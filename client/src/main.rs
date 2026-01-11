@@ -345,13 +345,13 @@ impl Ps5UploadApp {
                 let mut workers = Vec::new();
                 for bucket in buckets.into_iter().filter(|b| !b.is_empty()) {
                     let stream = upload_v2_init(&ip, TRANSFER_PORT, &dest_path).await?;
-                    let mut std_stream = stream.into_std()?;
+                    let std_stream = stream.into_std()?;
                     std_stream.set_nonblocking(false)?;
                     workers.push((bucket, std_stream));
                 }
                 let _ = tx.send(AppMessage::PayloadLog("Server READY".to_string()));
 
-                for (bucket, std_stream) in workers {
+                for (bucket, mut std_stream) in workers {
                     let cancel = cancel_token.clone();
                     let tx = tx.clone();
                     let tx_log = tx_log.clone();
