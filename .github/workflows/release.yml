@@ -211,8 +211,8 @@ jobs:
           version="${tag#v}"
           notes="dist/RELEASE_NOTES.md"
           awk -v ver="$version" '
-            $0 ~ "^## \\[" ver "\\]" {found=1; next}
-            found && /^## \\[/ {exit}
+            $0 == "## [" ver "]" {found=1; next}
+            found && substr($0,1,4) == "## [" {exit}
             found {print}
           ' CHANGELOG.md > "$notes"
           if [ ! -s "$notes" ]; then
