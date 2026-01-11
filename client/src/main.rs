@@ -160,12 +160,8 @@ impl Ps5UploadApp {
         self.payload_logs.push_str(&format!("[{}] {}\n", time, msg));
     }
     
-    fn get_dest_path(&self) -> String {
-        let base = if !self.temp_dir_override.trim().is_empty() {
-            self.temp_dir_override.as_str()
-        } else {
-            self.selected_storage.as_deref().unwrap_or("/data")
-        };
+    fn build_dest_path_with_base(&self, base: &str) -> String {
+        let base = if base.trim().is_empty() { "/data" } else { base };
         
         let preset_path = if self.selected_preset == 2 { // custom
              &self.custom_preset_path
@@ -187,6 +183,20 @@ impl Ps5UploadApp {
         } else {
             format!("{}/{}/{}", base_clean, preset_clean, folder)
         }
+    }
+
+    fn get_display_dest_path(&self) -> String {
+        let base = self.selected_storage.as_deref().unwrap_or("/data");
+        self.build_dest_path_with_base(base)
+    }
+
+    fn get_upload_dest_path(&self) -> String {
+        let base = if !self.temp_dir_override.trim().is_empty() {
+            self.temp_dir_override.as_str()
+        } else {
+            self.selected_storage.as_deref().unwrap_or("/data")
+        };
+        self.build_dest_path_with_base(base)
     }
 
     fn update_game_path(&mut self, path: String) {
@@ -240,7 +250,7 @@ impl Ps5UploadApp {
             return;
         }
 
-        let dest = self.get_dest_path();
+        let dest = self.get_upload_dest_path();
         let ip = self.ip.clone();
         let tx = self.tx.clone();
         let rt = self.rt.clone();
@@ -277,7 +287,7 @@ impl Ps5UploadApp {
         
         let ip = self.ip.clone();
         let game_path = self.game_path.clone();
-        let dest_path = self.get_dest_path();
+        let dest_path = self.get_upload_dest_path();
         let tx = self.tx.clone();
         let rt = self.rt.clone();
         let connections = self.config.connections;
@@ -567,7 +577,7 @@ impl eframe::App for Ps5UploadApp {
                 .show(ctx, |ui| {
                     ui.label(format!("Folder already exists:\n{}
 
-Overwrite it?", self.get_dest_path()));
+Overwrite it?", self.get_upload_dest_path()));
                     ui.add_space(10.0);
                     ui.horizontal(|ui| {
                         if ui.button("Overwrite").clicked() { self.start_upload(); }
@@ -753,7 +763,10 @@ Overwrite it?", self.get_dest_path()));
                     ui.end_row();
                 });
                 ui.add_space(5.0);
-                ui.label(egui::RichText::new(format!("➡ {}", self.get_dest_path())).monospace().weak());
+                ui.label(egui::RichText::new(format!("➡ Destination: {}", self.get_display_dest_path())).monospace().weak());
+                if !self.temp_dir_override.trim().is_empty() {
+                    ui.label(egui::RichText::new(format!("➡ Uploading to: {}", self.get_upload_dest_path())).monospace().weak());
+                }
             });
 
             ui.add_space(10.0);

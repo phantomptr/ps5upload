@@ -7,9 +7,12 @@ use std::sync::mpsc::sync_channel;
 use std::thread;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::net::Shutdown;
+use std::time::Duration;
 
-const PACK_BUFFER_SIZE: usize = 128 * 1024 * 1024; // 128MB Packs
+const PACK_BUFFER_SIZE: usize = 64 * 1024 * 1024; // 64MB Packs
 const MAGIC_FTX1: u32 = 0x31585446;
+const SEND_CHUNK_SIZE: usize = 1024 * 1024; // 1MB write chunks for smoother progress
 
 #[derive(Debug, Clone)]
 pub struct FileEntry {
@@ -144,6 +147,7 @@ where
 {
     // Optimize socket
     let _ = stream.set_nodelay(true);
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
 
     // Channel for Pipelining: Packer -> Sender
     let (tx, rx) = sync_channel::<ReadyPack>(2);
@@ -233,18 +237,44 @@ where
     let mut total_sent_bytes = 0u64;
     let mut total_sent_files = 0i32;
 
+    let mut last_progress_sent = 0u64;
+
     for ready_pack in rx {
         if cancel.load(Ordering::Relaxed) {
+            let _ = stream.shutdown(Shutdown::Both);
             return Err(anyhow::anyhow!("Upload cancelled by user"));
         }
 
         send_frame_header(&mut stream, FrameType::Pack, ready_pack.buffer.len() as u64)?;
-        stream.write_all(&ready_pack.buffer)?;
+
+        let mut sent_payload = 0usize;
+        let pack_len = ready_pack.buffer.len();
+        while sent_payload < pack_len {
+            if cancel.load(Ordering::Relaxed) {
+                let _ = stream.shutdown(Shutdown::Both);
+                return Err(anyhow::anyhow!("Upload cancelled by user"));
+            }
+            let end = std::cmp::min(sent_payload + SEND_CHUNK_SIZE, pack_len);
+            stream.write_all(&ready_pack.buffer[sent_payload..end])?;
+            sent_payload = end;
+
+            let approx = if pack_len > 0 {
+                (ready_pack.bytes_in_pack as u128 * sent_payload as u128 / pack_len as u128) as u64
+            } else {
+                0
+            };
+            let approx_total = total_sent_bytes + approx;
+            if approx_total != last_progress_sent {
+                progress(approx_total, total_sent_files);
+                last_progress_sent = approx_total;
+            }
+        }
         
         total_sent_bytes += ready_pack.bytes_in_pack;
         total_sent_files += ready_pack.files_in_pack;
         
         progress(total_sent_bytes, total_sent_files);
+        last_progress_sent = total_sent_bytes;
     }
 
     send_frame_header(&mut stream, FrameType::Finish, 0)?;
