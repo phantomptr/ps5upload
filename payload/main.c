@@ -19,6 +19,7 @@
 #include <pthread.h>
 #include <poll.h>
 #include <fcntl.h>
+#include <limits.h>
 
 #include <ps5/kernel.h>
 

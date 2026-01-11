@@ -115,17 +115,6 @@ static PackJob *queue_pop(PackQueue *q) {
     return job;
 }
 
-// Helper to receive exact bytes
-static int recv_exact(int sock, void *buf, size_t len) {
-    size_t received = 0;
-    while (received < len) {
-        ssize_t n = recv(sock, (char*)buf + received, len - received, 0);
-        if (n <= 0) return -1;
-        received += n;
-    }
-    return 0;
-}
-
 // Helper to create directories recursively with caching
 static int mkdir_recursive(const char *path, char *cache) {
     if (cache && strcmp(path, cache) == 0) {
