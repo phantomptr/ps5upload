@@ -46,6 +46,9 @@ typedef struct UploadSession {
     char final_dest_root[PATH_MAX];
     char temp_root[PATH_MAX];
     char session_root[PATH_MAX];
+    uint64_t bytes_received;
+    uint64_t packs_enqueued;
+    uint64_t last_log_bytes;
 } UploadSession;
 
 typedef struct PackJob {
@@ -527,6 +530,7 @@ static int enqueue_pack(UploadSession *session, uint8_t *pack_buf, size_t pack_l
     job->seq = seq;
 
     if (queue_push(&g_queue, job) != 0) {
+        printf("[FTX] enqueue failed (queue full/closed)\n");
         free(job);
         pthread_mutex_lock(&session->state.mutex);
         if (session->state.pending > 0) {
@@ -551,6 +555,13 @@ int upload_session_feed(UploadSession *session, const uint8_t *data, size_t len,
     }
 
     size_t offset = 0;
+    session->bytes_received += len;
+    if (session->bytes_received - session->last_log_bytes >= (512ULL * 1024 * 1024)) {
+        printf("[FTX] recv %.2f GB, packs %llu\n",
+               session->bytes_received / (1024.0 * 1024.0 * 1024.0),
+               (unsigned long long)session->packs_enqueued);
+        session->last_log_bytes = session->bytes_received;
+    }
     while (offset < len) {
         if (session->header_bytes < sizeof(struct FrameHeader)) {
             size_t need = sizeof(struct FrameHeader) - session->header_bytes;
@@ -564,6 +575,7 @@ int upload_session_feed(UploadSession *session, const uint8_t *data, size_t len,
             }
 
             if (session->header.magic != MAGIC_FTX1) {
+                printf("[FTX] invalid magic: %08x\n", session->header.magic);
                 session->error = 1;
             } else if (session->header.type == FRAME_FINISH) {
                 if (done) {
@@ -571,15 +583,22 @@ int upload_session_feed(UploadSession *session, const uint8_t *data, size_t len,
                 }
             } else if (session->header.type == FRAME_PACK) {
                 if (session->header.body_len > PACK_BUFFER_SIZE) {
+                    printf("[FTX] pack too large: %llu\n",
+                           (unsigned long long)session->header.body_len);
                     session->error = 1;
                 } else {
                     session->body_len = session->header.body_len;
                     session->body = malloc(session->body_len);
                     session->body_bytes = 0;
                     if (!session->body) {
+                        printf("[FTX] OOM allocating pack buffer (%llu)\n",
+                               (unsigned long long)session->body_len);
                         session->error = 1;
                     }
                 }
+            } else {
+                printf("[FTX] unknown frame type: %u\n", session->header.type);
+                session->error = 1;
             }
 
             if (session->error) {
@@ -613,6 +632,7 @@ int upload_session_feed(UploadSession *session, const uint8_t *data, size_t len,
                     }
                     return 0;
                 }
+                session->packs_enqueued++;
                 session->body = NULL;
                 session->body_len = 0;
                 session->body_bytes = 0;
@@ -671,6 +691,7 @@ int upload_session_finalize(UploadSession *session) {
         return session->error ? -1 : 0;
     }
 
+    printf("[FTX] finalize start (temp=%d)\n", session->use_temp);
     if (upload_session_finish(session) != 0) {
         session->error = 1;
     }
@@ -707,6 +728,7 @@ int upload_session_finalize(UploadSession *session) {
         (void)rmdir(temp_parent);
     }
 
+    printf("[FTX] finalize done (ok=%d)\n", session->error ? 0 : 1);
     session->finalized = 1;
     return session->error ? -1 : 0;
 }

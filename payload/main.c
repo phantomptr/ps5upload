@@ -448,12 +448,14 @@ int main(void) {
                 int err = 0;
                 upload_session_feed(conn->upload, buffer, (size_t)n, &done, &err);
                 if (err) {
+                    printf("[FTX] upload feed error\n");
                     const char *error = "ERROR: Upload failed\n";
                     send(conn->sock, error, strlen(error), 0);
                     close_connection(conn);
                     continue;
                 }
                 if (done) {
+                    printf("[FTX] upload done\n");
                     int files = 0;
                     long long bytes = 0;
                     int finalize_ok = (upload_session_finalize(conn->upload) == 0);
