@@ -7,6 +7,7 @@ pub struct AppConfig {
     pub address: String,
     pub storage: String,
     pub connections: usize,
+    pub temp_dir: String,
 }
 
 impl Default for AppConfig {
@@ -14,7 +15,8 @@ impl Default for AppConfig {
         Self {
             address: "192.168.0.100".to_string(),
             storage: "/data".to_string(),
-            connections: 1,
+            connections: 12,
+            temp_dir: String::new(),
         }
     }
 }
@@ -42,6 +44,7 @@ impl AppConfig {
                                     config.connections = parsed.max(1);
                                 }
                             }
+                            "temp_dir" => config.temp_dir = value,
                             _ => {}
                         }
                     }
@@ -54,8 +57,8 @@ impl AppConfig {
 
     pub fn save(&self) {
         let content = format!(
-            "address={}\nstorage={}\nconnections={}\n",
-            self.address, self.storage, self.connections
+            "address={}\nstorage={}\nconnections={}\ntemp_dir={}\n",
+            self.address, self.storage, self.connections, self.temp_dir
         );
         let _ = fs::write("ps5upload.ini", content);
     }

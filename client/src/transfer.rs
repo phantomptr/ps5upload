@@ -8,7 +8,7 @@ use std::thread;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-const PACK_BUFFER_SIZE: usize = 16 * 1024 * 1024; // 16MB Packs
+const PACK_BUFFER_SIZE: usize = 128 * 1024 * 1024; // 128MB Packs
 const MAGIC_FTX1: u32 = 0x31585446;
 
 #[derive(Debug, Clone)]
@@ -250,19 +250,4 @@ where
     send_frame_header(&mut stream, FrameType::Finish, 0)?;
 
     Ok(())
-}
-
-pub fn send_files_v2<F, L>(
-    base_path: &str,
-    stream: std::net::TcpStream,
-    cancel: Arc<AtomicBool>,
-    progress: F,
-    log: L,
-) -> Result<()>
-where
-    F: FnMut(u64, i32),
-    L: Fn(String) + Send + Sync + 'static,
-{
-    let files = collect_files(base_path);
-    send_files_v2_for_list(files, stream, cancel, progress, log)
 }

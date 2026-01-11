@@ -39,7 +39,7 @@ use config::AppConfig;
 const PRESETS: [&str; 3] = ["etaHEN/games", "homebrew", "custom"];
 const TRANSFER_PORT: u16 = 9113;
 const PAYLOAD_PORT: u16 = 9021;
-const MAX_PARALLEL_CONNECTIONS: usize = 8;
+const MAX_PARALLEL_CONNECTIONS: usize = 12;
 
 enum AppMessage {
     Log(String),
@@ -65,6 +65,7 @@ struct Ps5UploadApp {
     selected_preset: usize,
     custom_preset_path: String,
     custom_subfolder: String, // Calculated from game_path usually
+    temp_dir_override: String,
 
     storage_locations: Vec<StorageLocation>,
     
@@ -123,6 +124,7 @@ impl Ps5UploadApp {
             selected_preset: 0,
             custom_preset_path: String::new(),
             custom_subfolder: String::new(),
+            temp_dir_override: config.temp_dir.clone(),
             storage_locations: Vec::new(),
             client_logs: String::new(),
             payload_logs: String::new(),
@@ -159,7 +161,11 @@ impl Ps5UploadApp {
     }
     
     fn get_dest_path(&self) -> String {
-        let base = self.selected_storage.as_deref().unwrap_or("/data");
+        let base = if !self.temp_dir_override.trim().is_empty() {
+            self.temp_dir_override.as_str()
+        } else {
+            self.selected_storage.as_deref().unwrap_or("/data")
+        };
         
         let preset_path = if self.selected_preset == 2 { // custom
              &self.custom_preset_path
@@ -738,6 +744,13 @@ Overwrite it?", self.get_dest_path()));
                     ui.end_row();
                     if self.selected_preset == 2 { ui.label("Path:"); ui.text_edit_singleline(&mut self.custom_preset_path); ui.end_row(); }
                     ui.label("Name:"); ui.text_edit_singleline(&mut self.custom_subfolder); ui.end_row();
+                    ui.label("Temp Dir:");
+                    let temp_edit = ui.text_edit_singleline(&mut self.temp_dir_override);
+                    if temp_edit.changed() {
+                        self.config.temp_dir = self.temp_dir_override.clone();
+                        self.config.save();
+                    }
+                    ui.end_row();
                 });
                 ui.add_space(5.0);
                 ui.label(egui::RichText::new(format!("➡ {}", self.get_dest_path())).monospace().weak());
