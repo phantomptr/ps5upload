@@ -1,7 +1,7 @@
 use anyhow::Result;
 use std::io::{Read, Write};
 use std::fs::File;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 use std::sync::mpsc::sync_channel;
 use std::thread;
@@ -10,6 +10,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 const PACK_BUFFER_SIZE: usize = 16 * 1024 * 1024; // 16MB Packs
 const MAGIC_FTX1: u32 = 0x31585446;
+
+#[derive(Debug, Clone)]
+pub struct FileEntry {
+    pub rel_path: String,
+    pub abs_path: PathBuf,
+    pub size: u64,
+}
 
 #[derive(Debug)]
 enum FrameType {
@@ -84,13 +91,53 @@ fn send_frame_header(stream: &mut std::net::TcpStream, ftype: FrameType, len: u6
     Ok(())
 }
 
-pub fn send_files_v2<F, L>(
-    base_path: &str, 
-    mut stream: std::net::TcpStream, 
-    cancel: Arc<AtomicBool>, 
+pub fn collect_files(base_path: &str) -> Vec<FileEntry> {
+    let path = Path::new(base_path);
+    let mut files = Vec::new();
+
+    if path.is_file() {
+        if let Ok(meta) = path.metadata() {
+            let rel_path = path
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| "file".to_string());
+            files.push(FileEntry {
+                rel_path,
+                abs_path: path.to_path_buf(),
+                size: meta.len(),
+            });
+        }
+        return files;
+    }
+
+    for entry in WalkDir::new(path).into_iter().filter_map(|e| e.ok()) {
+        let entry_path = entry.path();
+        if !entry_path.is_file() {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else { continue; };
+        let rel_path = entry_path
+            .strip_prefix(path)
+            .unwrap_or(entry_path)
+            .to_string_lossy()
+            .replace('\\', "/");
+        files.push(FileEntry {
+            rel_path,
+            abs_path: entry_path.to_path_buf(),
+            size: meta.len(),
+        });
+    }
+
+    files
+}
+
+pub fn send_files_v2_for_list<F, L>(
+    files: Vec<FileEntry>,
+    mut stream: std::net::TcpStream,
+    cancel: Arc<AtomicBool>,
     mut progress: F,
-    log: L
-) -> Result<()> 
+    log: L,
+) -> Result<()>
 where
     F: FnMut(u64, i32),
     L: Fn(String) + Send + Sync + 'static,
@@ -98,9 +145,6 @@ where
     // Optimize socket
     let _ = stream.set_nodelay(true);
 
-    let path_obj = Path::new(base_path);
-    let base_path_buf = path_obj.to_path_buf();
-    
     // Channel for Pipelining: Packer -> Sender
     let (tx, rx) = sync_channel::<ReadyPack>(2);
     let cancel_packer = cancel.clone();
@@ -111,21 +155,14 @@ where
     thread::spawn(move || {
         let mut pack = PackBuffer::new();
         
-        for entry in WalkDir::new(&base_path_buf).into_iter().filter_map(|e| e.ok()) {
+        for entry in files {
             if cancel_packer.load(Ordering::Relaxed) { break; }
-
-            let entry_path = entry.path();
-            if !entry_path.is_file() { continue; }
-
-            let rel_path = entry_path.strip_prefix(&base_path_buf).unwrap_or(entry_path);
-            let rel_path_str = rel_path.to_string_lossy().replace('\\', "/");
             
+            let rel_path_str = entry.rel_path;
             (log_packer_clone)(format!("Packing: {}", rel_path_str));
 
-            let Ok(metadata) = entry.metadata() else { continue; };
-            let file_size = metadata.len();
-
-            let Ok(mut file) = File::open(entry_path) else { continue; };
+            let file_size = entry.size;
+            let Ok(mut file) = File::open(entry.abs_path) else { continue; };
             
             // Empty file case
             if file_size == 0 {
@@ -213,4 +250,19 @@ where
     send_frame_header(&mut stream, FrameType::Finish, 0)?;
 
     Ok(())
+}
+
+pub fn send_files_v2<F, L>(
+    base_path: &str,
+    stream: std::net::TcpStream,
+    cancel: Arc<AtomicBool>,
+    progress: F,
+    log: L,
+) -> Result<()>
+where
+    F: FnMut(u64, i32),
+    L: Fn(String) + Send + Sync + 'static,
+{
+    let files = collect_files(base_path);
+    send_files_v2_for_list(files, stream, cancel, progress, log)
 }

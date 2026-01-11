@@ -33,12 +33,13 @@ mod config;
 
 use protocol::{StorageLocation, list_storage, check_dir, upload_v2_init};
 use archive::get_size;
-use transfer::send_files_v2;
+use transfer::{collect_files, send_files_v2_for_list, FileEntry};
 use config::AppConfig;
 
 const PRESETS: [&str; 3] = ["etaHEN/games", "homebrew", "custom"];
 const TRANSFER_PORT: u16 = 9113;
 const PAYLOAD_PORT: u16 = 9021;
+const MAX_PARALLEL_CONNECTIONS: usize = 8;
 
 enum AppMessage {
     Log(String),
@@ -273,6 +274,7 @@ impl Ps5UploadApp {
         let dest_path = self.get_dest_path();
         let tx = self.tx.clone();
         let rt = self.rt.clone();
+        let connections = self.config.connections;
         
         thread::spawn(move || {
             let tx_log = tx.clone();
@@ -281,47 +283,151 @@ impl Ps5UploadApp {
                     return Err(anyhow::anyhow!("Cancelled"));
                 }
 
-                let size = get_size(&game_path);
-                let stream = upload_v2_init(&ip, TRANSFER_PORT, &dest_path).await?;
-                let mut std_stream = stream.into_std()?;
-                std_stream.set_nonblocking(false)?;
-                
-                let _ = tx.send(AppMessage::PayloadLog("Server READY".to_string()));
-                let _ = tx.send(AppMessage::Log(format!("Starting transfer: {:.2} GB", size as f64 / 1_073_741_824.0)));
+                let files = collect_files(&game_path);
+                if files.is_empty() {
+                    return Err(anyhow::anyhow!("No files found to upload"));
+                }
+
+                let total_size: u64 = files.iter().map(|f| f.size).sum();
+                let mut connection_count = connections.clamp(1, MAX_PARALLEL_CONNECTIONS);
+                if files.len() < connection_count {
+                    connection_count = files.len().max(1);
+                }
+
+                let _ = tx.send(AppMessage::Log(format!(
+                    "Starting transfer: {:.2} GB using {} connection{}",
+                    total_size as f64 / 1_073_741_824.0,
+                    connection_count,
+                    if connection_count == 1 { "" } else { "s" }
+                )));
                 let _ = tx.send(AppMessage::UploadStart);
 
                 let start = std::time::Instant::now();
-                let mut last_sent = 0u64;
-                
-                send_files_v2(
-                    &game_path, 
-                    std_stream.try_clone()?, 
-                    cancel_token.clone(), 
-                    |sent, files| {
-                        if sent == last_sent { return; }
-                        let elapsed = start.elapsed().as_secs_f64();
-                        let _ = tx.send(AppMessage::Progress {
-                            sent, total: size, files_sent: files, elapsed_secs: elapsed,
-                        });
-                        last_sent = sent;
-                    },
-                    move |msg| {
-                        let _ = tx_log.send(AppMessage::Log(msg));
+                if connection_count == 1 {
+                    let stream = upload_v2_init(&ip, TRANSFER_PORT, &dest_path).await?;
+                    let mut std_stream = stream.into_std()?;
+                    std_stream.set_nonblocking(false)?;
+                    let _ = tx.send(AppMessage::PayloadLog("Server READY".to_string()));
+
+                    let mut last_sent = 0u64;
+                    send_files_v2_for_list(
+                        files,
+                        std_stream.try_clone()?,
+                        cancel_token.clone(),
+                        |sent, files_sent| {
+                            if sent == last_sent { return; }
+                            let elapsed = start.elapsed().as_secs_f64();
+                            let _ = tx.send(AppMessage::Progress {
+                                sent,
+                                total: total_size,
+                                files_sent,
+                                elapsed_secs: elapsed,
+                            });
+                            last_sent = sent;
+                        },
+                        move |msg| {
+                            let _ = tx_log.send(AppMessage::Log(msg));
+                        },
+                    )?;
+
+                    use std::io::Read;
+                    let mut buffer = [0u8; 1024];
+                    let n = std_stream.read(&mut buffer)?;
+                    let response = String::from_utf8_lossy(&buffer[..n]).trim().to_string();
+                    return parse_upload_response(&response);
+                }
+
+                let buckets = partition_files_by_size(files, connection_count);
+                let total_sent = Arc::new(std::sync::atomic::AtomicU64::new(0));
+                let total_files = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+                let mut handles = Vec::new();
+
+                let mut workers = Vec::new();
+                for bucket in buckets.into_iter().filter(|b| !b.is_empty()) {
+                    let stream = upload_v2_init(&ip, TRANSFER_PORT, &dest_path).await?;
+                    let mut std_stream = stream.into_std()?;
+                    std_stream.set_nonblocking(false)?;
+                    workers.push((bucket, std_stream));
+                }
+                let _ = tx.send(AppMessage::PayloadLog("Server READY".to_string()));
+
+                for (bucket, std_stream) in workers {
+                    let cancel = cancel_token.clone();
+                    let tx = tx.clone();
+                    let tx_log = tx_log.clone();
+                    let total_sent = total_sent.clone();
+                    let total_files = total_files.clone();
+                    let start = start;
+
+                    handles.push(thread::spawn(move || -> anyhow::Result<()> {
+                        let mut last_sent = 0u64;
+                        let mut last_files = 0i32;
+                        send_files_v2_for_list(
+                            bucket,
+                            std_stream.try_clone()?,
+                            cancel.clone(),
+                            |sent, files_sent| {
+                                let delta_bytes = sent.saturating_sub(last_sent);
+                                let delta_files = if files_sent >= last_files {
+                                    files_sent - last_files
+                                } else {
+                                    0
+                                };
+                                if delta_bytes == 0 && delta_files == 0 {
+                                    return;
+                                }
+                                last_sent = sent;
+                                last_files = files_sent;
+
+                                let new_total = total_sent.fetch_add(delta_bytes, Ordering::Relaxed) + delta_bytes;
+                                let new_files = total_files.fetch_add(delta_files as usize, Ordering::Relaxed) + delta_files as usize;
+                                let elapsed = start.elapsed().as_secs_f64();
+                                let _ = tx.send(AppMessage::Progress {
+                                    sent: new_total,
+                                    total: total_size,
+                                    files_sent: new_files as i32,
+                                    elapsed_secs: elapsed,
+                                });
+                            },
+                            move |msg| {
+                                let _ = tx_log.send(AppMessage::Log(msg));
+                            },
+                        )?;
+
+                        use std::io::Read;
+                        let mut buffer = [0u8; 1024];
+                        let n = std_stream.read(&mut buffer)?;
+                        let response = String::from_utf8_lossy(&buffer[..n]).trim().to_string();
+                        parse_upload_response(&response).map(|_| ())
+                    }));
+                }
+
+                let mut first_err: Option<anyhow::Error> = None;
+                for handle in handles {
+                    match handle.join() {
+                        Ok(result) => {
+                            if let Err(err) = result {
+                                if first_err.is_none() {
+                                    first_err = Some(err);
+                                    cancel_token.store(true, Ordering::Relaxed);
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            if first_err.is_none() {
+                                first_err = Some(anyhow::anyhow!("Upload worker panicked"));
+                                cancel_token.store(true, Ordering::Relaxed);
+                            }
+                        }
                     }
-                )?;
-                
-                use std::io::Read;
-                let mut buffer = [0u8; 1024];
-                let n = std_stream.read(&mut buffer)?;
-                let response = String::from_utf8_lossy(&buffer[..n]).trim().to_string();
-                
-                if response.starts_with("SUCCESS") {
-                    let parts: Vec<&str> = response.split_whitespace().collect();
-                    let files = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
-                    let bytes = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
-                    Ok((files, bytes))
+                }
+
+                if let Some(err) = first_err {
+                    Err(err)
                 } else {
-                    Err(anyhow::anyhow!("Upload failed: {}", response))
+                    let files_sent = total_files.load(Ordering::Relaxed) as i32;
+                    let bytes_sent = total_sent.load(Ordering::Relaxed);
+                    Ok((files_sent, bytes_sent))
                 }
             });
             
@@ -659,6 +765,22 @@ Overwrite it?", self.get_dest_path()));
                 
                 if self.progress_files > 0 { ui.label(format!("Files transferred: {}", self.progress_files)); }
                 
+                ui.add_space(5.0);
+                ui.horizontal(|ui| {
+                    ui.label("Connections");
+                    let mut connections = self.config.connections as i32;
+                    let response = ui.add(
+                        egui::DragValue::new(&mut connections)
+                            .clamp_range(1..=MAX_PARALLEL_CONNECTIONS as i32)
+                            .speed(1.0)
+                    );
+                    if response.changed() {
+                        self.config.connections = connections as usize;
+                        self.config.save();
+                    }
+                    ui.label(format!("(max {})", MAX_PARALLEL_CONNECTIONS));
+                });
+
                 if self.is_uploading {
                     ui.add_space(10.0);
                     ui.horizontal(|ui| {
@@ -737,4 +859,33 @@ fn format_duration(seconds: f64) -> String {
     let total = seconds.round() as u64;
     let mins = total / 60; let secs = total % 60;
     if mins > 0 { format!("{}m {}s", mins, secs) } else { format!("{}s", secs) }
+}
+
+fn parse_upload_response(response: &str) -> anyhow::Result<(i32, u64)> {
+    if response.starts_with("SUCCESS") {
+        let parts: Vec<&str> = response.split_whitespace().collect();
+        let files = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+        let bytes = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
+        Ok((files, bytes))
+    } else {
+        Err(anyhow::anyhow!("Upload failed: {}", response))
+    }
+}
+
+fn partition_files_by_size(mut files: Vec<FileEntry>, connections: usize) -> Vec<Vec<FileEntry>> {
+    files.sort_by_key(|f| std::cmp::Reverse(f.size));
+    let mut buckets: Vec<Vec<FileEntry>> = vec![Vec::new(); connections];
+    let mut bucket_sizes = vec![0u64; connections];
+
+    for file in files {
+        let (idx, _) = bucket_sizes
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, size)| *size)
+            .unwrap();
+        bucket_sizes[idx] += file.size;
+        buckets[idx].push(file);
+    }
+
+    buckets
 }

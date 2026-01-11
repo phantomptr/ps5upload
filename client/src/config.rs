@@ -6,6 +6,7 @@ use std::path::Path;
 pub struct AppConfig {
     pub address: String,
     pub storage: String,
+    pub connections: usize,
 }
 
 impl Default for AppConfig {
@@ -13,6 +14,7 @@ impl Default for AppConfig {
         Self {
             address: "192.168.0.100".to_string(),
             storage: "/data".to_string(),
+            connections: 1,
         }
     }
 }
@@ -35,6 +37,11 @@ impl AppConfig {
                         match key {
                             "address" => config.address = value,
                             "storage" => config.storage = value,
+                            "connections" => {
+                                if let Ok(parsed) = value.parse::<usize>() {
+                                    config.connections = parsed.max(1);
+                                }
+                            }
                             _ => {}
                         }
                     }
@@ -47,8 +54,8 @@ impl AppConfig {
 
     pub fn save(&self) {
         let content = format!(
-            "address={}\nstorage={}\n",
-            self.address, self.storage
+            "address={}\nstorage={}\nconnections={}\n",
+            self.address, self.storage, self.connections
         );
         let _ = fs::write("ps5upload.ini", content);
     }

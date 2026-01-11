@@ -13,7 +13,7 @@ OBJS := main.o storage.o protocol.o extract.o notify.o transfer.o
 # Read version from VERSION file
 VERSION := $(shell cat ../VERSION)
 CFLAGS := -Wall -O2 -DPS5_UPLOAD_VERSION=\"$(VERSION)\" -DSERVER_PORT_STR=\"9113\"
-LDADD := -lkernel
+LDADD := -lkernel -lpthread
 
 .PHONY: all clean test info help
 
