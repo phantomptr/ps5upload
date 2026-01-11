@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::net::Shutdown;
 use std::time::Duration;
+use std::io::ErrorKind;
 
 const PACK_BUFFER_SIZE: usize = 128 * 1024 * 1024; // 128MB Packs
 const MAGIC_FTX1: u32 = 0x31585446;
@@ -255,7 +256,23 @@ where
                 return Err(anyhow::anyhow!("Upload cancelled by user"));
             }
             let end = std::cmp::min(sent_payload + SEND_CHUNK_SIZE, pack_len);
-            stream.write_all(&ready_pack.buffer[sent_payload..end])?;
+            let mut offset = sent_payload;
+            while offset < end {
+                match stream.write(&ready_pack.buffer[offset..end]) {
+                    Ok(0) => return Err(anyhow::anyhow!("Socket closed during send")),
+                    Ok(n) => offset += n,
+                    Err(err) => match err.kind() {
+                        ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted => {
+                            if cancel.load(Ordering::Relaxed) {
+                                let _ = stream.shutdown(Shutdown::Both);
+                                return Err(anyhow::anyhow!("Upload cancelled by user"));
+                            }
+                            continue;
+                        }
+                        _ => return Err(err.into()),
+                    },
+                }
+            }
             sent_payload = end;
 
             let approx = if pack_len > 0 {
