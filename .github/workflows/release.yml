@@ -1,0 +1,213 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g., v1.0.0-alpha)"
+        required: true
+        default: "v1.0.0-alpha"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-client:
+    name: build-client-${{ matrix.platform }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            platform: linux
+            arch: x64
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            platform: linux
+            arch: arm64
+          - os: windows-2025
+            target: x86_64-pc-windows-msvc
+            platform: windows
+            arch: x64
+          - os: windows-2025
+            target: aarch64-pc-windows-msvc
+            platform: windows
+            arch: arm64
+          - os: macos-15
+            target: x86_64-apple-darwin
+            platform: macos
+            arch: x64
+          - os: macos-15
+            target: aarch64-apple-darwin
+            platform: macos
+            arch: arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Linux GUI build deps
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config zip \
+            libx11-dev libxi-dev libxrandr-dev libxkbcommon-dev libwayland-dev
+
+      - name: Use lld for Windows ARM64
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        run: echo "RUSTFLAGS=-C linker=rust-lld" >> $GITHUB_ENV
+        shell: bash
+
+      - name: Build client
+        run: |
+          cd client
+          cargo build --release --target ${{ matrix.target }}
+
+      - name: Package artifact (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $bin = "client\\target\\${{ matrix.target }}\\release\\ps5upload.exe"
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item $bin dist\\ps5upload.exe
+          Compress-Archive -Path dist\\ps5upload.exe -DestinationPath "ps5upload-${{ matrix.platform }}-${{ matrix.arch }}.zip"
+
+      - name: Package artifact (Linux)
+        if: matrix.platform == 'linux'
+        run: |
+          bin="client/target/${{ matrix.target }}/release/ps5upload"
+          mkdir -p dist
+          cp "$bin" dist/ps5upload
+          cat <<'EOF' > dist/PS5Upload.desktop
+          [Desktop Entry]
+          Type=Application
+          Name=PS5 Upload
+          Exec=sh -c 'exec "$(dirname "%k")/ps5upload"'
+          Terminal=false
+          Categories=Utility;
+          EOF
+          (cd dist && zip -r "../ps5upload-${{ matrix.platform }}-${{ matrix.arch }}.zip" ps5upload PS5Upload.desktop)
+
+      - name: Package artifact (macOS)
+        if: matrix.platform == 'macos'
+        run: |
+          # Create .app structure
+          APP_NAME="PS5Upload.app"
+          VERSION="$(cat VERSION)"
+          mkdir -p "dist/$APP_NAME/Contents/MacOS"
+          mkdir -p "dist/$APP_NAME/Contents/Resources"
+          
+          # Copy binary
+          cp "client/target/${{ matrix.target }}/release/ps5upload" "dist/$APP_NAME/Contents/MacOS/"
+          
+          # Create Info.plist
+          cat <<EOF > "dist/$APP_NAME/Contents/Info.plist"
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleExecutable</key>
+              <string>ps5upload</string>
+              <key>CFBundleIdentifier</key>
+              <string>com.phantomptr.ps5upload</string>
+              <key>CFBundleName</key>
+              <string>PS5 Upload</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleShortVersionString</key>
+              <string>${VERSION}</string>
+              <key>CFBundleVersion</key>
+              <string>${VERSION}</string>
+              <key>LSUIElement</key>
+              <false/>
+          </dict>
+          </plist>
+          EOF
+          
+          chmod +x "dist/$APP_NAME/Contents/MacOS/ps5upload"
+          codesign --force --deep --sign - "dist/$APP_NAME"
+          
+          # Zip the .app (macOS requires bundles)
+          (cd dist && zip -r "../ps5upload-${{ matrix.platform }}-${{ matrix.arch }}.zip" "$APP_NAME")
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ps5upload-${{ matrix.platform }}-${{ matrix.arch }}
+          path: ps5upload-${{ matrix.platform }}-${{ matrix.arch }}.zip
+
+  build-payload:
+    name: build-payload
+    runs-on: ubuntu-24.04
+    env:
+      PS5_PAYLOAD_SDK: /opt/ps5-payload-sdk
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install payload dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang lld unzip zip
+
+      - name: Download PS5 Payload SDK
+        run: |
+          curl -L -o /tmp/ps5-payload-sdk.zip \
+            https://github.com/ps5-payload-dev/sdk/releases/latest/download/ps5-payload-sdk.zip
+          sudo unzip -q /tmp/ps5-payload-sdk.zip -d /opt
+
+      - name: Build payload
+        run: |
+          make payload
+
+      - name: Package payload
+        run: |
+          mkdir -p dist
+          cp payload/ps5upload.elf dist/ps5upload.elf
+
+      - name: Upload payload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ps5upload-payload
+          path: dist/ps5upload.elf
+
+  release:
+    name: create-release
+    runs-on: ubuntu-24.04
+    needs:
+      - build-client
+      - build-payload
+    steps:
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: ${{ steps.tag.outputs.tag }}
+          generate_release_notes: true
+          files: |
+            dist/**/*.zip
+            dist/**/*.elf

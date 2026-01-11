@@ -1,0 +1,39 @@
+# Build outputs
+*.elf
+*.o
+*.so
+*.a
+target/
+client/target/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test files
+test_games/
+*.rar
+*.zip
+*.7z
+*.tar
+*.tar.gz
+
+# Logs
+*.log
