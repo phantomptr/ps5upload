@@ -73,17 +73,11 @@ void handle_check_dir(int client_sock, const char *path_arg) {
     size_t len = strlen(path);
     if(len > 0 && path[len-1] == '\n') path[len-1] = '\0';
 
-    pid_t pid = getpid();
-    intptr_t old_root = kernel_get_proc_rootdir(pid);
-    kernel_set_proc_rootdir(pid, kernel_get_root_vnode());
-
     struct stat st;
     int exists = 0;
     if(stat(path, &st) == 0 && S_ISDIR(st.st_mode)) {
         exists = 1;
     }
-
-    kernel_set_proc_rootdir(pid, old_root);
 
     if(exists) {
         send(client_sock, "EXISTS\n", 7, 0);
@@ -103,10 +97,6 @@ void handle_test_write(int client_sock, const char *path_arg) {
         path[len-1] = '\0';
     }
 
-    pid_t pid = getpid();
-    intptr_t old_root = kernel_get_proc_rootdir(pid);
-    kernel_set_proc_rootdir(pid, kernel_get_root_vnode());
-
     // Create test file path
     char test_file[PATH_MAX];
     snprintf(test_file, PATH_MAX, "%s/.ps5upload_test", path);
@@ -116,7 +106,6 @@ void handle_test_write(int client_sock, const char *path_arg) {
     if(!fp) {
         const char *error = "ERROR: Cannot write to path\n";
         send(client_sock, error, strlen(error), 0);
-        kernel_set_proc_rootdir(pid, old_root);
         return;
     }
 
@@ -127,11 +116,8 @@ void handle_test_write(int client_sock, const char *path_arg) {
     if(unlink(test_file) != 0) {
         const char *error = "ERROR: Cannot delete test file\n";
         send(client_sock, error, strlen(error), 0);
-        kernel_set_proc_rootdir(pid, old_root);
         return;
     }
-
-    kernel_set_proc_rootdir(pid, old_root);
 
     // Success
     const char *success = "SUCCESS\n";
@@ -149,20 +135,13 @@ void handle_create_path(int client_sock, const char *path_arg) {
         path[len-1] = '\0';
     }
 
-    pid_t pid = getpid();
-    intptr_t old_root = kernel_get_proc_rootdir(pid);
-    kernel_set_proc_rootdir(pid, kernel_get_root_vnode());
-
     char mkdir_err[256] = {0};
     if(mkdir_p(path, 0777, mkdir_err, sizeof(mkdir_err)) != 0) {
         char error_msg[320];
         snprintf(error_msg, sizeof(error_msg), "ERROR: %s\n", mkdir_err);
         send(client_sock, error_msg, strlen(error_msg), 0);
-        kernel_set_proc_rootdir(pid, old_root);
         return;
     }
-
-    kernel_set_proc_rootdir(pid, old_root);
 
     const char *success = "SUCCESS\n";
     send(client_sock, success, strlen(success), 0);
@@ -177,13 +156,7 @@ void handle_upload_v2_wrapper(int client_sock, const char *args) {
         return;
     }
 
-    pid_t pid = getpid();
-    intptr_t old_root = kernel_get_proc_rootdir(pid);
-    kernel_set_proc_rootdir(pid, kernel_get_root_vnode());
-
     handle_upload_v2(client_sock, dest_path);
-
-    kernel_set_proc_rootdir(pid, old_root);
 }
 
 void handle_upload(int client_sock, const char *args) {
@@ -219,11 +192,7 @@ void handle_upload(int client_sock, const char *args) {
         fclose(log_fp);
     }
 
-    pid_t pid = getpid();
-    intptr_t old_root = kernel_get_proc_rootdir(pid);
-    kernel_set_proc_rootdir(pid, kernel_get_root_vnode());
-
-    printf("[UPLOAD] Switched to root vnode for filesystem access\n");
+    printf("[UPLOAD] Using root vnode for filesystem access\n");
 
     // Check if writable
     printf("[UPLOAD] Checking write access to destination parent\n");
@@ -252,8 +221,6 @@ void handle_upload(int client_sock, const char *args) {
     time_t end_time = time(NULL);
     double elapsed_secs = difftime(end_time, start_time);
 
-    kernel_set_proc_rootdir(pid, old_root);
-    printf("[UPLOAD] Restored original root vnode\n");
 
     // Update request log with results
     log_fp = fopen(log_filename, "a");

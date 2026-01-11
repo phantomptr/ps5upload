@@ -171,22 +171,13 @@ int main(void) {
     printf("[INIT] Creating log directories...\n");
     
     // Use direct mkdir instead of system() for speed
-    // We need to escape sandbox first? No, main runs as root usually, but let's check.
-    // In main(), we haven't set root vnode yet. 
-    // However, system() works, so we have some permissions.
-    // Ideally we should use the same sandbox escape pattern if needed.
-    // But /data is usually accessible.
-    // Let's use the standard sandbox escape just in case.
-    
+    // Set root vnode once for the lifetime of the server to ensure full FS access.
     pid_t pid = getpid();
-    intptr_t old_root = kernel_get_proc_rootdir(pid);
     kernel_set_proc_rootdir(pid, kernel_get_root_vnode());
     
     mkdir("/data/ps5upload", 0777);
     mkdir("/data/ps5upload/logs", 0777);
     mkdir("/data/ps5upload/requests", 0777);
-    
-    kernel_set_proc_rootdir(pid, old_root);
 
     printf("[INIT] Log directory: /data/ps5upload/logs/\n");
     printf("[INIT] Request directory: /data/ps5upload/requests/\n");

@@ -45,12 +45,6 @@ static int is_dir_non_empty(const char *path) {
 }
 
 void handle_list_storage(int client_sock) {
-    pid_t pid = getpid();
-    intptr_t old_root = kernel_get_proc_rootdir(pid);
-
-    // Escape sandbox to see full filesystem
-    kernel_set_proc_rootdir(pid, kernel_get_root_vnode());
-
     printf("[STORAGE] Scanning PS5 mount points...\n");
 
     // Define specific PS5 mount points to scan
@@ -153,9 +147,6 @@ void handle_list_storage(int client_sock) {
 
     printf("[STORAGE] Scan complete, found storage locations\n");
 
-    // Restore sandbox
-    kernel_set_proc_rootdir(pid, old_root);
-
     send(client_sock, response, offset, 0);
 }
 
@@ -170,15 +161,10 @@ void handle_list_dir(int client_sock, const char *path_arg) {
         path[len-1] = '\0';
     }
 
-    pid_t pid = getpid();
-    intptr_t old_root = kernel_get_proc_rootdir(pid);
-    kernel_set_proc_rootdir(pid, kernel_get_root_vnode());
-
     DIR *dir = opendir(path);
     if(!dir) {
         const char *error = "ERROR: Cannot open directory\n";
         send(client_sock, error, strlen(error), 0);
-        kernel_set_proc_rootdir(pid, old_root);
         return;
     }
 
@@ -214,8 +200,6 @@ void handle_list_dir(int client_sock, const char *path_arg) {
     }
 
     offset += sprintf(response + offset, "]\n");
-
-    kernel_set_proc_rootdir(pid, old_root);
 
     send(client_sock, response, offset, 0);
 }
