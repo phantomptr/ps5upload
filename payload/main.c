@@ -16,6 +16,7 @@
 #include <errno.h>
 #include <sys/stat.h>
 #include <signal.h>
+#include <pthread.h>
 
 #include <ps5/kernel.h>
 
@@ -157,6 +158,21 @@ static void handle_client(int client_sock, const struct sockaddr_in *client_addr
     close(client_sock);
 }
 
+struct ClientContext {
+    int sock;
+    struct sockaddr_in addr;
+};
+
+static void *client_thread(void *arg) {
+    struct ClientContext *ctx = (struct ClientContext *)arg;
+    if (!ctx) {
+        return NULL;
+    }
+    handle_client(ctx->sock, &ctx->addr);
+    free(ctx);
+    return NULL;
+}
+
 int main(void) {
     printf("╔════════════════════════════════════════╗\n");
     printf("║     PS5 Upload Server v1.0-alpha      ║\n");
@@ -214,7 +230,21 @@ int main(void) {
         inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, sizeof(client_ip));
         printf("Client connected: %s\n", client_ip);
 
-        handle_client(client, &client_addr);
+        struct ClientContext *ctx = malloc(sizeof(*ctx));
+        if (!ctx) {
+            close(client);
+            continue;
+        }
+        ctx->sock = client;
+        ctx->addr = client_addr;
+
+        pthread_t tid;
+        if (pthread_create(&tid, NULL, client_thread, ctx) != 0) {
+            close(client);
+            free(ctx);
+            continue;
+        }
+        pthread_detach(tid);
     }
 
     close(server_sock);
