@@ -4,6 +4,8 @@ PS5 Upload is a tool designed to get your apps and homebrew onto your console wi
 
 While it's optimized to chew through thousands of small files on a local network (where it smokes traditional FTP), it works over any standard network connection.
 
+<img width="1102" height="732" alt="ps5upload" src="https://github.com/user-attachments/assets/b4bc3834-2702-4003-86fe-92e1b07b1692" />
+
 ## Why use this?
 
 If you've ever tried to upload a homebrew app containing 10,000 small assets via FTP, you know the pain. It takes forever.
