@@ -196,18 +196,35 @@ jobs:
           else
             echo "tag=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
           fi
+      
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
           path: dist
 
+      - name: Build release notes
+        run: |
+          tag="${{ steps.tag.outputs.tag }}"
+          version="${tag#v}"
+          notes="dist/RELEASE_NOTES.md"
+          awk -v ver="$version" '
+            $0 ~ "^## \\[" ver "\\]" {found=1; next}
+            found && /^## \\[/ {exit}
+            found {print}
+          ' CHANGELOG.md > "$notes"
+          if [ ! -s "$notes" ]; then
+            echo "Release $version" > "$notes"
+          fi
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
           name: ${{ steps.tag.outputs.tag }}
-          generate_release_notes: true
+          body_path: dist/RELEASE_NOTES.md
           files: |
             dist/**/*.zip
             dist/**/*.elf

@@ -46,12 +46,14 @@ static int mkdir_recursive(const char *path, char *cache) {
             if (mkdir(tmp, 0777) != 0 && errno != EEXIST) {
                 return -1;
             }
+            chmod(tmp, 0777);
             *p = '/';
         }
     }
     if (mkdir(tmp, 0777) != 0 && errno != EEXIST) {
         return -1;
     }
+    chmod(tmp, 0777);
 
     if (cache) {
         strncpy(cache, path, PATH_MAX - 1);
@@ -169,6 +171,7 @@ void handle_upload_v2(int client_sock, const char *dest_root) {
                 if(fp) {
                     fwrite(pack_buf + offset, 1, data_len, fp);
                     fclose(fp);
+                    chmod(full_path, 0777);
                     total_bytes += data_len;
                 } else {
                     printf("[FTX] Failed to open %s: %s\n", full_path, strerror(errno));

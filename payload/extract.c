@@ -37,12 +37,14 @@ static int mkdir_recursive(const char *path) {
             if (mkdir(tmp, 0777) != 0 && errno != EEXIST) {
                 return -1;
             }
+            chmod(tmp, 0777);
             *p = '/';
         }
     }
     if (mkdir(tmp, 0777) != 0 && errno != EEXIST) {
         return -1;
     }
+    chmod(tmp, 0777);
     return 0;
 }
 
@@ -94,6 +96,7 @@ int receive_folder_stream(int sock, const char *dest_path, char *err, size_t err
         }
         return -1;
     }
+    chmod(dest_path, 0777);
 
     char buffer[BUFFER_SIZE];
     char line_buffer[PATH_MAX + 256];
@@ -201,6 +204,7 @@ int receive_folder_stream(int sock, const char *dest_path, char *err, size_t err
         }
 
         fclose(fp);
+        chmod(full_path, 0777);
         file_count++;
 
         printf("[EXTRACT] File complete: %s\n", rel_path);
