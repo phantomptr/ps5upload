@@ -6,7 +6,7 @@
 
 typedef struct UploadSession UploadSession;
 
-UploadSession *upload_session_create(const char *dest_root);
+UploadSession *upload_session_create(const char *dest_root, int use_temp);
 int upload_session_finalize(UploadSession *session);
 void upload_session_destroy(UploadSession *session);
 int upload_session_feed(UploadSession *session, const uint8_t *data, size_t len, int *done, int *error);

@@ -63,14 +63,15 @@ pub async fn check_dir(ip: &str, port: u16, path: &str) -> Result<bool> {
     Ok(response == "EXISTS")
 }
 
-pub async fn upload_v2_init(ip: &str, port: u16, dest_path: &str) -> Result<TcpStream> {
+pub async fn upload_v2_init(ip: &str, port: u16, dest_path: &str, use_temp: bool) -> Result<TcpStream> {
     let addr = format!("{}:{}", ip, port);
     let mut stream = tokio::time::timeout(
         std::time::Duration::from_secs(CONNECTION_TIMEOUT_SECS),
         TcpStream::connect(&addr)
     ).await.context("Connection timed out")??;
 
-    let cmd = format!("UPLOAD_V2 {}\n", dest_path);
+    let mode = if use_temp { "TEMP" } else { "DIRECT" };
+    let cmd = format!("UPLOAD_V2 {} {}\n", dest_path, mode);
     stream.write_all(cmd.as_bytes()).await?;
     
     // Wait for READY

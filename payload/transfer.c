@@ -14,7 +14,7 @@
 #include "protocol_defs.h"
 #include "notify.h"
 
-#define PACK_BUFFER_SIZE (64 * 1024 * 1024) // 64MB buffer for packs
+#define PACK_BUFFER_SIZE (128 * 1024 * 1024) // 128MB buffer for packs
 #define PACK_QUEUE_DEPTH 4
 #define DISK_WORKER_COUNT 4
 
@@ -451,38 +451,46 @@ static int upload_session_start(UploadSession *session, const char *dest_root) {
     memset(session, 0, sizeof(*session));
     strncpy(session->final_dest_root, dest_root, PATH_MAX - 1);
     session->final_dest_root[PATH_MAX - 1] = '\0';
-    session->use_temp = 1;
+    if (session->use_temp) {
+        const char *base = "/data";
+        if (path_is_dir("/mnt/usb0")) {
+            base = "/mnt/usb0";
+        } else if (path_is_dir("/mnt/ext1")) {
+            base = "/mnt/ext1";
+        }
 
-    const char *base = "/data";
-    if (path_is_dir("/mnt/usb0")) {
-        base = "/mnt/usb0";
-    } else if (path_is_dir("/mnt/ext1")) {
-        base = "/mnt/ext1";
+        snprintf(session->temp_root, sizeof(session->temp_root), "%s/ps5upload/temp", base);
+        if (mkdir_recursive(session->temp_root, NULL) != 0) {
+            printf("[FTX] temp mkdir failed: %s (%s)\n", session->temp_root, strerror(errno));
+            session->error = 1;
+            return -1;
+        }
+
+        static pthread_mutex_t counter_lock = PTHREAD_MUTEX_INITIALIZER;
+        static unsigned counter = 0;
+        pthread_mutex_lock(&counter_lock);
+        unsigned local = ++counter;
+        pthread_mutex_unlock(&counter_lock);
+
+        snprintf(session->session_root, sizeof(session->session_root), "%s/session_%d_%u",
+                 session->temp_root, (int)getpid(), local);
+        if (mkdir_recursive(session->session_root, NULL) != 0) {
+            printf("[FTX] session mkdir failed: %s (%s)\n", session->session_root, strerror(errno));
+            session->error = 1;
+            return -1;
+        }
+
+        strncpy(session->state.dest_root, session->session_root, PATH_MAX - 1);
+        session->state.dest_root[PATH_MAX - 1] = '\0';
+    } else {
+        strncpy(session->state.dest_root, session->final_dest_root, PATH_MAX - 1);
+        session->state.dest_root[PATH_MAX - 1] = '\0';
+        if (mkdir_recursive(session->state.dest_root, NULL) != 0) {
+            printf("[FTX] dest mkdir failed: %s (%s)\n", session->state.dest_root, strerror(errno));
+            session->error = 1;
+            return -1;
+        }
     }
-
-    snprintf(session->temp_root, sizeof(session->temp_root), "%s/ps5upload/temp", base);
-    if (mkdir_recursive(session->temp_root, NULL) != 0) {
-        printf("[FTX] temp mkdir failed: %s (%s)\n", session->temp_root, strerror(errno));
-        session->error = 1;
-        return -1;
-    }
-
-    static pthread_mutex_t counter_lock = PTHREAD_MUTEX_INITIALIZER;
-    static unsigned counter = 0;
-    pthread_mutex_lock(&counter_lock);
-    unsigned local = ++counter;
-    pthread_mutex_unlock(&counter_lock);
-
-    snprintf(session->session_root, sizeof(session->session_root), "%s/session_%d_%u",
-             session->temp_root, (int)getpid(), local);
-    if (mkdir_recursive(session->session_root, NULL) != 0) {
-        printf("[FTX] session mkdir failed: %s (%s)\n", session->session_root, strerror(errno));
-        session->error = 1;
-        return -1;
-    }
-
-    strncpy(session->state.dest_root, session->session_root, PATH_MAX - 1);
-    session->state.dest_root[PATH_MAX - 1] = '\0';
     session->state.dir_cache[0] = '\0';
     session->state.current_fp = NULL;
     session->state.current_path[0] = '\0';
@@ -703,11 +711,12 @@ int upload_session_finalize(UploadSession *session) {
     return session->error ? -1 : 0;
 }
 
-UploadSession *upload_session_create(const char *dest_root) {
+UploadSession *upload_session_create(const char *dest_root, int use_temp) {
     UploadSession *session = malloc(sizeof(*session));
     if (!session) {
         return NULL;
     }
+    session->use_temp = use_temp ? 1 : 0;
     if (upload_session_start(session, dest_root) != 0) {
         free(session);
         return NULL;
@@ -731,7 +740,7 @@ void handle_upload_v2(int client_sock, const char *dest_root) {
     const char *ready = "READY\n";
     send(client_sock, ready, strlen(ready), 0);
 
-    UploadSession *session = upload_session_create(dest_root);
+    UploadSession *session = upload_session_create(dest_root, 1);
     if (!session) {
         const char *err = "ERROR: Upload init failed\n";
         send(client_sock, err, strlen(err), 0);

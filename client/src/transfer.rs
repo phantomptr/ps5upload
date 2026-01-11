@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::net::Shutdown;
 use std::time::Duration;
 
-const PACK_BUFFER_SIZE: usize = 64 * 1024 * 1024; // 64MB Packs
+const PACK_BUFFER_SIZE: usize = 128 * 1024 * 1024; // 128MB Packs
 const MAGIC_FTX1: u32 = 0x31585446;
 const SEND_CHUNK_SIZE: usize = 1024 * 1024; // 1MB write chunks for smoother progress
 

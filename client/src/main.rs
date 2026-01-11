@@ -65,7 +65,6 @@ struct Ps5UploadApp {
     selected_preset: usize,
     custom_preset_path: String,
     custom_subfolder: String, // Calculated from game_path usually
-    temp_dir_override: String,
 
     storage_locations: Vec<StorageLocation>,
     
@@ -124,7 +123,6 @@ impl Ps5UploadApp {
             selected_preset: 0,
             custom_preset_path: String::new(),
             custom_subfolder: String::new(),
-            temp_dir_override: config.temp_dir.clone(),
             storage_locations: Vec::new(),
             client_logs: String::new(),
             payload_logs: String::new(),
@@ -185,17 +183,8 @@ impl Ps5UploadApp {
         }
     }
 
-    fn get_display_dest_path(&self) -> String {
+    fn get_dest_path(&self) -> String {
         let base = self.selected_storage.as_deref().unwrap_or("/data");
-        self.build_dest_path_with_base(base)
-    }
-
-    fn get_upload_dest_path(&self) -> String {
-        let base = if !self.temp_dir_override.trim().is_empty() {
-            self.temp_dir_override.as_str()
-        } else {
-            self.selected_storage.as_deref().unwrap_or("/data")
-        };
         self.build_dest_path_with_base(base)
     }
 
@@ -250,7 +239,7 @@ impl Ps5UploadApp {
             return;
         }
 
-        let dest = self.get_upload_dest_path();
+        let dest = self.get_dest_path();
         let ip = self.ip.clone();
         let tx = self.tx.clone();
         let rt = self.rt.clone();
@@ -287,10 +276,11 @@ impl Ps5UploadApp {
         
         let ip = self.ip.clone();
         let game_path = self.game_path.clone();
-        let dest_path = self.get_upload_dest_path();
+        let dest_path = self.get_dest_path();
         let tx = self.tx.clone();
         let rt = self.rt.clone();
         let connections = self.config.connections;
+        let use_temp = self.config.use_temp;
         
         thread::spawn(move || {
             let tx_log = tx.clone();
@@ -320,7 +310,7 @@ impl Ps5UploadApp {
 
                 let start = std::time::Instant::now();
                 if connection_count == 1 {
-                    let stream = upload_v2_init(&ip, TRANSFER_PORT, &dest_path).await?;
+                    let stream = upload_v2_init(&ip, TRANSFER_PORT, &dest_path, use_temp).await?;
                     let mut std_stream = stream.into_std()?;
                     std_stream.set_nonblocking(false)?;
                     let _ = tx.send(AppMessage::PayloadLog("Server READY".to_string()));
@@ -360,7 +350,7 @@ impl Ps5UploadApp {
 
                 let mut workers = Vec::new();
                 for bucket in buckets.into_iter().filter(|b| !b.is_empty()) {
-                    let stream = upload_v2_init(&ip, TRANSFER_PORT, &dest_path).await?;
+                    let stream = upload_v2_init(&ip, TRANSFER_PORT, &dest_path, use_temp).await?;
                     let std_stream = stream.into_std()?;
                     std_stream.set_nonblocking(false)?;
                     workers.push((bucket, std_stream));
@@ -577,7 +567,7 @@ impl eframe::App for Ps5UploadApp {
                 .show(ctx, |ui| {
                     ui.label(format!("Folder already exists:\n{}
 
-Overwrite it?", self.get_upload_dest_path()));
+Overwrite it?", self.get_dest_path()));
                     ui.add_space(10.0);
                     ui.horizontal(|ui| {
                         if ui.button("Overwrite").clicked() { self.start_upload(); }
@@ -754,19 +744,13 @@ Overwrite it?", self.get_upload_dest_path()));
                     ui.end_row();
                     if self.selected_preset == 2 { ui.label("Path:"); ui.text_edit_singleline(&mut self.custom_preset_path); ui.end_row(); }
                     ui.label("Name:"); ui.text_edit_singleline(&mut self.custom_subfolder); ui.end_row();
-                    ui.label("Temp Dir:");
-                    let temp_edit = ui.text_edit_singleline(&mut self.temp_dir_override);
-                    if temp_edit.changed() {
-                        self.config.temp_dir = self.temp_dir_override.clone();
-                        self.config.save();
-                    }
+                    ui.label("Use Temp:");
+                    let temp_toggle = ui.checkbox(&mut self.config.use_temp, "Stage on fastest storage");
+                    if temp_toggle.changed() { self.config.save(); }
                     ui.end_row();
                 });
                 ui.add_space(5.0);
-                ui.label(egui::RichText::new(format!("➡ Destination: {}", self.get_display_dest_path())).monospace().weak());
-                if !self.temp_dir_override.trim().is_empty() {
-                    ui.label(egui::RichText::new(format!("➡ Uploading to: {}", self.get_upload_dest_path())).monospace().weak());
-                }
+                ui.label(egui::RichText::new(format!("➡ Destination: {}", self.get_dest_path())).monospace().weak());
             });
 
             ui.add_space(10.0);

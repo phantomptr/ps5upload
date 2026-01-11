@@ -215,13 +215,19 @@ static void process_command(struct ClientConnection *conn) {
     }
     if (strncmp(conn->cmd_buffer, "UPLOAD_V2 ", 10) == 0) {
         char dest_path[PATH_MAX];
-        if (sscanf(conn->cmd_buffer + 10, "%s", dest_path) < 1) {
+        char mode[16] = {0};
+        int parsed = sscanf(conn->cmd_buffer + 10, "%s %15s", dest_path, mode);
+        if (parsed < 1) {
             const char *error = "ERROR: Invalid UPLOAD_V2 format\n";
             send(conn->sock, error, strlen(error), 0);
             close_connection(conn);
             return;
         }
-        conn->upload = upload_session_create(dest_path);
+        int use_temp = 1;
+        if (parsed >= 2 && strcasecmp(mode, "DIRECT") == 0) {
+            use_temp = 0;
+        }
+        conn->upload = upload_session_create(dest_path, use_temp);
         if (!conn->upload) {
             printf("[FTX] Upload init failed for %s\n", dest_path);
             const char *error = "ERROR: Upload init failed\n";
