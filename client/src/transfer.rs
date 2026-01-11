@@ -8,7 +8,6 @@ use std::thread;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::net::Shutdown;
-use std::time::Duration;
 use std::io::ErrorKind;
 
 const PACK_BUFFER_SIZE: usize = 128 * 1024 * 1024; // 128MB Packs
@@ -88,10 +87,38 @@ impl PackBuffer {
     }
 }
 
-fn send_frame_header(stream: &mut std::net::TcpStream, ftype: FrameType, len: u64) -> Result<()> {
-    stream.write_all(&MAGIC_FTX1.to_le_bytes())?;
-    stream.write_all(&(ftype as u32).to_le_bytes())?;
-    stream.write_all(&len.to_le_bytes())?;
+fn write_all_retry(
+    stream: &mut std::net::TcpStream,
+    data: &[u8],
+    cancel: &Arc<AtomicBool>,
+) -> Result<()> {
+    let mut offset = 0usize;
+    while offset < data.len() {
+        if cancel.load(Ordering::Relaxed) {
+            let _ = stream.shutdown(Shutdown::Both);
+            return Err(anyhow::anyhow!("Upload cancelled by user"));
+        }
+        match stream.write(&data[offset..]) {
+            Ok(0) => return Err(anyhow::anyhow!("Socket closed during send")),
+            Ok(n) => offset += n,
+            Err(err) => match err.kind() {
+                ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted => continue,
+                _ => return Err(err.into()),
+            },
+        }
+    }
+    Ok(())
+}
+
+fn send_frame_header(
+    stream: &mut std::net::TcpStream,
+    ftype: FrameType,
+    len: u64,
+    cancel: &Arc<AtomicBool>,
+) -> Result<()> {
+    write_all_retry(stream, &MAGIC_FTX1.to_le_bytes(), cancel)?;
+    write_all_retry(stream, &(ftype as u32).to_le_bytes(), cancel)?;
+    write_all_retry(stream, &len.to_le_bytes(), cancel)?;
     Ok(())
 }
 
@@ -148,7 +175,6 @@ where
 {
     // Optimize socket
     let _ = stream.set_nodelay(true);
-    let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
 
     // Channel for Pipelining: Packer -> Sender
     let (tx, rx) = sync_channel::<ReadyPack>(2);
@@ -246,7 +272,7 @@ where
             return Err(anyhow::anyhow!("Upload cancelled by user"));
         }
 
-        send_frame_header(&mut stream, FrameType::Pack, ready_pack.buffer.len() as u64)?;
+        send_frame_header(&mut stream, FrameType::Pack, ready_pack.buffer.len() as u64, &cancel)?;
 
         let mut sent_payload = 0usize;
         let pack_len = ready_pack.buffer.len();
@@ -256,23 +282,7 @@ where
                 return Err(anyhow::anyhow!("Upload cancelled by user"));
             }
             let end = std::cmp::min(sent_payload + SEND_CHUNK_SIZE, pack_len);
-            let mut offset = sent_payload;
-            while offset < end {
-                match stream.write(&ready_pack.buffer[offset..end]) {
-                    Ok(0) => return Err(anyhow::anyhow!("Socket closed during send")),
-                    Ok(n) => offset += n,
-                    Err(err) => match err.kind() {
-                        ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted => {
-                            if cancel.load(Ordering::Relaxed) {
-                                let _ = stream.shutdown(Shutdown::Both);
-                                return Err(anyhow::anyhow!("Upload cancelled by user"));
-                            }
-                            continue;
-                        }
-                        _ => return Err(err.into()),
-                    },
-                }
-            }
+            write_all_retry(&mut stream, &ready_pack.buffer[sent_payload..end], &cancel)?;
             sent_payload = end;
 
             let approx = if pack_len > 0 {
@@ -294,7 +304,7 @@ where
         last_progress_sent = total_sent_bytes;
     }
 
-    send_frame_header(&mut stream, FrameType::Finish, 0)?;
+    send_frame_header(&mut stream, FrameType::Finish, 0, &cancel)?;
 
     Ok(())
 }
