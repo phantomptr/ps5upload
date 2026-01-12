@@ -19,7 +19,7 @@
 
 // Optimized for multi-process concurrency
 #define PACK_BUFFER_SIZE (128 * 1024 * 1024)  // 128MB buffer for packs (matches client)
-#define PACK_QUEUE_DEPTH 64                   // Deep queue for smooth pipeline
+#define PACK_QUEUE_DEPTH 16                   // Deep queue for smooth pipeline
 #define DISK_WORKER_COUNT 10                  // 10 separate processes for better I/O throughput
 
 typedef struct ConnState {
@@ -491,21 +491,25 @@ static void write_pack_worker(const char *dest_root, const uint8_t *pack_buf, si
 static void disk_worker_process(const char *dest_root) {
     long long local_bytes = 0;
     int local_files = 0;
+    PackJob *job = malloc(sizeof(PackJob));
+    if (!job) {
+        printf("[FTX] Worker process %d failed to allocate job buffer\n", getpid());
+        exit(1);
+    }
 
     for (;;) {
-        PackJob job;
-        if (!queue_pop(&g_shared->queue, &job)) {
+        if (!queue_pop(&g_shared->queue, job)) {
             break;
         }
 
         pthread_mutex_lock(&g_shared->state_mutex);
-        while (job.seq != g_shared->next_seq) {
+        while (job->seq != g_shared->next_seq) {
             pthread_cond_wait(&g_shared->state_cond, &g_shared->state_mutex);
         }
 
         long long before_bytes = local_bytes;
         int before_files = local_files;
-        write_pack_worker(dest_root, job.data, job.len, &local_bytes, &local_files);
+        write_pack_worker(dest_root, job->data, job->len, &local_bytes, &local_files);
 
         g_shared->total_bytes += (local_bytes - before_bytes);
         g_shared->total_files += (local_files - before_files);
@@ -517,6 +521,7 @@ static void disk_worker_process(const char *dest_root) {
         pthread_mutex_unlock(&g_shared->state_mutex);
     }
 
+    free(job);
     exit(0);
 }
 
@@ -714,7 +719,7 @@ static int enqueue_pack(UploadSession *session) {
 }
 
 int upload_session_feed(UploadSession *session, const uint8_t *data, size_t len, int *done, int *error) {
-    if (!session || !data) {
+    if (!session) {
         return -1;
     }
 

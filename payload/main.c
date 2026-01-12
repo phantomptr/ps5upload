@@ -370,7 +370,8 @@ int main(void) {
     size_t conn_cap = 0;
 
     while (1) {
-        size_t poll_count = 1 + conn_count;
+        size_t current_conn_count = conn_count;
+        size_t poll_count = 1 + current_conn_count;
         struct pollfd *pfds = calloc(poll_count, sizeof(*pfds));
         if (!pfds) {
             usleep(1000);
@@ -379,9 +380,13 @@ int main(void) {
 
         pfds[0].fd = server_sock;
         pfds[0].events = POLLIN;
-        for (size_t i = 0; i < conn_count; i++) {
+        for (size_t i = 0; i < current_conn_count; i++) {
             pfds[i + 1].fd = connections[i].sock;
-            pfds[i + 1].events = POLLIN;
+            if (connections[i].mode == CONN_UPLOAD && upload_session_backpressure(connections[i].upload)) {
+                pfds[i + 1].events = 0;
+            } else {
+                pfds[i + 1].events = POLLIN;
+            }
         }
 
         int ready = poll(pfds, poll_count, 100);
@@ -434,12 +439,28 @@ int main(void) {
             }
         }
 
-        for (size_t i = 0; i < conn_count; i++) {
-            if (!(pfds[i + 1].revents & POLLIN)) {
-                continue;
-            }
+        for (size_t i = 0; i < current_conn_count; i++) {
             struct ClientConnection *conn = &connections[i];
             if (conn->sock < 0) {
+                continue;
+            }
+
+            if (conn->mode == CONN_UPLOAD && upload_session_backpressure(conn->upload)) {
+                int done = 0;
+                int err = 0;
+                upload_session_feed(conn->upload, NULL, 0, &done, &err);
+                if (err) {
+                    const char *error = "ERROR: Upload failed\n";
+                    send(conn->sock, error, strlen(error), 0);
+                    close_connection(conn);
+                    continue;
+                }
+                if (upload_session_backpressure(conn->upload)) {
+                    continue;
+                }
+            }
+
+            if (!(pfds[i + 1].revents & POLLIN)) {
                 continue;
             }
 
@@ -470,13 +491,6 @@ int main(void) {
                 }
             } else {
                 uint8_t buffer[256 * 1024];  // Increased from 64KB to 256KB for better throughput
-
-                // Brief delay when queue is full to let workers catch up
-                // The next feed() call will automatically retry the pending enqueue
-                if (upload_session_backpressure(conn->upload)) {
-                    usleep(1000);  // 1ms delay to avoid tight loop
-                    continue;
-                }
 
                 ssize_t n = recv(conn->sock, buffer, sizeof(buffer), 0);
                 if (n < 0) {
