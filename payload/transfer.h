@@ -16,4 +16,6 @@ void upload_session_stats(UploadSession *session, int *files, long long *bytes);
 // Legacy blocking handler for compatibility
 void handle_upload_v2(int client_sock, const char *dest_root);
 
+void transfer_cleanup(void);
+
 #endif

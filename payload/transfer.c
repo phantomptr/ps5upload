@@ -18,9 +18,9 @@
 #include "notify.h"
 
 // Optimized for multi-process concurrency
-#define PACK_BUFFER_SIZE (128 * 1024 * 1024)  // 128MB buffer for packs (matches client)
-#define PACK_QUEUE_DEPTH 16                   // Deep queue for smooth pipeline
-#define DISK_WORKER_COUNT 10                  // 10 separate processes for better I/O throughput
+#define PACK_BUFFER_SIZE (4 * 1024 * 1024)    // 4MB buffer (reduced to 64MB total usage)
+#define PACK_QUEUE_DEPTH 8                    // 8 * 4MB = 32MB shared memory
+#define DISK_WORKER_COUNT 2                   // 2 separate processes (Stability fix)
 
 typedef struct ConnState {
     char dest_root[PATH_MAX];
@@ -489,6 +489,14 @@ static void write_pack_worker(const char *dest_root, const uint8_t *pack_buf, si
 }
 
 static void disk_worker_process(const char *dest_root) {
+    printf("[FTX] Worker %d started\n", getpid());
+
+    // Close all inherited file descriptors (except stdin/stdout/stderr)
+    // This ensures workers don't hold the server socket open
+    for (int i = 3; i < 1024; i++) {
+        close(i);
+    }
+
     long long local_bytes = 0;
     int local_files = 0;
     PackJob *job = malloc(sizeof(PackJob));
@@ -530,12 +538,14 @@ static void init_shared_state(void) {
         return;
     }
 
+    printf("[FTX] Allocating shared memory (%lu bytes)...\n", sizeof(SharedState));
     g_shared = mmap(NULL, sizeof(SharedState), PROT_READ | PROT_WRITE,
                     MAP_SHARED | MAP_ANONYMOUS, -1, 0);
     if (g_shared == MAP_FAILED) {
-        printf("[FTX] Failed to create shared memory\n");
+        printf("[FTX] Failed to create shared memory: %s\n", strerror(errno));
         exit(1);
     }
+    printf("[FTX] Shared memory allocated. Initializing...\n");
 
     memset(g_shared, 0, sizeof(SharedState));
     queue_init(&g_shared->queue, PACK_QUEUE_DEPTH);
@@ -567,12 +577,14 @@ static void init_worker_pool(const char *dest_root) {
         return;
     }
 
+    printf("[FTX] Initializing worker pool...\n");
     init_shared_state();
 
     for (int i = 0; i < DISK_WORKER_COUNT; i++) {
+        printf("[FTX] Forking worker %d...\n", i);
         pid_t pid = fork();
         if (pid < 0) {
-            printf("[FTX] Failed to fork worker %d\n", i);
+            printf("[FTX] Failed to fork worker %d: %s\n", i, strerror(errno));
             exit(1);
         } else if (pid == 0) {
             disk_worker_process(dest_root);
@@ -582,6 +594,7 @@ static void init_worker_pool(const char *dest_root) {
             printf("[FTX] Started worker process %d (pid %d)\n", i, pid);
         }
     }
+    printf("[FTX] Worker pool initialized.\n");
 
     g_workers_initialized = 1;
 }
@@ -611,6 +624,10 @@ static void cleanup_worker_pool(void) {
     }
 
     g_workers_initialized = 0;
+}
+
+void transfer_cleanup(void) {
+    cleanup_worker_pool();
 }
 
 static int upload_session_start(UploadSession *session, const char *dest_root) {
