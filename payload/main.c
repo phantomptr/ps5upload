@@ -470,10 +470,14 @@ int main(void) {
                 }
             } else {
                 uint8_t buffer[256 * 1024];  // Increased from 64KB to 256KB for better throughput
+
+                // Brief delay when queue is full to let workers catch up
+                // The next feed() call will automatically retry the pending enqueue
                 if (upload_session_backpressure(conn->upload)) {
-                    // Skip reading if backpressure - poll will notify us when ready
+                    usleep(1000);  // 1ms delay to avoid tight loop
                     continue;
                 }
+
                 ssize_t n = recv(conn->sock, buffer, sizeof(buffer), 0);
                 if (n < 0) {
                     if (errno == EWOULDBLOCK || errno == EAGAIN) {

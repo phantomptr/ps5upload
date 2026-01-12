@@ -14,11 +14,6 @@
 #include <sys/wait.h>
 #include <signal.h>
 
-// Ensure ETIMEDOUT is defined
-#ifndef ETIMEDOUT
-#define ETIMEDOUT 110
-#endif
-
 #include "protocol_defs.h"
 #include "notify.h"
 
@@ -228,7 +223,6 @@ static void close_current_file(ConnState *state) {
     if (!state->current_fp) {
         return;
     }
-    fflush(state->current_fp);  // Ensure all data is written before closing
     fclose(state->current_fp);
     chmod(state->current_full_path, 0777);
     state->current_fp = NULL;
@@ -448,7 +442,6 @@ static void write_pack_worker(const char *dest_root, const uint8_t *pack_buf, si
 
         if (strncmp(rel_path, current_path, PATH_MAX) != 0) {
             if (current_fp) {
-                fflush(current_fp);  // Flush before closing
                 fclose(current_fp);
                 chmod(current_full_path, 0777);
                 current_fp = NULL;
@@ -462,23 +455,17 @@ static void write_pack_worker(const char *dest_root, const uint8_t *pack_buf, si
             if (!current_fp) {
                 printf("[FTX] Worker %d: Failed to open %s: %s\n", getpid(), full_path, strerror(errno));
             } else {
-                // Set larger buffer for better write performance
-                setvbuf(current_fp, NULL, _IOFBF, 256 * 1024);  // 256KB buffer
                 (*total_files)++;
             }
         } else if (!current_fp) {
             current_fp = fopen(full_path, "ab");
             if (!current_fp) {
                 printf("[FTX] Worker %d: Failed to reopen %s: %s\n", getpid(), full_path, strerror(errno));
-            } else {
-                // Set larger buffer for reopened files too
-                setvbuf(current_fp, NULL, _IOFBF, 256 * 1024);
             }
         }
 
         if (current_fp) {
             fwrite(pack_buf + offset, 1, data_len, current_fp);
-            // Removed fflush() here - let OS buffer for better performance
             *total_bytes += data_len;
 
             pthread_mutex_lock(&g_shared->disk_log_mutex);
@@ -511,29 +498,15 @@ static void disk_worker_process(const char *dest_root) {
             break;
         }
 
-        // Wait for our turn with timeout to avoid deadlock
         pthread_mutex_lock(&g_shared->state_mutex);
         while (job.seq != g_shared->next_seq) {
-            struct timespec timeout;
-            clock_gettime(CLOCK_REALTIME, &timeout);
-            timeout.tv_sec += 1;  // 1 second timeout
-            int wait_result = pthread_cond_timedwait(&g_shared->state_cond, &g_shared->state_mutex, &timeout);
-
-            // On timeout, check if we should still wait
-            if (wait_result == ETIMEDOUT && job.seq != g_shared->next_seq) {
-                // Still not our turn, continue waiting
-                continue;
-            }
+            pthread_cond_wait(&g_shared->state_cond, &g_shared->state_mutex);
         }
-        pthread_mutex_unlock(&g_shared->state_mutex);
 
-        // Process pack outside the critical section for better parallelism
         long long before_bytes = local_bytes;
         int before_files = local_files;
         write_pack_worker(dest_root, job.data, job.len, &local_bytes, &local_files);
 
-        // Update shared state quickly
-        pthread_mutex_lock(&g_shared->state_mutex);
         g_shared->total_bytes += (local_bytes - before_bytes);
         g_shared->total_files += (local_files - before_files);
         g_shared->next_seq++;
