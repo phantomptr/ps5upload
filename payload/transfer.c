@@ -10,13 +10,17 @@
 #include <fcntl.h>
 #include <pthread.h>
 #include <time.h>
+#include <sys/mman.h>
+#include <sys/wait.h>
+#include <signal.h>
 
 #include "protocol_defs.h"
 #include "notify.h"
 
-#define PACK_BUFFER_SIZE (1024 * 1024 * 1024) // 1GB buffer for packs
-#define PACK_QUEUE_DEPTH 64
-#define DISK_WORKER_COUNT 10
+// Optimized for multi-process concurrency
+#define PACK_BUFFER_SIZE (128 * 1024 * 1024)  // 128MB buffer for packs (matches client)
+#define PACK_QUEUE_DEPTH 64                   // Deep queue for smooth pipeline
+#define DISK_WORKER_COUNT 10                  // 10 separate processes for better I/O throughput
 
 typedef struct ConnState {
     char dest_root[PATH_MAX];
@@ -26,11 +30,6 @@ typedef struct ConnState {
     char current_full_path[PATH_MAX];
     long long total_bytes;
     int total_files;
-    uint64_t next_seq;
-    uint64_t enqueue_seq;
-    uint64_t pending;
-    pthread_mutex_t mutex;
-    pthread_cond_t cond;
 } ConnState;
 
 typedef struct UploadSession {
@@ -54,16 +53,16 @@ typedef struct UploadSession {
 } UploadSession;
 
 typedef struct PackJob {
-    uint8_t *data;
+    uint8_t data[PACK_BUFFER_SIZE];
     size_t len;
-    ConnState *state;
     uint64_t seq;
-    struct PackJob *next;
+    int valid;
 } PackJob;
 
 typedef struct PackQueue {
-    PackJob *head;
-    PackJob *tail;
+    PackJob jobs[PACK_QUEUE_DEPTH];
+    size_t read_idx;
+    size_t write_idx;
     size_t count;
     size_t max;
     int closed;
@@ -72,19 +71,57 @@ typedef struct PackQueue {
     pthread_cond_t not_full;
 } PackQueue;
 
-static PackQueue g_queue;
-static pthread_t g_workers[DISK_WORKER_COUNT];
-static pthread_once_t g_workers_once = PTHREAD_ONCE_INIT;
+typedef struct SharedState {
+    PackQueue queue;
+    pthread_mutex_t state_mutex;
+    pthread_cond_t state_cond;
+    uint64_t next_seq;
+    uint64_t enqueue_seq;
+    uint64_t pending;
+    long long total_bytes;
+    int total_files;
+    pthread_mutex_t disk_log_mutex;
+    uint64_t disk_log_bytes;
+    uint64_t disk_log_ms;
+} SharedState;
+
+static SharedState *g_shared = NULL;
+static pid_t g_worker_pids[DISK_WORKER_COUNT];
+static int g_workers_initialized = 0;
+
+static uint64_t now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)(ts.tv_nsec / 1000000ULL);
+}
 
 static void queue_init(PackQueue *q, size_t max) {
     memset(q, 0, sizeof(*q));
     q->max = max;
-    pthread_mutex_init(&q->mutex, NULL);
-    pthread_cond_init(&q->not_empty, NULL);
-    pthread_cond_init(&q->not_full, NULL);
+    q->read_idx = 0;
+    q->write_idx = 0;
+    q->count = 0;
+    q->closed = 0;
+
+    pthread_mutexattr_t mattr;
+    pthread_mutexattr_init(&mattr);
+    pthread_mutexattr_setpshared(&mattr, PTHREAD_PROCESS_SHARED);
+    pthread_mutex_init(&q->mutex, &mattr);
+    pthread_mutexattr_destroy(&mattr);
+
+    pthread_condattr_t cattr;
+    pthread_condattr_init(&cattr);
+    pthread_condattr_setpshared(&cattr, PTHREAD_PROCESS_SHARED);
+    pthread_cond_init(&q->not_empty, &cattr);
+    pthread_cond_init(&q->not_full, &cattr);
+    pthread_condattr_destroy(&cattr);
+
+    for (size_t i = 0; i < PACK_QUEUE_DEPTH; i++) {
+        q->jobs[i].valid = 0;
+    }
 }
 
-static int queue_push(PackQueue *q, PackJob *job) {
+static int queue_push(PackQueue *q, const uint8_t *data, size_t len, uint64_t seq) {
     pthread_mutex_lock(&q->mutex);
     if (q->closed) {
         pthread_mutex_unlock(&q->mutex);
@@ -94,16 +131,16 @@ static int queue_push(PackQueue *q, PackJob *job) {
         pthread_mutex_unlock(&q->mutex);
         return 1;
     }
-    job->next = NULL;
-    if (!q->tail) {
-        q->head = job;
-        q->tail = job;
-    } else {
-        q->tail->next = job;
-        q->tail = job;
-    }
+
+    PackJob *job = &q->jobs[q->write_idx];
+    memcpy(job->data, data, len);
+    job->len = len;
+    job->seq = seq;
+    job->valid = 1;
+
+    q->write_idx = (q->write_idx + 1) % PACK_QUEUE_DEPTH;
     q->count++;
-    pthread_cond_signal(&q->not_empty);
+    pthread_cond_broadcast(&q->not_empty);
     pthread_mutex_unlock(&q->mutex);
     return 0;
 }
@@ -116,24 +153,30 @@ static int queue_is_full(PackQueue *q) {
     return full;
 }
 
-static PackJob *queue_pop(PackQueue *q) {
+static int queue_pop(PackQueue *q, PackJob *out) {
     pthread_mutex_lock(&q->mutex);
     while (!q->closed && q->count == 0) {
         pthread_cond_wait(&q->not_empty, &q->mutex);
     }
     if (q->count == 0 && q->closed) {
         pthread_mutex_unlock(&q->mutex);
-        return NULL;
+        return 0;
     }
-    PackJob *job = q->head;
-    q->head = job->next;
-    if (!q->head) {
-        q->tail = NULL;
+
+    PackJob *job = &q->jobs[q->read_idx];
+    if (!job->valid) {
+        pthread_mutex_unlock(&q->mutex);
+        return 0;
     }
+
+    memcpy(out, job, sizeof(PackJob));
+    job->valid = 0;
+
+    q->read_idx = (q->read_idx + 1) % PACK_QUEUE_DEPTH;
     q->count--;
-    pthread_cond_signal(&q->not_full);
+    pthread_cond_broadcast(&q->not_full);
     pthread_mutex_unlock(&q->mutex);
-    return job;
+    return 1;
 }
 
 // Helper to create directories recursively with caching
@@ -351,7 +394,8 @@ static int ensure_parent_dir(const char *path) {
     return mkdir_recursive(parent, NULL);
 }
 
-static void write_pack_locked(ConnState *state, const uint8_t *pack_buf, size_t pack_len) {
+static void write_pack_worker(const char *dest_root, const uint8_t *pack_buf, size_t pack_len,
+                               long long *total_bytes, int *total_files) {
     size_t offset = 0;
     uint32_t record_count = 0;
 
@@ -360,6 +404,11 @@ static void write_pack_locked(ConnState *state, const uint8_t *pack_buf, size_t 
     }
     memcpy(&record_count, pack_buf, 4);
     offset += 4;
+
+    static char current_path[PATH_MAX] = {0};
+    static char current_full_path[PATH_MAX] = {0};
+    static char dir_cache[PATH_MAX] = {0};
+    static FILE *current_fp = NULL;
 
     for (uint32_t i = 0; i < record_count; i++) {
         if (offset + 2 > pack_len) break;
@@ -382,77 +431,182 @@ static void write_pack_locked(ConnState *state, const uint8_t *pack_buf, size_t 
         if (offset + data_len > pack_len) break;
 
         char full_path[PATH_MAX];
-        snprintf(full_path, sizeof(full_path), "%s/%s", state->dest_root, rel_path);
+        snprintf(full_path, sizeof(full_path), "%s/%s", dest_root, rel_path);
 
         char *last_slash = strrchr(full_path, '/');
         if (last_slash) {
             *last_slash = '\0';
-            mkdir_recursive(full_path, state->dir_cache);
+            mkdir_recursive(full_path, dir_cache);
             *last_slash = '/';
         }
 
-        if (strncmp(rel_path, state->current_path, PATH_MAX) != 0) {
-            close_current_file(state);
-            strncpy(state->current_path, rel_path, PATH_MAX - 1);
-            state->current_path[PATH_MAX - 1] = '\0';
-            strncpy(state->current_full_path, full_path, PATH_MAX - 1);
-            state->current_full_path[PATH_MAX - 1] = '\0';
-
-            state->current_fp = fopen(full_path, "wb");
-            if (!state->current_fp) {
-                printf("[FTX] Failed to open %s: %s\n", full_path, strerror(errno));
-            } else {
-                state->total_files++;
+        if (strncmp(rel_path, current_path, PATH_MAX) != 0) {
+            if (current_fp) {
+                fclose(current_fp);
+                chmod(current_full_path, 0777);
+                current_fp = NULL;
             }
-        } else if (!state->current_fp) {
-            state->current_fp = fopen(full_path, "ab");
-            if (!state->current_fp) {
-                printf("[FTX] Failed to reopen %s: %s\n", full_path, strerror(errno));
+            strncpy(current_path, rel_path, PATH_MAX - 1);
+            current_path[PATH_MAX - 1] = '\0';
+            strncpy(current_full_path, full_path, PATH_MAX - 1);
+            current_full_path[PATH_MAX - 1] = '\0';
+
+            current_fp = fopen(full_path, "wb");
+            if (!current_fp) {
+                printf("[FTX] Worker %d: Failed to open %s: %s\n", getpid(), full_path, strerror(errno));
+            } else {
+                (*total_files)++;
+            }
+        } else if (!current_fp) {
+            current_fp = fopen(full_path, "ab");
+            if (!current_fp) {
+                printf("[FTX] Worker %d: Failed to reopen %s: %s\n", getpid(), full_path, strerror(errno));
             }
         }
 
-        if (state->current_fp) {
-            fwrite(pack_buf + offset, 1, data_len, state->current_fp);
-            state->total_bytes += data_len;
+        if (current_fp) {
+            fwrite(pack_buf + offset, 1, data_len, current_fp);
+            fflush(current_fp);
+            *total_bytes += data_len;
+
+            pthread_mutex_lock(&g_shared->disk_log_mutex);
+            g_shared->disk_log_bytes += data_len;
+            uint64_t now = now_ms();
+            if (g_shared->disk_log_ms == 0) {
+                g_shared->disk_log_ms = now;
+                g_shared->disk_log_bytes = 0;
+            } else if (now - g_shared->disk_log_ms >= 2000) {
+                double seconds = (now - g_shared->disk_log_ms) / 1000.0;
+                double mbps = (g_shared->disk_log_bytes / (1024.0 * 1024.0)) / seconds;
+                printf("[FTX] disk write rate: %.2f MB/s (%d workers)\n", mbps, DISK_WORKER_COUNT);
+                g_shared->disk_log_ms = now;
+                g_shared->disk_log_bytes = 0;
+            }
+            pthread_mutex_unlock(&g_shared->disk_log_mutex);
         }
 
         offset += data_len;
     }
 }
 
-static void *disk_worker_main(void *arg) {
-    (void)arg;
+static void disk_worker_process(const char *dest_root) {
+    long long local_bytes = 0;
+    int local_files = 0;
+
     for (;;) {
-        PackJob *job = queue_pop(&g_queue);
-        if (!job) {
+        PackJob job;
+        if (!queue_pop(&g_shared->queue, &job)) {
             break;
         }
 
-        ConnState *state = job->state;
-        pthread_mutex_lock(&state->mutex);
-        while (job->seq != state->next_seq) {
-            pthread_cond_wait(&state->cond, &state->mutex);
+        pthread_mutex_lock(&g_shared->state_mutex);
+        while (job.seq != g_shared->next_seq) {
+            pthread_cond_wait(&g_shared->state_cond, &g_shared->state_mutex);
         }
 
-        write_pack_locked(state, job->data, job->len);
-        state->next_seq++;
-        if (state->pending > 0) {
-            state->pending--;
-        }
-        pthread_cond_broadcast(&state->cond);
-        pthread_mutex_unlock(&state->mutex);
+        long long before_bytes = local_bytes;
+        int before_files = local_files;
+        write_pack_worker(dest_root, job.data, job.len, &local_bytes, &local_files);
 
-        free(job->data);
-        free(job);
+        g_shared->total_bytes += (local_bytes - before_bytes);
+        g_shared->total_files += (local_files - before_files);
+        g_shared->next_seq++;
+        if (g_shared->pending > 0) {
+            g_shared->pending--;
+        }
+        pthread_cond_broadcast(&g_shared->state_cond);
+        pthread_mutex_unlock(&g_shared->state_mutex);
     }
-    return NULL;
+
+    exit(0);
 }
 
-static void init_worker_pool(void) {
-    queue_init(&g_queue, PACK_QUEUE_DEPTH);
-    for (int i = 0; i < DISK_WORKER_COUNT; i++) {
-        pthread_create(&g_workers[i], NULL, disk_worker_main, NULL);
+static void init_shared_state(void) {
+    if (g_shared) {
+        return;
     }
+
+    g_shared = mmap(NULL, sizeof(SharedState), PROT_READ | PROT_WRITE,
+                    MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (g_shared == MAP_FAILED) {
+        printf("[FTX] Failed to create shared memory\n");
+        exit(1);
+    }
+
+    memset(g_shared, 0, sizeof(SharedState));
+    queue_init(&g_shared->queue, PACK_QUEUE_DEPTH);
+
+    pthread_mutexattr_t mattr;
+    pthread_mutexattr_init(&mattr);
+    pthread_mutexattr_setpshared(&mattr, PTHREAD_PROCESS_SHARED);
+    pthread_mutex_init(&g_shared->state_mutex, &mattr);
+    pthread_mutex_init(&g_shared->disk_log_mutex, &mattr);
+    pthread_mutexattr_destroy(&mattr);
+
+    pthread_condattr_t cattr;
+    pthread_condattr_init(&cattr);
+    pthread_condattr_setpshared(&cattr, PTHREAD_PROCESS_SHARED);
+    pthread_cond_init(&g_shared->state_cond, &cattr);
+    pthread_condattr_destroy(&cattr);
+
+    g_shared->next_seq = 0;
+    g_shared->enqueue_seq = 0;
+    g_shared->pending = 0;
+    g_shared->total_bytes = 0;
+    g_shared->total_files = 0;
+    g_shared->disk_log_bytes = 0;
+    g_shared->disk_log_ms = 0;
+}
+
+static void init_worker_pool(const char *dest_root) {
+    if (g_workers_initialized) {
+        return;
+    }
+
+    init_shared_state();
+
+    for (int i = 0; i < DISK_WORKER_COUNT; i++) {
+        pid_t pid = fork();
+        if (pid < 0) {
+            printf("[FTX] Failed to fork worker %d\n", i);
+            exit(1);
+        } else if (pid == 0) {
+            disk_worker_process(dest_root);
+            exit(0);
+        } else {
+            g_worker_pids[i] = pid;
+            printf("[FTX] Started worker process %d (pid %d)\n", i, pid);
+        }
+    }
+
+    g_workers_initialized = 1;
+}
+
+static void cleanup_worker_pool(void) {
+    if (!g_workers_initialized) {
+        return;
+    }
+
+    pthread_mutex_lock(&g_shared->queue.mutex);
+    g_shared->queue.closed = 1;
+    pthread_cond_broadcast(&g_shared->queue.not_empty);
+    pthread_mutex_unlock(&g_shared->queue.mutex);
+
+    for (int i = 0; i < DISK_WORKER_COUNT; i++) {
+        if (g_worker_pids[i] > 0) {
+            int status;
+            waitpid(g_worker_pids[i], &status, 0);
+            printf("[FTX] Worker process %d exited\n", g_worker_pids[i]);
+            g_worker_pids[i] = 0;
+        }
+    }
+
+    if (g_shared) {
+        munmap(g_shared, sizeof(SharedState));
+        g_shared = NULL;
+    }
+
+    g_workers_initialized = 0;
 }
 
 static int upload_session_start(UploadSession *session, const char *dest_root) {
@@ -460,7 +614,9 @@ static int upload_session_start(UploadSession *session, const char *dest_root) {
         return -1;
     }
 
-    pthread_once(&g_workers_once, init_worker_pool);
+    if (!g_workers_initialized) {
+        init_worker_pool(dest_root);
+    }
 
     memset(session, 0, sizeof(*session));
     strncpy(session->final_dest_root, dest_root, PATH_MAX - 1);
@@ -509,11 +665,6 @@ static int upload_session_start(UploadSession *session, const char *dest_root) {
     session->state.current_fp = NULL;
     session->state.current_path[0] = '\0';
     session->state.current_full_path[0] = '\0';
-    session->state.next_seq = 0;
-    session->state.enqueue_seq = 0;
-    session->state.pending = 0;
-    pthread_mutex_init(&session->state.mutex, NULL);
-    pthread_cond_init(&session->state.cond, NULL);
 
     session->header_bytes = 0;
     session->body = NULL;
@@ -525,45 +676,35 @@ static int upload_session_start(UploadSession *session, const char *dest_root) {
 }
 
 static int enqueue_pack(UploadSession *session) {
-    if (queue_is_full(&g_queue)) {
+    if (queue_is_full(&g_shared->queue)) {
         return 1;
     }
 
-    PackJob *job = malloc(sizeof(*job));
-    if (!job) {
-        return -1;
-    }
+    pthread_mutex_lock(&g_shared->state_mutex);
+    uint64_t seq = g_shared->enqueue_seq++;
+    g_shared->pending++;
+    pthread_mutex_unlock(&g_shared->state_mutex);
 
-    pthread_mutex_lock(&session->state.mutex);
-    uint64_t seq = session->state.enqueue_seq++;
-    session->state.pending++;
-    pthread_mutex_unlock(&session->state.mutex);
-
-    job->data = session->body;
-    job->len = session->body_len;
-    job->state = &session->state;
-    job->seq = seq;
-
-    int push_result = queue_push(&g_queue, job);
+    int push_result = queue_push(&g_shared->queue, session->body, session->body_len, seq);
     if (push_result == 1) {
-        free(job);
-        pthread_mutex_lock(&session->state.mutex);
-        if (session->state.pending > 0) {
-            session->state.pending--;
+        pthread_mutex_lock(&g_shared->state_mutex);
+        if (g_shared->pending > 0) {
+            g_shared->pending--;
         }
-        pthread_mutex_unlock(&session->state.mutex);
+        pthread_mutex_unlock(&g_shared->state_mutex);
         return 1;
     }
     if (push_result != 0) {
         printf("[FTX] enqueue failed (queue closed)\n");
-        free(job);
-        pthread_mutex_lock(&session->state.mutex);
-        if (session->state.pending > 0) {
-            session->state.pending--;
+        pthread_mutex_lock(&g_shared->state_mutex);
+        if (g_shared->pending > 0) {
+            g_shared->pending--;
         }
-        pthread_mutex_unlock(&session->state.mutex);
+        pthread_mutex_unlock(&g_shared->state_mutex);
         return -1;
     }
+
+    free(session->body);
     session->body = NULL;
     session->body_len = 0;
     session->body_bytes = 0;
@@ -710,15 +851,15 @@ static int upload_session_finish(UploadSession *session) {
         return -1;
     }
 
-    pthread_mutex_lock(&session->state.mutex);
-    while (session->state.pending > 0) {
-        pthread_cond_wait(&session->state.cond, &session->state.mutex);
+    pthread_mutex_lock(&g_shared->state_mutex);
+    while (g_shared->pending > 0) {
+        pthread_cond_wait(&g_shared->state_cond, &g_shared->state_mutex);
     }
     close_current_file(&session->state);
-    pthread_mutex_unlock(&session->state.mutex);
 
-    pthread_mutex_destroy(&session->state.mutex);
-    pthread_cond_destroy(&session->state.cond);
+    session->state.total_bytes = g_shared->total_bytes;
+    session->state.total_files = g_shared->total_files;
+    pthread_mutex_unlock(&g_shared->state_mutex);
 
     if (session->body) {
         free(session->body);

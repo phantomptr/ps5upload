@@ -12,6 +12,7 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <errno.h>
 #include <sys/stat.h>
@@ -42,8 +43,8 @@ static int create_server_socket(int port) {
     int opt = 1;
     setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
-    // Increase buffer sizes for performance
-    int buf_size = 4 * 1024 * 1024; // 4MB
+    // Increase buffer sizes for high throughput (16MB to match client)
+    int buf_size = 16 * 1024 * 1024; // 16MB
     setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &buf_size, sizeof(buf_size));
     setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &buf_size, sizeof(buf_size));
     
@@ -171,9 +172,14 @@ static int set_nonblocking(int sock) {
 }
 
 static void set_socket_buffers(int sock) {
-    int buf_size = 4 * 1024 * 1024; // 4MB
+    // Increased to 16MB to match client and improve throughput
+    int buf_size = 16 * 1024 * 1024; // 16MB
     setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &buf_size, sizeof(buf_size));
     setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &buf_size, sizeof(buf_size));
+
+    // Enable TCP_NODELAY for lower latency
+    int nodelay = 1;
+    setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
 }
 
 struct LegacyUploadArgs {
@@ -301,7 +307,7 @@ static void process_command(struct ClientConnection *conn) {
 
 int main(void) {
     printf("╔════════════════════════════════════════╗\n");
-    printf("║     PS5 Upload Server v1.0-alpha      ║\n");
+    printf("║     PS5 Upload Server v%s      ║\n", PS5_UPLOAD_VERSION);
     printf("║                                        ║\n");
     printf("║         Author: PhantomPtr            ║\n");
     printf("║   Fast game transfer over LAN         ║\n");
@@ -344,11 +350,13 @@ int main(void) {
     if (ip_buf[0] != '\0') {
         printf("Server listening on %s:%d\n", ip_buf, SERVER_PORT);
         char notify_msg[128];
-        snprintf(notify_msg, sizeof(notify_msg), "Ready on %s:%d", ip_buf, SERVER_PORT);
+        snprintf(notify_msg, sizeof(notify_msg), "v%s Ready on %s:%d", PS5_UPLOAD_VERSION, ip_buf, SERVER_PORT);
         notify_info("PS5 Upload Server (PhantomPtr)", notify_msg);
     } else {
         printf("Server listening on port %d\n", SERVER_PORT);
-        notify_info("PS5 Upload Server (PhantomPtr)", "Ready on port " SERVER_PORT_STR);
+        char notify_msg[128];
+        snprintf(notify_msg, sizeof(notify_msg), "v%s Ready on port %s", PS5_UPLOAD_VERSION, SERVER_PORT_STR);
+        notify_info("PS5 Upload Server (PhantomPtr)", notify_msg);
     }
 
     if (set_nonblocking(server_sock) != 0) {
