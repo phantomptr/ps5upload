@@ -12,10 +12,10 @@ use std::io::ErrorKind;
 use std::sync::Mutex;
 
 // Optimized for 10 worker processes on payload side
-const PACK_BUFFER_SIZE: usize = 4 * 1024 * 1024; // 4MB Packs (reduced to fix payload OOM)
+const PACK_BUFFER_SIZE: usize = 16 * 1024 * 1024; // 16MB Packs
 const MAGIC_FTX1: u32 = 0x31585446;
 const SEND_CHUNK_SIZE: usize = 4 * 1024 * 1024; // 4MB write chunks for better throughput
-const PIPELINE_DEPTH: usize = 20; // Keep 20 packs in flight to saturate 10 workers (2x workers)
+const PIPELINE_DEPTH: usize = 5; // Reduced to 5 to match server queue depth and save RAM (5 * 16MB = 80MB)
 
 #[derive(Debug, Clone)]
 pub struct FileEntry {

@@ -43,8 +43,8 @@ static int create_server_socket(int port) {
     int opt = 1;
     setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
-    // Increase buffer sizes for high throughput (16MB to match client)
-    int buf_size = 16 * 1024 * 1024; // 16MB
+    // Increased to 2MB to improve throughput
+    int buf_size = 2 * 1024 * 1024; // 2MB
     setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &buf_size, sizeof(buf_size));
     setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &buf_size, sizeof(buf_size));
     
@@ -177,8 +177,8 @@ static int set_nonblocking(int sock) {
 }
 
 static void set_socket_buffers(int sock) {
-    // Increased to 16MB to match client and improve throughput
-    int buf_size = 16 * 1024 * 1024; // 16MB
+    // Increased to 2MB to improve throughput
+    int buf_size = 2 * 1024 * 1024; // 2MB
     setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &buf_size, sizeof(buf_size));
     setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &buf_size, sizeof(buf_size));
 

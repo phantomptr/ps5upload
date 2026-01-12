@@ -40,7 +40,7 @@ use config::AppConfig;
 const PRESETS: [&str; 3] = ["etaHEN/games", "homebrew", "custom"];
 const TRANSFER_PORT: u16 = 9113;
 const PAYLOAD_PORT: u16 = 9021;
-const MAX_PARALLEL_CONNECTIONS: usize = 5; // Reduced for stability
+const MAX_PARALLEL_CONNECTIONS: usize = 10; // Increased back to 10 for better saturation
 
 enum AppMessage {
     Log(String),

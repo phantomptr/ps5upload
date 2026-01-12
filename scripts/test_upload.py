@@ -9,7 +9,7 @@ import os
 MAGIC_FTX1 = 0x31585446
 FRAME_PACK = 4
 FRAME_FINISH = 6
-PACK_BUFFER_SIZE = 4 * 1024 * 1024  # 4MB
+PACK_BUFFER_SIZE = 16 * 1024 * 1024  # 16MB
 CHUNK_SIZE = 1024 * 1024  # 1MB chunks for generation
 
 def send_all(sock, data):
