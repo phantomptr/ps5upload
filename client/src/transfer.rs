@@ -219,14 +219,14 @@ where
             const SO_RCVBUF: libc::c_int = 0x1002;
 
             libc::setsockopt(
-                socket as libc::c_int,
+                socket as usize,
                 SOL_SOCKET,
                 SO_SNDBUF,
                 &buf_size as *const libc::c_int as *const libc::c_char,
                 std::mem::size_of::<libc::c_int>() as libc::c_int,
             );
             libc::setsockopt(
-                socket as libc::c_int,
+                socket as usize,
                 SOL_SOCKET,
                 SO_RCVBUF,
                 &buf_size as *const libc::c_int as *const libc::c_char,
