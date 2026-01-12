@@ -181,7 +181,7 @@ where
     // Optimize socket for high throughput
     let _ = stream.set_nodelay(true);
 
-    // Increase TCP buffer sizes to 16MB for better throughput (Unix only)
+    // Increase TCP buffer sizes to 16MB for better throughput
     #[cfg(unix)]
     {
         use std::os::unix::io::AsRawFd;
@@ -201,6 +201,36 @@ where
                 libc::SO_RCVBUF,
                 &buf_size as *const _ as *const libc::c_void,
                 std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+            );
+        }
+    }
+
+    // Windows socket buffer configuration
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawSocket;
+        let socket = stream.as_raw_socket();
+        unsafe {
+            let buf_size: libc::c_int = 16 * 1024 * 1024; // 16MB
+
+            // On Windows: SOL_SOCKET = 0xFFFF, SO_SNDBUF = 0x1001, SO_RCVBUF = 0x1002
+            const SOL_SOCKET: libc::c_int = 0xFFFF;
+            const SO_SNDBUF: libc::c_int = 0x1001;
+            const SO_RCVBUF: libc::c_int = 0x1002;
+
+            libc::setsockopt(
+                socket as libc::c_int,
+                SOL_SOCKET,
+                SO_SNDBUF,
+                &buf_size as *const libc::c_int as *const libc::c_char,
+                std::mem::size_of::<libc::c_int>() as libc::c_int,
+            );
+            libc::setsockopt(
+                socket as libc::c_int,
+                SOL_SOCKET,
+                SO_RCVBUF,
+                &buf_size as *const libc::c_int as *const libc::c_char,
+                std::mem::size_of::<libc::c_int>() as libc::c_int,
             );
         }
     }

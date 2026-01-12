@@ -469,9 +469,9 @@ int main(void) {
                     process_command(conn);
                 }
             } else {
-                uint8_t buffer[64 * 1024];
+                uint8_t buffer[256 * 1024];  // Increased from 64KB to 256KB for better throughput
                 if (upload_session_backpressure(conn->upload)) {
-                    usleep(2000);
+                    // Skip reading if backpressure - poll will notify us when ready
                     continue;
                 }
                 ssize_t n = recv(conn->sock, buffer, sizeof(buffer), 0);
