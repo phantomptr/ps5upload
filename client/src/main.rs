@@ -550,6 +550,9 @@ impl eframe::App for Ps5UploadApp {
                             self.payload_log("SUCCESS");
                             self.status = "Upload Complete!".to_string();
                             if self.progress_total > 0 { self.progress_sent = self.progress_total; }
+                            if self.config.auto_connect {
+                                self.connect();
+                            }
                         }
                         Err(e) => {
                             self.log(&format!("✗ Failed: {}", e));
@@ -631,6 +634,9 @@ Overwrite it?", self.get_dest_path()));
             if ui.add_enabled(payload_enabled, egui::Button::new("📤 Send Payload").min_size([ui.available_width(), 30.0].into())).clicked() {
                 self.send_payload();
             }
+            ui.add_space(5.0);
+            let auto_connect = ui.checkbox(&mut self.config.auto_connect, "Auto reconnect after upload");
+            if auto_connect.changed() { self.config.save(); }
 
             ui.add_space(10.0);
             if connected {

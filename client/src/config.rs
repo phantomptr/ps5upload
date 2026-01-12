@@ -8,6 +8,7 @@ pub struct AppConfig {
     pub storage: String,
     pub connections: usize,
     pub use_temp: bool,
+    pub auto_connect: bool,
 }
 
 impl Default for AppConfig {
@@ -17,6 +18,7 @@ impl Default for AppConfig {
             storage: "/data".to_string(),
             connections: 12,
             use_temp: false,
+            auto_connect: false,
         }
     }
 }
@@ -47,6 +49,9 @@ impl AppConfig {
                             "use_temp" => {
                                 config.use_temp = matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on");
                             }
+                            "auto_connect" => {
+                                config.auto_connect = matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on");
+                            }
                             _ => {}
                         }
                     }
@@ -59,8 +64,8 @@ impl AppConfig {
 
     pub fn save(&self) {
         let content = format!(
-            "address={}\nstorage={}\nconnections={}\nuse_temp={}\n",
-            self.address, self.storage, self.connections, self.use_temp
+            "address={}\nstorage={}\nconnections={}\nuse_temp={}\nauto_connect={}\n",
+            self.address, self.storage, self.connections, self.use_temp, self.auto_connect
         );
         let _ = fs::write("ps5upload.ini", content);
     }
