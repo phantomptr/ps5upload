@@ -14,7 +14,7 @@
 #include "protocol_defs.h"
 #include "notify.h"
 
-#define PACK_BUFFER_SIZE (128 * 1024 * 1024) // 128MB buffer for packs
+#define PACK_BUFFER_SIZE (64 * 1024 * 1024) // 64MB buffer for packs
 #define PACK_QUEUE_DEPTH 4
 #define DISK_WORKER_COUNT 4
 

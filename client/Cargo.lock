@@ -2540,7 +2540,7 @@ checksum = "3eb8486b569e12e2c32ad3e204dbaba5e4b5b216e9367044f25f1dba42341773"
 
 [[package]]
 name = "ps5upload"
-version = "1.0.6-beta"
+version = "1.0.7-beta"
 dependencies = [
  "anyhow",
  "chrono",

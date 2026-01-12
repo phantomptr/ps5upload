@@ -23,7 +23,7 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::runtime::Runtime;
 
 mod protocol;
@@ -49,7 +49,7 @@ enum AppMessage {
     CheckExistsResult(bool),
     SizeCalculated(u64),
     UploadStart,
-    Progress { sent: u64, total: u64, files_sent: i32, elapsed_secs: f64 },
+    Progress { sent: u64, total: u64, files_sent: i32, elapsed_secs: f64, current_file: Option<String> },
     UploadComplete(Result<(i32, u64), String>),
 }
 
@@ -87,6 +87,7 @@ struct Ps5UploadApp {
     progress_speed_bps: f64,
     progress_eta_secs: Option<f64>,
     progress_files: i32,
+    progress_current_file: String,
     
     // Size Calc
     calculating_size: bool,
@@ -137,6 +138,7 @@ impl Ps5UploadApp {
             progress_speed_bps: 0.0,
             progress_eta_secs: None,
             progress_files: 0,
+            progress_current_file: String::new(),
             calculating_size: false,
             calculated_size: None,
             payload_path: String::new(),
@@ -309,6 +311,7 @@ impl Ps5UploadApp {
                 let _ = tx.send(AppMessage::UploadStart);
 
                 let start = std::time::Instant::now();
+                let last_progress_ms = Arc::new(std::sync::atomic::AtomicU64::new(0));
                 if connection_count == 1 {
                     let stream = upload_v2_init(&ip, TRANSFER_PORT, &dest_path, use_temp).await?;
                     let mut std_stream = stream.into_std()?;
@@ -320,7 +323,7 @@ impl Ps5UploadApp {
                         files,
                         std_stream.try_clone()?,
                         cancel_token.clone(),
-                        |sent, files_sent| {
+                        |sent, files_sent, current_file| {
                             if sent == last_sent { return; }
                             let elapsed = start.elapsed().as_secs_f64();
                             let _ = tx.send(AppMessage::Progress {
@@ -328,12 +331,16 @@ impl Ps5UploadApp {
                                 total: total_size,
                                 files_sent,
                                 elapsed_secs: elapsed,
+                                current_file,
                             });
+                            last_progress_ms.store(start.elapsed().as_millis() as u64, Ordering::Relaxed);
                             last_sent = sent;
                         },
                         move |msg| {
                             let _ = tx_log.send(AppMessage::Log(msg));
                         },
+                        0,
+                        None,
                     )?;
 
                     use std::io::Read;
@@ -346,6 +353,7 @@ impl Ps5UploadApp {
                 let buckets = partition_files_by_size(files, connection_count);
                 let total_sent = Arc::new(std::sync::atomic::AtomicU64::new(0));
                 let total_files = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+                let allowed_connections = Arc::new(std::sync::atomic::AtomicUsize::new(connection_count));
                 let mut handles = Vec::new();
 
                 let mut workers = Vec::new();
@@ -357,13 +365,55 @@ impl Ps5UploadApp {
                 }
                 let _ = tx.send(AppMessage::PayloadLog("Server READY".to_string()));
 
-                for (bucket, mut std_stream) in workers {
+                let max_connections = connection_count;
+                let allowed_monitor = allowed_connections.clone();
+                let last_progress_monitor = last_progress_ms.clone();
+                let cancel_monitor = cancel_token.clone();
+                let start_monitor = start;
+                thread::spawn(move || {
+                    let mut stable_good = 0u8;
+                    loop {
+                        if cancel_monitor.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        let elapsed_ms = start_monitor.elapsed().as_millis() as u64;
+                        let last_ms = last_progress_monitor.load(Ordering::Relaxed);
+                        if last_ms == 0 {
+                            thread::sleep(std::time::Duration::from_millis(500));
+                            continue;
+                        }
+                        let since = elapsed_ms.saturating_sub(last_ms);
+                        if since > 2000 {
+                            let current = allowed_monitor.load(Ordering::Relaxed);
+                            if current > 1 {
+                                allowed_monitor.store(current - 1, Ordering::Relaxed);
+                            }
+                            stable_good = 0;
+                        } else if since < 500 {
+                            stable_good = stable_good.saturating_add(1);
+                            if stable_good >= 6 {
+                                let current = allowed_monitor.load(Ordering::Relaxed);
+                                if current < max_connections {
+                                    allowed_monitor.store(current + 1, Ordering::Relaxed);
+                                }
+                                stable_good = 0;
+                            }
+                        } else {
+                            stable_good = 0;
+                        }
+                        thread::sleep(std::time::Duration::from_millis(500));
+                    }
+                });
+
+                for (worker_id, (bucket, mut std_stream)) in workers.into_iter().enumerate() {
                     let cancel = cancel_token.clone();
                     let tx = tx.clone();
                     let tx_log = tx_log.clone();
                     let total_sent = total_sent.clone();
                     let total_files = total_files.clone();
                     let start = start;
+                    let allowed_connections = allowed_connections.clone();
+                    let last_progress_ms = last_progress_ms.clone();
 
                     handles.push(thread::spawn(move || -> anyhow::Result<()> {
                         let mut last_sent = 0u64;
@@ -372,7 +422,7 @@ impl Ps5UploadApp {
                             bucket,
                             std_stream.try_clone()?,
                             cancel.clone(),
-                            |sent, files_sent| {
+                            |sent, files_sent, current_file| {
                                 let delta_bytes = sent.saturating_sub(last_sent);
                                 let delta_files = if files_sent >= last_files {
                                     files_sent - last_files
@@ -393,11 +443,15 @@ impl Ps5UploadApp {
                                     total: total_size,
                                     files_sent: new_files as i32,
                                     elapsed_secs: elapsed,
+                                    current_file,
                                 });
+                                last_progress_ms.store(start.elapsed().as_millis() as u64, Ordering::Relaxed);
                             },
                             move |msg| {
                                 let _ = tx_log.send(AppMessage::Log(msg));
                             },
+                            worker_id,
+                            Some(allowed_connections),
                         )?;
 
                         use std::io::Read;
@@ -531,7 +585,7 @@ impl eframe::App for Ps5UploadApp {
                     self.calculated_size = Some(size);
                 }
                 AppMessage::UploadStart => { self.status = "Uploading...".to_string(); }
-                AppMessage::Progress { sent, total, files_sent, elapsed_secs } => {
+                AppMessage::Progress { sent, total, files_sent, elapsed_secs, current_file } => {
                     self.progress_sent = sent;
                     self.progress_total = total;
                     self.progress_files = files_sent;
@@ -539,6 +593,9 @@ impl eframe::App for Ps5UploadApp {
                     if total > sent && self.progress_speed_bps > 0.0 {
                         let remaining = (total - sent) as f64;
                         self.progress_eta_secs = Some(remaining / self.progress_speed_bps);
+                    }
+                    if let Some(name) = current_file {
+                        self.progress_current_file = name;
                     }
                 }
                 AppMessage::UploadComplete(res) => {
@@ -558,6 +615,9 @@ impl eframe::App for Ps5UploadApp {
                             self.log(&format!("✗ Failed: {}", e));
                             self.payload_log(&format!("ERROR: {}", e));
                             self.status = "Upload Failed".to_string();
+                            if self.config.auto_connect && self.upload_cancellation_token.load(Ordering::Relaxed) {
+                                self.connect();
+                            }
                         }
                     }
                 }
@@ -780,6 +840,9 @@ Overwrite it?", self.get_dest_path()));
                 });
                 
                 if self.progress_files > 0 { ui.label(format!("Files transferred: {}", self.progress_files)); }
+                if !self.progress_current_file.is_empty() {
+                    ui.label(format!("Current file: {}", self.progress_current_file));
+                }
                 
                 ui.add_space(5.0);
                 ui.horizontal(|ui| {
