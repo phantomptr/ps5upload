@@ -11,7 +11,7 @@ use std::net::Shutdown;
 use std::io::ErrorKind;
 use std::sync::Mutex;
 
-const PACK_BUFFER_SIZE: usize = 64 * 1024 * 1024; // 64MB Packs
+const PACK_BUFFER_SIZE: usize = 1024 * 1024 * 1024; // 1GB Packs
 const MAGIC_FTX1: u32 = 0x31585446;
 const SEND_CHUNK_SIZE: usize = 1024 * 1024; // 1MB write chunks for smoother progress
 

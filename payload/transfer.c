@@ -14,9 +14,9 @@
 #include "protocol_defs.h"
 #include "notify.h"
 
-#define PACK_BUFFER_SIZE (64 * 1024 * 1024) // 64MB buffer for packs
-#define PACK_QUEUE_DEPTH 4
-#define DISK_WORKER_COUNT 4
+#define PACK_BUFFER_SIZE (1024 * 1024 * 1024) // 1GB buffer for packs
+#define PACK_QUEUE_DEPTH 64
+#define DISK_WORKER_COUNT 10
 
 typedef struct ConnState {
     char dest_root[PATH_MAX];
