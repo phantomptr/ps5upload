@@ -86,12 +86,13 @@ static void queue_init(PackQueue *q, size_t max) {
 
 static int queue_push(PackQueue *q, PackJob *job) {
     pthread_mutex_lock(&q->mutex);
-    while (!q->closed && q->count >= q->max) {
-        pthread_cond_wait(&q->not_full, &q->mutex);
-    }
     if (q->closed) {
         pthread_mutex_unlock(&q->mutex);
         return -1;
+    }
+    if (q->count >= q->max) {
+        pthread_mutex_unlock(&q->mutex);
+        return 1;
     }
     job->next = NULL;
     if (!q->tail) {
@@ -543,8 +544,18 @@ static int enqueue_pack(UploadSession *session) {
     job->state = &session->state;
     job->seq = seq;
 
-    if (queue_push(&g_queue, job) != 0) {
-        printf("[FTX] enqueue failed (queue full/closed)\n");
+    int push_result = queue_push(&g_queue, job);
+    if (push_result == 1) {
+        free(job);
+        pthread_mutex_lock(&session->state.mutex);
+        if (session->state.pending > 0) {
+            session->state.pending--;
+        }
+        pthread_mutex_unlock(&session->state.mutex);
+        return 1;
+    }
+    if (push_result != 0) {
+        printf("[FTX] enqueue failed (queue closed)\n");
         free(job);
         pthread_mutex_lock(&session->state.mutex);
         if (session->state.pending > 0) {
