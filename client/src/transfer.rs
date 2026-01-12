@@ -6,11 +6,12 @@ use walkdir::WalkDir;
 use std::sync::mpsc::sync_channel;
 use std::thread;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::net::Shutdown;
 use std::io::ErrorKind;
+use std::sync::Mutex;
 
-const PACK_BUFFER_SIZE: usize = 128 * 1024 * 1024; // 128MB Packs
+const PACK_BUFFER_SIZE: usize = 64 * 1024 * 1024; // 64MB Packs
 const MAGIC_FTX1: u32 = 0x31585446;
 const SEND_CHUNK_SIZE: usize = 1024 * 1024; // 1MB write chunks for smoother progress
 
@@ -168,9 +169,11 @@ pub fn send_files_v2_for_list<F, L>(
     cancel: Arc<AtomicBool>,
     mut progress: F,
     log: L,
+    worker_id: usize,
+    allowed_connections: Option<Arc<AtomicUsize>>,
 ) -> Result<()>
 where
-    F: FnMut(u64, i32),
+    F: FnMut(u64, i32, Option<String>),
     L: Fn(String) + Send + Sync + 'static,
 {
     // Optimize socket
@@ -181,6 +184,8 @@ where
     let cancel_packer = cancel.clone();
     let log_packer = Arc::new(log);
     let log_packer_clone = log_packer.clone();
+    let current_file = Arc::new(Mutex::new(String::new()));
+    let current_file_packer = current_file.clone();
 
     // Packer Thread
     thread::spawn(move || {
@@ -190,6 +195,9 @@ where
             if cancel_packer.load(Ordering::Relaxed) { break; }
             
             let rel_path_str = entry.rel_path;
+            if let Ok(mut guard) = current_file_packer.lock() {
+                *guard = rel_path_str.clone();
+            }
             (log_packer_clone)(format!("Packing: {}", rel_path_str));
 
             let file_size = entry.size;
@@ -265,8 +273,18 @@ where
     let mut total_sent_files = 0i32;
 
     let mut last_progress_sent = 0u64;
+    let mut last_progress_file = String::new();
 
     for ready_pack in rx {
+        if let Some(allowed) = &allowed_connections {
+            while worker_id >= allowed.load(Ordering::Relaxed) {
+                if cancel.load(Ordering::Relaxed) {
+                    let _ = stream.shutdown(Shutdown::Both);
+                    return Err(anyhow::anyhow!("Upload cancelled by user"));
+                }
+                thread::sleep(std::time::Duration::from_millis(50));
+            }
+        }
         if cancel.load(Ordering::Relaxed) {
             let _ = stream.shutdown(Shutdown::Both);
             return Err(anyhow::anyhow!("Upload cancelled by user"));
@@ -292,7 +310,14 @@ where
             };
             let approx_total = total_sent_bytes + approx;
             if approx_total != last_progress_sent {
-                progress(approx_total, total_sent_files);
+                let mut file_update = None;
+                if let Ok(guard) = current_file.lock() {
+                    if *guard != last_progress_file {
+                        last_progress_file = guard.clone();
+                        file_update = Some(last_progress_file.clone());
+                    }
+                }
+                progress(approx_total, total_sent_files, file_update);
                 last_progress_sent = approx_total;
             }
         }
@@ -300,7 +325,14 @@ where
         total_sent_bytes += ready_pack.bytes_in_pack;
         total_sent_files += ready_pack.files_in_pack;
         
-        progress(total_sent_bytes, total_sent_files);
+        let mut file_update = None;
+        if let Ok(guard) = current_file.lock() {
+            if *guard != last_progress_file {
+                last_progress_file = guard.clone();
+                file_update = Some(last_progress_file.clone());
+            }
+        }
+        progress(total_sent_bytes, total_sent_files, file_update);
         last_progress_sent = total_sent_bytes;
     }
 

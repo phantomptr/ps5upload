@@ -16,7 +16,7 @@ impl Default for AppConfig {
         Self {
             address: "192.168.0.100".to_string(),
             storage: "/data".to_string(),
-            connections: 12,
+            connections: 4,
             use_temp: false,
             auto_connect: false,
         }
