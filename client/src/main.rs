@@ -508,6 +508,9 @@ impl Ps5UploadApp {
         self.is_sending_payload = true;
         self.status = "Sending payload...".to_string();
         self.payload_log(&format!("Sending payload to {}:{}...", self.ip, PAYLOAD_PORT));
+        if !self.payload_path.trim().is_empty() {
+            self.payload_log(&format!("Payload path: {}", self.payload_path));
+        }
 
         let ip = self.ip.clone();
         let path = self.payload_path.clone();
@@ -516,16 +519,38 @@ impl Ps5UploadApp {
         thread::spawn(move || {
             use std::fs::File;
             use std::net::TcpStream;
+            use std::time::Duration;
 
             let result = (|| -> Result<u64, String> {
                 let mut file = File::open(&path)
                     .map_err(|e| format!("Failed to open payload: {}", e))?;
+                let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
+                if file_len > 0 {
+                    let size_msg = crate::format_bytes(file_len);
+                    let _ = tx.send(AppMessage::PayloadLog(format!("Payload size: {}", size_msg)));
+                }
                 let mut stream = TcpStream::connect((ip.as_str(), PAYLOAD_PORT))
                     .map_err(|e| format!("Failed to connect: {}", e))?;
                 let _ = stream.set_nodelay(true);
-                let bytes = std::io::copy(&mut file, &mut stream)
-                    .map_err(|e| format!("Send failed: {}", e))?;
-                Ok(bytes)
+                let _ = stream.set_linger(Some(Duration::from_secs(2)));
+                let mut buffer = vec![0u8; 256 * 1024];
+                let mut sent = 0u64;
+                loop {
+                    let n = file.read(&mut buffer)
+                        .map_err(|e| format!("Send failed: {}", e))?;
+                    if n == 0 {
+                        break;
+                    }
+                    stream.write_all(&buffer[..n])
+                        .map_err(|e| format!("Send failed: {}", e))?;
+                    sent += n as u64;
+                }
+                let _ = stream.shutdown(std::net::Shutdown::Write);
+                std::thread::sleep(Duration::from_millis(200));
+                if file_len > 0 && bytes != file_len {
+                    return Err(format!("Send incomplete: {} of {} bytes", sent, file_len));
+                }
+                Ok(sent)
             })();
 
             let _ = tx.send(AppMessage::PayloadSendComplete(result));
