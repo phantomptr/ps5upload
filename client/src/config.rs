@@ -16,7 +16,7 @@ impl Default for AppConfig {
         Self {
             address: "192.168.0.100".to_string(),
             storage: "/data".to_string(),
-            connections: 1,
+            connections: 10, // Default to 10 connections to match 10 worker processes on payload
             use_temp: false,
             auto_connect: false,
         }

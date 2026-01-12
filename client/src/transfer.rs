@@ -11,9 +11,11 @@ use std::net::Shutdown;
 use std::io::ErrorKind;
 use std::sync::Mutex;
 
-const PACK_BUFFER_SIZE: usize = 1024 * 1024 * 1024; // 1GB Packs
+// Optimized for 10 worker processes on payload side
+const PACK_BUFFER_SIZE: usize = 128 * 1024 * 1024; // 128MB Packs (smaller = lower latency, better pipeline)
 const MAGIC_FTX1: u32 = 0x31585446;
-const SEND_CHUNK_SIZE: usize = 1024 * 1024; // 1MB write chunks for smoother progress
+const SEND_CHUNK_SIZE: usize = 4 * 1024 * 1024; // 4MB write chunks for better throughput
+const PIPELINE_DEPTH: usize = 20; // Keep 20 packs in flight to saturate 10 workers (2x workers)
 
 #[derive(Debug, Clone)]
 pub struct FileEntry {
@@ -176,11 +178,33 @@ where
     F: FnMut(u64, i32, Option<String>),
     L: Fn(String) + Send + Sync + 'static,
 {
-    // Optimize socket
+    // Optimize socket for high throughput
     let _ = stream.set_nodelay(true);
 
+    // Increase TCP buffer sizes to 16MB for better throughput
+    use std::os::fd::AsRawFd;
+    let fd = stream.as_raw_fd();
+    unsafe {
+        let buf_size: libc::c_int = 16 * 1024 * 1024; // 16MB
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_SNDBUF,
+            &buf_size as *const _ as *const libc::c_void,
+            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+        );
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_RCVBUF,
+            &buf_size as *const _ as *const libc::c_void,
+            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+        );
+    }
+
     // Channel for Pipelining: Packer -> Sender
-    let (tx, rx) = sync_channel::<ReadyPack>(2);
+    // Deep pipeline to keep all 10 payload workers saturated
+    let (tx, rx) = sync_channel::<ReadyPack>(PIPELINE_DEPTH);
     let cancel_packer = cancel.clone();
     let log_packer = Arc::new(log);
     let log_packer_clone = log_packer.clone();

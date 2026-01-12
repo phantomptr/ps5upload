@@ -7,7 +7,7 @@ endif
 include $(PS5_PAYLOAD_SDK)/toolchain/prospero.mk
 
 TARGET := ps5upload.elf
-SRCS := main.c storage.c protocol.c extract.c notify.c
+SRCS := main.c storage.c protocol.c extract.c notify.c transfer.c
 OBJS := main.o storage.o protocol.o extract.o notify.o transfer.o
 
 # Read version from VERSION file
