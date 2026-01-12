@@ -120,6 +120,11 @@ static int request_shutdown(void) {
     const char *cmd = "SHUTDOWN\n";
     send(sock, cmd, strlen(cmd), 0);
 
+    struct timeval tv;
+    tv.tv_sec = 2; // 2s timeout
+    tv.tv_usec = 0;
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
+
     char buffer[64] = {0};
     int bytes = recv(sock, buffer, sizeof(buffer) - 1, 0);
     close(sock);
@@ -215,6 +220,7 @@ static void process_command(struct ClientConnection *conn) {
             send(conn->sock, ok, strlen(ok), 0);
             close_connection(conn);
             notify_info("PS5 Upload Server", "Shutting down...");
+            transfer_cleanup();
             exit(EXIT_SUCCESS);
         }
         return;
