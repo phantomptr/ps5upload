@@ -23,7 +23,8 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::io::{Read, Write};
 use tokio::runtime::Runtime;
 
 mod protocol;
@@ -532,7 +533,6 @@ impl Ps5UploadApp {
                 let mut stream = TcpStream::connect((ip.as_str(), PAYLOAD_PORT))
                     .map_err(|e| format!("Failed to connect: {}", e))?;
                 let _ = stream.set_nodelay(true);
-                let _ = stream.set_linger(Some(Duration::from_secs(2)));
                 let mut buffer = vec![0u8; 256 * 1024];
                 let mut sent = 0u64;
                 loop {
@@ -547,7 +547,7 @@ impl Ps5UploadApp {
                 }
                 let _ = stream.shutdown(std::net::Shutdown::Write);
                 std::thread::sleep(Duration::from_millis(200));
-                if file_len > 0 && bytes != file_len {
+                if file_len > 0 && sent != file_len {
                     return Err(format!("Send incomplete: {} of {} bytes", sent, file_len));
                 }
                 Ok(sent)
