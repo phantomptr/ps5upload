@@ -181,25 +181,28 @@ where
     // Optimize socket for high throughput
     let _ = stream.set_nodelay(true);
 
-    // Increase TCP buffer sizes to 16MB for better throughput
-    use std::os::fd::AsRawFd;
-    let fd = stream.as_raw_fd();
-    unsafe {
-        let buf_size: libc::c_int = 16 * 1024 * 1024; // 16MB
-        libc::setsockopt(
-            fd,
-            libc::SOL_SOCKET,
-            libc::SO_SNDBUF,
-            &buf_size as *const _ as *const libc::c_void,
-            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
-        );
-        libc::setsockopt(
-            fd,
-            libc::SOL_SOCKET,
-            libc::SO_RCVBUF,
-            &buf_size as *const _ as *const libc::c_void,
-            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
-        );
+    // Increase TCP buffer sizes to 16MB for better throughput (Unix only)
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        let fd = stream.as_raw_fd();
+        unsafe {
+            let buf_size: libc::c_int = 16 * 1024 * 1024; // 16MB
+            libc::setsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_SNDBUF,
+                &buf_size as *const _ as *const libc::c_void,
+                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+            );
+            libc::setsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_RCVBUF,
+                &buf_size as *const _ as *const libc::c_void,
+                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+            );
+        }
     }
 
     // Channel for Pipelining: Packer -> Sender
