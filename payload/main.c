@@ -20,6 +20,7 @@
 #include <poll.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <ifaddrs.h>
 
 #include <ps5/kernel.h>
 
@@ -72,6 +73,31 @@ static int create_server_socket(int port) {
 
 static int is_localhost(const struct sockaddr_in *addr) {
     return addr->sin_addr.s_addr == htonl(INADDR_LOOPBACK);
+}
+
+static void get_local_ip(char *out, size_t out_len) {
+    if (!out || out_len == 0) {
+        return;
+    }
+    out[0] = '\0';
+
+    struct ifaddrs *ifaddr = NULL;
+    if (getifaddrs(&ifaddr) != 0) {
+        return;
+    }
+
+    for (struct ifaddrs *ifa = ifaddr; ifa; ifa = ifa->ifa_next) {
+        if (!ifa->ifa_addr || ifa->ifa_addr->sa_family != AF_INET) {
+            continue;
+        }
+        struct sockaddr_in *sa = (struct sockaddr_in *)ifa->ifa_addr;
+        if (sa->sin_addr.s_addr == htonl(INADDR_LOOPBACK)) {
+            continue;
+        }
+        inet_ntop(AF_INET, &sa->sin_addr, out, out_len);
+        break;
+    }
+    freeifaddrs(ifaddr);
 }
 
 static int request_shutdown(void) {
@@ -313,8 +339,17 @@ int main(void) {
         }
     }
 
-    printf("Server listening on port %d\n", SERVER_PORT);
-    notify_info("PS5 Upload Server", "Ready on port " SERVER_PORT_STR);
+    char ip_buf[INET_ADDRSTRLEN] = {0};
+    get_local_ip(ip_buf, sizeof(ip_buf));
+    if (ip_buf[0] != '\0') {
+        printf("Server listening on %s:%d\n", ip_buf, SERVER_PORT);
+        char notify_msg[128];
+        snprintf(notify_msg, sizeof(notify_msg), "Ready on %s:%d", ip_buf, SERVER_PORT);
+        notify_info("PS5 Upload Server (PhantomPtr)", notify_msg);
+    } else {
+        printf("Server listening on port %d\n", SERVER_PORT);
+        notify_info("PS5 Upload Server (PhantomPtr)", "Ready on port " SERVER_PORT_STR);
+    }
 
     if (set_nonblocking(server_sock) != 0) {
         perror("fcntl");
@@ -479,10 +514,6 @@ int main(void) {
                     char response[256];
                     snprintf(response, sizeof(response), "SUCCESS %d %lld\n", files, bytes);
                     send(conn->sock, response, strlen(response), 0);
-
-                    char msg[128];
-                    snprintf(msg, sizeof(msg), "Transfer complete: %d files", files);
-                    notify_success("PS5 Upload", msg);
 
                     close_connection(conn);
                 }
