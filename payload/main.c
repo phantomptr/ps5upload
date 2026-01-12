@@ -427,6 +427,10 @@ int main(void) {
                 }
             } else {
                 uint8_t buffer[64 * 1024];
+                if (upload_session_backpressure(conn->upload)) {
+                    usleep(2000);
+                    continue;
+                }
                 ssize_t n = recv(conn->sock, buffer, sizeof(buffer), 0);
                 if (n < 0) {
                     if (errno == EWOULDBLOCK || errno == EAGAIN) {

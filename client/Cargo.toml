@@ -1,6 +1,6 @@
 [package]
 name = "ps5upload"
-version = "1.0.5-beta"
+version = "1.0.6-beta"
 edition = "2021"
 
 [dependencies]

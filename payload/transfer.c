@@ -49,6 +49,8 @@ typedef struct UploadSession {
     uint64_t bytes_received;
     uint64_t packs_enqueued;
     uint64_t last_log_bytes;
+    int enqueue_pending;
+    uint64_t last_backpressure_log;
 } UploadSession;
 
 typedef struct PackJob {
@@ -103,6 +105,14 @@ static int queue_push(PackQueue *q, PackJob *job) {
     pthread_cond_signal(&q->not_empty);
     pthread_mutex_unlock(&q->mutex);
     return 0;
+}
+
+static int queue_is_full(PackQueue *q) {
+    int full = 0;
+    pthread_mutex_lock(&q->mutex);
+    full = (q->count >= q->max);
+    pthread_mutex_unlock(&q->mutex);
+    return full;
 }
 
 static PackJob *queue_pop(PackQueue *q) {
@@ -513,7 +523,11 @@ static int upload_session_start(UploadSession *session, const char *dest_root) {
     return 0;
 }
 
-static int enqueue_pack(UploadSession *session, uint8_t *pack_buf, size_t pack_len) {
+static int enqueue_pack(UploadSession *session) {
+    if (queue_is_full(&g_queue)) {
+        return 1;
+    }
+
     PackJob *job = malloc(sizeof(*job));
     if (!job) {
         return -1;
@@ -524,8 +538,8 @@ static int enqueue_pack(UploadSession *session, uint8_t *pack_buf, size_t pack_l
     session->state.pending++;
     pthread_mutex_unlock(&session->state.mutex);
 
-    job->data = pack_buf;
-    job->len = pack_len;
+    job->data = session->body;
+    job->len = session->body_len;
     job->state = &session->state;
     job->seq = seq;
 
@@ -539,6 +553,12 @@ static int enqueue_pack(UploadSession *session, uint8_t *pack_buf, size_t pack_l
         pthread_mutex_unlock(&session->state.mutex);
         return -1;
     }
+    session->body = NULL;
+    session->body_len = 0;
+    session->body_bytes = 0;
+    session->header_bytes = 0;
+    session->enqueue_pending = 0;
+    session->packs_enqueued++;
     return 0;
 }
 
@@ -552,6 +572,24 @@ int upload_session_feed(UploadSession *session, const uint8_t *data, size_t len,
     }
     if (error) {
         *error = 0;
+    }
+
+    if (session->enqueue_pending) {
+        int res = enqueue_pack(session);
+        if (res == 1) {
+            if (session->bytes_received - session->last_backpressure_log >= (256ULL * 1024 * 1024)) {
+                printf("[FTX] backpressure: queue full\n");
+                session->last_backpressure_log = session->bytes_received;
+            }
+            return 0;
+        }
+        if (res != 0) {
+            session->error = 1;
+            if (error) {
+                *error = 1;
+            }
+            return 0;
+        }
     }
 
     size_t offset = 0;
@@ -625,18 +663,18 @@ int upload_session_feed(UploadSession *session, const uint8_t *data, size_t len,
             offset += take;
 
             if (session->body_bytes == session->body_len) {
-                if (enqueue_pack(session, session->body, session->body_len) != 0) {
+                int res = enqueue_pack(session);
+                if (res == 1) {
+                    session->enqueue_pending = 1;
+                    return 0;
+                }
+                if (res != 0) {
                     session->error = 1;
                     if (error) {
                         *error = 1;
                     }
                     return 0;
                 }
-                session->packs_enqueued++;
-                session->body = NULL;
-                session->body_len = 0;
-                session->body_bytes = 0;
-                session->header_bytes = 0;
             }
         } else if (session->header_bytes == sizeof(struct FrameHeader)) {
             session->header_bytes = 0;
@@ -647,6 +685,13 @@ int upload_session_feed(UploadSession *session, const uint8_t *data, size_t len,
         *error = 1;
     }
     return 0;
+}
+
+int upload_session_backpressure(UploadSession *session) {
+    if (!session) {
+        return 0;
+    }
+    return session->enqueue_pending ? 1 : 0;
 }
 
 static int upload_session_finish(UploadSession *session) {
