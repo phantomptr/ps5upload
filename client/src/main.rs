@@ -545,8 +545,19 @@ impl Ps5UploadApp {
                         .map_err(|e| format!("Send failed: {}", e))?;
                     sent += n as u64;
                 }
+                // Send FIN to indicate we are done writing
                 let _ = stream.shutdown(std::net::Shutdown::Write);
-                std::thread::sleep(Duration::from_millis(200));
+                
+                // Critical for Windows: Read until server closes connection (EOF) or timeout.
+                // If we close the socket while the server sends data (or before it processes FIN), 
+                // Windows might send RST, causing the loader to fail.
+                stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
+                let mut discard = [0u8; 1024];
+                while match stream.read(&mut discard) {
+                    Ok(n) => n > 0,
+                    Err(_) => false,
+                } {}
+
                 if file_len > 0 && sent != file_len {
                     return Err(format!("Send incomplete: {} of {} bytes", sent, file_len));
                 }
