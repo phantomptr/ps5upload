@@ -186,8 +186,8 @@ void handle_list_dir(int client_sock, const char *path_arg) {
         if(stat(fullpath, &st) == 0) {
             const char *type = S_ISDIR(st.st_mode) ? "dir" : "file";
             offset += sprintf(response + offset,
-                "  {\"name\":\"%s\",\"type\":\"%s\",\"size\":%ld},\n",
-                entry->d_name, type, (long)st.st_size);
+                "  {\"name\":\"%s\",\"type\":\"%s\",\"size\":%ld,\"mtime\":%ld},\n",
+                entry->d_name, type, (long)st.st_size, (long)st.st_mtime);
         }
     }
 

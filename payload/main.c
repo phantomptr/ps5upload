@@ -251,6 +251,31 @@ static void process_command(struct ClientConnection *conn) {
         close_connection(conn);
         return;
     }
+    if (strncmp(conn->cmd_buffer, "DELETE ", 7) == 0) {
+        handle_delete_path(conn->sock, conn->cmd_buffer + 7);
+        close_connection(conn);
+        return;
+    }
+    if (strncmp(conn->cmd_buffer, "MOVE ", 5) == 0) {
+        handle_move_path(conn->sock, conn->cmd_buffer + 5);
+        close_connection(conn);
+        return;
+    }
+    if (strncmp(conn->cmd_buffer, "COPY ", 5) == 0) {
+        handle_copy_path(conn->sock, conn->cmd_buffer + 5);
+        close_connection(conn);
+        return;
+    }
+    if (strncmp(conn->cmd_buffer, "CHMOD777 ", 9) == 0) {
+        handle_chmod_777(conn->sock, conn->cmd_buffer + 9);
+        close_connection(conn);
+        return;
+    }
+    if (strncmp(conn->cmd_buffer, "DOWNLOAD ", 9) == 0) {
+        handle_download_file(conn->sock, conn->cmd_buffer + 9);
+        close_connection(conn);
+        return;
+    }
     if (strncmp(conn->cmd_buffer, "UPLOAD_V2 ", 10) == 0) {
         char dest_path[PATH_MAX];
         char mode[16] = {0};
