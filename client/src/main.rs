@@ -66,6 +66,7 @@ enum AppMessage {
     DownloadStart { total: u64, label: String },
     DownloadProgress { received: u64, total: u64, current_file: Option<String> },
     DownloadComplete(Result<u64, String>),
+    MoveCheckResult { req: MoveRequest, exists: bool },
     UpdateCheckComplete(Result<ReleaseInfo, String>),
     UpdateDownloadComplete { kind: String, result: Result<String, String> },
     CheckExistsResult(bool),
@@ -93,6 +94,20 @@ struct ReleaseInfo {
     html_url: String,
     assets: Vec<ReleaseAsset>,
     prerelease: bool,
+}
+
+#[derive(Clone)]
+enum DownloadRequest {
+    File { name: String, target: String, save_path: String },
+    Dir { name: String, target: String, dest_root: String, use_lz4: bool },
+}
+
+#[derive(Clone)]
+struct MoveRequest {
+    src: String,
+    dst: String,
+    op_name: String,
+    dst_exists: bool,
 }
 
 struct Ps5UploadApp {
@@ -158,6 +173,10 @@ struct Ps5UploadApp {
     
     // Override Dialog
     show_override_dialog: bool,
+    show_download_overwrite_dialog: bool,
+    pending_download_request: Option<DownloadRequest>,
+    show_move_overwrite_dialog: bool,
+    pending_move_request: Option<MoveRequest>,
     
     // Progress
     progress_sent: u64,
@@ -272,6 +291,10 @@ impl Ps5UploadApp {
             is_connected: false,
             upload_cancellation_token: Arc::new(AtomicBool::new(false)),
             show_override_dialog: false,
+            show_download_overwrite_dialog: false,
+            pending_download_request: None,
+            show_move_overwrite_dialog: false,
+            pending_move_request: None,
             progress_sent: 0,
             progress_total: 0,
             progress_speed_bps: 0.0,
@@ -528,6 +551,64 @@ impl Ps5UploadApp {
         let tx = self.tx.clone();
         let cancel = self.download_cancellation_token.clone();
         task(tx, cancel);
+    }
+
+    fn execute_download_request(&mut self, request: DownloadRequest) {
+        match request {
+            DownloadRequest::File { name, target, save_path } => {
+                let ip = self.ip.clone();
+                let rt = self.rt.clone();
+                let label = format!("Download {}", name);
+                self.start_download(label, move |tx, cancel| {
+                    thread::spawn(move || {
+                        let _ = tx.send(AppMessage::DownloadStart { total: 0, label: target.clone() });
+                        let result = rt.block_on(async {
+                            download_file_with_progress(&ip, TRANSFER_PORT, &target, &save_path, cancel, |received, total, _| {
+                                let _ = tx.send(AppMessage::DownloadProgress {
+                                    received,
+                                    total,
+                                    current_file: None,
+                                });
+                            }).await
+                        });
+                        let _ = tx.send(AppMessage::DownloadComplete(result.map_err(|e| e.to_string())));
+                    });
+                });
+            }
+            DownloadRequest::Dir { name, target, dest_root, use_lz4 } => {
+                let ip = self.ip.clone();
+                let rt = self.rt.clone();
+                let label = format!("Download {}", name);
+                self.start_download(label, move |tx, cancel| {
+                    thread::spawn(move || {
+                        let _ = tx.send(AppMessage::DownloadStart { total: 0, label: target.clone() });
+                        let result = rt.block_on(async {
+                            download_dir_with_progress(&ip, TRANSFER_PORT, &target, &dest_root, cancel, use_lz4, |received, total, current_file| {
+                                let _ = tx.send(AppMessage::DownloadProgress {
+                                    received,
+                                    total,
+                                    current_file,
+                                });
+                            }).await
+                        });
+                        let _ = tx.send(AppMessage::DownloadComplete(result.map_err(|e| e.to_string())));
+                    });
+                });
+            }
+        }
+    }
+
+    fn start_move_request(&mut self, request: MoveRequest) {
+        let ip = self.ip.clone();
+        let rt = self.rt.clone();
+        let src = request.src.clone();
+        let dst = request.dst.clone();
+        let op_name = request.op_name.clone();
+        self.manage_send_op(&op_name, move || {
+            rt.block_on(async {
+                move_path(&ip, TRANSFER_PORT, &src, &dst).await
+            }).map_err(|e| e.to_string())
+        });
     }
 
     fn start_update_check(&mut self) {
@@ -1118,6 +1199,12 @@ impl eframe::App for Ps5UploadApp {
                         }
                     }
                 }
+                AppMessage::MoveCheckResult { mut req, exists } => {
+                    req.dst_exists = exists;
+                    self.pending_move_request = Some(req);
+                    self.show_move_overwrite_dialog = true;
+                    self.status = "Confirm Move".to_string();
+                }
                 AppMessage::DownloadStart { total, label } => {
                     self.is_downloading = true;
                     self.status = "Downloading...".to_string();
@@ -1286,6 +1373,25 @@ impl eframe::App for Ps5UploadApp {
                             };
                             add_record(&mut self.history_data, record);
 
+                            if self.config.chmod_after_upload {
+                                let ip = self.ip.clone();
+                                let path = self.upload_dest_path.clone();
+                                let tx = self.tx.clone();
+                                let rt = self.rt.clone();
+                                self.log(&format!("Applying chmod 777 recursively to {}...", path));
+                                thread::spawn(move || {
+                                    let result = rt.block_on(async { chmod_777(&ip, TRANSFER_PORT, &path).await });
+                                    match result {
+                                        Ok(_) => {
+                                            let _ = tx.send(AppMessage::Log(format!("chmod 777 complete for {}", path)));
+                                        }
+                                        Err(e) => {
+                                            let _ = tx.send(AppMessage::Log(format!("chmod 777 failed for {}: {}", path, e)));
+                                        }
+                                    }
+                                });
+                            }
+
                             // Update queue item status
                             if let Some(id) = self.current_queue_item_id.take() {
                                 self.update_queue_item_status(id, QueueStatus::Completed);
@@ -1343,6 +1449,65 @@ Overwrite it?", self.get_dest_path()));
                     ui.horizontal(|ui| {
                         if ui.button("Overwrite").clicked() { self.start_upload(); }
                         if ui.button("Cancel").clicked() { self.show_override_dialog = false; self.status = "Connected".to_string(); }
+                    });
+                });
+        }
+
+        if self.show_download_overwrite_dialog {
+            let request = self.pending_download_request.clone();
+            let dest_label = match &request {
+                Some(DownloadRequest::File { save_path, .. }) => save_path.clone(),
+                Some(DownloadRequest::Dir { dest_root, .. }) => dest_root.clone(),
+                None => String::new(),
+            };
+            egui::Window::new("Download Confirmation")
+                .collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.label(format!("Destination already exists:\n{}\n\nOverwrite and download?", dest_label));
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Download").clicked() {
+                            self.show_download_overwrite_dialog = false;
+                            if let Some(req) = request {
+                                self.pending_download_request = None;
+                                self.execute_download_request(req);
+                            }
+                        }
+                        if ui.button("Cancel").clicked() {
+                            self.show_download_overwrite_dialog = false;
+                            self.pending_download_request = None;
+                        }
+                    });
+                });
+        }
+
+        if self.show_move_overwrite_dialog {
+            let request = self.pending_move_request.clone();
+            let (dest_label, src_label, exists_label) = match &request {
+                Some(r) => (
+                    r.dst.clone(),
+                    r.src.clone(),
+                    if r.dst_exists { "Destination already exists." } else { "Destination does not exist yet." },
+                ),
+                None => (String::new(), String::new(), ""),
+            };
+            egui::Window::new("Move Confirmation")
+                .collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.label(format!("Move from:\n{}\n\nMove to:\n{}\n\n{}", src_label, dest_label, exists_label));
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Move").clicked() {
+                            self.show_move_overwrite_dialog = false;
+                            if let Some(req) = request {
+                                self.pending_move_request = None;
+                                self.start_move_request(req);
+                            }
+                        }
+                        if ui.button("Cancel").clicked() {
+                            self.show_move_overwrite_dialog = false;
+                            self.pending_move_request = None;
+                        }
                     });
                 });
         }
@@ -1907,22 +2072,50 @@ Overwrite it?", self.get_dest_path()));
                                 for (idx, entry) in entries.iter().enumerate() {
                                     let is_selected = *selected_ref == Some(idx);
                                     let icon = if entry.entry_type == "dir" { "📁" } else { "📄" };
+                                    let mut row_clicked = false;
+                                    let mut row_double_clicked = false;
                                     let response = ui.selectable_label(is_selected, format!("{} {}", icon, entry.name));
                                     if response.clicked() {
+                                        row_clicked = true;
+                                    }
+                                    if response.double_clicked() {
+                                        row_double_clicked = true;
+                                    }
+                                    let type_label = if entry.entry_type == "dir" { "Directory" } else { "File" };
+                                    let type_response = ui.selectable_label(is_selected, type_label);
+                                    if type_response.clicked() {
+                                        row_clicked = true;
+                                    }
+                                    if type_response.double_clicked() {
+                                        row_double_clicked = true;
+                                    }
+                                    let size_label = if entry.entry_type == "dir" {
+                                        "--".to_string()
+                                    } else {
+                                        format_bytes(entry.size)
+                                    };
+                                    let size_response = ui.selectable_label(is_selected, size_label);
+                                    if size_response.clicked() {
+                                        row_clicked = true;
+                                    }
+                                    if size_response.double_clicked() {
+                                        row_double_clicked = true;
+                                    }
+                                    let modified_label = format_modified_time(entry.mtime);
+                                    let modified_response = ui.selectable_label(is_selected, modified_label);
+                                    if modified_response.clicked() {
+                                        row_clicked = true;
+                                    }
+                                    if modified_response.double_clicked() {
+                                        row_double_clicked = true;
+                                    }
+                                    if row_clicked {
                                         *selected_ref = Some(idx);
                                         self.manage_new_name = entry.name.clone();
                                     }
-                                    if response.double_clicked() && entry.entry_type == "dir" {
+                                    if row_double_clicked && entry.entry_type == "dir" {
                                         open_dir = Some(entry.name.clone());
                                     }
-                                    let type_label = if entry.entry_type == "dir" { "Directory" } else { "File" };
-                                    ui.label(type_label);
-                                    if entry.entry_type == "dir" {
-                                        ui.label("--");
-                                    } else {
-                                        ui.label(format_bytes(entry.size));
-                                    }
-                                    ui.label(format_modified_time(entry.mtime));
                                     ui.end_row();
                                 }
                             });
@@ -2036,10 +2229,29 @@ Overwrite it?", self.get_dest_path()));
                             let ip = self.ip.clone();
                             let rt = self.rt.clone();
                             let op_name = move_label.to_string();
-                            self.manage_send_op(&op_name, move || {
-                                rt.block_on(async {
-                                    move_path(&ip, TRANSFER_PORT, &src, &dst).await
-                                }).map_err(|e| e.to_string())
+                            let tx = self.tx.clone();
+                            let req = MoveRequest { src: src.clone(), dst: dst.clone(), op_name: op_name.clone(), dst_exists: false };
+                            thread::spawn(move || {
+                                let name = std::path::Path::new(&dst)
+                                    .file_name()
+                                    .map(|n| n.to_string_lossy().to_string())
+                                    .unwrap_or_default();
+                                let parent = std::path::Path::new(&dst)
+                                    .parent()
+                                    .map(|p| p.to_string_lossy().to_string())
+                                    .unwrap_or_else(|| "/".to_string());
+                                let exists = if name.is_empty() {
+                                    false
+                                } else {
+                                    match rt.block_on(async { list_dir(&ip, TRANSFER_PORT, &parent).await }) {
+                                        Ok(entries) => entries.iter().any(|e| e.name == name),
+                                        Err(e) => {
+                                            let _ = tx.send(AppMessage::Log(format!("Move check failed: {}", e)));
+                                            false
+                                        }
+                                    }
+                                };
+                                let _ = tx.send(AppMessage::MoveCheckResult { req, exists });
                             });
                         }
                         if ui.add_enabled(can_ops && has_selection, egui::Button::new("Copy")).clicked() {
@@ -2077,48 +2289,28 @@ Overwrite it?", self.get_dest_path()));
                             let name = selected_name.clone().unwrap_or_default();
                             let entry_type = selected_type.clone().unwrap_or_default();
                             let target = selected_path.clone().unwrap_or_default();
-                            let ip = self.ip.clone();
-                            let rt = self.rt.clone();
                             let use_lz4 = self.config.download_compression == "lz4";
                             if entry_type == "file" {
                                 if let Some(save_path) = rfd::FileDialog::new().set_file_name(&name).save_file() {
                                     let save_path = save_path.display().to_string();
-                                    let label = format!("Download {}", name);
-                                    self.start_download(label, move |tx, cancel| {
-                                        thread::spawn(move || {
-                                            let _ = tx.send(AppMessage::DownloadStart { total: 0, label: target.clone() });
-                                            let result = rt.block_on(async {
-                                                download_file_with_progress(&ip, TRANSFER_PORT, &target, &save_path, cancel, |received, total, _| {
-                                                    let _ = tx.send(AppMessage::DownloadProgress {
-                                                        received,
-                                                        total,
-                                                        current_file: None,
-                                                    });
-                                                }).await
-                                            });
-                                            let _ = tx.send(AppMessage::DownloadComplete(result.map_err(|e| e.to_string())));
-                                        });
-                                    });
+                                    let request = DownloadRequest::File { name, target, save_path: save_path.clone() };
+                                    if std::path::Path::new(&save_path).exists() {
+                                        self.pending_download_request = Some(request);
+                                        self.show_download_overwrite_dialog = true;
+                                    } else {
+                                        self.execute_download_request(request);
+                                    }
                                 }
                             } else {
                                 if let Some(save_folder) = rfd::FileDialog::new().pick_folder() {
                                     let dest_root = save_folder.join(&name).display().to_string();
-                                    let label = format!("Download {}", name);
-                                    self.start_download(label, move |tx, cancel| {
-                                        thread::spawn(move || {
-                                            let _ = tx.send(AppMessage::DownloadStart { total: 0, label: target.clone() });
-                                            let result = rt.block_on(async {
-                                                download_dir_with_progress(&ip, TRANSFER_PORT, &target, &dest_root, cancel, use_lz4, |received, total, current_file| {
-                                                    let _ = tx.send(AppMessage::DownloadProgress {
-                                                        received,
-                                                        total,
-                                                        current_file,
-                                                    });
-                                                }).await
-                                            });
-                                            let _ = tx.send(AppMessage::DownloadComplete(result.map_err(|e| e.to_string())));
-                                        });
-                                    });
+                                    let request = DownloadRequest::Dir { name, target, dest_root: dest_root.clone(), use_lz4 };
+                                    if std::path::Path::new(&dest_root).exists() {
+                                        self.pending_download_request = Some(request);
+                                        self.show_download_overwrite_dialog = true;
+                                    } else {
+                                        self.execute_download_request(request);
+                                    }
                                 }
                             }
                         }
@@ -2408,6 +2600,13 @@ Overwrite it?", self.get_dest_path()));
                         if self.config.bandwidth_limit_mbps <= 0.0 {
                             ui.label("(unlimited)");
                         }
+                    });
+                    ui.horizontal(|ui| {
+                        let chmod_toggle = ui.checkbox(&mut self.config.chmod_after_upload, "Chmod 777 after upload");
+                        if chmod_toggle.changed() {
+                            self.config.save();
+                        }
+                        ui.label("May be required for games on internal storage.");
                     });
 
                     if self.is_uploading {
