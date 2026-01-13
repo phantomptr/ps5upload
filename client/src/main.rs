@@ -36,9 +36,9 @@ mod profiles;
 mod history;
 mod queue;
 
-use protocol::{StorageLocation, DirEntry, list_storage, list_dir, check_dir, upload_v2_init, delete_path, move_path, copy_path, chmod_777, download_file};
+use protocol::{StorageLocation, DirEntry, list_storage, list_dir, check_dir, upload_v2_init, delete_path, move_path, copy_path, chmod_777, download_file_with_progress, download_dir_with_progress, get_payload_version};
 use archive::get_size;
-use transfer::{collect_files, send_files_v2_for_list, FileEntry};
+use transfer::{collect_files, send_files_v2_for_list, FileEntry, CompressionMode};
 use config::AppConfig;
 use profiles::{Profile, ProfilesData, load_profiles, save_profiles};
 use history::{TransferRecord, HistoryData, load_history, add_record, clear_history};
@@ -49,13 +49,23 @@ const TRANSFER_PORT: u16 = 9113;
 const PAYLOAD_PORT: u16 = 9021;
 const MAX_PARALLEL_CONNECTIONS: usize = 10; // Increased back to 10 for better saturation
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ManageSide {
+    Left,
+    Right,
+}
+
 enum AppMessage {
     Log(String),
     PayloadLog(String),
     PayloadSendComplete(Result<u64, String>),
+    PayloadVersion(Result<String, String>),
     StorageList(Result<Vec<StorageLocation>, String>),
-    ManageList(Result<Vec<DirEntry>, String>),
+    ManageList { side: ManageSide, result: Result<Vec<DirEntry>, String> },
     ManageOpComplete { op: String, result: Result<(), String> },
+    DownloadStart { total: u64, label: String },
+    DownloadProgress { received: u64, total: u64, current_file: Option<String> },
+    DownloadComplete(Result<u64, String>),
     UpdateCheckComplete(Result<ReleaseInfo, String>),
     UpdateDownloadComplete { kind: String, result: Result<String, String> },
     CheckExistsResult(bool),
@@ -63,6 +73,12 @@ enum AppMessage {
     UploadStart,
     Progress { sent: u64, total: u64, files_sent: i32, elapsed_secs: f64, current_file: Option<String> },
     UploadComplete(Result<(i32, u64), String>),
+}
+
+const APP_VERSION: &str = include_str!("../../VERSION");
+
+fn app_version_trimmed() -> &'static str {
+    APP_VERSION.trim()
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -76,6 +92,7 @@ struct ReleaseInfo {
     tag_name: String,
     html_url: String,
     assets: Vec<ReleaseAsset>,
+    prerelease: bool,
 }
 
 struct Ps5UploadApp {
@@ -95,14 +112,31 @@ struct Ps5UploadApp {
     storage_locations: Vec<StorageLocation>,
 
     // Manage
-    manage_path: String,
-    manage_entries: Vec<DirEntry>,
-    manage_selected: Option<usize>,
-    manage_status: String,
-    manage_target_dir: String,
+    manage_left_path: String,
+    manage_right_path: String,
+    manage_left_entries: Vec<DirEntry>,
+    manage_right_entries: Vec<DirEntry>,
+    manage_left_selected: Option<usize>,
+    manage_right_selected: Option<usize>,
+    manage_left_status: String,
+    manage_right_status: String,
+    manage_active: ManageSide,
     manage_new_name: String,
     manage_clipboard: Option<String>,
     manage_busy: bool,
+
+    // Download
+    is_downloading: bool,
+    download_cancellation_token: Arc<AtomicBool>,
+    download_progress_sent: u64,
+    download_progress_total: u64,
+    download_speed_bps: f64,
+    download_eta_secs: Option<f64>,
+    download_current_file: String,
+
+    // Move
+    is_moving: bool,
+    move_cancellation_token: Arc<AtomicBool>,
 
     // Updates
     update_info: Option<ReleaseInfo>,
@@ -117,6 +151,7 @@ struct Ps5UploadApp {
     is_uploading: bool,
     is_connecting: bool,
     is_sending_payload: bool,
+    is_connected: bool,
     
     // Cancellation
     upload_cancellation_token: Arc<AtomicBool>,
@@ -138,6 +173,8 @@ struct Ps5UploadApp {
     
     // Payload
     payload_path: String,
+    payload_status: String,
+    payload_version: Option<String>,
 
     // UI Toggles
     log_tab: usize, // 0 = Client, 1 = Payload, 2 = History
@@ -163,10 +200,14 @@ struct Ps5UploadApp {
     upload_start_time: Option<std::time::Instant>,
     upload_source_path: String,
     upload_dest_path: String,
+    download_start_time: Option<std::time::Instant>,
 
     // Queue
     queue_data: QueueData,
     current_queue_item_id: Option<u64>,
+
+    // Auto-connect
+    last_auto_connect_attempt: Option<std::time::Instant>,
 }
 
 impl Ps5UploadApp {
@@ -196,14 +237,27 @@ impl Ps5UploadApp {
             custom_preset_path: String::new(),
             custom_subfolder: String::new(),
             storage_locations: Vec::new(),
-            manage_path: "/data".to_string(),
-            manage_entries: Vec::new(),
-            manage_selected: None,
-            manage_status: "Not connected".to_string(),
-            manage_target_dir: "/data".to_string(),
+            manage_left_path: "/data".to_string(),
+            manage_right_path: "/data".to_string(),
+            manage_left_entries: Vec::new(),
+            manage_right_entries: Vec::new(),
+            manage_left_selected: None,
+            manage_right_selected: None,
+            manage_left_status: "Not connected".to_string(),
+            manage_right_status: "Not connected".to_string(),
+            manage_active: ManageSide::Left,
             manage_new_name: String::new(),
             manage_clipboard: None,
             manage_busy: false,
+            is_downloading: false,
+            download_cancellation_token: Arc::new(AtomicBool::new(false)),
+            download_progress_sent: 0,
+            download_progress_total: 0,
+            download_speed_bps: 0.0,
+            download_eta_secs: None,
+            download_current_file: String::new(),
+            is_moving: false,
+            move_cancellation_token: Arc::new(AtomicBool::new(false)),
             update_info: None,
             update_status: "Checking for updates...".to_string(),
             update_available: false,
@@ -215,6 +269,7 @@ impl Ps5UploadApp {
             is_uploading: false,
             is_connecting: false,
             is_sending_payload: false,
+            is_connected: false,
             upload_cancellation_token: Arc::new(AtomicBool::new(false)),
             show_override_dialog: false,
             progress_sent: 0,
@@ -226,6 +281,8 @@ impl Ps5UploadApp {
             calculating_size: false,
             calculated_size: None,
             payload_path: String::new(),
+            payload_status: "Unknown (not checked)".to_string(),
+            payload_version: None,
             log_tab: 0,
             theme_dark,
             rx,
@@ -241,9 +298,17 @@ impl Ps5UploadApp {
             upload_start_time: None,
             upload_source_path: String::new(),
             upload_dest_path: String::new(),
+            download_start_time: None,
             queue_data,
             current_queue_item_id: None,
+            last_auto_connect_attempt: None,
         };
+
+        if let Some(default_name) = app.profiles_data.default_profile.clone() {
+            if let Some(profile) = app.profiles_data.profiles.iter().find(|p| p.name == default_name).cloned() {
+                app.apply_profile(&profile);
+            }
+        }
 
         app.start_update_check();
         app
@@ -274,6 +339,11 @@ impl Ps5UploadApp {
         self.current_profile = Some(profile.name.clone());
     }
 
+    fn set_default_profile(&mut self, name: Option<String>) {
+        self.profiles_data.default_profile = name;
+        save_profiles(&self.profiles_data);
+    }
+
     fn save_current_as_profile(&mut self, name: String) {
         let profile = Profile {
             name: name.clone(),
@@ -293,6 +363,7 @@ impl Ps5UploadApp {
         }
         save_profiles(&self.profiles_data);
         self.current_profile = Some(name);
+        self.set_default_profile(self.current_profile.clone());
     }
 
     fn delete_profile(&mut self, name: &str) {
@@ -396,21 +467,28 @@ impl Ps5UploadApp {
         }
     }
 
-    fn manage_refresh(&mut self) {
-        if self.ip.trim().is_empty() || self.manage_path.trim().is_empty() {
+    fn manage_refresh(&mut self, side: ManageSide) {
+        let path = match side {
+            ManageSide::Left => self.manage_left_path.clone(),
+            ManageSide::Right => self.manage_right_path.clone(),
+        };
+        if self.ip.trim().is_empty() || path.trim().is_empty() {
             return;
         }
 
         self.manage_busy = true;
-        self.manage_status = "Listing...".to_string();
+        match side {
+            ManageSide::Left => self.manage_left_status = "Listing...".to_string(),
+            ManageSide::Right => self.manage_right_status = "Listing...".to_string(),
+        }
+        self.log(&format!("Listing {}", path));
         let ip = self.ip.clone();
-        let path = self.manage_path.clone();
         let tx = self.tx.clone();
         let rt = self.rt.clone();
 
         thread::spawn(move || {
             let res = rt.block_on(async { list_dir(&ip, TRANSFER_PORT, &path).await });
-            let _ = tx.send(AppMessage::ManageList(res.map_err(|e| e.to_string())));
+            let _ = tx.send(AppMessage::ManageList { side, result: res.map_err(|e| e.to_string()) });
         });
     }
 
@@ -419,7 +497,15 @@ impl Ps5UploadApp {
             return;
         }
         self.manage_busy = true;
-        self.manage_status = format!("{}...", op);
+        match self.manage_active {
+            ManageSide::Left => self.manage_left_status = format!("{}...", op),
+            ManageSide::Right => self.manage_right_status = format!("{}...", op),
+        }
+        self.log(&format!("{}...", op));
+        if op.starts_with("Move") {
+            self.is_moving = true;
+            self.move_cancellation_token.store(false, Ordering::Relaxed);
+        }
         let op_name = op.to_string();
         let tx = self.tx.clone();
         thread::spawn(move || {
@@ -428,16 +514,33 @@ impl Ps5UploadApp {
         });
     }
 
+    fn start_download(&mut self, label: String, task: impl FnOnce(Sender<AppMessage>, Arc<AtomicBool>) + Send + 'static) {
+        if self.ip.trim().is_empty() {
+            return;
+        }
+        self.manage_busy = true;
+        match self.manage_active {
+            ManageSide::Left => self.manage_left_status = format!("{}...", label),
+            ManageSide::Right => self.manage_right_status = format!("{}...", label),
+        }
+        self.log(&format!("{}...", label));
+        self.download_cancellation_token.store(false, Ordering::Relaxed);
+        let tx = self.tx.clone();
+        let cancel = self.download_cancellation_token.clone();
+        task(tx, cancel);
+    }
+
     fn start_update_check(&mut self) {
         if self.update_check_running {
             return;
         }
         self.update_check_running = true;
         self.update_status = "Checking for updates...".to_string();
+        let include_prerelease = self.config.update_channel == "all";
         let tx = self.tx.clone();
         let rt = self.rt.clone();
         thread::spawn(move || {
-            let res = rt.block_on(async { fetch_latest_release().await });
+            let res = rt.block_on(async { fetch_latest_release(include_prerelease).await });
             let _ = tx.send(AppMessage::UpdateCheckComplete(res.map_err(|e| e.to_string())));
         });
     }
@@ -602,6 +705,8 @@ impl Ps5UploadApp {
         let rt = self.rt.clone();
         let connections = self.config.connections;
         let use_temp = self.config.use_temp;
+        let use_lz4 = self.config.compression == "lz4";
+        let bandwidth_limit_bps = (self.config.bandwidth_limit_mbps * 1024.0 * 1024.0) as u64;
         
         thread::spawn(move || {
             let tx_log = tx.clone();
@@ -631,6 +736,14 @@ impl Ps5UploadApp {
 
                 let start = std::time::Instant::now();
                 let last_progress_ms = Arc::new(std::sync::atomic::AtomicU64::new(0));
+                let compression = if use_lz4 { CompressionMode::Lz4 } else { CompressionMode::None };
+                let rate_limit = if bandwidth_limit_bps > 0 {
+                    let per_conn = (bandwidth_limit_bps / connection_count as u64).max(1);
+                    Some(per_conn)
+                } else {
+                    None
+                };
+
                 if connection_count == 1 {
                     let stream = upload_v2_init(&ip, TRANSFER_PORT, &dest_path, use_temp).await?;
                     let mut std_stream = stream.into_std()?;
@@ -660,6 +773,8 @@ impl Ps5UploadApp {
                         },
                         0,
                         None,
+                        compression,
+                        rate_limit,
                     )?;
 
                     use std::io::Read;
@@ -771,6 +886,8 @@ impl Ps5UploadApp {
                             },
                             worker_id,
                             Some(allowed_connections),
+                            compression,
+                            rate_limit,
                         )?;
 
                         use std::io::Read;
@@ -836,60 +953,70 @@ impl Ps5UploadApp {
         let tx = self.tx.clone();
 
         thread::spawn(move || {
-            use std::fs::File;
-            use std::net::TcpStream;
-            use std::time::Duration;
-
-            let result = (|| -> Result<u64, String> {
-                let mut file = File::open(&path)
-                    .map_err(|e| format!("Failed to open payload: {}", e))?;
-                let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
-                if file_len > 0 {
-                    let size_msg = crate::format_bytes(file_len);
-                    let _ = tx.send(AppMessage::PayloadLog(format!("Payload size: {}", size_msg)));
-                }
-                let mut stream = TcpStream::connect((ip.as_str(), PAYLOAD_PORT))
-                    .map_err(|e| format!("Failed to connect: {}", e))?;
-                let _ = stream.set_nodelay(true);
-                let mut buffer = vec![0u8; 256 * 1024];
-                let mut sent = 0u64;
-                loop {
-                    let n = file.read(&mut buffer)
-                        .map_err(|e| format!("Send failed: {}", e))?;
-                    if n == 0 {
-                        break;
-                    }
-                    stream.write_all(&buffer[..n])
-                        .map_err(|e| format!("Send failed: {}", e))?;
-                    sent += n as u64;
-                }
-                // Send FIN to indicate we are done writing
-                let _ = stream.shutdown(std::net::Shutdown::Write);
-                
-                // Critical for Windows: Read until server closes connection (EOF) or timeout.
-                // If we close the socket while the server sends data (or before it processes FIN), 
-                // Windows might send RST, causing the loader to fail.
-                stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
-                let mut discard = [0u8; 1024];
-                while match stream.read(&mut discard) {
-                    Ok(n) => n > 0,
-                    Err(_) => false,
-                } {}
-
-                if file_len > 0 && sent != file_len {
-                    return Err(format!("Send incomplete: {} of {} bytes", sent, file_len));
-                }
-                Ok(sent)
-            })();
-
+            let result = send_payload_file(&ip, &path, &tx);
             let _ = tx.send(AppMessage::PayloadSendComplete(result));
+        });
+    }
+
+    fn check_payload_version(&mut self) {
+        if self.ip.trim().is_empty() {
+            return;
+        }
+        let ip = self.ip.clone();
+        let tx = self.tx.clone();
+        let rt = self.rt.clone();
+        thread::spawn(move || {
+            let res = rt.block_on(async { get_payload_version(&ip, TRANSFER_PORT).await });
+            let _ = tx.send(AppMessage::PayloadVersion(res.map_err(|e| e.to_string())));
         });
     }
 }
 
+fn send_payload_file(ip: &str, path: &str, tx: &Sender<AppMessage>) -> Result<u64, String> {
+    use std::fs::File;
+    use std::net::TcpStream;
+    use std::time::Duration;
+
+    let mut file = File::open(path)
+        .map_err(|e| format!("Failed to open payload: {}", e))?;
+    let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    if file_len > 0 {
+        let size_msg = crate::format_bytes(file_len);
+        let _ = tx.send(AppMessage::PayloadLog(format!("Payload size: {}", size_msg)));
+    }
+    let mut stream = TcpStream::connect((ip, PAYLOAD_PORT))
+        .map_err(|e| format!("Failed to connect: {}", e))?;
+    let _ = stream.set_nodelay(true);
+    let mut buffer = vec![0u8; 256 * 1024];
+    let mut sent = 0u64;
+    loop {
+        let n = file.read(&mut buffer)
+            .map_err(|e| format!("Send failed: {}", e))?;
+        if n == 0 {
+            break;
+        }
+        stream.write_all(&buffer[..n])
+            .map_err(|e| format!("Send failed: {}", e))?;
+        sent += n as u64;
+    }
+    let _ = stream.shutdown(std::net::Shutdown::Write);
+
+    stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
+    let mut discard = [0u8; 1024];
+    while match stream.read(&mut discard) {
+        Ok(n) => n > 0,
+        Err(_) => false,
+    } {}
+
+    if file_len > 0 && sent != file_len {
+        return Err(format!("Send incomplete: {} of {} bytes", sent, file_len));
+    }
+    Ok(sent)
+}
+
 impl eframe::App for Ps5UploadApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        let connected = self.status == "Connected" || self.is_uploading;
+        let connected = self.is_connected || self.is_uploading;
 
         while let Ok(msg) = self.rx.try_recv() {
             match msg {
@@ -902,25 +1029,30 @@ impl eframe::App for Ps5UploadApp {
                             self.storage_locations = locs.into_iter().filter(|l| l.free_gb > 0.0).collect();
                             if let Some(first) = self.storage_locations.first() {
                                 self.selected_storage = Some(first.path.clone());
-                                if self.manage_path.trim().is_empty() || self.manage_path == "/data" {
-                                    self.manage_path = first.path.clone();
-                                    self.manage_target_dir = first.path.clone();
+                                if self.manage_left_path.trim().is_empty() || self.manage_left_path == "/data" {
+                                    self.manage_left_path = first.path.clone();
+                                }
+                                if self.manage_right_path.trim().is_empty() || self.manage_right_path == "/data" {
+                                    self.manage_right_path = first.path.clone();
                                 }
                             }
                             self.status = "Connected".to_string();
+                            self.is_connected = true;
                             self.log("Connected to PS5");
                             self.payload_log("Connected and Storage scanned.");
+                            self.check_payload_version();
                             if self.main_tab == 1 {
-                                self.manage_refresh();
+                                self.manage_refresh(self.manage_active);
                             }
                         }
                         Err(e) => {
                             self.log(&format!("Error: {}", e));
                             self.status = "Connection Failed".to_string();
+                            self.is_connected = false;
                         }
                     }
                 }
-                AppMessage::ManageList(res) => {
+                AppMessage::ManageList { side, result: res } => {
                     self.manage_busy = false;
                     match res {
                         Ok(mut entries) => {
@@ -933,24 +1065,101 @@ impl eframe::App for Ps5UploadApp {
                                 }
                             });
                             let count = entries.len();
-                            self.manage_entries = entries;
-                            self.manage_selected = None;
-                            self.manage_status = format!("{} item{}", count, if count == 1 { "" } else { "s" });
+                            match side {
+                                ManageSide::Left => {
+                                    self.manage_left_entries = entries;
+                                    self.manage_left_selected = None;
+                                    self.manage_left_status = format!("{} item{}", count, if count == 1 { "" } else { "s" });
+                                }
+                                ManageSide::Right => {
+                                    self.manage_right_entries = entries;
+                                    self.manage_right_selected = None;
+                                    self.manage_right_status = format!("{} item{}", count, if count == 1 { "" } else { "s" });
+                                }
+                            }
                         }
                         Err(e) => {
-                            self.manage_status = format!("List failed: {}", e);
+                            match side {
+                                ManageSide::Left => self.manage_left_status = format!("List failed: {}", e),
+                                ManageSide::Right => self.manage_right_status = format!("List failed: {}", e),
+                            }
+                            self.log(&format!("List failed: {}", e));
                         }
                     }
                 }
                 AppMessage::ManageOpComplete { op, result } => {
                     self.manage_busy = false;
+                    if op.starts_with("Move") {
+                        self.is_moving = false;
+                    }
                     match result {
                         Ok(()) => {
-                            self.manage_status = format!("{} OK", op);
-                            self.manage_refresh();
+                            if op.starts_with("Move") && self.move_cancellation_token.load(Ordering::Relaxed) {
+                                match self.manage_active {
+                                    ManageSide::Left => self.manage_left_status = "Move cancelled".to_string(),
+                                    ManageSide::Right => self.manage_right_status = "Move cancelled".to_string(),
+                                }
+                                self.log("Move cancelled (operation may complete)");
+                            } else {
+                                match self.manage_active {
+                                    ManageSide::Left => self.manage_left_status = format!("{} OK", op),
+                                    ManageSide::Right => self.manage_right_status = format!("{} OK", op),
+                                }
+                                self.log(&format!("{} OK", op));
+                            }
+                            self.manage_refresh(self.manage_active);
                         }
                         Err(e) => {
-                            self.manage_status = format!("{} failed: {}", op, e);
+                            match self.manage_active {
+                                ManageSide::Left => self.manage_left_status = format!("{} failed: {}", op, e),
+                                ManageSide::Right => self.manage_right_status = format!("{} failed: {}", op, e),
+                            }
+                            self.log(&format!("{} failed: {}", op, e));
+                        }
+                    }
+                }
+                AppMessage::DownloadStart { total, label } => {
+                    self.is_downloading = true;
+                    self.status = "Downloading...".to_string();
+                    self.download_progress_sent = 0;
+                    self.download_progress_total = total;
+                    self.download_speed_bps = 0.0;
+                    self.download_eta_secs = None;
+                    self.download_current_file = label.clone();
+                    self.download_start_time = Some(std::time::Instant::now());
+                    self.log(&format!("Download started: {}", label));
+                }
+                AppMessage::DownloadProgress { received, total, current_file } => {
+                    self.download_progress_sent = received;
+                    self.download_progress_total = total.max(received);
+                    if let Some(name) = current_file {
+                        if !name.is_empty() {
+                            self.download_current_file = name;
+                        }
+                    }
+                    if let Some(start) = self.download_start_time {
+                        let elapsed = start.elapsed().as_secs_f64();
+                        if elapsed > 0.0 {
+                            self.download_speed_bps = received as f64 / elapsed;
+                            if self.download_progress_total > received && self.download_speed_bps > 0.0 {
+                                let remaining = (self.download_progress_total - received) as f64;
+                                self.download_eta_secs = Some(remaining / self.download_speed_bps);
+                            }
+                        }
+                    }
+                }
+                AppMessage::DownloadComplete(res) => {
+                    self.manage_busy = false;
+                    self.is_downloading = false;
+                    self.download_start_time = None;
+                    match res {
+                        Ok(bytes) => {
+                            self.log(&format!("✓ Download complete: {}", format_bytes(bytes)));
+                            self.status = "Download Complete!".to_string();
+                        }
+                        Err(e) => {
+                            self.log(&format!("✗ Download failed: {}", e));
+                            self.status = "Download Failed".to_string();
                         }
                     }
                 }
@@ -958,7 +1167,7 @@ impl eframe::App for Ps5UploadApp {
                     self.update_check_running = false;
                     match res {
                         Ok(release) => {
-                            let current = env!("CARGO_PKG_VERSION");
+                            let current = app_version_trimmed();
                             let latest = release.tag_name.clone();
                             match is_newer_version(&latest, current) {
                                 Some(true) => {
@@ -1005,10 +1214,23 @@ impl eframe::App for Ps5UploadApp {
                         Ok(bytes) => {
                             self.payload_log(&format!("Payload sent ({}).", format_bytes(bytes)));
                             self.status = "Payload sent".to_string();
+                            self.check_payload_version();
                         }
                         Err(e) => {
                             self.payload_log(&format!("Payload failed: {}", e));
                             self.status = "Payload failed".to_string();
+                        }
+                    }
+                }
+                AppMessage::PayloadVersion(res) => {
+                    match res {
+                        Ok(version) => {
+                            self.payload_status = format!("Running (v{})", version);
+                            self.payload_version = Some(version);
+                        }
+                        Err(e) => {
+                            self.payload_status = format!("Not detected ({})", e);
+                            self.payload_version = None;
                         }
                     }
                 }
@@ -1123,6 +1345,17 @@ Overwrite it?", self.get_dest_path()));
                         if ui.button("Cancel").clicked() { self.show_override_dialog = false; self.status = "Connected".to_string(); }
                     });
                 });
+        }
+
+        if self.config.auto_connect && !self.is_connected && !self.is_connecting && !self.is_uploading && !self.is_sending_payload {
+            let now = std::time::Instant::now();
+            let should_attempt = self.last_auto_connect_attempt
+                .map(|last| now.duration_since(last).as_secs() >= 5)
+                .unwrap_or(true);
+            if should_attempt {
+                self.last_auto_connect_attempt = Some(now);
+                self.connect();
+            }
         }
 
         // Profile Management Dialog
@@ -1241,12 +1474,14 @@ Overwrite it?", self.get_dest_path()));
                     .show_ui(ui, |ui| {
                         if ui.selectable_label(self.current_profile.is_none(), "(none)").clicked() {
                             self.current_profile = None;
+                            self.set_default_profile(None);
                         }
                         for name in &profile_names {
                             if ui.selectable_label(self.current_profile.as_ref() == Some(name), name).clicked() {
                                 if let Some(profile) = self.profiles_data.profiles.iter().find(|p| &p.name == name) {
                                     let profile = profile.clone();
                                     self.apply_profile(&profile);
+                                    self.set_default_profile(Some(profile.name.clone()));
                                 }
                             }
                         }
@@ -1264,7 +1499,8 @@ Overwrite it?", self.get_dest_path()));
             ui.label(format!("Transfer port: {}", TRANSFER_PORT));
 
             ui.add_space(8.0);
-            ui.label("Send Payload (optional)");
+            ui.label("Payload");
+            ui.label("Required for file transfer features. You can send it from the client or via another loader.");
             ui.label(format!("Payload port: {}", PAYLOAD_PORT));
             ui.horizontal(|ui| {
                 if ui.button("📂 Select").clicked() {
@@ -1276,11 +1512,84 @@ Overwrite it?", self.get_dest_path()));
             });
             ui.add_space(5.0);
             let payload_enabled = !self.is_sending_payload && !self.ip.trim().is_empty() && !self.payload_path.trim().is_empty();
-            if ui.add_enabled(payload_enabled, egui::Button::new("📤 Send Payload").min_size([ui.available_width(), 30.0].into())).clicked() {
+            if ui.add_enabled(payload_enabled, egui::Button::new("📤 Send Payload from Client").min_size([ui.available_width(), 30.0].into())).clicked() {
                 self.send_payload();
             }
             ui.add_space(5.0);
-            let auto_connect = ui.checkbox(&mut self.config.auto_connect, "Auto reconnect after upload");
+            ui.label(format!("Payload status: {}", self.payload_status));
+            if ui.button("Check Payload Status").clicked() {
+                self.check_payload_version();
+            }
+            ui.add_space(5.0);
+            if ui.button("Download Current Payload + Send").clicked() {
+                if self.ip.trim().is_empty() {
+                    self.payload_log("Enter a PS5 address first.");
+                } else {
+                    let ip = self.ip.clone();
+                    let tx = self.tx.clone();
+                    let rt = self.rt.clone();
+                    let tag = format!("v{}", app_version_trimmed());
+                    self.is_sending_payload = true;
+                    self.status = "Downloading payload...".to_string();
+                    self.payload_log(&format!("Downloading payload {}...", tag));
+                    thread::spawn(move || {
+                        let result = rt.block_on(async {
+                            let release = fetch_release_by_tag(&tag).await?;
+                            let asset = release.assets.iter().find(|a| a.name == "ps5upload.elf")
+                                .ok_or_else(|| anyhow::anyhow!("Payload asset not found for {}", tag))?;
+                            let tmp_path = std::env::temp_dir().join("ps5upload_current.elf");
+                            download_asset(&asset.browser_download_url, &tmp_path.display().to_string()).await?;
+                            Ok::<_, anyhow::Error>(tmp_path)
+                        });
+                        match result {
+                            Ok(path) => {
+                                let path_str = path.display().to_string();
+                                let _ = tx.send(AppMessage::PayloadLog(format!("Payload downloaded: {}", path_str)));
+                                let result = send_payload_file(&ip, &path_str, &tx);
+                                let _ = tx.send(AppMessage::PayloadSendComplete(result));
+                            }
+                            Err(e) => {
+                                let _ = tx.send(AppMessage::PayloadSendComplete(Err(e.to_string())));
+                            }
+                        }
+                    });
+                }
+            }
+            if ui.button("Download Latest Payload + Send").clicked() {
+                if self.ip.trim().is_empty() {
+                    self.payload_log("Enter a PS5 address first.");
+                } else {
+                    let ip = self.ip.clone();
+                    let tx = self.tx.clone();
+                    let rt = self.rt.clone();
+                    self.is_sending_payload = true;
+                    self.status = "Downloading payload...".to_string();
+                    self.payload_log("Downloading latest payload...");
+                    thread::spawn(move || {
+                        let result = rt.block_on(async {
+                            let release = fetch_latest_release(false).await?;
+                            let asset = release.assets.iter().find(|a| a.name == "ps5upload.elf")
+                                .ok_or_else(|| anyhow::anyhow!("Latest payload asset not found"))?;
+                            let tmp_path = std::env::temp_dir().join("ps5upload_latest.elf");
+                            download_asset(&asset.browser_download_url, &tmp_path.display().to_string()).await?;
+                            Ok::<_, anyhow::Error>(tmp_path)
+                        });
+                        match result {
+                            Ok(path) => {
+                                let path_str = path.display().to_string();
+                                let _ = tx.send(AppMessage::PayloadLog(format!("Latest payload downloaded: {}", path_str)));
+                                let result = send_payload_file(&ip, &path_str, &tx);
+                                let _ = tx.send(AppMessage::PayloadSendComplete(result));
+                            }
+                            Err(e) => {
+                                let _ = tx.send(AppMessage::PayloadSendComplete(Err(e.to_string())));
+                            }
+                        }
+                    });
+                }
+            }
+            ui.add_space(5.0);
+            let auto_connect = ui.checkbox(&mut self.config.auto_connect, "Auto reconnect");
             if auto_connect.changed() { self.config.save(); }
 
             ui.add_space(10.0);
@@ -1289,6 +1598,7 @@ Overwrite it?", self.get_dest_path()));
                     self.status = "Disconnected".to_string();
                     self.storage_locations.clear();
                     self.selected_storage = None;
+                    self.is_connected = false;
                 }
             } else {
                 ui.horizontal(|ui| {
@@ -1333,12 +1643,18 @@ Overwrite it?", self.get_dest_path()));
             ui.add_space(15.0);
             ui.heading("Updates");
             ui.add_space(5.0);
-            ui.label(format!("Current: v{}", env!("CARGO_PKG_VERSION")));
+            ui.label(format!("Current: v{}", app_version_trimmed()));
             if self.update_available {
                 ui.label(egui::RichText::new("New version available").color(egui::Color32::from_rgb(255, 140, 0)));
             }
             ui.label(self.update_status.clone());
             if ui.button("Check Updates").clicked() {
+                self.start_update_check();
+            }
+            let mut include_pre = self.config.update_channel == "all";
+            if ui.checkbox(&mut include_pre, "Include pre-release").changed() {
+                self.config.update_channel = if include_pre { "all".to_string() } else { "stable".to_string() };
+                self.config.save();
                 self.start_update_check();
             }
 
@@ -1463,93 +1779,165 @@ Overwrite it?", self.get_dest_path()));
                 let transfer_tab = ui.selectable_value(&mut self.main_tab, 0, "Transfer");
                 let manage_tab = ui.selectable_value(&mut self.main_tab, 1, "Manage");
                 if manage_tab.clicked() && connected {
-                    self.manage_refresh();
+                    self.manage_refresh(self.manage_active);
                 }
                 if transfer_tab.clicked() {
-                    self.manage_selected = None;
+                    self.manage_left_selected = None;
+                    self.manage_right_selected = None;
                 }
             });
             ui.separator();
 
             if self.main_tab == 1 {
-                ui.heading("Manage Files");
-                ui.add_space(10.0);
+                ui.heading("File Manager");
+                ui.add_space(8.0);
+
+                let can_manage = connected && !self.manage_busy && !self.is_downloading;
 
                 ui.group(|ui| {
                     ui.set_width(ui.available_width());
-                    ui.label("Current Path");
                     ui.horizontal(|ui| {
-                        ui.text_edit_singleline(&mut self.manage_path);
-                        let can_manage = connected && !self.manage_busy;
+                        ui.label("Pane");
+                        if ui.selectable_value(&mut self.manage_active, ManageSide::Left, "Left").clicked() {
+                            self.manage_refresh(ManageSide::Left);
+                        }
+                        if ui.selectable_value(&mut self.manage_active, ManageSide::Right, "Right").clicked() {
+                            self.manage_refresh(ManageSide::Right);
+                        }
+                        ui.separator();
+                        ui.label("Path");
+                        let buttons_width = 3.0 * 70.0 + 12.0;
+                        let path_width = (ui.available_width() - buttons_width).max(200.0);
+                        let path_value = match self.manage_active {
+                            ManageSide::Left => &mut self.manage_left_path,
+                            ManageSide::Right => &mut self.manage_right_path,
+                        };
+                        ui.add_sized([path_width, 24.0], egui::TextEdit::singleline(path_value));
                         if ui.add_enabled(can_manage, egui::Button::new("Go")).clicked() {
-                            self.manage_target_dir = self.manage_path.clone();
-                            self.manage_refresh();
+                            self.manage_refresh(self.manage_active);
                         }
                         if ui.add_enabled(can_manage, egui::Button::new("Up")).clicked() {
-                            if let Some(parent) = std::path::Path::new(&self.manage_path).parent() {
-                                self.manage_path = parent.display().to_string();
-                                self.manage_target_dir = self.manage_path.clone();
-                                self.manage_refresh();
-                            }
-                        }
-                        if ui.add_enabled(can_manage, egui::Button::new("Use Storage")).clicked() {
-                            if let Some(path) = &self.selected_storage {
-                                self.manage_path = path.clone();
-                                self.manage_target_dir = path.clone();
-                                self.manage_refresh();
+                            let current_path = match self.manage_active {
+                                ManageSide::Left => self.manage_left_path.clone(),
+                                ManageSide::Right => self.manage_right_path.clone(),
+                            };
+                            if let Some(parent) = std::path::Path::new(&current_path).parent() {
+                                match self.manage_active {
+                                    ManageSide::Left => self.manage_left_path = parent.display().to_string(),
+                                    ManageSide::Right => self.manage_right_path = parent.display().to_string(),
+                                }
+                                self.manage_refresh(self.manage_active);
                             }
                         }
                         if ui.add_enabled(can_manage, egui::Button::new("Refresh")).clicked() {
-                            self.manage_refresh();
+                            self.manage_refresh(self.manage_active);
                         }
                     });
-                    ui.label(self.manage_status.clone());
+
+                    ui.add_space(6.0);
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label("Breadcrumb");
+                        let mut parts = Vec::new();
+                        let mut current = String::new();
+                        let active_path = match self.manage_active {
+                            ManageSide::Left => &self.manage_left_path,
+                            ManageSide::Right => &self.manage_right_path,
+                        };
+                        if active_path.starts_with('/') {
+                            parts.push("/".to_string());
+                        }
+                        for part in active_path.split('/').filter(|p| !p.is_empty()) {
+                            if current.ends_with('/') || current.is_empty() {
+                                current.push_str(part);
+                            } else {
+                                current.push('/');
+                                current.push_str(part);
+                            }
+                            parts.push(current.clone());
+                        }
+
+                        for (idx, part) in parts.iter().enumerate() {
+                            let label = if idx == 0 && part == "/" { "/" } else { part.rsplit('/').next().unwrap_or(part) };
+                            if ui.add_enabled(can_manage, egui::Button::new(label)).clicked() {
+                                match self.manage_active {
+                                    ManageSide::Left => self.manage_left_path = part.clone(),
+                                    ManageSide::Right => self.manage_right_path = part.clone(),
+                                }
+                                self.manage_refresh(self.manage_active);
+                            }
+                        }
+                    });
+
+                    ui.add_space(4.0);
+                    ui.label(match self.manage_active {
+                        ManageSide::Left => self.manage_left_status.clone(),
+                        ManageSide::Right => self.manage_right_status.clone(),
+                    });
                 });
 
                 ui.add_space(10.0);
 
+                let total_height = ui.available_height();
+                let list_height = (total_height * 0.55).clamp(240.0, 520.0);
+                let _details_height = (total_height - list_height - 12.0).max(240.0);
+
                 ui.group(|ui| {
                     ui.set_width(ui.available_width());
-                    ui.label("Directory Contents");
+                    ui.label("Items");
                     if !connected {
                         ui.label("Not connected");
-                        return;
-                    }
-                    let mut open_dir: Option<String> = None;
-                    egui::ScrollArea::vertical().max_height(280.0).show(ui, |ui| {
-                        egui::Grid::new("manage_list").striped(true).min_col_width(140.0).show(ui, |ui| {
-                            ui.strong("Name");
-                            ui.strong("Type");
-                            ui.strong("Size");
-                            ui.strong("Modified");
-                            ui.end_row();
-
-                            for (idx, entry) in self.manage_entries.iter().enumerate() {
-                                let is_selected = self.manage_selected == Some(idx);
-                                let icon = if entry.entry_type == "dir" { "📁" } else { "📄" };
-                                let response = ui.selectable_label(is_selected, format!("{} {}", icon, entry.name));
-                                if response.clicked() {
-                                    self.manage_selected = Some(idx);
-                                    self.manage_new_name = entry.name.clone();
-                                }
-                                if response.double_clicked() && entry.entry_type == "dir" {
-                                    open_dir = Some(entry.name.clone());
-                                }
-                                ui.label(entry.entry_type.clone());
-                                if entry.entry_type == "dir" {
-                                    ui.label("--");
-                                } else {
-                                    ui.label(format_bytes(entry.size));
-                                }
-                                ui.label(format_modified_time(entry.mtime));
+                    } else {
+                        let mut open_dir: Option<String> = None;
+                        let entries = match self.manage_active {
+                            ManageSide::Left => &self.manage_left_entries,
+                            ManageSide::Right => &self.manage_right_entries,
+                        };
+                        let selected_ref = match self.manage_active {
+                            ManageSide::Left => &mut self.manage_left_selected,
+                            ManageSide::Right => &mut self.manage_right_selected,
+                        };
+                        egui::ScrollArea::vertical().max_height(list_height).show(ui, |ui| {
+                            egui::Grid::new("manage_list").striped(true).min_col_width(140.0).show(ui, |ui| {
+                                ui.strong("Name");
+                                ui.strong("Type");
+                                ui.strong("Size");
+                                ui.strong("Modified");
                                 ui.end_row();
-                            }
+
+                                for (idx, entry) in entries.iter().enumerate() {
+                                    let is_selected = *selected_ref == Some(idx);
+                                    let icon = if entry.entry_type == "dir" { "📁" } else { "📄" };
+                                    let response = ui.selectable_label(is_selected, format!("{} {}", icon, entry.name));
+                                    if response.clicked() {
+                                        *selected_ref = Some(idx);
+                                        self.manage_new_name = entry.name.clone();
+                                    }
+                                    if response.double_clicked() && entry.entry_type == "dir" {
+                                        open_dir = Some(entry.name.clone());
+                                    }
+                                    let type_label = if entry.entry_type == "dir" { "Directory" } else { "File" };
+                                    ui.label(type_label);
+                                    if entry.entry_type == "dir" {
+                                        ui.label("--");
+                                    } else {
+                                        ui.label(format_bytes(entry.size));
+                                    }
+                                    ui.label(format_modified_time(entry.mtime));
+                                    ui.end_row();
+                                }
+                            });
                         });
-                    });
-                    if let Some(dir_name) = open_dir {
-                        self.manage_path = Self::join_remote_path(&self.manage_path, &dir_name);
-                        self.manage_target_dir = self.manage_path.clone();
-                        self.manage_refresh();
+                        if let Some(dir_name) = open_dir {
+                            match self.manage_active {
+                                ManageSide::Left => {
+                                    self.manage_left_path = Self::join_remote_path(&self.manage_left_path, &dir_name);
+                                }
+                                ManageSide::Right => {
+                                    self.manage_right_path = Self::join_remote_path(&self.manage_right_path, &dir_name);
+                                }
+                            }
+                            self.manage_refresh(self.manage_active);
+                        }
                     }
                 });
 
@@ -1557,130 +1945,259 @@ Overwrite it?", self.get_dest_path()));
 
                 ui.group(|ui| {
                     ui.set_width(ui.available_width());
-                    ui.label("Actions");
+                    ui.label("Details & Actions");
 
-                    let selected_info = self.manage_selected
-                        .and_then(|idx| self.manage_entries.get(idx))
-                        .map(|entry| (entry.name.clone(), entry.entry_type.clone()));
+                    let selected_info = match self.manage_active {
+                        ManageSide::Left => self.manage_left_selected
+                            .and_then(|idx| self.manage_left_entries.get(idx))
+                            .map(|entry| (entry.name.clone(), entry.entry_type.clone(), entry.size, entry.mtime)),
+                        ManageSide::Right => self.manage_right_selected
+                            .and_then(|idx| self.manage_right_entries.get(idx))
+                            .map(|entry| (entry.name.clone(), entry.entry_type.clone(), entry.size, entry.mtime)),
+                    };
 
-                    if let Some((selected_name, selected_type)) = selected_info {
-                        let selected_path = Self::join_remote_path(&self.manage_path, &selected_name);
-                        ui.label(format!("Selected: {}", selected_path));
+                    let mut selected_name: Option<String> = None;
+                    let mut selected_type: Option<String> = None;
+                    let mut selected_path: Option<String> = None;
+                    let mut selected_size: Option<u64> = None;
+                    let mut selected_mtime: Option<Option<i64>> = None;
 
-                        let can_ops = connected && !self.manage_busy;
+                    if let Some((name, entry_type, size, mtime)) = selected_info {
+                        let base = match self.manage_active {
+                            ManageSide::Left => &self.manage_left_path,
+                            ManageSide::Right => &self.manage_right_path,
+                        };
+                        let path = Self::join_remote_path(base, &name);
+                        selected_name = Some(name);
+                        selected_type = Some(entry_type);
+                        selected_path = Some(path);
+                        selected_size = Some(size);
+                        selected_mtime = Some(mtime);
+                    }
 
-                        ui.horizontal(|ui| {
-                            ui.label("Rename to");
-                            ui.text_edit_singleline(&mut self.manage_new_name);
-                            let can_rename = can_ops
-                                && !self.manage_new_name.trim().is_empty()
-                                && self.manage_new_name.trim() != selected_name;
-                            if ui.add_enabled(can_rename, egui::Button::new("Rename")).clicked() {
-                                let src = selected_path.clone();
-                                let new_name = self.manage_new_name.trim().to_string();
-                                let dst = Self::join_remote_path(&self.manage_path, &new_name);
-                                let ip = self.ip.clone();
-                                let rt = self.rt.clone();
-                                self.manage_send_op("Rename", move || {
-                                    rt.block_on(async {
-                                        move_path(&ip, TRANSFER_PORT, &src, &dst).await
-                                    }).map_err(|e| e.to_string())
-                                });
-                            }
-                        });
-
-                        ui.horizontal(|ui| {
-                            ui.label("Target folder");
-                            ui.text_edit_singleline(&mut self.manage_target_dir);
-                            let can_move = can_ops;
-                            if ui.add_enabled(can_move, egui::Button::new("Move")).clicked() {
-                                let src = selected_path.clone();
-                                let target_dir = if self.manage_target_dir.trim().is_empty() {
-                                    self.manage_path.clone()
-                                } else {
-                                    self.manage_target_dir.clone()
-                                };
-                                let dst = Self::join_remote_path(&target_dir, &selected_name);
-                                let ip = self.ip.clone();
-                                let rt = self.rt.clone();
-                                self.manage_send_op("Move", move || {
-                                    rt.block_on(async {
-                                        move_path(&ip, TRANSFER_PORT, &src, &dst).await
-                                    }).map_err(|e| e.to_string())
-                                });
-                            }
-                        });
-
-                        ui.horizontal(|ui| {
-                            let can_copy = can_ops;
-                            if ui.add_enabled(can_copy, egui::Button::new("Copy")).clicked() {
-                                self.manage_clipboard = Some(selected_path.clone());
-                                self.manage_status = "Copied to clipboard".to_string();
-                            }
-
-                            let can_paste = can_ops && self.manage_clipboard.is_some();
-                            if ui.add_enabled(can_paste, egui::Button::new("Paste")).clicked() {
-                                if let Some(clip_path) = self.manage_clipboard.clone() {
-                                    let name = std::path::Path::new(&clip_path)
-                                        .file_name()
-                                        .map(|n| n.to_string_lossy().to_string())
-                                        .unwrap_or_else(|| "item".to_string());
-                                    let dst = Self::join_remote_path(&self.manage_path, &name);
-                                    let ip = self.ip.clone();
-                                    let rt = self.rt.clone();
-                                    self.manage_send_op("Paste", move || {
-                                        rt.block_on(async {
-                                            copy_path(&ip, TRANSFER_PORT, &clip_path, &dst).await
-                                        }).map_err(|e| e.to_string())
-                                    });
+                    if let (Some(ref name), Some(ref entry_type), Some(path)) = (selected_name.clone(), selected_type.clone(), selected_path.clone()) {
+                        egui::Grid::new("manage_details").spacing([10.0, 6.0]).show(ui, |ui| {
+                            ui.label("Name"); ui.label(name); ui.end_row();
+                            ui.label("Type"); ui.label(if entry_type == "dir" { "Directory" } else { "File" }); ui.end_row();
+                            if entry_type == "file" {
+                                if let Some(size) = selected_size {
+                                    ui.label("Size"); ui.label(format_bytes(size)); ui.end_row();
                                 }
                             }
-                        });
-
-                        ui.horizontal(|ui| {
-                            let is_file = selected_type == "file";
-                            let can_download = can_ops && is_file;
-                            if ui.add_enabled(can_download, egui::Button::new("Download")).clicked() {
-                                let default_name = selected_name.clone();
-                                if let Some(save_path) = rfd::FileDialog::new().set_file_name(&default_name).save_file() {
-                                    let target = selected_path.clone();
-                                    let ip = self.ip.clone();
-                                    let rt = self.rt.clone();
-                                    let save_path = save_path.display().to_string();
-                                    self.manage_send_op("Download", move || {
-                                        rt.block_on(async {
-                                            download_file(&ip, TRANSFER_PORT, &target, &save_path).await
-                                        }).map_err(|e| e.to_string())
-                                    });
-                                }
-                            }
-                            let can_delete = can_ops;
-                            if ui.add_enabled(can_delete, egui::Button::new("Delete")).clicked() {
-                                let target = selected_path.clone();
-                                let ip = self.ip.clone();
-                                let rt = self.rt.clone();
-                                self.manage_send_op("Delete", move || {
-                                    rt.block_on(async {
-                                        delete_path(&ip, TRANSFER_PORT, &target).await
-                                    }).map_err(|e| e.to_string())
-                                });
-                            }
-                            let can_chmod = can_ops;
-                            if ui.add_enabled(can_chmod, egui::Button::new("chmod 777"))
-                                .on_hover_text("Applies recursively")
-                                .clicked() {
-                                let target = selected_path.clone();
-                                let ip = self.ip.clone();
-                                let rt = self.rt.clone();
-                                self.manage_send_op("chmod", move || {
-                                    rt.block_on(async {
-                                        chmod_777(&ip, TRANSFER_PORT, &target).await
-                                    }).map_err(|e| e.to_string())
-                                });
-                            }
+                            ui.label("Modified"); ui.label(format_modified_time(selected_mtime.flatten())); ui.end_row();
+                            ui.label("Path"); ui.label(path.clone()); ui.end_row();
                         });
                     } else {
-                        ui.label("Select an item to manage.");
+                        ui.label("Select an item to see details.");
+                    }
+
+                    let can_ops = connected && !self.manage_busy && !self.is_downloading;
+                    let has_selection = selected_name.is_some() && selected_path.is_some() && selected_type.is_some();
+
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        ui.label("Rename");
+                        ui.text_edit_singleline(&mut self.manage_new_name);
+                    });
+
+                    ui.horizontal(|ui| {
+                        let can_rename = can_ops
+                            && has_selection
+                            && !self.manage_new_name.trim().is_empty()
+                            && self.manage_new_name.trim() != selected_name.as_deref().unwrap_or("");
+                        if ui.add_enabled(can_rename, egui::Button::new("Rename")).clicked() {
+                            let src = selected_path.clone().unwrap_or_default();
+                            let new_name = self.manage_new_name.trim().to_string();
+                            let dst_base = match self.manage_active {
+                                ManageSide::Left => &self.manage_left_path,
+                                ManageSide::Right => &self.manage_right_path,
+                            };
+                            let dst = Self::join_remote_path(dst_base, &new_name);
+                            let ip = self.ip.clone();
+                            let rt = self.rt.clone();
+                            self.manage_send_op("Rename", move || {
+                                rt.block_on(async {
+                                    move_path(&ip, TRANSFER_PORT, &src, &dst).await
+                                }).map_err(|e| e.to_string())
+                            });
+                        }
+                        let move_label = match self.manage_active {
+                            ManageSide::Left => "Move to Right Path",
+                            ManageSide::Right => "Move to Left Path",
+                        };
+                        if ui.add_enabled(can_ops && has_selection, egui::Button::new(move_label)).clicked() {
+                            let src = selected_path.clone().unwrap_or_default();
+                            let name = selected_name.clone().unwrap_or_default();
+                            let dst_dir = match self.manage_active {
+                                ManageSide::Left => self.manage_right_path.clone(),
+                                ManageSide::Right => self.manage_left_path.clone(),
+                            };
+                            let dst = Self::join_remote_path(&dst_dir, &name);
+                            let ip = self.ip.clone();
+                            let rt = self.rt.clone();
+                            let op_name = move_label.to_string();
+                            self.manage_send_op(&op_name, move || {
+                                rt.block_on(async {
+                                    move_path(&ip, TRANSFER_PORT, &src, &dst).await
+                                }).map_err(|e| e.to_string())
+                            });
+                        }
+                        if ui.add_enabled(can_ops && has_selection, egui::Button::new("Copy")).clicked() {
+                            if let Some(path) = selected_path.clone() {
+                                self.manage_clipboard = Some(path);
+                                match self.manage_active {
+                                    ManageSide::Left => self.manage_left_status = "Copied to clipboard".to_string(),
+                                    ManageSide::Right => self.manage_right_status = "Copied to clipboard".to_string(),
+                                }
+                            }
+                        }
+                        let can_paste = can_ops && self.manage_clipboard.is_some();
+                        if ui.add_enabled(can_paste, egui::Button::new("Paste")).clicked() {
+                            if let Some(clip_path) = self.manage_clipboard.clone() {
+                                let name = std::path::Path::new(&clip_path)
+                                    .file_name()
+                                    .map(|n| n.to_string_lossy().to_string())
+                                    .unwrap_or_else(|| "item".to_string());
+                                let dst_base = match self.manage_active {
+                                    ManageSide::Left => &self.manage_left_path,
+                                    ManageSide::Right => &self.manage_right_path,
+                                };
+                                let dst = Self::join_remote_path(dst_base, &name);
+                                let ip = self.ip.clone();
+                                let rt = self.rt.clone();
+                                self.manage_send_op("Paste", move || {
+                                    rt.block_on(async {
+                                        copy_path(&ip, TRANSFER_PORT, &clip_path, &dst).await
+                                    }).map_err(|e| e.to_string())
+                                });
+                            }
+                        }
+                        let can_download = can_ops && has_selection;
+                        if ui.add_enabled(can_download, egui::Button::new("Download")).clicked() {
+                            let name = selected_name.clone().unwrap_or_default();
+                            let entry_type = selected_type.clone().unwrap_or_default();
+                            let target = selected_path.clone().unwrap_or_default();
+                            let ip = self.ip.clone();
+                            let rt = self.rt.clone();
+                            let use_lz4 = self.config.download_compression == "lz4";
+                            if entry_type == "file" {
+                                if let Some(save_path) = rfd::FileDialog::new().set_file_name(&name).save_file() {
+                                    let save_path = save_path.display().to_string();
+                                    let label = format!("Download {}", name);
+                                    self.start_download(label, move |tx, cancel| {
+                                        thread::spawn(move || {
+                                            let _ = tx.send(AppMessage::DownloadStart { total: 0, label: target.clone() });
+                                            let result = rt.block_on(async {
+                                                download_file_with_progress(&ip, TRANSFER_PORT, &target, &save_path, cancel, |received, total, _| {
+                                                    let _ = tx.send(AppMessage::DownloadProgress {
+                                                        received,
+                                                        total,
+                                                        current_file: None,
+                                                    });
+                                                }).await
+                                            });
+                                            let _ = tx.send(AppMessage::DownloadComplete(result.map_err(|e| e.to_string())));
+                                        });
+                                    });
+                                }
+                            } else {
+                                if let Some(save_folder) = rfd::FileDialog::new().pick_folder() {
+                                    let dest_root = save_folder.join(&name).display().to_string();
+                                    let label = format!("Download {}", name);
+                                    self.start_download(label, move |tx, cancel| {
+                                        thread::spawn(move || {
+                                            let _ = tx.send(AppMessage::DownloadStart { total: 0, label: target.clone() });
+                                            let result = rt.block_on(async {
+                                                download_dir_with_progress(&ip, TRANSFER_PORT, &target, &dest_root, cancel, use_lz4, |received, total, current_file| {
+                                                    let _ = tx.send(AppMessage::DownloadProgress {
+                                                        received,
+                                                        total,
+                                                        current_file,
+                                                    });
+                                                }).await
+                                            });
+                                            let _ = tx.send(AppMessage::DownloadComplete(result.map_err(|e| e.to_string())));
+                                        });
+                                    });
+                                }
+                            }
+                        }
+                        if ui.add_enabled(can_ops && has_selection, egui::Button::new("Delete")).clicked() {
+                            let target = selected_path.clone().unwrap_or_default();
+                            let ip = self.ip.clone();
+                            let rt = self.rt.clone();
+                            self.manage_send_op("Delete", move || {
+                                rt.block_on(async {
+                                    delete_path(&ip, TRANSFER_PORT, &target).await
+                                }).map_err(|e| e.to_string())
+                            });
+                        }
+                        if ui.add_enabled(can_ops && has_selection, egui::Button::new("chmod 777"))
+                            .on_hover_text("Applies recursively")
+                            .clicked() {
+                            let target = selected_path.clone().unwrap_or_default();
+                            let ip = self.ip.clone();
+                            let rt = self.rt.clone();
+                            self.manage_send_op("chmod", move || {
+                                rt.block_on(async {
+                                    chmod_777(&ip, TRANSFER_PORT, &target).await
+                                }).map_err(|e| e.to_string())
+                            });
+                        }
+                    });
+
+                    ui.add_space(8.0);
+                    ui.separator();
+                    ui.label("Download Progress");
+                    ui.horizontal(|ui| {
+                        ui.label("Compression");
+                        egui::ComboBox::from_id_source("download_compression_combo")
+                            .selected_text(if self.config.download_compression == "lz4" { "LZ4" } else { "None" })
+                            .show_ui(ui, |ui| {
+                                if ui.selectable_label(self.config.download_compression == "none", "None").clicked() {
+                                    self.config.download_compression = "none".to_string();
+                                    self.config.save();
+                                }
+                                if ui.selectable_label(self.config.download_compression == "lz4", "LZ4").clicked() {
+                                    self.config.download_compression = "lz4".to_string();
+                                    self.config.save();
+                                }
+                            });
+                    });
+                    let total = self.download_progress_total.max(1);
+                    let progress = (self.download_progress_sent as f64 / total as f64).clamp(0.0, 1.0) as f32;
+                    ui.add(egui::ProgressBar::new(progress).show_percentage().animate(self.is_downloading));
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.label(format!(
+                            "{} / {}",
+                            format_bytes(self.download_progress_sent),
+                            format_bytes(self.download_progress_total)
+                        ));
+                        ui.separator();
+                        ui.label(format!("{}/s", format_bytes(self.download_speed_bps as u64)));
+                        ui.separator();
+                        ui.label(format!("ETA {}", self.download_eta_secs.map(format_duration).unwrap_or("N/A".to_string())));
+                    });
+                    if !self.download_current_file.is_empty() {
+                        ui.label(format!("Current file: {}", self.download_current_file));
+                    }
+                    if self.is_downloading {
+                        if ui.add(egui::Button::new("Stop Download").min_size([140.0, 30.0].into())).clicked() {
+                            self.download_cancellation_token.store(true, Ordering::Relaxed);
+                            self.log("Stopping download...");
+                        }
+                    }
+
+                    if self.is_moving {
+                        ui.add_space(6.0);
+                        ui.separator();
+                        ui.label("Move Progress");
+                        ui.add(egui::ProgressBar::new(0.5).show_percentage().animate(true));
+                        if ui.add(egui::Button::new("Stop Move").min_size([140.0, 30.0].into())).clicked() {
+                            self.move_cancellation_token.store(true, Ordering::Relaxed);
+                            self.log("Stopping move...");
+                        }
                     }
                 });
             } else {
@@ -1817,6 +2334,20 @@ Overwrite it?", self.get_dest_path()));
                         let temp_toggle = ui.checkbox(&mut self.config.use_temp, "Stage on fastest storage");
                         if temp_toggle.changed() { self.config.save(); }
                         ui.end_row();
+                        ui.label("Compression:");
+                        egui::ComboBox::from_id_source("compression_combo")
+                            .selected_text(if self.config.compression == "lz4" { "LZ4" } else { "None" })
+                            .show_ui(ui, |ui| {
+                                if ui.selectable_label(self.config.compression == "none", "None").clicked() {
+                                    self.config.compression = "none".to_string();
+                                    self.config.save();
+                                }
+                                if ui.selectable_label(self.config.compression == "lz4", "LZ4").clicked() {
+                                    self.config.compression = "lz4".to_string();
+                                    self.config.save();
+                                }
+                            });
+                        ui.end_row();
                     });
                     ui.add_space(5.0);
                     ui.label(egui::RichText::new(format!("➡ Destination: {}", self.get_dest_path())).monospace().weak());
@@ -1826,7 +2357,7 @@ Overwrite it?", self.get_dest_path()));
 
                 ui.group(|ui| {
                     ui.set_width(ui.available_width());
-                    ui.label("Upload Progress");
+                    ui.label("Transfer Progress");
                     ui.add_space(5.0);
                     
                     let total = self.progress_total.max(1);
@@ -1862,6 +2393,22 @@ Overwrite it?", self.get_dest_path()));
                         }
                         ui.label(format!("(max {})", MAX_PARALLEL_CONNECTIONS));
                     });
+                    ui.horizontal(|ui| {
+                        ui.label("Limit MB/s");
+                        let mut limit = self.config.bandwidth_limit_mbps;
+                        let response = ui.add(
+                            egui::DragValue::new(&mut limit)
+                                .clamp_range(0.0..=1000.0)
+                                .speed(1.0)
+                        );
+                        if response.changed() {
+                            self.config.bandwidth_limit_mbps = limit.max(0.0);
+                            self.config.save();
+                        }
+                        if self.config.bandwidth_limit_mbps <= 0.0 {
+                            ui.label("(unlimited)");
+                        }
+                    });
 
                     if self.is_uploading {
                         ui.add_space(10.0);
@@ -1873,10 +2420,16 @@ Overwrite it?", self.get_dest_path()));
                                 self.log("Stopping...");
                             }
                         });
+                    } else if self.is_downloading {
+                        ui.add_space(10.0);
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label("Downloading...");
+                        });
                     } else {
                         ui.add_space(15.0);
-                        let enabled = !self.game_path.is_empty() && self.selected_storage.is_some() && connected;
-                        if ui.add_enabled(enabled, egui::Button::new("🚀 Start Upload").min_size([ui.available_width(), 40.0].into())).clicked() {
+                        let enabled = !self.game_path.is_empty() && self.selected_storage.is_some() && connected && !self.is_downloading;
+                        if ui.add_enabled(enabled, egui::Button::new("🚀 Upload").min_size([ui.available_width(), 40.0].into())).clicked() {
                             self.check_exists_and_upload();
                         }
                     }
@@ -1886,15 +2439,34 @@ Overwrite it?", self.get_dest_path()));
     }
 }
 
-async fn fetch_latest_release() -> anyhow::Result<ReleaseInfo> {
+async fn fetch_latest_release(include_prerelease: bool) -> anyhow::Result<ReleaseInfo> {
     let client = reqwest::Client::new();
     let response = client
-        .get("https://api.github.com/repos/phantomptr/ps5upload/releases/latest")
+        .get("https://api.github.com/repos/phantomptr/ps5upload/releases")
         .header("User-Agent", "ps5upload")
         .send()
         .await?
         .error_for_status()?;
 
+    let releases = response.json::<Vec<ReleaseInfo>>().await?;
+    if include_prerelease {
+        releases.into_iter().next().ok_or_else(|| anyhow::anyhow!("No releases found"))
+    } else {
+        releases
+            .into_iter()
+            .find(|r| !r.prerelease)
+            .ok_or_else(|| anyhow::anyhow!("No stable releases found"))
+    }
+}
+
+async fn fetch_release_by_tag(tag: &str) -> anyhow::Result<ReleaseInfo> {
+    let client = reqwest::Client::new();
+    let response = client
+        .get(format!("https://api.github.com/repos/phantomptr/ps5upload/releases/tags/{}", tag))
+        .header("User-Agent", "ps5upload")
+        .send()
+        .await?
+        .error_for_status()?;
     let release = response.json::<ReleaseInfo>().await?;
     Ok(release)
 }
@@ -1980,13 +2552,13 @@ fn setup_light_style(ctx: &egui::Context) {
 }
 
 fn main() -> eframe::Result<()> {
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1400.0, 900.0])
-            .with_min_inner_size([1200.0, 800.0])
-            .with_icon(std::sync::Arc::new(build_icon())),
-        ..Default::default()
-    };
+        let options = eframe::NativeOptions {
+            viewport: egui::ViewportBuilder::default()
+                .with_inner_size([1680.0, 1080.0])
+                .with_min_inner_size([1440.0, 960.0])
+                .with_icon(std::sync::Arc::new(build_icon())),
+            ..Default::default()
+        };
     eframe::run_native("PS5 Upload", options, Box::new(|cc| Box::new(Ps5UploadApp::new(cc))))
 }
 

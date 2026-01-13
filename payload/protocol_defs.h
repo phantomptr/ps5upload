@@ -12,7 +12,8 @@ enum FrameType {
     FRAME_PACK = 4,
     FRAME_PACK_ACK = 5,
     FRAME_FINISH = 6,
-    FRAME_ERROR = 7
+    FRAME_ERROR = 7,
+    FRAME_PACK_LZ4 = 8
 };
 
 struct FrameHeader {

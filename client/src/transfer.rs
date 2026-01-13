@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::net::Shutdown;
 use std::io::ErrorKind;
 use std::sync::Mutex;
+use lz4_flex::block::compress_prepend_size;
 
 // Optimized for 10 worker processes on payload side
 const PACK_BUFFER_SIZE: usize = 16 * 1024 * 1024; // 16MB Packs
@@ -27,6 +28,7 @@ pub struct FileEntry {
 #[derive(Debug)]
 enum FrameType {
     Pack = 4,
+    PackLz4 = 8,
     Finish = 6,
 }
 
@@ -35,6 +37,45 @@ struct ReadyPack {
     buffer: Vec<u8>,
     bytes_in_pack: u64,
     files_in_pack: i32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum CompressionMode {
+    None,
+    Lz4,
+}
+
+struct RateLimiter {
+    limit_bps: Option<u64>,
+    start: std::time::Instant,
+    sent: u64,
+}
+
+impl RateLimiter {
+    fn new(limit_bps: Option<u64>) -> Self {
+        Self {
+            limit_bps,
+            start: std::time::Instant::now(),
+            sent: 0,
+        }
+    }
+
+    fn throttle(&mut self, bytes: u64) {
+        let Some(limit) = self.limit_bps else { return; };
+        if limit == 0 {
+            return;
+        }
+        self.sent += bytes;
+        let elapsed = self.start.elapsed().as_secs_f64();
+        if elapsed <= 0.0 {
+            return;
+        }
+        let expected = self.sent as f64 / limit as f64;
+        if expected > elapsed {
+            let sleep_secs = expected - elapsed;
+            std::thread::sleep(std::time::Duration::from_secs_f64(sleep_secs.min(0.5)));
+        }
+    }
 }
 
 struct PackBuffer {
@@ -173,6 +214,8 @@ pub fn send_files_v2_for_list<F, L>(
     log: L,
     worker_id: usize,
     allowed_connections: Option<Arc<AtomicUsize>>,
+    compression: CompressionMode,
+    rate_limit_bps: Option<u64>,
 ) -> Result<()>
 where
     F: FnMut(u64, i32, Option<String>),
@@ -332,6 +375,7 @@ where
     let mut last_progress_sent = 0u64;
     let mut last_progress_file = String::new();
 
+    let mut limiter = RateLimiter::new(rate_limit_bps);
     for ready_pack in rx {
         if let Some(allowed) = &allowed_connections {
             while worker_id >= allowed.load(Ordering::Relaxed) {
@@ -347,17 +391,30 @@ where
             return Err(anyhow::anyhow!("Upload cancelled by user"));
         }
 
-        send_frame_header(&mut stream, FrameType::Pack, ready_pack.buffer.len() as u64, &cancel)?;
+        let (frame_type, payload) = match compression {
+            CompressionMode::Lz4 => {
+                let compressed = compress_prepend_size(&ready_pack.buffer);
+                if compressed.len() >= ready_pack.buffer.len() {
+                    (FrameType::Pack, ready_pack.buffer)
+                } else {
+                    (FrameType::PackLz4, compressed)
+                }
+            }
+            CompressionMode::None => (FrameType::Pack, ready_pack.buffer),
+        };
+
+        send_frame_header(&mut stream, frame_type, payload.len() as u64, &cancel)?;
 
         let mut sent_payload = 0usize;
-        let pack_len = ready_pack.buffer.len();
+        let pack_len = payload.len();
         while sent_payload < pack_len {
             if cancel.load(Ordering::Relaxed) {
                 let _ = stream.shutdown(Shutdown::Both);
                 return Err(anyhow::anyhow!("Upload cancelled by user"));
             }
             let end = std::cmp::min(sent_payload + SEND_CHUNK_SIZE, pack_len);
-            write_all_retry(&mut stream, &ready_pack.buffer[sent_payload..end], &cancel)?;
+            write_all_retry(&mut stream, &payload[sent_payload..end], &cancel)?;
+            limiter.throttle((end - sent_payload) as u64);
             sent_payload = end;
 
             let approx = if pack_len > 0 {
