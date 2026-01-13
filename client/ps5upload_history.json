@@ -1,3 +1,26 @@
 {
-  "records": []
+  "records": [
+    {
+      "timestamp": 1768296474,
+      "source_path": "/home/ubuntu/ps5upload/ABCD54321-app",
+      "dest_path": "/data/etaHEN/games/ABCD54321-app",
+      "file_count": 124,
+      "total_bytes": 6931411576,
+      "duration_secs": 61.030039828,
+      "speed_bps": 113573767.86144476,
+      "success": true,
+      "error": null
+    },
+    {
+      "timestamp": 1768296536,
+      "source_path": "/home/ubuntu/ps5upload/ABCD54321-app",
+      "dest_path": "/data/etaHEN/games/ABCD54321-app",
+      "file_count": 124,
+      "total_bytes": 6931411576,
+      "duration_secs": 0.0,
+      "speed_bps": 0.0,
+      "success": true,
+      "error": null
+    }
+  ]
 }

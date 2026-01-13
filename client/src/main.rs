@@ -806,6 +806,13 @@ impl Ps5UploadApp {
                 if files.len() < connection_count {
                     connection_count = files.len().max(1);
                 }
+                let mut effective_use_temp = use_temp;
+                if connection_count > 1 && effective_use_temp {
+                    effective_use_temp = false;
+                    let _ = tx.send(AppMessage::Log(
+                        "Temp staging disabled for multi-connection uploads to avoid corruption.".to_string()
+                    ));
+                }
 
                 let _ = tx.send(AppMessage::Log(format!(
                     "Starting transfer: {:.2} GB using {} connection{}",
@@ -826,7 +833,7 @@ impl Ps5UploadApp {
                 };
 
                 if connection_count == 1 {
-                    let stream = upload_v2_init(&ip, TRANSFER_PORT, &dest_path, use_temp).await?;
+                    let stream = upload_v2_init(&ip, TRANSFER_PORT, &dest_path, effective_use_temp).await?;
                     let mut std_stream = stream.into_std()?;
                     std_stream.set_nonblocking(false)?;
                     let _ = tx.send(AppMessage::PayloadLog("Server READY".to_string()));
@@ -873,7 +880,7 @@ impl Ps5UploadApp {
 
                 let mut workers = Vec::new();
                 for bucket in buckets.into_iter().filter(|b| !b.is_empty()) {
-                    let stream = upload_v2_init(&ip, TRANSFER_PORT, &dest_path, use_temp).await?;
+                    let stream = upload_v2_init(&ip, TRANSFER_PORT, &dest_path, effective_use_temp).await?;
                     let std_stream = stream.into_std()?;
                     std_stream.set_nonblocking(false)?;
                     workers.push((bucket, std_stream));
