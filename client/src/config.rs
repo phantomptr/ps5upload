@@ -14,6 +14,7 @@ pub struct AppConfig {
     pub bandwidth_limit_mbps: f32, // 0 = unlimited
     pub update_channel: String, // "stable" or "all"
     pub download_compression: String, // "none" or "lz4"
+    pub chmod_after_upload: bool,
 }
 
 impl Default for AppConfig {
@@ -29,6 +30,7 @@ impl Default for AppConfig {
             bandwidth_limit_mbps: 0.0,
             update_channel: "stable".to_string(),
             download_compression: "none".to_string(),
+            chmod_after_upload: false,
         }
     }
 }
@@ -79,6 +81,9 @@ impl AppConfig {
                             "download_compression" => {
                                 config.download_compression = if value == "lz4" { "lz4".to_string() } else { "none".to_string() };
                             }
+                            "chmod_after_upload" => {
+                                config.chmod_after_upload = matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on");
+                            }
                             _ => {}
                         }
                     }
@@ -91,7 +96,7 @@ impl AppConfig {
 
     pub fn save(&self) {
         let content = format!(
-            "address={}\nstorage={}\nconnections={}\nuse_temp={}\nauto_connect={}\ntheme={}\ncompression={}\nbandwidth_limit_mbps={}\nupdate_channel={}\ndownload_compression={}\n",
+            "address={}\nstorage={}\nconnections={}\nuse_temp={}\nauto_connect={}\ntheme={}\ncompression={}\nbandwidth_limit_mbps={}\nupdate_channel={}\ndownload_compression={}\nchmod_after_upload={}\n",
             self.address,
             self.storage,
             self.connections,
@@ -101,7 +106,8 @@ impl AppConfig {
             self.compression,
             self.bandwidth_limit_mbps,
             self.update_channel,
-            self.download_compression
+            self.download_compression,
+            self.chmod_after_upload
         );
         let _ = fs::write("ps5upload.ini", content);
     }

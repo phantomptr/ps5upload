@@ -350,6 +350,9 @@ where
                 return Err(anyhow!("Invalid record"));
             }
             let rel_path = String::from_utf8_lossy(&raw_body[offset..offset + path_len]).to_string();
+            if rel_path.contains('\0') {
+                return Err(anyhow!("Download failed: corrupted stream (unexpected NUL in path). Disable compression and retry."));
+            }
             offset += path_len;
             let data_len = u64::from_le_bytes([
                 raw_body[offset], raw_body[offset + 1], raw_body[offset + 2], raw_body[offset + 3],
