@@ -1,0 +1,14 @@
+{
+  "profiles": [
+    {
+      "name": "Yunpengs-PS5Pro",
+      "address": "192.168.10.2",
+      "storage": "/data",
+      "preset_index": 0,
+      "custom_preset_path": "",
+      "connections": 5,
+      "use_temp": false
+    }
+  ],
+  "default_profile": null
+}

@@ -9,6 +9,7 @@ pub struct AppConfig {
     pub connections: usize,
     pub use_temp: bool,
     pub auto_connect: bool,
+    pub theme: String, // "dark" or "light"
 }
 
 impl Default for AppConfig {
@@ -19,6 +20,7 @@ impl Default for AppConfig {
             connections: 5, // Default to 5 connections for stability, max 10
             use_temp: false,
             auto_connect: false,
+            theme: "dark".to_string(),
         }
     }
 }
@@ -52,6 +54,9 @@ impl AppConfig {
                             "auto_connect" => {
                                 config.auto_connect = matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on");
                             }
+                            "theme" => {
+                                config.theme = if value == "light" { "light".to_string() } else { "dark".to_string() };
+                            }
                             _ => {}
                         }
                     }
@@ -64,8 +69,8 @@ impl AppConfig {
 
     pub fn save(&self) {
         let content = format!(
-            "address={}\nstorage={}\nconnections={}\nuse_temp={}\nauto_connect={}\n",
-            self.address, self.storage, self.connections, self.use_temp, self.auto_connect
+            "address={}\nstorage={}\nconnections={}\nuse_temp={}\nauto_connect={}\ntheme={}\n",
+            self.address, self.storage, self.connections, self.use_temp, self.auto_connect, self.theme
         );
         let _ = fs::write("ps5upload.ini", content);
     }

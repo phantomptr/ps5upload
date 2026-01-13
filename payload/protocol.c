@@ -14,6 +14,8 @@
 #include <sys/stat.h>
 #include <limits.h>
 #include <errno.h>
+#include <dirent.h>
+#include <fcntl.h>
 
 #include <ps5/kernel.h>
 
@@ -64,14 +66,182 @@ static int mkdir_p(const char *path, mode_t mode, char *err, size_t err_len) {
     return 0;
 }
 
+static void trim_newline(char *path) {
+    size_t len = strlen(path);
+    while (len > 0 && (path[len - 1] == '\n' || path[len - 1] == '\r')) {
+        path[len - 1] = '\0';
+        len--;
+    }
+}
+
+static int remove_recursive(const char *path, char *err, size_t err_len) {
+    struct stat st;
+    if (lstat(path, &st) != 0) {
+        snprintf(err, err_len, "lstat %s failed: %s", path, strerror(errno));
+        return -1;
+    }
+
+    if (S_ISDIR(st.st_mode)) {
+        DIR *dir = opendir(path);
+        if (!dir) {
+            snprintf(err, err_len, "opendir %s failed: %s", path, strerror(errno));
+            return -1;
+        }
+        struct dirent *entry;
+        while ((entry = readdir(dir)) != NULL) {
+            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+                continue;
+            }
+            char child[PATH_MAX];
+            snprintf(child, sizeof(child), "%s/%s", path, entry->d_name);
+            if (remove_recursive(child, err, err_len) != 0) {
+                closedir(dir);
+                return -1;
+            }
+        }
+        closedir(dir);
+        if (rmdir(path) != 0) {
+            snprintf(err, err_len, "rmdir %s failed: %s", path, strerror(errno));
+            return -1;
+        }
+        return 0;
+    }
+
+    if (unlink(path) != 0) {
+        snprintf(err, err_len, "unlink %s failed: %s", path, strerror(errno));
+        return -1;
+    }
+    return 0;
+}
+
+static int copy_file(const char *src, const char *dst, mode_t mode, char *err, size_t err_len) {
+    int in_fd = open(src, O_RDONLY);
+    if (in_fd < 0) {
+        snprintf(err, err_len, "open %s failed: %s", src, strerror(errno));
+        return -1;
+    }
+
+    int out_fd = open(dst, O_WRONLY | O_CREAT | O_TRUNC, mode);
+    if (out_fd < 0) {
+        snprintf(err, err_len, "open %s failed: %s", dst, strerror(errno));
+        close(in_fd);
+        return -1;
+    }
+
+    char buffer[64 * 1024];
+    ssize_t n;
+    while ((n = read(in_fd, buffer, sizeof(buffer))) > 0) {
+        ssize_t written = 0;
+        while (written < n) {
+            ssize_t w = write(out_fd, buffer + written, (size_t)(n - written));
+            if (w < 0) {
+                snprintf(err, err_len, "write %s failed: %s", dst, strerror(errno));
+                close(in_fd);
+                close(out_fd);
+                return -1;
+            }
+            written += w;
+        }
+    }
+    if (n < 0) {
+        snprintf(err, err_len, "read %s failed: %s", src, strerror(errno));
+        close(in_fd);
+        close(out_fd);
+        return -1;
+    }
+
+    close(in_fd);
+    close(out_fd);
+    return 0;
+}
+
+static int copy_recursive(const char *src, const char *dst, char *err, size_t err_len) {
+    struct stat st;
+    if (lstat(src, &st) != 0) {
+        snprintf(err, err_len, "lstat %s failed: %s", src, strerror(errno));
+        return -1;
+    }
+
+    if (S_ISDIR(st.st_mode)) {
+        if (mkdir(dst, st.st_mode & 0777) != 0 && errno != EEXIST) {
+            snprintf(err, err_len, "mkdir %s failed: %s", dst, strerror(errno));
+            return -1;
+        }
+
+        DIR *dir = opendir(src);
+        if (!dir) {
+            snprintf(err, err_len, "opendir %s failed: %s", src, strerror(errno));
+            return -1;
+        }
+        struct dirent *entry;
+        while ((entry = readdir(dir)) != NULL) {
+            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+                continue;
+            }
+            char child_src[PATH_MAX];
+            char child_dst[PATH_MAX];
+            snprintf(child_src, sizeof(child_src), "%s/%s", src, entry->d_name);
+            snprintf(child_dst, sizeof(child_dst), "%s/%s", dst, entry->d_name);
+            if (copy_recursive(child_src, child_dst, err, err_len) != 0) {
+                closedir(dir);
+                return -1;
+            }
+        }
+        closedir(dir);
+        return 0;
+    }
+
+    if (S_ISREG(st.st_mode)) {
+        return copy_file(src, dst, st.st_mode & 0777, err, err_len);
+    }
+
+    snprintf(err, err_len, "Unsupported file type: %s", src);
+    return -1;
+}
+
+static int chmod_recursive(const char *path, mode_t mode, char *err, size_t err_len) {
+    struct stat st;
+    if (lstat(path, &st) != 0) {
+        snprintf(err, err_len, "lstat %s failed: %s", path, strerror(errno));
+        return -1;
+    }
+
+    if (chmod(path, mode) != 0) {
+        snprintf(err, err_len, "chmod %s failed: %s", path, strerror(errno));
+        return -1;
+    }
+
+    if (S_ISDIR(st.st_mode)) {
+        DIR *dir = opendir(path);
+        if (!dir) {
+            snprintf(err, err_len, "opendir %s failed: %s", path, strerror(errno));
+            return -1;
+        }
+        struct dirent *entry;
+        while ((entry = readdir(dir)) != NULL) {
+            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+                continue;
+            }
+            char child[PATH_MAX];
+            snprintf(child, sizeof(child), "%s/%s", path, entry->d_name);
+            if (chmod_recursive(child, mode, err, err_len) != 0) {
+                closedir(dir);
+                return -1;
+            }
+        }
+        closedir(dir);
+    }
+
+    return 0;
+}
+
 void handle_check_dir(int client_sock, const char *path_arg) {
     char path[PATH_MAX];
     strncpy(path, path_arg, PATH_MAX-1);
     path[PATH_MAX-1] = '\0';
     
     // Remove trailing newline
-    size_t len = strlen(path);
-    if(len > 0 && path[len-1] == '\n') path[len-1] = '\0';
+    trim_newline(path);
 
     struct stat st;
     int exists = 0;
@@ -92,10 +262,7 @@ void handle_test_write(int client_sock, const char *path_arg) {
     path[PATH_MAX-1] = '\0';
 
     // Remove trailing newline
-    size_t len = strlen(path);
-    if(len > 0 && path[len-1] == '\n') {
-        path[len-1] = '\0';
-    }
+    trim_newline(path);
 
     // Create test file path
     char test_file[PATH_MAX];
@@ -130,10 +297,7 @@ void handle_create_path(int client_sock, const char *path_arg) {
     path[PATH_MAX-1] = '\0';
 
     // Remove trailing newline
-    size_t len = strlen(path);
-    if(len > 0 && path[len-1] == '\n') {
-        path[len-1] = '\0';
-    }
+    trim_newline(path);
 
     char mkdir_err[256] = {0};
     if(mkdir_p(path, 0777, mkdir_err, sizeof(mkdir_err)) != 0) {
@@ -145,6 +309,170 @@ void handle_create_path(int client_sock, const char *path_arg) {
 
     const char *success = "SUCCESS\n";
     send(client_sock, success, strlen(success), 0);
+}
+
+void handle_delete_path(int client_sock, const char *path_arg) {
+    char path[PATH_MAX];
+    strncpy(path, path_arg, PATH_MAX-1);
+    path[PATH_MAX-1] = '\0';
+    trim_newline(path);
+
+    char err[256] = {0};
+    if (remove_recursive(path, err, sizeof(err)) != 0) {
+        char error_msg[320];
+        snprintf(error_msg, sizeof(error_msg), "ERROR: %s\n", err);
+        send(client_sock, error_msg, strlen(error_msg), 0);
+        return;
+    }
+
+    const char *success = "OK\n";
+    send(client_sock, success, strlen(success), 0);
+}
+
+void handle_move_path(int client_sock, const char *args) {
+    char buffer[PATH_MAX * 2];
+    strncpy(buffer, args, sizeof(buffer) - 1);
+    buffer[sizeof(buffer) - 1] = '\0';
+    trim_newline(buffer);
+
+    char *sep = strchr(buffer, '\t');
+    if (!sep) {
+        const char *error = "ERROR: Invalid MOVE format\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+    *sep = '\0';
+    const char *src = buffer;
+    const char *dst = sep + 1;
+    if (!*src || !*dst) {
+        const char *error = "ERROR: Invalid MOVE format\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+
+    if (rename(src, dst) == 0) {
+        const char *success = "OK\n";
+        send(client_sock, success, strlen(success), 0);
+        return;
+    }
+
+    if (errno == EXDEV) {
+        char err[256] = {0};
+        if (copy_recursive(src, dst, err, sizeof(err)) != 0) {
+            char error_msg[320];
+            snprintf(error_msg, sizeof(error_msg), "ERROR: %s\n", err);
+            send(client_sock, error_msg, strlen(error_msg), 0);
+            return;
+        }
+        if (remove_recursive(src, err, sizeof(err)) != 0) {
+            char error_msg[320];
+            snprintf(error_msg, sizeof(error_msg), "ERROR: %s\n", err);
+            send(client_sock, error_msg, strlen(error_msg), 0);
+            return;
+        }
+        const char *success = "OK\n";
+        send(client_sock, success, strlen(success), 0);
+        return;
+    }
+
+    {
+        char error_msg[320];
+        snprintf(error_msg, sizeof(error_msg), "ERROR: rename failed: %s\n", strerror(errno));
+        send(client_sock, error_msg, strlen(error_msg), 0);
+    }
+}
+
+void handle_copy_path(int client_sock, const char *args) {
+    char buffer[PATH_MAX * 2];
+    strncpy(buffer, args, sizeof(buffer) - 1);
+    buffer[sizeof(buffer) - 1] = '\0';
+    trim_newline(buffer);
+
+    char *sep = strchr(buffer, '\t');
+    if (!sep) {
+        const char *error = "ERROR: Invalid COPY format\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+    *sep = '\0';
+    const char *src = buffer;
+    const char *dst = sep + 1;
+    if (!*src || !*dst) {
+        const char *error = "ERROR: Invalid COPY format\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+
+    char err[256] = {0};
+    if (copy_recursive(src, dst, err, sizeof(err)) != 0) {
+        char error_msg[320];
+        snprintf(error_msg, sizeof(error_msg), "ERROR: %s\n", err);
+        send(client_sock, error_msg, strlen(error_msg), 0);
+        return;
+    }
+
+    const char *success = "OK\n";
+    send(client_sock, success, strlen(success), 0);
+}
+
+void handle_chmod_777(int client_sock, const char *path_arg) {
+    char path[PATH_MAX];
+    strncpy(path, path_arg, PATH_MAX-1);
+    path[PATH_MAX-1] = '\0';
+    trim_newline(path);
+
+    char err[256] = {0};
+    if (chmod_recursive(path, 0777, err, sizeof(err)) != 0) {
+        char error_msg[320];
+        snprintf(error_msg, sizeof(error_msg), "ERROR: %s\n", err);
+        send(client_sock, error_msg, strlen(error_msg), 0);
+        return;
+    }
+
+    const char *success = "OK\n";
+    send(client_sock, success, strlen(success), 0);
+}
+
+void handle_download_file(int client_sock, const char *path_arg) {
+    char path[PATH_MAX];
+    strncpy(path, path_arg, PATH_MAX-1);
+    path[PATH_MAX-1] = '\0';
+    trim_newline(path);
+
+    struct stat st;
+    if (stat(path, &st) != 0) {
+        char error_msg[320];
+        snprintf(error_msg, sizeof(error_msg), "ERROR: stat failed: %s\n", strerror(errno));
+        send(client_sock, error_msg, strlen(error_msg), 0);
+        return;
+    }
+    if (!S_ISREG(st.st_mode)) {
+        const char *error = "ERROR: Not a file\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+
+    FILE *fp = fopen(path, "rb");
+    if (!fp) {
+        char error_msg[320];
+        snprintf(error_msg, sizeof(error_msg), "ERROR: open failed: %s\n", strerror(errno));
+        send(client_sock, error_msg, strlen(error_msg), 0);
+        return;
+    }
+
+    char header[128];
+    snprintf(header, sizeof(header), "OK %lld\n", (long long)st.st_size);
+    send(client_sock, header, strlen(header), 0);
+
+    char buffer[64 * 1024];
+    size_t n;
+    while ((n = fread(buffer, 1, sizeof(buffer), fp)) > 0) {
+        if (send(client_sock, buffer, n, 0) < 0) {
+            break;
+        }
+    }
+
+    fclose(fp);
 }
 
 void handle_upload_v2_wrapper(int client_sock, const char *args) {

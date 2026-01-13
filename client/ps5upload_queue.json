@@ -1,0 +1,14 @@
+{
+  "items": [
+    {
+      "id": 0,
+      "source_path": "/home/ubuntu/ps5upload/ABCD54321-app",
+      "subfolder_name": "ABCD54321-app",
+      "preset_index": 0,
+      "custom_preset_path": "",
+      "status": "Pending",
+      "size_bytes": 19714297641
+    }
+  ],
+  "next_id": 1
+}
