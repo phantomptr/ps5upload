@@ -12,6 +12,7 @@ void handle_copy_path(int client_sock, const char *args);
 void handle_chmod_777(int client_sock, const char *path);
 void handle_download_file(int client_sock, const char *path);
 void handle_download_dir(int client_sock, const char *path);
+void handle_hash_file(int client_sock, const char *path);
 void handle_version(int client_sock);
 
 #endif

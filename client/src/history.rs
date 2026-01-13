@@ -13,6 +13,8 @@ pub struct TransferRecord {
     pub speed_bps: f64,
     pub success: bool,
     pub error: Option<String>,
+    #[serde(default)]
+    pub via_queue: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

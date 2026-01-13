@@ -15,6 +15,8 @@ pub struct AppConfig {
     pub update_channel: String, // "stable" or "all"
     pub download_compression: String, // "none" or "lz4"
     pub chmod_after_upload: bool,
+    pub resume_mode: String, // "none", "size", "size_mtime", "sha256"
+    pub language: String, // "en", "zh-CN", "zh-TW", "fr", "es", "ar"
 }
 
 impl Default for AppConfig {
@@ -22,7 +24,7 @@ impl Default for AppConfig {
         Self {
             address: "192.168.0.100".to_string(),
             storage: "/data".to_string(),
-            connections: 5, // Default to 5 connections for stability, max 10
+            connections: 1, // Default to 1 for maximum reliability
             use_temp: false,
             auto_connect: false,
             theme: "dark".to_string(),
@@ -31,6 +33,8 @@ impl Default for AppConfig {
             update_channel: "stable".to_string(),
             download_compression: "none".to_string(),
             chmod_after_upload: false,
+            resume_mode: "none".to_string(),
+            language: "en".to_string(),
         }
     }
 }
@@ -84,6 +88,20 @@ impl AppConfig {
                             "chmod_after_upload" => {
                                 config.chmod_after_upload = matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on");
                             }
+                            "resume_mode" => {
+                                config.resume_mode = match value.as_str() {
+                                    "size" => "size".to_string(),
+                                    "size_mtime" => "size_mtime".to_string(),
+                                    "sha256" => "sha256".to_string(),
+                                    _ => "none".to_string(),
+                                };
+                            }
+                            "language" => {
+                                config.language = match value.as_str() {
+                                    "zh-CN" | "zh-TW" | "fr" | "es" | "ar" => value,
+                                    _ => "en".to_string(),
+                                };
+                            }
                             _ => {}
                         }
                     }
@@ -96,7 +114,7 @@ impl AppConfig {
 
     pub fn save(&self) {
         let content = format!(
-            "address={}\nstorage={}\nconnections={}\nuse_temp={}\nauto_connect={}\ntheme={}\ncompression={}\nbandwidth_limit_mbps={}\nupdate_channel={}\ndownload_compression={}\nchmod_after_upload={}\n",
+            "address={}\nstorage={}\nconnections={}\nuse_temp={}\nauto_connect={}\ntheme={}\ncompression={}\nbandwidth_limit_mbps={}\nupdate_channel={}\ndownload_compression={}\nchmod_after_upload={}\nresume_mode={}\nlanguage={}\n",
             self.address,
             self.storage,
             self.connections,
@@ -107,7 +125,9 @@ impl AppConfig {
             self.bandwidth_limit_mbps,
             self.update_channel,
             self.download_compression,
-            self.chmod_after_upload
+            self.chmod_after_upload,
+            self.resume_mode,
+            self.language
         );
         let _ = fs::write("ps5upload.ini", content);
     }

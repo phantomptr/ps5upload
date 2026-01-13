@@ -23,6 +23,7 @@ pub struct FileEntry {
     pub rel_path: String,
     pub abs_path: PathBuf,
     pub size: u64,
+    pub mtime: Option<i64>,
 }
 
 #[derive(Debug)]
@@ -180,6 +181,9 @@ pub fn collect_files(base_path: &str) -> Vec<FileEntry> {
                 rel_path,
                 abs_path: path.to_path_buf(),
                 size: meta.len(),
+                mtime: meta.modified().ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs() as i64),
             });
         }
         return files;
@@ -200,6 +204,9 @@ pub fn collect_files(base_path: &str) -> Vec<FileEntry> {
             rel_path,
             abs_path: entry_path.to_path_buf(),
             size: meta.len(),
+            mtime: meta.modified().ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs() as i64),
         });
     }
 
@@ -284,6 +291,10 @@ where
     let cancel_packer = cancel.clone();
     let log_packer = Arc::new(log);
     let log_packer_clone = log_packer.clone();
+    let pack_error = Arc::new(AtomicBool::new(false));
+    let pack_error_msg = Arc::new(Mutex::new(String::new()));
+    let pack_error_packer = pack_error.clone();
+    let pack_error_msg_packer = pack_error_msg.clone();
     let current_file = Arc::new(Mutex::new(String::new()));
     let current_file_packer = current_file.clone();
 
@@ -301,7 +312,19 @@ where
             (log_packer_clone)(format!("Packing: {}", rel_path_str));
 
             let file_size = entry.size;
-            let Ok(mut file) = File::open(entry.abs_path) else { continue; };
+            let mut file = match File::open(&entry.abs_path) {
+                Ok(file) => file,
+                Err(err) => {
+                    let msg = format!("Failed to open file {}: {}", rel_path_str, err);
+                    if let Ok(mut guard) = pack_error_msg_packer.lock() {
+                        *guard = msg.clone();
+                    }
+                    pack_error_packer.store(true, Ordering::Relaxed);
+                    (log_packer_clone)(msg);
+                    cancel_packer.store(true, Ordering::Relaxed);
+                    break;
+                }
+            };
             
             // Empty file case
             if file_size == 0 {
@@ -347,12 +370,18 @@ where
                  }
 
                  let mut chunk_buf = vec![0u8; to_read];
-                 if file.read_exact(&mut chunk_buf).is_ok() {
-                     pack.add_record(&rel_path_str, &chunk_buf);
-                     file_remaining -= to_read as u64;
-                 } else {
-                     break; // Error reading
+                 if let Err(err) = file.read_exact(&mut chunk_buf) {
+                     let msg = format!("Failed to read file {}: {}", rel_path_str, err);
+                     if let Ok(mut guard) = pack_error_msg_packer.lock() {
+                         *guard = msg.clone();
+                     }
+                     pack_error_packer.store(true, Ordering::Relaxed);
+                     (log_packer_clone)(msg);
+                     cancel_packer.store(true, Ordering::Relaxed);
+                     break;
                  }
+                 pack.add_record(&rel_path_str, &chunk_buf);
+                 file_remaining -= to_read as u64;
             }
             // Finished file
             pack.files_added += 1;
@@ -448,6 +477,13 @@ where
         }
         progress(total_sent_bytes, total_sent_files, file_update);
         last_progress_sent = total_sent_bytes;
+    }
+
+    if pack_error.load(Ordering::Relaxed) {
+        let msg = pack_error_msg.lock().ok().and_then(|g| {
+            if g.is_empty() { None } else { Some(g.clone()) }
+        }).unwrap_or_else(|| "Upload failed while reading files".to_string());
+        return Err(anyhow::anyhow!(msg));
     }
 
     send_frame_header(&mut stream, FrameType::Finish, 0, &cancel)?;
