@@ -4,9 +4,9 @@
   <img src="logo.png" alt="PS5 Upload logo" width="500" />
 </p>
 
-PS5 Upload is a tool designed to get your apps and homebrew onto your console without the headache of slow transfers.
+PS5 Upload is a fast, reliable way to move apps and homebrew to your PS5 without the pain of slow transfers.
 
-While it's optimized to chew through thousands of small files on a local network (where it smokes traditional FTP), it works over any standard network connection.
+It is optimized for thousands of small files on a local network (where it outperforms FTP), but works over any standard network connection.
 
 
 <img width="1682" height="1112" alt="ps5upload1" src="https://github.com/user-attachments/assets/79e1c599-afad-4740-8e12-cc32296d2892" />
@@ -19,7 +19,7 @@ File Management
 
 If you've ever tried to upload a homebrew app containing 10,000 small assets via FTP, you know the pain. It takes forever.
 
-This tool fixes that by bundling files into efficient "packs" on your computer and streaming them directly to the PS5's disk. No temp files, no waiting for handshakes between every single file.
+This tool fixes that by bundling files into efficient "packs" on your computer and streaming them directly to the PS5's disk. No per-file handshakes, no temporary archive steps.
 
 ## Supported Platforms
 
@@ -44,7 +44,7 @@ nc -w 1 192.168.0.xxx 9021 < payload/ps5upload.elf
 Use any standard "ELF Loader" or "Payload Sender" GUI tool for Windows/Android. Point it to `ps5upload.elf` and send it to your console's IP.
 
 **Option C: Built-in "Send Payload" button**
-Open the client, click **Send Payload**, pick `ps5upload.elf`, and it will send to port **9021**.
+Open the client, click **Send Payload from Client**, pick `ps5upload.elf`, and it will send to port **9021**.
 
 **Success?**
 You should see a notification pop up on your TV: **"PS5 Upload Server - Ready on port 9113"**.
@@ -61,7 +61,16 @@ You should see a notification pop up on your TV: **"PS5 Upload Server - Ready on
     *   Pick a drive (like `/mnt/usb0` or `/data`).
     *   Pick a preset location (like `homebrew` or `etaHEN/games`).
     *   Give your folder a name.
-3.  **Upload:** Click **Start Upload**. The bar will track real-time progress.
+3.  **Upload:** Click **Upload Current**. The bar will track real-time progress.
+
+### 4. Manage Files (Optional)
+Open the **Manage** tab to browse PS5 storage. You can rename, move, copy/paste, delete, chmod 777, and download files or folders with progress.
+
+### 5. Resume Transfers (Optional)
+If a transfer was interrupted, you can enable **Resume** and choose a mode:
+* **Skip by size (fast)** — quickest.
+* **Skip by size + time (medium)** — more accurate.
+* **Verify SHA256 (slow)** — most accurate, slowest.
 
 ## FAQ
 
@@ -95,6 +104,10 @@ You should see a notification pop up on your TV: **"PS5 Upload Server - Ready on
 
 **Q: Does this work on PS4?**
 *   The logic is similar, but the payload is compiled specifically for the PS5 environment. It won't run on a PS4 as-is.
+
+**Q: What if files are missing after a fast transfer?**
+*   Set **Connections** to `1` for maximum reliability.
+*   Use **Resume** to re-send only missing files.
 
 ## Disclaimer
 
