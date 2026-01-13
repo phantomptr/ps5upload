@@ -52,12 +52,15 @@ typedef struct UploadSession {
     uint64_t last_log_bytes;
     int enqueue_pending;
     uint64_t last_backpressure_log;
+    uint64_t session_id;
 } UploadSession;
 
 typedef struct PackJob {
     uint8_t *data; // Owned pointer
     size_t len;
     char dest_root[PATH_MAX];
+    uint64_t session_id;
+    int is_close;
 } PackJob;
 
 typedef struct PackQueue {
@@ -76,6 +79,8 @@ static pthread_t g_writer_thread;
 static int g_workers_initialized = 0;
 static long long g_total_bytes = 0;
 static int g_total_files = 0;
+static uint64_t g_session_counter = 0;
+static pthread_mutex_t g_session_counter_lock = PTHREAD_MUTEX_INITIALIZER;
 
 typedef struct {
     pthread_mutex_t mutex;
@@ -84,6 +89,18 @@ typedef struct {
 } GlobalLogState;
 
 static GlobalLogState g_log_state;
+
+typedef struct SessionWriterState {
+    uint64_t session_id;
+    char current_path[PATH_MAX];
+    char current_full_path[PATH_MAX];
+    char dir_cache[PATH_MAX];
+    char last_dest_root[PATH_MAX];
+    int current_fd;
+    struct SessionWriterState *next;
+} SessionWriterState;
+
+static SessionWriterState *g_writer_states = NULL;
 
 static uint64_t now_ms(void) {
     struct timespec ts;
@@ -102,7 +119,7 @@ static void queue_init(PackQueue *q) {
     pthread_cond_init(&q->not_full, NULL);
 }
 
-static int queue_push(PackQueue *q, uint8_t *data, size_t len, const char *dest_root) {
+static int queue_push(PackQueue *q, uint8_t *data, size_t len, const char *dest_root, uint64_t session_id, int is_close) {
     pthread_mutex_lock(&q->mutex);
     while (q->count >= PACK_QUEUE_DEPTH && !q->closed) {
         pthread_cond_wait(&q->not_full, &q->mutex);
@@ -117,6 +134,8 @@ static int queue_push(PackQueue *q, uint8_t *data, size_t len, const char *dest_
     job->len = len;
     strncpy(job->dest_root, dest_root, PATH_MAX - 1);
     job->dest_root[PATH_MAX - 1] = '\0';
+    job->session_id = session_id;
+    job->is_close = is_close;
 
     q->write_idx = (q->write_idx + 1) % PACK_QUEUE_DEPTH;
     q->count++;
@@ -359,7 +378,69 @@ static int ensure_parent_dir(const char *path) {
     return mkdir_recursive(parent, NULL);
 }
 
-static void write_pack_data(const char *dest_root, const uint8_t *pack_buf, size_t pack_len) {
+static SessionWriterState *get_writer_state(uint64_t session_id, const char *dest_root) {
+    SessionWriterState *state = g_writer_states;
+    while (state) {
+        if (state->session_id == session_id) {
+            if (strcmp(dest_root, state->last_dest_root) != 0) {
+                if (state->current_fd >= 0) {
+                    close(state->current_fd);
+                    chmod(state->current_full_path, 0777);
+                    state->current_fd = -1;
+                }
+                state->current_path[0] = '\0';
+                state->current_full_path[0] = '\0';
+                state->dir_cache[0] = '\0';
+                strncpy(state->last_dest_root, dest_root, PATH_MAX - 1);
+                state->last_dest_root[PATH_MAX - 1] = '\0';
+            }
+            return state;
+        }
+        state = state->next;
+    }
+
+    state = malloc(sizeof(*state));
+    if (!state) {
+        return NULL;
+    }
+    memset(state, 0, sizeof(*state));
+    state->session_id = session_id;
+    state->current_fd = -1;
+    strncpy(state->last_dest_root, dest_root, PATH_MAX - 1);
+    state->last_dest_root[PATH_MAX - 1] = '\0';
+    state->next = g_writer_states;
+    g_writer_states = state;
+    return state;
+}
+
+static void release_writer_state(uint64_t session_id) {
+    SessionWriterState **prev = &g_writer_states;
+    SessionWriterState *state = g_writer_states;
+    while (state) {
+        if (state->session_id == session_id) {
+            if (state->current_fd >= 0) {
+                close(state->current_fd);
+                chmod(state->current_full_path, 0777);
+                state->current_fd = -1;
+            }
+            *prev = state->next;
+            free(state);
+            return;
+        }
+        prev = &state->next;
+        state = state->next;
+    }
+}
+
+static void write_pack_data(uint64_t session_id, const char *dest_root, const uint8_t *pack_buf, size_t pack_len, int is_close) {
+    if (is_close) {
+        release_writer_state(session_id);
+        return;
+    }
+    SessionWriterState *state = get_writer_state(session_id, dest_root);
+    if (!state) {
+        return;
+    }
     size_t offset = 0;
     uint32_t record_count = 0;
 
@@ -368,26 +449,6 @@ static void write_pack_data(const char *dest_root, const uint8_t *pack_buf, size
     }
     memcpy(&record_count, pack_buf, 4);
     offset += 4;
-
-    static char current_path[PATH_MAX] = {0};
-    static char current_full_path[PATH_MAX] = {0};
-    static char dir_cache[PATH_MAX] = {0};
-    static int current_fd = -1;
-    static char last_dest_root[PATH_MAX] = {0};
-
-    // If destination changed, close current file
-    if (strcmp(dest_root, last_dest_root) != 0) {
-        if (current_fd >= 0) {
-            close(current_fd);
-            chmod(current_full_path, 0777);
-            current_fd = -1;
-        }
-        current_path[0] = '\0';
-        current_full_path[0] = '\0';
-        dir_cache[0] = '\0';
-        strncpy(last_dest_root, dest_root, PATH_MAX - 1);
-        last_dest_root[PATH_MAX - 1] = '\0';
-    }
 
     for (uint32_t i = 0; i < record_count; i++) {
         if (offset + 2 > pack_len) break;
@@ -415,36 +476,36 @@ static void write_pack_data(const char *dest_root, const uint8_t *pack_buf, size
         char *last_slash = strrchr(full_path, '/');
         if (last_slash) {
             *last_slash = '\0';
-            mkdir_recursive(full_path, dir_cache);
+            mkdir_recursive(full_path, state->dir_cache);
             *last_slash = '/';
         }
 
-        if (strncmp(rel_path, current_path, PATH_MAX) != 0) {
-            if (current_fd >= 0) {
-                close(current_fd);
-                chmod(current_full_path, 0777);
-                current_fd = -1;
+        if (strncmp(rel_path, state->current_path, PATH_MAX) != 0) {
+            if (state->current_fd >= 0) {
+                close(state->current_fd);
+                chmod(state->current_full_path, 0777);
+                state->current_fd = -1;
             }
-            strncpy(current_path, rel_path, PATH_MAX - 1);
-            current_path[PATH_MAX - 1] = '\0';
-            strncpy(current_full_path, full_path, PATH_MAX - 1);
-            current_full_path[PATH_MAX - 1] = '\0';
+            strncpy(state->current_path, rel_path, PATH_MAX - 1);
+            state->current_path[PATH_MAX - 1] = '\0';
+            strncpy(state->current_full_path, full_path, PATH_MAX - 1);
+            state->current_full_path[PATH_MAX - 1] = '\0';
 
-            current_fd = open(full_path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
-            if (current_fd < 0) {
+            state->current_fd = open(full_path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+            if (state->current_fd < 0) {
                 printf("[FTX] Writer: Failed to open %s: %s\n", full_path, strerror(errno));
             } else {
                 g_total_files++;
             }
-        } else if (current_fd < 0) {
-            current_fd = open(full_path, O_WRONLY | O_APPEND, 0666);
-            if (current_fd < 0) {
+        } else if (state->current_fd < 0) {
+            state->current_fd = open(full_path, O_WRONLY | O_APPEND, 0666);
+            if (state->current_fd < 0) {
                 printf("[FTX] Writer: Failed to reopen %s: %s\n", full_path, strerror(errno));
             }
         }
 
-        if (current_fd >= 0) {
-            ssize_t written = write(current_fd, pack_buf + offset, data_len);
+        if (state->current_fd >= 0) {
+            ssize_t written = write(state->current_fd, pack_buf + offset, data_len);
             if (written > 0) {
                 g_total_bytes += written;
             }
@@ -480,7 +541,7 @@ static void *disk_writer_thread(void *arg) {
 
     PackJob job;
     while (queue_pop(&g_queue, &job)) {
-        write_pack_data(job.dest_root, job.data, job.len);
+        write_pack_data(job.session_id, job.dest_root, job.data, job.len, job.is_close);
         
         // Ownership was transferred to us, so we free it
         if (job.data) {
@@ -536,6 +597,9 @@ static int upload_session_start(UploadSession *session, const char *dest_root) {
     }
 
     memset(session, 0, sizeof(*session));
+    pthread_mutex_lock(&g_session_counter_lock);
+    session->session_id = ++g_session_counter;
+    pthread_mutex_unlock(&g_session_counter_lock);
     strncpy(session->final_dest_root, dest_root, PATH_MAX - 1);
     session->final_dest_root[PATH_MAX - 1] = '\0';
     if (session->use_temp) {
@@ -594,7 +658,7 @@ static int upload_session_start(UploadSession *session, const char *dest_root) {
 
 static int enqueue_pack(UploadSession *session) {
     // Transfer ownership of session->body to queue
-    int push_result = queue_push(&g_queue, session->body, session->body_len, session->state.dest_root);
+    int push_result = queue_push(&g_queue, session->body, session->body_len, session->state.dest_root, session->session_id, 0);
     if (push_result == -1) {
         printf("[FTX] enqueue failed (queue closed)\n");
         return -1;
@@ -775,6 +839,10 @@ int upload_session_backpressure(UploadSession *session) {
 
 static int upload_session_finish(UploadSession *session) {
     if (!session) {
+        return -1;
+    }
+
+    if (queue_push(&g_queue, NULL, 0, session->state.dest_root, session->session_id, 1) == -1) {
         return -1;
     }
 
