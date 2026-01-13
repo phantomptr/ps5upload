@@ -1,7 +1,7 @@
 # PS5 Upload - Fast App Transfer
 
 <p align="center">
-  <img src="logo.png" alt="PS5 Upload logo" width="160" />
+  <img src="logo.png" alt="PS5 Upload logo" width="500" />
 </p>
 
 PS5 Upload is a tool designed to get your apps and homebrew onto your console without the headache of slow transfers.
