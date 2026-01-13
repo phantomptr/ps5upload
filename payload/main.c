@@ -276,6 +276,16 @@ static void process_command(struct ClientConnection *conn) {
         close_connection(conn);
         return;
     }
+    if (strncmp(conn->cmd_buffer, "DOWNLOAD_DIR ", 13) == 0) {
+        handle_download_dir(conn->sock, conn->cmd_buffer + 13);
+        close_connection(conn);
+        return;
+    }
+    if (strncmp(conn->cmd_buffer, "VERSION", 7) == 0) {
+        handle_version(conn->sock);
+        close_connection(conn);
+        return;
+    }
     if (strncmp(conn->cmd_buffer, "UPLOAD_V2 ", 10) == 0) {
         char dest_path[PATH_MAX];
         char mode[16] = {0};

@@ -14,6 +14,7 @@
 
 #include "protocol_defs.h"
 #include "notify.h"
+#include "lz4.h"
 
 // Optimized for single-process threaded concurrency
 #define PACK_BUFFER_SIZE (16 * 1024 * 1024)   // 16MB buffer (Increased for throughput)
@@ -647,7 +648,7 @@ int upload_session_feed(UploadSession *session, const uint8_t *data, size_t len,
                 if (done) {
                     *done = 1;
                 }
-            } else if (session->header.type == FRAME_PACK) {
+            } else if (session->header.type == FRAME_PACK || session->header.type == FRAME_PACK_LZ4) {
                 if (session->header.body_len > PACK_BUFFER_SIZE) {
                     printf("[FTX] pack too large: %llu\n",
                            (unsigned long long)session->header.body_len);
@@ -700,6 +701,51 @@ int upload_session_feed(UploadSession *session, const uint8_t *data, size_t len,
             offset += take;
 
             if (session->body_bytes == session->body_len) {
+                if (session->header.type == FRAME_PACK_LZ4) {
+                    if (session->body_len < 4) {
+                        session->error = 1;
+                        if (error) {
+                            *error = 1;
+                        }
+                        return 0;
+                    }
+                    uint32_t raw_len = 0;
+                    memcpy(&raw_len, session->body, 4);
+                    if (raw_len > PACK_BUFFER_SIZE) {
+                        session->error = 1;
+                        if (error) {
+                            *error = 1;
+                        }
+                        return 0;
+                    }
+                    void *out = NULL;
+                    int ret = posix_memalign(&out, 4096, raw_len);
+                    if (ret != 0) {
+                        out = malloc(raw_len);
+                    }
+                    if (!out) {
+                        session->error = 1;
+                        if (error) {
+                            *error = 1;
+                        }
+                        return 0;
+                    }
+                    int decoded = LZ4_decompress_safe((const char *)session->body + 4, (char *)out,
+                                                     (int)session->body_len - 4, (int)raw_len);
+                    if (decoded < 0 || (uint32_t)decoded != raw_len) {
+                        free(out);
+                        session->error = 1;
+                        if (error) {
+                            *error = 1;
+                        }
+                        return 0;
+                    }
+                    free(session->body);
+                    session->body = out;
+                    session->body_len = raw_len;
+                    session->body_bytes = raw_len;
+                }
+
                 int res = enqueue_pack(session);
                 if (res != 0) {
                     session->error = 1;

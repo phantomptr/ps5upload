@@ -168,10 +168,8 @@ void handle_list_dir(int client_sock, const char *path_arg) {
         return;
     }
 
-    char response[8192];
-    int offset = 0;
-    offset += sprintf(response, "[\n");
-
+    send(client_sock, "[\n", 2, 0);
+    int first = 1;
     struct dirent *entry;
     while((entry = readdir(dir)) != NULL) {
         if(strcmp(entry->d_name, ".") == 0 ||
@@ -185,21 +183,19 @@ void handle_list_dir(int client_sock, const char *path_arg) {
         struct stat st;
         if(stat(fullpath, &st) == 0) {
             const char *type = S_ISDIR(st.st_mode) ? "dir" : "file";
-            offset += sprintf(response + offset,
-                "  {\"name\":\"%s\",\"type\":\"%s\",\"size\":%ld,\"mtime\":%ld},\n",
+            char line[PATH_MAX + 128];
+            int written = snprintf(line, sizeof(line),
+                "%s  {\"name\":\"%s\",\"type\":\"%s\",\"size\":%ld,\"mtime\":%ld}\n",
+                first ? "" : ",",
                 entry->d_name, type, (long)st.st_size, (long)st.st_mtime);
+            if (written > 0) {
+                send(client_sock, line, (size_t)written, 0);
+            }
+            first = 0;
         }
     }
 
     closedir(dir);
 
-    // Remove trailing comma
-    if(offset > 2 && response[offset-2] == ',') {
-        offset -= 2;
-        offset += sprintf(response + offset, "\n");
-    }
-
-    offset += sprintf(response + offset, "]\n");
-
-    send(client_sock, response, offset, 0);
+    send(client_sock, "]\n", 2, 0);
 }

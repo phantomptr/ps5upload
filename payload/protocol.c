@@ -24,6 +24,10 @@
 #include "notify.h"
 #include "config.h"
 #include "transfer.h"
+#include "protocol_defs.h"
+#include "lz4.h"
+
+#define DOWNLOAD_PACK_BUFFER_SIZE (4 * 1024 * 1024)
 
 static int mkdir_p(const char *path, mode_t mode, char *err, size_t err_len) {
     char tmp[PATH_MAX];
@@ -232,6 +236,255 @@ static int chmod_recursive(const char *path, mode_t mode, char *err, size_t err_
         closedir(dir);
     }
 
+    return 0;
+}
+
+struct DownloadPack {
+    uint8_t *buf;
+    size_t len;
+    uint32_t records;
+    int compress;
+};
+
+static int send_all(int sock, const void *buf, size_t len) {
+    const uint8_t *p = (const uint8_t *)buf;
+    size_t sent = 0;
+    while (sent < len) {
+        ssize_t n = send(sock, p + sent, len - sent, 0);
+        if (n > 0) {
+            sent += (size_t)n;
+            continue;
+        }
+        if (n < 0 && (errno == EWOULDBLOCK || errno == EAGAIN || errno == EINTR)) {
+            usleep(1000);
+            continue;
+        }
+        return -1;
+    }
+    return 0;
+}
+
+static int send_frame_header(int sock, uint32_t type, uint64_t len) {
+    struct FrameHeader hdr;
+    hdr.magic = MAGIC_FTX1;
+    hdr.type = type;
+    hdr.body_len = len;
+    return send_all(sock, &hdr, sizeof(hdr));
+}
+
+static void send_error_frame(int sock, const char *msg) {
+    if (!msg) {
+        return;
+    }
+    size_t len = strlen(msg);
+    if (send_frame_header(sock, FRAME_ERROR, len) != 0) {
+        return;
+    }
+    send_all(sock, msg, len);
+}
+
+static int download_pack_init(struct DownloadPack *pack, int compress) {
+    pack->buf = malloc(DOWNLOAD_PACK_BUFFER_SIZE);
+    if (!pack->buf) {
+        return -1;
+    }
+    pack->len = 4;
+    pack->records = 0;
+    pack->compress = compress;
+    memset(pack->buf, 0, 4);
+    return 0;
+}
+
+static void download_pack_reset(struct DownloadPack *pack) {
+    pack->len = 4;
+    pack->records = 0;
+    memset(pack->buf, 0, 4);
+}
+
+static int download_pack_flush(int sock, struct DownloadPack *pack) {
+    if (pack->records == 0) {
+        return 0;
+    }
+    memcpy(pack->buf, &pack->records, 4);
+    if (pack->compress) {
+        int max_dst = LZ4_compressBound((int)pack->len);
+        uint8_t *tmp = malloc((size_t)max_dst + 4);
+        if (!tmp) {
+            return -1;
+        }
+        uint32_t raw_len = (uint32_t)pack->len;
+        memcpy(tmp, &raw_len, 4);
+        int compressed = LZ4_compress_default((const char *)pack->buf, (char *)tmp + 4, (int)pack->len, max_dst);
+        if (compressed <= 0) {
+            free(tmp);
+            return -1;
+        }
+        size_t out_len = (size_t)compressed + 4;
+        if (send_frame_header(sock, FRAME_PACK_LZ4, out_len) != 0) {
+            free(tmp);
+            return -1;
+        }
+        if (send_all(sock, tmp, out_len) != 0) {
+            free(tmp);
+            return -1;
+        }
+        free(tmp);
+    } else {
+        if (send_frame_header(sock, FRAME_PACK, pack->len) != 0) {
+            return -1;
+        }
+        if (send_all(sock, pack->buf, pack->len) != 0) {
+            return -1;
+        }
+    }
+    download_pack_reset(pack);
+    return 0;
+}
+
+static int download_pack_add_record(int sock, struct DownloadPack *pack, const char *rel_path,
+                                    const uint8_t *data, uint64_t data_len) {
+    size_t path_len = strlen(rel_path);
+    size_t overhead = 2 + path_len + 8;
+    if (overhead + data_len > DOWNLOAD_PACK_BUFFER_SIZE - 4) {
+        return -1;
+    }
+    if (pack->len + overhead + data_len > DOWNLOAD_PACK_BUFFER_SIZE) {
+        if (download_pack_flush(sock, pack) != 0) {
+            return -1;
+        }
+    }
+
+    uint16_t path_len_u16 = (uint16_t)path_len;
+    memcpy(pack->buf + pack->len, &path_len_u16, 2);
+    pack->len += 2;
+    memcpy(pack->buf + pack->len, rel_path, path_len);
+    pack->len += path_len;
+    memcpy(pack->buf + pack->len, &data_len, 8);
+    pack->len += 8;
+    memcpy(pack->buf + pack->len, data, data_len);
+    pack->len += (size_t)data_len;
+
+    pack->records++;
+    return 0;
+}
+
+static int send_file_records(int sock, struct DownloadPack *pack, const char *rel_path, const char *path) {
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        return -1;
+    }
+
+    size_t path_len = strlen(rel_path);
+    size_t overhead = 2 + path_len + 8;
+    size_t max_chunk = DOWNLOAD_PACK_BUFFER_SIZE - 4 - overhead;
+    if (max_chunk == 0) {
+        close(fd);
+        return -1;
+    }
+
+    uint8_t *buf = malloc(max_chunk);
+    if (!buf) {
+        close(fd);
+        return -1;
+    }
+
+    ssize_t n;
+    while ((n = read(fd, buf, max_chunk)) > 0) {
+        if (download_pack_add_record(sock, pack, rel_path, buf, (uint64_t)n) != 0) {
+            free(buf);
+            close(fd);
+            return -1;
+        }
+    }
+
+    free(buf);
+    close(fd);
+    return (n < 0) ? -1 : 0;
+}
+
+static int send_dir_recursive(int sock, struct DownloadPack *pack, const char *base_path, const char *rel_path) {
+    char path[PATH_MAX];
+    if (rel_path && *rel_path) {
+        snprintf(path, sizeof(path), "%s/%s", base_path, rel_path);
+    } else {
+        snprintf(path, sizeof(path), "%s", base_path);
+    }
+
+    DIR *dir = opendir(path);
+    if (!dir) {
+        return -1;
+    }
+
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+        char child_rel[PATH_MAX];
+        if (rel_path && *rel_path) {
+            snprintf(child_rel, sizeof(child_rel), "%s/%s", rel_path, entry->d_name);
+        } else {
+            snprintf(child_rel, sizeof(child_rel), "%s", entry->d_name);
+        }
+        char child_path[PATH_MAX];
+        snprintf(child_path, sizeof(child_path), "%s/%s", base_path, child_rel);
+
+        struct stat st;
+        if (lstat(child_path, &st) != 0) {
+            closedir(dir);
+            return -1;
+        }
+        if (S_ISLNK(st.st_mode)) {
+            continue;
+        }
+        if (S_ISDIR(st.st_mode)) {
+            if (send_dir_recursive(sock, pack, base_path, child_rel) != 0) {
+                closedir(dir);
+                return -1;
+            }
+        } else if (S_ISREG(st.st_mode)) {
+            printf("[DOWNLOAD_DIR] Sending %s\n", child_rel);
+            if (send_file_records(sock, pack, child_rel, child_path) != 0) {
+                closedir(dir);
+                return -1;
+            }
+        }
+    }
+
+    closedir(dir);
+    return 0;
+}
+
+static int calc_dir_size(const char *path, uint64_t *total) {
+    DIR *dir = opendir(path);
+    if (!dir) {
+        return -1;
+    }
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+        char child[PATH_MAX];
+        snprintf(child, sizeof(child), "%s/%s", path, entry->d_name);
+        struct stat st;
+        if (lstat(child, &st) != 0) {
+            closedir(dir);
+            return -1;
+        }
+        if (S_ISLNK(st.st_mode)) {
+            continue;
+        }
+        if (S_ISDIR(st.st_mode)) {
+            if (calc_dir_size(child, total) != 0) {
+                closedir(dir);
+                return -1;
+            }
+        } else if (S_ISREG(st.st_mode)) {
+            *total += (uint64_t)st.st_size;
+        }
+    }
+    closedir(dir);
     return 0;
 }
 
@@ -462,17 +715,95 @@ void handle_download_file(int client_sock, const char *path_arg) {
 
     char header[128];
     snprintf(header, sizeof(header), "OK %lld\n", (long long)st.st_size);
-    send(client_sock, header, strlen(header), 0);
+    if (send_all(client_sock, header, strlen(header)) != 0) {
+        fclose(fp);
+        return;
+    }
 
     char buffer[64 * 1024];
     size_t n;
     while ((n = fread(buffer, 1, sizeof(buffer), fp)) > 0) {
-        if (send(client_sock, buffer, n, 0) < 0) {
+        if (send_all(client_sock, buffer, n) != 0) {
             break;
         }
     }
 
     fclose(fp);
+}
+
+void handle_download_dir(int client_sock, const char *path_arg) {
+    char path[PATH_MAX];
+    strncpy(path, path_arg, PATH_MAX-1);
+    path[PATH_MAX-1] = '\0';
+    trim_newline(path);
+
+    int use_lz4 = 0;
+    char *lz4_tag = strstr(path, " LZ4");
+    if (lz4_tag) {
+        *lz4_tag = '\0';
+        use_lz4 = 1;
+    }
+
+    struct stat st;
+    if (stat(path, &st) != 0) {
+        char error_msg[320];
+        snprintf(error_msg, sizeof(error_msg), "ERROR: stat failed: %s\n", strerror(errno));
+        send(client_sock, error_msg, strlen(error_msg), 0);
+        return;
+    }
+    if (!S_ISDIR(st.st_mode)) {
+        const char *error = "ERROR: Not a directory\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+
+    uint64_t total_size = 0;
+    if (calc_dir_size(path, &total_size) != 0) {
+        const char *error = "ERROR: Failed to stat directory\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+
+    char ready[64];
+    snprintf(ready, sizeof(ready), "READY %llu\n", (unsigned long long)total_size);
+    if (send_all(client_sock, ready, strlen(ready)) != 0) {
+        return;
+    }
+
+    struct DownloadPack pack;
+    if (download_pack_init(&pack, use_lz4) != 0) {
+        send_error_frame(client_sock, "Download failed: OOM");
+        return;
+    }
+
+    printf("[DOWNLOAD_DIR] Streaming %s\n", path);
+    if (send_dir_recursive(client_sock, &pack, path, NULL) != 0) {
+        printf("[DOWNLOAD_DIR] Failed while streaming %s\n", path);
+        send_error_frame(client_sock, "Download failed");
+        free(pack.buf);
+        return;
+    }
+
+    if (download_pack_flush(client_sock, &pack) != 0) {
+        printf("[DOWNLOAD_DIR] Failed flush for %s\n", path);
+        send_error_frame(client_sock, "Download failed");
+        free(pack.buf);
+        return;
+    }
+    free(pack.buf);
+
+    struct FrameHeader finish;
+    finish.magic = MAGIC_FTX1;
+    finish.type = FRAME_FINISH;
+    finish.body_len = 0;
+    send_all(client_sock, &finish, sizeof(finish));
+    printf("[DOWNLOAD_DIR] Completed %s\n", path);
+}
+
+void handle_version(int client_sock) {
+    char msg[64];
+    snprintf(msg, sizeof(msg), "VERSION %s\n", PS5_UPLOAD_VERSION);
+    send_all(client_sock, msg, strlen(msg));
 }
 
 void handle_upload_v2_wrapper(int client_sock, const char *args) {
