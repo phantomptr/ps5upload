@@ -3,6 +3,7 @@ use tokio::net::TcpStream;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::{HashMap, VecDeque};
 use lz4_flex::block::decompress_size_prepended;
 use serde::{Deserialize};
 
@@ -170,6 +171,47 @@ pub async fn chmod_777(ip: &str, port: u16, path: &str) -> Result<()> {
     } else {
         Err(anyhow!("Chmod failed: {}", response))
     }
+}
+
+pub async fn hash_file(ip: &str, port: u16, path: &str) -> Result<String> {
+    let cmd = format!("HASH_FILE {}\n", path);
+    let response = send_simple_command(ip, port, &cmd).await?;
+    if response.starts_with("OK ") {
+        Ok(response.trim_start_matches("OK ").trim().to_string())
+    } else {
+        Err(anyhow!("Hash failed: {}", response))
+    }
+}
+
+pub async fn list_dir_recursive(ip: &str, port: u16, base_path: &str) -> Result<HashMap<String, DirEntry>> {
+    let base = base_path.trim_end_matches('/');
+    let mut results: HashMap<String, DirEntry> = HashMap::new();
+    let mut queue: VecDeque<String> = VecDeque::new();
+    queue.push_back(base.to_string());
+
+    while let Some(dir) = queue.pop_front() {
+        let entries = list_dir(ip, port, &dir).await?;
+        for entry in entries {
+            let full_path = if dir == "/" {
+                format!("/{}", entry.name)
+            } else {
+                format!("{}/{}", dir, entry.name)
+            };
+            if entry.entry_type == "dir" {
+                queue.push_back(full_path);
+                continue;
+            }
+            let rel = full_path.strip_prefix(base).unwrap_or(&full_path);
+            let rel = rel.trim_start_matches('/').to_string();
+            results.insert(rel.clone(), DirEntry {
+                name: rel,
+                entry_type: entry.entry_type,
+                size: entry.size,
+                mtime: entry.mtime,
+            });
+        }
+    }
+    Ok(results)
 }
 
 pub async fn download_file_with_progress<F>(

@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2026-02-15
+
+### Added
+- Resume uploads with options (size, size+time, SHA256) and a guided resume flow.
+- Upload queue controls and history resume actions with clearer labels.
+- Multi-language UI: English, 简体中文, 繁體中文, Français, Español, العربية.
+- App logo integration in the UI and app icons across Windows/macOS/Linux.
+
+### Changed
+- Default connections set to 1 for maximum reliability.
+- Queue list shows destination path; upload buttons are grouped and renamed for clarity.
+- Improved selection contrast and note styling in dark/light themes.
+
+### Fixed
+- Multi-connection upload corruption on the payload writer.
+- Clearer confirmation flows for rename/delete/move/download/overwrite.
+
 ## [1.1.0] - 2026-02-01
 
 ### Added

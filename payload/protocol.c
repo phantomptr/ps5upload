@@ -26,6 +26,7 @@
 #include "transfer.h"
 #include "protocol_defs.h"
 #include "lz4.h"
+#include "sha256.h"
 
 #define DOWNLOAD_PACK_BUFFER_SIZE (4 * 1024 * 1024)
 
@@ -798,6 +799,51 @@ void handle_download_dir(int client_sock, const char *path_arg) {
     finish.body_len = 0;
     send_all(client_sock, &finish, sizeof(finish));
     printf("[DOWNLOAD_DIR] Completed %s\n", path);
+}
+
+void handle_hash_file(int client_sock, const char *path_arg) {
+    char path[PATH_MAX];
+    strncpy(path, path_arg, PATH_MAX - 1);
+    path[PATH_MAX - 1] = '\0';
+    trim_newline(path);
+
+    struct stat st;
+    if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) {
+        char error_msg[320];
+        snprintf(error_msg, sizeof(error_msg), "ERROR: Not a file\n");
+        send(client_sock, error_msg, strlen(error_msg), 0);
+        return;
+    }
+
+    FILE *fp = fopen(path, "rb");
+    if (!fp) {
+        char error_msg[320];
+        snprintf(error_msg, sizeof(error_msg), "ERROR: Failed to open\n");
+        send(client_sock, error_msg, strlen(error_msg), 0);
+        return;
+    }
+
+    Sha256Ctx ctx;
+    sha256_init(&ctx);
+    uint8_t buffer[64 * 1024];
+    size_t n = 0;
+    while ((n = fread(buffer, 1, sizeof(buffer), fp)) > 0) {
+        sha256_update(&ctx, buffer, n);
+    }
+    fclose(fp);
+
+    uint8_t hash[32];
+    sha256_final(&ctx, hash);
+
+    char hex[65];
+    for (int i = 0; i < 32; i++) {
+        snprintf(hex + (i * 2), 3, "%02x", hash[i]);
+    }
+    hex[64] = '\0';
+
+    char msg[96];
+    snprintf(msg, sizeof(msg), "OK %s\n", hex);
+    send(client_sock, msg, strlen(msg), 0);
 }
 
 void handle_version(int client_sock) {

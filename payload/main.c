@@ -281,6 +281,11 @@ static void process_command(struct ClientConnection *conn) {
         close_connection(conn);
         return;
     }
+    if (strncmp(conn->cmd_buffer, "HASH_FILE ", 10) == 0) {
+        handle_hash_file(conn->sock, conn->cmd_buffer + 10);
+        close_connection(conn);
+        return;
+    }
     if (strncmp(conn->cmd_buffer, "VERSION", 7) == 0) {
         handle_version(conn->sock);
         close_connection(conn);

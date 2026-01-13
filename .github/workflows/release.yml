@@ -89,12 +89,14 @@ jobs:
           bin="client/target/${{ matrix.target }}/release/ps5upload"
           mkdir -p dist
           cp "$bin" dist/ps5upload
+          cp logo.png dist/ps5upload.png
           cat <<'EOF' > dist/PS5Upload.desktop
           [Desktop Entry]
           Type=Application
           Name=PS5 Upload
           Exec=sh -c 'exec "$(dirname "%k")/ps5upload"'
           Terminal=false
+          Icon=ps5upload.png
           Categories=Utility;
           EOF
           (cd dist && zip -r "../ps5upload-${{ matrix.platform }}-${{ matrix.arch }}.zip" ps5upload PS5Upload.desktop)
@@ -110,6 +112,7 @@ jobs:
           
           # Copy binary
           cp "client/target/${{ matrix.target }}/release/ps5upload" "dist/$APP_NAME/Contents/MacOS/"
+          cp "logo.png" "dist/$APP_NAME/Contents/Resources/icon.png"
           
           # Create Info.plist
           cat <<EOF > "dist/$APP_NAME/Contents/Info.plist"
@@ -129,6 +132,8 @@ jobs:
               <string>${VERSION}</string>
               <key>CFBundleVersion</key>
               <string>${VERSION}</string>
+              <key>CFBundleIconFile</key>
+              <string>icon.png</string>
               <key>LSUIElement</key>
               <false/>
           </dict>

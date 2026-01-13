@@ -1,26 +1,76 @@
 {
   "records": [
     {
-      "timestamp": 1768296474,
+      "timestamp": 1768334129,
       "source_path": "/home/ubuntu/ps5upload/ABCD54321-app",
-      "dest_path": "/data/etaHEN/games/ABCD54321-app",
-      "file_count": 124,
-      "total_bytes": 6931411576,
-      "duration_secs": 61.030039828,
-      "speed_bps": 113573767.86144476,
-      "success": true,
-      "error": null
+      "dest_path": "/data/test/ABCD54321-app",
+      "file_count": 0,
+      "total_bytes": 721418067,
+      "duration_secs": 6.805968483,
+      "speed_bps": 105997855.97038299,
+      "success": false,
+      "error": "Upload cancelled by user",
+      "via_queue": false
     },
     {
-      "timestamp": 1768296536,
+      "timestamp": 1768334138,
       "source_path": "/home/ubuntu/ps5upload/ABCD54321-app",
-      "dest_path": "/data/etaHEN/games/ABCD54321-app",
-      "file_count": 124,
-      "total_bytes": 6931411576,
+      "dest_path": "/data/test/ABCD54321-app",
+      "file_count": 0,
+      "total_bytes": 402651939,
+      "duration_secs": 3.993432715,
+      "speed_bps": 100828527.16851147,
+      "success": false,
+      "error": "Upload cancelled by user",
+      "via_queue": false
+    },
+    {
+      "timestamp": 1768334156,
+      "source_path": "/home/ubuntu/ps5upload/ABCD54321-app",
+      "dest_path": "/data/test/ABCD54321-app",
+      "file_count": 0,
+      "total_bytes": 314571824,
+      "duration_secs": 3.264118148,
+      "speed_bps": 96372683.1373262,
+      "success": false,
+      "error": "Upload cancelled by user",
+      "via_queue": false
+    },
+    {
+      "timestamp": 1768334165,
+      "source_path": "/home/ubuntu/ps5upload/ABCD54321-app",
+      "dest_path": "/data/test/ABCD54321-app",
+      "file_count": 0,
+      "total_bytes": 631873552,
+      "duration_secs": 4.849533847,
+      "speed_bps": 130295729.84440292,
+      "success": false,
+      "error": "Upload cancelled by user",
+      "via_queue": false
+    },
+    {
+      "timestamp": 1768334183,
+      "source_path": "/home/ubuntu/ps5upload/1.1.0",
+      "dest_path": "/data/test/1.1.0",
+      "file_count": 9,
+      "total_bytes": 71707718,
+      "duration_secs": 1.721372121,
+      "speed_bps": 41657301.8263725,
+      "success": true,
+      "error": null,
+      "via_queue": true
+    },
+    {
+      "timestamp": 1768334189,
+      "source_path": "/home/ubuntu/ps5upload/ABCD54321-app",
+      "dest_path": "/data/test/ABCD54321-app",
+      "file_count": 0,
+      "total_bytes": 801938098,
       "duration_secs": 0.0,
       "speed_bps": 0.0,
-      "success": true,
-      "error": null
+      "success": false,
+      "error": "Upload cancelled by user",
+      "via_queue": true
     }
   ]
 }
