@@ -1159,10 +1159,7 @@ impl Ps5UploadApp {
                              }, move |msg| { let _ = tx_log.send(AppMessage::Log(msg)); }, rate_limit)?;
                          }
                          
-                         use std::io::Read;
-                         let mut buffer = [0u8; 1024];
-                         let n = std_stream.read(&mut buffer)?;
-                         let response = String::from_utf8_lossy(&buffer[..n]).trim().to_string();
+                         let response = read_upload_response(&mut std_stream, &cancel_token)?;
                          return parse_upload_response(&response);
                      }
                 }
@@ -1239,10 +1236,7 @@ impl Ps5UploadApp {
                             0, None, compression, rate_limit
                          )?;
                          
-                         use std::io::Read;
-                         let mut buffer = [0u8; 1024];
-                         let n = std_stream.read(&mut buffer)?;
-                         let response = String::from_utf8_lossy(&buffer[..n]).trim().to_string();
+                         let response = read_upload_response(&mut std_stream, &cancel_token)?;
                          let (files_ack, bytes_ack) = parse_upload_response(&response)?;
                          return Ok((files_ack, bytes_ack));
                      } else {
@@ -1531,10 +1525,7 @@ impl Ps5UploadApp {
                         rate_limit,
                     )?;
 
-                    use std::io::Read;
-                    let mut buffer = [0u8; 1024];
-                    let n = std_stream.read(&mut buffer)?;
-                    let response = String::from_utf8_lossy(&buffer[..n]).trim().to_string();
+                    let response = read_upload_response(&mut std_stream, &cancel_token)?;
                     return parse_upload_response(&response);
                 }
 
@@ -1644,10 +1635,7 @@ impl Ps5UploadApp {
                             rate_limit,
                         )?;
 
-                        use std::io::Read;
-                        let mut buffer = [0u8; 1024];
-                        let n = std_stream.read(&mut buffer)?;
-                        let response = String::from_utf8_lossy(&buffer[..n]).trim().to_string();
+                        let response = read_upload_response(&mut std_stream, &cancel)?;
                         parse_upload_response(&response).map(|_| ())
                     }));
                 }
@@ -4069,6 +4057,34 @@ fn parse_upload_response(response: &str) -> anyhow::Result<(i32, u64)> {
         Ok((files, bytes))
     } else {
         Err(anyhow::anyhow!("Upload failed: {}", response))
+    }
+}
+
+fn read_upload_response(
+    stream: &mut std::net::TcpStream,
+    cancel: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> anyhow::Result<String> {
+    use std::io::Read;
+    use std::io::ErrorKind;
+    let start = std::time::Instant::now();
+    let mut buffer = [0u8; 1024];
+    loop {
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(anyhow::anyhow!("Upload cancelled"));
+        }
+        match stream.read(&mut buffer) {
+            Ok(0) => return Err(anyhow::anyhow!("Socket closed during response read")),
+            Ok(n) => return Ok(String::from_utf8_lossy(&buffer[..n]).trim().to_string()),
+            Err(err) => match err.kind() {
+                ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted => {
+                    if start.elapsed() >= std::time::Duration::from_secs(10) {
+                        return Err(anyhow::anyhow!("Timed out waiting for server response"));
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(25));
+                }
+                _ => return Err(err.into()),
+            },
+        }
     }
 }
 
