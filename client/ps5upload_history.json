@@ -83,6 +83,18 @@
       "success": false,
       "error": "Upload cancelled by user",
       "via_queue": false
+    },
+    {
+      "timestamp": 1768369176,
+      "source_path": "/home/ubuntu/ps5upload/PPSA02433-app",
+      "dest_path": "/data/test/PPSA02433-app",
+      "file_count": 516,
+      "total_bytes": 3692955778,
+      "duration_secs": 28.695234812,
+      "speed_bps": 128695785.28263691,
+      "success": false,
+      "error": "Upload cancelled by user",
+      "via_queue": false
     }
   ]
 }

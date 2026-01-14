@@ -250,8 +250,91 @@ where
     (files, false)
 }
 
-pub fn send_files_v2_for_list<F, L>(
-    files: Vec<FileEntry>,
+/// Stream files with progress reporting and cancellation support.
+/// Returns a Receiver that yields FileEntry items.
+pub fn stream_files_with_progress<F>(
+    base_path: String,
+    cancel: Arc<AtomicBool>,
+    mut progress: F,
+) -> std::sync::mpsc::Receiver<FileEntry>
+where
+    F: FnMut(usize, u64) + Send + 'static,
+{
+    let (tx, rx) = sync_channel(10_000);
+    thread::spawn(move || {
+        let path = Path::new(&base_path);
+        let mut total_size: u64 = 0;
+        let mut file_count: usize = 0;
+        
+        if path.is_file() {
+            if let Ok(meta) = path.metadata() {
+                 let rel_path = path
+                    .file_name()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "file".to_string());
+                let size = meta.len();
+                let entry = FileEntry {
+                    rel_path,
+                    abs_path: path.to_path_buf(),
+                    size,
+                    mtime: meta.modified().ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_secs() as i64),
+                };
+                progress(1, size);
+                let _ = tx.send(entry);
+            }
+            return;
+        }
+
+        let mut last_report = 0usize;
+        for entry in WalkDir::new(path).into_iter().filter_map(|e| e.ok()) {
+            if cancel.load(Ordering::Relaxed) {
+                break;
+            }
+
+            let entry_path = entry.path();
+            if !entry_path.is_file() {
+                continue;
+            }
+            let Ok(meta) = entry.metadata() else { continue; };
+            let size = meta.len();
+            let rel_path = entry_path
+                .strip_prefix(path)
+                .unwrap_or(entry_path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            
+            let entry = FileEntry {
+                rel_path,
+                abs_path: entry_path.to_path_buf(),
+                size,
+                mtime: meta.modified().ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs() as i64),
+            };
+            
+            total_size += size;
+            file_count += 1;
+
+            if tx.send(entry).is_err() {
+                break; // Receiver dropped
+            }
+
+            // Report progress every 1000 files
+            if file_count - last_report >= 1000 {
+                progress(file_count, total_size);
+                last_report = file_count;
+            }
+        }
+        progress(file_count, total_size);
+    });
+
+    rx
+}
+
+pub fn send_files_v2_for_list<I, F, L>(
+    files: I,
     mut stream: std::net::TcpStream,
     cancel: Arc<AtomicBool>,
     mut progress: F,
@@ -262,6 +345,8 @@ pub fn send_files_v2_for_list<F, L>(
     rate_limit_bps: Option<u64>,
 ) -> Result<()>
 where
+    I: IntoIterator<Item = FileEntry> + Send + 'static,
+    I::IntoIter: Send + 'static,
     F: FnMut(u64, i32, Option<String>),
     L: Fn(String) + Send + Sync + 'static,
 {
@@ -526,4 +611,21 @@ where
     send_frame_header(&mut stream, FrameType::Finish, 0, &cancel)?;
 
     Ok(())
+}
+
+pub struct SharedReceiverIterator {
+    rx: Arc<Mutex<std::sync::mpsc::Receiver<FileEntry>>>,
+}
+
+impl SharedReceiverIterator {
+    pub fn new(rx: Arc<Mutex<std::sync::mpsc::Receiver<FileEntry>>>) -> Self {
+        Self { rx }
+    }
+}
+
+impl Iterator for SharedReceiverIterator {
+    type Item = FileEntry;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.rx.lock().ok()?.recv().ok()
+    }
 }

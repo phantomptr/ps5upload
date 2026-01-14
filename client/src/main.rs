@@ -22,8 +22,8 @@ use eframe::egui;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
 use std::path::Path;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicUsize, AtomicU64, Ordering};
 use std::io::{Read, Write};
 use tokio::runtime::Runtime;
 use serde::Deserialize;
@@ -39,7 +39,7 @@ mod i18n;
 
 use protocol::{StorageLocation, DirEntry, list_storage, list_dir, list_dir_recursive, check_dir, upload_v2_init, delete_path, move_path, copy_path, chmod_777, create_path, download_file_with_progress, download_dir_with_progress, get_payload_version, hash_file};
 use archive::get_size;
-use transfer::{collect_files_with_progress, send_files_v2_for_list, FileEntry, CompressionMode};
+use transfer::{collect_files_with_progress, stream_files_with_progress, send_files_v2_for_list, SharedReceiverIterator, FileEntry, CompressionMode};
 use config::AppConfig;
 use profiles::{Profile, ProfilesData, load_profiles, save_profiles};
 use history::{TransferRecord, HistoryData, load_history, add_record, clear_history};
@@ -702,6 +702,7 @@ impl Ps5UploadApp {
         };
 
         self.update_download_status = format!("Downloading {}...", kind);
+        self.update_check_running = true;
         let tx = self.tx.clone();
         let rt = self.rt.clone();
         let url = asset.browser_download_url.clone();
@@ -861,6 +862,7 @@ impl Ps5UploadApp {
         let rt = self.rt.clone();
 
         self.status = "Checking destination...".to_string();
+        self.manage_busy = true;
 
         thread::spawn(move || {
             rt.block_on(async {
@@ -916,9 +918,187 @@ impl Ps5UploadApp {
 
         thread::spawn(move || {
             let tx_log = tx.clone();
-            let res = rt.block_on(async {
+            let tx_inner = tx.clone();
+            let res = rt.block_on(async move {
+                let tx = tx_inner;
                 if cancel_token.load(Ordering::Relaxed) {
                     return Err(anyhow::anyhow!("Cancelled"));
+                }
+
+                let connection_count_cfg = connections.clamp(1, MAX_PARALLEL_CONNECTIONS);
+                let can_stream = resume_mode == "none";
+
+                if can_stream {
+                     let _ = tx.send(AppMessage::UploadStart);
+                     let _ = tx.send(AppMessage::Log(format!("Starting streaming upload ({} connections)...", connection_count_cfg)));
+                     
+                     let tx_scan = tx.clone();
+                     let shared_total = Arc::new(AtomicU64::new(0));
+                     let shared_total_scan = shared_total.clone();
+                     let rx = stream_files_with_progress(
+                        game_path,
+                        cancel_token.clone(),
+                        move |files_found, total_size| {
+                            shared_total_scan.store(total_size, Ordering::Relaxed);
+                            let _ = tx_scan.send(AppMessage::Scanning { files_found, total_size });
+                        }
+                     );
+
+                     let start = std::time::Instant::now();
+                     let last_progress_ms = Arc::new(AtomicU64::new(0));
+                     let compression = if use_lz4 { CompressionMode::Lz4 } else { CompressionMode::None };
+                     let rate_limit = if bandwidth_limit_bps > 0 { 
+                         let per_conn = (bandwidth_limit_bps / connection_count_cfg as u64).max(1);
+                         Some(per_conn)
+                     } else { None };
+
+                     if connection_count_cfg == 1 {
+                         let stream = upload_v2_init(&ip, TRANSFER_PORT, &dest_path, use_temp).await?;
+                         let mut std_stream = stream.into_std()?;
+                         std_stream.set_nonblocking(true)?;
+                         let _ = tx.send(AppMessage::PayloadLog("Server READY".to_string()));
+                         
+                         let mut last_sent = 0u64;
+                         
+                         send_files_v2_for_list(
+                            rx,
+                            std_stream.try_clone()?,
+                            cancel_token.clone(),
+                            move |sent, files_sent, current_file| {
+                                if sent == last_sent { return; }
+                                let elapsed = start.elapsed().as_secs_f64();
+                                let current_total = shared_total.load(Ordering::Relaxed);
+                                let display_total = current_total.max(sent);
+                                let _ = tx.send(AppMessage::Progress {
+                                    sent,
+                                    total: display_total,
+                                    files_sent,
+                                    elapsed_secs: elapsed,
+                                    current_file,
+                                });
+                                last_progress_ms.store(start.elapsed().as_millis() as u64, Ordering::Relaxed);
+                                last_sent = sent;
+                            },
+                            move |msg| { let _ = tx_log.send(AppMessage::Log(msg)); },
+                            0, None, compression, rate_limit
+                         )?;
+                         
+                         use std::io::Read;
+                         let mut buffer = [0u8; 1024];
+                         let n = std_stream.read(&mut buffer)?;
+                         let response = String::from_utf8_lossy(&buffer[..n]).trim().to_string();
+                         let (files_ack, bytes_ack) = parse_upload_response(&response)?;
+                         return Ok((files_ack, bytes_ack));
+                     } else {
+                         let shared_rx = Arc::new(Mutex::new(rx));
+                         let total_sent = Arc::new(AtomicU64::new(0));
+                         let total_files = Arc::new(AtomicUsize::new(0));
+                         let allowed_connections = Arc::new(AtomicUsize::new(connection_count_cfg));
+                         
+                         let mut handles = Vec::new();
+                         
+                         let max_connections = connection_count_cfg;
+                         let allowed_monitor = allowed_connections.clone();
+                         let last_progress_monitor = last_progress_ms.clone();
+                         let cancel_monitor = cancel_token.clone();
+                         let start_monitor = start;
+                         thread::spawn(move || {
+                            let mut stable_good = 0u8;
+                            loop {
+                                if cancel_monitor.load(Ordering::Relaxed) { break; }
+                                let elapsed_ms = start_monitor.elapsed().as_millis() as u64;
+                                let last_ms = last_progress_monitor.load(Ordering::Relaxed);
+                                if last_ms == 0 { thread::sleep(std::time::Duration::from_millis(500)); continue; }
+                                let since = elapsed_ms.saturating_sub(last_ms);
+                                if since > 2000 {
+                                    let current = allowed_monitor.load(Ordering::Relaxed);
+                                    if current > 1 { allowed_monitor.store(current - 1, Ordering::Relaxed); }
+                                    stable_good = 0;
+                                } else if since < 500 {
+                                    stable_good = stable_good.saturating_add(1);
+                                    if stable_good >= 6 {
+                                        let current = allowed_monitor.load(Ordering::Relaxed);
+                                        if current < max_connections { allowed_monitor.store(current + 1, Ordering::Relaxed); }
+                                        stable_good = 0;
+                                    }
+                                } else { stable_good = 0; }
+                                thread::sleep(std::time::Duration::from_millis(500));
+                            }
+                         });
+
+                         let mut streams = Vec::new();
+                         for _ in 0..connection_count_cfg {
+                             let stream = upload_v2_init(&ip, TRANSFER_PORT, &dest_path, false).await?;
+                             let std_stream = stream.into_std()?;
+                             std_stream.set_nonblocking(true)?;
+                             streams.push(std_stream);
+                         }
+                         let _ = tx.send(AppMessage::PayloadLog("Server READY".to_string()));
+
+                         for (worker_id, std_stream) in streams.into_iter().enumerate() {
+                             let iterator = SharedReceiverIterator::new(shared_rx.clone());
+                             let cancel = cancel_token.clone();
+                             let tx = tx.clone();
+                             let tx_log = tx_log.clone();
+                             let total_sent = total_sent.clone();
+                             let total_files = total_files.clone();
+                             let shared_total = shared_total.clone();
+                             let start = start;
+                             let allowed = allowed_connections.clone();
+                             let last_progress = last_progress_ms.clone();
+                             
+                             handles.push(thread::spawn(move || -> anyhow::Result<()> {
+                                 let mut last_sent = 0u64;
+                                 let mut last_files = 0i32;
+                                 
+                                 send_files_v2_for_list(
+                                     iterator,
+                                     std_stream,
+                                     cancel,
+                                     move |sent, files_sent, _| {
+                                         let delta_bytes = sent.saturating_sub(last_sent);
+                                         let delta_files = if files_sent >= last_files { files_sent - last_files } else { 0 };
+                                         if delta_bytes == 0 && delta_files == 0 { return; }
+                                         last_sent = sent;
+                                         last_files = files_sent;
+                                         
+                                         let new_total = total_sent.fetch_add(delta_bytes, Ordering::Relaxed) + delta_bytes;
+                                         let new_files = total_files.fetch_add(delta_files as usize, Ordering::Relaxed) + delta_files as usize;
+                                         let elapsed = start.elapsed().as_secs_f64();
+                                         let current_total_scan = shared_total.load(Ordering::Relaxed);
+                                         let display_total = current_total_scan.max(new_total);
+                                         
+                                         let _ = tx.send(AppMessage::Progress {
+                                             sent: new_total,
+                                             total: display_total,
+                                             files_sent: new_files as i32,
+                                             elapsed_secs: elapsed,
+                                             current_file: None,
+                                         });
+                                         last_progress.store(start.elapsed().as_millis() as u64, Ordering::Relaxed);
+                                     },
+                                     move |msg| { let _ = tx_log.send(AppMessage::Log(msg)); },
+                                     worker_id,
+                                     Some(allowed),
+                                     compression,
+                                     rate_limit
+                                 )
+                             }));
+                         }
+                         
+                         let mut first_err = None;
+                         for h in handles {
+                             if let Ok(res) = h.join() {
+                                 if let Err(e) = res { if first_err.is_none() { first_err = Some(e); } }
+                             }
+                         }
+                         if let Some(e) = first_err { return Err(e); }
+                         
+                         // We don't read response for multi-connection here as threads finished.
+                         // But threads return Ok(()).
+                         // We rely on local counting.
+                         return Ok((total_files.load(Ordering::Relaxed) as i32, total_sent.load(Ordering::Relaxed)));
+                     }
                 }
 
                 // Scan files with progress reporting
@@ -1323,6 +1503,10 @@ fn send_payload_file(ip: &str, path: &str, tx: &Sender<AppMessage>) -> Result<u6
 
 impl eframe::App for Ps5UploadApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.is_uploading || self.is_downloading || self.is_connecting || self.manage_busy || self.is_sending_payload || self.calculating_size || self.update_check_running {
+            ctx.request_repaint();
+        }
+
         let connected = self.is_connected || self.is_uploading;
         let lang = self.language;
         if self.logo_texture.is_none() {
@@ -1522,6 +1706,7 @@ impl eframe::App for Ps5UploadApp {
                     }
                 }
                 AppMessage::UpdateDownloadComplete { kind, result } => {
+                    self.update_check_running = false;
                     match result {
                         Ok(path) => {
                             self.update_download_status = format!("Downloaded {} to {}", kind, path);
@@ -1558,6 +1743,7 @@ impl eframe::App for Ps5UploadApp {
                     }
                 }
                 AppMessage::CheckExistsResult(exists) => {
+                    self.manage_busy = false;
                     if exists {
                         if self.config.resume_mode != "none" {
                             if self.auto_resume_on_exists {
@@ -1582,7 +1768,14 @@ impl eframe::App for Ps5UploadApp {
                 AppMessage::Scanning { files_found, total_size } => {
                     self.scanning_files_found = files_found;
                     self.scanning_total_size = total_size;
-                    self.status = format!("Scanning... {} files ({})", files_found, format_bytes(total_size));
+                    if self.is_scanning {
+                        self.status = format!("Scanning... {} files ({})", files_found, format_bytes(total_size));
+                    }
+                    if self.is_uploading {
+                         if total_size > self.progress_total {
+                            self.progress_total = total_size;
+                        }
+                    }
                 }
                 AppMessage::UploadStart => {
                     self.is_scanning = false;
