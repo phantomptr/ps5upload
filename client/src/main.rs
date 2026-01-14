@@ -227,6 +227,7 @@ struct Ps5UploadApp {
     show_archive_confirm_dialog: bool,
     pending_archive_path: Option<String>,
     pending_archive_kind: Option<String>,
+    pending_archive_trim: bool,
     
     // Progress
     progress_sent: u64,
@@ -372,6 +373,7 @@ impl Ps5UploadApp {
             show_archive_confirm_dialog: false,
             pending_archive_path: None,
             pending_archive_kind: None,
+            pending_archive_trim: true,
             progress_sent: 0,
             progress_total: 0,
             progress_speed_bps: 0.0,
@@ -634,9 +636,7 @@ impl Ps5UploadApp {
                 let usage = unsafe { usage.assume_init() };
                 let rss_kb = usage.ru_maxrss as u64;
                 #[cfg(target_os = "macos")]
-                {
-                    rss_kb /= 1024;
-                }
+                let rss_kb = rss_kb / 1024;
                 self.log(&format!("Peak RSS ({}): {} MB", label, rss_kb / 1024));
             }
         }
@@ -960,6 +960,7 @@ impl Ps5UploadApp {
     fn prompt_archive_confirm(&mut self, path: &Path, kind: &str) {
         self.pending_archive_path = Some(path.display().to_string());
         self.pending_archive_kind = Some(kind.to_string());
+        self.pending_archive_trim = true;
         self.show_archive_confirm_dialog = true;
     }
     
@@ -1049,6 +1050,7 @@ impl Ps5UploadApp {
         let connections = self.config.connections;
         let use_temp = self.config.use_temp;
         let use_lz4 = self.config.compression == "lz4";
+        let archive_trim = self.pending_archive_trim;
         let mut resume_mode = self.config.resume_mode.clone();
         if self.force_full_upload_once {
             resume_mode = "none".to_string();
@@ -1099,8 +1101,15 @@ impl Ps5UploadApp {
                              extract_7z_archive(&game_path, &temp_dir, cancel_extract, log_extract)?;
                          }
 
+                         let mut selected_path = temp_dir.clone();
+                         if archive_trim {
+                             if let Some(trimmed) = trim_archive_root(&temp_dir, &game_path) {
+                                 selected_path = trimmed;
+                                 let _ = tx.send(AppMessage::Log("Trimmed top-level folder that matches the archive name.".to_string()));
+                             }
+                         }
                          temp_dir_guard = Some(TempDirGuard::new(temp_dir.clone()));
-                         effective_path = temp_dir.display().to_string();
+                         effective_path = selected_path.display().to_string();
                          let _ = tx.send(AppMessage::Log("Archive extracted. Starting upload...".to_string()));
                      } else {
                          let _ = tx.send(AppMessage::UploadStart);
@@ -2204,6 +2213,8 @@ Overwrite it?", self.get_dest_path()));
                         ui.add_space(4.0);
                         ui.label(tr(lang, "archive_multi_conn_note"));
                     }
+                    ui.add_space(6.0);
+                    ui.checkbox(&mut self.pending_archive_trim, tr(lang, "archive_trim_dir"));
                     ui.add_space(10.0);
                     ui.horizontal(|ui| {
                         if ui.button(tr(lang, "continue")).clicked() {
@@ -2212,11 +2223,13 @@ Overwrite it?", self.get_dest_path()));
                                 self.log(&format!("{} archive selected. It will be decompressed and uploaded during transfer.", archive_kind));
                             }
                             self.pending_archive_kind = None;
+                            self.pending_archive_trim = true;
                             self.show_archive_confirm_dialog = false;
                         }
                         if ui.button(tr(lang, "cancel")).clicked() {
                             self.pending_archive_path = None;
                             self.pending_archive_kind = None;
+                            self.pending_archive_trim = true;
                             self.show_archive_confirm_dialog = false;
                         }
                     });
@@ -4024,6 +4037,26 @@ fn recommend_connections(current: usize, sample_count: usize, sample_bytes: u64)
     } else {
         current
     }
+}
+
+fn trim_archive_root(temp_dir: &std::path::Path, archive_path: &str) -> Option<std::path::PathBuf> {
+    let stem = std::path::Path::new(archive_path)
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())?;
+    let mut entries = std::fs::read_dir(temp_dir).ok()?;
+    let first = entries.next()?.ok()?;
+    if entries.next().is_some() {
+        return None;
+    }
+    let path = first.path();
+    if !path.is_dir() {
+        return None;
+    }
+    let name = path.file_name()?.to_string_lossy().to_string();
+    if name != stem {
+        return None;
+    }
+    Some(path)
 }
 
 fn parse_upload_response(response: &str) -> anyhow::Result<(i32, u64)> {
