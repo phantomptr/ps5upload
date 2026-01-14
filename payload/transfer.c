@@ -24,16 +24,28 @@
 static uint8_t *g_buffer_pool[POOL_SIZE];
 static int g_pool_count = 0;
 static pthread_mutex_t g_pool_mutex = PTHREAD_MUTEX_INITIALIZER;
+static size_t g_pack_in_use = 0;
+static int g_active_sessions = 0;
+static pthread_mutex_t g_mem_stats_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static uint8_t *alloc_pack_buffer(size_t size) {
     if (size > PACK_BUFFER_SIZE) {
-        return malloc(size);
+        uint8_t *ptr = malloc(size);
+        pthread_mutex_lock(&g_mem_stats_mutex);
+        if (ptr) {
+            g_pack_in_use++;
+        }
+        pthread_mutex_unlock(&g_mem_stats_mutex);
+        return ptr;
     }
     
     pthread_mutex_lock(&g_pool_mutex);
     if (g_pool_count > 0) {
         uint8_t *ptr = g_buffer_pool[--g_pool_count];
         pthread_mutex_unlock(&g_pool_mutex);
+        pthread_mutex_lock(&g_mem_stats_mutex);
+        g_pack_in_use++;
+        pthread_mutex_unlock(&g_mem_stats_mutex);
         return ptr;
     }
     pthread_mutex_unlock(&g_pool_mutex);
@@ -42,6 +54,9 @@ static uint8_t *alloc_pack_buffer(size_t size) {
     if (posix_memalign(&ptr, 4096, PACK_BUFFER_SIZE) != 0) {
         return NULL; // Fallback to NULL if OOM
     }
+    pthread_mutex_lock(&g_mem_stats_mutex);
+    g_pack_in_use++;
+    pthread_mutex_unlock(&g_mem_stats_mutex);
     return ptr;
 }
 
@@ -52,11 +67,21 @@ static void free_pack_buffer(uint8_t *ptr) {
     if (g_pool_count < POOL_SIZE) {
         g_buffer_pool[g_pool_count++] = ptr;
         pthread_mutex_unlock(&g_pool_mutex);
+        pthread_mutex_lock(&g_mem_stats_mutex);
+        if (g_pack_in_use > 0) {
+            g_pack_in_use--;
+        }
+        pthread_mutex_unlock(&g_mem_stats_mutex);
         return;
     }
     pthread_mutex_unlock(&g_pool_mutex);
     
     free(ptr);
+    pthread_mutex_lock(&g_mem_stats_mutex);
+    if (g_pack_in_use > 0) {
+        g_pack_in_use--;
+    }
+    pthread_mutex_unlock(&g_mem_stats_mutex);
 }
 
 static void cleanup_buffer_pool(void) {
@@ -128,6 +153,29 @@ static long long g_total_bytes = 0;
 static int g_total_files = 0;
 static uint64_t g_session_counter = 0;
 static pthread_mutex_t g_session_counter_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static void log_memory_stats(const char *tag) {
+    int pool_count = 0;
+    size_t in_use = 0;
+    int active_sessions = 0;
+    size_t queue_count = 0;
+
+    pthread_mutex_lock(&g_mem_stats_mutex);
+    in_use = g_pack_in_use;
+    active_sessions = g_active_sessions;
+    pthread_mutex_unlock(&g_mem_stats_mutex);
+
+    pthread_mutex_lock(&g_pool_mutex);
+    pool_count = g_pool_count;
+    pthread_mutex_unlock(&g_pool_mutex);
+
+    pthread_mutex_lock(&g_queue.mutex);
+    queue_count = g_queue.count;
+    pthread_mutex_unlock(&g_queue.mutex);
+
+    printf("[FTX] MEM %s: pack_in_use=%zu pool=%d queue=%zu sessions=%d\n",
+           tag, in_use, pool_count, queue_count, active_sessions);
+}
 
 typedef struct {
     pthread_mutex_t mutex;
@@ -778,6 +826,7 @@ int upload_session_feed(UploadSession *session, const uint8_t *data, size_t len,
         printf("[FTX] recv %.2f GB, packs %llu\n",
                session->bytes_received / (1024.0 * 1024.0 * 1024.0),
                (unsigned long long)session->packs_enqueued);
+        log_memory_stats("progress");
         session->last_log_bytes = session->bytes_received;
     }
     while (offset < len) {
@@ -1005,6 +1054,7 @@ int upload_session_finalize(UploadSession *session) {
     }
 
     printf("[FTX] finalize done (ok=%d)\n", session->error ? 0 : 1);
+    log_memory_stats("finalize");
     session->finalized = 1;
     return session->error ? -1 : 0;
 }
@@ -1014,8 +1064,16 @@ UploadSession *upload_session_create(const char *dest_root, int use_temp) {
     if (!session) {
         return NULL;
     }
+    pthread_mutex_lock(&g_mem_stats_mutex);
+    g_active_sessions++;
+    pthread_mutex_unlock(&g_mem_stats_mutex);
     session->use_temp = use_temp ? 1 : 0;
     if (upload_session_start(session, dest_root) != 0) {
+        pthread_mutex_lock(&g_mem_stats_mutex);
+        if (g_active_sessions > 0) {
+            g_active_sessions--;
+        }
+        pthread_mutex_unlock(&g_mem_stats_mutex);
         free(session);
         return NULL;
     }
@@ -1037,6 +1095,11 @@ void upload_session_destroy(UploadSession *session) {
         session->body = NULL;
     }
     free(session);
+    pthread_mutex_lock(&g_mem_stats_mutex);
+    if (g_active_sessions > 0) {
+        g_active_sessions--;
+    }
+    pthread_mutex_unlock(&g_mem_stats_mutex);
 }
 
 void handle_upload_v2(int client_sock, const char *dest_root) {

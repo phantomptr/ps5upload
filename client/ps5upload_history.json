@@ -91,9 +91,33 @@
       "file_count": 516,
       "total_bytes": 3692955778,
       "duration_secs": 28.695234812,
-      "speed_bps": 128695785.28263691,
+      "speed_bps": 128695785.28263693,
       "success": false,
       "error": "Upload cancelled by user",
+      "via_queue": false
+    },
+    {
+      "timestamp": 1768374151,
+      "source_path": "/home/ubuntu/ps5upload/PPSA19639-[DLPSGAME.COM].rar",
+      "dest_path": "/data/test/PPSA19639-[DLPSGAME.COM]",
+      "file_count": 22354,
+      "total_bytes": 1135575240,
+      "duration_secs": 179.486257111,
+      "speed_bps": 6326808.850316179,
+      "success": false,
+      "error": "Resource temporarily unavailable (os error 11)",
+      "via_queue": false
+    },
+    {
+      "timestamp": 1768378737,
+      "source_path": "/home/ubuntu/ps5upload/PPSA19639-[DLPSGAME.COM].rar",
+      "dest_path": "/data/test/PPSA19639-[DLPSGAME.COM]",
+      "file_count": 22354,
+      "total_bytes": 1135575240,
+      "duration_secs": 207.014824087,
+      "speed_bps": 5485477.887915715,
+      "success": false,
+      "error": "Resource temporarily unavailable (os error 11)",
       "via_queue": false
     }
   ]

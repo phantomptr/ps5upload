@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.4] - 2026-01-14
+
+### Added
+- **RAR Archive Support:** You can now select a `.rar` file and upload it directly. The client extracts and streams the files on-the-fly, eliminating the need to extract huge games to disk first.
+- **Multi-Connection Streaming:** Streaming uploads now support multiple parallel connections for maximum speed (when Resume is off).
+
+### Fixed
+- **Windows Defender False Positives:** Applied binary stripping, LTO optimization, and a proper application manifest to prevent heuristics from flagging the client as malware.
+- **UI Responsiveness:** Fixed "ghost clicks" on all buttons (Upload, Delete, Rename, etc.) by ensuring the interface refreshes immediately when background tasks complete.
+
 ## [1.1.3] - 2026-01-14
 
 ### Added

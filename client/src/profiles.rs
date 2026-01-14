@@ -11,6 +11,7 @@ pub struct Profile {
     pub custom_preset_path: String,
     pub connections: usize,
     pub use_temp: bool,
+    pub auto_tune_connections: bool,
 }
 
 impl Default for Profile {
@@ -23,6 +24,7 @@ impl Default for Profile {
             custom_preset_path: String::new(),
             connections: 5,
             use_temp: false,
+            auto_tune_connections: true,
         }
     }
 }
@@ -134,6 +136,9 @@ pub fn load_profiles() -> ProfilesData {
                             "use_temp" => {
                                 profile.use_temp = matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on");
                             }
+                            "auto_tune_connections" => {
+                                profile.auto_tune_connections = matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on");
+                            }
                             _ => {}
                         }
                     }
@@ -162,6 +167,10 @@ pub fn save_profiles(data: &ProfilesData) {
         content.push_str(&format!("custom_preset_path={}\n", profile.custom_preset_path));
         content.push_str(&format!("connections={}\n", profile.connections));
         content.push_str(&format!("use_temp={}\n", if profile.use_temp { "true" } else { "false" }));
+        content.push_str(&format!(
+            "auto_tune_connections={}\n",
+            if profile.auto_tune_connections { "true" } else { "false" }
+        ));
         content.push('\n');
     }
 

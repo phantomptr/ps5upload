@@ -21,12 +21,18 @@ If you've ever tried to upload a homebrew app containing 10,000 small assets via
 
 This tool fixes that by bundling files into efficient "packs" on your computer and streaming them directly to the PS5's disk. No per-file handshakes, no temporary archive steps.
 
-## Supported Platforms
+## Supported Platforms & Requirements
 
-The client works on:
-- **Windows** (10/11)
-- **Linux** (Ubuntu, Arch, Fedora, etc.)
-- **macOS** (Intel & Apple Silicon)
+| Platform | OS Version | Architecture | Notes |
+| :--- | :--- | :--- | :--- |
+| **Windows** | 10 / 11 | x64 | **Zero-Install:** No DLLs or WinRAR required. Fully portable. |
+| **macOS** | 12 (Monterey)+ | x64, ARM64 (M1+) | **Universal:** Works on Intel and Apple Silicon natively. |
+| **Linux** | GLIBC 2.31+ | x64, ARM64 | **Portable:** Tested on Ubuntu, Arch, Fedora, and Steam Deck. |
+
+### Feature Support Matrix
+- **Instant Streaming:** Supported on all platforms (ZIP, 7Z, RAR, and Folders).
+- **Zero-Install Archives:** ZIP and 7Z are supported via pure-Rust libraries (no external software needed). RAR is statically linked into the binary for maximum portability.
+- **AV Clean:** Optimized release builds with stripped symbols and proper manifests to minimize false positives.
 
 ## Quick Start Guide
 

@@ -17,6 +17,7 @@ pub struct AppConfig {
     pub chmod_after_upload: bool,
     pub resume_mode: String, // "none", "size", "size_mtime", "sha256"
     pub language: String, // "en", "zh-CN", "zh-TW", "fr", "es", "ar"
+    pub auto_tune_connections: bool,
 }
 
 impl Default for AppConfig {
@@ -35,6 +36,7 @@ impl Default for AppConfig {
             chmod_after_upload: false,
             resume_mode: "none".to_string(),
             language: "en".to_string(),
+            auto_tune_connections: true,
         }
     }
 }
@@ -102,6 +104,9 @@ impl AppConfig {
                                     _ => "en".to_string(),
                                 };
                             }
+                            "auto_tune_connections" => {
+                                config.auto_tune_connections = matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on");
+                            }
                             _ => {}
                         }
                     }
@@ -114,7 +119,7 @@ impl AppConfig {
 
     pub fn save(&self) {
         let content = format!(
-            "address={}\nstorage={}\nconnections={}\nuse_temp={}\nauto_connect={}\ntheme={}\ncompression={}\nbandwidth_limit_mbps={}\nupdate_channel={}\ndownload_compression={}\nchmod_after_upload={}\nresume_mode={}\nlanguage={}\n",
+            "address={}\nstorage={}\nconnections={}\nuse_temp={}\nauto_connect={}\ntheme={}\ncompression={}\nbandwidth_limit_mbps={}\nupdate_channel={}\ndownload_compression={}\nchmod_after_upload={}\nresume_mode={}\nlanguage={}\nauto_tune_connections={}\n",
             self.address,
             self.storage,
             self.connections,
@@ -127,7 +132,8 @@ impl AppConfig {
             self.download_compression,
             self.chmod_after_upload,
             self.resume_mode,
-            self.language
+            self.language,
+            self.auto_tune_connections
         );
         let _ = fs::write("ps5upload.ini", content);
     }

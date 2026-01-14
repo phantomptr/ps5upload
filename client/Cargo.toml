@@ -1,6 +1,6 @@
 [package]
 name = "ps5upload"
-version = "1.1.3"
+version = "1.1.4"
 edition = "2021"
 
 [dependencies]
@@ -21,7 +21,20 @@ semver = "1.0"
 lz4_flex = "0.11"
 sha2 = "0.10"
 image = { version = "0.25", default-features = false, features = ["png"] }
+# unrar builds a bundled static lib via unrar_sys by default (no external deps).
+unrar = "0.5"
+unrar_sys = { version = "0.5", features = ["std"] }
+zip = "2.1"
+sevenz-rust = "0.6"
+widestring = "1.0"
 
 [build-dependencies]
 image = { version = "0.25", default-features = false, features = ["png", "ico"] }
 winres = "0.1"
+
+[profile.release]
+strip = true
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"

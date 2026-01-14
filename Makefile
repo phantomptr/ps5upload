@@ -104,8 +104,8 @@ payload: setup-payload
 	@echo "✓ Payload built: payload/ps5upload.elf"
 
 client: setup-client
-	@echo "Building Rust GUI client..."
-	@cd client && cargo build --release
+	@echo "Building Rust GUI client (static)..."
+	@cd client && export RAR_STATIC=1 && cargo build --release
 	@echo "✓ Rust GUI client built: client/target/release/ps5upload"
 
 bundle-macos: client
