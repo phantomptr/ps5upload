@@ -8,8 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.1.4] - 2026-01-14
 
 ### Added
-- **RAR Archive Support:** You can now select a `.rar` file and upload it directly. The client extracts and streams the files on-the-fly, eliminating the need to extract huge games to disk first.
-- **Multi-Connection Streaming:** Streaming uploads now support multiple parallel connections for maximum speed (when Resume is off).
+- **Archive UX:** Confirmation prompt for archives with a trim option to drop the top-level folder when it matches the archive name.
+- **Auto-Tune Connections:** Optional heuristic that reduces connections for tiny-file workloads to improve throughput and responsiveness.
+- **Resource Visibility:** Client logs peak RSS after uploads; payload logs lightweight memory stats during transfers.
+- **Multi-Connection Archive Note:** UI explicitly explains that multi-connection archive uploads require temporary extraction.
+
+### Changed
+- **Archive Streaming:** ZIP/7Z now stream in chunks instead of buffering whole files; RAR uses callback streaming for single-connection uploads.
+- **Resume Policy:** Resume is disabled for archive uploads to avoid partial/invalid states.
+- **Profiles:** Active profile auto-saves after changes (debounced) instead of requiring manual updates.
+- **File Manager UI:** Move actions now reference “pane path”, rows highlight as a single full-width block, and the opposite pane path is shown.
+- **Window Size:** Default and minimum window sizes increased to keep all controls visible with breathing room.
 
 ### Fixed
 - **Windows Defender False Positives:** Applied binary stripping, LTO optimization, and a proper application manifest to prevent heuristics from flagging the client as malware.
