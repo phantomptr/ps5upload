@@ -101,6 +101,7 @@ typedef struct SessionWriterState {
 } SessionWriterState;
 
 static SessionWriterState *g_writer_states = NULL;
+static pthread_mutex_t g_writer_state_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static uint64_t now_ms(void) {
     struct timespec ts;
@@ -379,6 +380,7 @@ static int ensure_parent_dir(const char *path) {
 }
 
 static SessionWriterState *get_writer_state(uint64_t session_id, const char *dest_root) {
+    pthread_mutex_lock(&g_writer_state_mutex);
     SessionWriterState *state = g_writer_states;
     while (state) {
         if (state->session_id == session_id) {
@@ -394,6 +396,7 @@ static SessionWriterState *get_writer_state(uint64_t session_id, const char *des
                 strncpy(state->last_dest_root, dest_root, PATH_MAX - 1);
                 state->last_dest_root[PATH_MAX - 1] = '\0';
             }
+            pthread_mutex_unlock(&g_writer_state_mutex);
             return state;
         }
         state = state->next;
@@ -401,6 +404,7 @@ static SessionWriterState *get_writer_state(uint64_t session_id, const char *des
 
     state = malloc(sizeof(*state));
     if (!state) {
+        pthread_mutex_unlock(&g_writer_state_mutex);
         return NULL;
     }
     memset(state, 0, sizeof(*state));
@@ -410,10 +414,12 @@ static SessionWriterState *get_writer_state(uint64_t session_id, const char *des
     state->last_dest_root[PATH_MAX - 1] = '\0';
     state->next = g_writer_states;
     g_writer_states = state;
+    pthread_mutex_unlock(&g_writer_state_mutex);
     return state;
 }
 
 static void release_writer_state(uint64_t session_id) {
+    pthread_mutex_lock(&g_writer_state_mutex);
     SessionWriterState **prev = &g_writer_states;
     SessionWriterState *state = g_writer_states;
     while (state) {
@@ -425,11 +431,30 @@ static void release_writer_state(uint64_t session_id) {
             }
             *prev = state->next;
             free(state);
+            pthread_mutex_unlock(&g_writer_state_mutex);
             return;
         }
         prev = &state->next;
         state = state->next;
     }
+    pthread_mutex_unlock(&g_writer_state_mutex);
+}
+
+// Clean up all orphaned writer states - call periodically or on memory pressure
+static void cleanup_all_writer_states(void) {
+    pthread_mutex_lock(&g_writer_state_mutex);
+    SessionWriterState *state = g_writer_states;
+    while (state) {
+        SessionWriterState *next = state->next;
+        if (state->current_fd >= 0) {
+            close(state->current_fd);
+            chmod(state->current_full_path, 0777);
+        }
+        free(state);
+        state = next;
+    }
+    g_writer_states = NULL;
+    pthread_mutex_unlock(&g_writer_state_mutex);
 }
 
 static void write_pack_data(uint64_t session_id, const char *dest_root, const uint8_t *pack_buf, size_t pack_len, int is_close) {
@@ -585,6 +610,10 @@ static void cleanup_worker_pool(void) {
 
 void transfer_cleanup(void) {
     cleanup_worker_pool();
+    cleanup_all_writer_states();
+    // Reset global counters
+    g_total_bytes = 0;
+    g_total_files = 0;
 }
 
 static int upload_session_start(UploadSession *session, const char *dest_root) {
@@ -595,6 +624,10 @@ static int upload_session_start(UploadSession *session, const char *dest_root) {
     if (!g_workers_initialized) {
         init_worker_pool();
     }
+
+    // Reset global counters for this session to avoid accumulation across transfers
+    g_total_bytes = 0;
+    g_total_files = 0;
 
     memset(session, 0, sizeof(*session));
     pthread_mutex_lock(&g_session_counter_lock);
@@ -661,6 +694,9 @@ static int enqueue_pack(UploadSession *session) {
     int push_result = queue_push(&g_queue, session->body, session->body_len, session->state.dest_root, session->session_id, 0);
     if (push_result == -1) {
         printf("[FTX] enqueue failed (queue closed)\n");
+        // Queue rejected, we still own the buffer - free it to avoid leak
+        free(session->body);
+        session->body = NULL;
         return -1;
     }
 
@@ -767,6 +803,8 @@ int upload_session_feed(UploadSession *session, const uint8_t *data, size_t len,
             if (session->body_bytes == session->body_len) {
                 if (session->header.type == FRAME_PACK_LZ4) {
                     if (session->body_len < 4) {
+                        free(session->body);
+                        session->body = NULL;
                         session->error = 1;
                         if (error) {
                             *error = 1;
@@ -776,6 +814,8 @@ int upload_session_feed(UploadSession *session, const uint8_t *data, size_t len,
                     uint32_t raw_len = 0;
                     memcpy(&raw_len, session->body, 4);
                     if (raw_len > PACK_BUFFER_SIZE) {
+                        free(session->body);
+                        session->body = NULL;
                         session->error = 1;
                         if (error) {
                             *error = 1;
@@ -788,6 +828,8 @@ int upload_session_feed(UploadSession *session, const uint8_t *data, size_t len,
                         out = malloc(raw_len);
                     }
                     if (!out) {
+                        free(session->body);
+                        session->body = NULL;
                         session->error = 1;
                         if (error) {
                             *error = 1;
@@ -798,6 +840,8 @@ int upload_session_feed(UploadSession *session, const uint8_t *data, size_t len,
                                                      (int)session->body_len - 4, (int)raw_len);
                     if (decoded < 0 || (uint32_t)decoded != raw_len) {
                         free(out);
+                        free(session->body);
+                        session->body = NULL;
                         session->error = 1;
                         if (error) {
                             *error = 1;
@@ -945,6 +989,13 @@ void upload_session_destroy(UploadSession *session) {
     }
     if (!session->finalized) {
         upload_session_finalize(session);
+    }
+    // Ensure writer state is released even if session wasn't properly finalized
+    release_writer_state(session->session_id);
+    // Free any remaining body buffer
+    if (session->body) {
+        free(session->body);
+        session->body = NULL;
     }
     free(session);
 }

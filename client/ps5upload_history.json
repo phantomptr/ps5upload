@@ -7,7 +7,7 @@
       "file_count": 0,
       "total_bytes": 721418067,
       "duration_secs": 6.805968483,
-      "speed_bps": 105997855.97038299,
+      "speed_bps": 105997855.970383,
       "success": false,
       "error": "Upload cancelled by user",
       "via_queue": false
@@ -19,7 +19,7 @@
       "file_count": 0,
       "total_bytes": 402651939,
       "duration_secs": 3.993432715,
-      "speed_bps": 100828527.16851147,
+      "speed_bps": 100828527.16851148,
       "success": false,
       "error": "Upload cancelled by user",
       "via_queue": false
@@ -71,6 +71,18 @@
       "success": false,
       "error": "Upload cancelled by user",
       "via_queue": true
+    },
+    {
+      "timestamp": 1768365747,
+      "source_path": "/home/ubuntu/ps5upload/PPSA02433-app",
+      "dest_path": "/data/test/PPSA02433-app",
+      "file_count": 516,
+      "total_bytes": 4962491088,
+      "duration_secs": 37.307625169,
+      "speed_bps": 133015464.41298224,
+      "success": false,
+      "error": "Upload cancelled by user",
+      "via_queue": false
     }
   ]
 }

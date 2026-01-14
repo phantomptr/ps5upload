@@ -415,14 +415,27 @@ int main(void) {
     size_t conn_count = 0;
     size_t conn_cap = 0;
 
+    // Reusable poll fd array to avoid repeated malloc/free
+    struct pollfd *pfds = NULL;
+    size_t pfds_cap = 0;
+
     while (1) {
         size_t current_conn_count = conn_count;
         size_t poll_count = 1 + current_conn_count;
-        struct pollfd *pfds = calloc(poll_count, sizeof(*pfds));
-        if (!pfds) {
-            usleep(1000);
-            continue;
+
+        // Grow pfds array if needed (but reuse existing allocation)
+        if (poll_count > pfds_cap) {
+            size_t new_cap = pfds_cap == 0 ? 32 : pfds_cap * 2;
+            if (new_cap < poll_count) new_cap = poll_count;
+            struct pollfd *new_pfds = realloc(pfds, new_cap * sizeof(*pfds));
+            if (!new_pfds) {
+                usleep(1000);
+                continue;
+            }
+            pfds = new_pfds;
+            pfds_cap = new_cap;
         }
+        memset(pfds, 0, poll_count * sizeof(*pfds));
 
         pfds[0].fd = server_sock;
         pfds[0].events = POLLIN;
@@ -437,7 +450,6 @@ int main(void) {
 
         int ready = poll(pfds, poll_count, 100);
         if (ready < 0) {
-            free(pfds);
             continue;
         }
 
@@ -602,9 +614,30 @@ int main(void) {
             }
         }
         conn_count = write_idx;
-        free(pfds);
+
+        // Periodically shrink connections array if it's much larger than needed
+        // This prevents unbounded memory growth from connection spikes
+        if (conn_cap > 64 && conn_count < conn_cap / 4) {
+            size_t new_cap = conn_cap / 2;
+            struct ClientConnection *new_conns = realloc(connections, new_cap * sizeof(*connections));
+            if (new_conns) {
+                connections = new_conns;
+                conn_cap = new_cap;
+            }
+        }
+
+        // Also shrink pfds array if oversized
+        if (pfds_cap > 64 && poll_count < pfds_cap / 4) {
+            size_t new_cap = pfds_cap / 2;
+            struct pollfd *new_pfds = realloc(pfds, new_cap * sizeof(*pfds));
+            if (new_pfds) {
+                pfds = new_pfds;
+                pfds_cap = new_cap;
+            }
+        }
     }
 
+    free(pfds);
     free(connections);
 
     close(server_sock);

@@ -1,25 +1,4 @@
 {
-  "items": [
-    {
-      "id": 5,
-      "source_path": "/home/ubuntu/ps5upload/1.1.0",
-      "subfolder_name": "1.1.0",
-      "preset_index": 2,
-      "custom_preset_path": "test",
-      "status": "Completed",
-      "size_bytes": 71707718
-    },
-    {
-      "id": 9,
-      "source_path": "/home/ubuntu/ps5upload/ABCD54321-app",
-      "subfolder_name": "ABCD54321-app",
-      "preset_index": 2,
-      "custom_preset_path": "test",
-      "status": {
-        "Failed": "Upload cancelled by user"
-      },
-      "size_bytes": 19714297641
-    }
-  ],
+  "items": [],
   "next_id": 10
 }

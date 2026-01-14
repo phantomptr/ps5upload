@@ -37,9 +37,9 @@ mod history;
 mod queue;
 mod i18n;
 
-use protocol::{StorageLocation, DirEntry, list_storage, list_dir, list_dir_recursive, check_dir, upload_v2_init, delete_path, move_path, copy_path, chmod_777, download_file_with_progress, download_dir_with_progress, get_payload_version, hash_file};
+use protocol::{StorageLocation, DirEntry, list_storage, list_dir, list_dir_recursive, check_dir, upload_v2_init, delete_path, move_path, copy_path, chmod_777, create_path, download_file_with_progress, download_dir_with_progress, get_payload_version, hash_file};
 use archive::get_size;
-use transfer::{collect_files, send_files_v2_for_list, FileEntry, CompressionMode};
+use transfer::{collect_files_with_progress, send_files_v2_for_list, FileEntry, CompressionMode};
 use config::AppConfig;
 use profiles::{Profile, ProfilesData, load_profiles, save_profiles};
 use history::{TransferRecord, HistoryData, load_history, add_record, clear_history};
@@ -77,6 +77,7 @@ enum AppMessage {
     UpdateDownloadComplete { kind: String, result: Result<String, String> },
     CheckExistsResult(bool),
     SizeCalculated(u64),
+    Scanning { files_found: usize, total_size: u64 },
     UploadStart,
     Progress { sent: u64, total: u64, files_sent: i32, elapsed_secs: f64, current_file: Option<String> },
     UploadComplete(Result<(i32, u64), String>),
@@ -203,7 +204,12 @@ struct Ps5UploadApp {
     progress_eta_secs: Option<f64>,
     progress_files: i32,
     progress_current_file: String,
-    
+
+    // Scanning state
+    is_scanning: bool,
+    scanning_files_found: usize,
+    scanning_total_size: u64,
+
     // Size Calc
     calculating_size: bool,
     calculated_size: Option<u64>,
@@ -264,6 +270,9 @@ impl Ps5UploadApp {
         let profiles_data = load_profiles();
         let history_data = load_history();
         let queue_data = load_queue();
+
+        // Setup fonts for CJK and Arabic language support
+        setup_fonts(&cc.egui_ctx);
 
         // Apply theme based on config
         if theme_dark {
@@ -332,6 +341,9 @@ impl Ps5UploadApp {
             progress_eta_secs: None,
             progress_files: 0,
             progress_current_file: String::new(),
+            is_scanning: false,
+            scanning_files_found: 0,
+            scanning_total_size: 0,
             calculating_size: false,
             calculated_size: None,
             payload_path: String::new(),
@@ -867,9 +879,12 @@ impl Ps5UploadApp {
     fn start_upload(&mut self) {
         // Reset state
         self.is_uploading = true;
+        self.is_scanning = true;
+        self.scanning_files_found = 0;
+        self.scanning_total_size = 0;
         self.show_override_dialog = false;
         self.show_resume_dialog = false;
-        self.status = "Uploading...".to_string();
+        self.status = "Scanning files...".to_string();
         self.progress_sent = 0;
         self.progress_total = self.calculated_size.unwrap_or(0);
         self.progress_files = 0;
@@ -883,7 +898,7 @@ impl Ps5UploadApp {
 
         self.upload_cancellation_token.store(false, Ordering::Relaxed);
         let cancel_token = self.upload_cancellation_token.clone();
-        
+
         let ip = self.ip.clone();
         let game_path = self.game_path.clone();
         let dest_path = self.get_dest_path();
@@ -898,7 +913,7 @@ impl Ps5UploadApp {
             self.force_full_upload_once = false;
         }
         let bandwidth_limit_bps = (self.config.bandwidth_limit_mbps * 1024.0 * 1024.0) as u64;
-        
+
         thread::spawn(move || {
             let tx_log = tx.clone();
             let res = rt.block_on(async {
@@ -906,7 +921,21 @@ impl Ps5UploadApp {
                     return Err(anyhow::anyhow!("Cancelled"));
                 }
 
-                let mut files = collect_files(&game_path);
+                // Scan files with progress reporting
+                let tx_scan = tx.clone();
+                let cancel_scan = cancel_token.clone();
+                let (mut files, was_cancelled) = collect_files_with_progress(
+                    &game_path,
+                    cancel_scan,
+                    move |files_found, total_size| {
+                        let _ = tx_scan.send(AppMessage::Scanning { files_found, total_size });
+                    }
+                );
+
+                if was_cancelled {
+                    return Err(anyhow::anyhow!("Cancelled"));
+                }
+
                 if files.is_empty() {
                     return Err(anyhow::anyhow!("No files found to upload"));
                 }
@@ -1025,7 +1054,7 @@ impl Ps5UploadApp {
                 if connection_count == 1 {
                     let stream = upload_v2_init(&ip, TRANSFER_PORT, &dest_path, effective_use_temp).await?;
                     let mut std_stream = stream.into_std()?;
-                    std_stream.set_nonblocking(false)?;
+                    std_stream.set_nonblocking(true)?;
                     let _ = tx.send(AppMessage::PayloadLog("Server READY".to_string()));
 
                     let mut last_sent = 0u64;
@@ -1072,7 +1101,7 @@ impl Ps5UploadApp {
                 for bucket in buckets.into_iter().filter(|b| !b.is_empty()) {
                     let stream = upload_v2_init(&ip, TRANSFER_PORT, &dest_path, effective_use_temp).await?;
                     let std_stream = stream.into_std()?;
-                    std_stream.set_nonblocking(false)?;
+                    std_stream.set_nonblocking(true)?;
                     workers.push((bucket, std_stream));
                 }
                 let _ = tx.send(AppMessage::PayloadLog("Server READY".to_string()));
@@ -1550,7 +1579,15 @@ impl eframe::App for Ps5UploadApp {
                     self.calculating_size = false;
                     self.calculated_size = Some(size);
                 }
-                AppMessage::UploadStart => { self.status = "Uploading...".to_string(); }
+                AppMessage::Scanning { files_found, total_size } => {
+                    self.scanning_files_found = files_found;
+                    self.scanning_total_size = total_size;
+                    self.status = format!("Scanning... {} files ({})", files_found, format_bytes(total_size));
+                }
+                AppMessage::UploadStart => {
+                    self.is_scanning = false;
+                    self.status = "Uploading...".to_string();
+                }
                 AppMessage::Progress { sent, total, files_sent, elapsed_secs, current_file } => {
                     self.progress_sent = sent;
                     self.progress_total = total;
@@ -1566,6 +1603,7 @@ impl eframe::App for Ps5UploadApp {
                 }
                 AppMessage::UploadComplete(res) => {
                     self.is_uploading = false;
+                    self.is_scanning = false;
                     let duration = self.upload_start_time.map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0);
 
                     match &res {
@@ -2620,6 +2658,23 @@ Overwrite it?", self.get_dest_path()));
                             self.pending_rename_request = Some(RenameRequest { src, dst });
                             self.show_rename_confirm = true;
                         }
+                        let can_new_folder = can_ops && !self.manage_new_name.trim().is_empty();
+                        if ui.add_enabled(can_new_folder, egui::Button::new(tr(lang, "new_folder"))).clicked() {
+                            let folder_name = self.manage_new_name.trim().to_string();
+                            let base_path = match self.manage_active {
+                                ManageSide::Left => self.manage_left_path.clone(),
+                                ManageSide::Right => self.manage_right_path.clone(),
+                            };
+                            let full_path = Self::join_remote_path(&base_path, &folder_name);
+                            let ip = self.ip.clone();
+                            let rt = self.rt.clone();
+                            self.manage_send_op("New folder", move || {
+                                rt.block_on(async {
+                                    create_path(&ip, TRANSFER_PORT, &full_path).await
+                                }).map_err(|e| e.to_string())
+                            });
+                            self.manage_new_name.clear();
+                        }
                         let move_label = match self.manage_active {
                             ManageSide::Left => tr(lang, "move_right"),
                             ManageSide::Right => tr(lang, "move_left"),
@@ -3161,6 +3216,41 @@ fn current_asset_name() -> Result<String, String> {
     };
 
     Ok(format!("ps5upload-{}-{}.zip", os_name, arch_name))
+}
+
+fn setup_fonts(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+
+    // Load Simplified Chinese font
+    fonts.font_data.insert(
+        "noto_sans_sc".to_owned(),
+        egui::FontData::from_static(include_bytes!("../fonts/NotoSansSC-Regular.otf")).into(),
+    );
+
+    // Load Traditional Chinese font
+    fonts.font_data.insert(
+        "noto_sans_tc".to_owned(),
+        egui::FontData::from_static(include_bytes!("../fonts/NotoSansTC-Regular.otf")).into(),
+    );
+
+    // Load Arabic font
+    fonts.font_data.insert(
+        "noto_sans_arabic".to_owned(),
+        egui::FontData::from_static(include_bytes!("../fonts/NotoSansArabic-Regular.ttf")).into(),
+    );
+
+    // Add fonts as fallbacks for Proportional family (after default fonts)
+    fonts
+        .families
+        .entry(egui::FontFamily::Proportional)
+        .or_default()
+        .extend([
+            "noto_sans_sc".to_owned(),
+            "noto_sans_tc".to_owned(),
+            "noto_sans_arabic".to_owned(),
+        ]);
+
+    ctx.set_fonts(fonts);
 }
 
 fn setup_custom_style(ctx: &egui::Context) {

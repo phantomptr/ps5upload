@@ -147,7 +147,10 @@ fn write_all_retry(
             Ok(0) => return Err(anyhow::anyhow!("Socket closed during send")),
             Ok(n) => offset += n,
             Err(err) => match err.kind() {
-                ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted => continue,
+                ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted => {
+                    thread::sleep(std::time::Duration::from_millis(1));
+                    continue;
+                }
                 _ => return Err(err.into()),
             },
         }
@@ -167,9 +170,25 @@ fn send_frame_header(
     Ok(())
 }
 
-pub fn collect_files(base_path: &str) -> Vec<FileEntry> {
+#[allow(dead_code)]
+fn collect_files(base_path: &str) -> Vec<FileEntry> {
+    collect_files_with_progress(base_path, Arc::new(AtomicBool::new(false)), |_, _| {}).0
+}
+
+/// Collect files with progress reporting and cancellation support.
+/// Returns (files, was_cancelled).
+/// The progress callback receives (files_found, total_size_so_far) and is called every 1000 files.
+pub fn collect_files_with_progress<F>(
+    base_path: &str,
+    cancel: Arc<AtomicBool>,
+    mut progress: F,
+) -> (Vec<FileEntry>, bool)
+where
+    F: FnMut(usize, u64),
+{
     let path = Path::new(base_path);
     let mut files = Vec::new();
+    let mut total_size: u64 = 0;
 
     if path.is_file() {
         if let Ok(meta) = path.metadata() {
@@ -177,24 +196,33 @@ pub fn collect_files(base_path: &str) -> Vec<FileEntry> {
                 .file_name()
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_else(|| "file".to_string());
+            let size = meta.len();
             files.push(FileEntry {
                 rel_path,
                 abs_path: path.to_path_buf(),
-                size: meta.len(),
+                size,
                 mtime: meta.modified().ok()
                     .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                     .map(|d| d.as_secs() as i64),
             });
+            progress(1, size);
         }
-        return files;
+        return (files, false);
     }
 
+    let mut last_report = 0usize;
     for entry in WalkDir::new(path).into_iter().filter_map(|e| e.ok()) {
+        // Check cancellation every iteration
+        if cancel.load(Ordering::Relaxed) {
+            return (files, true);
+        }
+
         let entry_path = entry.path();
         if !entry_path.is_file() {
             continue;
         }
         let Ok(meta) = entry.metadata() else { continue; };
+        let size = meta.len();
         let rel_path = entry_path
             .strip_prefix(path)
             .unwrap_or(entry_path)
@@ -203,14 +231,23 @@ pub fn collect_files(base_path: &str) -> Vec<FileEntry> {
         files.push(FileEntry {
             rel_path,
             abs_path: entry_path.to_path_buf(),
-            size: meta.len(),
+            size,
             mtime: meta.modified().ok()
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d| d.as_secs() as i64),
         });
+        total_size += size;
+
+        // Report progress every 1000 files
+        if files.len() - last_report >= 1000 {
+            progress(files.len(), total_size);
+            last_report = files.len();
+        }
     }
 
-    files
+    // Final progress report
+    progress(files.len(), total_size);
+    (files, false)
 }
 
 pub fn send_files_v2_for_list<F, L>(

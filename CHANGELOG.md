@@ -5,13 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.1.1] - 2026-02-15
+## [1.1.2] - 2026-01-14
 
 ### Added
 - Resume uploads with options (size, size+time, SHA256) and a guided resume flow.
 - Upload queue controls and history resume actions with clearer labels.
 - Multi-language UI: English, 简体中文, 繁體中文, Français, Español, العربية.
 - App logo integration in the UI and app icons across Windows/macOS/Linux.
+- New Folder button in file manager to create directories on PS5.
 
 ### Changed
 - Default connections set to 1 for maximum reliability.
@@ -20,7 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Multi-connection upload corruption on the payload writer.
+- Fixed a race condition in the payload writer state that could cause transfers to hang or crash when using multiple connections.
+- Improved client responsiveness during transfers by using non-blocking I/O and handling socket backpressure more efficiently.
 - Clearer confirmation flows for rename/delete/move/download/overwrite.
+- Chinese (简体中文, 繁體中文) and Arabic (العربية) characters now render correctly by embedding Noto Sans fonts.
+- Large folder uploads (millions of files) no longer appear stuck at 0%; scanning progress is now shown with file count and size.
+- Payload memory leaks fixed: session counters now reset per-upload, writer states properly cleaned up on disconnect, and buffer leaks in error paths resolved. This prevents OOM issues during extended operations with many files.
+- Payload now reuses buffers instead of allocating/freeing every poll cycle, and automatically shrinks oversized arrays when load decreases. This reduces memory fragmentation during long-running transfers.
 
 ## [1.1.0] - 2026-02-01
 

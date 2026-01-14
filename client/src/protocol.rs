@@ -173,6 +173,16 @@ pub async fn chmod_777(ip: &str, port: u16, path: &str) -> Result<()> {
     }
 }
 
+pub async fn create_path(ip: &str, port: u16, path: &str) -> Result<()> {
+    let cmd = format!("CREATE_PATH {}\n", path);
+    let response = send_simple_command(ip, port, &cmd).await?;
+    if response.starts_with("SUCCESS") {
+        Ok(())
+    } else {
+        Err(anyhow!("Create folder failed: {}", response))
+    }
+}
+
 pub async fn hash_file(ip: &str, port: u16, path: &str) -> Result<String> {
     let cmd = format!("HASH_FILE {}\n", path);
     let response = send_simple_command(ip, port, &cmd).await?;
