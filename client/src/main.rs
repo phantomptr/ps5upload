@@ -3572,6 +3572,7 @@ Overwrite it?", self.get_dest_path()));
                         ui.add(egui::ProgressBar::new(0.5).show_percentage().animate(true));
                         ui.add_space(5.0);
                         ui.label(format!("Scanning: {} files ({})", self.scanning_files_found, format_bytes(self.scanning_total_size)));
+                        ui.label(tr(lang, "progress_total_estimated"));
                     } else {
                         let total = self.progress_total.max(1);
                         let progress = (self.progress_sent as f64 / total as f64).clamp(0.0, 1.0) as f32;
@@ -3592,6 +3593,7 @@ Overwrite it?", self.get_dest_path()));
                         }
                         if self.progress_sent == 0 && self.scanning_files_found > 0 {
                             ui.label(format!("Scanning: {} files ({})", self.scanning_files_found, format_bytes(self.scanning_total_size)));
+                            ui.label(tr(lang, "progress_total_estimated"));
                         }
                     }
                     
