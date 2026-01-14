@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.5] - 2026-01-14
+
+### Added
+- **Auto-Tune Toggle:** UI checkbox to enable/disable small-file connection auto-tuning.
+- **Archive Trim Prompt:** Option to trim the top-level folder when it matches the archive name.
+- **Progress Clarity:** Scanning note explains that total size is still being calculated.
+- **Memory Telemetry:** Payload logs lightweight memory stats; client logs peak RSS after uploads.
+
+### Changed
+- **File Manager UI:** Full-width row selection highlight, pane-aware move labels, and opposite pane path display.
+- **Window Size:** Default/min sizes increased so all controls are visible with extra space.
+- **Archive Workflow:** Multi-connection archives explicitly extract to temp; optional trim applied after extraction.
+- **Response Handling:** Non-blocking response reads now retry with timeout to avoid false 10035 errors.
+
+### Fixed
+- **Archive Streaming:** ZIP/7Z chunked streaming and RAR callback streaming for smoother single-connection uploads.
+- **Resume Policy:** Resume disabled for archive uploads to prevent partial/invalid states.
+
 ## [1.1.4] - 2026-01-14
 
 ### Added
@@ -75,3 +93,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Auto reconnect stability and clearer connection status.
 - Manage UI selection behavior (click any column to select).
+
