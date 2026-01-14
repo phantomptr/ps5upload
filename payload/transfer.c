@@ -20,6 +20,53 @@
 #define PACK_BUFFER_SIZE (16 * 1024 * 1024)   // 16MB buffer (Increased for throughput)
 #define PACK_QUEUE_DEPTH 4                    // 4 * 16MB = 64MB heap usage
 
+#define POOL_SIZE 16
+static uint8_t *g_buffer_pool[POOL_SIZE];
+static int g_pool_count = 0;
+static pthread_mutex_t g_pool_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+static uint8_t *alloc_pack_buffer(size_t size) {
+    if (size > PACK_BUFFER_SIZE) {
+        return malloc(size);
+    }
+    
+    pthread_mutex_lock(&g_pool_mutex);
+    if (g_pool_count > 0) {
+        uint8_t *ptr = g_buffer_pool[--g_pool_count];
+        pthread_mutex_unlock(&g_pool_mutex);
+        return ptr;
+    }
+    pthread_mutex_unlock(&g_pool_mutex);
+    
+    void *ptr = NULL;
+    if (posix_memalign(&ptr, 4096, PACK_BUFFER_SIZE) != 0) {
+        return NULL; // Fallback to NULL if OOM
+    }
+    return ptr;
+}
+
+static void free_pack_buffer(uint8_t *ptr) {
+    if (!ptr) return;
+    
+    pthread_mutex_lock(&g_pool_mutex);
+    if (g_pool_count < POOL_SIZE) {
+        g_buffer_pool[g_pool_count++] = ptr;
+        pthread_mutex_unlock(&g_pool_mutex);
+        return;
+    }
+    pthread_mutex_unlock(&g_pool_mutex);
+    
+    free(ptr);
+}
+
+static void cleanup_buffer_pool(void) {
+    pthread_mutex_lock(&g_pool_mutex);
+    while (g_pool_count > 0) {
+        free(g_buffer_pool[--g_pool_count]);
+    }
+    pthread_mutex_unlock(&g_pool_mutex);
+}
+
 #ifndef O_DIRECT
 #define O_DIRECT 0
 #endif
@@ -208,6 +255,9 @@ static void close_current_file(ConnState *state) {
     if (state->current_fd < 0) {
         return;
     }
+#ifdef POSIX_FADV_DONTNEED
+    posix_fadvise(state->current_fd, 0, 0, POSIX_FADV_DONTNEED);
+#endif
     close(state->current_fd);
     chmod(state->current_full_path, 0777);
     state->current_fd = -1;
@@ -570,7 +620,7 @@ static void *disk_writer_thread(void *arg) {
         
         // Ownership was transferred to us, so we free it
         if (job.data) {
-            free(job.data);
+            free_pack_buffer(job.data);
         }
     }
     
@@ -611,6 +661,7 @@ static void cleanup_worker_pool(void) {
 void transfer_cleanup(void) {
     cleanup_worker_pool();
     cleanup_all_writer_states();
+    cleanup_buffer_pool();
     // Reset global counters
     g_total_bytes = 0;
     g_total_files = 0;
@@ -695,7 +746,7 @@ static int enqueue_pack(UploadSession *session) {
     if (push_result == -1) {
         printf("[FTX] enqueue failed (queue closed)\n");
         // Queue rejected, we still own the buffer - free it to avoid leak
-        free(session->body);
+        free_pack_buffer(session->body);
         session->body = NULL;
         return -1;
     }
@@ -755,15 +806,7 @@ int upload_session_feed(UploadSession *session, const uint8_t *data, size_t len,
                     session->error = 1;
                 } else {
                     session->body_len = session->header.body_len;
-                    // Use aligned_alloc or posix_memalign for potential future O_DIRECT or SIMD optimizations
-                    // 4096 alignment is standard for disk IO
-                    void *ptr = NULL;
-                    int ret = posix_memalign(&ptr, 4096, session->body_len);
-                    if (ret != 0) {
-                         // Fallback
-                         ptr = malloc(session->body_len);
-                    }
-                    session->body = ptr;
+                    session->body = alloc_pack_buffer(session->body_len);
                     
                     session->body_bytes = 0;
                     if (!session->body) {
@@ -803,7 +846,7 @@ int upload_session_feed(UploadSession *session, const uint8_t *data, size_t len,
             if (session->body_bytes == session->body_len) {
                 if (session->header.type == FRAME_PACK_LZ4) {
                     if (session->body_len < 4) {
-                        free(session->body);
+                        free_pack_buffer(session->body);
                         session->body = NULL;
                         session->error = 1;
                         if (error) {
@@ -814,7 +857,7 @@ int upload_session_feed(UploadSession *session, const uint8_t *data, size_t len,
                     uint32_t raw_len = 0;
                     memcpy(&raw_len, session->body, 4);
                     if (raw_len > PACK_BUFFER_SIZE) {
-                        free(session->body);
+                        free_pack_buffer(session->body);
                         session->body = NULL;
                         session->error = 1;
                         if (error) {
@@ -822,13 +865,9 @@ int upload_session_feed(UploadSession *session, const uint8_t *data, size_t len,
                         }
                         return 0;
                     }
-                    void *out = NULL;
-                    int ret = posix_memalign(&out, 4096, raw_len);
-                    if (ret != 0) {
-                        out = malloc(raw_len);
-                    }
+                    void *out = alloc_pack_buffer(raw_len);
                     if (!out) {
-                        free(session->body);
+                        free_pack_buffer(session->body);
                         session->body = NULL;
                         session->error = 1;
                         if (error) {
@@ -839,8 +878,8 @@ int upload_session_feed(UploadSession *session, const uint8_t *data, size_t len,
                     int decoded = LZ4_decompress_safe((const char *)session->body + 4, (char *)out,
                                                      (int)session->body_len - 4, (int)raw_len);
                     if (decoded < 0 || (uint32_t)decoded != raw_len) {
-                        free(out);
-                        free(session->body);
+                        free_pack_buffer(out);
+                        free_pack_buffer(session->body);
                         session->body = NULL;
                         session->error = 1;
                         if (error) {
@@ -848,7 +887,7 @@ int upload_session_feed(UploadSession *session, const uint8_t *data, size_t len,
                         }
                         return 0;
                     }
-                    free(session->body);
+                    free_pack_buffer(session->body);
                     session->body = out;
                     session->body_len = raw_len;
                     session->body_bytes = raw_len;
@@ -902,7 +941,7 @@ static int upload_session_finish(UploadSession *session) {
     session->state.total_files = g_total_files;
 
     if (session->body) {
-        free(session->body);
+        free_pack_buffer(session->body);
         session->body = NULL;
     }
     return 0;
@@ -994,7 +1033,7 @@ void upload_session_destroy(UploadSession *session) {
     release_writer_state(session->session_id);
     // Free any remaining body buffer
     if (session->body) {
-        free(session->body);
+        free_pack_buffer(session->body);
         session->body = NULL;
     }
     free(session);

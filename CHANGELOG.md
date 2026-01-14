@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.3] - 2026-01-14
+
+### Added
+- **Instant Streaming Uploads:** Fresh uploads (where resume is off) now start transferring immediately while scanning proceeds in the background. This works for both single and multi-connection modes, avoiding the long "Scanning..." pause on large folders.
+
+### Fixed
+- **Payload Reliability:** Fixed a critical race condition in the writer thread that could cause transfers to hang or crash when using multiple connections.
+- **System Freeze Fix:** Implemented a memory buffer pool and cache-bypass (`POSIX_FADV_DONTNEED`) in the payload to prevent the PS5 from freezing or lagging during massive transfers (e.g. 100GB+ to internal SSD).
+- **UI Responsiveness:** Resolved the "ghost click" issue where buttons occasionally required two clicks or mouse movement to trigger.
+- **Client Stability:** Switched to non-blocking network I/O with improved backpressure handling for smoother throughput and better cancellation responsiveness.
+
 ## [1.1.2] - 2026-01-14
 
 ### Added
@@ -21,13 +32,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Multi-connection upload corruption on the payload writer.
-- Fixed a race condition in the payload writer state that could cause transfers to hang or crash when using multiple connections.
-- Improved client responsiveness during transfers by using non-blocking I/O and handling socket backpressure more efficiently.
 - Clearer confirmation flows for rename/delete/move/download/overwrite.
 - Chinese (简体中文, 繁體中文) and Arabic (العربية) characters now render correctly by embedding Noto Sans fonts.
 - Large folder uploads (millions of files) no longer appear stuck at 0%; scanning progress is now shown with file count and size.
-- Payload memory leaks fixed: session counters now reset per-upload, writer states properly cleaned up on disconnect, and buffer leaks in error paths resolved. This prevents OOM issues during extended operations with many files.
-- Payload now reuses buffers instead of allocating/freeing every poll cycle, and automatically shrinks oversized arrays when load decreases. This reduces memory fragmentation during long-running transfers.
+- Payload memory management: fixed session counters and writer state cleanup to prevent OOM issues.
 
 ## [1.1.0] - 2026-02-01
 
