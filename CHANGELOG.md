@@ -7,6 +7,7 @@ This project follows Semantic Versioning.
 
 ### Added
 - Chat tab with global chat, display names, and built-in key.
+- Auto-generated chat display names to avoid collisions.
 - Auto-optimize upload settings and clearer compression descriptions.
 - Archive fast-extract toggle and trim behavior that ignores Name when enabled.
 - Optional RAR streaming (single-connection) alongside extract-first mode.
@@ -17,11 +18,14 @@ This project follows Semantic Versioning.
 ### Changed
 - Manage UI simplified to a single pane with a destination picker.
 - Upload status now reflects the real phase (scanning/extracting/uploading).
+- Chat panel now fills the center pane.
 
 ### Fixed
 - Upload cancel now starts cleanly on a new folder without getting stuck.
 - UI stays responsive during heavy uploads.
 - Prevent uploads from starting when the target drive is nearly full.
+- Chat messages now deserialize correctly and show up across clients.
+- `make run-client` runs the correct binary when extra tools are present.
 
 ## [1.1.5] - 2026-01-14
 
