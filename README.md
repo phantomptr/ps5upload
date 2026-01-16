@@ -78,6 +78,9 @@ If a transfer was interrupted, you can enable **Resume** and choose a mode:
 * **Skip by size + time (medium)** — more accurate.
 * **Verify SHA256 (slow)** — most accurate, slowest.
 
+### 6. Chat (Optional)
+Open the **Chat** tab to talk with other PS5Upload users. It uses the built-in key and requires an internet connection.
+
 ## FAQ
 
 **Q: "Connection Refused" or it won't connect?**

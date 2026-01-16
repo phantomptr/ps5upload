@@ -17,6 +17,8 @@ pub struct QueueItem {
     pub subfolder_name: String,
     pub preset_index: usize,
     pub custom_preset_path: String,
+    #[serde(default)]
+    pub storage_base: String,
     pub status: QueueStatus,
     pub size_bytes: Option<u64>,
 }

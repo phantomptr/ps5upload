@@ -135,8 +135,7 @@ enum AppMessage {
 }
 
 const APP_VERSION: &str = include_str!("../../VERSION");
-#[allow(dead_code)]
-const CHAT_SHARED_KEY_HEX: &str = include_str!("../../ps5upload_chat.key");
+include!(concat!(env!("OUT_DIR"), "/chat_key.rs"));
 
 fn app_version_trimmed() -> &'static str {
     APP_VERSION.trim()
@@ -632,6 +631,7 @@ impl Ps5UploadApp {
             subfolder_name: subfolder,
             preset_index: self.selected_preset,
             custom_preset_path: self.custom_preset_path.clone(),
+            storage_base: self.selected_storage.clone().unwrap_or_else(|| self.config.storage.clone()),
             status: QueueStatus::Pending,
             size_bytes: self.calculated_size,
         };
@@ -670,6 +670,9 @@ impl Ps5UploadApp {
             self.custom_subfolder = item_clone.subfolder_name.clone();
             self.selected_preset = item_clone.preset_index;
             self.custom_preset_path = item_clone.custom_preset_path.clone();
+            if !item_clone.storage_base.is_empty() {
+                self.selected_storage = Some(item_clone.storage_base.clone());
+            }
             self.calculated_size = item_clone.size_bytes;
             self.current_queue_item_id = Some(item_clone.id);
 
@@ -682,6 +685,41 @@ impl Ps5UploadApp {
             item.status = status;
             save_queue(&self.queue_data);
         }
+    }
+
+    fn storage_free_bytes(&self, base: &str) -> Option<u64> {
+        self.storage_locations
+            .iter()
+            .find(|loc| loc.path == base)
+            .map(|loc| (loc.free_gb * 1_073_741_824.0) as u64)
+    }
+
+    fn ensure_space_before_upload(&mut self) -> bool {
+        let Some(required) = self.calculated_size else {
+            return true;
+        };
+        let Some(storage) = self.selected_storage.clone() else {
+            return true;
+        };
+        let Some(free_bytes) = self.storage_free_bytes(&storage) else {
+            return true;
+        };
+        let required = required.saturating_add(64 * 1024 * 1024);
+        if free_bytes >= required {
+            return true;
+        }
+
+        let lang = self.language;
+        let msg = tr(lang, "insufficient_space_log")
+            .replacen("{}", &storage, 1)
+            .replacen("{}", &format_bytes(free_bytes), 1)
+            .replacen("{}", &format_bytes(required), 1);
+        self.log(&msg);
+        self.status = tr(lang, "status_insufficient_space");
+        if let Some(id) = self.current_queue_item_id.take() {
+            self.update_queue_item_status(id, QueueStatus::Failed("Not enough free space".to_string()));
+        }
+        false
     }
 
     fn log(&mut self, msg: &str) {
@@ -1221,6 +1259,10 @@ impl Ps5UploadApp {
             return;
         }
 
+        if !self.ensure_space_before_upload() {
+            return;
+        }
+
         let dest = self.get_dest_path();
         let ip = self.ip.clone();
         let tx = self.tx.clone();
@@ -1244,6 +1286,11 @@ impl Ps5UploadApp {
     }
 
     fn start_upload(&mut self) {
+        if !self.ensure_space_before_upload() {
+            self.is_uploading = false;
+            self.is_scanning = false;
+            return;
+        }
         self.upload_run_id = self.upload_run_id.wrapping_add(1);
         let run_id = self.upload_run_id;
 
@@ -1289,6 +1336,7 @@ impl Ps5UploadApp {
         let compression_setting = self.config.compression.clone();
         let optimize_upload = self.config.optimize_upload;
         let extract_archives_fast = self.config.extract_archives_fast;
+        let rar_stream_on_the_fly = self.config.rar_stream_on_the_fly;
         let lang_code = self.config.language.clone();
         let payload_supports_modern = self.payload_supports_modern_compression();
 
@@ -1315,7 +1363,8 @@ impl Ps5UploadApp {
 
                 if is_archive {
                      let ext = if is_rar { "RAR" } else if is_zip { "ZIP" } else { "7Z" };
-                     let needs_extract = extract_archives_fast || resume_mode != "none" || connections > 1;
+                     let allow_rar_stream = is_rar && rar_stream_on_the_fly && resume_mode == "none" && connections == 1;
+                     let needs_extract = !allow_rar_stream && (extract_archives_fast || resume_mode != "none" || connections > 1);
 
                      if needs_extract {
                          let lang = Language::from_code(&lang_code);
@@ -1355,6 +1404,10 @@ impl Ps5UploadApp {
                          effective_path = selected_path.display().to_string();
                          let _ = tx.send(AppMessage::Log("Archive extracted. Starting upload...".to_string()));
                     } else {
+                        if is_rar && rar_stream_on_the_fly {
+                            let lang = Language::from_code(&lang_code);
+                            let _ = tx.send(AppMessage::Log(tr(lang, "archive_rar_stream_log")));
+                        }
                         let _ = tx.send(AppMessage::UploadStart { run_id });
                         let _ = tx.send(AppMessage::Log(format!("Starting {} streaming upload...", ext)));
                          
@@ -2679,6 +2732,7 @@ Overwrite it?", self.get_dest_path()));
                 .collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ctx, |ui| {
                     let detected_label = tr(lang, "archive_detected").replace("{}", &archive_kind);
+                    let is_rar = archive_kind.eq_ignore_ascii_case("RAR");
                     ui.label(detected_label);
                     ui.add_space(6.0);
                     ui.label(tr(lang, "archive_decompress_note"));
@@ -2690,6 +2744,13 @@ Overwrite it?", self.get_dest_path()));
                         ui.label(egui::RichText::new(tr(lang, "archive_extract_fast_note")).weak());
                     } else {
                         ui.label(egui::RichText::new(tr(lang, "archive_extract_stream_note")).weak());
+                    }
+                    if is_rar {
+                        let rar_stream = ui.checkbox(&mut self.config.rar_stream_on_the_fly, tr(lang, "archive_rar_stream_toggle"));
+                        if rar_stream.changed() {
+                            self.config.save();
+                        }
+                        ui.label(egui::RichText::new(tr(lang, "archive_rar_stream_note")).weak());
                     }
                     if self.config.connections > 1 {
                         ui.add_space(4.0);
@@ -2707,6 +2768,8 @@ Overwrite it?", self.get_dest_path()));
                                 self.update_game_path(path);
                                 let msg_key = if self.config.extract_archives_fast {
                                     "archive_selected_extract"
+                                } else if is_rar && self.config.rar_stream_on_the_fly {
+                                    "archive_selected_stream_rar"
                                 } else {
                                     "archive_selected_stream"
                                 };
@@ -4153,12 +4216,21 @@ Overwrite it?", self.get_dest_path()));
                             self.config.save();
                         }
                     });
+                    ui.horizontal(|ui| {
+                        let rar_stream = ui.checkbox(&mut self.config.rar_stream_on_the_fly, tr(lang, "archive_rar_stream_toggle"));
+                        if rar_stream.changed() {
+                            self.config.save();
+                        }
+                    });
                     let extract_note = if self.config.extract_archives_fast {
                         tr(lang, "archive_extract_fast_note")
                     } else {
                         tr(lang, "archive_extract_stream_note")
                     };
                     ui.label(egui::RichText::new(extract_note).weak().small());
+                    if self.config.rar_stream_on_the_fly {
+                        ui.label(egui::RichText::new(tr(lang, "archive_rar_stream_note")).weak().small());
+                    }
                     if self.config.optimize_upload {
                         ui.label(egui::RichText::new(tr(lang, "optimize_upload_lock_notice")).weak().small());
                     }

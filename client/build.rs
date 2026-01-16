@@ -1,17 +1,20 @@
 use std::path::PathBuf;
 
 fn main() {
+    let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+    let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
+
+    write_chat_key(&manifest_dir, &out_dir);
+
     if std::env::var("CARGO_CFG_WINDOWS").is_err() {
         return;
     }
 
-    let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let logo_path = manifest_dir.join("..").join("logo.png");
     if !logo_path.exists() {
         return;
     }
 
-    let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
     let icon_path = out_dir.join("ps5upload.ico");
 
     if let Err(err) = build_ico(&logo_path, &icon_path) {
@@ -33,6 +36,22 @@ fn main() {
 </assembly>
 "#);
     let _ = res.compile();
+}
+
+fn write_chat_key(manifest_dir: &PathBuf, out_dir: &PathBuf) {
+    let key_path = Some(manifest_dir.join("ps5upload_chat.key"));
+    let key = key_path
+        .as_ref()
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .unwrap_or_default();
+    let key = key.trim();
+    let key_literal = key.replace('\\', "\\\\").replace('"', "\\\"");
+    let content = format!("pub const CHAT_SHARED_KEY_HEX: &str = \"{}\";\n", key_literal);
+    let out_file = out_dir.join("chat_key.rs");
+    let _ = std::fs::write(out_file, content);
+    if let Some(path) = key_path {
+        println!("cargo:rerun-if-changed={}", path.display());
+    }
 }
 
 fn build_ico(src: &PathBuf, dst: &PathBuf) -> Result<(), String> {

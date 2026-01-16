@@ -9,6 +9,9 @@ This project follows Semantic Versioning.
 - Chat tab with global chat, display names, and built-in key.
 - Auto-optimize upload settings and clearer compression descriptions.
 - Archive fast-extract toggle and trim behavior that ignores Name when enabled.
+- Optional RAR streaming (single-connection) alongside extract-first mode.
+- Free-space check before upload starts.
+- Queue items now remember their target storage device.
 
 ### Changed
 - Manage UI simplified to a single pane with a destination picker.
@@ -17,6 +20,7 @@ This project follows Semantic Versioning.
 ### Fixed
 - Upload cancel now starts cleanly on a new folder without getting stuck.
 - UI stays responsive during heavy uploads.
+- Prevent uploads from starting when the target drive is nearly full.
 
 ## [1.1.5] - 2026-01-14
 

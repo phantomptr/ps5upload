@@ -22,6 +22,7 @@ pub struct AppConfig {
     pub optimize_upload: bool,
     pub extract_archives_fast: bool,
     pub chat_display_name: String,
+    pub rar_stream_on_the_fly: bool,
 }
 
 impl Default for AppConfig {
@@ -45,6 +46,7 @@ impl Default for AppConfig {
             optimize_upload: false,
             extract_archives_fast: true,
             chat_display_name: String::new(),
+            rar_stream_on_the_fly: false,
         }
     }
 }
@@ -133,6 +135,9 @@ impl AppConfig {
                             "chat_display_name" => {
                                 config.chat_display_name = value;
                             }
+                            "rar_stream_on_the_fly" => {
+                                config.rar_stream_on_the_fly = matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on");
+                            }
                             _ => {}
                         }
                     }
@@ -145,7 +150,7 @@ impl AppConfig {
 
     pub fn save(&self) {
         let content = format!(
-            "address={}\nstorage={}\nconnections={}\nuse_temp={}\nauto_connect={}\ntheme={}\ncompression={}\nbandwidth_limit_mbps={}\nupdate_channel={}\ndownload_compression={}\nchmod_after_upload={}\nresume_mode={}\nlanguage={}\nauto_tune_connections={}\nauto_check_payload={}\noptimize_upload={}\nextract_archives_fast={}\nchat_display_name={}\n",
+            "address={}\nstorage={}\nconnections={}\nuse_temp={}\nauto_connect={}\ntheme={}\ncompression={}\nbandwidth_limit_mbps={}\nupdate_channel={}\ndownload_compression={}\nchmod_after_upload={}\nresume_mode={}\nlanguage={}\nauto_tune_connections={}\nauto_check_payload={}\noptimize_upload={}\nextract_archives_fast={}\nchat_display_name={}\nrar_stream_on_the_fly={}\n",
             self.address,
             self.storage,
             self.connections,
@@ -163,7 +168,8 @@ impl AppConfig {
             self.auto_check_payload,
             self.optimize_upload,
             self.extract_archives_fast,
-            self.chat_display_name
+            self.chat_display_name,
+            self.rar_stream_on_the_fly
         );
         let _ = fs::write("ps5upload.ini", content);
     }
