@@ -126,6 +126,7 @@ enum AppMessage {
     MoveCheckResult { req: MoveRequest, exists: bool },
     UpdateCheckComplete(Result<ReleaseInfo, String>),
     UpdateDownloadComplete { kind: String, result: Result<String, String> },
+    SelfUpdateReady(Result<PendingUpdate, String>),
     CheckExistsResult(bool),
     SizeCalculated(u64),
     Scanning { run_id: u64, files_found: usize, total_size: u64 },
@@ -153,6 +154,14 @@ struct ReleaseInfo {
     html_url: String,
     assets: Vec<ReleaseAsset>,
     prerelease: bool,
+}
+
+#[derive(Clone, Debug)]
+struct PendingUpdate {
+    target_path: std::path::PathBuf,
+    replacement_path: std::path::PathBuf,
+    restart_path: std::path::PathBuf,
+    is_dir: bool,
 }
 
 #[derive(Clone)]
@@ -240,6 +249,7 @@ struct Ps5UploadApp {
     update_available: bool,
     update_check_running: bool,
     update_download_status: String,
+    pending_update: Option<PendingUpdate>,
     
     client_logs: String,
     payload_logs: String,
@@ -268,6 +278,7 @@ struct Ps5UploadApp {
     pending_archive_path: Option<String>,
     pending_archive_kind: Option<String>,
     pending_archive_trim: bool,
+    show_update_restart_dialog: bool,
     
     // Progress
     progress_sent: u64,
@@ -292,7 +303,6 @@ struct Ps5UploadApp {
     payload_path: String,
     payload_status: String,
     payload_version: Option<String>,
-    auto_payload_attempted: bool,
 
     // UI Toggles
     log_tab: usize, // 0 = Client, 1 = Payload, 2 = History
@@ -305,6 +315,8 @@ struct Ps5UploadApp {
     chat_input: String,
     chat_status: String,
     chat_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
+    chat_sent_count: u64,
+    chat_received_count: u64,
 
     // Concurrency
     rx: Receiver<AppMessage>,
@@ -341,6 +353,7 @@ struct Ps5UploadApp {
 
     // Auto-connect
     last_auto_connect_attempt: Option<std::time::Instant>,
+    last_payload_check: Option<std::time::Instant>,
 }
 
 impl Ps5UploadApp {
@@ -402,6 +415,7 @@ impl Ps5UploadApp {
             update_available: false,
             update_check_running: false,
             update_download_status: String::new(),
+            pending_update: None,
             client_logs: String::new(),
             payload_logs: String::new(),
             status: "Ready".to_string(),
@@ -425,6 +439,7 @@ impl Ps5UploadApp {
             pending_archive_path: None,
             pending_archive_kind: None,
             pending_archive_trim: true,
+            show_update_restart_dialog: false,
             progress_sent: 0,
             progress_total: 0,
             progress_speed_bps: 0.0,
@@ -441,7 +456,6 @@ impl Ps5UploadApp {
             payload_path: String::new(),
             payload_status: "Unknown (not checked)".to_string(),
             payload_version: None,
-            auto_payload_attempted: false,
             log_tab: 0,
             theme_dark,
             language,
@@ -450,6 +464,8 @@ impl Ps5UploadApp {
             chat_input: String::new(),
             chat_status: tr(language, "chat_connecting"),
             chat_tx: None,
+            chat_sent_count: 0,
+            chat_received_count: 0,
             rx,
             tx,
             rt: Arc::new(rt),
@@ -474,6 +490,7 @@ impl Ps5UploadApp {
             queue_data,
             current_queue_item_id: None,
             last_auto_connect_attempt: None,
+            last_payload_check: None,
         };
 
         app.ensure_chat_display_name();
@@ -994,6 +1011,57 @@ impl Ps5UploadApp {
         });
     }
 
+    fn start_self_update(&mut self) {
+        let Some(release) = self.update_info.clone() else {
+            self.update_download_status = tr(self.language, "update_no_release");
+            return;
+        };
+        let asset_name = match current_asset_name() {
+            Ok(name) => name,
+            Err(e) => {
+                self.update_download_status = format!("{} {}", tr(self.language, "update_asset_missing"), e);
+                return;
+            }
+        };
+        let asset = release.assets.iter().find(|a| a.name == asset_name);
+        let Some(asset) = asset else {
+            self.update_download_status = tr(self.language, "update_asset_missing");
+            return;
+        };
+
+        self.update_download_status = tr(self.language, "update_downloading");
+        self.update_check_running = true;
+        let tx = self.tx.clone();
+        let rt = self.rt.clone();
+        let url = asset.browser_download_url.clone();
+
+        thread::spawn(move || {
+            let result = rt.block_on(async move {
+                let temp_root = std::env::temp_dir().join(format!("ps5upload_update_{}", chrono::Utc::now().timestamp()));
+                std::fs::create_dir_all(&temp_root)?;
+                let zip_path = temp_root.join("update.zip");
+                download_asset(&url, zip_path.to_str().ok_or_else(|| anyhow::anyhow!("Invalid update path"))?).await?;
+                let extract_dir = temp_root.join("extracted");
+                extract_zip(&zip_path, &extract_dir)?;
+                let pending = build_pending_update(&extract_dir)?;
+                Ok::<PendingUpdate, anyhow::Error>(pending)
+            });
+            let _ = tx.send(AppMessage::SelfUpdateReady(result.map_err(|e| e.to_string())));
+        });
+    }
+
+    fn apply_self_update(&mut self) {
+        let Some(pending) = self.pending_update.clone() else {
+            return;
+        };
+        if let Err(err) = spawn_update_helper(&pending) {
+            self.update_download_status = format!("{} {}", tr(self.language, "update_apply_failed"), err);
+            return;
+        }
+        self.update_download_status = tr(self.language, "update_restarting");
+        std::process::exit(0);
+    }
+
     fn start_chat(&mut self) {
         if self.chat_tx.is_some() {
             return;
@@ -1031,6 +1099,8 @@ impl Ps5UploadApp {
         });
         if let Some(tx) = &self.chat_tx {
             let _ = tx.send(payload);
+            self.chat_sent_count = self.chat_sent_count.saturating_add(1);
+            self.log("Chat: message sent.");
         } else {
             self.chat_status = tr(self.language, "chat_disabled_missing_key");
         }
@@ -2177,6 +2247,7 @@ impl Ps5UploadApp {
         let ip = self.ip.clone();
         let tx = self.tx.clone();
         let rt = self.rt.clone();
+        self.last_payload_check = Some(std::time::Instant::now());
         thread::spawn(move || {
             let res = rt.block_on(async { get_payload_version(&ip, TRANSFER_PORT).await });
             let _ = tx.send(AppMessage::PayloadVersion(res.map_err(|e| e.to_string())));
@@ -2246,6 +2317,16 @@ impl eframe::App for Ps5UploadApp {
 
         let connected = self.is_connected || self.is_uploading;
         let lang = self.language;
+
+        if self.config.auto_check_payload && connected && !self.is_sending_payload {
+            let now = std::time::Instant::now();
+            let should_check = self.last_payload_check
+                .map(|last| now.duration_since(last).as_secs() >= 30)
+                .unwrap_or(true);
+            if should_check {
+                self.check_payload_version();
+            }
+        }
         if self.logo_texture.is_none() {
             if let Some(image) = load_logo_image() {
                 self.logo_texture = Some(ctx.load_texture(
@@ -2262,7 +2343,11 @@ impl eframe::App for Ps5UploadApp {
                 AppMessage::PayloadLog(s) => self.payload_log(&s),
                 AppMessage::Status(s) => self.status = s,
                 AppMessage::StatusPhase(phase) => self.progress_phase = phase,
-                AppMessage::ChatMessage(msg) => self.push_chat_message(msg),
+                AppMessage::ChatMessage(msg) => {
+                    self.chat_received_count = self.chat_received_count.saturating_add(1);
+                    self.log("Chat: message received.");
+                    self.push_chat_message(msg);
+                }
                 AppMessage::ChatStatus(status) => self.chat_status = self.format_chat_status(status),
                 AppMessage::StorageList(res) => {
                     self.is_connecting = false;
@@ -2282,7 +2367,6 @@ impl eframe::App for Ps5UploadApp {
                             self.is_connected = true;
                             self.log("Connected to PS5");
                             self.payload_log("Connected and Storage scanned.");
-                            self.auto_payload_attempted = false;
                             self.check_payload_version();
                             if self.main_tab == 1 {
                                 self.manage_refresh(ManageSide::Left);
@@ -2469,6 +2553,18 @@ impl eframe::App for Ps5UploadApp {
                         }
                     }
                 }
+                AppMessage::SelfUpdateReady(result) => {
+                    self.update_check_running = false;
+                    match result {
+                        Ok(pending) => {
+                            self.pending_update = Some(pending);
+                            self.update_download_status = tr(lang, "update_ready");
+                        }
+                        Err(e) => {
+                            self.update_download_status = format!("{} {}", tr(lang, "update_failed"), e);
+                        }
+                    }
+                }
                 AppMessage::PayloadSendComplete(res) => {
                     self.is_sending_payload = false;
                     match res {
@@ -2491,10 +2587,8 @@ impl eframe::App for Ps5UploadApp {
                             let current_version = normalize_version(app_version_trimmed());
                             let running_version = normalize_version(&version);
                             if self.config.auto_check_payload
-                                && !self.auto_payload_attempted
                                 && running_version != current_version
                             {
-                                self.auto_payload_attempted = true;
                                 self.payload_log(&format!(
                                     "Payload version mismatch (v{}). Auto-loading current payload...",
                                     version
@@ -2505,8 +2599,7 @@ impl eframe::App for Ps5UploadApp {
                         Err(e) => {
                             self.payload_status = format!("Not detected ({})", e);
                             self.payload_version = None;
-                            if self.config.auto_check_payload && !self.auto_payload_attempted {
-                                self.auto_payload_attempted = true;
+                            if self.config.auto_check_payload {
                                 self.payload_log("Payload not detected. Auto-loading current payload...");
                                 self.start_payload_download_and_send(PayloadFetch::Current);
                             }
@@ -2918,6 +3011,26 @@ Overwrite it?", self.get_dest_path()));
                 });
         }
 
+        if self.show_update_restart_dialog {
+            egui::Window::new(tr(lang, "update_restart_title"))
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.label(tr(lang, "update_restart_note"));
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        if ui.button(tr(lang, "update_restart_now")).clicked() {
+                            self.show_update_restart_dialog = false;
+                            self.apply_self_update();
+                        }
+                        if ui.button(tr(lang, "update_restart_later")).clicked() {
+                            self.show_update_restart_dialog = false;
+                        }
+                    });
+                });
+        }
+
         if self.show_download_overwrite_dialog {
             let request = self.pending_download_request.clone();
             let dest_label = match &request {
@@ -3297,10 +3410,13 @@ Overwrite it?", self.get_dest_path()));
             let auto_payload = ui.checkbox(&mut self.config.auto_check_payload, tr(lang, "auto_check_payload"));
             if auto_payload.changed() {
                 self.config.save();
-                self.auto_payload_attempted = false;
                 if self.config.auto_check_payload {
+                    self.last_payload_check = None;
                     self.check_payload_version();
                 }
+            }
+            if self.config.auto_check_payload {
+                ui.label(egui::RichText::new(tr(lang, "auto_payload_interval")).weak().small());
             }
             let auto_connect = ui.checkbox(&mut self.config.auto_connect, tr(lang, "auto_reconnect"));
             if auto_connect.changed() { self.config.save(); }
@@ -3312,7 +3428,7 @@ Overwrite it?", self.get_dest_path()));
                     self.storage_locations.clear();
                     self.selected_storage = None;
                     self.is_connected = false;
-                    self.auto_payload_attempted = false;
+                    self.last_payload_check = None;
                 }
             } else {
                 ui.horizontal(|ui| {
@@ -3389,6 +3505,15 @@ Overwrite it?", self.get_dest_path()));
                     Ok(asset_name) => {
                         if ui.button(tr(lang, "download_client")).clicked() {
                             self.start_download_asset("client", &asset_name, &asset_name);
+                        }
+                        if self.update_available {
+                            if self.pending_update.is_some() {
+                                if ui.button(tr(lang, "update_restart")).clicked() {
+                                    self.show_update_restart_dialog = true;
+                                }
+                            } else if ui.button(tr(lang, "update_now")).clicked() {
+                                self.start_self_update();
+                            }
                         }
                     }
                     Err(e) => {
@@ -3951,6 +4076,10 @@ Overwrite it?", self.get_dest_path()));
                 ui.add_space(6.0);
                 ui.label(format!("{} {}", tr(lang, "chat_status"), self.chat_status));
                 ui.add_space(6.0);
+                let count_label = tr(lang, "chat_counts")
+                    .replacen("{}", &self.chat_sent_count.to_string(), 1)
+                    .replacen("{}", &self.chat_received_count.to_string(), 1);
+                ui.label(egui::RichText::new(count_label).weak().small());
                 ui.horizontal(|ui| {
                     ui.label(tr(lang, "chat_display_name"));
                     let response = ui.add(
@@ -4456,6 +4585,148 @@ async fn download_asset(url: &str, dest_path: &str) -> anyhow::Result<()> {
     let bytes = response.bytes().await?;
     std::fs::write(dest_path, bytes)?;
     Ok(())
+}
+
+fn extract_zip(zip_path: &std::path::Path, dest_dir: &std::path::Path) -> anyhow::Result<()> {
+    let file = std::fs::File::open(zip_path)?;
+    let mut archive = zip::ZipArchive::new(file)?;
+    std::fs::create_dir_all(dest_dir)?;
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i)?;
+        let outpath = dest_dir.join(file.mangled_name());
+        if file.is_dir() {
+            std::fs::create_dir_all(&outpath)?;
+            continue;
+        }
+        if let Some(parent) = outpath.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut outfile = std::fs::File::create(&outpath)?;
+        std::io::copy(&mut file, &mut outfile)?;
+    }
+    Ok(())
+}
+
+fn find_app_bundle(root: &std::path::Path) -> Option<std::path::PathBuf> {
+    for entry in walkdir::WalkDir::new(root).max_depth(3).into_iter().filter_map(|e| e.ok()) {
+        if entry.file_type().is_dir() {
+            if entry.path().extension().and_then(|e| e.to_str()).map(|e| e.eq_ignore_ascii_case("app")).unwrap_or(false) {
+                return Some(entry.path().to_path_buf());
+            }
+        }
+    }
+    None
+}
+
+fn find_file_by_name(root: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+    for entry in walkdir::WalkDir::new(root).into_iter().filter_map(|e| e.ok()) {
+        if entry.file_type().is_file() {
+            if entry.file_name() == name {
+                return Some(entry.path().to_path_buf());
+            }
+        }
+    }
+    None
+}
+
+fn build_pending_update(extract_dir: &std::path::Path) -> anyhow::Result<PendingUpdate> {
+    let current_exe = std::env::current_exe()?;
+    let mut bundle_root: Option<std::path::PathBuf> = None;
+    let mut cursor = current_exe.as_path();
+    while let Some(parent) = cursor.parent() {
+        if cursor.extension().and_then(|e| e.to_str()).map(|e| e.eq_ignore_ascii_case("app")).unwrap_or(false) {
+            bundle_root = Some(cursor.to_path_buf());
+            break;
+        }
+        cursor = parent;
+    }
+
+    if let Some(bundle_root) = bundle_root {
+        let replacement = find_app_bundle(extract_dir)
+            .ok_or_else(|| anyhow::anyhow!("Update bundle not found"))?;
+        let restart_path = current_exe.clone();
+        return Ok(PendingUpdate {
+            target_path: bundle_root,
+            replacement_path: replacement,
+            restart_path,
+            is_dir: true,
+        });
+    }
+
+    let exe_name = current_exe.file_name().and_then(|s| s.to_str()).ok_or_else(|| anyhow::anyhow!("Invalid executable name"))?;
+    let replacement = find_file_by_name(extract_dir, exe_name)
+        .ok_or_else(|| anyhow::anyhow!("Update binary not found"))?;
+    Ok(PendingUpdate {
+        target_path: current_exe.clone(),
+        replacement_path: replacement,
+        restart_path: current_exe,
+        is_dir: false,
+    })
+}
+
+fn spawn_update_helper(pending: &PendingUpdate) -> anyhow::Result<()> {
+    let helper_dir = std::env::temp_dir();
+    let pid = std::process::id();
+    let target = pending.target_path.to_string_lossy().to_string();
+    let replacement = pending.replacement_path.to_string_lossy().to_string();
+    let restart = pending.restart_path.to_string_lossy().to_string();
+
+    #[cfg(windows)]
+    {
+        let script_path = helper_dir.join("ps5upload_update.cmd");
+        let script = format!(
+            "@echo off\r\n:wait\r\ntasklist /FI \"PID eq {}\" | find \"{}\" >nul\r\nif not errorlevel 1 (timeout /t 1 >nul & goto wait)\r\n",
+            pid, pid
+        );
+        let script = if pending.is_dir {
+            format!(
+                "{}rmdir /S /Q \"{}\"\r\nmove /Y \"{}\" \"{}\"\r\nstart \"\" \"{}\"\r\n",
+                script, target, replacement, target, restart
+            )
+        } else {
+            format!(
+                "{}del /F /Q \"{}\"\r\nmove /Y \"{}\" \"{}\"\r\nstart \"\" \"{}\"\r\n",
+                script, target, replacement, target, restart
+            )
+        };
+        std::fs::write(&script_path, script)?;
+        std::process::Command::new("cmd")
+            .args(["/C", script_path.to_string_lossy().as_ref()])
+            .spawn()?;
+        return Ok(());
+    }
+
+    #[cfg(not(windows))]
+    {
+        let script_path = helper_dir.join("ps5upload_update.sh");
+        let script = format!(
+            "#!/bin/sh\nwhile kill -0 {} 2>/dev/null; do sleep 0.2; done\n",
+            pid
+        );
+        let script = if pending.is_dir {
+            format!(
+                "{}rm -rf \"{}\"\nmv \"{}\" \"{}\"\n\"{}\" &\n",
+                script, target, replacement, target, restart
+            )
+        } else {
+            format!(
+                "{}rm -f \"{}\"\nmv \"{}\" \"{}\"\nchmod +x \"{}\"\n\"{}\" &\n",
+                script, target, replacement, target, restart, restart
+            )
+        };
+        std::fs::write(&script_path, script)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&script_path)?.permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&script_path, perms)?;
+        }
+        std::process::Command::new("sh")
+            .arg(script_path)
+            .spawn()?;
+        return Ok(());
+    }
 }
 
 fn normalize_version(version: &str) -> String {

@@ -12,6 +12,7 @@ This project follows Semantic Versioning.
 - Optional RAR streaming (single-connection) alongside extract-first mode.
 - Free-space check before upload starts.
 - Queue items now remember their target storage device.
+- In-app self-update flow with restart prompt.
 
 ### Changed
 - Manage UI simplified to a single pane with a destination picker.
