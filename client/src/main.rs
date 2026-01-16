@@ -28,6 +28,8 @@ use std::io::{Read, Write};
 use tokio::runtime::Runtime;
 use serde::Deserialize;
 use lz4_flex::block::compress_prepend_size;
+use chat::ChatMessage;
+use rand::Rng;
 
 mod protocol;
 mod archive;
@@ -37,6 +39,9 @@ mod profiles;
 mod history;
 mod queue;
 mod i18n;
+mod chat;
+
+const CHAT_MAX_MESSAGES: usize = 500;
 
 use protocol::{StorageLocation, DirEntry, DownloadCompression, list_storage, list_dir, list_dir_recursive, check_dir, upload_v2_init, delete_path, move_path, copy_path, chmod_777, create_path, download_file_with_progress, download_dir_with_progress, get_payload_version, hash_file};
 use archive::get_size;
@@ -97,10 +102,18 @@ enum ManageDestAction {
     Copy,
 }
 
+enum ChatStatusEvent {
+    Connected,
+    Disconnected,
+}
+
 enum AppMessage {
     Log(String),
     PayloadLog(String),
     Status(String),
+    StatusPhase(String),
+    ChatMessage(ChatMessage),
+    ChatStatus(ChatStatusEvent),
     PayloadSendComplete(Result<u64, String>),
     PayloadVersion(Result<String, String>),
     StorageList(Result<Vec<StorageLocation>, String>),
@@ -115,13 +128,15 @@ enum AppMessage {
     UpdateDownloadComplete { kind: String, result: Result<String, String> },
     CheckExistsResult(bool),
     SizeCalculated(u64),
-    Scanning { files_found: usize, total_size: u64 },
-    UploadStart,
-    Progress { sent: u64, total: u64, files_sent: i32, elapsed_secs: f64, current_file: Option<String> },
-    UploadComplete(Result<(i32, u64), String>),
+    Scanning { run_id: u64, files_found: usize, total_size: u64 },
+    UploadStart { run_id: u64 },
+    Progress { run_id: u64, sent: u64, total: u64, files_sent: i32, elapsed_secs: f64, current_file: Option<String> },
+    UploadComplete { run_id: u64, result: Result<(i32, u64), String> },
 }
 
 const APP_VERSION: &str = include_str!("../../VERSION");
+#[allow(dead_code)]
+const CHAT_SHARED_KEY_HEX: &str = include_str!("../../ps5upload_chat.key");
 
 fn app_version_trimmed() -> &'static str {
     APP_VERSION.trim()
@@ -178,7 +193,7 @@ struct UploadOptimization {
 struct Ps5UploadApp {
     // UI State
     ip: String,
-    main_tab: usize, // 0 = Transfer, 1 = Manage
+    main_tab: usize, // 0 = Transfer, 1 = Manage, 2 = Chat
     
     // Source
     game_path: String,
@@ -263,6 +278,7 @@ struct Ps5UploadApp {
     progress_files: i32,
     progress_current_file: String,
     progress_phase: String,
+    upload_run_id: u64,
 
     // Scanning state
     is_scanning: bool,
@@ -284,6 +300,12 @@ struct Ps5UploadApp {
     theme_dark: bool,
     language: Language,
     logo_texture: Option<egui::TextureHandle>,
+
+    // Chat
+    chat_messages: Vec<ChatMessage>,
+    chat_input: String,
+    chat_status: String,
+    chat_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
 
     // Concurrency
     rx: Receiver<AppMessage>,
@@ -411,6 +433,7 @@ impl Ps5UploadApp {
             progress_files: 0,
             progress_current_file: String::new(),
             progress_phase: String::new(),
+            upload_run_id: 0,
             is_scanning: false,
             scanning_files_found: 0,
             scanning_total_size: 0,
@@ -424,6 +447,10 @@ impl Ps5UploadApp {
             theme_dark,
             language,
             logo_texture: None,
+            chat_messages: Vec::new(),
+            chat_input: String::new(),
+            chat_status: tr(language, "chat_connecting"),
+            chat_tx: None,
             rx,
             tx,
             rt: Arc::new(rt),
@@ -450,12 +477,15 @@ impl Ps5UploadApp {
             last_auto_connect_attempt: None,
         };
 
+        app.ensure_chat_display_name();
+
         if let Some(default_name) = app.profiles_data.default_profile.clone() {
             if let Some(profile) = app.profiles_data.profiles.iter().find(|p| p.name == default_name).cloned() {
                 app.apply_profile(&profile);
             }
         }
 
+        app.start_chat();
         app.start_update_check();
         app
     }
@@ -694,6 +724,14 @@ impl Ps5UploadApp {
         }
     }
 
+    fn push_chat_message(&mut self, msg: ChatMessage) {
+        self.chat_messages.push(msg);
+        if self.chat_messages.len() > CHAT_MAX_MESSAGES {
+            let remove_count = self.chat_messages.len() - CHAT_MAX_MESSAGES;
+            self.chat_messages.drain(0..remove_count);
+        }
+    }
+
     fn join_remote_path(base: &str, name: &str) -> String {
         if base.ends_with('/') {
             format!("{}{}", base, name)
@@ -916,6 +954,67 @@ impl Ps5UploadApp {
             let res = rt.block_on(async { fetch_latest_release(include_prerelease).await });
             let _ = tx.send(AppMessage::UpdateCheckComplete(res.map_err(|e| e.to_string())));
         });
+    }
+
+    fn start_chat(&mut self) {
+        if self.chat_tx.is_some() {
+            return;
+        }
+        let key = CHAT_SHARED_KEY_HEX.trim();
+        if key.is_empty() {
+            self.chat_status = tr(self.language, "chat_disabled_missing_key");
+            return;
+        }
+        self.chat_status = tr(self.language, "chat_connecting");
+        let tx = self.tx.clone();
+        let handle = self.rt.handle().clone();
+        let sender = chat::start_chat_worker(tx, key.to_string(), handle);
+        self.chat_tx = Some(sender);
+    }
+
+    fn send_chat_message(&mut self) {
+        self.ensure_chat_display_name();
+        let text = self.chat_input.trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+        let time = chrono::Local::now().format("%H:%M").to_string();
+        let sender_label = self.config.chat_display_name.clone();
+        let payload = serde_json::json!({
+            "name": sender_label,
+            "text": text,
+        })
+        .to_string();
+        self.push_chat_message(ChatMessage {
+            time,
+            sender: self.config.chat_display_name.clone(),
+            text: text.clone(),
+            local: true,
+        });
+        if let Some(tx) = &self.chat_tx {
+            let _ = tx.send(payload);
+        } else {
+            self.chat_status = tr(self.language, "chat_disabled_missing_key");
+        }
+        self.chat_input.clear();
+    }
+
+    fn format_chat_status(&self, status: ChatStatusEvent) -> String {
+        let lang = self.language;
+        match status {
+            ChatStatusEvent::Connected => tr(lang, "chat_connected"),
+            ChatStatusEvent::Disconnected => tr(lang, "chat_disconnected"),
+        }
+    }
+
+    fn ensure_chat_display_name(&mut self) {
+        if !self.config.chat_display_name.trim().is_empty() {
+            return;
+        }
+        let mut rng = rand::thread_rng();
+        let name = format!("Player-{}", rng.gen_range(1000..=9999));
+        self.config.chat_display_name = name;
+        self.config.save();
     }
 
     fn start_download_asset(&mut self, kind: &str, asset_name: &str, default_filename: &str) {
@@ -1145,6 +1244,9 @@ impl Ps5UploadApp {
     }
 
     fn start_upload(&mut self) {
+        self.upload_run_id = self.upload_run_id.wrapping_add(1);
+        let run_id = self.upload_run_id;
+
         // Reset state
         self.is_uploading = true;
         self.is_scanning = true;
@@ -1166,8 +1268,8 @@ impl Ps5UploadApp {
         self.upload_source_path = self.game_path.clone();
         self.upload_dest_path = self.get_dest_path();
 
-        self.upload_cancellation_token.store(false, Ordering::Relaxed);
-        let cancel_token = self.upload_cancellation_token.clone();
+        let cancel_token = Arc::new(AtomicBool::new(false));
+        self.upload_cancellation_token = cancel_token.clone();
 
         let ip = self.ip.clone();
         let game_path = self.game_path.clone();
@@ -1218,6 +1320,7 @@ impl Ps5UploadApp {
                      if needs_extract {
                          let lang = Language::from_code(&lang_code);
                          let _ = tx.send(AppMessage::Status(tr(lang, "status_extracting_archive")));
+                         let _ = tx.send(AppMessage::StatusPhase("Extracting".to_string()));
                          let lang = Language::from_code(&lang_code);
                          if extract_archives_fast {
                              let msg = tr(lang, "archive_extract_fast_log").replace("{}", ext);
@@ -1251,9 +1354,9 @@ impl Ps5UploadApp {
                          temp_dir_guard = Some(TempDirGuard::new(temp_dir.clone()));
                          effective_path = selected_path.display().to_string();
                          let _ = tx.send(AppMessage::Log("Archive extracted. Starting upload...".to_string()));
-                     } else {
-                         let _ = tx.send(AppMessage::UploadStart);
-                         let _ = tx.send(AppMessage::Log(format!("Starting {} streaming upload...", ext)));
+                    } else {
+                        let _ = tx.send(AppMessage::UploadStart { run_id });
+                        let _ = tx.send(AppMessage::Log(format!("Starting {} streaming upload...", ext)));
                          
                          let (_count, size) = if is_rar {
                              scan_rar_archive(&game_path)?
@@ -1277,7 +1380,7 @@ impl Ps5UploadApp {
                              send_rar_archive(game_path, std_stream.try_clone()?, cancel_token.clone(), move |sent, files_sent, current_file| {
                                 if sent == last_sent { return; }
                                 let elapsed = start.elapsed().as_secs_f64();
-                                let _ = tx.send(AppMessage::Progress { sent, total: size, files_sent, elapsed_secs: elapsed, current_file });
+                                let _ = tx.send(AppMessage::Progress { run_id, sent, total: size, files_sent, elapsed_secs: elapsed, current_file });
                                 last_progress_ms.store(start.elapsed().as_millis() as u64, Ordering::Relaxed);
                                 last_sent = sent;
                              }, move |msg| { let _ = tx_log.send(AppMessage::Log(msg)); }, rate_limit)?;
@@ -1285,7 +1388,7 @@ impl Ps5UploadApp {
                              send_zip_archive(game_path, std_stream.try_clone()?, cancel_token.clone(), move |sent, files_sent, current_file| {
                                 if sent == last_sent { return; }
                                 let elapsed = start.elapsed().as_secs_f64();
-                                let _ = tx.send(AppMessage::Progress { sent, total: size, files_sent, elapsed_secs: elapsed, current_file });
+                                let _ = tx.send(AppMessage::Progress { run_id, sent, total: size, files_sent, elapsed_secs: elapsed, current_file });
                                 last_progress_ms.store(start.elapsed().as_millis() as u64, Ordering::Relaxed);
                                 last_sent = sent;
                              }, move |msg| { let _ = tx_log.send(AppMessage::Log(msg)); }, rate_limit)?;
@@ -1293,7 +1396,7 @@ impl Ps5UploadApp {
                              send_7z_archive(game_path, std_stream.try_clone()?, cancel_token.clone(), move |sent, files_sent, current_file| {
                                 if sent == last_sent { return; }
                                 let elapsed = start.elapsed().as_secs_f64();
-                                let _ = tx.send(AppMessage::Progress { sent, total: size, files_sent, elapsed_secs: elapsed, current_file });
+                                let _ = tx.send(AppMessage::Progress { run_id, sent, total: size, files_sent, elapsed_secs: elapsed, current_file });
                                 last_progress_ms.store(start.elapsed().as_millis() as u64, Ordering::Relaxed);
                                 last_sent = sent;
                              }, move |msg| { let _ = tx_log.send(AppMessage::Log(msg)); }, rate_limit)?;
@@ -1344,7 +1447,7 @@ impl Ps5UploadApp {
                 let can_stream = resume_mode == "none";
 
                 if can_stream {
-                     let _ = tx.send(AppMessage::UploadStart);
+                     let _ = tx.send(AppMessage::UploadStart { run_id });
                      let _ = tx.send(AppMessage::Log(format!("Starting streaming upload ({} connections)...", connection_count_cfg)));
                      
                      let tx_scan = tx.clone();
@@ -1355,7 +1458,7 @@ impl Ps5UploadApp {
                         cancel_token.clone(),
                         move |files_found, total_size| {
                             shared_total_scan.store(total_size, Ordering::Relaxed);
-                            let _ = tx_scan.send(AppMessage::Scanning { files_found, total_size });
+                            let _ = tx_scan.send(AppMessage::Scanning { run_id, files_found, total_size });
                         }
                      );
 
@@ -1414,6 +1517,7 @@ impl Ps5UploadApp {
                                     let current_total = shared_total.load(Ordering::Relaxed);
                                     let display_total = current_total.max(sent);
                                     let _ = tx.send(AppMessage::Progress {
+                                        run_id,
                                         sent,
                                         total: display_total,
                                         files_sent,
@@ -1514,6 +1618,7 @@ impl Ps5UploadApp {
                                          let display_total = current_total_scan.max(new_total);
                                          
                                          let _ = tx.send(AppMessage::Progress {
+                                             run_id,
                                              sent: new_total,
                                              total: display_total,
                                              files_sent: new_files as i32,
@@ -1556,7 +1661,7 @@ impl Ps5UploadApp {
                     &effective_path,
                     cancel_scan,
                     move |files_found, total_size| {
-                        let _ = tx_scan.send(AppMessage::Scanning { files_found, total_size });
+                        let _ = tx_scan.send(AppMessage::Scanning { run_id, files_found, total_size });
                     }
                 );
 
@@ -1680,7 +1785,7 @@ impl Ps5UploadApp {
                     connection_count,
                     if connection_count == 1 { "" } else { "s" }
                 )));
-                let _ = tx.send(AppMessage::UploadStart);
+                let _ = tx.send(AppMessage::UploadStart { run_id });
 
                 let start = std::time::Instant::now();
                 let last_progress_ms = Arc::new(std::sync::atomic::AtomicU64::new(0));
@@ -1736,6 +1841,7 @@ impl Ps5UploadApp {
                                 if sent == last_sent { return; }
                                 let elapsed = start.elapsed().as_secs_f64();
                                 let _ = tx.send(AppMessage::Progress {
+                                    run_id,
                                     sent,
                                     total: total_size,
                                     files_sent,
@@ -1848,6 +1954,7 @@ impl Ps5UploadApp {
                                 let new_files = total_files.fetch_add(delta_files as usize, Ordering::Relaxed) + delta_files as usize;
                                 let elapsed = start.elapsed().as_secs_f64();
                                 let _ = tx.send(AppMessage::Progress {
+                                    run_id,
                                     sent: new_total,
                                     total: total_size,
                                     files_sent: new_files as i32,
@@ -1900,7 +2007,7 @@ impl Ps5UploadApp {
                 }
             });
             
-            let _ = tx.send(AppMessage::UploadComplete(res.map_err(|e| e.to_string())));
+            let _ = tx.send(AppMessage::UploadComplete { run_id, result: res.map_err(|e| e.to_string()) });
         });
     }
 
@@ -2081,7 +2188,7 @@ fn send_payload_file(ip: &str, path: &str, tx: &Sender<AppMessage>) -> Result<u6
 impl eframe::App for Ps5UploadApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if self.is_uploading || self.is_downloading || self.is_connecting || self.manage_busy || self.is_sending_payload || self.calculating_size || self.update_check_running {
-            ctx.request_repaint();
+            ctx.request_repaint_after(std::time::Duration::from_millis(33));
         }
 
         let connected = self.is_connected || self.is_uploading;
@@ -2101,6 +2208,9 @@ impl eframe::App for Ps5UploadApp {
                 AppMessage::Log(s) => self.log(&s),
                 AppMessage::PayloadLog(s) => self.payload_log(&s),
                 AppMessage::Status(s) => self.status = s,
+                AppMessage::StatusPhase(phase) => self.progress_phase = phase,
+                AppMessage::ChatMessage(msg) => self.push_chat_message(msg),
+                AppMessage::ChatStatus(status) => self.chat_status = self.format_chat_status(status),
                 AppMessage::StorageList(res) => {
                     self.is_connecting = false;
                     match res {
@@ -2373,7 +2483,10 @@ impl eframe::App for Ps5UploadApp {
                     self.calculating_size = false;
                     self.calculated_size = Some(size);
                 }
-                AppMessage::Scanning { files_found, total_size } => {
+                AppMessage::Scanning { run_id, files_found, total_size } => {
+                    if run_id != self.upload_run_id {
+                        continue;
+                    }
                     self.scanning_files_found = files_found;
                     self.scanning_total_size = total_size;
                     if self.is_scanning {
@@ -2389,12 +2502,18 @@ impl eframe::App for Ps5UploadApp {
                         self.progress_total = total_size;
                     }
                 }
-                AppMessage::UploadStart => {
+                AppMessage::UploadStart { run_id } => {
+                    if run_id != self.upload_run_id {
+                        continue;
+                    }
                     self.is_scanning = false;
                     self.status = tr(lang, "status_uploading");
                     self.progress_phase = "Sending".to_string();
                 }
-                AppMessage::Progress { sent, total, files_sent, elapsed_secs, current_file } => {
+                AppMessage::Progress { run_id, sent, total, files_sent, elapsed_secs, current_file } => {
+                    if run_id != self.upload_run_id {
+                        continue;
+                    }
                     self.progress_sent = sent;
                     self.progress_total = total;
                     self.progress_files = files_sent;
@@ -2412,7 +2531,10 @@ impl eframe::App for Ps5UploadApp {
                         self.progress_current_file = name;
                     }
                 }
-                AppMessage::UploadComplete(res) => {
+                AppMessage::UploadComplete { run_id, result: res } => {
+                    if run_id != self.upload_run_id {
+                        continue;
+                    }
                     self.is_uploading = false;
                     self.is_scanning = false;
                     self.progress_phase.clear();
@@ -3353,10 +3475,11 @@ Overwrite it?", self.get_dest_path()));
                 ui.horizontal(|ui| {
                     let transfer_tab = ui.selectable_value(&mut self.main_tab, 0, tr(lang, "transfer"));
                     let manage_tab = ui.selectable_value(&mut self.main_tab, 1, tr(lang, "manage"));
+                    let chat_tab = ui.selectable_value(&mut self.main_tab, 2, tr(lang, "chat"));
                     if manage_tab.clicked() && connected {
                         self.manage_refresh(ManageSide::Left);
                     }
-                    if transfer_tab.clicked() {
+                    if transfer_tab.clicked() || chat_tab.clicked() {
                         self.manage_left_selected = None;
                         self.manage_right_selected = None;
                     }
@@ -3760,6 +3883,66 @@ Overwrite it?", self.get_dest_path()));
                         }
                     }
                 });
+            } else if self.main_tab == 2 {
+                ui.heading(tr(lang, "chat"));
+                ui.add_space(6.0);
+                ui.label(format!("{} {}", tr(lang, "chat_status"), self.chat_status));
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.label(tr(lang, "chat_display_name"));
+                    let response = ui.add(
+                        egui::TextEdit::singleline(&mut self.config.chat_display_name)
+                            .desired_width(220.0),
+                    );
+                    if response.changed() {
+                        self.config.save();
+                    }
+                });
+                ui.label(egui::RichText::new(tr(lang, "chat_display_name_note")).weak().small());
+
+                let remaining_height = ui.available_height().max(200.0);
+                ui.allocate_ui(egui::vec2(ui.available_width(), remaining_height), |ui| {
+                    ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+                        ui.horizontal(|ui| {
+                            let mut send_now = false;
+                            let response = ui.add(
+                                egui::TextEdit::singleline(&mut self.chat_input)
+                                    .hint_text(tr(lang, "chat_input_placeholder"))
+                                    .desired_width(f32::INFINITY),
+                            );
+                            if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                                send_now = true;
+                            }
+                            let can_send = self.chat_tx.is_some() && !self.chat_input.trim().is_empty();
+                            if ui.add_enabled(can_send, egui::Button::new(tr(lang, "chat_send"))).clicked() {
+                                send_now = true;
+                            }
+                            if send_now {
+                                self.send_chat_message();
+                            }
+                        });
+
+                        ui.add_space(8.0);
+                        ui.group(|ui| {
+                            ui.set_width(ui.available_width());
+                            let list_height = ui.available_height().max(120.0);
+                            egui::ScrollArea::vertical().stick_to_bottom(true).max_height(list_height).show(ui, |ui| {
+                                if self.chat_messages.is_empty() {
+                                    ui.label(tr(lang, "chat_empty"));
+                                } else {
+                                    for msg in &self.chat_messages {
+                                        let sender = if msg.local {
+                                            tr(lang, "chat_you")
+                                        } else {
+                                            msg.sender.clone()
+                                        };
+                                        ui.label(format!("[{}] {}: {}", msg.time, sender, msg.text));
+                                    }
+                                }
+                            });
+                        });
+                    });
+                });
             } else {
                 // Drag & Drop handling
                 let drag_active = ctx.input(|i| !i.raw.hovered_files.is_empty());
@@ -4005,6 +4188,7 @@ Overwrite it?", self.get_dest_path()));
                                 "Packing" => tr(lang, "phase_packing"),
                                 "Sending" => tr(lang, "phase_sending"),
                                 "Scanning" => tr(lang, "phase_scanning"),
+                                "Extracting" => tr(lang, "phase_extracting"),
                                 _ => self.progress_phase.clone(),
                             };
                             ui.label(format!("Phase: {}", phase_label));

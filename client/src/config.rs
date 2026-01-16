@@ -21,6 +21,7 @@ pub struct AppConfig {
     pub auto_check_payload: bool,
     pub optimize_upload: bool,
     pub extract_archives_fast: bool,
+    pub chat_display_name: String,
 }
 
 impl Default for AppConfig {
@@ -43,6 +44,7 @@ impl Default for AppConfig {
             auto_check_payload: false,
             optimize_upload: false,
             extract_archives_fast: true,
+            chat_display_name: String::new(),
         }
     }
 }
@@ -128,6 +130,9 @@ impl AppConfig {
                             "extract_archives_fast" => {
                                 config.extract_archives_fast = matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on");
                             }
+                            "chat_display_name" => {
+                                config.chat_display_name = value;
+                            }
                             _ => {}
                         }
                     }
@@ -140,7 +145,7 @@ impl AppConfig {
 
     pub fn save(&self) {
         let content = format!(
-            "address={}\nstorage={}\nconnections={}\nuse_temp={}\nauto_connect={}\ntheme={}\ncompression={}\nbandwidth_limit_mbps={}\nupdate_channel={}\ndownload_compression={}\nchmod_after_upload={}\nresume_mode={}\nlanguage={}\nauto_tune_connections={}\nauto_check_payload={}\noptimize_upload={}\nextract_archives_fast={}\n",
+            "address={}\nstorage={}\nconnections={}\nuse_temp={}\nauto_connect={}\ntheme={}\ncompression={}\nbandwidth_limit_mbps={}\nupdate_channel={}\ndownload_compression={}\nchmod_after_upload={}\nresume_mode={}\nlanguage={}\nauto_tune_connections={}\nauto_check_payload={}\noptimize_upload={}\nextract_archives_fast={}\nchat_display_name={}\n",
             self.address,
             self.storage,
             self.connections,
@@ -157,7 +162,8 @@ impl AppConfig {
             self.auto_tune_connections,
             self.auto_check_payload,
             self.optimize_upload,
-            self.extract_archives_fast
+            self.extract_archives_fast,
+            self.chat_display_name
         );
         let _ = fs::write("ps5upload.ini", content);
     }

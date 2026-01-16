@@ -25,6 +25,7 @@ const MAGIC_FTX1: u32 = 0x31585446;
 const SEND_CHUNK_SIZE: usize = 4 * 1024 * 1024; // 4MB write chunks for better throughput
 const PIPELINE_DEPTH: usize = 5; // Reduced to 5 to match server queue depth and save RAM (5 * 16MB = 80MB)
 const ARCHIVE_READ_BUFFER_SIZE: usize = 1024 * 1024; // 1MB streaming buffer for archives
+const WRITE_IDLE_TIMEOUT_SECS: u64 = 120;
 
 #[derive(Debug, Clone)]
 pub struct FileEntry {
@@ -290,17 +291,19 @@ impl Drop for RarHandle {
 }
 
 #[cfg(any(target_os = "linux", target_os = "netbsd"))]
-fn rar_construct_path(path: &Path) -> CString {
-    CString::new(path.as_os_str().as_encoded_bytes()).expect("Unexpected nul in path")
+fn rar_construct_path(path: &Path) -> Result<CString> {
+    CString::new(path.as_os_str().as_encoded_bytes())
+        .map_err(|_| anyhow::anyhow!("RAR path contains a nul byte"))
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "netbsd")))]
-fn rar_construct_path(path: &Path) -> WideCString {
-    WideCString::from_os_str(path).expect("Unexpected nul in path")
+fn rar_construct_path(path: &Path) -> Result<WideCString> {
+    WideCString::from_os_str(path)
+        .map_err(|_| anyhow::anyhow!("RAR path contains a nul byte"))
 }
 
 fn rar_open_archive(path: &Path) -> Result<RarHandle> {
-    let filename = rar_construct_path(path);
+    let filename = rar_construct_path(path)?;
     let mut data = unrar_sys::OpenArchiveDataEx::new(
         filename.as_ptr() as *const _,
         unrar_sys::RAR_OM_EXTRACT,
@@ -441,14 +444,21 @@ fn write_all_retry(
     cancel: &Arc<AtomicBool>,
 ) -> Result<()> {
     let mut offset = 0usize;
+    let mut last_progress = std::time::Instant::now();
     while offset < data.len() {
         if cancel.load(Ordering::Relaxed) {
             let _ = stream.shutdown(Shutdown::Both);
             return Err(anyhow::anyhow!("Upload cancelled by user"));
         }
+        if last_progress.elapsed() >= std::time::Duration::from_secs(WRITE_IDLE_TIMEOUT_SECS) {
+            return Err(anyhow::anyhow!("Upload timed out waiting for socket write"));
+        }
         match stream.write(&data[offset..]) {
             Ok(0) => return Err(anyhow::anyhow!("Socket closed during send")),
-            Ok(n) => offset += n,
+            Ok(n) => {
+                offset += n;
+                last_progress = std::time::Instant::now();
+            }
             Err(err) => match err.kind() {
                 ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted => {
                     thread::sleep(std::time::Duration::from_millis(1));

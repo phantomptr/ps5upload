@@ -10,6 +10,27 @@ use lzma_rs::lzma_decompress;
 use serde::{Deserialize};
 
 pub const CONNECTION_TIMEOUT_SECS: u64 = 30;
+const READ_TIMEOUT_SECS: u64 = 120;
+
+async fn read_timeout(stream: &mut TcpStream, buf: &mut [u8]) -> Result<usize> {
+    tokio::time::timeout(
+        std::time::Duration::from_secs(READ_TIMEOUT_SECS),
+        stream.read(buf),
+    )
+    .await
+    .context("Read timed out")?
+    .map_err(Into::into)
+}
+
+async fn read_exact_timeout(stream: &mut TcpStream, buf: &mut [u8]) -> Result<()> {
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_secs(READ_TIMEOUT_SECS),
+        stream.read_exact(buf),
+    )
+    .await
+    .context("Read timed out")??;
+    Ok(())
+}
 
 #[derive(Debug, Deserialize, Clone, PartialEq)]
 pub struct StorageLocation {
@@ -49,7 +70,7 @@ async fn send_simple_command(ip: &str, port: u16, cmd: &str) -> Result<String> {
     let mut response = Vec::new();
     let mut buffer = [0u8; 1024];
     loop {
-        let n = stream.read(&mut buffer).await?;
+        let n = read_timeout(&mut stream, &mut buffer).await?;
         if n == 0 {
             break;
         }
@@ -75,7 +96,7 @@ pub async fn list_storage(ip: &str, port: u16) -> Result<Vec<StorageLocation>> {
     let mut buffer = [0u8; 4096];
 
     loop {
-        let n = stream.read(&mut buffer).await?;
+        let n = read_timeout(&mut stream, &mut buffer).await?;
         if n == 0 {
             break;
         }
@@ -109,7 +130,7 @@ pub async fn list_dir(ip: &str, port: u16, path: &str) -> Result<Vec<DirEntry>> 
     let mut buffer = [0u8; 4096];
 
     loop {
-        let n = stream.read(&mut buffer).await?;
+        let n = read_timeout(&mut stream, &mut buffer).await?;
         if n == 0 {
             break;
         }
@@ -138,7 +159,7 @@ pub async fn check_dir(ip: &str, port: u16, path: &str) -> Result<bool> {
     stream.write_all(cmd.as_bytes()).await?;
 
     let mut buffer = [0u8; 1024];
-    let n = stream.read(&mut buffer).await?;
+    let n = read_timeout(&mut stream, &mut buffer).await?;
     let response = String::from_utf8_lossy(&buffer[..n]).trim().to_string();
 
     Ok(response == "EXISTS")
@@ -258,7 +279,7 @@ where
     let mut header = Vec::new();
     let mut buffer = [0u8; 1];
     while header.len() < 128 {
-        let n = stream.read(&mut buffer).await?;
+        let n = read_timeout(&mut stream, &mut buffer).await?;
         if n == 0 {
             break;
         }
@@ -285,7 +306,7 @@ where
             return Err(anyhow!("Cancelled"));
         }
         let chunk = std::cmp::min(remaining, buf.len() as u64) as usize;
-        stream.read_exact(&mut buf[..chunk]).await?;
+        read_exact_timeout(&mut stream, &mut buf[..chunk]).await?;
         file.write_all(&buf[..chunk]).await?;
         remaining -= chunk as u64;
         received += chunk as u64;
@@ -332,7 +353,7 @@ where
     let mut header = Vec::new();
     let mut buffer = [0u8; 1];
     while header.len() < 128 {
-        let n = stream.read(&mut buffer).await?;
+        let n = read_timeout(&mut stream, &mut buffer).await?;
         if n == 0 {
             break;
         }
@@ -369,7 +390,7 @@ where
             return Err(anyhow!("Cancelled"));
         }
         let mut header_buf = [0u8; 16];
-        if let Err(err) = stream.read_exact(&mut header_buf).await {
+        if let Err(err) = read_exact_timeout(&mut stream, &mut header_buf).await {
             return Err(anyhow!("Download failed (header): {}", err));
         }
         let magic = u32::from_le_bytes([header_buf[0], header_buf[1], header_buf[2], header_buf[3]]);
@@ -390,19 +411,19 @@ where
         }
         if frame_type == 7 {
             let mut body = vec![0u8; body_len];
-            stream.read_exact(&mut body).await?;
+            read_exact_timeout(&mut stream, &mut body).await?;
             let msg = String::from_utf8_lossy(&body).to_string();
             return Err(anyhow!("Download failed: {}", msg));
         }
         let raw_body = if frame_type == 8 {
             let mut body = vec![0u8; body_len];
-            if let Err(err) = stream.read_exact(&mut body).await {
+            if let Err(err) = read_exact_timeout(&mut stream, &mut body).await {
                 return Err(anyhow!("Download failed (body): {}", err));
             }
             decompress_size_prepended(&body).map_err(|e| anyhow!("Download failed (lz4): {}", e))?
         } else if frame_type == 9 {
             let mut body = vec![0u8; body_len];
-            if let Err(err) = stream.read_exact(&mut body).await {
+            if let Err(err) = read_exact_timeout(&mut stream, &mut body).await {
                 return Err(anyhow!("Download failed (body): {}", err));
             }
             if body.len() < 4 {
@@ -414,7 +435,7 @@ where
             decompressed
         } else if frame_type == 10 {
             let mut body = vec![0u8; body_len];
-            if let Err(err) = stream.read_exact(&mut body).await {
+            if let Err(err) = read_exact_timeout(&mut stream, &mut body).await {
                 return Err(anyhow!("Download failed (body): {}", err));
             }
             if body.len() < 4 {
@@ -431,7 +452,7 @@ where
             out
         } else if frame_type == 4 {
             let mut body = vec![0u8; body_len];
-            if let Err(err) = stream.read_exact(&mut body).await {
+            if let Err(err) = read_exact_timeout(&mut stream, &mut body).await {
                 return Err(anyhow!("Download failed (body): {}", err));
             }
             body
@@ -527,7 +548,7 @@ pub async fn upload_v2_init(ip: &str, port: u16, dest_path: &str, use_temp: bool
     
     // Wait for READY
     let mut buffer = [0u8; 1024];
-    let n = stream.read(&mut buffer).await?;
+    let n = read_timeout(&mut stream, &mut buffer).await?;
     let response = String::from_utf8_lossy(&buffer[..n]).trim().to_string();
     
     if response == "READY" {
@@ -549,7 +570,7 @@ pub async fn get_payload_version(ip: &str, port: u16) -> Result<String> {
     let mut response = Vec::new();
     let mut buffer = [0u8; 128];
     loop {
-        let n = stream.read(&mut buffer).await?;
+        let n = read_timeout(&mut stream, &mut buffer).await?;
         if n == 0 {
             break;
         }

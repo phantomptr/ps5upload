@@ -22,6 +22,13 @@ lz4_flex = "0.11"
 zstd = "0.13"
 lzma-rs = "0.3"
 sha2 = "0.10"
+tokio-tungstenite = { version = "0.21", features = ["rustls-tls-native-roots"] }
+futures-util = "0.3"
+secp256k1 = { version = "0.28", features = ["rand-std", "serde"] }
+aes-gcm = "0.10"
+base64 = "0.21"
+hex = "0.4"
+rand = "0.8"
 image = { version = "0.25", default-features = false, features = ["png"] }
 # unrar builds a bundled static lib via unrar_sys by default (no external deps).
 unrar = "0.5"
