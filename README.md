@@ -79,7 +79,7 @@ If a transfer was interrupted, you can enable **Resume** and choose a mode:
 * **Verify SHA256 (slow)** — most accurate, slowest.
 
 ### 6. Chat (Optional)
-Open the **Chat** tab to talk with other PS5Upload users. It uses the built-in key and requires an internet connection.
+Open the **Chat** tab to talk with other PS5Upload users. It uses the built-in key, auto-picks a display name, and requires an internet connection.
 
 ## FAQ
 
