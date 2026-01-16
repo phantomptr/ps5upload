@@ -27,6 +27,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, AtomicU64, Ordering};
 use std::io::{Read, Write};
 use tokio::runtime::Runtime;
 use serde::Deserialize;
+use lz4_flex::block::compress_prepend_size;
 
 mod protocol;
 mod archive;
@@ -37,9 +38,9 @@ mod history;
 mod queue;
 mod i18n;
 
-use protocol::{StorageLocation, DirEntry, list_storage, list_dir, list_dir_recursive, check_dir, upload_v2_init, delete_path, move_path, copy_path, chmod_777, create_path, download_file_with_progress, download_dir_with_progress, get_payload_version, hash_file};
+use protocol::{StorageLocation, DirEntry, DownloadCompression, list_storage, list_dir, list_dir_recursive, check_dir, upload_v2_init, delete_path, move_path, copy_path, chmod_777, create_path, download_file_with_progress, download_dir_with_progress, get_payload_version, hash_file};
 use archive::get_size;
-use transfer::{collect_files_with_progress, stream_files_with_progress, send_files_v2_for_list, scan_rar_archive, send_rar_archive, scan_zip_archive, send_zip_archive, scan_7z_archive, send_7z_archive, extract_rar_archive, extract_zip_archive, extract_7z_archive, SharedReceiverIterator, FileEntry, CompressionMode};
+use transfer::{collect_files_with_progress, stream_files_with_progress, send_files_v2_for_list, SendFilesConfig, scan_rar_archive, send_rar_archive, scan_zip_archive, send_zip_archive, scan_7z_archive, send_7z_archive, extract_rar_archive, extract_zip_archive, extract_7z_archive, SharedReceiverIterator, FileEntry, CompressionMode};
 use config::AppConfig;
 use profiles::{Profile, ProfilesData, load_profiles, save_profiles};
 use history::{TransferRecord, HistoryData, load_history, add_record, clear_history};
@@ -55,6 +56,7 @@ const PRESETS: [&str; 3] = ["etaHEN/games", "homebrew", "custom"];
 const TRANSFER_PORT: u16 = 9113;
 const PAYLOAD_PORT: u16 = 9021;
 const MAX_PARALLEL_CONNECTIONS: usize = 10; // Increased back to 10 for better saturation
+const MAX_LOG_BYTES: usize = 512 * 1024;
 
 struct TempDirGuard {
     path: std::path::PathBuf,
@@ -89,9 +91,16 @@ enum ManageSide {
     Right,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ManageDestAction {
+    Move,
+    Copy,
+}
+
 enum AppMessage {
     Log(String),
     PayloadLog(String),
+    Status(String),
     PayloadSendComplete(Result<u64, String>),
     PayloadVersion(Result<String, String>),
     StorageList(Result<Vec<StorageLocation>, String>),
@@ -100,6 +109,7 @@ enum AppMessage {
     DownloadStart { total: u64, label: String },
     DownloadProgress { received: u64, total: u64, current_file: Option<String> },
     DownloadComplete(Result<u64, String>),
+    UploadOptimizeComplete(UploadOptimization),
     MoveCheckResult { req: MoveRequest, exists: bool },
     UpdateCheckComplete(Result<ReleaseInfo, String>),
     UpdateDownloadComplete { kind: String, result: Result<String, String> },
@@ -134,7 +144,13 @@ struct ReleaseInfo {
 #[derive(Clone)]
 enum DownloadRequest {
     File { name: String, target: String, save_path: String },
-    Dir { name: String, target: String, dest_root: String, use_lz4: bool },
+    Dir { name: String, target: String, dest_root: String, compression: protocol::DownloadCompression },
+}
+
+#[derive(Clone, Copy)]
+enum PayloadFetch {
+    Current,
+    Latest,
 }
 
 #[derive(Clone)]
@@ -149,6 +165,14 @@ struct MoveRequest {
 struct RenameRequest {
     src: String,
     dst: String,
+}
+
+#[derive(Clone, Debug)]
+struct UploadOptimization {
+    compression: Option<CompressionMode>,
+    connections: Option<usize>,
+    sample_files: Option<usize>,
+    sample_bytes: Option<u64>,
 }
 
 struct Ps5UploadApp {
@@ -176,10 +200,12 @@ struct Ps5UploadApp {
     manage_right_selected: Option<usize>,
     manage_left_status: String,
     manage_right_status: String,
-    manage_active: ManageSide,
     manage_new_name: String,
-    manage_clipboard: Option<String>,
     manage_busy: bool,
+    manage_dest_open: bool,
+    manage_dest_action: Option<ManageDestAction>,
+    manage_dest_source_path: Option<String>,
+    manage_dest_source_name: Option<String>,
 
     // Download
     is_downloading: bool,
@@ -236,6 +262,7 @@ struct Ps5UploadApp {
     progress_eta_secs: Option<f64>,
     progress_files: i32,
     progress_current_file: String,
+    progress_phase: String,
 
     // Scanning state
     is_scanning: bool,
@@ -250,6 +277,7 @@ struct Ps5UploadApp {
     payload_path: String,
     payload_status: String,
     payload_version: Option<String>,
+    auto_payload_attempted: bool,
 
     // UI Toggles
     log_tab: usize, // 0 = Client, 1 = Payload, 2 = History
@@ -333,10 +361,12 @@ impl Ps5UploadApp {
             manage_right_selected: None,
             manage_left_status: "Not connected".to_string(),
             manage_right_status: "Not connected".to_string(),
-            manage_active: ManageSide::Left,
             manage_new_name: String::new(),
-            manage_clipboard: None,
             manage_busy: false,
+            manage_dest_open: false,
+            manage_dest_action: None,
+            manage_dest_source_path: None,
+            manage_dest_source_name: None,
             is_downloading: false,
             download_cancellation_token: Arc::new(AtomicBool::new(false)),
             download_progress_sent: 0,
@@ -380,6 +410,7 @@ impl Ps5UploadApp {
             progress_eta_secs: None,
             progress_files: 0,
             progress_current_file: String::new(),
+            progress_phase: String::new(),
             is_scanning: false,
             scanning_files_found: 0,
             scanning_total_size: 0,
@@ -388,6 +419,7 @@ impl Ps5UploadApp {
             payload_path: String::new(),
             payload_status: "Unknown (not checked)".to_string(),
             payload_version: None,
+            auto_payload_attempted: false,
             log_tab: 0,
             theme_dark,
             language,
@@ -625,6 +657,7 @@ impl Ps5UploadApp {
     fn log(&mut self, msg: &str) {
         let time = chrono::Local::now().format("%H:%M:%S");
         self.client_logs.push_str(&format!("[{}] {}\n", time, msg));
+        self.trim_logs();
     }
 
     fn log_peak_rss(&mut self, label: &str) {
@@ -645,6 +678,20 @@ impl Ps5UploadApp {
     fn payload_log(&mut self, msg: &str) {
         let time = chrono::Local::now().format("%H:%M:%S");
         self.payload_logs.push_str(&format!("[{}] {}\n", time, msg));
+        self.trim_logs();
+    }
+
+    fn trim_logs(&mut self) {
+        if self.client_logs.len() > MAX_LOG_BYTES {
+            let start = self.client_logs.len() - MAX_LOG_BYTES;
+            let cut = self.client_logs[start..].find('\n').map(|idx| start + idx + 1).unwrap_or(start);
+            self.client_logs.drain(..cut);
+        }
+        if self.payload_logs.len() > MAX_LOG_BYTES {
+            let start = self.payload_logs.len() - MAX_LOG_BYTES;
+            let cut = self.payload_logs[start..].find('\n').map(|idx| start + idx + 1).unwrap_or(start);
+            self.payload_logs.drain(..cut);
+        }
     }
 
     fn join_remote_path(base: &str, name: &str) -> String {
@@ -680,6 +727,47 @@ impl Ps5UploadApp {
         });
     }
 
+    fn open_destination_picker(&mut self, action: ManageDestAction, src_path: String, src_name: String) {
+        self.manage_dest_action = Some(action);
+        self.manage_dest_source_path = Some(src_path);
+        self.manage_dest_source_name = Some(src_name);
+        if self.manage_right_path.trim().is_empty() {
+            self.manage_right_path = self.selected_storage.clone().unwrap_or_else(|| "/data".to_string());
+        }
+        self.manage_right_selected = None;
+        self.manage_dest_open = true;
+        self.manage_refresh(ManageSide::Right);
+    }
+
+    fn start_move_check(&self, src: String, dst: String, op_name: String) {
+        let ip = self.ip.clone();
+        let rt = self.rt.clone();
+        let tx = self.tx.clone();
+        let req = MoveRequest { src: src.clone(), dst: dst.clone(), op_name: op_name.clone(), dst_exists: false };
+        thread::spawn(move || {
+            let name = std::path::Path::new(&dst)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let parent = std::path::Path::new(&dst)
+                .parent()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|| "/".to_string());
+            let exists = if name.is_empty() {
+                false
+            } else {
+                match rt.block_on(async { list_dir(&ip, TRANSFER_PORT, &parent).await }) {
+                    Ok(entries) => entries.iter().any(|e| e.name == name),
+                    Err(e) => {
+                        let _ = tx.send(AppMessage::Log(format!("Move check failed: {}", e)));
+                        false
+                    }
+                }
+            };
+            let _ = tx.send(AppMessage::MoveCheckResult { req, exists });
+        });
+    }
+
     fn note_text(&self, text: &str) -> egui::RichText {
         let color = if self.theme_dark {
             egui::Color32::from_rgb(210, 170, 80)
@@ -694,10 +782,7 @@ impl Ps5UploadApp {
             return;
         }
         self.manage_busy = true;
-        match self.manage_active {
-            ManageSide::Left => self.manage_left_status = format!("{}...", op),
-            ManageSide::Right => self.manage_right_status = format!("{}...", op),
-        }
+        self.manage_left_status = format!("{}...", op);
         self.log(&format!("{}...", op));
         if op.starts_with("Move") {
             self.is_moving = true;
@@ -716,10 +801,7 @@ impl Ps5UploadApp {
             return;
         }
         self.manage_busy = true;
-        match self.manage_active {
-            ManageSide::Left => self.manage_left_status = format!("{}...", label),
-            ManageSide::Right => self.manage_right_status = format!("{}...", label),
-        }
+        self.manage_left_status = format!("{}...", label);
         self.log(&format!("{}...", label));
         self.download_cancellation_token.store(false, Ordering::Relaxed);
         let tx = self.tx.clone();
@@ -749,27 +831,63 @@ impl Ps5UploadApp {
                     });
                 });
             }
-            DownloadRequest::Dir { name, target, dest_root, use_lz4 } => {
+            DownloadRequest::Dir { name, target, dest_root, compression } => {
                 let ip = self.ip.clone();
                 let rt = self.rt.clone();
+                let lang_code = self.config.language.clone();
                 let label = format!("Download {}", name);
                 self.start_download(label, move |tx, cancel| {
                     thread::spawn(move || {
                         let _ = tx.send(AppMessage::DownloadStart { total: 0, label: target.clone() });
                         let result = rt.block_on(async {
-                            download_dir_with_progress(&ip, TRANSFER_PORT, &target, &dest_root, cancel, use_lz4, |received, total, current_file| {
+                            let lang = Language::from_code(&lang_code);
+                            download_dir_with_progress(
+                                &ip,
+                                TRANSFER_PORT,
+                                &target,
+                                &dest_root,
+                                cancel,
+                                compression,
+                                |received, total, current_file| {
                                 let _ = tx.send(AppMessage::DownloadProgress {
                                     received,
                                     total,
                                     current_file,
                                 });
-                            }).await
+                                },
+                                |comp| {
+                                    if let Some(comp) = comp {
+                                        let msg = if compression == DownloadCompression::Auto {
+                                            format!("{} {}", tr(lang, "compression_auto_selected"), comp)
+                                        } else {
+                                            format!("{} {}", tr(lang, "compression_used"), comp)
+                                        };
+                                        let _ = tx.send(AppMessage::Log(msg));
+                                    }
+                                },
+                            ).await
                         });
                         let _ = tx.send(AppMessage::DownloadComplete(result.map_err(|e| e.to_string())));
                     });
                 });
             }
         }
+    }
+
+    fn start_optimize_upload(&mut self) {
+        if self.game_path.trim().is_empty() {
+            return;
+        }
+        let path = self.game_path.clone();
+        let connections = self.config.connections;
+        let tx = self.tx.clone();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let lang = Language::from_code(&self.config.language);
+        self.log(&tr(lang, "optimize_upload_scanning"));
+        thread::spawn(move || {
+            let opt = optimize_upload_settings(&path, &cancel, connections);
+            let _ = tx.send(AppMessage::UploadOptimizeComplete(opt));
+        });
     }
 
     fn start_move_request(&mut self, request: MoveRequest) {
@@ -833,34 +951,41 @@ impl Ps5UploadApp {
         });
     }
     
-    fn build_dest_path_with_base(&self, base: &str) -> String {
+    fn build_dest_path_with_base(&self, base: &str, include_folder: bool) -> String {
         let base = if base.trim().is_empty() { "/data" } else { base };
-        
+
         let preset_path = if self.selected_preset == 2 { // custom
              &self.custom_preset_path
         } else {
              PRESETS[self.selected_preset]
         };
 
-        let folder = if self.custom_subfolder.is_empty() {
-             "App"
-        } else {
-             &self.custom_subfolder
-        };
-        
         let base_clean = base.trim_end_matches('/');
         let preset_clean = preset_path.trim_matches('/');
-        
-        if preset_clean.is_empty() {
-            format!("{}/{}", base_clean, folder)
+
+        if include_folder {
+            let folder = if self.custom_subfolder.is_empty() {
+                 "App"
+            } else {
+                 &self.custom_subfolder
+            };
+            if preset_clean.is_empty() {
+                format!("{}/{}", base_clean, folder)
+            } else {
+                format!("{}/{}/{}", base_clean, preset_clean, folder)
+            }
+        } else if preset_clean.is_empty() {
+            base_clean.to_string()
         } else {
-            format!("{}/{}/{}", base_clean, preset_clean, folder)
+            format!("{}/{}", base_clean, preset_clean)
         }
     }
 
     fn get_dest_path(&self) -> String {
         let base = self.selected_storage.as_deref().unwrap_or("/data");
-        self.build_dest_path_with_base(base)
+        let is_archive = Self::archive_kind(Path::new(&self.game_path)).is_some();
+        let include_folder = !(is_archive && self.pending_archive_trim);
+        self.build_dest_path_with_base(base, include_folder)
     }
 
     fn apply_history_record(&mut self, record: &TransferRecord) -> Result<(), String> {
@@ -1027,12 +1152,14 @@ impl Ps5UploadApp {
         self.scanning_total_size = 0;
         self.show_override_dialog = false;
         self.show_resume_dialog = false;
-        self.status = "Scanning files...".to_string();
+        let lang = Language::from_code(&self.config.language);
+        self.status = tr(lang, "status_scanning");
         self.progress_sent = 0;
         self.progress_total = self.calculated_size.unwrap_or(0);
         self.progress_files = 0;
         self.progress_speed_bps = 0.0;
         self.progress_eta_secs = None;
+        self.progress_phase.clear();
 
         // Record for history
         self.upload_start_time = Some(std::time::Instant::now());
@@ -1049,7 +1176,6 @@ impl Ps5UploadApp {
         let rt = self.rt.clone();
         let connections = self.config.connections;
         let use_temp = self.config.use_temp;
-        let use_lz4 = self.config.compression == "lz4";
         let archive_trim = self.pending_archive_trim;
         let mut resume_mode = self.config.resume_mode.clone();
         if self.force_full_upload_once {
@@ -1058,6 +1184,11 @@ impl Ps5UploadApp {
         }
         let bandwidth_limit_bps = (self.config.bandwidth_limit_mbps * 1024.0 * 1024.0) as u64;
         let auto_tune_connections = self.config.auto_tune_connections;
+        let compression_setting = self.config.compression.clone();
+        let optimize_upload = self.config.optimize_upload;
+        let extract_archives_fast = self.config.extract_archives_fast;
+        let lang_code = self.config.language.clone();
+        let payload_supports_modern = self.payload_supports_modern_compression();
 
         thread::spawn(move || {
             let tx_log = tx.clone();
@@ -1082,10 +1213,19 @@ impl Ps5UploadApp {
 
                 if is_archive {
                      let ext = if is_rar { "RAR" } else if is_zip { "ZIP" } else { "7Z" };
-                     let needs_extract = resume_mode != "none" || connections > 1;
+                     let needs_extract = extract_archives_fast || resume_mode != "none" || connections > 1;
 
                      if needs_extract {
-                         let _ = tx.send(AppMessage::Log(format!("{} archive with multiple connections will be extracted to a temp folder before upload.", ext)));
+                         let lang = Language::from_code(&lang_code);
+                         let _ = tx.send(AppMessage::Status(tr(lang, "status_extracting_archive")));
+                         let lang = Language::from_code(&lang_code);
+                         if extract_archives_fast {
+                             let msg = tr(lang, "archive_extract_fast_log").replace("{}", ext);
+                             let _ = tx.send(AppMessage::Log(msg));
+                         } else {
+                             let msg = tr(lang, "archive_extract_required_log").replace("{}", ext);
+                             let _ = tx.send(AppMessage::Log(msg));
+                         }
                          let temp_dir = create_temp_dir("ps5upload_archive")
                              .map_err(|e| anyhow::anyhow!("Temp dir error: {}", e))?;
                          let _ = tx.send(AppMessage::Log(format!("Temp extract location: {}", temp_dir.display())));
@@ -1166,7 +1306,29 @@ impl Ps5UploadApp {
                 let _temp_guard = temp_dir_guard;
 
                 let mut connection_count_cfg = connections.clamp(1, MAX_PARALLEL_CONNECTIONS);
-                if !is_archive && auto_tune_connections {
+                let mut optimize_compression: Option<CompressionMode> = None;
+                let mut optimize_connections: Option<usize> = None;
+                let lang = Language::from_code(&lang_code);
+                if !is_archive && optimize_upload {
+                    let _ = tx.send(AppMessage::Log(tr(lang, "optimize_upload_scanning")));
+                    let opt = optimize_upload_settings(&effective_path, &cancel_token, connection_count_cfg);
+                    if opt.compression.is_none() && opt.connections.is_none() {
+                        let _ = tx.send(AppMessage::Log(tr(lang, "optimize_upload_no_samples")));
+                    } else {
+                        optimize_connections = opt.connections;
+                        optimize_compression = opt.compression;
+                        if let Some(recommended) = optimize_connections {
+                            connection_count_cfg = recommended;
+                        }
+                        let unchanged = tr(lang, "optimize_upload_unchanged");
+                        let comp_label = optimize_compression.map(compression_label).unwrap_or(unchanged.as_str());
+                        let template = tr(lang, "optimize_upload_result");
+                        let msg = template
+                            .replacen("{}", comp_label, 1)
+                            .replacen("{}", &connection_count_cfg.to_string(), 1);
+                        let _ = tx.send(AppMessage::Log(msg));
+                    }
+                } else if !is_archive && auto_tune_connections {
                     if let Some((sample_count, sample_bytes)) = sample_workload(&effective_path, &cancel_token) {
                         let recommended = recommend_connections(connection_count_cfg, sample_count, sample_bytes);
                         if recommended != connection_count_cfg {
@@ -1199,7 +1361,35 @@ impl Ps5UploadApp {
 
                      let start = std::time::Instant::now();
                      let last_progress_ms = Arc::new(AtomicU64::new(0));
-                     let compression = if use_lz4 { CompressionMode::Lz4 } else { CompressionMode::None };
+                     let mut compression = match compression_setting.as_str() {
+                         "lz4" => CompressionMode::Lz4,
+                         "zstd" => CompressionMode::Zstd,
+                         "lzma" => CompressionMode::Lzma,
+                         "auto" => {
+                             let _ = tx.send(AppMessage::Log(tr(lang, "compression_auto_scanning")));
+                             if let Some(sample) = sample_bytes_from_path(&effective_path, &cancel_token) {
+                                 let mode = choose_best_compression(&sample);
+                                 let template = tr(lang, "compression_auto_result");
+                                 let msg = template.replacen("{}", compression_label(mode), 1);
+                                 let _ = tx.send(AppMessage::Log(msg));
+                                 mode
+                             } else {
+                                 CompressionMode::None
+                             }
+                         }
+                         _ => CompressionMode::None,
+                     };
+                     if let Some(override_mode) = optimize_compression {
+                         compression = override_mode;
+                     }
+                     if matches!(compression, CompressionMode::Zstd | CompressionMode::Lzma)
+                         && !payload_supports_modern
+                     {
+                         let _ = tx.send(AppMessage::Log(
+                             "Payload does not support Zstd/LZMA yet; falling back to LZ4.".to_string()
+                         ));
+                         compression = CompressionMode::Lz4;
+                     }
                      let rate_limit = if bandwidth_limit_bps > 0 { 
                          let per_conn = (bandwidth_limit_bps / connection_count_cfg as u64).max(1);
                          Some(per_conn)
@@ -1216,24 +1406,29 @@ impl Ps5UploadApp {
                          send_files_v2_for_list(
                             rx,
                             std_stream.try_clone()?,
-                            cancel_token.clone(),
-                            move |sent, files_sent, current_file| {
-                                if sent == last_sent { return; }
-                                let elapsed = start.elapsed().as_secs_f64();
-                                let current_total = shared_total.load(Ordering::Relaxed);
-                                let display_total = current_total.max(sent);
-                                let _ = tx.send(AppMessage::Progress {
-                                    sent,
-                                    total: display_total,
-                                    files_sent,
-                                    elapsed_secs: elapsed,
-                                    current_file,
-                                });
-                                last_progress_ms.store(start.elapsed().as_millis() as u64, Ordering::Relaxed);
-                                last_sent = sent;
-                            },
-                            move |msg| { let _ = tx_log.send(AppMessage::Log(msg)); },
-                            0, None, compression, rate_limit
+                            SendFilesConfig {
+                                cancel: cancel_token.clone(),
+                                progress: move |sent, files_sent, current_file| {
+                                    if sent == last_sent { return; }
+                                    let elapsed = start.elapsed().as_secs_f64();
+                                    let current_total = shared_total.load(Ordering::Relaxed);
+                                    let display_total = current_total.max(sent);
+                                    let _ = tx.send(AppMessage::Progress {
+                                        sent,
+                                        total: display_total,
+                                        files_sent,
+                                        elapsed_secs: elapsed,
+                                        current_file,
+                                    });
+                                    last_progress_ms.store(start.elapsed().as_millis() as u64, Ordering::Relaxed);
+                                    last_sent = sent;
+                                },
+                                log: move |msg| { let _ = tx_log.send(AppMessage::Log(msg)); },
+                                worker_id: 0,
+                                allowed_connections: None,
+                                compression,
+                                rate_limit_bps: rate_limit,
+                            }
                          )?;
                          
                          let response = read_upload_response(&mut std_stream, &cancel_token)?;
@@ -1293,7 +1488,6 @@ impl Ps5UploadApp {
                              let total_sent = total_sent.clone();
                              let total_files = total_files.clone();
                              let shared_total = shared_total.clone();
-                             let start = start;
                              let allowed = allowed_connections.clone();
                              let last_progress = last_progress_ms.clone();
                              
@@ -1304,8 +1498,9 @@ impl Ps5UploadApp {
                                  send_files_v2_for_list(
                                      iterator,
                                      std_stream,
-                                     cancel,
-                                     move |sent, files_sent, _| {
+                                     SendFilesConfig {
+                                         cancel,
+                                         progress: move |sent, files_sent, _| {
                                          let delta_bytes = sent.saturating_sub(last_sent);
                                          let delta_files = if files_sent >= last_files { files_sent - last_files } else { 0 };
                                          if delta_bytes == 0 && delta_files == 0 { return; }
@@ -1327,19 +1522,22 @@ impl Ps5UploadApp {
                                          });
                                          last_progress.store(start.elapsed().as_millis() as u64, Ordering::Relaxed);
                                      },
-                                     move |msg| { let _ = tx_log.send(AppMessage::Log(msg)); },
-                                     worker_id,
-                                     Some(allowed),
-                                     compression,
-                                     rate_limit
+                                         log: move |msg| { let _ = tx_log.send(AppMessage::Log(msg)); },
+                                         worker_id,
+                                         allowed_connections: Some(allowed),
+                                         compression,
+                                         rate_limit_bps: rate_limit,
+                                     }
                                  )
                              }));
                          }
                          
                          let mut first_err = None;
                          for h in handles {
-                             if let Ok(res) = h.join() {
-                                 if let Err(e) = res { if first_err.is_none() { first_err = Some(e); } }
+                             if let Ok(Err(e)) = h.join() {
+                                 if first_err.is_none() {
+                                     first_err = Some(e);
+                                 }
                              }
                          }
                          if let Some(e) = first_err { return Err(e); }
@@ -1452,7 +1650,9 @@ impl Ps5UploadApp {
 
                 let total_size: u64 = files.iter().map(|f| f.size).sum();
                 let mut connection_count = connections.clamp(1, MAX_PARALLEL_CONNECTIONS);
-                if !is_archive && auto_tune_connections {
+                if let Some(recommended) = optimize_connections {
+                    connection_count = recommended;
+                } else if !is_archive && auto_tune_connections {
                     let recommended = recommend_connections(connection_count, files.len(), total_size);
                     if recommended != connection_count {
                         let _ = tx.send(AppMessage::Log(format!(
@@ -1484,7 +1684,35 @@ impl Ps5UploadApp {
 
                 let start = std::time::Instant::now();
                 let last_progress_ms = Arc::new(std::sync::atomic::AtomicU64::new(0));
-                let compression = if use_lz4 { CompressionMode::Lz4 } else { CompressionMode::None };
+                let mut compression = match compression_setting.as_str() {
+                    "lz4" => CompressionMode::Lz4,
+                    "zstd" => CompressionMode::Zstd,
+                    "lzma" => CompressionMode::Lzma,
+                    "auto" => {
+                        let _ = tx.send(AppMessage::Log(tr(lang, "compression_auto_scanning")));
+                        if let Some(sample) = sample_bytes_from_files(&files, &cancel_token) {
+                            let mode = choose_best_compression(&sample);
+                            let template = tr(lang, "compression_auto_result");
+                            let msg = template.replacen("{}", compression_label(mode), 1);
+                            let _ = tx.send(AppMessage::Log(msg));
+                            mode
+                        } else {
+                            CompressionMode::None
+                        }
+                    }
+                    _ => CompressionMode::None,
+                };
+                if let Some(override_mode) = optimize_compression {
+                    compression = override_mode;
+                }
+                if matches!(compression, CompressionMode::Zstd | CompressionMode::Lzma)
+                    && !payload_supports_modern
+                {
+                    let _ = tx.send(AppMessage::Log(
+                        "Payload does not support Zstd/LZMA yet; falling back to LZ4.".to_string()
+                    ));
+                    compression = CompressionMode::Lz4;
+                }
                 let rate_limit = if bandwidth_limit_bps > 0 {
                     let per_conn = (bandwidth_limit_bps / connection_count as u64).max(1);
                     Some(per_conn)
@@ -1502,27 +1730,29 @@ impl Ps5UploadApp {
                     send_files_v2_for_list(
                         files,
                         std_stream.try_clone()?,
-                        cancel_token.clone(),
-                        |sent, files_sent, current_file| {
-                            if sent == last_sent { return; }
-                            let elapsed = start.elapsed().as_secs_f64();
-                            let _ = tx.send(AppMessage::Progress {
-                                sent,
-                                total: total_size,
-                                files_sent,
-                                elapsed_secs: elapsed,
-                                current_file,
-                            });
-                            last_progress_ms.store(start.elapsed().as_millis() as u64, Ordering::Relaxed);
-                            last_sent = sent;
+                        SendFilesConfig {
+                            cancel: cancel_token.clone(),
+                            progress: |sent, files_sent, current_file| {
+                                if sent == last_sent { return; }
+                                let elapsed = start.elapsed().as_secs_f64();
+                                let _ = tx.send(AppMessage::Progress {
+                                    sent,
+                                    total: total_size,
+                                    files_sent,
+                                    elapsed_secs: elapsed,
+                                    current_file,
+                                });
+                                last_progress_ms.store(start.elapsed().as_millis() as u64, Ordering::Relaxed);
+                                last_sent = sent;
+                            },
+                            log: move |msg| {
+                                let _ = tx_log.send(AppMessage::Log(msg));
+                            },
+                            worker_id: 0,
+                            allowed_connections: None,
+                            compression,
+                            rate_limit_bps: rate_limit,
                         },
-                        move |msg| {
-                            let _ = tx_log.send(AppMessage::Log(msg));
-                        },
-                        0,
-                        None,
-                        compression,
-                        rate_limit,
                     )?;
 
                     let response = read_upload_response(&mut std_stream, &cancel_token)?;
@@ -1590,7 +1820,6 @@ impl Ps5UploadApp {
                     let tx_log = tx_log.clone();
                     let total_sent = total_sent.clone();
                     let total_files = total_files.clone();
-                    let start = start;
                     let allowed_connections = allowed_connections.clone();
                     let last_progress_ms = last_progress_ms.clone();
 
@@ -1600,8 +1829,9 @@ impl Ps5UploadApp {
                         send_files_v2_for_list(
                             bucket,
                             std_stream.try_clone()?,
-                            cancel.clone(),
-                            |sent, files_sent, current_file| {
+                            SendFilesConfig {
+                                cancel: cancel.clone(),
+                                progress: |sent, files_sent, current_file| {
                                 let delta_bytes = sent.saturating_sub(last_sent);
                                 let delta_files = if files_sent >= last_files {
                                     files_sent - last_files
@@ -1625,14 +1855,15 @@ impl Ps5UploadApp {
                                     current_file,
                                 });
                                 last_progress_ms.store(start.elapsed().as_millis() as u64, Ordering::Relaxed);
+                                },
+                                log: move |msg| {
+                                    let _ = tx_log.send(AppMessage::Log(msg));
+                                },
+                                worker_id,
+                                allowed_connections: Some(allowed_connections),
+                                compression,
+                                rate_limit_bps: rate_limit,
                             },
-                            move |msg| {
-                                let _ = tx_log.send(AppMessage::Log(msg));
-                            },
-                            worker_id,
-                            Some(allowed_connections),
-                            compression,
-                            rate_limit,
                         )?;
 
                         let response = read_upload_response(&mut std_stream, &cancel)?;
@@ -1682,9 +1913,14 @@ impl Ps5UploadApp {
             self.payload_log("Select a payload (.elf) file first.");
             return;
         }
+        if !payload_path_is_elf(&self.payload_path) {
+            self.payload_log("Payload must be a .elf file.");
+            return;
+        }
 
         self.is_sending_payload = true;
-        self.status = "Sending payload...".to_string();
+        let lang = Language::from_code(&self.config.language);
+        self.status = tr(lang, "status_sending_payload");
         self.payload_log(&format!("Sending payload to {}:{}...", self.ip, PAYLOAD_PORT));
         if !self.payload_path.trim().is_empty() {
             self.payload_log(&format!("Payload path: {}", self.payload_path));
@@ -1698,6 +1934,80 @@ impl Ps5UploadApp {
             let result = send_payload_file(&ip, &path, &tx);
             let _ = tx.send(AppMessage::PayloadSendComplete(result));
         });
+    }
+
+    fn start_payload_download_and_send(&mut self, fetch: PayloadFetch) {
+        if self.ip.trim().is_empty() {
+            self.payload_log("Enter a PS5 address first.");
+            return;
+        }
+        if self.is_sending_payload {
+            self.payload_log("Payload transfer already in progress.");
+            return;
+        }
+
+        let (log_label, tmp_name, tag) = match fetch {
+            PayloadFetch::Current => {
+                let tag = format!("v{}", app_version_trimmed());
+                (format!("Downloading payload {}...", tag), "ps5upload_current.elf".to_string(), Some(tag))
+            }
+            PayloadFetch::Latest => ("Downloading latest payload...".to_string(), "ps5upload_latest.elf".to_string(), None),
+        };
+
+        let ip = self.ip.clone();
+        let tx = self.tx.clone();
+        let rt = self.rt.clone();
+        self.is_sending_payload = true;
+        let lang = Language::from_code(&self.config.language);
+        self.status = tr(lang, "status_downloading_payload");
+        self.payload_log(&log_label);
+
+        thread::spawn(move || {
+            let result = rt.block_on(async {
+                let release = if let Some(tag) = tag {
+                    match fetch_release_by_tag(&tag).await {
+                        Ok(release) => release,
+                        Err(_) => {
+                            let _ = tx.send(AppMessage::PayloadLog(format!(
+                                "Tag {} not found, falling back to latest release.",
+                                tag
+                            )));
+                            fetch_latest_release(false).await?
+                        }
+                    }
+                } else {
+                    fetch_latest_release(false).await?
+                };
+                let asset = release.assets.iter().find(|a| a.name == "ps5upload.elf")
+                    .ok_or_else(|| anyhow::anyhow!("Payload asset not found"))?;
+                let tmp_path = std::env::temp_dir().join(tmp_name);
+                download_asset(&asset.browser_download_url, &tmp_path.display().to_string()).await?;
+                Ok::<_, anyhow::Error>(tmp_path)
+            });
+            match result {
+                Ok(path) => {
+                    let path_str = path.display().to_string();
+                    let _ = tx.send(AppMessage::PayloadLog(format!("Payload downloaded: {}", path_str)));
+                    let result = send_payload_file(&ip, &path_str, &tx);
+                    let _ = tx.send(AppMessage::PayloadSendComplete(result));
+                }
+                Err(e) => {
+                    let _ = tx.send(AppMessage::PayloadSendComplete(Err(e.to_string())));
+                }
+            }
+        });
+    }
+
+    fn payload_supports_modern_compression(&self) -> bool {
+        let Some(version) = &self.payload_version else {
+            return false;
+        };
+        let current_norm = normalize_version("1.1.6");
+        let running_norm = normalize_version(version);
+        match (semver::Version::parse(&running_norm), semver::Version::parse(&current_norm)) {
+            (Ok(running), Ok(required)) => running >= required,
+            _ => false,
+        }
     }
 
     fn check_payload_version(&mut self) {
@@ -1714,10 +2024,22 @@ impl Ps5UploadApp {
     }
 }
 
+fn payload_path_is_elf(path: &str) -> bool {
+    std::path::Path::new(path)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("elf"))
+        .unwrap_or(false)
+}
+
 fn send_payload_file(ip: &str, path: &str, tx: &Sender<AppMessage>) -> Result<u64, String> {
     use std::fs::File;
     use std::net::TcpStream;
     use std::time::Duration;
+
+    if !payload_path_is_elf(path) {
+        return Err("Payload must be a .elf file.".to_string());
+    }
 
     let mut file = File::open(path)
         .map_err(|e| format!("Failed to open payload: {}", e))?;
@@ -1778,6 +2100,7 @@ impl eframe::App for Ps5UploadApp {
             match msg {
                 AppMessage::Log(s) => self.log(&s),
                 AppMessage::PayloadLog(s) => self.payload_log(&s),
+                AppMessage::Status(s) => self.status = s,
                 AppMessage::StorageList(res) => {
                     self.is_connecting = false;
                     match res {
@@ -1796,9 +2119,10 @@ impl eframe::App for Ps5UploadApp {
                             self.is_connected = true;
                             self.log("Connected to PS5");
                             self.payload_log("Connected and Storage scanned.");
+                            self.auto_payload_attempted = false;
                             self.check_payload_version();
                             if self.main_tab == 1 {
-                                self.manage_refresh(self.manage_active);
+                                self.manage_refresh(ManageSide::Left);
                             }
                         }
                         Err(e) => {
@@ -1851,25 +2175,16 @@ impl eframe::App for Ps5UploadApp {
                     match result {
                         Ok(()) => {
                             if op.starts_with("Move") && self.move_cancellation_token.load(Ordering::Relaxed) {
-                                match self.manage_active {
-                                    ManageSide::Left => self.manage_left_status = "Move cancelled".to_string(),
-                                    ManageSide::Right => self.manage_right_status = "Move cancelled".to_string(),
-                                }
+                                self.manage_left_status = "Move cancelled".to_string();
                                 self.log("Move cancelled (operation may complete)");
                             } else {
-                                match self.manage_active {
-                                    ManageSide::Left => self.manage_left_status = format!("{} OK", op),
-                                    ManageSide::Right => self.manage_right_status = format!("{} OK", op),
-                                }
+                                self.manage_left_status = format!("{} OK", op);
                                 self.log(&format!("{} OK", op));
                             }
-                            self.manage_refresh(self.manage_active);
+                            self.manage_refresh(ManageSide::Left);
                         }
                         Err(e) => {
-                            match self.manage_active {
-                                ManageSide::Left => self.manage_left_status = format!("{} failed: {}", op, e),
-                                ManageSide::Right => self.manage_right_status = format!("{} failed: {}", op, e),
-                            }
+                            self.manage_left_status = format!("{} failed: {}", op, e);
                             self.log(&format!("{} failed: {}", op, e));
                         }
                     }
@@ -1882,7 +2197,7 @@ impl eframe::App for Ps5UploadApp {
                 }
                 AppMessage::DownloadStart { total, label } => {
                     self.is_downloading = true;
-                    self.status = "Downloading...".to_string();
+                    self.status = tr(lang, "status_downloading");
                     self.download_progress_sent = 0;
                     self.download_progress_total = total;
                     self.download_speed_bps = 0.0;
@@ -1924,6 +2239,26 @@ impl eframe::App for Ps5UploadApp {
                             self.status = "Download Failed".to_string();
                         }
                     }
+                }
+                AppMessage::UploadOptimizeComplete(opt) => {
+                    let lang = Language::from_code(&self.config.language);
+                    if opt.compression.is_none() && opt.connections.is_none() {
+                        self.log(&tr(lang, "optimize_upload_no_samples"));
+                        return;
+                    }
+                    if let Some(mode) = opt.compression {
+                        self.config.compression = compression_mode_to_setting(mode).to_string();
+                    }
+                    if let Some(connections) = opt.connections {
+                        self.config.connections = connections;
+                    }
+                    self.config.save();
+                    let unchanged = tr(lang, "optimize_upload_unchanged");
+                    let comp_label = opt.compression.map(compression_label).unwrap_or(unchanged.as_str());
+                    let conn_label = opt.connections.map(|v| v.to_string()).unwrap_or_else(|| unchanged.clone());
+                    let template = tr(lang, "optimize_upload_result");
+                    let msg = template.replacen("{}", comp_label, 1).replacen("{}", &conn_label, 1);
+                    self.log(&msg);
                 }
                 AppMessage::UpdateCheckComplete(res) => {
                     self.update_check_running = false;
@@ -1989,11 +2324,29 @@ impl eframe::App for Ps5UploadApp {
                     match res {
                         Ok(version) => {
                             self.payload_status = format!("Running (v{})", version);
-                            self.payload_version = Some(version);
+                            self.payload_version = Some(version.clone());
+                            let current_version = normalize_version(app_version_trimmed());
+                            let running_version = normalize_version(&version);
+                            if self.config.auto_check_payload
+                                && !self.auto_payload_attempted
+                                && running_version != current_version
+                            {
+                                self.auto_payload_attempted = true;
+                                self.payload_log(&format!(
+                                    "Payload version mismatch (v{}). Auto-loading current payload...",
+                                    version
+                                ));
+                                self.start_payload_download_and_send(PayloadFetch::Current);
+                            }
                         }
                         Err(e) => {
                             self.payload_status = format!("Not detected ({})", e);
                             self.payload_version = None;
+                            if self.config.auto_check_payload && !self.auto_payload_attempted {
+                                self.auto_payload_attempted = true;
+                                self.payload_log("Payload not detected. Auto-loading current payload...");
+                                self.start_payload_download_and_send(PayloadFetch::Current);
+                            }
                         }
                     }
                 }
@@ -2024,23 +2377,32 @@ impl eframe::App for Ps5UploadApp {
                     self.scanning_files_found = files_found;
                     self.scanning_total_size = total_size;
                     if self.is_scanning {
-                        self.status = format!("Scanning... {} files ({})", files_found, format_bytes(total_size));
+                        let template = tr(lang, "status_scanning_detail");
+                        let msg = template
+                            .replacen("{}", &files_found.to_string(), 1)
+                            .replacen("{}", &format_bytes(total_size), 1);
+                        self.status = msg;
                         self.progress_total = total_size;
+                        self.progress_phase = "Scanning".to_string();
                     }
-                    if self.is_uploading {
-                         if total_size > self.progress_total {
-                            self.progress_total = total_size;
-                        }
+                    if self.is_uploading && total_size > self.progress_total {
+                        self.progress_total = total_size;
                     }
                 }
                 AppMessage::UploadStart => {
                     self.is_scanning = false;
-                    self.status = "Uploading...".to_string();
+                    self.status = tr(lang, "status_uploading");
+                    self.progress_phase = "Sending".to_string();
                 }
                 AppMessage::Progress { sent, total, files_sent, elapsed_secs, current_file } => {
                     self.progress_sent = sent;
                     self.progress_total = total;
                     self.progress_files = files_sent;
+                    if sent == 0 {
+                        self.progress_phase = "Packing".to_string();
+                    } else {
+                        self.progress_phase = "Sending".to_string();
+                    }
                     if elapsed_secs > 0.0 { self.progress_speed_bps = sent as f64 / elapsed_secs; }
                     if total > sent && self.progress_speed_bps > 0.0 {
                         let remaining = (total - sent) as f64;
@@ -2053,6 +2415,7 @@ impl eframe::App for Ps5UploadApp {
                 AppMessage::UploadComplete(res) => {
                     self.is_uploading = false;
                     self.is_scanning = false;
+                    self.progress_phase.clear();
                     let duration = self.upload_start_time.map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0);
 
                     match &res {
@@ -2197,21 +2560,38 @@ Overwrite it?", self.get_dest_path()));
                     ui.label(detected_label);
                     ui.add_space(6.0);
                     ui.label(tr(lang, "archive_decompress_note"));
+                    let extract = ui.checkbox(&mut self.config.extract_archives_fast, tr(lang, "archive_extract_fast_toggle"));
+                    if extract.changed() {
+                        self.config.save();
+                    }
+                    if self.config.extract_archives_fast {
+                        ui.label(egui::RichText::new(tr(lang, "archive_extract_fast_note")).weak());
+                    } else {
+                        ui.label(egui::RichText::new(tr(lang, "archive_extract_stream_note")).weak());
+                    }
                     if self.config.connections > 1 {
                         ui.add_space(4.0);
                         ui.label(tr(lang, "archive_multi_conn_note"));
                     }
                     ui.add_space(6.0);
                     ui.checkbox(&mut self.pending_archive_trim, tr(lang, "archive_trim_dir"));
+                    if self.pending_archive_trim && !self.custom_subfolder.is_empty() {
+                        self.custom_subfolder.clear();
+                    }
                     ui.add_space(10.0);
                     ui.horizontal(|ui| {
                         if ui.button(tr(lang, "continue")).clicked() {
                             if let Some(path) = self.pending_archive_path.take() {
                                 self.update_game_path(path);
-                                self.log(&format!("{} archive selected. It will be decompressed and uploaded during transfer.", archive_kind));
+                                let msg_key = if self.config.extract_archives_fast {
+                                    "archive_selected_extract"
+                                } else {
+                                    "archive_selected_stream"
+                                };
+                                let msg = tr(lang, msg_key).replace("{}", &archive_kind);
+                                self.log(&msg);
                             }
                             self.pending_archive_kind = None;
-                            self.pending_archive_trim = true;
                             self.show_archive_confirm_dialog = false;
                         }
                         if ui.button(tr(lang, "cancel")).clicked() {
@@ -2219,6 +2599,135 @@ Overwrite it?", self.get_dest_path()));
                             self.pending_archive_kind = None;
                             self.pending_archive_trim = true;
                             self.show_archive_confirm_dialog = false;
+                        }
+                    });
+                });
+        }
+
+        if self.manage_dest_open {
+            egui::Window::new(tr(lang, "select_destination"))
+                .collapsible(false)
+                .resizable(true)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.heading(tr(lang, "select_destination"));
+                    ui.add_space(4.0);
+                    ui.label(tr(lang, "destination_path"));
+                    ui.horizontal(|ui| {
+                        let buttons_width = 3.0 * 70.0 + 12.0;
+                        let path_width = (ui.available_width() - buttons_width).max(200.0);
+                        ui.add_sized([path_width, 24.0], egui::TextEdit::singleline(&mut self.manage_right_path));
+                        if ui.button(tr(lang, "go")).clicked() {
+                            self.manage_refresh(ManageSide::Right);
+                        }
+                        if ui.button(tr(lang, "up")).clicked() {
+                            let current_path = self.manage_right_path.clone();
+                            if let Some(parent) = std::path::Path::new(&current_path).parent() {
+                                self.manage_right_path = parent.display().to_string();
+                                self.manage_refresh(ManageSide::Right);
+                            }
+                        }
+                        if ui.button(tr(lang, "refresh")).clicked() {
+                            self.manage_refresh(ManageSide::Right);
+                        }
+                    });
+                    ui.add_space(4.0);
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(tr(lang, "breadcrumb"));
+                        let mut parts = Vec::new();
+                        let mut current = String::new();
+                        let active_path = &self.manage_right_path;
+                        if active_path.starts_with('/') {
+                            parts.push("/".to_string());
+                        }
+                        for part in active_path.split('/').filter(|p| !p.is_empty()) {
+                            if current.ends_with('/') || current.is_empty() {
+                                current.push_str(part);
+                            } else {
+                                current.push('/');
+                                current.push_str(part);
+                            }
+                            parts.push(current.clone());
+                        }
+
+                        for (idx, part) in parts.iter().enumerate() {
+                            let label = if idx == 0 && part == "/" { "/" } else { part.rsplit('/').next().unwrap_or(part) };
+                            if ui.button(label).clicked() {
+                                self.manage_right_path = part.clone();
+                                self.manage_refresh(ManageSide::Right);
+                            }
+                        }
+                    });
+                    ui.add_space(4.0);
+                    ui.label(self.manage_right_status.clone());
+
+                    let mut open_dir: Option<String> = None;
+                    egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                        for (idx, entry) in self.manage_right_entries.iter().enumerate() {
+                            if entry.entry_type != "dir" {
+                                continue;
+                            }
+                            let is_selected = self.manage_right_selected == Some(idx);
+                            let response = ui.add(egui::SelectableLabel::new(
+                                is_selected,
+                                format!("📁 {}", entry.name),
+                            ));
+                            if response.clicked() {
+                                self.manage_right_selected = Some(idx);
+                            }
+                            if response.double_clicked() {
+                                open_dir = Some(entry.name.clone());
+                            }
+                        }
+                    });
+
+                    if let Some(dir_name) = open_dir {
+                        self.manage_right_path = Self::join_remote_path(&self.manage_right_path, &dir_name);
+                        self.manage_refresh(ManageSide::Right);
+                    }
+
+                    let selected_dest = self.manage_right_selected
+                        .and_then(|idx| self.manage_right_entries.get(idx))
+                        .filter(|e| e.entry_type == "dir")
+                        .map(|e| Self::join_remote_path(&self.manage_right_path, &e.name))
+                        .unwrap_or_else(|| self.manage_right_path.clone());
+
+                    ui.add_space(6.0);
+                    ui.label(format!("{} {}", tr(lang, "destination"), selected_dest));
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if ui.button(tr(lang, "select_here")).clicked() {
+                            if let (Some(action), Some(src), Some(name)) = (
+                                self.manage_dest_action,
+                                self.manage_dest_source_path.clone(),
+                                self.manage_dest_source_name.clone(),
+                            ) {
+                                let dst = Self::join_remote_path(&selected_dest, &name);
+                                match action {
+                                    ManageDestAction::Move => {
+                                        self.start_move_check(src, dst, tr(lang, "move").to_string());
+                                    }
+                                    ManageDestAction::Copy => {
+                                        let ip = self.ip.clone();
+                                        let rt = self.rt.clone();
+                                        self.manage_send_op("Copy", move || {
+                                            rt.block_on(async {
+                                                copy_path(&ip, TRANSFER_PORT, &src, &dst).await
+                                            }).map_err(|e| e.to_string())
+                                        });
+                                    }
+                                }
+                            }
+                            self.manage_dest_open = false;
+                            self.manage_dest_action = None;
+                            self.manage_dest_source_path = None;
+                            self.manage_dest_source_name = None;
+                        }
+                        if ui.button(tr(lang, "cancel")).clicked() {
+                            self.manage_dest_open = false;
+                            self.manage_dest_action = None;
+                            self.manage_dest_source_path = None;
+                            self.manage_dest_source_name = None;
                         }
                     });
                 });
@@ -2484,11 +2993,21 @@ Overwrite it?", self.get_dest_path()));
 
         // 1. TOP HEADER
         egui::TopBottomPanel::top("header").show(ctx, |ui| {
-            ui.add_space(5.0);
+            ui.add_space(6.0);
             ui.horizontal(|ui| {
-                ui.vertical(|ui| {
-                    ui.heading(tr(lang, "app_title"));
-                    ui.label(format!("v{}", env!("CARGO_PKG_VERSION")));
+                ui.horizontal(|ui| {
+                    if let Some(tex) = &self.logo_texture {
+                        ui.add(egui::Image::new(tex).fit_to_exact_size([80.0, 80.0].into()));
+                        ui.add_space(12.0);
+                    }
+                    ui.vertical(|ui| {
+                        ui.label(egui::RichText::new("PS5Upload").strong().size(22.0));
+                        ui.label(
+                            egui::RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
+                                .size(14.0)
+                                .color(ui.visuals().weak_text_color()),
+                        );
+                    });
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.add(egui::Button::new("☕ Buy me a coffee").min_size([120.0, 32.0].into())).clicked() {
@@ -2501,7 +3020,7 @@ Overwrite it?", self.get_dest_path()));
                     }
                 });
             });
-            ui.add_space(5.0);
+            ui.add_space(6.0);
         });
 
         // 2. BOTTOM STATUS BAR
@@ -2520,14 +3039,12 @@ Overwrite it?", self.get_dest_path()));
 
         // 3. LEFT PANEL: CONNECTION & STORAGE
         egui::SidePanel::left("left_panel").resizable(true).default_width(300.0).min_width(250.0).show(ctx, |ui| {
-            ui.add_space(10.0);
-            ui.horizontal(|ui| {
-                if let Some(tex) = &self.logo_texture {
-                    ui.add(egui::Image::new(tex).fit_to_exact_size([40.0, 40.0].into()));
-                }
-                ui.heading(tr(lang, "connect"));
-            });
-            ui.add_space(5.0);
+            egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    ui.heading(tr(lang, "connect"));
+                });
+                ui.add_space(5.0);
 
             // Profile selector
             ui.horizontal(|ui| {
@@ -2586,73 +3103,20 @@ Overwrite it?", self.get_dest_path()));
             }
             ui.add_space(5.0);
             if ui.button(tr(lang, "download_current_payload")).clicked() {
-                if self.ip.trim().is_empty() {
-                    self.payload_log("Enter a PS5 address first.");
-                } else {
-                    let ip = self.ip.clone();
-                    let tx = self.tx.clone();
-                    let rt = self.rt.clone();
-                    let tag = format!("v{}", app_version_trimmed());
-                    self.is_sending_payload = true;
-                    self.status = "Downloading payload...".to_string();
-                    self.payload_log(&format!("Downloading payload {}...", tag));
-                    thread::spawn(move || {
-                        let result = rt.block_on(async {
-                            let release = fetch_release_by_tag(&tag).await?;
-                            let asset = release.assets.iter().find(|a| a.name == "ps5upload.elf")
-                                .ok_or_else(|| anyhow::anyhow!("Payload asset not found for {}", tag))?;
-                            let tmp_path = std::env::temp_dir().join("ps5upload_current.elf");
-                            download_asset(&asset.browser_download_url, &tmp_path.display().to_string()).await?;
-                            Ok::<_, anyhow::Error>(tmp_path)
-                        });
-                        match result {
-                            Ok(path) => {
-                                let path_str = path.display().to_string();
-                                let _ = tx.send(AppMessage::PayloadLog(format!("Payload downloaded: {}", path_str)));
-                                let result = send_payload_file(&ip, &path_str, &tx);
-                                let _ = tx.send(AppMessage::PayloadSendComplete(result));
-                            }
-                            Err(e) => {
-                                let _ = tx.send(AppMessage::PayloadSendComplete(Err(e.to_string())));
-                            }
-                        }
-                    });
-                }
+                self.start_payload_download_and_send(PayloadFetch::Current);
             }
             if ui.button(tr(lang, "download_latest_payload")).clicked() {
-                if self.ip.trim().is_empty() {
-                    self.payload_log("Enter a PS5 address first.");
-                } else {
-                    let ip = self.ip.clone();
-                    let tx = self.tx.clone();
-                    let rt = self.rt.clone();
-                    self.is_sending_payload = true;
-                    self.status = "Downloading payload...".to_string();
-                    self.payload_log("Downloading latest payload...");
-                    thread::spawn(move || {
-                        let result = rt.block_on(async {
-                            let release = fetch_latest_release(false).await?;
-                            let asset = release.assets.iter().find(|a| a.name == "ps5upload.elf")
-                                .ok_or_else(|| anyhow::anyhow!("Latest payload asset not found"))?;
-                            let tmp_path = std::env::temp_dir().join("ps5upload_latest.elf");
-                            download_asset(&asset.browser_download_url, &tmp_path.display().to_string()).await?;
-                            Ok::<_, anyhow::Error>(tmp_path)
-                        });
-                        match result {
-                            Ok(path) => {
-                                let path_str = path.display().to_string();
-                                let _ = tx.send(AppMessage::PayloadLog(format!("Latest payload downloaded: {}", path_str)));
-                                let result = send_payload_file(&ip, &path_str, &tx);
-                                let _ = tx.send(AppMessage::PayloadSendComplete(result));
-                            }
-                            Err(e) => {
-                                let _ = tx.send(AppMessage::PayloadSendComplete(Err(e.to_string())));
-                            }
-                        }
-                    });
-                }
+                self.start_payload_download_and_send(PayloadFetch::Latest);
             }
             ui.add_space(5.0);
+            let auto_payload = ui.checkbox(&mut self.config.auto_check_payload, tr(lang, "auto_check_payload"));
+            if auto_payload.changed() {
+                self.config.save();
+                self.auto_payload_attempted = false;
+                if self.config.auto_check_payload {
+                    self.check_payload_version();
+                }
+            }
             let auto_connect = ui.checkbox(&mut self.config.auto_connect, tr(lang, "auto_reconnect"));
             if auto_connect.changed() { self.config.save(); }
 
@@ -2663,17 +3127,18 @@ Overwrite it?", self.get_dest_path()));
                     self.storage_locations.clear();
                     self.selected_storage = None;
                     self.is_connected = false;
+                    self.auto_payload_attempted = false;
                 }
             } else {
                 ui.horizontal(|ui| {
                     if ui.add_enabled(!self.is_connecting, egui::Button::new(tr(lang, "connect_ps5")).min_size([150.0, 30.0].into())).clicked() {
                         self.connect();
                     }
-                    if self.is_connecting {
-                        if ui.add(egui::Button::new(tr(lang, "stop")).min_size([60.0, 30.0].into())).clicked() {
-                            self.is_connecting = false;
-                            self.status = "Cancelled".to_string();
-                        }
+                    if self.is_connecting
+                        && ui.add(egui::Button::new(tr(lang, "stop")).min_size([60.0, 30.0].into())).clicked()
+                    {
+                        self.is_connecting = false;
+                        self.status = "Cancelled".to_string();
                     }
                 });
             }
@@ -2681,8 +3146,8 @@ Overwrite it?", self.get_dest_path()));
             ui.add_space(20.0);
             ui.horizontal(|ui| {
                 ui.heading(tr(lang, "storage"));
-                if connected {
-                    if ui.button(format!("⟳ {}", tr(lang, "refresh"))).clicked() { self.connect(); }
+                if connected && ui.button(format!("⟳ {}", tr(lang, "refresh"))).clicked() {
+                    self.connect();
                 }
             });
             ui.add_space(5.0);
@@ -2772,20 +3237,22 @@ Overwrite it?", self.get_dest_path()));
                         }
                     });
             });
+            });
         });
 
         // 4. RIGHT PANEL: LOGS
         egui::SidePanel::right("right_panel").resizable(true).default_width(450.0).min_width(350.0).show(ctx, |ui| {
-            ui.add_space(10.0);
-            ui.horizontal(|ui| {
-                ui.heading(tr(lang, "logs"));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("🗑 Clear").clicked() {
-                        self.client_logs.clear();
-                        self.payload_logs.clear();
-                    }
+            egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    ui.heading(tr(lang, "logs"));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("🗑 Clear").clicked() {
+                            self.client_logs.clear();
+                            self.payload_logs.clear();
+                        }
+                    });
                 });
-            });
             
             ui.add_space(5.0);
             ui.horizontal(|ui| {
@@ -2798,6 +3265,14 @@ Overwrite it?", self.get_dest_path()));
             if self.log_tab == 2 {
                 // History tab
                 let records = self.history_data.records.clone();
+                ui.horizontal(|ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button(tr(lang, "clear_history")).clicked() {
+                            clear_history(&mut self.history_data);
+                        }
+                    });
+                });
+                ui.add_space(5.0);
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     if self.history_data.records.is_empty() {
                         ui.label(tr(lang, "no_history"));
@@ -2858,10 +3333,6 @@ Overwrite it?", self.get_dest_path()));
                     }
                 });
 
-                ui.add_space(5.0);
-                if ui.button(tr(lang, "clear_history")).clicked() {
-                    clear_history(&mut self.history_data);
-                }
             } else {
                 egui::ScrollArea::vertical().stick_to_bottom(true).show(ui, |ui| {
                     let text = if self.log_tab == 0 { &self.client_logs } else { &self.payload_logs };
@@ -2872,26 +3343,28 @@ Overwrite it?", self.get_dest_path()));
                         .lock_focus(true));
                 });
             }
+            });
         });
 
         // 5. CENTRAL PANEL: MAIN
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.add_space(10.0);
-            ui.horizontal(|ui| {
-                let transfer_tab = ui.selectable_value(&mut self.main_tab, 0, tr(lang, "transfer"));
-                let manage_tab = ui.selectable_value(&mut self.main_tab, 1, tr(lang, "manage"));
-                if manage_tab.clicked() && connected {
-                    self.manage_refresh(self.manage_active);
-                }
-                if transfer_tab.clicked() {
-                    self.manage_left_selected = None;
-                    self.manage_right_selected = None;
-                }
-            });
-            ui.separator();
+            egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    let transfer_tab = ui.selectable_value(&mut self.main_tab, 0, tr(lang, "transfer"));
+                    let manage_tab = ui.selectable_value(&mut self.main_tab, 1, tr(lang, "manage"));
+                    if manage_tab.clicked() && connected {
+                        self.manage_refresh(ManageSide::Left);
+                    }
+                    if transfer_tab.clicked() {
+                        self.manage_left_selected = None;
+                        self.manage_right_selected = None;
+                    }
+                });
+                ui.separator();
 
             if self.main_tab == 1 {
-                ui.heading("File Manager");
+                ui.heading(tr(lang, "file_manager"));
                 ui.add_space(8.0);
 
                 let can_manage = connected && !self.manage_busy && !self.is_downloading;
@@ -2899,59 +3372,31 @@ Overwrite it?", self.get_dest_path()));
                 ui.group(|ui| {
                     ui.set_width(ui.available_width());
                     ui.horizontal(|ui| {
-                        ui.label("Pane");
-                        if ui.selectable_value(&mut self.manage_active, ManageSide::Left, "Left").clicked() {
-                            self.manage_refresh(ManageSide::Left);
-                        }
-                        if ui.selectable_value(&mut self.manage_active, ManageSide::Right, "Right").clicked() {
-                            self.manage_refresh(ManageSide::Right);
-                        }
-                        ui.separator();
-                        ui.label("Path");
+                        ui.label(tr(lang, "path"));
                         let buttons_width = 3.0 * 70.0 + 12.0;
                         let path_width = (ui.available_width() - buttons_width).max(200.0);
-                        let path_value = match self.manage_active {
-                            ManageSide::Left => &mut self.manage_left_path,
-                            ManageSide::Right => &mut self.manage_right_path,
-                        };
-                        ui.add_sized([path_width, 24.0], egui::TextEdit::singleline(path_value));
-                        if ui.add_enabled(can_manage, egui::Button::new("Go")).clicked() {
-                            self.manage_refresh(self.manage_active);
+                        ui.add_sized([path_width, 24.0], egui::TextEdit::singleline(&mut self.manage_left_path));
+                        if ui.add_enabled(can_manage, egui::Button::new(tr(lang, "go"))).clicked() {
+                            self.manage_refresh(ManageSide::Left);
                         }
-                        if ui.add_enabled(can_manage, egui::Button::new("Up")).clicked() {
-                            let current_path = match self.manage_active {
-                                ManageSide::Left => self.manage_left_path.clone(),
-                                ManageSide::Right => self.manage_right_path.clone(),
-                            };
+                        if ui.add_enabled(can_manage, egui::Button::new(tr(lang, "up"))).clicked() {
+                            let current_path = self.manage_left_path.clone();
                             if let Some(parent) = std::path::Path::new(&current_path).parent() {
-                                match self.manage_active {
-                                    ManageSide::Left => self.manage_left_path = parent.display().to_string(),
-                                    ManageSide::Right => self.manage_right_path = parent.display().to_string(),
-                                }
-                                self.manage_refresh(self.manage_active);
+                                self.manage_left_path = parent.display().to_string();
+                                self.manage_refresh(ManageSide::Left);
                             }
                         }
-                        if ui.add_enabled(can_manage, egui::Button::new("Refresh")).clicked() {
-                            self.manage_refresh(self.manage_active);
+                        if ui.add_enabled(can_manage, egui::Button::new(tr(lang, "refresh"))).clicked() {
+                            self.manage_refresh(ManageSide::Left);
                         }
                     });
 
-                    ui.add_space(4.0);
-                    let other_path = match self.manage_active {
-                        ManageSide::Left => self.manage_right_path.clone(),
-                        ManageSide::Right => self.manage_left_path.clone(),
-                    };
-                    ui.label(format!("{} {}", tr(lang, "other_pane_path"), other_path));
-
                     ui.add_space(6.0);
                     ui.horizontal_wrapped(|ui| {
-                        ui.label("Breadcrumb");
+                        ui.label(tr(lang, "breadcrumb"));
                         let mut parts = Vec::new();
                         let mut current = String::new();
-                        let active_path = match self.manage_active {
-                            ManageSide::Left => &self.manage_left_path,
-                            ManageSide::Right => &self.manage_right_path,
-                        };
+                        let active_path = &self.manage_left_path;
                         if active_path.starts_with('/') {
                             parts.push("/".to_string());
                         }
@@ -2968,20 +3413,14 @@ Overwrite it?", self.get_dest_path()));
                         for (idx, part) in parts.iter().enumerate() {
                             let label = if idx == 0 && part == "/" { "/" } else { part.rsplit('/').next().unwrap_or(part) };
                             if ui.add_enabled(can_manage, egui::Button::new(label)).clicked() {
-                                match self.manage_active {
-                                    ManageSide::Left => self.manage_left_path = part.clone(),
-                                    ManageSide::Right => self.manage_right_path = part.clone(),
-                                }
-                                self.manage_refresh(self.manage_active);
+                                self.manage_left_path = part.clone();
+                                self.manage_refresh(ManageSide::Left);
                             }
                         }
                     });
 
                     ui.add_space(4.0);
-                    ui.label(match self.manage_active {
-                        ManageSide::Left => self.manage_left_status.clone(),
-                        ManageSide::Right => self.manage_right_status.clone(),
-                    });
+                    ui.label(self.manage_left_status.clone());
                 });
 
                 ui.add_space(10.0);
@@ -2997,14 +3436,8 @@ Overwrite it?", self.get_dest_path()));
                         ui.label(tr(lang, "not_connected"));
                     } else {
                         let mut open_dir: Option<String> = None;
-                        let entries = match self.manage_active {
-                            ManageSide::Left => &self.manage_left_entries,
-                            ManageSide::Right => &self.manage_right_entries,
-                        };
-                        let selected_ref = match self.manage_active {
-                            ManageSide::Left => &mut self.manage_left_selected,
-                            ManageSide::Right => &mut self.manage_right_selected,
-                        };
+                        let entries = &self.manage_left_entries;
+                        let selected_ref = &mut self.manage_left_selected;
                         egui::ScrollArea::vertical().max_height(list_height).show(ui, |ui| {
                             let total_width = ui.available_width();
                             let name_w = (total_width * 0.45).max(220.0);
@@ -3105,15 +3538,8 @@ Overwrite it?", self.get_dest_path()));
                             });
                         });
                         if let Some(dir_name) = open_dir {
-                            match self.manage_active {
-                                ManageSide::Left => {
-                                    self.manage_left_path = Self::join_remote_path(&self.manage_left_path, &dir_name);
-                                }
-                                ManageSide::Right => {
-                                    self.manage_right_path = Self::join_remote_path(&self.manage_right_path, &dir_name);
-                                }
-                            }
-                            self.manage_refresh(self.manage_active);
+                            self.manage_left_path = Self::join_remote_path(&self.manage_left_path, &dir_name);
+                            self.manage_refresh(ManageSide::Left);
                         }
                     }
                 });
@@ -3124,14 +3550,9 @@ Overwrite it?", self.get_dest_path()));
                     ui.set_width(ui.available_width());
                     ui.label(tr(lang, "details_actions"));
 
-                    let selected_info = match self.manage_active {
-                        ManageSide::Left => self.manage_left_selected
-                            .and_then(|idx| self.manage_left_entries.get(idx))
-                            .map(|entry| (entry.name.clone(), entry.entry_type.clone(), entry.size, entry.mtime)),
-                        ManageSide::Right => self.manage_right_selected
-                            .and_then(|idx| self.manage_right_entries.get(idx))
-                            .map(|entry| (entry.name.clone(), entry.entry_type.clone(), entry.size, entry.mtime)),
-                    };
+                    let selected_info = self.manage_left_selected
+                        .and_then(|idx| self.manage_left_entries.get(idx))
+                        .map(|entry| (entry.name.clone(), entry.entry_type.clone(), entry.size, entry.mtime));
 
                     let mut selected_name: Option<String> = None;
                     let mut selected_type: Option<String> = None;
@@ -3140,11 +3561,7 @@ Overwrite it?", self.get_dest_path()));
                     let mut selected_mtime: Option<Option<i64>> = None;
 
                     if let Some((name, entry_type, size, mtime)) = selected_info {
-                        let base = match self.manage_active {
-                            ManageSide::Left => &self.manage_left_path,
-                            ManageSide::Right => &self.manage_right_path,
-                        };
-                        let path = Self::join_remote_path(base, &name);
+                        let path = Self::join_remote_path(&self.manage_left_path, &name);
                         selected_name = Some(name);
                         selected_type = Some(entry_type);
                         selected_path = Some(path);
@@ -3182,25 +3599,17 @@ Overwrite it?", self.get_dest_path()));
                             && has_selection
                             && !self.manage_new_name.trim().is_empty()
                             && self.manage_new_name.trim() != selected_name.as_deref().unwrap_or("");
-                        if ui.add_enabled(can_rename, egui::Button::new("Rename")).clicked() {
+                        if ui.add_enabled(can_rename, egui::Button::new(tr(lang, "rename"))).clicked() {
                             let src = selected_path.clone().unwrap_or_default();
                             let new_name = self.manage_new_name.trim().to_string();
-                            let dst_base = match self.manage_active {
-                                ManageSide::Left => &self.manage_left_path,
-                                ManageSide::Right => &self.manage_right_path,
-                            };
-                            let dst = Self::join_remote_path(dst_base, &new_name);
+                            let dst = Self::join_remote_path(&self.manage_left_path, &new_name);
                             self.pending_rename_request = Some(RenameRequest { src, dst });
                             self.show_rename_confirm = true;
                         }
                         let can_new_folder = can_ops && !self.manage_new_name.trim().is_empty();
                         if ui.add_enabled(can_new_folder, egui::Button::new(tr(lang, "new_folder"))).clicked() {
                             let folder_name = self.manage_new_name.trim().to_string();
-                            let base_path = match self.manage_active {
-                                ManageSide::Left => self.manage_left_path.clone(),
-                                ManageSide::Right => self.manage_right_path.clone(),
-                            };
-                            let full_path = Self::join_remote_path(&base_path, &folder_name);
+                            let full_path = Self::join_remote_path(&self.manage_left_path, &folder_name);
                             let ip = self.ip.clone();
                             let rt = self.rt.clone();
                             self.manage_send_op("New folder", move || {
@@ -3210,82 +3619,34 @@ Overwrite it?", self.get_dest_path()));
                             });
                             self.manage_new_name.clear();
                         }
-                        let move_label = match self.manage_active {
-                            ManageSide::Left => tr(lang, "move_right"),
-                            ManageSide::Right => tr(lang, "move_left"),
-                        };
-                        if ui.add_enabled(can_ops && has_selection, egui::Button::new(&move_label)).clicked() {
+                        if ui.add_enabled(can_ops && has_selection, egui::Button::new(tr(lang, "move"))).clicked() {
                             let src = selected_path.clone().unwrap_or_default();
                             let name = selected_name.clone().unwrap_or_default();
-                            let dst_dir = match self.manage_active {
-                                ManageSide::Left => self.manage_right_path.clone(),
-                                ManageSide::Right => self.manage_left_path.clone(),
-                            };
-                            let dst = Self::join_remote_path(&dst_dir, &name);
-                            let ip = self.ip.clone();
-                            let rt = self.rt.clone();
-                            let op_name = move_label.to_string();
-                            let tx = self.tx.clone();
-                            let req = MoveRequest { src: src.clone(), dst: dst.clone(), op_name: op_name.clone(), dst_exists: false };
-                            thread::spawn(move || {
-                                let name = std::path::Path::new(&dst)
-                                    .file_name()
-                                    .map(|n| n.to_string_lossy().to_string())
-                                    .unwrap_or_default();
-                                let parent = std::path::Path::new(&dst)
-                                    .parent()
-                                    .map(|p| p.to_string_lossy().to_string())
-                                    .unwrap_or_else(|| "/".to_string());
-                                let exists = if name.is_empty() {
-                                    false
-                                } else {
-                                    match rt.block_on(async { list_dir(&ip, TRANSFER_PORT, &parent).await }) {
-                                        Ok(entries) => entries.iter().any(|e| e.name == name),
-                                        Err(e) => {
-                                            let _ = tx.send(AppMessage::Log(format!("Move check failed: {}", e)));
-                                            false
-                                        }
-                                    }
-                                };
-                                let _ = tx.send(AppMessage::MoveCheckResult { req, exists });
-                            });
+                            self.open_destination_picker(ManageDestAction::Move, src, name);
                         }
                         if ui.add_enabled(can_ops && has_selection, egui::Button::new(tr(lang, "copy"))).clicked() {
-                            if let Some(path) = selected_path.clone() {
-                                self.manage_clipboard = Some(path);
-                                match self.manage_active {
-                                    ManageSide::Left => self.manage_left_status = "Copied to clipboard".to_string(),
-                                    ManageSide::Right => self.manage_right_status = "Copied to clipboard".to_string(),
-                                }
-                            }
-                        }
-                        let can_paste = can_ops && self.manage_clipboard.is_some();
-                        if ui.add_enabled(can_paste, egui::Button::new(tr(lang, "paste"))).clicked() {
-                            if let Some(clip_path) = self.manage_clipboard.clone() {
-                                let name = std::path::Path::new(&clip_path)
-                                    .file_name()
-                                    .map(|n| n.to_string_lossy().to_string())
-                                    .unwrap_or_else(|| "item".to_string());
-                                let dst_base = match self.manage_active {
-                                    ManageSide::Left => &self.manage_left_path,
-                                    ManageSide::Right => &self.manage_right_path,
-                                };
-                                let dst = Self::join_remote_path(dst_base, &name);
-                                let ip = self.ip.clone();
-                                let rt = self.rt.clone();
-                                self.manage_send_op("Paste", move || {
-                                    rt.block_on(async {
-                                        copy_path(&ip, TRANSFER_PORT, &clip_path, &dst).await
-                                    }).map_err(|e| e.to_string())
-                                });
-                            }
+                            let src = selected_path.clone().unwrap_or_default();
+                            let name = selected_name.clone().unwrap_or_default();
+                            self.open_destination_picker(ManageDestAction::Copy, src, name);
                         }
                         let can_download = can_ops && has_selection;
                         if ui.add_enabled(can_download, egui::Button::new(tr(lang, "download"))).clicked() {
                             let name = selected_name.clone().unwrap_or_default();
                             let entry_type = selected_type.clone().unwrap_or_default();
                             let target = selected_path.clone().unwrap_or_default();
-                            let use_lz4 = self.config.download_compression == "lz4";
+                            let mut compression = match self.config.download_compression.as_str() {
+                                "lz4" => DownloadCompression::Lz4,
+                                "zstd" => DownloadCompression::Zstd,
+                                "lzma" => DownloadCompression::Lzma,
+                                "auto" => DownloadCompression::Auto,
+                                _ => DownloadCompression::None,
+                            };
+                            if matches!(compression, DownloadCompression::Zstd | DownloadCompression::Lzma | DownloadCompression::Auto)
+                                && !self.payload_supports_modern_compression()
+                            {
+                                self.log("Payload does not support Zstd/LZMA yet; using LZ4 for download.");
+                                compression = DownloadCompression::Lz4;
+                            }
                             if entry_type == "file" {
                                 if let Some(save_path) = rfd::FileDialog::new().set_file_name(&name).save_file() {
                                     let save_path = save_path.display().to_string();
@@ -3297,16 +3658,14 @@ Overwrite it?", self.get_dest_path()));
                                         self.execute_download_request(request);
                                     }
                                 }
-                            } else {
-                                if let Some(save_folder) = rfd::FileDialog::new().pick_folder() {
-                                    let dest_root = save_folder.join(&name).display().to_string();
-                                    let request = DownloadRequest::Dir { name, target, dest_root: dest_root.clone(), use_lz4 };
-                                    if std::path::Path::new(&dest_root).exists() {
-                                        self.pending_download_request = Some(request);
-                                        self.show_download_overwrite_dialog = true;
-                                    } else {
-                                        self.execute_download_request(request);
-                                    }
+                            } else if let Some(save_folder) = rfd::FileDialog::new().pick_folder() {
+                                let dest_root = save_folder.join(&name).display().to_string();
+                                let request = DownloadRequest::Dir { name, target, dest_root: dest_root.clone(), compression };
+                                if std::path::Path::new(&dest_root).exists() {
+                                    self.pending_download_request = Some(request);
+                                    self.show_download_overwrite_dialog = true;
+                                } else {
+                                    self.execute_download_request(request);
                                 }
                             }
                         }
@@ -3335,14 +3694,32 @@ Overwrite it?", self.get_dest_path()));
                     ui.horizontal(|ui| {
                         ui.label(tr(lang, "compression"));
                         egui::ComboBox::from_id_source("download_compression_combo")
-                            .selected_text(if self.config.download_compression == "lz4" { "LZ4" } else { "None" })
+                            .selected_text(match self.config.download_compression.as_str() {
+                                "auto" => tr(lang, "compression_opt_auto"),
+                                "lz4" => tr(lang, "compression_opt_lz4"),
+                                "zstd" => tr(lang, "compression_opt_zstd"),
+                                "lzma" => tr(lang, "compression_opt_lzma"),
+                                _ => tr(lang, "compression_opt_none"),
+                            })
                             .show_ui(ui, |ui| {
-                                if ui.selectable_label(self.config.download_compression == "none", "None").clicked() {
+                                if ui.selectable_label(self.config.download_compression == "none", tr(lang, "compression_opt_none")).clicked() {
                                     self.config.download_compression = "none".to_string();
                                     self.config.save();
                                 }
-                                if ui.selectable_label(self.config.download_compression == "lz4", "LZ4").clicked() {
+                                if ui.selectable_label(self.config.download_compression == "auto", tr(lang, "compression_opt_auto")).clicked() {
+                                    self.config.download_compression = "auto".to_string();
+                                    self.config.save();
+                                }
+                                if ui.selectable_label(self.config.download_compression == "lz4", tr(lang, "compression_opt_lz4")).clicked() {
                                     self.config.download_compression = "lz4".to_string();
+                                    self.config.save();
+                                }
+                                if ui.selectable_label(self.config.download_compression == "zstd", tr(lang, "compression_opt_zstd")).clicked() {
+                                    self.config.download_compression = "zstd".to_string();
+                                    self.config.save();
+                                }
+                                if ui.selectable_label(self.config.download_compression == "lzma", tr(lang, "compression_opt_lzma")).clicked() {
+                                    self.config.download_compression = "lzma".to_string();
                                     self.config.save();
                                 }
                             });
@@ -3365,11 +3742,11 @@ Overwrite it?", self.get_dest_path()));
                     if !self.download_current_file.is_empty() {
                         ui.label(format!("Current file: {}", self.download_current_file));
                     }
-                    if self.is_downloading {
-                        if ui.add(egui::Button::new(tr(lang, "stop_download")).min_size([140.0, 30.0].into())).clicked() {
-                            self.download_cancellation_token.store(true, Ordering::Relaxed);
-                            self.log("Stopping download...");
-                        }
+                    if self.is_downloading
+                        && ui.add(egui::Button::new(tr(lang, "stop_download")).min_size([140.0, 30.0].into())).clicked()
+                    {
+                        self.download_cancellation_token.store(true, Ordering::Relaxed);
+                        self.log("Stopping download...");
                     }
 
                     if self.is_moving {
@@ -3485,10 +3862,10 @@ Overwrite it?", self.get_dest_path()));
                                             }
 
                                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                                if item.status == QueueStatus::Pending {
-                                                    if ui.small_button("×").on_hover_text("Remove").clicked() {
-                                                        item_to_remove = Some(item.id);
-                                                    }
+                                                if item.status == QueueStatus::Pending
+                                                    && ui.small_button("×").on_hover_text("Remove").clicked()
+                                                {
+                                                    item_to_remove = Some(item.id);
                                                 }
                                             });
                                         });
@@ -3525,26 +3902,83 @@ Overwrite it?", self.get_dest_path()));
                         });
                         ui.end_row();
                         if self.selected_preset == 2 { ui.label(format!("{}:", tr(lang, "path"))); ui.text_edit_singleline(&mut self.custom_preset_path); ui.end_row(); }
-                        ui.label(format!("{}:", tr(lang, "name_label"))); ui.text_edit_singleline(&mut self.custom_subfolder); ui.end_row();
+                        let is_archive = Self::archive_kind(Path::new(&self.game_path)).is_some();
+                        let trim_active = is_archive && self.pending_archive_trim;
+                        ui.label(format!("{}:", tr(lang, "name_label")));
+                        ui.add_enabled_ui(!trim_active, |ui| {
+                            ui.text_edit_singleline(&mut self.custom_subfolder);
+                        });
+                        ui.end_row();
+                        if trim_active {
+                            ui.label(egui::RichText::new(tr(lang, "archive_trim_ignores_name")).weak().small());
+                            ui.end_row();
+                        }
                         ui.label(format!("{}:", tr(lang, "use_temp")));
                         let temp_toggle = ui.checkbox(&mut self.config.use_temp, tr(lang, "stage_fast"));
                         if temp_toggle.changed() { self.config.save(); }
                         ui.end_row();
                         ui.label(tr(lang, "compression"));
-                        egui::ComboBox::from_id_source("compression_combo")
-                            .selected_text(if self.config.compression == "lz4" { "LZ4" } else { "None" })
-                            .show_ui(ui, |ui| {
-                                if ui.selectable_label(self.config.compression == "none", "None").clicked() {
-                                    self.config.compression = "none".to_string();
-                                    self.config.save();
-                                }
-                                if ui.selectable_label(self.config.compression == "lz4", "LZ4").clicked() {
-                                    self.config.compression = "lz4".to_string();
-                                    self.config.save();
-                                }
-                            });
+                        ui.add_enabled_ui(!self.config.optimize_upload, |ui| {
+                            egui::ComboBox::from_id_source("compression_combo")
+                                .selected_text(match self.config.compression.as_str() {
+                                    "auto" => tr(lang, "compression_opt_auto"),
+                                    "lz4" => tr(lang, "compression_opt_lz4"),
+                                    "zstd" => tr(lang, "compression_opt_zstd"),
+                                    "lzma" => tr(lang, "compression_opt_lzma"),
+                                    _ => tr(lang, "compression_opt_none"),
+                                })
+                                .show_ui(ui, |ui| {
+                                    if ui.selectable_label(self.config.compression == "none", tr(lang, "compression_opt_none")).clicked() {
+                                        self.config.compression = "none".to_string();
+                                        self.config.save();
+                                    }
+                                    if ui.selectable_label(self.config.compression == "auto", tr(lang, "compression_opt_auto")).clicked() {
+                                        self.config.compression = "auto".to_string();
+                                        self.config.save();
+                                    }
+                                    if ui.selectable_label(self.config.compression == "lz4", tr(lang, "compression_opt_lz4")).clicked() {
+                                        self.config.compression = "lz4".to_string();
+                                        self.config.save();
+                                    }
+                                    if ui.selectable_label(self.config.compression == "zstd", tr(lang, "compression_opt_zstd")).clicked() {
+                                        self.config.compression = "zstd".to_string();
+                                        self.config.save();
+                                    }
+                                    if ui.selectable_label(self.config.compression == "lzma", tr(lang, "compression_opt_lzma")).clicked() {
+                                        self.config.compression = "lzma".to_string();
+                                        self.config.save();
+                                    }
+                                });
+                        });
                         ui.end_row();
                     });
+                    ui.horizontal(|ui| {
+                        let optimize = ui.checkbox(&mut self.config.optimize_upload, tr(lang, "optimize_upload_auto"));
+                        if optimize.changed() {
+                            self.config.save();
+                            if self.config.optimize_upload {
+                                self.log(&tr(lang, "optimize_upload_notice"));
+                            }
+                        }
+                        if ui.button(tr(lang, "optimize_upload_now")).clicked() {
+                            self.start_optimize_upload();
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        let extract = ui.checkbox(&mut self.config.extract_archives_fast, tr(lang, "archive_extract_fast_toggle"));
+                        if extract.changed() {
+                            self.config.save();
+                        }
+                    });
+                    let extract_note = if self.config.extract_archives_fast {
+                        tr(lang, "archive_extract_fast_note")
+                    } else {
+                        tr(lang, "archive_extract_stream_note")
+                    };
+                    ui.label(egui::RichText::new(extract_note).weak().small());
+                    if self.config.optimize_upload {
+                        ui.label(egui::RichText::new(tr(lang, "optimize_upload_lock_notice")).weak().small());
+                    }
                     ui.add_space(5.0);
                     ui.label(egui::RichText::new(format!("➡ Destination: {}", self.get_dest_path())).monospace().weak());
                 });
@@ -3557,18 +3991,29 @@ Overwrite it?", self.get_dest_path()));
                     ui.add_space(5.0);
 
                     if self.is_scanning && !self.is_uploading {
-                        ui.add(egui::ProgressBar::new(0.5).show_percentage().animate(true));
+                        ui.label(format!("Phase: {}", tr(lang, "phase_scanning")));
+                        let scan_progress = (self.scanning_files_found as f32 / 10_000.0).min(1.0);
+                        ui.add(egui::ProgressBar::new(scan_progress).show_percentage().animate(true));
                         ui.add_space(5.0);
                         ui.label(format!("Scanning: {} files ({})", self.scanning_files_found, format_bytes(self.scanning_total_size)));
                         ui.label(tr(lang, "progress_total_estimated"));
                     } else {
                         let total = self.progress_total.max(1);
                         let progress = (self.progress_sent as f64 / total as f64).clamp(0.0, 1.0) as f32;
+                        if !self.progress_phase.is_empty() {
+                            let phase_label = match self.progress_phase.as_str() {
+                                "Packing" => tr(lang, "phase_packing"),
+                                "Sending" => tr(lang, "phase_sending"),
+                                "Scanning" => tr(lang, "phase_scanning"),
+                                _ => self.progress_phase.clone(),
+                            };
+                            ui.label(format!("Phase: {}", phase_label));
+                        }
                         ui.add(egui::ProgressBar::new(progress).show_percentage().animate(self.is_uploading));
 
                         ui.add_space(5.0);
                         ui.horizontal(|ui| {
-                            ui.label(format!("{} / {}", format_bytes(self.progress_sent), format_bytes(self.progress_total)));
+                            ui.label(format!("Sent: {} / {}", format_bytes(self.progress_sent), format_bytes(self.progress_total)));
                             ui.separator();
                             ui.label(format!("{}/s", format_bytes(self.progress_speed_bps as u64)));
                             ui.separator();
@@ -3580,7 +4025,9 @@ Overwrite it?", self.get_dest_path()));
                             ui.label(format!("Current file: {}", self.progress_current_file));
                         }
                         if self.progress_sent == 0 && self.scanning_files_found > 0 {
+                            let scan_progress = (self.scanning_files_found as f32 / 10_000.0).min(1.0);
                             ui.label(format!("Scanning: {} files ({})", self.scanning_files_found, format_bytes(self.scanning_total_size)));
+                            ui.add(egui::ProgressBar::new(scan_progress).show_percentage().animate(true));
                             ui.label(tr(lang, "progress_total_estimated"));
                         }
                     }
@@ -3589,7 +4036,8 @@ Overwrite it?", self.get_dest_path()));
                     ui.horizontal(|ui| {
                         ui.label(tr(lang, "connections"));
                         let mut connections = self.config.connections as i32;
-                        let response = ui.add(
+                        let response = ui.add_enabled(
+                            !self.config.optimize_upload,
                             egui::DragValue::new(&mut connections)
                                 .clamp_range(1..=MAX_PARALLEL_CONNECTIONS as i32)
                                 .speed(1.0)
@@ -3601,7 +4049,10 @@ Overwrite it?", self.get_dest_path()));
                         ui.label(format!("(max {})", MAX_PARALLEL_CONNECTIONS));
                     });
                     ui.horizontal(|ui| {
-                        let auto_tune = ui.checkbox(&mut self.config.auto_tune_connections, tr(lang, "auto_tune_connections"));
+                        let auto_tune = ui.add_enabled(
+                            !self.config.optimize_upload,
+                            egui::Checkbox::new(&mut self.config.auto_tune_connections, tr(lang, "auto_tune_connections"))
+                        );
                         if auto_tune.changed() {
                             self.config.save();
                         }
@@ -3700,6 +4151,7 @@ Overwrite it?", self.get_dest_path()));
                     }
                 });
             }
+            });
         });
     }
 }
@@ -3788,19 +4240,19 @@ fn setup_fonts(ctx: &egui::Context) {
     // Load Simplified Chinese font
     fonts.font_data.insert(
         "noto_sans_sc".to_owned(),
-        egui::FontData::from_static(include_bytes!("../fonts/NotoSansSC-Regular.otf")).into(),
+        egui::FontData::from_static(include_bytes!("../fonts/NotoSansSC-Regular.otf")),
     );
 
     // Load Traditional Chinese font
     fonts.font_data.insert(
         "noto_sans_tc".to_owned(),
-        egui::FontData::from_static(include_bytes!("../fonts/NotoSansTC-Regular.otf")).into(),
+        egui::FontData::from_static(include_bytes!("../fonts/NotoSansTC-Regular.otf")),
     );
 
     // Load Arabic font
     fonts.font_data.insert(
         "noto_sans_arabic".to_owned(),
-        egui::FontData::from_static(include_bytes!("../fonts/NotoSansArabic-Regular.ttf")).into(),
+        egui::FontData::from_static(include_bytes!("../fonts/NotoSansArabic-Regular.ttf")),
     );
 
     // Add fonts as fallbacks for Proportional family (after default fonts)
@@ -4013,6 +4465,147 @@ fn sample_workload(path: &str, cancel: &Arc<AtomicBool>) -> Option<(usize, u64)>
     if count == 0 { None } else { Some((count, total)) }
 }
 
+fn sample_bytes_from_path(path: &str, cancel: &Arc<AtomicBool>) -> Option<Vec<u8>> {
+    let path = Path::new(path);
+    let max_total = 512 * 1024;
+    let per_file = 64 * 1024;
+    let mut out = Vec::with_capacity(max_total.min(64 * 1024));
+    let mut total = 0usize;
+
+    if path.is_file() {
+        if !cancel.load(Ordering::Relaxed) && total < max_total {
+            if let Ok(mut file) = std::fs::File::open(path) {
+                let remaining = max_total - total;
+                let to_read = per_file.min(remaining);
+                let mut buf = vec![0u8; to_read];
+                if let Ok(n) = file.read(&mut buf) {
+                    if n > 0 {
+                        out.extend_from_slice(&buf[..n]);
+                    }
+                }
+            }
+        }
+        return if out.is_empty() { None } else { Some(out) };
+    } else {
+        let start = std::time::Instant::now();
+        let mut files_seen = 0usize;
+        for entry in WalkDir::new(path).into_iter().filter_map(|e| e.ok()) {
+            if cancel.load(Ordering::Relaxed) {
+                return None;
+            }
+            if start.elapsed() > std::time::Duration::from_millis(400) {
+                break;
+            }
+            let entry_path = entry.path();
+            if !entry_path.is_file() {
+                continue;
+            }
+            if total < max_total {
+                if let Ok(mut file) = std::fs::File::open(entry_path) {
+                    let remaining = max_total - total;
+                    let to_read = per_file.min(remaining);
+                    let mut buf = vec![0u8; to_read];
+                    if let Ok(n) = file.read(&mut buf) {
+                        if n > 0 {
+                            out.extend_from_slice(&buf[..n]);
+                            total += n;
+                        }
+                    }
+                }
+            }
+            files_seen += 1;
+            if total >= max_total || files_seen >= 200 {
+                break;
+            }
+        }
+    }
+
+    if out.is_empty() { None } else { Some(out) }
+}
+
+fn sample_bytes_from_files(files: &[FileEntry], cancel: &Arc<AtomicBool>) -> Option<Vec<u8>> {
+    let max_total = 512 * 1024;
+    let per_file = 64 * 1024;
+    let mut out = Vec::with_capacity(max_total.min(64 * 1024));
+    let mut total = 0usize;
+
+    for entry in files.iter() {
+        if cancel.load(Ordering::Relaxed) {
+            return None;
+        }
+        if total >= max_total {
+            break;
+        }
+        if let Ok(mut file) = std::fs::File::open(&entry.abs_path) {
+            let remaining = max_total - total;
+            let to_read = per_file.min(remaining);
+            let mut buf = vec![0u8; to_read];
+            if let Ok(n) = file.read(&mut buf) {
+                if n > 0 {
+                    out.extend_from_slice(&buf[..n]);
+                    total += n;
+                }
+            }
+        }
+    }
+
+    if out.is_empty() { None } else { Some(out) }
+}
+
+fn optimize_upload_settings(path: &str, cancel: &Arc<AtomicBool>, current_connections: usize) -> UploadOptimization {
+    let mut opt = UploadOptimization {
+        compression: None,
+        connections: None,
+        sample_files: None,
+        sample_bytes: None,
+    };
+
+    if let Some((count, bytes)) = sample_workload(path, cancel) {
+        opt.sample_files = Some(count);
+        opt.sample_bytes = Some(bytes);
+        opt.connections = Some(recommend_connections(current_connections, count, bytes));
+    }
+
+    if let Some(sample) = sample_bytes_from_path(path, cancel) {
+        opt.compression = Some(choose_best_compression(&sample));
+    }
+
+    opt
+}
+
+fn choose_best_compression(sample: &[u8]) -> CompressionMode {
+    let raw_size = sample.len();
+    if raw_size == 0 {
+        return CompressionMode::None;
+    }
+
+    let lz4 = compress_prepend_size(sample);
+    let lz4_size = lz4.len();
+    if lz4_size < raw_size {
+        CompressionMode::Lz4
+    } else {
+        CompressionMode::None
+    }
+}
+
+fn compression_label(mode: CompressionMode) -> &'static str {
+    match mode {
+        CompressionMode::None => "None",
+        CompressionMode::Lz4 => "LZ4",
+        CompressionMode::Zstd => "Zstd",
+        CompressionMode::Lzma => "LZMA",
+    }
+}
+
+fn compression_mode_to_setting(mode: CompressionMode) -> &'static str {
+    match mode {
+        CompressionMode::None => "none",
+        CompressionMode::Lz4 => "lz4",
+        CompressionMode::Zstd => "zstd",
+        CompressionMode::Lzma => "lzma",
+    }
+}
+
 fn recommend_connections(current: usize, sample_count: usize, sample_bytes: u64) -> usize {
     if sample_count < 200 || current <= 1 {
         return current;
@@ -4089,6 +4682,7 @@ fn read_upload_response(
 }
 
 fn partition_files_by_size(mut files: Vec<FileEntry>, connections: usize) -> Vec<Vec<FileEntry>> {
+    let connections = connections.max(1);
     files.sort_by_key(|f| std::cmp::Reverse(f.size));
     let mut buckets: Vec<Vec<FileEntry>> = vec![Vec::new(); connections];
     let mut bucket_sizes = vec![0u64; connections];

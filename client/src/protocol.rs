@@ -5,6 +5,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::collections::{HashMap, VecDeque};
 use lz4_flex::block::decompress_size_prepended;
+use zstd::bulk::decompress as zstd_decompress;
+use lzma_rs::lzma_decompress;
 use serde::{Deserialize};
 
 pub const CONNECTION_TIMEOUT_SECS: u64 = 30;
@@ -24,6 +26,15 @@ pub struct DirEntry {
     pub entry_type: String,
     pub size: u64,
     pub mtime: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum DownloadCompression {
+    None,
+    Lz4,
+    Zstd,
+    Lzma,
+    Auto,
 }
 
 async fn send_simple_command(ip: &str, port: u16, cmd: &str) -> Result<String> {
@@ -289,17 +300,19 @@ where
     Ok(total_size)
 }
 
-pub async fn download_dir_with_progress<F>(
+pub async fn download_dir_with_progress<F, G>(
     ip: &str,
     port: u16,
     path: &str,
     dest_path: &str,
     cancel: Arc<AtomicBool>,
-    use_lz4: bool,
+    compression: DownloadCompression,
     mut progress: F,
+    mut info: G,
 ) -> Result<u64>
 where
     F: FnMut(u64, u64, Option<String>),
+    G: FnMut(Option<String>),
 {
     let addr = format!("{}:{}", ip, port);
     let mut stream = tokio::time::timeout(
@@ -307,10 +320,12 @@ where
         TcpStream::connect(&addr)
     ).await.context("Connection timed out")??;
 
-    let cmd = if use_lz4 {
-        format!("DOWNLOAD_DIR {} LZ4\n", path)
-    } else {
-        format!("DOWNLOAD_DIR {}\n", path)
+    let cmd = match compression {
+        DownloadCompression::Lz4 => format!("DOWNLOAD_DIR {} LZ4\n", path),
+        DownloadCompression::Zstd => format!("DOWNLOAD_DIR {} ZSTD\n", path),
+        DownloadCompression::Lzma => format!("DOWNLOAD_DIR {} LZMA\n", path),
+        DownloadCompression::Auto => format!("DOWNLOAD_DIR {} AUTO\n", path),
+        DownloadCompression::None => format!("DOWNLOAD_DIR {}\n", path),
     };
     stream.write_all(cmd.as_bytes()).await?;
 
@@ -331,7 +346,17 @@ where
     if !header_str.starts_with("READY") {
         return Err(anyhow!("Download failed: {}", header_str));
     }
-    let total_size = header_str.split_whitespace().nth(1).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+    let mut parts = header_str.split_whitespace();
+    let _ = parts.next(); // READY
+    let total_size = parts.next().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+    let mut comp: Option<String> = None;
+    while let Some(part) = parts.next() {
+        if part == "COMP" {
+            comp = parts.next().map(|s| s.to_string());
+            break;
+        }
+    }
+    info(comp);
     progress(0, total_size, Some(path.to_string()));
 
     tokio::fs::create_dir_all(dest_path).await?;
@@ -375,6 +400,35 @@ where
                 return Err(anyhow!("Download failed (body): {}", err));
             }
             decompress_size_prepended(&body).map_err(|e| anyhow!("Download failed (lz4): {}", e))?
+        } else if frame_type == 9 {
+            let mut body = vec![0u8; body_len];
+            if let Err(err) = stream.read_exact(&mut body).await {
+                return Err(anyhow!("Download failed (body): {}", err));
+            }
+            if body.len() < 4 {
+                return Err(anyhow!("Download failed (zstd): invalid header"));
+            }
+            let raw_len = u32::from_le_bytes([body[0], body[1], body[2], body[3]]) as usize;
+            let decompressed = zstd_decompress(&body[4..], raw_len)
+                .map_err(|e| anyhow!("Download failed (zstd): {}", e))?;
+            decompressed
+        } else if frame_type == 10 {
+            let mut body = vec![0u8; body_len];
+            if let Err(err) = stream.read_exact(&mut body).await {
+                return Err(anyhow!("Download failed (body): {}", err));
+            }
+            if body.len() < 4 {
+                return Err(anyhow!("Download failed (lzma): invalid header"));
+            }
+            let raw_len = u32::from_le_bytes([body[0], body[1], body[2], body[3]]) as usize;
+            let cursor = std::io::Cursor::new(&body[4..]);
+            let mut input = std::io::BufReader::new(cursor);
+            let mut out = Vec::with_capacity(raw_len);
+            lzma_decompress(&mut input, &mut out).map_err(|e| anyhow!("Download failed (lzma): {}", e))?;
+            if out.len() != raw_len {
+                return Err(anyhow!("Download failed (lzma): size mismatch"));
+            }
+            out
         } else if frame_type == 4 {
             let mut body = vec![0u8; body_len];
             if let Err(err) = stream.read_exact(&mut body).await {

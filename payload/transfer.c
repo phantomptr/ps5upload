@@ -11,10 +11,13 @@
 #include <pthread.h>
 #include <time.h>
 #include <signal.h>
+#include <stdint.h>
 
 #include "protocol_defs.h"
 #include "notify.h"
 #include "lz4.h"
+#include "zstd.h"
+#include "LzmaLib.h"
 
 // Optimized for single-process threaded concurrency
 #define PACK_BUFFER_SIZE (16 * 1024 * 1024)   // 16MB buffer (Increased for throughput)
@@ -82,6 +85,60 @@ static void free_pack_buffer(uint8_t *ptr) {
         g_pack_in_use--;
     }
     pthread_mutex_unlock(&g_mem_stats_mutex);
+}
+
+static int decompress_pack_body(uint32_t frame_type, uint8_t **body, size_t *body_len) {
+    if (!body || !*body || !body_len || *body_len < 4) {
+        return -1;
+    }
+
+    uint32_t raw_len = 0;
+    memcpy(&raw_len, *body, 4);
+    if (raw_len > PACK_BUFFER_SIZE) {
+        return -1;
+    }
+
+    uint8_t *out = alloc_pack_buffer(raw_len);
+    if (!out) {
+        return -1;
+    }
+
+    int ok = 0;
+    if (frame_type == FRAME_PACK_LZ4) {
+        int decoded = LZ4_decompress_safe((const char *)(*body) + 4, (char *)out,
+                                         (int)(*body_len - 4), (int)raw_len);
+        ok = (decoded >= 0 && (uint32_t)decoded == raw_len);
+    } else if (frame_type == FRAME_PACK_ZSTD) {
+        size_t decoded = ZSTD_decompress(out, raw_len, *body + 4, *body_len - 4);
+        ok = !ZSTD_isError(decoded) && decoded == raw_len;
+    } else if (frame_type == FRAME_PACK_LZMA) {
+        if (*body_len < 17) {
+            free_pack_buffer(out);
+            return -1;
+        }
+        uint64_t declared = 0;
+        memcpy(&declared, *body + 9, 8);
+        if (declared != 0 && declared != UINT64_MAX && declared != raw_len) {
+            free_pack_buffer(out);
+            return -1;
+        }
+        SizeT dest_len = (SizeT)raw_len;
+        SizeT src_len = (SizeT)(*body_len - 17);
+        const unsigned char *props = *body + 4;
+        const unsigned char *src = *body + 17;
+        int res = LzmaUncompress(out, &dest_len, src, &src_len, props, LZMA_PROPS_SIZE);
+        ok = (res == SZ_OK && dest_len == raw_len);
+    }
+
+    if (!ok) {
+        free_pack_buffer(out);
+        return -1;
+    }
+
+    free_pack_buffer(*body);
+    *body = out;
+    *body_len = raw_len;
+    return 0;
 }
 
 static void cleanup_buffer_pool(void) {
@@ -848,7 +905,10 @@ int upload_session_feed(UploadSession *session, const uint8_t *data, size_t len,
                 if (done) {
                     *done = 1;
                 }
-            } else if (session->header.type == FRAME_PACK || session->header.type == FRAME_PACK_LZ4) {
+            } else if (session->header.type == FRAME_PACK
+                || session->header.type == FRAME_PACK_LZ4
+                || session->header.type == FRAME_PACK_ZSTD
+                || session->header.type == FRAME_PACK_LZMA) {
                 if (session->header.body_len > PACK_BUFFER_SIZE) {
                     printf("[FTX] pack too large: %llu\n",
                            (unsigned long long)session->header.body_len);
@@ -893,8 +953,10 @@ int upload_session_feed(UploadSession *session, const uint8_t *data, size_t len,
             offset += take;
 
             if (session->body_bytes == session->body_len) {
-                if (session->header.type == FRAME_PACK_LZ4) {
-                    if (session->body_len < 4) {
+                if (session->header.type == FRAME_PACK_LZ4
+                    || session->header.type == FRAME_PACK_ZSTD
+                    || session->header.type == FRAME_PACK_LZMA) {
+                    if (decompress_pack_body(session->header.type, &session->body, &session->body_len) != 0) {
                         free_pack_buffer(session->body);
                         session->body = NULL;
                         session->error = 1;
@@ -903,43 +965,7 @@ int upload_session_feed(UploadSession *session, const uint8_t *data, size_t len,
                         }
                         return 0;
                     }
-                    uint32_t raw_len = 0;
-                    memcpy(&raw_len, session->body, 4);
-                    if (raw_len > PACK_BUFFER_SIZE) {
-                        free_pack_buffer(session->body);
-                        session->body = NULL;
-                        session->error = 1;
-                        if (error) {
-                            *error = 1;
-                        }
-                        return 0;
-                    }
-                    void *out = alloc_pack_buffer(raw_len);
-                    if (!out) {
-                        free_pack_buffer(session->body);
-                        session->body = NULL;
-                        session->error = 1;
-                        if (error) {
-                            *error = 1;
-                        }
-                        return 0;
-                    }
-                    int decoded = LZ4_decompress_safe((const char *)session->body + 4, (char *)out,
-                                                     (int)session->body_len - 4, (int)raw_len);
-                    if (decoded < 0 || (uint32_t)decoded != raw_len) {
-                        free_pack_buffer(out);
-                        free_pack_buffer(session->body);
-                        session->body = NULL;
-                        session->error = 1;
-                        if (error) {
-                            *error = 1;
-                        }
-                        return 0;
-                    }
-                    free_pack_buffer(session->body);
-                    session->body = out;
-                    session->body_len = raw_len;
-                    session->body_bytes = raw_len;
+                    session->body_bytes = session->body_len;
                 }
 
                 int res = enqueue_pack(session);

@@ -7,12 +7,30 @@ endif
 include $(PS5_PAYLOAD_SDK)/toolchain/prospero.mk
 
 TARGET := ps5upload.elf
-SRCS := main.c storage.c protocol.c extract.c notify.c transfer.c lz4.c sha256.c
-OBJS := main.o storage.o protocol.o extract.o notify.o transfer.o lz4.o sha256.o
+SRCS := main.c storage.c protocol.c extract.c notify.c transfer.c lz4.c sha256.c \
+	third_party/zstd/zstd.c \
+	third_party/lzma_sdk/Alloc.c \
+	third_party/lzma_sdk/CpuArch.c \
+	third_party/lzma_sdk/LzmaDec.c \
+	third_party/lzma_sdk/LzmaEnc.c \
+	third_party/lzma_sdk/LzmaLib.c \
+	third_party/lzma_sdk/LzFind.c \
+	third_party/lzma_sdk/Sort.c
+OBJS := main.o storage.o protocol.o extract.o notify.o transfer.o lz4.o sha256.o \
+	third_party/zstd/zstd.o \
+	third_party/lzma_sdk/Alloc.o \
+	third_party/lzma_sdk/CpuArch.o \
+	third_party/lzma_sdk/LzmaDec.o \
+	third_party/lzma_sdk/LzmaEnc.o \
+	third_party/lzma_sdk/LzmaLib.o \
+	third_party/lzma_sdk/LzFind.o \
+	third_party/lzma_sdk/Sort.o
 
 # Read version from VERSION file
 VERSION := $(shell cat ../VERSION)
-CFLAGS := -Wall -O2 -DPS5_UPLOAD_VERSION=\"$(VERSION)\" -DSERVER_PORT_STR=\"9113\"
+CFLAGS := -Wall -O2 -DPS5_UPLOAD_VERSION=\"$(VERSION)\" -DSERVER_PORT_STR=\"9113\" -D_7ZIP_ST \
+	-Ithird_party/zstd -Ithird_party/lzma_sdk
+THIRD_PARTY_CFLAGS := -Wno-unneeded-internal-declaration -Wno-empty-body
 LDADD := -lkernel -lpthread
 
 .PHONY: all clean test info help
@@ -28,6 +46,10 @@ $(TARGET): $(OBJS)
 %.o: %.c
 	@echo "Compiling $<..."
 	$(CC) $(CFLAGS) -c $< -o $@
+
+third_party/%.o: third_party/%.c
+	@echo "Compiling $<..."
+	$(CC) $(CFLAGS) $(THIRD_PARTY_CFLAGS) -c $< -o $@
 
 notify.o: notify.c notify.h config.h
 	$(CC) $(CFLAGS) -c notify.c -o notify.o

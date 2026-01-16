@@ -10,14 +10,17 @@ pub struct AppConfig {
     pub use_temp: bool,
     pub auto_connect: bool,
     pub theme: String, // "dark" or "light"
-    pub compression: String, // "none" or "lz4"
+    pub compression: String, // "none", "lz4", "zstd", "lzma", "auto"
     pub bandwidth_limit_mbps: f32, // 0 = unlimited
     pub update_channel: String, // "stable" or "all"
-    pub download_compression: String, // "none" or "lz4"
+    pub download_compression: String, // "none", "lz4", "zstd", "lzma", "auto"
     pub chmod_after_upload: bool,
     pub resume_mode: String, // "none", "size", "size_mtime", "sha256"
     pub language: String, // "en", "zh-CN", "zh-TW", "fr", "es", "ar"
     pub auto_tune_connections: bool,
+    pub auto_check_payload: bool,
+    pub optimize_upload: bool,
+    pub extract_archives_fast: bool,
 }
 
 impl Default for AppConfig {
@@ -37,6 +40,9 @@ impl Default for AppConfig {
             resume_mode: "none".to_string(),
             language: "en".to_string(),
             auto_tune_connections: true,
+            auto_check_payload: false,
+            optimize_upload: false,
+            extract_archives_fast: true,
         }
     }
 }
@@ -74,7 +80,10 @@ impl AppConfig {
                                 config.theme = if value == "light" { "light".to_string() } else { "dark".to_string() };
                             }
                             "compression" => {
-                                config.compression = if value == "lz4" { "lz4".to_string() } else { "none".to_string() };
+                                config.compression = match value.as_str() {
+                                    "lz4" | "zstd" | "lzma" | "auto" => value,
+                                    _ => "none".to_string(),
+                                };
                             }
                             "bandwidth_limit_mbps" => {
                                 if let Ok(parsed) = value.parse::<f32>() {
@@ -85,7 +94,10 @@ impl AppConfig {
                                 config.update_channel = if value == "all" { "all".to_string() } else { "stable".to_string() };
                             }
                             "download_compression" => {
-                                config.download_compression = if value == "lz4" { "lz4".to_string() } else { "none".to_string() };
+                                config.download_compression = match value.as_str() {
+                                    "lz4" | "zstd" | "lzma" | "auto" => value,
+                                    _ => "none".to_string(),
+                                };
                             }
                             "chmod_after_upload" => {
                                 config.chmod_after_upload = matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on");
@@ -107,6 +119,15 @@ impl AppConfig {
                             "auto_tune_connections" => {
                                 config.auto_tune_connections = matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on");
                             }
+                            "auto_check_payload" => {
+                                config.auto_check_payload = matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on");
+                            }
+                            "optimize_upload" => {
+                                config.optimize_upload = matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on");
+                            }
+                            "extract_archives_fast" => {
+                                config.extract_archives_fast = matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on");
+                            }
                             _ => {}
                         }
                     }
@@ -119,7 +140,7 @@ impl AppConfig {
 
     pub fn save(&self) {
         let content = format!(
-            "address={}\nstorage={}\nconnections={}\nuse_temp={}\nauto_connect={}\ntheme={}\ncompression={}\nbandwidth_limit_mbps={}\nupdate_channel={}\ndownload_compression={}\nchmod_after_upload={}\nresume_mode={}\nlanguage={}\nauto_tune_connections={}\n",
+            "address={}\nstorage={}\nconnections={}\nuse_temp={}\nauto_connect={}\ntheme={}\ncompression={}\nbandwidth_limit_mbps={}\nupdate_channel={}\ndownload_compression={}\nchmod_after_upload={}\nresume_mode={}\nlanguage={}\nauto_tune_connections={}\nauto_check_payload={}\noptimize_upload={}\nextract_archives_fast={}\n",
             self.address,
             self.storage,
             self.connections,
@@ -133,7 +154,10 @@ impl AppConfig {
             self.chmod_after_upload,
             self.resume_mode,
             self.language,
-            self.auto_tune_connections
+            self.auto_tune_connections,
+            self.auto_check_payload,
+            self.optimize_upload,
+            self.extract_archives_fast
         );
         let _ = fs::write("ps5upload.ini", content);
     }

@@ -11,8 +11,9 @@ use std::net::Shutdown;
 use std::io::ErrorKind;
 use std::sync::Mutex;
 use lz4_flex::block::compress_prepend_size;
+use zstd::bulk::compress as zstd_compress;
+use lzma_rs::lzma_compress;
 use std::ptr::NonNull;
-use unrar_sys;
 #[cfg(any(target_os = "linux", target_os = "netbsd"))]
 use std::ffi::CString;
 #[cfg(not(any(target_os = "linux", target_os = "netbsd")))]
@@ -37,6 +38,8 @@ pub struct FileEntry {
 enum FrameType {
     Pack = 4,
     PackLz4 = 8,
+    PackZstd = 9,
+    PackLzma = 10,
     Finish = 6,
 }
 
@@ -51,6 +54,8 @@ struct ReadyPack {
 pub enum CompressionMode {
     None,
     Lz4,
+    Zstd,
+    Lzma,
 }
 
 struct RateLimiter {
@@ -83,6 +88,47 @@ impl RateLimiter {
             let sleep_secs = expected - elapsed;
             std::thread::sleep(std::time::Duration::from_secs_f64(sleep_secs.min(0.5)));
         }
+    }
+}
+
+struct SendContext<'a, F>
+where
+    F: FnMut(u64, i32, Option<String>),
+{
+    stream: &'a mut std::net::TcpStream,
+    cancel: &'a Arc<AtomicBool>,
+    limiter: &'a mut RateLimiter,
+    progress: &'a mut F,
+    total_sent_bytes: &'a mut u64,
+    total_sent_files: &'a mut i32,
+    last_progress_sent: &'a mut u64,
+}
+
+impl<'a, F> SendContext<'a, F>
+where
+    F: FnMut(u64, i32, Option<String>),
+{
+    fn send_pack_inline(&mut self, pack: &PackBuffer, current_file: Option<String>) -> Result<()> {
+        send_frame_header(self.stream, FrameType::Pack, pack.buffer.len() as u64, self.cancel)?;
+        let mut sent_payload = 0usize;
+        let pack_len = pack.buffer.len();
+        while sent_payload < pack_len {
+            if self.cancel.load(Ordering::Relaxed) {
+                let _ = self.stream.shutdown(std::net::Shutdown::Both);
+                return Err(anyhow::anyhow!("Upload cancelled"));
+            }
+            let end = std::cmp::min(sent_payload + SEND_CHUNK_SIZE, pack_len);
+            write_all_retry(self.stream, &pack.buffer[sent_payload..end], self.cancel)?;
+            self.limiter.throttle((end - sent_payload) as u64);
+            sent_payload = end;
+            let approx = (pack.bytes_added as u128 * sent_payload as u128 / pack_len as u128) as u64;
+            let approx_total = *self.total_sent_bytes + approx;
+            if approx_total != *self.last_progress_sent {
+                (self.progress)(approx_total, *self.total_sent_files, current_file.clone());
+                *self.last_progress_sent = approx_total;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -178,13 +224,7 @@ fn pack_reader_into_stream<F, R>(
     reader: &mut R,
     rel_path: &str,
     pack: &mut PackBuffer,
-    stream: &mut std::net::TcpStream,
-    cancel: &Arc<AtomicBool>,
-    limiter: &mut RateLimiter,
-    progress: &mut F,
-    total_sent_bytes: &mut u64,
-    total_sent_files: &mut i32,
-    last_progress_sent: &mut u64,
+    ctx: &mut SendContext<F>,
 ) -> Result<()>
 where
     F: FnMut(u64, i32, Option<String>),
@@ -195,7 +235,7 @@ where
     let rel_path_string = rel_path.to_string();
 
     loop {
-        if cancel.load(Ordering::Relaxed) {
+        if ctx.cancel.load(Ordering::Relaxed) {
             return Err(anyhow::anyhow!("Upload cancelled by user"));
         }
         let n = reader.read(&mut buf)?;
@@ -205,28 +245,19 @@ where
         saw_data = true;
         let mut offset = 0usize;
         while offset < n {
-            if cancel.load(Ordering::Relaxed) {
+            if ctx.cancel.load(Ordering::Relaxed) {
                 return Err(anyhow::anyhow!("Upload cancelled by user"));
             }
             let overhead = 2 + rel_path.len() + 8;
-            let max_data = PACK_BUFFER_SIZE - pack.buffer.len() - overhead;
-            if PACK_BUFFER_SIZE - pack.buffer.len() < overhead || max_data == 0 {
-                send_pack_inline(
-                    stream,
-                    pack,
-                    cancel,
-                    limiter,
-                    progress,
-                    *total_sent_bytes,
-                    *total_sent_files,
-                    Some(rel_path_string.clone()),
-                    last_progress_sent,
-                )?;
-                *total_sent_bytes += pack.bytes_added;
-                *total_sent_files += pack.files_added;
+            let remaining = PACK_BUFFER_SIZE.saturating_sub(pack.buffer.len());
+            if remaining <= overhead {
+                ctx.send_pack_inline(pack, Some(rel_path_string.clone()))?;
+                *ctx.total_sent_bytes += pack.bytes_added;
+                *ctx.total_sent_files += pack.files_added;
                 pack.reset();
                 continue;
             }
+            let max_data = remaining - overhead;
             let chunk_size = std::cmp::min(max_data, n - offset);
             pack.add_record(rel_path, &buf[offset..offset + chunk_size]);
             offset += chunk_size;
@@ -235,19 +266,9 @@ where
 
     if !saw_data {
         if !pack.can_fit(rel_path.len(), 0) {
-            send_pack_inline(
-                stream,
-                pack,
-                cancel,
-                limiter,
-                progress,
-                *total_sent_bytes,
-                *total_sent_files,
-                Some(rel_path_string.clone()),
-                last_progress_sent,
-            )?;
-            *total_sent_bytes += pack.bytes_added;
-            *total_sent_files += pack.files_added;
+            ctx.send_pack_inline(pack, Some(rel_path_string.clone()))?;
+            *ctx.total_sent_bytes += pack.bytes_added;
+            *ctx.total_sent_files += pack.files_added;
             pack.reset();
         }
         pack.add_record(rel_path, &[]);
@@ -348,28 +369,28 @@ where
         let total_sent_bytes = unsafe { &mut *self.total_sent_bytes };
         let total_sent_files = unsafe { &mut *self.total_sent_files };
         let last_progress_sent = unsafe { &mut *self.last_progress_sent };
+        let mut ctx = SendContext {
+            stream,
+            cancel: &self.cancel,
+            limiter,
+            progress,
+            total_sent_bytes,
+            total_sent_files,
+            last_progress_sent,
+        };
 
         let mut offset = 0usize;
         while offset < data.len() {
             let overhead = 2 + self.current_rel_path.len() + 8;
-            let max_data = PACK_BUFFER_SIZE - pack.buffer.len() - overhead;
-            if PACK_BUFFER_SIZE - pack.buffer.len() < overhead || max_data == 0 {
-                send_pack_inline(
-                    stream,
-                    pack,
-                    &self.cancel,
-                    limiter,
-                    progress,
-                    *total_sent_bytes,
-                    *total_sent_files,
-                    Some(self.current_rel_path.clone()),
-                    last_progress_sent,
-                )?;
-                *total_sent_bytes += pack.bytes_added;
-                *total_sent_files += pack.files_added;
+            let remaining = PACK_BUFFER_SIZE.saturating_sub(pack.buffer.len());
+            if remaining <= overhead {
+                ctx.send_pack_inline(pack, Some(self.current_rel_path.clone()))?;
+                *ctx.total_sent_bytes += pack.bytes_added;
+                *ctx.total_sent_files += pack.files_added;
                 pack.reset();
                 continue;
             }
+            let max_data = remaining - overhead;
             let chunk_size = std::cmp::min(max_data, data.len() - offset);
             pack.add_record(&self.current_rel_path, &data[offset..offset + chunk_size]);
             offset += chunk_size;
@@ -618,13 +639,7 @@ where
 pub fn send_files_v2_for_list<I, F, L>(
     files: I,
     mut stream: std::net::TcpStream,
-    cancel: Arc<AtomicBool>,
-    mut progress: F,
-    log: L,
-    worker_id: usize,
-    allowed_connections: Option<Arc<AtomicUsize>>,
-    compression: CompressionMode,
-    rate_limit_bps: Option<u64>,
+    config: SendFilesConfig<F, L>,
 ) -> Result<()>
 where
     I: IntoIterator<Item = FileEntry> + Send + 'static,
@@ -632,6 +647,16 @@ where
     F: FnMut(u64, i32, Option<String>),
     L: Fn(String) + Send + Sync + 'static,
 {
+    let SendFilesConfig {
+        cancel,
+        mut progress,
+        log,
+        worker_id,
+        allowed_connections,
+        compression,
+        rate_limit_bps,
+    } = config;
+
     // Optimize socket for high throughput
     let _ = stream.set_nodelay(true);
 
@@ -741,35 +766,62 @@ where
             }
 
             let mut file_remaining = file_size;
+            let mut chunk_buf: Vec<u8> = Vec::new();
             while file_remaining > 0 {
                  if cancel_packer.load(Ordering::Relaxed) { break; }
 
                  let overhead = 2 + rel_path_str.len() + 8;
-                 let max_data = PACK_BUFFER_SIZE - pack.buffer.len() - overhead;
-                 
-                 if PACK_BUFFER_SIZE - pack.buffer.len() < overhead {
+                 let remaining = PACK_BUFFER_SIZE.saturating_sub(pack.buffer.len());
+
+                 if remaining <= overhead {
                      let _ = tx.send(pack.take_ready_pack());
                      continue;
                  }
 
+                 let max_data = remaining - overhead;
                  let to_read = std::cmp::min(max_data as u64, file_remaining) as usize;
                  if to_read == 0 {
                      let _ = tx.send(pack.take_ready_pack());
                      continue;
                  }
 
-                 let mut chunk_buf = vec![0u8; to_read];
-                 if let Err(err) = file.read_exact(&mut chunk_buf) {
-                     let msg = format!("Failed to read file {}: {}", rel_path_str, err);
-                     if let Ok(mut guard) = pack_error_msg_packer.lock() {
-                         *guard = msg.clone();
+                 chunk_buf.resize(to_read, 0u8);
+                 let mut filled = 0usize;
+                 let mut read_failed = false;
+                 while filled < to_read {
+                     match file.read(&mut chunk_buf[filled..to_read]) {
+                         Ok(0) => {
+                             let msg = format!(
+                                 "Failed to read file {}: file size changed during upload",
+                                 rel_path_str
+                             );
+                             if let Ok(mut guard) = pack_error_msg_packer.lock() {
+                                 *guard = msg.clone();
+                             }
+                             pack_error_packer.store(true, Ordering::Relaxed);
+                             (log_packer_clone)(msg);
+                             cancel_packer.store(true, Ordering::Relaxed);
+                             read_failed = true;
+                             break;
+                         }
+                         Ok(n) => filled += n,
+                         Err(err) => {
+                             let msg = format!("Failed to read file {}: {}", rel_path_str, err);
+                             if let Ok(mut guard) = pack_error_msg_packer.lock() {
+                                 *guard = msg.clone();
+                             }
+                             pack_error_packer.store(true, Ordering::Relaxed);
+                             (log_packer_clone)(msg);
+                             cancel_packer.store(true, Ordering::Relaxed);
+                             read_failed = true;
+                             break;
+                         }
                      }
-                     pack_error_packer.store(true, Ordering::Relaxed);
-                     (log_packer_clone)(msg);
-                     cancel_packer.store(true, Ordering::Relaxed);
+                 }
+                 if read_failed {
                      break;
                  }
-                 pack.add_record(&rel_path_str, &chunk_buf);
+                 pack.add_record(&rel_path_str, &chunk_buf[..to_read]);
                  file_remaining -= to_read as u64;
             }
             // Finished file
@@ -812,6 +864,31 @@ where
                     (FrameType::Pack, ready_pack.buffer)
                 } else {
                     (FrameType::PackLz4, compressed)
+                }
+            }
+            CompressionMode::Zstd => {
+                let compressed = zstd_compress(&ready_pack.buffer, 19).unwrap_or_default();
+                if compressed.is_empty() || compressed.len() + 4 >= ready_pack.buffer.len() {
+                    (FrameType::Pack, ready_pack.buffer)
+                } else {
+                    let mut payload = Vec::with_capacity(compressed.len() + 4);
+                    payload.extend_from_slice(&(ready_pack.buffer.len() as u32).to_le_bytes());
+                    payload.extend_from_slice(&compressed);
+                    (FrameType::PackZstd, payload)
+                }
+            }
+            CompressionMode::Lzma => {
+                let mut compressed = Vec::new();
+                let cursor = std::io::Cursor::new(&ready_pack.buffer);
+                let mut input = std::io::BufReader::new(cursor);
+                let lzma_ok = lzma_compress(&mut input, &mut compressed).is_ok();
+                if !lzma_ok || compressed.len() + 4 >= ready_pack.buffer.len() {
+                    (FrameType::Pack, ready_pack.buffer)
+                } else {
+                    let mut payload = Vec::with_capacity(compressed.len() + 4);
+                    payload.extend_from_slice(&(ready_pack.buffer.len() as u32).to_le_bytes());
+                    payload.extend_from_slice(&compressed);
+                    (FrameType::PackLzma, payload)
                 }
             }
             CompressionMode::None => (FrameType::Pack, ready_pack.buffer),
@@ -893,6 +970,20 @@ impl Iterator for SharedReceiverIterator {
     }
 }
 
+pub struct SendFilesConfig<F, L>
+where
+    F: FnMut(u64, i32, Option<String>),
+    L: Fn(String) + Send + Sync + 'static,
+{
+    pub cancel: Arc<AtomicBool>,
+    pub progress: F,
+    pub log: L,
+    pub worker_id: usize,
+    pub allowed_connections: Option<Arc<AtomicUsize>>,
+    pub compression: CompressionMode,
+    pub rate_limit_bps: Option<u64>,
+}
+
 pub fn scan_rar_archive(path: &str) -> Result<(usize, u64)> {
     let mut count = 0;
     let mut size = 0;
@@ -900,7 +991,7 @@ pub fn scan_rar_archive(path: &str) -> Result<(usize, u64)> {
         let h = header?;
         if !h.is_directory() {
             count += 1;
-            size += h.unpacked_size as u64;
+            size += h.unpacked_size;
         }
     }
     Ok((count, size))
@@ -1089,6 +1180,15 @@ where
     let mut total_sent_files = 0i32;
     let mut last_progress_sent = 0u64;
     let mut limiter = RateLimiter::new(rate_limit_bps);
+    let mut ctx = SendContext {
+        stream: &mut stream,
+        cancel: &cancel,
+        limiter: &mut limiter,
+        progress: &mut progress,
+        total_sent_bytes: &mut total_sent_bytes,
+        total_sent_files: &mut total_sent_files,
+        last_progress_sent: &mut last_progress_sent,
+    };
 
     for i in 0..archive.len() {
         if cancel.load(Ordering::Relaxed) { break; }
@@ -1097,21 +1197,10 @@ where
         
         let rel_path = file.name().replace('\\', "/");
         log(format!("Packing: {}", rel_path));
-        pack_reader_into_stream(
-            &mut file,
-            &rel_path,
-            &mut pack,
-            &mut stream,
-            &cancel,
-            &mut limiter,
-            &mut progress,
-            &mut total_sent_bytes,
-            &mut total_sent_files,
-            &mut last_progress_sent,
-        )?;
+        pack_reader_into_stream(&mut file, &rel_path, &mut pack, &mut ctx)?;
     }
     if pack.record_count() > 0 {
-        send_pack_inline(&mut stream, &pack, &cancel, &mut limiter, &mut progress, total_sent_bytes, total_sent_files, None, &mut last_progress_sent)?;
+        ctx.send_pack_inline(&pack, None)?;
     }
     send_frame_header(&mut stream, FrameType::Finish, 0, &cancel)?;
     Ok(())
@@ -1134,6 +1223,15 @@ where
     let mut total_sent_files = 0i32;
     let mut last_progress_sent = 0u64;
     let mut limiter = RateLimiter::new(rate_limit_bps);
+    let mut ctx = SendContext {
+        stream: &mut stream,
+        cancel: &cancel,
+        limiter: &mut limiter,
+        progress: &mut progress,
+        total_sent_bytes: &mut total_sent_bytes,
+        total_sent_files: &mut total_sent_files,
+        last_progress_sent: &mut last_progress_sent,
+    };
 
     sevenz_rust::decompress_file_with_extract_fn(&path, "", |entry: &sevenz_rust::SevenZArchiveEntry, reader: &mut dyn std::io::Read, _| {
         if cancel.load(Ordering::Relaxed) { return Ok(false); }
@@ -1142,62 +1240,16 @@ where
         let rel_path = entry.name().replace('\\', "/");
         log(format!("Packing: {}", rel_path));
 
-        if let Err(e) = pack_reader_into_stream(
-            reader,
-            &rel_path,
-            &mut pack,
-            &mut stream,
-            &cancel,
-            &mut limiter,
-            &mut progress,
-            &mut total_sent_bytes,
-            &mut total_sent_files,
-            &mut last_progress_sent,
-        ) {
-            return Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()).into());
+        if let Err(e) = pack_reader_into_stream(reader, &rel_path, &mut pack, &mut ctx) {
+            return Err(std::io::Error::other(e.to_string()).into());
         }
         Ok(true)
     })?;
 
     if pack.record_count() > 0 {
-        send_pack_inline(&mut stream, &pack, &cancel, &mut limiter, &mut progress, total_sent_bytes, total_sent_files, None, &mut last_progress_sent)?;
+        ctx.send_pack_inline(&pack, None)?;
     }
     send_frame_header(&mut stream, FrameType::Finish, 0, &cancel)?;
-    Ok(())
-}
-
-fn send_pack_inline<F>(
-    stream: &mut std::net::TcpStream,
-    pack: &PackBuffer,
-    cancel: &Arc<AtomicBool>,
-    limiter: &mut RateLimiter,
-    progress: &mut F,
-    base_bytes: u64,
-    base_files: i32,
-    current_file: Option<String>,
-    last_progress_sent: &mut u64,
-) -> Result<()>
-where F: FnMut(u64, i32, Option<String>)
-{
-    send_frame_header(stream, FrameType::Pack, pack.buffer.len() as u64, cancel)?;
-    let mut sent_payload = 0usize;
-    let pack_len = pack.buffer.len();
-    while sent_payload < pack_len {
-        if cancel.load(Ordering::Relaxed) {
-            let _ = stream.shutdown(std::net::Shutdown::Both);
-            return Err(anyhow::anyhow!("Upload cancelled"));
-        }
-        let end = std::cmp::min(sent_payload + SEND_CHUNK_SIZE, pack_len);
-        write_all_retry(stream, &pack.buffer[sent_payload..end], cancel)?;
-        limiter.throttle((end - sent_payload) as u64);
-        sent_payload = end;
-        let approx = (pack.bytes_added as u128 * sent_payload as u128 / pack_len as u128) as u64;
-        let approx_total = base_bytes + approx;
-        if approx_total != *last_progress_sent {
-            progress(approx_total, base_files, current_file.clone());
-            *last_progress_sent = approx_total;
-        }
-    }
     Ok(())
 }
 
@@ -1290,19 +1342,18 @@ where
             let pack_ref = unsafe { &mut *ctx.pack };
             let rel_path = &ctx.current_rel_path;
             if !pack_ref.can_fit(rel_path.len(), 0) {
-                send_pack_inline(
-                    &mut stream,
-                    pack_ref,
-                    &cancel,
-                    &mut limiter,
-                    &mut progress,
-                    total_sent_bytes,
-                    total_sent_files,
-                    Some(rel_path.clone()),
-                    &mut last_progress_sent,
-                )?;
-                total_sent_bytes += pack_ref.bytes_added;
-                total_sent_files += pack_ref.files_added;
+                let mut send_ctx = SendContext {
+                    stream: &mut stream,
+                    cancel: &cancel,
+                    limiter: &mut limiter,
+                    progress: &mut progress,
+                    total_sent_bytes: &mut total_sent_bytes,
+                    total_sent_files: &mut total_sent_files,
+                    last_progress_sent: &mut last_progress_sent,
+                };
+                send_ctx.send_pack_inline(pack_ref, Some(rel_path.clone()))?;
+                *send_ctx.total_sent_bytes += pack_ref.bytes_added;
+                *send_ctx.total_sent_files += pack_ref.files_added;
                 pack_ref.reset();
             }
             pack_ref.add_record(rel_path, &[]);
@@ -1311,17 +1362,16 @@ where
     }
 
     if pack.record_count() > 0 {
-        send_pack_inline(
-            &mut stream,
-            &pack,
-            &cancel,
-            &mut limiter,
-            &mut progress,
-            total_sent_bytes,
-            total_sent_files,
-            None,
-            &mut last_progress_sent,
-        )?;
+        let mut send_ctx = SendContext {
+            stream: &mut stream,
+            cancel: &cancel,
+            limiter: &mut limiter,
+            progress: &mut progress,
+            total_sent_bytes: &mut total_sent_bytes,
+            total_sent_files: &mut total_sent_files,
+            last_progress_sent: &mut last_progress_sent,
+        };
+        send_ctx.send_pack_inline(&pack, None)?;
     }
     send_frame_header(&mut stream, FrameType::Finish, 0, &cancel)?;
     Ok(())

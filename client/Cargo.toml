@@ -1,6 +1,6 @@
 [package]
 name = "ps5upload"
-version = "1.1.5"
+version = "1.1.6"
 edition = "2021"
 
 [dependencies]
@@ -19,6 +19,8 @@ libc = "0.2"
 reqwest = { version = "0.11", features = ["json", "rustls-tls"] }
 semver = "1.0"
 lz4_flex = "0.11"
+zstd = "0.13"
+lzma-rs = "0.3"
 sha2 = "0.10"
 image = { version = "0.25", default-features = false, features = ["png"] }
 # unrar builds a bundled static lib via unrar_sys by default (no external deps).

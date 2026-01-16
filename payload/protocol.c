@@ -26,6 +26,8 @@
 #include "transfer.h"
 #include "protocol_defs.h"
 #include "lz4.h"
+#include "zstd.h"
+#include "LzmaLib.h"
 #include "sha256.h"
 
 #define DOWNLOAD_PACK_BUFFER_SIZE (4 * 1024 * 1024)
@@ -240,11 +242,18 @@ static int chmod_recursive(const char *path, mode_t mode, char *err, size_t err_
     return 0;
 }
 
+enum DownloadCompression {
+    DL_COMP_NONE = 0,
+    DL_COMP_LZ4 = 1,
+    DL_COMP_ZSTD = 2,
+    DL_COMP_LZMA = 3
+};
+
 struct DownloadPack {
     uint8_t *buf;
     size_t len;
     uint32_t records;
-    int compress;
+    enum DownloadCompression compress;
 };
 
 static int send_all(int sock, const void *buf, size_t len) {
@@ -284,7 +293,7 @@ static void send_error_frame(int sock, const char *msg) {
     send_all(sock, msg, len);
 }
 
-static int download_pack_init(struct DownloadPack *pack, int compress) {
+static int download_pack_init(struct DownloadPack *pack, enum DownloadCompression compress) {
     pack->buf = malloc(DOWNLOAD_PACK_BUFFER_SIZE);
     if (!pack->buf) {
         return -1;
@@ -302,12 +311,22 @@ static void download_pack_reset(struct DownloadPack *pack) {
     memset(pack->buf, 0, 4);
 }
 
+static int download_pack_send_raw(int sock, struct DownloadPack *pack) {
+    if (send_frame_header(sock, FRAME_PACK, pack->len) != 0) {
+        return -1;
+    }
+    if (send_all(sock, pack->buf, pack->len) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
 static int download_pack_flush(int sock, struct DownloadPack *pack) {
     if (pack->records == 0) {
         return 0;
     }
     memcpy(pack->buf, &pack->records, 4);
-    if (pack->compress) {
+    if (pack->compress == DL_COMP_LZ4) {
         int max_dst = LZ4_compressBound((int)pack->len);
         uint8_t *tmp = malloc((size_t)max_dst + 4);
         if (!tmp) {
@@ -316,9 +335,9 @@ static int download_pack_flush(int sock, struct DownloadPack *pack) {
         uint32_t raw_len = (uint32_t)pack->len;
         memcpy(tmp, &raw_len, 4);
         int compressed = LZ4_compress_default((const char *)pack->buf, (char *)tmp + 4, (int)pack->len, max_dst);
-        if (compressed <= 0) {
+        if (compressed <= 0 || (size_t)compressed + 4 >= pack->len) {
             free(tmp);
-            return -1;
+            return download_pack_send_raw(sock, pack);
         }
         size_t out_len = (size_t)compressed + 4;
         if (send_frame_header(sock, FRAME_PACK_LZ4, out_len) != 0) {
@@ -330,11 +349,63 @@ static int download_pack_flush(int sock, struct DownloadPack *pack) {
             return -1;
         }
         free(tmp);
-    } else {
-        if (send_frame_header(sock, FRAME_PACK, pack->len) != 0) {
+    } else if (pack->compress == DL_COMP_ZSTD) {
+        size_t max_dst = ZSTD_compressBound(pack->len);
+        uint8_t *tmp = malloc(max_dst + 4);
+        if (!tmp) {
             return -1;
         }
-        if (send_all(sock, pack->buf, pack->len) != 0) {
+        uint32_t raw_len = (uint32_t)pack->len;
+        memcpy(tmp, &raw_len, 4);
+        size_t compressed = ZSTD_compress(tmp + 4, max_dst, pack->buf, pack->len, 19);
+        if (ZSTD_isError(compressed) || compressed + 4 >= pack->len) {
+            free(tmp);
+            return download_pack_send_raw(sock, pack);
+        }
+        size_t out_len = compressed + 4;
+        if (send_frame_header(sock, FRAME_PACK_ZSTD, out_len) != 0) {
+            free(tmp);
+            return -1;
+        }
+        if (send_all(sock, tmp, out_len) != 0) {
+            free(tmp);
+            return -1;
+        }
+        free(tmp);
+    } else if (pack->compress == DL_COMP_LZMA) {
+        size_t max_dst = pack->len + (pack->len / 3) + 256;
+        uint8_t *tmp = malloc(max_dst + 17);
+        if (!tmp) {
+            return -1;
+        }
+        uint32_t raw_len = (uint32_t)pack->len;
+        memcpy(tmp, &raw_len, 4);
+        unsigned char props[LZMA_PROPS_SIZE];
+        size_t props_size = LZMA_PROPS_SIZE;
+        size_t dest_len = max_dst;
+        int res = LzmaCompress(
+            tmp + 17, &dest_len, pack->buf, pack->len,
+            props, &props_size, 9, 0, -1, -1, -1, -1, 1
+        );
+        if (res != SZ_OK || props_size != LZMA_PROPS_SIZE || dest_len + 17 >= pack->len) {
+            free(tmp);
+            return download_pack_send_raw(sock, pack);
+        }
+        memcpy(tmp + 4, props, LZMA_PROPS_SIZE);
+        uint64_t raw64 = pack->len;
+        memcpy(tmp + 9, &raw64, 8);
+        size_t out_len = dest_len + 17;
+        if (send_frame_header(sock, FRAME_PACK_LZMA, out_len) != 0) {
+            free(tmp);
+            return -1;
+        }
+        if (send_all(sock, tmp, out_len) != 0) {
+            free(tmp);
+            return -1;
+        }
+        free(tmp);
+    } else {
+        if (download_pack_send_raw(sock, pack) != 0) {
             return -1;
         }
     }
@@ -367,6 +438,85 @@ static int download_pack_add_record(int sock, struct DownloadPack *pack, const c
 
     pack->records++;
     return 0;
+}
+
+static size_t sample_dir_data(const char *base_path, uint8_t *buf, size_t max_len) {
+    DIR *dir = opendir(base_path);
+    if (!dir) {
+        return 0;
+    }
+
+    size_t written = 0;
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL && written < max_len) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+        char full_path[PATH_MAX];
+        snprintf(full_path, sizeof(full_path), "%s/%s", base_path, entry->d_name);
+
+        struct stat st;
+        if (stat(full_path, &st) != 0) {
+            continue;
+        }
+        if (S_ISDIR(st.st_mode)) {
+            size_t nested = sample_dir_data(full_path, buf + written, max_len - written);
+            written += nested;
+            continue;
+        }
+        if (!S_ISREG(st.st_mode)) {
+            continue;
+        }
+
+        FILE *fp = fopen(full_path, "rb");
+        if (!fp) {
+            continue;
+        }
+        size_t to_read = max_len - written;
+        if (to_read > 64 * 1024) {
+            to_read = 64 * 1024;
+        }
+        size_t n = fread(buf + written, 1, to_read, fp);
+        fclose(fp);
+        if (n > 0) {
+            written += n;
+        }
+    }
+    closedir(dir);
+    return written;
+}
+
+static enum DownloadCompression pick_auto_compression(const char *path) {
+    const size_t sample_max = 512 * 1024;
+    uint8_t *sample = malloc(sample_max);
+    if (!sample) {
+        return DL_COMP_NONE;
+    }
+    size_t sample_len = sample_dir_data(path, sample, sample_max);
+    if (sample_len == 0) {
+        free(sample);
+        return DL_COMP_NONE;
+    }
+
+    enum DownloadCompression best = DL_COMP_NONE;
+
+    int max_lz4 = LZ4_compressBound((int)sample_len);
+    if (max_lz4 > 0) {
+        uint8_t *tmp = malloc((size_t)max_lz4 + 4);
+        if (tmp) {
+            int compressed = LZ4_compress_default((const char *)sample, (char *)tmp + 4, (int)sample_len, max_lz4);
+            if (compressed > 0) {
+                size_t out_len = (size_t)compressed + 4;
+                if (out_len < sample_len) {
+                    best = DL_COMP_LZ4;
+                }
+            }
+            free(tmp);
+        }
+    }
+
+    free(sample);
+    return best;
 }
 
 static int send_file_records(int sock, struct DownloadPack *pack, const char *rel_path, const char *path) {
@@ -738,11 +888,28 @@ void handle_download_dir(int client_sock, const char *path_arg) {
     path[PATH_MAX-1] = '\0';
     trim_newline(path);
 
-    int use_lz4 = 0;
-    char *lz4_tag = strstr(path, " LZ4");
-    if (lz4_tag) {
-        *lz4_tag = '\0';
-        use_lz4 = 1;
+    enum DownloadCompression compression = DL_COMP_NONE;
+    int auto_requested = 0;
+    char *tag = strstr(path, " LZ4");
+    if (tag) {
+        *tag = '\0';
+        compression = DL_COMP_LZ4;
+    }
+    tag = strstr(path, " ZSTD");
+    if (tag) {
+        *tag = '\0';
+        compression = DL_COMP_ZSTD;
+    }
+    tag = strstr(path, " LZMA");
+    if (tag) {
+        *tag = '\0';
+        compression = DL_COMP_LZMA;
+    }
+    tag = strstr(path, " AUTO");
+    if (tag) {
+        *tag = '\0';
+        auto_requested = 1;
+        compression = pick_auto_compression(path);
     }
 
     struct stat st;
@@ -765,14 +932,27 @@ void handle_download_dir(int client_sock, const char *path_arg) {
         return;
     }
 
-    char ready[64];
-    snprintf(ready, sizeof(ready), "READY %llu\n", (unsigned long long)total_size);
+    char ready[96];
+    const char *comp_label = "NONE";
+    if (compression == DL_COMP_LZ4) {
+        comp_label = "LZ4";
+    } else if (compression == DL_COMP_ZSTD) {
+        comp_label = "ZSTD";
+    } else if (compression == DL_COMP_LZMA) {
+        comp_label = "LZMA";
+    }
+    if (auto_requested) {
+        snprintf(ready, sizeof(ready), "READY %llu COMP %s\n",
+                 (unsigned long long)total_size, comp_label);
+    } else {
+        snprintf(ready, sizeof(ready), "READY %llu\n", (unsigned long long)total_size);
+    }
     if (send_all(client_sock, ready, strlen(ready)) != 0) {
         return;
     }
 
     struct DownloadPack pack;
-    if (download_pack_init(&pack, use_lz4) != 0) {
+    if (download_pack_init(&pack, compression) != 0) {
         send_error_frame(client_sock, "Download failed: OOM");
         return;
     }

@@ -25,17 +25,17 @@ help:
 	@echo ""
 	@echo "Detailed Targets:"
 	@echo "  make payload        - Build PS5 payload only"
-	@echo "  make client         - Build Rust GUI client only"
+	@echo "  make client         - Build Rust client only"
 	@echo "  make setup-payload  - Check/setup payload build environment"
-	@echo "  make setup-client   - Check Rust toolchain for GUI client"
+	@echo "  make setup-client   - Check Rust toolchain for client"
 	@echo "  make test-payload   - Test payload build"
 	@echo "  make test-client    - Test client installation"
-	@echo "  make run-gui        - Run GUI client"
+	@echo "  make run-client     - Run client"
 	@echo ""
 	@echo "Examples:"
 	@echo "  make setup          # First time setup"
 	@echo "  make build          # Build everything"
-	@echo "  make run-gui        # Launch GUI"
+	@echo "  make run-client     # Launch client"
 	@echo ""
 
 #──────────────────────────────────────────────────────────────────────────────
@@ -49,7 +49,7 @@ setup: setup-payload setup-client
 	@echo "Next steps:"
 	@echo "  1. make build       - Build the payload"
 	@echo "  2. Load ps5upload.elf on your PS5"
-	@echo "  3. make run-gui     - Start uploading games!"
+	@echo "  3. make run-client  - Start uploading games!"
 	@echo ""
 
 setup-payload:
@@ -95,7 +95,7 @@ build: payload client
 	@echo ""
 	@echo "Output files:"
 	@echo "  - payload/ps5upload.elf   (Load this on your PS5)"
-	@echo "  - client/target/release/ps5upload (Run with: make run-gui)"
+	@echo "  - client/target/release/ps5upload (Run with: make run-client)"
 	@echo ""
 
 payload: setup-payload
@@ -104,9 +104,9 @@ payload: setup-payload
 	@echo "✓ Payload built: payload/ps5upload.elf"
 
 client: setup-client
-	@echo "Building Rust GUI client (static)..."
+	@echo "Building Rust client (static)..."
 	@cd client && export RAR_STATIC=1 && cargo build --release
-	@echo "✓ Rust GUI client built: client/target/release/ps5upload"
+	@echo "✓ Rust client built: client/target/release/ps5upload"
 
 bundle-macos: client
 	@echo "Creating macOS .app bundle..."
@@ -175,8 +175,8 @@ test-client: client
 # Run
 #──────────────────────────────────────────────────────────────────────────────
 
-run-gui: client
-	@echo "Starting PS5 Upload GUI..."
+run-client: client
+	@echo "Starting PS5 Upload client..."
 	@cd client && cargo run --release
 
 #──────────────────────────────────────────────────────────────────────────────
@@ -213,7 +213,7 @@ info:
 	@echo "  Payload:"
 	@[ -f "payload/ps5upload.elf" ] && echo "    ✓ ps5upload.elf exists" || echo "    ✗ ps5upload.elf missing (run: make payload)"
 	@echo "  Client:"
-	@[ -f "client/target/release/ps5upload" ] && echo "    ✓ Rust GUI exists" || echo "    ✗ GUI missing (run: make client)"
+	@[ -f "client/target/release/ps5upload" ] && echo "    ✓ Rust client exists" || echo "    ✗ Client missing (run: make client)"
 	@echo ""
 
 install-hooks:
