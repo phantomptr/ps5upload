@@ -30,6 +30,7 @@ use serde::Deserialize;
 use lz4_flex::block::compress_prepend_size;
 use chat::ChatMessage;
 use rand::Rng;
+use hex;
 
 mod protocol;
 mod archive;
@@ -114,6 +115,7 @@ enum AppMessage {
     StatusPhase(String),
     ChatMessage(ChatMessage),
     ChatStatus(ChatStatusEvent),
+    ChatAck { ok: bool, reason: Option<String> },
     PayloadSendComplete(Result<u64, String>),
     PayloadVersion(Result<String, String>),
     StorageList(Result<Vec<StorageLocation>, String>),
@@ -317,6 +319,9 @@ struct Ps5UploadApp {
     chat_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
     chat_sent_count: u64,
     chat_received_count: u64,
+    chat_ack_count: u64,
+    chat_reject_count: u64,
+    chat_room_id: String,
 
     // Concurrency
     rx: Receiver<AppMessage>,
@@ -466,6 +471,9 @@ impl Ps5UploadApp {
             chat_tx: None,
             chat_sent_count: 0,
             chat_received_count: 0,
+            chat_ack_count: 0,
+            chat_reject_count: 0,
+            chat_room_id: String::new(),
             rx,
             tx,
             rt: Arc::new(rt),
@@ -1069,8 +1077,10 @@ impl Ps5UploadApp {
         let key = CHAT_SHARED_KEY_HEX.trim();
         if key.is_empty() {
             self.chat_status = tr(self.language, "chat_disabled_missing_key");
+            self.chat_room_id.clear();
             return;
         }
+        self.chat_room_id = chat_room_id_for_key(key);
         self.chat_status = tr(self.language, "chat_connecting");
         let tx = self.tx.clone();
         let handle = self.rt.handle().clone();
@@ -1107,7 +1117,7 @@ impl Ps5UploadApp {
         self.chat_input.clear();
     }
 
-    fn format_chat_status(&self, status: ChatStatusEvent) -> String {
+fn format_chat_status(&self, status: ChatStatusEvent) -> String {
         let lang = self.language;
         match status {
             ChatStatusEvent::Connected => tr(lang, "chat_connected"),
@@ -1119,8 +1129,7 @@ impl Ps5UploadApp {
         if !self.config.chat_display_name.trim().is_empty() {
             return;
         }
-        let mut rng = rand::thread_rng();
-        let name = format!("Player-{}", rng.gen_range(1000..=9999));
+        let name = generate_chat_display_name(CHAT_SHARED_KEY_HEX);
         self.config.chat_display_name = name;
         self.config.save();
     }
@@ -2255,6 +2264,21 @@ impl Ps5UploadApp {
     }
 }
 
+fn generate_chat_display_name(key_hex: &str) -> String {
+    let mut rng = rand::thread_rng();
+    let rand_part: u32 = rng.gen();
+    let mut tag = String::new();
+    let trimmed = key_hex.trim();
+    if !trimmed.is_empty() {
+        let digest = sha2::Sha256::digest(trimmed.as_bytes());
+        tag = hex::encode(digest);
+    }
+    let tag_short = if tag.is_empty() { "chat".to_string() } else { tag.chars().take(4).collect() };
+    let time = chrono::Utc::now().timestamp() as u64;
+    let suffix = format!("{:08x}{:08x}", time as u32, rand_part);
+    format!("Player-{}-{}", tag_short, &suffix[..6])
+}
+
 fn payload_path_is_elf(path: &str) -> bool {
     std::path::Path::new(path)
         .extension()
@@ -2347,6 +2371,19 @@ impl eframe::App for Ps5UploadApp {
                     self.chat_received_count = self.chat_received_count.saturating_add(1);
                     self.log("Chat: message received.");
                     self.push_chat_message(msg);
+                }
+                AppMessage::ChatAck { ok, reason } => {
+                    if ok {
+                        self.chat_ack_count = self.chat_ack_count.saturating_add(1);
+                    } else {
+                        self.chat_reject_count = self.chat_reject_count.saturating_add(1);
+                        if let Some(reason) = reason {
+                            let trimmed = reason.to_lowercase();
+                            if trimmed.contains("auth") || trimmed.contains("sign") || trimmed.contains("signup") {
+                                // Keep noisy relay policy messages out of the UI.
+                            }
+                        }
+                    }
                 }
                 AppMessage::ChatStatus(status) => self.chat_status = self.format_chat_status(status),
                 AppMessage::StorageList(res) => {
@@ -3650,7 +3687,8 @@ Overwrite it?", self.get_dest_path()));
                         .font(egui::TextStyle::Monospace)
                         .desired_width(f32::INFINITY)
                         .desired_rows(30)
-                        .lock_focus(true));
+                        .cursor_at_end(false)
+                        .interactive(false));
                 });
             }
             });
@@ -4076,10 +4114,6 @@ Overwrite it?", self.get_dest_path()));
                 ui.add_space(6.0);
                 ui.label(format!("{} {}", tr(lang, "chat_status"), self.chat_status));
                 ui.add_space(6.0);
-                let count_label = tr(lang, "chat_counts")
-                    .replacen("{}", &self.chat_sent_count.to_string(), 1)
-                    .replacen("{}", &self.chat_received_count.to_string(), 1);
-                ui.label(egui::RichText::new(count_label).weak().small());
                 ui.horizontal(|ui| {
                     ui.label(tr(lang, "chat_display_name"));
                     let response = ui.add(
@@ -4731,6 +4765,13 @@ fn spawn_update_helper(pending: &PendingUpdate) -> anyhow::Result<()> {
 
 fn normalize_version(version: &str) -> String {
     version.trim_start_matches('v').trim().to_string()
+}
+
+fn chat_room_id_for_key(key_hex: &str) -> String {
+    let bytes = hex::decode(key_hex).unwrap_or_else(|_| key_hex.as_bytes().to_vec());
+    let digest = Sha256::digest(&bytes);
+    let full = hex::encode(digest);
+    full.chars().take(8).collect()
 }
 
 fn is_newer_version(latest: &str, current: &str) -> Option<bool> {

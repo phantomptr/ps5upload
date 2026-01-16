@@ -1,4 +1,5 @@
 use std::collections::{HashSet, VecDeque};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use aes_gcm::{Aes256Gcm, Key, Nonce};
@@ -37,10 +38,13 @@ pub struct ChatMessage {
 struct NostrEvent {
     id: String,
     pubkey: String,
+    #[serde(rename = "created_at")]
     _created_at: i64,
+    #[serde(rename = "kind")]
     _kind: u64,
     tags: Vec<Vec<String>>,
     content: String,
+    #[serde(rename = "sig")]
     _sig: String,
 }
 
@@ -110,7 +114,7 @@ pub fn start_chat_worker(
     let secp = Secp256k1::new();
     let keypair = Keypair::new(&secp, &mut rand::thread_rng());
     let pubkey_hex = xonly_pubkey_hex(&keypair);
-    let _ = app_tx.send(AppMessage::ChatStatus(ChatStatusEvent::Connected));
+    let relay_count = std::sync::Arc::new(AtomicUsize::new(0));
 
     let dedup = std::sync::Arc::new(Mutex::new(Dedup::new()));
 
@@ -138,13 +142,26 @@ pub fn start_chat_worker(
         let dedup = dedup.clone();
         let mut out_rx = broadcast_tx.subscribe();
         let handle = handle.clone();
+        let relay_count = relay_count.clone();
         handle.spawn(async move {
+            let mut connected = false;
             loop {
                 match connect_async(&relay).await {
                     Ok((mut ws, _)) => {
+                        if !connected {
+                            let prev = relay_count.fetch_add(1, Ordering::SeqCst);
+                            if prev == 0 {
+                                let _ = app_tx.send(AppMessage::ChatStatus(ChatStatusEvent::Connected));
+                            }
+                            connected = true;
+                        }
                         let sub_id = format!("ps5upload-{}", rand::random::<u32>());
-                        let req = json!(["REQ", sub_id, {"kinds":[1], "#t":[CHAT_TAG]}]).to_string();
-                        let _ = ws.send(tokio_tungstenite::tungstenite::Message::Text(req)).await;
+                        let since = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs() as i64 - 600;
+                        let req = json!(["REQ", sub_id, {"kinds":[1], "since": since, "limit": 50}]).to_string();
+                        let _ = ws.send(tokio_tungstenite::tungstenite::Message::Text(req.clone())).await;
                         let _ = app_tx.send(AppMessage::ChatStatus(ChatStatusEvent::Connected));
 
                         loop {
@@ -163,6 +180,23 @@ pub fn start_chat_worker(
                                     let Ok(msg) = msg else { break; };
                                     let Ok(text) = msg.to_text() else { continue; };
                                     if let Ok(val) = serde_json::from_str::<serde_json::Value>(text) {
+                                        if let Some(challenge) = parse_auth_challenge(&val) {
+                                            let _ = app_tx.send(AppMessage::Log("Chat: auth challenge received.".to_string()));
+                                            if let Some(event) = build_auth_event(&secp, &keypair, &pubkey_hex, &relay, &challenge) {
+                                                let msg = json!(["AUTH", event]).to_string();
+                                                let _ = ws.send(tokio_tungstenite::tungstenite::Message::Text(msg)).await;
+                                                let _ = ws.send(tokio_tungstenite::tungstenite::Message::Text(req.clone())).await;
+                                            }
+                                            continue;
+                                        }
+                                        if let Some((ok, reason)) = parse_ok(val.clone()) {
+                                            let _ = app_tx.send(AppMessage::ChatAck { ok, reason });
+                                            continue;
+                                        }
+                                        if is_notice(&val) {
+                                            let _ = app_tx.send(AppMessage::ChatAck { ok: false, reason: None });
+                                            continue;
+                                        }
                                         if let Some(event) = parse_event(val) {
                                             let mut dedup_guard = dedup.lock().await;
                                             if !dedup_guard.insert(&event.id) {
@@ -187,6 +221,8 @@ pub fn start_chat_worker(
                                                     local: false,
                                                 };
                                                 let _ = app_tx.send(AppMessage::ChatMessage(chat));
+                                            } else {
+                                                let _ = app_tx.send(AppMessage::Log("Chat: failed to decrypt message.".to_string()));
                                             }
                                         }
                                     }
@@ -195,8 +231,15 @@ pub fn start_chat_worker(
                         }
                     }
                     Err(_) => {
+                        // fall through to disconnect handling
+                    }
+                }
+                if connected {
+                    let prev = relay_count.fetch_sub(1, Ordering::SeqCst);
+                    if prev == 1 {
                         let _ = app_tx.send(AppMessage::ChatStatus(ChatStatusEvent::Disconnected));
                     }
+                    connected = false;
                 }
                 tokio::time::sleep(std::time::Duration::from_secs(3)).await;
             }
@@ -258,6 +301,41 @@ fn parse_event(val: serde_json::Value) -> Option<NostrEvent> {
     serde_json::from_value(arr.get(2)?.clone()).ok()
 }
 
+fn parse_auth_challenge(val: &serde_json::Value) -> Option<String> {
+    let arr = val.as_array()?;
+    if arr.len() < 2 {
+        return None;
+    }
+    if arr.get(0)?.as_str()? != "AUTH" {
+        return None;
+    }
+    arr.get(1)?.as_str().map(|s| s.to_string())
+}
+
+fn parse_ok(val: serde_json::Value) -> Option<(bool, Option<String>)> {
+    let arr = val.as_array()?;
+    if arr.len() < 3 {
+        return None;
+    }
+    if arr.get(0)?.as_str()? != "OK" {
+        return None;
+    }
+    let ok = arr.get(2)?.as_bool()?;
+    let reason = arr.get(3).and_then(|v| v.as_str()).map(|s| s.to_string());
+    Some((ok, reason))
+}
+
+fn is_notice(val: &serde_json::Value) -> bool {
+    let arr = match val.as_array() {
+        Some(arr) => arr,
+        None => return false,
+    };
+    if arr.len() < 2 {
+        return false;
+    }
+    arr.get(0).and_then(|v| v.as_str()) == Some("NOTICE")
+}
+
 fn event_has_tag(event: &NostrEvent, tag: &str) -> bool {
     event.tags.iter().any(|t| t.get(0).map(|s| s == "t").unwrap_or(false) && t.get(1).map(|s| s == tag).unwrap_or(false))
 }
@@ -295,4 +373,33 @@ fn parse_chat_payload(payload: &str, fallback_sender: &str) -> (String, String) 
         }
     }
     (fallback_sender.to_string(), payload.to_string())
+}
+
+fn build_auth_event(
+    secp: &Secp256k1<secp256k1::All>,
+    keypair: &Keypair,
+    pubkey_hex: &str,
+    relay: &str,
+    challenge: &str,
+) -> Option<OutEvent> {
+    let created_at = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64;
+    let tags = vec![
+        vec!["relay".to_string(), relay.to_string()],
+        vec!["challenge".to_string(), challenge.to_string()],
+    ];
+    let event_data = json!([0, pubkey_hex, created_at, 22242, tags, ""]);
+    let id_bytes = sha2::Sha256::digest(event_data.to_string().as_bytes());
+    let id_hex = hex::encode(id_bytes);
+    let id_raw = hex::decode(&id_hex).ok()?;
+    let msg = Message::from_digest_slice(&id_raw).ok()?;
+    let sig = secp.sign_schnorr(&msg, keypair);
+    Some(OutEvent {
+        id: id_hex,
+        pubkey: pubkey_hex.to_string(),
+        created_at,
+        kind: 22242,
+        tags,
+        content: String::new(),
+        sig: sig.to_string(),
+    })
 }

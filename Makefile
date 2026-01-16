@@ -177,7 +177,7 @@ test-client: client
 
 run-client: client
 	@echo "Starting PS5 Upload client..."
-	@cd client && cargo run --release
+	@cd client && cargo run --release --bin ps5upload
 
 #──────────────────────────────────────────────────────────────────────────────
 # Clean
