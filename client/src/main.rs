@@ -1382,10 +1382,6 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
             return;
         }
 
-        if !self.ensure_space_before_upload() {
-            return;
-        }
-
         let dest = self.get_dest_path();
         let ip = self.ip.clone();
         let tx = self.tx.clone();
@@ -1409,11 +1405,6 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
     }
 
     fn start_upload(&mut self) {
-        if !self.ensure_space_before_upload() {
-            self.is_uploading = false;
-            self.is_scanning = false;
-            return;
-        }
         self.upload_run_id = self.upload_run_id.wrapping_add(1);
         let run_id = self.upload_run_id;
 
@@ -1460,12 +1451,40 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
         let optimize_upload = self.config.optimize_upload;
         let lang_code = self.config.language.clone();
         let payload_supports_modern = self.payload_supports_modern_compression();
+        let required_size = self.calculated_size;
+        
+        let mut best_root = "/data".to_string();
+        let mut best_len = 0;
+        let check_dest = dest_path.clone();
+        for loc in &self.storage_locations {
+             if check_dest.starts_with(&loc.path) && loc.path.len() > best_len {
+                 best_len = loc.path.len();
+                 best_root = loc.path.clone();
+             }
+        }
+        let storage_root = best_root;
 
         thread::spawn(move || {
             let tx_log = tx.clone();
             let tx_inner = tx.clone();
             let res = rt.block_on(async move {
                 let tx = tx_inner;
+                
+                if let Some(req) = required_size {
+                    let required_safe = req.saturating_add(64 * 1024 * 1024); 
+                    match get_space(&ip, TRANSFER_PORT, &storage_root).await {
+                        Ok((free_bytes, _total)) => {
+                            if free_bytes < required_safe {
+                                let _ = tx.send(AppMessage::Log(format!("Insufficient space: {} free, {} required", crate::format_bytes(free_bytes), crate::format_bytes(required_safe))));
+                                return Err(anyhow::anyhow!("Not enough free space on target drive"));
+                            }
+                        },
+                        Err(e) => {
+                            let _ = tx.send(AppMessage::Log(format!("Space check warning: {}", e)));
+                        }
+                    }
+                }
+
                 if cancel_token.load(Ordering::Relaxed) {
                     return Err(anyhow::anyhow!("Cancelled"));
                 }
