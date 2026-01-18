@@ -1453,7 +1453,10 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
                         &dest_path,
                         cancel_token.clone(),
                         progress_callback,
-                        move |msg| { let _ = tx_extract.send(AppMessage::Log(msg)); }
+                        move |msg| { 
+                            let _ = tx_extract.send(AppMessage::Log(msg.clone()));
+                            let _ = tx_extract.send(AppMessage::StatusPhase("Extracting".to_string()));
+                        }
                     ).await;
 
                     match result {
