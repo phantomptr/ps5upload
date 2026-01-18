@@ -13,6 +13,8 @@
 #include <sys/stat.h>
 #if defined(_WIN32)
 #include <windows.h>
+#include <direct.h>
+#include <io.h>
 #else
 #include <unistd.h>
 #endif
@@ -26,6 +28,57 @@
 #define PATH_MAX 4096
 #endif
 #endif
+
+#if defined(_WIN32)
+#define PATH_SEP '\\'
+#define unlink _unlink
+#define rmdir _rmdir
+#else
+#define PATH_SEP '/'
+#endif
+
+static bool make_probe_dir(char *out_path, size_t out_len) {
+    if (!out_path || out_len == 0) {
+        return false;
+    }
+#if defined(_WIN32)
+    char temp_root[MAX_PATH];
+    DWORD root_len = GetTempPathA(sizeof(temp_root), temp_root);
+    if (root_len == 0 || root_len >= sizeof(temp_root)) {
+        return false;
+    }
+    char template_buf[MAX_PATH];
+    if (snprintf(template_buf, sizeof(template_buf), "%sps5upload_probe_XXXXXX", temp_root) < 0) {
+        return false;
+    }
+    if (_mktemp_s(template_buf, strlen(template_buf) + 1) != 0) {
+        return false;
+    }
+    if (_mkdir(template_buf) != 0 && errno != EEXIST) {
+        return false;
+    }
+    strncpy_s(out_path, out_len, template_buf, _TRUNCATE);
+    return true;
+#else
+    const char *tmp_root = getenv("TMPDIR");
+    if (!tmp_root || !*tmp_root) {
+        tmp_root = "/tmp";
+    }
+    char template_buf[PATH_MAX];
+    if (snprintf(template_buf, sizeof(template_buf), "%s/ps5upload_probe_XXXXXX", tmp_root) < 0) {
+        return false;
+    }
+    if (!mkdtemp(template_buf)) {
+        return false;
+    }
+    if (strlen(template_buf) >= out_len) {
+        return false;
+    }
+    strncpy(out_path, template_buf, out_len);
+    out_path[out_len - 1] = '\0';
+    return true;
+#endif
+}
 
 static bool sanitize_target_path(const char *input, std::string &out) {
     if (!input || !*input) {
@@ -587,19 +640,15 @@ extern "C" int unrar_probe_archive(const char *rar_path,
         cover_entry = find_entry_by_normalized(entries, candidate);
     }
 
-    const char *probe_root = "/data/ps5upload/temp";
-    if (mkdir(probe_root, 0777) != 0 && errno != EEXIST) {
-        return UNRAR_ERR_READ;
-    }
-    char temp_dir[] = "/data/ps5upload/temp/probe_XXXXXX";
-    if (!mkdtemp(temp_dir)) {
+    char temp_dir[PATH_MAX];
+    if (!make_probe_dir(temp_dir, sizeof(temp_dir))) {
         return UNRAR_ERR_READ;
     }
 
     char param_path[PATH_MAX];
     char cover_path[PATH_MAX];
-    snprintf(param_path, sizeof(param_path), "%s/param.json", temp_dir);
-    snprintf(cover_path, sizeof(cover_path), "%s/cover.bin", temp_dir);
+    snprintf(param_path, sizeof(param_path), "%s%cparam.json", temp_dir, PATH_SEP);
+    snprintf(cover_path, sizeof(cover_path), "%s%ccover.bin", temp_dir, PATH_SEP);
 
     int result = UNRAR_OK;
     if (param_entry) {
