@@ -11,7 +11,11 @@
 #include <string>
 #include <vector>
 #include <sys/stat.h>
+#if defined(_WIN32)
+#include <windows.h>
+#else
 #include <unistd.h>
+#endif
 #include <limits.h>
 #include <errno.h>
 
@@ -68,6 +72,17 @@ static bool sanitize_target_path(const char *input, std::string &out) {
     return true;
 }
 
+static void sleep_us(unsigned int usec) {
+#if defined(_WIN32)
+    if (usec == 0) {
+        return;
+    }
+    Sleep((usec + 999) / 1000);
+#else
+    usleep(usec);
+#endif
+}
+
 /* Progress callback context */
 struct ExtractContext {
     unrar_progress_cb callback;
@@ -120,7 +135,7 @@ static int CALLBACK unrar_callback(UINT msg, LPARAM user_data, LPARAM p1, LPARAM
             /* Yield periodically based on configured thresholds */
             if (ctx->sleep_every_bytes > 0 && ctx->sleep_us > 0 &&
                 ctx->bytes_since_sleep > ctx->sleep_every_bytes) {
-                usleep(ctx->sleep_us);
+                sleep_us(ctx->sleep_us);
                 ctx->bytes_since_sleep = 0;
             }
             break;

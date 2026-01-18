@@ -229,7 +229,7 @@ SSE_VERSION GetSSEVersion()
     if ((CPUInfo[3] & 0x2000000)!=0)
       return SSE_SSE;
   }
-#elif defined(__GNUC__)
+#elif defined(__GNUC__) && !defined(__APPLE__)
   if (__builtin_cpu_supports("avx2"))
     return SSE_AVX2;
   if (__builtin_cpu_supports("sse4.1"))
