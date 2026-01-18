@@ -346,6 +346,8 @@ struct Ps5UploadApp {
     
     // Internal
     forced_dest_path: Option<String>,
+    show_archive_overwrite_dialog: bool,
+    archive_overwrite_confirmed: bool,
 }
 
 impl Ps5UploadApp {
@@ -487,6 +489,8 @@ impl Ps5UploadApp {
             last_auto_connect_attempt: None,
             last_payload_check: None,
             forced_dest_path: None,
+            show_archive_overwrite_dialog: false,
+            archive_overwrite_confirmed: true,
         };
 
         app.ensure_chat_display_name();
@@ -2177,11 +2181,11 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
             return;
         }
         if self.payload_path.trim().is_empty() {
-            self.payload_log("Select a payload (.elf) file first.");
+            self.payload_log("Select a payload (.elf/.bin) file first.");
             return;
         }
         if !payload_path_is_elf(&self.payload_path) {
-            self.payload_log("Payload must be a .elf file.");
+            self.payload_log("Payload must be a .elf or .bin file.");
             return;
         }
 
@@ -2311,7 +2315,10 @@ fn payload_path_is_elf(path: &str) -> bool {
     std::path::Path::new(path)
         .extension()
         .and_then(|ext| ext.to_str())
-        .map(|ext| ext.eq_ignore_ascii_case("elf"))
+        .map(|ext| {
+            let e = ext.to_lowercase();
+            e == "elf" || e == "bin"
+        })
         .unwrap_or(false)
 }
 
@@ -2321,7 +2328,7 @@ fn send_payload_file(ip: &str, path: &str, tx: &Sender<AppMessage>) -> Result<u6
     use std::time::Duration;
 
     if !payload_path_is_elf(path) {
-        return Err("Payload must be a .elf file.".to_string());
+        return Err("Payload must be a .elf or .bin file.".to_string());
     }
 
     let mut file = File::open(path)
@@ -2672,18 +2679,14 @@ impl eframe::App for Ps5UploadApp {
                 }
                 AppMessage::CheckExistsResult(exists) => {
                     self.manage_busy = false;
+                    self.status = "Connected".to_string();
                     if exists {
-                        if self.config.resume_mode != "none" {
-                            if self.auto_resume_on_exists {
-                                self.auto_resume_on_exists = false;
-                                self.start_upload();
-                            } else {
-                                self.show_resume_dialog = true;
-                                self.status = "Confirm Resume".to_string();
-                            }
+                        let path_obj = std::path::Path::new(&self.game_path);
+                        if Self::archive_kind(path_obj).is_some() {
+                            self.show_archive_overwrite_dialog = true;
+                            self.archive_overwrite_confirmed = true;
                         } else {
                             self.show_override_dialog = true;
-                            self.status = "Confirm Overwrite".to_string();
                         }
                     } else {
                         self.start_upload();
@@ -2838,6 +2841,35 @@ impl eframe::App for Ps5UploadApp {
                     self.upload_start_time = None;
                 }
             }
+        }
+
+        if self.show_archive_overwrite_dialog {
+            egui::Window::new(tr(lang, "confirm_overwrite"))
+                .collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.label(format!("Archive Upload - Conflict\nFolder already exists:\n{}", self.get_dest_path()));
+                    ui.add_space(10.0);
+                    
+                    ui.checkbox(&mut self.archive_overwrite_confirmed, "Overwrite existing files");
+                    ui.label(egui::RichText::new("If unchecked, upload will abort if conflict found.").weak());
+                    
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        if ui.button(tr(lang, "continue")).clicked() {
+                            if self.archive_overwrite_confirmed {
+                                self.start_upload();
+                            } else {
+                                self.log("Upload cancelled - Overwrite required.");
+                                self.status = "Upload Cancelled".to_string();
+                            }
+                            self.show_archive_overwrite_dialog = false; 
+                        }
+                        if ui.button(tr(lang, "cancel")).clicked() { 
+                            self.show_archive_overwrite_dialog = false; 
+                            self.status = "Connected".to_string(); 
+                        }
+                    });
+                });
         }
 
         if self.show_override_dialog {
