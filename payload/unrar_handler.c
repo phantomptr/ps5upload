@@ -1,5 +1,7 @@
 /* RAR extraction handler implementation */
 
+#define _FILE_OFFSET_BITS 64
+
 #include "unrar_handler.h"
 #include "notify.h"
 #include "third_party/unrar/unrar_wrapper.h"
@@ -17,6 +19,23 @@
 #define RAR_TEMP_DIR "/data/ps5upload/temp"
 #define RECV_BUFFER_SIZE (256 * 1024)  /* 256KB receive buffer */
 
+/* Helper to reliably send data */
+static void send_all(int sock, const char *data) {
+    size_t len = strlen(data);
+    size_t sent = 0;
+    while (sent < len) {
+        ssize_t n = send(sock, data + sent, len - sent, 0);
+        if (n < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                usleep(1000);
+                continue;
+            }
+            break; 
+        }
+        sent += n;
+    }
+}
+
 /* Progress callback for extraction */
 static int extraction_progress(const char *filename, unsigned long long file_size,
                                int files_done, void *user_data) {
@@ -29,7 +48,7 @@ static int extraction_progress(const char *filename, unsigned long long file_siz
         /* Ensure filename doesn't break the protocol line (basic sanitization) */
         /* Protocol: EXTRACTING <count> <filename> */
         snprintf(msg, sizeof(msg), "EXTRACTING %d %s\n", files_done + 1, filename);
-        send(*sock_ptr, msg, strlen(msg), 0);
+        send_all(*sock_ptr, msg);
     }
 
     printf("[RAR] Extracting (%d): %s\n", files_done + 1, filename);
@@ -38,6 +57,9 @@ static int extraction_progress(const char *filename, unsigned long long file_siz
 }
 
 char *receive_rar_to_temp(int sock, size_t file_size) {
+    /* Debug off_t size */
+    printf("[RAR] sizeof(off_t) = %zu\n", sizeof(off_t));
+
     /* Create temp directory if needed */
     mkdir(RAR_TEMP_DIR, 0777);
 
@@ -90,14 +112,21 @@ char *receive_rar_to_temp(int sock, size_t file_size) {
             return NULL;
         }
 
-        ssize_t written = write(fd, buffer, (size_t)n);
-        if (written != n) {
-            perror("[RAR] Write error");
-            close(fd);
-            unlink(temp_path);
-            free(buffer);
-            free(temp_path);
-            return NULL;
+        /* Write loop to handle partial writes */
+        size_t to_write = (size_t)n;
+        size_t written_total = 0;
+        while (written_total < to_write) {
+            ssize_t w = write(fd, buffer + written_total, to_write - written_total);
+            if (w < 0) {
+                if (errno == EINTR) continue;
+                perror("[RAR] Write error");
+                close(fd);
+                unlink(temp_path);
+                free(buffer);
+                free(temp_path);
+                return NULL;
+            }
+            written_total += (size_t)w;
         }
 
         received += (size_t)n;
@@ -180,7 +209,7 @@ void handle_upload_rar(int sock, const char *args) {
     char *last_space = strrchr(args_copy, ' ');
     if (!last_space) {
         const char *error = "ERROR: Invalid UPLOAD_RAR format (expected: UPLOAD_RAR <dest> <size>)\n";
-        send(sock, error, strlen(error), 0);
+        send_all(sock, error);
         return;
     }
 
@@ -189,7 +218,7 @@ void handle_upload_rar(int sock, const char *args) {
     file_size = strtoull(last_space + 1, &endptr, 10);
     if (*endptr != '\0') {
          const char *error = "ERROR: Invalid file size format\n";
-         send(sock, error, strlen(error), 0);
+         send_all(sock, error);
          return;
     }
 
@@ -200,7 +229,7 @@ void handle_upload_rar(int sock, const char *args) {
 
     if (file_size == 0 || file_size > (500ULL * 1024 * 1024 * 1024)) {  /* Max 500GB */
         const char *error = "ERROR: Invalid file size\n";
-        send(sock, error, strlen(error), 0);
+        send_all(sock, error);
         return;
     }
 
@@ -208,13 +237,13 @@ void handle_upload_rar(int sock, const char *args) {
 
     /* Send ready signal */
     const char *ready = "READY\n";
-    send(sock, ready, strlen(ready), 0);
+    send_all(sock, ready);
 
     /* Receive RAR file to temp */
     char *temp_path = receive_rar_to_temp(sock, (size_t)file_size);
     if (!temp_path) {
         const char *error = "ERROR: Failed to receive RAR file\n";
-        send(sock, error, strlen(error), 0);
+        send_all(sock, error);
         return;
     }
 
@@ -234,7 +263,7 @@ void handle_upload_rar(int sock, const char *args) {
 
     if (result != 0) {
         const char *error = "ERROR: RAR extraction failed\n";
-        send(sock, error, strlen(error), 0);
+        send_all(sock, error);
         notify_error("PS5 Upload", "RAR extraction failed");
         return;
     }
@@ -242,7 +271,7 @@ void handle_upload_rar(int sock, const char *args) {
     /* Success response */
     char response[256];
     snprintf(response, sizeof(response), "SUCCESS %d %llu\n", file_count, total_bytes);
-    send(sock, response, strlen(response), 0);
+    send_all(sock, response);
 
     /* Notification */
     char notify_msg[128];
