@@ -1,9 +1,5 @@
 /* C wrapper implementation for unrar library */
 
-#define _UNIX
-#define SILENT
-#define RARDLL
-
 #include "rar.hpp"
 #include "dll.hpp"
 #include "unrar_wrapper.h"
