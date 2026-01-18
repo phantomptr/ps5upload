@@ -14,9 +14,9 @@ fn main() {
     ).expect("Failed to write chat_key.rs");
     println!("cargo:rerun-if-changed={}", chat_key_path.display());
 
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let unrar_dir = PathBuf::from("../payload/third_party/unrar");
-    let sources = [
-        "rar.cpp",
+    let mut sources = vec![
         "strlist.cpp",
         "strfn.cpp",
         "pathfn.cpp",
@@ -33,7 +33,6 @@ fn main() {
         "crc.cpp",
         "rawread.cpp",
         "encname.cpp",
-        "resource.cpp",
         "match.cpp",
         "timefn.cpp",
         "rdwrfn.cpp",
@@ -55,7 +54,6 @@ fn main() {
         "find.cpp",
         "unpack.cpp",
         "headers.cpp",
-        "threadpool.cpp",
         "rs16.cpp",
         "cmddata.cpp",
         "ui.cpp",
@@ -66,6 +64,10 @@ fn main() {
         "largepage.cpp",
         "unrar_wrapper.cpp",
     ];
+
+    if target_os == "windows" {
+        sources.push("threadpool.cpp");
+    }
 
     let mut build = cc::Build::new();
     build.cpp(true);
@@ -82,6 +84,12 @@ fn main() {
     build.define("_LARGEFILE_SOURCE", None);
     build.flag_if_supported("-fno-rtti");
 
+    if target_os == "macos" {
+        let min_version = std::env::var("MACOSX_DEPLOYMENT_TARGET")
+            .unwrap_or_else(|_| "10.12".to_string());
+        build.flag(&format!("-mmacosx-version-min={}", min_version));
+    }
+
     if !cfg!(target_os = "windows") {
         build.define("_UNIX", None);
     }
@@ -94,10 +102,9 @@ fn main() {
 
     build.compile("unrar_client");
 
-    let target = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-    if target == "linux" || target == "android" {
+    if target_os == "linux" || target_os == "android" {
         println!("cargo:rustc-link-lib=dylib=stdc++");
-    } else if target == "macos" || target == "ios" {
+    } else if target_os == "macos" || target_os == "ios" {
         println!("cargo:rustc-link-lib=dylib=c++");
     }
 }

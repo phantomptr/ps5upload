@@ -47,6 +47,10 @@
 #define WIN32_LEAN_AND_MEAN
 
 #include <windows.h>
+#if defined(_MSC_VER)
+#include <BaseTsd.h>
+typedef SSIZE_T ssize_t;
+#endif
 #include <prsht.h>
 #include <shlwapi.h>
 #pragma comment(lib, "Shlwapi.lib")
