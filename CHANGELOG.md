@@ -8,13 +8,18 @@ This project follows Semantic Versioning.
 ### Added
 - Turbo RAR extraction mode with minimal throttling for maximum speed.
 - Manage extract now supports RAR-only explicitly with UI guidance.
+- RAR metadata probing with cover/title display for local and remote archives where available.
+- RAR mode selector (Normal/Safe/Turbo) in archive confirmation and transfer settings.
+- RTL-friendly text input alignment for Arabic.
 
 ### Fixed
 - RAR upload temp file creation now has a safe fallback if mkstemp is unavailable.
 - Move/Copy operations now use iterative traversal to avoid deep recursion issues.
+- RAR uploads now retry with Normal mode if the payload rejects Safe/Turbo commands.
 
 ### Changed
 - Copy buffer size increased for better throughput.
+- UI contrast and text legibility improved for readability.
 
 ## [1.1.8] - 2026-01-18
 
