@@ -646,6 +646,12 @@ where
     let mut sent = 0u64;
     let mut read_buf = vec![0u8; 256 * 1024]; // 256KB chunks
 
+    // Buffer for reading potential error responses during upload
+    let mut response_buf = [0u8; 1024];
+    
+    // Split stream to allow concurrent read/write monitoring
+    let (mut rd, mut wr) = stream.into_split();
+
     while sent < file_size {
         if cancel.load(Ordering::Relaxed) {
             return Err(anyhow!("Cancelled"));
@@ -656,14 +662,28 @@ where
             break;
         }
 
-        stream.write_all(&read_buf[..n]).await?;
-        sent += n as u64;
-        progress(sent, file_size);
+        tokio::select! {
+            write_res = wr.write_all(&read_buf[..n]) => {
+                write_res?;
+                sent += n as u64;
+                progress(sent, file_size);
+            }
+            read_res = rd.read(&mut response_buf) => {
+                match read_res {
+                    Ok(0) => return Err(anyhow!("Connection closed by server during upload")),
+                    Ok(len) => {
+                        let msg = String::from_utf8_lossy(&response_buf[..len]).to_string();
+                        return Err(anyhow!("Server error: {}", msg.trim()));
+                    }
+                    Err(e) => return Err(anyhow!("Failed to read from server: {}", e)),
+                }
+            }
+        }
     }
 
     // Wait for extraction result (may take a while for large archives)
     // Use BufReader for line-based reading to handle EXTRACTING messages
-    let mut reader = tokio::io::BufReader::new(stream);
+    let mut reader = tokio::io::BufReader::new(rd);
     let mut line = String::new();
     let timeout = std::time::Duration::from_secs(600); // 10 minute timeout between messages
 

@@ -94,7 +94,7 @@ VERSION := $(shell cat ../VERSION)
 
 # Common flags
 COMMON_FLAGS := -O2 -DPS5_UPLOAD_VERSION=\"$(VERSION)\" -DSERVER_PORT_STR=\"9113\" -D_7ZIP_ST \
-	-Ithird_party/zstd -Ithird_party/lzma_sdk -Ithird_party/unrar
+	-Ithird_party/zstd -Ithird_party/lzma_sdk -Ithird_party/unrar -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE
 
 # C flags
 CFLAGS := -Wall $(COMMON_FLAGS)
