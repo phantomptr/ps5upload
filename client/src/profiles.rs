@@ -69,7 +69,12 @@ fn parse_section(line: &str) -> Option<ProfileSection> {
 }
 
 fn get_profile_mut<'a>(data: &'a mut ProfilesData, name: &str) -> &'a mut Profile {
-    if let Some((idx, _)) = data.profiles.iter().enumerate().find(|(_, p)| p.name == name) {
+    if let Some((idx, _)) = data
+        .profiles
+        .iter()
+        .enumerate()
+        .find(|(_, p)| p.name == name)
+    {
         return &mut data.profiles[idx];
     }
     data.profiles.push(Profile {
@@ -108,7 +113,9 @@ pub fn load_profiles() -> ProfilesData {
                     section = next_section;
                     continue;
                 }
-                let Some((key, value)) = line.split_once('=') else { continue; };
+                let Some((key, value)) = line.split_once('=') else {
+                    continue;
+                };
                 let key = key.trim();
                 let value = value.trim();
                 match &section {
@@ -134,10 +141,16 @@ pub fn load_profiles() -> ProfilesData {
                                 }
                             }
                             "use_temp" => {
-                                profile.use_temp = matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on");
+                                profile.use_temp = matches!(
+                                    value.to_lowercase().as_str(),
+                                    "1" | "true" | "yes" | "on"
+                                );
                             }
                             "auto_tune_connections" => {
-                                profile.auto_tune_connections = matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on");
+                                profile.auto_tune_connections = matches!(
+                                    value.to_lowercase().as_str(),
+                                    "1" | "true" | "yes" | "on"
+                                );
                             }
                             _ => {}
                         }
@@ -164,12 +177,22 @@ pub fn save_profiles(data: &ProfilesData) {
         content.push_str(&format!("address={}\n", profile.address));
         content.push_str(&format!("storage={}\n", profile.storage));
         content.push_str(&format!("preset_index={}\n", profile.preset_index));
-        content.push_str(&format!("custom_preset_path={}\n", profile.custom_preset_path));
+        content.push_str(&format!(
+            "custom_preset_path={}\n",
+            profile.custom_preset_path
+        ));
         content.push_str(&format!("connections={}\n", profile.connections));
-        content.push_str(&format!("use_temp={}\n", if profile.use_temp { "true" } else { "false" }));
+        content.push_str(&format!(
+            "use_temp={}\n",
+            if profile.use_temp { "true" } else { "false" }
+        ));
         content.push_str(&format!(
             "auto_tune_connections={}\n",
-            if profile.auto_tune_connections { "true" } else { "false" }
+            if profile.auto_tune_connections {
+                "true"
+            } else {
+                "false"
+            }
         ));
         content.push('\n');
     }

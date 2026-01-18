@@ -1,13 +1,13 @@
-use anyhow::{Result, anyhow, Context};
-use tokio::net::TcpStream;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, AsyncBufReadExt};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::collections::{HashMap, VecDeque};
+use anyhow::{anyhow, Context, Result};
 use lz4_flex::block::decompress_size_prepended;
-use zstd::bulk::decompress as zstd_decompress;
 use lzma_rs::lzma_decompress;
-use serde::{Deserialize};
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
+use zstd::bulk::decompress as zstd_decompress;
 
 pub const CONNECTION_TIMEOUT_SECS: u64 = 30;
 const READ_TIMEOUT_SECS: u64 = 120;
@@ -32,7 +32,7 @@ async fn read_exact_timeout(stream: &mut TcpStream, buf: &mut [u8]) -> Result<()
     Ok(())
 }
 
-#[derive(Debug, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct StorageLocation {
     pub path: String,
     #[serde(rename = "type")]
@@ -40,7 +40,7 @@ pub struct StorageLocation {
     pub free_gb: f64,
 }
 
-#[derive(Debug, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct DirEntry {
     pub name: String,
     #[serde(rename = "type")]
@@ -69,8 +69,10 @@ async fn send_simple_command(ip: &str, port: u16, cmd: &str) -> Result<String> {
     let addr = format!("{}:{}", ip, port);
     let mut stream = tokio::time::timeout(
         std::time::Duration::from_secs(CONNECTION_TIMEOUT_SECS),
-        TcpStream::connect(&addr)
-    ).await.context("Connection timed out")??;
+        TcpStream::connect(&addr),
+    )
+    .await
+    .context("Connection timed out")??;
 
     stream.write_all(cmd.as_bytes()).await?;
 
@@ -94,8 +96,10 @@ pub async fn list_storage(ip: &str, port: u16) -> Result<Vec<StorageLocation>> {
     let addr = format!("{}:{}", ip, port);
     let mut stream = tokio::time::timeout(
         std::time::Duration::from_secs(CONNECTION_TIMEOUT_SECS),
-        TcpStream::connect(&addr)
-    ).await.context("Connection timed out")??;
+        TcpStream::connect(&addr),
+    )
+    .await
+    .context("Connection timed out")??;
 
     stream.write_all(b"LIST_STORAGE\n").await?;
 
@@ -110,13 +114,15 @@ pub async fn list_storage(ip: &str, port: u16) -> Result<Vec<StorageLocation>> {
         response.extend_from_slice(&buffer[..n]);
         // Check for end marker "\n]\n"
         if response.windows(3).any(|w| w == b"\n]\n") {
-             break;
+            break;
         }
     }
 
     let response_str = String::from_utf8(response)?;
     // Ideally we trim any trailing garbage if any
-    let json_end = response_str.rfind(']').ok_or_else(|| anyhow!("Invalid JSON response"))?;
+    let json_end = response_str
+        .rfind(']')
+        .ok_or_else(|| anyhow!("Invalid JSON response"))?;
     let json_str = &response_str[..=json_end];
 
     let locations: Vec<StorageLocation> = serde_json::from_str(json_str)?;
@@ -127,8 +133,10 @@ pub async fn list_dir(ip: &str, port: u16, path: &str) -> Result<Vec<DirEntry>> 
     let addr = format!("{}:{}", ip, port);
     let mut stream = tokio::time::timeout(
         std::time::Duration::from_secs(CONNECTION_TIMEOUT_SECS),
-        TcpStream::connect(&addr)
-    ).await.context("Connection timed out")??;
+        TcpStream::connect(&addr),
+    )
+    .await
+    .context("Connection timed out")??;
 
     let cmd = format!("LIST_DIR {}\n", path);
     stream.write_all(cmd.as_bytes()).await?;
@@ -143,12 +151,14 @@ pub async fn list_dir(ip: &str, port: u16, path: &str) -> Result<Vec<DirEntry>> 
         }
         response.extend_from_slice(&buffer[..n]);
         if response.windows(3).any(|w| w == b"\n]\n") {
-             break;
+            break;
         }
     }
 
     let response_str = String::from_utf8(response)?;
-    let json_end = response_str.rfind(']').ok_or_else(|| anyhow!("Invalid JSON response"))?;
+    let json_end = response_str
+        .rfind(']')
+        .ok_or_else(|| anyhow!("Invalid JSON response"))?;
     let json_str = &response_str[..=json_end];
 
     let entries: Vec<DirEntry> = serde_json::from_str(json_str)?;
@@ -159,8 +169,10 @@ pub async fn check_dir(ip: &str, port: u16, path: &str) -> Result<bool> {
     let addr = format!("{}:{}", ip, port);
     let mut stream = tokio::time::timeout(
         std::time::Duration::from_secs(CONNECTION_TIMEOUT_SECS),
-        TcpStream::connect(&addr)
-    ).await.context("Connection timed out")??;
+        TcpStream::connect(&addr),
+    )
+    .await
+    .context("Connection timed out")??;
 
     let cmd = format!("CHECK_DIR {}\n", path);
     stream.write_all(cmd.as_bytes()).await?;
@@ -182,12 +194,18 @@ pub async fn delete_path(ip: &str, port: u16, path: &str) -> Result<()> {
     }
 }
 
-pub async fn probe_rar_metadata(ip: &str, port: u16, path: &str) -> Result<(Option<Vec<u8>>, Option<Vec<u8>>)> {
+pub async fn probe_rar_metadata(
+    ip: &str,
+    port: u16,
+    path: &str,
+) -> Result<(Option<Vec<u8>>, Option<Vec<u8>>)> {
     let addr = format!("{}:{}", ip, port);
     let mut stream = tokio::time::timeout(
         std::time::Duration::from_secs(CONNECTION_TIMEOUT_SECS),
-        TcpStream::connect(&addr)
-    ).await.context("Connection timed out")??;
+        TcpStream::connect(&addr),
+    )
+    .await
+    .context("Connection timed out")??;
 
     let cmd = format!("PROBE_RAR {}\n", path);
     stream.write_all(cmd.as_bytes()).await?;
@@ -258,8 +276,10 @@ where
     let addr = format!("{}:{}", ip, port);
     let mut stream = tokio::time::timeout(
         std::time::Duration::from_secs(CONNECTION_TIMEOUT_SECS),
-        TcpStream::connect(&addr)
-    ).await.context("Connection timed out")??;
+        TcpStream::connect(&addr),
+    )
+    .await
+    .context("Connection timed out")??;
 
     stream.write_all(cmd.as_bytes()).await?;
 
@@ -315,7 +335,14 @@ where
     }
 }
 
-pub async fn move_path_with_progress<F>(ip: &str, port: u16, src: &str, dst: &str, cancel: Arc<AtomicBool>, progress: F) -> Result<()>
+pub async fn move_path_with_progress<F>(
+    ip: &str,
+    port: u16,
+    src: &str,
+    dst: &str,
+    cancel: Arc<AtomicBool>,
+    progress: F,
+) -> Result<()>
 where
     F: FnMut(u64, u64),
 {
@@ -323,7 +350,14 @@ where
     send_manage_command_with_progress(ip, port, &cmd, "MOVE_PROGRESS", cancel, progress).await
 }
 
-pub async fn copy_path_with_progress<F>(ip: &str, port: u16, src: &str, dst: &str, cancel: Arc<AtomicBool>, progress: F) -> Result<()>
+pub async fn copy_path_with_progress<F>(
+    ip: &str,
+    port: u16,
+    src: &str,
+    dst: &str,
+    cancel: Arc<AtomicBool>,
+    progress: F,
+) -> Result<()>
 where
     F: FnMut(u64, u64),
 {
@@ -331,7 +365,14 @@ where
     send_manage_command_with_progress(ip, port, &cmd, "COPY_PROGRESS", cancel, progress).await
 }
 
-pub async fn extract_archive_with_progress<F>(ip: &str, port: u16, src: &str, dst: &str, cancel: Arc<AtomicBool>, progress: F) -> Result<()>
+pub async fn extract_archive_with_progress<F>(
+    ip: &str,
+    port: u16,
+    src: &str,
+    dst: &str,
+    cancel: Arc<AtomicBool>,
+    progress: F,
+) -> Result<()>
 where
     F: FnMut(u64, u64),
 {
@@ -348,7 +389,6 @@ pub async fn move_path(ip: &str, port: u16, src: &str, dst: &str) -> Result<()> 
         Err(anyhow!("Move failed: {}", response))
     }
 }
-
 
 pub async fn chmod_777(ip: &str, port: u16, path: &str) -> Result<()> {
     let cmd = format!("CHMOD777 {}\n", path);
@@ -394,7 +434,11 @@ pub async fn get_space(ip: &str, port: u16, path: &str) -> Result<(u64, u64)> {
     Err(anyhow!("Failed to get space: {}", response))
 }
 
-pub async fn list_dir_recursive(ip: &str, port: u16, base_path: &str) -> Result<HashMap<String, DirEntry>> {
+pub async fn list_dir_recursive(
+    ip: &str,
+    port: u16,
+    base_path: &str,
+) -> Result<HashMap<String, DirEntry>> {
     let base = base_path.trim_end_matches('/');
     let mut results: HashMap<String, DirEntry> = HashMap::new();
     let mut queue: VecDeque<String> = VecDeque::new();
@@ -414,12 +458,15 @@ pub async fn list_dir_recursive(ip: &str, port: u16, base_path: &str) -> Result<
             }
             let rel = full_path.strip_prefix(base).unwrap_or(&full_path);
             let rel = rel.trim_start_matches('/').to_string();
-            results.insert(rel.clone(), DirEntry {
-                name: rel,
-                entry_type: entry.entry_type,
-                size: entry.size,
-                mtime: entry.mtime,
-            });
+            results.insert(
+                rel.clone(),
+                DirEntry {
+                    name: rel,
+                    entry_type: entry.entry_type,
+                    size: entry.size,
+                    mtime: entry.mtime,
+                },
+            );
         }
     }
     Ok(results)
@@ -439,8 +486,10 @@ where
     let addr = format!("{}:{}", ip, port);
     let mut stream = tokio::time::timeout(
         std::time::Duration::from_secs(CONNECTION_TIMEOUT_SECS),
-        TcpStream::connect(&addr)
-    ).await.context("Connection timed out")??;
+        TcpStream::connect(&addr),
+    )
+    .await
+    .context("Connection timed out")??;
 
     let cmd = format!("DOWNLOAD {}\n", path);
     stream.write_all(cmd.as_bytes()).await?;
@@ -463,7 +512,9 @@ where
         return Err(anyhow!("Download failed: {}", header_str));
     }
     let size_str = header_str.trim_start_matches("OK ").trim();
-    let total_size: u64 = size_str.parse().map_err(|_| anyhow!("Invalid size header"))?;
+    let total_size: u64 = size_str
+        .parse()
+        .map_err(|_| anyhow!("Invalid size header"))?;
     progress(0, total_size, Some(path.to_string()));
 
     let mut file = tokio::fs::File::create(dest_path).await?;
@@ -507,8 +558,10 @@ where
     let addr = format!("{}:{}", ip, port);
     let mut stream = tokio::time::timeout(
         std::time::Duration::from_secs(CONNECTION_TIMEOUT_SECS),
-        TcpStream::connect(&addr)
-    ).await.context("Connection timed out")??;
+        TcpStream::connect(&addr),
+    )
+    .await
+    .context("Connection timed out")??;
 
     let cmd = match compression {
         DownloadCompression::Lz4 => format!("DOWNLOAD_DIR {} LZ4\n", path),
@@ -538,7 +591,10 @@ where
     }
     let mut parts = header_str.split_whitespace();
     let _ = parts.next(); // READY
-    let total_size = parts.next().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+    let total_size = parts
+        .next()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(0);
     let mut comp: Option<String> = None;
     while let Some(part) = parts.next() {
         if part == "COMP" {
@@ -562,14 +618,22 @@ where
         if let Err(err) = read_exact_timeout(&mut stream, &mut header_buf).await {
             return Err(anyhow!("Download failed (header): {}", err));
         }
-        let magic = u32::from_le_bytes([header_buf[0], header_buf[1], header_buf[2], header_buf[3]]);
+        let magic =
+            u32::from_le_bytes([header_buf[0], header_buf[1], header_buf[2], header_buf[3]]);
         if magic != 0x31585446 {
             return Err(anyhow!("Invalid frame magic"));
         }
-        let frame_type = u32::from_le_bytes([header_buf[4], header_buf[5], header_buf[6], header_buf[7]]);
+        let frame_type =
+            u32::from_le_bytes([header_buf[4], header_buf[5], header_buf[6], header_buf[7]]);
         let body_len = u64::from_le_bytes([
-            header_buf[8], header_buf[9], header_buf[10], header_buf[11],
-            header_buf[12], header_buf[13], header_buf[14], header_buf[15],
+            header_buf[8],
+            header_buf[9],
+            header_buf[10],
+            header_buf[11],
+            header_buf[12],
+            header_buf[13],
+            header_buf[14],
+            header_buf[15],
         ]) as usize;
 
         if frame_type == 6 {
@@ -614,7 +678,8 @@ where
             let cursor = std::io::Cursor::new(&body[4..]);
             let mut input = std::io::BufReader::new(cursor);
             let mut out = Vec::with_capacity(raw_len);
-            lzma_decompress(&mut input, &mut out).map_err(|e| anyhow!("Download failed (lzma): {}", e))?;
+            lzma_decompress(&mut input, &mut out)
+                .map_err(|e| anyhow!("Download failed (lzma): {}", e))?;
             if out.len() != raw_len {
                 return Err(anyhow!("Download failed (lzma): size mismatch"));
             }
@@ -645,14 +710,21 @@ where
             if offset + path_len + 8 > body_len {
                 return Err(anyhow!("Invalid record"));
             }
-            let rel_path = String::from_utf8_lossy(&raw_body[offset..offset + path_len]).to_string();
+            let rel_path =
+                String::from_utf8_lossy(&raw_body[offset..offset + path_len]).to_string();
             if rel_path.contains('\0') {
                 return Err(anyhow!("Download failed: corrupted stream (unexpected NUL in path). Disable compression and retry."));
             }
             offset += path_len;
             let data_len = u64::from_le_bytes([
-                raw_body[offset], raw_body[offset + 1], raw_body[offset + 2], raw_body[offset + 3],
-                raw_body[offset + 4], raw_body[offset + 5], raw_body[offset + 6], raw_body[offset + 7],
+                raw_body[offset],
+                raw_body[offset + 1],
+                raw_body[offset + 2],
+                raw_body[offset + 3],
+                raw_body[offset + 4],
+                raw_body[offset + 5],
+                raw_body[offset + 6],
+                raw_body[offset + 7],
             ]) as usize;
             offset += 8;
             if offset + data_len > body_len {
@@ -667,22 +739,26 @@ where
                 if let Some(parent) = full_path.parent() {
                     tokio::fs::create_dir_all(parent).await?;
                 }
-                current_file = Some(tokio::fs::OpenOptions::new()
-                    .create(true)
-                    .write(true)
-                    .truncate(true)
-                    .open(&full_path)
-                    .await?);
+                current_file = Some(
+                    tokio::fs::OpenOptions::new()
+                        .create(true)
+                        .write(true)
+                        .truncate(true)
+                        .open(&full_path)
+                        .await?,
+                );
                 current_path = rel_path.clone();
             } else if current_file.is_none() {
                 if let Some(parent) = full_path.parent() {
                     tokio::fs::create_dir_all(parent).await?;
                 }
-                current_file = Some(tokio::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(&full_path)
-                    .await?);
+                current_file = Some(
+                    tokio::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(&full_path)
+                        .await?,
+                );
             }
 
             if let Some(file) = current_file.as_mut() {
@@ -703,23 +779,29 @@ where
     Ok(received)
 }
 
-
-pub async fn upload_v2_init(ip: &str, port: u16, dest_path: &str, use_temp: bool) -> Result<TcpStream> {
+pub async fn upload_v2_init(
+    ip: &str,
+    port: u16,
+    dest_path: &str,
+    use_temp: bool,
+) -> Result<TcpStream> {
     let addr = format!("{}:{}", ip, port);
     let mut stream = tokio::time::timeout(
         std::time::Duration::from_secs(CONNECTION_TIMEOUT_SECS),
-        TcpStream::connect(&addr)
-    ).await.context("Connection timed out")??;
+        TcpStream::connect(&addr),
+    )
+    .await
+    .context("Connection timed out")??;
 
     let mode = if use_temp { "TEMP" } else { "DIRECT" };
     let cmd = format!("UPLOAD_V2 {} {}\n", dest_path, mode);
     stream.write_all(cmd.as_bytes()).await?;
-    
+
     // Wait for READY
     let mut buffer = [0u8; 1024];
     let n = read_timeout(&mut stream, &mut buffer).await?;
     let response = String::from_utf8_lossy(&buffer[..n]).trim().to_string();
-    
+
     if response == "READY" {
         Ok(stream)
     } else {
@@ -731,8 +813,10 @@ pub async fn get_payload_version(ip: &str, port: u16) -> Result<String> {
     let addr = format!("{}:{}", ip, port);
     let mut stream = tokio::time::timeout(
         std::time::Duration::from_secs(CONNECTION_TIMEOUT_SECS),
-        TcpStream::connect(&addr)
-    ).await.context("Connection timed out")??;
+        TcpStream::connect(&addr),
+    )
+    .await
+    .context("Connection timed out")??;
 
     stream.write_all(b"VERSION\n").await?;
 
@@ -751,7 +835,10 @@ pub async fn get_payload_version(ip: &str, port: u16) -> Result<String> {
 
     let response_str = String::from_utf8_lossy(&response).trim().to_string();
     if response_str.starts_with("VERSION ") {
-        Ok(response_str.trim_start_matches("VERSION ").trim().to_string())
+        Ok(response_str
+            .trim_start_matches("VERSION ")
+            .trim()
+            .to_string())
     } else {
         Err(anyhow!("Unexpected response: {}", response_str))
     }
@@ -774,7 +861,8 @@ where
     P: FnMut(String),
 {
     // Get file size
-    let metadata = tokio::fs::metadata(rar_path).await
+    let metadata = tokio::fs::metadata(rar_path)
+        .await
         .context("Failed to read RAR file metadata")?;
     let file_size = metadata.len();
 
@@ -784,8 +872,10 @@ where
     let stream = loop {
         let mut stream = tokio::time::timeout(
             std::time::Duration::from_secs(CONNECTION_TIMEOUT_SECS),
-            TcpStream::connect(&addr)
-        ).await.context("Connection timed out")??;
+            TcpStream::connect(&addr),
+        )
+        .await
+        .context("Connection timed out")??;
 
         // Send command
         let cmd = match mode_to_try {
@@ -824,7 +914,7 @@ where
 
     // Buffer for reading potential error responses during upload
     let mut response_buf = [0u8; 1024];
-    
+
     // Split stream to allow concurrent read/write monitoring
     let (mut rd, mut wr) = stream.into_split();
 
@@ -866,17 +956,17 @@ where
     loop {
         line.clear();
         let read_future = reader.read_line(&mut line);
-        
+
         let n = match tokio::time::timeout(timeout, read_future).await {
             Ok(Ok(n)) => n,
             Ok(Err(e)) => return Err(anyhow!("Failed to read from server: {}", e)),
             Err(_) => return Err(anyhow!("Extraction timed out (no progress for 10m)")),
         };
-            
+
         if n == 0 {
-             return Err(anyhow!("Connection closed during extraction"));
+            return Err(anyhow!("Connection closed during extraction"));
         }
-        
+
         let trimmed = line.trim();
         if trimmed.starts_with("SUCCESS ") {
             let parts: Vec<&str> = trimmed.split_whitespace().collect();
@@ -895,7 +985,7 @@ where
                 let processed: u64 = parts[2].parse().unwrap_or(0);
                 let total: u64 = parts[3].parse().unwrap_or(0);
                 progress(processed, total);
-                
+
                 if parts.len() >= 5 {
                     // Extract filename from the rest of the string
                     // Find the position after the 4th token (total)
@@ -904,7 +994,9 @@ where
                     for _ in 0..4 {
                         if let Some(pos) = trimmed[current_pos..].find(char::is_whitespace) {
                             current_pos += pos;
-                            if let Some(next_char) = trimmed[current_pos..].find(|c: char| !c.is_whitespace()) {
+                            if let Some(next_char) =
+                                trimmed[current_pos..].find(|c: char| !c.is_whitespace())
+                            {
                                 current_pos += next_char;
                             }
                         }
@@ -919,16 +1011,16 @@ where
                     if parts_n.len() >= 5 {
                         let filename = parts_n[4].trim();
                         if !filename.is_empty() {
-                             extract_progress(format!("Extracting: {}", filename));
+                            extract_progress(format!("Extracting: {}", filename));
                         }
                     }
                 }
             }
         } else if trimmed.starts_with("EXTRACTING ") {
             if let Some(rest) = trimmed.strip_prefix("EXTRACTING ") {
-                 if let Some((count, filename)) = rest.split_once(' ') {
-                     extract_progress(format!("Extracting ({}): {}", count, filename));
-                 }
+                if let Some((count, filename)) = rest.split_once(' ') {
+                    extract_progress(format!("Extracting ({}): {}", count, filename));
+                }
             }
         }
     }

@@ -41,7 +41,9 @@ pub fn save_history(data: &HistoryData) {
     // Limit to MAX_HISTORY_ITEMS
     let mut limited = data.clone();
     if limited.records.len() > MAX_HISTORY_ITEMS {
-        limited.records = limited.records.split_off(limited.records.len() - MAX_HISTORY_ITEMS);
+        limited.records = limited
+            .records
+            .split_off(limited.records.len() - MAX_HISTORY_ITEMS);
     }
 
     if let Ok(content) = serde_json::to_string_pretty(&limited) {

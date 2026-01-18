@@ -2,13 +2,13 @@ use std::collections::{HashSet, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use aes_gcm::{Aes256Gcm, Key, Nonce};
 use aes_gcm::aead::{Aead, KeyInit};
+use aes_gcm::{Aes256Gcm, Key, Nonce};
 use base64::{engine::general_purpose, Engine as _};
 use chrono::Local;
 use futures_util::{SinkExt, StreamExt};
 use rand::RngCore;
-use secp256k1::{Message, Secp256k1, Keypair, XOnlyPublicKey};
+use secp256k1::{Keypair, Message, Secp256k1, XOnlyPublicKey};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::Digest;
@@ -72,7 +72,10 @@ struct Dedup {
 
 impl Dedup {
     fn new() -> Self {
-        Self { set: HashSet::new(), order: VecDeque::new() }
+        Self {
+            set: HashSet::new(),
+            order: VecDeque::new(),
+        }
     }
 
     fn insert(&mut self, id: &str) -> bool {
@@ -271,7 +274,10 @@ fn build_event(
     pubkey_hex: &str,
     content: String,
 ) -> Option<OutEvent> {
-    let created_at = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64;
+    let created_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
     let tags = vec![vec!["t".to_string(), CHAT_TAG.to_string()]];
     let event_data = json!([0, pubkey_hex, created_at, 1, tags, content]);
     let id_bytes = sha2::Sha256::digest(event_data.to_string().as_bytes());
@@ -337,7 +343,9 @@ fn is_notice(val: &serde_json::Value) -> bool {
 }
 
 fn event_has_tag(event: &NostrEvent, tag: &str) -> bool {
-    event.tags.iter().any(|t| t.get(0).map(|s| s == "t").unwrap_or(false) && t.get(1).map(|s| s == tag).unwrap_or(false))
+    event.tags.iter().any(|t| {
+        t.get(0).map(|s| s == "t").unwrap_or(false) && t.get(1).map(|s| s == tag).unwrap_or(false)
+    })
 }
 
 fn encrypt_message(key: &[u8; 32], plaintext: &str) -> Option<String> {
@@ -382,7 +390,10 @@ fn build_auth_event(
     relay: &str,
     challenge: &str,
 ) -> Option<OutEvent> {
-    let created_at = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64;
+    let created_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
     let tags = vec![
         vec!["relay".to_string(), relay.to_string()],
         vec!["challenge".to_string(), challenge.to_string()],

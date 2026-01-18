@@ -7,6 +7,8 @@
 .PHONY: test-payload test-client
 .PHONY: clean-payload clean-client
 
+TAURI_CMD ?= $(shell if command -v cargo-tauri >/dev/null 2>&1; then echo "cargo tauri"; elif command -v tauri >/dev/null 2>&1; then echo "tauri"; fi)
+
 # Default target
 all: build
 
@@ -25,12 +27,12 @@ help:
 	@echo ""
 	@echo "Detailed Targets:"
 	@echo "  make payload        - Build PS5 payload only"
-	@echo "  make client         - Build Rust client only"
+	@echo "  make client         - Build desktop client (Tauri + React)"
 	@echo "  make setup-payload  - Check/setup payload build environment"
-	@echo "  make setup-client   - Check Rust toolchain for client"
+	@echo "  make setup-client   - Check toolchain for desktop client"
 	@echo "  make test-payload   - Test payload build"
 	@echo "  make test-client    - Test client installation"
-	@echo "  make run-client     - Run client"
+	@echo "  make run-client     - Run desktop client (Tauri dev)"
 	@echo ""
 	@echo "Examples:"
 	@echo "  make setup          # First time setup"
@@ -77,13 +79,23 @@ setup-payload:
 	@echo "✓ PS5 Payload SDK is properly installed"
 
 setup-client:
-	@echo "Checking Rust toolchain..."
+	@echo "Checking desktop client toolchain..."
 	@command -v cargo >/dev/null 2>&1 || { \
 		echo "ERROR: cargo is not installed!"; \
 		echo "Install Rust from https://rustup.rs"; \
 		exit 1; \
 	}
-	@echo "✓ Rust toolchain found: $$(cargo --version)"
+	@command -v npm >/dev/null 2>&1 || { \
+		echo "ERROR: npm is not installed!"; \
+		echo "Install Node.js from https://nodejs.org"; \
+		exit 1; \
+	}
+	@if [ -z "$(TAURI_CMD)" ]; then \
+		echo "ERROR: Tauri CLI is not installed!"; \
+		echo "Install with: cargo install tauri-cli"; \
+		exit 1; \
+	fi
+	@echo "✓ Toolchain found: $$(cargo --version), $$(npm --version)"
 
 #──────────────────────────────────────────────────────────────────────────────
 # Build
@@ -95,7 +107,7 @@ build: payload client
 	@echo ""
 	@echo "Output files:"
 	@echo "  - payload/ps5upload.elf   (Load this on your PS5)"
-	@echo "  - client/target/release/ps5upload (Run with: make run-client)"
+	@echo "  - desktop/src-tauri/target/release/ps5upload-desktop (Run with: make run-client)"
 	@echo ""
 
 payload: setup-payload
@@ -104,45 +116,18 @@ payload: setup-payload
 	@echo "✓ Payload built: payload/ps5upload.elf"
 
 client: setup-client
-	@echo "Building Rust client (static)..."
-	@cd client && export RAR_STATIC=1 && cargo build --release
-	@echo "✓ Rust client built: client/target/release/ps5upload"
+	@echo "Building desktop client (Tauri)..."
+	@cd desktop && npm install
+	@cd desktop && $(TAURI_CMD) build
+	@echo "✓ Desktop client built: desktop/src-tauri/target/release/ps5upload-desktop"
 
 bundle-macos: client
-	@echo "Creating macOS .app bundle..."
-	@mkdir -p dist/PS5Upload.app/Contents/MacOS
-	@mkdir -p dist/PS5Upload.app/Contents/Resources
-	@cp client/target/release/ps5upload dist/PS5Upload.app/Contents/MacOS/
-	@echo '<?xml version="1.0" encoding="UTF-8"?>' > dist/PS5Upload.app/Contents/Info.plist
-	@echo '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' >> dist/PS5Upload.app/Contents/Info.plist
-	@echo '<plist version="1.0"><dict>' >> dist/PS5Upload.app/Contents/Info.plist
-	@echo '<key>CFBundleExecutable</key><string>ps5upload</string>' >> dist/PS5Upload.app/Contents/Info.plist
-	@echo '<key>CFBundleIdentifier</key><string>com.phantomptr.ps5upload</string>' >> dist/PS5Upload.app/Contents/Info.plist
-	@echo '<key>CFBundleName</key><string>PS5 Upload</string>' >> dist/PS5Upload.app/Contents/Info.plist
-	@echo '<key>CFBundlePackageType</key><string>APPL</string>' >> dist/PS5Upload.app/Contents/Info.plist
-	@echo '<key>CFBundleShortVersionString</key><string>$(shell cat VERSION)</string>' >> dist/PS5Upload.app/Contents/Info.plist
-	@echo '<key>LSUIElement</key><false/>' >> dist/PS5Upload.app/Contents/Info.plist
-	@echo '</dict></plist>' >> dist/PS5Upload.app/Contents/Info.plist
-	@chmod +x dist/PS5Upload.app/Contents/MacOS/ps5upload
-	@if command -v codesign >/dev/null 2>&1; then \
-		echo "Ad-hoc signing .app bundle..."; \
-		codesign --force --deep --sign - dist/PS5Upload.app; \
-	fi
-	@echo "✓ macOS Bundle created: dist/PS5Upload.app"
+	@echo "Tauri bundle output:"
+	@echo "  desktop/src-tauri/target/release/bundle/macos/PS5 Upload.app"
 
 bundle-linux: client
-	@echo "Creating Linux desktop launcher..."
-	@mkdir -p dist
-	@cp client/target/release/ps5upload dist/ps5upload
-	@printf '%s\n' \
-		'[Desktop Entry]' \
-		'Type=Application' \
-		'Name=PS5 Upload' \
-		'Exec=sh -c '"'"'exec "$(dirname "%k")/ps5upload"'"'" \
-		'Terminal=false' \
-		'Categories=Utility;' \
-		> dist/PS5Upload.desktop
-	@echo "✓ Linux launcher created: dist/PS5Upload.desktop"
+	@echo "Tauri bundle output:"
+	@echo "  desktop/src-tauri/target/release/bundle/appimage/ps5upload-desktop*.AppImage"
 
 #──────────────────────────────────────────────────────────────────────────────
 # Testing
@@ -167,17 +152,19 @@ test-payload: payload
 	@echo "✓ Payload is valid ELF binary"
 
 test-client: client
-	@echo "Testing Rust client build..."
-	@cd client && cargo build --release
-	@echo "✓ Client build succeeded"
+	@echo "Testing desktop client build..."
+	@cd desktop && npm install
+	@cd desktop && $(TAURI_CMD) build
+	@echo "✓ Desktop client build succeeded"
 
 #──────────────────────────────────────────────────────────────────────────────
 # Run
 #──────────────────────────────────────────────────────────────────────────────
 
-run-client: client
-	@echo "Starting PS5 Upload client..."
-	@cd client && cargo run --release --bin ps5upload
+run-client: setup-client
+	@echo "Starting PS5 Upload desktop client..."
+	@cd desktop && npm install
+	@cd desktop && $(TAURI_CMD) dev
 
 #──────────────────────────────────────────────────────────────────────────────
 # Clean
@@ -194,6 +181,8 @@ clean-payload:
 clean-client:
 	@echo "Cleaning client build artifacts..."
 	@rm -rf client/target
+	@rm -rf desktop/dist
+	@rm -rf desktop/src-tauri/target
 	@rm -rf dist
 	@echo "✓ Client cleaned"
 
@@ -207,13 +196,20 @@ info:
 	@echo "Environment:"
 	@echo "  PS5_PAYLOAD_SDK: $(PS5_PAYLOAD_SDK)"
 	@echo "  Rust: $$(cargo --version 2>/dev/null || echo 'Not found')"
+	@echo "  Node: $$(node --version 2>/dev/null || echo 'Not found')"
+	@echo "  npm: $$(npm --version 2>/dev/null || echo 'Not found')"
+	@if [ -n "$(TAURI_CMD)" ]; then \
+		echo "  tauri: $$($(TAURI_CMD) --version 2>/dev/null)"; \
+	else \
+		echo "  tauri: Not found"; \
+	fi
 	@echo "  Make: $$(make --version | head -1)"
 	@echo ""
 	@echo "Files:"
 	@echo "  Payload:"
 	@[ -f "payload/ps5upload.elf" ] && echo "    ✓ ps5upload.elf exists" || echo "    ✗ ps5upload.elf missing (run: make payload)"
 	@echo "  Client:"
-	@[ -f "client/target/release/ps5upload" ] && echo "    ✓ Rust client exists" || echo "    ✗ Client missing (run: make client)"
+	@[ -f "desktop/src-tauri/target/release/ps5upload-desktop" ] && echo "    ✓ Desktop client exists" || echo "    ✗ Client missing (run: make client)"
 	@echo ""
 
 install-hooks:

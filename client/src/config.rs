@@ -2,21 +2,23 @@ use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
-#[derive(Debug, Clone)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub address: String,
     pub storage: String,
     pub connections: usize,
     pub use_temp: bool,
     pub auto_connect: bool,
-    pub theme: String, // "dark" or "light"
-    pub compression: String, // "none", "lz4", "zstd", "lzma", "auto"
-    pub bandwidth_limit_mbps: f32, // 0 = unlimited
-    pub update_channel: String, // "stable" or "all"
+    pub theme: String,                // "dark" or "light"
+    pub compression: String,          // "none", "lz4", "zstd", "lzma", "auto"
+    pub bandwidth_limit_mbps: f32,    // 0 = unlimited
+    pub update_channel: String,       // "stable" or "all"
     pub download_compression: String, // "none", "lz4", "zstd", "lzma", "auto"
     pub chmod_after_upload: bool,
     pub resume_mode: String, // "none", "size", "size_mtime", "sha256"
-    pub language: String, // "en", "zh-CN", "zh-TW", "fr", "es", "ar"
+    pub language: String,    // "en", "zh-CN", "zh-TW", "fr", "es", "ar"
     pub auto_tune_connections: bool,
     pub auto_check_payload: bool,
     pub optimize_upload: bool,
@@ -51,7 +53,10 @@ impl Default for AppConfig {
 
 impl AppConfig {
     pub fn load() -> Self {
-        let path = Path::new("ps5upload.ini");
+        Self::load_from(Path::new("ps5upload.ini"))
+    }
+
+    pub fn load_from(path: &Path) -> Self {
         if !path.exists() {
             return Self::default();
         }
@@ -73,13 +78,23 @@ impl AppConfig {
                                 }
                             }
                             "use_temp" => {
-                                config.use_temp = matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on");
+                                config.use_temp = matches!(
+                                    value.to_lowercase().as_str(),
+                                    "1" | "true" | "yes" | "on"
+                                );
                             }
                             "auto_connect" => {
-                                config.auto_connect = matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on");
+                                config.auto_connect = matches!(
+                                    value.to_lowercase().as_str(),
+                                    "1" | "true" | "yes" | "on"
+                                );
                             }
                             "theme" => {
-                                config.theme = if value == "light" { "light".to_string() } else { "dark".to_string() };
+                                config.theme = if value == "light" {
+                                    "light".to_string()
+                                } else {
+                                    "dark".to_string()
+                                };
                             }
                             "compression" => {
                                 config.compression = match value.as_str() {
@@ -93,7 +108,11 @@ impl AppConfig {
                                 }
                             }
                             "update_channel" => {
-                                config.update_channel = if value == "all" { "all".to_string() } else { "stable".to_string() };
+                                config.update_channel = if value == "all" {
+                                    "all".to_string()
+                                } else {
+                                    "stable".to_string()
+                                };
                             }
                             "download_compression" => {
                                 config.download_compression = match value.as_str() {
@@ -102,7 +121,10 @@ impl AppConfig {
                                 };
                             }
                             "chmod_after_upload" => {
-                                config.chmod_after_upload = matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on");
+                                config.chmod_after_upload = matches!(
+                                    value.to_lowercase().as_str(),
+                                    "1" | "true" | "yes" | "on"
+                                );
                             }
                             "resume_mode" => {
                                 config.resume_mode = match value.as_str() {
@@ -119,13 +141,22 @@ impl AppConfig {
                                 };
                             }
                             "auto_tune_connections" => {
-                                config.auto_tune_connections = matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on");
+                                config.auto_tune_connections = matches!(
+                                    value.to_lowercase().as_str(),
+                                    "1" | "true" | "yes" | "on"
+                                );
                             }
                             "auto_check_payload" => {
-                                config.auto_check_payload = matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on");
+                                config.auto_check_payload = matches!(
+                                    value.to_lowercase().as_str(),
+                                    "1" | "true" | "yes" | "on"
+                                );
                             }
                             "optimize_upload" => {
-                                config.optimize_upload = matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on");
+                                config.optimize_upload = matches!(
+                                    value.to_lowercase().as_str(),
+                                    "1" | "true" | "yes" | "on"
+                                );
                             }
                             "chat_display_name" => {
                                 config.chat_display_name = value;
@@ -137,19 +168,25 @@ impl AppConfig {
                                 };
                             }
                             "rar_safe_extract" => {
-                                if matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on") {
+                                if matches!(
+                                    value.to_lowercase().as_str(),
+                                    "1" | "true" | "yes" | "on"
+                                ) {
                                     config.rar_extract_mode = "safe".to_string();
                                 }
                             }
                             "rar_turbo_extract" => {
-                                if matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on") {
+                                if matches!(
+                                    value.to_lowercase().as_str(),
+                                    "1" | "true" | "yes" | "on"
+                                ) {
                                     config.rar_extract_mode = "turbo".to_string();
                                 }
                             }
                             // Backwards compatibility: ignore removed fields
                             "extract_archives_fast" => {} // Removed fields are ignored
                             "rar_stream_on_the_fly" => {} // Removed fields are ignored
-                            _ => {} // Removed fields are ignored
+                            _ => {}                       // Removed fields are ignored
                         }
                     }
                 }
@@ -160,6 +197,10 @@ impl AppConfig {
     }
 
     pub fn save(&self) -> anyhow::Result<()> {
+        self.save_to(Path::new("ps5upload.ini"))
+    }
+
+    pub fn save_to(&self, path: &Path) -> anyhow::Result<()> {
         let content = format!(
             "address={}\nstorage={}\nconnections={}\nuse_temp={}\nauto_connect={}\ntheme={}\ncompression={}\nbandwidth_limit_mbps={}\nupdate_channel={}\ndownload_compression={}\nchmod_after_upload={}\nresume_mode={}\nlanguage={}\nauto_tune_connections={}\nauto_check_payload={}\noptimize_upload={}\nchat_display_name={}\n",
             self.address,
@@ -180,12 +221,11 @@ impl AppConfig {
             self.optimize_upload,
             self.chat_display_name,
         );
-        let content = format!(
-            "{}rar_extract_mode={}\n",
-            content,
-            self.rar_extract_mode
-        );
-        std::fs::write("ps5upload.ini", content)?;
+        let content = format!("{}rar_extract_mode={}\n", content, self.rar_extract_mode);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(path, content)?;
         Ok(())
     }
 }

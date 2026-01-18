@@ -18,44 +18,68 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use eframe::egui;
-use std::sync::mpsc::{channel, Receiver, Sender};
-use std::thread;
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicBool, AtomicUsize, AtomicU64, Ordering};
-use std::io::{Read, Write};
-use tokio::runtime::Runtime;
-use serde::Deserialize;
-use lz4_flex::block::compress_prepend_size;
 use chat::ChatMessage;
-use rand::Rng;
+use eframe::egui;
 use hex;
+use rand::Rng;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use tokio::runtime::Runtime;
 
-mod protocol;
 mod archive;
-mod transfer;
-mod config;
-mod profiles;
-mod history;
-mod queue;
-mod i18n;
 mod chat;
+mod config;
+mod history;
+mod i18n;
+mod message;
+mod profiles;
+mod protocol;
+mod queue;
+mod transfer;
+mod transfer_utils;
+mod ui;
 mod unrar;
 
 const CHAT_MAX_MESSAGES: usize = 500;
 
-use protocol::{StorageLocation, DirEntry, DownloadCompression, RarExtractMode, list_storage, list_dir, list_dir_recursive, check_dir, upload_v2_init, delete_path, move_path, move_path_with_progress, copy_path_with_progress, extract_archive_with_progress, chmod_777, create_path, download_file_with_progress, download_dir_with_progress, get_payload_version, hash_file, upload_rar_for_extraction, probe_rar_metadata, get_space};
 use archive::get_size;
-use transfer::{collect_files_with_progress, stream_files_with_progress, send_files_v2_for_list, SendFilesConfig, scan_zip_archive, send_zip_archive, scan_7z_archive, send_7z_archive, SharedReceiverIterator, FileEntry, CompressionMode};
 use config::AppConfig;
-use profiles::{Profile, ProfilesData, load_profiles, save_profiles};
-use history::{TransferRecord, HistoryData, load_history, add_record, clear_history};
-use queue::{QueueItem, QueueData, QueueStatus, load_queue, save_queue};
-use i18n::{Language, tr};
-use sha2::{Digest, Sha256};
+use history::{add_record, clear_history, load_history, HistoryData, TransferRecord};
+use i18n::{tr, Language};
 use image::GenericImageView;
-use walkdir::WalkDir;
+use message::{
+    AppMessage, ChatStatusEvent, CoverImage, GameMeta, ManageSide, MoveRequest, PendingUpdate,
+    ReleaseInfo, RenameRequest,
+};
+use profiles::{load_profiles, save_profiles, Profile, ProfilesData};
+use protocol::{
+    check_dir, chmod_777, copy_path_with_progress, create_path, delete_path,
+    download_dir_with_progress, download_file_with_progress, extract_archive_with_progress,
+    get_payload_version, get_space, hash_file, list_dir, list_dir_recursive, list_storage,
+    move_path, move_path_with_progress, probe_rar_metadata, upload_rar_for_extraction,
+    upload_v2_init, DirEntry, DownloadCompression, RarExtractMode, StorageLocation,
+};
+use queue::{load_queue, save_queue, QueueData, QueueItem, QueueStatus};
+use sha2::{Digest, Sha256};
+use transfer::{
+    collect_files_with_progress, scan_7z_archive, scan_zip_archive, send_7z_archive,
+    send_files_v2_for_list, send_zip_archive, stream_files_with_progress, CompressionMode,
+    FileEntry, SendFilesConfig, SharedReceiverIterator,
+};
+use transfer_utils::{
+    choose_best_compression, compression_label, compression_mode_to_setting, optimize_upload_settings,
+    parse_upload_response, partition_files_by_size, payload_supports_modern_compression,
+    read_upload_response, recommend_connections, sample_bytes_from_files, sample_bytes_from_path,
+    sample_workload, sha256_file,
+};
+use ui::{
+    format_bytes, format_duration, format_modified_time, is_rtl, join_remote_path, note_text,
+    row, row_align, setup_dark_style, setup_fonts, setup_light_style, text_edit,
+};
 
 const LOGO_BYTES: &[u8] = include_bytes!("../../logo.png");
 
@@ -64,7 +88,35 @@ const TRANSFER_PORT: u16 = 9113;
 const PAYLOAD_PORT: u16 = 9021;
 const MAX_PARALLEL_CONNECTIONS: usize = 10; // Increased back to 10 for better saturation
 const MAX_LOG_BYTES: usize = 512 * 1024;
+const UPDATE_CHECK_INTERVAL_SECS: u64 = 6 * 60 * 60;
 
+const APP_VERSION: &str = include_str!("../../VERSION");
+include!(concat!(env!("OUT_DIR"), "/chat_key.rs"));
+
+fn app_version_trimmed() -> &'static str {
+    APP_VERSION.trim()
+}
+
+#[derive(Clone)]
+enum DownloadRequest {
+    File {
+        name: String,
+        target: String,
+        save_path: String,
+    },
+    Dir {
+        name: String,
+        target: String,
+        dest_root: String,
+        compression: protocol::DownloadCompression,
+    },
+}
+
+#[derive(Clone, Copy)]
+enum PayloadFetch {
+    Current,
+    Latest,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ProfileSnapshot {
@@ -78,140 +130,20 @@ struct ProfileSnapshot {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ManageSide {
-    Left,
-    Right,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ManageDestAction {
     Move,
     Copy,
     Extract,
 }
 
-enum ChatStatusEvent {
-    Connected,
-    Disconnected,
-}
-
-enum AppMessage {
-    Log(String),
-    PayloadLog(String),
-    StatusPhase(String),
-    ChatMessage(ChatMessage),
-    ChatStatus(ChatStatusEvent),
-    ChatAck { ok: bool, reason: Option<String> },
-    PayloadSendComplete(Result<u64, String>),
-    PayloadVersion(Result<String, String>),
-    StorageList(Result<Vec<StorageLocation>, String>),
-    ManageList { side: ManageSide, result: Result<Vec<DirEntry>, String> },
-    ManageOpComplete { op: String, result: Result<(), String> },
-    ManageProgress { op: String, processed: u64, total: u64 },
-    DownloadStart { total: u64, label: String },
-    DownloadProgress { received: u64, total: u64, current_file: Option<String> },
-    DownloadComplete(Result<u64, String>),
-    UploadOptimizeComplete(UploadOptimization),
-    MoveCheckResult { req: MoveRequest, exists: bool },
-    UpdateCheckComplete(Result<ReleaseInfo, String>),
-    UpdateDownloadComplete { kind: String, result: Result<String, String> },
-    SelfUpdateReady(Result<PendingUpdate, String>),
-    CheckExistsResult(bool),
-    SizeCalculated(u64),
-    Scanning { run_id: u64, files_found: usize, total_size: u64 },
-    UploadStart { run_id: u64 },
-    Progress { run_id: u64, sent: u64, total: u64, files_sent: i32, elapsed_secs: f64, current_file: Option<String> },
-    UploadComplete { run_id: u64, result: Result<(i32, u64), String> },
-    GameMetaLoaded { path: String, meta: Option<GameMeta>, cover: Option<CoverImage> },
-    ManageMetaLoaded { path: String, meta: Option<GameMeta>, cover: Option<CoverImage> },
-}
-
-const APP_VERSION: &str = include_str!("../../VERSION");
-include!(concat!(env!("OUT_DIR"), "/chat_key.rs"));
-
-fn app_version_trimmed() -> &'static str {
-    APP_VERSION.trim()
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct ReleaseAsset {
-    name: String,
-    browser_download_url: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct ReleaseInfo {
-    tag_name: String,
-    html_url: String,
-    assets: Vec<ReleaseAsset>,
-    prerelease: bool,
-}
-
-#[derive(Clone, Debug)]
-struct PendingUpdate {
-    target_path: std::path::PathBuf,
-    replacement_path: std::path::PathBuf,
-    restart_path: std::path::PathBuf,
-    is_dir: bool,
-}
-
-#[derive(Clone)]
-enum DownloadRequest {
-    File { name: String, target: String, save_path: String },
-    Dir { name: String, target: String, dest_root: String, compression: protocol::DownloadCompression },
-}
-
-#[derive(Clone, Copy)]
-enum PayloadFetch {
-    Current,
-    Latest,
-}
-
-#[derive(Clone)]
-struct MoveRequest {
-    src: String,
-    dst: String,
-    op_name: String,
-    dst_exists: bool,
-}
-
-#[derive(Clone)]
-struct RenameRequest {
-    src: String,
-    dst: String,
-}
-
-#[derive(Clone, Debug)]
-struct UploadOptimization {
-    compression: Option<CompressionMode>,
-    connections: Option<usize>,
-    sample_files: Option<usize>,
-    sample_bytes: Option<u64>,
-}
-
-#[derive(Clone, Debug)]
-struct GameMeta {
-    title: String,
-    title_id: String,
-    content_id: String,
-    version: String,
-}
-
-#[derive(Clone, Debug)]
-struct CoverImage {
-    pixels: Vec<u8>,
-    width: usize,
-    height: usize,
-}
-
 struct Ps5UploadApp {
     // UI State
     ip: String,
     main_tab: usize, // 0 = Transfer, 1 = Manage, 2 = Chat
-    
+
     // Source
     game_path: String,
-    
+
     // Destination
     selected_storage: Option<String>,
     selected_preset: usize,
@@ -262,7 +194,10 @@ struct Ps5UploadApp {
     update_check_running: bool,
     update_download_status: String,
     pending_update: Option<PendingUpdate>,
-    
+    update_prompt_open: bool,
+    update_prompt_snooze_until: Option<std::time::Instant>,
+    next_update_check: Option<std::time::Instant>,
+
     client_logs: String,
     payload_logs: String,
     status: String,
@@ -270,7 +205,7 @@ struct Ps5UploadApp {
     is_connecting: bool,
     is_sending_payload: bool,
     is_connected: bool,
-    
+
     // Cancellation
     upload_cancellation_token: Arc<AtomicBool>,
 
@@ -281,7 +216,7 @@ struct Ps5UploadApp {
     manage_meta: Option<GameMeta>,
     manage_cover_texture: Option<egui::TextureHandle>,
     manage_meta_path: Option<String>,
-    
+
     // Override Dialog
     show_override_dialog: bool,
     show_resume_dialog: bool,
@@ -299,7 +234,7 @@ struct Ps5UploadApp {
     pending_archive_kind: Option<String>,
     pending_archive_trim: bool,
     show_update_restart_dialog: bool,
-    
+
     // Progress
     progress_sent: u64,
     progress_total: u64,
@@ -318,7 +253,7 @@ struct Ps5UploadApp {
     // Size Calc
     calculating_size: bool,
     calculated_size: Option<u64>,
-    
+
     // Payload
     payload_path: String,
     payload_status: String,
@@ -345,7 +280,7 @@ struct Ps5UploadApp {
     rx: Receiver<AppMessage>,
     tx: Sender<AppMessage>,
     rt: Arc<Runtime>,
-    
+
     // Config
     config: AppConfig,
 
@@ -377,7 +312,7 @@ struct Ps5UploadApp {
     // Auto-connect
     last_auto_connect_attempt: Option<std::time::Instant>,
     last_payload_check: Option<std::time::Instant>,
-    
+
     // Internal
     forced_dest_path: Option<String>,
     show_archive_overwrite_dialog: bool,
@@ -397,11 +332,11 @@ impl Ps5UploadApp {
         let queue_data = load_queue();
 
         // Setup fonts for CJK and Arabic language support
-        setup_fonts(&cc.egui_ctx);
+        setup_fonts(&cc.egui_ctx, language);
 
         // Apply theme based on config
         if theme_dark {
-            setup_custom_style(&cc.egui_ctx);
+            setup_dark_style(&cc.egui_ctx);
         } else {
             setup_light_style(&cc.egui_ctx);
         }
@@ -450,6 +385,9 @@ impl Ps5UploadApp {
             update_check_running: false,
             update_download_status: String::new(),
             pending_update: None,
+            update_prompt_open: false,
+            update_prompt_snooze_until: None,
+            next_update_check: None,
             client_logs: String::new(),
             payload_logs: String::new(),
             status: "Ready".to_string(),
@@ -541,7 +479,13 @@ impl Ps5UploadApp {
         app.ensure_chat_display_name();
 
         if let Some(default_name) = app.profiles_data.default_profile.clone() {
-            if let Some(profile) = app.profiles_data.profiles.iter().find(|p| p.name == default_name).cloned() {
+            if let Some(profile) = app
+                .profiles_data
+                .profiles
+                .iter()
+                .find(|p| p.name == default_name)
+                .cloned()
+            {
                 app.apply_profile(&profile);
             }
         }
@@ -554,7 +498,7 @@ impl Ps5UploadApp {
     fn toggle_theme(&mut self, ctx: &egui::Context) {
         self.theme_dark = !self.theme_dark;
         if self.theme_dark {
-            setup_custom_style(ctx);
+            setup_dark_style(ctx);
             self.config.theme = "dark".to_string();
         } else {
             setup_light_style(ctx);
@@ -586,7 +530,10 @@ impl Ps5UploadApp {
         let profile = Profile {
             name: name.clone(),
             address: self.ip.clone(),
-            storage: self.selected_storage.clone().unwrap_or_else(|| "/data".to_string()),
+            storage: self
+                .selected_storage
+                .clone()
+                .unwrap_or_else(|| "/data".to_string()),
             preset_index: self.selected_preset,
             custom_preset_path: self.custom_preset_path.clone(),
             connections: self.config.connections,
@@ -595,7 +542,12 @@ impl Ps5UploadApp {
         };
 
         // Update or add profile
-        if let Some(existing) = self.profiles_data.profiles.iter_mut().find(|p| p.name == name) {
+        if let Some(existing) = self
+            .profiles_data
+            .profiles
+            .iter_mut()
+            .find(|p| p.name == name)
+        {
             *existing = profile;
         } else {
             self.profiles_data.profiles.push(profile);
@@ -608,7 +560,10 @@ impl Ps5UploadApp {
     fn current_profile_snapshot(&self) -> ProfileSnapshot {
         ProfileSnapshot {
             address: self.ip.clone(),
-            storage: self.selected_storage.clone().unwrap_or_else(|| "/data".to_string()),
+            storage: self
+                .selected_storage
+                .clone()
+                .unwrap_or_else(|| "/data".to_string()),
             preset_index: self.selected_preset,
             custom_preset_path: self.custom_preset_path.clone(),
             connections: self.config.connections,
@@ -639,7 +594,11 @@ impl Ps5UploadApp {
         };
 
         let snapshot = self.current_profile_snapshot();
-        let snapshot_changed = self.last_profile_snapshot.as_ref().map(|s| s != &snapshot).unwrap_or(true);
+        let snapshot_changed = self
+            .last_profile_snapshot
+            .as_ref()
+            .map(|s| s != &snapshot)
+            .unwrap_or(true);
         if snapshot_changed {
             self.last_profile_snapshot = Some(snapshot.clone());
             self.last_profile_change = Some(std::time::Instant::now());
@@ -695,7 +654,10 @@ impl Ps5UploadApp {
             subfolder_name: subfolder,
             preset_index: self.selected_preset,
             custom_preset_path: self.custom_preset_path.clone(),
-            storage_base: self.selected_storage.clone().unwrap_or_else(|| self.config.storage.clone()),
+            storage_base: self
+                .selected_storage
+                .clone()
+                .unwrap_or_else(|| self.config.storage.clone()),
             dest_path,
             status: QueueStatus::Pending,
             size_bytes: self.calculated_size,
@@ -713,9 +675,9 @@ impl Ps5UploadApp {
     }
 
     fn clear_completed_queue(&mut self) {
-        self.queue_data.items.retain(|i| {
-            !matches!(i.status, QueueStatus::Completed | QueueStatus::Failed(_))
-        });
+        self.queue_data
+            .items
+            .retain(|i| !matches!(i.status, QueueStatus::Completed | QueueStatus::Failed(_)));
         save_queue(&self.queue_data);
     }
 
@@ -725,7 +687,12 @@ impl Ps5UploadApp {
         }
 
         // Find next pending item
-        if let Some(item) = self.queue_data.items.iter_mut().find(|i| i.status == QueueStatus::Pending) {
+        if let Some(item) = self
+            .queue_data
+            .items
+            .iter_mut()
+            .find(|i| i.status == QueueStatus::Pending)
+        {
             item.status = QueueStatus::InProgress;
             let item_clone = item.clone();
             save_queue(&self.queue_data);
@@ -787,12 +754,18 @@ impl Ps5UploadApp {
     fn trim_logs(&mut self) {
         if self.client_logs.len() > MAX_LOG_BYTES {
             let start = self.client_logs.len() - MAX_LOG_BYTES;
-            let cut = self.client_logs[start..].find('\n').map(|idx| start + idx + 1).unwrap_or(start);
+            let cut = self.client_logs[start..]
+                .find('\n')
+                .map(|idx| start + idx + 1)
+                .unwrap_or(start);
             self.client_logs.drain(..cut);
         }
         if self.payload_logs.len() > MAX_LOG_BYTES {
             let start = self.payload_logs.len() - MAX_LOG_BYTES;
-            let cut = self.payload_logs[start..].find('\n').map(|idx| start + idx + 1).unwrap_or(start);
+            let cut = self.payload_logs[start..]
+                .find('\n')
+                .map(|idx| start + idx + 1)
+                .unwrap_or(start);
             self.payload_logs.drain(..cut);
         }
     }
@@ -802,14 +775,6 @@ impl Ps5UploadApp {
         if self.chat_messages.len() > CHAT_MAX_MESSAGES {
             let remove_count = self.chat_messages.len() - CHAT_MAX_MESSAGES;
             self.chat_messages.drain(0..remove_count);
-        }
-    }
-
-    fn join_remote_path(base: &str, name: &str) -> String {
-        if base.ends_with('/') {
-            format!("{}{}", base, name)
-        } else {
-            format!("{}/{}", base, name)
         }
     }
 
@@ -834,16 +799,27 @@ impl Ps5UploadApp {
 
         thread::spawn(move || {
             let res = rt.block_on(async { list_dir(&ip, TRANSFER_PORT, &path).await });
-            let _ = tx.send(AppMessage::ManageList { side, result: res.map_err(|e| e.to_string()) });
+            let _ = tx.send(AppMessage::ManageList {
+                side,
+                result: res.map_err(|e| e.to_string()),
+            });
         });
     }
 
-    fn open_destination_picker(&mut self, action: ManageDestAction, src_path: String, src_name: String) {
+    fn open_destination_picker(
+        &mut self,
+        action: ManageDestAction,
+        src_path: String,
+        src_name: String,
+    ) {
         self.manage_dest_action = Some(action);
         self.manage_dest_source_path = Some(src_path);
         self.manage_dest_source_name = Some(src_name);
         if self.manage_right_path.trim().is_empty() {
-            self.manage_right_path = self.selected_storage.clone().unwrap_or_else(|| "/data".to_string());
+            self.manage_right_path = self
+                .selected_storage
+                .clone()
+                .unwrap_or_else(|| "/data".to_string());
         }
         self.manage_right_selected = None;
         self.manage_dest_open = true;
@@ -854,7 +830,12 @@ impl Ps5UploadApp {
         let ip = self.ip.clone();
         let rt = self.rt.clone();
         let tx = self.tx.clone();
-        let req = MoveRequest { src: src.clone(), dst: dst.clone(), op_name: op_name.clone(), dst_exists: false };
+        let req = MoveRequest {
+            src: src.clone(),
+            dst: dst.clone(),
+            op_name: op_name.clone(),
+            dst_exists: false,
+        };
         thread::spawn(move || {
             let name = std::path::Path::new(&dst)
                 .file_name()
@@ -879,28 +860,6 @@ impl Ps5UploadApp {
         });
     }
 
-    fn note_text(&self, text: &str) -> egui::RichText {
-        let color = if self.theme_dark {
-            egui::Color32::from_rgb(235, 200, 95)
-        } else {
-            egui::Color32::from_rgb(120, 70, 0)
-        };
-        egui::RichText::new(text).color(color).italics()
-    }
-
-    fn is_rtl(lang: Language) -> bool {
-        matches!(lang, Language::Ar)
-    }
-
-    fn singleline_text_edit<'a>(value: &'a mut String, rtl: bool) -> egui::TextEdit<'a> {
-        let edit = egui::TextEdit::singleline(value);
-        if rtl {
-            edit.horizontal_align(egui::Align::RIGHT)
-        } else {
-            edit
-        }
-    }
-
     fn request_manage_rar_meta(&mut self, path: &str) {
         if self.manage_meta_path.as_deref() == Some(path) {
             return;
@@ -917,9 +876,7 @@ impl Ps5UploadApp {
             let result = rt.block_on(async { probe_rar_metadata(&ip, TRANSFER_PORT, &path).await });
             let (meta, cover) = match result {
                 Ok((param, cover_bytes)) => {
-                    let meta = param
-                        .as_deref()
-                        .and_then(parse_game_meta_from_param_bytes);
+                    let meta = param.as_deref().and_then(parse_game_meta_from_param_bytes);
                     let cover = cover_bytes
                         .as_deref()
                         .and_then(|bytes| load_cover_image_from_bytes(bytes, 160));
@@ -943,7 +900,11 @@ impl Ps5UploadApp {
         }
     }
 
-    fn manage_send_op(&mut self, op: &str, task: impl FnOnce() -> Result<(), String> + Send + 'static) {
+    fn manage_send_op(
+        &mut self,
+        op: &str,
+        task: impl FnOnce() -> Result<(), String> + Send + 'static,
+    ) {
         if self.ip.trim().is_empty() {
             return;
         }
@@ -958,11 +919,19 @@ impl Ps5UploadApp {
         let tx = self.tx.clone();
         thread::spawn(move || {
             let result = task();
-            let _ = tx.send(AppMessage::ManageOpComplete { op: op_name, result });
+            let _ = tx.send(AppMessage::ManageOpComplete {
+                op: op_name,
+                result,
+            });
         });
     }
 
-    fn manage_send_op_with_progress(&mut self, op: &str, cancel: Arc<AtomicBool>, task: impl FnOnce(Sender<AppMessage>, Arc<AtomicBool>) -> Result<(), String> + Send + 'static) {
+    fn manage_send_op_with_progress(
+        &mut self,
+        op: &str,
+        cancel: Arc<AtomicBool>,
+        task: impl FnOnce(Sender<AppMessage>, Arc<AtomicBool>) -> Result<(), String> + Send + 'static,
+    ) {
         if self.ip.trim().is_empty() {
             return;
         }
@@ -983,18 +952,158 @@ impl Ps5UploadApp {
         let tx = self.tx.clone();
         thread::spawn(move || {
             let result = task(tx.clone(), cancel);
-            let _ = tx.send(AppMessage::ManageOpComplete { op: op_name, result });
+            let _ = tx.send(AppMessage::ManageOpComplete {
+                op: op_name,
+                result,
+            });
         });
     }
 
-    fn start_download(&mut self, label: String, task: impl FnOnce(Sender<AppMessage>, Arc<AtomicBool>) + Send + 'static) {
+    fn manage_upload_paths(&mut self, paths: Vec<PathBuf>) {
+        if self.ip.trim().is_empty() || paths.is_empty() {
+            return;
+        }
+
+        let dest_root = if self.manage_left_path.trim().is_empty() {
+            "/data".to_string()
+        } else {
+            self.manage_left_path.clone()
+        };
+        let ip = self.ip.clone();
+        let rt = self.rt.clone();
+        let cancel = self.manage_op_cancellation_token.clone();
+
+        self.manage_send_op_with_progress("Upload", cancel, move |tx, cancel| {
+            let mut batches: Vec<(String, Vec<FileEntry>, u64)> = Vec::new();
+            let mut total_bytes = 0u64;
+
+            for path in paths {
+                if cancel.load(Ordering::Relaxed) {
+                    return Err("Upload cancelled".to_string());
+                }
+                if path.is_dir() {
+                    let folder_name = path
+                        .file_name()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_else(|| "folder".to_string());
+                    let dest = join_remote_path(&dest_root, &folder_name);
+                    let (files, cancelled) = collect_files_with_progress(
+                        path.to_string_lossy().as_ref(),
+                        cancel.clone(),
+                        |_, _| {},
+                    );
+                    if cancelled {
+                        return Err("Upload cancelled".to_string());
+                    }
+                    if files.is_empty() {
+                        continue;
+                    }
+                    let batch_bytes: u64 = files.iter().map(|f| f.size).sum();
+                    total_bytes = total_bytes.saturating_add(batch_bytes);
+                    batches.push((dest, files, batch_bytes));
+                } else if path.is_file() {
+                    let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+                    let rel_path = path
+                        .file_name()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .ok_or_else(|| "Invalid file name".to_string())?;
+                    let entry = FileEntry {
+                        rel_path,
+                        abs_path: path.clone(),
+                        size: meta.len(),
+                        mtime: meta
+                            .modified()
+                            .ok()
+                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map(|d| d.as_secs() as i64),
+                    };
+                    let entry_size = entry.size;
+                    total_bytes = total_bytes.saturating_add(entry_size);
+                    batches.push((dest_root.clone(), vec![entry], entry_size));
+                }
+            }
+
+            if batches.is_empty() {
+                return Err("No files to upload.".to_string());
+            }
+
+            let _ = tx.send(AppMessage::ManageProgress {
+                op: "Upload".to_string(),
+                processed: 0,
+                total: total_bytes,
+            });
+
+            let mut sent_offset = 0u64;
+            for (dest, files, batch_bytes) in batches {
+                if cancel.load(Ordering::Relaxed) {
+                    return Err("Upload cancelled".to_string());
+                }
+                let stream = rt
+                    .block_on(async { upload_v2_init(&ip, TRANSFER_PORT, &dest, false).await })
+                    .map_err(|e| e.to_string())?;
+                let mut std_stream = stream.into_std().map_err(|e| e.to_string())?;
+                std_stream
+                    .set_nonblocking(true)
+                    .map_err(|e| e.to_string())?;
+
+                let mut last_sent = 0u64;
+                let base_offset = sent_offset;
+                let total_bytes_copy = total_bytes;
+                let tx_progress = tx.clone();
+                send_files_v2_for_list(
+                    files,
+                    std_stream.try_clone().map_err(|e| e.to_string())?,
+                    SendFilesConfig {
+                        cancel: cancel.clone(),
+                        progress: move |sent, _files, _current| {
+                            if sent == last_sent {
+                                return;
+                            }
+                            let _ = tx_progress.send(AppMessage::ManageProgress {
+                                op: "Upload".to_string(),
+                                processed: base_offset + sent,
+                                total: total_bytes_copy,
+                            });
+                            last_sent = sent;
+                        },
+                        log: |_| {},
+                        worker_id: 0,
+                        allowed_connections: None,
+                        compression: CompressionMode::None,
+                        rate_limit_bps: None,
+                    },
+                )
+                .map_err(|e| e.to_string())?;
+
+                let response =
+                    read_upload_response(&mut std_stream, &cancel).map_err(|e| e.to_string())?;
+                parse_upload_response(&response).map_err(|e| e.to_string())?;
+
+                sent_offset = sent_offset.saturating_add(batch_bytes);
+                let _ = tx.send(AppMessage::ManageProgress {
+                    op: "Upload".to_string(),
+                    processed: sent_offset,
+                    total: total_bytes,
+                });
+            }
+
+            Ok(())
+        });
+    }
+
+    fn start_download(
+        &mut self,
+        label: String,
+        task: impl FnOnce(Sender<AppMessage>, Arc<AtomicBool>) + Send + 'static,
+    ) {
         if self.ip.trim().is_empty() {
             return;
         }
         self.manage_busy = true;
         self.manage_left_status = format!("{}...", label);
         self.log(&format!("{}...", label));
-        self.download_cancellation_token.store(false, Ordering::Relaxed);
+        self.download_cancellation_token
+            .store(false, Ordering::Relaxed);
         let tx = self.tx.clone();
         let cancel = self.download_cancellation_token.clone();
         task(tx, cancel);
@@ -1002,34 +1111,59 @@ impl Ps5UploadApp {
 
     fn execute_download_request(&mut self, request: DownloadRequest) {
         match request {
-            DownloadRequest::File { name, target, save_path } => {
+            DownloadRequest::File {
+                name,
+                target,
+                save_path,
+            } => {
                 let ip = self.ip.clone();
                 let rt = self.rt.clone();
                 let label = format!("Download {}", name);
                 self.start_download(label, move |tx, cancel| {
                     thread::spawn(move || {
-                        let _ = tx.send(AppMessage::DownloadStart { total: 0, label: target.clone() });
-                        let result = rt.block_on(async {
-                            download_file_with_progress(&ip, TRANSFER_PORT, &target, &save_path, cancel, |received, total, _| {
-                                let _ = tx.send(AppMessage::DownloadProgress {
-                                    received,
-                                    total,
-                                    current_file: None,
-                                });
-                            }).await
+                        let _ = tx.send(AppMessage::DownloadStart {
+                            total: 0,
+                            label: target.clone(),
                         });
-                        let _ = tx.send(AppMessage::DownloadComplete(result.map_err(|e| e.to_string())));
+                        let result = rt.block_on(async {
+                            download_file_with_progress(
+                                &ip,
+                                TRANSFER_PORT,
+                                &target,
+                                &save_path,
+                                cancel,
+                                |received, total, _| {
+                                    let _ = tx.send(AppMessage::DownloadProgress {
+                                        received,
+                                        total,
+                                        current_file: None,
+                                    });
+                                },
+                            )
+                            .await
+                        });
+                        let _ = tx.send(AppMessage::DownloadComplete(
+                            result.map_err(|e| e.to_string()),
+                        ));
                     });
                 });
             }
-            DownloadRequest::Dir { name, target, dest_root, compression } => {
+            DownloadRequest::Dir {
+                name,
+                target,
+                dest_root,
+                compression,
+            } => {
                 let ip = self.ip.clone();
                 let rt = self.rt.clone();
                 let lang_code = self.config.language.clone();
                 let label = format!("Download {}", name);
                 self.start_download(label, move |tx, cancel| {
                     thread::spawn(move || {
-                        let _ = tx.send(AppMessage::DownloadStart { total: 0, label: target.clone() });
+                        let _ = tx.send(AppMessage::DownloadStart {
+                            total: 0,
+                            label: target.clone(),
+                        });
                         let result = rt.block_on(async {
                             let lang = Language::from_code(&lang_code);
                             download_dir_with_progress(
@@ -1040,25 +1174,32 @@ impl Ps5UploadApp {
                                 cancel,
                                 compression,
                                 |received, total, current_file| {
-                                let _ = tx.send(AppMessage::DownloadProgress {
-                                    received,
-                                    total,
-                                    current_file,
-                                });
+                                    let _ = tx.send(AppMessage::DownloadProgress {
+                                        received,
+                                        total,
+                                        current_file,
+                                    });
                                 },
                                 |comp| {
                                     if let Some(comp) = comp {
                                         let msg = if compression == DownloadCompression::Auto {
-                                            format!("{} {}", tr(lang, "compression_auto_selected"), comp)
+                                            format!(
+                                                "{} {}",
+                                                tr(lang, "compression_auto_selected"),
+                                                comp
+                                            )
                                         } else {
                                             format!("{} {}", tr(lang, "compression_used"), comp)
                                         };
                                         let _ = tx.send(AppMessage::Log(msg));
                                     }
                                 },
-                            ).await
+                            )
+                            .await
                         });
-                        let _ = tx.send(AppMessage::DownloadComplete(result.map_err(|e| e.to_string())));
+                        let _ = tx.send(AppMessage::DownloadComplete(
+                            result.map_err(|e| e.to_string()),
+                        ));
                     });
                 });
             }
@@ -1091,10 +1232,23 @@ impl Ps5UploadApp {
         let op_label = op_name.clone();
         self.manage_send_op_with_progress(&op_name, cancel, move |tx, cancel| {
             rt.block_on(async {
-                move_path_with_progress(&ip, TRANSFER_PORT, &src, &dst, cancel, move |processed, total| {
-                    let _ = tx.send(AppMessage::ManageProgress { op: op_label.clone(), processed, total });
-                }).await
-            }).map_err(|e| e.to_string())
+                move_path_with_progress(
+                    &ip,
+                    TRANSFER_PORT,
+                    &src,
+                    &dst,
+                    cancel,
+                    move |processed, total| {
+                        let _ = tx.send(AppMessage::ManageProgress {
+                            op: op_label.clone(),
+                            processed,
+                            total,
+                        });
+                    },
+                )
+                .await
+            })
+            .map_err(|e| e.to_string())
         });
     }
 
@@ -1104,12 +1258,17 @@ impl Ps5UploadApp {
         }
         self.update_check_running = true;
         self.update_status = "Checking for updates...".to_string();
+        let now = std::time::Instant::now();
+        self.next_update_check =
+            Some(now + std::time::Duration::from_secs(UPDATE_CHECK_INTERVAL_SECS));
         let include_prerelease = self.config.update_channel == "all";
         let tx = self.tx.clone();
         let rt = self.rt.clone();
         thread::spawn(move || {
             let res = rt.block_on(async { fetch_latest_release(include_prerelease).await });
-            let _ = tx.send(AppMessage::UpdateCheckComplete(res.map_err(|e| e.to_string())));
+            let _ = tx.send(AppMessage::UpdateCheckComplete(
+                res.map_err(|e| e.to_string()),
+            ));
         });
     }
 
@@ -1121,7 +1280,8 @@ impl Ps5UploadApp {
         let asset_name = match current_asset_name() {
             Ok(name) => name,
             Err(e) => {
-                self.update_download_status = format!("{} {}", tr(self.language, "update_asset_missing"), e);
+                self.update_download_status =
+                    format!("{} {}", tr(self.language, "update_asset_missing"), e);
                 return;
             }
         };
@@ -1139,16 +1299,27 @@ impl Ps5UploadApp {
 
         thread::spawn(move || {
             let result = rt.block_on(async move {
-                let temp_root = std::env::temp_dir().join(format!("ps5upload_update_{}", chrono::Utc::now().timestamp()));
+                let temp_root = std::env::temp_dir().join(format!(
+                    "ps5upload_update_{}",
+                    chrono::Utc::now().timestamp()
+                ));
                 std::fs::create_dir_all(&temp_root)?;
                 let zip_path = temp_root.join("update.zip");
-                download_asset(&url, zip_path.to_str().ok_or_else(|| anyhow::anyhow!("Invalid update path"))?).await?;
+                download_asset(
+                    &url,
+                    zip_path
+                        .to_str()
+                        .ok_or_else(|| anyhow::anyhow!("Invalid update path"))?,
+                )
+                .await?;
                 let extract_dir = temp_root.join("extracted");
                 extract_zip(&zip_path, &extract_dir)?;
                 let pending = build_pending_update(&extract_dir)?;
                 Ok::<PendingUpdate, anyhow::Error>(pending)
             });
-            let _ = tx.send(AppMessage::SelfUpdateReady(result.map_err(|e| e.to_string())));
+            let _ = tx.send(AppMessage::SelfUpdateReady(
+                result.map_err(|e| e.to_string()),
+            ));
         });
     }
 
@@ -1157,7 +1328,8 @@ impl Ps5UploadApp {
             return;
         };
         if let Err(err) = spawn_update_helper(&pending) {
-            self.update_download_status = format!("{} {}", tr(self.language, "update_apply_failed"), err);
+            self.update_download_status =
+                format!("{} {}", tr(self.language, "update_apply_failed"), err);
             return;
         }
         self.update_download_status = tr(self.language, "update_restarting");
@@ -1211,7 +1383,7 @@ impl Ps5UploadApp {
         self.chat_input.clear();
     }
 
-fn format_chat_status(&self, status: ChatStatusEvent) -> String {
+    fn format_chat_status(&self, status: ChatStatusEvent) -> String {
         let lang = self.language;
         match status {
             ChatStatusEvent::Connected => tr(lang, "chat_connected"),
@@ -1240,7 +1412,9 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
             return;
         };
 
-        let save_path = rfd::FileDialog::new().set_file_name(default_filename).save_file();
+        let save_path = rfd::FileDialog::new()
+            .set_file_name(default_filename)
+            .save_file();
         let Some(save_path) = save_path else {
             return;
         };
@@ -1254,20 +1428,29 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
         let kind_name = kind.to_string();
 
         thread::spawn(move || {
-            let result = rt.block_on(async { download_asset(&url, &save_path).await })
+            let result = rt
+                .block_on(async { download_asset(&url, &save_path).await })
                 .map(|_| save_path)
                 .map_err(|e| e.to_string());
-            let _ = tx.send(AppMessage::UpdateDownloadComplete { kind: kind_name, result });
+            let _ = tx.send(AppMessage::UpdateDownloadComplete {
+                kind: kind_name,
+                result,
+            });
         });
     }
-    
-    fn build_dest_path_with_base(&self, base: &str, include_folder: bool) -> String {
-        let base = if base.trim().is_empty() { "/data" } else { base };
 
-        let preset_path = if self.selected_preset == 2 { // custom
-             &self.custom_preset_path
+    fn build_dest_path_with_base(&self, base: &str, include_folder: bool) -> String {
+        let base = if base.trim().is_empty() {
+            "/data"
         } else {
-             PRESETS[self.selected_preset]
+            base
+        };
+
+        let preset_path = if self.selected_preset == 2 {
+            // custom
+            &self.custom_preset_path
+        } else {
+            PRESETS[self.selected_preset]
         };
 
         let base_clean = base.trim_end_matches('/');
@@ -1275,9 +1458,9 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
 
         if include_folder {
             let folder = if self.custom_subfolder.is_empty() {
-                 "App"
+                "App"
             } else {
-                 &self.custom_subfolder
+                &self.custom_subfolder
             };
             if preset_clean.is_empty() {
                 format!("{}/{}", base_clean, folder)
@@ -1321,14 +1504,20 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
             base = "/mnt/ext1".to_string();
         }
 
-        let relative = dest.strip_prefix(&base).unwrap_or(dest).trim_start_matches('/');
+        let relative = dest
+            .strip_prefix(&base)
+            .unwrap_or(dest)
+            .trim_start_matches('/');
         let (preset_path, folder_name) = if let Some((parent, name)) = relative.rsplit_once('/') {
             (parent.to_string(), name.to_string())
         } else if relative.is_empty() {
-            (String::new(), std::path::Path::new(&record.source_path)
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| "App".to_string()))
+            (
+                String::new(),
+                std::path::Path::new(&record.source_path)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "App".to_string()),
+            )
         } else {
             (String::new(), relative.to_string())
         };
@@ -1370,12 +1559,12 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
                 self.custom_subfolder = name.to_string_lossy().to_string();
             }
         }
-        
+
         self.calculating_size = true;
         self.calculated_size = None;
         let path_clone = self.game_path.clone();
         let tx = self.tx.clone();
-        
+
         thread::spawn(move || {
             let size = get_size(&path_clone);
             let _ = tx.send(AppMessage::SizeCalculated(size));
@@ -1427,7 +1616,7 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
         self.pending_archive_trim = true;
         self.show_archive_confirm_dialog = true;
     }
-    
+
     fn connect(&mut self) {
         // Save config
         self.config.address = self.ip.clone();
@@ -1436,11 +1625,11 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
         self.is_connecting = true;
         self.status = "Connecting...".to_string();
         self.log(&format!("Connecting to {}...", self.ip));
-        
+
         let ip = self.ip.clone();
         let tx = self.tx.clone();
         let rt = self.rt.clone();
-        
+
         thread::spawn(move || {
             rt.block_on(async {
                 match list_storage(&ip, TRANSFER_PORT).await {
@@ -1454,9 +1643,9 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
             });
         });
     }
-    
+
     fn check_exists_and_upload(&mut self) {
-         if self.game_path.trim().is_empty() {
+        if self.game_path.trim().is_empty() {
             self.log("Please select an app folder first.");
             return;
         }
@@ -1473,7 +1662,7 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
             rt.block_on(async {
                 match check_dir(&ip, TRANSFER_PORT, &dest).await {
                     Ok(exists) => {
-                         let _ = tx.send(AppMessage::CheckExistsResult(exists));
+                        let _ = tx.send(AppMessage::CheckExistsResult(exists));
                     }
                     Err(_) => {
                         let _ = tx.send(AppMessage::CheckExistsResult(false));
@@ -1513,7 +1702,10 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
 
         let ip = self.ip.clone();
         let game_path = self.game_path.clone();
-        let dest_path = self.forced_dest_path.clone().unwrap_or_else(|| self.get_dest_path());
+        let dest_path = self
+            .forced_dest_path
+            .clone()
+            .unwrap_or_else(|| self.get_dest_path());
         let tx = self.tx.clone();
         let rt = self.rt.clone();
         let connections = self.config.connections;
@@ -1532,15 +1724,15 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
         let lang_code = self.config.language.clone();
         let payload_supports_modern = self.payload_supports_modern_compression();
         let required_size = self.calculated_size;
-        
+
         let mut best_root = "/data".to_string();
         let mut best_len = 0;
         let check_dest = dest_path.clone();
         for loc in &self.storage_locations {
-             if check_dest.starts_with(&loc.path) && loc.path.len() > best_len {
-                 best_len = loc.path.len();
-                 best_root = loc.path.clone();
-             }
+            if check_dest.starts_with(&loc.path) && loc.path.len() > best_len {
+                best_len = loc.path.len();
+                best_root = loc.path.clone();
+            }
         }
         let storage_root = best_root;
 
@@ -1549,9 +1741,9 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
             let tx_inner = tx.clone();
             let res = rt.block_on(async move {
                 let tx = tx_inner;
-                
+
                 if let Some(req) = required_size {
-                    let required_safe = req.saturating_add(64 * 1024 * 1024); 
+                    let required_safe = req.saturating_add(64 * 1024 * 1024);
                     match get_space(&ip, TRANSFER_PORT, &storage_root).await {
                         Ok((free_bytes, _total)) => {
                             if free_bytes < required_safe {
@@ -1613,7 +1805,7 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
                         rar_mode,
                         cancel_token.clone(),
                         progress_callback,
-                        move |msg| { 
+                        move |msg| {
                             let _ = tx_extract.send(AppMessage::Log(msg.clone()));
                             let _ = tx_extract.send(AppMessage::StatusPhase("Extracting".to_string()));
                         }
@@ -1633,7 +1825,7 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
                 // ZIP and 7Z archives - client-side handling
                 if is_zip || is_7z {
                     let ext = if is_zip { "ZIP" } else { "7Z" };
-                    
+
                     let _ = tx.send(AppMessage::UploadStart { run_id });
                     let _ = tx.send(AppMessage::Log(format!("Starting {} streaming upload...", ext)));
 
@@ -1716,7 +1908,7 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
                 if can_stream {
                      let _ = tx.send(AppMessage::UploadStart { run_id });
                      let _ = tx.send(AppMessage::Log(format!("Starting streaming upload ({} connections)...", connection_count_cfg)));
-                     
+
                      let tx_scan = tx.clone();
                      let shared_total = Arc::new(AtomicU64::new(0));
                      let shared_total_scan = shared_total.clone();
@@ -1760,7 +1952,7 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
                          ));
                          compression = CompressionMode::Lz4;
                      }
-                     let rate_limit = if bandwidth_limit_bps > 0 { 
+                     let rate_limit = if bandwidth_limit_bps > 0 {
                          let per_conn = (bandwidth_limit_bps / connection_count_cfg as u64).max(1);
                          Some(per_conn)
                      } else { None };
@@ -1770,9 +1962,9 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
                          let mut std_stream = stream.into_std()?;
                          std_stream.set_nonblocking(true)?;
                          let _ = tx.send(AppMessage::PayloadLog("Server READY".to_string()));
-                         
+
                          let mut last_sent = 0u64;
-                         
+
                          send_files_v2_for_list(
                             rx,
                             std_stream.try_clone()?,
@@ -1801,7 +1993,7 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
                                 rate_limit_bps: rate_limit,
                             }
                          )?;
-                         
+
                          let response = read_upload_response(&mut std_stream, &cancel_token)?;
                          let (files_ack, bytes_ack) = parse_upload_response(&response)?;
                          return Ok((files_ack, bytes_ack));
@@ -1810,9 +2002,9 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
                          let total_sent = Arc::new(AtomicU64::new(0));
                          let total_files = Arc::new(AtomicUsize::new(0));
                          let allowed_connections = Arc::new(AtomicUsize::new(connection_count_cfg));
-                         
+
                          let mut handles = Vec::new();
-                         
+
                          let max_connections = connection_count_cfg;
                          let allowed_monitor = allowed_connections.clone();
                          let last_progress_monitor = last_progress_ms.clone();
@@ -1861,11 +2053,11 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
                              let shared_total = shared_total.clone();
                              let allowed = allowed_connections.clone();
                              let last_progress = last_progress_ms.clone();
-                             
+
                              handles.push(thread::spawn(move || -> anyhow::Result<()> {
                                  let mut last_sent = 0u64;
                                  let mut last_files = 0i32;
-                                 
+
                                  send_files_v2_for_list(
                                      iterator,
                                      std_stream,
@@ -1877,13 +2069,13 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
                                          if delta_bytes == 0 && delta_files == 0 { return; }
                                          last_sent = sent;
                                          last_files = files_sent;
-                                         
+
                                          let new_total = total_sent.fetch_add(delta_bytes, Ordering::Relaxed) + delta_bytes;
                                          let new_files = total_files.fetch_add(delta_files as usize, Ordering::Relaxed) + delta_files as usize;
                                          let elapsed = start.elapsed().as_secs_f64();
                                          let current_total_scan = shared_total.load(Ordering::Relaxed);
                                          let display_total = current_total_scan.max(new_total);
-                                         
+
                                          let _ = tx.send(AppMessage::Progress {
                                              run_id,
                                              sent: new_total,
@@ -1903,7 +2095,7 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
                                  )
                              }));
                          }
-                         
+
                          let mut first_err = None;
                          for h in handles {
                              if let Ok(Err(e)) = h.join() {
@@ -1913,7 +2105,7 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
                              }
                          }
                          if let Some(e) = first_err { return Err(e); }
-                         
+
                          // We don't read response for multi-connection here as threads finished.
                          // But threads return Ok(()).
                          // We rely on local counting.
@@ -2273,8 +2465,11 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
                     Ok((files_sent, bytes_sent))
                 }
             });
-            
-            let _ = tx.send(AppMessage::UploadComplete { run_id, result: res.map_err(|e| e.to_string()) });
+
+            let _ = tx.send(AppMessage::UploadComplete {
+                run_id,
+                result: res.map_err(|e| e.to_string()),
+            });
         });
     }
 
@@ -2295,7 +2490,10 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
         self.is_sending_payload = true;
         let lang = Language::from_code(&self.config.language);
         self.status = tr(lang, "status_sending_payload");
-        self.payload_log(&format!("Sending payload to {}:{}...", self.ip, PAYLOAD_PORT));
+        self.payload_log(&format!(
+            "Sending payload to {}:{}...",
+            self.ip, PAYLOAD_PORT
+        ));
         if !self.payload_path.trim().is_empty() {
             self.payload_log(&format!("Payload path: {}", self.payload_path));
         }
@@ -2323,9 +2521,17 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
         let (log_label, tmp_name, tag) = match fetch {
             PayloadFetch::Current => {
                 let tag = format!("v{}", app_version_trimmed());
-                (format!("Downloading payload {}...", tag), "ps5upload_current.elf".to_string(), Some(tag))
+                (
+                    format!("Downloading payload {}...", tag),
+                    "ps5upload_current.elf".to_string(),
+                    Some(tag),
+                )
             }
-            PayloadFetch::Latest => ("Downloading latest payload...".to_string(), "ps5upload_latest.elf".to_string(), None),
+            PayloadFetch::Latest => (
+                "Downloading latest payload...".to_string(),
+                "ps5upload_latest.elf".to_string(),
+                None,
+            ),
         };
 
         let ip = self.ip.clone();
@@ -2352,16 +2558,23 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
                 } else {
                     fetch_latest_release(false).await?
                 };
-                let asset = release.assets.iter().find(|a| a.name == "ps5upload.elf")
+                let asset = release
+                    .assets
+                    .iter()
+                    .find(|a| a.name == "ps5upload.elf")
                     .ok_or_else(|| anyhow::anyhow!("Payload asset not found"))?;
                 let tmp_path = std::env::temp_dir().join(tmp_name);
-                download_asset(&asset.browser_download_url, &tmp_path.display().to_string()).await?;
+                download_asset(&asset.browser_download_url, &tmp_path.display().to_string())
+                    .await?;
                 Ok::<_, anyhow::Error>(tmp_path)
             });
             match result {
                 Ok(path) => {
                     let path_str = path.display().to_string();
-                    let _ = tx.send(AppMessage::PayloadLog(format!("Payload downloaded: {}", path_str)));
+                    let _ = tx.send(AppMessage::PayloadLog(format!(
+                        "Payload downloaded: {}",
+                        path_str
+                    )));
                     let result = send_payload_file(&ip, &path_str, &tx);
                     let _ = tx.send(AppMessage::PayloadSendComplete(result));
                 }
@@ -2373,15 +2586,7 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
     }
 
     fn payload_supports_modern_compression(&self) -> bool {
-        let Some(version) = &self.payload_version else {
-            return false;
-        };
-        let current_norm = normalize_version("1.1.6");
-        let running_norm = normalize_version(version);
-        match (semver::Version::parse(&running_norm), semver::Version::parse(&current_norm)) {
-            (Ok(running), Ok(required)) => running >= required,
-            _ => false,
-        }
+        payload_supports_modern_compression(self.payload_version.as_deref())
     }
 
     fn check_payload_version(&mut self) {
@@ -2408,7 +2613,11 @@ fn generate_chat_display_name(key_hex: &str) -> String {
         let digest = sha2::Sha256::digest(trimmed.as_bytes());
         tag = hex::encode(digest);
     }
-    let tag_short = if tag.is_empty() { "chat".to_string() } else { tag.chars().take(4).collect() };
+    let tag_short = if tag.is_empty() {
+        "chat".to_string()
+    } else {
+        tag.chars().take(4).collect()
+    };
     let time = chrono::Utc::now().timestamp() as u64;
     let suffix = format!("{:08x}{:08x}", time as u32, rand_part);
     format!("Player-{}-{}", tag_short, &suffix[..6])
@@ -2434,25 +2643,29 @@ fn send_payload_file(ip: &str, path: &str, tx: &Sender<AppMessage>) -> Result<u6
         return Err("Payload must be a .elf or .bin file.".to_string());
     }
 
-    let mut file = File::open(path)
-        .map_err(|e| format!("Failed to open payload: {}", e))?;
+    let mut file = File::open(path).map_err(|e| format!("Failed to open payload: {}", e))?;
     let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
     if file_len > 0 {
         let size_msg = crate::format_bytes(file_len);
-        let _ = tx.send(AppMessage::PayloadLog(format!("Payload size: {}", size_msg)));
+        let _ = tx.send(AppMessage::PayloadLog(format!(
+            "Payload size: {}",
+            size_msg
+        )));
     }
-    let mut stream = TcpStream::connect((ip, PAYLOAD_PORT))
-        .map_err(|e| format!("Failed to connect: {}", e))?;
+    let mut stream =
+        TcpStream::connect((ip, PAYLOAD_PORT)).map_err(|e| format!("Failed to connect: {}", e))?;
     let _ = stream.set_nodelay(true);
     let mut buffer = vec![0u8; 256 * 1024];
     let mut sent = 0u64;
     loop {
-        let n = file.read(&mut buffer)
+        let n = file
+            .read(&mut buffer)
             .map_err(|e| format!("Send failed: {}", e))?;
         if n == 0 {
             break;
         }
-        stream.write_all(&buffer[..n])
+        stream
+            .write_all(&buffer[..n])
             .map_err(|e| format!("Send failed: {}", e))?;
         sent += n as u64;
     }
@@ -2473,13 +2686,21 @@ fn send_payload_file(ip: &str, path: &str, tx: &Sender<AppMessage>) -> Result<u6
 
 impl eframe::App for Ps5UploadApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        if self.is_uploading || self.is_downloading || self.is_connecting || self.manage_busy || self.is_sending_payload || self.calculating_size || self.update_check_running {
+        if self.is_uploading
+            || self.is_downloading
+            || self.is_connecting
+            || self.manage_busy
+            || self.is_sending_payload
+            || self.calculating_size
+            || self.update_check_running
+        {
             ctx.request_repaint_after(std::time::Duration::from_millis(33));
         }
 
         let connected = self.is_connected || self.is_uploading;
         let lang = self.language;
-        let rtl = Self::is_rtl(lang);
+        let rtl = is_rtl(lang);
+        let now = std::time::Instant::now();
 
         if self.config.auto_check_payload
             && connected
@@ -2489,21 +2710,30 @@ impl eframe::App for Ps5UploadApp {
             && !self.is_downloading
             && !self.is_uploading
         {
-            let now = std::time::Instant::now();
-            let should_check = self.last_payload_check
+            let should_check = self
+                .last_payload_check
                 .map(|last| now.duration_since(last).as_secs() >= 30)
                 .unwrap_or(true);
             if should_check {
                 self.check_payload_version();
             }
         }
+        if self
+            .next_update_check
+            .map(|next| now >= next)
+            .unwrap_or(false)
+            && !self.update_check_running
+        {
+            if !self.is_uploading && !self.is_downloading && !self.is_connecting {
+                self.start_update_check();
+            } else {
+                self.next_update_check = Some(now + std::time::Duration::from_secs(60));
+            }
+        }
         if self.logo_texture.is_none() {
             if let Some(image) = load_logo_image() {
-                self.logo_texture = Some(ctx.load_texture(
-                    "ps5upload_logo",
-                    image,
-                    egui::TextureOptions::LINEAR,
-                ));
+                self.logo_texture =
+                    Some(ctx.load_texture("ps5upload_logo", image, egui::TextureOptions::LINEAR));
             }
         }
 
@@ -2533,24 +2763,34 @@ impl eframe::App for Ps5UploadApp {
                         self.chat_reject_count = self.chat_reject_count.saturating_add(1);
                         if let Some(reason) = reason {
                             let trimmed = reason.to_lowercase();
-                            if trimmed.contains("auth") || trimmed.contains("sign") || trimmed.contains("signup") {
+                            if trimmed.contains("auth")
+                                || trimmed.contains("sign")
+                                || trimmed.contains("signup")
+                            {
                                 // Keep noisy relay policy messages out of the UI.
                             }
                         }
                     }
                 }
-                AppMessage::ChatStatus(status) => self.chat_status = self.format_chat_status(status),
+                AppMessage::ChatStatus(status) => {
+                    self.chat_status = self.format_chat_status(status)
+                }
                 AppMessage::StorageList(res) => {
                     self.is_connecting = false;
                     match res {
                         Ok(locs) => {
-                            self.storage_locations = locs.into_iter().filter(|l| l.free_gb > 0.0).collect();
+                            self.storage_locations =
+                                locs.into_iter().filter(|l| l.free_gb > 0.0).collect();
                             if let Some(first) = self.storage_locations.first() {
                                 self.selected_storage = Some(first.path.clone());
-                                if self.manage_left_path.trim().is_empty() || self.manage_left_path == "/data" {
+                                if self.manage_left_path.trim().is_empty()
+                                    || self.manage_left_path == "/data"
+                                {
                                     self.manage_left_path = first.path.clone();
                                 }
-                                if self.manage_right_path.trim().is_empty() || self.manage_right_path == "/data" {
+                                if self.manage_right_path.trim().is_empty()
+                                    || self.manage_right_path == "/data"
+                                {
                                     self.manage_right_path = first.path.clone();
                                 }
                             }
@@ -2578,7 +2818,9 @@ impl eframe::App for Ps5UploadApp {
                                 let a_is_dir = a.entry_type == "dir";
                                 let b_is_dir = b.entry_type == "dir";
                                 match b_is_dir.cmp(&a_is_dir) {
-                                    std::cmp::Ordering::Equal => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+                                    std::cmp::Ordering::Equal => {
+                                        a.name.to_lowercase().cmp(&b.name.to_lowercase())
+                                    }
                                     other => other,
                                 }
                             });
@@ -2587,7 +2829,11 @@ impl eframe::App for Ps5UploadApp {
                                 ManageSide::Left => {
                                     self.manage_left_entries = entries;
                                     self.manage_left_selected = None;
-                                    self.manage_left_status = format!("{} item{}", count, if count == 1 { "" } else { "s" });
+                                    self.manage_left_status = format!(
+                                        "{} item{}",
+                                        count,
+                                        if count == 1 { "" } else { "s" }
+                                    );
                                     self.manage_meta = None;
                                     self.manage_cover_texture = None;
                                     self.manage_meta_path = None;
@@ -2595,14 +2841,22 @@ impl eframe::App for Ps5UploadApp {
                                 ManageSide::Right => {
                                     self.manage_right_entries = entries;
                                     self.manage_right_selected = None;
-                                    self.manage_right_status = format!("{} item{}", count, if count == 1 { "" } else { "s" });
+                                    self.manage_right_status = format!(
+                                        "{} item{}",
+                                        count,
+                                        if count == 1 { "" } else { "s" }
+                                    );
                                 }
                             }
                         }
                         Err(e) => {
                             match side {
-                                ManageSide::Left => self.manage_left_status = format!("List failed: {}", e),
-                                ManageSide::Right => self.manage_right_status = format!("List failed: {}", e),
+                                ManageSide::Left => {
+                                    self.manage_left_status = format!("List failed: {}", e)
+                                }
+                                ManageSide::Right => {
+                                    self.manage_right_status = format!("List failed: {}", e)
+                                }
                             }
                             self.log(&format!("List failed: {}", e));
                         }
@@ -2617,10 +2871,13 @@ impl eframe::App for Ps5UploadApp {
                     self.manage_progress_sent = 0;
                     self.manage_progress_total = 0;
                     self.manage_progress_start_time = None;
-                    self.manage_op_cancellation_token.store(false, Ordering::Relaxed);
+                    self.manage_op_cancellation_token
+                        .store(false, Ordering::Relaxed);
                     match result {
                         Ok(()) => {
-                            if op.starts_with("Move") && self.move_cancellation_token.load(Ordering::Relaxed) {
+                            if op.starts_with("Move")
+                                && self.move_cancellation_token.load(Ordering::Relaxed)
+                            {
                                 self.manage_left_status = "Move cancelled".to_string();
                                 self.log("Move cancelled (operation may complete)");
                             } else {
@@ -2635,7 +2892,11 @@ impl eframe::App for Ps5UploadApp {
                         }
                     }
                 }
-                AppMessage::ManageProgress { op, processed, total } => {
+                AppMessage::ManageProgress {
+                    op,
+                    processed,
+                    total,
+                } => {
                     self.manage_progress_active = true;
                     self.manage_progress_op = op;
                     self.manage_progress_sent = processed;
@@ -2658,7 +2919,11 @@ impl eframe::App for Ps5UploadApp {
                     self.download_start_time = Some(std::time::Instant::now());
                     self.log(&format!("Download started: {}", label));
                 }
-                AppMessage::DownloadProgress { received, total, current_file } => {
+                AppMessage::DownloadProgress {
+                    received,
+                    total,
+                    current_file,
+                } => {
                     self.download_progress_sent = received;
                     self.download_progress_total = total.max(received);
                     if let Some(name) = current_file {
@@ -2670,7 +2935,9 @@ impl eframe::App for Ps5UploadApp {
                         let elapsed = start.elapsed().as_secs_f64();
                         if elapsed > 0.0 {
                             self.download_speed_bps = received as f64 / elapsed;
-                            if self.download_progress_total > received && self.download_speed_bps > 0.0 {
+                            if self.download_progress_total > received
+                                && self.download_speed_bps > 0.0
+                            {
                                 let remaining = (self.download_progress_total - received) as f64;
                                 self.download_eta_secs = Some(remaining / self.download_speed_bps);
                             }
@@ -2706,10 +2973,18 @@ impl eframe::App for Ps5UploadApp {
                     }
                     let _ = self.config.save();
                     let unchanged = tr(lang, "optimize_upload_unchanged");
-                    let comp_label = opt.compression.map(compression_label).unwrap_or(unchanged.as_str());
-                    let conn_label = opt.connections.map(|v| v.to_string()).unwrap_or_else(|| unchanged.clone());
+                    let comp_label = opt
+                        .compression
+                        .map(compression_label)
+                        .unwrap_or(unchanged.as_str());
+                    let conn_label = opt
+                        .connections
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| unchanged.clone());
                     let template = tr(lang, "optimize_upload_result");
-                    let msg = template.replacen("{}", comp_label, 1).replacen("{}", &conn_label, 1);
+                    let msg = template
+                        .replacen("{}", comp_label, 1)
+                        .replacen("{}", &conn_label, 1);
                     self.log(&msg);
                 }
                 AppMessage::UpdateCheckComplete(res) => {
@@ -2721,11 +2996,13 @@ impl eframe::App for Ps5UploadApp {
                             match is_newer_version(&latest, current) {
                                 Some(true) => {
                                     self.update_available = true;
-                                    self.update_status = format!("Update available: {}", release.tag_name);
+                                    self.update_status =
+                                        format!("Update available: {}", release.tag_name);
                                 }
                                 Some(false) => {
                                     self.update_available = false;
-                                    self.update_status = format!("Up to date ({})", release.tag_name);
+                                    self.update_status =
+                                        format!("Up to date ({})", release.tag_name);
                                 }
                                 None => {
                                     let current_norm = normalize_version(current);
@@ -2739,11 +3016,23 @@ impl eframe::App for Ps5UploadApp {
                                 }
                             }
                             self.update_info = Some(release);
+                            if self.update_available {
+                                let prompt_ready = self
+                                    .update_prompt_snooze_until
+                                    .map(|until| std::time::Instant::now() >= until)
+                                    .unwrap_or(true);
+                                if prompt_ready {
+                                    self.update_prompt_open = true;
+                                }
+                            } else {
+                                self.update_prompt_open = false;
+                            }
                         }
                         Err(e) => {
                             self.update_status = format!("Update check failed: {}", e);
                             self.update_info = None;
                             self.update_available = false;
+                            self.update_prompt_open = false;
                         }
                     }
                 }
@@ -2751,10 +3040,12 @@ impl eframe::App for Ps5UploadApp {
                     self.update_check_running = false;
                     match result {
                         Ok(path) => {
-                            self.update_download_status = format!("Downloaded {} to {}", kind, path);
+                            self.update_download_status =
+                                format!("Downloaded {} to {}", kind, path);
                         }
                         Err(e) => {
-                            self.update_download_status = format!("Download {} failed: {}", kind, e);
+                            self.update_download_status =
+                                format!("Download {} failed: {}", kind, e);
                         }
                     }
                 }
@@ -2766,7 +3057,8 @@ impl eframe::App for Ps5UploadApp {
                             self.update_download_status = tr(lang, "update_ready");
                         }
                         Err(e) => {
-                            self.update_download_status = format!("{} {}", tr(lang, "update_failed"), e);
+                            self.update_download_status =
+                                format!("{} {}", tr(lang, "update_failed"), e);
                         }
                     }
                 }
@@ -2784,38 +3076,36 @@ impl eframe::App for Ps5UploadApp {
                         }
                     }
                 }
-                AppMessage::PayloadVersion(res) => {
-                    match res {
-                        Ok(version) => {
-                            self.payload_status = format!("Running (v{})", version);
-                            self.payload_version = Some(version.clone());
-                            let current_version = normalize_version(app_version_trimmed());
-                            let running_version = normalize_version(&version);
-                            if self.config.auto_check_payload
-                                && running_version != current_version
-                            {
-                                self.payload_log(&format!(
-                                    "Payload version mismatch (v{}). Auto-loading current payload...",
-                                    version
-                                ));
-                                self.start_payload_download_and_send(PayloadFetch::Current);
-                            }
-                        }
-                        Err(e) => {
-                            self.payload_status = format!("Not detected ({})", e);
-                            self.payload_version = None;
-                            if self.config.auto_check_payload
-                                && !self.manage_busy
-                                && !self.manage_progress_active
-                                && !self.is_downloading
-                                && !self.is_uploading
-                            {
-                                self.payload_log("Payload not detected. Auto-loading current payload...");
-                                self.start_payload_download_and_send(PayloadFetch::Current);
-                            }
+                AppMessage::PayloadVersion(res) => match res {
+                    Ok(version) => {
+                        self.payload_status = format!("Running (v{})", version);
+                        self.payload_version = Some(version.clone());
+                        let current_version = normalize_version(app_version_trimmed());
+                        let running_version = normalize_version(&version);
+                        if self.config.auto_check_payload && running_version != current_version {
+                            self.payload_log(&format!(
+                                "Payload version mismatch (v{}). Auto-loading current payload...",
+                                version
+                            ));
+                            self.start_payload_download_and_send(PayloadFetch::Current);
                         }
                     }
-                }
+                    Err(e) => {
+                        self.payload_status = format!("Not detected ({})", e);
+                        self.payload_version = None;
+                        if self.config.auto_check_payload
+                            && !self.manage_busy
+                            && !self.manage_progress_active
+                            && !self.is_downloading
+                            && !self.is_uploading
+                        {
+                            self.payload_log(
+                                "Payload not detected. Auto-loading current payload...",
+                            );
+                            self.start_payload_download_and_send(PayloadFetch::Current);
+                        }
+                    }
+                },
                 AppMessage::CheckExistsResult(exists) => {
                     self.manage_busy = false;
                     self.status = "Connected".to_string();
@@ -2835,7 +3125,11 @@ impl eframe::App for Ps5UploadApp {
                     self.calculating_size = false;
                     self.calculated_size = Some(size);
                 }
-                AppMessage::Scanning { run_id, files_found, total_size } => {
+                AppMessage::Scanning {
+                    run_id,
+                    files_found,
+                    total_size,
+                } => {
                     if run_id != self.upload_run_id {
                         continue;
                     }
@@ -2862,7 +3156,14 @@ impl eframe::App for Ps5UploadApp {
                     self.status = tr(lang, "status_uploading");
                     self.progress_phase = "Sending".to_string();
                 }
-                AppMessage::Progress { run_id, sent, total, files_sent, elapsed_secs, current_file } => {
+                AppMessage::Progress {
+                    run_id,
+                    sent,
+                    total,
+                    files_sent,
+                    elapsed_secs,
+                    current_file,
+                } => {
                     if run_id != self.upload_run_id {
                         continue;
                     }
@@ -2874,7 +3175,9 @@ impl eframe::App for Ps5UploadApp {
                     } else {
                         self.progress_phase = "Sending".to_string();
                     }
-                    if elapsed_secs > 0.0 { self.progress_speed_bps = sent as f64 / elapsed_secs; }
+                    if elapsed_secs > 0.0 {
+                        self.progress_speed_bps = sent as f64 / elapsed_secs;
+                    }
                     if total > sent && self.progress_speed_bps > 0.0 {
                         let remaining = (total - sent) as f64;
                         self.progress_eta_secs = Some(remaining / self.progress_speed_bps);
@@ -2883,22 +3186,34 @@ impl eframe::App for Ps5UploadApp {
                         self.progress_current_file = name;
                     }
                 }
-                AppMessage::UploadComplete { run_id, result: res } => {
+                AppMessage::UploadComplete {
+                    run_id,
+                    result: res,
+                } => {
                     if run_id != self.upload_run_id {
                         continue;
                     }
                     self.is_uploading = false;
                     self.is_scanning = false;
                     self.progress_phase.clear();
-                    let duration = self.upload_start_time.map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0);
+                    let duration = self
+                        .upload_start_time
+                        .map(|t| t.elapsed().as_secs_f64())
+                        .unwrap_or(0.0);
 
                     match &res {
                         Ok((files, bytes)) => {
                             self.progress_files = *files;
-                            self.log(&format!("✓ Completed: {} files, {}", files, format_bytes(*bytes)));
+                            self.log(&format!(
+                                "✓ Completed: {} files, {}",
+                                files,
+                                format_bytes(*bytes)
+                            ));
                             self.payload_log("SUCCESS");
                             self.status = "Upload Complete!".to_string();
-                            if self.progress_total > 0 { self.progress_sent = self.progress_total; }
+                            if self.progress_total > 0 {
+                                self.progress_sent = self.progress_total;
+                            }
 
                             // Record to history
                             let record = TransferRecord {
@@ -2908,7 +3223,11 @@ impl eframe::App for Ps5UploadApp {
                                 file_count: *files,
                                 total_bytes: *bytes,
                                 duration_secs: duration,
-                                speed_bps: if duration > 0.0 { *bytes as f64 / duration } else { 0.0 },
+                                speed_bps: if duration > 0.0 {
+                                    *bytes as f64 / duration
+                                } else {
+                                    0.0
+                                },
                                 success: true,
                                 error: None,
                                 via_queue: self.current_queue_item_id.is_some(),
@@ -2922,13 +3241,21 @@ impl eframe::App for Ps5UploadApp {
                                 let rt = self.rt.clone();
                                 self.log(&format!("Applying chmod 777 recursively to {}...", path));
                                 thread::spawn(move || {
-                                    let result = rt.block_on(async { chmod_777(&ip, TRANSFER_PORT, &path).await });
+                                    let result = rt.block_on(async {
+                                        chmod_777(&ip, TRANSFER_PORT, &path).await
+                                    });
                                     match result {
                                         Ok(_) => {
-                                            let _ = tx.send(AppMessage::Log(format!("chmod 777 complete for {}", path)));
+                                            let _ = tx.send(AppMessage::Log(format!(
+                                                "chmod 777 complete for {}",
+                                                path
+                                            )));
                                         }
                                         Err(e) => {
-                                            let _ = tx.send(AppMessage::Log(format!("chmod 777 failed for {}: {}", path, e)));
+                                            let _ = tx.send(AppMessage::Log(format!(
+                                                "chmod 777 failed for {}: {}",
+                                                path, e
+                                            )));
                                         }
                                     }
                                 });
@@ -2940,7 +3267,12 @@ impl eframe::App for Ps5UploadApp {
                             }
 
                             // Process next queue item or reconnect
-                            if self.queue_data.items.iter().any(|i| i.status == QueueStatus::Pending) {
+                            if self
+                                .queue_data
+                                .items
+                                .iter()
+                                .any(|i| i.status == QueueStatus::Pending)
+                            {
                                 self.process_next_queue_item();
                             } else if self.config.auto_connect {
                                 self.connect();
@@ -2959,7 +3291,11 @@ impl eframe::App for Ps5UploadApp {
                                 file_count: self.progress_files,
                                 total_bytes: self.progress_sent,
                                 duration_secs: duration,
-                                speed_bps: if duration > 0.0 { self.progress_sent as f64 / duration } else { 0.0 },
+                                speed_bps: if duration > 0.0 {
+                                    self.progress_sent as f64 / duration
+                                } else {
+                                    0.0
+                                },
                                 success: false,
                                 error: Some(e.clone()),
                                 via_queue: self.current_queue_item_id.is_some(),
@@ -2971,7 +3307,9 @@ impl eframe::App for Ps5UploadApp {
                                 self.update_queue_item_status(id, QueueStatus::Failed(e.clone()));
                             }
 
-                            if self.config.auto_connect && self.upload_cancellation_token.load(Ordering::Relaxed) {
+                            if self.config.auto_connect
+                                && self.upload_cancellation_token.load(Ordering::Relaxed)
+                            {
                                 self.connect();
                             }
                         }
@@ -3023,12 +3361,10 @@ impl eframe::App for Ps5UploadApp {
                 .collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ctx, |ui| {
                     ui.label(format!("Archive Extraction Warning\n\nThe destination folder already exists:\n{}\n\nExtracting this archive will merge its contents with the existing folder. Any files with the same name will be overwritten.", self.get_dest_path()));
-                    ui.add_space(10.0);
-                    
+
                     ui.checkbox(&mut self.archive_overwrite_confirmed, "Allow overwriting of existing files");
                     ui.label(egui::RichText::new("If unchecked, the upload will be cancelled to prevent data loss.").weak());
-                    
-                    ui.add_space(10.0);
+
                     ui.horizontal(|ui| {
                         if ui.button(tr(lang, "continue")).clicked() {
                             if self.archive_overwrite_confirmed {
@@ -3037,11 +3373,11 @@ impl eframe::App for Ps5UploadApp {
                                 self.log("Upload cancelled - Overwrite required.");
                                 self.status = "Upload Cancelled".to_string();
                             }
-                            self.show_archive_overwrite_dialog = false; 
+                            self.show_archive_overwrite_dialog = false;
                         }
-                        if ui.button(tr(lang, "cancel")).clicked() { 
-                            self.show_archive_overwrite_dialog = false; 
-                            self.status = "Connected".to_string(); 
+                        if ui.button(tr(lang, "cancel")).clicked() {
+                            self.show_archive_overwrite_dialog = false;
+                            self.status = "Connected".to_string();
                         }
                     });
                 });
@@ -3049,22 +3385,33 @@ impl eframe::App for Ps5UploadApp {
 
         if self.show_override_dialog {
             egui::Window::new(tr(lang, "confirm_overwrite"))
-                .collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ctx, |ui| {
-                    ui.label(format!("Folder already exists:\n{}
+                    ui.label(format!(
+                        "Folder already exists:\n{}
 
-Overwrite it?", self.get_dest_path()));
-                    ui.add_space(10.0);
+Overwrite it?",
+                        self.get_dest_path()
+                    ));
                     ui.horizontal(|ui| {
-                        if ui.button(tr(lang, "overwrite")).clicked() { self.start_upload(); }
-                        if ui.button(tr(lang, "cancel")).clicked() { self.show_override_dialog = false; self.status = "Connected".to_string(); }
+                        if ui.button(tr(lang, "overwrite")).clicked() {
+                            self.start_upload();
+                        }
+                        if ui.button(tr(lang, "cancel")).clicked() {
+                            self.show_override_dialog = false;
+                            self.status = "Connected".to_string();
+                        }
                     });
                 });
         }
 
         if self.show_resume_dialog {
             egui::Window::new(tr(lang, "confirm_resume"))
-                .collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ctx, |ui| {
                     let mode_label = match self.config.resume_mode.as_str() {
                         "size" => tr(lang, "resume_fast"),
@@ -3072,8 +3419,11 @@ Overwrite it?", self.get_dest_path()));
                         "sha256" => tr(lang, "resume_slow"),
                         _ => tr(lang, "resume"),
                     };
-                    ui.label(format!("Destination already exists:\n{}\n\n{}", self.get_dest_path(), mode_label));
-                    ui.add_space(10.0);
+                    ui.label(format!(
+                        "Destination already exists:\n{}\n\n{}",
+                        self.get_dest_path(),
+                        mode_label
+                    ));
                     ui.horizontal(|ui| {
                         if ui.button(tr(lang, "resume")).clicked() {
                             self.start_upload();
@@ -3091,14 +3441,18 @@ Overwrite it?", self.get_dest_path()));
         }
 
         if self.show_archive_confirm_dialog {
-            let archive_kind = self.pending_archive_kind.clone().unwrap_or_else(|| "Archive".to_string());
+            let archive_kind = self
+                .pending_archive_kind
+                .clone()
+                .unwrap_or_else(|| "Archive".to_string());
             egui::Window::new(tr(lang, "confirm_archive"))
-                .collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ctx, |ui| {
                     let detected_label = tr(lang, "archive_detected").replace("{}", &archive_kind);
                     let is_rar = archive_kind.eq_ignore_ascii_case("RAR");
                     ui.label(detected_label);
-                    ui.add_space(6.0);
                     if is_rar {
                         // RAR files are extracted server-side on PS5
                         ui.label(egui::RichText::new(tr(lang, "archive_rar_ps5_note")).weak());
@@ -3106,11 +3460,32 @@ Overwrite it?", self.get_dest_path()));
                             ui.label(tr(lang, "archive_rar_mode_label"));
                             let mut changed = false;
                             egui::ComboBox::from_id_source("rar_mode_confirm")
-                                .selected_text(Self::rar_mode_label(lang, &self.config.rar_extract_mode))
+                                .selected_text(Self::rar_mode_label(
+                                    lang,
+                                    &self.config.rar_extract_mode,
+                                ))
                                 .show_ui(ui, |ui| {
-                                    changed |= ui.selectable_value(&mut self.config.rar_extract_mode, "normal".to_string(), tr(lang, "archive_rar_mode_normal")).changed();
-                                    changed |= ui.selectable_value(&mut self.config.rar_extract_mode, "safe".to_string(), tr(lang, "archive_rar_mode_safe")).changed();
-                                    changed |= ui.selectable_value(&mut self.config.rar_extract_mode, "turbo".to_string(), tr(lang, "archive_rar_mode_turbo")).changed();
+                                    changed |= ui
+                                        .selectable_value(
+                                            &mut self.config.rar_extract_mode,
+                                            "normal".to_string(),
+                                            tr(lang, "archive_rar_mode_normal"),
+                                        )
+                                        .changed();
+                                    changed |= ui
+                                        .selectable_value(
+                                            &mut self.config.rar_extract_mode,
+                                            "safe".to_string(),
+                                            tr(lang, "archive_rar_mode_safe"),
+                                        )
+                                        .changed();
+                                    changed |= ui
+                                        .selectable_value(
+                                            &mut self.config.rar_extract_mode,
+                                            "turbo".to_string(),
+                                            tr(lang, "archive_rar_mode_turbo"),
+                                        )
+                                        .changed();
                                 });
                             if changed {
                                 let _ = self.config.save();
@@ -3123,18 +3498,17 @@ Overwrite it?", self.get_dest_path()));
                         };
                         ui.label(egui::RichText::new(tr(lang, note_key)).weak());
                     } else {
-                        ui.label(egui::RichText::new(tr(lang, "archive_extract_stream_note")).weak());
+                        ui.label(
+                            egui::RichText::new(tr(lang, "archive_extract_stream_note")).weak(),
+                        );
                     }
                     if self.config.connections > 1 && !is_rar {
-                        ui.add_space(4.0);
                         ui.label(tr(lang, "archive_rar_stream_note"));
                     }
-                    ui.add_space(6.0);
                     ui.checkbox(&mut self.pending_archive_trim, tr(lang, "archive_trim_dir"));
                     if self.pending_archive_trim && !self.custom_subfolder.is_empty() {
                         self.custom_subfolder.clear();
                     }
-                    ui.add_space(10.0);
                     ui.horizontal(|ui| {
                         if ui.button(tr(lang, "continue")).clicked() {
                             if let Some(path) = self.pending_archive_path.take() {
@@ -3166,12 +3540,14 @@ Overwrite it?", self.get_dest_path()));
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ctx, |ui| {
                     ui.heading(tr(lang, "select_destination"));
-                    ui.add_space(4.0);
                     ui.label(tr(lang, "destination_path"));
                     ui.horizontal(|ui| {
                         let buttons_width = 3.0 * 70.0 + 12.0;
                         let path_width = (ui.available_width() - buttons_width).max(200.0);
-                        ui.add_sized([path_width, 24.0], Self::singleline_text_edit(&mut self.manage_right_path, rtl));
+                        ui.add_sized(
+                            [path_width, 24.0],
+                            text_edit(&mut self.manage_right_path, rtl),
+                        );
                         if ui.button(tr(lang, "go")).clicked() {
                             self.manage_refresh(ManageSide::Right);
                         }
@@ -3186,7 +3562,6 @@ Overwrite it?", self.get_dest_path()));
                             self.manage_refresh(ManageSide::Right);
                         }
                     });
-                    ui.add_space(4.0);
                     ui.horizontal_wrapped(|ui| {
                         ui.label(tr(lang, "breadcrumb"));
                         let mut parts = Vec::new();
@@ -3206,50 +3581,55 @@ Overwrite it?", self.get_dest_path()));
                         }
 
                         for (idx, part) in parts.iter().enumerate() {
-                            let label = if idx == 0 && part == "/" { "/" } else { part.rsplit('/').next().unwrap_or(part) };
+                            let label = if idx == 0 && part == "/" {
+                                "/"
+                            } else {
+                                part.rsplit('/').next().unwrap_or(part)
+                            };
                             if ui.button(label).clicked() {
                                 self.manage_right_path = part.clone();
                                 self.manage_refresh(ManageSide::Right);
                             }
                         }
                     });
-                    ui.add_space(4.0);
                     ui.label(self.manage_right_status.clone());
 
                     let mut open_dir: Option<String> = None;
-                    egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
-                        for (idx, entry) in self.manage_right_entries.iter().enumerate() {
-                            if entry.entry_type != "dir" {
-                                continue;
+                    egui::ScrollArea::vertical()
+                        .max_height(320.0)
+                        .show(ui, |ui| {
+                            for (idx, entry) in self.manage_right_entries.iter().enumerate() {
+                                if entry.entry_type != "dir" {
+                                    continue;
+                                }
+                                let is_selected = self.manage_right_selected == Some(idx);
+                                let response = ui.add(egui::SelectableLabel::new(
+                                    is_selected,
+                                    format!("📁 {}", entry.name),
+                                ));
+                                if response.clicked() {
+                                    self.manage_right_selected = Some(idx);
+                                }
+                                if response.double_clicked() {
+                                    open_dir = Some(entry.name.clone());
+                                }
                             }
-                            let is_selected = self.manage_right_selected == Some(idx);
-                            let response = ui.add(egui::SelectableLabel::new(
-                                is_selected,
-                                format!("📁 {}", entry.name),
-                            ));
-                            if response.clicked() {
-                                self.manage_right_selected = Some(idx);
-                            }
-                            if response.double_clicked() {
-                                open_dir = Some(entry.name.clone());
-                            }
-                        }
-                    });
+                        });
 
                     if let Some(dir_name) = open_dir {
-                        self.manage_right_path = Self::join_remote_path(&self.manage_right_path, &dir_name);
+                        self.manage_right_path =
+                            join_remote_path(&self.manage_right_path, &dir_name);
                         self.manage_refresh(ManageSide::Right);
                     }
 
-                    let selected_dest = self.manage_right_selected
+                    let selected_dest = self
+                        .manage_right_selected
                         .and_then(|idx| self.manage_right_entries.get(idx))
                         .filter(|e| e.entry_type == "dir")
-                        .map(|e| Self::join_remote_path(&self.manage_right_path, &e.name))
+                        .map(|e| join_remote_path(&self.manage_right_path, &e.name))
                         .unwrap_or_else(|| self.manage_right_path.clone());
 
-                    ui.add_space(6.0);
                     ui.label(format!("{} {}", tr(lang, "destination"), selected_dest));
-                    ui.add_space(8.0);
                     ui.horizontal(|ui| {
                         if ui.button(tr(lang, "select_here")).clicked() {
                             if let (Some(action), Some(src), Some(name)) = (
@@ -3257,34 +3637,76 @@ Overwrite it?", self.get_dest_path()));
                                 self.manage_dest_source_path.clone(),
                                 self.manage_dest_source_name.clone(),
                             ) {
-                                let dst = Self::join_remote_path(&selected_dest, &name);
+                                let dst = join_remote_path(&selected_dest, &name);
                                 match action {
                                     ManageDestAction::Move => {
-                                        self.start_move_check(src, dst, tr(lang, "move").to_string());
+                                        self.start_move_check(
+                                            src,
+                                            dst,
+                                            tr(lang, "move").to_string(),
+                                        );
                                     }
                                     ManageDestAction::Copy => {
                                         let ip = self.ip.clone();
                                         let rt = self.rt.clone();
                                         let cancel = self.manage_op_cancellation_token.clone();
-                                        self.manage_send_op_with_progress("Copy", cancel, move |tx, cancel| {
-                                            rt.block_on(async {
-                                                copy_path_with_progress(&ip, TRANSFER_PORT, &src, &dst, cancel, move |processed, total| {
-                                                    let _ = tx.send(AppMessage::ManageProgress { op: "Copy".to_string(), processed, total });
-                                                }).await
-                                            }).map_err(|e| e.to_string())
-                                        });
+                                        self.manage_send_op_with_progress(
+                                            "Copy",
+                                            cancel,
+                                            move |tx, cancel| {
+                                                rt.block_on(async {
+                                                    copy_path_with_progress(
+                                                        &ip,
+                                                        TRANSFER_PORT,
+                                                        &src,
+                                                        &dst,
+                                                        cancel,
+                                                        move |processed, total| {
+                                                            let _ = tx.send(
+                                                                AppMessage::ManageProgress {
+                                                                    op: "Copy".to_string(),
+                                                                    processed,
+                                                                    total,
+                                                                },
+                                                            );
+                                                        },
+                                                    )
+                                                    .await
+                                                })
+                                                .map_err(|e| e.to_string())
+                                            },
+                                        );
                                     }
                                     ManageDestAction::Extract => {
                                         let ip = self.ip.clone();
                                         let rt = self.rt.clone();
                                         let cancel = self.manage_op_cancellation_token.clone();
-                                        self.manage_send_op_with_progress("Extract", cancel, move |tx, cancel| {
-                                            rt.block_on(async {
-                                                extract_archive_with_progress(&ip, TRANSFER_PORT, &src, &dst, cancel, move |processed, total| {
-                                                    let _ = tx.send(AppMessage::ManageProgress { op: "Extract".to_string(), processed, total });
-                                                }).await
-                                            }).map_err(|e| e.to_string())
-                                        });
+                                        self.manage_send_op_with_progress(
+                                            "Extract",
+                                            cancel,
+                                            move |tx, cancel| {
+                                                rt.block_on(async {
+                                                    extract_archive_with_progress(
+                                                        &ip,
+                                                        TRANSFER_PORT,
+                                                        &src,
+                                                        &dst,
+                                                        cancel,
+                                                        move |processed, total| {
+                                                            let _ = tx.send(
+                                                                AppMessage::ManageProgress {
+                                                                    op: "Extract".to_string(),
+                                                                    processed,
+                                                                    total,
+                                                                },
+                                                            );
+                                                        },
+                                                    )
+                                                    .await
+                                                })
+                                                .map_err(|e| e.to_string())
+                                            },
+                                        );
                                     }
                                 }
                             }
@@ -3303,6 +3725,49 @@ Overwrite it?", self.get_dest_path()));
                 });
         }
 
+        if self.update_prompt_open {
+            let info = self.update_info.clone();
+            if let Some(info) = info {
+                egui::Window::new(tr(lang, "update_prompt_title"))
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                    .show(ctx, |ui| {
+                        let latest = info.tag_name;
+                        let current = app_version_trimmed();
+                        let body = tr(lang, "update_prompt_body")
+                            .replacen("{}", &latest, 1)
+                            .replacen("{}", current, 1);
+                        ui.label(body);
+                        row(ui, rtl, |ui| {
+                            if ui.button(tr(lang, "open_release_page")).clicked() {
+                                let _ = webbrowser::open(&info.html_url);
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            if ui.button(tr(lang, "update_now")).clicked() {
+                                self.update_prompt_open = false;
+                                if self.pending_update.is_some() {
+                                    self.show_update_restart_dialog = true;
+                                } else {
+                                    self.start_self_update();
+                                }
+                            }
+                            if ui.button(tr(lang, "update_prompt_later")).clicked() {
+                                self.update_prompt_open = false;
+                                self.update_prompt_snooze_until = Some(
+                                    std::time::Instant::now()
+                                        + std::time::Duration::from_secs(
+                                            UPDATE_CHECK_INTERVAL_SECS,
+                                        ),
+                                );
+                            }
+                        });
+                    });
+            } else {
+                self.update_prompt_open = false;
+            }
+        }
         if self.show_update_restart_dialog {
             egui::Window::new(tr(lang, "update_restart_title"))
                 .collapsible(false)
@@ -3310,7 +3775,6 @@ Overwrite it?", self.get_dest_path()));
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ctx, |ui| {
                     ui.label(tr(lang, "update_restart_note"));
-                    ui.add_space(10.0);
                     ui.horizontal(|ui| {
                         if ui.button(tr(lang, "update_restart_now")).clicked() {
                             self.show_update_restart_dialog = false;
@@ -3331,10 +3795,14 @@ Overwrite it?", self.get_dest_path()));
                 None => String::new(),
             };
             egui::Window::new(tr(lang, "confirm_download"))
-                .collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ctx, |ui| {
-                    ui.label(format!("Destination already exists:\n{}\n\nOverwrite and download?", dest_label));
-                    ui.add_space(10.0);
+                    ui.label(format!(
+                        "Destination already exists:\n{}\n\nOverwrite and download?",
+                        dest_label
+                    ));
                     ui.horizontal(|ui| {
                         if ui.button(tr(lang, "download")).clicked() {
                             self.show_download_overwrite_dialog = false;
@@ -3357,15 +3825,23 @@ Overwrite it?", self.get_dest_path()));
                 Some(r) => (
                     r.dst.clone(),
                     r.src.clone(),
-                    if r.dst_exists { "Destination already exists." } else { "Destination does not exist yet." },
+                    if r.dst_exists {
+                        "Destination already exists."
+                    } else {
+                        "Destination does not exist yet."
+                    },
                 ),
                 None => (String::new(), String::new(), ""),
             };
             egui::Window::new(tr(lang, "confirm_move"))
-                .collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ctx, |ui| {
-                    ui.label(format!("Move from:\n{}\n\nMove to:\n{}\n\n{}", src_label, dest_label, exists_label));
-                    ui.add_space(10.0);
+                    ui.label(format!(
+                        "Move from:\n{}\n\nMove to:\n{}\n\n{}",
+                        src_label, dest_label, exists_label
+                    ));
                     ui.horizontal(|ui| {
                         if ui.button(tr(lang, "move")).clicked() {
                             self.show_move_overwrite_dialog = false;
@@ -3389,10 +3865,14 @@ Overwrite it?", self.get_dest_path()));
                 None => (String::new(), String::new()),
             };
             egui::Window::new(tr(lang, "confirm_rename"))
-                .collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ctx, |ui| {
-                    ui.label(format!("Rename from:\n{}\n\nRename to:\n{}", src_label, dst_label));
-                    ui.add_space(10.0);
+                    ui.label(format!(
+                        "Rename from:\n{}\n\nRename to:\n{}",
+                        src_label, dst_label
+                    ));
                     ui.horizontal(|ui| {
                         if ui.button(tr(lang, "rename")).clicked() {
                             self.show_rename_confirm = false;
@@ -3403,7 +3883,8 @@ Overwrite it?", self.get_dest_path()));
                                 self.manage_send_op("Rename", move || {
                                     rt.block_on(async {
                                         move_path(&ip, TRANSFER_PORT, &req.src, &req.dst).await
-                                    }).map_err(|e| e.to_string())
+                                    })
+                                    .map_err(|e| e.to_string())
                                 });
                             }
                         }
@@ -3418,10 +3899,11 @@ Overwrite it?", self.get_dest_path()));
         if self.show_delete_confirm {
             let target = self.pending_delete_target.clone().unwrap_or_default();
             egui::Window::new(tr(lang, "confirm_delete"))
-                .collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ctx, |ui| {
                     ui.label(format!("Delete:\n{}\n\nThis cannot be undone.", target));
-                    ui.add_space(10.0);
                     ui.horizontal(|ui| {
                         if ui.button(tr(lang, "delete_action")).clicked() {
                             self.show_delete_confirm = false;
@@ -3431,7 +3913,8 @@ Overwrite it?", self.get_dest_path()));
                                 self.manage_send_op("Delete", move || {
                                     rt.block_on(async {
                                         delete_path(&ip, TRANSFER_PORT, &target).await
-                                    }).map_err(|e| e.to_string())
+                                    })
+                                    .map_err(|e| e.to_string())
                                 });
                             }
                         }
@@ -3445,13 +3928,26 @@ Overwrite it?", self.get_dest_path()));
 
         if self.show_history_resume_dialog {
             let record = self.pending_history_record.clone();
-            let dest_label = record.as_ref().map(|r| r.dest_path.clone()).unwrap_or_default();
-            let src_label = record.as_ref().map(|r| r.source_path.clone()).unwrap_or_default();
+            let dest_label = record
+                .as_ref()
+                .map(|r| r.dest_path.clone())
+                .unwrap_or_default();
+            let src_label = record
+                .as_ref()
+                .map(|r| r.source_path.clone())
+                .unwrap_or_default();
             egui::Window::new(tr(lang, "resume_title"))
-                .collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ctx, |ui| {
-                    ui.label(format!("{}:\n{}\n\n{}:\n{}", tr(lang, "source_folder"), src_label, tr(lang, "destination"), dest_label));
-                    ui.add_space(6.0);
+                    ui.label(format!(
+                        "{}:\n{}\n\n{}:\n{}",
+                        tr(lang, "source_folder"),
+                        src_label,
+                        tr(lang, "destination"),
+                        dest_label
+                    ));
                     ui.horizontal(|ui| {
                         ui.label(tr(lang, "resume_mode"));
                         egui::ComboBox::from_id_source("history_resume_mode_combo")
@@ -3462,24 +3958,46 @@ Overwrite it?", self.get_dest_path()));
                                 _ => tr(lang, "off"),
                             })
                             .show_ui(ui, |ui| {
-                                if ui.selectable_label(self.history_resume_mode == "size", tr(lang, "resume_fast")).clicked() {
+                                if ui
+                                    .selectable_label(
+                                        self.history_resume_mode == "size",
+                                        tr(lang, "resume_fast"),
+                                    )
+                                    .clicked()
+                                {
                                     self.history_resume_mode = "size".to_string();
                                 }
-                                if ui.selectable_label(self.history_resume_mode == "size_mtime", tr(lang, "resume_medium")).clicked() {
+                                if ui
+                                    .selectable_label(
+                                        self.history_resume_mode == "size_mtime",
+                                        tr(lang, "resume_medium"),
+                                    )
+                                    .clicked()
+                                {
                                     self.history_resume_mode = "size_mtime".to_string();
                                 }
-                                if ui.selectable_label(self.history_resume_mode == "sha256", tr(lang, "resume_slow")).clicked() {
+                                if ui
+                                    .selectable_label(
+                                        self.history_resume_mode == "sha256",
+                                        tr(lang, "resume_slow"),
+                                    )
+                                    .clicked()
+                                {
                                     self.history_resume_mode = "sha256".to_string();
                                 }
-                                if ui.selectable_label(self.history_resume_mode == "none", tr(lang, "off")).clicked() {
+                                if ui
+                                    .selectable_label(
+                                        self.history_resume_mode == "none",
+                                        tr(lang, "off"),
+                                    )
+                                    .clicked()
+                                {
                                     self.history_resume_mode = "none".to_string();
                                 }
                             });
                     });
-                    ui.add_space(8.0);
                     let note = tr(lang, "note_resume");
-                    ui.label(self.note_text(&note));
-                    ui.add_space(8.0);
+                    ui.label(note_text(&note, self.theme_dark));
                     ui.horizontal(|ui| {
                         if ui.button(tr(lang, "resume")).clicked() {
                             self.show_history_resume_dialog = false;
@@ -3503,9 +4021,15 @@ Overwrite it?", self.get_dest_path()));
                 });
         }
 
-        if self.config.auto_connect && !self.is_connected && !self.is_connecting && !self.is_uploading && !self.is_sending_payload {
+        if self.config.auto_connect
+            && !self.is_connected
+            && !self.is_connecting
+            && !self.is_uploading
+            && !self.is_sending_payload
+        {
             let now = std::time::Instant::now();
-            let should_attempt = self.last_auto_connect_attempt
+            let should_attempt = self
+                .last_auto_connect_attempt
                 .map(|last| now.duration_since(last).as_secs() >= 5)
                 .unwrap_or(true);
             if should_attempt {
@@ -3523,31 +4047,32 @@ Overwrite it?", self.get_dest_path()));
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ctx, |ui| {
                     ui.heading("Saved Profiles");
-                    ui.add_space(5.0);
 
                     let mut profile_to_delete: Option<String> = None;
                     let mut profile_to_apply: Option<Profile> = None;
 
-                    egui::ScrollArea::vertical().max_height(150.0).show(ui, |ui| {
-                        if self.profiles_data.profiles.is_empty() {
-                            ui.label("No profiles saved yet.");
-                        } else {
-                            for profile in &self.profiles_data.profiles {
-                                ui.horizontal(|ui| {
-                                    ui.label(&profile.name);
-                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                        if ui.small_button("Delete").clicked() {
-                                            profile_to_delete = Some(profile.name.clone());
-                                        }
-                                        if ui.small_button("Load").clicked() {
-                                            profile_to_apply = Some(profile.clone());
-                                        }
+                    egui::ScrollArea::vertical()
+                        .max_height(150.0)
+                        .show(ui, |ui| {
+                            if self.profiles_data.profiles.is_empty() {
+                                ui.label("No profiles saved yet.");
+                            } else {
+                                for profile in &self.profiles_data.profiles {
+                                    ui.horizontal(|ui| {
+                                        ui.label(&profile.name);
+                                        row_align(ui, true, |ui| {
+                                            if ui.small_button("Delete").clicked() {
+                                                profile_to_delete = Some(profile.name.clone());
+                                            }
+                                            if ui.small_button("Load").clicked() {
+                                                profile_to_apply = Some(profile.clone());
+                                            }
+                                        });
                                     });
-                                });
-                                ui.separator();
+                                    ui.separator();
+                                }
                             }
-                        }
-                    });
+                        });
 
                     if let Some(name) = profile_to_delete {
                         self.delete_profile(&name);
@@ -3556,20 +4081,23 @@ Overwrite it?", self.get_dest_path()));
                         self.apply_profile(&profile);
                     }
 
-                    ui.add_space(10.0);
                     ui.separator();
-                    ui.add_space(5.0);
 
                     ui.heading(tr(lang, "save_current_settings"));
                     ui.horizontal(|ui| {
                         ui.label(tr(lang, "profile_name"));
-                        ui.add(Self::singleline_text_edit(&mut self.profile_name_input, rtl));
+                        ui.add(text_edit(
+                            &mut self.profile_name_input,
+                            rtl,
+                        ));
                     });
-                    ui.add_space(5.0);
 
                     ui.horizontal(|ui| {
                         let can_save = !self.profile_name_input.trim().is_empty();
-                        if ui.add_enabled(can_save, egui::Button::new(tr(lang, "save_profile"))).clicked() {
+                        if ui
+                            .add_enabled(can_save, egui::Button::new(tr(lang, "save_profile")))
+                            .clicked()
+                        {
                             let name = self.profile_name_input.trim().to_string();
                             self.save_current_as_profile(name);
                             self.profile_name_input.clear();
@@ -3582,416 +4110,484 @@ Overwrite it?", self.get_dest_path()));
         }
 
         // 1. TOP HEADER
-        egui::TopBottomPanel::top("header").show(ctx, |ui| {
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                if rtl {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.add(egui::Button::new("☕ Buy me a coffee").min_size([120.0, 32.0].into())).clicked() {
-                            let _ = webbrowser::open("https://ko-fi.com/B0B81S0WUA");
-                        }
-                        ui.separator();
-                        let theme_icon = if self.theme_dark { "🌙" } else { "☀" };
-                        if ui.button(theme_icon).on_hover_text("Toggle Theme").clicked() {
-                            self.toggle_theme(ctx);
-                        }
-                    });
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if let Some(tex) = &self.logo_texture {
-                            ui.add(egui::Image::new(tex).fit_to_exact_size([80.0, 80.0].into()));
-                            ui.add_space(12.0);
-                        }
-                        ui.vertical(|ui| {
-                            ui.label(egui::RichText::new("PS5Upload").strong().size(22.0));
-                            ui.label(
-                                egui::RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
-                                    .size(14.0)
-                                    .color(ui.visuals().weak_text_color()),
-                            );
-                        });
-                    });
-                } else {
-                    ui.horizontal(|ui| {
-                        if let Some(tex) = &self.logo_texture {
-                            ui.add(egui::Image::new(tex).fit_to_exact_size([80.0, 80.0].into()));
-                            ui.add_space(12.0);
-                        }
-                        ui.vertical(|ui| {
-                            ui.label(egui::RichText::new("PS5Upload").strong().size(22.0));
-                            ui.label(
-                                egui::RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
-                                    .size(14.0)
-                                    .color(ui.visuals().weak_text_color()),
-                            );
-                        });
-                    });
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.add(egui::Button::new("☕ Buy me a coffee").min_size([120.0, 32.0].into())).clicked() {
-                            let _ = webbrowser::open("https://ko-fi.com/B0B81S0WUA");
-                        }
-                        ui.separator();
-                        let theme_icon = if self.theme_dark { "🌙" } else { "☀" };
-                        if ui.button(theme_icon).on_hover_text("Toggle Theme").clicked() {
-                            self.toggle_theme(ctx);
-                        }
-                    });
-                }
-            });
-            ui.add_space(6.0);
-        });
+        let header = ui::header::render(ctx, self.logo_texture.as_ref(), self.theme_dark);
+        if header.coffee_clicked {
+            let _ = webbrowser::open("https://ko-fi.com/B0B81S0WUA");
+        }
+        if header.theme_toggle_clicked {
+            self.toggle_theme(ctx);
+        }
 
         // 2. BOTTOM STATUS BAR
-        egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
-            let status_layout = if rtl {
-                egui::Layout::right_to_left(egui::Align::Center)
-            } else {
-                egui::Layout::left_to_right(egui::Align::Center)
-            };
-            let link_layout = if rtl {
-                egui::Layout::left_to_right(egui::Align::Center)
-            } else {
-                egui::Layout::right_to_left(egui::Align::Center)
-            };
-            ui.with_layout(status_layout, |ui| {
-                ui.label(egui::RichText::new(&self.status).strong());
-                ui.with_layout(link_layout, |ui| {
-                     ui.hyperlink_to("Created by PhantomPtr", "https://x.com/phantomptr");
-                     ui.label("|");
-                     ui.hyperlink_to("Source Code", "https://github.com/phantomptr/ps5upload");
-                });
-            });
-        });
+        ui::status_bar::render(ctx, &self.status, rtl);
 
         self.autosave_profile_if_needed();
 
         // 3. LEFT PANEL: CONNECTION & STORAGE
-        egui::SidePanel::left("left_panel").resizable(true).default_width(300.0).min_width(250.0).show(ctx, |ui| {
-            let side_layout = if rtl {
-                egui::Layout::top_down(egui::Align::RIGHT)
-            } else {
-                egui::Layout::top_down(egui::Align::LEFT)
-            };
-            ui.with_layout(side_layout, |ui| {
-                egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
-                    ui.add_space(10.0);
-                    ui.horizontal(|ui| {
-                        ui.heading(tr(lang, "connect"));
-                    });
-                    ui.add_space(5.0);
+        egui::SidePanel::left("left_panel")
+            .resizable(true)
+            .default_width(300.0)
+            .min_width(250.0)
+            .show(ctx, |ui| {
+                let side_layout = if rtl {
+                    egui::Layout::top_down(egui::Align::RIGHT)
+                } else {
+                    egui::Layout::top_down(egui::Align::LEFT)
+                };
+                ui.with_layout(side_layout, |ui| {
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false; 2])
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.heading(tr(lang, "connect"));
+                            });
 
-                    // Profile selector
-                    ui.horizontal(|ui| {
-                        ui.label(tr(lang, "profile"));
-                        let profile_names: Vec<String> = self.profiles_data.profiles.iter().map(|p| p.name.clone()).collect();
-                        egui::ComboBox::from_id_source("profile_combo")
-                            .selected_text(self.current_profile.as_deref().unwrap_or("(none)"))
-                            .show_ui(ui, |ui| {
-                                if ui.selectable_label(self.current_profile.is_none(), "(none)").clicked() {
-                                    self.current_profile = None;
-                                    self.set_default_profile(None);
-                                }
-                                for name in &profile_names {
-                                    if ui.selectable_label(self.current_profile.as_ref() == Some(name), name).clicked() {
-                                        if let Some(profile) = self.profiles_data.profiles.iter().find(|p| &p.name == name) {
-                                            let profile = profile.clone();
-                                            self.apply_profile(&profile);
-                                            self.set_default_profile(Some(profile.name.clone()));
+                            // Profile selector
+                            row(ui, rtl, |ui| {
+                                ui.label(tr(lang, "profile"));
+                                let profile_names: Vec<String> = self
+                                    .profiles_data
+                                    .profiles
+                                    .iter()
+                                    .map(|p| p.name.clone())
+                                    .collect();
+                                egui::ComboBox::from_id_source("profile_combo")
+                                    .selected_text(
+                                        self.current_profile.as_deref().unwrap_or("(none)"),
+                                    )
+                                    .show_ui(ui, |ui| {
+                                        if ui
+                                            .selectable_label(
+                                                self.current_profile.is_none(),
+                                                "(none)",
+                                            )
+                                            .clicked()
+                                        {
+                                            self.current_profile = None;
+                                            self.set_default_profile(None);
                                         }
-                                    }
+                                        for name in &profile_names {
+                                            if ui
+                                                .selectable_label(
+                                                    self.current_profile.as_ref() == Some(name),
+                                                    name,
+                                                )
+                                                .clicked()
+                                            {
+                                                if let Some(profile) = self
+                                                    .profiles_data
+                                                    .profiles
+                                                    .iter()
+                                                    .find(|p| &p.name == name)
+                                                {
+                                                    let profile = profile.clone();
+                                                    self.apply_profile(&profile);
+                                                    self.set_default_profile(Some(
+                                                        profile.name.clone(),
+                                                    ));
+                                                }
+                                            }
+                                        }
+                                    });
+                                if ui.button("+").on_hover_text("Manage Profiles").clicked() {
+                                    self.show_profile_dialog = true;
+                                    self.editing_profile = None;
+                                    self.profile_name_input.clear();
                                 }
                             });
-                        if ui.button("+").on_hover_text("Manage Profiles").clicked() {
-                            self.show_profile_dialog = true;
-                            self.editing_profile = None;
-                            self.profile_name_input.clear();
-                        }
-                    });
-                    ui.add_space(5.0);
 
-                    ui.label(tr(lang, "ps5_address"));
-                    ui.add(Self::singleline_text_edit(&mut self.ip, rtl));
-                    ui.label(format!("Transfer port: {}", TRANSFER_PORT));
+                            ui.label(tr(lang, "ps5_address"));
+                            ui.add(text_edit(&mut self.ip, rtl));
+                            ui.label(format!("Transfer port: {}", TRANSFER_PORT));
 
-                    ui.add_space(8.0);
-                    ui.label(tr(lang, "payload"));
-                    ui.label(tr(lang, "payload_required"));
-                    ui.label(format!("{} {}", tr(lang, "payload_port"), PAYLOAD_PORT));
-                    ui.horizontal(|ui| {
-                        if ui.button(format!("📂 {}", tr(lang, "select"))).clicked() {
-                            if let Some(path) = rfd::FileDialog::new().add_filter("Payload", &["elf"]).pick_file() {
-                                self.payload_path = path.display().to_string();
-                            }
-                        }
-                        ui.add(Self::singleline_text_edit(&mut self.payload_path, rtl));
-                    });
-                    ui.add_space(5.0);
-                    let payload_enabled = !self.is_sending_payload && !self.ip.trim().is_empty() && !self.payload_path.trim().is_empty();
-                    if ui.add_enabled(payload_enabled, egui::Button::new(format!("📤 {}", tr(lang, "send_payload"))).min_size([ui.available_width(), 30.0].into())).clicked() {
-                        self.send_payload();
-                    }
-                    ui.add_space(5.0);
-                    ui.label(format!("{} {}", tr(lang, "payload_status"), self.payload_status));
-                    if ui.button(tr(lang, "check_payload_status")).clicked() {
-                        self.check_payload_version();
-                    }
-                    ui.add_space(5.0);
-                    if ui.button(tr(lang, "download_current_payload")).clicked() {
-                        self.start_payload_download_and_send(PayloadFetch::Current);
-                    }
-                    if ui.button(tr(lang, "download_latest_payload")).clicked() {
-                        self.start_payload_download_and_send(PayloadFetch::Latest);
-                    }
-                    ui.add_space(5.0);
-                    let auto_payload = ui.checkbox(&mut self.config.auto_check_payload, tr(lang, "auto_check_payload"));
-                    if auto_payload.changed() {
-                        let _ = self.config.save();
-                        if self.config.auto_check_payload {
-                            self.last_payload_check = None;
-                            self.check_payload_version();
-                        }
-                    }
-                    if self.config.auto_check_payload {
-                        ui.label(egui::RichText::new(tr(lang, "auto_payload_interval")).weak().small());
-                    }
-                    let auto_connect = ui.checkbox(&mut self.config.auto_connect, tr(lang, "auto_reconnect"));
-                    if auto_connect.changed() { let _ = self.config.save(); }
-
-                    ui.add_space(10.0);
-                    if connected {
-                        if ui.add(egui::Button::new(tr(lang, "disconnect")).min_size([ui.available_width(), 30.0].into())).clicked() {
-                            self.status = "Disconnected".to_string();
-                            self.storage_locations.clear();
-                            self.selected_storage = None;
-                            self.is_connected = false;
-                            self.last_payload_check = None;
-                        }
-                    } else {
-                        ui.horizontal(|ui| {
-                            if ui.add_enabled(!self.is_connecting, egui::Button::new(tr(lang, "connect_ps5")).min_size([150.0, 30.0].into())).clicked() {
-                                self.connect();
-                            }
-                            if self.is_connecting
-                                && ui.add(egui::Button::new(tr(lang, "stop")).min_size([60.0, 30.0].into())).clicked()
+                            ui.label(tr(lang, "payload"));
+                            ui.label(tr(lang, "payload_required"));
+                            ui.label(format!("{} {}", tr(lang, "payload_port"), PAYLOAD_PORT));
+                            row(ui, rtl, |ui| {
+                                if ui.button(format!("📂 {}", tr(lang, "select"))).clicked() {
+                                    if let Some(path) = rfd::FileDialog::new()
+                                        .add_filter("Payload", &["elf"])
+                                        .pick_file()
+                                    {
+                                        self.payload_path = path.display().to_string();
+                                    }
+                                }
+                                ui.add(text_edit(&mut self.payload_path, rtl));
+                            });
+                            let payload_enabled = !self.is_sending_payload
+                                && !self.ip.trim().is_empty()
+                                && !self.payload_path.trim().is_empty();
+                            if ui
+                                .add_enabled(
+                                    payload_enabled,
+                                    egui::Button::new(format!("📤 {}", tr(lang, "send_payload")))
+                                        .min_size([ui.available_width(), 30.0].into()),
+                                )
+                                .clicked()
                             {
-                                self.is_connecting = false;
-                                self.status = "Cancelled".to_string();
+                                self.send_payload();
                             }
-                        });
-                    }
+                            ui.label(format!(
+                                "{} {}",
+                                tr(lang, "payload_status"),
+                                self.payload_status
+                            ));
+                            if ui.button(tr(lang, "check_payload_status")).clicked() {
+                                self.check_payload_version();
+                            }
+                            if ui.button(tr(lang, "download_current_payload")).clicked() {
+                                self.start_payload_download_and_send(PayloadFetch::Current);
+                            }
+                            if ui.button(tr(lang, "download_latest_payload")).clicked() {
+                                self.start_payload_download_and_send(PayloadFetch::Latest);
+                            }
+                            let auto_payload = ui.checkbox(
+                                &mut self.config.auto_check_payload,
+                                tr(lang, "auto_check_payload"),
+                            );
+                            if auto_payload.changed() {
+                                let _ = self.config.save();
+                                if self.config.auto_check_payload {
+                                    self.last_payload_check = None;
+                                    self.check_payload_version();
+                                }
+                            }
+                            if self.config.auto_check_payload {
+                                ui.label(
+                                    egui::RichText::new(tr(lang, "auto_payload_interval"))
+                                        .weak()
+                                        .small(),
+                                );
+                            }
+                            let auto_connect = ui.checkbox(
+                                &mut self.config.auto_connect,
+                                tr(lang, "auto_reconnect"),
+                            );
+                            if auto_connect.changed() {
+                                let _ = self.config.save();
+                            }
 
-                    ui.add_space(20.0);
-                    ui.horizontal(|ui| {
-                        ui.heading(tr(lang, "storage"));
-                        if connected && ui.button(format!("⟳ {}", tr(lang, "refresh"))).clicked() {
-                            self.connect();
-                        }
-                    });
-                    ui.add_space(5.0);
-
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        if self.storage_locations.is_empty() {
-                            ui.label(tr(lang, "not_connected"));
-                        } else {
-                            egui::Grid::new("storage_grid").striped(true).spacing([10.0, 5.0]).show(ui, |ui| {
-                                for loc in &self.storage_locations {
-                                    if ui.radio_value(&mut self.selected_storage, Some(loc.path.clone()), &loc.path).clicked() {
-                                        self.config.storage = loc.path.clone();
-                                        let _ = self.config.save();
+                            if connected {
+                                if ui
+                                    .add(
+                                        egui::Button::new(tr(lang, "disconnect"))
+                                            .min_size([ui.available_width(), 30.0].into()),
+                                    )
+                                    .clicked()
+                                {
+                                    self.status = "Disconnected".to_string();
+                                    self.storage_locations.clear();
+                                    self.selected_storage = None;
+                                    self.is_connected = false;
+                                    self.last_payload_check = None;
+                                }
+                            } else {
+                                row(ui, rtl, |ui| {
+                                    if ui
+                                        .add_enabled(
+                                            !self.is_connecting,
+                                            egui::Button::new(tr(lang, "connect_ps5"))
+                                                .min_size([150.0, 30.0].into()),
+                                        )
+                                        .clicked()
+                                    {
+                                        self.connect();
                                     }
-                                    ui.label(format!("{:.1} GB Free", loc.free_gb));
-                                    ui.end_row();
+                                    if self.is_connecting
+                                        && ui
+                                            .add(
+                                                egui::Button::new(tr(lang, "stop"))
+                                                    .min_size([60.0, 30.0].into()),
+                                            )
+                                            .clicked()
+                                    {
+                                        self.is_connecting = false;
+                                        self.status = "Cancelled".to_string();
+                                    }
+                                });
+                            }
+
+                            row(ui, rtl, |ui| {
+                                ui.heading(tr(lang, "storage"));
+                                if connected
+                                    && ui.button(format!("⟳ {}", tr(lang, "refresh"))).clicked()
+                                {
+                                    self.connect();
                                 }
                             });
-                        }
-                    });
 
-                    ui.add_space(15.0);
-                    ui.heading(tr(lang, "updates"));
-                    ui.add_space(5.0);
-                    ui.label(format!("Current: v{}", app_version_trimmed()));
-                    if self.update_available {
-                        ui.label(egui::RichText::new("New version available").color(egui::Color32::from_rgb(255, 140, 0)));
-                    }
-                    ui.label(self.update_status.clone());
-                    if ui.button(tr(lang, "check_updates")).clicked() {
-                        self.start_update_check();
-                    }
-                    let mut include_pre = self.config.update_channel == "all";
-                    if ui.checkbox(&mut include_pre, tr(lang, "include_prerelease")).changed() {
-                        self.config.update_channel = if include_pre { "all".to_string() } else { "stable".to_string() };
-                        let _ = self.config.save();
-                        self.start_update_check();
-                    }
-
-                    if let Some(info) = &self.update_info {
-                        ui.add_space(5.0);
-                        ui.horizontal(|ui| {
-                            if ui.button(tr(lang, "open_release_page")).clicked() {
-                                let _ = webbrowser::open(&info.html_url);
-                            }
-                        });
-
-                        ui.add_space(5.0);
-                        if ui.button(tr(lang, "download_payload")).clicked() {
-                            self.start_download_asset("payload", "ps5upload.elf", "ps5upload.elf");
-                        }
-
-                        match current_asset_name() {
-                            Ok(asset_name) => {
-                                if ui.button(tr(lang, "download_client")).clicked() {
-                                    self.start_download_asset("client", &asset_name, &asset_name);
+                            egui::ScrollArea::vertical().show(ui, |ui| {
+                                if self.storage_locations.is_empty() {
+                                    ui.label(tr(lang, "not_connected"));
+                                } else {
+                                    egui::Grid::new("storage_grid")
+                                        .striped(true)
+                                        .spacing([6.0, 3.0])
+                                        .show(ui, |ui| {
+                                            for loc in &self.storage_locations {
+                                                if ui
+                                                    .radio_value(
+                                                        &mut self.selected_storage,
+                                                        Some(loc.path.clone()),
+                                                        &loc.path,
+                                                    )
+                                                    .clicked()
+                                                {
+                                                    self.config.storage = loc.path.clone();
+                                                    let _ = self.config.save();
+                                                }
+                                                ui.label(format!("{:.1} GB Free", loc.free_gb));
+                                                ui.end_row();
+                                            }
+                                        });
                                 }
-                                if self.update_available {
-                                    if self.pending_update.is_some() {
-                                        if ui.button(tr(lang, "update_restart")).clicked() {
-                                            self.show_update_restart_dialog = true;
+                            });
+
+                            ui.heading(tr(lang, "updates"));
+                            ui.label(format!("Current: v{}", app_version_trimmed()));
+                            if self.update_available {
+                                ui.label(
+                                    egui::RichText::new("New version available")
+                                        .color(egui::Color32::from_rgb(255, 140, 0)),
+                                );
+                            }
+                            ui.label(self.update_status.clone());
+                            if ui.button(tr(lang, "check_updates")).clicked() {
+                                self.start_update_check();
+                            }
+                            let mut include_pre = self.config.update_channel == "all";
+                            if ui
+                                .checkbox(&mut include_pre, tr(lang, "include_prerelease"))
+                                .changed()
+                            {
+                                self.config.update_channel = if include_pre {
+                                    "all".to_string()
+                                } else {
+                                    "stable".to_string()
+                                };
+                                let _ = self.config.save();
+                                self.start_update_check();
+                            }
+
+                            if let Some(info) = &self.update_info {
+                                ui.horizontal(|ui| {
+                                    if ui.button(tr(lang, "open_release_page")).clicked() {
+                                        let _ = webbrowser::open(&info.html_url);
+                                    }
+                                });
+
+                                if ui.button(tr(lang, "download_payload")).clicked() {
+                                    self.start_download_asset(
+                                        "payload",
+                                        "ps5upload.elf",
+                                        "ps5upload.elf",
+                                    );
+                                }
+
+                                match current_asset_name() {
+                                    Ok(asset_name) => {
+                                        if ui.button(tr(lang, "download_client")).clicked() {
+                                            self.start_download_asset(
+                                                "client",
+                                                &asset_name,
+                                                &asset_name,
+                                            );
                                         }
-                                    } else if ui.button(tr(lang, "update_now")).clicked() {
-                                        self.start_self_update();
+                                        if self.update_available {
+                                            if self.pending_update.is_some() {
+                                                if ui.button(tr(lang, "update_restart")).clicked() {
+                                                    self.show_update_restart_dialog = true;
+                                                }
+                                            } else if ui.button(tr(lang, "update_now")).clicked() {
+                                                self.start_self_update();
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        ui.label(format!("Client download unavailable: {}", e));
                                     }
                                 }
                             }
-                            Err(e) => {
-                                ui.label(format!("Client download unavailable: {}", e));
+                            if !self.update_download_status.is_empty() {
+                                ui.label(self.update_download_status.clone());
                             }
-                        }
-                    }
-                    if !self.update_download_status.is_empty() {
-                        ui.label(self.update_download_status.clone());
-                    }
 
-                    ui.add_space(10.0);
-                    ui.horizontal(|ui| {
-                        ui.label(tr(lang, "language"));
-                        egui::ComboBox::from_id_source("language_combo")
-                            .selected_text(self.language.label())
-                            .show_ui(ui, |ui| {
-                                for candidate in [
-                                    Language::En,
-                                    Language::ZhCn,
-                                    Language::ZhTw,
-                                    Language::Fr,
-                                    Language::Es,
-                                    Language::Ar,
-                                ] {
-                                    if ui.selectable_label(self.language == candidate, candidate.label()).clicked() {
-                                        self.language = candidate;
-                                        self.config.language = candidate.code().to_string();
-                                        let _ = self.config.save();
-                                    }
-                                }
+                            row(ui, rtl, |ui| {
+                                ui.label(tr(lang, "language"));
+                                egui::ComboBox::from_id_source("language_combo")
+                                    .selected_text(self.language.label())
+                                    .show_ui(ui, |ui| {
+                                        for candidate in [
+                                            Language::En,
+                                            Language::ZhCn,
+                                            Language::ZhTw,
+                                            Language::Fr,
+                                            Language::Es,
+                                            Language::Ar,
+                                        ] {
+                                            if ui
+                                                .selectable_label(
+                                                    self.language == candidate,
+                                                    candidate.label(),
+                                                )
+                                                .clicked()
+                                            {
+                                                self.language = candidate;
+                                                self.config.language = candidate.code().to_string();
+                                                let _ = self.config.save();
+                                                setup_fonts(ctx, self.language);
+                                            }
+                                        }
+                                    });
                             });
-                    });
+                        });
                 });
             });
-        });
 
         // 4. RIGHT PANEL: LOGS
-        egui::SidePanel::right("right_panel").resizable(true).default_width(450.0).min_width(350.0).show(ctx, |ui| {
-            egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
-                ui.add_space(10.0);
-                ui.horizontal(|ui| {
-                    ui.heading(tr(lang, "logs"));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("🗑 Clear").clicked() {
-                            self.client_logs.clear();
-                            self.payload_logs.clear();
-                        }
-                    });
-                });
-            
-            ui.add_space(5.0);
-            ui.horizontal(|ui| {
-                ui.selectable_value(&mut self.log_tab, 0, tr(lang, "client"));
-                ui.selectable_value(&mut self.log_tab, 1, tr(lang, "payload"));
-                ui.selectable_value(&mut self.log_tab, 2, tr(lang, "history"));
-            });
-            ui.separator();
-
-            if self.log_tab == 2 {
-                // History tab
-                let records = self.history_data.records.clone();
-                ui.horizontal(|ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button(tr(lang, "clear_history")).clicked() {
-                            clear_history(&mut self.history_data);
-                        }
-                    });
-                });
-                ui.add_space(5.0);
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    if self.history_data.records.is_empty() {
-                        ui.label(tr(lang, "no_history"));
-                    } else {
-                        for record in records.iter().rev() {
-                            ui.group(|ui| {
-                                ui.horizontal(|ui| {
-                                    let icon = if record.success { "✓" } else { "✗" };
-                                    let color = if record.success {
-                                        egui::Color32::from_rgb(100, 200, 100)
-                                    } else {
-                                        egui::Color32::from_rgb(200, 100, 100)
-                                    };
-                                    ui.label(egui::RichText::new(icon).color(color).strong());
-
-                                    if let Some(dt) = chrono::DateTime::from_timestamp(record.timestamp, 0) {
-                                        ui.label(dt.format("%m/%d %H:%M").to_string());
-                                    }
-                                });
-
-                                // Source folder name only
-                                let source_name = std::path::Path::new(&record.source_path)
-                                    .file_name()
-                                    .map(|n| n.to_string_lossy().to_string())
-                                    .unwrap_or_else(|| record.source_path.clone());
-                                ui.label(format!("{}: {}", tr(lang, "source_folder"), source_name));
-                                ui.label(format!("{}: {}", tr(lang, "destination"), record.dest_path));
-                                let transfer_kind = if record.via_queue { tr(lang, "queue_upload") } else { tr(lang, "single_upload") };
-                                ui.label(self.note_text(&transfer_kind));
-
-                                ui.horizontal(|ui| {
-                                    ui.label(format!("{} files", record.file_count));
-                                    ui.separator();
-                                    ui.label(format_bytes(record.total_bytes));
-                                    ui.separator();
-                                    ui.label(format!("{}/s", format_bytes(record.speed_bps as u64)));
-                                    ui.separator();
-                                    ui.label(format_duration(record.duration_secs));
-                                });
-
-                                if let Some(err) = &record.error {
-                                    ui.label(egui::RichText::new(format!("Error: {}", err)).color(egui::Color32::from_rgb(200, 100, 100)).small());
-                                }
-
-                                ui.add_space(4.0);
-                                if ui.button(tr(lang, "resume_btn")).clicked() {
-                                    self.pending_history_record = Some(record.clone());
-                                    self.history_resume_mode = if self.config.resume_mode == "none" {
-                                        "size".to_string()
-                                    } else {
-                                        self.config.resume_mode.clone()
-                                    };
-                                    self.show_history_resume_dialog = true;
+        egui::SidePanel::right("right_panel")
+            .resizable(true)
+            .default_width(450.0)
+            .min_width(350.0)
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false; 2])
+                    .show(ui, |ui| {
+                        row(ui, rtl, |ui| {
+                            ui.heading(tr(lang, "logs"));
+                            row_align(ui, true, |ui| {
+                                if ui.button("🗑 Clear").clicked() {
+                                    self.client_logs.clear();
+                                    self.payload_logs.clear();
                                 }
                             });
-                            ui.add_space(2.0);
-                        }
-                    }
-                });
+                        });
 
-            } else {
-                egui::ScrollArea::vertical().stick_to_bottom(true).show(ui, |ui| {
-                    let text = if self.log_tab == 0 { &self.client_logs } else { &self.payload_logs };
-                    ui.add(egui::TextEdit::multiline(&mut text.as_str())
-                        .font(egui::TextStyle::Monospace)
-                        .desired_width(f32::INFINITY)
-                        .desired_rows(30)
-                        .cursor_at_end(false)
-                        .interactive(false));
-                });
-            }
+                        row(ui, rtl, |ui| {
+                            ui.selectable_value(&mut self.log_tab, 0, tr(lang, "client"));
+                            ui.selectable_value(&mut self.log_tab, 1, tr(lang, "payload"));
+                            ui.selectable_value(&mut self.log_tab, 2, tr(lang, "history"));
+                        });
+                        ui.separator();
+
+                        if self.log_tab == 2 {
+                            // History tab
+                            let records = self.history_data.records.clone();
+                            row(ui, rtl, |ui| {
+                                row_align(ui, true, |ui| {
+                                    if ui.button(tr(lang, "clear_history")).clicked() {
+                                        clear_history(&mut self.history_data);
+                                    }
+                                });
+                            });
+                            egui::ScrollArea::vertical().show(ui, |ui| {
+                                if self.history_data.records.is_empty() {
+                                    ui.label(tr(lang, "no_history"));
+                                } else {
+                                    for record in records.iter().rev() {
+                                        ui.group(|ui| {
+                                            ui.horizontal(|ui| {
+                                                let icon =
+                                                    if record.success { "✓" } else { "✗" };
+                                                let color = if record.success {
+                                                    egui::Color32::from_rgb(100, 200, 100)
+                                                } else {
+                                                    egui::Color32::from_rgb(200, 100, 100)
+                                                };
+                                                ui.label(
+                                                    egui::RichText::new(icon).color(color).strong(),
+                                                );
+
+                                                if let Some(dt) = chrono::DateTime::from_timestamp(
+                                                    record.timestamp,
+                                                    0,
+                                                ) {
+                                                    ui.label(dt.format("%m/%d %H:%M").to_string());
+                                                }
+                                            });
+
+                                            // Source folder name only
+                                            let source_name =
+                                                std::path::Path::new(&record.source_path)
+                                                    .file_name()
+                                                    .map(|n| n.to_string_lossy().to_string())
+                                                    .unwrap_or_else(|| record.source_path.clone());
+                                            ui.label(format!(
+                                                "{}: {}",
+                                                tr(lang, "source_folder"),
+                                                source_name
+                                            ));
+                                            ui.label(format!(
+                                                "{}: {}",
+                                                tr(lang, "destination"),
+                                                record.dest_path
+                                            ));
+                                            let transfer_kind = if record.via_queue {
+                                                tr(lang, "queue_upload")
+                                            } else {
+                                                tr(lang, "single_upload")
+                                            };
+                                            ui.label(note_text(&transfer_kind, self.theme_dark));
+
+                                            ui.horizontal(|ui| {
+                                                ui.label(format!("{} files", record.file_count));
+                                                ui.separator();
+                                                ui.label(format_bytes(record.total_bytes));
+                                                ui.separator();
+                                                ui.label(format!(
+                                                    "{}/s",
+                                                    format_bytes(record.speed_bps as u64)
+                                                ));
+                                                ui.separator();
+                                                ui.label(format_duration(record.duration_secs));
+                                            });
+
+                                            if let Some(err) = &record.error {
+                                                ui.label(
+                                                    egui::RichText::new(format!("Error: {}", err))
+                                                        .color(egui::Color32::from_rgb(
+                                                            200, 100, 100,
+                                                        ))
+                                                        .small(),
+                                                );
+                                            }
+
+                                            if ui.button(tr(lang, "resume_btn")).clicked() {
+                                                self.pending_history_record = Some(record.clone());
+                                                self.history_resume_mode =
+                                                    if self.config.resume_mode == "none" {
+                                                        "size".to_string()
+                                                    } else {
+                                                        self.config.resume_mode.clone()
+                                                    };
+                                                self.show_history_resume_dialog = true;
+                                            }
+                                        });
+                                    }
+                                }
+                            });
+                        } else {
+                            egui::ScrollArea::vertical()
+                                .stick_to_bottom(true)
+                                .show(ui, |ui| {
+                                    let text = if self.log_tab == 0 {
+                                        &self.client_logs
+                                    } else {
+                                        &self.payload_logs
+                                    };
+                                    let text_width = ui.available_width();
+                                    ui.add(
+                                        egui::TextEdit::multiline(&mut text.as_str())
+                                            .font(egui::TextStyle::Monospace)
+                                            .desired_width(text_width)
+                                            .desired_rows(30)
+                                            .cursor_at_end(false)
+                                            .interactive(false),
+                                    );
+                                });
+                        }
+                    });
             });
-        });
 
         // 5. CENTRAL PANEL: MAIN
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -4002,8 +4598,7 @@ Overwrite it?", self.get_dest_path()));
             };
             ui.with_layout(main_layout, |ui| {
                 egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
-                    ui.add_space(10.0);
-                    ui.horizontal(|ui| {
+                    row(ui, rtl, |ui| {
                         let transfer_tab = ui.selectable_value(&mut self.main_tab, 0, tr(lang, "transfer"));
                         let manage_tab = ui.selectable_value(&mut self.main_tab, 1, tr(lang, "manage"));
                         let chat_tab = ui.selectable_value(&mut self.main_tab, 2, tr(lang, "chat"));
@@ -4019,17 +4614,16 @@ Overwrite it?", self.get_dest_path()));
 
             if self.main_tab == 1 {
                 ui.heading(tr(lang, "file_manager"));
-                ui.add_space(8.0);
 
                 let can_manage = connected && !self.manage_busy && !self.is_downloading;
 
                 ui.group(|ui| {
                     ui.set_width(ui.available_width());
-                    ui.horizontal(|ui| {
+                    row(ui, rtl, |ui| {
                         ui.label(tr(lang, "path"));
                         let buttons_width = 3.0 * 70.0 + 12.0;
                         let path_width = (ui.available_width() - buttons_width).max(200.0);
-                        ui.add_sized([path_width, 24.0], Self::singleline_text_edit(&mut self.manage_left_path, rtl));
+                        ui.add_sized([path_width, 24.0], text_edit(&mut self.manage_left_path, rtl));
                         if ui.add_enabled(can_manage, egui::Button::new(tr(lang, "go"))).clicked() {
                             self.manage_refresh(ManageSide::Left);
                         }
@@ -4045,39 +4639,42 @@ Overwrite it?", self.get_dest_path()));
                         }
                     });
 
-                    ui.add_space(6.0);
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(tr(lang, "breadcrumb"));
-                        let mut parts = Vec::new();
-                        let mut current = String::new();
-                        let active_path = &self.manage_left_path;
-                        if active_path.starts_with('/') {
-                            parts.push("/".to_string());
-                        }
-                        for part in active_path.split('/').filter(|p| !p.is_empty()) {
-                            if current.ends_with('/') || current.is_empty() {
-                                current.push_str(part);
-                            } else {
-                                current.push('/');
-                                current.push_str(part);
+                    let mut breadcrumb_layout = egui::Layout::left_to_right(egui::Align::Center);
+                    if rtl {
+                        breadcrumb_layout = breadcrumb_layout.with_main_align(egui::Align::Max);
+                    }
+                    ui.with_layout(breadcrumb_layout, |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(tr(lang, "breadcrumb"));
+                            let mut parts = Vec::new();
+                            let mut current = String::new();
+                            let active_path = &self.manage_left_path;
+                            if active_path.starts_with('/') {
+                                parts.push("/".to_string());
                             }
-                            parts.push(current.clone());
-                        }
+                            for part in active_path.split('/').filter(|p| !p.is_empty()) {
+                                if current.ends_with('/') || current.is_empty() {
+                                    current.push_str(part);
+                                } else {
+                                    current.push('/');
+                                    current.push_str(part);
+                                }
+                                parts.push(current.clone());
+                            }
 
-                        for (idx, part) in parts.iter().enumerate() {
-                            let label = if idx == 0 && part == "/" { "/" } else { part.rsplit('/').next().unwrap_or(part) };
-                            if ui.add_enabled(can_manage, egui::Button::new(label)).clicked() {
-                                self.manage_left_path = part.clone();
-                                self.manage_refresh(ManageSide::Left);
+                            for (idx, part) in parts.iter().enumerate() {
+                                let label = if idx == 0 && part == "/" { "/" } else { part.rsplit('/').next().unwrap_or(part) };
+                                if ui.add_enabled(can_manage, egui::Button::new(label)).clicked() {
+                                    self.manage_left_path = part.clone();
+                                    self.manage_refresh(ManageSide::Left);
+                                }
                             }
-                        }
+                        });
                     });
 
-                    ui.add_space(4.0);
                     ui.label(self.manage_left_status.clone());
                 });
 
-                ui.add_space(10.0);
 
                 let total_height = ui.available_height();
                 let list_height = (total_height * 0.55).clamp(240.0, 520.0);
@@ -4106,7 +4703,7 @@ Overwrite it?", self.get_dest_path()));
                                 ui.visuals_mut().selection.bg_fill = strong;
                                 ui.visuals_mut().selection.stroke = egui::Stroke::new(1.0, base);
 
-                                egui::Grid::new("manage_list").striped(true).spacing([0.0, 4.0]).show(ui, |ui| {
+                                egui::Grid::new("manage_list").striped(true).spacing([0.0, 2.0]).show(ui, |ui| {
                                     ui.add_sized([name_w, row_height], egui::Label::new(egui::RichText::new(tr(lang, "name")).strong()));
                                     ui.add_sized([type_w, row_height], egui::Label::new(egui::RichText::new(tr(lang, "type")).strong()));
                                     ui.add_sized([size_w, row_height], egui::Label::new(egui::RichText::new(tr(lang, "size")).strong()));
@@ -4192,13 +4789,12 @@ Overwrite it?", self.get_dest_path()));
                             });
                         });
                         if let Some(dir_name) = open_dir {
-                            self.manage_left_path = Self::join_remote_path(&self.manage_left_path, &dir_name);
+                            self.manage_left_path = join_remote_path(&self.manage_left_path, &dir_name);
                             self.manage_refresh(ManageSide::Left);
                         }
                     }
                 });
 
-                ui.add_space(10.0);
 
                 ui.group(|ui| {
                     ui.set_width(ui.available_width());
@@ -4215,7 +4811,7 @@ Overwrite it?", self.get_dest_path()));
                     let mut selected_mtime: Option<Option<i64>> = None;
 
                     if let Some((name, entry_type, size, mtime)) = selected_info {
-                        let path = Self::join_remote_path(&self.manage_left_path, &name);
+                        let path = join_remote_path(&self.manage_left_path, &name);
                         selected_name = Some(name);
                         selected_type = Some(entry_type);
                         selected_path = Some(path);
@@ -4224,7 +4820,7 @@ Overwrite it?", self.get_dest_path()));
                     }
 
                     if let (Some(ref name), Some(ref entry_type), Some(path)) = (selected_name.clone(), selected_type.clone(), selected_path.clone()) {
-                        egui::Grid::new("manage_details").spacing([10.0, 6.0]).show(ui, |ui| {
+                        egui::Grid::new("manage_details").spacing([6.0, 4.0]).show(ui, |ui| {
                             ui.label(tr(lang, "name")); ui.label(name); ui.end_row();
                             ui.label(tr(lang, "type")); ui.label(if entry_type == "dir" { tr(lang, "directory") } else { tr(lang, "file") }); ui.end_row();
                             if entry_type == "file" {
@@ -4254,7 +4850,6 @@ Overwrite it?", self.get_dest_path()));
                     }
 
                     if let Some(meta) = &self.manage_meta {
-                        ui.add_space(6.0);
                         ui.horizontal(|ui| {
                             if let Some(tex) = &self.manage_cover_texture {
                                 let size = egui::vec2(72.0, 72.0);
@@ -4276,15 +4871,15 @@ Overwrite it?", self.get_dest_path()));
                     }
 
                     let can_ops = connected && !self.manage_busy && !self.is_downloading;
+                    let can_upload = can_ops && !self.is_uploading;
                     let has_selection = selected_name.is_some() && selected_path.is_some() && selected_type.is_some();
 
-                    ui.add_space(6.0);
-                    ui.horizontal(|ui| {
+                    row(ui, rtl, |ui| {
                         ui.label(tr(lang, "rename"));
-                        ui.add(Self::singleline_text_edit(&mut self.manage_new_name, rtl));
+                        ui.add(text_edit(&mut self.manage_new_name, rtl));
                     });
 
-                    ui.horizontal(|ui| {
+                    row(ui, rtl, |ui| {
                         let can_rename = can_ops
                             && has_selection
                             && !self.manage_new_name.trim().is_empty()
@@ -4292,14 +4887,14 @@ Overwrite it?", self.get_dest_path()));
                         if ui.add_enabled(can_rename, egui::Button::new(tr(lang, "rename"))).clicked() {
                             let src = selected_path.clone().unwrap_or_default();
                             let new_name = self.manage_new_name.trim().to_string();
-                            let dst = Self::join_remote_path(&self.manage_left_path, &new_name);
+                            let dst = join_remote_path(&self.manage_left_path, &new_name);
                             self.pending_rename_request = Some(RenameRequest { src, dst });
                             self.show_rename_confirm = true;
                         }
                         let can_new_folder = can_ops && !self.manage_new_name.trim().is_empty();
                         if ui.add_enabled(can_new_folder, egui::Button::new(tr(lang, "new_folder"))).clicked() {
                             let folder_name = self.manage_new_name.trim().to_string();
-                            let full_path = Self::join_remote_path(&self.manage_left_path, &folder_name);
+                            let full_path = join_remote_path(&self.manage_left_path, &folder_name);
                             let ip = self.ip.clone();
                             let rt = self.rt.clone();
                             self.manage_send_op("New folder", move || {
@@ -4308,6 +4903,16 @@ Overwrite it?", self.get_dest_path()));
                                 }).map_err(|e| e.to_string())
                             });
                             self.manage_new_name.clear();
+                        }
+                        if ui.add_enabled(can_upload, egui::Button::new(tr(lang, "upload_files"))).clicked() {
+                            if let Some(paths) = rfd::FileDialog::new().pick_files() {
+                                self.manage_upload_paths(paths);
+                            }
+                        }
+                        if ui.add_enabled(can_upload, egui::Button::new(tr(lang, "upload_folder"))).clicked() {
+                            if let Some(path) = rfd::FileDialog::new().pick_folder() {
+                                self.manage_upload_paths(vec![path]);
+                            }
                         }
                         if ui.add_enabled(can_ops && has_selection, egui::Button::new(tr(lang, "move"))).clicked() {
                             let src = selected_path.clone().unwrap_or_default();
@@ -4391,7 +4996,6 @@ Overwrite it?", self.get_dest_path()));
                     });
                     ui.label(egui::RichText::new(tr(lang, "extract_rar_only_note")).weak().small());
 
-                    ui.add_space(8.0);
                     ui.separator();
                     ui.label(tr(lang, "progress"));
                     ui.horizontal(|ui| {
@@ -4463,7 +5067,6 @@ Overwrite it?", self.get_dest_path()));
                         let total_clamped = total.max(1);
                         let progress = (sent as f64 / total_clamped as f64).clamp(0.0, 1.0) as f32;
                         ui.add(egui::ProgressBar::new(progress).show_percentage().animate(true));
-                        ui.add_space(4.0);
                         ui.horizontal(|ui| {
                             ui.label(format!("{} / {}", format_bytes(sent), format_bytes(total)));
                             if speed_bps > 0.0 {
@@ -4506,13 +5109,11 @@ Overwrite it?", self.get_dest_path()));
                 });
             } else if self.main_tab == 2 {
                 ui.heading(tr(lang, "chat"));
-                ui.add_space(6.0);
                 ui.label(format!("{} {}", tr(lang, "chat_status"), self.chat_status));
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
+                row(ui, rtl, |ui| {
                     ui.label(tr(lang, "chat_display_name"));
                     let response = ui.add(
-                        Self::singleline_text_edit(&mut self.config.chat_display_name, rtl)
+                        text_edit(&mut self.config.chat_display_name, rtl)
                             .desired_width(220.0),
                     );
                     if response.changed() {
@@ -4524,12 +5125,13 @@ Overwrite it?", self.get_dest_path()));
                 let remaining_height = ui.available_height().max(200.0);
                 ui.allocate_ui(egui::vec2(ui.available_width(), remaining_height), |ui| {
                     ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-                        ui.horizontal(|ui| {
+                        row(ui, rtl, |ui| {
                             let mut send_now = false;
+                            let input_width = (ui.available_width() - 90.0).max(140.0);
                             let response = ui.add(
-                                Self::singleline_text_edit(&mut self.chat_input, rtl)
+                                text_edit(&mut self.chat_input, rtl)
                                     .hint_text(tr(lang, "chat_input_placeholder"))
-                                    .desired_width(f32::INFINITY),
+                                    .desired_width(input_width),
                             );
                             if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                                 send_now = true;
@@ -4543,7 +5145,6 @@ Overwrite it?", self.get_dest_path()));
                             }
                         });
 
-                        ui.add_space(8.0);
                         ui.group(|ui| {
                             ui.set_width(ui.available_width());
                             let list_height = ui.available_height().max(120.0);
@@ -4598,14 +5199,12 @@ Overwrite it?", self.get_dest_path()));
                     }
                 }
 
-                ui.add_space(10.0);
                 ui.heading(tr(lang, "transfer"));
-                ui.add_space(10.0);
 
                 ui.group(|ui| {
                     ui.set_width(ui.available_width());
                     ui.label(tr(lang, "source_folder"));
-                    ui.horizontal(|ui| {
+                    row(ui, rtl, |ui| {
                         if ui.button(format!("📂 {}", tr(lang, "browse"))).clicked() {
                             if let Some(path) = rfd::FileDialog::new().pick_folder() {
                                 self.update_game_path(path.display().to_string());
@@ -4625,14 +5224,13 @@ Overwrite it?", self.get_dest_path()));
                         if ui.add_enabled(can_add_queue, egui::Button::new(tr(lang, "add_queue"))).on_hover_text("Add to transfer queue").clicked() {
                             self.add_to_queue();
                         }
-                        ui.add(Self::singleline_text_edit(&mut self.game_path, rtl));
+                        ui.add(text_edit(&mut self.game_path, rtl));
                     });
                     if self.calculating_size { ui.spinner(); ui.label("Measuring..."); }
                     else if let Some(size) = self.calculated_size { ui.label(format!("Total Size: {}", format_bytes(size))); }
                 });
 
                 if let Some(meta) = &self.game_meta {
-                    ui.add_space(6.0);
                     ui.group(|ui| {
                         ui.set_width(ui.available_width());
                         ui.horizontal(|ui| {
@@ -4664,7 +5262,6 @@ Overwrite it?", self.get_dest_path()));
                     tr(lang, "upload_queue").to_string()
                 };
 
-                ui.add_space(5.0);
                 egui::CollapsingHeader::new(queue_label)
                     .default_open(false)
                     .show(ui, |ui| {
@@ -4690,7 +5287,7 @@ Overwrite it?", self.get_dest_path()));
                                                 ui.label(egui::RichText::new(format_bytes(size)).weak());
                                             }
 
-                                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                            row_align(ui, true, |ui| {
                                                 if item.status == QueueStatus::Pending
                                                     && ui.small_button("×").on_hover_text("Remove").clicked()
                                                 {
@@ -4709,7 +5306,6 @@ Overwrite it?", self.get_dest_path()));
                                 self.remove_from_queue(id);
                             }
 
-                            ui.add_space(5.0);
                             ui.horizontal(|ui| {
                                 let _has_pending = self.queue_data.items.iter().any(|i| i.status == QueueStatus::Pending);
                                 if ui.button("Clear Completed").clicked() {
@@ -4719,25 +5315,24 @@ Overwrite it?", self.get_dest_path()));
                         }
                     });
 
-                ui.add_space(10.0);
 
                 ui.group(|ui| {
                     ui.set_width(ui.available_width());
                     ui.label(tr(lang, "destination_path"));
-                    egui::Grid::new("dest_grid").num_columns(2).spacing([10.0, 10.0]).show(ui, |ui| {
+                    egui::Grid::new("dest_grid").num_columns(2).spacing([6.0, 6.0]).show(ui, |ui| {
                         ui.label(format!("{}:", tr(lang, "preset")));
                         egui::ComboBox::from_id_source("preset_combo").selected_text(PRESETS[self.selected_preset]).show_ui(ui, |ui| {
                             for (i, p) in PRESETS.iter().enumerate() { ui.selectable_value(&mut self.selected_preset, i, *p); }
                         });
                         ui.end_row();
-                        if self.selected_preset == 2 { ui.label(format!("{}:", tr(lang, "path"))); ui.add(Self::singleline_text_edit(&mut self.custom_preset_path, rtl)); ui.end_row(); }
+                        if self.selected_preset == 2 { ui.label(format!("{}:", tr(lang, "path"))); ui.add(text_edit(&mut self.custom_preset_path, rtl)); ui.end_row(); }
                     let archive_kind = Self::archive_kind(Path::new(&self.game_path));
                     let is_archive = archive_kind.is_some();
                     let _is_rar_archive = archive_kind.as_ref().map(|k| k.eq_ignore_ascii_case("RAR")).unwrap_or(false);
                     let trim_active = is_archive && self.pending_archive_trim;
                         ui.label(format!("{}:", tr(lang, "name_label")));
                         ui.add_enabled_ui(!trim_active, |ui| {
-                            ui.add(Self::singleline_text_edit(&mut self.custom_subfolder, rtl));
+                            ui.add(text_edit(&mut self.custom_subfolder, rtl));
                         });
                         ui.end_row();
                         if trim_active {
@@ -4821,22 +5416,18 @@ Overwrite it?", self.get_dest_path()));
                     if self.config.optimize_upload {
                         ui.label(egui::RichText::new(tr(lang, "optimize_upload_lock_notice")).weak().small());
                     }
-                    ui.add_space(5.0);
                     ui.label(egui::RichText::new(format!("➡ Destination: {}", self.get_dest_path())).monospace().weak());
                 });
 
-                ui.add_space(10.0);
 
                 ui.group(|ui| {
                     ui.set_width(ui.available_width());
                     ui.label(tr(lang, "progress"));
-                    ui.add_space(5.0);
 
                     if self.is_scanning && !self.is_uploading {
                         ui.label(format!("Phase: {}", tr(lang, "phase_scanning")));
                         let scan_progress = (self.scanning_files_found as f32 / 10_000.0).min(1.0);
                         ui.add(egui::ProgressBar::new(scan_progress).show_percentage().animate(true));
-                        ui.add_space(5.0);
                         ui.label(format!("Scanning: {} files ({})", self.scanning_files_found, format_bytes(self.scanning_total_size)));
                         ui.label(tr(lang, "progress_total_estimated"));
                     } else {
@@ -4854,7 +5445,6 @@ Overwrite it?", self.get_dest_path()));
                         }
                         ui.add(egui::ProgressBar::new(progress).show_percentage().animate(self.is_uploading));
 
-                        ui.add_space(5.0);
                         ui.horizontal(|ui| {
                             ui.label(format!("Sent: {} / {}", format_bytes(self.progress_sent), format_bytes(self.progress_total)));
                             ui.separator();
@@ -4862,7 +5452,7 @@ Overwrite it?", self.get_dest_path()));
                             ui.separator();
                             ui.label(format!("ETA {}", self.progress_eta_secs.map(format_duration).unwrap_or("N/A".to_string())));
                         });
-                        
+
                         if self.progress_files > 0 { ui.label(format!("Files transferred: {}", self.progress_files)); }
                         if !self.progress_current_file.is_empty() {
                             ui.label(format!("Current file: {}", self.progress_current_file));
@@ -4874,8 +5464,7 @@ Overwrite it?", self.get_dest_path()));
                             ui.label(tr(lang, "progress_total_estimated"));
                         }
                     }
-                    
-                    ui.add_space(5.0);
+
                     ui.horizontal(|ui| {
                         ui.label(tr(lang, "connections"));
                         let mut connections = self.config.connections as i32;
@@ -4901,9 +5490,9 @@ Overwrite it?", self.get_dest_path()));
                         }
                     });
                     let note1 = tr(lang, "note_conn_1");
-                    ui.label(self.note_text(&note1));
+                    ui.label(note_text(&note1, self.theme_dark));
                     let note2 = tr(lang, "note_conn_2");
-                    ui.label(self.note_text(&note2));
+                    ui.label(note_text(&note2, self.theme_dark));
                     ui.horizontal(|ui| {
                         ui.label(tr(lang, "limit_mbps"));
                         let mut limit = self.config.bandwidth_limit_mbps;
@@ -4950,9 +5539,9 @@ Overwrite it?", self.get_dest_path()));
                     });
                     if self.config.resume_mode != "none" {
                         let note_resume = tr(lang, "note_resume");
-                        ui.label(self.note_text(&note_resume));
+                        ui.label(note_text(&note_resume, self.theme_dark));
                         let note_resume_change = tr(lang, "note_resume_change");
-                        ui.label(self.note_text(&note_resume_change));
+                        ui.label(note_text(&note_resume_change, self.theme_dark));
                     }
                     ui.horizontal(|ui| {
                         let chmod_toggle = ui.checkbox(&mut self.config.chmod_after_upload, tr(lang, "chmod_after"));
@@ -4960,11 +5549,10 @@ Overwrite it?", self.get_dest_path()));
                             let _ = self.config.save();
                         }
                         let note_chmod = tr(lang, "note_chmod");
-                        ui.label(self.note_text(&note_chmod));
+                        ui.label(note_text(&note_chmod, self.theme_dark));
                     });
 
                     if self.is_uploading {
-                        ui.add_space(10.0);
                         ui.horizontal(|ui| {
                             ui.spinner();
                             ui.label(tr(lang, "uploading"));
@@ -4974,13 +5562,11 @@ Overwrite it?", self.get_dest_path()));
                             }
                         });
                     } else if self.is_downloading {
-                        ui.add_space(10.0);
                         ui.horizontal(|ui| {
                             ui.spinner();
                             ui.label(tr(lang, "downloading"));
                         });
                     } else {
-                        ui.add_space(15.0);
                         let enabled = !self.game_path.is_empty() && self.selected_storage.is_some() && connected && !self.is_downloading;
                         let has_pending = self.queue_data.items.iter().any(|i| i.status == QueueStatus::Pending);
                         ui.horizontal(|ui| {
@@ -5011,7 +5597,10 @@ async fn fetch_latest_release(include_prerelease: bool) -> anyhow::Result<Releas
 
     let releases = response.json::<Vec<ReleaseInfo>>().await?;
     if include_prerelease {
-        releases.into_iter().next().ok_or_else(|| anyhow::anyhow!("No releases found"))
+        releases
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("No releases found"))
     } else {
         releases
             .into_iter()
@@ -5023,7 +5612,10 @@ async fn fetch_latest_release(include_prerelease: bool) -> anyhow::Result<Releas
 async fn fetch_release_by_tag(tag: &str) -> anyhow::Result<ReleaseInfo> {
     let client = reqwest::Client::new();
     let response = client
-        .get(format!("https://api.github.com/repos/phantomptr/ps5upload/releases/tags/{}", tag))
+        .get(format!(
+            "https://api.github.com/repos/phantomptr/ps5upload/releases/tags/{}",
+            tag
+        ))
         .header("User-Agent", "ps5upload")
         .send()
         .await?
@@ -5067,9 +5659,19 @@ fn extract_zip(zip_path: &std::path::Path, dest_dir: &std::path::Path) -> anyhow
 }
 
 fn find_app_bundle(root: &std::path::Path) -> Option<std::path::PathBuf> {
-    for entry in walkdir::WalkDir::new(root).max_depth(3).into_iter().filter_map(|e| e.ok()) {
+    for entry in walkdir::WalkDir::new(root)
+        .max_depth(3)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
         if entry.file_type().is_dir() {
-            if entry.path().extension().and_then(|e| e.to_str()).map(|e| e.eq_ignore_ascii_case("app")).unwrap_or(false) {
+            if entry
+                .path()
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.eq_ignore_ascii_case("app"))
+                .unwrap_or(false)
+            {
                 return Some(entry.path().to_path_buf());
             }
         }
@@ -5078,7 +5680,10 @@ fn find_app_bundle(root: &std::path::Path) -> Option<std::path::PathBuf> {
 }
 
 fn find_file_by_name(root: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
-    for entry in walkdir::WalkDir::new(root).into_iter().filter_map(|e| e.ok()) {
+    for entry in walkdir::WalkDir::new(root)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
         if entry.file_type().is_file() {
             if entry.file_name() == name {
                 return Some(entry.path().to_path_buf());
@@ -5093,7 +5698,12 @@ fn build_pending_update(extract_dir: &std::path::Path) -> anyhow::Result<Pending
     let mut bundle_root: Option<std::path::PathBuf> = None;
     let mut cursor = current_exe.as_path();
     while let Some(parent) = cursor.parent() {
-        if cursor.extension().and_then(|e| e.to_str()).map(|e| e.eq_ignore_ascii_case("app")).unwrap_or(false) {
+        if cursor
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("app"))
+            .unwrap_or(false)
+        {
             bundle_root = Some(cursor.to_path_buf());
             break;
         }
@@ -5112,7 +5722,10 @@ fn build_pending_update(extract_dir: &std::path::Path) -> anyhow::Result<Pending
         });
     }
 
-    let exe_name = current_exe.file_name().and_then(|s| s.to_str()).ok_or_else(|| anyhow::anyhow!("Invalid executable name"))?;
+    let exe_name = current_exe
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| anyhow::anyhow!("Invalid executable name"))?;
     let replacement = find_file_by_name(extract_dir, exe_name)
         .ok_or_else(|| anyhow::anyhow!("Update binary not found"))?;
     Ok(PendingUpdate {
@@ -5181,9 +5794,7 @@ fn spawn_update_helper(pending: &PendingUpdate) -> anyhow::Result<()> {
             perms.set_mode(0o755);
             std::fs::set_permissions(&script_path, perms)?;
         }
-        std::process::Command::new("sh")
-            .arg(script_path)
-            .spawn()?;
+        std::process::Command::new("sh").arg(script_path).spawn()?;
         return Ok(());
     }
 }
@@ -5227,89 +5838,6 @@ fn current_asset_name() -> Result<String, String> {
     Ok(format!("ps5upload-{}-{}.zip", os_name, arch_name))
 }
 
-fn setup_fonts(ctx: &egui::Context) {
-    let mut fonts = egui::FontDefinitions::default();
-
-    // Load Simplified Chinese font
-    fonts.font_data.insert(
-        "noto_sans_sc".to_owned(),
-        egui::FontData::from_static(include_bytes!("../fonts/NotoSansSC-Regular.otf")),
-    );
-
-    // Load Traditional Chinese font
-    fonts.font_data.insert(
-        "noto_sans_tc".to_owned(),
-        egui::FontData::from_static(include_bytes!("../fonts/NotoSansTC-Regular.otf")),
-    );
-
-    // Load Arabic font
-    fonts.font_data.insert(
-        "noto_sans_arabic".to_owned(),
-        egui::FontData::from_static(include_bytes!("../fonts/NotoSansArabic-Regular.ttf")),
-    );
-
-    // Add fonts as fallbacks for Proportional family (after default fonts)
-    fonts
-        .families
-        .entry(egui::FontFamily::Proportional)
-        .or_default()
-        .extend([
-            "noto_sans_sc".to_owned(),
-            "noto_sans_tc".to_owned(),
-            "noto_sans_arabic".to_owned(),
-        ]);
-
-    ctx.set_fonts(fonts);
-}
-
-fn setup_custom_style(ctx: &egui::Context) {
-    let mut visuals = egui::Visuals::dark();
-    visuals.window_rounding = 8.0.into();
-    visuals.selection.bg_fill = egui::Color32::from_rgb(0, 120, 215);
-    visuals.selection.stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(245, 245, 245));
-    visuals.widgets.noninteractive.bg_stroke.color = egui::Color32::from_gray(70);
-    visuals.widgets.noninteractive.fg_stroke.color = egui::Color32::from_gray(230);
-    visuals.widgets.inactive.fg_stroke.color = egui::Color32::from_gray(210);
-    visuals.widgets.inactive.bg_fill = egui::Color32::from_gray(30);
-    visuals.override_text_color = Some(egui::Color32::from_gray(230));
-    visuals.hyperlink_color = egui::Color32::from_rgb(120, 180, 255);
-    ctx.set_visuals(visuals);
-
-    let mut style = (*ctx.style()).clone();
-    style.text_styles.insert(egui::TextStyle::Small, egui::FontId::new(13.0, egui::FontFamily::Proportional));
-    style.text_styles.insert(egui::TextStyle::Body, egui::FontId::new(14.0, egui::FontFamily::Proportional));
-    style.text_styles.insert(egui::TextStyle::Button, egui::FontId::new(14.0, egui::FontFamily::Proportional));
-    style.text_styles.insert(egui::TextStyle::Heading, egui::FontId::new(20.0, egui::FontFamily::Proportional));
-    style.text_styles.insert(egui::TextStyle::Monospace, egui::FontId::new(13.0, egui::FontFamily::Monospace));
-    style.spacing.item_spacing = [8.0, 8.0].into();
-    style.spacing.button_padding = [10.0, 6.0].into();
-    ctx.set_style(style);
-}
-
-fn setup_light_style(ctx: &egui::Context) {
-    let mut visuals = egui::Visuals::light();
-    visuals.window_rounding = 8.0.into();
-    visuals.selection.bg_fill = egui::Color32::from_rgb(0, 92, 171);
-    visuals.selection.stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(255, 255, 255));
-    visuals.widgets.noninteractive.bg_stroke.color = egui::Color32::from_gray(170);
-    visuals.widgets.noninteractive.fg_stroke.color = egui::Color32::from_gray(30);
-    visuals.widgets.inactive.bg_fill = egui::Color32::from_gray(235);
-    visuals.widgets.inactive.fg_stroke.color = egui::Color32::from_gray(50);
-    visuals.override_text_color = Some(egui::Color32::from_gray(20));
-    visuals.hyperlink_color = egui::Color32::from_rgb(0, 85, 160);
-    ctx.set_visuals(visuals);
-
-    let mut style = (*ctx.style()).clone();
-    style.text_styles.insert(egui::TextStyle::Small, egui::FontId::new(13.0, egui::FontFamily::Proportional));
-    style.text_styles.insert(egui::TextStyle::Body, egui::FontId::new(14.0, egui::FontFamily::Proportional));
-    style.text_styles.insert(egui::TextStyle::Button, egui::FontId::new(14.0, egui::FontFamily::Proportional));
-    style.text_styles.insert(egui::TextStyle::Heading, egui::FontId::new(20.0, egui::FontFamily::Proportional));
-    style.text_styles.insert(egui::TextStyle::Monospace, egui::FontId::new(13.0, egui::FontFamily::Monospace));
-    style.spacing.item_spacing = [8.0, 8.0].into();
-    style.spacing.button_padding = [10.0, 6.0].into();
-    ctx.set_style(style);
-}
-
 fn load_logo_rgba(max_dim: Option<u32>) -> Option<(Vec<u8>, u32, u32)> {
     let mut image = image::load_from_memory(LOGO_BYTES).ok()?;
     if let Some(max_dim) = max_dim {
@@ -5319,7 +5847,8 @@ fn load_logo_rgba(max_dim: Option<u32>) -> Option<(Vec<u8>, u32, u32)> {
             let scale = max_dim as f32 / max_side as f32;
             let nw = (w as f32 * scale).round().max(1.0) as u32;
             let nh = (h as f32 * scale).round().max(1.0) as u32;
-            let resized = image::imageops::resize(&image, nw, nh, image::imageops::FilterType::Lanczos3);
+            let resized =
+                image::imageops::resize(&image, nw, nh, image::imageops::FilterType::Lanczos3);
             image = image::DynamicImage::ImageRgba8(resized);
         }
     }
@@ -5346,7 +5875,11 @@ fn get_title_from_param(param: &serde_json::Value) -> Option<String> {
         return Some(title.to_string());
     }
     let localized = param.get("localizedParameters")?;
-    let mut region = localized.get("defaultLanguage").and_then(|v| v.as_str()).unwrap_or("en-US").trim();
+    let mut region = localized
+        .get("defaultLanguage")
+        .and_then(|v| v.as_str())
+        .unwrap_or("en-US")
+        .trim();
     if region.is_empty() {
         region = "en-US";
     }
@@ -5364,7 +5897,9 @@ fn get_title_from_param(param: &serde_json::Value) -> Option<String> {
         }
         if let Some(obj) = localized.as_object() {
             for (k, v) in obj {
-                if k.to_ascii_uppercase().ends_with(&format!("-{}", region_upper)) {
+                if k.to_ascii_uppercase()
+                    .ends_with(&format!("-{}", region_upper))
+                {
                     if let Some(title) = v.get("titleName").and_then(|v| v.as_str()) {
                         return Some(title.to_string());
                     }
@@ -5380,7 +5915,9 @@ fn get_title_from_param(param: &serde_json::Value) -> Option<String> {
     if !lang_only.is_empty() {
         if let Some(obj) = localized.as_object() {
             for (k, v) in obj {
-                if k.to_ascii_lowercase().starts_with(&lang_only.to_ascii_lowercase()) {
+                if k.to_ascii_lowercase()
+                    .starts_with(&lang_only.to_ascii_lowercase())
+                {
                     if let Some(title) = v.get("titleName").and_then(|v| v.as_str()) {
                         return Some(title.to_string());
                     }
@@ -5416,7 +5953,8 @@ fn load_cover_image(path: &Path, max_dim: u32) -> Option<CoverImage> {
         let scale = max_dim as f32 / max_side as f32;
         let nw = (w as f32 * scale).round().max(1.0) as u32;
         let nh = (h as f32 * scale).round().max(1.0) as u32;
-        let resized = image::imageops::resize(&image, nw, nh, image::imageops::FilterType::Lanczos3);
+        let resized =
+            image::imageops::resize(&image, nw, nh, image::imageops::FilterType::Lanczos3);
         image = image::DynamicImage::ImageRgba8(resized);
     }
     let rgba = image.to_rgba8();
@@ -5436,7 +5974,8 @@ fn load_cover_image_from_bytes(bytes: &[u8], max_dim: u32) -> Option<CoverImage>
         let scale = max_dim as f32 / max_side as f32;
         let nw = (w as f32 * scale).round().max(1.0) as u32;
         let nh = (h as f32 * scale).round().max(1.0) as u32;
-        let resized = image::imageops::resize(&image, nw, nh, image::imageops::FilterType::Lanczos3);
+        let resized =
+            image::imageops::resize(&image, nw, nh, image::imageops::FilterType::Lanczos3);
         image = image::DynamicImage::ImageRgba8(resized);
     }
     let rgba = image.to_rgba8();
@@ -5497,9 +6036,21 @@ fn load_game_meta_from_rar(path: &Path) -> Option<(GameMeta, Option<CoverImage>)
 fn parse_game_meta_from_param_bytes(param_bytes: &[u8]) -> Option<GameMeta> {
     let param: serde_json::Value = serde_json::from_slice(param_bytes).ok()?;
     let title = get_title_from_param(&param).unwrap_or_else(|| "Unknown".to_string());
-    let title_id = param.get("titleId").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let content_id = param.get("contentId").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let version = param.get("contentVersion").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let title_id = param
+        .get("titleId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let content_id = param
+        .get("contentId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let version = param
+        .get("contentVersion")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     Some(GameMeta {
         title,
         title_id,
@@ -5527,9 +6078,21 @@ fn load_game_meta_for_path(path: &str) -> (Option<GameMeta>, Option<CoverImage>)
         None => return (None, None),
     };
     let title = get_title_from_param(&param).unwrap_or_else(|| "Unknown".to_string());
-    let title_id = param.get("titleId").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let content_id = param.get("contentId").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let version = param.get("contentVersion").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let title_id = param
+        .get("titleId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let content_id = param
+        .get("contentId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let version = param
+        .get("contentVersion")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
 
     let meta = GameMeta {
         title,
@@ -5548,7 +6111,12 @@ fn load_game_meta_for_path(path: &str) -> (Option<GameMeta>, Option<CoverImage>)
         "cover.jpg",
         "tile0.png",
     ];
-    let sce_sys_dir = if param_path.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()) == Some("sce_sys") {
+    let sce_sys_dir = if param_path
+        .parent()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        == Some("sce_sys")
+    {
         param_path.parent().map(|p| p.to_path_buf())
     } else {
         param_path.parent().map(|p| p.join("sce_sys"))
@@ -5565,8 +6133,16 @@ fn load_game_meta_for_path(path: &str) -> (Option<GameMeta>, Option<CoverImage>)
         }
     }
     if cover.is_none() {
-        let game_root = if param_path.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()) == Some("sce_sys") {
-            param_path.parent().and_then(|p| p.parent()).map(|p| p.to_path_buf())
+        let game_root = if param_path
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            == Some("sce_sys")
+        {
+            param_path
+                .parent()
+                .and_then(|p| p.parent())
+                .map(|p| p.to_path_buf())
         } else {
             param_path.parent().map(|p| p.to_path_buf())
         };
@@ -5587,14 +6163,18 @@ fn load_game_meta_for_path(path: &str) -> (Option<GameMeta>, Option<CoverImage>)
 }
 
 fn main() -> eframe::Result<()> {
-        let options = eframe::NativeOptions {
-            viewport: egui::ViewportBuilder::default()
-                .with_inner_size([1932.0, 1242.0])
-                .with_min_inner_size([1656.0, 1104.0])
-                .with_icon(std::sync::Arc::new(build_icon())),
-            ..Default::default()
-        };
-    eframe::run_native("PS5 Upload", options, Box::new(|cc| Box::new(Ps5UploadApp::new(cc))))
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([1932.0, 1242.0])
+            .with_min_inner_size([1656.0, 1104.0])
+            .with_icon(std::sync::Arc::new(build_icon())),
+        ..Default::default()
+    };
+    eframe::run_native(
+        "PS5 Upload",
+        options,
+        Box::new(|cc| Box::new(Ps5UploadApp::new(cc))),
+    )
 }
 
 fn build_icon() -> egui::IconData {
@@ -5611,316 +6191,39 @@ fn build_icon() -> egui::IconData {
     let mut rgba = vec![0u8; width * height * 4];
     let bg = [20u8, 20u8, 24u8, 255u8];
     let fg = [98u8, 161u8, 255u8, 255u8];
-    for y in 0..height { for x in 0..width { let idx = (y * width + x) * 4; rgba[idx..idx + 4].copy_from_slice(&bg); } }
-    for y in 6..26 { for x in 8..11 { let idx = (y * width + x) * 4; rgba[idx..idx + 4].copy_from_slice(&fg); } }
-    for y in 6..12 { for x in 11..20 { let idx = (y * width + x) * 4; rgba[idx..idx + 4].copy_from_slice(&fg); } }
-    for y in 12..18 { for x in 18..21 { let idx = (y * width + x) * 4; rgba[idx..idx + 4].copy_from_slice(&fg); } }
-    for y in 18..24 { for x in 11..20 { let idx = (y * width + x) * 4; rgba[idx..idx + 4].copy_from_slice(&fg); } }
-    egui::IconData { rgba, width: width as u32, height: height as u32 }
-}
-
-fn format_modified_time(mtime: Option<i64>) -> String {
-    let Some(ts) = mtime else {
-        return "--".to_string();
-    };
-
-    let now = chrono::Utc::now().timestamp();
-    let delta = now.saturating_sub(ts);
-    if delta < 60 {
-        return "just now".to_string();
-    }
-    if delta < 3600 {
-        return format!("{}m ago", delta / 60);
-    }
-    if delta < 86400 {
-        return format!("{}h ago", delta / 3600);
-    }
-    if delta < 86400 * 7 {
-        return format!("{}d ago", delta / 86400);
-    }
-
-    let Some(dt_utc) = chrono::DateTime::<chrono::Utc>::from_timestamp(ts, 0) else {
-        return "--".to_string();
-    };
-    let dt_local = dt_utc.with_timezone(&chrono::Local);
-    dt_local.format("%Y-%m-%d %H:%M").to_string()
-}
-
-fn format_bytes(bytes: u64) -> String {
-    const KB: f64 = 1024.0; const MB: f64 = 1024.0 * KB; const GB: f64 = 1024.0 * MB;
-    let b = bytes as f64;
-    if b >= GB { format!("{:.2} GB", b / GB) }
-    else if b >= MB { format!("{:.2} MB", b / MB) }
-    else if b >= KB { format!("{:.2} KB", b / KB) }
-    else { format!("{} B", bytes) }
-}
-
-fn format_duration(seconds: f64) -> String {
-    if !seconds.is_finite() || seconds <= 0.0 { return "N/A".to_string(); }
-    let total = seconds.round() as u64;
-    let mins = total / 60; let secs = total % 60;
-    if mins > 0 { format!("{}m {}s", mins, secs) } else { format!("{}s", secs) }
-}
-
-fn sha256_file(path: &std::path::Path) -> anyhow::Result<String> {
-    let mut file = std::fs::File::open(path)?;
-    let mut hasher = Sha256::new();
-    let mut buffer = [0u8; 1024 * 1024];
-    loop {
-        let n = file.read(&mut buffer)?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buffer[..n]);
-    }
-    let hash = hasher.finalize();
-    Ok(format!("{:x}", hash))
-}
-
-
-fn sample_workload(path: &str, cancel: &Arc<AtomicBool>) -> Option<(usize, u64)> {
-    let path = Path::new(path);
-    if path.is_file() {
-        let size = path.metadata().ok().map(|m| m.len()).unwrap_or(0);
-        return Some((1, size));
-    }
-    let mut count = 0usize;
-    let mut total = 0u64;
-    let start = std::time::Instant::now();
-    for entry in WalkDir::new(path).into_iter().filter_map(|e| e.ok()) {
-        if cancel.load(Ordering::Relaxed) {
-            return None;
-        }
-        if start.elapsed() > std::time::Duration::from_millis(300) {
-            break;
-        }
-        let entry_path = entry.path();
-        if !entry_path.is_file() {
-            continue;
-        }
-        if let Ok(meta) = entry.metadata() {
-            total += meta.len();
-        }
-        count += 1;
-        if count >= 2000 {
-            break;
+    for y in 0..height {
+        for x in 0..width {
+            let idx = (y * width + x) * 4;
+            rgba[idx..idx + 4].copy_from_slice(&bg);
         }
     }
-    if count == 0 { None } else { Some((count, total)) }
-}
-
-fn sample_bytes_from_path(path: &str, cancel: &Arc<AtomicBool>) -> Option<Vec<u8>> {
-    let path = Path::new(path);
-    let max_total = 512 * 1024;
-    let per_file = 64 * 1024;
-    let mut out = Vec::with_capacity(max_total.min(64 * 1024));
-    let mut total = 0usize;
-
-    if path.is_file() {
-        if !cancel.load(Ordering::Relaxed) && total < max_total {
-            if let Ok(mut file) = std::fs::File::open(path) {
-                let remaining = max_total - total;
-                let to_read = per_file.min(remaining);
-                let mut buf = vec![0u8; to_read];
-                if let Ok(n) = file.read(&mut buf) {
-                    if n > 0 {
-                        out.extend_from_slice(&buf[..n]);
-                    }
-                }
-            }
-        }
-        return if out.is_empty() { None } else { Some(out) };
-    } else {
-        let start = std::time::Instant::now();
-        let mut files_seen = 0usize;
-        for entry in WalkDir::new(path).into_iter().filter_map(|e| e.ok()) {
-            if cancel.load(Ordering::Relaxed) {
-                return None;
-            }
-            if start.elapsed() > std::time::Duration::from_millis(400) {
-                break;
-            }
-            let entry_path = entry.path();
-            if !entry_path.is_file() {
-                continue;
-            }
-            if total < max_total {
-                if let Ok(mut file) = std::fs::File::open(entry_path) {
-                    let remaining = max_total - total;
-                    let to_read = per_file.min(remaining);
-                    let mut buf = vec![0u8; to_read];
-                    if let Ok(n) = file.read(&mut buf) {
-                        if n > 0 {
-                            out.extend_from_slice(&buf[..n]);
-                            total += n;
-                        }
-                    }
-                }
-            }
-            files_seen += 1;
-            if total >= max_total || files_seen >= 200 {
-                break;
-            }
+    for y in 6..26 {
+        for x in 8..11 {
+            let idx = (y * width + x) * 4;
+            rgba[idx..idx + 4].copy_from_slice(&fg);
         }
     }
-
-    if out.is_empty() { None } else { Some(out) }
-}
-
-fn sample_bytes_from_files(files: &[FileEntry], cancel: &Arc<AtomicBool>) -> Option<Vec<u8>> {
-    let max_total = 512 * 1024;
-    let per_file = 64 * 1024;
-    let mut out = Vec::with_capacity(max_total.min(64 * 1024));
-    let mut total = 0usize;
-
-    for entry in files.iter() {
-        if cancel.load(Ordering::Relaxed) {
-            return None;
-        }
-        if total >= max_total {
-            break;
-        }
-        if let Ok(mut file) = std::fs::File::open(&entry.abs_path) {
-            let remaining = max_total - total;
-            let to_read = per_file.min(remaining);
-            let mut buf = vec![0u8; to_read];
-            if let Ok(n) = file.read(&mut buf) {
-                if n > 0 {
-                    out.extend_from_slice(&buf[..n]);
-                    total += n;
-                }
-            }
+    for y in 6..12 {
+        for x in 11..20 {
+            let idx = (y * width + x) * 4;
+            rgba[idx..idx + 4].copy_from_slice(&fg);
         }
     }
-
-    if out.is_empty() { None } else { Some(out) }
-}
-
-fn optimize_upload_settings(path: &str, cancel: &Arc<AtomicBool>, current_connections: usize) -> UploadOptimization {
-    let mut opt = UploadOptimization {
-        compression: None,
-        connections: None,
-        sample_files: None,
-        sample_bytes: None,
-    };
-
-    if let Some((count, bytes)) = sample_workload(path, cancel) {
-        opt.sample_files = Some(count);
-        opt.sample_bytes = Some(bytes);
-        opt.connections = Some(recommend_connections(current_connections, count, bytes));
-    }
-
-    if let Some(sample) = sample_bytes_from_path(path, cancel) {
-        opt.compression = Some(choose_best_compression(&sample));
-    }
-
-    opt
-}
-
-fn choose_best_compression(sample: &[u8]) -> CompressionMode {
-    let raw_size = sample.len();
-    if raw_size == 0 {
-        return CompressionMode::None;
-    }
-
-    let lz4 = compress_prepend_size(sample);
-    let lz4_size = lz4.len();
-    if lz4_size < raw_size {
-        CompressionMode::Lz4
-    } else {
-        CompressionMode::None
-    }
-}
-
-fn compression_label(mode: CompressionMode) -> &'static str {
-    match mode {
-        CompressionMode::None => "None",
-        CompressionMode::Lz4 => "LZ4",
-        CompressionMode::Zstd => "Zstd",
-        CompressionMode::Lzma => "LZMA",
-    }
-}
-
-fn compression_mode_to_setting(mode: CompressionMode) -> &'static str {
-    match mode {
-        CompressionMode::None => "none",
-        CompressionMode::Lz4 => "lz4",
-        CompressionMode::Zstd => "zstd",
-        CompressionMode::Lzma => "lzma",
-    }
-}
-
-fn recommend_connections(current: usize, sample_count: usize, sample_bytes: u64) -> usize {
-    if sample_count < 200 || current <= 1 {
-        return current;
-    }
-    let avg = sample_bytes / sample_count as u64;
-    if avg < 8 * 1024 {
-        1
-    } else if avg < 64 * 1024 {
-        current.min(2)
-    } else if avg < 512 * 1024 {
-        current.min(4)
-    } else {
-        current
-    }
-}
-
-
-fn parse_upload_response(response: &str) -> anyhow::Result<(i32, u64)> {
-    if response.starts_with("SUCCESS") {
-        let parts: Vec<&str> = response.split_whitespace().collect();
-        let files = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
-        let bytes = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
-        Ok((files, bytes))
-    } else {
-        Err(anyhow::anyhow!("Upload failed: {}", response))
-    }
-}
-
-fn read_upload_response(
-    stream: &mut std::net::TcpStream,
-    cancel: &std::sync::Arc<std::sync::atomic::AtomicBool>,
-) -> anyhow::Result<String> {
-    use std::io::Read;
-    use std::io::ErrorKind;
-    let start = std::time::Instant::now();
-    let mut buffer = [0u8; 1024];
-    loop {
-        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
-            return Err(anyhow::anyhow!("Upload cancelled"));
-        }
-        match stream.read(&mut buffer) {
-            Ok(0) => return Err(anyhow::anyhow!("Socket closed during response read")),
-            Ok(n) => return Ok(String::from_utf8_lossy(&buffer[..n]).trim().to_string()),
-            Err(err) => match err.kind() {
-                ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted => {
-                    if start.elapsed() >= std::time::Duration::from_secs(10) {
-                        return Err(anyhow::anyhow!("Timed out waiting for server response"));
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(25));
-                }
-                _ => return Err(err.into()),
-            },
+    for y in 12..18 {
+        for x in 18..21 {
+            let idx = (y * width + x) * 4;
+            rgba[idx..idx + 4].copy_from_slice(&fg);
         }
     }
-}
-
-fn partition_files_by_size(mut files: Vec<FileEntry>, connections: usize) -> Vec<Vec<FileEntry>> {
-    let connections = connections.max(1);
-    files.sort_by_key(|f| std::cmp::Reverse(f.size));
-    let mut buckets: Vec<Vec<FileEntry>> = vec![Vec::new(); connections];
-    let mut bucket_sizes = vec![0u64; connections];
-
-    for file in files {
-        let (idx, _) = bucket_sizes
-            .iter()
-            .enumerate()
-            .min_by_key(|(_, size)| *size)
-            .unwrap();
-        bucket_sizes[idx] += file.size;
-        buckets[idx].push(file);
+    for y in 18..24 {
+        for x in 11..20 {
+            let idx = (y * width + x) * 4;
+            rgba[idx..idx + 4].copy_from_slice(&fg);
+        }
     }
-
-    buckets
+    egui::IconData {
+        rgba,
+        width: width as u32,
+        height: height as u32,
+    }
 }

@@ -1,18 +1,18 @@
 use anyhow::Result;
-use std::io::{Read, Write};
-use std::fs::File;
-use std::path::{Path, PathBuf};
-use walkdir::WalkDir;
-use std::sync::mpsc::sync_channel;
-use std::thread;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::net::Shutdown;
-use std::io::ErrorKind;
-use std::sync::Mutex;
 use lz4_flex::block::compress_prepend_size;
-use zstd::bulk::compress as zstd_compress;
 use lzma_rs::lzma_compress;
+use std::fs::File;
+use std::io::ErrorKind;
+use std::io::{Read, Write};
+use std::net::Shutdown;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc::sync_channel;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::thread;
+use walkdir::WalkDir;
+use zstd::bulk::compress as zstd_compress;
 
 // Optimized for 10 worker processes on payload side
 const PACK_BUFFER_SIZE: usize = 16 * 1024 * 1024; // 16MB Packs
@@ -70,7 +70,9 @@ impl RateLimiter {
     }
 
     fn throttle(&mut self, bytes: u64) {
-        let Some(limit) = self.limit_bps else { return; };
+        let Some(limit) = self.limit_bps else {
+            return;
+        };
         if limit == 0 {
             return;
         }
@@ -105,7 +107,12 @@ where
     F: FnMut(u64, i32, Option<String>),
 {
     fn send_pack_inline(&mut self, pack: &PackBuffer, current_file: Option<String>) -> Result<()> {
-        send_frame_header(self.stream, FrameType::Pack, pack.buffer.len() as u64, self.cancel)?;
+        send_frame_header(
+            self.stream,
+            FrameType::Pack,
+            pack.buffer.len() as u64,
+            self.cancel,
+        )?;
         let mut sent_payload = 0usize;
         let pack_len = pack.buffer.len();
         while sent_payload < pack_len {
@@ -117,7 +124,8 @@ where
             write_all_retry(self.stream, &pack.buffer[sent_payload..end], self.cancel)?;
             self.limiter.throttle((end - sent_payload) as u64);
             sent_payload = end;
-            let approx = (pack.bytes_added as u128 * sent_payload as u128 / pack_len as u128) as u64;
+            let approx =
+                (pack.bytes_added as u128 * sent_payload as u128 / pack_len as u128) as u64;
             let approx_total = *self.total_sent_bytes + approx;
             if approx_total != *self.last_progress_sent {
                 (self.progress)(approx_total, *self.total_sent_files, current_file.clone());
@@ -137,8 +145,8 @@ struct PackBuffer {
 impl PackBuffer {
     fn new() -> Self {
         let mut buffer = Vec::with_capacity(PACK_BUFFER_SIZE);
-        buffer.extend_from_slice(&[0u8; 4]); 
-        Self { 
+        buffer.extend_from_slice(&[0u8; 4]);
+        Self {
             buffer,
             bytes_added: 0,
             files_added: 0,
@@ -195,8 +203,6 @@ impl PackBuffer {
         self.bytes_added += data_len;
     }
 }
-
-
 
 fn pack_reader_into_stream<F, R>(
     reader: &mut R,
@@ -331,7 +337,9 @@ where
                 rel_path,
                 abs_path: path.to_path_buf(),
                 size,
-                mtime: meta.modified().ok()
+                mtime: meta
+                    .modified()
+                    .ok()
                     .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                     .map(|d| d.as_secs() as i64),
             });
@@ -351,7 +359,9 @@ where
         if !entry_path.is_file() {
             continue;
         }
-        let Ok(meta) = entry.metadata() else { continue; };
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
         let size = meta.len();
         let rel_path = entry_path
             .strip_prefix(path)
@@ -362,7 +372,9 @@ where
             rel_path,
             abs_path: entry_path.to_path_buf(),
             size,
-            mtime: meta.modified().ok()
+            mtime: meta
+                .modified()
+                .ok()
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d| d.as_secs() as i64),
         });
@@ -395,10 +407,10 @@ where
         let path = Path::new(&base_path);
         let mut total_size: u64 = 0;
         let mut file_count: usize = 0;
-        
+
         if path.is_file() {
             if let Ok(meta) = path.metadata() {
-                 let rel_path = path
+                let rel_path = path
                     .file_name()
                     .map(|s| s.to_string_lossy().to_string())
                     .unwrap_or_else(|| "file".to_string());
@@ -407,7 +419,9 @@ where
                     rel_path,
                     abs_path: path.to_path_buf(),
                     size,
-                    mtime: meta.modified().ok()
+                    mtime: meta
+                        .modified()
+                        .ok()
                         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                         .map(|d| d.as_secs() as i64),
                 };
@@ -427,23 +441,27 @@ where
             if !entry_path.is_file() {
                 continue;
             }
-            let Ok(meta) = entry.metadata() else { continue; };
+            let Ok(meta) = entry.metadata() else {
+                continue;
+            };
             let size = meta.len();
             let rel_path = entry_path
                 .strip_prefix(path)
                 .unwrap_or(entry_path)
                 .to_string_lossy()
                 .replace('\\', "/");
-            
+
             let entry = FileEntry {
                 rel_path,
                 abs_path: entry_path.to_path_buf(),
                 size,
-                mtime: meta.modified().ok()
+                mtime: meta
+                    .modified()
+                    .ok()
                     .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                     .map(|d| d.as_secs() as i64),
             };
-            
+
             total_size += size;
             file_count += 1;
 
@@ -557,10 +575,12 @@ where
     // Packer Thread
     thread::spawn(move || {
         let mut pack = PackBuffer::new();
-        
+
         for entry in files {
-            if cancel_packer.load(Ordering::Relaxed) { break; }
-            
+            if cancel_packer.load(Ordering::Relaxed) {
+                break;
+            }
+
             let rel_path_str = entry.rel_path;
             if let Ok(mut guard) = current_file_packer.lock() {
                 *guard = rel_path_str.clone();
@@ -581,75 +601,77 @@ where
                     break;
                 }
             };
-            
+
             // Empty file case
             if file_size == 0 {
-                 if !pack.can_fit(rel_path_str.len(), 0) {
-                     let _ = tx.send(pack.take_ready_pack());
-                 }
-                 pack.add_record(&rel_path_str, &[]);
-                 pack.files_added += 1;
-                 continue;
+                if !pack.can_fit(rel_path_str.len(), 0) {
+                    let _ = tx.send(pack.take_ready_pack());
+                }
+                pack.add_record(&rel_path_str, &[]);
+                pack.files_added += 1;
+                continue;
             }
 
             let mut file_remaining = file_size;
             let mut chunk_buf: Vec<u8> = Vec::new();
             while file_remaining > 0 {
-                 if cancel_packer.load(Ordering::Relaxed) { break; }
+                if cancel_packer.load(Ordering::Relaxed) {
+                    break;
+                }
 
-                 let overhead = 2 + rel_path_str.len() + 8;
-                 let remaining = PACK_BUFFER_SIZE.saturating_sub(pack.buffer.len());
+                let overhead = 2 + rel_path_str.len() + 8;
+                let remaining = PACK_BUFFER_SIZE.saturating_sub(pack.buffer.len());
 
-                 if remaining <= overhead {
-                     let _ = tx.send(pack.take_ready_pack());
-                     continue;
-                 }
+                if remaining <= overhead {
+                    let _ = tx.send(pack.take_ready_pack());
+                    continue;
+                }
 
-                 let max_data = remaining - overhead;
-                 let to_read = std::cmp::min(max_data as u64, file_remaining) as usize;
-                 if to_read == 0 {
-                     let _ = tx.send(pack.take_ready_pack());
-                     continue;
-                 }
+                let max_data = remaining - overhead;
+                let to_read = std::cmp::min(max_data as u64, file_remaining) as usize;
+                if to_read == 0 {
+                    let _ = tx.send(pack.take_ready_pack());
+                    continue;
+                }
 
-                 chunk_buf.resize(to_read, 0u8);
-                 let mut filled = 0usize;
-                 let mut read_failed = false;
-                 while filled < to_read {
-                     match file.read(&mut chunk_buf[filled..to_read]) {
-                         Ok(0) => {
-                             let msg = format!(
-                                 "Failed to read file {}: file size changed during upload",
-                                 rel_path_str
-                             );
-                             if let Ok(mut guard) = pack_error_msg_packer.lock() {
-                                 *guard = msg.clone();
-                             }
-                             pack_error_packer.store(true, Ordering::Relaxed);
-                             (log_packer_clone)(msg);
-                             cancel_packer.store(true, Ordering::Relaxed);
-                             read_failed = true;
-                             break;
-                         }
-                         Ok(n) => filled += n,
-                         Err(err) => {
-                             let msg = format!("Failed to read file {}: {}", rel_path_str, err);
-                             if let Ok(mut guard) = pack_error_msg_packer.lock() {
-                                 *guard = msg.clone();
-                             }
-                             pack_error_packer.store(true, Ordering::Relaxed);
-                             (log_packer_clone)(msg);
-                             cancel_packer.store(true, Ordering::Relaxed);
-                             read_failed = true;
-                             break;
-                         }
-                     }
-                 }
-                 if read_failed {
-                     break;
-                 }
-                 pack.add_record(&rel_path_str, &chunk_buf[..to_read]);
-                 file_remaining -= to_read as u64;
+                chunk_buf.resize(to_read, 0u8);
+                let mut filled = 0usize;
+                let mut read_failed = false;
+                while filled < to_read {
+                    match file.read(&mut chunk_buf[filled..to_read]) {
+                        Ok(0) => {
+                            let msg = format!(
+                                "Failed to read file {}: file size changed during upload",
+                                rel_path_str
+                            );
+                            if let Ok(mut guard) = pack_error_msg_packer.lock() {
+                                *guard = msg.clone();
+                            }
+                            pack_error_packer.store(true, Ordering::Relaxed);
+                            (log_packer_clone)(msg);
+                            cancel_packer.store(true, Ordering::Relaxed);
+                            read_failed = true;
+                            break;
+                        }
+                        Ok(n) => filled += n,
+                        Err(err) => {
+                            let msg = format!("Failed to read file {}: {}", rel_path_str, err);
+                            if let Ok(mut guard) = pack_error_msg_packer.lock() {
+                                *guard = msg.clone();
+                            }
+                            pack_error_packer.store(true, Ordering::Relaxed);
+                            (log_packer_clone)(msg);
+                            cancel_packer.store(true, Ordering::Relaxed);
+                            read_failed = true;
+                            break;
+                        }
+                    }
+                }
+                if read_failed {
+                    break;
+                }
+                pack.add_record(&rel_path_str, &chunk_buf[..to_read]);
+                file_remaining -= to_read as u64;
             }
             // Finished file
             pack.files_added += 1;
@@ -753,10 +775,10 @@ where
                 last_progress_sent = approx_total;
             }
         }
-        
+
         total_sent_bytes += ready_pack.bytes_in_pack;
         total_sent_files += ready_pack.files_in_pack;
-        
+
         let mut file_update = None;
         if let Ok(guard) = current_file.lock() {
             if *guard != last_progress_file {
@@ -769,9 +791,11 @@ where
     }
 
     if pack_error.load(Ordering::Relaxed) {
-        let msg = pack_error_msg.lock().ok().and_then(|g| {
-            if g.is_empty() { None } else { Some(g.clone()) }
-        }).unwrap_or_else(|| "Upload failed while reading files".to_string());
+        let msg = pack_error_msg
+            .lock()
+            .ok()
+            .and_then(|g| if g.is_empty() { None } else { Some(g.clone()) })
+            .unwrap_or_else(|| "Upload failed while reading files".to_string());
         return Err(anyhow::anyhow!(msg));
     }
 
@@ -829,17 +853,19 @@ pub fn scan_zip_archive(path: &str) -> Result<(usize, u64)> {
 pub fn scan_7z_archive(path: &str) -> Result<(usize, u64)> {
     let mut count = 0;
     let mut size = 0;
-    sevenz_rust::decompress_file_with_extract_fn(path, "", |entry: &sevenz_rust::SevenZArchiveEntry, _, _| {
-        if !entry.is_directory() {
-            count += 1;
-            size += entry.size();
-        }
-        Ok(true)
-    })?;
+    sevenz_rust::decompress_file_with_extract_fn(
+        path,
+        "",
+        |entry: &sevenz_rust::SevenZArchiveEntry, _, _| {
+            if !entry.is_directory() {
+                count += 1;
+                size += entry.size();
+            }
+            Ok(true)
+        },
+    )?;
     Ok((count, size))
 }
-
-
 
 pub fn send_zip_archive<F, L>(
     path: String,
@@ -871,10 +897,14 @@ where
     };
 
     for i in 0..archive.len() {
-        if cancel.load(Ordering::Relaxed) { break; }
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
         let mut file = archive.by_index(i)?;
-        if !file.is_file() { continue; }
-        
+        if !file.is_file() {
+            continue;
+        }
+
         let rel_path = file.name().replace('\\', "/");
         log(format!("Packing: {}", rel_path));
         pack_reader_into_stream(&mut file, &rel_path, &mut pack, &mut ctx)?;
@@ -913,18 +943,26 @@ where
         last_progress_sent: &mut last_progress_sent,
     };
 
-    sevenz_rust::decompress_file_with_extract_fn(&path, "", |entry: &sevenz_rust::SevenZArchiveEntry, reader: &mut dyn std::io::Read, _| {
-        if cancel.load(Ordering::Relaxed) { return Ok(false); }
-        if entry.is_directory() { return Ok(true); }
-        
-        let rel_path = entry.name().replace('\\', "/");
-        log(format!("Packing: {}", rel_path));
+    sevenz_rust::decompress_file_with_extract_fn(
+        &path,
+        "",
+        |entry: &sevenz_rust::SevenZArchiveEntry, reader: &mut dyn std::io::Read, _| {
+            if cancel.load(Ordering::Relaxed) {
+                return Ok(false);
+            }
+            if entry.is_directory() {
+                return Ok(true);
+            }
 
-        if let Err(e) = pack_reader_into_stream(reader, &rel_path, &mut pack, &mut ctx) {
-            return Err(std::io::Error::other(e.to_string()).into());
-        }
-        Ok(true)
-    })?;
+            let rel_path = entry.name().replace('\\', "/");
+            log(format!("Packing: {}", rel_path));
+
+            if let Err(e) = pack_reader_into_stream(reader, &rel_path, &mut pack, &mut ctx) {
+                return Err(std::io::Error::other(e.to_string()).into());
+            }
+            Ok(true)
+        },
+    )?;
 
     if pack.record_count() > 0 {
         ctx.send_pack_inline(&pack, None)?;
@@ -932,4 +970,3 @@ where
     send_frame_header(&mut stream, FrameType::Finish, 0, &cancel)?;
     Ok(())
 }
-
