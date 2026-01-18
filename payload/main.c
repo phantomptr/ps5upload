@@ -383,6 +383,9 @@ int main(void) {
     mkdir("/data/ps5upload", 0777);
     mkdir("/data/ps5upload/logs", 0777);
     mkdir("/data/ps5upload/requests", 0777);
+    
+    // Clean up any leftover temporary files from previous runs
+    unrar_cleanup_temp();
 
     printf("[INIT] Log directory: /data/ps5upload/logs/\n");
     printf("[INIT] Request directory: /data/ps5upload/requests/\n");
