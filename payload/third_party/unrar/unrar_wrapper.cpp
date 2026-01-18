@@ -13,6 +13,10 @@ struct ExtractContext {
     void *user_data;
     int files_done;
     int abort_flag;
+    /* Fields for keep-alive updates */
+    char current_filename[1024];
+    unsigned long long current_file_size;
+    time_t last_update_time;
 };
 
 /* Internal callback for unrar library */
@@ -23,7 +27,18 @@ static int CALLBACK unrar_callback(UINT msg, LPARAM user_data, LPARAM p1, LPARAM
     switch (msg) {
         case UCM_PROCESSDATA:
             /* p1 = data pointer, p2 = data size */
-            /* We can use this for progress if needed */
+            if (ctx->callback) {
+                time_t now = time(NULL);
+                /* Send keep-alive update every 5 seconds for large files */
+                if (now - ctx->last_update_time >= 5) {
+                    ctx->last_update_time = now;
+                    /* Re-send the current file status to keep the client connection alive */
+                    if (ctx->callback(ctx->current_filename, ctx->current_file_size, ctx->files_done, ctx->user_data) != 0) {
+                        ctx->abort_flag = 1;
+                        return -1;
+                    }
+                }
+            }
             break;
         case UCM_NEEDPASSWORD:
         case UCM_NEEDPASSWORDW:
@@ -59,6 +74,9 @@ extern "C" int unrar_extract(const char *rar_path, const char *dest_dir, int str
     ctx.user_data = user_data;
     ctx.files_done = 0;
     ctx.abort_flag = 0;
+    ctx.last_update_time = time(NULL);
+    memset(ctx.current_filename, 0, sizeof(ctx.current_filename));
+    ctx.current_file_size = 0;
 
     RARSetCallback(hArc, unrar_callback, (LPARAM)&ctx);
 
@@ -74,6 +92,12 @@ extern "C" int unrar_extract(const char *rar_path, const char *dest_dir, int str
             result = UNRAR_ERR_READ;
             break;
         }
+
+        /* Update context for callback */
+        strncpy(ctx.current_filename, header.FileName, sizeof(ctx.current_filename) - 1);
+        ctx.current_filename[sizeof(ctx.current_filename) - 1] = '\0';
+        ctx.current_file_size = header.UnpSize;
+        ctx.last_update_time = time(NULL);
 
         /* Report progress before extraction */
         if (progress) {
