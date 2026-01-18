@@ -3,17 +3,21 @@
 All notable changes to this project are documented here.
 This project follows Semantic Versioning.
 
-## [1.1.7] - 2026-01-17
+## [1.1.7] - 2026-01-18
 
 ### Added
-- Integrated `unrar` directly into the payload for server-side RAR extraction.
-- Implemented `GET_SPACE` command for live disk space checking on the payload side.
-- Queue items now strictly persist their destination path, preventing location changes when the UI selection is modified.
+- **Automatic Storage Check:** The app now checks exactly how much space is left on your PS5 drive before starting an upload. This prevents "disk full" errors during transfer.
+- **Smart Queue Pathing:** Transfers in the queue now remember exactly where they were supposed to go. If you change your selected storage device in the UI, pending transfers will still use their original target path.
+- **Server-Side RAR Extraction:** RAR archives are now sent directly to the PS5 and extracted there. This includes live progress updates and handles filenames with spaces much better.
+- **Improved Payload Support:** The payload sender now supports both `.elf` and `.bin` files.
+
+### Fixed
+- **Large File Fix:** Fixed a bug where uploading RAR files larger than 2GB would get stuck.
+- **Better Error Reporting:** If the PS5 runs out of space or has an error while you are sending a RAR file, the client will now tell you immediately instead of hanging.
+- **Clarified Overwrite Warnings:** When extracting an archive to an existing folder, the app now clearly explains that files will be merged and existing ones might be overwritten.
 
 ### Changed
-- Removed client-side archive extraction. All ZIP and 7Z archives are now streamed directly to the PS5.
-- RAR archives are now uploaded as-is and extracted by the PS5 payload.
-- Space check before upload now queries the PS5 directly for the specific destination's available space.
+- All archive types (ZIP, 7Z, RAR) are now streamed or sent as-is to the PS5 without needing extraction on your computer first.
 
 ## [1.1.6] - 2026-01-14
 
