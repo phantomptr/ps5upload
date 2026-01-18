@@ -7,10 +7,13 @@ This project follows Semantic Versioning.
 
 ### Added
 - Integrated `unrar` directly into the payload for server-side RAR extraction.
+- Implemented `GET_SPACE` command for live disk space checking on the payload side.
+- Queue items now strictly persist their destination path, preventing location changes when the UI selection is modified.
 
 ### Changed
 - Removed client-side archive extraction. All ZIP and 7Z archives are now streamed directly to the PS5.
 - RAR archives are now uploaded as-is and extracted by the PS5 payload.
+- Space check before upload now queries the PS5 directly for the specific destination's available space.
 
 ## [1.1.6] - 2026-01-14
 

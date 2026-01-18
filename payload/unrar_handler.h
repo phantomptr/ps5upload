@@ -31,8 +31,9 @@ char *receive_rar_to_temp(int sock, size_t file_size);
  * Returns 0 on success, -1 on error
  * file_count and total_bytes are output parameters
  * strip_root: if 1, strips the top-level directory if it exists
+ * user_data: passed to extraction callback (can be NULL)
  */
 int extract_rar_file(const char *rar_path, const char *dest_dir, int strip_root,
-                     int *file_count, unsigned long long *total_bytes);
+                     int *file_count, unsigned long long *total_bytes, void *user_data);
 
 #endif /* UNRAR_HANDLER_H */

@@ -1,5 +1,5 @@
 /* Copyright (C) 2025 PS5 Upload Contributors
- *
+ * 
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 3, or (at your option) any
@@ -16,6 +16,7 @@
 #include <errno.h>
 #include <dirent.h>
 #include <fcntl.h>
+#include <sys/mount.h>
 
 #include <ps5/kernel.h>
 
@@ -1029,6 +1030,29 @@ void handle_hash_file(int client_sock, const char *path_arg) {
 void handle_version(int client_sock) {
     char msg[64];
     snprintf(msg, sizeof(msg), "VERSION %s\n", PS5_UPLOAD_VERSION);
+    send_all(client_sock, msg, strlen(msg));
+}
+
+void handle_get_space(int client_sock, const char *path_arg) {
+    char path[PATH_MAX];
+    strncpy(path, path_arg, PATH_MAX - 1);
+    path[PATH_MAX - 1] = '\0';
+    trim_newline(path);
+
+    // Get filesystem stats
+    struct statfs fs;
+    if (statfs(path, &fs) != 0) {
+        char error_msg[320];
+        snprintf(error_msg, sizeof(error_msg), "ERROR: statfs failed: %s\n", strerror(errno));
+        send(client_sock, error_msg, strlen(error_msg), 0);
+        return;
+    }
+
+    unsigned long long free_bytes = (unsigned long long)fs.f_bavail * fs.f_bsize;
+    unsigned long long total_bytes = (unsigned long long)fs.f_blocks * fs.f_bsize;
+
+    char msg[128];
+    snprintf(msg, sizeof(msg), "OK %llu %llu\n", free_bytes, total_bytes);
     send_all(client_sock, msg, strlen(msg));
 }
 

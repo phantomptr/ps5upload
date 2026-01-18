@@ -292,6 +292,11 @@ static void process_command(struct ClientConnection *conn) {
         close_connection(conn);
         return;
     }
+    if (strncmp(conn->cmd_buffer, "GET_SPACE ", 10) == 0) {
+        handle_get_space(conn->sock, conn->cmd_buffer + 10);
+        close_connection(conn);
+        return;
+    }
     if (strncmp(conn->cmd_buffer, "UPLOAD_RAR ", 11) == 0) {
         handle_upload_rar(conn->sock, conn->cmd_buffer + 11);
         close_connection(conn);

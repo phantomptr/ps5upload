@@ -21,8 +21,19 @@
 static int extraction_progress(const char *filename, unsigned long long file_size,
                                int files_done, void *user_data) {
     (void)file_size;
-    (void)user_data;
+    
+    /* Send progress to client if socket is provided */
+    int *sock_ptr = (int*)user_data;
+    if (sock_ptr) {
+        char msg[PATH_MAX + 64];
+        /* Ensure filename doesn't break the protocol line (basic sanitization) */
+        /* Protocol: EXTRACTING <count> <filename> */
+        snprintf(msg, sizeof(msg), "EXTRACTING %d %s\n", files_done + 1, filename);
+        send(*sock_ptr, msg, strlen(msg), 0);
+    }
+
     printf("[RAR] Extracting (%d): %s\n", files_done + 1, filename);
+    usleep(1000); /* Yield CPU */
     return 0;  /* Continue extraction */
 }
 
@@ -107,7 +118,7 @@ char *receive_rar_to_temp(int sock, size_t file_size) {
 }
 
 int extract_rar_file(const char *rar_path, const char *dest_dir, int strip_root,
-                     int *file_count, unsigned long long *total_bytes) {
+                     int *file_count, unsigned long long *total_bytes, void *user_data) {
     if (!rar_path || !dest_dir) {
         return -1;
     }
@@ -121,7 +132,7 @@ int extract_rar_file(const char *rar_path, const char *dest_dir, int strip_root,
     int count = 0;
     unsigned long long size = 0;
     
-    /* We just scan to get stats here, common_root check is done in handle_upload_rar or we could trust the caller */
+    /* We just scan to get stats here */
     int scan_result = unrar_scan(rar_path, &count, &size, NULL, 0);
     if (scan_result != UNRAR_OK) {
         printf("[RAR] Scan failed: %s\n", unrar_strerror(scan_result));
@@ -131,7 +142,7 @@ int extract_rar_file(const char *rar_path, const char *dest_dir, int strip_root,
     printf("[RAR] Archive contains %d files, %llu bytes uncompressed\n", count, size);
 
     /* Extract */
-    int extract_result = unrar_extract(rar_path, dest_dir, strip_root, extraction_progress, NULL);
+    int extract_result = unrar_extract(rar_path, dest_dir, strip_root, extraction_progress, user_data);
     if (extract_result != UNRAR_OK) {
         printf("[RAR] Extraction failed: %s\n", unrar_strerror(extract_result));
         return -1;
@@ -148,14 +159,46 @@ void handle_upload_rar(int sock, const char *args) {
     char dest_path[PATH_MAX];
     unsigned long long file_size = 0;
 
-    /* Parse arguments: dest_path file_size */
-    if (sscanf(args, "%s %llu", dest_path, &file_size) != 2) {
+    /* Parse arguments: dest_path file_size
+       Since dest_path can contain spaces, we parse from the end.
+       Format is: <path> <size>
+    */
+    
+    // Create a working copy to manipulate
+    char args_copy[PATH_MAX + 32];
+    strncpy(args_copy, args, sizeof(args_copy) - 1);
+    args_copy[sizeof(args_copy) - 1] = '\0';
+
+    // Remove trailing newlines
+    size_t len = strlen(args_copy);
+    while(len > 0 && (args_copy[len-1] == '\n' || args_copy[len-1] == '\r')) {
+        args_copy[len-1] = '\0';
+        len--;
+    }
+
+    // Find the last space, which should separate path and size
+    char *last_space = strrchr(args_copy, ' ');
+    if (!last_space) {
         const char *error = "ERROR: Invalid UPLOAD_RAR format (expected: UPLOAD_RAR <dest> <size>)\n";
         send(sock, error, strlen(error), 0);
         return;
     }
 
-    if (file_size == 0 || file_size > (10ULL * 1024 * 1024 * 1024)) {  /* Max 10GB */
+    // Parse size
+    char *endptr;
+    file_size = strtoull(last_space + 1, &endptr, 10);
+    if (*endptr != '\0') {
+         const char *error = "ERROR: Invalid file size format\n";
+         send(sock, error, strlen(error), 0);
+         return;
+    }
+
+    // Parse path
+    *last_space = '\0'; // Null-terminate path at the space
+    strncpy(dest_path, args_copy, sizeof(dest_path) - 1);
+    dest_path[sizeof(dest_path) - 1] = '\0';
+
+    if (file_size == 0 || file_size > (500ULL * 1024 * 1024 * 1024)) {  /* Max 500GB */
         const char *error = "ERROR: Invalid file size\n";
         send(sock, error, strlen(error), 0);
         return;
@@ -175,38 +218,15 @@ void handle_upload_rar(int sock, const char *args) {
         return;
     }
 
-    /* Check for common root folder */
-    char common_root[256] = {0};
-    int count = 0;
-    unsigned long long size = 0;
-    int scan_res = unrar_scan(temp_path, &count, &size, common_root, sizeof(common_root));
-    
+    /* Common root detection removed per user request. 
+       We always extract exactly what is in the archive to the destination. */
     int strip_root = 0;
-    if (scan_res == UNRAR_OK && common_root[0] != '\0') {
-        /* Get basename of dest_path */
-        const char *base_name = strrchr(dest_path, '/');
-        if (base_name) {
-            base_name++; /* Skip slash */
-        } else {
-            base_name = dest_path;
-        }
-        
-        /* Remove potential trailing slash from common_root for comparison */
-        size_t len = strlen(common_root);
-        if (len > 0 && (common_root[len-1] == '/' || common_root[len-1] == '\\')) {
-            common_root[len-1] = '\0';
-        }
-
-        if (strcmp(common_root, base_name) == 0) {
-            printf("[RAR] Detected common root '%s' matching destination '%s', stripping it.\n", common_root, base_name);
-            strip_root = 1;
-        }
-    }
 
     /* Extract */
     int file_count = 0;
     unsigned long long total_bytes = 0;
-    int result = extract_rar_file(temp_path, dest_path, strip_root, &file_count, &total_bytes);
+    /* Pass socket for progress updates */
+    int result = extract_rar_file(temp_path, dest_path, strip_root, &file_count, &total_bytes, &sock);
 
     /* Cleanup temp file */
     unlink(temp_path);

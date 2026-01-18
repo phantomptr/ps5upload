@@ -44,7 +44,7 @@ mod chat;
 
 const CHAT_MAX_MESSAGES: usize = 500;
 
-use protocol::{StorageLocation, DirEntry, DownloadCompression, list_storage, list_dir, list_dir_recursive, check_dir, upload_v2_init, delete_path, move_path, copy_path, chmod_777, create_path, download_file_with_progress, download_dir_with_progress, get_payload_version, hash_file, upload_rar_for_extraction};
+use protocol::{StorageLocation, DirEntry, DownloadCompression, list_storage, list_dir, list_dir_recursive, check_dir, upload_v2_init, delete_path, move_path, copy_path, chmod_777, create_path, download_file_with_progress, download_dir_with_progress, get_payload_version, hash_file, upload_rar_for_extraction, get_space};
 use archive::get_size;
 use transfer::{collect_files_with_progress, stream_files_with_progress, send_files_v2_for_list, SendFilesConfig, scan_zip_archive, send_zip_archive, scan_7z_archive, send_7z_archive, SharedReceiverIterator, FileEntry, CompressionMode};
 use config::AppConfig;
@@ -343,6 +343,9 @@ struct Ps5UploadApp {
     // Auto-connect
     last_auto_connect_attempt: Option<std::time::Instant>,
     last_payload_check: Option<std::time::Instant>,
+    
+    // Internal
+    forced_dest_path: Option<String>,
 }
 
 impl Ps5UploadApp {
@@ -483,6 +486,7 @@ impl Ps5UploadApp {
             current_queue_item_id: None,
             last_auto_connect_attempt: None,
             last_payload_check: None,
+            forced_dest_path: None,
         };
 
         app.ensure_chat_display_name();
@@ -634,6 +638,8 @@ impl Ps5UploadApp {
             self.custom_subfolder.clone()
         };
 
+        let dest_path = self.get_dest_path();
+
         let item = QueueItem {
             id: self.queue_data.next_id,
             source_path: self.game_path.clone(),
@@ -641,6 +647,7 @@ impl Ps5UploadApp {
             preset_index: self.selected_preset,
             custom_preset_path: self.custom_preset_path.clone(),
             storage_base: self.selected_storage.clone().unwrap_or_else(|| self.config.storage.clone()),
+            dest_path,
             status: QueueStatus::Pending,
             size_bytes: self.calculated_size,
         };
@@ -682,6 +689,11 @@ impl Ps5UploadApp {
             if !item_clone.storage_base.is_empty() {
                 self.selected_storage = Some(item_clone.storage_base.clone());
             }
+            if !item_clone.dest_path.is_empty() {
+                self.forced_dest_path = Some(item_clone.dest_path.clone());
+            } else {
+                self.forced_dest_path = None;
+            }
             self.calculated_size = item_clone.size_bytes;
             self.current_queue_item_id = Some(item_clone.id);
 
@@ -704,9 +716,53 @@ impl Ps5UploadApp {
     }
 
     fn ensure_space_before_upload(&mut self) -> bool {
+        // If we don't have a size, we should probably warn, but for now let's assume valid
         let Some(required) = self.calculated_size else {
-            return true;
+             // Try to calculate if missing?
+             return true;
         };
+
+        let dest_path = self.forced_dest_path.clone().unwrap_or_else(|| self.get_dest_path());
+        
+        let ip = self.ip.clone();
+        let rt = self.rt.clone();
+        
+        // Try to get space from payload using new command
+        let space_res = rt.block_on(async {
+            // Let's try the destination parent.
+            let parent = std::path::Path::new(&dest_path)
+                .parent()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|| "/".to_string());
+                
+            get_space(&ip, TRANSFER_PORT, &parent).await
+        });
+
+        match space_res {
+            Ok((free_bytes, _total)) => {
+                let required_safe = required.saturating_add(64 * 1024 * 1024); // +64MB safety
+                if free_bytes >= required_safe {
+                    return true;
+                }
+                
+                let lang = self.language;
+                let msg = tr(lang, "insufficient_space_log")
+                    .replacen("{}", &dest_path, 1)
+                    .replacen("{}", &format_bytes(free_bytes), 1)
+                    .replacen("{}", &format_bytes(required_safe), 1);
+                self.log(&msg);
+                self.status = tr(lang, "status_insufficient_space");
+                if let Some(id) = self.current_queue_item_id.take() {
+                    self.update_queue_item_status(id, QueueStatus::Failed("Not enough free space".to_string()));
+                }
+                return false;
+            },
+            Err(e) => {
+                // Fallback to local cache if payload check fails (e.g. old payload)
+                self.log(&format!("Space check failed ({}). Using cached info.", e));
+            }
+        }
+
         let Some(storage) = self.selected_storage.clone() else {
             return true;
         };
@@ -1383,7 +1439,7 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
 
         let ip = self.ip.clone();
         let game_path = self.game_path.clone();
-        let dest_path = self.get_dest_path();
+        let dest_path = self.forced_dest_path.clone().unwrap_or_else(|| self.get_dest_path());
         let tx = self.tx.clone();
         let rt = self.rt.clone();
         let connections = self.config.connections;
@@ -1445,13 +1501,15 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
                         });
                     };
 
+                    let tx_extract = tx.clone();
                     let result = upload_rar_for_extraction(
                         &ip,
                         TRANSFER_PORT,
                         &game_path,
                         &dest_path,
                         cancel_token.clone(),
-                        progress_callback
+                        progress_callback,
+                        move |msg| { let _ = tx_extract.send(AppMessage::Log(msg)); }
                     ).await;
 
                     match result {
