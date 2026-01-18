@@ -28,7 +28,7 @@ void Unpack::Unpack29(bool Solid)
   if (DDecode[1]==0)
   {
     int Dist=0,BitLength=0,Slot=0;
-    for (int I=0;I<ASIZE(DBitLengthCounts);I++,BitLength++)
+    for (size_t I=0;I<ASIZE(DBitLengthCounts);I++,BitLength++)
       for (int J=0;J<DBitLengthCounts[I];J++,Slot++,Dist+=(1<<BitLength))
       {
         DDecode[Slot]=Dist;
@@ -365,7 +365,7 @@ bool Unpack::ReadVMCodePPM()
 bool Unpack::AddVMCode(uint FirstByte,byte *Code,uint CodeSize)
 {
   VMCodeInp.InitBitInput();
-  memcpy(VMCodeInp.InBuf,Code,Min(BitInput::MAX_SIZE,CodeSize));
+  memcpy(VMCodeInp.InBuf,Code,Min((uint)BitInput::MAX_SIZE,CodeSize));
   VM.Init();
 
   uint FiltPos;

@@ -123,6 +123,8 @@ bool RarVM::ExecuteStandardFilter(VM_StandardFilters FilterType)
 {
   switch(FilterType)
   {
+    case VMSF_NONE:
+      return true;
     case VMSF_E8:
     case VMSF_E8E9:
       {

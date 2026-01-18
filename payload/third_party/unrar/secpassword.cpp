@@ -175,6 +175,10 @@ bool SecPassword::operator == (SecPassword &psw)
 // and Windows GUI SFX modules.
 void SecHideData(void *Data,size_t DataSize,bool Encode,bool CrossProcess)
 {
+  RAR_UNUSED(Data);
+  RAR_UNUSED(DataSize);
+  RAR_UNUSED(Encode);
+  RAR_UNUSED(CrossProcess);
   // CryptProtectMemory is not available in UWP and CryptProtectData
   // increases data size not allowing in place conversion.
 #if defined(_WIN_ALL)

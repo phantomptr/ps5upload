@@ -45,7 +45,8 @@ static bool UnixSymlink(CommandData *Cmd,const std::string &Target,const wchar *
 }
 
 
-static bool IsFullPath(const char *PathA) // Unix ASCII version.
+static bool IsFullPath(const char *PathA) RAR_UNUSED_FUNCTION; // Unix ASCII version.
+static bool IsFullPath(const char *PathA)
 {
   return *PathA==CPATHDIVIDER;
 }

@@ -22,6 +22,7 @@ LargePageAlloc::LargePageAlloc()
 
 void LargePageAlloc::AllowLargePages(bool Allow)
 {
+  RAR_UNUSED(Allow);
 #ifdef ALLOW_LARGE_PAGES
   if (Allow && PageSize==0)
   {
@@ -116,6 +117,7 @@ bool LargePageAlloc::AssignPrivilege()
 
 bool LargePageAlloc::AssignPrivilegeBySid(const std::wstring &Sid)
 {
+  RAR_UNUSED(Sid);
 #ifdef ALLOW_LARGE_PAGES
   LSA_HANDLE PolicyHandle;
   LSA_OBJECT_ATTRIBUTES ObjectAttributes{}; // Docs require to zero initalize it.
@@ -169,6 +171,7 @@ bool LargePageAlloc::AssignConfirmation()
 
 void* LargePageAlloc::new_large(size_t Size)
 {
+  RAR_UNUSED(Size);
   void *Allocated=nullptr;
 
 #ifdef ALLOW_LARGE_PAGES
@@ -187,6 +190,7 @@ void* LargePageAlloc::new_large(size_t Size)
 
 bool LargePageAlloc::delete_large(void *Addr)
 {
+  RAR_UNUSED(Addr);
 #ifdef ALLOW_LARGE_PAGES
   if (Addr!=nullptr)
     for (size_t I=0;I<LargeAlloc.size();I++)

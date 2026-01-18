@@ -119,7 +119,7 @@ void Unpack::Init(uint64 WinSize,bool Solid)
   // solid stream. So if we are here, we are either creating a new window
   // or increasing the size of non-solid window. So we could safely reject
   // current window data without copying them to a new window.
-  if (Solid && (Window!=NULL || Fragmented && WinSize>FragWindow.GetWinSize()))
+  if (Solid && (Window!=NULL || (Fragmented && WinSize>FragWindow.GetWinSize())))
     throw std::bad_alloc();
 
   Alloc.delete_l<byte>(Window); // delete Window;
@@ -130,7 +130,7 @@ void Unpack::Init(uint64 WinSize,bool Solid)
     if (!Fragmented)
       Window=Alloc.new_l<byte>((size_t)WinSize,false); // Window=new byte[(size_t)WinSize];
   }
-  catch (std::bad_alloc) // Use the fragmented window in this case.
+  catch (const std::bad_alloc &) // Use the fragmented window in this case.
   {
   }
 

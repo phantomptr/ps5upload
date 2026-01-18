@@ -106,7 +106,9 @@ void CmdExtract::DoExtract()
       ErrHandler.SetErrorCode(RARX_NOFILES);
   }
   else
+  {
     if (!Cmd->DisableDone)
+    {
       if (Cmd->Command[0]=='I')
         mprintf(St(MDone));
       else
@@ -114,6 +116,8 @@ void CmdExtract::DoExtract()
           mprintf(St(MExtrAllOk));
         else
           mprintf(St(MExtrTotalErr),ErrHandler.GetErrorCount());
+    }
+  }
 }
 
 
@@ -300,6 +304,7 @@ EXTRACT_ARC_CODE CmdExtract::ExtractArchive()
 
     bool Repeat=false;
     if (!ExtractCurrentFile(Arc,Size,Repeat))
+    {
       if (Repeat)
       {
         // If we started extraction from not first volume and need to
@@ -312,6 +317,7 @@ EXTRACT_ARC_CODE CmdExtract::ExtractArchive()
       }
       else
         break;
+    }
   }
 
 
@@ -326,8 +332,10 @@ EXTRACT_ARC_CODE CmdExtract::ExtractArchive()
 
 bool CmdExtract::ExtractCurrentFile(Archive &Arc,size_t HeaderSize,bool &Repeat)
 {
+  RAR_UNUSED(Repeat);
   wchar Command=Cmd->Command[0];
   if (HeaderSize==0)
+  {
     if (DataIO.UnpVolume)
     {
 #ifdef NOVOLUME
@@ -344,12 +352,14 @@ bool CmdExtract::ExtractCurrentFile(Archive &Arc,size_t HeaderSize,bool &Repeat)
     }
     else
       return false;
+  }
 
   HEADER_TYPE HeaderType=Arc.GetHeaderType();
   if (HeaderType==HEAD_FILE)
   {
     // Unlike Arc.FileName, ArcName might store an old volume name here.
-    if (Analyze.EndPos!=0 && Analyze.EndPos==Arc.CurBlockPos &&
+    if (Analyze.EndPos!=0 &&
+        Analyze.EndPos==static_cast<uint64>(Arc.CurBlockPos) &&
         (Analyze.EndName.empty() || Analyze.EndName==Arc.FileName))
       return false;
   }
@@ -362,6 +372,7 @@ bool CmdExtract::ExtractCurrentFile(Archive &Arc,size_t HeaderSize,bool &Repeat)
     if (HeaderType==HEAD_SERVICE && PrevProcessed)
       SetExtraInfo(Cmd,Arc,DestFileName);
     if (HeaderType==HEAD_ENDARC)
+    {
       if (Arc.EndArcHead.NextVolume)
       {
 #ifdef NOVOLUME
@@ -378,6 +389,7 @@ bool CmdExtract::ExtractCurrentFile(Archive &Arc,size_t HeaderSize,bool &Repeat)
       }
       else
         return false;
+    }
     Arc.SeekToNext();
     return true;
   }
@@ -459,7 +471,8 @@ bool CmdExtract::ExtractCurrentFile(Archive &Arc,size_t HeaderSize,bool &Repeat)
       if (Cmd->VersionControl==0)
         MatchFound=false;
       int Version=ParseVersionFileName(ArcFileName,false);
-      if (Cmd->VersionControl-1==Version)
+      if (Cmd->VersionControl>0 &&
+          static_cast<int>(Cmd->VersionControl)-1==Version)
         ParseVersionFileName(ArcFileName,true);
       else
         MatchFound=false;
@@ -521,10 +534,12 @@ bool CmdExtract::ExtractCurrentFile(Archive &Arc,size_t HeaderSize,bool &Repeat)
       }
   
   if (Arc.FileHead.Encrypted && Cmd->SkipEncrypted)
+  {
     if (Arc.Solid)
       return false; // Abort the entire extraction for solid archive.
     else
       MatchFound=false; // Skip only the current file for non-solid archive.
+  }
   
   if (MatchFound || RefTarget || (SkipSolid=Arc.Solid)!=false)
   {
@@ -771,6 +786,7 @@ bool CmdExtract::ExtractCurrentFile(Archive &Arc,size_t HeaderSize,bool &Repeat)
       }
       FileCount++;
       if (Command!='I' && !Cmd->DisableNames)
+      {
         if (SkipSolid)
           mprintf(St(MExtrSkipFile),ArcFileName.c_str());
         else
@@ -789,6 +805,7 @@ bool CmdExtract::ExtractCurrentFile(Archive &Arc,size_t HeaderSize,bool &Repeat)
               mprintf(St(MExtrFile),DestFileName.c_str());
               break;
           }
+      }
       if (!Cmd->DisablePercentage && !Cmd->DisableNames)
         mprintf(L"     ");
       if (Cmd->DisableNames)
@@ -851,10 +868,12 @@ bool CmdExtract::ExtractCurrentFile(Archive &Arc,size_t HeaderSize,bool &Repeat)
           std::wstring NameExisting;
           ExtrPrepareName(Arc,RedirName,NameExisting);
           if (FileCreateMode && !NameExisting.empty()) // *NameExisting can be empty in case of excessive -ap switch.
+          {
             if (Type==FSREDIR_HARDLINK)
               LinkSuccess=ExtractHardlink(Cmd,DestFileName,NameExisting);
             else
               LinkSuccess=ExtractFileCopy(CurFile,Arc.FileName,RedirName,DestFileName,NameExisting,Arc.FileHead.UnpSize);
+          }
         }
         else
           if (Type==FSREDIR_UNIXSYMLINK || Type==FSREDIR_WINSYMLINK || Type==FSREDIR_JUNCTION)
@@ -884,7 +903,7 @@ bool CmdExtract::ExtractCurrentFile(Archive &Arc,size_t HeaderSize,bool &Repeat)
             LinkSuccess=false;
           }
           
-          if (!LinkSuccess || Arc.Format==RARFMT15 && !FileCreateMode)
+          if (!LinkSuccess || (Arc.Format==RARFMT15 && !FileCreateMode))
           {
             // RAR 5.x links have a valid data checksum even in case of
             // failure, because they do not store any data.
@@ -896,7 +915,9 @@ bool CmdExtract::ExtractCurrentFile(Archive &Arc,size_t HeaderSize,bool &Repeat)
           PrevProcessed=FileCreateMode && LinkSuccess;
       }
       else
+      {
         if (!Arc.FileHead.SplitBefore)
+        {
           if (Arc.FileHead.Method==0)
             UnstoreFile(DataIO,Arc.FileHead.UnpSize);
           else
@@ -905,7 +926,7 @@ bool CmdExtract::ExtractCurrentFile(Archive &Arc,size_t HeaderSize,bool &Repeat)
             {
               Unp->Init(Arc.FileHead.WinSize,Arc.FileHead.Solid);
             }
-            catch (std::bad_alloc)
+            catch (const std::bad_alloc &)
             {
               if (Arc.FileHead.WinSize>=0x40000000)
                 uiMsg(UIERROR_EXTRDICTOUTMEM,Arc.FileName,uint(Arc.FileHead.WinSize/0x40000000+(Arc.FileHead.WinSize%0x40000000!=0 ? 1 : 0)));
@@ -921,6 +942,8 @@ bool CmdExtract::ExtractCurrentFile(Archive &Arc,size_t HeaderSize,bool &Repeat)
 #endif
               Unp->DoUnpack(Arc.FileHead.UnpVer,Arc.FileHead.Solid);
           }
+        }
+      }
 
       Arc.SeekToNext();
 
@@ -1010,7 +1033,8 @@ bool CmdExtract::ExtractCurrentFile(Archive &Arc,size_t HeaderSize,bool &Repeat)
         {
           // We could preallocate more space than really written to broken file
           // or file with crafted header.
-          if (Preallocated>0 && (BrokenFile || DataIO.CurUnpWrite!=Preallocated))
+          if (Preallocated>0 &&
+              (BrokenFile || static_cast<uint64>(DataIO.CurUnpWrite)!=Preallocated))
             CurFile.Truncate();
 
 #ifdef PROPAGATE_MOTW
@@ -1060,11 +1084,13 @@ bool CmdExtract::ExtractCurrentFile(Archive &Arc,size_t HeaderSize,bool &Repeat)
   if (DataIO.NextVolumeMissing)
     return false;
   if (!ExtrFile)
+  {
     if (!Arc.Solid)
       Arc.SeekToNext();
     else
       if (!SkipSolid)
         return false;
+  }
   return true;
 }
 

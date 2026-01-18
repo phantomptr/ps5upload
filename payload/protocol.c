@@ -35,6 +35,7 @@
 #include "third_party/unrar/unrar_wrapper.h"
 
 #define DOWNLOAD_PACK_BUFFER_SIZE (4 * 1024 * 1024)
+#define PROBE_RAR_MAX_LINE 128
 
 static int send_all(int sock, const void *buf, size_t len);
 
@@ -1270,6 +1271,61 @@ void handle_extract_archive(int client_sock, const char *args) {
 
     const char *success = "OK\n";
     send(client_sock, success, strlen(success), 0);
+}
+
+void handle_probe_rar(int client_sock, const char *args) {
+    char src[PATH_MAX];
+    if (!args) {
+        const char *error = "ERROR: Invalid PROBE_RAR format\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+    while (*args == ' ' || *args == '\t') {
+        args++;
+    }
+    snprintf(src, sizeof(src), "%s", args);
+    size_t len = strlen(src);
+    while (len > 0 && (src[len - 1] == '\n' || src[len - 1] == '\r' || src[len - 1] == ' ' || src[len - 1] == '\t')) {
+        src[len - 1] = '\0';
+        len--;
+    }
+    if (src[0] == '\0') {
+        const char *error = "ERROR: Invalid PROBE_RAR format\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+
+    char *param_buf = NULL;
+    size_t param_size = 0;
+    char *cover_buf = NULL;
+    size_t cover_size = 0;
+    int result = unrar_probe_archive(src, &param_buf, &param_size, &cover_buf, &cover_size);
+    if (result != UNRAR_OK) {
+        char error_msg[128];
+        snprintf(error_msg, sizeof(error_msg), "ERROR: %s\n", unrar_strerror(result));
+        send(client_sock, error_msg, strlen(error_msg), 0);
+        if (param_buf) free(param_buf);
+        if (cover_buf) free(cover_buf);
+        return;
+    }
+
+    char line[PROBE_RAR_MAX_LINE];
+    int line_len = snprintf(line, sizeof(line), "META %zu\n", param_size);
+    send_all(client_sock, line, (size_t)line_len);
+    if (param_size > 0 && param_buf) {
+        send_all(client_sock, param_buf, param_size);
+        send_all(client_sock, "\n", 1);
+    }
+    line_len = snprintf(line, sizeof(line), "COVER %zu\n", cover_size);
+    send_all(client_sock, line, (size_t)line_len);
+    if (cover_size > 0 && cover_buf) {
+        send_all(client_sock, cover_buf, cover_size);
+        send_all(client_sock, "\n", 1);
+    }
+    send_all(client_sock, "DONE\n", 5);
+
+    if (param_buf) free(param_buf);
+    if (cover_buf) free(cover_buf);
 }
 
 void handle_chmod_777(int client_sock, const char *path_arg) {

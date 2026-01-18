@@ -2,8 +2,6 @@
 
 static void ListFileHeader(Archive &Arc,FileHeader &hd,bool &TitleShown,bool Verbose,bool Technical,bool Bare,bool DisableNames);
 static void ListFileAttr(uint A,HOST_SYSTEM_TYPE HostType,wchar *AttrStr,size_t AttrSize);
-static void ListOldSubHeader(Archive &Arc);
-static void ListNewSubHeader(CommandData *Cmd,Archive &Arc);
 
 void ListArchive(CommandData *Cmd)
 {
@@ -44,6 +42,7 @@ void ListArchive(CommandData *Cmd)
           if (Arc.SFXSize>0)
             mprintf(L", %s", St(MListSFX));
           if (Arc.Volume)
+          {
             if (Arc.Format==RARFMT50)
             {
               // RAR 5.0 archives store the volume number in main header,
@@ -53,6 +52,7 @@ void ListArchive(CommandData *Cmd)
             }
             else
               mprintf(L", %s", St(MListVolume));
+          }
           if (Arc.Protected)
             mprintf(L", %s", St(MListRR));
           if (Arc.Locked)
@@ -127,10 +127,13 @@ void ListArchive(CommandData *Cmd)
                   ListFileHeader(Arc,Arc.SubHead,TitleShown,Verbose,true,false,false);
               }
               break;
+            default:
+              break;
           }
           Arc.SeekToNext();
         }
         if (!Bare && !Technical)
+        {
           if (TitleShown)
           {
             wchar UnpSizeText[20];
@@ -157,6 +160,7 @@ void ListArchive(CommandData *Cmd)
             SumPackSize+=TotalPackSize;
             mprintf(L"\n");
           }
+        }
           else
             mprintf(St(MListNoFiles));
 
@@ -164,7 +168,7 @@ void ListArchive(CommandData *Cmd)
 
 #ifndef NOVOLUME
         if (Cmd->VolSize==VOLSIZE_AUTO && (Arc.FileHead.SplitAfter ||
-            Arc.GetHeaderType()==HEAD_ENDARC && Arc.EndArcHead.NextVolume) &&
+            (Arc.GetHeaderType()==HEAD_ENDARC && Arc.EndArcHead.NextVolume)) &&
             MergeArchive(Arc,NULL,false,Cmd->Command[0]))
           Arc.Seek(0,SEEK_SET);
         else

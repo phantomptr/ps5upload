@@ -217,7 +217,7 @@ bool ScanTree::GetNextMask()
   // starting from "share\".
   SpecPathLength=GetNamePos(CurMask);
 
-  // We prefer to scan entire disk if mask like \\server\share\ or c:\
+  // We prefer to scan entire disk if mask like \\server\share\ or c:\\
   // is specified even without -r, but not with -r-. Use \\server\share\*.*,
   // c:\*.* mask or -r- to scan only the root directory. Note that UNC names
   // are possible both in Win32 and Unix, just with proper path separators.
@@ -229,8 +229,8 @@ bool ScanTree::GetNextMask()
       {
         Slash=CurMask.find(CPATHDIVIDER,Slash+1);
         // If path separator is mssing or it is the last string character.
-        ScanEntireDisk=Slash==std::wstring::npos || 
-                       Slash!=std::wstring::npos && Slash+1==CurMask.size();
+        ScanEntireDisk=Slash==std::wstring::npos ||
+                       (Slash!=std::wstring::npos && Slash+1==CurMask.size());
 
         // Win32 FindFirstFile fails for \\server\share names without
         // the trailing backslash. So we add it here.
@@ -284,9 +284,9 @@ SCAN_CODE ScanTree::FindProc(FindData *FD)
     // at top level in recursion mode. We always comrpess the entire directory
     // if folder wildcard is specified.
     bool SearchAll=!IsDir && (Depth>0 || Recurse==RECURSE_ALWAYS ||
-                   FolderWildcards && Recurse!=RECURSE_DISABLE || 
-                   Wildcards && Recurse==RECURSE_WILDCARDS || 
-                   ScanEntireDisk && Recurse!=RECURSE_DISABLE);
+                   (FolderWildcards && Recurse!=RECURSE_DISABLE) ||
+                   (Wildcards && Recurse==RECURSE_WILDCARDS) ||
+                   (ScanEntireDisk && Recurse!=RECURSE_DISABLE));
     if (Depth==0)
       SearchAllInRoot=SearchAll;
     if (SearchAll || Wildcards)
@@ -427,7 +427,8 @@ SCAN_CODE ScanTree::FindProc(FindData *FD)
     std::wstring Mask=FastFindFile ? MASKALL:PointToName(CurMask);
     CurMask=FD->Name;
 
-    if (CurMask.size()+Mask.size()+1>=MAXPATHSIZE || Depth>=MAXSCANDEPTH-1)
+    if (CurMask.size()+Mask.size()+1>=MAXPATHSIZE ||
+        Depth>=static_cast<int>(MAXSCANDEPTH-1))
     {
       uiMsg(UIERROR_PATHTOOLONG,CurMask,SPATHDIVIDER,Mask);
       return SCAN_ERROR;

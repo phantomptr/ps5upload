@@ -21,6 +21,9 @@
 #ifndef SFX_MODULE
 void SetExtraInfo20(CommandData *Cmd,Archive &Arc,const std::wstring &Name)
 {
+  RAR_UNUSED(Cmd);
+  RAR_UNUSED(Arc);
+  RAR_UNUSED(Name);
 #ifdef _WIN_ALL
   if (Cmd->Test)
     return;

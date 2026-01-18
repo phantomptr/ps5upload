@@ -13,11 +13,11 @@ bool GetConsolePassword(UIPASSWORD_TYPE Type,const std::wstring &FileName,SecPas
 #endif
 
 #ifdef SILENT
-  inline void mprintf(const wchar *fmt,...) {}
-  inline void eprintf(const wchar *fmt,...) {}
+  inline void mprintf(const wchar *fmt,...) { RAR_UNUSED(fmt); }
+  inline void eprintf(const wchar *fmt,...) { RAR_UNUSED(fmt); }
   inline void Alarm() {}
-  inline int Ask(const wchar *AskStr) {return 0;}
-  inline void getwstr(std::wstring &str) {}
+  inline int Ask(const wchar *AskStr) { RAR_UNUSED(AskStr); return 0; }
+  inline void getwstr(std::wstring &str) { RAR_UNUSED(str); }
 #else
   void mprintf(const wchar *fmt,...);
   void eprintf(const wchar *fmt,...);

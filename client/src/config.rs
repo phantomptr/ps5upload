@@ -21,7 +21,7 @@ pub struct AppConfig {
     pub auto_check_payload: bool,
     pub optimize_upload: bool,
     pub chat_display_name: String,
-    pub rar_safe_extract: bool,
+    pub rar_extract_mode: String, // "normal", "safe", "turbo"
 }
 
 impl Default for AppConfig {
@@ -44,7 +44,7 @@ impl Default for AppConfig {
             auto_check_payload: false,
             optimize_upload: false,
             chat_display_name: String::new(),
-            rar_safe_extract: false,
+            rar_extract_mode: "turbo".to_string(),
         }
     }
 }
@@ -130,8 +130,21 @@ impl AppConfig {
                             "chat_display_name" => {
                                 config.chat_display_name = value;
                             }
+                            "rar_extract_mode" => {
+                                config.rar_extract_mode = match value.as_str() {
+                                    "normal" | "safe" | "turbo" => value,
+                                    _ => "turbo".to_string(),
+                                };
+                            }
                             "rar_safe_extract" => {
-                                config.rar_safe_extract = matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on");
+                                if matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on") {
+                                    config.rar_extract_mode = "safe".to_string();
+                                }
+                            }
+                            "rar_turbo_extract" => {
+                                if matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on") {
+                                    config.rar_extract_mode = "turbo".to_string();
+                                }
                             }
                             // Backwards compatibility: ignore removed fields
                             "extract_archives_fast" => {} // Removed fields are ignored
@@ -168,9 +181,9 @@ impl AppConfig {
             self.chat_display_name,
         );
         let content = format!(
-            "{}rar_safe_extract={}\n",
+            "{}rar_extract_mode={}\n",
             content,
-            self.rar_safe_extract
+            self.rar_extract_mode
         );
         std::fs::write("ps5upload.ini", content)?;
         Ok(())

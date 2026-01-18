@@ -51,6 +51,7 @@ inline bool CmpMSGID(MSGID i1,MSGID i2)
 
 void CommandData::OutHelp(RAR_EXIT ExitCode)
 {
+  RAR_UNUSED(ExitCode);
 #if !defined(SILENT)
   OutTitle();
   static MSGID Help[]={
@@ -121,4 +122,3 @@ void CommandData::OutHelp(RAR_EXIT ExitCode)
   ErrHandler.Exit(ExitCode);
 #endif
 }
-

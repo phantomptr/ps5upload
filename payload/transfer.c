@@ -772,6 +772,36 @@ void transfer_cleanup(void) {
     g_total_files = 0;
 }
 
+int transfer_idle_cleanup(void) {
+    int active_sessions = 0;
+    size_t in_use = 0;
+    size_t queue_count = 0;
+    int cleaned = 0;
+
+    pthread_mutex_lock(&g_mem_stats_mutex);
+    active_sessions = g_active_sessions;
+    in_use = g_pack_in_use;
+    pthread_mutex_unlock(&g_mem_stats_mutex);
+
+    if (active_sessions != 0 || in_use != 0 || !g_workers_initialized) {
+        return 0;
+    }
+
+    pthread_mutex_lock(&g_queue.mutex);
+    queue_count = g_queue.count;
+    pthread_mutex_unlock(&g_queue.mutex);
+
+    if (queue_count == 0) {
+        cleanup_all_writer_states();
+        cleanup_buffer_pool();
+        g_total_bytes = 0;
+        g_total_files = 0;
+        cleaned = 1;
+    }
+
+    return cleaned;
+}
+
 static int upload_session_start(UploadSession *session, const char *dest_root) {
     if (!session || !dest_root) {
         return -1;
@@ -1126,6 +1156,7 @@ void upload_session_destroy(UploadSession *session) {
         g_active_sessions--;
     }
     pthread_mutex_unlock(&g_mem_stats_mutex);
+    transfer_idle_cleanup();
 }
 
 void handle_upload_v2(int client_sock, const char *dest_root) {

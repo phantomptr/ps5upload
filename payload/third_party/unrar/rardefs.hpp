@@ -9,6 +9,18 @@
 
 #define  ASIZE(x) (sizeof(x)/sizeof(x[0]))
 
+#ifndef RAR_UNUSED
+#define RAR_UNUSED(x) (void)(x)
+#endif
+
+#ifndef RAR_UNUSED_FUNCTION
+#if defined(__GNUC__) || defined(__clang__)
+#define RAR_UNUSED_FUNCTION __attribute__((unused))
+#else
+#define RAR_UNUSED_FUNCTION
+#endif
+#endif
+
 // MAXPASSWORD and MAXPASSWORD_RAR are expected to be multiple of
 // CRYPTPROTECTMEMORY_BLOCK_SIZE (16) for CryptProtectMemory in SecPassword.
 // We allow a larger MAXPASSWORD to unpack archives with lengthy passwords

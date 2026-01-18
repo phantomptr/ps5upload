@@ -1,5 +1,4 @@
 #include "rar.hpp"
-static bool IsAnsiEscComment(const wchar *Data,size_t Size);
 
 bool Archive::GetComment(std::wstring &CmtData)
 {
@@ -38,10 +37,12 @@ bool Archive::DoGetComment(std::wstring &CmtData)
       // Current (RAR 3.0+) version of archive comment.
       Seek(GetStartPos(),SEEK_SET);
       if (SearchSubBlock(SUBHEAD_TYPE_CMT)!=0)
+      {
         if (ReadCommentData(CmtData))
           return true;
         else
           uiMsg(UIERROR_CMTBROKEN,FileName);
+      }
       return false;
     }
 #ifndef SFX_MODULE
@@ -56,7 +57,8 @@ bool Archive::DoGetComment(std::wstring &CmtData)
 #endif
   }
 #ifndef SFX_MODULE
-  if (Format==RARFMT14 && MainHead.PackComment || Format!=RARFMT14 && CommHead.Method!=0x30)
+  if ((Format==RARFMT14 && MainHead.PackComment) ||
+      (Format!=RARFMT14 && CommHead.Method!=0x30))
   {
     if (Format!=RARFMT14 && (CommHead.UnpVer < 15 || CommHead.UnpVer > VER_UNPACK || CommHead.Method > 0x35))
       return false;
@@ -149,7 +151,6 @@ bool Archive::ReadCommentData(std::wstring &CmtData)
   std::vector<byte> CmtRaw;
   if (!ReadSubData(&CmtRaw,NULL,false))
     return false;
-  size_t CmtSize=CmtRaw.size();
   CmtRaw.push_back(0);
 //  CmtData->resize(CmtSize+1);
   if (Format==RARFMT50)
@@ -175,14 +176,12 @@ void Archive::ViewComment()
   std::wstring CmtBuf;
   if (GetComment(CmtBuf)) // In GUI too, so "Test" command detects broken comments.
   {
-    size_t CmtSize=CmtBuf.size();
     auto EndPos=CmtBuf.find(0x1A);
     if (EndPos!=std::wstring::npos)
-      CmtSize=EndPos;
+      CmtBuf.resize(EndPos);
     mprintf(St(MArcComment));
     mprintf(L":\n");
     OutComment(CmtBuf);
   }
 }
-
 

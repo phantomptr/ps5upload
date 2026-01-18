@@ -58,6 +58,13 @@ pub enum DownloadCompression {
     Auto,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RarExtractMode {
+    Normal,
+    Safe,
+    Turbo,
+}
+
 async fn send_simple_command(ip: &str, port: u16, cmd: &str) -> Result<String> {
     let addr = format!("{}:{}", ip, port);
     let mut stream = tokio::time::timeout(
@@ -173,6 +180,68 @@ pub async fn delete_path(ip: &str, port: u16, path: &str) -> Result<()> {
     } else {
         Err(anyhow!("Delete failed: {}", response))
     }
+}
+
+pub async fn probe_rar_metadata(ip: &str, port: u16, path: &str) -> Result<(Option<Vec<u8>>, Option<Vec<u8>>)> {
+    let addr = format!("{}:{}", ip, port);
+    let mut stream = tokio::time::timeout(
+        std::time::Duration::from_secs(CONNECTION_TIMEOUT_SECS),
+        TcpStream::connect(&addr)
+    ).await.context("Connection timed out")??;
+
+    let cmd = format!("PROBE_RAR {}\n", path);
+    stream.write_all(cmd.as_bytes()).await?;
+
+    let mut reader = tokio::io::BufReader::new(stream);
+    let timeout = std::time::Duration::from_secs(READ_TIMEOUT_SECS);
+    let mut line = String::new();
+    let mut param: Option<Vec<u8>> = None;
+    let mut cover: Option<Vec<u8>> = None;
+
+    loop {
+        line.clear();
+        let n = tokio::time::timeout(timeout, reader.read_line(&mut line))
+            .await
+            .context("Read timed out")??;
+        if n == 0 {
+            break;
+        }
+        let trimmed = line.trim_end();
+        if trimmed.starts_with("ERROR") {
+            return Err(anyhow!("Probe failed: {}", trimmed));
+        }
+        if let Some(size_str) = trimmed.strip_prefix("META ") {
+            let size: usize = size_str.trim().parse().unwrap_or(0);
+            if size > 0 {
+                let mut buf = vec![0u8; size];
+                tokio::time::timeout(timeout, reader.read_exact(&mut buf))
+                    .await
+                    .context("Read timed out")??;
+                let mut newline = [0u8; 1];
+                let _ = tokio::time::timeout(timeout, reader.read_exact(&mut newline)).await;
+                param = Some(buf);
+            }
+            continue;
+        }
+        if let Some(size_str) = trimmed.strip_prefix("COVER ") {
+            let size: usize = size_str.trim().parse().unwrap_or(0);
+            if size > 0 {
+                let mut buf = vec![0u8; size];
+                tokio::time::timeout(timeout, reader.read_exact(&mut buf))
+                    .await
+                    .context("Read timed out")??;
+                let mut newline = [0u8; 1];
+                let _ = tokio::time::timeout(timeout, reader.read_exact(&mut newline)).await;
+                cover = Some(buf);
+            }
+            continue;
+        }
+        if trimmed == "DONE" {
+            break;
+        }
+    }
+
+    Ok((param, cover))
 }
 
 async fn send_manage_command_with_progress<F>(
@@ -695,7 +764,7 @@ pub async fn upload_rar_for_extraction<F, P>(
     port: u16,
     rar_path: &str,
     dest_path: &str,
-    safe_mode: bool,
+    mode: RarExtractMode,
     cancel: Arc<AtomicBool>,
     mut progress: F,
     mut extract_progress: P,
@@ -716,10 +785,10 @@ where
     ).await.context("Connection timed out")??;
 
     // Send command
-    let cmd = if safe_mode {
-        format!("UPLOAD_RAR_SAFE {} {}\n", dest_path, file_size)
-    } else {
-        format!("UPLOAD_RAR {} {}\n", dest_path, file_size)
+    let cmd = match mode {
+        RarExtractMode::Safe => format!("UPLOAD_RAR_SAFE {} {}\n", dest_path, file_size),
+        RarExtractMode::Turbo => format!("UPLOAD_RAR_TURBO {} {}\n", dest_path, file_size),
+        RarExtractMode::Normal => format!("UPLOAD_RAR {} {}\n", dest_path, file_size),
     };
     stream.write_all(cmd.as_bytes()).await?;
 

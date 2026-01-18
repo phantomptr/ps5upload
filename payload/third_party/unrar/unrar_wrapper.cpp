@@ -10,6 +10,10 @@
 #include <ctype.h>
 #include <string>
 #include <vector>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <limits.h>
+#include <errno.h>
 
 static bool sanitize_target_path(const char *input, std::string &out) {
     if (!input || !*input) {
@@ -88,6 +92,7 @@ struct ExtractContext {
 static int CALLBACK unrar_callback(UINT msg, LPARAM user_data, LPARAM p1, LPARAM p2) {
     ExtractContext *ctx = (ExtractContext *)user_data;
     if (!ctx) return 0;
+    RAR_UNUSED(p1);
 
     switch (msg) {
         case UCM_PROCESSDATA:
@@ -130,6 +135,204 @@ static int CALLBACK unrar_callback(UINT msg, LPARAM user_data, LPARAM p1, LPARAM
             return 1;
     }
     return ctx->abort_flag ? -1 : 1;
+}
+
+struct RarProbeEntry {
+    std::string original;
+    std::string normalized;
+    std::string lower;
+};
+
+static std::string normalize_path(const std::string &input) {
+    std::string out = input;
+    for (size_t i = 0; i < out.size(); i++) {
+        if (out[i] == '\\') {
+            out[i] = '/';
+        }
+    }
+    return out;
+}
+
+static std::string to_lower(const std::string &input) {
+    std::string out = input;
+    for (size_t i = 0; i < out.size(); i++) {
+        out[i] = (char)tolower((unsigned char)out[i]);
+    }
+    return out;
+}
+
+static std::string compute_preferred_prefix(const char *rar_path) {
+    if (!rar_path) {
+        return std::string();
+    }
+    const char *base = strrchr(rar_path, '/');
+    const char *base2 = strrchr(rar_path, '\\');
+    if (base2 && (!base || base2 > base)) {
+        base = base2;
+    }
+    const char *name = base ? base + 1 : rar_path;
+    std::string stem(name);
+    std::string lower = to_lower(stem);
+    if (lower.size() > 4 && lower.rfind(".rar") == lower.size() - 4) {
+        stem = stem.substr(0, stem.size() - 4);
+    }
+    if (stem.empty()) {
+        return std::string();
+    }
+    return stem + "/";
+}
+
+static int read_file_to_buffer(const char *path, size_t max_size, char **out_buf, size_t *out_size) {
+    if (!path || !out_buf || !out_size) {
+        return UNRAR_ERR_READ;
+    }
+    *out_buf = NULL;
+    *out_size = 0;
+    struct stat st;
+    if (stat(path, &st) != 0) {
+        return UNRAR_ERR_READ;
+    }
+    if (st.st_size <= 0 || (size_t)st.st_size > max_size) {
+        return UNRAR_ERR_READ;
+    }
+    FILE *fp = fopen(path, "rb");
+    if (!fp) {
+        return UNRAR_ERR_READ;
+    }
+    size_t size = (size_t)st.st_size;
+    char *buf = (char *)malloc(size);
+    if (!buf) {
+        fclose(fp);
+        return UNRAR_ERR_MEMORY;
+    }
+    size_t read_bytes = fread(buf, 1, size, fp);
+    fclose(fp);
+    if (read_bytes != size) {
+        free(buf);
+        return UNRAR_ERR_READ;
+    }
+    *out_buf = buf;
+    *out_size = size;
+    return UNRAR_OK;
+}
+
+static const RarProbeEntry *find_param_entry(const std::vector<RarProbeEntry> &entries, const std::string &preferred_prefix) {
+    std::vector<const RarProbeEntry *> sce_candidates;
+    std::vector<const RarProbeEntry *> param_candidates;
+    for (size_t i = 0; i < entries.size(); i++) {
+        const RarProbeEntry &entry = entries[i];
+        if (entry.lower.size() >= strlen("sce_sys/param.json") &&
+            (entry.lower.rfind("/sce_sys/param.json") == entry.lower.size() - strlen("/sce_sys/param.json") ||
+             entry.lower.rfind("sce_sys/param.json") == entry.lower.size() - strlen("sce_sys/param.json"))) {
+            sce_candidates.push_back(&entry);
+        } else if (entry.lower == "param.json" ||
+                   (entry.lower.size() >= strlen("/param.json") &&
+                    entry.lower.rfind("/param.json") == entry.lower.size() - strlen("/param.json"))) {
+            param_candidates.push_back(&entry);
+        }
+    }
+
+    if (!preferred_prefix.empty()) {
+        std::string prefix_lower = to_lower(preferred_prefix);
+        const RarProbeEntry *best = NULL;
+        size_t best_len = 0;
+        for (size_t i = 0; i < sce_candidates.size(); i++) {
+            const RarProbeEntry *entry = sce_candidates[i];
+            if (entry->lower.rfind(prefix_lower, 0) == 0) {
+                if (!best || entry->normalized.size() < best_len) {
+                    best = entry;
+                    best_len = entry->normalized.size();
+                }
+            }
+        }
+        if (!best) {
+            for (size_t i = 0; i < param_candidates.size(); i++) {
+                const RarProbeEntry *entry = param_candidates[i];
+                if (entry->lower.rfind(prefix_lower, 0) == 0) {
+                    if (!best || entry->normalized.size() < best_len) {
+                        best = entry;
+                        best_len = entry->normalized.size();
+                    }
+                }
+            }
+        }
+        if (best) {
+            return best;
+        }
+    }
+
+    if (!sce_candidates.empty()) {
+        const RarProbeEntry *best = sce_candidates[0];
+        for (size_t i = 1; i < sce_candidates.size(); i++) {
+            if (sce_candidates[i]->normalized.size() < best->normalized.size()) {
+                best = sce_candidates[i];
+            }
+        }
+        return best;
+    }
+    if (!param_candidates.empty()) {
+        const RarProbeEntry *best = param_candidates[0];
+        for (size_t i = 1; i < param_candidates.size(); i++) {
+            if (param_candidates[i]->normalized.size() < best->normalized.size()) {
+                best = param_candidates[i];
+            }
+        }
+        return best;
+    }
+    return NULL;
+}
+
+static const RarProbeEntry *find_entry_by_normalized(const std::vector<RarProbeEntry> &entries, const std::string &normalized) {
+    std::string target = to_lower(normalized);
+    for (size_t i = 0; i < entries.size(); i++) {
+        if (entries[i].lower == target) {
+            return &entries[i];
+        }
+    }
+    return NULL;
+}
+
+static int extract_entry_to_path(const char *rar_path, const RarProbeEntry *entry, const char *dest_dir, const char *dest_name) {
+    if (!rar_path || !entry || !dest_dir || !dest_name) {
+        return UNRAR_ERR_READ;
+    }
+    struct RAROpenArchiveData arc_data;
+    memset(&arc_data, 0, sizeof(arc_data));
+    arc_data.ArcName = (char *)rar_path;
+    arc_data.OpenMode = RAR_OM_EXTRACT;
+
+    HANDLE hArc = RAROpenArchive(&arc_data);
+    if (!hArc || arc_data.OpenResult != ERAR_SUCCESS) {
+        return UNRAR_ERR_OPEN;
+    }
+
+    struct RARHeaderDataEx header;
+    int result = UNRAR_ERR_READ;
+    while (1) {
+        memset(&header, 0, sizeof(header));
+        int read_result = RARReadHeaderEx(hArc, &header);
+        if (read_result == ERAR_END_ARCHIVE) {
+            break;
+        }
+        if (read_result != ERAR_SUCCESS) {
+            break;
+        }
+        std::string normalized = normalize_path(header.FileName);
+        std::string lower = to_lower(normalized);
+        if (lower == entry->lower) {
+            char dest_path_buf[PATH_MAX];
+            char dest_name_buf[PATH_MAX];
+            snprintf(dest_path_buf, sizeof(dest_path_buf), "%s", dest_dir);
+            snprintf(dest_name_buf, sizeof(dest_name_buf), "%s", dest_name);
+            int proc_result = RARProcessFile(hArc, RAR_EXTRACT, dest_path_buf, dest_name_buf);
+            result = (proc_result == ERAR_SUCCESS) ? UNRAR_OK : UNRAR_ERR_EXTRACT;
+            break;
+        } else {
+            RARProcessFile(hArc, RAR_SKIP, NULL, NULL);
+        }
+    }
+    RARCloseArchive(hArc);
+    return result;
 }
 
 extern "C" int unrar_extract(const char *rar_path, const char *dest_dir, int strip_root,
@@ -266,6 +469,144 @@ extern "C" int unrar_extract(const char *rar_path, const char *dest_dir, int str
     return result;
 }
 
+extern "C" int unrar_probe_archive(const char *rar_path,
+                                   char **param_buf, size_t *param_size,
+                                   char **cover_buf, size_t *cover_size) {
+    if (!param_buf || !param_size || !cover_buf || !cover_size) {
+        return UNRAR_ERR_READ;
+    }
+    *param_buf = NULL;
+    *param_size = 0;
+    *cover_buf = NULL;
+    *cover_size = 0;
+
+    if (!rar_path || !*rar_path) {
+        return UNRAR_ERR_READ;
+    }
+
+    struct RAROpenArchiveData arc_data;
+    memset(&arc_data, 0, sizeof(arc_data));
+    arc_data.ArcName = (char *)rar_path;
+    arc_data.OpenMode = RAR_OM_LIST;
+
+    HANDLE hArc = RAROpenArchive(&arc_data);
+    if (!hArc || arc_data.OpenResult != ERAR_SUCCESS) {
+        return UNRAR_ERR_OPEN;
+    }
+
+    std::vector<RarProbeEntry> entries;
+    struct RARHeaderDataEx header;
+    while (1) {
+        memset(&header, 0, sizeof(header));
+        int read_result = RARReadHeaderEx(hArc, &header);
+        if (read_result == ERAR_END_ARCHIVE) {
+            break;
+        }
+        if (read_result != ERAR_SUCCESS) {
+            RARCloseArchive(hArc);
+            return UNRAR_ERR_READ;
+        }
+        if ((header.Flags & RHDF_DIRECTORY) == 0) {
+            std::string original(header.FileName);
+            std::string normalized = normalize_path(original);
+            RarProbeEntry entry;
+            entry.original = original;
+            entry.normalized = normalized;
+            entry.lower = to_lower(normalized);
+            entries.push_back(entry);
+        }
+        RARProcessFile(hArc, RAR_SKIP, NULL, NULL);
+    }
+    RARCloseArchive(hArc);
+
+    if (entries.empty()) {
+        return UNRAR_OK;
+    }
+
+    std::string preferred_prefix = compute_preferred_prefix(rar_path);
+    const RarProbeEntry *param_entry = find_param_entry(entries, preferred_prefix);
+    if (!param_entry) {
+        return UNRAR_OK;
+    }
+
+    std::string prefix;
+    size_t sce_pos = param_entry->lower.rfind("sce_sys/param.json");
+    if (sce_pos != std::string::npos) {
+        prefix = param_entry->normalized.substr(0, sce_pos);
+    } else {
+        size_t param_pos = param_entry->lower.rfind("param.json");
+        if (param_pos != std::string::npos) {
+            prefix = param_entry->normalized.substr(0, param_pos);
+        }
+    }
+    if (!prefix.empty() && prefix[prefix.size() - 1] != '/') {
+        prefix.push_back('/');
+    }
+
+    const char *candidates[] = {
+        "icon0.png",
+        "icon0.jpg",
+        "icon0.jpeg",
+        "icon.png",
+        "cover.png",
+        "cover.jpg",
+        "tile0.png",
+    };
+    const size_t candidate_count = sizeof(candidates) / sizeof(candidates[0]);
+
+    const RarProbeEntry *cover_entry = NULL;
+    for (size_t i = 0; i < candidate_count && !cover_entry; i++) {
+        std::string candidate = prefix + "sce_sys/" + candidates[i];
+        cover_entry = find_entry_by_normalized(entries, candidate);
+    }
+    for (size_t i = 0; i < candidate_count && !cover_entry; i++) {
+        std::string candidate = prefix + candidates[i];
+        cover_entry = find_entry_by_normalized(entries, candidate);
+    }
+
+    const char *probe_root = "/data/ps5upload/temp";
+    if (mkdir(probe_root, 0777) != 0 && errno != EEXIST) {
+        return UNRAR_ERR_READ;
+    }
+    char temp_dir[] = "/data/ps5upload/temp/probe_XXXXXX";
+    if (!mkdtemp(temp_dir)) {
+        return UNRAR_ERR_READ;
+    }
+
+    char param_path[PATH_MAX];
+    char cover_path[PATH_MAX];
+    snprintf(param_path, sizeof(param_path), "%s/param.json", temp_dir);
+    snprintf(cover_path, sizeof(cover_path), "%s/cover.bin", temp_dir);
+
+    int result = UNRAR_OK;
+    if (param_entry) {
+        int extract_result = extract_entry_to_path(rar_path, param_entry, temp_dir, "param.json");
+        if (extract_result == UNRAR_OK) {
+            int read_result = read_file_to_buffer(param_path, UNRAR_PROBE_PARAM_MAX, param_buf, param_size);
+            if (read_result != UNRAR_OK) {
+                *param_buf = NULL;
+                *param_size = 0;
+            }
+        }
+    }
+    if (cover_entry) {
+        int extract_result = extract_entry_to_path(rar_path, cover_entry, temp_dir, "cover.bin");
+        if (extract_result == UNRAR_OK) {
+            int read_result = read_file_to_buffer(cover_path, UNRAR_PROBE_COVER_MAX, cover_buf, cover_size);
+            if (read_result != UNRAR_OK) {
+                *cover_buf = NULL;
+                *cover_size = 0;
+            }
+        }
+    }
+
+    unlink(param_path);
+    unlink(cover_path);
+    rmdir(temp_dir);
+
+    return result;
+}
+
 extern "C" int unrar_scan(const char *rar_path, int *file_count, unsigned long long *total_size, 
                          char *common_root, size_t root_len) {
     if (!rar_path) {
@@ -330,7 +671,7 @@ extern "C" int unrar_scan(const char *rar_path, int *file_count, unsigned long l
 
                 if (!multiple_roots) {
                     if (first_root[0] == '\0') {
-                        strncpy(first_root, current_root, sizeof(first_root) - 1);
+                        snprintf(first_root, sizeof(first_root), "%s", current_root);
                     } else if (strcmp(first_root, current_root) != 0) {
                         multiple_roots = 1;
                     }

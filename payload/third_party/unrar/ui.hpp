@@ -163,6 +163,7 @@ class uiMsgStore
 
 inline void uiMsgBase(uiMsgStore &Store)
 {
+  RAR_UNUSED(Store);
   // Called last, when no parameters are left.
 }
 

@@ -10,6 +10,7 @@ void handle_delete_path(int client_sock, const char *path);
 void handle_move_path(int client_sock, const char *args);
 void handle_copy_path(int client_sock, const char *args);
 void handle_extract_archive(int client_sock, const char *args);
+void handle_probe_rar(int client_sock, const char *args);
 void handle_chmod_777(int client_sock, const char *path);
 void handle_download_file(int client_sock, const char *path);
 void handle_download_dir(int client_sock, const char *path);

@@ -19,7 +19,13 @@
  * sock: client socket
  * args: command arguments (dest_path file_size)
  */
-void handle_upload_rar(int sock, const char *args, int safe_mode);
+typedef enum {
+    UNRAR_MODE_FAST = 0,
+    UNRAR_MODE_SAFE = 1,
+    UNRAR_MODE_TURBO = 2
+} UnrarMode;
+
+void handle_upload_rar(int sock, const char *args, UnrarMode mode);
 
 /* Receive RAR file data into a temporary file
  * Returns the temp file path on success, NULL on error
@@ -34,7 +40,7 @@ char *receive_rar_to_temp(int sock, size_t file_size);
  * user_data: passed to extraction callback (can be NULL)
  */
 int extract_rar_file(const char *rar_path, const char *dest_dir, int strip_root,
-                     int *file_count, unsigned long long *total_bytes, void *user_data, int safe_mode);
+                     int *file_count, unsigned long long *total_bytes, void *user_data, UnrarMode mode);
 
 /* Clean up the temporary directory used for RAR uploads */
 void unrar_cleanup_temp(void);

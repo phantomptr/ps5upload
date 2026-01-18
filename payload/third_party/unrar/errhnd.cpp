@@ -64,6 +64,10 @@ void ErrorHandler::ReadError(const std::wstring &FileName)
 
 void ErrorHandler::AskRepeatRead(const std::wstring &FileName,bool &Ignore,bool &Retry,bool &Quit)
 {
+  RAR_UNUSED(FileName);
+  RAR_UNUSED(Ignore);
+  RAR_UNUSED(Retry);
+  RAR_UNUSED(Quit);
   SetErrorCode(RARX_READ);
 #if !defined(SILENT) && !defined(SFX_MODULE)
   if (!Silent)
@@ -90,6 +94,8 @@ void ErrorHandler::AskRepeatRead(const std::wstring &FileName,bool &Ignore,bool 
 
 void ErrorHandler::WriteError(const std::wstring &ArcName,const std::wstring &FileName)
 {
+  RAR_UNUSED(ArcName);
+  RAR_UNUSED(FileName);
 #ifndef SILENT
   WriteErrorMsg(ArcName,FileName);
 #endif
@@ -113,6 +119,8 @@ void ErrorHandler::WriteErrorFAT(const std::wstring &FileName)
 
 bool ErrorHandler::AskRepeatWrite(const std::wstring &FileName,bool DiskFull)
 {
+  RAR_UNUSED(FileName);
+  RAR_UNUSED(DiskFull);
 #ifndef SILENT
   if (!Silent)
   {
@@ -144,6 +152,7 @@ void ErrorHandler::SeekError(const std::wstring &FileName)
 
 void ErrorHandler::GeneralErrMsg(const wchar *fmt,...)
 {
+  RAR_UNUSED(fmt);
 #ifndef RARDLL
   va_list arglist;
   va_start(arglist,fmt);
@@ -281,6 +290,7 @@ extern "C"
 void _stdfunction ProcessSignal(int SigType)
 #endif
 {
+  RAR_UNUSED(SigType);
 #ifdef _WIN_ALL
   // When a console application is run as a service, this allows the service
   // to continue running after the user logs off. 
@@ -349,6 +359,7 @@ void ErrorHandler::Throw(RAR_EXIT Code)
 
 bool ErrorHandler::GetSysErrMsg(std::wstring &Msg)
 {
+  RAR_UNUSED(Msg);
 #ifndef SILENT
 #ifdef _WIN_ALL
   int ErrType=GetLastError();

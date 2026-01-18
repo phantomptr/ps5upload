@@ -190,7 +190,7 @@ char *receive_rar_to_temp(int sock, size_t file_size) {
 }
 
 int extract_rar_file(const char *rar_path, const char *dest_dir, int strip_root,
-                     int *file_count, unsigned long long *total_bytes, void *user_data, int safe_mode) {
+                     int *file_count, unsigned long long *total_bytes, void *user_data, UnrarMode mode) {
     if (!rar_path || !dest_dir) {
         return -1;
     }
@@ -203,7 +203,7 @@ int extract_rar_file(const char *rar_path, const char *dest_dir, int strip_root,
     /* Scan first to get file count (safe mode only) */
     int count = 0;
     unsigned long long size = 0;
-    if (safe_mode) {
+    if (mode == UNRAR_MODE_SAFE) {
         int scan_result = unrar_scan(rar_path, &count, &size, NULL, 0);
         if (scan_result != UNRAR_OK) {
             printf("[RAR] Scan failed: %s\n", unrar_strerror(scan_result));
@@ -211,23 +211,27 @@ int extract_rar_file(const char *rar_path, const char *dest_dir, int strip_root,
         }
     }
 
-    if (safe_mode) {
+    if (mode == UNRAR_MODE_SAFE) {
         printf("[RAR] Archive contains %d files, %llu bytes uncompressed\n", count, size);
     }
 
     /* Extract */
     /* Pass total size to wrapper for progress if known */
     unrar_extract_opts opts;
-    if (safe_mode) {
+    if (mode == UNRAR_MODE_SAFE) {
         opts.keepalive_interval_sec = UNRAR_SAFE_KEEPALIVE_SEC;
         opts.sleep_every_bytes = UNRAR_SAFE_SLEEP_EVERY_BYTES;
         opts.sleep_us = UNRAR_SAFE_SLEEP_US;
+    } else if (mode == UNRAR_MODE_TURBO) {
+        opts.keepalive_interval_sec = UNRAR_TURBO_KEEPALIVE_SEC;
+        opts.sleep_every_bytes = UNRAR_TURBO_SLEEP_EVERY_BYTES;
+        opts.sleep_us = UNRAR_TURBO_SLEEP_US;
     } else {
         opts.keepalive_interval_sec = UNRAR_FAST_KEEPALIVE_SEC;
         opts.sleep_every_bytes = UNRAR_FAST_SLEEP_EVERY_BYTES;
         opts.sleep_us = UNRAR_FAST_SLEEP_US;
     }
-    int extract_result = unrar_extract(rar_path, dest_dir, strip_root, safe_mode ? size : 0,
+    int extract_result = unrar_extract(rar_path, dest_dir, strip_root, (mode == UNRAR_MODE_SAFE) ? size : 0,
                                        &opts, extraction_progress, user_data, &count, &size);
     if (extract_result != UNRAR_OK) {
         printf("[RAR] Extraction failed: %s\n", unrar_strerror(extract_result));
@@ -241,7 +245,7 @@ int extract_rar_file(const char *rar_path, const char *dest_dir, int strip_root,
     return 0;
 }
 
-void handle_upload_rar(int sock, const char *args, int safe_mode) {
+void handle_upload_rar(int sock, const char *args, UnrarMode mode) {
     char dest_path[PATH_MAX];
     unsigned long long file_size = 0;
 
@@ -301,6 +305,7 @@ void handle_upload_rar(int sock, const char *args, int safe_mode) {
     if (!temp_path) {
         const char *error = "ERROR: Failed to receive RAR file\n";
         send_all(sock, error);
+        unrar_cleanup_temp();
         return;
     }
 
@@ -314,13 +319,20 @@ void handle_upload_rar(int sock, const char *args, int safe_mode) {
     struct ProgressState progress;
     memset(&progress, 0, sizeof(progress));
     progress.sock = sock;
-    progress.min_interval_sec = safe_mode ? UNRAR_SAFE_PROGRESS_INTERVAL_SEC : UNRAR_FAST_PROGRESS_INTERVAL_SEC;
+    if (mode == UNRAR_MODE_SAFE) {
+        progress.min_interval_sec = UNRAR_SAFE_PROGRESS_INTERVAL_SEC;
+    } else if (mode == UNRAR_MODE_TURBO) {
+        progress.min_interval_sec = UNRAR_TURBO_PROGRESS_INTERVAL_SEC;
+    } else {
+        progress.min_interval_sec = UNRAR_FAST_PROGRESS_INTERVAL_SEC;
+    }
     /* Pass progress state for updates */
-    int result = extract_rar_file(temp_path, dest_path, strip_root, &file_count, &total_bytes, &progress, safe_mode);
+    int result = extract_rar_file(temp_path, dest_path, strip_root, &file_count, &total_bytes, &progress, mode);
 
     /* Cleanup temp file */
     unlink(temp_path);
     free(temp_path);
+    unrar_cleanup_temp();
 
     if (result != 0) {
         const char *error = "ERROR: RAR extraction failed\n";

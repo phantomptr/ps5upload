@@ -25,10 +25,12 @@ File::File()
 File::~File()
 {
   if (hFile!=FILE_BAD_HANDLE && !SkipClose)
+  {
     if (NewFile)
       Delete();
     else
       Close();
+  }
 }
 
 
@@ -187,6 +189,7 @@ bool File::Create(const std::wstring &Name,uint Mode)
   // SetFileTime call and do not need to read from file.
   bool WriteMode=(Mode & FMF_WRITE)!=0;
   bool ShareRead=(Mode & FMF_SHAREREAD)!=0 || File::OpenShared;
+  RAR_UNUSED(ShareRead);
 #ifdef _WIN_ALL
   // CreateMode=Mode;
   uint Access=WriteMode ? GENERIC_WRITE:GENERIC_READ|GENERIC_WRITE;
@@ -343,10 +346,10 @@ bool File::Write(const void *Data,size_t Size)
 #else
 #ifdef FILE_USE_OPEN
     ssize_t Written=write(hFile,Data,Size);
-    Success=Written==Size;
+    Success=Written==(ssize_t)Size;
 #else
     int Written=fwrite(Data,1,Size,hFile);
-    Success=Written==Size && !ferror(hFile);
+    Success=Written==(int)Size && !ferror(hFile);
 #endif
 #endif
     if (!Success && AllowExceptions && HandleType==FILE_HANDLENORMAL)
@@ -364,7 +367,7 @@ bool File::Write(const void *Data,size_t Size)
 #if !defined(_WIN_ALL) && !defined(FILE_USE_OPEN)
         clearerr(hFile);
 #endif
-        if (Written<Size && Written>0)
+        if (Written<(ssize_t)Size && Written>0)
           Seek(Tell()-Written,SEEK_SET);
         continue;
       }
@@ -395,6 +398,7 @@ int File::Read(void *Data,size_t Size)
     {
       ErrorType=FILE_READERROR;
       if (AllowExceptions)
+      {
         if (ReadErrorMode==FREM_IGNORE)
         {
           ReadSize=0;
@@ -424,6 +428,7 @@ int File::Read(void *Data,size_t Size)
           }
           ErrHandler.ReadError(FileName);
         }
+      }
     }
     TotalRead+=ReadSize; // If ReadSize is -1, TotalRead is also set to -1 here.
 
@@ -533,7 +538,7 @@ bool File::RawSeek(int64 Offset,int Method)
     // We tried to dynamically allocate 32 KB buffer here, but it improved
     // speed in Windows 10 by mere ~1.5%.
     byte Buf[4096];
-    if (Method==SEEK_CUR || Method==SEEK_SET && Offset>=CurFilePos)
+    if (Method==SEEK_CUR || (Method==SEEK_SET && Offset>=CurFilePos))
     {
       uint64 SkipSize=Method==SEEK_CUR ? Offset:Offset-CurFilePos;
       while (SkipSize>0) // Reading to emulate seek forward.
@@ -588,20 +593,24 @@ bool File::RawSeek(int64 Offset,int Method)
 int64 File::Tell()
 {
   if (hFile==FILE_BAD_HANDLE)
+  {
     if (AllowExceptions)
       ErrHandler.SeekError(FileName);
     else
       return -1;
+  }
   if (!IsSeekable())
     return CurFilePos;
 #ifdef _WIN_ALL
   LONG HighDist=0;
   uint LowDist=SetFilePointer(hFile,0,&HighDist,FILE_CURRENT);
   if (LowDist==0xffffffff && GetLastError()!=NO_ERROR)
+  {
     if (AllowExceptions)
       ErrHandler.SeekError(FileName);
     else
       return -1;
+  }
   return INT32TO64(HighDist,LowDist);
 #else
 #ifdef FILE_USE_OPEN
@@ -617,6 +626,7 @@ int64 File::Tell()
 
 void File::Prealloc(int64 Size)
 {
+  RAR_UNUSED(Size);
 #ifdef _WIN_ALL
   if (RawSeek(Size,SEEK_SET))
   {
@@ -674,6 +684,9 @@ void File::Flush()
 
 void File::SetOpenFileTime(RarTime *ftm,RarTime *ftc,RarTime *fta)
 {
+  RAR_UNUSED(ftm);
+  RAR_UNUSED(ftc);
+  RAR_UNUSED(fta);
 #ifdef _WIN_ALL
   // Workaround for OpenIndiana NAS time bug. If we cannot create a file
   // in write only mode, we need to flush the write buffer before calling

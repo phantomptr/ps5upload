@@ -21,7 +21,7 @@
 use eframe::egui;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicUsize, AtomicU64, Ordering};
 use std::io::{Read, Write};
@@ -41,10 +41,11 @@ mod history;
 mod queue;
 mod i18n;
 mod chat;
+mod unrar;
 
 const CHAT_MAX_MESSAGES: usize = 500;
 
-use protocol::{StorageLocation, DirEntry, DownloadCompression, list_storage, list_dir, list_dir_recursive, check_dir, upload_v2_init, delete_path, move_path, move_path_with_progress, copy_path_with_progress, extract_archive_with_progress, chmod_777, create_path, download_file_with_progress, download_dir_with_progress, get_payload_version, hash_file, upload_rar_for_extraction, get_space};
+use protocol::{StorageLocation, DirEntry, DownloadCompression, RarExtractMode, list_storage, list_dir, list_dir_recursive, check_dir, upload_v2_init, delete_path, move_path, move_path_with_progress, copy_path_with_progress, extract_archive_with_progress, chmod_777, create_path, download_file_with_progress, download_dir_with_progress, get_payload_version, hash_file, upload_rar_for_extraction, probe_rar_metadata, get_space};
 use archive::get_size;
 use transfer::{collect_files_with_progress, stream_files_with_progress, send_files_v2_for_list, SendFilesConfig, scan_zip_archive, send_zip_archive, scan_7z_archive, send_7z_archive, SharedReceiverIterator, FileEntry, CompressionMode};
 use config::AppConfig;
@@ -121,6 +122,8 @@ enum AppMessage {
     UploadStart { run_id: u64 },
     Progress { run_id: u64, sent: u64, total: u64, files_sent: i32, elapsed_secs: f64, current_file: Option<String> },
     UploadComplete { run_id: u64, result: Result<(i32, u64), String> },
+    GameMetaLoaded { path: String, meta: Option<GameMeta>, cover: Option<CoverImage> },
+    ManageMetaLoaded { path: String, meta: Option<GameMeta>, cover: Option<CoverImage> },
 }
 
 const APP_VERSION: &str = include_str!("../../VERSION");
@@ -184,6 +187,21 @@ struct UploadOptimization {
     connections: Option<usize>,
     sample_files: Option<usize>,
     sample_bytes: Option<u64>,
+}
+
+#[derive(Clone, Debug)]
+struct GameMeta {
+    title: String,
+    title_id: String,
+    content_id: String,
+    version: String,
+}
+
+#[derive(Clone, Debug)]
+struct CoverImage {
+    pixels: Vec<u8>,
+    width: usize,
+    height: usize,
 }
 
 struct Ps5UploadApp {
@@ -255,6 +273,14 @@ struct Ps5UploadApp {
     
     // Cancellation
     upload_cancellation_token: Arc<AtomicBool>,
+
+    // Game metadata (local)
+    game_meta: Option<GameMeta>,
+    game_cover_texture: Option<egui::TextureHandle>,
+    // Game metadata (manage)
+    manage_meta: Option<GameMeta>,
+    manage_cover_texture: Option<egui::TextureHandle>,
+    manage_meta_path: Option<String>,
     
     // Override Dialog
     show_override_dialog: bool,
@@ -432,6 +458,11 @@ impl Ps5UploadApp {
             is_sending_payload: false,
             is_connected: false,
             upload_cancellation_token: Arc::new(AtomicBool::new(false)),
+            game_meta: None,
+            game_cover_texture: None,
+            manage_meta: None,
+            manage_cover_texture: None,
+            manage_meta_path: None,
             show_override_dialog: false,
             show_resume_dialog: false,
             force_full_upload_once: false,
@@ -913,6 +944,36 @@ impl Ps5UploadApp {
         });
     }
 
+    fn request_manage_rar_meta(&mut self, path: &str) {
+        if self.manage_meta_path.as_deref() == Some(path) {
+            return;
+        }
+        self.manage_meta_path = Some(path.to_string());
+        self.manage_meta = None;
+        self.manage_cover_texture = None;
+
+        let ip = self.ip.clone();
+        let path = path.to_string();
+        let tx = self.tx.clone();
+        let rt = self.rt.clone();
+        thread::spawn(move || {
+            let result = rt.block_on(async { probe_rar_metadata(&ip, TRANSFER_PORT, &path).await });
+            let (meta, cover) = match result {
+                Ok((param, cover_bytes)) => {
+                    let meta = param
+                        .as_deref()
+                        .and_then(parse_game_meta_from_param_bytes);
+                    let cover = cover_bytes
+                        .as_deref()
+                        .and_then(|bytes| load_cover_image_from_bytes(bytes, 160));
+                    (meta, cover)
+                }
+                Err(_) => (None, None),
+            };
+            let _ = tx.send(AppMessage::ManageMetaLoaded { path, meta, cover });
+        });
+    }
+
     fn start_download(&mut self, label: String, task: impl FnOnce(Sender<AppMessage>, Arc<AtomicBool>) + Send + 'static) {
         if self.ip.trim().is_empty() {
             return;
@@ -1306,6 +1367,19 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
             let size = get_size(&path_clone);
             let _ = tx.send(AppMessage::SizeCalculated(size));
         });
+
+        self.game_meta = None;
+        self.game_cover_texture = None;
+        let meta_path = self.game_path.clone();
+        let tx_meta = self.tx.clone();
+        thread::spawn(move || {
+            let (meta, cover) = load_game_meta_for_path(&meta_path);
+            let _ = tx_meta.send(AppMessage::GameMetaLoaded {
+                path: meta_path,
+                meta,
+                cover,
+            });
+        });
     }
 
     fn archive_kind(path: &Path) -> Option<&'static str> {
@@ -1315,6 +1389,22 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
             "zip" => Some("ZIP"),
             "7z" => Some("7Z"),
             _ => None,
+        }
+    }
+
+    fn parse_rar_extract_mode(mode: &str) -> RarExtractMode {
+        match mode {
+            "safe" => RarExtractMode::Safe,
+            "turbo" => RarExtractMode::Turbo,
+            _ => RarExtractMode::Normal,
+        }
+    }
+
+    fn rar_mode_label(lang: Language, mode: &str) -> String {
+        match mode {
+            "safe" => tr(lang, "archive_rar_mode_safe"),
+            "turbo" => tr(lang, "archive_rar_mode_turbo"),
+            _ => tr(lang, "archive_rar_mode_normal"),
         }
     }
 
@@ -1425,7 +1515,7 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
         let auto_tune_connections = self.config.auto_tune_connections;
         let compression_setting = self.config.compression.clone();
         let optimize_upload = self.config.optimize_upload;
-        let rar_safe_extract = self.config.rar_safe_extract;
+        let rar_mode = Self::parse_rar_extract_mode(&self.config.rar_extract_mode);
         let lang_code = self.config.language.clone();
         let payload_supports_modern = self.payload_supports_modern_compression();
         let required_size = self.calculated_size;
@@ -1507,7 +1597,7 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
                         TRANSFER_PORT,
                         &game_path,
                         &dest_path,
-                        rar_safe_extract,
+                        rar_mode,
                         cancel_token.clone(),
                         progress_callback,
                         move |msg| { 
@@ -2484,6 +2574,9 @@ impl eframe::App for Ps5UploadApp {
                                     self.manage_left_entries = entries;
                                     self.manage_left_selected = None;
                                     self.manage_left_status = format!("{} item{}", count, if count == 1 { "" } else { "s" });
+                                    self.manage_meta = None;
+                                    self.manage_cover_texture = None;
+                                    self.manage_meta_path = None;
                                 }
                                 ManageSide::Right => {
                                     self.manage_right_entries = entries;
@@ -2872,6 +2965,42 @@ impl eframe::App for Ps5UploadApp {
                     self.log_peak_rss("upload");
                     self.upload_start_time = None;
                 }
+                AppMessage::GameMetaLoaded { path, meta, cover } => {
+                    if path == self.game_path {
+                        self.game_meta = meta;
+                        if let Some(cover) = cover {
+                            let image = egui::ColorImage::from_rgba_unmultiplied(
+                                [cover.width, cover.height],
+                                &cover.pixels,
+                            );
+                            self.game_cover_texture = Some(ctx.load_texture(
+                                "game_cover",
+                                image,
+                                egui::TextureOptions::LINEAR,
+                            ));
+                        } else {
+                            self.game_cover_texture = None;
+                        }
+                    }
+                }
+                AppMessage::ManageMetaLoaded { path, meta, cover } => {
+                    if self.manage_meta_path.as_deref() == Some(path.as_str()) {
+                        self.manage_meta = meta;
+                        if let Some(cover) = cover {
+                            let image = egui::ColorImage::from_rgba_unmultiplied(
+                                [cover.width, cover.height],
+                                &cover.pixels,
+                            );
+                            self.manage_cover_texture = Some(ctx.load_texture(
+                                "manage_cover",
+                                image,
+                                egui::TextureOptions::LINEAR,
+                            ));
+                        } else {
+                            self.manage_cover_texture = None;
+                        }
+                    }
+                }
             }
         }
 
@@ -2883,7 +3012,7 @@ impl eframe::App for Ps5UploadApp {
                     ui.add_space(10.0);
                     
                     ui.checkbox(&mut self.archive_overwrite_confirmed, "Allow overwriting of existing files");
-                    ui.label(egui::RichText::new("If unchecked, the upload will be cancelled to prevent data loss.").weak());
+                    ui.label("If unchecked, the upload will be cancelled to prevent data loss.");
                     
                     ui.add_space(10.0);
                     ui.horizontal(|ui| {
@@ -2958,12 +3087,27 @@ Overwrite it?", self.get_dest_path()));
                     ui.add_space(6.0);
                     if is_rar {
                         // RAR files are extracted server-side on PS5
-                        ui.label(egui::RichText::new("RAR will be uploaded and extracted on PS5.").weak());
-                        let safe_toggle = ui.checkbox(&mut self.config.rar_safe_extract, tr(lang, "archive_rar_safe_toggle"));
-                        if safe_toggle.changed() {
-                            let _ = self.config.save();
-                        }
-                        ui.label(egui::RichText::new(tr(lang, "archive_rar_safe_note")).weak());
+                        ui.label(egui::RichText::new("RAR archives are uploaded and extracted on the PS5.").weak());
+                        ui.horizontal(|ui| {
+                            ui.label(tr(lang, "archive_rar_mode_label"));
+                            let mut changed = false;
+                            egui::ComboBox::from_id_source("rar_mode_confirm")
+                                .selected_text(Self::rar_mode_label(lang, &self.config.rar_extract_mode))
+                                .show_ui(ui, |ui| {
+                                    changed |= ui.selectable_value(&mut self.config.rar_extract_mode, "normal".to_string(), tr(lang, "archive_rar_mode_normal")).changed();
+                                    changed |= ui.selectable_value(&mut self.config.rar_extract_mode, "safe".to_string(), tr(lang, "archive_rar_mode_safe")).changed();
+                                    changed |= ui.selectable_value(&mut self.config.rar_extract_mode, "turbo".to_string(), tr(lang, "archive_rar_mode_turbo")).changed();
+                                });
+                            if changed {
+                                let _ = self.config.save();
+                            }
+                        });
+                        let note_key = match self.config.rar_extract_mode.as_str() {
+                            "safe" => "archive_rar_safe_note",
+                            "turbo" => "archive_rar_turbo_note",
+                            _ => "archive_rar_normal_note",
+                        };
+                        ui.label(egui::RichText::new(tr(lang, note_key)).weak());
                     } else {
                         ui.label(egui::RichText::new(tr(lang, "archive_extract_stream_note")).weak());
                     }
@@ -3460,9 +3604,9 @@ Overwrite it?", self.get_dest_path()));
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(&self.status).strong());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                     ui.hyperlink_to("Created by PhantomPtr", "https://x.com/phantomptr");
-                     ui.label("|");
-                     ui.hyperlink_to("Source Code", "https://github.com/phantomptr/ps5upload");
+                    ui.hyperlink_to("Created by PhantomPtr", "https://x.com/phantomptr");
+                    ui.label("|");
+                    ui.hyperlink_to("Source Code", "https://github.com/phantomptr/ps5upload");
                 });
             });
         });
@@ -3681,7 +3825,6 @@ Overwrite it?", self.get_dest_path()));
                         }
                     });
             });
-            });
         });
 
         // 4. RIGHT PANEL: LOGS
@@ -3695,99 +3838,94 @@ Overwrite it?", self.get_dest_path()));
                             self.client_logs.clear();
                             self.payload_logs.clear();
                         }
-                    });
-                });
-            
-            ui.add_space(5.0);
-            ui.horizontal(|ui| {
-                ui.selectable_value(&mut self.log_tab, 0, tr(lang, "client"));
-                ui.selectable_value(&mut self.log_tab, 1, tr(lang, "payload"));
-                ui.selectable_value(&mut self.log_tab, 2, tr(lang, "history"));
-            });
-            ui.separator();
-
-            if self.log_tab == 2 {
-                // History tab
-                let records = self.history_data.records.clone();
-                ui.horizontal(|ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button(tr(lang, "clear_history")).clicked() {
+                        if ui.add_enabled(self.log_tab == 2, egui::Button::new(tr(lang, "clear_history"))).clicked() {
                             clear_history(&mut self.history_data);
                         }
                     });
                 });
-                ui.add_space(5.0);
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    if self.history_data.records.is_empty() {
-                        ui.label(tr(lang, "no_history"));
-                    } else {
-                        for record in records.iter().rev() {
-                            ui.group(|ui| {
-                                ui.horizontal(|ui| {
-                                    let icon = if record.success { "✓" } else { "✗" };
-                                    let color = if record.success {
-                                        egui::Color32::from_rgb(100, 200, 100)
-                                    } else {
-                                        egui::Color32::from_rgb(200, 100, 100)
-                                    };
-                                    ui.label(egui::RichText::new(icon).color(color).strong());
 
-                                    if let Some(dt) = chrono::DateTime::from_timestamp(record.timestamp, 0) {
-                                        ui.label(dt.format("%m/%d %H:%M").to_string());
+                ui.add_space(5.0);
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut self.log_tab, 0, tr(lang, "client"));
+                    ui.selectable_value(&mut self.log_tab, 1, tr(lang, "payload"));
+                    ui.selectable_value(&mut self.log_tab, 2, tr(lang, "history"));
+                });
+                ui.separator();
+
+                if self.log_tab == 2 {
+                    // History tab
+                    let records = self.history_data.records.clone();
+                    ui.add_space(5.0);
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        if self.history_data.records.is_empty() {
+                            ui.label(tr(lang, "no_history"));
+                        } else {
+                            for record in records.iter().rev() {
+                                ui.group(|ui| {
+                                    ui.horizontal(|ui| {
+                                        let icon = if record.success { "✓" } else { "✗" };
+                                        let color = if record.success {
+                                            egui::Color32::from_rgb(100, 200, 100)
+                                        } else {
+                                            egui::Color32::from_rgb(200, 100, 100)
+                                        };
+                                        ui.label(egui::RichText::new(icon).color(color).strong());
+
+                                        if let Some(dt) = chrono::DateTime::from_timestamp(record.timestamp, 0) {
+                                            ui.label(dt.format("%m/%d %H:%M").to_string());
+                                        }
+                                    });
+
+                                    // Source folder name only
+                                    let source_name = std::path::Path::new(&record.source_path)
+                                        .file_name()
+                                        .map(|n| n.to_string_lossy().to_string())
+                                        .unwrap_or_else(|| record.source_path.clone());
+                                    ui.label(format!("{}: {}", tr(lang, "source_folder"), source_name));
+                                    ui.label(format!("{}: {}", tr(lang, "destination"), record.dest_path));
+                                    let transfer_kind = if record.via_queue { tr(lang, "queue_upload") } else { tr(lang, "single_upload") };
+                                    ui.label(self.note_text(&transfer_kind));
+
+                                    ui.horizontal(|ui| {
+                                        ui.label(format!("{} files", record.file_count));
+                                        ui.separator();
+                                        ui.label(format_bytes(record.total_bytes));
+                                        ui.separator();
+                                        ui.label(format!("{}/s", format_bytes(record.speed_bps as u64)));
+                                        ui.separator();
+                                        ui.label(format_duration(record.duration_secs));
+                                    });
+
+                                    if let Some(err) = &record.error {
+                                        ui.label(egui::RichText::new(format!("Error: {}", err)).color(egui::Color32::from_rgb(200, 100, 100)).small());
+                                    }
+
+                                    ui.add_space(4.0);
+                                    if ui.button(tr(lang, "resume_btn")).clicked() {
+                                        self.pending_history_record = Some(record.clone());
+                                        self.history_resume_mode = if self.config.resume_mode == "none" {
+                                            "size".to_string()
+                                        } else {
+                                            self.config.resume_mode.clone()
+                                        };
+                                        self.show_history_resume_dialog = true;
                                     }
                                 });
-
-                                // Source folder name only
-                                let source_name = std::path::Path::new(&record.source_path)
-                                    .file_name()
-                                    .map(|n| n.to_string_lossy().to_string())
-                                    .unwrap_or_else(|| record.source_path.clone());
-                                ui.label(format!("{}: {}", tr(lang, "source_folder"), source_name));
-                                ui.label(format!("{}: {}", tr(lang, "destination"), record.dest_path));
-                                let transfer_kind = if record.via_queue { tr(lang, "queue_upload") } else { tr(lang, "single_upload") };
-                                ui.label(self.note_text(&transfer_kind));
-
-                                ui.horizontal(|ui| {
-                                    ui.label(format!("{} files", record.file_count));
-                                    ui.separator();
-                                    ui.label(format_bytes(record.total_bytes));
-                                    ui.separator();
-                                    ui.label(format!("{}/s", format_bytes(record.speed_bps as u64)));
-                                    ui.separator();
-                                    ui.label(format_duration(record.duration_secs));
-                                });
-
-                                if let Some(err) = &record.error {
-                                    ui.label(egui::RichText::new(format!("Error: {}", err)).color(egui::Color32::from_rgb(200, 100, 100)).small());
-                                }
-
-                                ui.add_space(4.0);
-                                if ui.button(tr(lang, "resume_btn")).clicked() {
-                                    self.pending_history_record = Some(record.clone());
-                                    self.history_resume_mode = if self.config.resume_mode == "none" {
-                                        "size".to_string()
-                                    } else {
-                                        self.config.resume_mode.clone()
-                                    };
-                                    self.show_history_resume_dialog = true;
-                                }
-                            });
-                            ui.add_space(2.0);
+                                ui.add_space(2.0);
+                            }
                         }
-                    }
-                });
-
-            } else {
-                egui::ScrollArea::vertical().stick_to_bottom(true).show(ui, |ui| {
-                    let text = if self.log_tab == 0 { &self.client_logs } else { &self.payload_logs };
-                    ui.add(egui::TextEdit::multiline(&mut text.as_str())
-                        .font(egui::TextStyle::Monospace)
-                        .desired_width(f32::INFINITY)
-                        .desired_rows(30)
-                        .cursor_at_end(false)
-                        .interactive(false));
-                });
-            }
+                    });
+                } else {
+                    egui::ScrollArea::vertical().stick_to_bottom(true).show(ui, |ui| {
+                        let text = if self.log_tab == 0 { &self.client_logs } else { &self.payload_logs };
+                        ui.add(egui::TextEdit::multiline(&mut text.as_str())
+                            .font(egui::TextStyle::Monospace)
+                            .desired_width(f32::INFINITY)
+                            .desired_rows(30)
+                            .cursor_at_end(false)
+                            .interactive(false));
+                    });
+                }
             });
         });
 
@@ -4027,8 +4165,44 @@ Overwrite it?", self.get_dest_path()));
                             ui.label(tr(lang, "modified")); ui.label(format_modified_time(selected_mtime.flatten())); ui.end_row();
                             ui.label(tr(lang, "path")); ui.label(path.clone()); ui.end_row();
                         });
+
+                        let is_rar = entry_type == "file" && name.to_ascii_lowercase().ends_with(".rar");
+                        if is_rar {
+                            self.request_manage_rar_meta(&path);
+                        } else if self.manage_meta_path.is_some() {
+                            self.manage_meta = None;
+                            self.manage_cover_texture = None;
+                            self.manage_meta_path = None;
+                        }
                     } else {
                         ui.label(tr(lang, "select_item"));
+                        if self.manage_meta_path.is_some() {
+                            self.manage_meta = None;
+                            self.manage_cover_texture = None;
+                            self.manage_meta_path = None;
+                        }
+                    }
+
+                    if let Some(meta) = &self.manage_meta {
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            if let Some(tex) = &self.manage_cover_texture {
+                                let size = egui::vec2(72.0, 72.0);
+                                ui.add(egui::Image::new(tex).fit_to_exact_size(size));
+                            }
+                            ui.vertical(|ui| {
+                                ui.label(egui::RichText::new(&meta.title).strong());
+                                if !meta.content_id.is_empty() {
+                                    ui.label(format!("Content ID: {}", meta.content_id));
+                                }
+                                if !meta.title_id.is_empty() {
+                                    ui.label(format!("Title ID: {}", meta.title_id));
+                                }
+                                if !meta.version.is_empty() {
+                                    ui.label(format!("Version: {}", meta.version));
+                                }
+                            });
+                        });
                     }
 
                     let can_ops = connected && !self.manage_busy && !self.is_downloading;
@@ -4387,6 +4561,31 @@ Overwrite it?", self.get_dest_path()));
                     else if let Some(size) = self.calculated_size { ui.label(format!("Total Size: {}", format_bytes(size))); }
                 });
 
+                if let Some(meta) = &self.game_meta {
+                    ui.add_space(6.0);
+                    ui.group(|ui| {
+                        ui.set_width(ui.available_width());
+                        ui.horizontal(|ui| {
+                            if let Some(tex) = &self.game_cover_texture {
+                                let size = egui::vec2(96.0, 96.0);
+                                ui.add(egui::Image::new(tex).fit_to_exact_size(size));
+                            }
+                            ui.vertical(|ui| {
+                                ui.label(egui::RichText::new(&meta.title).strong());
+                                if !meta.content_id.is_empty() {
+                                    ui.label(format!("Content ID: {}", meta.content_id));
+                                }
+                                if !meta.title_id.is_empty() {
+                                    ui.label(format!("Title ID: {}", meta.title_id));
+                                }
+                                if !meta.version.is_empty() {
+                                    ui.label(format!("Version: {}", meta.version));
+                                }
+                            });
+                        });
+                    });
+                }
+
                 // Transfer Queue (collapsible)
                 let pending_count = self.queue_data.items.iter().filter(|i| i.status == QueueStatus::Pending).count();
                 let queue_label = if pending_count > 0 {
@@ -4526,13 +4725,28 @@ Overwrite it?", self.get_dest_path()));
                             self.start_optimize_upload();
                         }
                     });
-                    ui.label(egui::RichText::new("RAR archives are extracted on PS5.").weak().small());
+                    ui.label(egui::RichText::new("RAR archives are uploaded and extracted on the PS5.").weak().small());
                     if Self::archive_kind(Path::new(&self.game_path)).as_ref().map(|k| k.eq_ignore_ascii_case("RAR")).unwrap_or(false) {
-                        let safe_toggle = ui.checkbox(&mut self.config.rar_safe_extract, tr(lang, "archive_rar_safe_toggle"));
-                        if safe_toggle.changed() {
-                            let _ = self.config.save();
-                        }
-                        ui.label(egui::RichText::new(tr(lang, "archive_rar_safe_note")).weak().small());
+                        ui.horizontal(|ui| {
+                            ui.label(tr(lang, "archive_rar_mode_label"));
+                            let mut changed = false;
+                            egui::ComboBox::from_id_source("rar_mode_transfer")
+                                .selected_text(Self::rar_mode_label(lang, &self.config.rar_extract_mode))
+                                .show_ui(ui, |ui| {
+                                    changed |= ui.selectable_value(&mut self.config.rar_extract_mode, "normal".to_string(), tr(lang, "archive_rar_mode_normal")).changed();
+                                    changed |= ui.selectable_value(&mut self.config.rar_extract_mode, "safe".to_string(), tr(lang, "archive_rar_mode_safe")).changed();
+                                    changed |= ui.selectable_value(&mut self.config.rar_extract_mode, "turbo".to_string(), tr(lang, "archive_rar_mode_turbo")).changed();
+                                });
+                            if changed {
+                                let _ = self.config.save();
+                            }
+                        });
+                        let note_key = match self.config.rar_extract_mode.as_str() {
+                            "safe" => "archive_rar_safe_note",
+                            "turbo" => "archive_rar_turbo_note",
+                            _ => "archive_rar_normal_note",
+                        };
+                        ui.label(egui::RichText::new(tr(lang, note_key)).weak().small());
                     }
                     if self.config.optimize_upload {
                         ui.label(egui::RichText::new(tr(lang, "optimize_upload_lock_notice")).weak().small());
@@ -4710,6 +4924,7 @@ Overwrite it?", self.get_dest_path()));
                     }
                 });
             }
+                });
             });
         });
     }
@@ -4982,9 +5197,9 @@ fn setup_custom_style(ctx: &egui::Context) {
     visuals.window_rounding = 8.0.into();
     visuals.selection.bg_fill = egui::Color32::from_rgb(0, 120, 215);
     visuals.selection.stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(245, 245, 245));
-    visuals.widgets.noninteractive.bg_stroke.color = egui::Color32::from_gray(60);
-    visuals.widgets.noninteractive.fg_stroke.color = egui::Color32::from_gray(220);
-    visuals.widgets.inactive.bg_fill = egui::Color32::from_gray(30);
+    visuals.widgets.noninteractive.bg_stroke.color = egui::Color32::from_gray(80);
+    visuals.widgets.noninteractive.fg_stroke.color = egui::Color32::from_gray(235);
+    visuals.widgets.inactive.bg_fill = egui::Color32::from_gray(40);
     ctx.set_visuals(visuals);
 
     let mut style = (*ctx.style()).clone();
@@ -5000,9 +5215,9 @@ fn setup_light_style(ctx: &egui::Context) {
     visuals.window_rounding = 8.0.into();
     visuals.selection.bg_fill = egui::Color32::from_rgb(0, 92, 171);
     visuals.selection.stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(255, 255, 255));
-    visuals.widgets.noninteractive.bg_stroke.color = egui::Color32::from_gray(180);
-    visuals.widgets.noninteractive.fg_stroke.color = egui::Color32::from_gray(40);
-    visuals.widgets.inactive.bg_fill = egui::Color32::from_gray(230);
+    visuals.widgets.noninteractive.bg_stroke.color = egui::Color32::from_gray(200);
+    visuals.widgets.noninteractive.fg_stroke.color = egui::Color32::from_gray(30);
+    visuals.widgets.inactive.bg_fill = egui::Color32::from_gray(245);
     ctx.set_visuals(visuals);
 
     let mut style = (*ctx.style()).clone();
@@ -5039,11 +5254,259 @@ fn load_logo_image() -> Option<egui::ColorImage> {
     ))
 }
 
+fn read_json_file(path: &Path) -> Option<serde_json::Value> {
+    let data = std::fs::read(path).ok()?;
+    serde_json::from_slice(&data).ok()
+}
+
+fn get_title_from_param(param: &serde_json::Value) -> Option<String> {
+    if let Some(title) = param.get("titleName").and_then(|v| v.as_str()) {
+        return Some(title.to_string());
+    }
+    let localized = param.get("localizedParameters")?;
+    let mut region = localized.get("defaultLanguage").and_then(|v| v.as_str()).unwrap_or("en-US").trim();
+    if region.is_empty() {
+        region = "en-US";
+    }
+    if let Some(obj) = localized.get(region) {
+        if let Some(title) = obj.get("titleName").and_then(|v| v.as_str()) {
+            return Some(title.to_string());
+        }
+    }
+    if region.len() == 2 {
+        let region_upper = region.to_ascii_uppercase();
+        if let Some(obj) = localized.get(&region_upper) {
+            if let Some(title) = obj.get("titleName").and_then(|v| v.as_str()) {
+                return Some(title.to_string());
+            }
+        }
+        if let Some(obj) = localized.as_object() {
+            for (k, v) in obj {
+                if k.to_ascii_uppercase().ends_with(&format!("-{}", region_upper)) {
+                    if let Some(title) = v.get("titleName").and_then(|v| v.as_str()) {
+                        return Some(title.to_string());
+                    }
+                }
+            }
+        }
+    }
+    let lang_only = if let Some((lang, _)) = region.split_once('-') {
+        lang
+    } else {
+        region
+    };
+    if !lang_only.is_empty() {
+        if let Some(obj) = localized.as_object() {
+            for (k, v) in obj {
+                if k.to_ascii_lowercase().starts_with(&lang_only.to_ascii_lowercase()) {
+                    if let Some(title) = v.get("titleName").and_then(|v| v.as_str()) {
+                        return Some(title.to_string());
+                    }
+                }
+            }
+        }
+    }
+    if let Some(obj) = localized.get("en-US") {
+        if let Some(title) = obj.get("titleName").and_then(|v| v.as_str()) {
+            return Some(title.to_string());
+        }
+    }
+    if let Some(obj) = localized.get("en-GB") {
+        if let Some(title) = obj.get("titleName").and_then(|v| v.as_str()) {
+            return Some(title.to_string());
+        }
+    }
+    if let Some(obj) = localized.as_object() {
+        for (_, v) in obj {
+            if let Some(title) = v.get("titleName").and_then(|v| v.as_str()) {
+                return Some(title.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn load_cover_image(path: &Path, max_dim: u32) -> Option<CoverImage> {
+    let mut image = image::open(path).ok()?;
+    let (w, h) = image.dimensions();
+    let max_side = w.max(h);
+    if max_side > max_dim {
+        let scale = max_dim as f32 / max_side as f32;
+        let nw = (w as f32 * scale).round().max(1.0) as u32;
+        let nh = (h as f32 * scale).round().max(1.0) as u32;
+        let resized = image::imageops::resize(&image, nw, nh, image::imageops::FilterType::Lanczos3);
+        image = image::DynamicImage::ImageRgba8(resized);
+    }
+    let rgba = image.to_rgba8();
+    let (width, height) = rgba.dimensions();
+    Some(CoverImage {
+        pixels: rgba.into_raw(),
+        width: width as usize,
+        height: height as usize,
+    })
+}
+
+fn load_cover_image_from_bytes(bytes: &[u8], max_dim: u32) -> Option<CoverImage> {
+    let mut image = image::load_from_memory(bytes).ok()?;
+    let (w, h) = image.dimensions();
+    let max_side = w.max(h);
+    if max_side > max_dim {
+        let scale = max_dim as f32 / max_side as f32;
+        let nw = (w as f32 * scale).round().max(1.0) as u32;
+        let nh = (h as f32 * scale).round().max(1.0) as u32;
+        let resized = image::imageops::resize(&image, nw, nh, image::imageops::FilterType::Lanczos3);
+        image = image::DynamicImage::ImageRgba8(resized);
+    }
+    let rgba = image.to_rgba8();
+    let (width, height) = rgba.dimensions();
+    Some(CoverImage {
+        pixels: rgba.into_raw(),
+        width: width as usize,
+        height: height as usize,
+    })
+}
+
+fn is_rar_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("rar"))
+        .unwrap_or(false)
+}
+
+fn find_param_path(path: &Path) -> Option<PathBuf> {
+    if path.is_dir() {
+        let sce = path.join("sce_sys").join("param.json");
+        if sce.exists() {
+            return Some(sce);
+        }
+        let direct = path.join("param.json");
+        if direct.exists() {
+            return Some(direct);
+        }
+        return None;
+    }
+
+    let parent = path.parent()?;
+    let stem = path.file_stem()?.to_string_lossy().to_string();
+    if !stem.is_empty() {
+        let candidate = parent.join(&stem);
+        let sce = candidate.join("sce_sys").join("param.json");
+        if sce.exists() {
+            return Some(sce);
+        }
+        let direct = candidate.join("param.json");
+        if direct.exists() {
+            return Some(direct);
+        }
+    }
+    None
+}
+
+fn load_game_meta_from_rar(path: &Path) -> Option<(GameMeta, Option<CoverImage>)> {
+    let (param, cover) = unrar::probe_rar_local(path)?;
+    let param = param?;
+    let meta = parse_game_meta_from_param_bytes(&param)?;
+    let cover = cover
+        .as_deref()
+        .and_then(|bytes| load_cover_image_from_bytes(bytes, 160));
+    Some((meta, cover))
+}
+
+fn parse_game_meta_from_param_bytes(param_bytes: &[u8]) -> Option<GameMeta> {
+    let param: serde_json::Value = serde_json::from_slice(param_bytes).ok()?;
+    let title = get_title_from_param(&param).unwrap_or_else(|| "Unknown".to_string());
+    let title_id = param.get("titleId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let content_id = param.get("contentId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let version = param.get("contentVersion").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    Some(GameMeta {
+        title,
+        title_id,
+        content_id,
+        version,
+    })
+}
+
+fn load_game_meta_for_path(path: &str) -> (Option<GameMeta>, Option<CoverImage>) {
+    if path.trim().is_empty() {
+        return (None, None);
+    }
+    let path = Path::new(path);
+    if path.is_file() && is_rar_path(path) {
+        if let Some((meta, cover)) = load_game_meta_from_rar(path) {
+            return (Some(meta), cover);
+        }
+    }
+    let param_path = match find_param_path(path) {
+        Some(p) => p,
+        None => return (None, None),
+    };
+    let param = match read_json_file(&param_path) {
+        Some(v) => v,
+        None => return (None, None),
+    };
+    let title = get_title_from_param(&param).unwrap_or_else(|| "Unknown".to_string());
+    let title_id = param.get("titleId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let content_id = param.get("contentId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let version = param.get("contentVersion").and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+    let meta = GameMeta {
+        title,
+        title_id,
+        content_id,
+        version,
+    };
+
+    let mut cover = None;
+    let candidates = [
+        "icon0.png",
+        "icon0.jpg",
+        "icon0.jpeg",
+        "icon.png",
+        "cover.png",
+        "cover.jpg",
+        "tile0.png",
+    ];
+    let sce_sys_dir = if param_path.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()) == Some("sce_sys") {
+        param_path.parent().map(|p| p.to_path_buf())
+    } else {
+        param_path.parent().map(|p| p.join("sce_sys"))
+    };
+    if let Some(sce_sys) = sce_sys_dir {
+        for name in candidates.iter() {
+            let c = sce_sys.join(name);
+            if c.exists() {
+                cover = load_cover_image(&c, 160);
+                if cover.is_some() {
+                    break;
+                }
+            }
+        }
+    }
+    if cover.is_none() {
+        let game_root = if param_path.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()) == Some("sce_sys") {
+            param_path.parent().and_then(|p| p.parent()).map(|p| p.to_path_buf())
+        } else {
+            param_path.parent().map(|p| p.to_path_buf())
+        };
+        if let Some(root) = game_root {
+            for name in candidates.iter() {
+                let c = root.join(name);
+                if c.exists() {
+                    cover = load_cover_image(&c, 160);
+                    if cover.is_some() {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    (Some(meta), cover)
+}
+
 fn main() -> eframe::Result<()> {
         let options = eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
-                .with_inner_size([1932.0, 1242.0])
-                .with_min_inner_size([1656.0, 1104.0])
                 .with_icon(std::sync::Arc::new(build_icon())),
             ..Default::default()
         };

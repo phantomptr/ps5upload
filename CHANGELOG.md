@@ -3,6 +3,19 @@
 All notable changes to this project are documented here.
 This project follows Semantic Versioning.
 
+## [1.1.9] - 2026-01-18
+
+### Added
+- Turbo RAR extraction mode with minimal throttling for maximum speed.
+- Manage extract now supports RAR-only explicitly with UI guidance.
+
+### Fixed
+- RAR upload temp file creation now has a safe fallback if mkstemp is unavailable.
+- Move/Copy operations now use iterative traversal to avoid deep recursion issues.
+
+### Changed
+- Copy buffer size increased for better throughput.
+
 ## [1.1.8] - 2026-01-18
 
 ### Added

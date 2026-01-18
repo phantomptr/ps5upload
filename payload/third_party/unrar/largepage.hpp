@@ -23,6 +23,7 @@ class LargePageAlloc
 
     static bool ProcessSwitch(CommandData *Cmd,const wchar *Switch)
     {
+      RAR_UNUSED(Cmd);
       if (Switch[0]==LOCKMEM_SWITCH[0])
       {
         size_t Length=wcslen(LOCKMEM_SWITCH);

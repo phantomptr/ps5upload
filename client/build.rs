@@ -1,72 +1,103 @@
 use std::path::PathBuf;
+use std::io::Write;
 
 fn main() {
-    let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
-    let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
+    let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR not set"));
+    let chat_key_path = PathBuf::from("ps5upload_chat.key");
+    let chat_key = std::fs::read_to_string(&chat_key_path).unwrap_or_default();
+    let chat_key = chat_key.trim();
+    let mut chat_key_file = std::fs::File::create(out_dir.join("chat_key.rs")).expect("Failed to write chat_key.rs");
+    writeln!(
+        chat_key_file,
+        "const CHAT_SHARED_KEY_HEX: &str = \"{}\";",
+        chat_key.escape_default()
+    ).expect("Failed to write chat_key.rs");
+    println!("cargo:rerun-if-changed={}", chat_key_path.display());
 
-    write_chat_key(&manifest_dir, &out_dir);
+    let unrar_dir = PathBuf::from("../payload/third_party/unrar");
+    let sources = [
+        "rar.cpp",
+        "strlist.cpp",
+        "strfn.cpp",
+        "pathfn.cpp",
+        "smallfn.cpp",
+        "global.cpp",
+        "file.cpp",
+        "filefn.cpp",
+        "filcreat.cpp",
+        "archive.cpp",
+        "arcread.cpp",
+        "unicode.cpp",
+        "system.cpp",
+        "crypt.cpp",
+        "crc.cpp",
+        "rawread.cpp",
+        "encname.cpp",
+        "resource.cpp",
+        "match.cpp",
+        "timefn.cpp",
+        "rdwrfn.cpp",
+        "consio.cpp",
+        "options.cpp",
+        "errhnd.cpp",
+        "rarvm.cpp",
+        "secpassword.cpp",
+        "rijndael.cpp",
+        "getbits.cpp",
+        "sha1.cpp",
+        "sha256.cpp",
+        "blake2s.cpp",
+        "hash.cpp",
+        "extinfo.cpp",
+        "extract.cpp",
+        "volume.cpp",
+        "list.cpp",
+        "find.cpp",
+        "unpack.cpp",
+        "headers.cpp",
+        "threadpool.cpp",
+        "rs16.cpp",
+        "cmddata.cpp",
+        "ui.cpp",
+        "filestr.cpp",
+        "scantree.cpp",
+        "dll.cpp",
+        "qopen.cpp",
+        "largepage.cpp",
+        "unrar_wrapper.cpp",
+    ];
 
-    if std::env::var("CARGO_CFG_WINDOWS").is_err() {
-        return;
+    let mut build = cc::Build::new();
+    build.cpp(true);
+    // Silence warnings from vendored unrar sources.
+    build.warnings(false);
+    build.flag_if_supported("-w");
+    build.include(&unrar_dir);
+    build.flag_if_supported("-std=c++11");
+    build.define("SILENT", None);
+    build.define("RARDLL", None);
+    build.define("LITTLE_ENDIAN", None);
+    build.define("ALLOW_MISALIGNED", None);
+    build.define("_FILE_OFFSET_BITS", Some("64"));
+    build.define("_LARGEFILE_SOURCE", None);
+    build.flag_if_supported("-fno-rtti");
+
+    if !cfg!(target_os = "windows") {
+        build.define("_UNIX", None);
     }
 
-    let logo_path = manifest_dir.join("..").join("logo.png");
-    if !logo_path.exists() {
-        return;
-    }
-
-    let icon_path = out_dir.join("ps5upload.ico");
-
-    if let Err(err) = build_ico(&logo_path, &icon_path) {
-        eprintln!("Failed to build Windows icon: {}", err);
-        return;
-    }
-
-    let mut res = winres::WindowsResource::new();
-    res.set_icon(icon_path.to_string_lossy().as_ref());
-    res.set_manifest(r#"
-<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
-<trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
-    <security>
-        <requestedPrivileges>
-            <requestedExecutionLevel level="asInvoker" uiAccess="false" />
-        </requestedPrivileges>
-    </security>
-</trustInfo>
-</assembly>
-"#);
-    let _ = res.compile();
-}
-
-fn write_chat_key(manifest_dir: &PathBuf, out_dir: &PathBuf) {
-    let key_path = Some(manifest_dir.join("ps5upload_chat.key"));
-    let key = key_path
-        .as_ref()
-        .and_then(|path| std::fs::read_to_string(path).ok())
-        .unwrap_or_default();
-    let key = key.trim();
-    let key_literal = key.replace('\\', "\\\\").replace('"', "\\\"");
-    let content = format!("pub const CHAT_SHARED_KEY_HEX: &str = \"{}\";\n", key_literal);
-    let out_file = out_dir.join("chat_key.rs");
-    let _ = std::fs::write(out_file, content);
-    if let Some(path) = key_path {
+    for source in sources.iter() {
+        let path = unrar_dir.join(source);
+        build.file(&path);
         println!("cargo:rerun-if-changed={}", path.display());
     }
-}
 
-fn build_ico(src: &PathBuf, dst: &PathBuf) -> Result<(), String> {
-    let image = image::open(src).map_err(|e| e.to_string())?;
-    let sizes = [16u32, 24, 32, 48, 64, 128, 256];
-    let mut frames = Vec::new();
-    for size in sizes {
-        let resized = image::imageops::resize(&image, size, size, image::imageops::FilterType::Lanczos3);
-        let (w, h) = resized.dimensions();
-        let buf = resized.into_raw();
-        let frame = image::codecs::ico::IcoFrame::as_png(&buf, w, h, image::ExtendedColorType::Rgba8)
-            .map_err(|e| e.to_string())?;
-        frames.push(frame);
+    build.compile("unrar_client");
+
+    let target = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    if target == "linux" || target == "android" {
+        println!("cargo:rustc-link-lib=dylib=stdc++");
+    } else if target == "macos" || target == "ios" {
+        println!("cargo:rustc-link-lib=dylib=c++");
     }
-    image::codecs::ico::IcoEncoder::new(std::fs::File::create(dst).map_err(|e| e.to_string())?)
-        .encode_images(&frames)
-        .map_err(|e| e.to_string())
 }

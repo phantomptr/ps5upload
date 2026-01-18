@@ -310,7 +310,7 @@ void Unpack::LongLZ()
     Length++;
   if (Distance <= 256)
     Length+=8;
-  if (OldAvr3 > 0xb0 || AvrPlc >= 0x2a00 && OldAvr2 < 0x40)
+  if (OldAvr3 > 0xb0 || (AvrPlc >= 0x2a00 && OldAvr2 < 0x40))
     MaxDist3=0x7f00;
   else
     MaxDist3=0x2001;
@@ -476,7 +476,7 @@ void Unpack::CopyString15(uint Distance,uint Length)
 {
   DestUnpSize-=Length;
   // 2024.04.18: Distance can be 0 in corrupt RAR 1.5 archives.
-  if (!FirstWinDone && Distance>UnpPtr || Distance>MaxWinSize || Distance==0)
+  if ((!FirstWinDone && Distance>UnpPtr) || Distance>MaxWinSize || Distance==0)
     while (Length-- > 0)
     {
       Window[UnpPtr]=0;

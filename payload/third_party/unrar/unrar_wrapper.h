@@ -17,6 +17,8 @@ extern "C" {
 #define UNRAR_ERR_PASSWORD   -4
 #define UNRAR_ERR_MEMORY     -5
 #define UNRAR_ERR_BADARCHIVE -6
+#define UNRAR_PROBE_PARAM_MAX (1024 * 1024)
+#define UNRAR_PROBE_COVER_MAX (16 * 1024 * 1024)
 
 /* Callback for progress reporting
  * filename: current file being extracted
@@ -60,6 +62,14 @@ int unrar_extract(const char *rar_path, const char *dest_dir, int strip_root,
  * Returns: UNRAR_OK on success, error code on failure
  */
 int unrar_scan(const char *rar_path, int *file_count, unsigned long long *total_size, char *common_root, size_t root_len);
+
+/* Probe a RAR archive for param.json and a cover image.
+ * Outputs allocated buffers (caller must free).
+ * Returns UNRAR_OK on success (even if files not found).
+ */
+int unrar_probe_archive(const char *rar_path,
+                        char **param_buf, size_t *param_size,
+                        char **cover_buf, size_t *cover_size);
 
 /* Get error description string */
 const char *unrar_strerror(int err);

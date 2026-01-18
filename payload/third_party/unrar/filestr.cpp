@@ -10,6 +10,7 @@ bool ReadTextFile(
   bool SkipComments,
   bool ExpandEnvStr)
 {
+  RAR_UNUSED(ExpandEnvStr);
   std::wstring FileName;
 
   if (Config)

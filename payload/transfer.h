@@ -17,5 +17,6 @@ void upload_session_stats(UploadSession *session, int *files, long long *bytes);
 void handle_upload_v2(int client_sock, const char *dest_root);
 
 void transfer_cleanup(void);
+int transfer_idle_cleanup(void);
 
 #endif

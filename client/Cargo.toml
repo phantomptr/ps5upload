@@ -1,6 +1,6 @@
 [package]
 name = "ps5upload"
-version = "1.1.7"
+version = "1.1.9"
 edition = "2021"
 
 [dependencies]
@@ -29,7 +29,7 @@ aes-gcm = "0.10"
 base64 = "0.21"
 hex = "0.4"
 rand = "0.8"
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 # RAR extraction is now done server-side (payload) - no client unrar needed
 zip = "2.1"
 sevenz-rust = "0.6"
@@ -37,6 +37,7 @@ sevenz-rust = "0.6"
 [build-dependencies]
 image = { version = "0.25", default-features = false, features = ["png", "ico"] }
 winres = "0.1"
+cc = "1.0"
 
 [profile.release]
 opt-level = 3

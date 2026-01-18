@@ -257,6 +257,11 @@ static void process_command(struct ClientConnection *conn) {
         close_connection(conn);
         return;
     }
+    if (strncmp(conn->cmd_buffer, "PROBE_RAR ", 10) == 0) {
+        handle_probe_rar(conn->sock, conn->cmd_buffer + 10);
+        close_connection(conn);
+        return;
+    }
     if (strncmp(conn->cmd_buffer, "EXTRACT_ARCHIVE ", 16) == 0) {
         handle_extract_archive(conn->sock, conn->cmd_buffer + 16);
         close_connection(conn);
@@ -303,12 +308,17 @@ static void process_command(struct ClientConnection *conn) {
         return;
     }
     if (strncmp(conn->cmd_buffer, "UPLOAD_RAR_SAFE ", 16) == 0) {
-        handle_upload_rar(conn->sock, conn->cmd_buffer + 16, 1);
+        handle_upload_rar(conn->sock, conn->cmd_buffer + 16, UNRAR_MODE_SAFE);
+        close_connection(conn);
+        return;
+    }
+    if (strncmp(conn->cmd_buffer, "UPLOAD_RAR_TURBO ", 17) == 0) {
+        handle_upload_rar(conn->sock, conn->cmd_buffer + 17, UNRAR_MODE_TURBO);
         close_connection(conn);
         return;
     }
     if (strncmp(conn->cmd_buffer, "UPLOAD_RAR ", 11) == 0) {
-        handle_upload_rar(conn->sock, conn->cmd_buffer + 11, 0);
+        handle_upload_rar(conn->sock, conn->cmd_buffer + 11, UNRAR_MODE_FAST);
         close_connection(conn);
         return;
     }

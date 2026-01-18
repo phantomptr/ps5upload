@@ -27,6 +27,8 @@ size_t Archive::ReadHeader()
     case RARFMT50:
       ReadSize=ReadHeader50();
       break;
+    default:
+      break;
   }
 
   // It is important to check ReadSize>0 here, because it is normal
@@ -197,6 +199,7 @@ size_t Archive::ReadHeader15()
     case HEAD3_FILE:    ShortBlock.HeaderType=HEAD_FILE;     break;
     case HEAD3_SERVICE: ShortBlock.HeaderType=HEAD_SERVICE;  break;
     case HEAD3_ENDARC:  ShortBlock.HeaderType=HEAD_ENDARC;   break;
+    default: break;
   }
   CurHeaderType=ShortBlock.HeaderType;
 
@@ -928,6 +931,8 @@ size_t Archive::ReadHeader50()
         EndArcHead.DataCRC=false;
         EndArcHead.RevSpace=false;
       }
+      break;
+    default:
       break;
   }
 

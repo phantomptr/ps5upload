@@ -189,6 +189,7 @@ bool IsPathDiv(int Ch)
 bool IsDriveDiv(int Ch)
 {
 #ifdef _UNIX
+  RAR_UNUSED(Ch);
   return false;
 #else
   return Ch==':';
@@ -324,6 +325,7 @@ void GetRarDataPath(std::wstring &Path,bool Create)
 bool EnumConfigPaths(uint Number,std::wstring &Path,bool Create)
 {
 #ifdef _UNIX
+  RAR_UNUSED(Create);
   static const wchar *ConfPath[]={
     L"/etc", L"/etc/rar", L"/usr/lib", L"/usr/local/lib", L"/usr/local/etc"
   };
@@ -544,8 +546,8 @@ void MakeNameUsable(std::wstring &Name,bool Extended)
 
   for (size_t I=StartPos;I<Name.size();I++)
   {
-    if (wcschr(Extended ? L"?*<>|\"":L"?*",Name[I])!=NULL || 
-        Extended && (uint)Name[I]<32)
+    if (wcschr(Extended ? L"?*<>|\"":L"?*",Name[I])!=NULL ||
+        (Extended && (uint)Name[I]<32))
       Name[I]='_';
 #ifdef _UNIX
     // We were asked to apply Windows-like conversion in Linux in case
@@ -567,8 +569,8 @@ void MakeNameUsable(std::wstring &Name,bool Extended)
       // conversion at the end of file name would never be invoked here.
       // While converting dots, we preserve "." and ".." path components,
       // such as when specifying ".." in the destination path.
-      if (IsPathDiv(Name[I+1]) && (Name[I]==' ' || Name[I]=='.' && I>0 &&
-          !IsPathDiv(Name[I-1]) && (Name[I-1]!='.' || I>1 && !IsPathDiv(Name[I-2]))))
+      if (IsPathDiv(Name[I+1]) && (Name[I]==' ' || (Name[I]=='.' && I>0 &&
+          !IsPathDiv(Name[I-1]) && (Name[I-1]!='.' || (I>1 && !IsPathDiv(Name[I-2]))))))
         Name[I]='_';
     }
 #else
@@ -855,6 +857,7 @@ static void GenArcName(std::wstring &ArcName,const std::wstring &GenerateMask,ui
       MAsMinutes=0; // Treat 'M' in HHDDMMYY and HHYYMMDD as month.
 
     if (CurChar=='M')
+    {
       if (MAsMinutes>0)
       {
         // Replace minutes with 'I'. We use 'M' both for months and minutes,
@@ -869,6 +872,7 @@ static void GenArcName(std::wstring &ArcName,const std::wstring &GenerateMask,ui
           for (uint J=I;J<Mask.size() && toupperw(Mask[J])=='M';J++)
             Mask[J]='O';
       }
+    }
     if (CurChar=='N')
     {
       uint Digits=GetDigits(ArcNumber);
@@ -905,10 +909,12 @@ static void GenArcName(std::wstring &ArcName,const std::wstring &GenerateMask,ui
   int WeekDay=rlt.wDay==0 ? 6:rlt.wDay-1;
   int StartWeekDay=rlt.yDay-WeekDay;
   if (StartWeekDay<0)
+  {
     if (StartWeekDay<=-4)
       StartWeekDay+=IsLeapYear(rlt.Year-1) ? 366:365;
     else
       StartWeekDay=0;
+  }
   int CurWeek=StartWeekDay/7+1;
   if (StartWeekDay%7>=4)
     CurWeek++;
@@ -1234,5 +1240,4 @@ bool GetCurDir(std::wstring &Dir)
   return Code!=0;
 }
 #endif
-
 

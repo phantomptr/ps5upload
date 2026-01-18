@@ -133,6 +133,7 @@ bool CommandData::CheckArgs(StringList *Args,bool Dir,const std::wstring &CheckN
 // but not the contents of symlinked directory.
 bool CommandData::ExclDirByAttr(uint FileAttr)
 {
+  RAR_UNUSED(FileAttr);
 #ifdef _WIN_ALL
   if ((FileAttr & FILE_ATTRIBUTE_REPARSE_POINT)!=0 &&
       (ExclFileAttr & FILE_ATTRIBUTE_REPARSE_POINT)!=0)
@@ -301,6 +302,7 @@ bool CommandData::SizeCheck(int64 Size)
 int CommandData::IsProcessFile(FileHeader &FileHead,bool *ExactMatch,int MatchType,
                                bool Flags,std::wstring *MatchedArg)
 {
+  RAR_UNUSED(Flags);
   if (MatchedArg!=NULL)
     MatchedArg->clear();
   bool Dir=FileHead.Dir;
@@ -309,7 +311,7 @@ int CommandData::IsProcessFile(FileHeader &FileHead,bool *ExactMatch,int MatchTy
 #ifndef SFX_MODULE
   if (TimeCheck(FileHead.mtime,FileHead.ctime,FileHead.atime))
     return 0;
-  if ((FileHead.FileAttr & ExclFileAttr)!=0 || FileHead.Dir && ExclDir)
+  if ((FileHead.FileAttr & ExclFileAttr)!=0 || (FileHead.Dir && ExclDir))
     return 0;
   if (InclAttrSet && (FileHead.FileAttr & InclFileAttr)==0 &&
       (!FileHead.Dir || !InclDir))

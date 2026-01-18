@@ -105,10 +105,11 @@ CXXFLAGS := -std=c++11 $(COMMON_FLAGS) \
 	-D_UNIX -DSILENT -DRARDLL -DLITTLE_ENDIAN -DALLOW_MISALIGNED \
 	-D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE \
 	-UUSE_SSE -URAR_SMP \
-	-Wno-logical-op-parentheses -Wno-switch -Wno-dangling-else \
+	-Wno-switch -Wno-dangling-else \
 	-Wno-delete-non-virtual-dtor -Wno-unused-variable -fno-rtti
 
 THIRD_PARTY_CFLAGS := -Wno-unneeded-internal-declaration -Wno-empty-body
+UNRAR_CXXFLAGS := $(CXXFLAGS) -w
 LDADD := -lkernel -lpthread -lc++
 
 .PHONY: all clean test info help
@@ -138,7 +139,7 @@ third_party/lzma_sdk/%.o: third_party/lzma_sdk/%.c
 # C++ unrar sources
 $(UNRAR_DIR)/%.o: $(UNRAR_DIR)/%.cpp
 	@echo "Compiling C++: $<..."
-	$(CXX) $(CXXFLAGS) -c $< -o $@
+	$(CXX) $(UNRAR_CXXFLAGS) -c $< -o $@
 
 notify.o: notify.c notify.h config.h
 	$(CC) $(CFLAGS) -c notify.c -o notify.o

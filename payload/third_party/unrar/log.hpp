@@ -5,7 +5,7 @@ void InitLogOptions(const std::wstring &LogFileName,RAR_CHARSET CSet);
 void CloseLogOptions();
 
 #ifdef SILENT
-inline void Log(const wchar *ArcName,const wchar *fmt,...) {}
+inline void Log(const wchar *ArcName,const wchar *fmt,...) { RAR_UNUSED(ArcName); RAR_UNUSED(fmt); }
 #else
 void Log(const wchar *ArcName,const wchar *fmt,...);
 #endif

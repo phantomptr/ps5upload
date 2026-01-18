@@ -89,6 +89,12 @@ bool CreatePath(const std::wstring &Path,bool SkipLastName,bool Silent)
 
 void SetDirTime(const std::wstring &Name,RarTime *ftm,RarTime *ftc,RarTime *fta)
 {
+#ifndef _WIN_ALL
+  RAR_UNUSED(Name);
+  RAR_UNUSED(ftm);
+  RAR_UNUSED(ftc);
+  RAR_UNUSED(fta);
+#endif
 #if defined(_WIN_ALL)
   bool sm=ftm!=NULL && ftm->IsSet();
   bool sc=ftc!=NULL && ftc->IsSet();
@@ -133,6 +139,9 @@ void SetDirTime(const std::wstring &Name,RarTime *ftm,RarTime *ftc,RarTime *fta)
 
 bool IsRemovable(const std::wstring &Name)
 {
+#ifdef _UNIX
+  RAR_UNUSED(Name);
+#endif
 #if defined(_WIN_ALL)
   std::wstring Root;
   GetPathRoot(Name,Root);
