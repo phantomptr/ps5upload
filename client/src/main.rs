@@ -44,7 +44,7 @@ mod chat;
 
 const CHAT_MAX_MESSAGES: usize = 500;
 
-use protocol::{StorageLocation, DirEntry, DownloadCompression, list_storage, list_dir, list_dir_recursive, check_dir, upload_v2_init, delete_path, move_path, copy_path, chmod_777, create_path, download_file_with_progress, download_dir_with_progress, get_payload_version, hash_file, upload_rar_for_extraction, get_space};
+use protocol::{StorageLocation, DirEntry, DownloadCompression, list_storage, list_dir, list_dir_recursive, check_dir, upload_v2_init, delete_path, move_path, move_path_with_progress, copy_path_with_progress, extract_archive_with_progress, chmod_777, create_path, download_file_with_progress, download_dir_with_progress, get_payload_version, hash_file, upload_rar_for_extraction, get_space};
 use archive::get_size;
 use transfer::{collect_files_with_progress, stream_files_with_progress, send_files_v2_for_list, SendFilesConfig, scan_zip_archive, send_zip_archive, scan_7z_archive, send_7z_archive, SharedReceiverIterator, FileEntry, CompressionMode};
 use config::AppConfig;
@@ -86,6 +86,7 @@ enum ManageSide {
 enum ManageDestAction {
     Move,
     Copy,
+    Extract,
 }
 
 enum ChatStatusEvent {
@@ -105,6 +106,7 @@ enum AppMessage {
     StorageList(Result<Vec<StorageLocation>, String>),
     ManageList { side: ManageSide, result: Result<Vec<DirEntry>, String> },
     ManageOpComplete { op: String, result: Result<(), String> },
+    ManageProgress { op: String, processed: u64, total: u64 },
     DownloadStart { total: u64, label: String },
     DownloadProgress { received: u64, total: u64, current_file: Option<String> },
     DownloadComplete(Result<u64, String>),
@@ -228,6 +230,12 @@ struct Ps5UploadApp {
     // Move
     is_moving: bool,
     move_cancellation_token: Arc<AtomicBool>,
+    manage_op_cancellation_token: Arc<AtomicBool>,
+    manage_progress_active: bool,
+    manage_progress_op: String,
+    manage_progress_sent: u64,
+    manage_progress_total: u64,
+    manage_progress_start_time: Option<std::time::Instant>,
 
     // Updates
     update_info: Option<ReleaseInfo>,
@@ -404,6 +412,12 @@ impl Ps5UploadApp {
             download_current_file: String::new(),
             is_moving: false,
             move_cancellation_token: Arc::new(AtomicBool::new(false)),
+            manage_op_cancellation_token: Arc::new(AtomicBool::new(false)),
+            manage_progress_active: false,
+            manage_progress_op: String::new(),
+            manage_progress_sent: 0,
+            manage_progress_total: 0,
+            manage_progress_start_time: None,
             update_info: None,
             update_status: "Checking for updates...".to_string(),
             update_available: false,
@@ -843,6 +857,18 @@ impl Ps5UploadApp {
         egui::RichText::new(text).color(color).italics()
     }
 
+    fn is_extractable_archive(name: &str) -> bool {
+        let lower = name.to_lowercase();
+        lower.ends_with(".rar")
+    }
+
+    fn archive_base_name(name: &str) -> String {
+        match name.rfind('.') {
+            Some(idx) => name[..idx].to_string(),
+            None => name.to_string(),
+        }
+    }
+
     fn manage_send_op(&mut self, op: &str, task: impl FnOnce() -> Result<(), String> + Send + 'static) {
         if self.ip.trim().is_empty() {
             return;
@@ -858,6 +884,31 @@ impl Ps5UploadApp {
         let tx = self.tx.clone();
         thread::spawn(move || {
             let result = task();
+            let _ = tx.send(AppMessage::ManageOpComplete { op: op_name, result });
+        });
+    }
+
+    fn manage_send_op_with_progress(&mut self, op: &str, cancel: Arc<AtomicBool>, task: impl FnOnce(Sender<AppMessage>, Arc<AtomicBool>) -> Result<(), String> + Send + 'static) {
+        if self.ip.trim().is_empty() {
+            return;
+        }
+        self.manage_busy = true;
+        self.manage_left_status = format!("{}...", op);
+        self.log(&format!("{}...", op));
+        if op.starts_with("Move") {
+            self.is_moving = true;
+            self.move_cancellation_token.store(false, Ordering::Relaxed);
+        }
+        cancel.store(false, Ordering::Relaxed);
+        self.manage_progress_active = true;
+        self.manage_progress_op = op.to_string();
+        self.manage_progress_sent = 0;
+        self.manage_progress_total = 0;
+        self.manage_progress_start_time = Some(std::time::Instant::now());
+        let op_name = op.to_string();
+        let tx = self.tx.clone();
+        thread::spawn(move || {
+            let result = task(tx.clone(), cancel);
             let _ = tx.send(AppMessage::ManageOpComplete { op: op_name, result });
         });
     }
@@ -962,9 +1013,13 @@ impl Ps5UploadApp {
         let src = request.src.clone();
         let dst = request.dst.clone();
         let op_name = request.op_name.clone();
-        self.manage_send_op(&op_name, move || {
+        let cancel = self.move_cancellation_token.clone();
+        let op_label = op_name.clone();
+        self.manage_send_op_with_progress(&op_name, cancel, move |tx, cancel| {
             rt.block_on(async {
-                move_path(&ip, TRANSFER_PORT, &src, &dst).await
+                move_path_with_progress(&ip, TRANSFER_PORT, &src, &dst, cancel, move |processed, total| {
+                    let _ = tx.send(AppMessage::ManageProgress { op: op_label.clone(), processed, total });
+                }).await
             }).map_err(|e| e.to_string())
         });
     }
@@ -1370,6 +1425,7 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
         let auto_tune_connections = self.config.auto_tune_connections;
         let compression_setting = self.config.compression.clone();
         let optimize_upload = self.config.optimize_upload;
+        let rar_safe_extract = self.config.rar_safe_extract;
         let lang_code = self.config.language.clone();
         let payload_supports_modern = self.payload_supports_modern_compression();
         let required_size = self.calculated_size;
@@ -1451,6 +1507,7 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
                         TRANSFER_PORT,
                         &game_path,
                         &dest_path,
+                        rar_safe_extract,
                         cancel_token.clone(),
                         progress_callback,
                         move |msg| { 
@@ -2320,7 +2377,14 @@ impl eframe::App for Ps5UploadApp {
         let connected = self.is_connected || self.is_uploading;
         let lang = self.language;
 
-        if self.config.auto_check_payload && connected && !self.is_sending_payload {
+        if self.config.auto_check_payload
+            && connected
+            && !self.is_sending_payload
+            && !self.manage_busy
+            && !self.manage_progress_active
+            && !self.is_downloading
+            && !self.is_uploading
+        {
             let now = std::time::Instant::now();
             let should_check = self.last_payload_check
                 .map(|last| now.duration_since(last).as_secs() >= 30)
@@ -2442,6 +2506,11 @@ impl eframe::App for Ps5UploadApp {
                     if op.starts_with("Move") {
                         self.is_moving = false;
                     }
+                    self.manage_progress_active = false;
+                    self.manage_progress_sent = 0;
+                    self.manage_progress_total = 0;
+                    self.manage_progress_start_time = None;
+                    self.manage_op_cancellation_token.store(false, Ordering::Relaxed);
                     match result {
                         Ok(()) => {
                             if op.starts_with("Move") && self.move_cancellation_token.load(Ordering::Relaxed) {
@@ -2458,6 +2527,12 @@ impl eframe::App for Ps5UploadApp {
                             self.log(&format!("{} failed: {}", op, e));
                         }
                     }
+                }
+                AppMessage::ManageProgress { op, processed, total } => {
+                    self.manage_progress_active = true;
+                    self.manage_progress_op = op;
+                    self.manage_progress_sent = processed;
+                    self.manage_progress_total = total;
                 }
                 AppMessage::MoveCheckResult { mut req, exists } => {
                     req.dst_exists = exists;
@@ -2622,7 +2697,12 @@ impl eframe::App for Ps5UploadApp {
                         Err(e) => {
                             self.payload_status = format!("Not detected ({})", e);
                             self.payload_version = None;
-                            if self.config.auto_check_payload {
+                            if self.config.auto_check_payload
+                                && !self.manage_busy
+                                && !self.manage_progress_active
+                                && !self.is_downloading
+                                && !self.is_uploading
+                            {
                                 self.payload_log("Payload not detected. Auto-loading current payload...");
                                 self.start_payload_download_and_send(PayloadFetch::Current);
                             }
@@ -2879,6 +2959,11 @@ Overwrite it?", self.get_dest_path()));
                     if is_rar {
                         // RAR files are extracted server-side on PS5
                         ui.label(egui::RichText::new("RAR will be uploaded and extracted on PS5.").weak());
+                        let safe_toggle = ui.checkbox(&mut self.config.rar_safe_extract, tr(lang, "archive_rar_safe_toggle"));
+                        if safe_toggle.changed() {
+                            let _ = self.config.save();
+                        }
+                        ui.label(egui::RichText::new(tr(lang, "archive_rar_safe_note")).weak());
                     } else {
                         ui.label(egui::RichText::new(tr(lang, "archive_extract_stream_note")).weak());
                     }
@@ -3022,9 +3107,24 @@ Overwrite it?", self.get_dest_path()));
                                     ManageDestAction::Copy => {
                                         let ip = self.ip.clone();
                                         let rt = self.rt.clone();
-                                        self.manage_send_op("Copy", move || {
+                                        let cancel = self.manage_op_cancellation_token.clone();
+                                        self.manage_send_op_with_progress("Copy", cancel, move |tx, cancel| {
                                             rt.block_on(async {
-                                                copy_path(&ip, TRANSFER_PORT, &src, &dst).await
+                                                copy_path_with_progress(&ip, TRANSFER_PORT, &src, &dst, cancel, move |processed, total| {
+                                                    let _ = tx.send(AppMessage::ManageProgress { op: "Copy".to_string(), processed, total });
+                                                }).await
+                                            }).map_err(|e| e.to_string())
+                                        });
+                                    }
+                                    ManageDestAction::Extract => {
+                                        let ip = self.ip.clone();
+                                        let rt = self.rt.clone();
+                                        let cancel = self.manage_op_cancellation_token.clone();
+                                        self.manage_send_op_with_progress("Extract", cancel, move |tx, cancel| {
+                                            rt.block_on(async {
+                                                extract_archive_with_progress(&ip, TRANSFER_PORT, &src, &dst, cancel, move |processed, total| {
+                                                    let _ = tx.send(AppMessage::ManageProgress { op: "Extract".to_string(), processed, total });
+                                                }).await
                                             }).map_err(|e| e.to_string())
                                         });
                                     }
@@ -3975,6 +4075,18 @@ Overwrite it?", self.get_dest_path()));
                             let name = selected_name.clone().unwrap_or_default();
                             self.open_destination_picker(ManageDestAction::Copy, src, name);
                         }
+                        let can_extract = can_ops
+                            && has_selection
+                            && selected_type.as_deref() == Some("file")
+                            && selected_name.as_deref().map(Self::is_extractable_archive).unwrap_or(false);
+                        if ui.add_enabled(can_extract, egui::Button::new(tr(lang, "extract"))).clicked() {
+                            let src = selected_path.clone().unwrap_or_default();
+                            let name = selected_name
+                                .as_deref()
+                                .map(Self::archive_base_name)
+                                .unwrap_or_default();
+                            self.open_destination_picker(ManageDestAction::Extract, src, name);
+                        }
                         let can_download = can_ops && has_selection;
                         if ui.add_enabled(can_download, egui::Button::new(tr(lang, "download"))).clicked() {
                             let name = selected_name.clone().unwrap_or_default();
@@ -4033,10 +4145,11 @@ Overwrite it?", self.get_dest_path()));
                             });
                         }
                     });
+                    ui.label(egui::RichText::new(tr(lang, "extract_rar_only_note")).weak().small());
 
                     ui.add_space(8.0);
                     ui.separator();
-                    ui.label(tr(lang, "download_progress"));
+                    ui.label(tr(lang, "progress"));
                     ui.horizontal(|ui| {
                         ui.label(tr(lang, "compression"));
                         egui::ComboBox::from_id_source("download_compression_combo")
@@ -4070,39 +4183,80 @@ Overwrite it?", self.get_dest_path()));
                                 }
                             });
                     });
-                    let total = self.download_progress_total.max(1);
-                    let progress = (self.download_progress_sent as f64 / total as f64).clamp(0.0, 1.0) as f32;
-                    ui.add(egui::ProgressBar::new(progress).show_percentage().animate(self.is_downloading));
-                    ui.add_space(4.0);
-                    ui.horizontal(|ui| {
-                        ui.label(format!(
-                            "{} / {}",
-                            format_bytes(self.download_progress_sent),
-                            format_bytes(self.download_progress_total)
-                        ));
-                        ui.separator();
-                        ui.label(format!("{}/s", format_bytes(self.download_speed_bps as u64)));
-                        ui.separator();
-                        ui.label(format!("ETA {}", self.download_eta_secs.map(format_duration).unwrap_or("N/A".to_string())));
-                    });
-                    if !self.download_current_file.is_empty() {
-                        ui.label(format!("Current file: {}", self.download_current_file));
-                    }
-                    if self.is_downloading
-                        && ui.add(egui::Button::new(tr(lang, "stop_download")).min_size([140.0, 30.0].into())).clicked()
-                    {
-                        self.download_cancellation_token.store(true, Ordering::Relaxed);
-                        self.log("Stopping download...");
-                    }
 
-                    if self.is_moving {
-                        ui.add_space(6.0);
-                        ui.separator();
-                        ui.label(tr(lang, "move_progress"));
-                        ui.add(egui::ProgressBar::new(0.5).show_percentage().animate(true));
-                        if ui.add(egui::Button::new(tr(lang, "stop_move")).min_size([140.0, 30.0].into())).clicked() {
-                            self.move_cancellation_token.store(true, Ordering::Relaxed);
-                            self.log("Stopping move...");
+                    if self.is_downloading || self.manage_progress_active {
+                        let (sent, total, speed_bps, eta_secs, current_file, is_download) = if self.is_downloading {
+                            (
+                                self.download_progress_sent,
+                                self.download_progress_total,
+                                self.download_speed_bps,
+                                self.download_eta_secs,
+                                Some(self.download_current_file.clone()),
+                                true,
+                            )
+                        } else {
+                            let sent = self.manage_progress_sent;
+                            let total = self.manage_progress_total;
+                            let (speed_bps, eta_secs) = if let Some(start) = self.manage_progress_start_time {
+                                let elapsed = start.elapsed().as_secs_f64();
+                                if elapsed > 0.0 {
+                                    let speed = sent as f64 / elapsed;
+                                    let eta = if total > sent && speed > 0.0 {
+                                        Some((total - sent) as f64 / speed)
+                                    } else {
+                                        None
+                                    };
+                                    (speed, eta)
+                                } else {
+                                    (0.0, None)
+                                }
+                            } else {
+                                (0.0, None)
+                            };
+                            (sent, total, speed_bps, eta_secs, None, false)
+                        };
+
+                        let total_clamped = total.max(1);
+                        let progress = (sent as f64 / total_clamped as f64).clamp(0.0, 1.0) as f32;
+                        ui.add(egui::ProgressBar::new(progress).show_percentage().animate(true));
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            ui.label(format!("{} / {}", format_bytes(sent), format_bytes(total)));
+                            if speed_bps > 0.0 {
+                                ui.separator();
+                                ui.label(format!("{}/s", format_bytes(speed_bps as u64)));
+                            }
+                            if let Some(eta) = eta_secs {
+                                ui.separator();
+                                ui.label(format!("ETA {}", format_duration(eta)));
+                            }
+                        });
+                        if let Some(name) = current_file {
+                            if !name.is_empty() {
+                                ui.label(format!("Current file: {}", name));
+                            }
+                        }
+                        if is_download
+                            && ui.add(egui::Button::new(tr(lang, "stop_download")).min_size([140.0, 30.0].into())).clicked()
+                        {
+                            self.download_cancellation_token.store(true, Ordering::Relaxed);
+                            self.log("Stopping download...");
+                        }
+                        if !is_download {
+                            let stop_label = if self.manage_progress_op.starts_with("Move") {
+                                tr(lang, "stop_move")
+                            } else {
+                                tr(lang, "stop_operation")
+                            };
+                            if ui.add(egui::Button::new(stop_label).min_size([140.0, 30.0].into())).clicked() {
+                                if self.manage_progress_op.starts_with("Move") {
+                                    self.move_cancellation_token.store(true, Ordering::Relaxed);
+                                    self.log("Stopping move...");
+                                } else {
+                                    self.manage_op_cancellation_token.store(true, Ordering::Relaxed);
+                                    self.log("Stopping operation...");
+                                }
+                            }
                         }
                     }
                 });
@@ -4308,8 +4462,10 @@ Overwrite it?", self.get_dest_path()));
                         });
                         ui.end_row();
                         if self.selected_preset == 2 { ui.label(format!("{}:", tr(lang, "path"))); ui.text_edit_singleline(&mut self.custom_preset_path); ui.end_row(); }
-                        let is_archive = Self::archive_kind(Path::new(&self.game_path)).is_some();
-                        let trim_active = is_archive && self.pending_archive_trim;
+                    let archive_kind = Self::archive_kind(Path::new(&self.game_path));
+                    let is_archive = archive_kind.is_some();
+                    let _is_rar_archive = archive_kind.as_ref().map(|k| k.eq_ignore_ascii_case("RAR")).unwrap_or(false);
+                    let trim_active = is_archive && self.pending_archive_trim;
                         ui.label(format!("{}:", tr(lang, "name_label")));
                         ui.add_enabled_ui(!trim_active, |ui| {
                             ui.text_edit_singleline(&mut self.custom_subfolder);
@@ -4371,6 +4527,13 @@ Overwrite it?", self.get_dest_path()));
                         }
                     });
                     ui.label(egui::RichText::new("RAR archives are extracted on PS5.").weak().small());
+                    if Self::archive_kind(Path::new(&self.game_path)).as_ref().map(|k| k.eq_ignore_ascii_case("RAR")).unwrap_or(false) {
+                        let safe_toggle = ui.checkbox(&mut self.config.rar_safe_extract, tr(lang, "archive_rar_safe_toggle"));
+                        if safe_toggle.changed() {
+                            let _ = self.config.save();
+                        }
+                        ui.label(egui::RichText::new(tr(lang, "archive_rar_safe_note")).weak().small());
+                    }
                     if self.config.optimize_upload {
                         ui.label(egui::RichText::new(tr(lang, "optimize_upload_lock_notice")).weak().small());
                     }
@@ -4382,7 +4545,7 @@ Overwrite it?", self.get_dest_path()));
 
                 ui.group(|ui| {
                     ui.set_width(ui.available_width());
-                    ui.label(tr(lang, "transfer_progress"));
+                    ui.label(tr(lang, "progress"));
                     ui.add_space(5.0);
 
                     if self.is_scanning && !self.is_uploading {

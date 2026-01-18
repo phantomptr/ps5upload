@@ -257,6 +257,11 @@ static void process_command(struct ClientConnection *conn) {
         close_connection(conn);
         return;
     }
+    if (strncmp(conn->cmd_buffer, "EXTRACT_ARCHIVE ", 16) == 0) {
+        handle_extract_archive(conn->sock, conn->cmd_buffer + 16);
+        close_connection(conn);
+        return;
+    }
     if (strncmp(conn->cmd_buffer, "MOVE ", 5) == 0) {
         handle_move_path(conn->sock, conn->cmd_buffer + 5);
         close_connection(conn);
@@ -297,8 +302,13 @@ static void process_command(struct ClientConnection *conn) {
         close_connection(conn);
         return;
     }
+    if (strncmp(conn->cmd_buffer, "UPLOAD_RAR_SAFE ", 16) == 0) {
+        handle_upload_rar(conn->sock, conn->cmd_buffer + 16, 1);
+        close_connection(conn);
+        return;
+    }
     if (strncmp(conn->cmd_buffer, "UPLOAD_RAR ", 11) == 0) {
-        handle_upload_rar(conn->sock, conn->cmd_buffer + 11);
+        handle_upload_rar(conn->sock, conn->cmd_buffer + 11, 0);
         close_connection(conn);
         return;
     }

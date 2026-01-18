@@ -6,6 +6,63 @@
 
 #include <string.h>
 #include <stdlib.h>
+#include <time.h>
+#include <ctype.h>
+#include <string>
+#include <vector>
+
+static bool sanitize_target_path(const char *input, std::string &out) {
+    if (!input || !*input) {
+        return false;
+    }
+
+    const char *p = input;
+    if (isalpha((unsigned char)p[0]) && p[1] == ':') {
+        p += 2;
+    }
+
+    while (*p == '/' || *p == '\\') {
+        p++;
+    }
+
+    std::vector<std::string> segments;
+    while (*p != '\0') {
+        while (*p == '/' || *p == '\\') {
+            p++;
+        }
+        const char *start = p;
+        while (*p != '\0' && *p != '/' && *p != '\\') {
+            p++;
+        }
+        if (p == start) {
+            continue;
+        }
+        std::string segment(start, (size_t)(p - start));
+        if (segment == "." || segment.empty()) {
+            continue;
+        }
+        if (segment == "..") {
+            if (!segments.empty()) {
+                segments.pop_back();
+            }
+            continue;
+        }
+        segments.push_back(segment);
+    }
+
+    if (segments.empty()) {
+        return false;
+    }
+
+    out.clear();
+    for (size_t i = 0; i < segments.size(); i++) {
+        if (i > 0) {
+            out.push_back('/');
+        }
+        out.append(segments[i]);
+    }
+    return true;
+}
 
 /* Progress callback context */
 struct ExtractContext {
@@ -17,8 +74,14 @@ struct ExtractContext {
     char current_filename[1024];
     unsigned long long current_file_size;
     unsigned long long total_processed;
-    unsigned long long total_size;
+    unsigned long long progress_total_size;
+    unsigned long long total_unpacked_size;
+    unsigned long long bytes_since_sleep;
     time_t last_update_time;
+    unsigned int keepalive_interval_sec;
+    unsigned long long sleep_every_bytes;
+    unsigned int sleep_us;
+    int use_dynamic_total;
 };
 
 /* Internal callback for unrar library */
@@ -31,22 +94,30 @@ static int CALLBACK unrar_callback(UINT msg, LPARAM user_data, LPARAM p1, LPARAM
             /* p1 = data pointer, p2 = data size */
             if (p2 > 0) {
                 ctx->total_processed += (unsigned long long)p2;
+                ctx->bytes_since_sleep += (unsigned long long)p2;
             }
             if (ctx->callback) {
                 time_t now = time(NULL);
                 /* Send keep-alive update every 5 seconds for large files */
                 /* Or if we just processed a chunk? No, stick to time to avoid spam */
-                if (now - ctx->last_update_time >= 5) {
+                if (ctx->keepalive_interval_sec > 0 &&
+                    now - ctx->last_update_time >= (time_t)ctx->keepalive_interval_sec) {
                     ctx->last_update_time = now;
                     /* Re-send the current file status to keep the client connection alive */
-                    if (ctx->callback(ctx->current_filename, ctx->current_file_size, ctx->files_done, ctx->total_processed, ctx->total_size, ctx->user_data) != 0) {
+                    if (ctx->callback(ctx->current_filename, ctx->current_file_size, ctx->files_done,
+                                      ctx->total_processed, ctx->progress_total_size, ctx->user_data) != 0) {
                         ctx->abort_flag = 1;
                         return -1;
                     }
                 }
             }
             /* Throttle CPU usage to prevent OS kill/watchdog timeout */
-            usleep(1000); // Yield 1ms per chunk
+            /* Yield periodically based on configured thresholds */
+            if (ctx->sleep_every_bytes > 0 && ctx->sleep_us > 0 &&
+                ctx->bytes_since_sleep > ctx->sleep_every_bytes) {
+                usleep(ctx->sleep_us);
+                ctx->bytes_since_sleep = 0;
+            }
             break;
         case UCM_NEEDPASSWORD:
         case UCM_NEEDPASSWORDW:
@@ -62,9 +133,18 @@ static int CALLBACK unrar_callback(UINT msg, LPARAM user_data, LPARAM p1, LPARAM
 }
 
 extern "C" int unrar_extract(const char *rar_path, const char *dest_dir, int strip_root,
-                              unsigned long long total_size, unrar_progress_cb progress, void *user_data) {
+                              unsigned long long progress_total_size, const unrar_extract_opts *opts,
+                              unrar_progress_cb progress, void *user_data,
+                              int *file_count, unsigned long long *total_size) {
     if (!rar_path || !dest_dir) {
         return UNRAR_ERR_OPEN;
+    }
+
+    unrar_extract_opts local_opts;
+    if (opts) {
+        local_opts = *opts;
+    } else {
+        memset(&local_opts, 0, sizeof(local_opts));
     }
 
     struct RAROpenArchiveData arc_data;
@@ -86,15 +166,22 @@ extern "C" int unrar_extract(const char *rar_path, const char *dest_dir, int str
     memset(ctx.current_filename, 0, sizeof(ctx.current_filename));
     ctx.current_file_size = 0;
     ctx.total_processed = 0;
-    ctx.total_size = total_size;
+    ctx.progress_total_size = progress_total_size;
+    ctx.total_unpacked_size = 0;
+    ctx.bytes_since_sleep = 0;
+    ctx.keepalive_interval_sec = local_opts.keepalive_interval_sec;
+    ctx.sleep_every_bytes = local_opts.sleep_every_bytes;
+    ctx.sleep_us = local_opts.sleep_us;
+    ctx.use_dynamic_total = (progress_total_size == 0);
 
     RARSetCallback(hArc, unrar_callback, (LPARAM)&ctx);
 
-    struct RARHeaderData header;
+    struct RARHeaderDataEx header;
     int result = UNRAR_OK;
 
     while (1) {
-        int read_result = RARReadHeader(hArc, &header);
+        memset(&header, 0, sizeof(header));
+        int read_result = RARReadHeaderEx(hArc, &header);
         if (read_result == ERAR_END_ARCHIVE) {
             break;
         }
@@ -106,13 +193,16 @@ extern "C" int unrar_extract(const char *rar_path, const char *dest_dir, int str
         /* Update context for callback */
         strncpy(ctx.current_filename, header.FileName, sizeof(ctx.current_filename) - 1);
         ctx.current_filename[sizeof(ctx.current_filename) - 1] = '\0';
-        ctx.current_file_size = header.UnpSize;
+        unsigned long long file_size = ((unsigned long long)header.UnpSizeHigh << 32) | header.UnpSize;
+        ctx.current_file_size = file_size;
+        if (ctx.use_dynamic_total) {
+            ctx.progress_total_size += file_size;
+        }
         ctx.last_update_time = time(NULL);
 
         /* Report progress before extraction */
         if (progress) {
-            unsigned long long file_size = header.UnpSize;
-            if (progress(header.FileName, file_size, ctx.files_done, ctx.total_processed, ctx.total_size, user_data) != 0) {
+            if (progress(header.FileName, file_size, ctx.files_done, ctx.total_processed, ctx.progress_total_size, user_data) != 0) {
                 result = UNRAR_ERR_EXTRACT;
                 break;
             }
@@ -132,13 +222,20 @@ extern "C" int unrar_extract(const char *rar_path, const char *dest_dir, int str
             }
         }
 
-        char full_dest[1024];
-        snprintf(full_dest, sizeof(full_dest), "%s/%s", dest_dir, target_name);
+        std::string sanitized;
+        if (!sanitize_target_path(target_name, sanitized)) {
+            RARProcessFile(hArc, RAR_SKIP, NULL, NULL);
+            continue;
+        }
+
+        std::string full_dest = std::string(dest_dir) + "/" + sanitized;
 
         /* Extract the file */
         /* Note: When providing DestName (2nd arg for path), DestPath (1st arg) is ignored or handled differently
            depending on implementation. We use DestName to control full path. */
-        int proc_result = RARProcessFile(hArc, RAR_EXTRACT, NULL, full_dest);
+        std::vector<char> full_dest_buf(full_dest.begin(), full_dest.end());
+        full_dest_buf.push_back('\0');
+        int proc_result = RARProcessFile(hArc, RAR_EXTRACT, NULL, full_dest_buf.data());
         if (proc_result != ERAR_SUCCESS) {
             if (proc_result == ERAR_MISSING_PASSWORD || proc_result == ERAR_BAD_PASSWORD) {
                 result = UNRAR_ERR_PASSWORD;
@@ -148,7 +245,10 @@ extern "C" int unrar_extract(const char *rar_path, const char *dest_dir, int str
             break;
         }
 
-        ctx.files_done++;
+        if (!(header.Flags & RHDF_DIRECTORY)) {
+            ctx.files_done++;
+            ctx.total_unpacked_size += file_size;
+        }
 
         if (ctx.abort_flag) {
             result = UNRAR_ERR_EXTRACT;
@@ -157,6 +257,12 @@ extern "C" int unrar_extract(const char *rar_path, const char *dest_dir, int str
     }
 
     RARCloseArchive(hArc);
+    if (file_count) {
+        *file_count = ctx.files_done;
+    }
+    if (total_size) {
+        *total_size = ctx.total_unpacked_size;
+    }
     return result;
 }
 
@@ -178,7 +284,7 @@ extern "C" int unrar_scan(const char *rar_path, int *file_count, unsigned long l
 
     int count = 0;
     unsigned long long size = 0;
-    struct RARHeaderData header;
+    struct RARHeaderDataEx header;
 
     char first_root[260] = {0};
     int multiple_roots = 0;
@@ -188,7 +294,8 @@ extern "C" int unrar_scan(const char *rar_path, int *file_count, unsigned long l
     }
 
     while (1) {
-        int read_result = RARReadHeader(hArc, &header);
+        memset(&header, 0, sizeof(header));
+        int read_result = RARReadHeaderEx(hArc, &header);
         if (read_result == ERAR_END_ARCHIVE) {
             break;
         }
@@ -200,7 +307,7 @@ extern "C" int unrar_scan(const char *rar_path, int *file_count, unsigned long l
         /* Skip directories */
         if (!(header.Flags & RHDF_DIRECTORY)) {
             count++;
-            size += header.UnpSize;
+            size += ((unsigned long long)header.UnpSizeHigh << 32) | header.UnpSize;
 
             if (common_root) {
                 char current_root[260] = {0};

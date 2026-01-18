@@ -3,6 +3,21 @@
 All notable changes to this project are documented here.
 This project follows Semantic Versioning.
 
+## [1.1.8] - 2026-01-18
+
+### Added
+- Manage-side archive extraction to a chosen destination with progress (RAR only).
+- Heartbeat/progress updates and cancellation for MOVE/COPY/EXTRACT operations.
+- Unified progress UI for download/move/extract with a single status block.
+
+### Fixed
+- Prevented auto payload checks from interrupting long Manage operations.
+- Improved large archive size reporting and progress stability.
+- RAR extraction now enforces safe paths to avoid directory traversal.
+
+### Changed
+- Move/copy directory traversal is now iterative to avoid deep recursion issues.
+
 ## [1.1.7] - 2026-01-18
 
 ### Added
@@ -17,7 +32,7 @@ This project follows Semantic Versioning.
 - **Clarified Overwrite Warnings:** When extracting an archive to an existing folder, the app now clearly explains that files will be merged and existing ones might be overwritten.
 
 ### Changed
-- All archive types (ZIP, 7Z, RAR) are now streamed or sent as-is to the PS5 without needing extraction on your computer first.
+- RAR is now streamed or sent as-is to the PS5 without needing extraction on your computer first.
 
 ## [1.1.6] - 2026-01-14
 

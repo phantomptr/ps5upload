@@ -175,6 +175,101 @@ pub async fn delete_path(ip: &str, port: u16, path: &str) -> Result<()> {
     }
 }
 
+async fn send_manage_command_with_progress<F>(
+    ip: &str,
+    port: u16,
+    cmd: &str,
+    prefix: &str,
+    cancel: Arc<AtomicBool>,
+    mut progress: F,
+) -> Result<()>
+where
+    F: FnMut(u64, u64),
+{
+    let addr = format!("{}:{}", ip, port);
+    let mut stream = tokio::time::timeout(
+        std::time::Duration::from_secs(CONNECTION_TIMEOUT_SECS),
+        TcpStream::connect(&addr)
+    ).await.context("Connection timed out")??;
+
+    stream.write_all(cmd.as_bytes()).await?;
+
+    let mut reader = tokio::io::BufReader::new(stream);
+    let mut line = String::new();
+    let timeout = std::time::Duration::from_secs(600);
+    let mut last_recv = std::time::Instant::now();
+
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            let _ = reader.get_mut().write_all(b"CANCEL\n").await;
+            return Err(anyhow!("Cancelled"));
+        }
+        line.clear();
+        let n = tokio::select! {
+            res = reader.read_line(&mut line) => {
+                res.map_err(|e| anyhow!("Failed to read from server: {}", e))?
+            }
+            _ = tokio::time::sleep(std::time::Duration::from_millis(200)) => {
+                if cancel.load(Ordering::Relaxed) {
+                    let _ = reader.get_mut().write_all(b"CANCEL\n").await;
+                    return Err(anyhow!("Cancelled"));
+                }
+                if last_recv.elapsed() > timeout {
+                    return Err(anyhow!("Operation timed out (no progress for 10m)"));
+                }
+                continue;
+            }
+        };
+        if n == 0 {
+            return Err(anyhow!("Connection closed by server"));
+        }
+        last_recv = std::time::Instant::now();
+        let trimmed = line.trim();
+        if trimmed == "OK" || trimmed.starts_with("OK ") {
+            return Ok(());
+        }
+        if trimmed.starts_with("ERROR: ") {
+            return Err(anyhow!("{}", trimmed));
+        }
+        if trimmed.starts_with(prefix) {
+            let parts: Vec<&str> = trimmed.split_whitespace().collect();
+            if parts.len() >= 4 {
+                let processed: u64 = parts[2].parse().unwrap_or(0);
+                let total: u64 = parts[3].parse().unwrap_or(0);
+                progress(processed, total);
+            } else if parts.len() >= 3 {
+                let processed: u64 = parts[1].parse().unwrap_or(0);
+                let total: u64 = parts[2].parse().unwrap_or(0);
+                progress(processed, total);
+            }
+        }
+    }
+}
+
+pub async fn move_path_with_progress<F>(ip: &str, port: u16, src: &str, dst: &str, cancel: Arc<AtomicBool>, progress: F) -> Result<()>
+where
+    F: FnMut(u64, u64),
+{
+    let cmd = format!("MOVE {}\t{}\n", src, dst);
+    send_manage_command_with_progress(ip, port, &cmd, "MOVE_PROGRESS", cancel, progress).await
+}
+
+pub async fn copy_path_with_progress<F>(ip: &str, port: u16, src: &str, dst: &str, cancel: Arc<AtomicBool>, progress: F) -> Result<()>
+where
+    F: FnMut(u64, u64),
+{
+    let cmd = format!("COPY {}\t{}\n", src, dst);
+    send_manage_command_with_progress(ip, port, &cmd, "COPY_PROGRESS", cancel, progress).await
+}
+
+pub async fn extract_archive_with_progress<F>(ip: &str, port: u16, src: &str, dst: &str, cancel: Arc<AtomicBool>, progress: F) -> Result<()>
+where
+    F: FnMut(u64, u64),
+{
+    let cmd = format!("EXTRACT_ARCHIVE {}\t{}\n", src, dst);
+    send_manage_command_with_progress(ip, port, &cmd, "EXTRACT_PROGRESS", cancel, progress).await
+}
+
 pub async fn move_path(ip: &str, port: u16, src: &str, dst: &str) -> Result<()> {
     let cmd = format!("MOVE {}\t{}\n", src, dst);
     let response = send_simple_command(ip, port, &cmd).await?;
@@ -185,15 +280,6 @@ pub async fn move_path(ip: &str, port: u16, src: &str, dst: &str) -> Result<()> 
     }
 }
 
-pub async fn copy_path(ip: &str, port: u16, src: &str, dst: &str) -> Result<()> {
-    let cmd = format!("COPY {}\t{}\n", src, dst);
-    let response = send_simple_command(ip, port, &cmd).await?;
-    if response.starts_with("OK") {
-        Ok(())
-    } else {
-        Err(anyhow!("Copy failed: {}", response))
-    }
-}
 
 pub async fn chmod_777(ip: &str, port: u16, path: &str) -> Result<()> {
     let cmd = format!("CHMOD777 {}\n", path);
@@ -609,6 +695,7 @@ pub async fn upload_rar_for_extraction<F, P>(
     port: u16,
     rar_path: &str,
     dest_path: &str,
+    safe_mode: bool,
     cancel: Arc<AtomicBool>,
     mut progress: F,
     mut extract_progress: P,
@@ -629,7 +716,11 @@ where
     ).await.context("Connection timed out")??;
 
     // Send command
-    let cmd = format!("UPLOAD_RAR {} {}\n", dest_path, file_size);
+    let cmd = if safe_mode {
+        format!("UPLOAD_RAR_SAFE {} {}\n", dest_path, file_size)
+    } else {
+        format!("UPLOAD_RAR {} {}\n", dest_path, file_size)
+    };
     stream.write_all(cmd.as_bytes()).await?;
 
     // Wait for READY

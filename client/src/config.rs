@@ -21,6 +21,7 @@ pub struct AppConfig {
     pub auto_check_payload: bool,
     pub optimize_upload: bool,
     pub chat_display_name: String,
+    pub rar_safe_extract: bool,
 }
 
 impl Default for AppConfig {
@@ -43,6 +44,7 @@ impl Default for AppConfig {
             auto_check_payload: false,
             optimize_upload: false,
             chat_display_name: String::new(),
+            rar_safe_extract: false,
         }
     }
 }
@@ -128,6 +130,9 @@ impl AppConfig {
                             "chat_display_name" => {
                                 config.chat_display_name = value;
                             }
+                            "rar_safe_extract" => {
+                                config.rar_safe_extract = matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on");
+                            }
                             // Backwards compatibility: ignore removed fields
                             "extract_archives_fast" => {} // Removed fields are ignored
                             "rar_stream_on_the_fly" => {} // Removed fields are ignored
@@ -161,6 +166,11 @@ impl AppConfig {
             self.auto_check_payload,
             self.optimize_upload,
             self.chat_display_name,
+        );
+        let content = format!(
+            "{}rar_safe_extract={}\n",
+            content,
+            self.rar_safe_extract
         );
         std::fs::write("ps5upload.ini", content)?;
         Ok(())

@@ -4,6 +4,7 @@
 
 #include "unrar_handler.h"
 #include "notify.h"
+#include "config.h"
 #include "third_party/unrar/unrar_wrapper.h"
 
 #include <stdio.h>
@@ -16,9 +17,17 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <dirent.h>
+#include <time.h>
 
 #define RAR_TEMP_DIR "/data/ps5upload/temp"
 #define RECV_BUFFER_SIZE (256 * 1024)  /* 256KB receive buffer */
+
+struct ProgressState {
+    int sock;
+    time_t last_sent;
+    char last_filename[PATH_MAX];
+    unsigned int min_interval_sec;
+};
 
 /* Helper to reliably send data */
 static void send_all(int sock, const char *data) {
@@ -37,58 +46,36 @@ static void send_all(int sock, const char *data) {
     }
 }
 
+static int chmod_recursive(const char *path, mode_t mode, char *err, size_t err_len);
+
 /* Progress callback for extraction */
 static int extraction_progress(const char *filename, unsigned long long file_size,
                                int files_done, unsigned long long total_processed, unsigned long long total_size, void *user_data) {
     (void)file_size;
+    (void)files_done;
     
     /* Send progress to client if socket is provided */
-    int *sock_ptr = (int*)user_data;
-    if (sock_ptr) {
+    struct ProgressState *progress = (struct ProgressState *)user_data;
+    if (progress) {
+        time_t now = time(NULL);
+        int filename_changed = (strncmp(progress->last_filename, filename, sizeof(progress->last_filename)) != 0);
+        if (!filename_changed && progress->min_interval_sec > 0 &&
+            now - progress->last_sent < (time_t)progress->min_interval_sec) {
+            return 0;
+        }
+        if (filename_changed) {
+            strncpy(progress->last_filename, filename, sizeof(progress->last_filename) - 1);
+            progress->last_filename[sizeof(progress->last_filename) - 1] = '\0';
+        }
+        progress->last_sent = now;
+
         char msg[PATH_MAX + 128];
         int percent = (total_size > 0) ? (int)((total_processed * 100) / total_size) : 0;
         
         /* Protocol: EXTRACT_PROGRESS <percent> <processed> <total> */
         /* Also include EXTRACTING for backward compat / filename display if needed, but client mainly needs progress now */
-        snprintf(msg, sizeof(msg), "EXTRACT_PROGRESS %d %llu %llu\n", percent, total_processed, total_size);
-        send_all(*sock_ptr, msg);
-        
-        /* Send filename update occasionally? Client might flicker. 
-           Let's stick to just progress or send both if needed. 
-           Client currently expects EXTRACTING for filename log. 
-           We can alternate or send both? sending both might flood. 
-           Let's send EXTRACTING only when file changes (files_done increments). 
-           But this callback is called periodically for same file too. 
-           We can just send EXTRACT_PROGRESS and client can use that. 
-           But client also logs "Extracting file X".
-           Let's send EXTRACTING message too? 
-           The wrapper calls callback periodically. 
-           If I send EXTRACTING every time, client logs fill up. 
-           I should only send EXTRACTING when filename changes. 
-           But I don't track previous filename here easily without static/context.
-           Actually unrar_wrapper only calls callback periodically for keep-alive OR on file start?
-           In wrapper: 
-             ProcessFile -> callback (file start)
-             UCM_PROCESSDATA -> callback (periodic)
-           So we get called for both.
-           If we are called for keep-alive, we are in middle of file.
-           We can send EXTRACT_PROGRESS always.
-           And send EXTRACTING if it's a new file? 
-           We can't easily distinguish here without state.
-           
-           Let's just send EXTRACT_PROGRESS. I will update client to handle it.
-           I'll also send EXTRACTING for filename logging if it seems like a new file?
-           Actually, the client overwrites the status phase. 
-           If I send EXTRACT_PROGRESS, client can update progress bar.
-           If I send EXTRACTING, client logs it.
-           
-           Let's keep sending EXTRACTING but maybe client can filter duplicates?
-           Or better: EXTRACT_PROGRESS includes current filename? 
-           "EXTRACT_PROGRESS <percent> <processed> <total> <filename>"
-           That's cleaner.
-        */
         snprintf(msg, sizeof(msg), "EXTRACT_PROGRESS %d %llu %llu %s\n", percent, total_processed, total_size, filename);
-        send_all(*sock_ptr, msg);
+        send_all(progress->sock, msg);
     }
 
     /* printf("[RAR] Extracting (%d): %s\n", files_done + 1, filename); */
@@ -104,16 +91,14 @@ char *receive_rar_to_temp(int sock, size_t file_size) {
     mkdir(RAR_TEMP_DIR, 0777);
 
     /* Generate temp file path */
-    static int temp_counter = 0;
     char *temp_path = malloc(PATH_MAX);
     if (!temp_path) {
         return NULL;
     }
-    snprintf(temp_path, PATH_MAX, "%s/upload_%d_%d.rar",
-             RAR_TEMP_DIR, (int)getpid(), temp_counter++);
+    snprintf(temp_path, PATH_MAX, "%s/upload_XXXXXX", RAR_TEMP_DIR);
 
     /* Open temp file for writing */
-    int fd = open(temp_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    int fd = mkstemp(temp_path);
     if (fd < 0) {
         perror("[RAR] Failed to create temp file");
         free(temp_path);
@@ -187,7 +172,7 @@ char *receive_rar_to_temp(int sock, size_t file_size) {
 }
 
 int extract_rar_file(const char *rar_path, const char *dest_dir, int strip_root,
-                     int *file_count, unsigned long long *total_bytes, void *user_data) {
+                     int *file_count, unsigned long long *total_bytes, void *user_data, int safe_mode) {
     if (!rar_path || !dest_dir) {
         return -1;
     }
@@ -197,22 +182,35 @@ int extract_rar_file(const char *rar_path, const char *dest_dir, int strip_root,
 
     printf("[RAR] Extracting %s to %s (strip_root=%d)\n", rar_path, dest_dir, strip_root);
 
-    /* Scan first to get file count */
+    /* Scan first to get file count (safe mode only) */
     int count = 0;
     unsigned long long size = 0;
-    
-    /* We just scan to get stats here */
-    int scan_result = unrar_scan(rar_path, &count, &size, NULL, 0);
-    if (scan_result != UNRAR_OK) {
-        printf("[RAR] Scan failed: %s\n", unrar_strerror(scan_result));
-        return -1;
+    if (safe_mode) {
+        int scan_result = unrar_scan(rar_path, &count, &size, NULL, 0);
+        if (scan_result != UNRAR_OK) {
+            printf("[RAR] Scan failed: %s\n", unrar_strerror(scan_result));
+            return -1;
+        }
     }
 
-    printf("[RAR] Archive contains %d files, %llu bytes uncompressed\n", count, size);
+    if (safe_mode) {
+        printf("[RAR] Archive contains %d files, %llu bytes uncompressed\n", count, size);
+    }
 
     /* Extract */
-    /* Pass total size to wrapper */
-    int extract_result = unrar_extract(rar_path, dest_dir, strip_root, size, extraction_progress, user_data);
+    /* Pass total size to wrapper for progress if known */
+    unrar_extract_opts opts;
+    if (safe_mode) {
+        opts.keepalive_interval_sec = UNRAR_SAFE_KEEPALIVE_SEC;
+        opts.sleep_every_bytes = UNRAR_SAFE_SLEEP_EVERY_BYTES;
+        opts.sleep_us = UNRAR_SAFE_SLEEP_US;
+    } else {
+        opts.keepalive_interval_sec = UNRAR_FAST_KEEPALIVE_SEC;
+        opts.sleep_every_bytes = UNRAR_FAST_SLEEP_EVERY_BYTES;
+        opts.sleep_us = UNRAR_FAST_SLEEP_US;
+    }
+    int extract_result = unrar_extract(rar_path, dest_dir, strip_root, safe_mode ? size : 0,
+                                       &opts, extraction_progress, user_data, &count, &size);
     if (extract_result != UNRAR_OK) {
         printf("[RAR] Extraction failed: %s\n", unrar_strerror(extract_result));
         return -1;
@@ -225,7 +223,7 @@ int extract_rar_file(const char *rar_path, const char *dest_dir, int strip_root,
     return 0;
 }
 
-void handle_upload_rar(int sock, const char *args) {
+void handle_upload_rar(int sock, const char *args, int safe_mode) {
     char dest_path[PATH_MAX];
     unsigned long long file_size = 0;
 
@@ -295,8 +293,12 @@ void handle_upload_rar(int sock, const char *args) {
     /* Extract */
     int file_count = 0;
     unsigned long long total_bytes = 0;
-    /* Pass socket for progress updates */
-    int result = extract_rar_file(temp_path, dest_path, strip_root, &file_count, &total_bytes, &sock);
+    struct ProgressState progress;
+    memset(&progress, 0, sizeof(progress));
+    progress.sock = sock;
+    progress.min_interval_sec = safe_mode ? UNRAR_SAFE_PROGRESS_INTERVAL_SEC : UNRAR_FAST_PROGRESS_INTERVAL_SEC;
+    /* Pass progress state for updates */
+    int result = extract_rar_file(temp_path, dest_path, strip_root, &file_count, &total_bytes, &progress, safe_mode);
 
     /* Cleanup temp file */
     unlink(temp_path);
@@ -309,6 +311,16 @@ void handle_upload_rar(int sock, const char *args) {
         return;
     }
 
+    {
+        char chmod_err[256];
+        if (chmod_recursive(dest_path, 0777, chmod_err, sizeof(chmod_err)) != 0) {
+            printf("[RAR] Chmod failed: %s\n", chmod_err);
+            send_all(sock, "ERROR: Failed to chmod extracted files\n");
+            notify_error("PS5 Upload", "RAR chmod failed");
+            return;
+        }
+    }
+
     /* Success response */
     char response[256];
     snprintf(response, sizeof(response), "SUCCESS %d %llu\n", file_count, total_bytes);
@@ -319,6 +331,42 @@ void handle_upload_rar(int sock, const char *args) {
     snprintf(notify_msg, sizeof(notify_msg), "Extracted %d files (%llu MB)",
              file_count, total_bytes / (1024 * 1024));
     notify_info("PS5 Upload", notify_msg);
+}
+
+static int chmod_recursive(const char *path, mode_t mode, char *err, size_t err_len) {
+    struct stat st;
+    if (lstat(path, &st) != 0) {
+        snprintf(err, err_len, "lstat %s failed: %s", path, strerror(errno));
+        return -1;
+    }
+
+    if (chmod(path, mode) != 0) {
+        snprintf(err, err_len, "chmod %s failed: %s", path, strerror(errno));
+        return -1;
+    }
+
+    if (S_ISDIR(st.st_mode)) {
+        DIR *dir = opendir(path);
+        if (!dir) {
+            snprintf(err, err_len, "opendir %s failed: %s", path, strerror(errno));
+            return -1;
+        }
+        struct dirent *entry;
+        while ((entry = readdir(dir)) != NULL) {
+            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+                continue;
+            }
+            char child[PATH_MAX];
+            snprintf(child, sizeof(child), "%s/%s", path, entry->d_name);
+            if (chmod_recursive(child, mode, err, err_len) != 0) {
+                closedir(dir);
+                return -1;
+            }
+        }
+        closedir(dir);
+    }
+
+    return 0;
 }
 
 static int rm_recursive(const char *path) {

@@ -17,6 +17,8 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <sys/mount.h>
+#include <time.h>
+#include <strings.h>
 
 #include <ps5/kernel.h>
 
@@ -30,8 +32,11 @@
 #include "zstd.h"
 #include "LzmaLib.h"
 #include "sha256.h"
+#include "third_party/unrar/unrar_wrapper.h"
 
 #define DOWNLOAD_PACK_BUFFER_SIZE (4 * 1024 * 1024)
+
+static int send_all(int sock, const void *buf, size_t len);
 
 static int mkdir_p(const char *path, mode_t mode, char *err, size_t err_len) {
     char tmp[PATH_MAX];
@@ -122,7 +127,185 @@ static int remove_recursive(const char *path, char *err, size_t err_len) {
     return 0;
 }
 
-static int copy_file(const char *src, const char *dst, mode_t mode, char *err, size_t err_len) {
+struct CopyProgressCtx {
+    int sock;
+    const char *prefix;
+    unsigned long long total;
+    unsigned long long processed;
+    unsigned long long bytes_since_send;
+    time_t last_send;
+    int cancelled;
+};
+
+static void copy_progress_check_cancel(struct CopyProgressCtx *ctx) {
+    if (!ctx || ctx->sock < 0 || ctx->cancelled) {
+        return;
+    }
+    char buf[64];
+    ssize_t n = recv(ctx->sock, buf, sizeof(buf) - 1, MSG_DONTWAIT);
+    if (n == 0) {
+        ctx->cancelled = 1;
+        return;
+    }
+    if (n < 0) {
+        if (errno == EWOULDBLOCK || errno == EAGAIN || errno == EINTR) {
+            return;
+        }
+        ctx->cancelled = 1;
+        return;
+    }
+    buf[n] = '\0';
+    if (strstr(buf, "CANCEL") != NULL) {
+        ctx->cancelled = 1;
+    }
+}
+
+static void copy_progress_send(struct CopyProgressCtx *ctx, int force) {
+    if (!ctx || ctx->sock < 0) {
+        return;
+    }
+    copy_progress_check_cancel(ctx);
+    if (ctx->cancelled) {
+        return;
+    }
+    time_t now = time(NULL);
+    if (!force) {
+        if (ctx->bytes_since_send < COPY_PROGRESS_BYTES &&
+            now - ctx->last_send < COPY_PROGRESS_INTERVAL_SEC) {
+            return;
+        }
+    }
+    char msg[128];
+    int len = snprintf(msg, sizeof(msg), "%s %llu %llu\n",
+                       ctx->prefix, ctx->processed, ctx->total);
+    if (len > 0) {
+        if (send_all(ctx->sock, msg, (size_t)len) != 0) {
+            ctx->cancelled = 1;
+            return;
+        }
+        ctx->last_send = now;
+        ctx->bytes_since_send = 0;
+    }
+}
+
+static void copy_progress_add(struct CopyProgressCtx *ctx, unsigned long long bytes) {
+    if (!ctx) {
+        return;
+    }
+    copy_progress_check_cancel(ctx);
+    if (ctx->cancelled) {
+        return;
+    }
+    ctx->processed += bytes;
+    ctx->bytes_since_send += bytes;
+    copy_progress_send(ctx, 0);
+}
+
+static void copy_progress_heartbeat(struct CopyProgressCtx *ctx) {
+    if (!ctx) {
+        return;
+    }
+    copy_progress_check_cancel(ctx);
+    if (ctx->cancelled) {
+        return;
+    }
+    time_t now = time(NULL);
+    if (now - ctx->last_send >= COPY_PROGRESS_INTERVAL_SEC) {
+        copy_progress_send(ctx, 1);
+    }
+}
+
+struct ScanNode {
+    char path[PATH_MAX];
+};
+
+static int scan_size_recursive(const char *src, unsigned long long *total,
+                               struct CopyProgressCtx *ctx, char *err, size_t err_len) {
+    size_t cap = 64;
+    size_t len = 0;
+    struct ScanNode *stack = (struct ScanNode *)malloc(cap * sizeof(*stack));
+    if (!stack) {
+        snprintf(err, err_len, "Out of memory");
+        return -1;
+    }
+    snprintf(stack[0].path, sizeof(stack[0].path), "%s", src);
+    len = 1;
+
+    while (len > 0) {
+        struct ScanNode node = stack[--len];
+        struct stat st;
+        if (lstat(node.path, &st) != 0) {
+            snprintf(err, err_len, "lstat %s failed: %s", node.path, strerror(errno));
+            free(stack);
+            return -1;
+        }
+        if (ctx && ctx->cancelled) {
+            snprintf(err, err_len, "Cancelled");
+            free(stack);
+            return -1;
+        }
+        if (S_ISDIR(st.st_mode)) {
+            DIR *dir = opendir(node.path);
+            if (!dir) {
+                snprintf(err, err_len, "opendir %s failed: %s", node.path, strerror(errno));
+                free(stack);
+                return -1;
+            }
+            struct dirent *entry;
+            while ((entry = readdir(dir)) != NULL) {
+                if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+                    continue;
+                }
+                char child_src[PATH_MAX];
+                snprintf(child_src, sizeof(child_src), "%s/%s", node.path, entry->d_name);
+                if (lstat(child_src, &st) != 0) {
+                    closedir(dir);
+                    snprintf(err, err_len, "lstat %s failed: %s", child_src, strerror(errno));
+                    free(stack);
+                    return -1;
+                }
+                if (S_ISDIR(st.st_mode)) {
+                    if (len == cap) {
+                        cap *= 2;
+                        struct ScanNode *next = (struct ScanNode *)realloc(stack, cap * sizeof(*stack));
+                        if (!next) {
+                            closedir(dir);
+                            snprintf(err, err_len, "Out of memory");
+                            free(stack);
+                            return -1;
+                        }
+                        stack = next;
+                    }
+                    snprintf(stack[len].path, sizeof(stack[len].path), "%s", child_src);
+                    len++;
+                } else if (S_ISREG(st.st_mode)) {
+                    *total += (unsigned long long)st.st_size;
+                } else {
+                    closedir(dir);
+                    snprintf(err, err_len, "Unsupported file type: %s", child_src);
+                    free(stack);
+                    return -1;
+                }
+            }
+            closedir(dir);
+            copy_progress_heartbeat(ctx);
+            continue;
+        }
+        if (S_ISREG(st.st_mode)) {
+            *total += (unsigned long long)st.st_size;
+            continue;
+        }
+        snprintf(err, err_len, "Unsupported file type: %s", node.path);
+        free(stack);
+        return -1;
+    }
+
+    free(stack);
+    return 0;
+}
+
+static int copy_file(const char *src, const char *dst, mode_t mode,
+                     char *err, size_t err_len, struct CopyProgressCtx *ctx) {
     int in_fd = open(src, O_RDONLY);
     if (in_fd < 0) {
         snprintf(err, err_len, "open %s failed: %s", src, strerror(errno));
@@ -136,9 +319,15 @@ static int copy_file(const char *src, const char *dst, mode_t mode, char *err, s
         return -1;
     }
 
-    char buffer[64 * 1024];
+    char buffer[256 * 1024];
     ssize_t n;
     while ((n = read(in_fd, buffer, sizeof(buffer))) > 0) {
+        if (ctx && ctx->cancelled) {
+            snprintf(err, err_len, "Cancelled");
+            close(in_fd);
+            close(out_fd);
+            return -1;
+        }
         ssize_t written = 0;
         while (written < n) {
             ssize_t w = write(out_fd, buffer + written, (size_t)(n - written));
@@ -149,6 +338,13 @@ static int copy_file(const char *src, const char *dst, mode_t mode, char *err, s
                 return -1;
             }
             written += w;
+            copy_progress_add(ctx, (unsigned long long)w);
+            if (ctx && ctx->cancelled) {
+                snprintf(err, err_len, "Cancelled");
+                close(in_fd);
+                close(out_fd);
+                return -1;
+            }
         }
     }
     if (n < 0) {
@@ -163,48 +359,115 @@ static int copy_file(const char *src, const char *dst, mode_t mode, char *err, s
     return 0;
 }
 
-static int copy_recursive(const char *src, const char *dst, char *err, size_t err_len) {
-    struct stat st;
-    if (lstat(src, &st) != 0) {
-        snprintf(err, err_len, "lstat %s failed: %s", src, strerror(errno));
+struct CopyNode {
+    char src[PATH_MAX];
+    char dst[PATH_MAX];
+};
+
+static int copy_recursive(const char *src, const char *dst, char *err, size_t err_len,
+                          struct CopyProgressCtx *ctx) {
+    size_t cap = 64;
+    size_t len = 0;
+    struct CopyNode *stack = (struct CopyNode *)malloc(cap * sizeof(*stack));
+    if (!stack) {
+        snprintf(err, err_len, "Out of memory");
+        return -1;
+    }
+    snprintf(stack[0].src, sizeof(stack[0].src), "%s", src);
+    snprintf(stack[0].dst, sizeof(stack[0].dst), "%s", dst);
+    len = 1;
+
+    while (len > 0) {
+        struct CopyNode node = stack[--len];
+        struct stat st;
+        if (lstat(node.src, &st) != 0) {
+            snprintf(err, err_len, "lstat %s failed: %s", node.src, strerror(errno));
+            free(stack);
+            return -1;
+        }
+        if (ctx && ctx->cancelled) {
+            snprintf(err, err_len, "Cancelled");
+            free(stack);
+            return -1;
+        }
+        if (S_ISDIR(st.st_mode)) {
+            if (mkdir(node.dst, st.st_mode & 0777) != 0 && errno != EEXIST) {
+                snprintf(err, err_len, "mkdir %s failed: %s", node.dst, strerror(errno));
+                free(stack);
+                return -1;
+            }
+            DIR *dir = opendir(node.src);
+            if (!dir) {
+                snprintf(err, err_len, "opendir %s failed: %s", node.src, strerror(errno));
+                free(stack);
+                return -1;
+            }
+            struct dirent *entry;
+            while ((entry = readdir(dir)) != NULL) {
+                if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+                    continue;
+                }
+                if (ctx && ctx->cancelled) {
+                    closedir(dir);
+                    snprintf(err, err_len, "Cancelled");
+                    free(stack);
+                    return -1;
+                }
+                char child_src[PATH_MAX];
+                char child_dst[PATH_MAX];
+                snprintf(child_src, sizeof(child_src), "%s/%s", node.src, entry->d_name);
+                snprintf(child_dst, sizeof(child_dst), "%s/%s", node.dst, entry->d_name);
+                if (lstat(child_src, &st) != 0) {
+                    closedir(dir);
+                    snprintf(err, err_len, "lstat %s failed: %s", child_src, strerror(errno));
+                    free(stack);
+                    return -1;
+                }
+                if (S_ISDIR(st.st_mode)) {
+                    if (len == cap) {
+                        cap *= 2;
+                        struct CopyNode *next = (struct CopyNode *)realloc(stack, cap * sizeof(*stack));
+                        if (!next) {
+                            closedir(dir);
+                            snprintf(err, err_len, "Out of memory");
+                            free(stack);
+                            return -1;
+                        }
+                        stack = next;
+                    }
+                    snprintf(stack[len].src, sizeof(stack[len].src), "%s", child_src);
+                    snprintf(stack[len].dst, sizeof(stack[len].dst), "%s", child_dst);
+                    len++;
+                } else if (S_ISREG(st.st_mode)) {
+                    if (copy_file(child_src, child_dst, st.st_mode & 0777, err, err_len, ctx) != 0) {
+                        closedir(dir);
+                        free(stack);
+                        return -1;
+                    }
+                } else {
+                    closedir(dir);
+                    snprintf(err, err_len, "Unsupported file type: %s", child_src);
+                    free(stack);
+                    return -1;
+                }
+            }
+            closedir(dir);
+            continue;
+        }
+        if (S_ISREG(st.st_mode)) {
+            if (copy_file(node.src, node.dst, st.st_mode & 0777, err, err_len, ctx) != 0) {
+                free(stack);
+                return -1;
+            }
+            continue;
+        }
+        snprintf(err, err_len, "Unsupported file type: %s", node.src);
+        free(stack);
         return -1;
     }
 
-    if (S_ISDIR(st.st_mode)) {
-        if (mkdir(dst, st.st_mode & 0777) != 0 && errno != EEXIST) {
-            snprintf(err, err_len, "mkdir %s failed: %s", dst, strerror(errno));
-            return -1;
-        }
-
-        DIR *dir = opendir(src);
-        if (!dir) {
-            snprintf(err, err_len, "opendir %s failed: %s", src, strerror(errno));
-            return -1;
-        }
-        struct dirent *entry;
-        while ((entry = readdir(dir)) != NULL) {
-            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
-                continue;
-            }
-            char child_src[PATH_MAX];
-            char child_dst[PATH_MAX];
-            snprintf(child_src, sizeof(child_src), "%s/%s", src, entry->d_name);
-            snprintf(child_dst, sizeof(child_dst), "%s/%s", dst, entry->d_name);
-            if (copy_recursive(child_src, child_dst, err, err_len) != 0) {
-                closedir(dir);
-                return -1;
-            }
-        }
-        closedir(dir);
-        return 0;
-    }
-
-    if (S_ISREG(st.st_mode)) {
-        return copy_file(src, dst, st.st_mode & 0777, err, err_len);
-    }
-
-    snprintf(err, err_len, "Unsupported file type: %s", src);
-    return -1;
+    free(stack);
+    return 0;
 }
 
 static int chmod_recursive(const char *path, mode_t mode, char *err, size_t err_len) {
@@ -242,6 +505,82 @@ static int chmod_recursive(const char *path, mode_t mode, char *err, size_t err_
 
     return 0;
 }
+
+struct ExtractProgressCtx {
+    int sock;
+    time_t last_send;
+    unsigned int min_interval_sec;
+    char last_filename[PATH_MAX];
+    int cancelled;
+};
+
+static void extract_check_cancel(struct ExtractProgressCtx *ctx) {
+    if (!ctx || ctx->sock < 0 || ctx->cancelled) {
+        return;
+    }
+    char buf[64];
+    ssize_t n = recv(ctx->sock, buf, sizeof(buf) - 1, MSG_DONTWAIT);
+    if (n == 0) {
+        ctx->cancelled = 1;
+        return;
+    }
+    if (n < 0) {
+        if (errno == EWOULDBLOCK || errno == EAGAIN || errno == EINTR) {
+            return;
+        }
+        ctx->cancelled = 1;
+        return;
+    }
+    buf[n] = '\0';
+    if (strstr(buf, "CANCEL") != NULL) {
+        ctx->cancelled = 1;
+    }
+}
+
+static int extract_progress(const char *filename, unsigned long long file_size,
+                            int files_done, unsigned long long total_processed,
+                            unsigned long long total_size, void *user_data) {
+    (void)file_size;
+    (void)files_done;
+    struct ExtractProgressCtx *ctx = (struct ExtractProgressCtx *)user_data;
+    if (!ctx) {
+        return 0;
+    }
+    extract_check_cancel(ctx);
+    if (ctx->cancelled) {
+        return 1;
+    }
+    time_t now = time(NULL);
+    int filename_changed = (strncmp(ctx->last_filename, filename, sizeof(ctx->last_filename)) != 0);
+    if (!filename_changed && ctx->min_interval_sec > 0 &&
+        now - ctx->last_send < (time_t)ctx->min_interval_sec) {
+        return 0;
+    }
+    if (filename_changed) {
+        strncpy(ctx->last_filename, filename, sizeof(ctx->last_filename) - 1);
+        ctx->last_filename[sizeof(ctx->last_filename) - 1] = '\0';
+    }
+    ctx->last_send = now;
+
+    int percent = (total_size > 0) ? (int)((total_processed * 100) / total_size) : 0;
+    char msg[PATH_MAX + 128];
+    int len = snprintf(msg, sizeof(msg), "EXTRACT_PROGRESS %d %llu %llu %s\n",
+                       percent, total_processed, total_size, filename);
+    if (len > 0 && send_all(ctx->sock, msg, (size_t)len) != 0) {
+        ctx->cancelled = 1;
+        return 1;
+    }
+    return 0;
+}
+
+static int has_extension(const char *path, const char *ext) {
+    const char *dot = strrchr(path, '.');
+    if (!dot) {
+        return 0;
+    }
+    return strcasecmp(dot, ext) == 0;
+}
+
 
 enum DownloadCompression {
     DL_COMP_NONE = 0,
@@ -762,13 +1101,30 @@ void handle_move_path(int client_sock, const char *args) {
     }
 
     if (errno == EXDEV) {
+        struct CopyProgressCtx progress;
+        memset(&progress, 0, sizeof(progress));
+        progress.sock = client_sock;
+        progress.prefix = "MOVE_PROGRESS";
+        progress.last_send = time(NULL);
+        copy_progress_send(&progress, 1);
+
+        unsigned long long total_size = 0;
         char err[256] = {0};
-        if (copy_recursive(src, dst, err, sizeof(err)) != 0) {
+        if (scan_size_recursive(src, &total_size, &progress, err, sizeof(err)) != 0) {
             char error_msg[320];
             snprintf(error_msg, sizeof(error_msg), "ERROR: %s\n", err);
             send(client_sock, error_msg, strlen(error_msg), 0);
             return;
         }
+        progress.total = total_size;
+        copy_progress_send(&progress, 1);
+        if (copy_recursive(src, dst, err, sizeof(err), &progress) != 0) {
+            char error_msg[320];
+            snprintf(error_msg, sizeof(error_msg), "ERROR: %s\n", err);
+            send(client_sock, error_msg, strlen(error_msg), 0);
+            return;
+        }
+        copy_progress_send(&progress, 1);
         if (remove_recursive(src, err, sizeof(err)) != 0) {
             char error_msg[320];
             snprintf(error_msg, sizeof(error_msg), "ERROR: %s\n", err);
@@ -808,10 +1164,106 @@ void handle_copy_path(int client_sock, const char *args) {
         return;
     }
 
+    struct CopyProgressCtx progress;
+    memset(&progress, 0, sizeof(progress));
+    progress.sock = client_sock;
+    progress.prefix = "COPY_PROGRESS";
+    progress.last_send = time(NULL);
+    copy_progress_send(&progress, 1);
+
+    unsigned long long total_size = 0;
     char err[256] = {0};
-    if (copy_recursive(src, dst, err, sizeof(err)) != 0) {
+    if (scan_size_recursive(src, &total_size, &progress, err, sizeof(err)) != 0) {
         char error_msg[320];
         snprintf(error_msg, sizeof(error_msg), "ERROR: %s\n", err);
+        send(client_sock, error_msg, strlen(error_msg), 0);
+        return;
+    }
+    progress.total = total_size;
+    copy_progress_send(&progress, 1);
+    if (copy_recursive(src, dst, err, sizeof(err), &progress) != 0) {
+        char error_msg[320];
+        snprintf(error_msg, sizeof(error_msg), "ERROR: %s\n", err);
+        send(client_sock, error_msg, strlen(error_msg), 0);
+        return;
+    }
+    copy_progress_send(&progress, 1);
+
+    const char *success = "OK\n";
+    send(client_sock, success, strlen(success), 0);
+}
+
+void handle_extract_archive(int client_sock, const char *args) {
+    char buffer[PATH_MAX * 2];
+    strncpy(buffer, args, sizeof(buffer) - 1);
+    buffer[sizeof(buffer) - 1] = '\0';
+    trim_newline(buffer);
+
+    char *sep = strchr(buffer, '\t');
+    if (!sep) {
+        const char *error = "ERROR: Invalid EXTRACT_ARCHIVE format\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+    *sep = '\0';
+    const char *src = buffer;
+    const char *dst = sep + 1;
+    if (!*src || !*dst) {
+        const char *error = "ERROR: Invalid EXTRACT_ARCHIVE format\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+
+    if (mkdir(dst, 0777) != 0 && errno != EEXIST) {
+        char error_msg[320];
+        snprintf(error_msg, sizeof(error_msg), "ERROR: mkdir %s failed: %s\n", dst, strerror(errno));
+        send(client_sock, error_msg, strlen(error_msg), 0);
+        return;
+    }
+
+    struct ExtractProgressCtx progress;
+    memset(&progress, 0, sizeof(progress));
+    progress.sock = client_sock;
+    progress.min_interval_sec = UNRAR_FAST_PROGRESS_INTERVAL_SEC;
+    progress.last_send = time(NULL);
+
+    if (!has_extension(src, ".rar")) {
+        const char *error = "ERROR: Unsupported archive type\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+
+    int count = 0;
+    unsigned long long size = 0;
+    int scan_result = unrar_scan(src, &count, &size, NULL, 0);
+    if (scan_result != UNRAR_OK) {
+        char error_msg[320];
+        snprintf(error_msg, sizeof(error_msg), "ERROR: %s\n", unrar_strerror(scan_result));
+        send(client_sock, error_msg, strlen(error_msg), 0);
+        return;
+    }
+
+    unrar_extract_opts opts;
+    opts.keepalive_interval_sec = UNRAR_FAST_KEEPALIVE_SEC;
+    opts.sleep_every_bytes = UNRAR_FAST_SLEEP_EVERY_BYTES;
+    opts.sleep_us = UNRAR_FAST_SLEEP_US;
+
+    int extracted_count = 0;
+    unsigned long long total_bytes = 0;
+    int extract_result = unrar_extract(src, dst, 0, size, &opts, extract_progress, &progress,
+                                       &extracted_count, &total_bytes);
+    if (extract_result != UNRAR_OK) {
+        const char *err = progress.cancelled ? "ERROR: Cancelled\n" : unrar_strerror(extract_result);
+        char error_msg[320];
+        snprintf(error_msg, sizeof(error_msg), "ERROR: %s\n", err);
+        send(client_sock, error_msg, strlen(error_msg), 0);
+        return;
+    }
+
+    char chmod_err[256] = {0};
+    if (chmod_recursive(dst, 0777, chmod_err, sizeof(chmod_err)) != 0) {
+        char error_msg[320];
+        snprintf(error_msg, sizeof(error_msg), "ERROR: %s\n", chmod_err);
         send(client_sock, error_msg, strlen(error_msg), 0);
         return;
     }
