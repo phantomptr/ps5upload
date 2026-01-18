@@ -888,6 +888,36 @@ impl Ps5UploadApp {
         egui::RichText::new(text).color(color).italics()
     }
 
+    fn request_manage_rar_meta(&mut self, path: &str) {
+        if self.manage_meta_path.as_deref() == Some(path) {
+            return;
+        }
+        self.manage_meta_path = Some(path.to_string());
+        self.manage_meta = None;
+        self.manage_cover_texture = None;
+
+        let ip = self.ip.clone();
+        let path = path.to_string();
+        let tx = self.tx.clone();
+        let rt = self.rt.clone();
+        thread::spawn(move || {
+            let result = rt.block_on(async { probe_rar_metadata(&ip, TRANSFER_PORT, &path).await });
+            let (meta, cover) = match result {
+                Ok((param, cover_bytes)) => {
+                    let meta = param
+                        .as_deref()
+                        .and_then(parse_game_meta_from_param_bytes);
+                    let cover = cover_bytes
+                        .as_deref()
+                        .and_then(|bytes| load_cover_image_from_bytes(bytes, 160));
+                    (meta, cover)
+                }
+                Err(_) => (None, None),
+            };
+            let _ = tx.send(AppMessage::ManageMetaLoaded { path, meta, cover });
+        });
+    }
+
     fn is_extractable_archive(name: &str) -> bool {
         let lower = name.to_lowercase();
         lower.ends_with(".rar")
@@ -941,36 +971,6 @@ impl Ps5UploadApp {
         thread::spawn(move || {
             let result = task(tx.clone(), cancel);
             let _ = tx.send(AppMessage::ManageOpComplete { op: op_name, result });
-        });
-    }
-
-    fn request_manage_rar_meta(&mut self, path: &str) {
-        if self.manage_meta_path.as_deref() == Some(path) {
-            return;
-        }
-        self.manage_meta_path = Some(path.to_string());
-        self.manage_meta = None;
-        self.manage_cover_texture = None;
-
-        let ip = self.ip.clone();
-        let path = path.to_string();
-        let tx = self.tx.clone();
-        let rt = self.rt.clone();
-        thread::spawn(move || {
-            let result = rt.block_on(async { probe_rar_metadata(&ip, TRANSFER_PORT, &path).await });
-            let (meta, cover) = match result {
-                Ok((param, cover_bytes)) => {
-                    let meta = param
-                        .as_deref()
-                        .and_then(parse_game_meta_from_param_bytes);
-                    let cover = cover_bytes
-                        .as_deref()
-                        .and_then(|bytes| load_cover_image_from_bytes(bytes, 160));
-                    (meta, cover)
-                }
-                Err(_) => (None, None),
-            };
-            let _ = tx.send(AppMessage::ManageMetaLoaded { path, meta, cover });
         });
     }
 
@@ -3012,7 +3012,7 @@ impl eframe::App for Ps5UploadApp {
                     ui.add_space(10.0);
                     
                     ui.checkbox(&mut self.archive_overwrite_confirmed, "Allow overwriting of existing files");
-                    ui.label("If unchecked, the upload will be cancelled to prevent data loss.");
+                    ui.label(egui::RichText::new("If unchecked, the upload will be cancelled to prevent data loss.").weak());
                     
                     ui.add_space(10.0);
                     ui.horizontal(|ui| {
@@ -3604,9 +3604,9 @@ Overwrite it?", self.get_dest_path()));
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(&self.status).strong());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.hyperlink_to("Created by PhantomPtr", "https://x.com/phantomptr");
-                    ui.label("|");
-                    ui.hyperlink_to("Source Code", "https://github.com/phantomptr/ps5upload");
+                     ui.hyperlink_to("Created by PhantomPtr", "https://x.com/phantomptr");
+                     ui.label("|");
+                     ui.hyperlink_to("Source Code", "https://github.com/phantomptr/ps5upload");
                 });
             });
         });
@@ -3825,6 +3825,7 @@ Overwrite it?", self.get_dest_path()));
                         }
                     });
             });
+            });
         });
 
         // 4. RIGHT PANEL: LOGS
@@ -3838,94 +3839,99 @@ Overwrite it?", self.get_dest_path()));
                             self.client_logs.clear();
                             self.payload_logs.clear();
                         }
-                        if ui.add_enabled(self.log_tab == 2, egui::Button::new(tr(lang, "clear_history"))).clicked() {
+                    });
+                });
+            
+            ui.add_space(5.0);
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut self.log_tab, 0, tr(lang, "client"));
+                ui.selectable_value(&mut self.log_tab, 1, tr(lang, "payload"));
+                ui.selectable_value(&mut self.log_tab, 2, tr(lang, "history"));
+            });
+            ui.separator();
+
+            if self.log_tab == 2 {
+                // History tab
+                let records = self.history_data.records.clone();
+                ui.horizontal(|ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button(tr(lang, "clear_history")).clicked() {
                             clear_history(&mut self.history_data);
                         }
                     });
                 });
-
                 ui.add_space(5.0);
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.log_tab, 0, tr(lang, "client"));
-                    ui.selectable_value(&mut self.log_tab, 1, tr(lang, "payload"));
-                    ui.selectable_value(&mut self.log_tab, 2, tr(lang, "history"));
-                });
-                ui.separator();
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    if self.history_data.records.is_empty() {
+                        ui.label(tr(lang, "no_history"));
+                    } else {
+                        for record in records.iter().rev() {
+                            ui.group(|ui| {
+                                ui.horizontal(|ui| {
+                                    let icon = if record.success { "✓" } else { "✗" };
+                                    let color = if record.success {
+                                        egui::Color32::from_rgb(100, 200, 100)
+                                    } else {
+                                        egui::Color32::from_rgb(200, 100, 100)
+                                    };
+                                    ui.label(egui::RichText::new(icon).color(color).strong());
 
-                if self.log_tab == 2 {
-                    // History tab
-                    let records = self.history_data.records.clone();
-                    ui.add_space(5.0);
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        if self.history_data.records.is_empty() {
-                            ui.label(tr(lang, "no_history"));
-                        } else {
-                            for record in records.iter().rev() {
-                                ui.group(|ui| {
-                                    ui.horizontal(|ui| {
-                                        let icon = if record.success { "✓" } else { "✗" };
-                                        let color = if record.success {
-                                            egui::Color32::from_rgb(100, 200, 100)
-                                        } else {
-                                            egui::Color32::from_rgb(200, 100, 100)
-                                        };
-                                        ui.label(egui::RichText::new(icon).color(color).strong());
-
-                                        if let Some(dt) = chrono::DateTime::from_timestamp(record.timestamp, 0) {
-                                            ui.label(dt.format("%m/%d %H:%M").to_string());
-                                        }
-                                    });
-
-                                    // Source folder name only
-                                    let source_name = std::path::Path::new(&record.source_path)
-                                        .file_name()
-                                        .map(|n| n.to_string_lossy().to_string())
-                                        .unwrap_or_else(|| record.source_path.clone());
-                                    ui.label(format!("{}: {}", tr(lang, "source_folder"), source_name));
-                                    ui.label(format!("{}: {}", tr(lang, "destination"), record.dest_path));
-                                    let transfer_kind = if record.via_queue { tr(lang, "queue_upload") } else { tr(lang, "single_upload") };
-                                    ui.label(self.note_text(&transfer_kind));
-
-                                    ui.horizontal(|ui| {
-                                        ui.label(format!("{} files", record.file_count));
-                                        ui.separator();
-                                        ui.label(format_bytes(record.total_bytes));
-                                        ui.separator();
-                                        ui.label(format!("{}/s", format_bytes(record.speed_bps as u64)));
-                                        ui.separator();
-                                        ui.label(format_duration(record.duration_secs));
-                                    });
-
-                                    if let Some(err) = &record.error {
-                                        ui.label(egui::RichText::new(format!("Error: {}", err)).color(egui::Color32::from_rgb(200, 100, 100)).small());
-                                    }
-
-                                    ui.add_space(4.0);
-                                    if ui.button(tr(lang, "resume_btn")).clicked() {
-                                        self.pending_history_record = Some(record.clone());
-                                        self.history_resume_mode = if self.config.resume_mode == "none" {
-                                            "size".to_string()
-                                        } else {
-                                            self.config.resume_mode.clone()
-                                        };
-                                        self.show_history_resume_dialog = true;
+                                    if let Some(dt) = chrono::DateTime::from_timestamp(record.timestamp, 0) {
+                                        ui.label(dt.format("%m/%d %H:%M").to_string());
                                     }
                                 });
-                                ui.add_space(2.0);
-                            }
+
+                                // Source folder name only
+                                let source_name = std::path::Path::new(&record.source_path)
+                                    .file_name()
+                                    .map(|n| n.to_string_lossy().to_string())
+                                    .unwrap_or_else(|| record.source_path.clone());
+                                ui.label(format!("{}: {}", tr(lang, "source_folder"), source_name));
+                                ui.label(format!("{}: {}", tr(lang, "destination"), record.dest_path));
+                                let transfer_kind = if record.via_queue { tr(lang, "queue_upload") } else { tr(lang, "single_upload") };
+                                ui.label(self.note_text(&transfer_kind));
+
+                                ui.horizontal(|ui| {
+                                    ui.label(format!("{} files", record.file_count));
+                                    ui.separator();
+                                    ui.label(format_bytes(record.total_bytes));
+                                    ui.separator();
+                                    ui.label(format!("{}/s", format_bytes(record.speed_bps as u64)));
+                                    ui.separator();
+                                    ui.label(format_duration(record.duration_secs));
+                                });
+
+                                if let Some(err) = &record.error {
+                                    ui.label(egui::RichText::new(format!("Error: {}", err)).color(egui::Color32::from_rgb(200, 100, 100)).small());
+                                }
+
+                                ui.add_space(4.0);
+                                if ui.button(tr(lang, "resume_btn")).clicked() {
+                                    self.pending_history_record = Some(record.clone());
+                                    self.history_resume_mode = if self.config.resume_mode == "none" {
+                                        "size".to_string()
+                                    } else {
+                                        self.config.resume_mode.clone()
+                                    };
+                                    self.show_history_resume_dialog = true;
+                                }
+                            });
+                            ui.add_space(2.0);
                         }
-                    });
-                } else {
-                    egui::ScrollArea::vertical().stick_to_bottom(true).show(ui, |ui| {
-                        let text = if self.log_tab == 0 { &self.client_logs } else { &self.payload_logs };
-                        ui.add(egui::TextEdit::multiline(&mut text.as_str())
-                            .font(egui::TextStyle::Monospace)
-                            .desired_width(f32::INFINITY)
-                            .desired_rows(30)
-                            .cursor_at_end(false)
-                            .interactive(false));
-                    });
-                }
+                    }
+                });
+
+            } else {
+                egui::ScrollArea::vertical().stick_to_bottom(true).show(ui, |ui| {
+                    let text = if self.log_tab == 0 { &self.client_logs } else { &self.payload_logs };
+                    ui.add(egui::TextEdit::multiline(&mut text.as_str())
+                        .font(egui::TextStyle::Monospace)
+                        .desired_width(f32::INFINITY)
+                        .desired_rows(30)
+                        .cursor_at_end(false)
+                        .interactive(false));
+                });
+            }
             });
         });
 
@@ -4725,7 +4731,7 @@ Overwrite it?", self.get_dest_path()));
                             self.start_optimize_upload();
                         }
                     });
-                    ui.label(egui::RichText::new("RAR archives are uploaded and extracted on the PS5.").weak().small());
+                    ui.label(egui::RichText::new("RAR archives are extracted on PS5.").weak().small());
                     if Self::archive_kind(Path::new(&self.game_path)).as_ref().map(|k| k.eq_ignore_ascii_case("RAR")).unwrap_or(false) {
                         ui.horizontal(|ui| {
                             ui.label(tr(lang, "archive_rar_mode_label"));
@@ -4924,7 +4930,6 @@ Overwrite it?", self.get_dest_path()));
                     }
                 });
             }
-                });
             });
         });
     }
@@ -5197,9 +5202,9 @@ fn setup_custom_style(ctx: &egui::Context) {
     visuals.window_rounding = 8.0.into();
     visuals.selection.bg_fill = egui::Color32::from_rgb(0, 120, 215);
     visuals.selection.stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(245, 245, 245));
-    visuals.widgets.noninteractive.bg_stroke.color = egui::Color32::from_gray(80);
-    visuals.widgets.noninteractive.fg_stroke.color = egui::Color32::from_gray(235);
-    visuals.widgets.inactive.bg_fill = egui::Color32::from_gray(40);
+    visuals.widgets.noninteractive.bg_stroke.color = egui::Color32::from_gray(60);
+    visuals.widgets.noninteractive.fg_stroke.color = egui::Color32::from_gray(220);
+    visuals.widgets.inactive.bg_fill = egui::Color32::from_gray(30);
     ctx.set_visuals(visuals);
 
     let mut style = (*ctx.style()).clone();
@@ -5215,9 +5220,9 @@ fn setup_light_style(ctx: &egui::Context) {
     visuals.window_rounding = 8.0.into();
     visuals.selection.bg_fill = egui::Color32::from_rgb(0, 92, 171);
     visuals.selection.stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(255, 255, 255));
-    visuals.widgets.noninteractive.bg_stroke.color = egui::Color32::from_gray(200);
-    visuals.widgets.noninteractive.fg_stroke.color = egui::Color32::from_gray(30);
-    visuals.widgets.inactive.bg_fill = egui::Color32::from_gray(245);
+    visuals.widgets.noninteractive.bg_stroke.color = egui::Color32::from_gray(180);
+    visuals.widgets.noninteractive.fg_stroke.color = egui::Color32::from_gray(40);
+    visuals.widgets.inactive.bg_fill = egui::Color32::from_gray(230);
     ctx.set_visuals(visuals);
 
     let mut style = (*ctx.style()).clone();
@@ -5507,6 +5512,8 @@ fn load_game_meta_for_path(path: &str) -> (Option<GameMeta>, Option<CoverImage>)
 fn main() -> eframe::Result<()> {
         let options = eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
+                .with_inner_size([1932.0, 1242.0])
+                .with_min_inner_size([1656.0, 1104.0])
                 .with_icon(std::sync::Arc::new(build_icon())),
             ..Default::default()
         };
