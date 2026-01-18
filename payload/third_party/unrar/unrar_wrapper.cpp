@@ -39,6 +39,8 @@ static int CALLBACK unrar_callback(UINT msg, LPARAM user_data, LPARAM p1, LPARAM
                     }
                 }
             }
+            /* Throttle CPU usage to prevent OS kill/watchdog timeout */
+            usleep(1000); // Yield 1ms per chunk
             break;
         case UCM_NEEDPASSWORD:
         case UCM_NEEDPASSWORDW:
