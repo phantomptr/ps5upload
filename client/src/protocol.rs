@@ -713,6 +713,41 @@ where
             }
         } else if trimmed.starts_with("ERROR: ") {
             return Err(anyhow!("RAR extraction failed: {}", trimmed));
+        } else if trimmed.starts_with("EXTRACT_PROGRESS ") {
+            let parts: Vec<&str> = trimmed.split_whitespace().collect();
+            if parts.len() >= 4 {
+                let processed: u64 = parts[2].parse().unwrap_or(0);
+                let total: u64 = parts[3].parse().unwrap_or(0);
+                progress(processed, total);
+                
+                if parts.len() >= 5 {
+                    // Extract filename from the rest of the string
+                    // Find the position after the 4th token (total)
+                    // This is robust against spaces in filenames
+                    let mut current_pos = 0;
+                    for _ in 0..4 {
+                        if let Some(pos) = trimmed[current_pos..].find(char::is_whitespace) {
+                            current_pos += pos;
+                            if let Some(next_char) = trimmed[current_pos..].find(|c: char| !c.is_whitespace()) {
+                                current_pos += next_char;
+                            }
+                        }
+                    }
+                    // Actually simpler: just find the index of parts[3] and add its len
+                    // But parts[3] might appear earlier (unlikely for numbers but still)
+                    // Let's use the parts slice
+                    // Reconstruct filename? No.
+                    // Let's iterate tokens.
+                    // Or simpler: use splitn(5)
+                    let parts_n: Vec<&str> = trimmed.splitn(5, char::is_whitespace).collect();
+                    if parts_n.len() >= 5 {
+                        let filename = parts_n[4].trim();
+                        if !filename.is_empty() {
+                             extract_progress(format!("Extracting: {}", filename));
+                        }
+                    }
+                }
+            }
         } else if trimmed.starts_with("EXTRACTING ") {
             if let Some(rest) = trimmed.strip_prefix("EXTRACTING ") {
                  if let Some((count, filename)) = rest.split_once(' ') {

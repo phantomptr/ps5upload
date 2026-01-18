@@ -22,9 +22,11 @@ extern "C" {
  * filename: current file being extracted
  * file_size: size of current file
  * files_done: number of files extracted so far
+ * total_processed: total bytes processed so far
+ * total_size: total uncompressed size of archive
  * Returns 0 to continue, non-zero to abort
  */
-typedef int (*unrar_progress_cb)(const char *filename, unsigned long long file_size, int files_done, void *user_data);
+typedef int (*unrar_progress_cb)(const char *filename, unsigned long long file_size, int files_done, unsigned long long total_processed, unsigned long long total_size, void *user_data);
 
 /* Extract a RAR archive to a destination directory
  *
@@ -36,7 +38,7 @@ typedef int (*unrar_progress_cb)(const char *filename, unsigned long long file_s
  *
  * Returns: UNRAR_OK on success, error code on failure
  */
-int unrar_extract(const char *rar_path, const char *dest_dir, int strip_root, unrar_progress_cb progress, void *user_data);
+int unrar_extract(const char *rar_path, const char *dest_dir, int strip_root, unsigned long long total_size, unrar_progress_cb progress, void *user_data);
 
 /* Get file count and total uncompressed size from a RAR archive
  *

@@ -39,21 +39,60 @@ static void send_all(int sock, const char *data) {
 
 /* Progress callback for extraction */
 static int extraction_progress(const char *filename, unsigned long long file_size,
-                               int files_done, void *user_data) {
+                               int files_done, unsigned long long total_processed, unsigned long long total_size, void *user_data) {
     (void)file_size;
     
     /* Send progress to client if socket is provided */
     int *sock_ptr = (int*)user_data;
     if (sock_ptr) {
-        char msg[PATH_MAX + 64];
-        /* Ensure filename doesn't break the protocol line (basic sanitization) */
-        /* Protocol: EXTRACTING <count> <filename> */
-        snprintf(msg, sizeof(msg), "EXTRACTING %d %s\n", files_done + 1, filename);
+        char msg[PATH_MAX + 128];
+        int percent = (total_size > 0) ? (int)((total_processed * 100) / total_size) : 0;
+        
+        /* Protocol: EXTRACT_PROGRESS <percent> <processed> <total> */
+        /* Also include EXTRACTING for backward compat / filename display if needed, but client mainly needs progress now */
+        snprintf(msg, sizeof(msg), "EXTRACT_PROGRESS %d %llu %llu\n", percent, total_processed, total_size);
+        send_all(*sock_ptr, msg);
+        
+        /* Send filename update occasionally? Client might flicker. 
+           Let's stick to just progress or send both if needed. 
+           Client currently expects EXTRACTING for filename log. 
+           We can alternate or send both? sending both might flood. 
+           Let's send EXTRACTING only when file changes (files_done increments). 
+           But this callback is called periodically for same file too. 
+           We can just send EXTRACT_PROGRESS and client can use that. 
+           But client also logs "Extracting file X".
+           Let's send EXTRACTING message too? 
+           The wrapper calls callback periodically. 
+           If I send EXTRACTING every time, client logs fill up. 
+           I should only send EXTRACTING when filename changes. 
+           But I don't track previous filename here easily without static/context.
+           Actually unrar_wrapper only calls callback periodically for keep-alive OR on file start?
+           In wrapper: 
+             ProcessFile -> callback (file start)
+             UCM_PROCESSDATA -> callback (periodic)
+           So we get called for both.
+           If we are called for keep-alive, we are in middle of file.
+           We can send EXTRACT_PROGRESS always.
+           And send EXTRACTING if it's a new file? 
+           We can't easily distinguish here without state.
+           
+           Let's just send EXTRACT_PROGRESS. I will update client to handle it.
+           I'll also send EXTRACTING for filename logging if it seems like a new file?
+           Actually, the client overwrites the status phase. 
+           If I send EXTRACT_PROGRESS, client can update progress bar.
+           If I send EXTRACTING, client logs it.
+           
+           Let's keep sending EXTRACTING but maybe client can filter duplicates?
+           Or better: EXTRACT_PROGRESS includes current filename? 
+           "EXTRACT_PROGRESS <percent> <processed> <total> <filename>"
+           That's cleaner.
+        */
+        snprintf(msg, sizeof(msg), "EXTRACT_PROGRESS %d %llu %llu %s\n", percent, total_processed, total_size, filename);
         send_all(*sock_ptr, msg);
     }
 
-    printf("[RAR] Extracting (%d): %s\n", files_done + 1, filename);
-    usleep(1000); /* Yield CPU */
+    /* printf("[RAR] Extracting (%d): %s\n", files_done + 1, filename); */
+    /* usleep(1000);  Yield CPU - handled in wrapper now */
     return 0;  /* Continue extraction */
 }
 
@@ -172,7 +211,8 @@ int extract_rar_file(const char *rar_path, const char *dest_dir, int strip_root,
     printf("[RAR] Archive contains %d files, %llu bytes uncompressed\n", count, size);
 
     /* Extract */
-    int extract_result = unrar_extract(rar_path, dest_dir, strip_root, extraction_progress, user_data);
+    /* Pass total size to wrapper */
+    int extract_result = unrar_extract(rar_path, dest_dir, strip_root, size, extraction_progress, user_data);
     if (extract_result != UNRAR_OK) {
         printf("[RAR] Extraction failed: %s\n", unrar_strerror(extract_result));
         return -1;

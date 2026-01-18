@@ -16,6 +16,8 @@ struct ExtractContext {
     /* Fields for keep-alive updates */
     char current_filename[1024];
     unsigned long long current_file_size;
+    unsigned long long total_processed;
+    unsigned long long total_size;
     time_t last_update_time;
 };
 
@@ -27,13 +29,17 @@ static int CALLBACK unrar_callback(UINT msg, LPARAM user_data, LPARAM p1, LPARAM
     switch (msg) {
         case UCM_PROCESSDATA:
             /* p1 = data pointer, p2 = data size */
+            if (p2 > 0) {
+                ctx->total_processed += (unsigned long long)p2;
+            }
             if (ctx->callback) {
                 time_t now = time(NULL);
                 /* Send keep-alive update every 5 seconds for large files */
+                /* Or if we just processed a chunk? No, stick to time to avoid spam */
                 if (now - ctx->last_update_time >= 5) {
                     ctx->last_update_time = now;
                     /* Re-send the current file status to keep the client connection alive */
-                    if (ctx->callback(ctx->current_filename, ctx->current_file_size, ctx->files_done, ctx->user_data) != 0) {
+                    if (ctx->callback(ctx->current_filename, ctx->current_file_size, ctx->files_done, ctx->total_processed, ctx->total_size, ctx->user_data) != 0) {
                         ctx->abort_flag = 1;
                         return -1;
                     }
@@ -56,7 +62,7 @@ static int CALLBACK unrar_callback(UINT msg, LPARAM user_data, LPARAM p1, LPARAM
 }
 
 extern "C" int unrar_extract(const char *rar_path, const char *dest_dir, int strip_root,
-                              unrar_progress_cb progress, void *user_data) {
+                              unsigned long long total_size, unrar_progress_cb progress, void *user_data) {
     if (!rar_path || !dest_dir) {
         return UNRAR_ERR_OPEN;
     }
@@ -79,6 +85,8 @@ extern "C" int unrar_extract(const char *rar_path, const char *dest_dir, int str
     ctx.last_update_time = time(NULL);
     memset(ctx.current_filename, 0, sizeof(ctx.current_filename));
     ctx.current_file_size = 0;
+    ctx.total_processed = 0;
+    ctx.total_size = total_size;
 
     RARSetCallback(hArc, unrar_callback, (LPARAM)&ctx);
 
@@ -104,7 +112,7 @@ extern "C" int unrar_extract(const char *rar_path, const char *dest_dir, int str
         /* Report progress before extraction */
         if (progress) {
             unsigned long long file_size = header.UnpSize;
-            if (progress(header.FileName, file_size, ctx.files_done, user_data) != 0) {
+            if (progress(header.FileName, file_size, ctx.files_done, ctx.total_processed, ctx.total_size, user_data) != 0) {
                 result = UNRAR_ERR_EXTRACT;
                 break;
             }
