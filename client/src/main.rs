@@ -44,9 +44,9 @@ mod chat;
 
 const CHAT_MAX_MESSAGES: usize = 500;
 
-use protocol::{StorageLocation, DirEntry, DownloadCompression, list_storage, list_dir, list_dir_recursive, check_dir, upload_v2_init, delete_path, move_path, copy_path, chmod_777, create_path, download_file_with_progress, download_dir_with_progress, get_payload_version, hash_file};
+use protocol::{StorageLocation, DirEntry, DownloadCompression, list_storage, list_dir, list_dir_recursive, check_dir, upload_v2_init, delete_path, move_path, copy_path, chmod_777, create_path, download_file_with_progress, download_dir_with_progress, get_payload_version, hash_file, upload_rar_for_extraction};
 use archive::get_size;
-use transfer::{collect_files_with_progress, stream_files_with_progress, send_files_v2_for_list, SendFilesConfig, scan_rar_archive, send_rar_archive, scan_zip_archive, send_zip_archive, scan_7z_archive, send_7z_archive, extract_rar_archive, extract_zip_archive, extract_7z_archive, SharedReceiverIterator, FileEntry, CompressionMode};
+use transfer::{collect_files_with_progress, stream_files_with_progress, send_files_v2_for_list, SendFilesConfig, scan_zip_archive, send_zip_archive, scan_7z_archive, send_7z_archive, SharedReceiverIterator, FileEntry, CompressionMode};
 use config::AppConfig;
 use profiles::{Profile, ProfilesData, load_profiles, save_profiles};
 use history::{TransferRecord, HistoryData, load_history, add_record, clear_history};
@@ -64,21 +64,6 @@ const PAYLOAD_PORT: u16 = 9021;
 const MAX_PARALLEL_CONNECTIONS: usize = 10; // Increased back to 10 for better saturation
 const MAX_LOG_BYTES: usize = 512 * 1024;
 
-struct TempDirGuard {
-    path: std::path::PathBuf,
-}
-
-impl TempDirGuard {
-    fn new(path: std::path::PathBuf) -> Self {
-        Self { path }
-    }
-}
-
-impl Drop for TempDirGuard {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.path);
-    }
-}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ProfileSnapshot {
@@ -111,7 +96,6 @@ enum ChatStatusEvent {
 enum AppMessage {
     Log(String),
     PayloadLog(String),
-    Status(String),
     StatusPhase(String),
     ChatMessage(ChatMessage),
     ChatStatus(ChatStatusEvent),
@@ -523,7 +507,7 @@ impl Ps5UploadApp {
             setup_light_style(ctx);
             self.config.theme = "light".to_string();
         }
-        self.config.save();
+        let _ = self.config.save();
     }
 
     fn apply_profile(&mut self, profile: &Profile) {
@@ -536,7 +520,7 @@ impl Ps5UploadApp {
         self.config.auto_tune_connections = profile.auto_tune_connections;
         self.config.address = profile.address.clone();
         self.config.storage = profile.storage.clone();
-        self.config.save();
+        let _ = self.config.save();
         self.current_profile = Some(profile.name.clone());
     }
 
@@ -1131,7 +1115,7 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
         }
         let name = generate_chat_display_name(CHAT_SHARED_KEY_HEX);
         self.config.chat_display_name = name;
-        self.config.save();
+        let _ = self.config.save();
     }
 
     fn start_download_asset(&mut self, kind: &str, asset_name: &str, default_filename: &str) {
@@ -1308,7 +1292,7 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
     fn connect(&mut self) {
         // Save config
         self.config.address = self.ip.clone();
-        self.config.save();
+        let _ = self.config.save();
 
         self.is_connecting = true;
         self.status = "Connecting...".to_string();
@@ -1404,7 +1388,7 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
         let rt = self.rt.clone();
         let connections = self.config.connections;
         let use_temp = self.config.use_temp;
-        let archive_trim = self.pending_archive_trim;
+        let _archive_trim = self.pending_archive_trim;
         let mut resume_mode = self.config.resume_mode.clone();
         if self.force_full_upload_once {
             resume_mode = "none".to_string();
@@ -1414,8 +1398,6 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
         let auto_tune_connections = self.config.auto_tune_connections;
         let compression_setting = self.config.compression.clone();
         let optimize_upload = self.config.optimize_upload;
-        let extract_archives_fast = self.config.extract_archives_fast;
-        let rar_stream_on_the_fly = self.config.rar_stream_on_the_fly;
         let lang_code = self.config.language.clone();
         let payload_supports_modern = self.payload_supports_modern_compression();
 
@@ -1437,108 +1419,96 @@ fn format_chat_status(&self, status: ChatStatusEvent) -> String {
                     resume_mode = "none".to_string();
                     let _ = tx.send(AppMessage::Log("Resume is disabled for archive uploads.".to_string()));
                 }
-                let mut effective_path = game_path.clone();
-                let mut temp_dir_guard: Option<TempDirGuard> = None;
+                let effective_path = game_path.clone();
 
-                if is_archive {
-                     let ext = if is_rar { "RAR" } else if is_zip { "ZIP" } else { "7Z" };
-                     let allow_rar_stream = is_rar && rar_stream_on_the_fly && resume_mode == "none" && connections == 1;
-                     let needs_extract = !allow_rar_stream && (extract_archives_fast || resume_mode != "none" || connections > 1);
+                // RAR files are extracted server-side on PS5
+                if is_rar {
+                    let _ = tx.send(AppMessage::UploadStart { run_id });
+                    let _ = tx.send(AppMessage::Log("Uploading RAR to PS5 for server-side extraction...".to_string()));
+                    let _ = tx.send(AppMessage::StatusPhase("Uploading".to_string()));
 
-                     if needs_extract {
-                         let lang = Language::from_code(&lang_code);
-                         let _ = tx.send(AppMessage::Status(tr(lang, "status_extracting_archive")));
-                         let _ = tx.send(AppMessage::StatusPhase("Extracting".to_string()));
-                         let lang = Language::from_code(&lang_code);
-                         if extract_archives_fast {
-                             let msg = tr(lang, "archive_extract_fast_log").replace("{}", ext);
-                             let _ = tx.send(AppMessage::Log(msg));
-                         } else {
-                             let msg = tr(lang, "archive_extract_required_log").replace("{}", ext);
-                             let _ = tx.send(AppMessage::Log(msg));
-                         }
-                         let temp_dir = create_temp_dir("ps5upload_archive")
-                             .map_err(|e| anyhow::anyhow!("Temp dir error: {}", e))?;
-                         let _ = tx.send(AppMessage::Log(format!("Temp extract location: {}", temp_dir.display())));
-                         let cancel_extract = cancel_token.clone();
-                         let tx_log_extract = tx_log.clone();
-                         let log_extract = move |msg: String| { let _ = tx_log_extract.send(AppMessage::Log(msg)); };
+                    let _rar_size = std::fs::metadata(&game_path)
+                        .map(|m| m.len())
+                        .unwrap_or(0);
 
-                         if is_rar {
-                             extract_rar_archive(&game_path, &temp_dir, cancel_extract, log_extract)?;
-                         } else if is_zip {
-                             extract_zip_archive(&game_path, &temp_dir, cancel_extract, log_extract)?;
-                         } else {
-                             extract_7z_archive(&game_path, &temp_dir, cancel_extract, log_extract)?;
-                         }
+                    let start = std::time::Instant::now();
+                    let tx_progress = tx.clone();
+                    let progress_callback = move |sent: u64, total: u64| {
+                        let elapsed = start.elapsed().as_secs_f64();
+                        let _ = tx_progress.send(AppMessage::Progress {
+                            run_id,
+                            sent,
+                            total,
+                            files_sent: 0,
+                            elapsed_secs: elapsed,
+                            current_file: Some("Uploading RAR...".to_string())
+                        });
+                    };
 
-                         let mut selected_path = temp_dir.clone();
-                         if archive_trim {
-                             if let Some(trimmed) = trim_archive_root(&temp_dir, &game_path) {
-                                 selected_path = trimmed;
-                                 let _ = tx.send(AppMessage::Log("Trimmed top-level folder that matches the archive name.".to_string()));
-                             }
-                         }
-                         temp_dir_guard = Some(TempDirGuard::new(temp_dir.clone()));
-                         effective_path = selected_path.display().to_string();
-                         let _ = tx.send(AppMessage::Log("Archive extracted. Starting upload...".to_string()));
-                    } else {
-                        if is_rar && rar_stream_on_the_fly {
-                            let lang = Language::from_code(&lang_code);
-                            let _ = tx.send(AppMessage::Log(tr(lang, "archive_rar_stream_log")));
+                    let result = upload_rar_for_extraction(
+                        &ip,
+                        TRANSFER_PORT,
+                        &game_path,
+                        &dest_path,
+                        cancel_token.clone(),
+                        progress_callback
+                    ).await;
+
+                    match result {
+                        Ok((files, bytes)) => {
+                            let _ = tx.send(AppMessage::Log(format!("PS5 extracted {} files ({} bytes)", files, bytes)));
+                            return Ok((files as i32, bytes));
                         }
-                        let _ = tx.send(AppMessage::UploadStart { run_id });
-                        let _ = tx.send(AppMessage::Log(format!("Starting {} streaming upload...", ext)));
-                         
-                         let (_count, size) = if is_rar {
-                             scan_rar_archive(&game_path)?
-                         } else if is_zip {
-                             scan_zip_archive(&game_path)?
-                         } else {
-                             scan_7z_archive(&game_path)?
-                         };
-                         
-                         let stream = upload_v2_init(&ip, TRANSFER_PORT, &dest_path, use_temp).await?;
-                         let mut std_stream = stream.into_std()?;
-                         std_stream.set_nonblocking(true)?;
-                         let _ = tx.send(AppMessage::PayloadLog("Server READY".to_string()));
-                         
-                         let start = std::time::Instant::now();
-                         let last_progress_ms = Arc::new(AtomicU64::new(0));
-                         let rate_limit = if bandwidth_limit_bps > 0 { Some(bandwidth_limit_bps) } else { None };
-                         let mut last_sent = 0u64;
-                         
-                         if is_rar {
-                             send_rar_archive(game_path, std_stream.try_clone()?, cancel_token.clone(), move |sent, files_sent, current_file| {
-                                if sent == last_sent { return; }
-                                let elapsed = start.elapsed().as_secs_f64();
-                                let _ = tx.send(AppMessage::Progress { run_id, sent, total: size, files_sent, elapsed_secs: elapsed, current_file });
-                                last_progress_ms.store(start.elapsed().as_millis() as u64, Ordering::Relaxed);
-                                last_sent = sent;
-                             }, move |msg| { let _ = tx_log.send(AppMessage::Log(msg)); }, rate_limit)?;
-                         } else if is_zip {
-                             send_zip_archive(game_path, std_stream.try_clone()?, cancel_token.clone(), move |sent, files_sent, current_file| {
-                                if sent == last_sent { return; }
-                                let elapsed = start.elapsed().as_secs_f64();
-                                let _ = tx.send(AppMessage::Progress { run_id, sent, total: size, files_sent, elapsed_secs: elapsed, current_file });
-                                last_progress_ms.store(start.elapsed().as_millis() as u64, Ordering::Relaxed);
-                                last_sent = sent;
-                             }, move |msg| { let _ = tx_log.send(AppMessage::Log(msg)); }, rate_limit)?;
-                         } else {
-                             send_7z_archive(game_path, std_stream.try_clone()?, cancel_token.clone(), move |sent, files_sent, current_file| {
-                                if sent == last_sent { return; }
-                                let elapsed = start.elapsed().as_secs_f64();
-                                let _ = tx.send(AppMessage::Progress { run_id, sent, total: size, files_sent, elapsed_secs: elapsed, current_file });
-                                last_progress_ms.store(start.elapsed().as_millis() as u64, Ordering::Relaxed);
-                                last_sent = sent;
-                             }, move |msg| { let _ = tx_log.send(AppMessage::Log(msg)); }, rate_limit)?;
-                         }
-                         
-                         let response = read_upload_response(&mut std_stream, &cancel_token)?;
-                         return parse_upload_response(&response);
-                     }
+                        Err(e) => {
+                            return Err(e);
+                        }
+                    }
                 }
-                let _temp_guard = temp_dir_guard;
+
+                // ZIP and 7Z archives - client-side handling
+                if is_zip || is_7z {
+                    let ext = if is_zip { "ZIP" } else { "7Z" };
+                    
+                    let _ = tx.send(AppMessage::UploadStart { run_id });
+                    let _ = tx.send(AppMessage::Log(format!("Starting {} streaming upload...", ext)));
+
+                    let (_count, size) = if is_zip {
+                        scan_zip_archive(&game_path)?
+                    } else {
+                        scan_7z_archive(&game_path)?
+                    };
+
+                    let stream = upload_v2_init(&ip, TRANSFER_PORT, &dest_path, use_temp).await?;
+                    let mut std_stream = stream.into_std()?;
+                    std_stream.set_nonblocking(true)?;
+                    let _ = tx.send(AppMessage::PayloadLog("Server READY".to_string()));
+
+                    let start = std::time::Instant::now();
+                    let last_progress_ms = Arc::new(AtomicU64::new(0));
+                    let rate_limit = if bandwidth_limit_bps > 0 { Some(bandwidth_limit_bps) } else { None };
+                    let mut last_sent = 0u64;
+
+                    if is_zip {
+                        send_zip_archive(game_path, std_stream.try_clone()?, cancel_token.clone(), move |sent, files_sent, current_file| {
+                            if sent == last_sent { return; }
+                            let elapsed = start.elapsed().as_secs_f64();
+                            let _ = tx.send(AppMessage::Progress { run_id, sent, total: size, files_sent, elapsed_secs: elapsed, current_file });
+                            last_progress_ms.store(start.elapsed().as_millis() as u64, Ordering::Relaxed);
+                            last_sent = sent;
+                        }, move |msg| { let _ = tx_log.send(AppMessage::Log(msg)); }, rate_limit)?;
+                    } else {
+                        send_7z_archive(game_path, std_stream.try_clone()?, cancel_token.clone(), move |sent, files_sent, current_file| {
+                            if sent == last_sent { return; }
+                            let elapsed = start.elapsed().as_secs_f64();
+                            let _ = tx.send(AppMessage::Progress { run_id, sent, total: size, files_sent, elapsed_secs: elapsed, current_file });
+                            last_progress_ms.store(start.elapsed().as_millis() as u64, Ordering::Relaxed);
+                            last_sent = sent;
+                        }, move |msg| { let _ = tx_log.send(AppMessage::Log(msg)); }, rate_limit)?;
+                    }
+
+                    let response = read_upload_response(&mut std_stream, &cancel_token)?;
+                    return parse_upload_response(&response);
+                }
 
                 let mut connection_count_cfg = connections.clamp(1, MAX_PARALLEL_CONNECTIONS);
                 let mut optimize_compression: Option<CompressionMode> = None;
@@ -2365,7 +2335,6 @@ impl eframe::App for Ps5UploadApp {
             match msg {
                 AppMessage::Log(s) => self.log(&s),
                 AppMessage::PayloadLog(s) => self.payload_log(&s),
-                AppMessage::Status(s) => self.status = s,
                 AppMessage::StatusPhase(phase) => self.progress_phase = phase,
                 AppMessage::ChatMessage(msg) => {
                     self.chat_received_count = self.chat_received_count.saturating_add(1);
@@ -2536,7 +2505,7 @@ impl eframe::App for Ps5UploadApp {
                     if let Some(connections) = opt.connections {
                         self.config.connections = connections;
                     }
-                    self.config.save();
+                    let _ = self.config.save();
                     let unchanged = tr(lang, "optimize_upload_unchanged");
                     let comp_label = opt.compression.map(compression_label).unwrap_or(unchanged.as_str());
                     let conn_label = opt.connections.map(|v| v.to_string()).unwrap_or_else(|| unchanged.clone());
@@ -2865,26 +2834,15 @@ Overwrite it?", self.get_dest_path()));
                     let is_rar = archive_kind.eq_ignore_ascii_case("RAR");
                     ui.label(detected_label);
                     ui.add_space(6.0);
-                    ui.label(tr(lang, "archive_decompress_note"));
-                    let extract = ui.checkbox(&mut self.config.extract_archives_fast, tr(lang, "archive_extract_fast_toggle"));
-                    if extract.changed() {
-                        self.config.save();
-                    }
-                    if self.config.extract_archives_fast {
-                        ui.label(egui::RichText::new(tr(lang, "archive_extract_fast_note")).weak());
+                    if is_rar {
+                        // RAR files are extracted server-side on PS5
+                        ui.label(egui::RichText::new("RAR will be uploaded and extracted on PS5.").weak());
                     } else {
                         ui.label(egui::RichText::new(tr(lang, "archive_extract_stream_note")).weak());
                     }
-                    if is_rar {
-                        let rar_stream = ui.checkbox(&mut self.config.rar_stream_on_the_fly, tr(lang, "archive_rar_stream_toggle"));
-                        if rar_stream.changed() {
-                            self.config.save();
-                        }
-                        ui.label(egui::RichText::new(tr(lang, "archive_rar_stream_note")).weak());
-                    }
-                    if self.config.connections > 1 {
+                    if self.config.connections > 1 && !is_rar {
                         ui.add_space(4.0);
-                        ui.label(tr(lang, "archive_multi_conn_note"));
+                        ui.label(tr(lang, "archive_rar_stream_note"));
                     }
                     ui.add_space(6.0);
                     ui.checkbox(&mut self.pending_archive_trim, tr(lang, "archive_trim_dir"));
@@ -2896,14 +2854,11 @@ Overwrite it?", self.get_dest_path()));
                         if ui.button(tr(lang, "continue")).clicked() {
                             if let Some(path) = self.pending_archive_path.take() {
                                 self.update_game_path(path);
-                                let msg_key = if self.config.extract_archives_fast {
-                                    "archive_selected_extract"
-                                } else if is_rar && self.config.rar_stream_on_the_fly {
-                                    "archive_selected_stream_rar"
+                                let msg = if is_rar {
+                                    format!("RAR archive selected. Will be extracted on PS5.")
                                 } else {
-                                    "archive_selected_stream"
+                                    tr(lang, "archive_selected_stream").replace("{}", &archive_kind)
                                 };
-                                let msg = tr(lang, msg_key).replace("{}", &archive_kind);
                                 self.log(&msg);
                             }
                             self.pending_archive_kind = None;
@@ -3233,7 +3188,7 @@ Overwrite it?", self.get_dest_path()));
                                     self.log(&format!("Resume failed: {}", msg));
                                 } else {
                                     self.config.resume_mode = self.history_resume_mode.clone();
-                                    self.config.save();
+                                    let _ = self.config.save();
                                     self.auto_resume_on_exists = true;
                                     self.check_exists_and_upload();
                                 }
@@ -3446,7 +3401,7 @@ Overwrite it?", self.get_dest_path()));
             ui.add_space(5.0);
             let auto_payload = ui.checkbox(&mut self.config.auto_check_payload, tr(lang, "auto_check_payload"));
             if auto_payload.changed() {
-                self.config.save();
+                let _ = self.config.save();
                 if self.config.auto_check_payload {
                     self.last_payload_check = None;
                     self.check_payload_version();
@@ -3456,7 +3411,7 @@ Overwrite it?", self.get_dest_path()));
                 ui.label(egui::RichText::new(tr(lang, "auto_payload_interval")).weak().small());
             }
             let auto_connect = ui.checkbox(&mut self.config.auto_connect, tr(lang, "auto_reconnect"));
-            if auto_connect.changed() { self.config.save(); }
+            if auto_connect.changed() { let _ = self.config.save(); }
 
             ui.add_space(10.0);
             if connected {
@@ -3498,7 +3453,7 @@ Overwrite it?", self.get_dest_path()));
                          for loc in &self.storage_locations {
                             if ui.radio_value(&mut self.selected_storage, Some(loc.path.clone()), &loc.path).clicked() {
                                 self.config.storage = loc.path.clone();
-                                self.config.save();
+                                let _ = self.config.save();
                             }
                             ui.label(format!("{:.1} GB Free", loc.free_gb));
                             ui.end_row();
@@ -3521,7 +3476,7 @@ Overwrite it?", self.get_dest_path()));
             let mut include_pre = self.config.update_channel == "all";
             if ui.checkbox(&mut include_pre, tr(lang, "include_prerelease")).changed() {
                 self.config.update_channel = if include_pre { "all".to_string() } else { "stable".to_string() };
-                self.config.save();
+                let _ = self.config.save();
                 self.start_update_check();
             }
 
@@ -3579,7 +3534,7 @@ Overwrite it?", self.get_dest_path()));
                             if ui.selectable_label(self.language == candidate, candidate.label()).clicked() {
                                 self.language = candidate;
                                 self.config.language = candidate.code().to_string();
-                                self.config.save();
+                                let _ = self.config.save();
                             }
                         }
                     });
@@ -4053,23 +4008,23 @@ Overwrite it?", self.get_dest_path()));
                             .show_ui(ui, |ui| {
                                 if ui.selectable_label(self.config.download_compression == "none", tr(lang, "compression_opt_none")).clicked() {
                                     self.config.download_compression = "none".to_string();
-                                    self.config.save();
+                                    let _ = self.config.save();
                                 }
                                 if ui.selectable_label(self.config.download_compression == "auto", tr(lang, "compression_opt_auto")).clicked() {
                                     self.config.download_compression = "auto".to_string();
-                                    self.config.save();
+                                    let _ = self.config.save();
                                 }
                                 if ui.selectable_label(self.config.download_compression == "lz4", tr(lang, "compression_opt_lz4")).clicked() {
                                     self.config.download_compression = "lz4".to_string();
-                                    self.config.save();
+                                    let _ = self.config.save();
                                 }
                                 if ui.selectable_label(self.config.download_compression == "zstd", tr(lang, "compression_opt_zstd")).clicked() {
                                     self.config.download_compression = "zstd".to_string();
-                                    self.config.save();
+                                    let _ = self.config.save();
                                 }
                                 if ui.selectable_label(self.config.download_compression == "lzma", tr(lang, "compression_opt_lzma")).clicked() {
                                     self.config.download_compression = "lzma".to_string();
-                                    self.config.save();
+                                    let _ = self.config.save();
                                 }
                             });
                     });
@@ -4121,7 +4076,7 @@ Overwrite it?", self.get_dest_path()));
                             .desired_width(220.0),
                     );
                     if response.changed() {
-                        self.config.save();
+                        let _ = self.config.save();
                     }
                 });
                 ui.label(egui::RichText::new(tr(lang, "chat_display_name_note")).weak().small());
@@ -4324,7 +4279,7 @@ Overwrite it?", self.get_dest_path()));
                         }
                         ui.label(format!("{}:", tr(lang, "use_temp")));
                         let temp_toggle = ui.checkbox(&mut self.config.use_temp, tr(lang, "stage_fast"));
-                        if temp_toggle.changed() { self.config.save(); }
+                        if temp_toggle.changed() { let _ = self.config.save(); }
                         ui.end_row();
                         ui.label(tr(lang, "compression"));
                         ui.add_enabled_ui(!self.config.optimize_upload, |ui| {
@@ -4339,23 +4294,23 @@ Overwrite it?", self.get_dest_path()));
                                 .show_ui(ui, |ui| {
                                     if ui.selectable_label(self.config.compression == "none", tr(lang, "compression_opt_none")).clicked() {
                                         self.config.compression = "none".to_string();
-                                        self.config.save();
+                                        let _ = self.config.save();
                                     }
                                     if ui.selectable_label(self.config.compression == "auto", tr(lang, "compression_opt_auto")).clicked() {
                                         self.config.compression = "auto".to_string();
-                                        self.config.save();
+                                        let _ = self.config.save();
                                     }
                                     if ui.selectable_label(self.config.compression == "lz4", tr(lang, "compression_opt_lz4")).clicked() {
                                         self.config.compression = "lz4".to_string();
-                                        self.config.save();
+                                        let _ = self.config.save();
                                     }
                                     if ui.selectable_label(self.config.compression == "zstd", tr(lang, "compression_opt_zstd")).clicked() {
                                         self.config.compression = "zstd".to_string();
-                                        self.config.save();
+                                        let _ = self.config.save();
                                     }
                                     if ui.selectable_label(self.config.compression == "lzma", tr(lang, "compression_opt_lzma")).clicked() {
                                         self.config.compression = "lzma".to_string();
-                                        self.config.save();
+                                        let _ = self.config.save();
                                     }
                                 });
                         });
@@ -4364,7 +4319,7 @@ Overwrite it?", self.get_dest_path()));
                     ui.horizontal(|ui| {
                         let optimize = ui.checkbox(&mut self.config.optimize_upload, tr(lang, "optimize_upload_auto"));
                         if optimize.changed() {
-                            self.config.save();
+                            let _ = self.config.save();
                             if self.config.optimize_upload {
                                 self.log(&tr(lang, "optimize_upload_notice"));
                             }
@@ -4373,27 +4328,7 @@ Overwrite it?", self.get_dest_path()));
                             self.start_optimize_upload();
                         }
                     });
-                    ui.horizontal(|ui| {
-                        let extract = ui.checkbox(&mut self.config.extract_archives_fast, tr(lang, "archive_extract_fast_toggle"));
-                        if extract.changed() {
-                            self.config.save();
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        let rar_stream = ui.checkbox(&mut self.config.rar_stream_on_the_fly, tr(lang, "archive_rar_stream_toggle"));
-                        if rar_stream.changed() {
-                            self.config.save();
-                        }
-                    });
-                    let extract_note = if self.config.extract_archives_fast {
-                        tr(lang, "archive_extract_fast_note")
-                    } else {
-                        tr(lang, "archive_extract_stream_note")
-                    };
-                    ui.label(egui::RichText::new(extract_note).weak().small());
-                    if self.config.rar_stream_on_the_fly {
-                        ui.label(egui::RichText::new(tr(lang, "archive_rar_stream_note")).weak().small());
-                    }
+                    ui.label(egui::RichText::new("RAR archives are extracted on PS5.").weak().small());
                     if self.config.optimize_upload {
                         ui.label(egui::RichText::new(tr(lang, "optimize_upload_lock_notice")).weak().small());
                     }
@@ -4463,7 +4398,7 @@ Overwrite it?", self.get_dest_path()));
                         );
                         if response.changed() {
                             self.config.connections = connections as usize;
-                            self.config.save();
+                            let _ = self.config.save();
                         }
                         ui.label(format!("(max {})", MAX_PARALLEL_CONNECTIONS));
                     });
@@ -4473,7 +4408,7 @@ Overwrite it?", self.get_dest_path()));
                             egui::Checkbox::new(&mut self.config.auto_tune_connections, tr(lang, "auto_tune_connections"))
                         );
                         if auto_tune.changed() {
-                            self.config.save();
+                            let _ = self.config.save();
                         }
                     });
                     let note1 = tr(lang, "note_conn_1");
@@ -4490,7 +4425,7 @@ Overwrite it?", self.get_dest_path()));
                         );
                         if response.changed() {
                             self.config.bandwidth_limit_mbps = limit.max(0.0);
-                            self.config.save();
+                            let _ = self.config.save();
                         }
                         if self.config.bandwidth_limit_mbps <= 0.0 {
                             ui.label("(unlimited)");
@@ -4508,19 +4443,19 @@ Overwrite it?", self.get_dest_path()));
                             .show_ui(ui, |ui| {
                                 if ui.selectable_label(self.config.resume_mode == "none", tr(lang, "off")).clicked() {
                                     self.config.resume_mode = "none".to_string();
-                                    self.config.save();
+                                    let _ = self.config.save();
                                 }
                                 if ui.selectable_label(self.config.resume_mode == "size", tr(lang, "resume_fast")).clicked() {
                                     self.config.resume_mode = "size".to_string();
-                                    self.config.save();
+                                    let _ = self.config.save();
                                 }
                                 if ui.selectable_label(self.config.resume_mode == "size_mtime", tr(lang, "resume_medium")).clicked() {
                                     self.config.resume_mode = "size_mtime".to_string();
-                                    self.config.save();
+                                    let _ = self.config.save();
                                 }
                                 if ui.selectable_label(self.config.resume_mode == "sha256", tr(lang, "resume_slow")).clicked() {
                                     self.config.resume_mode = "sha256".to_string();
-                                    self.config.save();
+                                    let _ = self.config.save();
                                 }
                             });
                     });
@@ -4533,7 +4468,7 @@ Overwrite it?", self.get_dest_path()));
                     ui.horizontal(|ui| {
                         let chmod_toggle = ui.checkbox(&mut self.config.chmod_after_upload, tr(lang, "chmod_after"));
                         if chmod_toggle.changed() {
-                            self.config.save();
+                            let _ = self.config.save();
                         }
                         let note_chmod = tr(lang, "note_chmod");
                         ui.label(self.note_text(&note_chmod));
@@ -4990,17 +4925,6 @@ fn sha256_file(path: &std::path::Path) -> anyhow::Result<String> {
     Ok(format!("{:x}", hash))
 }
 
-fn create_temp_dir(prefix: &str) -> std::io::Result<std::path::PathBuf> {
-    let mut dir = std::env::temp_dir();
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let name = format!("{}_{}_{}", prefix, std::process::id(), nanos);
-    dir.push(name);
-    std::fs::create_dir_all(&dir)?;
-    Ok(dir)
-}
 
 fn sample_workload(path: &str, cancel: &Arc<AtomicBool>) -> Option<(usize, u64)> {
     let path = Path::new(path);
@@ -5190,25 +5114,6 @@ fn recommend_connections(current: usize, sample_count: usize, sample_bytes: u64)
     }
 }
 
-fn trim_archive_root(temp_dir: &std::path::Path, archive_path: &str) -> Option<std::path::PathBuf> {
-    let stem = std::path::Path::new(archive_path)
-        .file_stem()
-        .map(|s| s.to_string_lossy().to_string())?;
-    let mut entries = std::fs::read_dir(temp_dir).ok()?;
-    let first = entries.next()?.ok()?;
-    if entries.next().is_some() {
-        return None;
-    }
-    let path = first.path();
-    if !path.is_dir() {
-        return None;
-    }
-    let name = path.file_name()?.to_string_lossy().to_string();
-    if name != stem {
-        return None;
-    }
-    Some(path)
-}
 
 fn parse_upload_response(response: &str) -> anyhow::Result<(i32, u64)> {
     if response.starts_with("SUCCESS") {

@@ -1,4 +1,4 @@
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
@@ -20,9 +20,7 @@ pub struct AppConfig {
     pub auto_tune_connections: bool,
     pub auto_check_payload: bool,
     pub optimize_upload: bool,
-    pub extract_archives_fast: bool,
     pub chat_display_name: String,
-    pub rar_stream_on_the_fly: bool,
 }
 
 impl Default for AppConfig {
@@ -44,9 +42,7 @@ impl Default for AppConfig {
             auto_tune_connections: true,
             auto_check_payload: false,
             optimize_upload: false,
-            extract_archives_fast: true,
             chat_display_name: String::new(),
-            rar_stream_on_the_fly: false,
         }
     }
 }
@@ -129,16 +125,13 @@ impl AppConfig {
                             "optimize_upload" => {
                                 config.optimize_upload = matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on");
                             }
-                            "extract_archives_fast" => {
-                                config.extract_archives_fast = matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on");
-                            }
                             "chat_display_name" => {
                                 config.chat_display_name = value;
                             }
-                            "rar_stream_on_the_fly" => {
-                                config.rar_stream_on_the_fly = matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on");
-                            }
-                            _ => {}
+                            // Backwards compatibility: ignore removed fields
+                            "extract_archives_fast" => {} // Removed fields are ignored
+                            "rar_stream_on_the_fly" => {} // Removed fields are ignored
+                            _ => {} // Removed fields are ignored
                         }
                     }
                 }
@@ -148,9 +141,9 @@ impl AppConfig {
         Self::default()
     }
 
-    pub fn save(&self) {
+    pub fn save(&self) -> anyhow::Result<()> {
         let content = format!(
-            "address={}\nstorage={}\nconnections={}\nuse_temp={}\nauto_connect={}\ntheme={}\ncompression={}\nbandwidth_limit_mbps={}\nupdate_channel={}\ndownload_compression={}\nchmod_after_upload={}\nresume_mode={}\nlanguage={}\nauto_tune_connections={}\nauto_check_payload={}\noptimize_upload={}\nextract_archives_fast={}\nchat_display_name={}\nrar_stream_on_the_fly={}\n",
+            "address={}\nstorage={}\nconnections={}\nuse_temp={}\nauto_connect={}\ntheme={}\ncompression={}\nbandwidth_limit_mbps={}\nupdate_channel={}\ndownload_compression={}\nchmod_after_upload={}\nresume_mode={}\nlanguage={}\nauto_tune_connections={}\nauto_check_payload={}\noptimize_upload={}\nchat_display_name={}\n",
             self.address,
             self.storage,
             self.connections,
@@ -167,10 +160,9 @@ impl AppConfig {
             self.auto_tune_connections,
             self.auto_check_payload,
             self.optimize_upload,
-            self.extract_archives_fast,
             self.chat_display_name,
-            self.rar_stream_on_the_fly
         );
-        let _ = fs::write("ps5upload.ini", content);
+        std::fs::write("ps5upload.ini", content)?;
+        Ok(())
     }
 }

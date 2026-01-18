@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 This project follows Semantic Versioning.
 
+## [1.1.7] - 2026-01-17
+
+### Added
+- Integrated `unrar` directly into the payload for server-side RAR extraction.
+
+### Changed
+- Removed client-side archive extraction. All ZIP and 7Z archives are now streamed directly to the PS5.
+- RAR archives are now uploaded as-is and extracted by the PS5 payload.
+
 ## [1.1.6] - 2026-01-14
 
 ### Added
