@@ -19,6 +19,14 @@
 #include <limits.h>
 #include <errno.h>
 
+#ifndef PATH_MAX
+#if defined(_WIN32)
+#define PATH_MAX MAX_PATH
+#else
+#define PATH_MAX 4096
+#endif
+#endif
+
 static bool sanitize_target_path(const char *input, std::string &out) {
     if (!input || !*input) {
         return false;
