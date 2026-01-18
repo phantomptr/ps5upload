@@ -274,7 +274,9 @@
 
 #if !defined(BIG_ENDIAN) && defined(_WIN_ALL) || defined(__i386__) || defined(__x86_64__) || defined(__aarch64__)
 // Allow unaligned integer access, increases speed in some operations.
+#ifndef ALLOW_MISALIGNED
 #define ALLOW_MISALIGNED
+#endif
 #endif
 
 #endif // _RAR_OS_
