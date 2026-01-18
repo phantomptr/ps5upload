@@ -67,6 +67,8 @@ fn main() {
 
     if target_os == "windows" {
         sources.push("threadpool.cpp");
+        sources.push("isnt.cpp");
+        sources.push("motw.cpp");
     }
 
     let mut build = cc::Build::new();

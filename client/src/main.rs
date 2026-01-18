@@ -763,7 +763,7 @@ impl Ps5UploadApp {
         self.trim_logs();
     }
 
-    fn log_peak_rss(&mut self, label: &str) {
+    fn log_peak_rss(&mut self, _label: &str) {
         #[cfg(unix)]
         {
             let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
@@ -773,7 +773,7 @@ impl Ps5UploadApp {
                 let rss_kb = usage.ru_maxrss as u64;
                 #[cfg(target_os = "macos")]
                 let rss_kb = rss_kb / 1024;
-                self.log(&format!("Peak RSS ({}): {} MB", label, rss_kb / 1024));
+                self.log(&format!("Peak RSS ({}): {} MB", _label, rss_kb / 1024));
             }
         }
     }
