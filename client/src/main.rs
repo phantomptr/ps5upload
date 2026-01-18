@@ -2343,7 +2343,16 @@ impl eframe::App for Ps5UploadApp {
             match msg {
                 AppMessage::Log(s) => self.log(&s),
                 AppMessage::PayloadLog(s) => self.payload_log(&s),
-                AppMessage::StatusPhase(phase) => self.progress_phase = phase,
+                AppMessage::StatusPhase(phase) => {
+                    self.progress_phase = phase.clone();
+                    if phase == "Uploading" {
+                        self.status = tr(self.language, "status_uploading");
+                    } else if phase == "Extracting" {
+                        self.status = "Extracting...".to_string();
+                    } else {
+                        self.status = phase;
+                    }
+                }
                 AppMessage::ChatMessage(msg) => {
                     self.chat_received_count = self.chat_received_count.saturating_add(1);
                     self.log("Chat: message received.");
