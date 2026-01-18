@@ -95,10 +95,28 @@ char *receive_rar_to_temp(int sock, size_t file_size) {
     if (!temp_path) {
         return NULL;
     }
+
+    int fd = -1;
     snprintf(temp_path, PATH_MAX, "%s/upload_XXXXXX", RAR_TEMP_DIR);
+    fd = mkstemp(temp_path);
+
+    if (fd < 0) {
+        /* Fallback for platforms without mkstemp */
+        static unsigned int temp_counter = 0;
+        for (int attempt = 0; attempt < 100; attempt++) {
+            snprintf(temp_path, PATH_MAX, "%s/upload_%d_%u.rar",
+                     RAR_TEMP_DIR, (int)getpid(), temp_counter++);
+            fd = open(temp_path, O_WRONLY | O_CREAT | O_EXCL | O_TRUNC, 0644);
+            if (fd >= 0) {
+                break;
+            }
+            if (errno != EEXIST) {
+                break;
+            }
+        }
+    }
 
     /* Open temp file for writing */
-    int fd = mkstemp(temp_path);
     if (fd < 0) {
         perror("[RAR] Failed to create temp file");
         free(temp_path);

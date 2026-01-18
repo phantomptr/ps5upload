@@ -59,6 +59,18 @@
       "success": true,
       "error": null,
       "via_queue": false
+    },
+    {
+      "timestamp": 1768715782,
+      "source_path": "/home/ubuntu/ps5upload/apps/PPSA10112-app.rar",
+      "dest_path": "/data/test",
+      "file_count": 0,
+      "total_bytes": 277872640,
+      "duration_secs": 4.649617038,
+      "speed_bps": 59762478.87278152,
+      "success": false,
+      "error": "Cancelled",
+      "via_queue": false
     }
   ]
 }
