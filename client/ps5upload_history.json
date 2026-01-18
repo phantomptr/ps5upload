@@ -71,6 +71,42 @@
       "success": false,
       "error": "Cancelled",
       "via_queue": false
+    },
+    {
+      "timestamp": 1768730990,
+      "source_path": "/home/ubuntu/ps5upload/apps/PPSA02433-app",
+      "dest_path": "/data/test/PPSA02433-app",
+      "file_count": 2,
+      "total_bytes": 167767999,
+      "duration_secs": 2.944546062,
+      "speed_bps": 56975844.65228175,
+      "success": false,
+      "error": "Upload cancelled by user",
+      "via_queue": false
+    },
+    {
+      "timestamp": 1768731003,
+      "source_path": "/home/ubuntu/ps5upload/apps/PPSA10112-app.rar",
+      "dest_path": "/data/test",
+      "file_count": 0,
+      "total_bytes": 0,
+      "duration_secs": 0.009677249,
+      "speed_bps": 0.0,
+      "success": false,
+      "error": "Server rejected RAR upload: ERROR: Unknown command",
+      "via_queue": false
+    },
+    {
+      "timestamp": 1768731010,
+      "source_path": "/home/ubuntu/ps5upload/apps/PPSA10112-app.rar",
+      "dest_path": "/data/test",
+      "file_count": 0,
+      "total_bytes": 0,
+      "duration_secs": 0.010636495,
+      "speed_bps": 0.0,
+      "success": false,
+      "error": "Server rejected RAR upload: ERROR: Unknown command",
+      "via_queue": false
     }
   ]
 }

@@ -779,27 +779,43 @@ where
     let file_size = metadata.len();
 
     let addr = format!("{}:{}", ip, port);
-    let mut stream = tokio::time::timeout(
-        std::time::Duration::from_secs(CONNECTION_TIMEOUT_SECS),
-        TcpStream::connect(&addr)
-    ).await.context("Connection timed out")??;
+    let mut tried_fallback = false;
+    let mut mode_to_try = mode;
+    let stream = loop {
+        let mut stream = tokio::time::timeout(
+            std::time::Duration::from_secs(CONNECTION_TIMEOUT_SECS),
+            TcpStream::connect(&addr)
+        ).await.context("Connection timed out")??;
 
-    // Send command
-    let cmd = match mode {
-        RarExtractMode::Safe => format!("UPLOAD_RAR_SAFE {} {}\n", dest_path, file_size),
-        RarExtractMode::Turbo => format!("UPLOAD_RAR_TURBO {} {}\n", dest_path, file_size),
-        RarExtractMode::Normal => format!("UPLOAD_RAR {} {}\n", dest_path, file_size),
-    };
-    stream.write_all(cmd.as_bytes()).await?;
+        // Send command
+        let cmd = match mode_to_try {
+            RarExtractMode::Safe => format!("UPLOAD_RAR_SAFE {} {}\n", dest_path, file_size),
+            RarExtractMode::Turbo => format!("UPLOAD_RAR_TURBO {} {}\n", dest_path, file_size),
+            RarExtractMode::Normal => format!("UPLOAD_RAR {} {}\n", dest_path, file_size),
+        };
+        stream.write_all(cmd.as_bytes()).await?;
 
-    // Wait for READY
-    let mut buffer = [0u8; 1024];
-    let n = read_timeout(&mut stream, &mut buffer).await?;
-    let response = String::from_utf8_lossy(&buffer[..n]).trim().to_string();
+        // Wait for READY
+        let mut buffer = [0u8; 1024];
+        let n = read_timeout(&mut stream, &mut buffer).await?;
+        let response = String::from_utf8_lossy(&buffer[..n]).trim().to_string();
 
-    if response != "READY" {
+        if response == "READY" {
+            break stream;
+        }
+
+        if !tried_fallback
+            && mode_to_try != RarExtractMode::Normal
+            && response.contains("Unknown command")
+        {
+            tried_fallback = true;
+            mode_to_try = RarExtractMode::Normal;
+            extract_progress("RAR mode unsupported by payload. Retrying with Normal.".to_string());
+            continue;
+        }
+
         return Err(anyhow!("Server rejected RAR upload: {}", response));
-    }
+    };
 
     // Send RAR file data
     let mut file = tokio::fs::File::open(rar_path).await?;

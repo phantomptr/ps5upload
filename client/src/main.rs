@@ -881,11 +881,24 @@ impl Ps5UploadApp {
 
     fn note_text(&self, text: &str) -> egui::RichText {
         let color = if self.theme_dark {
-            egui::Color32::from_rgb(210, 170, 80)
+            egui::Color32::from_rgb(235, 200, 95)
         } else {
-            egui::Color32::from_rgb(130, 85, 0)
+            egui::Color32::from_rgb(120, 70, 0)
         };
         egui::RichText::new(text).color(color).italics()
+    }
+
+    fn is_rtl(lang: Language) -> bool {
+        matches!(lang, Language::Ar)
+    }
+
+    fn singleline_text_edit<'a>(value: &'a mut String, rtl: bool) -> egui::TextEdit<'a> {
+        let edit = egui::TextEdit::singleline(value);
+        if rtl {
+            edit.horizontal_align(egui::Align::RIGHT)
+        } else {
+            edit
+        }
     }
 
     fn request_manage_rar_meta(&mut self, path: &str) {
@@ -2466,6 +2479,7 @@ impl eframe::App for Ps5UploadApp {
 
         let connected = self.is_connected || self.is_uploading;
         let lang = self.language;
+        let rtl = Self::is_rtl(lang);
 
         if self.config.auto_check_payload
             && connected
@@ -3087,7 +3101,7 @@ Overwrite it?", self.get_dest_path()));
                     ui.add_space(6.0);
                     if is_rar {
                         // RAR files are extracted server-side on PS5
-                        ui.label(egui::RichText::new("RAR archives are uploaded and extracted on the PS5.").weak());
+                        ui.label(egui::RichText::new(tr(lang, "archive_rar_ps5_note")).weak());
                         ui.horizontal(|ui| {
                             ui.label(tr(lang, "archive_rar_mode_label"));
                             let mut changed = false;
@@ -3157,7 +3171,7 @@ Overwrite it?", self.get_dest_path()));
                     ui.horizontal(|ui| {
                         let buttons_width = 3.0 * 70.0 + 12.0;
                         let path_width = (ui.available_width() - buttons_width).max(200.0);
-                        ui.add_sized([path_width, 24.0], egui::TextEdit::singleline(&mut self.manage_right_path));
+                        ui.add_sized([path_width, 24.0], Self::singleline_text_edit(&mut self.manage_right_path, rtl));
                         if ui.button(tr(lang, "go")).clicked() {
                             self.manage_refresh(ManageSide::Right);
                         }
@@ -3549,7 +3563,7 @@ Overwrite it?", self.get_dest_path()));
                     ui.heading(tr(lang, "save_current_settings"));
                     ui.horizontal(|ui| {
                         ui.label(tr(lang, "profile_name"));
-                        ui.text_edit_singleline(&mut self.profile_name_input);
+                        ui.add(Self::singleline_text_edit(&mut self.profile_name_input, rtl));
                     });
                     ui.add_space(5.0);
 
@@ -3571,39 +3585,76 @@ Overwrite it?", self.get_dest_path()));
         egui::TopBottomPanel::top("header").show(ctx, |ui| {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                ui.horizontal(|ui| {
-                    if let Some(tex) = &self.logo_texture {
-                        ui.add(egui::Image::new(tex).fit_to_exact_size([80.0, 80.0].into()));
-                        ui.add_space(12.0);
-                    }
-                    ui.vertical(|ui| {
-                        ui.label(egui::RichText::new("PS5Upload").strong().size(22.0));
-                        ui.label(
-                            egui::RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
-                                .size(14.0)
-                                .color(ui.visuals().weak_text_color()),
-                        );
+                if rtl {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.add(egui::Button::new("☕ Buy me a coffee").min_size([120.0, 32.0].into())).clicked() {
+                            let _ = webbrowser::open("https://ko-fi.com/B0B81S0WUA");
+                        }
+                        ui.separator();
+                        let theme_icon = if self.theme_dark { "🌙" } else { "☀" };
+                        if ui.button(theme_icon).on_hover_text("Toggle Theme").clicked() {
+                            self.toggle_theme(ctx);
+                        }
                     });
-                });
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.add(egui::Button::new("☕ Buy me a coffee").min_size([120.0, 32.0].into())).clicked() {
-                        let _ = webbrowser::open("https://ko-fi.com/B0B81S0WUA");
-                    }
-                    ui.separator();
-                    let theme_icon = if self.theme_dark { "🌙" } else { "☀" };
-                    if ui.button(theme_icon).on_hover_text("Toggle Theme").clicked() {
-                        self.toggle_theme(ctx);
-                    }
-                });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if let Some(tex) = &self.logo_texture {
+                            ui.add(egui::Image::new(tex).fit_to_exact_size([80.0, 80.0].into()));
+                            ui.add_space(12.0);
+                        }
+                        ui.vertical(|ui| {
+                            ui.label(egui::RichText::new("PS5Upload").strong().size(22.0));
+                            ui.label(
+                                egui::RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
+                                    .size(14.0)
+                                    .color(ui.visuals().weak_text_color()),
+                            );
+                        });
+                    });
+                } else {
+                    ui.horizontal(|ui| {
+                        if let Some(tex) = &self.logo_texture {
+                            ui.add(egui::Image::new(tex).fit_to_exact_size([80.0, 80.0].into()));
+                            ui.add_space(12.0);
+                        }
+                        ui.vertical(|ui| {
+                            ui.label(egui::RichText::new("PS5Upload").strong().size(22.0));
+                            ui.label(
+                                egui::RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
+                                    .size(14.0)
+                                    .color(ui.visuals().weak_text_color()),
+                            );
+                        });
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.add(egui::Button::new("☕ Buy me a coffee").min_size([120.0, 32.0].into())).clicked() {
+                            let _ = webbrowser::open("https://ko-fi.com/B0B81S0WUA");
+                        }
+                        ui.separator();
+                        let theme_icon = if self.theme_dark { "🌙" } else { "☀" };
+                        if ui.button(theme_icon).on_hover_text("Toggle Theme").clicked() {
+                            self.toggle_theme(ctx);
+                        }
+                    });
+                }
             });
             ui.add_space(6.0);
         });
 
         // 2. BOTTOM STATUS BAR
         egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
-            ui.horizontal(|ui| {
+            let status_layout = if rtl {
+                egui::Layout::right_to_left(egui::Align::Center)
+            } else {
+                egui::Layout::left_to_right(egui::Align::Center)
+            };
+            let link_layout = if rtl {
+                egui::Layout::left_to_right(egui::Align::Center)
+            } else {
+                egui::Layout::right_to_left(egui::Align::Center)
+            };
+            ui.with_layout(status_layout, |ui| {
                 ui.label(egui::RichText::new(&self.status).strong());
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.with_layout(link_layout, |ui| {
                      ui.hyperlink_to("Created by PhantomPtr", "https://x.com/phantomptr");
                      ui.label("|");
                      ui.hyperlink_to("Source Code", "https://github.com/phantomptr/ps5upload");
@@ -3615,216 +3666,223 @@ Overwrite it?", self.get_dest_path()));
 
         // 3. LEFT PANEL: CONNECTION & STORAGE
         egui::SidePanel::left("left_panel").resizable(true).default_width(300.0).min_width(250.0).show(ctx, |ui| {
-            egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
-                ui.add_space(10.0);
-                ui.horizontal(|ui| {
-                    ui.heading(tr(lang, "connect"));
-                });
-                ui.add_space(5.0);
-
-            // Profile selector
-            ui.horizontal(|ui| {
-                ui.label(tr(lang, "profile"));
-                let profile_names: Vec<String> = self.profiles_data.profiles.iter().map(|p| p.name.clone()).collect();
-                egui::ComboBox::from_id_source("profile_combo")
-                    .selected_text(self.current_profile.as_deref().unwrap_or("(none)"))
-                    .show_ui(ui, |ui| {
-                        if ui.selectable_label(self.current_profile.is_none(), "(none)").clicked() {
-                            self.current_profile = None;
-                            self.set_default_profile(None);
-                        }
-                        for name in &profile_names {
-                            if ui.selectable_label(self.current_profile.as_ref() == Some(name), name).clicked() {
-                                if let Some(profile) = self.profiles_data.profiles.iter().find(|p| &p.name == name) {
-                                    let profile = profile.clone();
-                                    self.apply_profile(&profile);
-                                    self.set_default_profile(Some(profile.name.clone()));
-                                }
-                            }
-                        }
-                    });
-                if ui.button("+").on_hover_text("Manage Profiles").clicked() {
-                    self.show_profile_dialog = true;
-                    self.editing_profile = None;
-                    self.profile_name_input.clear();
-                }
-            });
-            ui.add_space(5.0);
-
-            ui.label(tr(lang, "ps5_address"));
-            ui.text_edit_singleline(&mut self.ip);
-            ui.label(format!("Transfer port: {}", TRANSFER_PORT));
-
-            ui.add_space(8.0);
-            ui.label(tr(lang, "payload"));
-            ui.label(tr(lang, "payload_required"));
-            ui.label(format!("{} {}", tr(lang, "payload_port"), PAYLOAD_PORT));
-            ui.horizontal(|ui| {
-                if ui.button(format!("📂 {}", tr(lang, "select"))).clicked() {
-                    if let Some(path) = rfd::FileDialog::new().add_filter("Payload", &["elf"]).pick_file() {
-                        self.payload_path = path.display().to_string();
-                    }
-                }
-                ui.text_edit_singleline(&mut self.payload_path);
-            });
-            ui.add_space(5.0);
-            let payload_enabled = !self.is_sending_payload && !self.ip.trim().is_empty() && !self.payload_path.trim().is_empty();
-            if ui.add_enabled(payload_enabled, egui::Button::new(format!("📤 {}", tr(lang, "send_payload"))).min_size([ui.available_width(), 30.0].into())).clicked() {
-                self.send_payload();
-            }
-            ui.add_space(5.0);
-            ui.label(format!("{} {}", tr(lang, "payload_status"), self.payload_status));
-            if ui.button(tr(lang, "check_payload_status")).clicked() {
-                self.check_payload_version();
-            }
-            ui.add_space(5.0);
-            if ui.button(tr(lang, "download_current_payload")).clicked() {
-                self.start_payload_download_and_send(PayloadFetch::Current);
-            }
-            if ui.button(tr(lang, "download_latest_payload")).clicked() {
-                self.start_payload_download_and_send(PayloadFetch::Latest);
-            }
-            ui.add_space(5.0);
-            let auto_payload = ui.checkbox(&mut self.config.auto_check_payload, tr(lang, "auto_check_payload"));
-            if auto_payload.changed() {
-                let _ = self.config.save();
-                if self.config.auto_check_payload {
-                    self.last_payload_check = None;
-                    self.check_payload_version();
-                }
-            }
-            if self.config.auto_check_payload {
-                ui.label(egui::RichText::new(tr(lang, "auto_payload_interval")).weak().small());
-            }
-            let auto_connect = ui.checkbox(&mut self.config.auto_connect, tr(lang, "auto_reconnect"));
-            if auto_connect.changed() { let _ = self.config.save(); }
-
-            ui.add_space(10.0);
-            if connected {
-                if ui.add(egui::Button::new(tr(lang, "disconnect")).min_size([ui.available_width(), 30.0].into())).clicked() {
-                    self.status = "Disconnected".to_string();
-                    self.storage_locations.clear();
-                    self.selected_storage = None;
-                    self.is_connected = false;
-                    self.last_payload_check = None;
-                }
+            let side_layout = if rtl {
+                egui::Layout::top_down(egui::Align::RIGHT)
             } else {
-                ui.horizontal(|ui| {
-                    if ui.add_enabled(!self.is_connecting, egui::Button::new(tr(lang, "connect_ps5")).min_size([150.0, 30.0].into())).clicked() {
-                        self.connect();
-                    }
-                    if self.is_connecting
-                        && ui.add(egui::Button::new(tr(lang, "stop")).min_size([60.0, 30.0].into())).clicked()
-                    {
-                        self.is_connecting = false;
-                        self.status = "Cancelled".to_string();
-                    }
-                });
-            }
-            
-            ui.add_space(20.0);
-            ui.horizontal(|ui| {
-                ui.heading(tr(lang, "storage"));
-                if connected && ui.button(format!("⟳ {}", tr(lang, "refresh"))).clicked() {
-                    self.connect();
-                }
-            });
-            ui.add_space(5.0);
-            
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                if self.storage_locations.is_empty() {
-                    ui.label(tr(lang, "not_connected"));
-                } else {
-                     egui::Grid::new("storage_grid").striped(true).spacing([10.0, 5.0]).show(ui, |ui| {
-                         for loc in &self.storage_locations {
-                            if ui.radio_value(&mut self.selected_storage, Some(loc.path.clone()), &loc.path).clicked() {
-                                self.config.storage = loc.path.clone();
-                                let _ = self.config.save();
-                            }
-                            ui.label(format!("{:.1} GB Free", loc.free_gb));
-                            ui.end_row();
-                         }
-                     });
-                }
-            });
+                egui::Layout::top_down(egui::Align::LEFT)
+            };
+            ui.with_layout(side_layout, |ui| {
+                egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        ui.heading(tr(lang, "connect"));
+                    });
+                    ui.add_space(5.0);
 
-            ui.add_space(15.0);
-            ui.heading(tr(lang, "updates"));
-            ui.add_space(5.0);
-            ui.label(format!("Current: v{}", app_version_trimmed()));
-            if self.update_available {
-                ui.label(egui::RichText::new("New version available").color(egui::Color32::from_rgb(255, 140, 0)));
-            }
-            ui.label(self.update_status.clone());
-            if ui.button(tr(lang, "check_updates")).clicked() {
-                self.start_update_check();
-            }
-            let mut include_pre = self.config.update_channel == "all";
-            if ui.checkbox(&mut include_pre, tr(lang, "include_prerelease")).changed() {
-                self.config.update_channel = if include_pre { "all".to_string() } else { "stable".to_string() };
-                let _ = self.config.save();
-                self.start_update_check();
-            }
-
-            if let Some(info) = &self.update_info {
-                ui.add_space(5.0);
-                ui.horizontal(|ui| {
-                    if ui.button(tr(lang, "open_release_page")).clicked() {
-                        let _ = webbrowser::open(&info.html_url);
-                    }
-                });
-
-                ui.add_space(5.0);
-                if ui.button(tr(lang, "download_payload")).clicked() {
-                    self.start_download_asset("payload", "ps5upload.elf", "ps5upload.elf");
-                }
-
-                match current_asset_name() {
-                    Ok(asset_name) => {
-                        if ui.button(tr(lang, "download_client")).clicked() {
-                            self.start_download_asset("client", &asset_name, &asset_name);
-                        }
-                        if self.update_available {
-                            if self.pending_update.is_some() {
-                                if ui.button(tr(lang, "update_restart")).clicked() {
-                                    self.show_update_restart_dialog = true;
+                    // Profile selector
+                    ui.horizontal(|ui| {
+                        ui.label(tr(lang, "profile"));
+                        let profile_names: Vec<String> = self.profiles_data.profiles.iter().map(|p| p.name.clone()).collect();
+                        egui::ComboBox::from_id_source("profile_combo")
+                            .selected_text(self.current_profile.as_deref().unwrap_or("(none)"))
+                            .show_ui(ui, |ui| {
+                                if ui.selectable_label(self.current_profile.is_none(), "(none)").clicked() {
+                                    self.current_profile = None;
+                                    self.set_default_profile(None);
                                 }
-                            } else if ui.button(tr(lang, "update_now")).clicked() {
-                                self.start_self_update();
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        ui.label(format!("Client download unavailable: {}", e));
-                    }
-                }
-            }
-            if !self.update_download_status.is_empty() {
-                ui.label(self.update_download_status.clone());
-            }
-
-            ui.add_space(10.0);
-            ui.horizontal(|ui| {
-                ui.label(tr(lang, "language"));
-                egui::ComboBox::from_id_source("language_combo")
-                    .selected_text(self.language.label())
-                    .show_ui(ui, |ui| {
-                        for candidate in [
-                            Language::En,
-                            Language::ZhCn,
-                            Language::ZhTw,
-                            Language::Fr,
-                            Language::Es,
-                            Language::Ar,
-                        ] {
-                            if ui.selectable_label(self.language == candidate, candidate.label()).clicked() {
-                                self.language = candidate;
-                                self.config.language = candidate.code().to_string();
-                                let _ = self.config.save();
-                            }
+                                for name in &profile_names {
+                                    if ui.selectable_label(self.current_profile.as_ref() == Some(name), name).clicked() {
+                                        if let Some(profile) = self.profiles_data.profiles.iter().find(|p| &p.name == name) {
+                                            let profile = profile.clone();
+                                            self.apply_profile(&profile);
+                                            self.set_default_profile(Some(profile.name.clone()));
+                                        }
+                                    }
+                                }
+                            });
+                        if ui.button("+").on_hover_text("Manage Profiles").clicked() {
+                            self.show_profile_dialog = true;
+                            self.editing_profile = None;
+                            self.profile_name_input.clear();
                         }
                     });
-            });
+                    ui.add_space(5.0);
+
+                    ui.label(tr(lang, "ps5_address"));
+                    ui.add(Self::singleline_text_edit(&mut self.ip, rtl));
+                    ui.label(format!("Transfer port: {}", TRANSFER_PORT));
+
+                    ui.add_space(8.0);
+                    ui.label(tr(lang, "payload"));
+                    ui.label(tr(lang, "payload_required"));
+                    ui.label(format!("{} {}", tr(lang, "payload_port"), PAYLOAD_PORT));
+                    ui.horizontal(|ui| {
+                        if ui.button(format!("📂 {}", tr(lang, "select"))).clicked() {
+                            if let Some(path) = rfd::FileDialog::new().add_filter("Payload", &["elf"]).pick_file() {
+                                self.payload_path = path.display().to_string();
+                            }
+                        }
+                        ui.add(Self::singleline_text_edit(&mut self.payload_path, rtl));
+                    });
+                    ui.add_space(5.0);
+                    let payload_enabled = !self.is_sending_payload && !self.ip.trim().is_empty() && !self.payload_path.trim().is_empty();
+                    if ui.add_enabled(payload_enabled, egui::Button::new(format!("📤 {}", tr(lang, "send_payload"))).min_size([ui.available_width(), 30.0].into())).clicked() {
+                        self.send_payload();
+                    }
+                    ui.add_space(5.0);
+                    ui.label(format!("{} {}", tr(lang, "payload_status"), self.payload_status));
+                    if ui.button(tr(lang, "check_payload_status")).clicked() {
+                        self.check_payload_version();
+                    }
+                    ui.add_space(5.0);
+                    if ui.button(tr(lang, "download_current_payload")).clicked() {
+                        self.start_payload_download_and_send(PayloadFetch::Current);
+                    }
+                    if ui.button(tr(lang, "download_latest_payload")).clicked() {
+                        self.start_payload_download_and_send(PayloadFetch::Latest);
+                    }
+                    ui.add_space(5.0);
+                    let auto_payload = ui.checkbox(&mut self.config.auto_check_payload, tr(lang, "auto_check_payload"));
+                    if auto_payload.changed() {
+                        let _ = self.config.save();
+                        if self.config.auto_check_payload {
+                            self.last_payload_check = None;
+                            self.check_payload_version();
+                        }
+                    }
+                    if self.config.auto_check_payload {
+                        ui.label(egui::RichText::new(tr(lang, "auto_payload_interval")).weak().small());
+                    }
+                    let auto_connect = ui.checkbox(&mut self.config.auto_connect, tr(lang, "auto_reconnect"));
+                    if auto_connect.changed() { let _ = self.config.save(); }
+
+                    ui.add_space(10.0);
+                    if connected {
+                        if ui.add(egui::Button::new(tr(lang, "disconnect")).min_size([ui.available_width(), 30.0].into())).clicked() {
+                            self.status = "Disconnected".to_string();
+                            self.storage_locations.clear();
+                            self.selected_storage = None;
+                            self.is_connected = false;
+                            self.last_payload_check = None;
+                        }
+                    } else {
+                        ui.horizontal(|ui| {
+                            if ui.add_enabled(!self.is_connecting, egui::Button::new(tr(lang, "connect_ps5")).min_size([150.0, 30.0].into())).clicked() {
+                                self.connect();
+                            }
+                            if self.is_connecting
+                                && ui.add(egui::Button::new(tr(lang, "stop")).min_size([60.0, 30.0].into())).clicked()
+                            {
+                                self.is_connecting = false;
+                                self.status = "Cancelled".to_string();
+                            }
+                        });
+                    }
+
+                    ui.add_space(20.0);
+                    ui.horizontal(|ui| {
+                        ui.heading(tr(lang, "storage"));
+                        if connected && ui.button(format!("⟳ {}", tr(lang, "refresh"))).clicked() {
+                            self.connect();
+                        }
+                    });
+                    ui.add_space(5.0);
+
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        if self.storage_locations.is_empty() {
+                            ui.label(tr(lang, "not_connected"));
+                        } else {
+                            egui::Grid::new("storage_grid").striped(true).spacing([10.0, 5.0]).show(ui, |ui| {
+                                for loc in &self.storage_locations {
+                                    if ui.radio_value(&mut self.selected_storage, Some(loc.path.clone()), &loc.path).clicked() {
+                                        self.config.storage = loc.path.clone();
+                                        let _ = self.config.save();
+                                    }
+                                    ui.label(format!("{:.1} GB Free", loc.free_gb));
+                                    ui.end_row();
+                                }
+                            });
+                        }
+                    });
+
+                    ui.add_space(15.0);
+                    ui.heading(tr(lang, "updates"));
+                    ui.add_space(5.0);
+                    ui.label(format!("Current: v{}", app_version_trimmed()));
+                    if self.update_available {
+                        ui.label(egui::RichText::new("New version available").color(egui::Color32::from_rgb(255, 140, 0)));
+                    }
+                    ui.label(self.update_status.clone());
+                    if ui.button(tr(lang, "check_updates")).clicked() {
+                        self.start_update_check();
+                    }
+                    let mut include_pre = self.config.update_channel == "all";
+                    if ui.checkbox(&mut include_pre, tr(lang, "include_prerelease")).changed() {
+                        self.config.update_channel = if include_pre { "all".to_string() } else { "stable".to_string() };
+                        let _ = self.config.save();
+                        self.start_update_check();
+                    }
+
+                    if let Some(info) = &self.update_info {
+                        ui.add_space(5.0);
+                        ui.horizontal(|ui| {
+                            if ui.button(tr(lang, "open_release_page")).clicked() {
+                                let _ = webbrowser::open(&info.html_url);
+                            }
+                        });
+
+                        ui.add_space(5.0);
+                        if ui.button(tr(lang, "download_payload")).clicked() {
+                            self.start_download_asset("payload", "ps5upload.elf", "ps5upload.elf");
+                        }
+
+                        match current_asset_name() {
+                            Ok(asset_name) => {
+                                if ui.button(tr(lang, "download_client")).clicked() {
+                                    self.start_download_asset("client", &asset_name, &asset_name);
+                                }
+                                if self.update_available {
+                                    if self.pending_update.is_some() {
+                                        if ui.button(tr(lang, "update_restart")).clicked() {
+                                            self.show_update_restart_dialog = true;
+                                        }
+                                    } else if ui.button(tr(lang, "update_now")).clicked() {
+                                        self.start_self_update();
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                ui.label(format!("Client download unavailable: {}", e));
+                            }
+                        }
+                    }
+                    if !self.update_download_status.is_empty() {
+                        ui.label(self.update_download_status.clone());
+                    }
+
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        ui.label(tr(lang, "language"));
+                        egui::ComboBox::from_id_source("language_combo")
+                            .selected_text(self.language.label())
+                            .show_ui(ui, |ui| {
+                                for candidate in [
+                                    Language::En,
+                                    Language::ZhCn,
+                                    Language::ZhTw,
+                                    Language::Fr,
+                                    Language::Es,
+                                    Language::Ar,
+                                ] {
+                                    if ui.selectable_label(self.language == candidate, candidate.label()).clicked() {
+                                        self.language = candidate;
+                                        self.config.language = candidate.code().to_string();
+                                        let _ = self.config.save();
+                                    }
+                                }
+                            });
+                    });
+                });
             });
         });
 
@@ -3937,21 +3995,27 @@ Overwrite it?", self.get_dest_path()));
 
         // 5. CENTRAL PANEL: MAIN
         egui::CentralPanel::default().show(ctx, |ui| {
-            egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
-                ui.add_space(10.0);
-                ui.horizontal(|ui| {
-                    let transfer_tab = ui.selectable_value(&mut self.main_tab, 0, tr(lang, "transfer"));
-                    let manage_tab = ui.selectable_value(&mut self.main_tab, 1, tr(lang, "manage"));
-                    let chat_tab = ui.selectable_value(&mut self.main_tab, 2, tr(lang, "chat"));
-                    if manage_tab.clicked() && connected {
-                        self.manage_refresh(ManageSide::Left);
-                    }
-                    if transfer_tab.clicked() || chat_tab.clicked() {
-                        self.manage_left_selected = None;
-                        self.manage_right_selected = None;
-                    }
-                });
-                ui.separator();
+            let main_layout = if rtl {
+                egui::Layout::top_down(egui::Align::RIGHT)
+            } else {
+                egui::Layout::top_down(egui::Align::LEFT)
+            };
+            ui.with_layout(main_layout, |ui| {
+                egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        let transfer_tab = ui.selectable_value(&mut self.main_tab, 0, tr(lang, "transfer"));
+                        let manage_tab = ui.selectable_value(&mut self.main_tab, 1, tr(lang, "manage"));
+                        let chat_tab = ui.selectable_value(&mut self.main_tab, 2, tr(lang, "chat"));
+                        if manage_tab.clicked() && connected {
+                            self.manage_refresh(ManageSide::Left);
+                        }
+                        if transfer_tab.clicked() || chat_tab.clicked() {
+                            self.manage_left_selected = None;
+                            self.manage_right_selected = None;
+                        }
+                    });
+                    ui.separator();
 
             if self.main_tab == 1 {
                 ui.heading(tr(lang, "file_manager"));
@@ -3965,7 +4029,7 @@ Overwrite it?", self.get_dest_path()));
                         ui.label(tr(lang, "path"));
                         let buttons_width = 3.0 * 70.0 + 12.0;
                         let path_width = (ui.available_width() - buttons_width).max(200.0);
-                        ui.add_sized([path_width, 24.0], egui::TextEdit::singleline(&mut self.manage_left_path));
+                        ui.add_sized([path_width, 24.0], Self::singleline_text_edit(&mut self.manage_left_path, rtl));
                         if ui.add_enabled(can_manage, egui::Button::new(tr(lang, "go"))).clicked() {
                             self.manage_refresh(ManageSide::Left);
                         }
@@ -4199,13 +4263,13 @@ Overwrite it?", self.get_dest_path()));
                             ui.vertical(|ui| {
                                 ui.label(egui::RichText::new(&meta.title).strong());
                                 if !meta.content_id.is_empty() {
-                                    ui.label(format!("Content ID: {}", meta.content_id));
+                                    ui.label(format!("{}: {}", tr(lang, "meta_content_id"), meta.content_id));
                                 }
                                 if !meta.title_id.is_empty() {
-                                    ui.label(format!("Title ID: {}", meta.title_id));
+                                    ui.label(format!("{}: {}", tr(lang, "meta_title_id"), meta.title_id));
                                 }
                                 if !meta.version.is_empty() {
-                                    ui.label(format!("Version: {}", meta.version));
+                                    ui.label(format!("{}: {}", tr(lang, "meta_version"), meta.version));
                                 }
                             });
                         });
@@ -4217,7 +4281,7 @@ Overwrite it?", self.get_dest_path()));
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
                         ui.label(tr(lang, "rename"));
-                        ui.text_edit_singleline(&mut self.manage_new_name);
+                        ui.add(Self::singleline_text_edit(&mut self.manage_new_name, rtl));
                     });
 
                     ui.horizontal(|ui| {
@@ -4448,7 +4512,7 @@ Overwrite it?", self.get_dest_path()));
                 ui.horizontal(|ui| {
                     ui.label(tr(lang, "chat_display_name"));
                     let response = ui.add(
-                        egui::TextEdit::singleline(&mut self.config.chat_display_name)
+                        Self::singleline_text_edit(&mut self.config.chat_display_name, rtl)
                             .desired_width(220.0),
                     );
                     if response.changed() {
@@ -4463,7 +4527,7 @@ Overwrite it?", self.get_dest_path()));
                         ui.horizontal(|ui| {
                             let mut send_now = false;
                             let response = ui.add(
-                                egui::TextEdit::singleline(&mut self.chat_input)
+                                Self::singleline_text_edit(&mut self.chat_input, rtl)
                                     .hint_text(tr(lang, "chat_input_placeholder"))
                                     .desired_width(f32::INFINITY),
                             );
@@ -4561,7 +4625,7 @@ Overwrite it?", self.get_dest_path()));
                         if ui.add_enabled(can_add_queue, egui::Button::new(tr(lang, "add_queue"))).on_hover_text("Add to transfer queue").clicked() {
                             self.add_to_queue();
                         }
-                        ui.text_edit_singleline(&mut self.game_path);
+                        ui.add(Self::singleline_text_edit(&mut self.game_path, rtl));
                     });
                     if self.calculating_size { ui.spinner(); ui.label("Measuring..."); }
                     else if let Some(size) = self.calculated_size { ui.label(format!("Total Size: {}", format_bytes(size))); }
@@ -4579,13 +4643,13 @@ Overwrite it?", self.get_dest_path()));
                             ui.vertical(|ui| {
                                 ui.label(egui::RichText::new(&meta.title).strong());
                                 if !meta.content_id.is_empty() {
-                                    ui.label(format!("Content ID: {}", meta.content_id));
+                                    ui.label(format!("{}: {}", tr(lang, "meta_content_id"), meta.content_id));
                                 }
                                 if !meta.title_id.is_empty() {
-                                    ui.label(format!("Title ID: {}", meta.title_id));
+                                    ui.label(format!("{}: {}", tr(lang, "meta_title_id"), meta.title_id));
                                 }
                                 if !meta.version.is_empty() {
-                                    ui.label(format!("Version: {}", meta.version));
+                                    ui.label(format!("{}: {}", tr(lang, "meta_version"), meta.version));
                                 }
                             });
                         });
@@ -4666,14 +4730,14 @@ Overwrite it?", self.get_dest_path()));
                             for (i, p) in PRESETS.iter().enumerate() { ui.selectable_value(&mut self.selected_preset, i, *p); }
                         });
                         ui.end_row();
-                        if self.selected_preset == 2 { ui.label(format!("{}:", tr(lang, "path"))); ui.text_edit_singleline(&mut self.custom_preset_path); ui.end_row(); }
+                        if self.selected_preset == 2 { ui.label(format!("{}:", tr(lang, "path"))); ui.add(Self::singleline_text_edit(&mut self.custom_preset_path, rtl)); ui.end_row(); }
                     let archive_kind = Self::archive_kind(Path::new(&self.game_path));
                     let is_archive = archive_kind.is_some();
                     let _is_rar_archive = archive_kind.as_ref().map(|k| k.eq_ignore_ascii_case("RAR")).unwrap_or(false);
                     let trim_active = is_archive && self.pending_archive_trim;
                         ui.label(format!("{}:", tr(lang, "name_label")));
                         ui.add_enabled_ui(!trim_active, |ui| {
-                            ui.text_edit_singleline(&mut self.custom_subfolder);
+                            ui.add(Self::singleline_text_edit(&mut self.custom_subfolder, rtl));
                         });
                         ui.end_row();
                         if trim_active {
@@ -4731,7 +4795,7 @@ Overwrite it?", self.get_dest_path()));
                             self.start_optimize_upload();
                         }
                     });
-                    ui.label(egui::RichText::new("RAR archives are extracted on PS5.").weak().small());
+                    ui.label(egui::RichText::new(tr(lang, "archive_rar_ps5_note")).weak().small());
                     if Self::archive_kind(Path::new(&self.game_path)).as_ref().map(|k| k.eq_ignore_ascii_case("RAR")).unwrap_or(false) {
                         ui.horizontal(|ui| {
                             ui.label(tr(lang, "archive_rar_mode_label"));
@@ -4930,6 +4994,7 @@ Overwrite it?", self.get_dest_path()));
                     }
                 });
             }
+                });
             });
         });
     }
@@ -5202,14 +5267,20 @@ fn setup_custom_style(ctx: &egui::Context) {
     visuals.window_rounding = 8.0.into();
     visuals.selection.bg_fill = egui::Color32::from_rgb(0, 120, 215);
     visuals.selection.stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(245, 245, 245));
-    visuals.widgets.noninteractive.bg_stroke.color = egui::Color32::from_gray(60);
-    visuals.widgets.noninteractive.fg_stroke.color = egui::Color32::from_gray(220);
+    visuals.widgets.noninteractive.bg_stroke.color = egui::Color32::from_gray(70);
+    visuals.widgets.noninteractive.fg_stroke.color = egui::Color32::from_gray(230);
+    visuals.widgets.inactive.fg_stroke.color = egui::Color32::from_gray(210);
     visuals.widgets.inactive.bg_fill = egui::Color32::from_gray(30);
+    visuals.override_text_color = Some(egui::Color32::from_gray(230));
+    visuals.hyperlink_color = egui::Color32::from_rgb(120, 180, 255);
     ctx.set_visuals(visuals);
 
     let mut style = (*ctx.style()).clone();
+    style.text_styles.insert(egui::TextStyle::Small, egui::FontId::new(13.0, egui::FontFamily::Proportional));
     style.text_styles.insert(egui::TextStyle::Body, egui::FontId::new(14.0, egui::FontFamily::Proportional));
+    style.text_styles.insert(egui::TextStyle::Button, egui::FontId::new(14.0, egui::FontFamily::Proportional));
     style.text_styles.insert(egui::TextStyle::Heading, egui::FontId::new(20.0, egui::FontFamily::Proportional));
+    style.text_styles.insert(egui::TextStyle::Monospace, egui::FontId::new(13.0, egui::FontFamily::Monospace));
     style.spacing.item_spacing = [8.0, 8.0].into();
     style.spacing.button_padding = [10.0, 6.0].into();
     ctx.set_style(style);
@@ -5220,14 +5291,20 @@ fn setup_light_style(ctx: &egui::Context) {
     visuals.window_rounding = 8.0.into();
     visuals.selection.bg_fill = egui::Color32::from_rgb(0, 92, 171);
     visuals.selection.stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(255, 255, 255));
-    visuals.widgets.noninteractive.bg_stroke.color = egui::Color32::from_gray(180);
-    visuals.widgets.noninteractive.fg_stroke.color = egui::Color32::from_gray(40);
-    visuals.widgets.inactive.bg_fill = egui::Color32::from_gray(230);
+    visuals.widgets.noninteractive.bg_stroke.color = egui::Color32::from_gray(170);
+    visuals.widgets.noninteractive.fg_stroke.color = egui::Color32::from_gray(30);
+    visuals.widgets.inactive.bg_fill = egui::Color32::from_gray(235);
+    visuals.widgets.inactive.fg_stroke.color = egui::Color32::from_gray(50);
+    visuals.override_text_color = Some(egui::Color32::from_gray(20));
+    visuals.hyperlink_color = egui::Color32::from_rgb(0, 85, 160);
     ctx.set_visuals(visuals);
 
     let mut style = (*ctx.style()).clone();
+    style.text_styles.insert(egui::TextStyle::Small, egui::FontId::new(13.0, egui::FontFamily::Proportional));
     style.text_styles.insert(egui::TextStyle::Body, egui::FontId::new(14.0, egui::FontFamily::Proportional));
+    style.text_styles.insert(egui::TextStyle::Button, egui::FontId::new(14.0, egui::FontFamily::Proportional));
     style.text_styles.insert(egui::TextStyle::Heading, egui::FontId::new(20.0, egui::FontFamily::Proportional));
+    style.text_styles.insert(egui::TextStyle::Monospace, egui::FontId::new(13.0, egui::FontFamily::Monospace));
     style.spacing.item_spacing = [8.0, 8.0].into();
     style.spacing.button_padding = [10.0, 6.0].into();
     ctx.set_style(style);
