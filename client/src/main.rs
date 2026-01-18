@@ -2847,11 +2847,11 @@ impl eframe::App for Ps5UploadApp {
             egui::Window::new(tr(lang, "confirm_overwrite"))
                 .collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ctx, |ui| {
-                    ui.label(format!("Archive Upload - Conflict\nFolder already exists:\n{}", self.get_dest_path()));
+                    ui.label(format!("Archive Extraction Warning\n\nThe destination folder already exists:\n{}\n\nExtracting this archive will merge its contents with the existing folder. Any files with the same name will be overwritten.", self.get_dest_path()));
                     ui.add_space(10.0);
                     
-                    ui.checkbox(&mut self.archive_overwrite_confirmed, "Overwrite existing files");
-                    ui.label(egui::RichText::new("If unchecked, upload will abort if conflict found.").weak());
+                    ui.checkbox(&mut self.archive_overwrite_confirmed, "Allow overwriting of existing files");
+                    ui.label(egui::RichText::new("If unchecked, the upload will be cancelled to prevent data loss.").weak());
                     
                     ui.add_space(10.0);
                     ui.horizontal(|ui| {
