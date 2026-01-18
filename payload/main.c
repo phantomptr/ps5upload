@@ -31,6 +31,7 @@
 #include "extract.h"
 #include "notify.h"
 #include "transfer.h"
+#include "unrar_handler.h"
 
 static int create_server_socket(int port) {
     int sock = socket(AF_INET, SOCK_STREAM, 0);
@@ -288,6 +289,11 @@ static void process_command(struct ClientConnection *conn) {
     }
     if (strncmp(conn->cmd_buffer, "VERSION", 7) == 0) {
         handle_version(conn->sock);
+        close_connection(conn);
+        return;
+    }
+    if (strncmp(conn->cmd_buffer, "UPLOAD_RAR ", 11) == 0) {
+        handle_upload_rar(conn->sock, conn->cmd_buffer + 11);
         close_connection(conn);
         return;
     }

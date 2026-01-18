@@ -37,3 +37,8 @@ test_games/
 
 # Logs
 *.log
+
+temp/
+*.tmp
+*.bak
+.claude/

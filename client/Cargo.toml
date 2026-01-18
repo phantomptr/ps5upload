@@ -1,6 +1,6 @@
 [package]
 name = "ps5upload"
-version = "1.1.6"
+version = "1.1.7"
 edition = "2021"
 
 [dependencies]
@@ -30,12 +30,9 @@ base64 = "0.21"
 hex = "0.4"
 rand = "0.8"
 image = { version = "0.25", default-features = false, features = ["png"] }
-# unrar builds a bundled static lib via unrar_sys by default (no external deps).
-unrar = "0.5"
-unrar_sys = { version = "0.5", features = ["std"] }
+# RAR extraction is now done server-side (payload) - no client unrar needed
 zip = "2.1"
 sevenz-rust = "0.6"
-widestring = "1.0"
 
 [build-dependencies]
 image = { version = "0.25", default-features = false, features = ["png", "ico"] }

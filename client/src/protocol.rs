@@ -587,3 +587,102 @@ pub async fn get_payload_version(ip: &str, port: u16) -> Result<String> {
         Err(anyhow!("Unexpected response: {}", response_str))
     }
 }
+
+/// Upload a RAR file to PS5 for server-side extraction
+/// This sends the RAR file directly and the PS5 payload extracts it
+pub async fn upload_rar_for_extraction<F>(
+    ip: &str,
+    port: u16,
+    rar_path: &str,
+    dest_path: &str,
+    cancel: Arc<AtomicBool>,
+    mut progress: F,
+) -> Result<(u32, u64)>
+where
+    F: FnMut(u64, u64),
+{
+    // Get file size
+    let metadata = tokio::fs::metadata(rar_path).await
+        .context("Failed to read RAR file metadata")?;
+    let file_size = metadata.len();
+
+    let addr = format!("{}:{}", ip, port);
+    let mut stream = tokio::time::timeout(
+        std::time::Duration::from_secs(CONNECTION_TIMEOUT_SECS),
+        TcpStream::connect(&addr)
+    ).await.context("Connection timed out")??;
+
+    // Send command
+    let cmd = format!("UPLOAD_RAR {} {}\n", dest_path, file_size);
+    stream.write_all(cmd.as_bytes()).await?;
+
+    // Wait for READY
+    let mut buffer = [0u8; 1024];
+    let n = read_timeout(&mut stream, &mut buffer).await?;
+    let response = String::from_utf8_lossy(&buffer[..n]).trim().to_string();
+
+    if response != "READY" {
+        return Err(anyhow!("Server rejected RAR upload: {}", response));
+    }
+
+    // Send RAR file data
+    let mut file = tokio::fs::File::open(rar_path).await?;
+    let mut sent = 0u64;
+    let mut read_buf = vec![0u8; 256 * 1024]; // 256KB chunks
+
+    while sent < file_size {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(anyhow!("Cancelled"));
+        }
+
+        let n = file.read(&mut read_buf).await?;
+        if n == 0 {
+            break;
+        }
+
+        stream.write_all(&read_buf[..n]).await?;
+        sent += n as u64;
+        progress(sent, file_size);
+    }
+
+    // Wait for extraction result (may take a while for large archives)
+    let mut response = Vec::new();
+    let mut buffer = [0u8; 1024];
+    let timeout = std::time::Duration::from_secs(600); // 10 minute timeout for extraction
+
+    let result = tokio::time::timeout(timeout, async {
+        loop {
+            let n = stream.read(&mut buffer).await?;
+            if n == 0 {
+                break;
+            }
+            response.extend_from_slice(&buffer[..n]);
+            if response.contains(&b'\n') {
+                break;
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    }).await;
+
+    match result {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => return Err(anyhow!("Failed to read extraction result: {}", e)),
+        Err(_) => return Err(anyhow!("Extraction timed out")),
+    }
+
+    let response_str = String::from_utf8_lossy(&response).trim().to_string();
+
+    if response_str.starts_with("SUCCESS ") {
+        // Parse "SUCCESS <files> <bytes>"
+        let parts: Vec<&str> = response_str.split_whitespace().collect();
+        if parts.len() >= 3 {
+            let files: u32 = parts[1].parse().unwrap_or(0);
+            let bytes: u64 = parts[2].parse().unwrap_or(0);
+            Ok((files, bytes))
+        } else {
+            Ok((0, 0))
+        }
+    } else {
+        Err(anyhow!("RAR extraction failed: {}", response_str))
+    }
+}
