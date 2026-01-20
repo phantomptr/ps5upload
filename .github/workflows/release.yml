@@ -60,6 +60,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
 
       - name: Install Linux desktop build deps
         if: matrix.platform == 'linux'
@@ -91,19 +96,32 @@ jobs:
         if: matrix.platform == 'windows'
         shell: pwsh
         run: |
-          $bundle = "desktop\\src-tauri\\target\\${{ matrix.target }}\\release\\bundle"
-          Compress-Archive -Path "$bundle\\*" -DestinationPath "ps5upload-${{ matrix.platform }}-${{ matrix.arch }}.zip"
+          $bundleDir = Get-ChildItem -Path "desktop\\src-tauri\\target" -Recurse -Directory -Filter bundle |
+            Where-Object { $_.FullName -match "\\\\release\\\\bundle$" } |
+            Select-Object -First 1
+          if (-not $bundleDir) {
+            throw "Tauri bundle directory not found."
+          }
+          Compress-Archive -Path (Join-Path $bundleDir.FullName "*") -DestinationPath "ps5upload-${{ matrix.platform }}-${{ matrix.arch }}.zip"
 
       - name: Package artifact (Linux)
         if: matrix.platform == 'linux'
         run: |
-          bundle="desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
+          bundle="$(find desktop/src-tauri/target -type d -path '*/release/bundle' | head -n 1)"
+          if [ -z "$bundle" ]; then
+            echo "Tauri bundle directory not found." >&2
+            exit 1
+          fi
           (cd "$bundle" && zip -r "$GITHUB_WORKSPACE/ps5upload-${{ matrix.platform }}-${{ matrix.arch }}.zip" .)
 
       - name: Package artifact (macOS)
         if: matrix.platform == 'macos'
         run: |
-          bundle="desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
+          bundle="$(find desktop/src-tauri/target -type d -path '*/release/bundle' | head -n 1)"
+          if [ -z "$bundle" ]; then
+            echo "Tauri bundle directory not found." >&2
+            exit 1
+          fi
           (cd "$bundle" && zip -r "$GITHUB_WORKSPACE/ps5upload-${{ matrix.platform }}-${{ matrix.arch }}.zip" .)
 
       - name: Upload artifact
