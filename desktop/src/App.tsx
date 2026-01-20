@@ -590,6 +590,7 @@ export default function App() {
     currentFile: ""
   });
   const [activeRunId, setActiveRunId] = useState<number | null>(null);
+  const lastProgressUpdate = useRef(0);
   const [activeTransferSource, setActiveTransferSource] = useState("");
   const [activeTransferDest, setActiveTransferDest] = useState("");
   const [activeTransferViaQueue, setActiveTransferViaQueue] = useState(false);
@@ -1427,6 +1428,11 @@ export default function App() {
         "transfer_progress",
         (event) => {
           if (!mounted) return;
+          const now = Date.now();
+          if (now - lastProgressUpdate.current < 100) {
+            return;
+          }
+          lastProgressUpdate.current = now;
           const snapshot = transferSnapshot.current;
           if (snapshot.runId && event.payload.run_id !== snapshot.runId) return;
           const payload = event.payload;

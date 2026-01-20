@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::thread;
 use tauri::{AppHandle, Emitter, State};
 
 use ps5upload_core::protocol::{
@@ -172,12 +171,10 @@ fn parse_compression_mode(mode: &str) -> CompressionMode {
 }
 
 #[tauri::command]
-pub fn transfer_check_dest(ip: String, dest_path: String) -> Result<bool, String> {
-    tauri::async_runtime::block_on(async {
-        check_dir(&ip, TRANSFER_PORT, &dest_path)
-            .await
-            .map_err(|err| err.to_string())
-    })
+pub async fn transfer_check_dest(ip: String, dest_path: String) -> Result<bool, String> {
+    check_dir(&ip, TRANSFER_PORT, &dest_path)
+        .await
+        .map_err(|err| err.to_string())
 }
 
 #[tauri::command]
@@ -233,8 +230,8 @@ pub async fn transfer_start(
     cancel.store(false, Ordering::Relaxed);
     active.store(true, Ordering::Relaxed);
 
-    tauri::async_runtime::spawn_blocking(move || {
-        let result = run_transfer(req, run_id, &app_handle, cancel.clone());
+    tauri::async_runtime::spawn(async move {
+        let result = run_transfer(req, run_id, &app_handle, cancel.clone()).await;
         active.store(false, Ordering::Relaxed);
         match result {
             Ok((files, bytes)) => emit_complete(&app_handle, run_id, files, bytes),
@@ -245,7 +242,7 @@ pub async fn transfer_start(
     Ok(run_id)
 }
 
-fn run_transfer(
+async fn run_transfer(
     mut req: TransferRequest,
     run_id: u64,
     handle: &AppHandle,
@@ -260,9 +257,7 @@ fn run_transfer(
 
     if let (Some(required), Some(storage_root)) = (req.required_size, req.storage_root.as_ref()) {
         let required_safe = required.saturating_add(64 * 1024 * 1024);
-        let space_result = tauri::async_runtime::block_on(async {
-            get_space(&ip, TRANSFER_PORT, storage_root).await
-        });
+        let space_result = get_space(&ip, TRANSFER_PORT, storage_root).await;
         if let Ok((free_bytes, _)) = space_result {
             if free_bytes < required_safe {
                 let msg = format!(
@@ -301,8 +296,7 @@ fn run_transfer(
         let log_handle = handle.clone();
         let extract_log = move |msg: String| emit_log(&log_handle, run_id, msg);
         let mode = parse_rar_mode(&req.rar_extract_mode);
-        let result = tauri::async_runtime::block_on(async {
-            upload_rar_for_extraction(
+        let result = upload_rar_for_extraction(
                 &ip,
                 TRANSFER_PORT,
                 &source_path,
@@ -312,25 +306,26 @@ fn run_transfer(
                 progress,
                 extract_log,
             )
-            .await
-        });
+            .await;
         return result
             .map(|(files, bytes)| (files as i32, bytes))
             .map_err(|err| err.to_string());
     }
 
     if is_zip || is_7z {
-        let (count, size) = if is_zip {
-            scan_zip_archive(&source_path).map_err(|err| err.to_string())?
-        } else {
-            scan_7z_archive(&source_path).map_err(|err| err.to_string())?
-        };
+        let source_path_clone = source_path.clone();
+        let (count, size) = tauri::async_runtime::spawn_blocking(move || {
+            if is_zip {
+                scan_zip_archive(&source_path_clone)
+            } else {
+                scan_7z_archive(&source_path_clone)
+            }
+        }).await.map_err(|e| e.to_string())?.map_err(|err| err.to_string())?;
+
         emit_scan(handle, run_id, count, size);
 
-        let stream = tauri::async_runtime::block_on(async {
-            upload_v2_init(&ip, TRANSFER_PORT, &dest_path, use_temp).await
-        })
-        .map_err(|err| err.to_string())?;
+        let stream = upload_v2_init(&ip, TRANSFER_PORT, &dest_path, use_temp).await
+            .map_err(|err| err.to_string())?;
         let mut std_stream = stream.into_std().map_err(|err| err.to_string())?;
         std_stream
             .set_nonblocking(true)
@@ -355,28 +350,32 @@ fn run_transfer(
         };
         let log_handle = handle.clone();
         let log = move |msg: String| emit_log(&log_handle, run_id, msg);
+        
+        let source_path_clone = source_path.clone();
+        let stream_clone = std_stream.try_clone().map_err(|err| err.to_string())?;
+        let cancel_clone = cancel.clone();
 
-        if is_zip {
-            send_zip_archive(
-                source_path,
-                std_stream.try_clone().map_err(|err| err.to_string())?,
-                cancel.clone(),
-                progress,
-                log,
-                rate_limit,
-            )
-            .map_err(|err| err.to_string())?;
-        } else {
-            send_7z_archive(
-                source_path,
-                std_stream.try_clone().map_err(|err| err.to_string())?,
-                cancel.clone(),
-                progress,
-                log,
-                rate_limit,
-            )
-            .map_err(|err| err.to_string())?;
-        }
+        tauri::async_runtime::spawn_blocking(move || {
+            if is_zip {
+                send_zip_archive(
+                    source_path_clone,
+                    stream_clone,
+                    cancel_clone,
+                    progress,
+                    log,
+                    rate_limit,
+                )
+            } else {
+                send_7z_archive(
+                    source_path_clone,
+                    stream_clone,
+                    cancel_clone,
+                    progress,
+                    log,
+                    rate_limit,
+                )
+            }
+        }).await.map_err(|e| e.to_string())?.map_err(|err| err.to_string())?;
 
         let response = read_upload_response(&mut std_stream, &cancel)
             .map_err(|err| err.to_string())?;
@@ -386,14 +385,19 @@ fn run_transfer(
     let mut connection_count_cfg = req.connections.clamp(1, MAX_PARALLEL_CONNECTIONS);
     let mut optimize_compression: Option<CompressionMode> = None;
     let mut optimize_connections: Option<usize> = None;
-
+    
+    let source_path_clone = source_path.clone();
+    let cancel_clone = cancel.clone();
     if req.optimize_upload {
         emit_log(handle, run_id, "Optimize upload: sampling files...".to_string());
-        let opt = ps5upload_core::transfer_utils::optimize_upload_settings(
-            &source_path,
-            &cancel,
-            connection_count_cfg,
-        );
+        let opt = tauri::async_runtime::spawn_blocking(move || {
+            ps5upload_core::transfer_utils::optimize_upload_settings(
+                &source_path_clone,
+                &cancel_clone,
+                connection_count_cfg,
+            )
+        }).await.map_err(|e| e.to_string())?;
+        
         optimize_connections = opt.connections;
         optimize_compression = opt.compression;
         if let Some(recommended) = optimize_connections {
@@ -411,7 +415,9 @@ fn run_transfer(
             ),
         );
     } else if req.auto_tune_connections {
-        if let Some((sample_count, sample_bytes)) = sample_workload(&source_path, &cancel) {
+        let source_path_clone = source_path.clone();
+        let cancel_clone = cancel.clone();
+        if let Some((sample_count, sample_bytes)) = tauri::async_runtime::spawn_blocking(move || sample_workload(&source_path_clone, &cancel_clone)).await.map_err(|e| e.to_string())? {
             let recommended = recommend_connections(connection_count_cfg, sample_count, sample_bytes);
             if recommended != connection_count_cfg {
                 emit_log(
@@ -442,17 +448,23 @@ fn run_transfer(
         let tx_handle = handle.clone();
         let shared_total = Arc::new(AtomicU64::new(0));
         let shared_total_scan = shared_total.clone();
-        let rx = stream_files_with_progress(source_path.clone(), cancel.clone(), move |count, total| {
-            shared_total_scan.store(total, Ordering::Relaxed);
-            emit_scan(&tx_handle, run_id, count, total);
-        });
+        let source_path_clone = source_path.clone();
+        let cancel_clone = cancel.clone();
+        let rx = tauri::async_runtime::spawn_blocking(move || {
+            stream_files_with_progress(source_path_clone, cancel_clone, move |count, total| {
+                shared_total_scan.store(total, Ordering::Relaxed);
+                emit_scan(&tx_handle, run_id, count, total);
+            })
+        }).await.map_err(|e| e.to_string())?;
 
         let start = std::time::Instant::now();
         let last_progress_ms = Arc::new(AtomicU64::new(0));
         let mut compression = match req.compression.to_lowercase().as_str() {
             "auto" => {
                 emit_log(handle, run_id, "Auto compression: sampling...".to_string());
-                if let Some(sample) = sample_bytes_from_path(&source_path, &cancel) {
+                let source_path_clone = source_path.clone();
+                let cancel_clone = cancel.clone();
+                if let Some(sample) = tauri::async_runtime::spawn_blocking(move || sample_bytes_from_path(&source_path_clone, &cancel_clone)).await.map_err(|e| e.to_string())? {
                     let mode = choose_best_compression(&sample);
                     emit_log(
                         handle,
@@ -486,208 +498,180 @@ fn run_transfer(
         } else {
             None
         };
-
-        if connection_count_cfg == 1 {
-            let stream = tauri::async_runtime::block_on(async {
-                upload_v2_init(&ip, TRANSFER_PORT, &dest_path, use_temp).await
-            })
-            .map_err(|err| err.to_string())?;
-            let mut std_stream = stream.into_std().map_err(|err| err.to_string())?;
-            std_stream
-                .set_nonblocking(true)
+        
+        let ip_clone = ip.clone();
+        let dest_path_clone = dest_path.clone();
+        let handle_clone = handle.clone();
+        let cancel_clone = cancel.clone();
+        let transfer_result = tauri::async_runtime::spawn_blocking(move || {
+            if connection_count_cfg == 1 {
+                let stream = tauri::async_runtime::block_on(async {
+                    upload_v2_init(&ip_clone, TRANSFER_PORT, &dest_path_clone, use_temp).await
+                })
                 .map_err(|err| err.to_string())?;
-
-            let mut last_sent = 0u64;
-            let progress_handle = handle.clone();
-            let log_handle = handle.clone();
-            send_files_v2_for_list(
-                rx,
-                std_stream.try_clone().map_err(|err| err.to_string())?,
-                SendFilesConfig {
-                    cancel: cancel.clone(),
-                    progress: move |sent, files_sent, current_file| {
-                        if sent == last_sent {
-                            return;
-                        }
-                        let elapsed = start.elapsed().as_secs_f64();
-                        let current_total = shared_total.load(Ordering::Relaxed);
-                        let display_total = current_total.max(sent);
-                        emit_progress(
-                            &progress_handle,
-                            run_id,
-                            sent,
-                            display_total,
-                            files_sent,
-                            elapsed,
-                            current_file,
-                        );
-                        last_progress_ms.store(start.elapsed().as_millis() as u64, Ordering::Relaxed);
-                        last_sent = sent;
-                    },
-                    log: move |msg| emit_log(&log_handle, run_id, msg),
-                    worker_id: 0,
-                    allowed_connections: None,
-                    compression,
-                    rate_limit_bps: rate_limit,
-                },
-            )
-            .map_err(|err| err.to_string())?;
-
-            let response = read_upload_response(&mut std_stream, &cancel)
-                .map_err(|err| err.to_string())?;
-            return parse_upload_response(&response).map_err(|err| err.to_string());
-        }
-
-        let shared_rx = Arc::new(std::sync::Mutex::new(rx));
-        let total_sent = Arc::new(std::sync::atomic::AtomicU64::new(0));
-        let total_files = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let allowed_connections = Arc::new(std::sync::atomic::AtomicUsize::new(connection_count_cfg));
-
-        let max_connections = connection_count_cfg;
-        let allowed_monitor = allowed_connections.clone();
-        let last_progress_monitor = last_progress_ms.clone();
-        let cancel_monitor = cancel.clone();
-        let start_monitor = start;
-        thread::spawn(move || {
-            let mut stable_good = 0u8;
-            loop {
-                if cancel_monitor.load(Ordering::Relaxed) {
-                    break;
-                }
-                let elapsed_ms = start_monitor.elapsed().as_millis() as u64;
-                let last_ms = last_progress_monitor.load(Ordering::Relaxed);
-                if last_ms == 0 {
-                    thread::sleep(std::time::Duration::from_millis(500));
-                    continue;
-                }
-                let since = elapsed_ms.saturating_sub(last_ms);
-                if since > 2000 {
-                    let current = allowed_monitor.load(Ordering::Relaxed);
-                    if current > 1 {
-                        allowed_monitor.store(current - 1, Ordering::Relaxed);
-                    }
-                    stable_good = 0;
-                } else if since < 500 {
-                    stable_good = stable_good.saturating_add(1);
-                    if stable_good >= 6 {
-                        let current = allowed_monitor.load(Ordering::Relaxed);
-                        if current < max_connections {
-                            allowed_monitor.store(current + 1, Ordering::Relaxed);
-                        }
-                        stable_good = 0;
-                    }
-                } else {
-                    stable_good = 0;
-                }
-                thread::sleep(std::time::Duration::from_millis(500));
-            }
-        });
-
-        let mut streams = Vec::new();
-        for _ in 0..connection_count_cfg {
-            let stream = tauri::async_runtime::block_on(async {
-                upload_v2_init(&ip, TRANSFER_PORT, &dest_path, false).await
-            })
-            .map_err(|err| err.to_string())?;
-            let std_stream = stream.into_std().map_err(|err| err.to_string())?;
-            std_stream
-                .set_nonblocking(true)
-                .map_err(|err| err.to_string())?;
-            streams.push(std_stream);
-        }
-
-        let mut handles = Vec::new();
-        for (worker_id, std_stream) in streams.into_iter().enumerate() {
-            let iterator = SharedReceiverIterator::new(shared_rx.clone());
-            let cancel = cancel.clone();
-            let total_sent = total_sent.clone();
-            let total_files = total_files.clone();
-            let shared_total = shared_total.clone();
-            let allowed = allowed_connections.clone();
-            let last_progress = last_progress_ms.clone();
-            let handle = handle.clone();
-            let progress_handle = handle.clone();
-            let log_handle = handle.clone();
-
-            handles.push(thread::spawn(move || -> Result<(), String> {
+                let mut std_stream = stream.into_std().map_err(|err| err.to_string())?;
+                std_stream
+                    .set_nonblocking(true)
+                    .map_err(|err| err.to_string())?;
+    
                 let mut last_sent = 0u64;
-                let mut last_files = 0i32;
-
+                let progress_handle = handle_clone.clone();
+                let log_handle = handle_clone.clone();
                 send_files_v2_for_list(
-                    iterator,
-                    std_stream,
+                    rx,
+                    std_stream.try_clone().map_err(|err| err.to_string())?,
                     SendFilesConfig {
-                        cancel,
-                        progress: move |sent, files_sent, _| {
-                            let delta_bytes = sent.saturating_sub(last_sent);
-                            let delta_files = if files_sent >= last_files {
-                                files_sent - last_files
-                            } else {
-                                0
-                            };
-                            if delta_bytes == 0 && delta_files == 0 {
+                        cancel: cancel_clone.clone(),
+                        progress: move |sent, files_sent, current_file| {
+                            if sent == last_sent {
                                 return;
                             }
-                            last_sent = sent;
-                            last_files = files_sent;
-
-                            let new_total =
-                                total_sent.fetch_add(delta_bytes, Ordering::Relaxed) + delta_bytes;
-                            let new_files =
-                                total_files.fetch_add(delta_files as usize, Ordering::Relaxed)
-                                    + delta_files as usize;
                             let elapsed = start.elapsed().as_secs_f64();
-                            let current_total_scan = shared_total.load(Ordering::Relaxed);
-                            let display_total = current_total_scan.max(new_total);
-
+                            let current_total = shared_total.load(Ordering::Relaxed);
+                            let display_total = current_total.max(sent);
                             emit_progress(
                                 &progress_handle,
                                 run_id,
-                                new_total,
+                                sent,
                                 display_total,
-                                new_files as i32,
+                                files_sent,
                                 elapsed,
-                                None,
+                                current_file,
                             );
-                            last_progress.store(
-                                start.elapsed().as_millis() as u64,
-                                Ordering::Relaxed,
-                            );
+                            last_progress_ms.store(start.elapsed().as_millis() as u64, Ordering::Relaxed);
+                            last_sent = sent;
                         },
                         log: move |msg| emit_log(&log_handle, run_id, msg),
-                        worker_id,
-                        allowed_connections: Some(allowed),
+                        worker_id: 0,
+                        allowed_connections: None,
                         compression,
                         rate_limit_bps: rate_limit,
                     },
                 )
-                .map_err(|err| err.to_string())
-            }));
-        }
+                .map_err(|err| err.to_string())?;
+    
+                let response = read_upload_response(&mut std_stream, &cancel_clone)
+                    .map_err(|err| err.to_string())?;
+                return parse_upload_response(&response).map_err(|err| err.to_string());
+            }
 
-        let mut first_err: Option<String> = None;
-        for h in handles {
-            if let Ok(Err(e)) = h.join() {
-                if first_err.is_none() {
-                    first_err = Some(e);
+            let shared_rx = Arc::new(std::sync::Mutex::new(rx));
+            let total_sent = Arc::new(std::sync::atomic::AtomicU64::new(0));
+            let total_files = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let allowed_connections = Arc::new(std::sync::atomic::AtomicUsize::new(connection_count_cfg));
+
+            let mut streams = Vec::new();
+            for _ in 0..connection_count_cfg {
+                let stream = tauri::async_runtime::block_on(async {
+                    upload_v2_init(&ip_clone, TRANSFER_PORT, &dest_path_clone, false).await
+                })
+                .map_err(|err| err.to_string())?;
+                let std_stream = stream.into_std().map_err(|err| err.to_string())?;
+                std_stream
+                    .set_nonblocking(true)
+                    .map_err(|err| err.to_string())?;
+                streams.push(std_stream);
+            }
+    
+            let mut handles = Vec::new();
+            for (worker_id, std_stream) in streams.into_iter().enumerate() {
+                let iterator = SharedReceiverIterator::new(shared_rx.clone());
+                let cancel = cancel_clone.clone();
+                let total_sent = total_sent.clone();
+                let total_files = total_files.clone();
+                let shared_total = shared_total.clone();
+                let allowed = allowed_connections.clone();
+                let last_progress = last_progress_ms.clone();
+                let progress_handle = handle_clone.clone();
+                let log_handle = handle_clone.clone();
+    
+                handles.push(std::thread::spawn(move || -> Result<(), String> {
+                    let mut last_sent = 0u64;
+                    let mut last_files = 0i32;
+    
+                    send_files_v2_for_list(
+                        iterator,
+                        std_stream,
+                        SendFilesConfig {
+                            cancel,
+                            progress: move |sent, files_sent, _| {
+                                let delta_bytes = sent.saturating_sub(last_sent);
+                                let delta_files = if files_sent >= last_files {
+                                    files_sent - last_files
+                                } else {
+                                    0
+                                };
+                                if delta_bytes == 0 && delta_files == 0 {
+                                    return;
+                                }
+                                last_sent = sent;
+                                last_files = files_sent;
+    
+                                let new_total =
+                                    total_sent.fetch_add(delta_bytes, Ordering::Relaxed) + delta_bytes;
+                                let new_files =
+                                    total_files.fetch_add(delta_files as usize, Ordering::Relaxed)
+                                        + delta_files as usize;
+                                let elapsed = start.elapsed().as_secs_f64();
+                                let current_total_scan = shared_total.load(Ordering::Relaxed);
+                                let display_total = current_total_scan.max(new_total);
+    
+                                emit_progress(
+                                    &progress_handle,
+                                    run_id,
+                                    new_total,
+                                    display_total,
+                                    new_files as i32,
+                                    elapsed,
+                                    None,
+                                );
+                                last_progress.store(
+                                    start.elapsed().as_millis() as u64,
+                                    Ordering::Relaxed,
+                                );
+                            },
+                            log: move |msg| emit_log(&log_handle, run_id, msg),
+                            worker_id,
+                            allowed_connections: Some(allowed),
+                            compression,
+                            rate_limit_bps: rate_limit,
+                        },
+                    )
+                    .map_err(|err| err.to_string())
+                }));
+            }
+    
+            let mut first_err: Option<String> = None;
+            for h in handles {
+                if let Ok(Err(e)) = h.join() {
+                    if first_err.is_none() {
+                        first_err = Some(e);
+                    }
                 }
             }
-        }
-        if let Some(e) = first_err {
-            return Err(e.to_string());
-        }
+            if let Some(e) = first_err {
+                return Err(e.to_string());
+            }
+    
+            return Ok((
+                total_files.load(Ordering::Relaxed) as i32,
+                total_sent.load(Ordering::Relaxed),
+            ));
+        }).await.map_err(|e| e.to_string())?;
 
-        return Ok((
-            total_files.load(Ordering::Relaxed) as i32,
-            total_sent.load(Ordering::Relaxed),
-        ));
+        return transfer_result;
     }
 
-    let (mut files, was_cancelled) = collect_files_with_progress(
-        &source_path,
-        cancel.clone(),
-        |files_found, total_size| emit_scan(handle, run_id, files_found, total_size),
-    );
+    let source_path_clone = source_path.clone();
+    let cancel_clone = cancel.clone();
+    let handle_clone = handle.clone();
+    let (mut files, was_cancelled) = tauri::async_runtime::spawn_blocking(move || {
+        collect_files_with_progress(
+            &source_path_clone,
+            cancel_clone,
+            |files_found, total_size| emit_scan(&handle_clone, run_id, files_found, total_size),
+        )
+    }).await.map_err(|e| e.to_string())?;
 
     if was_cancelled {
         return Err("Cancelled".to_string());
@@ -699,14 +683,10 @@ fn run_transfer(
 
     if req.resume_mode != "none" {
         emit_log(handle, run_id, "Resume: scanning remote files...".to_string());
-        let dest_exists = tauri::async_runtime::block_on(async {
-            check_dir(&ip, TRANSFER_PORT, &dest_path).await
-        })
-        .unwrap_or(false);
+        let dest_exists = check_dir(&ip, TRANSFER_PORT, &dest_path).await.unwrap_or(false);
+        
         let remote = if dest_exists {
-            tauri::async_runtime::block_on(async {
-                list_dir_recursive(&ip, TRANSFER_PORT, &dest_path).await
-            })
+            list_dir_recursive(&ip, TRANSFER_PORT, &dest_path).await
             .map_err(|err| format!("Resume failed: {}", err))?
         } else {
             std::collections::HashMap::new()
@@ -715,7 +695,9 @@ fn run_transfer(
         let mut kept = Vec::with_capacity(files.len());
         let mut skipped_files = 0u64;
         let mut skipped_bytes = 0u64;
-
+        
+        let ip_clone = ip.clone();
+        let dest_path_clone = dest_path.clone();
         for file in files.into_iter() {
             let Some(remote_entry) = remote.get(&file.rel_path) else {
                 kept.push(file);
@@ -736,21 +718,16 @@ fn run_transfer(
                 }
                 "sha256" => {
                     if remote_entry.size == file.size {
-                        let local_hash = ps5upload_core::transfer_utils::sha256_file(&file.abs_path)
-                            .map_err(|err| err.to_string())?;
-                        let remote_hash = tauri::async_runtime::block_on(async {
-                            hash_file(
-                                &ip,
-                                TRANSFER_PORT,
-                                &format!(
-                                    "{}/{}",
-                                    dest_path.trim_end_matches('/'),
-                                    file.rel_path
-                                ),
-                            )
-                            .await
-                        })
-                        .map_err(|err| err.to_string());
+                        let abs_path_clone = file.abs_path.clone();
+                        let local_hash = tauri::async_runtime::spawn_blocking(move || ps5upload_core::transfer_utils::sha256_file(&abs_path_clone)).await.map_err(|e| e.to_string())?.map_err(|err| err.to_string())?;
+                        
+                        let remote_path = format!(
+                            "{}/{}",
+                            dest_path_clone.trim_end_matches('/'),
+                            file.rel_path
+                        );
+                        let remote_hash = hash_file(&ip_clone, TRANSFER_PORT, &remote_path).await.map_err(|err| err.to_string());
+
                         if let Ok(remote_hash) = remote_hash {
                             skip = local_hash.eq_ignore_ascii_case(&remote_hash);
                         }
@@ -791,7 +768,9 @@ fn run_transfer(
     if let Some(recommended) = optimize_connections {
         connection_count = recommended;
     }
-    if let Some((sample_count, sample_bytes)) = sample_workload(&source_path, &cancel) {
+    let source_path_clone = source_path.clone();
+    let cancel_clone = cancel.clone();
+    if let Some((sample_count, sample_bytes)) = tauri::async_runtime::spawn_blocking(move || sample_workload(&source_path_clone, &cancel_clone)).await.map_err(|e| e.to_string())? {
         let recommended = recommend_connections(connection_count, sample_count, sample_bytes);
         connection_count = connection_count.min(recommended);
     }
@@ -830,9 +809,11 @@ fn run_transfer(
         None
     };
 
+    let files_clone = files.clone();
+    let cancel_clone = cancel.clone();
     let mut compression = match req.compression.to_lowercase().as_str() {
         "auto" => {
-            if let Some(sample) = sample_bytes_from_files(&files, &cancel) {
+            if let Some(sample) = tauri::async_runtime::spawn_blocking(move || sample_bytes_from_files(&files_clone, &cancel_clone)).await.map_err(|e| e.to_string())? {
                 choose_best_compression(&sample)
             } else {
                 CompressionMode::None
@@ -852,193 +833,159 @@ fn run_transfer(
         );
         compression = CompressionMode::Lz4;
     }
+    
+    let ip_clone = ip.clone();
+    let dest_path_clone = dest_path.clone();
+    let handle_clone = handle.clone();
+    let cancel_clone = cancel.clone();
 
-    if connection_count == 1 {
-        let stream = tauri::async_runtime::block_on(async {
-            upload_v2_init(&ip, TRANSFER_PORT, &dest_path, effective_use_temp).await
-        })
-        .map_err(|err| err.to_string())?;
-        let mut std_stream = stream.into_std().map_err(|err| err.to_string())?;
-        std_stream
-            .set_nonblocking(true)
+    tauri::async_runtime::spawn_blocking(move || {
+        if connection_count == 1 {
+            let stream = tauri::async_runtime::block_on(async {
+                upload_v2_init(&ip_clone, TRANSFER_PORT, &dest_path_clone, effective_use_temp).await
+            })
             .map_err(|err| err.to_string())?;
-
-        let mut last_sent = 0u64;
-        let progress_handle = handle.clone();
-        let log_handle = handle.clone();
-        send_files_v2_for_list(
-            files,
-            std_stream.try_clone().map_err(|err| err.to_string())?,
-            SendFilesConfig {
-                cancel: cancel.clone(),
-                progress: move |sent, files_sent, current| {
-                    if sent == last_sent {
-                        return;
-                    }
-                    let elapsed = start.elapsed().as_secs_f64();
-                    emit_progress(
-                        &progress_handle,
-                        run_id,
-                        sent,
-                        total_size,
-                        files_sent,
-                        elapsed,
-                        current,
-                    );
-                    last_progress_ms.store(start.elapsed().as_millis() as u64, Ordering::Relaxed);
-                    last_sent = sent;
-                },
-                log: move |msg| emit_log(&log_handle, run_id, msg),
-                worker_id: 0,
-                allowed_connections: None,
-                compression,
-                rate_limit_bps: rate_limit,
-            },
-        )
-        .map_err(|err| err.to_string())?;
-
-        let response = read_upload_response(&mut std_stream, &cancel)
-            .map_err(|err| err.to_string())?;
-        return parse_upload_response(&response).map_err(|err| err.to_string());
-    }
-
-    let buckets = partition_files_by_size(files, connection_count);
-    let total_sent = Arc::new(std::sync::atomic::AtomicU64::new(0));
-    let total_files = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let allowed_connections = Arc::new(std::sync::atomic::AtomicUsize::new(connection_count));
-    let mut handles = Vec::new();
-
-    let mut workers = Vec::new();
-    for bucket in buckets.into_iter().filter(|b| !b.is_empty()) {
-        if cancel.load(Ordering::Relaxed) {
-            return Err("Upload cancelled".to_string());
-        }
-        let stream = tauri::async_runtime::block_on(async {
-            upload_v2_init(&ip, TRANSFER_PORT, &dest_path, effective_use_temp).await
-        })
-        .map_err(|err| err.to_string())?;
-        let std_stream = stream.into_std().map_err(|err| err.to_string())?;
-        std_stream
-            .set_nonblocking(true)
-            .map_err(|err| err.to_string())?;
-        workers.push((bucket, std_stream));
-    }
-
-    let max_connections = connection_count;
-    let allowed_monitor = allowed_connections.clone();
-    let last_progress_monitor = last_progress_ms.clone();
-    let cancel_monitor = cancel.clone();
-    let start_monitor = start;
-    thread::spawn(move || {
-        let mut stable_good = 0u8;
-        loop {
-            if cancel_monitor.load(Ordering::Relaxed) {
-                break;
-            }
-            let elapsed_ms = start_monitor.elapsed().as_millis() as u64;
-            let last_ms = last_progress_monitor.load(Ordering::Relaxed);
-            if last_ms == 0 {
-                thread::sleep(std::time::Duration::from_millis(500));
-                continue;
-            }
-            let since = elapsed_ms.saturating_sub(last_ms);
-            if since > 2000 {
-                let current = allowed_monitor.load(Ordering::Relaxed);
-                if current > 1 {
-                    allowed_monitor.store(current - 1, Ordering::Relaxed);
-                }
-                stable_good = 0;
-            } else if since < 500 {
-                stable_good = stable_good.saturating_add(1);
-                if stable_good >= 6 {
-                    let current = allowed_monitor.load(Ordering::Relaxed);
-                    if current < max_connections {
-                        allowed_monitor.store(current + 1, Ordering::Relaxed);
-                    }
-                    stable_good = 0;
-                }
-            } else {
-                stable_good = 0;
-            }
-            thread::sleep(std::time::Duration::from_millis(500));
-        }
-    });
-
-    for (worker_id, (bucket, std_stream)) in workers.into_iter().enumerate() {
-        let cancel = cancel.clone();
-        let total_sent = total_sent.clone();
-        let total_files = total_files.clone();
-        let allowed = allowed_connections.clone();
-        let last_progress = last_progress_ms.clone();
-        let handle = handle.clone();
-        let progress_handle = handle.clone();
-        let log_handle = handle.clone();
-
-        handles.push(thread::spawn(move || -> Result<(), String> {
+            let mut std_stream = stream.into_std().map_err(|err| err.to_string())?;
+            std_stream
+                .set_nonblocking(true)
+                .map_err(|err| err.to_string())?;
+    
             let mut last_sent = 0u64;
-            let mut last_files = 0i32;
-
+            let progress_handle = handle_clone.clone();
+            let log_handle = handle_clone.clone();
             send_files_v2_for_list(
-                bucket,
-                std_stream,
+                files,
+                std_stream.try_clone().map_err(|err| err.to_string())?,
                 SendFilesConfig {
-                    cancel,
+                    cancel: cancel_clone.clone(),
                     progress: move |sent, files_sent, current| {
-                        let delta_bytes = sent.saturating_sub(last_sent);
-                        let delta_files = if files_sent >= last_files {
-                            files_sent - last_files
-                        } else {
-                            0
-                        };
-                        if delta_bytes == 0 && delta_files == 0 {
+                        if sent == last_sent {
                             return;
                         }
-                        last_sent = sent;
-                        last_files = files_sent;
-
-                        let new_total =
-                            total_sent.fetch_add(delta_bytes, Ordering::Relaxed) + delta_bytes;
-                        let new_files =
-                            total_files.fetch_add(delta_files as usize, Ordering::Relaxed)
-                                + delta_files as usize;
                         let elapsed = start.elapsed().as_secs_f64();
-
-                    emit_progress(
+                        emit_progress(
                             &progress_handle,
                             run_id,
-                            new_total,
-                            total_size.max(new_total),
-                            new_files as i32,
+                            sent,
+                            total_size,
+                            files_sent,
                             elapsed,
                             current,
                         );
-                    last_progress.store(start.elapsed().as_millis() as u64, Ordering::Relaxed);
-                },
-                log: move |msg| emit_log(&log_handle, run_id, msg),
-                worker_id,
-                allowed_connections: Some(allowed),
-                compression,
+                        last_progress_ms.store(start.elapsed().as_millis() as u64, Ordering::Relaxed);
+                        last_sent = sent;
+                    },
+                    log: move |msg| emit_log(&log_handle, run_id, msg),
+                    worker_id: 0,
+                    allowed_connections: None,
+                    compression,
                     rate_limit_bps: rate_limit,
                 },
             )
-            .map_err(|err| err.to_string())
-        }));
-    }
+            .map_err(|err| err.to_string())?;
+    
+            let response = read_upload_response(&mut std_stream, &cancel_clone)
+                .map_err(|err| err.to_string())?;
+            return parse_upload_response(&response).map_err(|err| err.to_string());
+        }
 
-    let mut first_err: Option<String> = None;
-    for h in handles {
-        if let Ok(Err(e)) = h.join() {
-            if first_err.is_none() {
-                first_err = Some(e);
+        let buckets = partition_files_by_size(files, connection_count);
+        let total_sent = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let total_files = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let allowed_connections = Arc::new(std::sync::atomic::AtomicUsize::new(connection_count));
+        let mut handles = Vec::new();
+    
+        let mut workers = Vec::new();
+        for bucket in buckets.into_iter().filter(|b| !b.is_empty()) {
+            if cancel_clone.load(Ordering::Relaxed) {
+                return Err("Upload cancelled".to_string());
+            }
+            let stream = tauri::async_runtime::block_on(async {
+                upload_v2_init(&ip_clone, TRANSFER_PORT, &dest_path_clone, effective_use_temp).await
+            })
+            .map_err(|err| err.to_string())?;
+            let std_stream = stream.into_std().map_err(|err| err.to_string())?;
+            std_stream
+                .set_nonblocking(true)
+                .map_err(|err| err.to_string())?;
+            workers.push((bucket, std_stream));
+        }
+        
+        for (worker_id, (bucket, std_stream)) in workers.into_iter().enumerate() {
+            let cancel = cancel_clone.clone();
+            let total_sent = total_sent.clone();
+            let total_files = total_files.clone();
+            let allowed = allowed_connections.clone();
+            let last_progress = last_progress_ms.clone();
+            let progress_handle = handle_clone.clone();
+            let log_handle = handle_clone.clone();
+    
+            handles.push(std::thread::spawn(move || -> Result<(), String> {
+                let mut last_sent = 0u64;
+                let mut last_files = 0i32;
+    
+                send_files_v2_for_list(
+                    bucket,
+                    std_stream,
+                    SendFilesConfig {
+                        cancel,
+                        progress: move |sent, files_sent, current| {
+                            let delta_bytes = sent.saturating_sub(last_sent);
+                            let delta_files = if files_sent >= last_files {
+                                files_sent - last_files
+                            } else {
+                                0
+                            };
+                            if delta_bytes == 0 && delta_files == 0 {
+                                return;
+                            }
+                            last_sent = sent;
+                            last_files = files_sent;
+    
+                            let new_total =
+                                total_sent.fetch_add(delta_bytes, Ordering::Relaxed) + delta_bytes;
+                            let new_files =
+                                total_files.fetch_add(delta_files as usize, Ordering::Relaxed)
+                                    + delta_files as usize;
+                            let elapsed = start.elapsed().as_secs_f64();
+    
+                        emit_progress(
+                                &progress_handle,
+                                run_id,
+                                new_total,
+                                total_size.max(new_total),
+                                new_files as i32,
+                                elapsed,
+                                current,
+                            );
+                        last_progress.store(start.elapsed().as_millis() as u64, Ordering::Relaxed);
+                    },
+                    log: move |msg| emit_log(&log_handle, run_id, msg),
+                    worker_id,
+                    allowed_connections: Some(allowed),
+                    compression,
+                        rate_limit_bps: rate_limit,
+                    },
+                )
+                .map_err(|err| err.to_string())
+            }));
+        }
+    
+        let mut first_err: Option<String> = None;
+        for h in handles {
+            if let Ok(Err(e)) = h.join() {
+                if first_err.is_none() {
+                    first_err = Some(e);
+                }
             }
         }
-    }
-    if let Some(e) = first_err {
-        return Err(e.to_string());
-    }
-
-    Ok((
-        total_files.load(Ordering::Relaxed) as i32,
-        total_sent.load(Ordering::Relaxed),
-    ))
+        if let Some(e) = first_err {
+            return Err(e.to_string());
+        }
+    
+        Ok((
+            total_files.load(Ordering::Relaxed) as i32,
+            total_sent.load(Ordering::Relaxed),
+        ))
+    }).await.map_err(|e| e.to_string())?
 }

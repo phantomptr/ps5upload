@@ -3,6 +3,20 @@
 version = 4
 
 [[package]]
+name = "PS5Upload"
+version = "1.2.0"
+dependencies = [
+ "chrono",
+ "ps5upload",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tokio",
+]
+
+[[package]]
 name = "adler2"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2952,20 +2966,6 @@ dependencies = [
  "webbrowser",
  "zip",
  "zstd",
-]
-
-[[package]]
-name = "ps5upload-desktop"
-version = "1.2.0"
-dependencies = [
- "chrono",
- "ps5upload",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tokio",
 ]
 
 [[package]]

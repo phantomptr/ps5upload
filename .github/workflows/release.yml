@@ -119,8 +119,8 @@ jobs:
             exit 0
           }
           $candidates = @(
-            "desktop\\src-tauri\\target\\${{ matrix.target }}\\release\\ps5upload-desktop.exe",
-            "desktop\\src-tauri\\target\\release\\ps5upload-desktop.exe"
+            "desktop\\src-tauri\\target\\${{ matrix.target }}\\release\\PS5Upload.exe",
+            "desktop\\src-tauri\\target\\release\\PS5Upload.exe"
           )
           $exe = $null
           foreach ($candidate in $candidates) {
@@ -130,7 +130,7 @@ jobs:
             }
           }
           if (-not $exe) {
-            $exe = Get-ChildItem -Path "desktop\\src-tauri\\target" -Recurse -File -Filter "ps5upload-desktop.exe" |
+            $exe = Get-ChildItem -Path "desktop\\src-tauri\\target" -Recurse -File -Filter "PS5Upload.exe" |
               Select-Object -First 1
           }
           if (-not $exe) {
@@ -151,7 +151,7 @@ jobs:
             (cd "$bundle" && zip -r "$GITHUB_WORKSPACE/ps5upload-${{ matrix.platform }}-${{ matrix.arch }}.zip" .)
             exit 0
           fi
-          bin="$(find desktop/src-tauri/target -type f -name 'ps5upload-desktop' -path '*/release/*' | head -n 1)"
+          bin="$(find desktop/src-tauri/target -type f -name 'PS5Upload' -path '*/release/*' | head -n 1)"
           if [ -z "$bin" ]; then
             echo "Tauri bundle directory and executable not found." >&2
             exit 1
@@ -166,7 +166,7 @@ jobs:
             (cd "$bundle" && zip -r "$GITHUB_WORKSPACE/ps5upload-${{ matrix.platform }}-${{ matrix.arch }}.zip" .)
             exit 0
           fi
-          bin="$(find desktop/src-tauri/target -type f -name 'ps5upload-desktop' -path '*/release/*' | head -n 1)"
+          bin="$(find desktop/src-tauri/target -type f -name 'PS5Upload' -path '*/release/*' | head -n 1)"
           if [ -z "$bin" ]; then
             echo "Tauri bundle directory and executable not found." >&2
             exit 1
