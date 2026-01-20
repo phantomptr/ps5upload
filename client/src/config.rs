@@ -17,10 +17,14 @@ pub struct AppConfig {
     pub update_channel: String,       // "stable" or "all"
     pub download_compression: String, // "none", "lz4", "zstd", "lzma", "auto"
     pub chmod_after_upload: bool,
+    pub override_on_conflict: bool,
     pub resume_mode: String, // "none", "size", "size_mtime", "sha256"
     pub language: String,    // "en", "zh-CN", "zh-TW", "fr", "es", "ar"
     pub auto_tune_connections: bool,
     pub auto_check_payload: bool,
+    pub payload_auto_reload: bool,
+    pub payload_reload_mode: String, // "local", "current", "latest"
+    pub payload_local_path: String,
     pub optimize_upload: bool,
     pub chat_display_name: String,
     pub rar_extract_mode: String, // "normal", "safe", "turbo"
@@ -40,10 +44,14 @@ impl Default for AppConfig {
             update_channel: "stable".to_string(),
             download_compression: "none".to_string(),
             chmod_after_upload: false,
+            override_on_conflict: false,
             resume_mode: "none".to_string(),
             language: "en".to_string(),
             auto_tune_connections: true,
             auto_check_payload: false,
+            payload_auto_reload: false,
+            payload_reload_mode: "current".to_string(),
+            payload_local_path: String::new(),
             optimize_upload: false,
             chat_display_name: String::new(),
             rar_extract_mode: "turbo".to_string(),
@@ -126,6 +134,12 @@ impl AppConfig {
                                     "1" | "true" | "yes" | "on"
                                 );
                             }
+                            "override_on_conflict" => {
+                                config.override_on_conflict = matches!(
+                                    value.to_lowercase().as_str(),
+                                    "1" | "true" | "yes" | "on"
+                                );
+                            }
                             "resume_mode" => {
                                 config.resume_mode = match value.as_str() {
                                     "size" => "size".to_string(),
@@ -151,6 +165,21 @@ impl AppConfig {
                                     value.to_lowercase().as_str(),
                                     "1" | "true" | "yes" | "on"
                                 );
+                            }
+                            "payload_auto_reload" => {
+                                config.payload_auto_reload = matches!(
+                                    value.to_lowercase().as_str(),
+                                    "1" | "true" | "yes" | "on"
+                                );
+                            }
+                            "payload_reload_mode" => {
+                                config.payload_reload_mode = match value.as_str() {
+                                    "local" | "current" | "latest" => value,
+                                    _ => "current".to_string(),
+                                };
+                            }
+                            "payload_local_path" => {
+                                config.payload_local_path = value;
                             }
                             "optimize_upload" => {
                                 config.optimize_upload = matches!(
@@ -190,6 +219,9 @@ impl AppConfig {
                         }
                     }
                 }
+                if config.auto_check_payload && !config.payload_auto_reload {
+                    config.payload_auto_reload = true;
+                }
                 return config;
             }
         }
@@ -202,7 +234,7 @@ impl AppConfig {
 
     pub fn save_to(&self, path: &Path) -> anyhow::Result<()> {
         let content = format!(
-            "address={}\nstorage={}\nconnections={}\nuse_temp={}\nauto_connect={}\ntheme={}\ncompression={}\nbandwidth_limit_mbps={}\nupdate_channel={}\ndownload_compression={}\nchmod_after_upload={}\nresume_mode={}\nlanguage={}\nauto_tune_connections={}\nauto_check_payload={}\noptimize_upload={}\nchat_display_name={}\n",
+            "address={}\nstorage={}\nconnections={}\nuse_temp={}\nauto_connect={}\ntheme={}\ncompression={}\nbandwidth_limit_mbps={}\nupdate_channel={}\ndownload_compression={}\nchmod_after_upload={}\noverride_on_conflict={}\nresume_mode={}\nlanguage={}\nauto_tune_connections={}\nauto_check_payload={}\npayload_auto_reload={}\npayload_reload_mode={}\npayload_local_path={}\noptimize_upload={}\nchat_display_name={}\n",
             self.address,
             self.storage,
             self.connections,
@@ -214,10 +246,14 @@ impl AppConfig {
             self.update_channel,
             self.download_compression,
             self.chmod_after_upload,
+            self.override_on_conflict,
             self.resume_mode,
             self.language,
             self.auto_tune_connections,
             self.auto_check_payload,
+            self.payload_auto_reload,
+            self.payload_reload_mode,
+            self.payload_local_path,
             self.optimize_upload,
             self.chat_display_name,
         );

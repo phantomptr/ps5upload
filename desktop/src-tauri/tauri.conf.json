@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/schema.json",
   "productName": "PS5 Upload",
-  "version": "0.1.0",
+  "version": "1.2.0",
   "identifier": "com.phantomptr.ps5upload",
   "build": {
     "beforeBuildCommand": "npm run build",
@@ -13,12 +13,13 @@
     "windows": [
       {
         "title": "PS5 Upload",
-        "width": 1280,
-        "height": 800,
-        "minWidth": 1080,
-        "minHeight": 720,
+        "width": 1440,
+        "height": 960,
+        "minWidth": 1200,
+        "minHeight": 840,
         "decorations": false,
-        "shadow": false
+        "shadow": true,
+        "transparent": true
       }
     ],
     "security": {

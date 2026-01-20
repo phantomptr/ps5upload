@@ -3,6 +3,25 @@
 All notable changes to this project are documented here.
 This project follows Semantic Versioning.
 
+## [1.2.0] - 2026-01-18
+
+### Added
+- Override-on-conflict toggle for uploads and queue processing.
+- Queue controls for clearing completed items and clearing the full queue.
+- Manage browser sorting (name/size/modified) and Type column.
+- `<New Profile>` dropdown option with modal creation flow.
+- Port checks before connect and payload actions.
+- UI redesign across transfer/manage/logs and window controls.
+
+### Fixed
+- Queue duplicate detection and clearer queue status behavior on conflicts.
+- Chat status display styling and default random `user-` names.
+- Window control buttons and general spacing/overflow issues across panels.
+
+### Changed
+- Actions panel now matches the browser width on Manage.
+- Transfer controls start uploads without a manual connect step.
+
 ## [1.1.9] - 2026-01-18
 
 ### Added

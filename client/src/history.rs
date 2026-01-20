@@ -25,8 +25,7 @@ pub struct HistoryData {
 const HISTORY_FILE: &str = "ps5upload_history.json";
 const MAX_HISTORY_ITEMS: usize = 100;
 
-pub fn load_history() -> HistoryData {
-    let path = Path::new(HISTORY_FILE);
+pub fn load_history_from(path: &Path) -> HistoryData {
     if !path.exists() {
         return HistoryData::default();
     }
@@ -37,7 +36,11 @@ pub fn load_history() -> HistoryData {
     }
 }
 
-pub fn save_history(data: &HistoryData) {
+pub fn load_history() -> HistoryData {
+    load_history_from(Path::new(HISTORY_FILE))
+}
+
+pub fn save_history_to(data: &HistoryData, path: &Path) -> Result<(), std::io::Error> {
     // Limit to MAX_HISTORY_ITEMS
     let mut limited = data.clone();
     if limited.records.len() > MAX_HISTORY_ITEMS {
@@ -46,9 +49,12 @@ pub fn save_history(data: &HistoryData) {
             .split_off(limited.records.len() - MAX_HISTORY_ITEMS);
     }
 
-    if let Ok(content) = serde_json::to_string_pretty(&limited) {
-        let _ = fs::write(HISTORY_FILE, content);
-    }
+    let content = serde_json::to_string_pretty(&limited).unwrap_or_else(|_| "{}".to_string());
+    fs::write(path, content)
+}
+
+pub fn save_history(data: &HistoryData) {
+    let _ = save_history_to(data, Path::new(HISTORY_FILE));
 }
 
 pub fn add_record(data: &mut HistoryData, record: TransferRecord) {
@@ -56,7 +62,11 @@ pub fn add_record(data: &mut HistoryData, record: TransferRecord) {
     save_history(data);
 }
 
-pub fn clear_history(data: &mut HistoryData) {
+pub fn clear_history_to(data: &mut HistoryData, path: &Path) -> Result<(), std::io::Error> {
     data.records.clear();
-    save_history(data);
+    save_history_to(data, path)
+}
+
+pub fn clear_history(data: &mut HistoryData) {
+    let _ = clear_history_to(data, Path::new(HISTORY_FILE));
 }

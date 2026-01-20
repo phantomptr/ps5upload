@@ -12,6 +12,8 @@ pub struct Profile {
     pub connections: usize,
     pub use_temp: bool,
     pub auto_tune_connections: bool,
+    #[serde(default)]
+    pub chat_display_name: String,
 }
 
 impl Default for Profile {
@@ -25,6 +27,7 @@ impl Default for Profile {
             connections: 5,
             use_temp: false,
             auto_tune_connections: true,
+            chat_display_name: String::new(),
         }
     }
 }
@@ -85,15 +88,15 @@ fn get_profile_mut<'a>(data: &'a mut ProfilesData, name: &str) -> &'a mut Profil
     &mut data.profiles[len - 1]
 }
 
-pub fn load_profiles() -> ProfilesData {
-    let path = Path::new(PROFILES_FILE);
+pub fn load_profiles_from(path: &Path, legacy_json: Option<&Path>) -> ProfilesData {
     if !path.exists() {
-        let legacy_path = Path::new(LEGACY_PROFILES_FILE);
-        if legacy_path.exists() {
-            if let Ok(content) = fs::read_to_string(legacy_path) {
-                if let Ok(data) = serde_json::from_str::<ProfilesData>(&content) {
-                    save_profiles(&data);
-                    return data;
+        if let Some(legacy_path) = legacy_json {
+            if legacy_path.exists() {
+                if let Ok(content) = fs::read_to_string(legacy_path) {
+                    if let Ok(data) = serde_json::from_str::<ProfilesData>(&content) {
+                        let _ = save_profiles_to(&data, path);
+                        return data;
+                    }
                 }
             }
         }
@@ -152,6 +155,7 @@ pub fn load_profiles() -> ProfilesData {
                                     "1" | "true" | "yes" | "on"
                                 );
                             }
+                            "chat_display_name" => profile.chat_display_name = value.to_string(),
                             _ => {}
                         }
                     }
@@ -164,7 +168,14 @@ pub fn load_profiles() -> ProfilesData {
     }
 }
 
-pub fn save_profiles(data: &ProfilesData) {
+pub fn load_profiles() -> ProfilesData {
+    load_profiles_from(
+        Path::new(PROFILES_FILE),
+        Some(Path::new(LEGACY_PROFILES_FILE)),
+    )
+}
+
+pub fn save_profiles_to(data: &ProfilesData, path: &Path) -> Result<(), std::io::Error> {
     let mut content = String::new();
     content.push_str("[profiles]\n");
     if let Some(default_name) = &data.default_profile {
@@ -194,8 +205,16 @@ pub fn save_profiles(data: &ProfilesData) {
                 "false"
             }
         ));
+        content.push_str(&format!(
+            "chat_display_name={}\n",
+            profile.chat_display_name
+        ));
         content.push('\n');
     }
 
-    let _ = fs::write(PROFILES_FILE, content);
+    fs::write(path, content)
+}
+
+pub fn save_profiles(data: &ProfilesData) {
+    let _ = save_profiles_to(data, Path::new(PROFILES_FILE));
 }

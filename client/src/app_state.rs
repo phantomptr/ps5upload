@@ -429,6 +429,6 @@ impl AppState {
 
     /// Add a history record
     pub fn add_history_record(&mut self, record: TransferRecord) {
-        crate::history::add_record(&mut self.history_data, record);
+        let _ = crate::history::add_record(&mut self.history_data, record);
     }
 }

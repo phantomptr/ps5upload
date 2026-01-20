@@ -12,15 +12,19 @@
 
 pub mod archive;
 pub mod chat;
+pub mod chat_key;
 pub mod config;
+pub mod game_meta;
 pub mod history;
 pub mod i18n;
 pub mod message;
+pub mod paths;
 pub mod profiles;
 pub mod protocol;
 pub mod queue;
 pub mod transfer;
 pub mod transfer_utils;
+pub mod update;
 pub mod unrar;
 
 pub use message::{AppMessage, ChatStatusEvent};

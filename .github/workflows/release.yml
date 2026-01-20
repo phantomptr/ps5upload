@@ -89,6 +89,7 @@ jobs:
           bin="client/target/${{ matrix.target }}/release/ps5upload"
           mkdir -p dist
           cp "$bin" dist/ps5upload
+          chmod +x dist/ps5upload
           cp logo.png dist/ps5upload.png
           cat <<'EOF' > dist/PS5Upload.desktop
           [Desktop Entry]
@@ -99,7 +100,7 @@ jobs:
           Icon=ps5upload.png
           Categories=Utility;
           EOF
-          (cd dist && zip -r "../ps5upload-${{ matrix.platform }}-${{ matrix.arch }}.zip" ps5upload PS5Upload.desktop)
+          (cd dist && zip -r "../ps5upload-${{ matrix.platform }}-${{ matrix.arch }}.zip" ps5upload ps5upload.png PS5Upload.desktop)
 
       - name: Package artifact (macOS)
         if: matrix.platform == 'macos'

@@ -8,6 +8,7 @@
 .PHONY: clean-payload clean-client
 
 TAURI_CMD ?= $(shell if command -v cargo-tauri >/dev/null 2>&1; then echo "cargo tauri"; elif command -v tauri >/dev/null 2>&1; then echo "tauri"; fi)
+JOBS ?= $(shell getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || echo 4)
 
 # Default target
 all: build
@@ -112,7 +113,7 @@ build: payload client
 
 payload: setup-payload
 	@echo "Building PS5 payload..."
-	@$(MAKE) -C payload
+	@$(MAKE) -C payload -j$(JOBS)
 	@echo "✓ Payload built: payload/ps5upload.elf"
 
 client: setup-client

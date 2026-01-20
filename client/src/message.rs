@@ -37,7 +37,7 @@ pub struct PendingUpdate {
 }
 
 /// Release information from GitHub
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct ReleaseInfo {
     pub tag_name: String,
     pub html_url: String,
@@ -46,7 +46,7 @@ pub struct ReleaseInfo {
 }
 
 /// Asset information from a GitHub release
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct ReleaseAsset {
     pub name: String,
     pub browser_download_url: String,
@@ -176,4 +176,3 @@ pub enum AppMessage {
         cover: Option<CoverImage>,
     },
 }
-

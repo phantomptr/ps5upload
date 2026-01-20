@@ -33,8 +33,7 @@ pub struct QueueData {
 
 const QUEUE_FILE: &str = "ps5upload_queue.json";
 
-pub fn load_queue() -> QueueData {
-    let path = Path::new(QUEUE_FILE);
+pub fn load_queue_from(path: &Path) -> QueueData {
     if !path.exists() {
         return QueueData::default();
     }
@@ -45,8 +44,17 @@ pub fn load_queue() -> QueueData {
     }
 }
 
-pub fn save_queue(data: &QueueData) {
+pub fn load_queue() -> QueueData {
+    load_queue_from(Path::new(QUEUE_FILE))
+}
+
+pub fn save_queue_to(data: &QueueData, path: &Path) -> Result<(), std::io::Error> {
     if let Ok(content) = serde_json::to_string_pretty(data) {
-        let _ = fs::write(QUEUE_FILE, content);
+        return fs::write(path, content);
     }
+    Ok(())
+}
+
+pub fn save_queue(data: &QueueData) {
+    let _ = save_queue_to(data, Path::new(QUEUE_FILE));
 }

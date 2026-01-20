@@ -127,6 +127,7 @@ struct ProfileSnapshot {
     connections: usize,
     use_temp: bool,
     auto_tune_connections: bool,
+    chat_display_name: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -515,6 +516,7 @@ impl Ps5UploadApp {
         self.config.connections = profile.connections;
         self.config.use_temp = profile.use_temp;
         self.config.auto_tune_connections = profile.auto_tune_connections;
+        self.config.chat_display_name = profile.chat_display_name.clone();
         self.config.address = profile.address.clone();
         self.config.storage = profile.storage.clone();
         let _ = self.config.save();
@@ -539,6 +541,7 @@ impl Ps5UploadApp {
             connections: self.config.connections,
             use_temp: self.config.use_temp,
             auto_tune_connections: self.config.auto_tune_connections,
+            chat_display_name: self.config.chat_display_name.clone(),
         };
 
         // Update or add profile
@@ -569,6 +572,7 @@ impl Ps5UploadApp {
             connections: self.config.connections,
             use_temp: self.config.use_temp,
             auto_tune_connections: self.config.auto_tune_connections,
+            chat_display_name: self.config.chat_display_name.clone(),
         }
     }
 
@@ -580,6 +584,7 @@ impl Ps5UploadApp {
             && profile.connections == snap.connections
             && profile.use_temp == snap.use_temp
             && profile.auto_tune_connections == snap.auto_tune_connections
+            && profile.chat_display_name == snap.chat_display_name
     }
 
     fn autosave_profile_if_needed(&mut self) {
