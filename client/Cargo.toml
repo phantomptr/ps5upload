@@ -39,6 +39,10 @@ image = { version = "0.25", default-features = false, features = ["png", "ico"] 
 winres = "0.1"
 cc = "1.0"
 
+[features]
+default = []
+client-unrar = []
+
 [profile.release]
 opt-level = 3
 codegen-units = 4

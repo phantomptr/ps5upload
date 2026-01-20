@@ -14,6 +14,11 @@ fn main() {
     ).expect("Failed to write chat_key.rs");
     println!("cargo:rerun-if-changed={}", chat_key_path.display());
 
+    let enable_unrar = std::env::var("CARGO_FEATURE_CLIENT_UNRAR").is_ok();
+    if !enable_unrar {
+        return;
+    }
+
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let unrar_dir = PathBuf::from("../payload/third_party/unrar");
     let mut sources = vec![
