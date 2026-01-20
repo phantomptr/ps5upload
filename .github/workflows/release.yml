@@ -106,6 +106,9 @@ jobs:
           else
             "${build_cmd[@]}"
           fi
+          if [[ "${{ matrix.platform }}" == "linux" ]]; then
+            strip "src-tauri/target/${{ matrix.target }}/release/PS5Upload"
+          fi
 
       - name: Package artifact (Windows)
         if: matrix.platform == 'windows'
@@ -146,17 +149,12 @@ jobs:
       - name: Package artifact (Linux)
         if: matrix.platform == 'linux'
         run: |
-          bundle="$(find desktop/src-tauri/target -type d -path '*/release/bundle' | head -n 1)"
-          if [ -n "$bundle" ]; then
-            (cd "$bundle" && zip -r "$GITHUB_WORKSPACE/ps5upload-${{ matrix.platform }}-${{ matrix.arch }}.zip" .)
-            exit 0
-          fi
-          bin="$(find desktop/src-tauri/target -type f -name 'PS5Upload' -path '*/release/*' | head -n 1)"
-          if [ -z "$bin" ]; then
-            echo "Tauri bundle directory and executable not found." >&2
+          appimage_path=$(find desktop/src-tauri/target -type f -name '*.AppImage' -path '*/release/bundle/appimage/*' | head -n 1)
+          if [ -z "$appimage_path" ]; then
+            echo "AppImage not found." >&2
             exit 1
           fi
-          zip -j "$GITHUB_WORKSPACE/ps5upload-${{ matrix.platform }}-${{ matrix.arch }}.zip" "$bin"
+          zip -j "$GITHUB_WORKSPACE/ps5upload-${{ matrix.platform }}-${{ matrix.arch }}.zip" "$appimage_path"
 
       - name: Package artifact (macOS)
         if: matrix.platform == 'macos'

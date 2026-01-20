@@ -205,7 +205,7 @@ pub fn transfer_cancel(state: State<AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn transfer_start(
+pub fn transfer_start(
     req: TransferRequest,
     app_handle: AppHandle,
     state: State<'_, AppState>,
@@ -230,8 +230,13 @@ pub async fn transfer_start(
     cancel.store(false, Ordering::Relaxed);
     active.store(true, Ordering::Relaxed);
 
-    tauri::async_runtime::spawn(async move {
-        let result = run_transfer(req, run_id, &app_handle, cancel.clone()).await;
+    tauri::async_runtime::spawn_blocking(move || {
+        let result = tauri::async_runtime::block_on(run_transfer(
+            req,
+            run_id,
+            &app_handle,
+            cancel.clone(),
+        ));
         active.store(false, Ordering::Relaxed);
         match result {
             Ok((files, bytes)) => emit_complete(&app_handle, run_id, files, bytes),
