@@ -90,7 +90,7 @@ jobs:
       - name: Build desktop app
         run: |
           cd desktop
-          npm run tauri build -- --target ${{ matrix.target }}
+          npm run tauri build -- --target ${{ matrix.target }} --bundles all
 
       - name: Package artifact (Windows)
         if: matrix.platform == 'windows'
@@ -99,30 +99,47 @@ jobs:
           $bundleDir = Get-ChildItem -Path "desktop\\src-tauri\\target" -Recurse -Directory -Filter bundle |
             Where-Object { $_.FullName -match "\\\\release\\\\bundle$" } |
             Select-Object -First 1
-          if (-not $bundleDir) {
-            throw "Tauri bundle directory not found."
+          if ($bundleDir) {
+            Compress-Archive -Path (Join-Path $bundleDir.FullName "*") -DestinationPath "ps5upload-${{ matrix.platform }}-${{ matrix.arch }}.zip"
+            exit 0
           }
-          Compress-Archive -Path (Join-Path $bundleDir.FullName "*") -DestinationPath "ps5upload-${{ matrix.platform }}-${{ matrix.arch }}.zip"
+          $exe = Get-ChildItem -Path "desktop\\src-tauri\\target" -Recurse -File -Filter "ps5upload-desktop.exe" |
+            Where-Object { $_.FullName -match "\\\\release\\\\" } |
+            Select-Object -First 1
+          if (-not $exe) {
+            throw "Tauri bundle directory and executable not found."
+          }
+          Compress-Archive -Path $exe.FullName -DestinationPath "ps5upload-${{ matrix.platform }}-${{ matrix.arch }}.zip"
 
       - name: Package artifact (Linux)
         if: matrix.platform == 'linux'
         run: |
           bundle="$(find desktop/src-tauri/target -type d -path '*/release/bundle' | head -n 1)"
-          if [ -z "$bundle" ]; then
-            echo "Tauri bundle directory not found." >&2
+          if [ -n "$bundle" ]; then
+            (cd "$bundle" && zip -r "$GITHUB_WORKSPACE/ps5upload-${{ matrix.platform }}-${{ matrix.arch }}.zip" .)
+            exit 0
+          fi
+          bin="$(find desktop/src-tauri/target -type f -name 'ps5upload-desktop' -path '*/release/*' | head -n 1)"
+          if [ -z "$bin" ]; then
+            echo "Tauri bundle directory and executable not found." >&2
             exit 1
           fi
-          (cd "$bundle" && zip -r "$GITHUB_WORKSPACE/ps5upload-${{ matrix.platform }}-${{ matrix.arch }}.zip" .)
+          zip -j "$GITHUB_WORKSPACE/ps5upload-${{ matrix.platform }}-${{ matrix.arch }}.zip" "$bin"
 
       - name: Package artifact (macOS)
         if: matrix.platform == 'macos'
         run: |
           bundle="$(find desktop/src-tauri/target -type d -path '*/release/bundle' | head -n 1)"
-          if [ -z "$bundle" ]; then
-            echo "Tauri bundle directory not found." >&2
+          if [ -n "$bundle" ]; then
+            (cd "$bundle" && zip -r "$GITHUB_WORKSPACE/ps5upload-${{ matrix.platform }}-${{ matrix.arch }}.zip" .)
+            exit 0
+          fi
+          bin="$(find desktop/src-tauri/target -type f -name 'ps5upload-desktop' -path '*/release/*' | head -n 1)"
+          if [ -z "$bin" ]; then
+            echo "Tauri bundle directory and executable not found." >&2
             exit 1
           fi
-          (cd "$bundle" && zip -r "$GITHUB_WORKSPACE/ps5upload-${{ matrix.platform }}-${{ matrix.arch }}.zip" .)
+          zip -j "$GITHUB_WORKSPACE/ps5upload-${{ matrix.platform }}-${{ matrix.arch }}.zip" "$bin"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
