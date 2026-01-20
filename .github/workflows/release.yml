@@ -88,9 +88,24 @@ jobs:
           npm ci
 
       - name: Build desktop app
+        shell: bash
         run: |
           cd desktop
-          npm run tauri build -- --target ${{ matrix.target }} --bundles all
+          case "${{ matrix.platform }}" in
+            linux) bundles="appimage,deb" ;;
+            macos) bundles="app,dmg" ;;
+            windows) bundles="nsis,msi" ;;
+            *) bundles="" ;;
+          esac
+          build_cmd=(npm run tauri build -- --target ${{ matrix.target }})
+          if [ -n "$bundles" ]; then
+            if ! "${build_cmd[@]}" --bundles "$bundles"; then
+              echo "Bundle build failed; retrying without bundles."
+              "${build_cmd[@]}"
+            fi
+          else
+            "${build_cmd[@]}"
+          fi
 
       - name: Package artifact (Windows)
         if: matrix.platform == 'windows'
