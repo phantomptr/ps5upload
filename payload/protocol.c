@@ -33,6 +33,7 @@
 #include "LzmaLib.h"
 #include "sha256.h"
 #include "third_party/unrar/unrar_wrapper.h"
+#include "extract_queue.h"
 
 #define DOWNLOAD_PACK_BUFFER_SIZE (4 * 1024 * 1024)
 #define PROBE_RAR_MAX_LINE 128
@@ -1682,4 +1683,86 @@ void handle_upload(int client_sock, const char *args) {
 
         notify_error("PS5 Upload", "Upload failed");
     }
+}
+
+void handle_payload_status(int client_sock) {
+    char *json = extract_queue_get_status_json();
+    if (!json) {
+        const char *error = "ERROR: Failed to get status\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+
+    char header[64];
+    size_t json_len = strlen(json);
+    int hdr_len = snprintf(header, sizeof(header), "STATUS %zu\n", json_len);
+    send_all(client_sock, header, (size_t)hdr_len);
+    send_all(client_sock, json, json_len);
+    send_all(client_sock, "\n", 1);
+
+    free(json);
+}
+
+void handle_queue_extract(int client_sock, const char *args) {
+    char buffer[PATH_MAX * 2];
+    strncpy(buffer, args, sizeof(buffer) - 1);
+    buffer[sizeof(buffer) - 1] = '\0';
+    trim_newline(buffer);
+
+    char *sep = strchr(buffer, '\t');
+    if (!sep) {
+        const char *error = "ERROR: Invalid QUEUE_EXTRACT format\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+    *sep = '\0';
+    const char *src = buffer;
+    const char *dst = sep + 1;
+    if (!*src || !*dst) {
+        const char *error = "ERROR: Invalid QUEUE_EXTRACT format\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+
+    int id = extract_queue_add(src, dst);
+    if (id < 0) {
+        const char *error = "ERROR: Queue full\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+
+    /* Start processing if not already running */
+    extract_queue_process();
+
+    char response[64];
+    snprintf(response, sizeof(response), "OK %d\n", id);
+    send(client_sock, response, strlen(response), 0);
+}
+
+void handle_queue_cancel(int client_sock, const char *args) {
+    char buffer[64];
+    strncpy(buffer, args, sizeof(buffer) - 1);
+    buffer[sizeof(buffer) - 1] = '\0';
+    trim_newline(buffer);
+
+    int id = atoi(buffer);
+    if (id <= 0) {
+        const char *error = "ERROR: Invalid item ID\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+
+    if (extract_queue_cancel(id) == 0) {
+        const char *success = "OK\n";
+        send(client_sock, success, strlen(success), 0);
+    } else {
+        const char *error = "ERROR: Item not found or cannot be cancelled\n";
+        send(client_sock, error, strlen(error), 0);
+    }
+}
+
+void handle_queue_clear(int client_sock) {
+    extract_queue_clear_done();
+    const char *success = "OK\n";
+    send(client_sock, success, strlen(success), 0);
 }

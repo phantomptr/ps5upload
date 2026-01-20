@@ -65,6 +65,29 @@ pub enum RarExtractMode {
     Turbo,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct ExtractQueueItem {
+    pub id: i32,
+    pub archive_name: String,
+    pub status: String,
+    pub percent: i32,
+    pub processed_bytes: u64,
+    pub total_bytes: u64,
+    pub files_extracted: i32,
+    pub started_at: i64,
+    pub completed_at: i64,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct PayloadStatus {
+    pub version: String,
+    pub uptime: u64,
+    pub queue_count: i32,
+    pub is_busy: bool,
+    pub items: Vec<ExtractQueueItem>,
+}
+
 async fn send_simple_command(ip: &str, port: u16, cmd: &str) -> Result<String> {
     let addr = format!("{}:{}", ip, port);
     let mut stream = tokio::time::timeout(
@@ -841,6 +864,73 @@ pub async fn get_payload_version(ip: &str, port: u16) -> Result<String> {
             .to_string())
     } else {
         Err(anyhow!("Unexpected response: {}", response_str))
+    }
+}
+
+pub async fn get_payload_status(ip: &str, port: u16) -> Result<PayloadStatus> {
+    let addr = format!("{}:{}", ip, port);
+    let mut stream = tokio::time::timeout(
+        std::time::Duration::from_secs(CONNECTION_TIMEOUT_SECS),
+        TcpStream::connect(&addr),
+    )
+    .await
+    .context("Connection timed out")??;
+
+    stream.write_all(b"PAYLOAD_STATUS\n").await?;
+
+    // Read header: "STATUS <length>\n"
+    let mut reader = tokio::io::BufReader::new(&mut stream);
+    let mut header = String::new();
+    reader.read_line(&mut header).await?;
+    let header = header.trim();
+
+    if header.starts_with("ERROR") {
+        return Err(anyhow!("Payload status error: {}", header));
+    }
+
+    if !header.starts_with("STATUS ") {
+        return Err(anyhow!("Unexpected response: {}", header));
+    }
+
+    let size_str = header.trim_start_matches("STATUS ").trim();
+    let json_size: usize = size_str.parse().context("Invalid JSON size")?;
+
+    // Read JSON body
+    let mut json_buf = vec![0u8; json_size];
+    reader.read_exact(&mut json_buf).await?;
+
+    let status: PayloadStatus = serde_json::from_slice(&json_buf)?;
+    Ok(status)
+}
+
+pub async fn queue_extract(ip: &str, port: u16, src: &str, dst: &str) -> Result<i32> {
+    let cmd = format!("QUEUE_EXTRACT {}\t{}\n", src, dst);
+    let response = send_simple_command(ip, port, &cmd).await?;
+    if response.starts_with("OK ") {
+        let id_str = response.trim_start_matches("OK ").trim();
+        let id: i32 = id_str.parse().context("Invalid queue ID")?;
+        Ok(id)
+    } else {
+        Err(anyhow!("Queue extract failed: {}", response))
+    }
+}
+
+pub async fn queue_cancel(ip: &str, port: u16, id: i32) -> Result<()> {
+    let cmd = format!("QUEUE_CANCEL {}\n", id);
+    let response = send_simple_command(ip, port, &cmd).await?;
+    if response.starts_with("OK") {
+        Ok(())
+    } else {
+        Err(anyhow!("Queue cancel failed: {}", response))
+    }
+}
+
+pub async fn queue_clear(ip: &str, port: u16) -> Result<()> {
+    let response = send_simple_command(ip, port, "QUEUE_CLEAR\n").await?;
+    if response.starts_with("OK") {
+        Ok(())
+    } else {
+        Err(anyhow!("Queue clear failed: {}", response))
     }
 }
 

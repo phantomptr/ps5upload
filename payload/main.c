@@ -32,6 +32,7 @@
 #include "notify.h"
 #include "transfer.h"
 #include "unrar_handler.h"
+#include "extract_queue.h"
 
 static int create_server_socket(int port) {
     int sock = socket(AF_INET, SOCK_STREAM, 0);
@@ -307,6 +308,26 @@ static void process_command(struct ClientConnection *conn) {
         close_connection(conn);
         return;
     }
+    if (strncmp(conn->cmd_buffer, "PAYLOAD_STATUS", 14) == 0) {
+        handle_payload_status(conn->sock);
+        close_connection(conn);
+        return;
+    }
+    if (strncmp(conn->cmd_buffer, "QUEUE_EXTRACT ", 14) == 0) {
+        handle_queue_extract(conn->sock, conn->cmd_buffer + 14);
+        close_connection(conn);
+        return;
+    }
+    if (strncmp(conn->cmd_buffer, "QUEUE_CANCEL ", 13) == 0) {
+        handle_queue_cancel(conn->sock, conn->cmd_buffer + 13);
+        close_connection(conn);
+        return;
+    }
+    if (strncmp(conn->cmd_buffer, "QUEUE_CLEAR", 11) == 0) {
+        handle_queue_clear(conn->sock);
+        close_connection(conn);
+        return;
+    }
     if (strncmp(conn->cmd_buffer, "UPLOAD_RAR_SAFE ", 16) == 0) {
         handle_upload_rar(conn->sock, conn->cmd_buffer + 16, UNRAR_MODE_SAFE);
         close_connection(conn);
@@ -407,8 +428,12 @@ int main(void) {
     // Clean up any leftover temporary files from previous runs
     unrar_cleanup_temp();
 
+    // Initialize extraction queue
+    extract_queue_init();
+
     printf("[INIT] Log directory: /data/ps5upload/logs/\n");
     printf("[INIT] Request directory: /data/ps5upload/requests/\n");
+    printf("[INIT] Extraction queue: initialized\n");
 
     int server_sock = create_server_socket(SERVER_PORT);
     if(server_sock < 0) {

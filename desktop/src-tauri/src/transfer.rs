@@ -181,16 +181,16 @@ pub fn transfer_check_dest(ip: String, dest_path: String) -> Result<bool, String
 }
 
 #[tauri::command]
-pub fn transfer_scan(
+pub async fn transfer_scan(
     source_path: String,
     app_handle: AppHandle,
-    state: State<AppState>,
+    state: State<'_, AppState>,
 ) -> Result<u64, String> {
     let run_id = state.transfer_run_id.fetch_add(1, Ordering::Relaxed) + 1;
     let cancel = state.transfer_cancel.clone();
     cancel.store(false, Ordering::Relaxed);
 
-    thread::spawn(move || {
+    tauri::async_runtime::spawn_blocking(move || {
         let (files, _) = collect_files_with_progress(&source_path, cancel, |files_found, total| {
             emit_scan(&app_handle, run_id, files_found, total);
         });
@@ -208,10 +208,10 @@ pub fn transfer_cancel(state: State<AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn transfer_start(
+pub async fn transfer_start(
     req: TransferRequest,
     app_handle: AppHandle,
-    state: State<AppState>,
+    state: State<'_, AppState>,
 ) -> Result<u64, String> {
     if req.ip.trim().is_empty() {
         return Err("PS5 IP address is required".to_string());
@@ -233,7 +233,7 @@ pub fn transfer_start(
     cancel.store(false, Ordering::Relaxed);
     active.store(true, Ordering::Relaxed);
 
-    thread::spawn(move || {
+    tauri::async_runtime::spawn_blocking(move || {
         let result = run_transfer(req, run_id, &app_handle, cancel.clone());
         active.store(false, Ordering::Relaxed);
         match result {

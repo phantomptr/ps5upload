@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/schema.json",
-  "productName": "PS5 Upload",
-  "version": "1.2.0",
+  "productName": "PS5Upload",
+  "version": "1.2.1",
   "identifier": "com.phantomptr.ps5upload",
   "build": {
     "beforeBuildCommand": "npm run build",
@@ -10,12 +10,24 @@
     "frontendDist": "../dist"
   },
   "bundle": {
-    "icon": ["icons/icon.ico", "icons/icon.png"]
+    "icon": ["icons/icon.png"],
+    "category": "public.app-category.utilities",
+    "macOS": {
+      "minimumSystemVersion": "10.13",
+      "exceptionDomain": "",
+      "signingIdentity": null,
+      "entitlements": null
+    },
+    "linux": {
+      "appimage": {
+        "bundleMediaFramework": false
+      }
+    }
   },
   "app": {
     "windows": [
       {
-        "title": "PS5 Upload",
+        "title": "PS5Upload",
         "width": 1440,
         "height": 960,
         "minWidth": 1200,

@@ -3,6 +3,13 @@
 All notable changes to this project are documented here.
 This project follows Semantic Versioning.
 
+## [1.2.1] - 2026-01-20
+
+### Fixed
+- UI freeze during uploads and when switching between tabs by making `transfer_start`, `transfer_scan`, `port_check`, `storage_list`, `payload_status`, and `manage_list` commands asynchronous.
+- Performance Improvements
+- Bug Fixes
+
 ## [1.2.0] - 2026-01-18
 
 ### Added

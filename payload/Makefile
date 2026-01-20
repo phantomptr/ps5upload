@@ -9,7 +9,7 @@ include $(PS5_PAYLOAD_SDK)/toolchain/prospero.mk
 TARGET := ps5upload.elf
 
 # C sources
-C_SRCS := main.c storage.c protocol.c extract.c notify.c transfer.c lz4.c sha256.c unrar_handler.c \
+C_SRCS := main.c storage.c protocol.c extract.c notify.c transfer.c lz4.c sha256.c unrar_handler.c extract_queue.c \
 	third_party/zstd/zstd.c \
 	third_party/lzma_sdk/Alloc.c \
 	third_party/lzma_sdk/CpuArch.c \
@@ -19,7 +19,7 @@ C_SRCS := main.c storage.c protocol.c extract.c notify.c transfer.c lz4.c sha256
 	third_party/lzma_sdk/LzFind.c \
 	third_party/lzma_sdk/Sort.c
 
-C_OBJS := main.o storage.o protocol.o extract.o notify.o transfer.o lz4.o sha256.o unrar_handler.o \
+C_OBJS := main.o storage.o protocol.o extract.o notify.o transfer.o lz4.o sha256.o unrar_handler.o extract_queue.o \
 	third_party/zstd/zstd.o \
 	third_party/lzma_sdk/Alloc.o \
 	third_party/lzma_sdk/CpuArch.o \

@@ -5,7 +5,7 @@ use ps5upload_core::history::{
 use ps5upload_core::profiles::{load_profiles_from, save_profiles_to, ProfilesData};
 use ps5upload_core::protocol::{list_storage, StorageLocation};
 use ps5upload_core::queue::{load_queue_from, save_queue_to, QueueData};
-use std::net::{SocketAddr, TcpStream};
+use std::net::SocketAddr;
 use std::time::Duration;
 use tauri::AppHandle;
 
@@ -31,16 +31,14 @@ pub fn config_save(app: AppHandle, config: AppConfig) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn storage_list(ip: String) -> Result<Vec<StorageLocation>, String> {
-    tauri::async_runtime::block_on(async {
-        list_storage(&ip, TRANSFER_PORT)
-            .await
-            .map_err(|err| err.to_string())
-    })
+pub async fn storage_list(ip: String) -> Result<Vec<StorageLocation>, String> {
+    list_storage(&ip, TRANSFER_PORT)
+        .await
+        .map_err(|err| err.to_string())
 }
 
 #[tauri::command]
-pub fn port_check(ip: String, port: u16) -> Result<bool, String> {
+pub async fn port_check(ip: String, port: u16) -> Result<bool, String> {
     if ip.trim().is_empty() {
         return Err("Enter a PS5 address first.".to_string());
     }
@@ -48,18 +46,20 @@ pub fn port_check(ip: String, port: u16) -> Result<bool, String> {
         .parse()
         .map_err(|_| "Invalid address".to_string())?;
     let timeout = Duration::from_secs(2);
-    TcpStream::connect_timeout(&addr, timeout)
-        .map(|_| true)
-        .or_else(|err| {
-            if err.kind() == std::io::ErrorKind::TimedOut
-                || err.kind() == std::io::ErrorKind::ConnectionRefused
+
+    match tokio::time::timeout(timeout, tokio::net::TcpStream::connect(&addr)).await {
+        Ok(Ok(_)) => Ok(true),
+        Ok(Err(err)) => {
+            if err.kind() == std::io::ErrorKind::ConnectionRefused
                 || err.kind() == std::io::ErrorKind::ConnectionReset
             {
                 Ok(false)
             } else {
                 Err(err.to_string())
             }
-        })
+        }
+        Err(_) => Ok(false), // Timeout
+    }
 }
 
 #[tauri::command]

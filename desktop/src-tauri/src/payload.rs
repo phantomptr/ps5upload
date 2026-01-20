@@ -6,7 +6,10 @@ use std::path::Path;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 
-use ps5upload_core::protocol::get_payload_version;
+use ps5upload_core::protocol::{
+    get_payload_version, get_payload_status, queue_extract, queue_cancel, queue_clear,
+    PayloadStatus,
+};
 use ps5upload_core::update::{download_asset, fetch_latest_release, fetch_release_by_tag};
 
 const TRANSFER_PORT: u16 = 9113;
@@ -286,4 +289,60 @@ pub fn payload_probe(path: String) -> Result<PayloadProbeResult, String> {
         return Err("Select a payload (.elf/.bin) file first.".to_string());
     }
     probe_payload_file(&path)
+}
+
+#[tauri::command]
+pub async fn payload_status(ip: String) -> Result<PayloadStatus, String> {
+    if ip.trim().is_empty() {
+        return Err("Enter a PS5 address first.".to_string());
+    }
+
+    get_payload_status(&ip, TRANSFER_PORT)
+        .await
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn payload_queue_extract(ip: String, src: String, dst: String) -> Result<i32, String> {
+    if ip.trim().is_empty() {
+        return Err("Enter a PS5 address first.".to_string());
+    }
+    if src.trim().is_empty() {
+        return Err("Source path is required.".to_string());
+    }
+    if dst.trim().is_empty() {
+        return Err("Destination path is required.".to_string());
+    }
+
+    tauri::async_runtime::block_on(async {
+        queue_extract(&ip, TRANSFER_PORT, &src, &dst)
+            .await
+            .map_err(|err| err.to_string())
+    })
+}
+
+#[tauri::command]
+pub fn payload_queue_cancel(ip: String, id: i32) -> Result<(), String> {
+    if ip.trim().is_empty() {
+        return Err("Enter a PS5 address first.".to_string());
+    }
+
+    tauri::async_runtime::block_on(async {
+        queue_cancel(&ip, TRANSFER_PORT, id)
+            .await
+            .map_err(|err| err.to_string())
+    })
+}
+
+#[tauri::command]
+pub fn payload_queue_clear(ip: String) -> Result<(), String> {
+    if ip.trim().is_empty() {
+        return Err("Enter a PS5 address first.".to_string());
+    }
+
+    tauri::async_runtime::block_on(async {
+        queue_clear(&ip, TRANSFER_PORT)
+            .await
+            .map_err(|err| err.to_string())
+    })
 }

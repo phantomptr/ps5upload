@@ -12,7 +12,7 @@ import { t } from "./i18n";
 
 const appWindow = getCurrentWindow();
 
-type TabId = "transfer" | "manage" | "chat";
+type TabId = "transfer" | "payload" | "manage" | "chat";
 
 type TransferProgressEvent = {
   run_id: number;
@@ -229,6 +229,27 @@ type GameMetaResponse = {
 
 type ManageAction = "Move" | "Copy" | "Extract";
 
+type ExtractQueueItem = {
+  id: number;
+  archive_name: string;
+  status: string;
+  percent: number;
+  processed_bytes: number;
+  total_bytes: number;
+  files_extracted: number;
+  started_at: number;
+  completed_at: number;
+  error?: string | null;
+};
+
+type PayloadStatusResponse = {
+  version: string;
+  uptime: number;
+  queue_count: number;
+  is_busy: boolean;
+  items: ExtractQueueItem[];
+};
+
 const isPresetOption = (
   value: string
 ): value is (typeof presetOptions)[number] =>
@@ -432,6 +453,9 @@ export default function App() {
     ok: boolean;
     message: string;
   } | null>(null);
+  const [payloadFullStatus, setPayloadFullStatus] = useState<PayloadStatusResponse | null>(null);
+  const [payloadStatusLoading, setPayloadStatusLoading] = useState(false);
+  const payloadStatusInterval = useRef<ReturnType<typeof setInterval> | null>(null);
   const [downloadCompression, setDownloadCompression] =
     useState<DownloadCompressionOption>("auto");
   const [chmodAfterUpload, setChmodAfterUpload] = useState(false);
@@ -518,13 +542,21 @@ export default function App() {
   const isRtl = language === "ar";
   const tr = (key: string) => t(language, key);
   const generateChatName = () => {
-    if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-      return `user-${crypto.randomUUID()}`;
+    try {
+      if (crypto?.randomUUID) {
+        return `user-${crypto.randomUUID()}`;
+      }
+    } catch {
+      // Fallback below
     }
     const bytes = new Uint8Array(10);
-    if (typeof crypto !== "undefined" && "getRandomValues" in crypto) {
-      crypto.getRandomValues(bytes);
-    } else {
+    try {
+      if (crypto?.getRandomValues) {
+        crypto.getRandomValues(bytes);
+      } else {
+        throw new Error("No crypto");
+      }
+    } catch {
       for (let i = 0; i < bytes.length; i += 1) {
         bytes[i] = Math.floor(Math.random() * 256);
       }
@@ -538,6 +570,7 @@ export default function App() {
   const tabs = useMemo(
     () => [
       { id: "transfer" as TabId, label: tr("transfer"), icon: "↑" },
+      { id: "payload" as TabId, label: tr("payload"), icon: "◎" },
       { id: "manage" as TabId, label: tr("manage"), icon: "≡" },
       { id: "chat" as TabId, label: tr("chat"), icon: "◈" }
     ],
@@ -1475,6 +1508,12 @@ export default function App() {
             updateQueueItemStatus(id, "Completed").then(() => {
               processNextQueueItem();
             });
+          } else {
+            // Reset active run ID to re-enable UI (non-queue transfer)
+            setActiveRunId(null);
+            setActiveTransferSource("");
+            setActiveTransferDest("");
+            setTransferStartedAt(null);
           }
         }
       );
@@ -1523,6 +1562,12 @@ export default function App() {
                 processNextQueueItem();
               }
             );
+          } else {
+            // Reset active run ID to re-enable UI (non-queue transfer)
+            setActiveRunId(null);
+            setActiveTransferSource("");
+            setActiveTransferDest("");
+            setTransferStartedAt(null);
           }
         }
       );
@@ -1533,13 +1578,13 @@ export default function App() {
           clientLogBuffer.current = [
             `${event.payload.message}`,
             ...clientLogBuffer.current
-          ].slice(0, 200);
+          ].slice(0, 100);
           if (!clientLogFlush.current) {
             clientLogFlush.current = setTimeout(() => {
               if (!mounted) return;
               setClientLogs(clientLogBuffer.current);
               clientLogFlush.current = null;
-            }, 120);
+            }, 250);
           }
         }
       );
@@ -1551,13 +1596,13 @@ export default function App() {
           payloadLogBuffer.current = [
             `${event.payload.message}`,
             ...payloadLogBuffer.current
-          ].slice(0, 200);
+          ].slice(0, 100);
           if (!payloadLogFlush.current) {
             payloadLogFlush.current = setTimeout(() => {
               if (!mounted) return;
               setPayloadLogs(payloadLogBuffer.current);
               payloadLogFlush.current = null;
-            }, 120);
+            }, 250);
           }
         }
       );
@@ -1573,7 +1618,7 @@ export default function App() {
           payloadLogBuffer.current = [
             `Payload failed: ${event.payload.error}`,
             ...payloadLogBuffer.current
-          ].slice(0, 200);
+          ].slice(0, 100);
           setPayloadLogs(payloadLogBuffer.current);
         } else if (typeof event.payload?.bytes === "number") {
           setPayloadStatus(`Sent (${formatBytes(event.payload.bytes)})`);
@@ -1665,7 +1710,7 @@ export default function App() {
               [
                 `${event.payload.op} failed: ${event.payload.error}`,
                 ...prev
-              ].slice(0, 200)
+              ].slice(0, 100)
             );
           } else {
             setManageStatus(`${event.payload.op} complete`);
@@ -1677,7 +1722,7 @@ export default function App() {
                 })
                 .then((entries) => {
                   if (!mounted) return;
-                  const sorted = sortEntries(entries);
+                  const sorted = sortEntries(entries, { key: "name", direction: "asc" });
                   setManageEntries(sorted);
                   setManageSelected(null);
                   setManageMeta(null);
@@ -1697,7 +1742,7 @@ export default function App() {
         (event) => {
           if (!mounted) return;
           setClientLogs((prev) =>
-            [`${event.payload.message}`, ...prev].slice(0, 200)
+            [`${event.payload.message}`, ...prev].slice(0, 100)
           );
         }
       );
@@ -1779,6 +1824,97 @@ export default function App() {
       : 0;
   const transferSpeed =
     transferState.elapsed > 0 ? transferState.sent / transferState.elapsed : 0;
+
+  const formatUptime = (seconds: number) => {
+    const days = Math.floor(seconds / 86400);
+    const hours = Math.floor((seconds % 86400) / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
+    const secs = seconds % 60;
+    if (days > 0) return `${days}d ${hours}h ${mins}m`;
+    if (hours > 0) return `${hours}h ${mins}m ${secs}s`;
+    if (mins > 0) return `${mins}m ${secs}s`;
+    return `${secs}s`;
+  };
+
+  const fetchPayloadStatus = async () => {
+    if (!ip.trim() || !isConnected) return;
+    try {
+      const status = await invoke<PayloadStatusResponse>("payload_status", { ip });
+      setPayloadFullStatus(status);
+    } catch (err) {
+      console.error("Failed to fetch payload status:", err);
+      // Don't spam logs on every poll, only log once
+      if (!payloadFullStatus) {
+        setClientLogs((prev) => [`Payload status error: ${String(err)}`, ...prev].slice(0, 100));
+      }
+    }
+  };
+
+  const handleRefreshPayloadStatus = async () => {
+    if (!ip.trim()) return;
+    setPayloadStatusLoading(true);
+    try {
+      const status = await invoke<PayloadStatusResponse>("payload_status", { ip });
+      setPayloadFullStatus(status);
+    } catch (err) {
+      setClientLogs((prev) => [`Payload status error: ${String(err)}`, ...prev].slice(0, 100));
+    }
+    setPayloadStatusLoading(false);
+  };
+
+  const handleQueueExtract = async (src: string, dst: string) => {
+    if (!ip.trim()) return;
+    try {
+      const id = await invoke<number>("payload_queue_extract", { ip, src, dst });
+      setClientLogs((prev) => [`Queued extraction (ID: ${id}): ${src}`, ...prev].slice(0, 100));
+      handleRefreshPayloadStatus();
+    } catch (err) {
+      setClientLogs((prev) => [`Queue extract failed: ${String(err)}`, ...prev].slice(0, 100));
+    }
+  };
+
+  const handleQueueCancel = async (id: number) => {
+    if (!ip.trim()) return;
+    try {
+      await invoke("payload_queue_cancel", { ip, id });
+      setClientLogs((prev) => [`Cancelled queue item ${id}`, ...prev].slice(0, 100));
+      handleRefreshPayloadStatus();
+    } catch (err) {
+      setClientLogs((prev) => [`Queue cancel failed: ${String(err)}`, ...prev].slice(0, 100));
+    }
+  };
+
+  const handleQueueClear = async () => {
+    if (!ip.trim()) return;
+    try {
+      await invoke("payload_queue_clear", { ip });
+      setClientLogs((prev) => ["Cleared completed queue items", ...prev].slice(0, 100));
+      handleRefreshPayloadStatus();
+    } catch (err) {
+      setClientLogs((prev) => [`Queue clear failed: ${String(err)}`, ...prev].slice(0, 100));
+    }
+  };
+
+  // Auto-refresh payload status when on payload tab
+  useEffect(() => {
+    if (activeTab === "payload" && isConnected && ip.trim()) {
+      fetchPayloadStatus();
+      if (!payloadStatusInterval.current) {
+        payloadStatusInterval.current = setInterval(fetchPayloadStatus, 5000);
+      }
+    } else {
+      if (payloadStatusInterval.current) {
+        clearInterval(payloadStatusInterval.current);
+        payloadStatusInterval.current = null;
+      }
+    }
+    return () => {
+      if (payloadStatusInterval.current) {
+        clearInterval(payloadStatusInterval.current);
+        payloadStatusInterval.current = null;
+      }
+    };
+  }, [activeTab, isConnected, ip]);
 
   const handleConnect = async () => {
     if (!ip.trim()) {
@@ -2276,7 +2412,13 @@ export default function App() {
     if (next) {
       await startQueueItem(next);
     } else {
+      // Queue is done, reset all transfer state to re-enable UI
       setCurrentQueueItemId(null);
+      setActiveRunId(null);
+      setActiveTransferSource("");
+      setActiveTransferDest("");
+      setActiveTransferViaQueue(false);
+      setTransferStartedAt(null);
     }
   };
 
@@ -2295,7 +2437,7 @@ export default function App() {
   const handleCancel = async () => {
     try {
       await invoke("transfer_cancel");
-      setTransferState((prev) => ({ ...prev, status: "Cancelling" }));
+      setTransferState((prev) => ({ ...prev, status: "Cancelled" }));
       if (currentQueueItemId) {
         updateQueueItemStatus(currentQueueItemId, { Failed: "Cancelled" }).then(
           () => {
@@ -2303,6 +2445,12 @@ export default function App() {
           }
         );
       }
+      // Reset transfer state to re-enable UI
+      setActiveRunId(null);
+      setActiveTransferSource("");
+      setActiveTransferDest("");
+      setActiveTransferViaQueue(false);
+      setTransferStartedAt(null);
     } catch (err) {
       setTransferState((prev) => ({
         ...prev,
@@ -3427,6 +3575,139 @@ export default function App() {
             </div>
           )}
 
+          {activeTab === "payload" && (
+            <div className="grid-two">
+              <div className="card">
+                <header className="card-title">
+                  <span className="card-title-icon">◎</span>
+                  {tr("payload_status")}
+                </header>
+                {!isConnected ? (
+                  <p className="muted">{tr("not_connected")}</p>
+                ) : payloadFullStatus ? (
+                  <div className="stack">
+                    <div className="stats-row">
+                      <span className="pill">
+                        {tr("version")}: {payloadFullStatus.version}
+                      </span>
+                      <span className="pill">
+                        {tr("uptime")}: {formatUptime(payloadFullStatus.uptime)}
+                      </span>
+                      <span className={`pill ${payloadFullStatus.is_busy ? "warn" : "ok"}`}>
+                        {payloadFullStatus.is_busy ? tr("busy") : tr("idle")}
+                      </span>
+                    </div>
+                    <button
+                      className="btn"
+                      onClick={handleRefreshPayloadStatus}
+                      disabled={payloadStatusLoading}
+                    >
+                      {payloadStatusLoading ? tr("loading") : tr("refresh")}
+                    </button>
+                  </div>
+                ) : (
+                  <div className="stack">
+                    <p className="muted">{tr("loading")}...</p>
+                    <button
+                      className="btn"
+                      onClick={handleRefreshPayloadStatus}
+                      disabled={payloadStatusLoading}
+                    >
+                      {tr("refresh")}
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <div className="card wide">
+                <header className="card-title">
+                  <span className="card-title-icon">≣</span>
+                  {tr("extraction_queue")}
+                </header>
+                {!isConnected ? (
+                  <p className="muted">{tr("not_connected")}</p>
+                ) : !payloadFullStatus ? (
+                  <div className="stack">
+                    <p className="muted">{tr("loading")}...</p>
+                    <button
+                      className="btn"
+                      onClick={handleRefreshPayloadStatus}
+                      disabled={payloadStatusLoading}
+                    >
+                      {tr("refresh")}
+                    </button>
+                  </div>
+                ) : payloadFullStatus.items.length === 0 ? (
+                  <div className="stack">
+                    <p className="muted">{tr("extraction_queue_empty")}</p>
+                    <button
+                      className="btn"
+                      onClick={handleRefreshPayloadStatus}
+                      disabled={payloadStatusLoading}
+                    >
+                      {tr("refresh")}
+                    </button>
+                  </div>
+                ) : (
+                  <div className="stack">
+                    {payloadFullStatus.items.map((item) => (
+                      <div
+                        key={item.id}
+                        className={`queue-item ${item.status === "running" ? "active" : ""} ${item.status === "complete" ? "completed" : ""} ${item.status === "failed" ? "failed" : ""}`}
+                      >
+                        <div className="queue-item-header">
+                          <strong>{item.archive_name}</strong>
+                          <span className={`chip ${item.status === "running" ? "warn" : item.status === "complete" ? "ok" : item.status === "failed" ? "error" : ""}`}>
+                            {item.status === "running" ? tr("extracting") :
+                             item.status === "complete" ? tr("complete") :
+                             item.status === "failed" ? tr("failed") :
+                             tr("pending")}
+                          </span>
+                        </div>
+                        {item.status === "running" && (
+                          <div className="progress-info">
+                            <div className="progress-bar">
+                              <div
+                                className="progress-fill"
+                                style={{ width: `${item.percent}%` }}
+                              />
+                            </div>
+                            <div className="muted small">
+                              {item.percent}% - {item.files_extracted} {tr("files")} - {formatBytes(item.processed_bytes)} / {formatBytes(item.total_bytes)}
+                            </div>
+                          </div>
+                        )}
+                        {item.status === "complete" && (
+                          <div className="muted small">
+                            {item.files_extracted} {tr("files")} - {formatBytes(item.total_bytes)}
+                          </div>
+                        )}
+                        {item.status === "failed" && item.error && (
+                          <div className="small" style={{ color: "#c86464" }}>
+                            {tr("error")}: {item.error}
+                          </div>
+                        )}
+                        {(item.status === "pending" || item.status === "running") && (
+                          <button
+                            className="btn ghost small"
+                            onClick={() => handleQueueCancel(item.id)}
+                          >
+                            {tr("cancel")}
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                    <div className="split">
+                      <button className="btn" onClick={handleQueueClear}>
+                        {tr("clear_completed")}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {activeTab === "manage" && (
             <div className="grid-two">
               <div className="card wide file-browser">
@@ -3945,9 +4226,9 @@ export default function App() {
                 {(logTab === "client" ? clientLogs : payloadLogs).length === 0 ? (
                   <p>{tr("no_logs")}</p>
                 ) : (
-                  (logTab === "client" ? clientLogs : payloadLogs).map(
-                    (entry, index) => <p key={`${entry}-${index}`}>{entry}</p>
-                  )
+                  (logTab === "client" ? clientLogs : payloadLogs)
+                    .slice(0, 50)
+                    .map((entry, index) => <p key={`${index}`}>{entry}</p>)
                 )}
               </div>
             </>

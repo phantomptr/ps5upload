@@ -18,4 +18,10 @@ void handle_hash_file(int client_sock, const char *path);
 void handle_get_space(int client_sock, const char *path);
 void handle_version(int client_sock);
 
+/* Extraction queue handlers */
+void handle_payload_status(int client_sock);
+void handle_queue_extract(int client_sock, const char *args);
+void handle_queue_cancel(int client_sock, const char *args);
+void handle_queue_clear(int client_sock);
+
 #endif

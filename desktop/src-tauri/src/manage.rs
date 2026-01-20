@@ -104,12 +104,10 @@ pub fn manage_cancel(state: State<AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn manage_list(ip: String, path: String) -> Result<Vec<DirEntry>, String> {
-    tauri::async_runtime::block_on(async {
-        ps5upload_core::protocol::list_dir(&ip, TRANSFER_PORT, &path)
-            .await
-            .map_err(|err| err.to_string())
-    })
+pub async fn manage_list(ip: String, path: String) -> Result<Vec<DirEntry>, String> {
+    ps5upload_core::protocol::list_dir(&ip, TRANSFER_PORT, &path)
+        .await
+        .map_err(|err| err.to_string())
 }
 
 #[tauri::command]

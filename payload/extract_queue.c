@@ -1,0 +1,466 @@
+/* Copyright (C) 2025 PS5 Upload Contributors
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation; either version 3, or (at your option) any
+ * later version.
+ */
+
+#include "extract_queue.h"
+#include "notify.h"
+#include "config.h"
+#include "third_party/unrar/unrar_wrapper.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <pthread.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <errno.h>
+#include <dirent.h>
+
+static ExtractQueue g_queue;
+static pthread_mutex_t g_queue_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_t g_extract_thread;
+static volatile int g_thread_running = 0;
+static volatile int g_cancel_requested = 0;
+
+/* Notification interval for extraction progress (seconds) */
+#define NOTIFY_INTERVAL_SEC 30
+
+/* Forward declarations */
+static int chmod_recursive_queue(const char *path, mode_t mode);
+static void *extract_thread_func(void *arg);
+
+void extract_queue_init(void) {
+    pthread_mutex_lock(&g_queue_mutex);
+    memset(&g_queue, 0, sizeof(g_queue));
+    g_queue.next_id = 1;
+    g_queue.current_index = -1;
+    g_queue.server_start_time = time(NULL);
+    pthread_mutex_unlock(&g_queue_mutex);
+    printf("[EXTRACT_QUEUE] Initialized\n");
+}
+
+static const char *get_archive_name(const char *path) {
+    const char *name = strrchr(path, '/');
+    return name ? name + 1 : path;
+}
+
+int extract_queue_add(const char *source_path, const char *dest_path) {
+    if (!source_path || !dest_path) {
+        return -1;
+    }
+
+    pthread_mutex_lock(&g_queue_mutex);
+
+    if (g_queue.count >= EXTRACT_QUEUE_MAX_ITEMS) {
+        pthread_mutex_unlock(&g_queue_mutex);
+        printf("[EXTRACT_QUEUE] Queue full, cannot add\n");
+        return -1;
+    }
+
+    ExtractQueueItem *item = &g_queue.items[g_queue.count];
+    memset(item, 0, sizeof(*item));
+
+    item->id = g_queue.next_id++;
+    strncpy(item->source_path, source_path, sizeof(item->source_path) - 1);
+    strncpy(item->dest_path, dest_path, sizeof(item->dest_path) - 1);
+    strncpy(item->archive_name, get_archive_name(source_path), sizeof(item->archive_name) - 1);
+    item->status = EXTRACT_STATUS_PENDING;
+    item->percent = 0;
+    item->processed_bytes = 0;
+    item->total_bytes = 0;
+    item->files_extracted = 0;
+    item->started_at = 0;
+    item->completed_at = 0;
+    item->error_msg[0] = '\0';
+
+    int id = item->id;
+    g_queue.count++;
+
+    pthread_mutex_unlock(&g_queue_mutex);
+
+    printf("[EXTRACT_QUEUE] Added item %d: %s -> %s\n", id, source_path, dest_path);
+
+    char notify_msg[256];
+    snprintf(notify_msg, sizeof(notify_msg), "Queued: %s", item->archive_name);
+    notify_info("PS5 Upload", notify_msg);
+
+    return id;
+}
+
+static void json_escape_string(const char *src, char *dest, size_t dest_size) {
+    size_t di = 0;
+    for (size_t si = 0; src[si] && di < dest_size - 1; si++) {
+        char c = src[si];
+        if (c == '"' || c == '\\') {
+            if (di + 2 >= dest_size) break;
+            dest[di++] = '\\';
+            dest[di++] = c;
+        } else if (c == '\n') {
+            if (di + 2 >= dest_size) break;
+            dest[di++] = '\\';
+            dest[di++] = 'n';
+        } else if (c == '\r') {
+            if (di + 2 >= dest_size) break;
+            dest[di++] = '\\';
+            dest[di++] = 'r';
+        } else if (c == '\t') {
+            if (di + 2 >= dest_size) break;
+            dest[di++] = '\\';
+            dest[di++] = 't';
+        } else {
+            dest[di++] = c;
+        }
+    }
+    dest[di] = '\0';
+}
+
+char *extract_queue_get_status_json(void) {
+    pthread_mutex_lock(&g_queue_mutex);
+
+    /* Calculate buffer size needed */
+    size_t buf_size = 4096 + (g_queue.count * 2048);
+    char *buf = malloc(buf_size);
+    if (!buf) {
+        pthread_mutex_unlock(&g_queue_mutex);
+        return NULL;
+    }
+
+    unsigned long uptime = (unsigned long)difftime(time(NULL), g_queue.server_start_time);
+
+    int pos = snprintf(buf, buf_size,
+        "{\"version\":\"%s\",\"uptime\":%lu,\"queue_count\":%d,\"is_busy\":%s,\"items\":[",
+        PS5_UPLOAD_VERSION, uptime, g_queue.count, g_thread_running ? "true" : "false");
+
+    char escaped[EXTRACT_QUEUE_PATH_MAX * 2];
+
+    for (int i = 0; i < g_queue.count && pos < (int)buf_size - 512; i++) {
+        ExtractQueueItem *item = &g_queue.items[i];
+
+        if (i > 0) {
+            buf[pos++] = ',';
+        }
+
+        const char *status_str = "pending";
+        switch (item->status) {
+            case EXTRACT_STATUS_RUNNING: status_str = "running"; break;
+            case EXTRACT_STATUS_COMPLETE: status_str = "complete"; break;
+            case EXTRACT_STATUS_FAILED: status_str = "failed"; break;
+            default: break;
+        }
+
+        json_escape_string(item->archive_name, escaped, sizeof(escaped));
+
+        pos += snprintf(buf + pos, buf_size - pos,
+            "{\"id\":%d,\"archive_name\":\"%s\",\"status\":\"%s\","
+            "\"percent\":%d,\"processed_bytes\":%llu,\"total_bytes\":%llu,"
+            "\"files_extracted\":%d,\"started_at\":%ld,\"completed_at\":%ld",
+            item->id, escaped, status_str,
+            item->percent, item->processed_bytes, item->total_bytes,
+            item->files_extracted, (long)item->started_at, (long)item->completed_at);
+
+        if (item->error_msg[0]) {
+            json_escape_string(item->error_msg, escaped, sizeof(escaped));
+            pos += snprintf(buf + pos, buf_size - pos, ",\"error\":\"%s\"", escaped);
+        }
+
+        buf[pos++] = '}';
+    }
+
+    pos += snprintf(buf + pos, buf_size - pos, "]}");
+
+    pthread_mutex_unlock(&g_queue_mutex);
+    return buf;
+}
+
+static int extraction_progress_callback(const char *filename, unsigned long long file_size,
+                                        int files_done, unsigned long long total_processed,
+                                        unsigned long long total_size, void *user_data) {
+    (void)filename;
+    (void)file_size;
+
+    if (g_cancel_requested) {
+        return 1; /* Stop extraction */
+    }
+
+    pthread_mutex_lock(&g_queue_mutex);
+
+    if (g_queue.current_index >= 0 && g_queue.current_index < g_queue.count) {
+        ExtractQueueItem *item = &g_queue.items[g_queue.current_index];
+        item->processed_bytes = total_processed;
+        item->total_bytes = total_size;
+        item->files_extracted = files_done;
+        item->percent = (total_size > 0) ? (int)((total_processed * 100) / total_size) : 0;
+
+        /* Check if we should send a notification */
+        static time_t last_notify = 0;
+        time_t now = time(NULL);
+        if (now - last_notify >= NOTIFY_INTERVAL_SEC) {
+            last_notify = now;
+            char notify_msg[256];
+            snprintf(notify_msg, sizeof(notify_msg),
+                "Extracting %s: %d%% (%d files)",
+                item->archive_name, item->percent, item->files_extracted);
+            notify_info("PS5 Upload", notify_msg);
+        }
+    }
+
+    pthread_mutex_unlock(&g_queue_mutex);
+
+    usleep(1000); /* Yield CPU */
+    return 0;
+}
+
+static void *extract_thread_func(void *arg) {
+    (void)arg;
+
+    pthread_mutex_lock(&g_queue_mutex);
+
+    /* Find first pending item */
+    int index = -1;
+    for (int i = 0; i < g_queue.count; i++) {
+        if (g_queue.items[i].status == EXTRACT_STATUS_PENDING) {
+            index = i;
+            break;
+        }
+    }
+
+    if (index < 0) {
+        g_thread_running = 0;
+        pthread_mutex_unlock(&g_queue_mutex);
+        return NULL;
+    }
+
+    ExtractQueueItem *item = &g_queue.items[index];
+    item->status = EXTRACT_STATUS_RUNNING;
+    item->started_at = time(NULL);
+    g_queue.current_index = index;
+    g_cancel_requested = 0;
+
+    char source[EXTRACT_QUEUE_PATH_MAX];
+    char dest[EXTRACT_QUEUE_PATH_MAX];
+    char archive_name[256];
+    strncpy(source, item->source_path, sizeof(source) - 1);
+    strncpy(dest, item->dest_path, sizeof(dest) - 1);
+    strncpy(archive_name, item->archive_name, sizeof(archive_name) - 1);
+
+    pthread_mutex_unlock(&g_queue_mutex);
+
+    printf("[EXTRACT_QUEUE] Starting extraction: %s -> %s\n", source, dest);
+
+    char notify_msg[256];
+    snprintf(notify_msg, sizeof(notify_msg), "Starting: %s", archive_name);
+    notify_info("PS5 Upload", notify_msg);
+
+    /* Create destination directory */
+    mkdir(dest, 0777);
+
+    /* Scan archive first */
+    int file_count = 0;
+    unsigned long long total_size = 0;
+    int scan_result = unrar_scan(source, &file_count, &total_size, NULL, 0);
+
+    if (scan_result != UNRAR_OK) {
+        pthread_mutex_lock(&g_queue_mutex);
+        item->status = EXTRACT_STATUS_FAILED;
+        item->completed_at = time(NULL);
+        snprintf(item->error_msg, sizeof(item->error_msg), "Scan failed: %s", unrar_strerror(scan_result));
+        g_queue.current_index = -1;
+        pthread_mutex_unlock(&g_queue_mutex);
+
+        snprintf(notify_msg, sizeof(notify_msg), "Failed: %s (scan error)", archive_name);
+        notify_error("PS5 Upload", notify_msg);
+
+        /* Continue with next item */
+        extract_queue_process();
+        return NULL;
+    }
+
+    pthread_mutex_lock(&g_queue_mutex);
+    item->total_bytes = total_size;
+    pthread_mutex_unlock(&g_queue_mutex);
+
+    /* Extract */
+    unrar_extract_opts opts;
+    opts.keepalive_interval_sec = UNRAR_FAST_KEEPALIVE_SEC;
+    opts.sleep_every_bytes = UNRAR_FAST_SLEEP_EVERY_BYTES;
+    opts.sleep_us = UNRAR_FAST_SLEEP_US;
+
+    int extracted_count = 0;
+    unsigned long long extracted_bytes = 0;
+    int extract_result = unrar_extract(source, dest, 0, total_size, &opts,
+                                       extraction_progress_callback, NULL,
+                                       &extracted_count, &extracted_bytes);
+
+    pthread_mutex_lock(&g_queue_mutex);
+
+    if (g_cancel_requested) {
+        item->status = EXTRACT_STATUS_FAILED;
+        snprintf(item->error_msg, sizeof(item->error_msg), "Cancelled");
+        snprintf(notify_msg, sizeof(notify_msg), "Cancelled: %s", archive_name);
+        notify_info("PS5 Upload", notify_msg);
+    } else if (extract_result != UNRAR_OK) {
+        item->status = EXTRACT_STATUS_FAILED;
+        snprintf(item->error_msg, sizeof(item->error_msg), "Extract failed: %s", unrar_strerror(extract_result));
+        snprintf(notify_msg, sizeof(notify_msg), "Failed: %s", archive_name);
+        notify_error("PS5 Upload", notify_msg);
+    } else {
+        /* Apply chmod */
+        char chmod_err[256];
+        if (chmod_recursive_queue(dest, 0777) != 0) {
+            printf("[EXTRACT_QUEUE] Warning: chmod failed for %s\n", dest);
+        }
+
+        item->status = EXTRACT_STATUS_COMPLETE;
+        item->percent = 100;
+        item->files_extracted = extracted_count;
+        item->processed_bytes = extracted_bytes;
+
+        snprintf(notify_msg, sizeof(notify_msg), "Complete: %s (%d files, %llu MB)",
+            archive_name, extracted_count, extracted_bytes / (1024 * 1024));
+        notify_success("PS5 Upload", notify_msg);
+    }
+
+    item->completed_at = time(NULL);
+    g_queue.current_index = -1;
+    g_thread_running = 0;
+
+    pthread_mutex_unlock(&g_queue_mutex);
+
+    printf("[EXTRACT_QUEUE] Extraction finished for %s\n", source);
+
+    /* Process next item */
+    extract_queue_process();
+
+    return NULL;
+}
+
+void extract_queue_process(void) {
+    pthread_mutex_lock(&g_queue_mutex);
+
+    if (g_thread_running) {
+        pthread_mutex_unlock(&g_queue_mutex);
+        return;
+    }
+
+    /* Check for pending items */
+    int has_pending = 0;
+    for (int i = 0; i < g_queue.count; i++) {
+        if (g_queue.items[i].status == EXTRACT_STATUS_PENDING) {
+            has_pending = 1;
+            break;
+        }
+    }
+
+    if (!has_pending) {
+        pthread_mutex_unlock(&g_queue_mutex);
+        return;
+    }
+
+    g_thread_running = 1;
+
+    pthread_mutex_unlock(&g_queue_mutex);
+
+    if (pthread_create(&g_extract_thread, NULL, extract_thread_func, NULL) != 0) {
+        pthread_mutex_lock(&g_queue_mutex);
+        g_thread_running = 0;
+        pthread_mutex_unlock(&g_queue_mutex);
+        printf("[EXTRACT_QUEUE] Failed to create extraction thread\n");
+        return;
+    }
+
+    pthread_detach(g_extract_thread);
+}
+
+int extract_queue_is_busy(void) {
+    return g_thread_running;
+}
+
+int extract_queue_cancel(int id) {
+    pthread_mutex_lock(&g_queue_mutex);
+
+    for (int i = 0; i < g_queue.count; i++) {
+        if (g_queue.items[i].id == id) {
+            if (g_queue.items[i].status == EXTRACT_STATUS_PENDING) {
+                /* Remove pending item */
+                g_queue.items[i].status = EXTRACT_STATUS_FAILED;
+                strncpy(g_queue.items[i].error_msg, "Cancelled", sizeof(g_queue.items[i].error_msg) - 1);
+                g_queue.items[i].completed_at = time(NULL);
+                pthread_mutex_unlock(&g_queue_mutex);
+                return 0;
+            } else if (g_queue.items[i].status == EXTRACT_STATUS_RUNNING) {
+                /* Request cancellation of running extraction */
+                g_cancel_requested = 1;
+                pthread_mutex_unlock(&g_queue_mutex);
+                return 0;
+            }
+            break;
+        }
+    }
+
+    pthread_mutex_unlock(&g_queue_mutex);
+    return -1;
+}
+
+void extract_queue_clear_done(void) {
+    pthread_mutex_lock(&g_queue_mutex);
+
+    int write_idx = 0;
+    for (int i = 0; i < g_queue.count; i++) {
+        if (g_queue.items[i].status == EXTRACT_STATUS_PENDING ||
+            g_queue.items[i].status == EXTRACT_STATUS_RUNNING) {
+            if (write_idx != i) {
+                g_queue.items[write_idx] = g_queue.items[i];
+            }
+            write_idx++;
+        }
+    }
+    g_queue.count = write_idx;
+
+    pthread_mutex_unlock(&g_queue_mutex);
+    printf("[EXTRACT_QUEUE] Cleared completed/failed items, %d remaining\n", write_idx);
+}
+
+unsigned long extract_queue_get_uptime(void) {
+    return (unsigned long)difftime(time(NULL), g_queue.server_start_time);
+}
+
+const ExtractQueueItem *extract_queue_get_current(void) {
+    if (g_queue.current_index >= 0 && g_queue.current_index < g_queue.count) {
+        return &g_queue.items[g_queue.current_index];
+    }
+    return NULL;
+}
+
+static int chmod_recursive_queue(const char *path, mode_t mode) {
+    struct stat st;
+    if (lstat(path, &st) != 0) {
+        return -1;
+    }
+
+    if (chmod(path, mode) != 0) {
+        return -1;
+    }
+
+    if (S_ISDIR(st.st_mode)) {
+        DIR *dir = opendir(path);
+        if (!dir) {
+            return -1;
+        }
+        struct dirent *entry;
+        while ((entry = readdir(dir)) != NULL) {
+            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+                continue;
+            }
+            char child[EXTRACT_QUEUE_PATH_MAX];
+            snprintf(child, sizeof(child), "%s/%s", path, entry->d_name);
+            chmod_recursive_queue(child, mode);
+        }
+        closedir(dir);
+    }
+
+    return 0;
+}

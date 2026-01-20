@@ -124,7 +124,7 @@ desktop: setup-desktop
 
 bundle-macos: desktop
 	@echo "Tauri bundle output:"
-	@echo "  desktop/src-tauri/target/release/bundle/macos/PS5 Upload.app"
+	@echo "  desktop/src-tauri/target/release/bundle/macos/PS5Upload.app"
 
 bundle-linux: desktop
 	@echo "Tauri bundle output:"
