@@ -30,7 +30,6 @@ If yes, which files:
 - [ ] QUICKSTART.md
 - [ ] PROTOCOL.md
 - [ ] BUILDING.md
-- [ ] client/README.md
 - [ ] IMPLEMENTATION_STATUS.md
 - [ ] Other: _______________
 
@@ -41,8 +40,7 @@ If yes, which files:
 
 - [ ] Built PS5 payload successfully
 - [ ] Tested on real PS5 hardware
-- [ ] Tested GUI client
-- [ ] Tested CLI client
+- [ ] Tested desktop app
 - [ ] Verified all example commands in docs work
 - [ ] Tested edge cases and error handling
 

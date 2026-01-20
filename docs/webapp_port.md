@@ -1,9 +1,9 @@
 # PS5Upload Webapp + Rust Wrapper Port Plan
 
-This doc captures the current desktop client feature set and a proposed Rust API surface
+This doc captures the current desktop app feature set and a proposed Rust API surface
 for a Tauri-based web UI. It is the baseline to ensure feature parity across platforms.
 
-## Feature inventory (current client)
+## Feature inventory (current desktop app)
 
 - Connection
   - Connect/disconnect to PS5
@@ -56,7 +56,7 @@ for a Tauri-based web UI. It is the baseline to ensure feature parity across pla
   - Save/apply/delete profile
   - Set default
 - Logs
-  - Client/payload logs
+  - App/payload logs
 
 ## Proposed Rust command surface (Tauri invoke)
 

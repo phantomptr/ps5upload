@@ -2,10 +2,10 @@
 # Makes building, testing, and setup simple
 
 .PHONY: all setup build test clean help
-.PHONY: payload client
-.PHONY: setup-payload setup-client
-.PHONY: test-payload test-client
-.PHONY: clean-payload clean-client
+.PHONY: payload desktop
+.PHONY: setup-payload setup-desktop
+.PHONY: test-payload test-desktop
+.PHONY: clean-payload clean-desktop
 
 TAURI_CMD ?= $(shell if command -v cargo-tauri >/dev/null 2>&1; then echo "cargo tauri"; elif command -v tauri >/dev/null 2>&1; then echo "tauri"; fi)
 JOBS ?= $(shell getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || echo 4)
@@ -22,37 +22,37 @@ help:
 	@echo ""
 	@echo "Quick Start:"
 	@echo "  make setup          - Install all dependencies (payload SDK + Rust)"
-	@echo "  make build          - Build payload and verify client"
+	@echo "  make build          - Build payload and verify desktop app"
 	@echo "  make test           - Run all tests"
 	@echo "  make clean          - Clean all build artifacts"
 	@echo ""
 	@echo "Detailed Targets:"
 	@echo "  make payload        - Build PS5 payload only"
-	@echo "  make client         - Build desktop client (Tauri + React)"
+	@echo "  make desktop        - Build desktop app (Tauri + React)"
 	@echo "  make setup-payload  - Check/setup payload build environment"
-	@echo "  make setup-client   - Check toolchain for desktop client"
+	@echo "  make setup-desktop  - Check toolchain for desktop app"
 	@echo "  make test-payload   - Test payload build"
-	@echo "  make test-client    - Test client installation"
-	@echo "  make run-client     - Run desktop client (Tauri dev)"
+	@echo "  make test-desktop   - Test desktop app build"
+	@echo "  make run-desktop    - Run desktop app (Tauri dev)"
 	@echo ""
 	@echo "Examples:"
 	@echo "  make setup          # First time setup"
 	@echo "  make build          # Build everything"
-	@echo "  make run-client     # Launch client"
+	@echo "  make run-desktop    # Launch desktop app"
 	@echo ""
 
 #──────────────────────────────────────────────────────────────────────────────
 # Setup - First Time Installation
 #──────────────────────────────────────────────────────────────────────────────
 
-setup: setup-payload setup-client
+setup: setup-payload setup-desktop
 	@echo ""
 	@echo "✓ Setup complete!"
 	@echo ""
 	@echo "Next steps:"
 	@echo "  1. make build       - Build the payload"
 	@echo "  2. Load ps5upload.elf on your PS5"
-	@echo "  3. make run-client  - Start uploading games!"
+	@echo "  3. make run-desktop - Start uploading games!"
 	@echo ""
 
 setup-payload:
@@ -79,8 +79,8 @@ setup-payload:
 	fi
 	@echo "✓ PS5 Payload SDK is properly installed"
 
-setup-client:
-	@echo "Checking desktop client toolchain..."
+setup-desktop:
+	@echo "Checking desktop app toolchain..."
 	@command -v cargo >/dev/null 2>&1 || { \
 		echo "ERROR: cargo is not installed!"; \
 		echo "Install Rust from https://rustup.rs"; \
@@ -102,13 +102,13 @@ setup-client:
 # Build
 #──────────────────────────────────────────────────────────────────────────────
 
-build: payload client
+build: payload desktop
 	@echo ""
 	@echo "✓ Build complete!"
 	@echo ""
 	@echo "Output files:"
 	@echo "  - payload/ps5upload.elf   (Load this on your PS5)"
-	@echo "  - desktop/src-tauri/target/release/ps5upload-desktop (Run with: make run-client)"
+	@echo "  - desktop/src-tauri/target/release/ps5upload-desktop (Run with: make run-desktop)"
 	@echo ""
 
 payload: setup-payload
@@ -116,17 +116,17 @@ payload: setup-payload
 	@$(MAKE) -C payload -j$(JOBS)
 	@echo "✓ Payload built: payload/ps5upload.elf"
 
-client: setup-client
-	@echo "Building desktop client (Tauri)..."
+desktop: setup-desktop
+	@echo "Building desktop app (Tauri)..."
 	@cd desktop && npm install
 	@cd desktop && $(TAURI_CMD) build
-	@echo "✓ Desktop client built: desktop/src-tauri/target/release/ps5upload-desktop"
+	@echo "✓ Desktop app built: desktop/src-tauri/target/release/ps5upload-desktop"
 
-bundle-macos: client
+bundle-macos: desktop
 	@echo "Tauri bundle output:"
 	@echo "  desktop/src-tauri/target/release/bundle/macos/PS5 Upload.app"
 
-bundle-linux: client
+bundle-linux: desktop
 	@echo "Tauri bundle output:"
 	@echo "  desktop/src-tauri/target/release/bundle/appimage/ps5upload-desktop*.AppImage"
 
@@ -134,7 +134,7 @@ bundle-linux: client
 # Testing
 #──────────────────────────────────────────────────────────────────────────────
 
-test: test-payload test-client
+test: test-payload test-desktop
 	@echo ""
 	@echo "✓ All tests passed!"
 	@echo ""
@@ -152,18 +152,18 @@ test-payload: payload
 	}
 	@echo "✓ Payload is valid ELF binary"
 
-test-client: client
-	@echo "Testing desktop client build..."
+test-desktop: desktop
+	@echo "Testing desktop app build..."
 	@cd desktop && npm install
 	@cd desktop && $(TAURI_CMD) build
-	@echo "✓ Desktop client build succeeded"
+	@echo "✓ Desktop app build succeeded"
 
 #──────────────────────────────────────────────────────────────────────────────
 # Run
 #──────────────────────────────────────────────────────────────────────────────
 
-run-client: setup-client
-	@echo "Starting PS5 Upload desktop client..."
+run-desktop: setup-desktop
+	@echo "Starting PS5 Upload desktop app..."
 	@cd desktop && npm install
 	@cd desktop && $(TAURI_CMD) dev
 
@@ -171,7 +171,7 @@ run-client: setup-client
 # Clean
 #──────────────────────────────────────────────────────────────────────────────
 
-clean: clean-payload clean-client
+clean: clean-payload clean-desktop
 	@echo "✓ All clean!"
 
 clean-payload:
@@ -179,13 +179,12 @@ clean-payload:
 	@$(MAKE) -C payload clean
 	@echo "✓ Payload cleaned"
 
-clean-client:
-	@echo "Cleaning client build artifacts..."
-	@rm -rf client/target
+clean-desktop:
+	@echo "Cleaning desktop build artifacts..."
 	@rm -rf desktop/dist
 	@rm -rf desktop/src-tauri/target
 	@rm -rf dist
-	@echo "✓ Client cleaned"
+	@echo "✓ Desktop cleaned"
 
 #──────────────────────────────────────────────────────────────────────────────
 # Development / Utility
@@ -209,8 +208,8 @@ info:
 	@echo "Files:"
 	@echo "  Payload:"
 	@[ -f "payload/ps5upload.elf" ] && echo "    ✓ ps5upload.elf exists" || echo "    ✗ ps5upload.elf missing (run: make payload)"
-	@echo "  Client:"
-	@[ -f "desktop/src-tauri/target/release/ps5upload-desktop" ] && echo "    ✓ Desktop client exists" || echo "    ✗ Client missing (run: make client)"
+	@echo "  Desktop:"
+	@[ -f "desktop/src-tauri/target/release/ps5upload-desktop" ] && echo "    ✓ Desktop app exists" || echo "    ✗ Desktop app missing (run: make desktop)"
 	@echo ""
 
 install-hooks:

@@ -1,0 +1,46 @@
+[package]
+name = "ps5upload"
+version = "1.2.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1.36", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+walkdir = "2.5"
+anyhow = "1.0"
+regex = "1.10"
+lazy_static = "1.4"
+chrono = "0.4"
+webbrowser = "0.8"
+libc = "0.2"
+reqwest = { version = "0.11", features = ["json", "rustls-tls"] }
+semver = "1.0"
+lz4_flex = "0.11"
+zstd = "0.13"
+lzma-rs = "0.3"
+sha2 = "0.10"
+tokio-tungstenite = { version = "0.21", features = ["rustls-tls-native-roots"] }
+futures-util = "0.3"
+secp256k1 = { version = "0.28", features = ["rand-std", "serde"] }
+aes-gcm = "0.10"
+base64 = "0.21"
+hex = "0.4"
+rand = "0.8"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+# RAR extraction is now done server-side (payload) - no client unrar needed
+zip = "2.1"
+sevenz-rust = "0.6"
+
+[build-dependencies]
+cc = "1.0"
+
+[features]
+default = []
+client-unrar = []
+
+[profile.release]
+opt-level = 3
+codegen-units = 4
+panic = "unwind"
+debug = 1

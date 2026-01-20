@@ -24,7 +24,6 @@ Use this checklist when reviewing pull requests or your own code changes.
 - [ ] **QUICKSTART.md** - Quick start guide
 - [ ] **docs/PROTOCOL.md** - If protocol changed
 - [ ] **docs/BUILDING.md** - If build process changed
-- [ ] **client/README.md** - If client changed
 - [ ] **IMPLEMENTATION_STATUS.md** - If features added/completed
 - [ ] **Code comments** - Updated for clarity
 

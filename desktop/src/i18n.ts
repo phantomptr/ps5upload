@@ -1,5 +1,5 @@
 // i18n translations for PS5 Upload webapp
-// Mirrors client/src/i18n.rs
+// Mirrors core/src/i18n.rs
 
 type TranslationKey = keyof typeof translations.en;
 
