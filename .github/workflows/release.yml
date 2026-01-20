@@ -111,16 +111,21 @@ jobs:
         if: matrix.platform == 'windows'
         shell: pwsh
         run: |
-          $bundleDir = Get-ChildItem -Path "desktop\\src-tauri\\target" -Recurse -Directory -Filter bundle |
+          $bundleDir = Get-ChildItem -Path "desktop" -Recurse -Directory -Filter bundle |
             Where-Object { $_.FullName -match "\\\\release\\\\bundle$" } |
             Select-Object -First 1
           if ($bundleDir) {
             Compress-Archive -Path (Join-Path $bundleDir.FullName "*") -DestinationPath "ps5upload-${{ matrix.platform }}-${{ matrix.arch }}.zip"
             exit 0
           }
-          $exe = Get-ChildItem -Path "desktop\\src-tauri\\target" -Recurse -File -Filter "ps5upload-desktop.exe" |
-            Where-Object { $_.FullName -match "\\\\release\\\\" } |
+          $exe = Get-ChildItem -Path "desktop" -Recurse -File -Filter "*.exe" |
+            Where-Object { $_.FullName -match "\\\\release\\\\" -and $_.Name -match "ps5upload" } |
             Select-Object -First 1
+          if (-not $exe) {
+            $exe = Get-ChildItem -Path "desktop" -Recurse -File -Filter "*.exe" |
+              Where-Object { $_.FullName -match "\\\\release\\\\" } |
+              Select-Object -First 1
+          }
           if (-not $exe) {
             throw "Tauri bundle directory and executable not found."
           }
