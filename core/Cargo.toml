@@ -4,12 +4,10 @@ version = "1.2.0"
 edition = "2021"
 
 [dependencies]
-eframe = "0.27.0"
 tokio = { version = "1.36", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 walkdir = "2.5"
-rfd = { version = "0.15", default-features = false, features = ["gtk3"] }
 anyhow = "1.0"
 regex = "1.10"
 lazy_static = "1.4"
@@ -35,8 +33,6 @@ zip = "2.1"
 sevenz-rust = "0.6"
 
 [build-dependencies]
-image = { version = "0.25", default-features = false, features = ["png", "ico"] }
-winres = "0.1"
 cc = "1.0"
 
 [features]
@@ -48,6 +44,3 @@ opt-level = 3
 codegen-units = 4
 panic = "unwind"
 debug = 1
-
-[patch.crates-io]
-egui = { path = "vendor/egui-0.27.2" }

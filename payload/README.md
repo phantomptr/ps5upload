@@ -1,6 +1,6 @@
 # PS5 Upload - Payload
 
-This is the code that runs on your PS5. Think of it as the "receiver". It sits quietly in the background, waiting for the client to send files, and writes them to the disk as fast as possible.
+This is the code that runs on your PS5. Think of it as the "receiver". It sits quietly in the background, waiting for the desktop app to send files, and writes them to the disk as fast as possible.
 
 ## How to use it
 
@@ -22,7 +22,7 @@ Any "Payload Sender" app will work. Just pick `ps5upload.elf` as the file and hi
 Look at your TV. You should see a notification bubble:
 > **PS5 Upload Server - Ready on port 9113**
 
-Once you see that, you can open the Client on your PC and connect.
+Once you see that, you can open the PS5 Upload desktop app on your PC and connect.
 
 ## For Developers: Building
 

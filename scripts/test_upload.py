@@ -72,7 +72,7 @@ def main():
     # Construct a pack
     # For simplicity in this test script, we will send one file per pack or split it?
     # The protocol supports multiple files per pack, or one file split across packs?
-    # Looking at client/src/transfer.rs: "pack.add_record".
+    # Looking at core/src/transfer.rs: "pack.add_record".
     # It seems the protocol expects full files within packs? 
     # "pack.add_record" adds path length, path, data length, data.
     # It does NOT seem to support splitting a single file record across multiple packs easily 

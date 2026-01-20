@@ -4,14 +4,12 @@
 *.so
 *.a
 target/
-client/target/
+core/target/
 desktop/target/
 desktop/src-tauri/target/
 desktop/dist/
 desktop/build/
 desktop/node_modules/
-client/dist/
-client/build/
 payload/build/
 
 # Python

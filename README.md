@@ -50,12 +50,12 @@ nc -w 1 192.168.0.xxx 9021 < payload/ps5upload.elf
 Use any standard "ELF Loader" or "Payload Sender" GUI tool for Windows/Android. Point it to `ps5upload.elf` and send it to your console's IP.
 
 **Option C: Built-in "Send Payload" button**
-Open the client, click **Send Payload from Client**, pick `ps5upload.elf`, and it will send to port **9021**.
+Open the desktop app, click **Send Payload**, pick `ps5upload.elf`, and it will send to port **9021**.
 
 **Success?**
 You should see a notification pop up on your TV: **"PS5 Upload Server - Ready on port 9113"**.
 
-### 2. Connect the Client (Computer)
+### 2. Connect the App (Computer)
 1.  Open the **PS5 Upload** app.
 2.  Type your PS5's IP address (e.g., `192.168.0.105`).
 3.  Click **Connect**.
@@ -85,7 +85,7 @@ Open the **Chat** tab to talk with other PS5Upload users. It uses the built-in k
 
 **Q: "Connection Refused" or it won't connect?**
 *   Did you load the payload first? The PS5 stops listening if you reboot or rest mode.
-*   Is your computer's firewall blocking the client?
+*   Is your computer's firewall blocking the app?
 *   Are you on the same network? (You don't *have* to be, but you need a route to the IP).
 
 **Q: Do I need to use a LAN cable?**
@@ -128,12 +128,11 @@ This software is for educational purposes. It is intended for use with legally o
 
 This software uses the following open-source packages:
 
-**Client (Rust):**
-*   [eframe / egui](https://github.com/emilk/egui) - Immediate mode GUI framework
+**Desktop App (Tauri + Rust Core + React):**
+*   [Tauri](https://tauri.app/) - Desktop app framework
+*   [React](https://react.dev/) - UI library
 *   [tokio](https://tokio.rs/) - Asynchronous runtime for Rust
 *   [serde](https://serde.rs/) - Serialization framework
-*   [walkdir](https://github.com/BurntSushi/walkdir) - Efficient recursive directory walking
-*   [rfd](https://github.com/PolyMeilex/rfd) - Native file dialogs
 *   [anyhow](https://github.com/dtolnay/anyhow) - Flexible error handling
 
 **Payload:**

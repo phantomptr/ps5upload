@@ -15,8 +15,8 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build-client:
-    name: build-client-${{ matrix.platform }}-${{ matrix.arch }}
+  build-desktop:
+    name: build-desktop-${{ matrix.platform }}-${{ matrix.arch }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -56,96 +56,55 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install Linux GUI build deps
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Linux desktop build deps
         if: matrix.platform == 'linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential pkg-config zip \
-            libx11-dev libxi-dev libxrandr-dev libxkbcommon-dev libwayland-dev \
-            libgtk-3-dev
+            libgtk-3-dev libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev \
+            libsoup-3.0-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --locked
 
       - name: Use lld for Windows ARM64
         if: matrix.target == 'aarch64-pc-windows-msvc'
         run: echo "RUSTFLAGS=-C linker=rust-lld" >> $GITHUB_ENV
         shell: bash
 
-      - name: Build client
+      - name: Install frontend deps
         run: |
-          cd client
-          cargo build --release --target ${{ matrix.target }}
+          cd desktop
+          npm ci
+
+      - name: Build desktop app
+        run: |
+          cd desktop
+          npm run tauri build -- --target ${{ matrix.target }}
 
       - name: Package artifact (Windows)
         if: matrix.platform == 'windows'
         shell: pwsh
         run: |
-          $bin = "client\\target\\${{ matrix.target }}\\release\\ps5upload.exe"
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Copy-Item $bin dist\\ps5upload.exe
-          Compress-Archive -Path dist\\ps5upload.exe -DestinationPath "ps5upload-${{ matrix.platform }}-${{ matrix.arch }}.zip"
+          $bundle = "desktop\\src-tauri\\target\\${{ matrix.target }}\\release\\bundle"
+          Compress-Archive -Path "$bundle\\*" -DestinationPath "ps5upload-${{ matrix.platform }}-${{ matrix.arch }}.zip"
 
       - name: Package artifact (Linux)
         if: matrix.platform == 'linux'
         run: |
-          bin="client/target/${{ matrix.target }}/release/ps5upload"
-          mkdir -p dist
-          cp "$bin" dist/ps5upload
-          chmod +x dist/ps5upload
-          cp logo.png dist/ps5upload.png
-          cat <<'EOF' > dist/PS5Upload.desktop
-          [Desktop Entry]
-          Type=Application
-          Name=PS5 Upload
-          Exec=sh -c 'exec "$(dirname "%k")/ps5upload"'
-          Terminal=false
-          Icon=ps5upload.png
-          Categories=Utility;
-          EOF
-          (cd dist && zip -r "../ps5upload-${{ matrix.platform }}-${{ matrix.arch }}.zip" ps5upload ps5upload.png PS5Upload.desktop)
+          bundle="desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
+          (cd "$bundle" && zip -r "$GITHUB_WORKSPACE/ps5upload-${{ matrix.platform }}-${{ matrix.arch }}.zip" .)
 
       - name: Package artifact (macOS)
         if: matrix.platform == 'macos'
         run: |
-          # Create .app structure
-          APP_NAME="PS5Upload.app"
-          VERSION="$(cat VERSION)"
-          mkdir -p "dist/$APP_NAME/Contents/MacOS"
-          mkdir -p "dist/$APP_NAME/Contents/Resources"
-          
-          # Copy binary
-          cp "client/target/${{ matrix.target }}/release/ps5upload" "dist/$APP_NAME/Contents/MacOS/"
-          cp "logo.png" "dist/$APP_NAME/Contents/Resources/icon.png"
-          
-          # Create Info.plist
-          cat <<EOF > "dist/$APP_NAME/Contents/Info.plist"
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-              <key>CFBundleExecutable</key>
-              <string>ps5upload</string>
-              <key>CFBundleIdentifier</key>
-              <string>com.phantomptr.ps5upload</string>
-              <key>CFBundleName</key>
-              <string>PS5 Upload</string>
-              <key>CFBundlePackageType</key>
-              <string>APPL</string>
-              <key>CFBundleShortVersionString</key>
-              <string>${VERSION}</string>
-              <key>CFBundleVersion</key>
-              <string>${VERSION}</string>
-              <key>CFBundleIconFile</key>
-              <string>icon.png</string>
-              <key>LSUIElement</key>
-              <false/>
-          </dict>
-          </plist>
-          EOF
-          
-          chmod +x "dist/$APP_NAME/Contents/MacOS/ps5upload"
-          codesign --force --deep --sign - "dist/$APP_NAME"
-          
-          # Zip the .app (macOS requires bundles)
-          (cd dist && zip -r "../ps5upload-${{ matrix.platform }}-${{ matrix.arch }}.zip" "$APP_NAME")
+          bundle="desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
+          (cd "$bundle" && zip -r "$GITHUB_WORKSPACE/ps5upload-${{ matrix.platform }}-${{ matrix.arch }}.zip" .)
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -192,7 +151,7 @@ jobs:
     name: create-release
     runs-on: ubuntu-24.04
     needs:
-      - build-client
+      - build-desktop
       - build-payload
     steps:
       - name: Resolve tag
