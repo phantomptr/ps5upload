@@ -118,11 +118,23 @@ jobs:
             Compress-Archive -Path (Join-Path $bundleDir.FullName "*") -DestinationPath "ps5upload-${{ matrix.platform }}-${{ matrix.arch }}.zip"
             exit 0
           }
-          $exe = Get-ChildItem -Path "desktop" -Recurse -File -Filter "*.exe" |
-            Where-Object { $_.FullName -match "\\\\release\\\\" -and $_.Name -match "ps5upload" } |
-            Select-Object -First 1
+          $candidates = @(
+            "desktop\\src-tauri\\target\\${{ matrix.target }}\\release\\ps5upload-desktop.exe",
+            "desktop\\src-tauri\\target\\release\\ps5upload-desktop.exe"
+          )
+          $exe = $null
+          foreach ($candidate in $candidates) {
+            if (Test-Path $candidate) {
+              $exe = Get-Item $candidate
+              break
+            }
+          }
           if (-not $exe) {
-            $exe = Get-ChildItem -Path "desktop" -Recurse -File -Filter "*.exe" |
+            $exe = Get-ChildItem -Path "desktop\\src-tauri\\target" -Recurse -File -Filter "ps5upload-desktop.exe" |
+              Select-Object -First 1
+          }
+          if (-not $exe) {
+            $exe = Get-ChildItem -Path "desktop\\src-tauri\\target" -Recurse -File -Filter "*.exe" |
               Where-Object { $_.FullName -match "\\\\release\\\\" } |
               Select-Object -First 1
           }
