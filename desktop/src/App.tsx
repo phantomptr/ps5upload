@@ -444,7 +444,7 @@ export default function App() {
   const payloadStatusInterval = useRef<ReturnType<typeof setInterval> | null>(null);
   const [downloadCompression, setDownloadCompression] =
     useState<DownloadCompressionOption>("auto");
-  const [chmodAfterUpload, setChmodAfterUpload] = useState(false);
+  const [chmodAfterUpload, setChmodAfterUpload] = useState(true);
   const [rarExtractMode, setRarExtractMode] = useState<RarExtractMode>("normal");
   const [chatDisplayName, setChatDisplayName] = useState("");
   const [configDefaults, setConfigDefaults] = useState<AppConfig | null>(null);
@@ -463,7 +463,7 @@ export default function App() {
   const [subfolder, setSubfolder] = useState("");
   const [finalPathMode, setFinalPathMode] = useState<"auto" | "custom">("auto");
   const [finalPath, setFinalPath] = useState("");
-  const [overrideOnConflict, setOverrideOnConflict] = useState(false);
+  const [overrideOnConflict, setOverrideOnConflict] = useState(true);
   const [compression, setCompression] = useState<CompressionOption>("auto");
   const [resumeMode, setResumeMode] = useState<ResumeOption>("none");
   const [connections, setConnections] = useState(4);
@@ -2451,6 +2451,32 @@ export default function App() {
     }
   };
 
+  const handleResetTransfer = () => {
+    setSourcePath("");
+    setStorageRoot("/data");
+    setPreset(presetOptions[0]);
+    setCustomPreset("");
+    setSubfolder("");
+    setFinalPathMode("auto");
+    setFinalPath("");
+    setOverrideOnConflict(false);
+    setCompression("auto");
+    setResumeMode("none");
+    setConnections(4);
+    setBandwidthLimit(0);
+    setOptimizeUpload(false);
+    setAutoTune(true);
+    setUseTemp(false);
+    setTransferState({
+      status: "Idle",
+      sent: 0,
+      total: 0,
+      files: 0,
+      elapsed: 0,
+      currentFile: ""
+    });
+  };
+
   const loadManageEntries = async (path: string) => {
     if (!ip.trim()) {
       setManageStatus("Not connected");
@@ -3489,6 +3515,13 @@ export default function App() {
                     disabled={!activeRunId}
                   >
                     {tr("stop")}
+                  </button>
+                  <button
+                    className="btn danger"
+                    onClick={handleResetTransfer}
+                    disabled={!!activeRunId}
+                  >
+                    {tr("reset")}
                   </button>
                 </div>
                 <p className="muted small" style={{ marginTop: 8 }}>
