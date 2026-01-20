@@ -396,20 +396,6 @@ export default function App() {
     setTheme((prev) => (prev === "dark" ? "light" : "dark"));
   };
 
-  const handleDragStart = async (event: React.MouseEvent<HTMLElement>) => {
-    if (event.button !== 0) {
-      return;
-    }
-    const target = event.target as HTMLElement;
-    if (
-      target.closest(
-        "button,input,select,textarea,a,.window-controls,.tabs,.tab,.table-row,.queue-item,.history-item,.chat-window,.log-window,.modal,.modal-backdrop,.field,.inline-field,.path-row,.chip-row,.file-item,.file-list"
-      )
-    ) {
-      return;
-    }
-    await appWindow.startDragging();
-  };
   const [appVersion, setAppVersion] = useState("...");
   const [profilesData, setProfilesData] = useState<ProfilesData>({
     profiles: [],
@@ -2808,7 +2794,6 @@ export default function App() {
     <div
       className="app"
       dir={isRtl ? "rtl" : "ltr"}
-      onMouseDown={handleDragStart}
       onContextMenu={(event) => event.preventDefault()}
     >
       <div className="ambient" aria-hidden="true" />
@@ -2817,6 +2802,7 @@ export default function App() {
         <div
           className="header-main"
           onDoubleClick={handleToggleMaximize}
+          data-tauri-drag-region
         >
           <div className="brand">
             <div className="brand-logo-wrap">
