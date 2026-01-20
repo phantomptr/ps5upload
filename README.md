@@ -8,12 +8,8 @@ PS5 Upload is a fast, reliable way to move apps and homebrew to your PS5 without
 
 It is optimized for thousands of small files on a local network (where it outperforms FTP), but works over any standard network connection.
 
-
-<img width="1682" height="1112" alt="ps5upload1" src="https://github.com/user-attachments/assets/79e1c599-afad-4740-8e12-cc32296d2892" />
-Upload
-
-<img width="1682" height="1112" alt="ps5upload" src="https://github.com/user-attachments/assets/41b3d285-1dbe-49c2-8c81-0a0e614d4aae" />
-File Management
+![Upload](https://github.com/user-attachments/assets/79e1c599-afad-4740-8e12-cc32296d2892)
+![File Management](https://github.com/user-attachments/assets/41b3d285-1dbe-49c2-8c81-0a0e614d4aae)
 
 ## Why use this?
 
@@ -49,37 +45,38 @@ nc -w 1 192.168.0.xxx 9021 < payload/ps5upload.elf
 **Option B: ELF Loader Tool**
 Use any standard "ELF Loader" or "Payload Sender" GUI tool for Windows/Android. Point it to `ps5upload.elf` and send it to your console's IP.
 
-**Option C: Built-in "Send Payload" button**
-Open the desktop app, click **Send Payload**, pick `ps5upload.elf`, and it will send to port **9021**.
+**Option C: Built-in Payload Sender**
+In the left panel of the app, under the **Payload** section, you can browse for a local `.elf` file and send it, or automatically download and send the latest payload.
 
 **Success?**
 You should see a notification pop up on your TV: **"PS5 Upload Server - Ready on port 9113"**.
 
 ### 2. Connect the App (Computer)
-1.  Open the **PS5 Upload** app.
+1.  In the left panel of the app, go to the **Connect** section.
 2.  Type your PS5's IP address (e.g., `192.168.0.105`).
 3.  Click **Connect**.
-4.  You'll see the available storage space on your console.
+4.  You'll see the available storage space on your console show up in the **Storage** section.
 
 ### 3. Send Your App
-1.  **Source:** Click **Browse** and pick the folder containing your app on your computer.
-2.  **Destination:**
+1.  In the main panel, make sure you are on the **Transfer** tab.
+2.  **Source:** Click **Browse** and pick the folder containing your app on your computer.
+3.  **Destination:**
     *   Pick a drive (like `/mnt/usb0` or `/data`).
     *   Pick a preset location (like `homebrew` or `etaHEN/games`).
     *   Give your folder a name.
-3.  **Upload:** Click **Upload Current**. The bar will track real-time progress.
+4.  **Upload:** Click **Upload** in the bottom right. The bar will track real-time progress.
 
 ### 4. Manage Files (Optional)
-Open the **Manage** tab to browse PS5 storage. You can rename, move, copy/paste, delete, chmod 777, and download files or folders with progress.
+Open the **Manage** tab to browse your PS5's storage. You can rename, move, copy, delete, and `chmod 777` files or folders. You can also download files and folders from your PS5 to your computer.
 
 ### 5. Resume Transfers (Optional)
-If a transfer was interrupted, you can enable **Resume** and choose a mode:
+If a transfer was interrupted, you can enable **Resume** mode in the **Transfer** tab's settings. The next time you upload the same content to the same destination, it will skip files that are already there.
 * **Skip by size (fast)** — quickest.
 * **Skip by size + time (medium)** — more accurate.
 * **Verify SHA256 (slow)** — most accurate, slowest.
 
 ### 6. Chat (Optional)
-Open the **Chat** tab to talk with other PS5Upload users. It uses the built-in key, auto-picks a display name, and requires an internet connection.
+Open the **Chat** tab to talk with other PS5Upload users. It uses a built-in key, auto-picks a display name, and requires an internet connection.
 
 ## FAQ
 
