@@ -3517,7 +3517,7 @@ export default function App() {
                     {tr("stop")}
                   </button>
                   <button
-                    className="btn danger"
+                    className="btn transfer-reset"
                     onClick={handleResetTransfer}
                     disabled={!!activeRunId}
                   >
