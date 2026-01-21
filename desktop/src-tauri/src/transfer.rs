@@ -92,7 +92,7 @@ fn update_status(handle: &AppHandle, status: TransferStatus) {
     let state = handle.state::<AppState>();
     if let Ok(mut guard) = state.transfer_status.lock() {
         *guard = status;
-    }
+    };
 }
 
 fn emit_scan(handle: &AppHandle, run_id: u64, files_found: usize, total_size: u64) {
