@@ -25,6 +25,7 @@ fn main() {
             commands::history_load,
             commands::history_add,
             commands::history_clear,
+            commands::logs_append,
             commands::storage_list,
             commands::port_check,
             manage::manage_list,
@@ -62,7 +63,8 @@ fn main() {
             transfer::transfer_check_dest,
             transfer::transfer_scan,
             transfer::transfer_start,
-            transfer::transfer_cancel
+            transfer::transfer_cancel,
+            transfer::transfer_status
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

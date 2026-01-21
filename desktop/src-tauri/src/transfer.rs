@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use ps5upload_core::protocol::{
     check_dir, get_space, hash_file, list_dir_recursive, upload_rar_for_extraction, upload_v2_init,
@@ -18,7 +18,7 @@ use ps5upload_core::transfer_utils::{
     sample_bytes_from_files, sample_bytes_from_path, sample_workload,
 };
 
-use crate::state::AppState;
+use crate::state::{AppState, TransferStatus};
 
 const TRANSFER_PORT: u16 = 9113;
 const MAX_PARALLEL_CONNECTIONS: usize = 10;
@@ -88,6 +88,13 @@ fn emit_log(handle: &AppHandle, run_id: u64, message: impl Into<String>) {
     );
 }
 
+fn update_status(handle: &AppHandle, status: TransferStatus) {
+    let state = handle.state::<AppState>();
+    if let Ok(mut guard) = state.transfer_status.lock() {
+        *guard = status;
+    }
+}
+
 fn emit_scan(handle: &AppHandle, run_id: u64, files_found: usize, total_size: u64) {
     let _ = handle.emit(
         "transfer_scan",
@@ -95,6 +102,18 @@ fn emit_scan(handle: &AppHandle, run_id: u64, files_found: usize, total_size: u6
             run_id,
             files_found,
             total_size,
+        },
+    );
+    update_status(
+        handle,
+        TransferStatus {
+            run_id,
+            status: "Scanning".to_string(),
+            sent: 0,
+            total: total_size,
+            files: files_found as i32,
+            elapsed_secs: 0.0,
+            current_file: String::new(),
         },
     );
 }
@@ -155,7 +174,19 @@ fn emit_progress_throttled(
             total,
             files_sent,
             elapsed_secs,
-            current_file,
+            current_file.clone(),
+        );
+        update_status(
+            handle,
+            TransferStatus {
+                run_id,
+                status: "Uploading".to_string(),
+                sent,
+                total,
+                files: files_sent,
+                elapsed_secs,
+                current_file: current_file.unwrap_or_default(),
+            },
         );
     }
 }
@@ -165,14 +196,39 @@ fn emit_complete(handle: &AppHandle, run_id: u64, files: i32, bytes: u64) {
         "transfer_complete",
         TransferCompleteEvent { run_id, files, bytes },
     );
+    update_status(
+        handle,
+        TransferStatus {
+            run_id,
+            status: "Complete".to_string(),
+            sent: bytes,
+            total: bytes,
+            files,
+            elapsed_secs: 0.0,
+            current_file: String::new(),
+        },
+    );
 }
 
 fn emit_error(handle: &AppHandle, run_id: u64, message: impl Into<String>) {
+    let message = message.into();
     let _ = handle.emit(
         "transfer_error",
         TransferErrorEvent {
             run_id,
-            message: message.into(),
+            message: message.clone(),
+        },
+    );
+    update_status(
+        handle,
+        TransferStatus {
+            run_id,
+            status: format!("Error: {}", message),
+            sent: 0,
+            total: 0,
+            files: 0,
+            elapsed_secs: 0.0,
+            current_file: String::new(),
         },
     );
 }
@@ -226,6 +282,17 @@ pub async fn transfer_scan(
     let run_id = state.transfer_run_id.fetch_add(1, Ordering::Relaxed) + 1;
     let cancel = state.transfer_cancel.clone();
     cancel.store(false, Ordering::Relaxed);
+    if let Ok(mut guard) = state.transfer_status.lock() {
+        *guard = TransferStatus {
+            run_id,
+            status: "Scanning".to_string(),
+            sent: 0,
+            total: 0,
+            files: 0,
+            elapsed_secs: 0.0,
+            current_file: String::new(),
+        };
+    }
 
     tauri::async_runtime::spawn_blocking(move || {
         let (files, _) = collect_files_with_progress(&source_path, cancel, |files_found, total| {
@@ -241,7 +308,19 @@ pub async fn transfer_scan(
 #[tauri::command]
 pub fn transfer_cancel(state: State<AppState>) -> Result<(), String> {
     state.transfer_cancel.store(true, Ordering::Relaxed);
+    if let Ok(mut guard) = state.transfer_status.lock() {
+        guard.status = "Cancelled".to_string();
+    }
     Ok(())
+}
+
+#[tauri::command]
+pub fn transfer_status(state: State<AppState>) -> TransferStatus {
+    state
+        .transfer_status
+        .lock()
+        .map(|status| status.clone())
+        .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -269,6 +348,17 @@ pub fn transfer_start(
     let active = state.transfer_active.clone();
     cancel.store(false, Ordering::Relaxed);
     active.store(true, Ordering::Relaxed);
+    if let Ok(mut guard) = state.transfer_status.lock() {
+        *guard = TransferStatus {
+            run_id,
+            status: "Starting".to_string(),
+            sent: 0,
+            total: req.required_size.unwrap_or(0),
+            files: 0,
+            elapsed_secs: 0.0,
+            current_file: String::new(),
+        };
+    }
 
     tauri::async_runtime::spawn_blocking(move || {
         let result = tauri::async_runtime::block_on(run_transfer(

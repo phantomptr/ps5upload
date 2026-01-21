@@ -14,6 +14,7 @@ const translations = {
     client: "Client",
     payload: "Payload",
     history: "History",
+    save_logs: "Save Logs",
 
     // Profile
     profile: "Profile",

@@ -5,7 +5,9 @@ use ps5upload_core::history::{
 use ps5upload_core::profiles::{load_profiles_from, save_profiles_to, ProfilesData};
 use ps5upload_core::protocol::{list_storage, StorageLocation};
 use ps5upload_core::queue::{load_queue_from, save_queue_to, QueueData};
+use std::io::Write;
 use std::net::SocketAddr;
+use std::time::SystemTime;
 use std::time::Duration;
 use tauri::AppHandle;
 
@@ -105,4 +107,38 @@ pub fn history_clear(app: AppHandle) -> Result<(), String> {
     let paths = resolve_paths(&app);
     let mut data = load_history_from(&paths.history);
     clear_history_to(&mut data, &paths.history).map_err(|err| err.to_string())
+}
+
+fn sanitize_log_tag(tag: &str) -> String {
+    tag.chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .collect()
+}
+
+#[tauri::command]
+pub fn logs_append(app: AppHandle, tag: String, lines: Vec<String>) -> Result<(), String> {
+    if lines.is_empty() {
+        return Ok(());
+    }
+    let paths = resolve_paths(&app);
+    let safe_tag = sanitize_log_tag(&tag);
+    let file_name = if safe_tag.is_empty() {
+        "desktop"
+    } else {
+        safe_tag.as_str()
+    };
+    let path = paths.logs_dir.join(format!("{file_name}.log"));
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|err| err.to_string())?;
+    let ts = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    for line in lines {
+        let _ = writeln!(file, "[{}] {}", ts, line);
+    }
+    Ok(())
 }

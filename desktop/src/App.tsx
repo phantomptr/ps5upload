@@ -14,21 +14,6 @@ const appWindow = getCurrentWindow();
 
 type TabId = "transfer" | "payload" | "manage" | "chat";
 
-type TransferProgressEvent = {
-  run_id: number;
-  sent: number;
-  total: number;
-  files_sent: number;
-  elapsed_secs: number;
-  current_file: string | null;
-};
-
-type TransferScanEvent = {
-  run_id: number;
-  files_found: number;
-  total_size: number;
-};
-
 type TransferCompleteEvent = {
   run_id: number;
   files: number;
@@ -38,6 +23,16 @@ type TransferCompleteEvent = {
 type TransferErrorEvent = {
   run_id: number;
   message: string;
+};
+
+type TransferStatusSnapshot = {
+  run_id: number;
+  status: string;
+  sent: number;
+  total: number;
+  files: number;
+  elapsed_secs: number;
+  current_file: string;
 };
 
 type TransferLogEvent = {
@@ -411,6 +406,10 @@ export default function App() {
   const [logTab, setLogTab] = useState<"client" | "payload" | "history">("client");
   const [clientLogs, setClientLogs] = useState<string[]>([]);
   const [payloadLogs, setPayloadLogs] = useState<string[]>([]);
+  const [saveLogs, setSaveLogs] = useState(false);
+  const saveLogsRef = useRef(false);
+  const logSaveBuffer = useRef<Record<string, string[]>>({});
+  const logSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const clientLogBuffer = useRef<string[]>([]);
   const payloadLogBuffer = useRef<string[]>([]);
   const clientLogFlush = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -576,9 +575,6 @@ export default function App() {
     currentFile: ""
   });
   const [activeRunId, setActiveRunId] = useState<number | null>(null);
-  const lastProgressUpdate = useRef(0);
-  const transferProgressPending = useRef<TransferProgressEvent["payload"] | null>(null);
-  const transferProgressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastManageProgressUpdate = useRef(0);
   const lastManageOp = useRef("");
   const [activeTransferSource, setActiveTransferSource] = useState("");
@@ -638,6 +634,86 @@ export default function App() {
     if (!entry) return manageDestPath;
     return joinRemote(manageDestPath, entry.name);
   }, [manageDestSelected, manageDestEntries, manageDestPath]);
+
+  useEffect(() => {
+    const stored = localStorage.getItem("ps5upload.save_logs");
+    if (stored === "true") {
+      setSaveLogs(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!activeRunId) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const poll = async () => {
+      if (cancelled) return;
+      try {
+        const status = await invoke<TransferStatusSnapshot>("transfer_status");
+        if (status.run_id === activeRunId) {
+          setTransferState((prev) => ({
+            ...prev,
+            status: status.status,
+            sent: status.sent,
+            total: status.total,
+            files: status.files,
+            elapsed: status.elapsed_secs,
+            currentFile: status.current_file ?? ""
+          }));
+        }
+      } catch {
+        // ignore polling failures
+      }
+      if (!cancelled) {
+        timer = setTimeout(poll, 1000);
+      }
+    };
+    poll();
+    return () => {
+      cancelled = true;
+      if (timer) {
+        clearTimeout(timer);
+      }
+    };
+  }, [activeRunId]);
+
+  useEffect(() => {
+    saveLogsRef.current = saveLogs;
+    localStorage.setItem("ps5upload.save_logs", saveLogs ? "true" : "false");
+    if (!saveLogs) {
+      logSaveBuffer.current = {};
+      if (logSaveTimer.current) {
+        clearTimeout(logSaveTimer.current);
+        logSaveTimer.current = null;
+      }
+    }
+  }, [saveLogs]);
+
+  const queueLogSave = (tag: string, message: string) => {
+    if (!saveLogsRef.current) return;
+    const buffer = logSaveBuffer.current;
+    if (!buffer[tag]) {
+      buffer[tag] = [];
+    }
+    buffer[tag].push(message);
+    if (!logSaveTimer.current) {
+      logSaveTimer.current = setTimeout(() => {
+        if (!saveLogsRef.current) {
+          logSaveTimer.current = null;
+          return;
+        }
+        const entries = logSaveBuffer.current;
+        logSaveBuffer.current = {};
+        logSaveTimer.current = null;
+        Object.entries(entries).forEach(([tagKey, lines]) => {
+          if (lines.length === 0) return;
+          invoke("logs_append", { tag: tagKey, lines }).catch(() => {
+            // ignore log write failures
+          });
+        });
+      }, 1000);
+    }
+  };
 
   useEffect(() => {
     transferSnapshot.current = {
@@ -1414,68 +1490,10 @@ export default function App() {
   useEffect(() => {
     let mounted = true;
     const unlisten = async () => {
-      const unlistenProgress = await listen<TransferProgressEvent>(
-        "transfer_progress",
-        (event) => {
-          if (!mounted) return;
-          const snapshot = transferSnapshot.current;
-          if (snapshot.runId && event.payload.run_id !== snapshot.runId) return;
-          transferProgressPending.current = event.payload;
-          const flush = () => {
-            if (!mounted) return;
-            const payload = transferProgressPending.current;
-            if (!payload) return;
-            setTransferState((prev) => ({
-              ...prev,
-              status: "Uploading",
-              sent: payload.sent,
-              total: payload.total,
-              files: payload.files_sent,
-              elapsed: payload.elapsed_secs,
-              currentFile: payload.current_file ?? ""
-            }));
-            transferProgressPending.current = null;
-            transferProgressTimer.current = null;
-            lastProgressUpdate.current = Date.now();
-          };
-          const now = Date.now();
-          const elapsed = now - lastProgressUpdate.current;
-          if (elapsed >= 1000) {
-            if (transferProgressTimer.current) {
-              return;
-            }
-            flush();
-            return;
-          }
-          if (!transferProgressTimer.current) {
-            transferProgressTimer.current = setTimeout(flush, 1000 - elapsed);
-          }
-        }
-      );
-      const unlistenScan = await listen<TransferScanEvent>(
-        "transfer_scan",
-        (event) => {
-          if (!mounted) return;
-          const snapshot = transferSnapshot.current;
-          if (snapshot.runId && event.payload.run_id !== snapshot.runId) return;
-          const payload = event.payload;
-          setTransferState((prev) => ({
-            ...prev,
-            status: "Scanning",
-            total: payload.total_size,
-            files: payload.files_found
-          }));
-        }
-      );
       const unlistenComplete = await listen<TransferCompleteEvent>(
         "transfer_complete",
         (event) => {
           if (!mounted) return;
-          if (transferProgressTimer.current) {
-            clearTimeout(transferProgressTimer.current);
-            transferProgressTimer.current = null;
-          }
-          transferProgressPending.current = null;
           const snapshot = transferSnapshot.current;
           if (snapshot.runId && event.payload.run_id !== snapshot.runId) return;
           const payload = event.payload;
@@ -1485,6 +1503,10 @@ export default function App() {
             sent: payload.bytes,
             total: payload.bytes
           }));
+          queueLogSave(
+            "transfer",
+            `complete files=${payload.files} bytes=${payload.bytes}`
+          );
           const duration =
             snapshot.state.elapsed ||
             (snapshot.startedAt ? (Date.now() - snapshot.startedAt) / 1000 : 0);
@@ -1537,17 +1559,13 @@ export default function App() {
         "transfer_error",
         (event) => {
           if (!mounted) return;
-          if (transferProgressTimer.current) {
-            clearTimeout(transferProgressTimer.current);
-            transferProgressTimer.current = null;
-          }
-          transferProgressPending.current = null;
           const snapshot = transferSnapshot.current;
           if (snapshot.runId && event.payload.run_id !== snapshot.runId) return;
           setTransferState((prev) => ({
             ...prev,
             status: `Error: ${event.payload.message}`
           }));
+          queueLogSave("transfer", `error ${event.payload.message}`);
           const duration =
             snapshot.state.elapsed ||
             (snapshot.startedAt ? (Date.now() - snapshot.startedAt) / 1000 : 0);
@@ -1600,6 +1618,7 @@ export default function App() {
             `${event.payload.message}`,
             ...clientLogBuffer.current
           ].slice(0, 100);
+          queueLogSave("transfer", `${event.payload.message}`);
           if (!clientLogFlush.current) {
             clientLogFlush.current = setTimeout(() => {
               if (!mounted) return;
@@ -1618,6 +1637,7 @@ export default function App() {
             `${event.payload.message}`,
             ...payloadLogBuffer.current
           ].slice(0, 100);
+          queueLogSave("payload", `${event.payload.message}`);
           if (!payloadLogFlush.current) {
             payloadLogFlush.current = setTimeout(() => {
               if (!mounted) return;
@@ -1775,6 +1795,7 @@ export default function App() {
           setClientLogs((prev) =>
             [`${event.payload.message}`, ...prev].slice(0, 100)
           );
+          queueLogSave("manage", `${event.payload.message}`);
         }
       );
 
@@ -1823,12 +1844,10 @@ export default function App() {
           clearTimeout(payloadLogFlush.current);
           payloadLogFlush.current = null;
         }
-        if (transferProgressTimer.current) {
-          clearTimeout(transferProgressTimer.current);
-          transferProgressTimer.current = null;
+        if (logSaveTimer.current) {
+          clearTimeout(logSaveTimer.current);
+          logSaveTimer.current = null;
         }
-        unlistenProgress();
-        unlistenScan();
         unlistenComplete();
         unlistenError();
         unlistenLog();
@@ -2264,6 +2283,9 @@ export default function App() {
       setActiveTransferDest(finalDestPath);
       setActiveTransferViaQueue(false);
       setTransferStartedAt(Date.now());
+      const startMsg = `Upload started: ${sourcePath} -> ${finalDestPath}`;
+      setClientLogs((prev) => [startMsg, ...prev].slice(0, 100));
+      queueLogSave("transfer", startMsg);
     } catch (err) {
       setTransferState((prev) => ({
         ...prev,
@@ -4278,6 +4300,14 @@ export default function App() {
             </div>
           ) : (
             <>
+              <label className="field inline">
+                <span>{tr("save_logs")}</span>
+                <input
+                  type="checkbox"
+                  checked={saveLogs}
+                  onChange={(event) => setSaveLogs(event.target.checked)}
+                />
+              </label>
               <button
                 className="btn"
                 onClick={() => {

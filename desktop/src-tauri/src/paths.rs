@@ -12,6 +12,9 @@ pub struct AppPaths {
 }
 
 fn resolve_base_dir(app: &AppHandle) -> PathBuf {
+    if let Ok(app_dir) = app.path().app_data_dir() {
+        return app_dir.join("ps5upload");
+    }
     let exe_dir = app
         .path()
         .executable_dir()

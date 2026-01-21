@@ -579,6 +579,10 @@ where
 
     // Packer Thread
     thread::spawn(move || {
+        let mut last_log = std::time::Instant::now()
+            .checked_sub(PROGRESS_UPDATE_INTERVAL)
+            .unwrap_or_else(std::time::Instant::now);
+        let mut packed_files = 0u64;
         let mut pack = PackBuffer::new();
 
         for entry in files {
@@ -590,7 +594,14 @@ where
             if let Ok(mut guard) = current_file_packer.lock() {
                 *guard = rel_path_str.clone();
             }
-            (log_packer_clone)(format!("Packing: {}", rel_path_str));
+            packed_files += 1;
+            if last_log.elapsed() >= PROGRESS_UPDATE_INTERVAL {
+                (log_packer_clone)(format!(
+                    "Packing: {} ({} files queued)",
+                    rel_path_str, packed_files
+                ));
+                last_log = std::time::Instant::now();
+            }
 
             let file_size = entry.size;
             let mut file = match File::open(&entry.abs_path) {
@@ -901,6 +912,9 @@ where
     let mut total_sent_bytes = 0u64;
     let mut total_sent_files = 0i32;
     let mut last_progress_sent = 0u64;
+    let mut last_log = std::time::Instant::now()
+        .checked_sub(PROGRESS_UPDATE_INTERVAL)
+        .unwrap_or_else(std::time::Instant::now);
     let mut last_progress_emit =
         std::time::Instant::now().checked_sub(PROGRESS_UPDATE_INTERVAL).unwrap_or_else(std::time::Instant::now);
     let mut limiter = RateLimiter::new(rate_limit_bps);
@@ -925,7 +939,10 @@ where
         }
 
         let rel_path = file.name().replace('\\', "/");
-        log(format!("Packing: {}", rel_path));
+        if last_log.elapsed() >= PROGRESS_UPDATE_INTERVAL {
+            log(format!("Packing: {}", rel_path));
+            last_log = std::time::Instant::now();
+        }
         pack_reader_into_stream(&mut file, &rel_path, &mut pack, &mut ctx)?;
     }
     if pack.record_count() > 0 {
@@ -954,6 +971,9 @@ where
     let mut total_sent_bytes = 0u64;
     let mut total_sent_files = 0i32;
     let mut last_progress_sent = 0u64;
+    let mut last_log = std::time::Instant::now()
+        .checked_sub(PROGRESS_UPDATE_INTERVAL)
+        .unwrap_or_else(std::time::Instant::now);
     let mut last_progress_emit =
         std::time::Instant::now().checked_sub(PROGRESS_UPDATE_INTERVAL).unwrap_or_else(std::time::Instant::now);
     let mut limiter = RateLimiter::new(rate_limit_bps);
@@ -980,7 +1000,10 @@ where
             }
 
             let rel_path = entry.name().replace('\\', "/");
-            log(format!("Packing: {}", rel_path));
+            if last_log.elapsed() >= PROGRESS_UPDATE_INTERVAL {
+                log(format!("Packing: {}", rel_path));
+                last_log = std::time::Instant::now();
+            }
 
             if let Err(e) = pack_reader_into_stream(reader, &rel_path, &mut pack, &mut ctx) {
                 return Err(std::io::Error::other(e.to_string()).into());
