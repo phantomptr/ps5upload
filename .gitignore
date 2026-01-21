@@ -4,12 +4,9 @@
 *.so
 *.a
 target/
-core/target/
-desktop/target/
-desktop/src-tauri/target/
-desktop/dist/
-desktop/build/
-desktop/node_modules/
+dist/
+build/
+node_modules/
 payload/build/
 
 # Python
@@ -17,8 +14,6 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.egg-info/
-dist/
-build/
 .venv/
 venv/
 
@@ -44,7 +39,10 @@ test_games/
 # Logs
 *.log
 
+# Temp files
 temp/
 *.tmp
 *.bak
+
+# Misc
 .claude/

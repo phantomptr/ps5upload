@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { listen } from '@tauri-apps/api/event';
+import { listen } from '../electron-api/event';
 import { useTransferStore } from '../state';
 import {
   TransferProgressEvent,
@@ -11,7 +11,7 @@ import {
 
 export function useTransferEvents() {
   const lastProgressUpdate = useRef(0);
-  const pendingProgress = useRef<TransferProgressEvent["payload"] | null>(null);
+  const pendingProgress = useRef<TransferProgressEvent | null>(null);
   const progressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
