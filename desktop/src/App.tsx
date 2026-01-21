@@ -1,13 +1,13 @@
 import { startTransition, useEffect, useMemo, useRef, useState } from "react";
-import { open, save } from "@tauri-apps/plugin-dialog";
-import { listen } from "@tauri-apps/api/event";
-import { invoke } from "@tauri-apps/api/core";
+import { open, save } from "./electron-api/dialog";
+import { listen } from "./electron-api/event";
+import { invoke } from "./electron-api/core";
 import {
   getCurrentWindow,
   currentMonitor,
   LogicalPosition,
   LogicalSize
-} from "@tauri-apps/api/window";
+} from "./electron-api/window";
 import { t } from "./i18n";
 
 const appWindow = getCurrentWindow();
@@ -2949,9 +2949,8 @@ export default function App() {
 
       <header className="header shell">
         <div
-          className="header-main"
+          className="header-main app-drag-region"
           onDoubleClick={handleToggleMaximize}
-          data-tauri-drag-region
         >
           <div className="brand">
             <div className="brand-logo-wrap">
