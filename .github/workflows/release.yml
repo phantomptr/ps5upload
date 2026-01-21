@@ -92,8 +92,8 @@ jobs:
         run: |
           cd desktop
           case "${{ matrix.platform }}" in
-            linux) bundles="appimage,deb" ;;
-            macos) bundles="app,dmg" ;;
+            linux) bundles="appimage" ;;
+            macos) bundles="app" ;;
             windows) bundles="nsis,msi" ;;
             *) bundles="" ;;
           esac
@@ -159,23 +159,20 @@ jobs:
       - name: Package artifact (macOS)
         if: matrix.platform == 'macos'
         run: |
-          bundle="$(find desktop/src-tauri/target -type d -path '*/release/bundle' | head -n 1)"
-          if [ -n "$bundle" ]; then
-            (cd "$bundle" && zip -r "$GITHUB_WORKSPACE/ps5upload-${{ matrix.platform }}-${{ matrix.arch }}.zip" .)
-            exit 0
-          fi
-          bin="$(find desktop/src-tauri/target -type f -name 'PS5Upload' -path '*/release/*' | head -n 1)"
-          if [ -z "$bin" ]; then
-            echo "Tauri bundle directory and executable not found." >&2
+          app_path="$(find desktop/src-tauri/target -type d -path '*/release/bundle/macos/*.app' | head -n 1)"
+          if [ -z "$app_path" ]; then
+            echo "macOS app bundle not found." >&2
             exit 1
           fi
-          zip -j "$GITHUB_WORKSPACE/ps5upload-${{ matrix.platform }}-${{ matrix.arch }}.zip" "$bin"
+          codesign --force --deep --sign - "$app_path"
+          dmg_path="$GITHUB_WORKSPACE/ps5upload-${{ matrix.platform }}-${{ matrix.arch }}.dmg"
+          hdiutil create -volname "PS5Upload" -srcfolder "$app_path" -ov -format UDZO "$dmg_path"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ps5upload-${{ matrix.platform }}-${{ matrix.arch }}
-          path: ps5upload-${{ matrix.platform }}-${{ matrix.arch }}.zip
+          path: ps5upload-${{ matrix.platform }}-${{ matrix.arch }}.*
 
   build-payload:
     name: build-payload
@@ -258,4 +255,5 @@ jobs:
           body_path: dist/RELEASE_NOTES.md
           files: |
             dist/**/*.zip
+            dist/**/*.dmg
             dist/**/*.elf

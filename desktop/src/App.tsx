@@ -577,6 +577,10 @@ export default function App() {
   });
   const [activeRunId, setActiveRunId] = useState<number | null>(null);
   const lastProgressUpdate = useRef(0);
+  const transferProgressPending = useRef<TransferProgressEvent["payload"] | null>(null);
+  const transferProgressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastManageProgressUpdate = useRef(0);
+  const lastManageOp = useRef("");
   const [activeTransferSource, setActiveTransferSource] = useState("");
   const [activeTransferDest, setActiveTransferDest] = useState("");
   const [activeTransferViaQueue, setActiveTransferViaQueue] = useState(false);
@@ -1414,23 +1418,38 @@ export default function App() {
         "transfer_progress",
         (event) => {
           if (!mounted) return;
-          const now = Date.now();
-          if (now - lastProgressUpdate.current < 100) {
-            return;
-          }
-          lastProgressUpdate.current = now;
           const snapshot = transferSnapshot.current;
           if (snapshot.runId && event.payload.run_id !== snapshot.runId) return;
-          const payload = event.payload;
-          setTransferState((prev) => ({
-            ...prev,
-            status: "Uploading",
-            sent: payload.sent,
-            total: payload.total,
-            files: payload.files_sent,
-            elapsed: payload.elapsed_secs,
-            currentFile: payload.current_file ?? ""
-          }));
+          transferProgressPending.current = event.payload;
+          const flush = () => {
+            if (!mounted) return;
+            const payload = transferProgressPending.current;
+            if (!payload) return;
+            setTransferState((prev) => ({
+              ...prev,
+              status: "Uploading",
+              sent: payload.sent,
+              total: payload.total,
+              files: payload.files_sent,
+              elapsed: payload.elapsed_secs,
+              currentFile: payload.current_file ?? ""
+            }));
+            transferProgressPending.current = null;
+            transferProgressTimer.current = null;
+            lastProgressUpdate.current = Date.now();
+          };
+          const now = Date.now();
+          const elapsed = now - lastProgressUpdate.current;
+          if (elapsed >= 1000) {
+            if (transferProgressTimer.current) {
+              return;
+            }
+            flush();
+            return;
+          }
+          if (!transferProgressTimer.current) {
+            transferProgressTimer.current = setTimeout(flush, 1000 - elapsed);
+          }
         }
       );
       const unlistenScan = await listen<TransferScanEvent>(
@@ -1452,6 +1471,11 @@ export default function App() {
         "transfer_complete",
         (event) => {
           if (!mounted) return;
+          if (transferProgressTimer.current) {
+            clearTimeout(transferProgressTimer.current);
+            transferProgressTimer.current = null;
+          }
+          transferProgressPending.current = null;
           const snapshot = transferSnapshot.current;
           if (snapshot.runId && event.payload.run_id !== snapshot.runId) return;
           const payload = event.payload;
@@ -1513,6 +1537,11 @@ export default function App() {
         "transfer_error",
         (event) => {
           if (!mounted) return;
+          if (transferProgressTimer.current) {
+            clearTimeout(transferProgressTimer.current);
+            transferProgressTimer.current = null;
+          }
+          transferProgressPending.current = null;
           const snapshot = transferSnapshot.current;
           if (snapshot.runId && event.payload.run_id !== snapshot.runId) return;
           setTransferState((prev) => ({
@@ -1650,6 +1679,14 @@ export default function App() {
           if (!mounted) return;
           setManageBusy(true);
           const now = Date.now();
+          if (event.payload.op !== lastManageOp.current) {
+            lastManageOp.current = event.payload.op;
+            lastManageProgressUpdate.current = 0;
+          }
+          if (now - lastManageProgressUpdate.current < 1000) {
+            return;
+          }
+          lastManageProgressUpdate.current = now;
           const prev = manageSpeedRef.current;
           const nextProcessed = event.payload.processed;
           let speed = prev.speed;
@@ -1683,6 +1720,8 @@ export default function App() {
         (event) => {
           if (!mounted) return;
           setManageBusy(false);
+          lastManageProgressUpdate.current = 0;
+          lastManageOp.current = "";
           manageSpeedRef.current = {
             op: "",
             processed: 0,
@@ -1783,6 +1822,10 @@ export default function App() {
         if (payloadLogFlush.current) {
           clearTimeout(payloadLogFlush.current);
           payloadLogFlush.current = null;
+        }
+        if (transferProgressTimer.current) {
+          clearTimeout(transferProgressTimer.current);
+          transferProgressTimer.current = null;
         }
         unlistenProgress();
         unlistenScan();

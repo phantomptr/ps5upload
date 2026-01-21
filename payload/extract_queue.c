@@ -27,7 +27,7 @@ static volatile int g_thread_running = 0;
 static volatile int g_cancel_requested = 0;
 
 /* Notification interval for extraction progress (seconds) */
-#define NOTIFY_INTERVAL_SEC 30
+#define NOTIFY_INTERVAL_SEC 5
 
 /* Forward declarations */
 static int chmod_recursive_queue(const char *path, mode_t mode);

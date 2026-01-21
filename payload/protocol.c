@@ -137,6 +137,8 @@ struct CopyProgressCtx {
     unsigned long long bytes_since_send;
     time_t last_send;
     int cancelled;
+    time_t last_notify;
+    unsigned int notify_interval_sec;
 };
 
 static void copy_progress_check_cancel(struct CopyProgressCtx *ctx) {
@@ -188,6 +190,26 @@ static void copy_progress_send(struct CopyProgressCtx *ctx, int force) {
         ctx->last_send = now;
         ctx->bytes_since_send = 0;
     }
+#if ENABLE_NOTIFICATIONS
+    if (ctx->notify_interval_sec > 0) {
+        time_t now_notify = time(NULL);
+        if (now_notify - ctx->last_notify >= (time_t)ctx->notify_interval_sec) {
+            int percent = 0;
+            if (ctx->total > 0) {
+                percent = (int)((ctx->processed * 100ULL) / ctx->total);
+            }
+            char notify_msg[256];
+            snprintf(notify_msg, sizeof(notify_msg),
+                "%s: %d%% (%.2f/%.2f GB)",
+                ctx->prefix,
+                percent,
+                ctx->processed / (1024.0 * 1024.0 * 1024.0),
+                ctx->total / (1024.0 * 1024.0 * 1024.0));
+            notify_info("PS5 Upload", notify_msg);
+            ctx->last_notify = now_notify;
+        }
+    }
+#endif
 }
 
 static void copy_progress_add(struct CopyProgressCtx *ctx, unsigned long long bytes) {
@@ -514,6 +536,8 @@ struct ExtractProgressCtx {
     unsigned int min_interval_sec;
     char last_filename[PATH_MAX];
     int cancelled;
+    time_t last_notify;
+    unsigned int notify_interval_sec;
 };
 
 static void extract_check_cancel(struct ExtractProgressCtx *ctx) {
@@ -572,6 +596,18 @@ static int extract_progress(const char *filename, unsigned long long file_size,
         ctx->cancelled = 1;
         return 1;
     }
+#if ENABLE_NOTIFICATIONS
+    if (ctx->notify_interval_sec > 0) {
+        time_t now_notify = time(NULL);
+        if (now_notify - ctx->last_notify >= (time_t)ctx->notify_interval_sec) {
+            char notify_msg[256];
+            snprintf(notify_msg, sizeof(notify_msg),
+                "Extracting: %d%% %s", percent, filename);
+            notify_info("PS5 Upload", notify_msg);
+            ctx->last_notify = now_notify;
+        }
+    }
+#endif
     return 0;
 }
 
@@ -1099,6 +1135,13 @@ void handle_move_path(int client_sock, const char *args) {
     if (rename(src, dst) == 0) {
         const char *success = "OK\n";
         send(client_sock, success, strlen(success), 0);
+#if ENABLE_NOTIFICATIONS
+        {
+            char notify_msg[256];
+            snprintf(notify_msg, sizeof(notify_msg), "Move complete: %s", dst);
+            notify_success("PS5 Upload", notify_msg);
+        }
+#endif
         return;
     }
 
@@ -1108,14 +1151,26 @@ void handle_move_path(int client_sock, const char *args) {
         progress.sock = client_sock;
         progress.prefix = "MOVE_PROGRESS";
         progress.last_send = time(NULL);
+        progress.notify_interval_sec = 10;
+        progress.last_notify = 0;
         copy_progress_send(&progress, 1);
 
         unsigned long long total_size = 0;
         char err[256] = {0};
+#if ENABLE_NOTIFICATIONS
+        {
+            char notify_msg[256];
+            snprintf(notify_msg, sizeof(notify_msg), "Starting move: %s -> %s", src, dst);
+            notify_info("PS5 Upload", notify_msg);
+        }
+#endif
         if (scan_size_recursive(src, &total_size, &progress, err, sizeof(err)) != 0) {
             char error_msg[320];
             snprintf(error_msg, sizeof(error_msg), "ERROR: %s\n", err);
             send(client_sock, error_msg, strlen(error_msg), 0);
+#if ENABLE_NOTIFICATIONS
+            notify_error("PS5 Upload", "Move failed");
+#endif
             return;
         }
         progress.total = total_size;
@@ -1124,6 +1179,9 @@ void handle_move_path(int client_sock, const char *args) {
             char error_msg[320];
             snprintf(error_msg, sizeof(error_msg), "ERROR: %s\n", err);
             send(client_sock, error_msg, strlen(error_msg), 0);
+#if ENABLE_NOTIFICATIONS
+            notify_error("PS5 Upload", "Move failed");
+#endif
             return;
         }
         copy_progress_send(&progress, 1);
@@ -1131,10 +1189,20 @@ void handle_move_path(int client_sock, const char *args) {
             char error_msg[320];
             snprintf(error_msg, sizeof(error_msg), "ERROR: %s\n", err);
             send(client_sock, error_msg, strlen(error_msg), 0);
+#if ENABLE_NOTIFICATIONS
+            notify_error("PS5 Upload", "Move failed");
+#endif
             return;
         }
         const char *success = "OK\n";
         send(client_sock, success, strlen(success), 0);
+#if ENABLE_NOTIFICATIONS
+        {
+            char notify_msg[256];
+            snprintf(notify_msg, sizeof(notify_msg), "Move complete: %s", dst);
+            notify_success("PS5 Upload", notify_msg);
+        }
+#endif
         return;
     }
 
@@ -1142,6 +1210,9 @@ void handle_move_path(int client_sock, const char *args) {
         char error_msg[320];
         snprintf(error_msg, sizeof(error_msg), "ERROR: rename failed: %s\n", strerror(errno));
         send(client_sock, error_msg, strlen(error_msg), 0);
+#if ENABLE_NOTIFICATIONS
+        notify_error("PS5 Upload", "Move failed");
+#endif
     }
 }
 
@@ -1171,14 +1242,26 @@ void handle_copy_path(int client_sock, const char *args) {
     progress.sock = client_sock;
     progress.prefix = "COPY_PROGRESS";
     progress.last_send = time(NULL);
+    progress.notify_interval_sec = 5;
+    progress.last_notify = 0;
     copy_progress_send(&progress, 1);
 
     unsigned long long total_size = 0;
     char err[256] = {0};
+#if ENABLE_NOTIFICATIONS
+    {
+        char notify_msg[256];
+        snprintf(notify_msg, sizeof(notify_msg), "Starting copy: %s -> %s", src, dst);
+        notify_info("PS5 Upload", notify_msg);
+    }
+#endif
     if (scan_size_recursive(src, &total_size, &progress, err, sizeof(err)) != 0) {
         char error_msg[320];
         snprintf(error_msg, sizeof(error_msg), "ERROR: %s\n", err);
         send(client_sock, error_msg, strlen(error_msg), 0);
+#if ENABLE_NOTIFICATIONS
+        notify_error("PS5 Upload", "Copy failed");
+#endif
         return;
     }
     progress.total = total_size;
@@ -1187,12 +1270,22 @@ void handle_copy_path(int client_sock, const char *args) {
         char error_msg[320];
         snprintf(error_msg, sizeof(error_msg), "ERROR: %s\n", err);
         send(client_sock, error_msg, strlen(error_msg), 0);
+#if ENABLE_NOTIFICATIONS
+        notify_error("PS5 Upload", "Copy failed");
+#endif
         return;
     }
     copy_progress_send(&progress, 1);
 
     const char *success = "OK\n";
     send(client_sock, success, strlen(success), 0);
+#if ENABLE_NOTIFICATIONS
+    {
+        char notify_msg[256];
+        snprintf(notify_msg, sizeof(notify_msg), "Copy complete: %s", dst);
+        notify_success("PS5 Upload", notify_msg);
+    }
+#endif
 }
 
 void handle_extract_archive(int client_sock, const char *args) {
@@ -1228,6 +1321,8 @@ void handle_extract_archive(int client_sock, const char *args) {
     progress.sock = client_sock;
     progress.min_interval_sec = UNRAR_FAST_PROGRESS_INTERVAL_SEC;
     progress.last_send = time(NULL);
+    progress.notify_interval_sec = 10;
+    progress.last_notify = 0;
 
     if (!has_extension(src, ".rar")) {
         const char *error = "ERROR: Unsupported archive type\n";

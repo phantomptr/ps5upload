@@ -22,6 +22,7 @@ use crate::state::AppState;
 
 const TRANSFER_PORT: u16 = 9113;
 const MAX_PARALLEL_CONNECTIONS: usize = 10;
+const PROGRESS_EMIT_MIN_MS: u64 = 1000;
 
 #[derive(Debug, Deserialize)]
 pub struct TransferRequest {
@@ -118,6 +119,45 @@ fn emit_progress(
             current_file,
         },
     );
+}
+
+fn should_emit_progress(last_emit_ms: &AtomicU64, now_ms: u64) -> bool {
+    loop {
+        let last = last_emit_ms.load(Ordering::Relaxed);
+        if now_ms.saturating_sub(last) < PROGRESS_EMIT_MIN_MS {
+            return false;
+        }
+        if last_emit_ms
+            .compare_exchange(last, now_ms, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+        {
+            return true;
+        }
+    }
+}
+
+fn emit_progress_throttled(
+    handle: &AppHandle,
+    run_id: u64,
+    sent: u64,
+    total: u64,
+    files_sent: i32,
+    elapsed_secs: f64,
+    current_file: Option<String>,
+    last_emit_ms: &AtomicU64,
+    now_ms: u64,
+) {
+    if should_emit_progress(last_emit_ms, now_ms) {
+        emit_progress(
+            handle,
+            run_id,
+            sent,
+            total,
+            files_sent,
+            elapsed_secs,
+            current_file,
+        );
+    }
 }
 
 fn emit_complete(handle: &AppHandle, run_id: u64, files: i32, bytes: u64) {
@@ -253,6 +293,7 @@ async fn run_transfer(
     handle: &AppHandle,
     cancel: Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<(i32, u64), String> {
+    let progress_emit_ms = Arc::new(AtomicU64::new(0));
     let ip = req.ip.clone();
     let source_path = req.source_path.clone();
     let dest_path = req.dest_path.clone();
@@ -294,9 +335,21 @@ async fn run_transfer(
         emit_log(handle, run_id, "Uploading RAR to PS5 for extraction...".to_string());
         let start = std::time::Instant::now();
         let tx_handle = handle.clone();
+        let emit_tick = progress_emit_ms.clone();
         let progress = move |sent: u64, total: u64| {
-            let elapsed = start.elapsed().as_secs_f64();
-            emit_progress(&tx_handle, run_id, sent, total, 0, elapsed, Some("Uploading RAR...".to_string()));
+            let now_ms = start.elapsed().as_millis() as u64;
+            let elapsed = now_ms as f64 / 1000.0;
+            emit_progress_throttled(
+                &tx_handle,
+                run_id,
+                sent,
+                total,
+                0,
+                elapsed,
+                Some("Uploading RAR...".to_string()),
+                &emit_tick,
+                now_ms,
+            );
         };
         let log_handle = handle.clone();
         let extract_log = move |msg: String| emit_log(&log_handle, run_id, msg);
@@ -338,6 +391,7 @@ async fn run_transfer(
 
         let start = std::time::Instant::now();
         let mut last_sent = 0u64;
+        let emit_tick = progress_emit_ms.clone();
         let rate_limit = if bandwidth_limit_bps > 0 {
             Some(bandwidth_limit_bps)
         } else {
@@ -349,8 +403,19 @@ async fn run_transfer(
             if sent == last_sent {
                 return;
             }
-            let elapsed = start.elapsed().as_secs_f64();
-            emit_progress(&tx_handle, run_id, sent, size, files_sent, elapsed, current_file);
+            let now_ms = start.elapsed().as_millis() as u64;
+            let elapsed = now_ms as f64 / 1000.0;
+            emit_progress_throttled(
+                &tx_handle,
+                run_id,
+                sent,
+                size,
+                files_sent,
+                elapsed,
+                current_file,
+                &emit_tick,
+                now_ms,
+            );
             last_sent = sent;
         };
         let log_handle = handle.clone();
@@ -463,7 +528,6 @@ async fn run_transfer(
         }).await.map_err(|e| e.to_string())?;
 
         let start = std::time::Instant::now();
-        let last_progress_ms = Arc::new(AtomicU64::new(0));
         let mut compression = match req.compression.to_lowercase().as_str() {
             "auto" => {
                 emit_log(handle, run_id, "Auto compression: sampling...".to_string());
@@ -522,6 +586,7 @@ async fn run_transfer(
                 let mut last_sent = 0u64;
                 let progress_handle = handle_clone.clone();
                 let log_handle = handle_clone.clone();
+                let emit_tick = progress_emit_ms.clone();
                 send_files_v2_for_list(
                     rx,
                     std_stream.try_clone().map_err(|err| err.to_string())?,
@@ -531,10 +596,11 @@ async fn run_transfer(
                             if sent == last_sent {
                                 return;
                             }
-                            let elapsed = start.elapsed().as_secs_f64();
+                            let now_ms = start.elapsed().as_millis() as u64;
+                            let elapsed = now_ms as f64 / 1000.0;
                             let current_total = shared_total.load(Ordering::Relaxed);
                             let display_total = current_total.max(sent);
-                            emit_progress(
+                            emit_progress_throttled(
                                 &progress_handle,
                                 run_id,
                                 sent,
@@ -542,8 +608,9 @@ async fn run_transfer(
                                 files_sent,
                                 elapsed,
                                 current_file,
+                                &emit_tick,
+                                now_ms,
                             );
-                            last_progress_ms.store(start.elapsed().as_millis() as u64, Ordering::Relaxed);
                             last_sent = sent;
                         },
                         log: move |msg| emit_log(&log_handle, run_id, msg),
@@ -586,9 +653,9 @@ async fn run_transfer(
                 let total_files = total_files.clone();
                 let shared_total = shared_total.clone();
                 let allowed = allowed_connections.clone();
-                let last_progress = last_progress_ms.clone();
                 let progress_handle = handle_clone.clone();
                 let log_handle = handle_clone.clone();
+                let emit_tick = progress_emit_ms.clone();
     
                 handles.push(std::thread::spawn(move || -> Result<(), String> {
                     let mut last_sent = 0u64;
@@ -617,11 +684,12 @@ async fn run_transfer(
                                 let new_files =
                                     total_files.fetch_add(delta_files as usize, Ordering::Relaxed)
                                         + delta_files as usize;
-                                let elapsed = start.elapsed().as_secs_f64();
+                                let now_ms = start.elapsed().as_millis() as u64;
+                                let elapsed = now_ms as f64 / 1000.0;
                                 let current_total_scan = shared_total.load(Ordering::Relaxed);
                                 let display_total = current_total_scan.max(new_total);
-    
-                                emit_progress(
+
+                                emit_progress_throttled(
                                     &progress_handle,
                                     run_id,
                                     new_total,
@@ -629,10 +697,8 @@ async fn run_transfer(
                                     new_files as i32,
                                     elapsed,
                                     None,
-                                );
-                                last_progress.store(
-                                    start.elapsed().as_millis() as u64,
-                                    Ordering::Relaxed,
+                                    &emit_tick,
+                                    now_ms,
                                 );
                             },
                             log: move |msg| emit_log(&log_handle, run_id, msg),
@@ -805,8 +871,6 @@ async fn run_transfer(
     );
 
     let start = std::time::Instant::now();
-    let last_progress_ms = Arc::new(AtomicU64::new(0));
-
     let rate_limit = if bandwidth_limit_bps > 0 {
         let per_conn = (bandwidth_limit_bps / connection_count as u64).max(1);
         Some(per_conn)
@@ -858,6 +922,7 @@ async fn run_transfer(
             let mut last_sent = 0u64;
             let progress_handle = handle_clone.clone();
             let log_handle = handle_clone.clone();
+            let emit_tick = progress_emit_ms.clone();
             send_files_v2_for_list(
                 files,
                 std_stream.try_clone().map_err(|err| err.to_string())?,
@@ -867,8 +932,9 @@ async fn run_transfer(
                         if sent == last_sent {
                             return;
                         }
-                        let elapsed = start.elapsed().as_secs_f64();
-                        emit_progress(
+                        let now_ms = start.elapsed().as_millis() as u64;
+                        let elapsed = now_ms as f64 / 1000.0;
+                        emit_progress_throttled(
                             &progress_handle,
                             run_id,
                             sent,
@@ -876,8 +942,9 @@ async fn run_transfer(
                             files_sent,
                             elapsed,
                             current,
+                            &emit_tick,
+                            now_ms,
                         );
-                        last_progress_ms.store(start.elapsed().as_millis() as u64, Ordering::Relaxed);
                         last_sent = sent;
                     },
                     log: move |msg| emit_log(&log_handle, run_id, msg),
@@ -921,9 +988,9 @@ async fn run_transfer(
             let total_sent = total_sent.clone();
             let total_files = total_files.clone();
             let allowed = allowed_connections.clone();
-            let last_progress = last_progress_ms.clone();
             let progress_handle = handle_clone.clone();
             let log_handle = handle_clone.clone();
+            let emit_tick = progress_emit_ms.clone();
     
             handles.push(std::thread::spawn(move || -> Result<(), String> {
                 let mut last_sent = 0u64;
@@ -952,9 +1019,10 @@ async fn run_transfer(
                             let new_files =
                                 total_files.fetch_add(delta_files as usize, Ordering::Relaxed)
                                     + delta_files as usize;
-                            let elapsed = start.elapsed().as_secs_f64();
+                            let now_ms = start.elapsed().as_millis() as u64;
+                            let elapsed = now_ms as f64 / 1000.0;
     
-                        emit_progress(
+                            emit_progress_throttled(
                                 &progress_handle,
                                 run_id,
                                 new_total,
@@ -962,13 +1030,14 @@ async fn run_transfer(
                                 new_files as i32,
                                 elapsed,
                                 current,
+                                &emit_tick,
+                                now_ms,
                             );
-                        last_progress.store(start.elapsed().as_millis() as u64, Ordering::Relaxed);
-                    },
-                    log: move |msg| emit_log(&log_handle, run_id, msg),
-                    worker_id,
-                    allowed_connections: Some(allowed),
-                    compression,
+                        },
+                        log: move |msg| emit_log(&log_handle, run_id, msg),
+                        worker_id,
+                        allowed_connections: Some(allowed),
+                        compression,
                         rate_limit_bps: rate_limit,
                     },
                 )

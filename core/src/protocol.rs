@@ -11,6 +11,7 @@ use zstd::bulk::decompress as zstd_decompress;
 
 pub const CONNECTION_TIMEOUT_SECS: u64 = 30;
 const READ_TIMEOUT_SECS: u64 = 120;
+const PROGRESS_UPDATE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 
 async fn read_timeout(stream: &mut TcpStream, buf: &mut [u8]) -> Result<usize> {
     tokio::time::timeout(
@@ -310,6 +311,9 @@ where
     let mut line = String::new();
     let timeout = std::time::Duration::from_secs(600);
     let mut last_recv = std::time::Instant::now();
+    let mut last_progress_emit =
+        std::time::Instant::now().checked_sub(PROGRESS_UPDATE_INTERVAL).unwrap_or_else(std::time::Instant::now);
+    let mut last_progress: Option<(u64, u64)> = None;
 
     loop {
         if cancel.load(Ordering::Relaxed) {
@@ -338,6 +342,11 @@ where
         last_recv = std::time::Instant::now();
         let trimmed = line.trim();
         if trimmed == "OK" || trimmed.starts_with("OK ") {
+            if let Some((processed, total)) = last_progress {
+                if processed != total {
+                    progress(processed, total);
+                }
+            }
             return Ok(());
         }
         if trimmed.starts_with("ERROR: ") {
@@ -348,11 +357,21 @@ where
             if parts.len() >= 4 {
                 let processed: u64 = parts[2].parse().unwrap_or(0);
                 let total: u64 = parts[3].parse().unwrap_or(0);
-                progress(processed, total);
+                let now = std::time::Instant::now();
+                last_progress = Some((processed, total));
+                if processed >= total || now.duration_since(last_progress_emit) >= PROGRESS_UPDATE_INTERVAL {
+                    progress(processed, total);
+                    last_progress_emit = now;
+                }
             } else if parts.len() >= 3 {
                 let processed: u64 = parts[1].parse().unwrap_or(0);
                 let total: u64 = parts[2].parse().unwrap_or(0);
-                progress(processed, total);
+                let now = std::time::Instant::now();
+                last_progress = Some((processed, total));
+                if processed >= total || now.duration_since(last_progress_emit) >= PROGRESS_UPDATE_INTERVAL {
+                    progress(processed, total);
+                    last_progress_emit = now;
+                }
             }
         }
     }
@@ -539,6 +558,8 @@ where
         .parse()
         .map_err(|_| anyhow!("Invalid size header"))?;
     progress(0, total_size, Some(path.to_string()));
+    let mut last_progress_emit = std::time::Instant::now();
+    let mut last_progress_emit = std::time::Instant::now();
 
     let mut file = tokio::fs::File::create(dest_path).await?;
     let mut remaining = total_size;
@@ -553,12 +574,20 @@ where
         file.write_all(&buf[..chunk]).await?;
         remaining -= chunk as u64;
         received += chunk as u64;
-        progress(received, total_size, None);
+        if received >= total_size
+            || last_progress_emit.elapsed() >= PROGRESS_UPDATE_INTERVAL
+        {
+            progress(received, total_size, None);
+            last_progress_emit = std::time::Instant::now();
+        }
     }
     file.flush().await?;
 
     if remaining != 0 {
         return Err(anyhow!("Download incomplete"));
+    }
+    if received != total_size {
+        progress(total_size, total_size, None);
     }
 
     Ok(total_size)
@@ -791,7 +820,12 @@ where
             }
             offset += data_len;
             received += data_len as u64;
-            progress(received, total_size, Some(rel_path));
+            if received >= total_size
+                || last_progress_emit.elapsed() >= PROGRESS_UPDATE_INTERVAL
+            {
+                progress(received, total_size, Some(rel_path));
+                last_progress_emit = std::time::Instant::now();
+            }
         }
     }
 
@@ -799,6 +833,9 @@ where
         file.flush().await.ok();
     }
 
+    if received != total_size {
+        progress(total_size, total_size, None);
+    }
     Ok(received)
 }
 

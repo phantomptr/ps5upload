@@ -21,6 +21,7 @@ const SEND_CHUNK_SIZE: usize = 4 * 1024 * 1024; // 4MB write chunks for better t
 const PIPELINE_DEPTH: usize = 5; // Reduced to 5 to match server queue depth and save RAM (5 * 16MB = 80MB)
 const ARCHIVE_READ_BUFFER_SIZE: usize = 1024 * 1024; // 1MB streaming buffer for archives
 const WRITE_IDLE_TIMEOUT_SECS: u64 = 120;
+const PROGRESS_UPDATE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 
 #[derive(Debug, Clone)]
 pub struct FileEntry {
@@ -100,6 +101,7 @@ where
     total_sent_bytes: &'a mut u64,
     total_sent_files: &'a mut i32,
     last_progress_sent: &'a mut u64,
+    last_progress_emit: &'a mut std::time::Instant,
 }
 
 impl<'a, F> SendContext<'a, F>
@@ -127,9 +129,12 @@ where
             let approx =
                 (pack.bytes_added as u128 * sent_payload as u128 / pack_len as u128) as u64;
             let approx_total = *self.total_sent_bytes + approx;
-            if approx_total != *self.last_progress_sent {
+            if approx_total != *self.last_progress_sent
+                && self.last_progress_emit.elapsed() >= PROGRESS_UPDATE_INTERVAL
+            {
                 (self.progress)(approx_total, *self.total_sent_files, current_file.clone());
                 *self.last_progress_sent = approx_total;
+                *self.last_progress_emit = std::time::Instant::now();
             }
         }
         Ok(())
@@ -689,6 +694,8 @@ where
 
     let mut last_progress_sent = 0u64;
     let mut last_progress_file = String::new();
+    let mut last_progress_emit =
+        std::time::Instant::now().checked_sub(PROGRESS_UPDATE_INTERVAL).unwrap_or_else(std::time::Instant::now);
 
     let mut limiter = RateLimiter::new(rate_limit_bps);
     for ready_pack in rx {
@@ -763,7 +770,9 @@ where
                 0
             };
             let approx_total = total_sent_bytes + approx;
-            if approx_total != last_progress_sent {
+            if approx_total != last_progress_sent
+                && last_progress_emit.elapsed() >= PROGRESS_UPDATE_INTERVAL
+            {
                 let mut file_update = None;
                 if let Ok(guard) = current_file.lock() {
                     if *guard != last_progress_file {
@@ -773,6 +782,7 @@ where
                 }
                 progress(approx_total, total_sent_files, file_update);
                 last_progress_sent = approx_total;
+                last_progress_emit = std::time::Instant::now();
             }
         }
 
@@ -786,7 +796,14 @@ where
                 file_update = Some(last_progress_file.clone());
             }
         }
-        progress(total_sent_bytes, total_sent_files, file_update);
+        if last_progress_emit.elapsed() >= PROGRESS_UPDATE_INTERVAL {
+            progress(total_sent_bytes, total_sent_files, file_update);
+            last_progress_sent = total_sent_bytes;
+            last_progress_emit = std::time::Instant::now();
+        }
+    }
+    if last_progress_sent != total_sent_bytes {
+        progress(total_sent_bytes, total_sent_files, None);
         last_progress_sent = total_sent_bytes;
     }
 
@@ -885,6 +902,8 @@ where
     let mut total_sent_bytes = 0u64;
     let mut total_sent_files = 0i32;
     let mut last_progress_sent = 0u64;
+    let mut last_progress_emit =
+        std::time::Instant::now().checked_sub(PROGRESS_UPDATE_INTERVAL).unwrap_or_else(std::time::Instant::now);
     let mut limiter = RateLimiter::new(rate_limit_bps);
     let mut ctx = SendContext {
         stream: &mut stream,
@@ -894,6 +913,7 @@ where
         total_sent_bytes: &mut total_sent_bytes,
         total_sent_files: &mut total_sent_files,
         last_progress_sent: &mut last_progress_sent,
+        last_progress_emit: &mut last_progress_emit,
     };
 
     for i in 0..archive.len() {
@@ -911,6 +931,10 @@ where
     }
     if pack.record_count() > 0 {
         ctx.send_pack_inline(&pack, None)?;
+    }
+    if last_progress_sent != total_sent_bytes {
+        progress(total_sent_bytes, total_sent_files, None);
+        last_progress_sent = total_sent_bytes;
     }
     send_frame_header(&mut stream, FrameType::Finish, 0, &cancel)?;
     Ok(())
@@ -932,6 +956,8 @@ where
     let mut total_sent_bytes = 0u64;
     let mut total_sent_files = 0i32;
     let mut last_progress_sent = 0u64;
+    let mut last_progress_emit =
+        std::time::Instant::now().checked_sub(PROGRESS_UPDATE_INTERVAL).unwrap_or_else(std::time::Instant::now);
     let mut limiter = RateLimiter::new(rate_limit_bps);
     let mut ctx = SendContext {
         stream: &mut stream,
@@ -941,6 +967,7 @@ where
         total_sent_bytes: &mut total_sent_bytes,
         total_sent_files: &mut total_sent_files,
         last_progress_sent: &mut last_progress_sent,
+        last_progress_emit: &mut last_progress_emit,
     };
 
     sevenz_rust::decompress_file_with_extract_fn(
@@ -966,6 +993,10 @@ where
 
     if pack.record_count() > 0 {
         ctx.send_pack_inline(&pack, None)?;
+    }
+    if last_progress_sent != total_sent_bytes {
+        progress(total_sent_bytes, total_sent_files, None);
+        last_progress_sent = total_sent_bytes;
     }
     send_frame_header(&mut stream, FrameType::Finish, 0, &cancel)?;
     Ok(())

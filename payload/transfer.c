@@ -1165,6 +1165,14 @@ void handle_upload_v2(int client_sock, const char *dest_root) {
     const char *ready = "READY\n";
     send(client_sock, ready, strlen(ready), 0);
 
+#if ENABLE_NOTIFICATIONS
+    {
+        char notify_msg[256];
+        snprintf(notify_msg, sizeof(notify_msg), "Starting upload to %s", dest_root);
+        notify_info("PS5 Upload", notify_msg);
+    }
+#endif
+
     UploadSession *session = upload_session_create(dest_root, 1);
     if (!session) {
         const char *err = "ERROR: Upload init failed\n";
@@ -1175,6 +1183,7 @@ void handle_upload_v2(int client_sock, const char *dest_root) {
     uint8_t buffer[64 * 1024];
     int done = 0;
     int error = 0;
+    time_t last_notify = 0;
 
     while (!done && !error) {
         ssize_t n = recv(client_sock, buffer, sizeof(buffer), 0);
@@ -1183,6 +1192,19 @@ void handle_upload_v2(int client_sock, const char *dest_root) {
             break;
         }
         upload_session_feed(session, buffer, (size_t)n, &done, &error);
+
+#if ENABLE_NOTIFICATIONS
+        {
+            time_t now = time(NULL);
+            if (now - last_notify >= 10) {
+                char msg[128];
+                double gb_received = session->bytes_received / (1024.0 * 1024.0 * 1024.0);
+                snprintf(msg, sizeof(msg), "Uploading: %.2f GB received", gb_received);
+                notify_info("PS5 Upload", msg);
+                last_notify = now;
+            }
+        }
+#endif
     }
 
     if (error) {
