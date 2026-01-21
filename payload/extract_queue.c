@@ -84,9 +84,6 @@ int extract_queue_add(const char *source_path, const char *dest_path) {
 
     printf("[EXTRACT_QUEUE] Added item %d: %s -> %s\n", id, source_path, dest_path);
 
-    char notify_msg[256];
-    snprintf(notify_msg, sizeof(notify_msg), "Queued: %s", item->archive_name);
-    notify_info("PS5 Upload", notify_msg);
 
     return id;
 }
@@ -134,6 +131,11 @@ char *extract_queue_get_status_json(void) {
     int pos = snprintf(buf, buf_size,
         "{\"version\":\"%s\",\"uptime\":%lu,\"queue_count\":%d,\"is_busy\":%s,\"items\":[",
         PS5_UPLOAD_VERSION, uptime, g_queue.count, g_thread_running ? "true" : "false");
+    if (pos < 0 || (size_t)pos >= buf_size) {
+        buf[buf_size - 1] = '\0';
+        pthread_mutex_unlock(&g_queue_mutex);
+        return buf;
+    }
 
     char escaped[EXTRACT_QUEUE_PATH_MAX * 2];
 
@@ -154,23 +156,54 @@ char *extract_queue_get_status_json(void) {
 
         json_escape_string(item->archive_name, escaped, sizeof(escaped));
 
-        pos += snprintf(buf + pos, buf_size - pos,
+        int wrote = snprintf(buf + pos, buf_size - (size_t)pos,
             "{\"id\":%d,\"archive_name\":\"%s\",\"status\":\"%s\","
             "\"percent\":%d,\"processed_bytes\":%llu,\"total_bytes\":%llu,"
             "\"files_extracted\":%d,\"started_at\":%ld,\"completed_at\":%ld",
             item->id, escaped, status_str,
             item->percent, item->processed_bytes, item->total_bytes,
             item->files_extracted, (long)item->started_at, (long)item->completed_at);
+        if (wrote < 0) {
+            buf[buf_size - 1] = '\0';
+            pthread_mutex_unlock(&g_queue_mutex);
+            return buf;
+        }
+        if ((size_t)wrote >= buf_size - (size_t)pos) {
+            pos = (int)buf_size - 1;
+            break;
+        }
+        pos += wrote;
 
         if (item->error_msg[0]) {
             json_escape_string(item->error_msg, escaped, sizeof(escaped));
-            pos += snprintf(buf + pos, buf_size - pos, ",\"error\":\"%s\"", escaped);
+            wrote = snprintf(buf + pos, buf_size - (size_t)pos, ",\"error\":\"%s\"", escaped);
+            if (wrote < 0) {
+                buf[buf_size - 1] = '\0';
+                pthread_mutex_unlock(&g_queue_mutex);
+                return buf;
+            }
+            if ((size_t)wrote >= buf_size - (size_t)pos) {
+                pos = (int)buf_size - 1;
+                break;
+            }
+            pos += wrote;
         }
 
+        if ((size_t)pos + 1 >= buf_size) {
+            pos = (int)buf_size - 1;
+            break;
+        }
         buf[pos++] = '}';
     }
 
-    pos += snprintf(buf + pos, buf_size - pos, "]}");
+    if ((size_t)pos < buf_size) {
+        int wrote = snprintf(buf + pos, buf_size - (size_t)pos, "]}");
+        if (wrote < 0) {
+            buf[buf_size - 1] = '\0';
+        }
+    } else {
+        buf[buf_size - 1] = '\0';
+    }
 
     pthread_mutex_unlock(&g_queue_mutex);
     return buf;
@@ -195,17 +228,7 @@ static int extraction_progress_callback(const char *filename, unsigned long long
         item->files_extracted = files_done;
         item->percent = (total_size > 0) ? (int)((total_processed * 100) / total_size) : 0;
 
-        /* Check if we should send a notification */
-        static time_t last_notify = 0;
-        time_t now = time(NULL);
-        if (now - last_notify >= NOTIFY_INTERVAL_SEC) {
-            last_notify = now;
-            char notify_msg[256];
-            snprintf(notify_msg, sizeof(notify_msg),
-                "Extracting %s: %d%% (%d files)",
-                item->archive_name, item->percent, item->files_extracted);
-            notify_info("PS5 Upload", notify_msg);
-        }
+        /* Notifications disabled */
     }
 
     pthread_mutex_unlock(&g_queue_mutex);
@@ -251,9 +274,6 @@ static void *extract_thread_func(void *arg) {
 
     printf("[EXTRACT_QUEUE] Starting extraction: %s -> %s\n", source, dest);
 
-    char notify_msg[256];
-    snprintf(notify_msg, sizeof(notify_msg), "Starting: %s", archive_name);
-    notify_info("PS5 Upload", notify_msg);
 
     /* Create destination directory */
     mkdir(dest, 0777);
@@ -271,8 +291,6 @@ static void *extract_thread_func(void *arg) {
         g_queue.current_index = -1;
         pthread_mutex_unlock(&g_queue_mutex);
 
-        snprintf(notify_msg, sizeof(notify_msg), "Failed: %s (scan error)", archive_name);
-        notify_error("PS5 Upload", notify_msg);
 
         /* Continue with next item */
         extract_queue_process();
@@ -300,13 +318,9 @@ static void *extract_thread_func(void *arg) {
     if (g_cancel_requested) {
         item->status = EXTRACT_STATUS_FAILED;
         snprintf(item->error_msg, sizeof(item->error_msg), "Cancelled");
-        snprintf(notify_msg, sizeof(notify_msg), "Cancelled: %s", archive_name);
-        notify_info("PS5 Upload", notify_msg);
     } else if (extract_result != UNRAR_OK) {
         item->status = EXTRACT_STATUS_FAILED;
         snprintf(item->error_msg, sizeof(item->error_msg), "Extract failed: %s", unrar_strerror(extract_result));
-        snprintf(notify_msg, sizeof(notify_msg), "Failed: %s", archive_name);
-        notify_error("PS5 Upload", notify_msg);
     } else {
         /* Apply chmod */
         char chmod_err[256];
@@ -319,9 +333,7 @@ static void *extract_thread_func(void *arg) {
         item->files_extracted = extracted_count;
         item->processed_bytes = extracted_bytes;
 
-        snprintf(notify_msg, sizeof(notify_msg), "Complete: %s (%d files, %llu MB)",
-            archive_name, extracted_count, extracted_bytes / (1024 * 1024));
-        notify_success("PS5 Upload", notify_msg);
+        /* Notifications disabled */
     }
 
     item->completed_at = time(NULL);

@@ -108,6 +108,13 @@ Open the **Chat** tab to talk with other PS5Upload users. It uses a built-in key
 **Q: Linux: A terminal pops up when I launch the app?**
 *   Use the `PS5Upload.desktop` launcher from the Linux release zip (or create it with `make bundle-linux`).
 
+**Q: Where are config and logs saved?**
+*   The desktop app uses the OS app data directory:
+    *   **Windows:** `%APPDATA%\\ps5upload`
+    *   **macOS:** `~/Library/Application Support/ps5upload`
+    *   **Linux:** `~/.local/share/ps5upload`
+*   Logs are stored in the `logs` subfolder when **Save Logs** is enabled in the Logs tab.
+
 **Q: Does this work on PS4?**
 *   The logic is similar, but the payload is compiled specifically for the PS5 environment. It won't run on a PS4 as-is.
 

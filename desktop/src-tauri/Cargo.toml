@@ -1,6 +1,6 @@
 [package]
 name = "PS5Upload"
-version = "1.2.0"
+version = "1.2.2"
 description = "PS5 Upload desktop wrapper"
 authors = ["PS5 Upload Contributors"]
 edition = "2021"

@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 This project follows Semantic Versioning.
 
+## [1.2.2] - 2026-01-20
+
+### Fixed
+- Payload status JSON buffer bounds to prevent malformed responses and connection resets.
+- Reduced UI work during transfers by moving polling and debounced saves into Rust.
+
+### Changed
+- Connection, payload status, and manage list polling now run in Rust with snapshot/event updates.
+
 ## [1.2.1] - 2026-01-20
 
 ### Fixed

@@ -649,7 +649,6 @@ int main(void) {
                     if (!finalize_ok) {
                         const char *error = "ERROR: Upload finalize failed\n";
                         send(conn->sock, error, strlen(error), 0);
-                        notify_error("PS5 Upload", "Upload failed");
                         close_connection(conn);
                         continue;
                     }

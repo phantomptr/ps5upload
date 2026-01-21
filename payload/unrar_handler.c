@@ -337,7 +337,6 @@ void handle_upload_rar(int sock, const char *args, UnrarMode mode) {
     if (result != 0) {
         const char *error = "ERROR: RAR extraction failed\n";
         send_all(sock, error);
-        notify_error("PS5 Upload", "RAR extraction failed");
         return;
     }
 
@@ -346,7 +345,6 @@ void handle_upload_rar(int sock, const char *args, UnrarMode mode) {
         if (chmod_recursive(dest_path, 0777, chmod_err, sizeof(chmod_err)) != 0) {
             printf("[RAR] Chmod failed: %s\n", chmod_err);
             send_all(sock, "ERROR: Failed to chmod extracted files\n");
-            notify_error("PS5 Upload", "RAR chmod failed");
             return;
         }
     }
@@ -357,10 +355,6 @@ void handle_upload_rar(int sock, const char *args, UnrarMode mode) {
     send_all(sock, response);
 
     /* Notification */
-    char notify_msg[128];
-    snprintf(notify_msg, sizeof(notify_msg), "Extracted %d files (%llu MB)",
-             file_count, total_bytes / (1024 * 1024));
-    notify_info("PS5 Upload", notify_msg);
 }
 
 static int chmod_recursive(const char *path, mode_t mode, char *err, size_t err_len) {

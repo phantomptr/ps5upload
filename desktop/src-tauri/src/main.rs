@@ -2,6 +2,8 @@
 
 mod commands;
 mod chat;
+mod connection;
+mod logging;
 mod manage;
 mod meta;
 mod payload;
@@ -10,25 +12,48 @@ mod state;
 mod transfer;
 mod update;
 
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(state::AppState::default())
+        .setup(|app| {
+            let handle = app.handle().clone();
+            payload::start_payload_poller(handle.clone());
+            payload::start_payload_auto_reloader(handle.clone());
+            connection::start_connection_poller(handle.clone());
+            manage::start_manage_poller(handle);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::app_version,
             commands::config_load,
             commands::config_save,
+            commands::config_update,
             commands::profiles_load,
             commands::profiles_save,
+            commands::profiles_update,
             commands::queue_load,
             commands::queue_save,
+            commands::queue_update,
             commands::history_load,
             commands::history_add,
             commands::history_clear,
-            commands::logs_append,
+            commands::set_save_logs,
+            commands::set_ui_log_enabled,
             commands::storage_list,
             commands::port_check,
+            connection::connection_set_ip,
+            connection::connection_polling_set,
+            connection::connection_auto_set,
+            connection::connection_snapshot,
+            connection::connection_connect,
             manage::manage_list,
+            manage::manage_list_snapshot,
+            manage::manage_list_refresh,
+            manage::manage_polling_set,
+            manage::manage_set_ip,
+            manage::manage_set_path,
             manage::manage_cancel,
             manage::manage_delete,
             manage::manage_rename,
@@ -45,6 +70,11 @@ fn main() {
             payload::payload_check,
             payload::payload_probe,
             payload::payload_status,
+            payload::payload_status_snapshot,
+            payload::payload_status_refresh,
+            payload::payload_polling_set,
+            payload::payload_set_ip,
+            payload::payload_auto_reload_set,
             payload::payload_queue_extract,
             payload::payload_queue_cancel,
             payload::payload_queue_clear,

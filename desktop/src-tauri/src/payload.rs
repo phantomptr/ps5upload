@@ -3,8 +3,9 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::Path;
-use std::time::Duration;
-use tauri::{AppHandle, Emitter};
+use std::sync::atomic::Ordering;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use ps5upload_core::protocol::{
     get_payload_version, get_payload_status, queue_extract, queue_cancel, queue_clear,
@@ -12,8 +13,14 @@ use ps5upload_core::protocol::{
 };
 use ps5upload_core::update::{download_asset, fetch_latest_release, fetch_release_by_tag};
 
+use crate::logging::write_log_line;
+use crate::state::{AppState, PayloadStatusCache};
+
 const TRANSFER_PORT: u16 = 9113;
 const PAYLOAD_PORT: u16 = 9021;
+const PAYLOAD_POLL_INTERVAL_SECS: u64 = 5;
+const PAYLOAD_POLL_ERROR_BACKOFF_SECS: u64 = 10;
+const PAYLOAD_AUTO_RELOAD_INTERVAL_SECS: u64 = 60;
 
 #[derive(Clone, Serialize)]
 struct PayloadLogEvent {
@@ -33,18 +40,37 @@ struct PayloadVersionEvent {
 }
 
 #[derive(Clone, Serialize)]
+struct PayloadBusyEvent {
+    busy: bool,
+}
+
+#[derive(Clone, Serialize)]
+struct PayloadStatusUpdateEvent {
+    status: Option<PayloadStatus>,
+    error: Option<String>,
+    updated_at_ms: u64,
+}
+
+#[derive(Clone, Serialize)]
 pub struct PayloadProbeResult {
     is_ps5upload: bool,
     message: String,
 }
 
 fn emit_log(handle: &AppHandle, message: impl Into<String>) {
-    let _ = handle.emit(
-        "payload_log",
-        PayloadLogEvent {
-            message: message.into(),
-        },
-    );
+    let message = message.into();
+    let state = handle.state::<AppState>();
+    if state.save_logs.load(std::sync::atomic::Ordering::Relaxed) {
+        write_log_line(handle, "payload", &message);
+    }
+    if state.ui_log_enabled.load(std::sync::atomic::Ordering::Relaxed) {
+        let _ = handle.emit(
+            "payload_log",
+            PayloadLogEvent {
+                message,
+            },
+        );
+    }
 }
 
 fn emit_done(handle: &AppHandle, bytes: Option<u64>, error: Option<String>) {
@@ -54,11 +80,256 @@ fn emit_done(handle: &AppHandle, bytes: Option<u64>, error: Option<String>) {
     );
 }
 
+fn emit_busy(handle: &AppHandle, busy: bool) {
+    let _ = handle.emit("payload_busy", PayloadBusyEvent { busy });
+}
+
 fn emit_version(handle: &AppHandle, version: Option<String>, error: Option<String>) {
     let _ = handle.emit(
         "payload_version",
         PayloadVersionEvent { version, error },
     );
+}
+
+fn emit_status_update(handle: &AppHandle, cache: PayloadStatusCache) {
+    let _ = handle.emit(
+        "payload_status_update",
+        PayloadStatusUpdateEvent {
+            status: cache.status,
+            error: cache.error,
+            updated_at_ms: cache.updated_at_ms,
+        },
+    );
+}
+
+fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn update_payload_cache(
+    handle: &AppHandle,
+    status: Option<PayloadStatus>,
+    error: Option<String>,
+) {
+    let mut changed = false;
+    let now = now_millis();
+    let snapshot = {
+        let state = handle.state::<AppState>();
+        let mut guard = state.payload_status.lock().unwrap();
+        if let Some(next_status) = status {
+            if guard.status.as_ref() != Some(&next_status) {
+                guard.status = Some(next_status);
+                changed = true;
+            }
+        }
+        if guard.error != error {
+            guard.error = error;
+            changed = true;
+        }
+        guard.updated_at_ms = now;
+        guard.clone()
+    };
+    if changed {
+        emit_status_update(handle, snapshot);
+    }
+}
+
+async fn download_payload(fetch: &str, handle: &AppHandle) -> Result<std::path::PathBuf, String> {
+    let (log_label, tmp_name, tag) = match fetch {
+        "current" => {
+            let tag = format!("v{}", include_str!("../../../VERSION").trim());
+            (
+                format!("Downloading payload {}...", tag),
+                "ps5upload_current.elf".to_string(),
+                Some(tag),
+            )
+        }
+        _ => (
+            "Downloading latest payload...".to_string(),
+            "ps5upload_latest.elf".to_string(),
+            None,
+        ),
+    };
+    emit_log(handle, log_label);
+    let release = if let Some(tag) = tag {
+        match fetch_release_by_tag(&tag).await {
+            Ok(release) => release,
+            Err(_) => {
+                emit_log(
+                    handle,
+                    format!("Tag {} not found, falling back to latest release.", tag),
+                );
+                fetch_latest_release(false)
+                    .await
+                    .map_err(|err| err.to_string())?
+            }
+        }
+    } else {
+        fetch_latest_release(false)
+            .await
+            .map_err(|err| err.to_string())?
+    };
+    let asset = release
+        .assets
+        .iter()
+        .find(|a| a.name == "ps5upload.elf")
+        .ok_or_else(|| "Payload asset not found".to_string())?;
+    let tmp_path = std::env::temp_dir().join(tmp_name);
+    download_asset(&asset.browser_download_url, &tmp_path.display().to_string())
+        .await
+        .map_err(|err| err.to_string())?;
+    Ok(tmp_path)
+}
+
+pub fn start_payload_auto_reloader(app_handle: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let mut last_run: Option<std::time::Instant> = None;
+        loop {
+            let state = app_handle.state::<AppState>();
+            if !state.payload_auto_reload_enabled.load(Ordering::Relaxed) {
+                last_run = None;
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                continue;
+            }
+            if state.transfer_active.load(Ordering::Relaxed)
+                || state.payload_auto_reload_inflight.load(Ordering::Relaxed)
+            {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                continue;
+            }
+            let ip = {
+                state
+                    .payload_ip
+                    .lock()
+                    .map(|value| value.clone())
+                    .unwrap_or_default()
+            };
+            if ip.trim().is_empty() {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                continue;
+            }
+            if let Some(last) = last_run {
+                if last.elapsed() < Duration::from_secs(PAYLOAD_AUTO_RELOAD_INTERVAL_SECS) {
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    continue;
+                }
+            }
+            state
+                .payload_auto_reload_inflight
+                .store(true, Ordering::Relaxed);
+            emit_busy(&app_handle, true);
+            let mode = {
+                state
+                    .payload_auto_reload_mode
+                    .lock()
+                    .map(|value| value.clone())
+                    .unwrap_or_else(|_| "current".to_string())
+            };
+            let local_path = {
+                state
+                    .payload_auto_reload_path
+                    .lock()
+                    .map(|value| value.clone())
+                    .unwrap_or_default()
+            };
+            let result = match mode.as_str() {
+                "local" => {
+                    if local_path.trim().is_empty() {
+                        Err("Select a payload (.elf/.bin) file first.".to_string())
+                    } else {
+                        let handle = app_handle.clone();
+                        let ip_clone = ip.clone();
+                        let path_clone = local_path.clone();
+                        tokio::task::spawn_blocking(move || {
+                            emit_log(&handle, format!("Auto-reload payload from {}", path_clone));
+                            send_payload_file(&ip_clone, &path_clone, &handle)
+                        })
+                        .await
+                        .unwrap_or_else(|_| Err("Auto-reload thread failed.".to_string()))
+                    }
+                }
+                "current" | "latest" => {
+                    let handle = app_handle.clone();
+                    let ip_clone = ip.clone();
+                    let fetch = mode.clone();
+                    match download_payload(&fetch, &handle).await {
+                        Ok(path) => {
+                            let path_str = path.display().to_string();
+                            tokio::task::spawn_blocking(move || {
+                                emit_log(&handle, format!("Auto-reload payload from {}", path_str));
+                                send_payload_file(&ip_clone, &path_str, &handle)
+                            })
+                            .await
+                            .unwrap_or_else(|_| Err("Auto-reload thread failed.".to_string()))
+                        }
+                        Err(err) => Err(err),
+                    }
+                }
+                _ => Err("Invalid payload reload mode.".to_string()),
+            };
+            match result {
+                Ok(bytes) => {
+                    emit_log(&app_handle, "Auto-reload payload sent.");
+                    emit_done(&app_handle, Some(bytes), None);
+                }
+                Err(err) => {
+                    emit_log(&app_handle, format!("Auto-reload failed: {}", err));
+                    emit_done(&app_handle, None, Some(err));
+                }
+            }
+            emit_busy(&app_handle, false);
+            state
+                .payload_auto_reload_inflight
+                .store(false, Ordering::Relaxed);
+            last_run = Some(std::time::Instant::now());
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    });
+}
+
+pub fn start_payload_poller(app_handle: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let mut backoff_until: Option<std::time::Instant> = None;
+        loop {
+            let state = app_handle.state::<AppState>();
+            if !state.payload_poll_enabled.load(Ordering::Relaxed) {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                continue;
+            }
+            let ip = {
+                state
+                    .payload_ip
+                    .lock()
+                    .map(|value| value.clone())
+                    .unwrap_or_default()
+            };
+            if ip.trim().is_empty() {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                continue;
+            }
+            if let Some(until) = backoff_until {
+                if std::time::Instant::now() < until {
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    continue;
+                }
+            }
+            match get_payload_status(&ip, TRANSFER_PORT).await {
+                Ok(status) => {
+                    backoff_until = None;
+                    update_payload_cache(&app_handle, Some(status), None);
+                }
+                Err(err) => {
+                    backoff_until =
+                        Some(std::time::Instant::now() + Duration::from_secs(PAYLOAD_POLL_ERROR_BACKOFF_SECS));
+                    update_payload_cache(&app_handle, None, Some(err.to_string()));
+                }
+            }
+            tokio::time::sleep(Duration::from_secs(PAYLOAD_POLL_INTERVAL_SECS)).await;
+        }
+    });
 }
 
 fn payload_path_is_elf(path: &str) -> bool {
@@ -165,6 +436,7 @@ pub fn payload_send(ip: String, path: String, app_handle: AppHandle) -> Result<(
     }
 
     let handle = app_handle.clone();
+    emit_busy(&handle, true);
     std::thread::spawn(move || {
         emit_log(&handle, format!("Sending payload to {}:{}...", ip, PAYLOAD_PORT));
         emit_log(&handle, format!("Payload path: {}", path));
@@ -179,6 +451,7 @@ pub fn payload_send(ip: String, path: String, app_handle: AppHandle) -> Result<(
                 emit_done(&handle, None, Some(err));
             }
         }
+        emit_busy(&handle, false);
     });
 
     Ok(())
@@ -195,53 +468,11 @@ pub fn payload_download_and_send(
     }
 
     let handle = app_handle.clone();
+    emit_busy(&handle, true);
     std::thread::spawn(move || {
-        let (log_label, tmp_name, tag) = match fetch.as_str() {
-            "current" => {
-                let tag = format!("v{}", include_str!("../../../VERSION").trim());
-                (
-                    format!("Downloading payload {}...", tag),
-                    "ps5upload_current.elf".to_string(),
-                    Some(tag),
-                )
-            }
-            _ => (
-                "Downloading latest payload...".to_string(),
-                "ps5upload_latest.elf".to_string(),
-                None,
-            ),
-        };
-
-        emit_log(&handle, log_label);
         let result = tauri::async_runtime::block_on(async {
-            let release = if let Some(tag) = tag {
-                match fetch_release_by_tag(&tag).await {
-                    Ok(release) => release,
-                    Err(_) => {
-                        emit_log(
-                            &handle,
-                            format!("Tag {} not found, falling back to latest release.", tag),
-                        );
-                        fetch_latest_release(false)
-                            .await
-                            .map_err(|err| err.to_string())?
-                    }
-                }
-            } else {
-                fetch_latest_release(false)
-                    .await
-                    .map_err(|err| err.to_string())?
-            };
-            let asset = release
-                .assets
-                .iter()
-                .find(|a| a.name == "ps5upload.elf")
-                .ok_or_else(|| "Payload asset not found".to_string())?;
-            let tmp_path = std::env::temp_dir().join(tmp_name);
-            download_asset(&asset.browser_download_url, &tmp_path.display().to_string())
-                .await
-                .map_err(|err| err.to_string())?;
-            Ok::<_, String>(tmp_path)
+            let path = download_payload(&fetch, &handle).await?;
+            Ok::<_, String>(path)
         });
 
         match result {
@@ -256,6 +487,7 @@ pub fn payload_download_and_send(
             }
             Err(err) => emit_done(&handle, None, Some(err)),
         }
+        emit_busy(&handle, false);
     });
 
     Ok(())
@@ -300,6 +532,73 @@ pub async fn payload_status(ip: String) -> Result<PayloadStatus, String> {
     get_payload_status(&ip, TRANSFER_PORT)
         .await
         .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn payload_status_snapshot(state: State<AppState>) -> PayloadStatusCache {
+    state
+        .payload_status
+        .lock()
+        .map(|value| value.clone())
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+pub async fn payload_status_refresh(
+    ip: String,
+    app_handle: AppHandle,
+) -> Result<PayloadStatusCache, String> {
+    if ip.trim().is_empty() {
+        return Err("Enter a PS5 address first.".to_string());
+    }
+    match get_payload_status(&ip, TRANSFER_PORT).await {
+        Ok(status) => {
+            update_payload_cache(&app_handle, Some(status), None);
+        }
+        Err(err) => {
+            update_payload_cache(&app_handle, None, Some(err.to_string()));
+        }
+    }
+    let snapshot = app_handle
+        .state::<AppState>()
+        .payload_status
+        .lock()
+        .map(|value| value.clone())
+        .unwrap_or_default();
+    Ok(snapshot)
+}
+
+#[tauri::command]
+pub fn payload_polling_set(state: State<AppState>, enabled: bool) -> Result<(), String> {
+    state.payload_poll_enabled.store(enabled, Ordering::Relaxed);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn payload_set_ip(state: State<AppState>, ip: String) -> Result<(), String> {
+    if let Ok(mut guard) = state.payload_ip.lock() {
+        *guard = ip.trim().to_string();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn payload_auto_reload_set(
+    state: State<AppState>,
+    enabled: bool,
+    mode: String,
+    local_path: String,
+) -> Result<(), String> {
+    state
+        .payload_auto_reload_enabled
+        .store(enabled, Ordering::Relaxed);
+    if let Ok(mut guard) = state.payload_auto_reload_mode.lock() {
+        *guard = mode;
+    }
+    if let Ok(mut guard) = state.payload_auto_reload_path.lock() {
+        *guard = local_path;
+    }
+    Ok(())
 }
 
 #[tauri::command]

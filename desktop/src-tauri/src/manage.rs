@@ -3,7 +3,7 @@ use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::thread;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use ps5upload_core::protocol::{
     chmod_777, copy_path_with_progress, create_path, delete_path, download_dir_with_progress,
@@ -13,9 +13,18 @@ use ps5upload_core::protocol::{
 use ps5upload_core::transfer::{collect_files_with_progress, send_files_v2_for_list, CompressionMode, FileEntry, SendFilesConfig};
 use ps5upload_core::transfer_utils::{parse_upload_response, read_upload_response};
 
-use crate::state::AppState;
+use crate::logging::write_log_line;
+use crate::state::{AppState, ManageListCache};
 
 const TRANSFER_PORT: u16 = 9113;
+const MANAGE_POLL_INTERVAL_SECS: u64 = 3;
+
+fn now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
 
 #[derive(Clone, Serialize)]
 struct ManageProgressEvent {
@@ -35,6 +44,14 @@ struct ManageDoneEvent {
 #[derive(Clone, Serialize)]
 struct ManageLogEvent {
     message: String,
+}
+
+#[derive(Clone, Serialize)]
+struct ManageListUpdateEvent {
+    path: String,
+    entries: Vec<DirEntry>,
+    error: Option<String>,
+    updated_at_ms: u64,
 }
 
 fn emit_progress(
@@ -67,12 +84,111 @@ fn emit_done(handle: &AppHandle, op: &str, bytes: Option<u64>, error: Option<Str
 }
 
 fn emit_log(handle: &AppHandle, message: impl Into<String>) {
+    let message = message.into();
+    let state = handle.state::<AppState>();
+    if state.save_logs.load(Ordering::Relaxed) {
+        write_log_line(handle, "manage", &message);
+    }
+    if state.ui_log_enabled.load(Ordering::Relaxed) {
+        let _ = handle.emit(
+            "manage_log",
+            ManageLogEvent {
+                message,
+            },
+        );
+    }
+}
+
+fn emit_manage_list_update(handle: &AppHandle, cache: &ManageListCache) {
     let _ = handle.emit(
-        "manage_log",
-        ManageLogEvent {
-            message: message.into(),
+        "manage_list_update",
+        ManageListUpdateEvent {
+            path: cache.path.clone(),
+            entries: cache.entries.clone(),
+            error: cache.error.clone(),
+            updated_at_ms: cache.updated_at_ms,
         },
     );
+}
+
+fn update_manage_cache(handle: &AppHandle, next: ManageListCache) -> ManageListCache {
+    let mut changed = false;
+    let snapshot = {
+        let state = handle.state::<AppState>();
+        let mut guard = state.manage_list_cache.lock().unwrap();
+    if guard.path != next.path
+        || guard.entries != next.entries
+        || guard.error != next.error
+        || guard.updated_at_ms != next.updated_at_ms
+    {
+        *guard = next;
+        changed = true;
+    }
+        guard.clone()
+    };
+    if changed {
+        emit_manage_list_update(handle, &snapshot);
+    }
+    snapshot
+}
+
+pub fn start_manage_poller(app_handle: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            let state = app_handle.state::<AppState>();
+            if !state.manage_poll_enabled.load(Ordering::Relaxed) {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                continue;
+            }
+            let ip = {
+                state
+                    .manage_ip
+                    .lock()
+                    .map(|value| value.clone())
+                    .unwrap_or_default()
+            };
+            let path = {
+                state
+                    .manage_path
+                    .lock()
+                    .map(|value| value.clone())
+                    .unwrap_or_default()
+            };
+            if ip.trim().is_empty() || path.trim().is_empty() {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                continue;
+            }
+            let result = ps5upload_core::protocol::list_dir(&ip, TRANSFER_PORT, &path)
+                .await
+                .map_err(|err| err.to_string());
+            let updated_at_ms = now_millis();
+            match result {
+                Ok(entries) => {
+                    update_manage_cache(
+                        &app_handle,
+                        ManageListCache {
+                            path: path.clone(),
+                            entries,
+                            error: None,
+                            updated_at_ms,
+                        },
+                    );
+                }
+                Err(err) => {
+                    update_manage_cache(
+                        &app_handle,
+                        ManageListCache {
+                            path: path.clone(),
+                            entries: Vec::new(),
+                            error: Some(err),
+                            updated_at_ms,
+                        },
+                    );
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(MANAGE_POLL_INTERVAL_SECS)).await;
+        }
+    });
 }
 
 fn join_remote_path(base: &str, name: &str) -> String {
@@ -101,6 +217,70 @@ fn ensure_manage_idle(state: &State<AppState>) -> Result<(), String> {
 pub fn manage_cancel(state: State<AppState>) -> Result<(), String> {
     state.manage_cancel.store(true, Ordering::Relaxed);
     Ok(())
+}
+
+#[tauri::command]
+pub fn manage_set_ip(state: State<AppState>, ip: String) -> Result<(), String> {
+    if let Ok(mut guard) = state.manage_ip.lock() {
+        *guard = ip.trim().to_string();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn manage_set_path(state: State<AppState>, path: String) -> Result<(), String> {
+    if let Ok(mut guard) = state.manage_path.lock() {
+        *guard = path.trim().to_string();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn manage_polling_set(state: State<AppState>, enabled: bool) -> Result<(), String> {
+    state.manage_poll_enabled.store(enabled, Ordering::Relaxed);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn manage_list_snapshot(state: State<AppState>) -> ManageListCache {
+    state
+        .manage_list_cache
+        .lock()
+        .map(|value| value.clone())
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+pub async fn manage_list_refresh(
+    ip: String,
+    path: String,
+    app_handle: AppHandle,
+) -> Result<ManageListCache, String> {
+    if ip.trim().is_empty() {
+        return Err("Enter a PS5 address first.".to_string());
+    }
+    if path.trim().is_empty() {
+        return Err("Enter a path.".to_string());
+    }
+    let result = ps5upload_core::protocol::list_dir(&ip, TRANSFER_PORT, &path)
+        .await
+        .map_err(|err| err.to_string());
+    let updated_at_ms = now_millis();
+    let snapshot = match result {
+        Ok(entries) => ManageListCache {
+            path: path.clone(),
+            entries,
+            error: None,
+            updated_at_ms,
+        },
+        Err(err) => ManageListCache {
+            path: path.clone(),
+            entries: Vec::new(),
+            error: Some(err),
+            updated_at_ms,
+        },
+    };
+    Ok(update_manage_cache(&app_handle, snapshot))
 }
 
 #[tauri::command]
