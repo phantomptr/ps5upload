@@ -102,7 +102,6 @@ int receive_folder_stream(int sock, const char *dest_path, char *err, size_t err
     char line_buffer[PATH_MAX + 256];
     long long total_bytes = 0;
     int file_count = 0;
-    time_t last_notify_time = 0;
 
     printf("[EXTRACT] Waiting for file stream...\n");
 
@@ -191,16 +190,6 @@ int receive_folder_stream(int sock, const char *dest_path, char *err, size_t err
             remaining -= to_recv;
             total_bytes += to_recv;
 
-#if ENABLE_NOTIFICATIONS
-            time_t now = time(NULL);
-            if (now - last_notify_time >= 10) {
-                char msg[128];
-                double gb_received = total_bytes / (1024.0 * 1024.0 * 1024.0);
-                snprintf(msg, sizeof(msg), "Received: %.2f GB (%d files)", gb_received, file_count + 1);
-                notify_info("PS5 Upload", msg);
-                last_notify_time = now;
-            }
-#endif
         }
 
         fclose(fp);

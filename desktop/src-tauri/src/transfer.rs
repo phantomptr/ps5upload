@@ -18,6 +18,7 @@ use ps5upload_core::transfer_utils::{
     sample_bytes_from_files, sample_bytes_from_path, sample_workload,
 };
 
+use crate::logging::write_log_line;
 use crate::state::{AppState, TransferStatus};
 
 const TRANSFER_PORT: u16 = 9113;
@@ -43,23 +44,6 @@ pub struct TransferRequest {
 }
 
 #[derive(Clone, Serialize)]
-struct TransferScanEvent {
-    run_id: u64,
-    files_found: usize,
-    total_size: u64,
-}
-
-#[derive(Clone, Serialize)]
-struct TransferProgressEvent {
-    run_id: u64,
-    sent: u64,
-    total: u64,
-    files_sent: i32,
-    elapsed_secs: f64,
-    current_file: Option<String>,
-}
-
-#[derive(Clone, Serialize)]
 struct TransferCompleteEvent {
     run_id: u64,
     files: i32,
@@ -79,13 +63,20 @@ struct TransferLogEvent {
 }
 
 fn emit_log(handle: &AppHandle, run_id: u64, message: impl Into<String>) {
-    let _ = handle.emit(
-        "transfer_log",
-        TransferLogEvent {
-            run_id,
-            message: message.into(),
-        },
-    );
+    let message = message.into();
+    let state = handle.state::<AppState>();
+    if state.save_logs.load(Ordering::Relaxed) {
+        write_log_line(handle, "transfer", &format!("[{}] {}", run_id, message));
+    }
+    if state.ui_log_enabled.load(Ordering::Relaxed) {
+        let _ = handle.emit(
+            "transfer_log",
+            TransferLogEvent {
+                run_id,
+                message,
+            },
+        );
+    }
 }
 
 fn update_status(handle: &AppHandle, status: TransferStatus) {
@@ -96,14 +87,6 @@ fn update_status(handle: &AppHandle, status: TransferStatus) {
 }
 
 fn emit_scan(handle: &AppHandle, run_id: u64, files_found: usize, total_size: u64) {
-    let _ = handle.emit(
-        "transfer_scan",
-        TransferScanEvent {
-            run_id,
-            files_found,
-            total_size,
-        },
-    );
     update_status(
         handle,
         TransferStatus {
@@ -127,17 +110,7 @@ fn emit_progress(
     elapsed_secs: f64,
     current_file: Option<String>,
 ) {
-    let _ = handle.emit(
-        "transfer_progress",
-        TransferProgressEvent {
-            run_id,
-            sent,
-            total,
-            files_sent,
-            elapsed_secs,
-            current_file,
-        },
-    );
+    let _ = (handle, run_id, sent, total, files_sent, elapsed_secs, current_file);
 }
 
 fn should_emit_progress(last_emit_ms: &AtomicU64, now_ms: u64) -> bool {

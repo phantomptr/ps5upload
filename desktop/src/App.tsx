@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { startTransition, useEffect, useMemo, useRef, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
@@ -82,6 +82,12 @@ type StorageLocation = {
   path: string;
   storage_type: string;
   free_gb: number;
+};
+
+type ConnectionStatusSnapshot = {
+  is_connected: boolean;
+  status: string;
+  storage_locations: StorageLocation[];
 };
 
 type DirEntry = {
@@ -224,6 +230,13 @@ type GameMetaResponse = {
 
 type ManageAction = "Move" | "Copy" | "Extract";
 
+type ManageListSnapshot = {
+  path: string;
+  entries: DirEntry[];
+  error?: string | null;
+  updated_at_ms?: number | null;
+};
+
 type ExtractQueueItem = {
   id: number;
   archive_name: string;
@@ -243,6 +256,12 @@ type PayloadStatusResponse = {
   queue_count: number;
   is_busy: boolean;
   items: ExtractQueueItem[];
+};
+
+type PayloadStatusSnapshot = {
+  status?: PayloadStatusResponse | null;
+  error?: string | null;
+  updated_at_ms: number;
 };
 
 const isPresetOption = (
@@ -407,14 +426,10 @@ export default function App() {
   const [clientLogs, setClientLogs] = useState<string[]>([]);
   const [payloadLogs, setPayloadLogs] = useState<string[]>([]);
   const [saveLogs, setSaveLogs] = useState(false);
-  const saveLogsRef = useRef(false);
-  const logSaveBuffer = useRef<Record<string, string[]>>({});
-  const logSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const clientLogBuffer = useRef<string[]>([]);
   const payloadLogBuffer = useRef<string[]>([]);
   const clientLogFlush = useRef<ReturnType<typeof setTimeout> | null>(null);
   const payloadLogFlush = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const profileAutosaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const configSaveRef = useRef<AppConfig | null>(null);
   const resizeSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [payloadLocalPath, setPayloadLocalPath] = useState("");
@@ -440,7 +455,8 @@ export default function App() {
   } | null>(null);
   const [payloadFullStatus, setPayloadFullStatus] = useState<PayloadStatusResponse | null>(null);
   const [payloadStatusLoading, setPayloadStatusLoading] = useState(false);
-  const payloadStatusInterval = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [payloadStatusError, setPayloadStatusError] = useState<string | null>(null);
+  const [payloadLastUpdated, setPayloadLastUpdated] = useState<number | null>(null);
   const [downloadCompression, setDownloadCompression] =
     useState<DownloadCompressionOption>("auto");
   const [chmodAfterUpload, setChmodAfterUpload] = useState(true);
@@ -500,6 +516,7 @@ export default function App() {
   });
   const [manageMeta, setManageMeta] = useState<GameMetaPayload | null>(null);
   const [manageCoverUrl, setManageCoverUrl] = useState<string | null>(null);
+  const [manageLastUpdated, setManageLastUpdated] = useState<number | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showRenamePrompt, setShowRenamePrompt] = useState(false);
   const [renameValue, setRenameValue] = useState("");
@@ -651,15 +668,29 @@ export default function App() {
       try {
         const status = await invoke<TransferStatusSnapshot>("transfer_status");
         if (status.run_id === activeRunId) {
-          setTransferState((prev) => ({
-            ...prev,
+          const nextState = {
             status: status.status,
             sent: status.sent,
             total: status.total,
             files: status.files,
             elapsed: status.elapsed_secs,
             currentFile: status.current_file ?? ""
-          }));
+          };
+          startTransition(() => {
+            setTransferState((prev) => {
+              if (
+                prev.status === nextState.status &&
+                prev.sent === nextState.sent &&
+                prev.total === nextState.total &&
+                prev.files === nextState.files &&
+                prev.elapsed === nextState.elapsed &&
+                prev.currentFile === nextState.currentFile
+              ) {
+                return prev;
+              }
+              return { ...prev, ...nextState };
+            });
+          });
         }
       } catch {
         // ignore polling failures
@@ -678,42 +709,18 @@ export default function App() {
   }, [activeRunId]);
 
   useEffect(() => {
-    saveLogsRef.current = saveLogs;
     localStorage.setItem("ps5upload.save_logs", saveLogs ? "true" : "false");
-    if (!saveLogs) {
-      logSaveBuffer.current = {};
-      if (logSaveTimer.current) {
-        clearTimeout(logSaveTimer.current);
-        logSaveTimer.current = null;
-      }
-    }
+    invoke("set_save_logs", { enabled: saveLogs }).catch(() => {
+      // ignore log toggle failures
+    });
   }, [saveLogs]);
 
-  const queueLogSave = (tag: string, message: string) => {
-    if (!saveLogsRef.current) return;
-    const buffer = logSaveBuffer.current;
-    if (!buffer[tag]) {
-      buffer[tag] = [];
-    }
-    buffer[tag].push(message);
-    if (!logSaveTimer.current) {
-      logSaveTimer.current = setTimeout(() => {
-        if (!saveLogsRef.current) {
-          logSaveTimer.current = null;
-          return;
-        }
-        const entries = logSaveBuffer.current;
-        logSaveBuffer.current = {};
-        logSaveTimer.current = null;
-        Object.entries(entries).forEach(([tagKey, lines]) => {
-          if (lines.length === 0) return;
-          invoke("logs_append", { tag: tagKey, lines }).catch(() => {
-            // ignore log write failures
-          });
-        });
-      }, 1000);
-    }
-  };
+  useEffect(() => {
+    const enabled = !activeRunId;
+    invoke("set_ui_log_enabled", { enabled }).catch(() => {
+      // ignore log toggle failures
+    });
+  }, [activeRunId]);
 
   useEffect(() => {
     transferSnapshot.current = {
@@ -813,7 +820,7 @@ export default function App() {
       // ignore storage failures
     }
     try {
-      await invoke("profiles_save", { data });
+      await invoke("profiles_update", { data });
     } catch (err) {
       setClientLogs((prev) => [
         `Failed to save profiles: ${String(err)}`,
@@ -1151,24 +1158,13 @@ export default function App() {
     if (profilesMatch(existing, nextProfile)) {
       return;
     }
-    if (profileAutosaveTimer.current) {
-      clearTimeout(profileAutosaveTimer.current);
-    }
-    profileAutosaveTimer.current = setTimeout(() => {
-      const updatedProfiles = profilesData.profiles.map((profile) =>
-        profile.name === currentProfile ? nextProfile : profile
-      );
-      persistProfiles({
-        ...profilesData,
-        profiles: updatedProfiles
-      });
-    }, 500);
-    return () => {
-      if (profileAutosaveTimer.current) {
-        clearTimeout(profileAutosaveTimer.current);
-        profileAutosaveTimer.current = null;
-      }
-    };
+    const updatedProfiles = profilesData.profiles.map((profile) =>
+      profile.name === currentProfile ? nextProfile : profile
+    );
+    persistProfiles({
+      ...profilesData,
+      profiles: updatedProfiles
+    });
   }, [
     configLoaded,
     currentProfile,
@@ -1215,7 +1211,7 @@ export default function App() {
             if (!mounted || !configSaveRef.current) {
               return;
             }
-            invoke("config_save", {
+            invoke("config_update", {
               config: {
                 ...configSaveRef.current,
                 window_width: size.width,
@@ -1250,7 +1246,7 @@ export default function App() {
           if (!mounted || !configSaveRef.current) {
             return;
           }
-          invoke("config_save", {
+          invoke("config_update", {
             config: {
               ...configSaveRef.current,
               window_x: pos.x,
@@ -1324,22 +1320,6 @@ export default function App() {
   }, [sourcePath]);
 
   useEffect(() => {
-    if (activeTab === "manage") {
-      handleManageRefresh();
-    }
-  }, [activeTab]);
-
-  useEffect(() => {
-    if (activeTab === "manage") {
-      if (manageRefreshSkip.current === managePath) {
-        manageRefreshSkip.current = null;
-        return;
-      }
-      handleManageRefresh();
-    }
-  }, [managePath]);
-
-  useEffect(() => {
     setManageEntries((prev) => sortEntries(prev, manageSort));
   }, [manageSort]);
 
@@ -1374,29 +1354,61 @@ export default function App() {
   }, [manageSelectedEntry, managePath, ip]);
 
   useEffect(() => {
-    if (!autoConnect || isConnected || isConnecting || !ip.trim()) return undefined;
-    const timer = setInterval(() => {
-      if (!isConnected && !isConnecting) {
-        handleConnect();
-      }
-    }, 5000);
-    return () => clearInterval(timer);
-  }, [autoConnect, isConnected, isConnecting, ip]);
+    invoke("connection_set_ip", { ip }).catch(() => {
+      // ignore connection ip sync failures
+    });
+  }, [ip]);
 
   useEffect(() => {
-    if (!payloadAutoReload || !isConnected || !ip.trim()) {
-      return undefined;
-    }
-    const timer = setInterval(() => {
-      runPayloadReload();
-    }, 60000);
-    return () => clearInterval(timer);
-  }, [payloadAutoReload, payloadReloadMode, payloadLocalPath, isConnected, ip, payloadBusy]);
+    invoke("manage_set_ip", { ip }).catch(() => {
+      // ignore manage ip sync failures
+    });
+  }, [ip]);
 
   useEffect(() => {
-    if (payloadAutoReload && isConnected && ip.trim()) {
-      runPayloadReload();
-    }
+    invoke("manage_set_path", { path: managePath }).catch(() => {
+      // ignore manage path sync failures
+    });
+  }, [managePath]);
+
+  useEffect(() => {
+    const enabled =
+      activeTab === "manage" && isConnected && ip.trim().length > 0 && !activeRunId;
+    invoke("manage_polling_set", { enabled }).catch(() => {
+      // ignore manage poll toggle failures
+    });
+  }, [activeTab, isConnected, ip, activeRunId]);
+
+  useEffect(() => {
+    invoke<ManageListSnapshot>("manage_list_snapshot")
+      .then((snapshot) => applyManageSnapshot(snapshot))
+      .catch(() => {
+        // ignore snapshot failures
+      });
+  }, []);
+
+  useEffect(() => {
+    invoke("connection_auto_set", { enabled: autoConnect }).catch(() => {
+      // ignore auto-connect failures
+    });
+  }, [autoConnect]);
+
+  useEffect(() => {
+    const enabled = autoConnect && ip.trim().length > 0;
+    invoke("connection_polling_set", { enabled }).catch(() => {
+      // ignore poll toggle failures
+    });
+  }, [autoConnect, ip]);
+
+  useEffect(() => {
+    const enabled = payloadAutoReload && isConnected && ip.trim().length > 0;
+    invoke("payload_auto_reload_set", {
+      enabled,
+      mode: payloadReloadMode,
+      local_path: payloadLocalPath
+    }).catch(() => {
+      // ignore payload auto-reload failures
+    });
   }, [payloadAutoReload, payloadReloadMode, payloadLocalPath, isConnected, ip]);
 
   useEffect(() => {
@@ -1434,16 +1446,12 @@ export default function App() {
     };
 
     configSaveRef.current = nextConfig;
-    const handle = setTimeout(() => {
-      invoke("config_save", { config: nextConfig }).catch((err) => {
-        setClientLogs((prev) => [
-          `Failed to save config: ${String(err)}`,
-          ...prev
-        ]);
-      });
-    }, 80);
-
-    return () => clearTimeout(handle);
+    invoke("config_update", { config: nextConfig }).catch((err) => {
+      setClientLogs((prev) => [
+        `Failed to save config: ${String(err)}`,
+        ...prev
+      ]);
+    });
   }, [
     configLoaded,
     configDefaults,
@@ -1503,10 +1511,6 @@ export default function App() {
             sent: payload.bytes,
             total: payload.bytes
           }));
-          queueLogSave(
-            "transfer",
-            `complete files=${payload.files} bytes=${payload.bytes}`
-          );
           const duration =
             snapshot.state.elapsed ||
             (snapshot.startedAt ? (Date.now() - snapshot.startedAt) / 1000 : 0);
@@ -1565,7 +1569,6 @@ export default function App() {
             ...prev,
             status: `Error: ${event.payload.message}`
           }));
-          queueLogSave("transfer", `error ${event.payload.message}`);
           const duration =
             snapshot.state.elapsed ||
             (snapshot.startedAt ? (Date.now() - snapshot.startedAt) / 1000 : 0);
@@ -1614,11 +1617,11 @@ export default function App() {
         "transfer_log",
         (event) => {
           if (!mounted) return;
+          if (activeRunId) return;
           clientLogBuffer.current = [
             `${event.payload.message}`,
             ...clientLogBuffer.current
           ].slice(0, 100);
-          queueLogSave("transfer", `${event.payload.message}`);
           if (!clientLogFlush.current) {
             clientLogFlush.current = setTimeout(() => {
               if (!mounted) return;
@@ -1633,11 +1636,11 @@ export default function App() {
         "payload_log",
         (event) => {
           if (!mounted) return;
+          if (activeRunId) return;
           payloadLogBuffer.current = [
             `${event.payload.message}`,
             ...payloadLogBuffer.current
           ].slice(0, 100);
-          queueLogSave("payload", `${event.payload.message}`);
           if (!payloadLogFlush.current) {
             payloadLogFlush.current = setTimeout(() => {
               if (!mounted) return;
@@ -1679,6 +1682,30 @@ export default function App() {
           setPayloadStatus(`Not detected (${event.payload.error})`);
         }
       });
+
+      const unlistenPayloadBusy = await listen<{ busy: boolean }>(
+        "payload_busy",
+        (event) => {
+          if (!mounted) return;
+          setPayloadBusy(!!event.payload?.busy);
+        }
+      );
+
+      const unlistenPayloadStatus = await listen<PayloadStatusSnapshot>(
+        "payload_status_update",
+        (event) => {
+          if (!mounted) return;
+          applyPayloadSnapshot(event.payload ?? null);
+        }
+      );
+
+      const unlistenConnectionStatus = await listen<ConnectionStatusSnapshot>(
+        "connection_status_update",
+        (event) => {
+          if (!mounted) return;
+          applyConnectionSnapshot(event.payload ?? null);
+        }
+      );
 
       const unlistenUpdateReady = await listen("update_ready", () => {
         if (!mounted) return;
@@ -1767,18 +1794,13 @@ export default function App() {
             setManageStatus(`${event.payload.op} complete`);
             const snapshot = manageSnapshot.current;
             if (snapshot.ip.trim()) {
-              invoke<DirEntry[]>("manage_list", {
+              invoke<ManageListSnapshot>("manage_list_refresh", {
                 ip: snapshot.ip,
                 path: snapshot.path
-                })
-                .then((entries) => {
+              })
+                .then((snapshot) => {
                   if (!mounted) return;
-                  const sorted = sortEntries(entries, { key: "name", direction: "asc" });
-                  setManageEntries(sorted);
-                  setManageSelected(null);
-                  setManageMeta(null);
-                  setManageCoverUrl(null);
-                  setManageStatus(`Loaded ${sorted.length} items`);
+                  applyManageSnapshot(snapshot);
                 })
                 .catch(() => {
                   // leave status as is
@@ -1792,10 +1814,18 @@ export default function App() {
         "manage_log",
         (event) => {
           if (!mounted) return;
+          if (activeRunId) return;
           setClientLogs((prev) =>
             [`${event.payload.message}`, ...prev].slice(0, 100)
           );
-          queueLogSave("manage", `${event.payload.message}`);
+        }
+      );
+
+      const unlistenManageList = await listen<ManageListSnapshot>(
+        "manage_list_update",
+        (event) => {
+          if (!mounted) return;
+          applyManageSnapshot(event.payload ?? null);
         }
       );
 
@@ -1844,21 +1874,21 @@ export default function App() {
           clearTimeout(payloadLogFlush.current);
           payloadLogFlush.current = null;
         }
-        if (logSaveTimer.current) {
-          clearTimeout(logSaveTimer.current);
-          logSaveTimer.current = null;
-        }
         unlistenComplete();
         unlistenError();
         unlistenLog();
         unlistenPayloadLog();
         unlistenPayloadDone();
         unlistenPayloadVersion();
+        unlistenPayloadBusy();
+        unlistenPayloadStatus();
+        unlistenConnectionStatus();
         unlistenUpdateReady();
         unlistenUpdateError();
         unlistenManageProgress();
         unlistenManageDone();
         unlistenManageLog();
+        unlistenManageList();
         unlistenChatMessage();
         unlistenChatStatus();
         unlistenChatAck();
@@ -1890,17 +1920,68 @@ export default function App() {
     return `${secs}s`;
   };
 
-  const fetchPayloadStatus = async () => {
-    if (!ip.trim() || !isConnected) return;
-    try {
-      const status = await invoke<PayloadStatusResponse>("payload_status", { ip });
-      setPayloadFullStatus(status);
-    } catch (err) {
-      console.error("Failed to fetch payload status:", err);
-      // Don't spam logs on every poll, only log once
-      if (!payloadFullStatus) {
-        setClientLogs((prev) => [`Payload status error: ${String(err)}`, ...prev].slice(0, 100));
-      }
+  const formatUpdatedAt = (updatedAt: number | null) => {
+    if (!updatedAt) return "—";
+    return new Date(updatedAt).toLocaleTimeString();
+  };
+
+  const applyConnectionSnapshot = (snapshot: ConnectionStatusSnapshot | null) => {
+    if (!snapshot) return;
+    setConnectionStatus(snapshot.status);
+    setIsConnected(snapshot.is_connected);
+    setIsConnecting(false);
+    setManageStatus((prev) =>
+      snapshot.is_connected ? (prev === "Not connected" ? "Connected" : prev) : "Not connected"
+    );
+    const available = snapshot.storage_locations;
+    setStorageLocations(available);
+    if (snapshot.is_connected && available.length > 0) {
+      setStorageRoot((prev) => {
+        if (!available.some((loc) => loc.path === prev)) {
+          return available[0].path;
+        }
+        return prev;
+      });
+      setManagePath((prev) => {
+        if (!prev || prev === "/data" || !available.some((loc) => loc.path === prev)) {
+          return available[0].path;
+        }
+        return prev;
+      });
+    }
+  };
+
+  const applyManageSnapshot = (snapshot: ManageListSnapshot | null) => {
+    if (!snapshot) return;
+    if (snapshot.path && snapshot.path !== managePath) {
+      return;
+    }
+    if (typeof snapshot.updated_at_ms === "number") {
+      setManageLastUpdated(snapshot.updated_at_ms);
+    }
+    if (snapshot.error) {
+      setManageStatus(`Error: ${snapshot.error}`);
+      return;
+    }
+    const sorted = sortEntries(snapshot.entries, manageSort);
+    setManageEntries(sorted);
+    setManageSelected(null);
+    setManageMeta(null);
+    setManageCoverUrl(null);
+    setManageStatus(`Loaded ${sorted.length} items`);
+  };
+
+  const applyPayloadSnapshot = (snapshot: PayloadStatusSnapshot | null) => {
+    if (!snapshot) return;
+    setPayloadFullStatus(snapshot.status ?? null);
+    setPayloadStatusError(snapshot.error ?? null);
+    if (typeof snapshot.updated_at_ms === "number") {
+      setPayloadLastUpdated(snapshot.updated_at_ms);
+    }
+    if (snapshot.status?.version) {
+      setPayloadStatus(`Running (v${snapshot.status.version})`);
+    } else if (snapshot.error) {
+      setPayloadStatus(`Status error: ${snapshot.error}`);
     }
   };
 
@@ -1908,10 +1989,12 @@ export default function App() {
     if (!ip.trim()) return;
     setPayloadStatusLoading(true);
     try {
-      const status = await invoke<PayloadStatusResponse>("payload_status", { ip });
-      setPayloadFullStatus(status);
+      const snapshot = await invoke<PayloadStatusSnapshot>("payload_status_refresh", { ip });
+      applyPayloadSnapshot(snapshot);
     } catch (err) {
-      setClientLogs((prev) => [`Payload status error: ${String(err)}`, ...prev].slice(0, 100));
+      const message = String(err);
+      setPayloadStatusError(message);
+      setClientLogs((prev) => [`Payload status error: ${message}`, ...prev].slice(0, 100));
     }
     setPayloadStatusLoading(false);
   };
@@ -1949,26 +2032,34 @@ export default function App() {
     }
   };
 
-  // Auto-refresh payload status when on payload tab
   useEffect(() => {
-    if (activeTab === "payload" && isConnected && ip.trim()) {
-      fetchPayloadStatus();
-      if (!payloadStatusInterval.current) {
-        payloadStatusInterval.current = setInterval(fetchPayloadStatus, 5000);
-      }
-    } else {
-      if (payloadStatusInterval.current) {
-        clearInterval(payloadStatusInterval.current);
-        payloadStatusInterval.current = null;
-      }
-    }
-    return () => {
-      if (payloadStatusInterval.current) {
-        clearInterval(payloadStatusInterval.current);
-        payloadStatusInterval.current = null;
-      }
-    };
-  }, [activeTab, isConnected, ip]);
+    invoke<PayloadStatusSnapshot>("payload_status_snapshot")
+      .then((snapshot) => applyPayloadSnapshot(snapshot))
+      .catch(() => {
+        // ignore snapshot failures
+      });
+  }, []);
+
+  useEffect(() => {
+    invoke<ConnectionStatusSnapshot>("connection_snapshot")
+      .then((snapshot) => applyConnectionSnapshot(snapshot))
+      .catch(() => {
+        // ignore snapshot failures
+      });
+  }, []);
+
+  useEffect(() => {
+    invoke("payload_set_ip", { ip }).catch(() => {
+      // ignore payload ip sync failures
+    });
+  }, [ip]);
+
+  useEffect(() => {
+    const enabled = activeTab === "payload" && isConnected && ip.trim().length > 0 && !activeRunId;
+    invoke("payload_polling_set", { enabled }).catch(() => {
+      // ignore poll toggle failures
+    });
+  }, [activeTab, isConnected, ip, activeRunId]);
 
   const handleConnect = async () => {
     if (!ip.trim()) {
@@ -1979,36 +2070,12 @@ export default function App() {
     setIsConnecting(true);
     setConnectionStatus("Connecting...");
     try {
-      const portOpen = await invoke<boolean>("port_check", {
-        ip,
-        port: 9113
-      });
-      if (!portOpen) {
-        setConnectionStatus("Port 9113 closed");
-        setIsConnected(false);
-        setIsConnecting(false);
-        return false;
-      }
-      const locations = await invoke<StorageLocation[]>("storage_list", { ip });
-      const available = locations.filter((loc) => loc.free_gb > 0);
-      setStorageLocations(available);
-      if (available.length > 0) {
-        setStorageRoot(available[0].path);
-        if (!managePath || managePath === "/data") {
-          setManagePath(available[0].path);
-        }
-        setConnectionStatus("Connected");
-        setManageStatus("Connected");
-        setIsConnected(true);
-        if (payloadAutoReload) {
-          runPayloadReload();
-        }
-        return true;
-      } else {
-        setConnectionStatus("No storage");
-        setIsConnected(false);
-        return false;
-      }
+      const snapshot = await invoke<ConnectionStatusSnapshot>(
+        "connection_connect",
+        { ip }
+      );
+      applyConnectionSnapshot(snapshot);
+      return snapshot.is_connected;
     } catch (err) {
       setConnectionStatus(`Error: ${String(err)}`);
       setIsConnected(false);
@@ -2138,7 +2205,6 @@ export default function App() {
       setPayloadStatus("Port 9021 closed");
       return;
     }
-    setPayloadBusy(true);
     setPayloadStatus(tr("payload_sending"));
     try {
       if (mode === "local") {
@@ -2147,7 +2213,6 @@ export default function App() {
         await invoke("payload_download_and_send", { ip, fetch: mode });
       }
     } catch (err) {
-      setPayloadBusy(false);
       setPayloadStatus(`Error: ${String(err)}`);
     }
   };
@@ -2285,7 +2350,6 @@ export default function App() {
       setTransferStartedAt(Date.now());
       const startMsg = `Upload started: ${sourcePath} -> ${finalDestPath}`;
       setClientLogs((prev) => [startMsg, ...prev].slice(0, 100));
-      queueLogSave("transfer", startMsg);
     } catch (err) {
       setTransferState((prev) => ({
         ...prev,
@@ -2297,7 +2361,7 @@ export default function App() {
   const saveQueueData = async (data: QueueData) => {
     setQueueData(data);
     try {
-      await invoke("queue_save", { data });
+      await invoke("queue_update", { data });
     } catch (err) {
       setClientLogs((prev) => [
         `Failed to save queue: ${String(err)}`,
@@ -2542,25 +2606,6 @@ export default function App() {
     });
   };
 
-  const loadManageEntries = async (path: string) => {
-    if (!ip.trim()) {
-      setManageStatus("Not connected");
-      return;
-    }
-    setManageStatus("Loading...");
-    try {
-      const entries = await invoke<DirEntry[]>("manage_list", { ip, path });
-      const sorted = sortEntries(entries, manageSort);
-      setManageEntries(sorted);
-      setManageSelected(null);
-      setManageMeta(null);
-      setManageCoverUrl(null);
-      setManageStatus(`Loaded ${sorted.length} items`);
-    } catch (err) {
-      setManageStatus(`Error: ${String(err)}`);
-    }
-  };
-
   const handleManageRefresh = async (pathOverride?: string) => {
     const override = typeof pathOverride === "string" ? pathOverride : undefined;
     const targetPath = override ?? managePath;
@@ -2568,7 +2613,20 @@ export default function App() {
       manageRefreshSkip.current = targetPath;
       setManagePath(targetPath);
     }
-    await loadManageEntries(targetPath);
+    if (!ip.trim()) {
+      setManageStatus("Not connected");
+      return;
+    }
+    setManageStatus("Loading...");
+    try {
+      const snapshot = await invoke<ManageListSnapshot>("manage_list_refresh", {
+        ip,
+        path: targetPath
+      });
+      applyManageSnapshot(snapshot);
+    } catch (err) {
+      setManageStatus(`Error: ${String(err)}`);
+    }
   };
 
   const handleManageUp = () => {
@@ -3694,10 +3752,17 @@ export default function App() {
                     >
                       {payloadStatusLoading ? tr("loading") : tr("refresh")}
                     </button>
+                    <p className="muted small">
+                      Last update: {formatUpdatedAt(payloadLastUpdated)}
+                    </p>
                   </div>
                 ) : (
                   <div className="stack">
-                    <p className="muted">{tr("loading")}...</p>
+                    <p className="muted">
+                      {payloadStatusError
+                        ? `Status error: ${payloadStatusError}`
+                        : `${tr("loading")}...`}
+                    </p>
                     <button
                       className="btn"
                       onClick={handleRefreshPayloadStatus}
@@ -3705,6 +3770,9 @@ export default function App() {
                     >
                       {tr("refresh")}
                     </button>
+                    <p className="muted small">
+                      Last update: {formatUpdatedAt(payloadLastUpdated)}
+                    </p>
                   </div>
                 )}
               </div>
@@ -3718,7 +3786,11 @@ export default function App() {
                   <p className="muted">{tr("not_connected")}</p>
                 ) : !payloadFullStatus ? (
                   <div className="stack">
-                    <p className="muted">{tr("loading")}...</p>
+                    <p className="muted">
+                      {payloadStatusError
+                        ? `Status error: ${payloadStatusError}`
+                        : `${tr("loading")}...`}
+                    </p>
                     <button
                       className="btn"
                       onClick={handleRefreshPayloadStatus}
@@ -3823,6 +3895,9 @@ export default function App() {
                   </button>
                 </div>
                 {manageStatus && <p className="muted small">{manageStatus}</p>}
+                <p className="muted small">
+                  Last update: {formatUpdatedAt(manageLastUpdated)}
+                </p>
                 <div className="file-list">
                   <div className="file-item header">
                     <span
