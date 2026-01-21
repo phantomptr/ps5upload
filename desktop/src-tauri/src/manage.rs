@@ -663,12 +663,12 @@ pub fn manage_download_dir(
 }
 
 #[tauri::command]
-pub fn manage_upload(
+pub async fn manage_upload(
     ip: String,
     dest_root: String,
     paths: Vec<String>,
     app_handle: AppHandle,
-    state: State<AppState>,
+    state: State<'_, AppState>,
 ) -> Result<(), String> {
     if ip.trim().is_empty() {
         return Err("Enter a PS5 address first.".to_string());
@@ -684,19 +684,19 @@ pub fn manage_upload(
     let handle = app_handle.clone();
     let active = state.manage_active.clone();
     let cancel = state.manage_cancel.clone();
-    thread::spawn(move || {
-        emit_log(&handle, "Upload started.");
-        let result = manage_upload_impl(&ip, &dest_root, paths, handle.clone(), cancel);
-        active.store(false, Ordering::Relaxed);
-        match result {
-            Ok(bytes) => emit_done(&handle, "Upload", Some(bytes), None),
-            Err(err) => emit_done(&handle, "Upload", None, Some(err)),
-        }
-    });
+    
+    emit_log(&handle, "Upload started.");
+    let result = manage_upload_impl(&ip, &dest_root, paths, handle.clone(), cancel).await;
+    active.store(false, Ordering::Relaxed);
+    match result {
+        Ok(bytes) => emit_done(&handle, "Upload", Some(bytes), None),
+        Err(err) => emit_done(&handle, "Upload", None, Some(err)),
+    }
+
     Ok(())
 }
 
-fn manage_upload_impl(
+async fn manage_upload_impl(
     ip: &str,
     dest_root: &str,
     paths: Vec<String>,
@@ -761,9 +761,7 @@ fn manage_upload_impl(
         if cancel.load(Ordering::Relaxed) {
             return Err("Upload cancelled".to_string());
         }
-        let stream = tauri::async_runtime::block_on(async {
-            upload_v2_init(ip, TRANSFER_PORT, &dest, false).await
-        })
+        let stream = upload_v2_init(ip, TRANSFER_PORT, &dest, false).await
         .map_err(|err| err.to_string())?;
         let mut std_stream = stream.into_std().map_err(|err| err.to_string())?;
         std_stream
