@@ -559,7 +559,6 @@ where
         .map_err(|_| anyhow!("Invalid size header"))?;
     progress(0, total_size, Some(path.to_string()));
     let mut last_progress_emit = std::time::Instant::now();
-    let mut last_progress_emit = std::time::Instant::now();
 
     let mut file = tokio::fs::File::create(dest_path).await?;
     let mut remaining = total_size;
@@ -662,6 +661,7 @@ where
     let mut current_path = String::new();
     let mut current_file: Option<tokio::fs::File> = None;
     let mut received = 0u64;
+    let mut last_progress_emit = std::time::Instant::now();
     loop {
         if cancel.load(Ordering::Relaxed) {
             return Err(anyhow!("Cancelled"));

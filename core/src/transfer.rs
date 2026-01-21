@@ -804,7 +804,6 @@ where
     }
     if last_progress_sent != total_sent_bytes {
         progress(total_sent_bytes, total_sent_files, None);
-        last_progress_sent = total_sent_bytes;
     }
 
     if pack_error.load(Ordering::Relaxed) {
@@ -934,7 +933,6 @@ where
     }
     if last_progress_sent != total_sent_bytes {
         progress(total_sent_bytes, total_sent_files, None);
-        last_progress_sent = total_sent_bytes;
     }
     send_frame_header(&mut stream, FrameType::Finish, 0, &cancel)?;
     Ok(())
@@ -996,7 +994,6 @@ where
     }
     if last_progress_sent != total_sent_bytes {
         progress(total_sent_bytes, total_sent_files, None);
-        last_progress_sent = total_sent_bytes;
     }
     send_frame_header(&mut stream, FrameType::Finish, 0, &cancel)?;
     Ok(())
