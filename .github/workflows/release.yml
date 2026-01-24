@@ -168,6 +168,7 @@ jobs:
           tag="${{ steps.tag.outputs.tag }}"
           version="${tag#v}"
           rm -f dist/**/elevate.exe dist/**/elevate.exe* || true
+          rm -f dist/PS5.Upload-${version}.AppImage dist/PS5.Upload-${version}-arm64.AppImage || true
 
           for arch in x64 arm64; do
             exe=$(find dist -type f -name "PS5 Upload*.exe" -path "*ps5upload-windows-${arch}*" | head -n 1 || true)
@@ -211,7 +212,7 @@ jobs:
           name: ${{ steps.tag.outputs.tag }}
           body_path: dist/RELEASE_NOTES.md
           files: |
-            dist/PS5.Upload-*.exe
-            dist/PS5.Upload-*.dmg
-            dist/PS5.Upload-*.AppImage
+            dist/PS5.Upload-*-win-*.exe
+            dist/PS5.Upload-*-mac-*.dmg
+            dist/PS5.Upload-*-linux-*.AppImage
             dist/**/*.elf
