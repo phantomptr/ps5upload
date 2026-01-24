@@ -87,7 +87,7 @@ jobs:
           if [[ "${{ matrix.platform }}" == "macos" ]]; then
             npx electron-builder --mac dmg --${{ matrix.arch }} --publish never
           elif [[ "${{ matrix.platform }}" == "windows" ]]; then
-            npx electron-builder --win portable --${{ matrix.arch }} --publish never
+            npx electron-builder --win nsis --${{ matrix.arch }} --publish never
           else
             npx electron-builder --linux AppImage --${{ matrix.arch }} --publish never
           fi
