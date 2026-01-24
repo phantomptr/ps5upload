@@ -141,6 +141,164 @@ function findArchiveCoverEntry(entries, paramEntry) {
   return null;
 }
 
+async function uploadRarForExtraction(ip, rarPath, destPath, mode, opts = {}) {
+  const {
+    cancel = { value: false },
+    onProgress = () => {},
+    onLog = () => {}
+  } = opts;
+  const fileSize = (await fs.promises.stat(rarPath)).size;
+
+  let triedFallback = false;
+  let modeToTry = mode;
+  let socket;
+
+  while (true) {
+    if (cancel.value) throw new Error('Upload cancelled');
+
+    socket = await createSocketWithTimeout(ip, TRANSFER_PORT);
+    const cmd = `UPLOAD_RAR_${String(modeToTry || 'normal').toUpperCase()} ${destPath} ${fileSize}\n`;
+    socket.write(cmd);
+
+    let response = '';
+    try {
+      response = await new Promise((resolve, reject) => {
+        let data = Buffer.alloc(0);
+        const timeout = setTimeout(() => {
+          socket.destroy();
+          reject(new Error('Read timeout'));
+        }, READ_TIMEOUT_MS);
+
+        socket.on('data', (chunk) => {
+          data = Buffer.concat([data, chunk]);
+          if (data.includes(Buffer.from('\n'))) {
+            clearTimeout(timeout);
+            resolve(data.toString('utf8').trim());
+          }
+        });
+        socket.on('error', reject);
+        socket.on('close', () => resolve(''));
+      });
+    } catch (err) {
+      socket.destroy();
+      throw err;
+    }
+
+    if (response === 'READY') {
+      break;
+    }
+
+    socket.destroy();
+
+    if (!triedFallback && modeToTry !== 'normal' && response.includes('Unknown command')) {
+      triedFallback = true;
+      modeToTry = 'normal';
+      onLog('RAR mode unsupported by payload. Retrying with Normal.');
+      continue;
+    }
+
+    throw new Error(`Server rejected RAR upload: ${response}`);
+  }
+
+  const fileStream = fs.createReadStream(rarPath);
+  let sentBytes = 0;
+  const progressInterval = setInterval(() => {
+    onProgress('Upload', sentBytes, fileSize, path.basename(rarPath));
+  }, 1000);
+
+  try {
+    await new Promise((resolve, reject) => {
+      fileStream.on('data', (chunk) => {
+        if (cancel.value) {
+          fileStream.destroy();
+          socket.destroy();
+          return reject(new Error('Upload cancelled'));
+        }
+        if (!socket.write(chunk)) {
+          fileStream.pause();
+          socket.once('drain', () => {
+            fileStream.resume();
+          });
+        }
+        sentBytes += chunk.length;
+      });
+
+      fileStream.on('end', () => {
+        socket.end();
+        resolve();
+      });
+
+      fileStream.on('error', (err) => {
+        socket.destroy();
+        reject(err);
+      });
+
+      socket.on('error', (err) => {
+        fileStream.destroy();
+        reject(err);
+      });
+    });
+  } finally {
+    clearInterval(progressInterval);
+  }
+
+  onLog('Upload complete. Waiting for extraction...');
+
+  const extractResult = await new Promise((resolve, reject) => {
+    let lineBuffer = '';
+    const timeout = setTimeout(() => {
+      socket.destroy();
+      reject(new Error('Extraction timed out (no progress for 10m)'));
+    }, 600000);
+
+    socket.on('data', (chunk) => {
+      clearTimeout(timeout);
+      lineBuffer += chunk.toString('utf8');
+      let newlineIndex;
+      while ((newlineIndex = lineBuffer.indexOf('\n')) !== -1) {
+        const line = lineBuffer.substring(0, newlineIndex).trim();
+        lineBuffer = lineBuffer.substring(newlineIndex + 1);
+
+        if (line.startsWith('SUCCESS ')) {
+          const parts = line.split(' ');
+          const files = parseInt(parts[1], 10) || 0;
+          const bytes = parseInt(parts[2], 10) || 0;
+          resolve({ files, bytes });
+          return;
+        } else if (line.startsWith('ERROR: ')) {
+          reject(new Error(`RAR extraction failed: ${line}`));
+          return;
+        } else if (line.startsWith('EXTRACT_PROGRESS ')) {
+          const parts = line.split(' ');
+          const processed = parseInt(parts[2], 10) || 0;
+          const total = parseInt(parts[3], 10) || 0;
+          let currentFile = null;
+          if (parts.length > 4) {
+            currentFile = parts.slice(4).join(' ');
+          }
+          onProgress('Extract', processed, total, currentFile);
+        } else if (line.startsWith('EXTRACTING ')) {
+          const rest = line.substring('EXTRACTING '.length);
+          const spaceIndex = rest.indexOf(' ');
+          if (spaceIndex !== -1) {
+            const count = rest.substring(0, spaceIndex);
+            const filename = rest.substring(spaceIndex + 1);
+            onLog(`Extracting (${count}): ${filename}`);
+          }
+        }
+      }
+      timeout.refresh();
+    });
+
+    socket.on('error', reject);
+    socket.on('close', () => {
+      reject(new Error('Connection closed unexpectedly during extraction monitoring.'));
+    });
+  });
+
+  return { fileSize, ...extractResult };
+}
+
 function getTitleFromParam(param) {
   if (param && typeof param.titleName === 'string') {
     return param.titleName;
@@ -1525,7 +1683,7 @@ async function readUploadResponse(socket, cancel = { value: false }) {
 }
 
 function parseUploadResponse(response) {
-  if (response.startsWith('OK ')) {
+  if (response.startsWith('OK ') || response.startsWith('SUCCESS ')) {
     const parts = response.split(/\s+/);
     if (parts.length >= 3) {
       return { files: parseInt(parts[1], 10), bytes: parseInt(parts[2], 10) };
@@ -2394,155 +2552,17 @@ function registerIpcHandlers() {
     emit('manage_log', { message: `Uploading RAR ${rarPath} for extraction to ${destPath}` });
 
     try {
-      const fileSize = (await fs.promises.stat(rarPath)).size;
-
-      let triedFallback = false;
-      let modeToTry = mode;
-      let socket;
-
-      while (true) {
-        if (state.manageCancel) {
-          throw new Error('Upload cancelled');
-        }
-
-        socket = await createSocketWithTimeout(ip, TRANSFER_PORT);
-        const cmd = `UPLOAD_RAR_${modeToTry.toUpperCase()} ${destPath} ${fileSize}\n`;
-        socket.write(cmd);
-
-        let response = '';
-        try {
-          response = await new Promise((resolve, reject) => {
-            let data = Buffer.alloc(0);
-            const timeout = setTimeout(() => {
-              socket.destroy();
-              reject(new Error('Read timeout'));
-            }, READ_TIMEOUT_MS);
-
-            socket.on('data', (chunk) => {
-              data = Buffer.concat([data, chunk]);
-              if (data.includes(Buffer.from('\n'))) {
-                clearTimeout(timeout);
-                resolve(data.toString('utf8').trim());
-              }
-            });
-            socket.on('error', reject);
-            socket.on('close', () => resolve('')); // Handle unexpected close
+      const extractResult = await uploadRarForExtraction(ip, rarPath, destPath, mode, {
+        cancel: { get value() { return state.manageCancel; } },
+        onProgress: (op, processed, total, currentFile) => {
+          emit('manage_progress', {
+            op: op === 'Upload' ? 'Extract' : 'Extract',
+            processed,
+            total,
+            current_file: currentFile
           });
-        } catch (err) {
-          socket.destroy();
-          throw err;
-        }
-
-        if (response === 'READY') {
-          break; // Server is ready, proceed with upload
-        }
-
-        socket.destroy();
-
-        if (!triedFallback && modeToTry !== 'normal' && response.includes('Unknown command')) {
-          triedFallback = true;
-          modeToTry = 'normal';
-          emit('manage_log', { message: 'RAR mode unsupported by payload. Retrying with Normal.' });
-          continue; // Try again with normal mode
-        }
-
-        throw new Error(`Server rejected RAR upload: ${response}`);
-      }
-
-      // --- Send RAR file data ---
-      const fileStream = fs.createReadStream(rarPath);
-      let sentBytes = 0;
-      const progressInterval = setInterval(() => {
-        emit('manage_progress', { op: 'Extract', processed: sentBytes, total: fileSize, current_file: path.basename(rarPath) });
-      }, 1000);
-
-      try {
-        await new Promise((resolve, reject) => {
-          fileStream.on('data', (chunk) => {
-            if (state.manageCancel) {
-              fileStream.destroy();
-              socket.destroy();
-              return reject(new Error('Upload cancelled'));
-            }
-            if (!socket.write(chunk)) {
-              fileStream.pause();
-              socket.once('drain', () => {
-                fileStream.resume();
-              });
-            }
-            sentBytes += chunk.length;
-          });
-
-          fileStream.on('end', () => {
-            socket.end(); // Signal end of file data
-            resolve();
-          });
-
-          fileStream.on('error', (err) => {
-            socket.destroy();
-            reject(err);
-          });
-
-          socket.on('error', (err) => {
-            fileStream.destroy();
-            reject(err);
-          });
-        });
-      } finally {
-        clearInterval(progressInterval);
-      }
-
-      // --- Monitor extraction progress ---
-      const extractResult = await new Promise((resolve, reject) => {
-        let lineBuffer = '';
-        const timeout = setTimeout(() => {
-          socket.destroy();
-          reject(new Error('Extraction timed out (no progress for 10m)'));
-        }, 600000); // 10 minutes timeout
-
-        socket.on('data', (chunk) => {
-          clearTimeout(timeout);
-          lineBuffer += chunk.toString('utf8');
-          let newlineIndex;
-          while ((newlineIndex = lineBuffer.indexOf('\n')) !== -1) {
-            const line = lineBuffer.substring(0, newlineIndex).trim();
-            lineBuffer = lineBuffer.substring(newlineIndex + 1);
-
-            if (line.startsWith('SUCCESS ')) {
-              const parts = line.split(' ');
-              const files = parseInt(parts[1], 10) || 0;
-              const bytes = parseInt(parts[2], 10) || 0;
-              resolve({ files, bytes });
-              return;
-            } else if (line.startsWith('ERROR: ')) {
-              reject(new Error(`RAR extraction failed: ${line}`));
-              return;
-            } else if (line.startsWith('EXTRACT_PROGRESS ')) {
-              const parts = line.split(' ');
-              const processed = parseInt(parts[2], 10) || 0;
-              const total = parseInt(parts[3], 10) || 0;
-              let currentFile = null;
-              if (parts.length > 4) { // parts[0] is "EXTRACT_PROGRESS", parts[1] is maybe a token, parts[2] is processed, parts[3] is total
-                currentFile = parts.slice(4).join(' '); // Remaining parts form the filename
-              }
-              emit('manage_progress', { op: 'Extract', processed, total, current_file: currentFile });
-            } else if (line.startsWith('EXTRACTING ')) {
-              const rest = line.substring('EXTRACTING '.length);
-              const spaceIndex = rest.indexOf(' ');
-              if (spaceIndex !== -1) {
-                const count = rest.substring(0, spaceIndex);
-                const filename = rest.substring(spaceIndex + 1);
-                emit('manage_log', { message: `Extracting (${count}): ${filename}` });
-              }
-            }
-          }
-          timeout.refresh(); // Reset timeout on data
-        });
-
-        socket.on('error', reject);
-        socket.on('close', () => {
-          reject(new Error('Connection closed unexpectedly during extraction monitoring.'));
-        });
+        },
+        onLog: (message) => emit('manage_log', { message })
       });
 
       emit('manage_done', { op: 'Extract', bytes: extractResult.bytes, error: null });
@@ -2796,6 +2816,58 @@ function registerIpcHandlers() {
         const startTime = Date.now();
 
         try {
+          const sourceStat = await fs.promises.stat(req.source_path);
+          const isRar = sourceStat.isFile() && path.extname(req.source_path).toLowerCase() === '.rar';
+
+          if (isRar) {
+            emitLog(`Uploading RAR for extraction: ${req.source_path}`);
+            state.transferStatus = {
+              run_id: runId,
+              status: 'Uploading archive',
+              sent: 0,
+              total: sourceStat.size,
+              files: 1,
+              elapsed_secs: 0,
+              current_file: path.basename(req.source_path),
+            };
+
+            const extractResult = await uploadRarForExtraction(
+              req.ip,
+              req.source_path,
+              req.dest_path,
+              req.rar_extract_mode || 'normal',
+              {
+                cancel: { get value() { return state.transferCancel; } },
+                onProgress: (op, processed, total, currentFile) => {
+                  state.transferStatus = {
+                    run_id: runId,
+                    status: op === 'Extract' ? 'Extracting' : 'Uploading archive',
+                    sent: processed,
+                    total: total || sourceStat.size,
+                    files: 1,
+                    elapsed_secs: (Date.now() - startTime) / 1000,
+                    current_file: currentFile || path.basename(req.source_path),
+                  };
+                },
+                onLog: emitLog,
+              }
+            );
+
+            const elapsed = (Date.now() - startTime) / 1000;
+            const finalTotal = extractResult.bytes || sourceStat.size;
+            state.transferStatus = {
+              run_id: runId,
+              status: 'Complete',
+              sent: finalTotal,
+              total: finalTotal,
+              files: extractResult.files || 1,
+              elapsed_secs: elapsed,
+              current_file: '',
+            };
+            emit('transfer_complete', { run_id: runId, files: extractResult.files || 1, bytes: finalTotal });
+            return;
+          }
+
           emitLog('Scanning files...');
           const result = await collectFiles(req.source_path, { get value() { return state.transferCancel; } }, (filesFound, totalSize) => {
             state.transferStatus = { ...state.transferStatus, status: 'Scanning', files: filesFound, total: totalSize };

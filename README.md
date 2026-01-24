@@ -56,13 +56,35 @@ In the left panel of the app, under the **Payload** section, you can browse for 
 **Success?**
 You should see a notification pop up on your TV: **"PS5 Upload Server - Ready on port 9113"**.
 
-### 2. Connect the App (Computer)
+### 2. Install & Run the App (Computer)
+**Windows**
+1. Download the `PS5Upload-<version>-win-<arch>.zip`.
+2. Extract it anywhere (portable).
+3. Run `PS5Upload.exe` inside the extracted folder.
+
+**macOS**
+1. Download the `PS5Upload-<version>-mac-<arch>.dmg`.
+2. Open the DMG and drag **PS5Upload** to Applications.
+3. Launch PS5Upload from Applications.
+
+**Linux**
+1. Download the `PS5Upload-<version>-linux-<arch>.tar.gz`.
+2. Extract it:
+   ```bash
+   tar -xzf PS5Upload-<version>-linux-<arch>.tar.gz
+   ```
+3. Run with sandbox disabled:
+   ```bash
+   ./ps5upload-desktop --no-sandbox
+   ```
+
+### 3. Connect the App (Computer)
 1.  In the left panel of the app, go to the **Connect** section.
 2.  Type your PS5's IP address (e.g., `192.168.0.105`).
 3.  Click **Connect**.
 4.  You'll see the available storage space on your console show up in the **Storage** section.
 
-### 3. Send Your App
+### 4. Send Your App
 1.  In the main panel, make sure you are on the **Transfer** tab.
 2.  **Source:** Click **Browse** and pick the folder containing your app on your computer.
 3.  **Destination:**
@@ -71,16 +93,16 @@ You should see a notification pop up on your TV: **"PS5 Upload Server - Ready on
     *   Give your folder a name.
 4.  **Upload:** Click **Upload** in the bottom right. The bar will track real-time progress.
 
-### 4. Manage Files (Optional)
+### 5. Manage Files (Optional)
 Open the **Manage** tab to browse your PS5's storage. You can rename, move, copy, delete, and `chmod 777` files or folders. You can also download files and folders from your PS5 to your computer.
 
-### 5. Resume Transfers (Optional)
+### 6. Resume Transfers (Optional)
 If a transfer was interrupted, you can enable **Resume** mode in the **Transfer** tab's settings. The next time you upload the same content to the same destination, it will skip files that are already there.
 * **Skip by size (fast)** — quickest.
 * **Skip by size + time (medium)** — more accurate.
 * **Verify SHA256 (slow)** — most accurate, slowest.
 
-### 6. Chat (Optional)
+### 7. Chat (Optional)
 Open the **Chat** tab to talk with other PS5Upload users on the same LAN. It auto-picks a display name and uses local broadcast.
 
 ## FAQ
