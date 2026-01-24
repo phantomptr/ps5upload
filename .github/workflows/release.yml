@@ -93,7 +93,6 @@ jobs:
           fi
         env:
           ELECTRON_BUILDER_REBUILD: "false"
-        env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
       - name: Upload artifact
