@@ -6,8 +6,14 @@
 target/
 dist/
 build/
+release/
 node_modules/
 payload/build/
+desktop/release/
+desktop/.vite/
+desktop/out/
+desktop/.electron-builder/
+desktop/.cache/
 
 # Python
 __pycache__/

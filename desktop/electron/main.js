@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const net = require('net');
+const dgram = require('dgram');
 const https = require('https');
 const http = require('http');
 const crypto = require('crypto');
@@ -32,7 +33,7 @@ const PACK_BUFFER_SIZE = 16 * 1024 * 1024; // 16MB
 const SEND_CHUNK_SIZE = 4 * 1024 * 1024; // 4MB
 const WRITE_CHUNK_SIZE = 512 * 1024; // 512KB
 const MAGIC_FTX1 = 0x31585446;
-const VERSION = '1.2.2';
+const VERSION = '1.2.3';
 
 const FrameType = {
   Pack: 4,
@@ -365,6 +366,12 @@ const state = {
   chatSender: null,
 };
 
+let chatSocket = null;
+let chatRoomId = 'LAN';
+let chatEnabled = false;
+const chatInstanceId = crypto.randomUUID();
+const CHAT_PORT = 9234;
+
 // Pollers
 let payloadPoller = null;
 let connectionPoller = null;
@@ -412,6 +419,10 @@ app.commandLine.appendSwitch(
   'AutofillServerCommunication,AutofillEnable'
 );
 
+if (!isDev) {
+  app.commandLine.appendSwitch('disable-devtools');
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -422,6 +433,7 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      devTools: isDev,
     },
   });
 
@@ -442,6 +454,75 @@ function emit(channel, data) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(channel, data);
   }
+}
+
+function startChatSocket() {
+  if (chatSocket) {
+    return { room_id: chatRoomId, enabled: chatEnabled };
+  }
+
+  try {
+    const socket = dgram.createSocket({ type: 'udp4', reuseAddr: true });
+    chatSocket = socket;
+
+    socket.on('error', (err) => {
+      chatEnabled = false;
+      emit('chat_status', { status: `Error: ${err.message}` });
+    });
+
+    socket.on('message', (msg) => {
+      let payload = null;
+      try {
+        payload = JSON.parse(msg.toString('utf8'));
+      } catch {
+        return;
+      }
+      if (!payload || payload.instance_id === chatInstanceId) return;
+      const time = payload.time || new Date().toLocaleTimeString();
+      emit('chat_message', {
+        time,
+        sender: payload.name || 'User',
+        text: payload.text || '',
+        local: false,
+      });
+    });
+
+    socket.bind(CHAT_PORT, () => {
+      socket.setBroadcast(true);
+      chatEnabled = true;
+      emit('chat_status', { status: 'Connected' });
+    });
+
+    return { room_id: chatRoomId, enabled: true };
+  } catch (err) {
+    chatEnabled = false;
+    emit('chat_status', { status: `Error: ${err.message}` });
+    return { room_id: '', enabled: false };
+  }
+}
+
+function sendChatMessage(name, text) {
+  if (!chatSocket) {
+    const info = startChatSocket();
+    if (!info.enabled) {
+      throw new Error('Chat unavailable');
+    }
+  }
+  const payload = {
+    instance_id: chatInstanceId,
+    name,
+    text,
+    time: new Date().toLocaleTimeString(),
+  };
+  const buffer = Buffer.from(JSON.stringify(payload));
+  chatSocket.send(buffer, 0, buffer.length, CHAT_PORT, '255.255.255.255');
+  emit('chat_message', {
+    time: payload.time,
+    sender: name,
+    text,
+    local: true,
+  });
+  emit('chat_ack', { ok: true });
 }
 
 // Log writing
@@ -2101,6 +2182,7 @@ function registerIpcHandlers() {
       emit('manage_done', { op: 'Copy', bytes: null, error: null });
     } catch (err) {
       emit('manage_done', { op: 'Copy', bytes: null, error: err.message });
+      throw err;
     }
     return true;
   });
@@ -2799,9 +2881,9 @@ function registerIpcHandlers() {
     return true;
   });
 
-  // Chat (simplified - no actual WebSocket implementation)
+  // Chat (LAN broadcast)
   ipcMain.handle('chat_info', () => {
-    return { room_id: '', enabled: false };
+    return { room_id: chatRoomId, enabled: true };
   });
 
   ipcMain.handle('chat_generate_name', () => {
@@ -2809,11 +2891,12 @@ function registerIpcHandlers() {
   });
 
   ipcMain.handle('chat_start', () => {
-    return { room_id: '', enabled: false };
+    return startChatSocket();
   });
 
   ipcMain.handle('chat_send', (_, name, text) => {
-    // No-op for now
+    if (!name || !text) return false;
+    sendChatMessage(String(name), String(text));
     return true;
   });
 
@@ -2844,6 +2927,14 @@ app.on('window-all-closed', () => {
   if (payloadPoller) clearInterval(payloadPoller);
   if (connectionPoller) clearInterval(connectionPoller);
   if (managePoller) clearInterval(managePoller);
+  if (chatSocket) {
+    try {
+      chatSocket.close();
+    } catch {
+      // ignore
+    }
+    chatSocket = null;
+  }
 
   if (process.platform !== 'darwin') app.quit();
 });

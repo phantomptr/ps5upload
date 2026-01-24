@@ -123,6 +123,7 @@ const translations = {
     resume_medium: "Medium - skip by size + time",
     resume_slow: "Slow - verify SHA256",
     resume_note: "Resume only works if source and destination are unchanged.",
+    resume_override_note: "Resume ignores existing files; override is disabled while resume is on.",
     resume_note_change: "Changing either path disables reliable resume.",
     chmod_after: "chmod 777 after upload",
     chmod_note: "May be required for games on internal storage.",
@@ -140,6 +141,7 @@ const translations = {
     override_conflict: "Override if conflict found",
     override_conflict_note: "When enabled, uploads overwrite existing destination files.",
     override_conflict_warn: "If disabled, uploads fail when the destination already exists.",
+    override_conflict_resume_note: "Disabled while Resume is enabled (resume skips existing files).",
     edit: "Edit",
     use_auto: "Use Auto",
 

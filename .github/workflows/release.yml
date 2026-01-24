@@ -23,38 +23,30 @@ jobs:
       matrix:
         include:
           - os: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
             platform: linux
             arch: x64
           - os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
             platform: linux
             arch: arm64
           - os: windows-2025
-            target: x86_64-pc-windows-msvc
             platform: windows
             arch: x64
           - os: windows-2025
-            target: aarch64-pc-windows-msvc
             platform: windows
             arch: arm64
           - os: macos-15
-            target: x86_64-apple-darwin
             platform: macos
             arch: x64
           - os: macos-15
-            target: aarch64-apple-darwin
             platform: macos
             arch: arm64
+          - os: macos-15
+            platform: macos
+            arch: universal
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -63,24 +55,13 @@ jobs:
           cache: npm
           cache-dependency-path: desktop/package-lock.json
 
-      - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
-
       - name: Install Linux desktop build deps
         if: matrix.platform == 'linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential pkg-config zip \
-            libgtk-3-dev libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev \
-            libsoup-3.0-dev libayatana-appindicator3-dev librsvg2-dev
-
-      - name: Install Tauri CLI
-        run: cargo install tauri-cli --locked
-
-      - name: Use lld for Windows ARM64
-        if: matrix.target == 'aarch64-pc-windows-msvc'
-        run: echo "RUSTFLAGS=-C linker=rust-lld" >> $GITHUB_ENV
-        shell: bash
+            libgtk-3-dev libnss3-dev libxss1 libasound2 \
+            libatk-bridge2.0-0 libgtk-3-0 libdrm2 libgbm1
 
       - name: Install frontend deps
         run: |
@@ -91,88 +72,27 @@ jobs:
         shell: bash
         run: |
           cd desktop
-          case "${{ matrix.platform }}" in
-            linux) bundles="appimage" ;;
-            macos) bundles="app" ;;
-            windows) bundles="nsis,msi" ;;
-            *) bundles="" ;;
-          esac
-          build_cmd=(npm run tauri build -- --target ${{ matrix.target }})
-          if [ -n "$bundles" ]; then
-            if ! "${build_cmd[@]}" --bundles "$bundles"; then
-              echo "Bundle build failed; retrying without bundles."
-              "${build_cmd[@]}"
+          node scripts/prepare-icons.js
+          npm run build:vite
+          if [[ "${{ matrix.platform }}" == "macos" ]]; then
+            if [[ "${{ matrix.arch }}" == "universal" ]]; then
+              npx electron-builder --mac --universal --publish never
+            else
+              npx electron-builder --mac --${{ matrix.arch }} --publish never
             fi
+          elif [[ "${{ matrix.platform }}" == "windows" ]]; then
+            npx electron-builder --win --${{ matrix.arch }} --publish never
           else
-            "${build_cmd[@]}"
+            npx electron-builder --linux --${{ matrix.arch }} --publish never
           fi
-          if [[ "${{ matrix.platform }}" == "linux" ]]; then
-            strip "src-tauri/target/${{ matrix.target }}/release/PS5Upload"
-          fi
-
-      - name: Package artifact (Windows)
-        if: matrix.platform == 'windows'
-        shell: pwsh
-        run: |
-          $bundleDir = Get-ChildItem -Path "desktop" -Recurse -Directory -Filter bundle |
-            Where-Object { $_.FullName -match "\\\\release\\\\bundle$" } |
-            Select-Object -First 1
-          if ($bundleDir) {
-            Compress-Archive -Path (Join-Path $bundleDir.FullName "*") -DestinationPath "ps5upload-${{ matrix.platform }}-${{ matrix.arch }}.zip"
-            exit 0
-          }
-          $candidates = @(
-            "desktop\\src-tauri\\target\\${{ matrix.target }}\\release\\PS5Upload.exe",
-            "desktop\\src-tauri\\target\\release\\PS5Upload.exe"
-          )
-          $exe = $null
-          foreach ($candidate in $candidates) {
-            if (Test-Path $candidate) {
-              $exe = Get-Item $candidate
-              break
-            }
-          }
-          if (-not $exe) {
-            $exe = Get-ChildItem -Path "desktop\\src-tauri\\target" -Recurse -File -Filter "PS5Upload.exe" |
-              Select-Object -First 1
-          }
-          if (-not $exe) {
-            $exe = Get-ChildItem -Path "desktop\\src-tauri\\target" -Recurse -File -Filter "*.exe" |
-              Where-Object { $_.FullName -match "\\\\release\\\\" } |
-              Select-Object -First 1
-          }
-          if (-not $exe) {
-            throw "Tauri bundle directory and executable not found."
-          }
-          Compress-Archive -Path $exe.FullName -DestinationPath "ps5upload-${{ matrix.platform }}-${{ matrix.arch }}.zip"
-
-      - name: Package artifact (Linux)
-        if: matrix.platform == 'linux'
-        run: |
-          appimage_path=$(find desktop/src-tauri/target -type f -name '*.AppImage' -path '*/release/bundle/appimage/*' | head -n 1)
-          if [ -z "$appimage_path" ]; then
-            echo "AppImage not found." >&2
-            exit 1
-          fi
-          zip -j "$GITHUB_WORKSPACE/ps5upload-${{ matrix.platform }}-${{ matrix.arch }}.zip" "$appimage_path"
-
-      - name: Package artifact (macOS)
-        if: matrix.platform == 'macos'
-        run: |
-          app_path="$(find desktop/src-tauri/target -type d -path '*/release/bundle/macos/*.app' | head -n 1)"
-          if [ -z "$app_path" ]; then
-            echo "macOS app bundle not found." >&2
-            exit 1
-          fi
-          codesign --force --deep --sign - "$app_path"
-          dmg_path="$GITHUB_WORKSPACE/ps5upload-${{ matrix.platform }}-${{ matrix.arch }}.dmg"
-          hdiutil create -volname "PS5Upload" -srcfolder "$app_path" -ov -format UDZO "$dmg_path"
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ps5upload-${{ matrix.platform }}-${{ matrix.arch }}
-          path: ps5upload-${{ matrix.platform }}-${{ matrix.arch }}.*
+          path: desktop/release/**/*
 
   build-payload:
     name: build-payload

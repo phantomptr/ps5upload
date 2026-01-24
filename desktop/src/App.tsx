@@ -308,6 +308,37 @@ const joinRemote = (...parts: string[]) =>
     })
     .join("/");
 
+const FolderIcon = () => (
+  <svg className="manage-icon" viewBox="0 0 24 24" aria-hidden="true">
+    <path
+      d="M3 6.5C3 5.67 3.67 5 4.5 5h5l2 2h8c.83 0 1.5.67 1.5 1.5v9c0 .83-.67 1.5-1.5 1.5h-15C3.67 19 3 18.33 3 17.5v-11Z"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
+const FileIcon = () => (
+  <svg className="manage-icon" viewBox="0 0 24 24" aria-hidden="true">
+    <path
+      d="M7 3.5h6.5L19 9v11.5c0 .83-.67 1.5-1.5 1.5h-10C6.67 22 6 21.33 6 20.5V5c0-.83.67-1.5 1-1.5Z"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinejoin="round"
+    />
+    <path
+      d="M13.5 3.5V9H19"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
 const normalizeVersion = (version: string) =>
   version.replace(/^v/i, "").trim();
 
@@ -516,6 +547,8 @@ export default function App() {
   const [manageEntries, setManageEntries] = useState<DirEntry[]>([]);
   const [manageStatus, setManageStatus] = useState("Not connected");
   const [manageSelected, setManageSelected] = useState<number | null>(null);
+  const manageSelectionRef = useRef<{ name: string; type: string } | null>(null);
+  const manageSelectedIndexRef = useRef<number | null>(null);
   const [manageSort, setManageSort] = useState<{
     key: ManageSortKey;
     direction: "asc" | "desc";
@@ -540,6 +573,7 @@ export default function App() {
     at: 0,
     speed: 0
   });
+  const manageLoadInFlight = useRef<Set<string>>(new Set());
   const [manageMeta, setManageMeta] = useState<GameMetaPayload | null>(null);
   const [manageCoverUrl, setManageCoverUrl] = useState<string | null>(null);
   const [manageLastUpdated, setManageLastUpdated] = useState<number | null>(null);
@@ -548,6 +582,9 @@ export default function App() {
   const [renameValue, setRenameValue] = useState("");
   const [showCreatePrompt, setShowCreatePrompt] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
+  const [showResumePrompt, setShowResumePrompt] = useState(false);
+  const [resumeRecord, setResumeRecord] = useState<TransferRecord | null>(null);
+  const [resumeChoice, setResumeChoice] = useState<ResumeOption>("size");
   const [gameMeta, setGameMeta] = useState<GameMetaPayload | null>(null);
   const [gameCoverUrl, setGameCoverUrl] = useState<string | null>(null);
   const [chatRoomId, setChatRoomId] = useState("");
@@ -649,6 +686,9 @@ export default function App() {
   });
   const managePathRef = useRef(managePath);
   managePathRef.current = managePath;
+  useEffect(() => {
+    manageSelectedIndexRef.current = manageSelected;
+  }, [manageSelected]);
   const configSnapshot = useRef({
     ip: "",
     chmodAfterUpload: false
@@ -789,6 +829,14 @@ export default function App() {
   useEffect(() => {
     payloadLogBuffer.current = payloadLogs;
   }, [payloadLogs]);
+
+  const pushClientLog = (message: string) => {
+    setClientLogs((prev) => [message, ...prev].slice(0, 100));
+  };
+
+  const pushPayloadLog = (message: string) => {
+    setPayloadLogs((prev) => [message, ...prev].slice(0, 100));
+  };
 
   useEffect(() => {
     if (!payloadLocalPath.trim()) {
@@ -2220,7 +2268,12 @@ export default function App() {
         return prev;
       });
       setManagePath((prev) => {
-        if (!prev || prev === "/data" || !available.some((loc) => loc.path === prev)) {
+        const matchesStorage = available.some((loc) => {
+          if (prev === loc.path) return true;
+          if (prev.startsWith(`${loc.path}/`)) return true;
+          return false;
+        });
+        if (!prev || !matchesStorage) {
           return available[0].path;
         }
         return prev;
@@ -2228,24 +2281,56 @@ export default function App() {
     }
   };
 
-  const applyManageSnapshot = (snapshot: ManageListSnapshot | null) => {
-    if (!snapshot) return;
-    if (snapshot.path && snapshot.path !== managePathRef.current) {
-      return;
+  const applyManageSnapshot = (
+    snapshot: ManageListSnapshot | null,
+    options: { force?: boolean } = {}
+  ) => {
+    if (!snapshot) return [];
+    if (!options.force && snapshot.path && snapshot.path !== managePathRef.current) {
+      return [];
     }
     if (typeof snapshot.updated_at_ms === "number") {
       setManageLastUpdated(snapshot.updated_at_ms);
     }
     if (snapshot.error) {
       setManageStatus(`Error: ${snapshot.error}`);
-      return;
+      return [];
     }
     const sorted = sortEntries(snapshot.entries, manageSort);
+    const selected = manageSelectionRef.current;
+    const nextSelectedIndex =
+      selected && selected.name
+        ? sorted.findIndex((entry) => {
+            if (entry.name !== selected.name) return false;
+            if (!selected.type) return true;
+            return getEntryType(entry) === selected.type;
+          })
+        : -1;
     setManageEntries(sorted);
-    setManageSelected(null);
-    setManageMeta(null);
-    setManageCoverUrl(null);
+    if (nextSelectedIndex >= 0) {
+      manageSelectionRef.current = {
+        name: sorted[nextSelectedIndex].name,
+        type: getEntryType(sorted[nextSelectedIndex])
+      };
+      setManageSelected(nextSelectedIndex);
+    } else {
+      const fallbackIndex = manageSelectedIndexRef.current;
+      if (fallbackIndex !== null && fallbackIndex >= 0 && fallbackIndex < sorted.length) {
+        const fallbackEntry = sorted[fallbackIndex];
+        manageSelectionRef.current = {
+          name: fallbackEntry.name,
+          type: getEntryType(fallbackEntry)
+        };
+        setManageSelected(fallbackIndex);
+      } else {
+        manageSelectionRef.current = null;
+        setManageSelected(null);
+        setManageMeta(null);
+        setManageCoverUrl(null);
+      }
+    }
     setManageStatus(`Loaded ${sorted.length} items`);
+    return sorted;
   };
 
   const applyPayloadSnapshot = (snapshot: PayloadStatusSnapshot | null) => {
@@ -2338,24 +2423,38 @@ export default function App() {
     });
   }, [activeTab, isConnected, ip, activeRunId]);
 
+  useEffect(() => {
+    if (!isConnected || !ip.trim()) return;
+    handleRefreshPayloadStatus();
+  }, [isConnected, ip]);
+
   const handleConnect = async () => {
     if (!ip.trim()) {
       setConnectionStatus("Missing IP");
+      pushClientLog("Connect blocked: missing IP");
       return false;
     }
     if (isConnecting) return false;
+    if (isConnected) return true;
     setIsConnecting(true);
     setConnectionStatus("Connecting...");
+    pushClientLog(`Connecting to ${ip}...`);
     try {
       const snapshot = await invoke<ConnectionStatusSnapshot>(
         "connection_connect",
         { ip }
       );
       applyConnectionSnapshot(snapshot);
+      if (snapshot.is_connected) {
+        pushClientLog("Connected.");
+      } else {
+        pushClientLog(`Connection failed: ${snapshot.status}`);
+      }
       return snapshot.is_connected;
     } catch (err) {
       setConnectionStatus(`Error: ${String(err)}`);
       setIsConnected(false);
+      pushClientLog(`Connection error: ${String(err)}`);
       return false;
     } finally {
       setIsConnecting(false);
@@ -2376,6 +2475,9 @@ export default function App() {
     setPayloadVersion(null);
     setIsConnected(false);
     setIsConnecting(false);
+    setPayloadFullStatus(null);
+    setPayloadStatusError(null);
+    pushClientLog("Disconnected.");
   };
 
   const handlePayloadBrowse = async () => {
@@ -2386,21 +2488,35 @@ export default function App() {
       });
       if (typeof selected === "string") {
         setPayloadLocalPath(selected);
+        pushPayloadLog(`Payload selected: ${selected}`);
       }
     } catch (err) {
       setPayloadStatus(`Error: ${String(err)}`);
+      pushPayloadLog(`Payload browse error: ${String(err)}`);
     }
   };
 
   const runPayloadReload = async (modeOverride?: "local" | "current" | "latest") => {
     if (payloadBusy || !ip.trim()) return;
+    if (payloadFullStatus?.status && !payloadStatusError) {
+      setPayloadStatus("Payload already running.");
+      pushPayloadLog("Payload already running; reload skipped.");
+      return;
+    }
+    if (payloadVersion) {
+      setPayloadStatus("Payload already running.");
+      pushPayloadLog("Payload already running; reload skipped.");
+      return;
+    }
     const mode = modeOverride ?? payloadReloadMode;
     if (mode === "local" && !payloadLocalPath.trim()) {
       setPayloadStatus(tr("payload_local_required"));
+      pushPayloadLog("Payload reload blocked: local payload path required.");
       return;
     }
     if (mode === "local" && payloadProbe && !payloadProbe.ok) {
       setPayloadStatus(payloadProbe.message);
+      pushPayloadLog(`Payload probe failed: ${payloadProbe.message}`);
       return;
     }
     const portOpen = await invoke<boolean>("port_check", {
@@ -2409,9 +2525,11 @@ export default function App() {
     });
     if (!portOpen) {
       setPayloadStatus("Port 9021 closed");
+      pushPayloadLog("Payload reload failed: port 9021 closed.");
       return;
     }
     setPayloadStatus(tr("payload_sending"));
+    pushPayloadLog(`Sending payload (${mode})...`);
     try {
       if (mode === "local") {
         await invoke("payload_send", { ip, path: payloadLocalPath });
@@ -2419,11 +2537,13 @@ export default function App() {
         await invoke("payload_download_and_send", { ip, fetch: mode });
       }
       setPayloadStatus("Waiting for payload...");
+      pushPayloadLog("Payload sent. Waiting for status...");
       setTimeout(() => {
         handlePayloadCheck();
       }, 3000);
     } catch (err) {
       setPayloadStatus(`Error: ${String(err)}`);
+      pushPayloadLog(`Payload send error: ${String(err)}`);
     }
   };
 
@@ -2434,9 +2554,11 @@ export default function App() {
   const handlePayloadCheck = async () => {
     try {
       setPayloadStatus("Checking...");
+      pushPayloadLog("Checking payload status...");
       await invoke("payload_check", { ip });
     } catch (err) {
       setPayloadStatus(`Error: ${String(err)}`);
+      pushPayloadLog(`Payload check error: ${String(err)}`);
     }
   };
 
@@ -2536,10 +2658,13 @@ export default function App() {
         `Upload preparing: ${sourcePath} -> ${finalDestPath}`,
         ...prev
       ].slice(0, 100));
-      const exists = await invoke<boolean>("transfer_check_dest", {
-        ip,
-        destPath: finalDestPath
-      });
+      const shouldCheckDest = resumeMode === "none" && !overrideOnConflict;
+      const exists = shouldCheckDest
+        ? await invoke<boolean>("transfer_check_dest", {
+            ip,
+            destPath: finalDestPath
+          })
+        : false;
       if (exists && !overrideOnConflict) {
         setTransferState((prev) => ({ ...prev, status: tr("destination_exists") }));
         setClientLogs((prev) => [
@@ -2707,17 +2832,35 @@ export default function App() {
   };
 
   const handleResumeFromHistory = (record: TransferRecord) => {
-    setSourcePath(record.source_path);
-    const name = record.source_path.split(/[/\\]/).filter(Boolean).pop() || "";
-    setSubfolder(name);
+    setResumeRecord(record);
+    setResumeChoice("size");
+    setShowResumePrompt(true);
+  };
+
+  const handleConfirmResumeFromHistory = () => {
+    if (!resumeRecord) return;
+    setSourcePath(resumeRecord.source_path);
+    setFinalPathMode("manual");
+    setFinalPath(resumeRecord.dest_path);
+    setResumeMode(resumeChoice);
     setActiveTab("transfer");
-    setClientLogs((prev) => [`Loaded from history: ${record.source_path}`, ...prev]);
+    setShowResumePrompt(false);
+    pushClientLog(`Loaded from history: ${resumeRecord.source_path}`);
+    if (resumeRecord.dest_path) {
+      pushClientLog(`Destination set: ${resumeRecord.dest_path}`);
+    }
+    pushClientLog(`Resume mode set: ${resumeChoice}.`);
+    setTimeout(() => {
+      handleUpload();
+    }, 0);
+    setResumeRecord(null);
   };
 
   const startQueueItem = async (item: QueueItem) => {
     const base = item.storage_base || storageRoot;
     const dest = buildDestPathForItem(base, item);
-    if (!overrideOnConflict) {
+    const itemResumeMode = settings?.resume_mode ?? resumeMode;
+    if (itemResumeMode === "none" && !overrideOnConflict) {
       const exists = await invoke<boolean>("transfer_check_dest", {
         ip,
         destPath: dest
@@ -2841,27 +2984,61 @@ export default function App() {
     });
   };
 
-  const handleManageRefresh = async (pathOverride?: string) => {
-    const override = typeof pathOverride === "string" ? pathOverride : undefined;
-    const targetPath = override ?? managePath;
-    if (override && override !== managePath) {
-      manageRefreshSkip.current = targetPath;
-      setManagePath(targetPath);
+  const handleManageSelectIndex = (index: number | null) => {
+    if (index === null) {
+      manageSelectionRef.current = null;
+      setManageSelected(null);
+      return;
     }
+    const entry = manageEntries[index];
+    if (!entry) {
+      manageSelectionRef.current = null;
+      setManageSelected(null);
+      return;
+    }
+    manageSelectionRef.current = {
+      name: entry.name,
+      type: getEntryType(entry)
+    };
+    setManageSelected(index);
+  };
+
+  const handleManageOpenDir = async (entry: DirEntry) => {
+    if (getEntryType(entry) !== "dir") return;
+    const nextPath = joinRemote(managePathRef.current, entry.name);
+    await handleManageRefresh(nextPath);
+    manageSelectionRef.current = null;
+    setManageSelected(null);
+  };
+
+  const loadManageDirectory = async (targetPath: string) => {
+    const normalized = targetPath && targetPath.trim() ? targetPath : "/";
     if (!ip.trim()) {
       setManageStatus("Not connected");
       return;
     }
+    if (manageLoadInFlight.current.has(normalized)) return;
+    manageLoadInFlight.current.add(normalized);
     setManageStatus("Loading...");
     try {
       const snapshot = await invoke<ManageListSnapshot>("manage_list_refresh", {
         ip,
-        path: targetPath
+        path: normalized
       });
-      applyManageSnapshot(snapshot);
+      managePathRef.current = snapshot.path || normalized;
+      setManagePath(managePathRef.current);
+      applyManageSnapshot(snapshot, { force: true });
     } catch (err) {
       setManageStatus(`Error: ${String(err)}`);
+    } finally {
+      manageLoadInFlight.current.delete(normalized);
     }
+  };
+
+  const handleManageRefresh = async (pathOverride?: string) => {
+    const override = typeof pathOverride === "string" ? pathOverride : undefined;
+    const targetPath = override ?? managePath;
+    await loadManageDirectory(targetPath);
   };
 
   const handleManageUp = () => {
@@ -2869,7 +3046,7 @@ export default function App() {
     const parts = managePath.split("/").filter(Boolean);
     parts.pop();
     const next = `/${parts.join("/")}`;
-    setManagePath(next || "/");
+    handleManageRefresh(next || "/");
   };
 
   const refreshManageDest = async (pathOverride?: string) => {
@@ -2909,6 +3086,13 @@ export default function App() {
 
   const handleOpenDestPicker = (action: ManageAction) => {
     if (!manageSelectedEntry) return;
+    if (action === "Extract") {
+      const isRar = manageSelectedEntry.name.toLowerCase().endsWith(".rar");
+      if (!isRar) {
+        setManageStatus("Extract only supports .rar files");
+        return;
+      }
+    }
     setManageDestAction(action);
     setManageDestOpen(true);
     const nextPath = storageRoot || managePath || "/data";
@@ -2932,11 +3116,12 @@ export default function App() {
     setManageStatus(`${manageDestAction}...`);
     try {
       if (manageDestAction === "Move") {
-        await invoke("manage_move", { ip, src_path: srcPath, dst_path: dstPath });
+        await invoke("manage_copy", { ip, src_path: srcPath, dst_path: dstPath });
+        await invoke("manage_delete", { ip, path: srcPath });
       } else if (manageDestAction === "Copy") {
         await invoke("manage_copy", { ip, src_path: srcPath, dst_path: dstPath });
       } else if (manageDestAction === "Extract") {
-        await invoke("manage_extract", { ip, src_path: srcPath, dst_path: dstPath });
+        await handleQueueExtract(srcPath, destBase);
       }
     } catch (err) {
       setManageBusy(false);
@@ -3768,12 +3953,17 @@ export default function App() {
                   <input
                     type="checkbox"
                     checked={overrideOnConflict}
+                    disabled={resumeMode !== "none"}
                     onChange={(event) => setOverrideOnConflict(event.target.checked)}
                   />
                 </label>
                 <p className="muted small">{tr("override_conflict_note")}</p>
-                {!overrideOnConflict && (
-                  <p className="muted small warn">{tr("override_conflict_warn")}</p>
+                {resumeMode !== "none" ? (
+                  <p className="muted small warn">{tr("override_conflict_resume_note")}</p>
+                ) : (
+                  !overrideOnConflict && (
+                    <p className="muted small warn">{tr("override_conflict_warn")}</p>
+                  )
                 )}
               </div>
 
@@ -3867,6 +4057,7 @@ export default function App() {
                     {resumeMode !== "none" && (
                       <>
                         <p className="muted small">{tr("resume_note")}</p>
+                        <p className="muted small">{tr("resume_override_note")}</p>
                         <p className="muted small">{tr("resume_note_change")}</p>
                       </>
                     )}
@@ -4200,107 +4391,50 @@ export default function App() {
                 <p className="muted small">
                   Last update: {formatUpdatedAt(manageLastUpdated)}
                 </p>
-                <div className="file-list">
-                  <div className="file-item header">
-                    <span
-                      role="button"
-                      className={`file-header ${manageSort.key === "name" ? "active" : ""}`}
-                      onClick={() =>
-                        setManageSort((prev) => ({
-                          key: "name",
-                          direction: prev.key === "name" && prev.direction === "asc" ? "desc" : "asc"
-                        }))
-                      }
-                    >
-                      {tr("name")}
-                      {manageSort.key === "name" && (manageSort.direction === "asc" ? " ↑" : " ↓")}
-                    </span>
-                    <span className="file-header">
-                      {tr("type")}
-                    </span>
-                    <span
-                      role="button"
-                      className={`file-header meta ${manageSort.key === "size" ? "active" : ""}`}
-                      onClick={() =>
-                        setManageSort((prev) => ({
-                          key: "size",
-                          direction: prev.key === "size" && prev.direction === "desc" ? "asc" : "desc"
-                        }))
-                      }
-                    >
-                      {tr("size")}
-                      {manageSort.key === "size" && (manageSort.direction === "asc" ? " ↑" : " ↓")}
-                    </span>
-                    <span
-                      role="button"
-                      className={`file-header meta ${manageSort.key === "modified" ? "active" : ""}`}
-                      onClick={() =>
-                        setManageSort((prev) => ({
-                          key: "modified",
-                          direction: prev.key === "modified" && prev.direction === "desc" ? "asc" : "desc"
-                        }))
-                      }
-                    >
-                      {tr("modified")}
-                      {manageSort.key === "modified" && (manageSort.direction === "asc" ? " ↑" : " ↓")}
-                    </span>
-                  </div>
-                  {manageEntries.length === 0 ? (
-                    <div className="empty-state">
-                      <span className="empty-state-icon">○</span>
-                      <span className="empty-state-text">{tr("no_files")}</span>
-                    </div>
-                  ) : (
-                    manageEntries.map((entry, index) => {
-                      if (!entry) return null;
-                      const entryTypeRaw = typeof entry.entry_type === "string"
-                        ? entry.entry_type
-                        : typeof (entry as { type?: unknown }).type === "string"
-                        ? String((entry as { type?: unknown }).type)
-                        : "";
-                      const entryType = entryTypeRaw.toLowerCase();
-                      const isDir =
-                        entryType === "dir" ||
-                        entryType === "folder" ||
-                        entryType === "directory";
-                      const nameRaw = typeof entry.name === "string" ? entry.name : "";
-                      const lowerName = nameRaw.toLowerCase();
-                      const baseIcon = isDir ? "▸" :
-                        lowerName.endsWith(".rar") || lowerName.endsWith(".zip") ? "▣" :
-                        lowerName.endsWith(".pkg") ? "●" :
-                        lowerName.endsWith(".json") || lowerName.endsWith(".txt") ? "≡" :
-                        lowerName.endsWith(".png") || lowerName.endsWith(".jpg") ? "◧" :
-                        "○";
-                      const isSelected = manageSelected === index;
-                      const icon = isSelected ? "●" : baseIcon;
-                      return (
-                        <div
-                          className={`file-item ${isSelected ? "selected" : ""}`}
-                          key={`${nameRaw}-${entryTypeRaw}-${index}`}
-                          onClick={() => setManageSelected(index)}
-                          onDoubleClick={() => {
-                            if (!isDir) return;
-                            const nextPath = joinRemote(managePath, nameRaw);
-                            handleManageRefresh(nextPath);
-                          }}
-                        >
-                          <span className="file-name">
-                            <span className={`file-icon ${isSelected ? "active" : ""}`}>
-                              {icon}
-                            </span>
-                            {nameRaw}
-                          </span>
-                          <span className="file-meta type">
-                            {isDir ? tr("folder") : tr("file")}
-                          </span>
-                          <span className="file-meta">
-                            {isDir ? "—" : formatBytes(entry.size)}
-                          </span>
-                          <span className="file-meta">{formatTimestamp(entry.mtime)}</span>
-                        </div>
-                      );
-                    })
-                  )}
+                <div className="manage-list">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th />
+                        <th>{tr("name")}</th>
+                        <th>{tr("type")}</th>
+                        <th>{tr("size")}</th>
+                        <th>{tr("modified")}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {manageEntries.length === 0 ? (
+                        <tr>
+                          <td colSpan={5} className="muted">
+                            {tr("no_files")}
+                          </td>
+                        </tr>
+                      ) : (
+                        manageEntries.map((entry, index) => {
+                          const entryType = getEntryType(entry);
+                          const isDir = entryType === "dir";
+                          return (
+                            <tr
+                              key={`${entry.name}-${index}`}
+                              className={manageSelected === index ? "selected" : ""}
+                              onClick={() => handleManageSelectIndex(index)}
+                              onDoubleClick={() => handleManageOpenDir(entry)}
+                            >
+                              <td className="manage-icon-cell">
+                                {isDir ? <FolderIcon /> : <FileIcon />}
+                              </td>
+                              <td>{isDir ? `${entry.name}/` : entry.name}</td>
+                              <td>{isDir ? tr("folder") : tr("file")}</td>
+                              <td>
+                                {isDir ? "—" : formatBytes(entry.size ?? 0)}
+                              </td>
+                              <td>{entry.mtime ? formatTimestamp(entry.mtime) : "—"}</td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
                 </div>
               </div>
 
@@ -4313,7 +4447,7 @@ export default function App() {
                   {manageSelectedEntry ? (
                     <div className="selected-item">
                       <span className="selected-item-icon">
-                        {manageSelectedEntry.entry_type === "dir" ? "▸" : "○"}
+                        {manageSelectedEntry.entry_type === "dir" ? <FolderIcon /> : <FileIcon />}
                       </span>
                       <div className="selected-item-info">
                         <div className="selected-item-name">{manageSelectedEntry.name}</div>
@@ -4377,7 +4511,12 @@ export default function App() {
                       <button
                         className="btn"
                         onClick={() => handleOpenDestPicker("Extract")}
-                        disabled={!manageSelectedEntry || manageBusy}
+                        disabled={
+                          !manageSelectedEntry ||
+                          manageBusy ||
+                          manageSelectedEntry.entry_type !== "file" ||
+                          !manageSelectedEntry.name.toLowerCase().endsWith(".rar")
+                        }
                       >
                         {tr("extract")}
                       </button>
@@ -4616,9 +4755,14 @@ export default function App() {
               <button
                 className="btn"
                 onClick={() => {
-                  invoke("history_clear").then(() =>
-                    setHistoryData({ records: [] })
-                  );
+                  invoke("history_clear")
+                    .then(() => {
+                      setHistoryData({ records: [] });
+                      pushClientLog("History cleared.");
+                    })
+                    .catch((err) => {
+                      pushClientLog(`Failed to clear history: ${String(err)}`);
+                    });
                 }}
               >
                 {tr("clear_history")}
@@ -4631,7 +4775,7 @@ export default function App() {
                   .reverse()
                   .map((record) => (
                     <div className="history-item" key={record.timestamp}>
-                      <div>
+                      <div className="history-main">
                         <strong style={{ color: record.success ? "#64c864" : "#c86464" }}>
                           {record.success ? "✓" : "✗"}{" "}
                           {record.source_path.split(/[/\\]/).filter(Boolean).pop()}
@@ -4646,14 +4790,17 @@ export default function App() {
                           </div>
                         )}
                       </div>
-                      <div className="stack-sm">
-                        <span>
+                      <div className="history-meta">
+                        <span className="history-metric">
                           {record.file_count} {tr("files")}
                         </span>
-                        <span>
-                          {formatBytes(record.total_bytes)} · {formatBytes(record.speed_bps)}/s
+                        <span className="history-metric history-metric-split">
+                          <span>{formatBytes(record.total_bytes)}</span>
+                          <span>{formatBytes(record.speed_bps)}/s</span>
                         </span>
-                        <span>{formatDuration(record.duration_secs)}</span>
+                        <span className="history-metric">
+                          {formatDuration(record.duration_secs)}
+                        </span>
                         <button
                           className="btn ghost small"
                           onClick={() => handleResumeFromHistory(record)}
@@ -4679,9 +4826,9 @@ export default function App() {
                 className="btn"
                 onClick={() => {
                   if (logTab === "client") {
-                    setClientLogs([]);
+                    setClientLogs(["Client logs cleared."]);
                   } else {
-                    setPayloadLogs([]);
+                    setPayloadLogs(["Payload logs cleared."]);
                   }
                 }}
               >
@@ -4795,6 +4942,40 @@ export default function App() {
               <button
                 className="btn ghost"
                 onClick={() => setShowRenamePrompt(false)}
+              >
+                {tr("cancel")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showResumePrompt && resumeRecord && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            <header className="modal-title">{tr("resume_mode")}</header>
+            <p className="muted">{tr("resume_note")}</p>
+            <label className="field">
+              <span>{tr("resume_mode")}</span>
+              <select
+                value={resumeChoice}
+                onChange={(event) => setResumeChoice(event.target.value as ResumeOption)}
+              >
+                <option value="size">{tr("resume_fast")}</option>
+                <option value="size_mtime">{tr("resume_medium")}</option>
+                <option value="sha256">{tr("resume_slow")}</option>
+              </select>
+            </label>
+            <div className="split">
+              <button className="btn primary" onClick={handleConfirmResumeFromHistory}>
+                {tr("resume")}
+              </button>
+              <button
+                className="btn ghost"
+                onClick={() => {
+                  setShowResumePrompt(false);
+                  setResumeRecord(null);
+                }}
               >
                 {tr("cancel")}
               </button>

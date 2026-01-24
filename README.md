@@ -6,6 +6,11 @@
 
 PS5 Upload is a fast, reliable way to move apps and homebrew to your PS5 without the pain of slow transfers.
 
+New UI highlights:
+- Cleaner Transfer and Manage layouts with clearer transfer settings.
+- Built-in quick scan + optimize options for large folders.
+- History resume workflow with explicit resume mode selection.
+
 It is optimized for thousands of small files on a local network (where it outperforms FTP), but works over any standard network connection.
 
 ![Upload](https://github.com/user-attachments/assets/79e1c599-afad-4740-8e12-cc32296d2892)
@@ -76,7 +81,7 @@ If a transfer was interrupted, you can enable **Resume** mode in the **Transfer*
 * **Verify SHA256 (slow)** — most accurate, slowest.
 
 ### 6. Chat (Optional)
-Open the **Chat** tab to talk with other PS5Upload users. It uses a built-in key, auto-picks a display name, and requires an internet connection.
+Open the **Chat** tab to talk with other PS5Upload users on the same LAN. It auto-picks a display name and uses local broadcast.
 
 ## FAQ
 
@@ -101,6 +106,7 @@ Open the **Chat** tab to talk with other PS5Upload users. It uses a built-in key
     ```bash
     xattr -dr com.apple.quarantine /Applications/PS5Upload.app
     ```
+*   No Apple Developer account is required; the app is intentionally unsigned.
 
 **Q: macOS: Terminal window opens when I run the app?**
 *   This happens if you run the raw binary. Use the `.app` bundle included in the release zip to avoid this.
