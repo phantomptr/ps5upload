@@ -41,6 +41,7 @@
   "build": {
     "appId": "com.ps5upload.desktop",
     "productName": "PS5 Upload",
+    "npmRebuild": false,
     "directories": {
       "output": "release",
       "buildResources": "build"
