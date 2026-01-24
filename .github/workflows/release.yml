@@ -179,12 +179,13 @@ jobs:
               cp "$zipfile" "$outzip"
               top_count=$(zipinfo -1 "$outzip" | awk -F/ 'NF{print $1}' | sort -u | wc -l | tr -d ' ')
               if [ "$top_count" -ne 1 ]; then
+                outzip_abs=$(realpath "$outzip")
                 tmpdir=$(mktemp -d)
                 folder="PS5Upload-${version}-win-${arch}"
                 mkdir -p "$tmpdir/$folder"
                 unzip -q "$outzip" -d "$tmpdir/$folder"
-                (cd "$tmpdir" && zip -qr "$outzip.tmp" "$folder")
-                mv "$outzip.tmp" "$outzip"
+                (cd "$tmpdir" && zip -qr "${outzip_abs}.tmp" "$folder")
+                mv "${outzip_abs}.tmp" "$outzip_abs"
                 rm -rf "$tmpdir"
               fi
             fi
