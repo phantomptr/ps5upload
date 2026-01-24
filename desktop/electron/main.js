@@ -12,7 +12,10 @@ const { execFile } = require('child_process');
 const { pipeline } = require('stream');
 const streamPipeline = promisify(pipeline);
 const execFileAsync = promisify(execFile);
-const walk = require('walk');
+if (process.platform === 'linux') {
+  app.commandLine.appendSwitch('no-sandbox');
+  app.commandLine.appendSwitch('disable-setuid-sandbox');
+}
 const tryRequire = (moduleName) => {
   try {
     return require(moduleName);
@@ -2681,50 +2684,56 @@ function registerIpcHandlers() {
           finish();
         };
 
-        const walkFull = () => {
-          const walker = walk.walk(sourcePath);
-
-          walker.on('file', (root, fileStats, next) => {
-            if (state.scanCancel) {
-              if (!ended) {
-                ended = true;
-                walker.emit('end');
-              }
-              return;
-            }
-            filesFound++;
-            currentTotalSize += fileStats.size;
-            emit('scan_progress', { files: filesFound, total: currentTotalSize });
+        const walkFull = async () => {
+          const stack = [sourcePath];
+          while (stack.length > 0) {
+            if (state.scanCancel) throw new Error('Scan cancelled');
             const stop = shouldStop();
             if (stop) {
               partialScan = true;
               stopReason = stop;
-              ended = true;
-              walker.emit('end');
               return;
             }
-            next();
-          });
-
-          walker.on('end', () => {
-            if (state.scanCancel) {
-              reject(new Error('Scan cancelled'));
-            } else {
-              finish();
+            const dir = stack.pop();
+            if (!dir) continue;
+            let entries;
+            try {
+              entries = await fs.promises.readdir(dir, { withFileTypes: true });
+            } catch {
+              continue;
             }
-          });
-
-          walker.on('error', (root, nodeStatsArray, next) => {
-            // Ignore errors
-            next();
-          });
+            for (const entry of entries) {
+              if (state.scanCancel) throw new Error('Scan cancelled');
+              const stopInner = shouldStop();
+              if (stopInner) {
+                partialScan = true;
+                stopReason = stopInner;
+                return;
+              }
+              const fullPath = path.join(dir, entry.name);
+              if (entry.isDirectory()) {
+                stack.push(fullPath);
+              } else if (entry.isFile()) {
+                try {
+                  const st = await fs.promises.stat(fullPath);
+                  filesFound++;
+                  currentTotalSize += st.size;
+                  emit('scan_progress', { files: filesFound, total: currentTotalSize });
+                } catch {
+                  // ignore stat failures
+                }
+              }
+            }
+          }
         };
 
         if (quickCount) {
           estimatedSize = true;
           walkQuick().catch(reject);
         } else {
-          walkFull();
+          walkFull()
+            .then(() => finish())
+            .catch(reject);
         }
       });
 
