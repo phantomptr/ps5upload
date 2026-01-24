@@ -13,7 +13,7 @@ New UI highlights:
 
 It is optimized for thousands of small files on a local network (where it outperforms FTP), but works over any standard network connection.
 
-![Upload](https://github.com/user-attachments/assets/663b4485-0d57-4f5f-99a1-e11b069361b8)
+<img width="1440" height="960" alt="Screenshot 2026-01-24 051817" src="https://github.com/user-attachments/assets/ef639887-b77c-423d-b37a-9014387cb45a" />
 
 ## Why use this?
 
