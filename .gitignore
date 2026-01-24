@@ -9,6 +9,8 @@ build/
 release/
 node_modules/
 payload/build/
+desktop/node_modules/
+desktop/node_modules/**
 desktop/release/
 desktop/.vite/
 desktop/out/
