@@ -9,6 +9,8 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
     switch (cmd) {
       case 'app_version':
         return api.appVersion();
+      case 'app_platform':
+        return api.appPlatform();
       case 'config_load':
         return api.configLoad();
       case 'config_save':

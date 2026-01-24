@@ -1845,6 +1845,7 @@ async function checkPort(ip, port) {
 function registerIpcHandlers() {
   // App
   ipcMain.handle('app_version', () => VERSION);
+  ipcMain.handle('app_platform', () => ({ platform: process.platform, arch: process.arch }));
 
   // Window controls
   ipcMain.handle('window_minimize', () => mainWindow?.minimize());

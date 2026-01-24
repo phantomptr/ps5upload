@@ -174,6 +174,11 @@ type ReleaseInfo = {
   prerelease: boolean;
 };
 
+type PlatformInfo = {
+  platform: string;
+  arch: string;
+};
+
 type AppConfig = {
   address: string;
   storage: string;
@@ -362,6 +367,24 @@ const compareVersions = (latest: string, current: string) => {
 const isNewerVersion = (latest: string, current: string) =>
   compareVersions(latest, current) > 0;
 
+const selectClientAsset = (
+  assets: ReleaseAsset[],
+  platformInfo: PlatformInfo | null
+) => {
+  if (!platformInfo) return null;
+  const { platform, arch } = platformInfo;
+  const platformKey =
+    platform === "win32" ? "win" : platform === "darwin" ? "mac" : "linux";
+  const ext = platformKey === "win" ? ".zip" : platformKey === "mac" ? ".dmg" : ".tar.gz";
+  const exactSuffix = `-${platformKey}-${arch}${ext}`;
+  const exact = assets.find((asset) => asset.name.endsWith(exactSuffix));
+  if (exact) return exact;
+  return assets.find(
+    (asset) =>
+      asset.name.includes(`-${platformKey}-`) && asset.name.endsWith(ext)
+  ) || null;
+};
+
 const formatDuration = (seconds: number) => {
   if (!Number.isFinite(seconds) || seconds <= 0) return "0s";
   const mins = Math.floor(seconds / 60);
@@ -492,7 +515,7 @@ export default function App() {
   const [updateDownloadStatus, setUpdateDownloadStatus] = useState("");
   const [updatePending, setUpdatePending] = useState(false);
   const [includePrerelease, setIncludePrerelease] = useState(false);
-  const [currentAssetName, setCurrentAssetName] = useState<string | null>(null);
+  const [platformInfo, setPlatformInfo] = useState<PlatformInfo | null>(null);
   const [language, setLanguage] = useState("en");
   const [autoConnect, setAutoConnect] = useState(false);
   const [payloadAutoReload, setPayloadAutoReload] = useState(false);
@@ -1258,15 +1281,15 @@ export default function App() {
         setClientLogs((prev) => [`Failed to load config: ${String(err)}`, ...prev]);
       }
 
-      // Load update asset name - independent
+      // Load platform info - independent
       try {
-        const assetName = await invoke<string>("update_current_asset_name");
+        const platform = await invoke<PlatformInfo>("app_platform");
         if (active) {
-          setCurrentAssetName(assetName);
+          setPlatformInfo(platform);
         }
       } catch {
         if (active) {
-          setCurrentAssetName(null);
+          setPlatformInfo(null);
         }
       }
 
@@ -2576,6 +2599,11 @@ export default function App() {
       setUpdateInfo(release);
       const available = isNewerVersion(release.tag_name, appVersion);
       setUpdateAvailable(available);
+      if (!selectClientAsset(release.assets, platformInfo)) {
+        setUpdateDownloadStatus("Client build not found for this platform.");
+      } else {
+        setUpdateDownloadStatus("");
+      }
       setUpdateStatus(
         available
           ? `Update available: ${release.tag_name}`
@@ -2606,10 +2634,9 @@ export default function App() {
   const handleUpdatePrepareSelf = async () => {
     if (!updateInfo) return;
     try {
-      const assetName = await invoke<string>("update_current_asset_name");
-      const asset = updateInfo.assets.find((item) => item.name === assetName);
+      const asset = selectClientAsset(updateInfo.assets, platformInfo);
       if (!asset) {
-        setUpdateDownloadStatus(`Asset not found: ${assetName}`);
+        setUpdateDownloadStatus("Client asset not found for this platform.");
         return;
       }
       setUpdateDownloadStatus("Preparing update...");
@@ -3359,6 +3386,10 @@ export default function App() {
       : tr("extract")
     : null;
 
+  const clientAsset = updateInfo
+    ? selectClientAsset(updateInfo.assets, platformInfo)
+    : null;
+
   return (
     <div
       className="app"
@@ -3374,7 +3405,7 @@ export default function App() {
         >
           <div className="brand">
             <div className="brand-logo-wrap">
-              <img className="brand-logo" src="/logo.png" alt="PS5Upload" />
+              <img className="brand-logo" src="logo.png" alt="PS5Upload" />
             </div>
             <div className="brand-text">
               <span className="brand-title">PS5Upload</span>
@@ -3674,21 +3705,10 @@ export default function App() {
                   ↓ {tr("download_payload_btn")}
                 </button>
               )}
-              {currentAssetName && (
+              {clientAsset && (
                 <button
                   className="btn ghost"
-                  onClick={() => {
-                    const asset = updateInfo.assets.find(
-                      (item) => item.name === currentAssetName
-                    );
-                    if (asset) {
-                      handleUpdateDownload(asset);
-                    } else {
-                      setUpdateDownloadStatus(
-                        `Asset not found: ${currentAssetName}`
-                      );
-                    }
-                  }}
+                  onClick={() => handleUpdateDownload(clientAsset)}
                 >
                   ↓ {tr("download_client")}
                 </button>

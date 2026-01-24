@@ -80,19 +80,16 @@
     "linux": {
       "target": [
         {
-          "target": "AppImage",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
-        },
-        {
           "target": "tar.gz",
           "arch": [
             "x64",
             "arm64"
           ]
         }
+      ],
+      "executableArgs": [
+        "--no-sandbox",
+        "--disable-setuid-sandbox"
       ],
       "icon": "build/icon.png",
       "category": "Utility",
