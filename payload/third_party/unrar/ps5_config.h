@@ -20,8 +20,8 @@
 #define RARDLL
 #endif
 
-/* Disable SMP/threading for simplicity */
-#undef RAR_SMP
+/* Enable SMP/threading for multi-core extraction */
+#define RAR_SMP
 
 /* PS5/FreeBSD is little endian ARM64 */
 #ifndef LITTLE_ENDIAN

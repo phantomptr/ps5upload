@@ -1538,14 +1538,22 @@ export default function App() {
 
 
   useEffect(() => {
-    if (!subfolder && sourcePath) {
-      const name = sourcePath.split(/[/\\]/).filter(Boolean).pop();
-      if (name) {
-        const clean = name.replace(/\.(zip|7z|rar)$/i, "");
-        setSubfolder(clean || name);
+    if (!sourcePath) return;
+    const name = sourcePath.split(/[/\\]/).filter(Boolean).pop();
+    if (!name) return;
+    const clean = name.replace(/\.(zip|7z|rar)$/i, "");
+    const nextSubfolder = clean || name;
+    if (finalPathMode === "auto") {
+      if (subfolder !== nextSubfolder) {
+        setSubfolder(nextSubfolder);
       }
+      const base = preset === "custom" ? customPreset : preset;
+      const nextDest = joinRemote(storageRoot, base, nextSubfolder);
+      setFinalPath(nextDest);
+    } else if (!subfolder) {
+      setSubfolder(nextSubfolder);
     }
-  }, [sourcePath, subfolder]);
+  }, [sourcePath, finalPathMode, storageRoot, preset, customPreset, subfolder]);
 
   useEffect(() => {
     if (finalPathMode === "auto") {
@@ -3960,7 +3968,10 @@ export default function App() {
                     ) : (
                       <button
                         className="btn ghost"
-                        onClick={() => setFinalPathMode("auto")}
+                        onClick={() => {
+                          setFinalPathMode("auto");
+                          setFinalPath(defaultDestPath);
+                        }}
                       >
                         {tr("use_auto")}
                       </button>

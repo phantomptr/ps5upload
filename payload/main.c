@@ -450,8 +450,7 @@ int main(void) {
     mkdir("/data/ps5upload/logs", 0777);
     mkdir("/data/ps5upload/requests", 0777);
     
-    // Clean up any leftover temporary files from previous runs
-    unrar_cleanup_temp();
+    // Temp cleanup handled per-upload based on destination root.
 
     // Initialize extraction queue
     extract_queue_init();

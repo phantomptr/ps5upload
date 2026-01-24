@@ -19,7 +19,6 @@
 #include <dirent.h>
 #include <time.h>
 
-#define RAR_TEMP_DIR "/data/ps5upload/temp"
 #define RECV_BUFFER_SIZE (256 * 1024)  /* 256KB receive buffer */
 
 struct ProgressState {
@@ -28,6 +27,9 @@ struct ProgressState {
     char last_filename[PATH_MAX];
     unsigned int min_interval_sec;
 };
+
+static char g_last_mkdir_err[256];
+static int g_last_mkdir_errno;
 
 /* Helper to reliably send data */
 static void send_all(int sock, const char *data) {
@@ -44,6 +46,132 @@ static void send_all(int sock, const char *data) {
         }
         sent += n;
     }
+}
+
+static void get_storage_root(const char *dest_path, char *out, size_t out_len) {
+    if (!dest_path || dest_path[0] != '/') {
+        snprintf(out, out_len, "/data");
+        return;
+    }
+    if (strncmp(dest_path, "/mnt/", 5) == 0) {
+        const char *p = dest_path + 5;
+        const char *slash = strchr(p, '/');
+        if (slash) {
+            size_t len = (size_t)(slash - dest_path);
+            if (len >= out_len) len = out_len - 1;
+            memcpy(out, dest_path, len);
+            out[len] = '\0';
+            return;
+        }
+        snprintf(out, out_len, "%s", dest_path);
+        return;
+    }
+    if (strncmp(dest_path, "/data", 5) == 0) {
+        snprintf(out, out_len, "/data");
+        return;
+    }
+    snprintf(out, out_len, "/data");
+}
+
+static void build_temp_dir(const char *dest_path, char *out, size_t out_len) {
+    char root[PATH_MAX];
+    get_storage_root(dest_path, root, sizeof(root));
+    snprintf(out, out_len, "%s/ps5upload/tmp", root);
+}
+
+static int remove_recursive(const char *path) {
+    DIR *dir = opendir(path);
+    if (!dir) {
+        return (errno == ENOENT) ? 0 : -1;
+    }
+    struct dirent *ent;
+    char buf[PATH_MAX];
+    while ((ent = readdir(dir)) != NULL) {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) {
+            continue;
+        }
+        snprintf(buf, sizeof(buf), "%s/%s", path, ent->d_name);
+        struct stat st;
+        if (stat(buf, &st) == 0 && S_ISDIR(st.st_mode)) {
+            if (remove_recursive(buf) != 0) {
+                closedir(dir);
+                return -1;
+            }
+            rmdir(buf);
+        } else {
+            unlink(buf);
+        }
+    }
+    closedir(dir);
+    return 0;
+}
+
+static int mkdir_recursive_ex(const char *path, char *err, size_t err_len) {
+    char tmp[PATH_MAX];
+    char *p = NULL;
+    size_t len;
+
+    snprintf(tmp, sizeof(tmp), "%s", path);
+    len = strlen(tmp);
+    if (len >= sizeof(tmp) - 1) {
+        if (err && err_len > 0) {
+            snprintf(err, err_len, "path too long");
+        }
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    if (len == 0) {
+        errno = EINVAL;
+        if (err && err_len > 0) {
+            snprintf(err, err_len, "invalid path");
+        }
+        return -1;
+    }
+    if (tmp[len - 1] == '/') {
+        tmp[len - 1] = 0;
+    }
+
+    for (p = tmp + 1; *p; p++) {
+        if (*p == '/') {
+            *p = 0;
+            struct stat st;
+            if (stat(tmp, &st) == 0) {
+                if (!S_ISDIR(st.st_mode)) {
+                    if (err && err_len > 0) {
+                        snprintf(err, err_len, "path component is not a directory: %s", tmp);
+                    }
+                    errno = ENOTDIR;
+                    return -1;
+                }
+            } else if (mkdir(tmp, 0777) != 0 && errno != EEXIST) {
+                if (err && err_len > 0) {
+                    snprintf(err, err_len, "mkdir %s failed: %s", tmp, strerror(errno));
+                }
+                return -1;
+            }
+            chmod(tmp, 0777);
+            *p = '/';
+        }
+    }
+    {
+        struct stat st;
+        if (stat(tmp, &st) == 0) {
+            if (!S_ISDIR(st.st_mode)) {
+                if (err && err_len > 0) {
+                    snprintf(err, err_len, "path component is not a directory: %s", tmp);
+                }
+                errno = ENOTDIR;
+                return -1;
+            }
+        } else if (mkdir(tmp, 0777) != 0 && errno != EEXIST) {
+            if (err && err_len > 0) {
+                snprintf(err, err_len, "mkdir %s failed: %s", tmp, strerror(errno));
+            }
+            return -1;
+        }
+    }
+    chmod(tmp, 0777);
+    return 0;
 }
 
 static int chmod_recursive(const char *path, mode_t mode, char *err, size_t err_len);
@@ -83,12 +211,12 @@ static int extraction_progress(const char *filename, unsigned long long file_siz
     return 0;  /* Continue extraction */
 }
 
-char *receive_rar_to_temp(int sock, size_t file_size) {
+char *receive_rar_to_temp(int sock, size_t file_size, const char *temp_dir) {
     /* Debug off_t size */
     printf("[RAR] sizeof(off_t) = %zu\n", sizeof(off_t));
 
     /* Create temp directory if needed */
-    mkdir(RAR_TEMP_DIR, 0777);
+    mkdir_recursive_ex(temp_dir, NULL, 0);
 
     /* Generate temp file path */
     char *temp_path = malloc(PATH_MAX);
@@ -97,7 +225,7 @@ char *receive_rar_to_temp(int sock, size_t file_size) {
     }
 
     int fd = -1;
-    snprintf(temp_path, PATH_MAX, "%s/upload_XXXXXX", RAR_TEMP_DIR);
+    snprintf(temp_path, PATH_MAX, "%s/upload_XXXXXX", temp_dir);
     fd = mkstemp(temp_path);
 
     if (fd < 0) {
@@ -105,7 +233,7 @@ char *receive_rar_to_temp(int sock, size_t file_size) {
         static unsigned int temp_counter = 0;
         for (int attempt = 0; attempt < 100; attempt++) {
             snprintf(temp_path, PATH_MAX, "%s/upload_%d_%u.rar",
-                     RAR_TEMP_DIR, (int)getpid(), temp_counter++);
+                     temp_dir, (int)getpid(), temp_counter++);
             fd = open(temp_path, O_WRONLY | O_CREAT | O_EXCL | O_TRUNC, 0644);
             if (fd >= 0) {
                 break;
@@ -196,7 +324,26 @@ int extract_rar_file(const char *rar_path, const char *dest_dir, int strip_root,
     }
 
     /* Create destination directory */
-    mkdir(dest_dir, 0777);
+    char mkdir_err[256];
+    g_last_mkdir_err[0] = '\0';
+    g_last_mkdir_errno = 0;
+    struct stat st;
+    if (stat(dest_dir, &st) == 0 && !S_ISDIR(st.st_mode)) {
+        snprintf(g_last_mkdir_err, sizeof(g_last_mkdir_err), "destination exists and is not a directory");
+        printf("[RAR] ERROR: Destination exists and is not a directory: %s\n", dest_dir);
+        return -2;
+    }
+    if (mkdir_recursive_ex(dest_dir, mkdir_err, sizeof(mkdir_err)) != 0) {
+        if (mkdir_err[0] == '\0') {
+            snprintf(mkdir_err, sizeof(mkdir_err), "mkdir failed: errno=%d %s", errno, strerror(errno));
+        }
+        snprintf(g_last_mkdir_err, sizeof(g_last_mkdir_err), "%s", mkdir_err);
+        g_last_mkdir_errno = errno;
+        printf("[RAR] Warning: failed to create destination path (will try extract anyway): %s (%s)\n",
+               dest_dir, mkdir_err);
+        g_last_mkdir_err[0] = '\0';
+        g_last_mkdir_errno = 0;
+    }
 
     printf("[RAR] Extracting %s to %s (strip_root=%d)\n", rar_path, dest_dir, strip_root);
 
@@ -207,7 +354,7 @@ int extract_rar_file(const char *rar_path, const char *dest_dir, int strip_root,
         int scan_result = unrar_scan(rar_path, &count, &size, NULL, 0);
         if (scan_result != UNRAR_OK) {
             printf("[RAR] Scan failed: %s\n", unrar_strerror(scan_result));
-            return -1;
+            return scan_result;
         }
     }
 
@@ -235,14 +382,14 @@ int extract_rar_file(const char *rar_path, const char *dest_dir, int strip_root,
                                        &opts, extraction_progress, user_data, &count, &size);
     if (extract_result != UNRAR_OK) {
         printf("[RAR] Extraction failed: %s\n", unrar_strerror(extract_result));
-        return -1;
+        return extract_result;
     }
 
     if (file_count) *file_count = count;
     if (total_bytes) *total_bytes = size;
 
     printf("[RAR] Extraction complete: %d files, %llu bytes\n", count, size);
-    return 0;
+    return UNRAR_OK;
 }
 
 void handle_upload_rar(int sock, const char *args, UnrarMode mode) {
@@ -300,12 +447,27 @@ void handle_upload_rar(int sock, const char *args, UnrarMode mode) {
     const char *ready = "READY\n";
     send_all(sock, ready);
 
+    char mkdir_err[256];
+    char temp_dir[PATH_MAX];
+    build_temp_dir(dest_path, temp_dir, sizeof(temp_dir));
+    if (remove_recursive(temp_dir) != 0) {
+        printf("[RAR] Warning: failed to clear temp dir %s (%s)\n", temp_dir, strerror(errno));
+    }
+    if (mkdir_recursive_ex(temp_dir, mkdir_err, sizeof(mkdir_err)) != 0) {
+        char error[256];
+        if (mkdir_err[0] == '\0') {
+            snprintf(mkdir_err, sizeof(mkdir_err), "mkdir failed: errno=%d %s", errno, strerror(errno));
+        }
+        snprintf(error, sizeof(error), "ERROR: Failed to create temp directory: %s\n", mkdir_err);
+        send_all(sock, error);
+        return;
+    }
+
     /* Receive RAR file to temp */
-    char *temp_path = receive_rar_to_temp(sock, (size_t)file_size);
+    char *temp_path = receive_rar_to_temp(sock, (size_t)file_size, temp_dir);
     if (!temp_path) {
         const char *error = "ERROR: Failed to receive RAR file\n";
         send_all(sock, error);
-        unrar_cleanup_temp();
         return;
     }
 
@@ -332,10 +494,24 @@ void handle_upload_rar(int sock, const char *args, UnrarMode mode) {
     /* Cleanup temp file */
     unlink(temp_path);
     free(temp_path);
-    unrar_cleanup_temp();
+    if (remove_recursive(temp_dir) != 0) {
+        printf("[RAR] Warning: failed to clear temp dir %s (%s)\n", temp_dir, strerror(errno));
+    }
 
-    if (result != 0) {
-        const char *error = "ERROR: RAR extraction failed\n";
+    if (result != UNRAR_OK) {
+        char error[256];
+        if (result > 0) {
+            snprintf(error, sizeof(error), "ERROR: RAR extraction failed: %s\n", unrar_strerror(result));
+        } else if (result == -2) {
+            snprintf(
+                error,
+                sizeof(error),
+                "ERROR: RAR extraction failed: destination exists and is not a directory [dest=%s]\n",
+                dest_path
+            );
+        } else {
+            snprintf(error, sizeof(error), "ERROR: RAR extraction failed\n");
+        }
         send_all(sock, error);
         return;
     }
@@ -391,52 +567,4 @@ static int chmod_recursive(const char *path, mode_t mode, char *err, size_t err_
     }
 
     return 0;
-}
-
-static int rm_recursive(const char *path) {
-    DIR *d = opendir(path);
-    size_t path_len = strlen(path);
-    int r = -1;
-
-    if (d) {
-        struct dirent *p;
-        r = 0;
-        while (!r && (p = readdir(d))) {
-            int r2 = -1;
-            char *buf;
-            size_t len;
-
-            if (!strcmp(p->d_name, ".") || !strcmp(p->d_name, ".."))
-                continue;
-
-            len = path_len + strlen(p->d_name) + 2; 
-            buf = (char *)malloc(len);
-
-            if (buf) {
-                struct stat statbuf;
-                snprintf(buf, len, "%s/%s", path, p->d_name);
-                if (!stat(buf, &statbuf)) {
-                    if (S_ISDIR(statbuf.st_mode))
-                        r2 = rm_recursive(buf);
-                    else
-                        r2 = unlink(buf);
-                }
-                free(buf);
-            }
-            r = r2;
-        }
-        closedir(d);
-    }
-
-    if (!r)
-        r = rmdir(path);
-
-    return r;
-}
-
-void unrar_cleanup_temp(void) {
-    printf("[RAR] Cleaning up temp directory: %s\n", RAR_TEMP_DIR);
-    rm_recursive(RAR_TEMP_DIR);
-    /* Recreate it empty */
-    mkdir(RAR_TEMP_DIR, 0777);
 }

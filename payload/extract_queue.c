@@ -323,7 +323,6 @@ static void *extract_thread_func(void *arg) {
         snprintf(item->error_msg, sizeof(item->error_msg), "Extract failed: %s", unrar_strerror(extract_result));
     } else {
         /* Apply chmod */
-        char chmod_err[256];
         if (chmod_recursive_queue(dest, 0777) != 0) {
             printf("[EXTRACT_QUEUE] Warning: chmod failed for %s\n", dest);
         }

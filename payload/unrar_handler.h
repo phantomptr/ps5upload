@@ -31,7 +31,7 @@ void handle_upload_rar(int sock, const char *args, UnrarMode mode);
  * Returns the temp file path on success, NULL on error
  * Caller must free the returned string
  */
-char *receive_rar_to_temp(int sock, size_t file_size);
+char *receive_rar_to_temp(int sock, size_t file_size, const char *temp_dir);
 
 /* Extract a RAR file to destination
  * Returns 0 on success, -1 on error
@@ -41,8 +41,5 @@ char *receive_rar_to_temp(int sock, size_t file_size);
  */
 int extract_rar_file(const char *rar_path, const char *dest_dir, int strip_root,
                      int *file_count, unsigned long long *total_bytes, void *user_data, UnrarMode mode);
-
-/* Clean up the temporary directory used for RAR uploads */
-void unrar_cleanup_temp(void);
 
 #endif /* UNRAR_HANDLER_H */

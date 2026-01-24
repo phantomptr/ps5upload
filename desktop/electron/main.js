@@ -149,6 +149,13 @@ async function uploadRarForExtraction(ip, rarPath, destPath, mode, opts = {}) {
   } = opts;
   const fileSize = (await fs.promises.stat(rarPath)).size;
 
+  try {
+    await createPath(ip, TRANSFER_PORT, destPath);
+  } catch (err) {
+    const message = err && err.message ? err.message : String(err);
+    throw new Error(`Create destination failed: ${message}`);
+  }
+
   let triedFallback = false;
   let modeToTry = mode;
   let socket;
