@@ -168,6 +168,7 @@ jobs:
         run: |
           tag="${{ steps.tag.outputs.tag }}"
           version="${tag#v}"
+          mkdir -p dist
           rm -f dist/**/elevate.exe dist/**/elevate.exe* || true
           rm -f dist/PS5Upload-${version}.AppImage dist/PS5Upload-${version}-arm64.AppImage || true
 
