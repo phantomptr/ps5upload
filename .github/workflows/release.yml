@@ -63,11 +63,20 @@ jobs:
         working-directory: desktop
         shell: bash
         run: |
-          npm ci --omit=optional --no-audit --no-fund
-          npm install --no-save sharp --include=dev --no-audit --no-fund
+          npm ci --no-audit --no-fund || npm install --include=dev --no-audit --no-fund
+          node -e "const fs=require('fs');const ok=fs.existsSync('node_modules/vite/dist/node/cli.js');console.log('vite cli exists:',ok); process.exit(ok?0:1);" \
+            || npm install vite@7.3.1 @vitejs/plugin-react@4.2.0 --include=dev --no-audit --no-fund
+          node -e "const fs=require('fs');const ok=fs.existsSync('node_modules/@vitejs/plugin-react/package.json');console.log('plugin-react exists:',ok); process.exit(ok?0:1);" \
+            || npm install @vitejs/plugin-react@4.2.0 --include=dev --no-audit --no-fund
+          npm install --no-save sharp --include=dev --include=optional --no-audit --no-fund
         env:
           NODE_ENV: development
-          NPM_CONFIG_OMIT: "optional"
+
+      - name: Install sharp
+        working-directory: desktop
+        shell: bash
+        run: |
+          npm install --no-save sharp --include=dev --include=optional --no-audit --no-fund
 
       - name: Build desktop app
         shell: bash
