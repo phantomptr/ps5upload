@@ -423,7 +423,7 @@ if (!isDev) {
   app.commandLine.appendSwitch('disable-devtools');
 }
 
-// Ensure ICU data is resolvable for portable Windows builds.
+// Ensure ICU data is resolvable for packaged builds.
 try {
   app.commandLine.appendSwitch('icu-data-dir', process.resourcesPath);
 } catch {
