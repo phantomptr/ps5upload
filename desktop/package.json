@@ -51,7 +51,16 @@
       "electron/**/*",
       "package.json"
     ],
-    "extraResources": [],
+    "extraResources": [
+      {
+        "from": "node_modules/electron/dist/icudtl.dat",
+        "to": "icudtl.dat"
+      },
+      {
+        "from": "node_modules/electron/dist/locales",
+        "to": "locales"
+      }
+    ],
     "win": {
       "target": [
         {
