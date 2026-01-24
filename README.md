@@ -132,8 +132,8 @@ This software is for educational purposes. It is intended for use with legally o
 
 This software uses the following open-source packages:
 
-**Desktop App (Tauri + Rust Core + React):**
-*   [Tauri](https://tauri.app/) - Desktop app framework
+**Desktop App (Electron + React):**
+
 *   [React](https://react.dev/) - UI library
 *   [tokio](https://tokio.rs/) - Asynchronous runtime for Rust
 *   [serde](https://serde.rs/) - Serialization framework

@@ -3,6 +3,26 @@
 All notable changes to this project are documented here.
 This project follows Semantic Versioning.
 
+## [1.2.3] - 2026-01-24
+
+### Fixed
+- UI freeze during rate-limited operations by replacing the blocking `RateLimiter`.
+- Error handling in the payload sending logic to prevent silent failures.
+- Sluggish UI during transfers by improving the progress update throttling.
+- Path traversal vulnerability in the payload by adding path safety checks.
+- Linker error in the payload build by moving a function to a shared header.
+- "Drill into folder" functionality in the file manager.
+- Payload status display getting stuck on "Reloading payload...".
+- White screen on startup by fixing broken `electron-api` calls.
+
+### Changed
+- Refactored the `electron-api` layer to remove the Tauri compatibility code.
+- Simplified the `invoke` mechanism in the frontend.
+
+### Removed
+- Old, unused Rust `core` library.
+- Obsolete Tauri-related documentation and build configurations.
+
 ## [1.2.2] - 2026-01-20
 
 ### Fixed

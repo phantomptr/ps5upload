@@ -73,11 +73,7 @@ body {
   height: 100vh;
   background: var(--ps-core);
   overflow: hidden;
-  -webkit-app-region: drag;
-}
-
-.app * {
-  -webkit-app-region: drag;
+  -webkit-app-region: no-drag;
 }
 
 .shell {
@@ -160,6 +156,10 @@ body {
   align-items: center;
   gap: 8px;
   -webkit-app-region: no-drag;
+}
+
+.app-drag-region {
+  -webkit-app-region: drag;
 }
 
 .lang-switch {
@@ -362,6 +362,19 @@ body {
   font-size: 0.75rem;
 }
 
+.section-label {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: var(--ps-steel);
+  margin: 4px 0 6px;
+}
+
+.note-tight {
+  margin-top: -4px;
+}
+
 /* Pills & Badges */
 .pill {
   display: inline-flex;
@@ -480,8 +493,13 @@ body {
 .field.inline {
   flex-direction: row;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  justify-content: flex-start;
+  gap: 8px;
+}
+
+.field.inline input[type="checkbox"] {
+  order: -1;
+  margin-right: 4px;
 }
 
 .field > span:first-child {
@@ -507,6 +525,21 @@ select {
   border-radius: 10px;
   font-size: 0.9rem;
   transition: all 0.15s ease;
+}
+
+input:disabled,
+select:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.field.is-disabled > span:first-child {
+  color: var(--ps-steel);
+}
+
+.field.is-disabled input,
+.field.is-disabled select {
+  opacity: 0.6;
 }
 
 select option {
@@ -661,6 +694,21 @@ input::placeholder {
   flex-direction: column;
   gap: 4px;
   align-items: flex-end;
+}
+
+.source-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.source-meta-fill {
+  flex: 1;
+  display: flex;
+  align-items: stretch;
+}
+
+.source-meta-fill .meta-block {
+  flex: 1;
 }
 
 /* Progress */
@@ -953,8 +1001,8 @@ input::placeholder {
 }
 
 .meta-block img {
-  width: 64px;
-  height: 64px;
+  width: 140px;
+  height: 140px;
   object-fit: cover;
   border-radius: 10px;
   border: 1px solid var(--ps-border);

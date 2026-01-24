@@ -1,6 +1,18 @@
 #ifndef PROTOCOL_H
 #define PROTOCOL_H
 
+#include <string.h>
+
+static inline int is_path_safe(const char *path) {
+    if (strstr(path, "..")) {
+        return 0;
+    }
+    if (strncmp(path, "/data/", 6) != 0) {
+        return 0;
+    }
+    return 1;
+}
+
 void handle_test_write(int client_sock, const char *path);
 void handle_create_path(int client_sock, const char *path);
 void handle_check_dir(int client_sock, const char *path);

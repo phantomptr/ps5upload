@@ -95,9 +95,10 @@ const translations = {
     scan: "Scan",
     add_to_queue: "+ Add to Queue",
     optimize: "Optimize",
-    bandwidth_limit: "Bandwidth Limit (Mbps)",
+    bandwidth_limit: "Bandwidth Limit (0 = Unlimited, Mbps)",
     auto_tune: "Auto-tune Connections",
     auto_tune_desc: "Automatically reduces connections for small files to improve reliability.",
+    connections_auto_note: "Connections are locked while Auto-tune is enabled.",
     use_temp: "Use Temp Staging",
     use_temp_desc: "Store temp files on fastest storage for faster uploads. Uses temporary disk space.",
 
@@ -137,11 +138,16 @@ const translations = {
     final_path: "Final Path",
     final_path_note: "Uploads use this path.",
     override_conflict: "Override if conflict found",
+    override_conflict_note: "When enabled, uploads overwrite existing destination files.",
+    override_conflict_warn: "If disabled, uploads fail when the destination already exists.",
     edit: "Edit",
     use_auto: "Use Auto",
 
     // Transfer Control
     transfer_control: "Transfer Control",
+    transfer_settings: "Transfer Settings",
+    connection_settings: "Connection Settings",
+    transfer_options: "Transfer Options",
     upload: "Upload",
     queue: "Queue",
     stop: "Stop",
@@ -149,9 +155,10 @@ const translations = {
     ready_to_upload: "Ready to upload",
     select_source: "Select a source folder to upload",
     transfer_in_progress: "Transfer in progress...",
-    scan_help: "Scan estimates total size and prepares transfer metadata.",
-    optimize_help: "Optimize auto-tunes compression and connections based on file sizes.",
-    optimize_lock_note: "While optimized, compression and connections are locked to auto.",
+    scan_help: "Scan does a quick count and estimates size. Large folders stop after ~10s or 20k files.",
+    optimize_help: "Optimize uses scan results to set compression, connections, and bandwidth for fast/stable uploads.",
+    scan_archive_not_supported: "Scan is only available for folders. Archives cannot be scanned.",
+    optimize_lock_note: "While optimized, compression, connections, and bandwidth are locked.",
 
     // Upload Queue
     upload_queue: "Upload Queue",
@@ -328,6 +335,7 @@ const translations = {
     bandwidth_limit: "带宽限制 (Mbps)",
     auto_tune: "自动调整连接数",
     auto_tune_desc: "自动为小文件减少连接数以提高可靠性。",
+    connections_auto_note: "启用自动调节时，连接数会被锁定。",
     use_temp: "使用临时暂存",
     use_temp_desc: "在最快存储上存放临时文件以加快上传。会使用临时磁盘空间。",
 
@@ -367,6 +375,8 @@ const translations = {
     final_path: "最终路径",
     final_path_note: "上传会使用此路径。",
     override_conflict: "冲突时覆盖",
+    override_conflict_note: "启用后，上传会覆盖目标中已存在的文件。",
+    override_conflict_warn: "关闭后，目标已存在时上传会失败。",
     edit: "编辑",
     use_auto: "使用自动",
 
@@ -557,6 +567,7 @@ const translations = {
     bandwidth_limit: "頻寬限制 (Mbps)",
     auto_tune: "自動調整連接數",
     auto_tune_desc: "自動為小檔案減少連接數以提高可靠性。",
+    connections_auto_note: "啟用自動調整時，連線數會被鎖定。",
     use_temp: "使用暫存",
     use_temp_desc: "在最快儲存上存放暫存檔案以加快上傳。會使用暫存磁碟空間。",
 
@@ -596,6 +607,8 @@ const translations = {
     final_path: "最終路徑",
     final_path_note: "上傳會使用此路徑。",
     override_conflict: "發生衝突時覆蓋",
+    override_conflict_note: "啟用後，上傳會覆蓋目標中已存在的檔案。",
+    override_conflict_warn: "關閉後，目標已存在時上傳會失敗。",
     edit: "編輯",
     use_auto: "使用自動",
 
@@ -786,6 +799,7 @@ const translations = {
     bandwidth_limit: "Limite bande passante (Mbps)",
     auto_tune: "Auto-ajuster connexions",
     auto_tune_desc: "Réduit automatiquement les connexions pour les petits fichiers.",
+    connections_auto_note: "Les connexions sont verrouillées lorsque l’auto-ajustement est activé.",
     use_temp: "Utiliser stockage temp",
     use_temp_desc: "Stocke les fichiers temp sur le stockage le plus rapide.",
 
@@ -825,6 +839,8 @@ const translations = {
     final_path: "Chemin final",
     final_path_note: "Les uploads utilisent ce chemin.",
     override_conflict: "Écraser en cas de conflit",
+    override_conflict_note: "Activé : l’upload écrase les fichiers existants.",
+    override_conflict_warn: "Désactivé : l’upload échoue si la destination existe.",
     edit: "Modifier",
     use_auto: "Utiliser auto",
 
@@ -1015,6 +1031,7 @@ const translations = {
     bandwidth_limit: "Límite de ancho de banda (Mbps)",
     auto_tune: "Auto-ajustar conexiones",
     auto_tune_desc: "Reduce automáticamente conexiones para archivos pequeños.",
+    connections_auto_note: "Las conexiones quedan bloqueadas cuando el autoajuste está activado.",
     use_temp: "Usar almacenamiento temporal",
     use_temp_desc: "Almacena archivos temporales en el almacenamiento más rápido.",
 
@@ -1054,6 +1071,8 @@ const translations = {
     final_path: "Ruta final",
     final_path_note: "Las subidas usan esta ruta.",
     override_conflict: "Sobrescribir si hay conflicto",
+    override_conflict_note: "Activado: la subida sobrescribe archivos existentes.",
+    override_conflict_warn: "Desactivado: la subida falla si el destino ya existe.",
     edit: "Editar",
     use_auto: "Usar auto",
 
@@ -1244,6 +1263,7 @@ const translations = {
     bandwidth_limit: "حد النطاق الترددي (Mbps)",
     auto_tune: "ضبط تلقائي للاتصالات",
     auto_tune_desc: "يقلل تلقائياً الاتصالات للملفات الصغيرة.",
+    connections_auto_note: "يتم قفل عدد الاتصالات عند تفعيل الضبط التلقائي.",
     use_temp: "استخدام التخزين المؤقت",
     use_temp_desc: "يخزن الملفات المؤقتة على أسرع تخزين.",
 
@@ -1283,6 +1303,8 @@ const translations = {
     final_path: "المسار النهائي",
     final_path_note: "يتم الرفع باستخدام هذا المسار.",
     override_conflict: "استبدال عند وجود تعارض",
+    override_conflict_note: "عند التفعيل، سيتم استبدال الملفات الموجودة في الوجهة.",
+    override_conflict_warn: "عند التعطيل، سيفشل الرفع إذا كانت الوجهة موجودة بالفعل.",
     edit: "تعديل",
     use_auto: "استخدام تلقائي",
 

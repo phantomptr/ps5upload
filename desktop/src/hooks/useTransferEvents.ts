@@ -39,19 +39,18 @@ export function useTransferEvents() {
               currentFile: payload.current_file ?? "",
             });
             pendingProgress.current = null;
-            progressTimer.current = null;
+            if (progressTimer.current) {
+                clearTimeout(progressTimer.current);
+                progressTimer.current = null;
+            }
             lastProgressUpdate.current = Date.now();
           };
           const now = Date.now();
           const elapsed = now - lastProgressUpdate.current;
+
           if (elapsed >= 1000) {
-            if (progressTimer.current) {
-              return;
-            }
             flush();
-            return;
-          }
-          if (!progressTimer.current) {
+          } else if (!progressTimer.current) {
             progressTimer.current = setTimeout(flush, 1000 - elapsed);
           }
         }),

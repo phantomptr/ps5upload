@@ -89,6 +89,8 @@ static void trim_newline(char *path) {
     }
 }
 
+
+
 static int remove_recursive(const char *path, char *err, size_t err_len) {
     struct stat st;
     if (lstat(path, &st) != 0) {
@@ -1016,6 +1018,12 @@ void handle_test_write(int client_sock, const char *path_arg) {
     // Remove trailing newline
     trim_newline(path);
 
+    if (!is_path_safe(path)) {
+        const char *error = "ERROR: Invalid path\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+
     // Create test file path
     char test_file[PATH_MAX];
     snprintf(test_file, PATH_MAX, "%s/.ps5upload_test", path);
@@ -1051,6 +1059,12 @@ void handle_create_path(int client_sock, const char *path_arg) {
     // Remove trailing newline
     trim_newline(path);
 
+    if (!is_path_safe(path)) {
+        const char *error = "ERROR: Invalid path\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+
     char mkdir_err[256] = {0};
     if(mkdir_p(path, 0777, mkdir_err, sizeof(mkdir_err)) != 0) {
         char error_msg[320];
@@ -1068,6 +1082,12 @@ void handle_delete_path(int client_sock, const char *path_arg) {
     strncpy(path, path_arg, PATH_MAX-1);
     path[PATH_MAX-1] = '\0';
     trim_newline(path);
+
+    if (!is_path_safe(path)) {
+        const char *error = "ERROR: Invalid path\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
 
     char err[256] = {0};
     if (remove_recursive(path, err, sizeof(err)) != 0) {
@@ -1098,6 +1118,12 @@ void handle_move_path(int client_sock, const char *args) {
     const char *dst = sep + 1;
     if (!*src || !*dst) {
         const char *error = "ERROR: Invalid MOVE format\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+
+    if (!is_path_safe(src) || !is_path_safe(dst)) {
+        const char *error = "ERROR: Invalid path\n";
         send(client_sock, error, strlen(error), 0);
         return;
     }
@@ -1174,6 +1200,12 @@ void handle_copy_path(int client_sock, const char *args) {
         return;
     }
 
+    if (!is_path_safe(src) || !is_path_safe(dst)) {
+        const char *error = "ERROR: Invalid path\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+
     struct CopyProgressCtx progress;
     memset(&progress, 0, sizeof(progress));
     progress.sock = client_sock;
@@ -1222,6 +1254,12 @@ void handle_extract_archive(int client_sock, const char *args) {
     const char *dst = sep + 1;
     if (!*src || !*dst) {
         const char *error = "ERROR: Invalid EXTRACT_ARCHIVE format\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+
+    if (!is_path_safe(src) || !is_path_safe(dst)) {
+        const char *error = "ERROR: Invalid path\n";
         send(client_sock, error, strlen(error), 0);
         return;
     }
@@ -1308,6 +1346,12 @@ void handle_probe_rar(int client_sock, const char *args) {
         return;
     }
 
+    if (!is_path_safe(src)) {
+        const char *error = "ERROR: Invalid path\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+
     char *param_buf = NULL;
     size_t param_size = 0;
     char *cover_buf = NULL;
@@ -1347,6 +1391,12 @@ void handle_chmod_777(int client_sock, const char *path_arg) {
     path[PATH_MAX-1] = '\0';
     trim_newline(path);
 
+    if (!is_path_safe(path)) {
+        const char *error = "ERROR: Invalid path\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+
     char err[256] = {0};
     if (chmod_recursive(path, 0777, err, sizeof(err)) != 0) {
         char error_msg[320];
@@ -1364,6 +1414,12 @@ void handle_download_file(int client_sock, const char *path_arg) {
     strncpy(path, path_arg, PATH_MAX-1);
     path[PATH_MAX-1] = '\0';
     trim_newline(path);
+
+    if (!is_path_safe(path)) {
+        const char *error = "ERROR: Invalid path\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
 
     struct stat st;
     if (stat(path, &st) != 0) {
@@ -1432,6 +1488,12 @@ void handle_download_dir(int client_sock, const char *path_arg) {
         *tag = '\0';
         auto_requested = 1;
         compression = pick_auto_compression(path);
+    }
+
+    if (!is_path_safe(path)) {
+        const char *error = "ERROR: Invalid path\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
     }
 
     struct stat st;
@@ -1508,6 +1570,12 @@ void handle_hash_file(int client_sock, const char *path_arg) {
     strncpy(path, path_arg, PATH_MAX - 1);
     path[PATH_MAX - 1] = '\0';
     trim_newline(path);
+
+    if (!is_path_safe(path)) {
+        const char *error = "ERROR: Invalid path\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
 
     struct stat st;
     if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) {
@@ -1586,6 +1654,12 @@ void handle_upload_v2_wrapper(int client_sock, const char *args) {
         return;
     }
 
+    if (!is_path_safe(dest_path)) {
+        const char *error = "ERROR: Invalid path\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+
     handle_upload_v2(client_sock, dest_path);
 }
 
@@ -1599,6 +1673,12 @@ void handle_upload(int client_sock, const char *args) {
     if(sscanf(args, "%s %s", dest_path, dummy) < 1) {
         printf("[UPLOAD] ERROR: Failed to parse command arguments\n");
         const char *error = "ERROR: Invalid UPLOAD command format\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+
+    if (!is_path_safe(dest_path)) {
+        const char *error = "ERROR: Invalid path\n";
         send(client_sock, error, strlen(error), 0);
         return;
     }
@@ -1723,6 +1803,12 @@ void handle_queue_extract(int client_sock, const char *args) {
     const char *dst = sep + 1;
     if (!*src || !*dst) {
         const char *error = "ERROR: Invalid QUEUE_EXTRACT format\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+
+    if (!is_path_safe(src) || !is_path_safe(dst)) {
+        const char *error = "ERROR: Invalid path\n";
         send(client_sock, error, strlen(error), 0);
         return;
     }

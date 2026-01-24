@@ -2,6 +2,7 @@
   "dependencies": {
     "fzstd": "^0.1.1",
     "lz4": "^0.6.5",
-    "lzma-native": "^8.0.6"
+    "lzma-native": "^8.0.6",
+    "walk": "^2.3.15"
   }
 }

@@ -1,7 +1,4 @@
-// Electron adapter for Tauri window API
-// This provides compatibility with Tauri's window module
-
-import './types';
+// Electron adapter for window API
 
 export class LogicalPosition {
   x: number;
@@ -34,86 +31,25 @@ export interface Monitor {
   };
 }
 
-type ResizeCallback = (event: { payload: { width: number; height: number } }) => void;
-type MoveCallback = (event: { payload: { x: number; y: number } }) => void;
-
-class AppWindow {
-  private resizeListeners: ResizeCallback[] = [];
-  private moveListeners: MoveCallback[] = [];
-
-  async minimize(): Promise<void> {
-    if (window.electronAPI?.windowMinimize) {
-      return window.electronAPI.windowMinimize();
-    }
-    console.warn('Window minimize not available');
-  }
-
-  async maximize(): Promise<void> {
-    if (window.electronAPI?.windowMaximize) {
-      return window.electronAPI.windowMaximize();
-    }
-    console.warn('Window maximize not available');
-  }
-
-  async toggleMaximize(): Promise<void> {
-    // Same as maximize in our implementation
-    if (window.electronAPI?.windowMaximize) {
-      return window.electronAPI.windowMaximize();
-    }
-    console.warn('Window toggleMaximize not available');
-  }
-
-  async close(): Promise<void> {
-    if (window.electronAPI?.windowClose) {
-      return window.electronAPI.windowClose();
-    }
-    console.warn('Window close not available');
-  }
-
-  async setSize(_size: LogicalSize): Promise<void> {
-    // Not implemented in Electron adapter - window size is managed by Electron main process
-    console.warn('Window setSize not implemented');
-  }
-
-  async setPosition(_position: LogicalPosition): Promise<void> {
-    // Not implemented in Electron adapter
-    console.warn('Window setPosition not implemented');
-  }
-
-  async innerSize(): Promise<LogicalSize> {
-    return new LogicalSize(window.innerWidth, window.innerHeight);
-  }
-
-  async outerPosition(): Promise<LogicalPosition> {
-    return new LogicalPosition(window.screenX, window.screenY);
-  }
-
-  async isMaximized(): Promise<boolean> {
-    // Approximation
-    return window.innerWidth >= screen.availWidth && window.innerHeight >= screen.availHeight;
-  }
-
-  async onResized(callback: ResizeCallback): Promise<() => void> {
+export const appWindow = {
+  minimize: () => window.electronAPI?.windowMinimize(),
+  maximize: () => window.electronAPI?.windowMaximize(),
+  toggleMaximize: () => window.electronAPI?.windowMaximize(),
+  close: () => window.electronAPI?.windowClose(),
+  onResized: (callback: (event: { payload: { width: number; height: number } }) => void) => {
     const handler = () => {
       callback({
         payload: { width: window.innerWidth, height: window.innerHeight }
       });
     };
     window.addEventListener('resize', handler);
-    this.resizeListeners.push(callback);
     return () => {
       window.removeEventListener('resize', handler);
-      const idx = this.resizeListeners.indexOf(callback);
-      if (idx !== -1) this.resizeListeners.splice(idx, 1);
     };
-  }
-
-  async onMoved(callback: MoveCallback): Promise<() => void> {
-    // In browser context, we can't easily track window moves
-    // This is a simplified implementation
+  },
+  onMoved: (callback: (event: { payload: { x: number; y: number } }) => void) => {
     let lastX = window.screenX;
     let lastY = window.screenY;
-
     const interval = setInterval(() => {
       if (window.screenX !== lastX || window.screenY !== lastY) {
         lastX = window.screenX;
@@ -121,24 +57,26 @@ class AppWindow {
         callback({ payload: { x: lastX, y: lastY } });
       }
     }, 500);
-
-    this.moveListeners.push(callback);
     return () => {
       clearInterval(interval);
-      const idx = this.moveListeners.indexOf(callback);
-      if (idx !== -1) this.moveListeners.splice(idx, 1);
     };
-  }
-}
+  },
+  innerSize: async () => ({ width: window.innerWidth, height: window.innerHeight }),
+  outerPosition: async () => ({ x: window.screenX, y: window.screenY }),
+  isMaximized: async () => window.innerWidth >= screen.availWidth && window.innerHeight >= screen.availHeight,
+  setSize: async () => {},
+  setPosition: async () => {},
+};
 
-const appWindow = new AppWindow();
-
-export function getCurrentWindow(): AppWindow {
+export function getCurrentWindow() {
   return appWindow;
 }
 
-export async function currentMonitor(): Promise<Monitor | null> {
-  return {
+export function currentMonitor(): Promise<Monitor | null> {
+  if (window.electronAPI?.currentMonitor) {
+    return window.electronAPI.currentMonitor();
+  }
+  return Promise.resolve({
     name: 'Primary',
     size: { width: screen.width, height: screen.height },
     position: { x: 0, y: 0 },
@@ -147,5 +85,5 @@ export async function currentMonitor(): Promise<Monitor | null> {
       position: { x: 0, y: 0 },
       size: { width: screen.availWidth, height: screen.availHeight },
     },
-  };
+  });
 }

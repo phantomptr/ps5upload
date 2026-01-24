@@ -128,6 +128,16 @@ type QueueItem = {
   dest_path?: string;
   status: QueueStatus;
   size_bytes?: number | null;
+  transfer_settings?: {
+    use_temp: boolean;
+    connections: number;
+    resume_mode: ResumeOption;
+    compression: CompressionOption;
+    bandwidth_limit_mbps: number;
+    auto_tune_connections: boolean;
+    optimize_upload: boolean;
+    rar_extract_mode: RarExtractMode;
+  };
 };
 
 type QueueData = {
@@ -278,14 +288,15 @@ type TransferState = {
   currentFile: string;
 };
 
-const formatBytes = (bytes: number) => {
+const formatBytes = (bytes: number | bigint) => {
+  const value = typeof bytes === "bigint" ? Number(bytes) : bytes;
   const kb = 1024;
   const mb = kb * 1024;
   const gb = mb * 1024;
-  if (bytes >= gb) return `${(bytes / gb).toFixed(2)} GB`;
-  if (bytes >= mb) return `${(bytes / mb).toFixed(2)} MB`;
-  if (bytes >= kb) return `${(bytes / kb).toFixed(2)} KB`;
-  return `${bytes} B`;
+  if (value >= gb) return `${(value / gb).toFixed(2)} GB`;
+  if (value >= mb) return `${(value / mb).toFixed(2)} MB`;
+  if (value >= kb) return `${(value / kb).toFixed(2)} KB`;
+  return `${value} B`;
 };
 
 const joinRemote = (...parts: string[]) =>
@@ -418,6 +429,7 @@ export default function App() {
   const [currentProfile, setCurrentProfile] = useState<string | null>(null);
   const [profileSelectValue, setProfileSelectValue] = useState("");
   const [showProfileCreatePrompt, setShowProfileCreatePrompt] = useState(false);
+  const [showProfileDeleteConfirm, setShowProfileDeleteConfirm] = useState(false);
   const [newProfileName, setNewProfileName] = useState("");
   const [queueData, setQueueData] = useState<QueueData>({ items: [], next_id: 1 });
   const [currentQueueItemId, setCurrentQueueItemId] = useState<number | null>(null);
@@ -432,6 +444,13 @@ export default function App() {
   const payloadLogFlush = useRef<ReturnType<typeof setTimeout> | null>(null);
   const configSaveRef = useRef<AppConfig | null>(null);
   const resizeSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const optimizeSnapshot = useRef<{
+    connections: number;
+    compression: CompressionOption;
+    bandwidth: number;
+    autoTune: boolean;
+  } | null>(null);
+  const lastScanLogAt = useRef(0);
   const [payloadLocalPath, setPayloadLocalPath] = useState("");
   const [payloadStatus, setPayloadStatus] = useState("Unknown");
   const [payloadVersion, setPayloadVersion] = useState<string | null>(null);
@@ -470,6 +489,13 @@ export default function App() {
   const [isConnecting, setIsConnecting] = useState(false);
   const [storageLocations, setStorageLocations] = useState<StorageLocation[]>([]);
   const [sourcePath, setSourcePath] = useState("");
+  const [scanStatus, setScanStatus] = useState('idle');
+  const [scanFiles, setScanFiles] = useState(0);
+  const [scanTotal, setScanTotal] = useState(0);
+  const [scanError, setScanError] = useState<string | null>(null);
+  const [scanPartial, setScanPartial] = useState(false);
+  const [scanPartialReason, setScanPartialReason] = useState<string | null>(null);
+  const [scanEstimated, setScanEstimated] = useState(false);
   const [storageRoot, setStorageRoot] = useState("/data");
   const [preset, setPreset] = useState<(typeof presetOptions)[number]>(
     presetOptions[0]
@@ -621,11 +647,8 @@ export default function App() {
     ip: "",
     path: "/data"
   });
-  const manageClickRef = useRef<{ index: number | null; time: number }>({
-    index: null,
-    time: 0
-  });
-  const manageRefreshSkip = useRef<string | null>(null);
+  const managePathRef = useRef(managePath);
+  managePathRef.current = managePath;
   const configSnapshot = useRef({
     ip: "",
     chmodAfterUpload: false
@@ -885,6 +908,167 @@ export default function App() {
     }
   };
 
+  const handleBrowse = async () => {
+    if (activeRunId || scanStatus === "scanning") return;
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false
+      });
+      if (typeof selected === "string") {
+        setSourcePath(selected);
+        resetScan();
+      }
+    } catch (err) {
+      setClientLogs((prev) => [`Browse failed: ${String(err)}`, ...prev]);
+    }
+  };
+
+  const handleBrowseArchive = async () => {
+    if (activeRunId || scanStatus === "scanning") return;
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: "Archives", extensions: ["zip", "rar", "7z"] }]
+      });
+      if (typeof selected === "string") {
+        setSourcePath(selected);
+        resetScan();
+        if (!subfolder) {
+          const name = selected.split(/[/\\]/).filter(Boolean).pop() ?? "";
+          const base = name.replace(/\.(zip|7z|rar)$/i, "");
+          if (base) {
+            setSubfolder(base);
+          }
+        }
+      }
+    } catch (err) {
+      setClientLogs((prev) => [`Browse failed: ${String(err)}`, ...prev]);
+    }
+  };
+
+  const scanLimitMs = 10000;
+  const scanLimitFiles = 20000;
+
+  const handleScan = async () => {
+    if (scanStatus === 'scanning' || !sourcePath) return;
+    if (isArchiveSource) {
+      setScanStatus("error");
+      setScanError(tr("scan_archive_not_supported"));
+      return;
+    }
+    setClientLogs((prev) => [
+      `Scan started: ${sourcePath}`,
+      ...prev
+    ].slice(0, 100));
+    setScanStatus('scanning');
+    setScanError(null);
+    setScanFiles(0);
+    setScanTotal(0);
+    setScanPartial(false);
+    setScanPartialReason(null);
+    setScanEstimated(false);
+    try {
+      await invoke("transfer_scan", {
+        source_path: sourcePath,
+        max_ms: scanLimitMs,
+        max_files: scanLimitFiles,
+        quick_count: true,
+        sample_limit: 800
+      });
+    } catch (err) {
+      setScanStatus('error');
+      const message = err instanceof Error ? err.message : String(err);
+      setScanError(message);
+      setClientLogs((prev) => [`Scan error: ${message}`, ...prev].slice(0, 100));
+    }
+  };
+
+  const handleCancelScan = async () => {
+    if (scanStatus !== 'scanning') return;
+    await invoke("transfer_scan_cancel");
+    setScanStatus('cancelled');
+    setScanError(null);
+    setClientLogs((prev) => ["Scan cancelled", ...prev].slice(0, 100));
+  };
+
+  const resetScan = () => {
+    setScanStatus('idle');
+    setScanFiles(0);
+    setScanTotal(0);
+    setScanError(null);
+    setScanPartial(false);
+    setScanPartialReason(null);
+    setScanEstimated(false);
+    setOptimizeUpload(false);
+  };
+
+  useEffect(() => {
+    if (scanStatus !== "completed" && optimizeUpload) {
+      setOptimizeUpload(false);
+    }
+  }, [scanStatus, optimizeUpload]);
+
+  const computeOptimizeSettings = () => {
+    if (scanFiles <= 0 || scanTotal <= 0) {
+      return { connections: 2, compression: "lz4" as CompressionOption, bandwidth: 0 };
+    }
+    const kb = 1024;
+    const mb = 1024 * 1024;
+    const avgSize = scanTotal / scanFiles;
+    let connections = 4;
+    let compression: CompressionOption = "lz4";
+
+    if (avgSize < 256 * kb || scanFiles >= 100000) {
+      connections = 1;
+      compression = "lz4";
+    } else if (avgSize < 1 * mb) {
+      connections = 2;
+      compression = "lz4";
+    } else if (avgSize < 8 * mb) {
+      connections = 4;
+      compression = "lz4";
+    } else if (avgSize < 64 * mb) {
+      connections = 6;
+      compression = "none";
+    } else {
+      connections = 8;
+      compression = "none";
+    }
+
+    return { connections, compression, bandwidth: 0 };
+  };
+
+  const handleOptimizeToggle = () => {
+    if (scanStatus !== "completed") return;
+    if (!optimizeUpload) {
+      optimizeSnapshot.current = {
+        connections,
+        compression,
+        bandwidth: bandwidthLimit,
+        autoTune
+      };
+      const nextSettings = computeOptimizeSettings();
+      setAutoTune(false);
+      setConnections(nextSettings.connections);
+      setCompression(nextSettings.compression);
+      setBandwidthLimit(nextSettings.bandwidth);
+      const tag = scanPartial ? " (sampled)" : "";
+      setClientLogs((prev) => [
+        `Optimize${tag}: connections=${nextSettings.connections}, compression=${nextSettings.compression}, bandwidth=${nextSettings.bandwidth === 0 ? "unlimited" : `${nextSettings.bandwidth} Mbps`}`,
+        ...prev
+      ].slice(0, 100));
+    }
+    if (optimizeUpload && optimizeSnapshot.current) {
+      setConnections(optimizeSnapshot.current.connections);
+      setCompression(optimizeSnapshot.current.compression);
+      setBandwidthLimit(optimizeSnapshot.current.bandwidth);
+      setAutoTune(optimizeSnapshot.current.autoTune);
+      optimizeSnapshot.current = null;
+    }
+    setOptimizeUpload((prev) => !prev);
+  };
+
   const handleSaveCurrentProfile = async () => {
     if (!currentProfile) return;
     const nextProfile = buildProfileFromState(currentProfile);
@@ -914,10 +1098,12 @@ export default function App() {
 
   const handleDeleteProfile = async () => {
     if (!currentProfile) return;
-    const ok = window.confirm(
-      tr("delete_profile_confirm").replace("{name}", currentProfile)
-    );
-    if (!ok) return;
+    setShowProfileDeleteConfirm(true);
+  };
+
+  const handleConfirmDeleteProfile = async () => {
+    if (!currentProfile) return;
+    setShowProfileDeleteConfirm(false);
     const nextProfiles = profilesData.profiles.filter(
       (item) => item.name !== currentProfile
     );
@@ -1865,6 +2051,61 @@ export default function App() {
         }));
       });
 
+      const unlistenScanProgress = await listen<{ files: number, total: number }>(
+        "scan_progress",
+        (event) => {
+          if (!mounted) return;
+          setScanFiles(event.payload.files);
+          setScanTotal(event.payload.total);
+          const now = Date.now();
+          if (now - lastScanLogAt.current >= 1000) {
+            lastScanLogAt.current = now;
+            setClientLogs((prev) => [
+              `Scanning... ${event.payload.files} files, ${formatBytes(event.payload.total)}`,
+              ...prev
+            ].slice(0, 100));
+          }
+        }
+      );
+
+      const unlistenScanComplete = await listen<{
+        files: number;
+        total: number;
+        partial?: boolean;
+        reason?: string | null;
+        elapsed_ms?: number;
+        estimated?: boolean;
+      }>(
+        "scan_complete",
+        (event) => {
+          if (!mounted) return;
+          setScanStatus('completed');
+          setScanFiles(event.payload.files);
+          setScanTotal(event.payload.total);
+          setScanPartial(!!event.payload.partial);
+          setScanPartialReason(event.payload.reason ?? null);
+          setScanEstimated(!!event.payload.estimated);
+          const label = event.payload.partial || event.payload.estimated ? "Scan sampled" : "Scan complete";
+          setClientLogs((prev) => [
+            `${label}: ${event.payload.files} files, ${formatBytes(event.payload.total)}`,
+            ...prev
+          ].slice(0, 100));
+        }
+      );
+
+      const unlistenScanError = await listen<{ message: string }>(
+        "scan_error",
+        (event) => {
+          if (!mounted) return;
+          setScanStatus('error');
+          setScanError(event.payload.message);
+          setClientLogs((prev) => [
+            `Scan error: ${event.payload.message}`,
+            ...prev
+          ].slice(0, 100));
+        }
+      );
+
       return () => {
         if (clientLogFlush.current) {
           clearTimeout(clientLogFlush.current);
@@ -1892,6 +2133,9 @@ export default function App() {
         unlistenChatMessage();
         unlistenChatStatus();
         unlistenChatAck();
+        unlistenScanProgress();
+        unlistenScanComplete();
+        unlistenScanError();
       };
     };
 
@@ -1902,12 +2146,45 @@ export default function App() {
     };
   }, []);
 
+  const toNumber = (value: number | bigint) =>
+    typeof value === "bigint" ? Number(value) : value;
+  const transferTotal = toNumber(transferState.total || 0);
+  const transferSent = toNumber(transferState.sent || 0);
   const transferPercent =
-    transferState.total > 0
-      ? Math.min(100, (transferState.sent / transferState.total) * 100)
-      : 0;
+    transferTotal > 0 ? Math.min(100, (transferSent / transferTotal) * 100) : 0;
   const transferSpeed =
-    transferState.elapsed > 0 ? transferState.sent / transferState.elapsed : 0;
+    transferState.elapsed > 0 ? transferSent / transferState.elapsed : 0;
+  const scanInProgress = scanStatus === "scanning";
+  const scanCompleted = scanStatus === "completed";
+  const scanSummary =
+    scanFiles > 0 || scanTotal > 0
+      ? `${scanFiles} ${tr("files")} | ${formatBytes(scanTotal)}`
+      : "";
+  const scanPartialNote = scanPartial
+    ? scanPartialReason === "time"
+      ? `Sampled for ~${Math.round(scanLimitMs / 1000)}s.`
+      : scanPartialReason === "files"
+      ? `Sampled first ${scanLimitFiles} files.`
+      : "Sampled scan."
+    : "";
+  const scanEstimateNote = scanEstimated
+    ? "Size is estimated from a quick sample."
+    : "";
+  const scanStatusLabel =
+    scanStatus === "scanning"
+      ? "Scanning..."
+    : scanStatus === "completed" && scanPartial
+      ? "Scan sampled"
+      : scanStatus === "completed"
+      ? "Scan complete"
+      : scanStatus === "cancelled"
+      ? "Scan cancelled"
+      : scanStatus === "error"
+      ? "Scan error"
+      : "";
+  const connectionsDisabled = optimizeUpload || autoTune;
+  const isRarSource = /\.rar$/i.test(sourcePath.trim());
+  const isArchiveSource = /\.(zip|rar|7z)$/i.test(sourcePath.trim());
 
   const formatUptime = (seconds: number) => {
     const days = Math.floor(seconds / 86400);
@@ -1953,7 +2230,7 @@ export default function App() {
 
   const applyManageSnapshot = (snapshot: ManageListSnapshot | null) => {
     if (!snapshot) return;
-    if (snapshot.path && snapshot.path !== managePath) {
+    if (snapshot.path && snapshot.path !== managePathRef.current) {
       return;
     }
     if (typeof snapshot.updated_at_ms === "number") {
@@ -2101,77 +2378,6 @@ export default function App() {
     setIsConnecting(false);
   };
 
-  const handleScan = async () => {
-    if (!sourcePath.trim()) {
-      setTransferState((prev) => ({ ...prev, status: "Missing source" }));
-      return;
-    }
-    setTransferState((prev) => ({ ...prev, status: "Scanning" }));
-    try {
-      const runId = await invoke<number>("transfer_scan", {
-        source_path: sourcePath
-      });
-      setActiveRunId(runId);
-    } catch (err) {
-      setTransferState((prev) => ({
-        ...prev,
-        status: `Error: ${String(err)}`
-      }));
-    }
-  };
-
-  const handleOptimizeToggle = () => {
-    setOptimizeUpload((prev) => {
-      const next = !prev;
-      if (next) {
-        setAutoTune(true);
-        setCompression("auto");
-      }
-      return next;
-    });
-  };
-
-  const handleBrowse = async () => {
-    try {
-      const selected = await open({
-        directory: true,
-        multiple: false
-      });
-      if (typeof selected === "string") {
-        setSourcePath(selected);
-      }
-    } catch (err) {
-      setTransferState((prev) => ({
-        ...prev,
-        status: `Error: ${String(err)}`
-      }));
-    }
-  };
-
-  const handleBrowseArchive = async () => {
-    try {
-      const selected = await open({
-        multiple: false,
-        filters: [{ name: "Archive", extensions: ["zip", "7z", "rar"] }]
-      });
-      if (typeof selected === "string") {
-        setSourcePath(selected);
-        if (!subfolder) {
-          const name = selected.split(/[/\\]/).filter(Boolean).pop() ?? "";
-          const base = name.replace(/\.(zip|7z|rar)$/i, "");
-          if (base) {
-            setSubfolder(base);
-          }
-        }
-      }
-    } catch (err) {
-      setTransferState((prev) => ({
-        ...prev,
-        status: `Error: ${String(err)}`
-      }));
-    }
-  };
-
   const handlePayloadBrowse = async () => {
     try {
       const selected = await open({
@@ -2212,6 +2418,10 @@ export default function App() {
       } else {
         await invoke("payload_download_and_send", { ip, fetch: mode });
       }
+      setPayloadStatus("Waiting for payload...");
+      setTimeout(() => {
+        handlePayloadCheck();
+      }, 3000);
     } catch (err) {
       setPayloadStatus(`Error: ${String(err)}`);
     }
@@ -2299,30 +2509,43 @@ export default function App() {
   };
 
   const handleUpload = async () => {
+    setClientLogs((prev) => ["Upload clicked", ...prev].slice(0, 100));
     if (!ip.trim()) {
       setTransferState((prev) => ({ ...prev, status: "Missing IP" }));
+      setClientLogs((prev) => ["Upload blocked: Missing IP", ...prev].slice(0, 100));
       return;
     }
     if (!sourcePath.trim()) {
       setTransferState((prev) => ({ ...prev, status: "Missing source" }));
+      setClientLogs((prev) => ["Upload blocked: Missing source", ...prev].slice(0, 100));
       return;
     }
     if (!finalDestPath.trim()) {
       setTransferState((prev) => ({ ...prev, status: "Missing destination" }));
+      setClientLogs((prev) => ["Upload blocked: Missing destination", ...prev].slice(0, 100));
       return;
     }
     if (!(await ensureConnected())) {
       setTransferState((prev) => ({ ...prev, status: "Not connected" }));
+      setClientLogs((prev) => ["Upload blocked: Not connected", ...prev].slice(0, 100));
       return;
     }
 
     try {
+      setClientLogs((prev) => [
+        `Upload preparing: ${sourcePath} -> ${finalDestPath}`,
+        ...prev
+      ].slice(0, 100));
       const exists = await invoke<boolean>("transfer_check_dest", {
         ip,
         destPath: finalDestPath
       });
       if (exists && !overrideOnConflict) {
         setTransferState((prev) => ({ ...prev, status: tr("destination_exists") }));
+        setClientLogs((prev) => [
+          "Upload blocked: Destination already exists",
+          ...prev
+        ].slice(0, 100));
         return;
       }
       const runId = await invoke<number>("transfer_start", {
@@ -2351,6 +2574,7 @@ export default function App() {
       const startMsg = `Upload started: ${sourcePath} -> ${finalDestPath}`;
       setClientLogs((prev) => [startMsg, ...prev].slice(0, 100));
     } catch (err) {
+      setClientLogs((prev) => [`Upload failed: ${String(err)}`, ...prev].slice(0, 100));
       setTransferState((prev) => ({
         ...prev,
         status: `Error: ${String(err)}`
@@ -2401,7 +2625,17 @@ export default function App() {
       storage_base: storageRoot,
       dest_path: finalDestPath,
       status: "Pending",
-      size_bytes: transferState.total || null
+      size_bytes: transferState.total || null,
+      transfer_settings: {
+        use_temp: useTemp,
+        connections,
+        resume_mode: resumeMode,
+        compression,
+        bandwidth_limit_mbps: bandwidthLimit,
+        auto_tune_connections: autoTune,
+        optimize_upload: optimizeUpload,
+        rar_extract_mode: rarExtractMode
+      }
     };
     const normalizeKey = (value: string) =>
       value.replace(/[/\\]+/g, "/").trim().toLowerCase();
@@ -2501,19 +2735,20 @@ export default function App() {
     setActiveTransferViaQueue(true);
     setTransferStartedAt(Date.now());
     try {
+      const settings = item.transfer_settings;
       const runId = await invoke<number>("transfer_start", {
         req: {
           ip,
           source_path: item.source_path,
           dest_path: dest,
-          use_temp: useTemp,
-          connections,
-          resume_mode: resumeMode,
-          compression,
-          bandwidth_limit_mbps: bandwidthLimit,
-          auto_tune_connections: autoTune,
-          optimize_upload: optimizeUpload,
-          rar_extract_mode: rarExtractMode,
+          use_temp: settings?.use_temp ?? useTemp,
+          connections: settings?.connections ?? connections,
+          resume_mode: settings?.resume_mode ?? resumeMode,
+          compression: settings?.compression ?? compression,
+          bandwidth_limit_mbps: settings?.bandwidth_limit_mbps ?? bandwidthLimit,
+          auto_tune_connections: settings?.auto_tune_connections ?? autoTune,
+          optimize_upload: settings?.optimize_upload ?? optimizeUpload,
+          rar_extract_mode: settings?.rar_extract_mode ?? rarExtractMode,
           payload_version: payloadVersion,
           storage_root: base,
           required_size: item.size_bytes || null
@@ -3306,7 +3541,7 @@ export default function App() {
         <section className="content">
           {activeTab === "transfer" && (
             <div className="grid-two">
-              <div className="card">
+              <div className="card source-card">
                 <header className="card-title">
                   <span className="card-title-icon">▢</span>
                   {tr("source")}
@@ -3328,73 +3563,77 @@ export default function App() {
                   </div>
                 </label>
                 <div className="split">
-                  <button className="btn" onClick={handleScan}>
+                  <button
+                    className="btn"
+                    onClick={handleScan}
+                    disabled={scanInProgress || !sourcePath.trim() || isArchiveSource}
+                  >
                     {tr("scan")}
                   </button>
+                  {scanInProgress && (
+                    <button className="btn danger" onClick={handleCancelScan}>
+                      {tr("cancel")}
+                    </button>
+                  )}
                   <button className="btn" onClick={handleAddToQueue}>
                     {tr("add_to_queue")}
                   </button>
                   <button
                     className={`btn ${optimizeUpload ? "primary" : ""}`}
                     onClick={handleOptimizeToggle}
+                    disabled={!scanCompleted}
                   >
                     {tr("optimize")}
                   </button>
                 </div>
+                {scanStatus !== "idle" && (
+                  <div className="stack">
+                    {scanStatusLabel && (
+                      <div className="pill status-pill">{scanStatusLabel}</div>
+                    )}
+                    {scanSummary && <p className="muted small">{scanSummary}</p>}
+                    {scanPartialNote && (
+                      <p className="muted small">{scanPartialNote}</p>
+                    )}
+                    {scanEstimateNote && (
+                      <p className="muted small">{scanEstimateNote}</p>
+                    )}
+                    {scanStatus === "error" && scanError && (
+                      <p className="muted small">{scanError}</p>
+                    )}
+                  </div>
+                )}
                 <p className="muted small">{tr("scan_help")}</p>
+                {isArchiveSource && (
+                  <p className="muted small">{tr("scan_archive_not_supported")}</p>
+                )}
                 <p className="muted small">{tr("optimize_help")}</p>
                 {optimizeUpload && (
                   <p className="muted small">{tr("optimize_lock_note")}</p>
                 )}
                 {gameMeta && (
-                  <div className="meta-block">
-                    {gameCoverUrl && (
-                      <img src={gameCoverUrl} alt={gameMeta.title} />
-                    )}
-                    <div>
-                      <strong>{gameMeta.title}</strong>
-                      {gameMeta.content_id && (
-                        <div className="muted">
-                          Content ID: {gameMeta.content_id}
-                        </div>
+                  <div className="source-meta-fill">
+                    <div className="meta-block">
+                      {gameCoverUrl && (
+                        <img src={gameCoverUrl} alt={gameMeta.title} />
                       )}
-                      {gameMeta.title_id && (
-                        <div className="muted">Title ID: {gameMeta.title_id}</div>
-                      )}
-                      {gameMeta.version && (
-                        <div className="muted">Version: {gameMeta.version}</div>
-                      )}
+                      <div>
+                        <strong>{gameMeta.title}</strong>
+                        {gameMeta.content_id && (
+                          <div className="muted">
+                            Content ID: {gameMeta.content_id}
+                          </div>
+                        )}
+                        {gameMeta.title_id && (
+                          <div className="muted">Title ID: {gameMeta.title_id}</div>
+                        )}
+                        {gameMeta.version && (
+                          <div className="muted">Version: {gameMeta.version}</div>
+                        )}
+                      </div>
                     </div>
                   </div>
                 )}
-                <label className="field">
-                  <span>{tr("bandwidth_limit")}</span>
-                  <input
-                    type="number"
-                    min={0}
-                    value={bandwidthLimit}
-                    onChange={(event) => setBandwidthLimit(Number(event.target.value))}
-                  />
-                </label>
-                <label className="field inline">
-                  <span>{tr("auto_tune")}</span>
-                  <input
-                    type="checkbox"
-                    checked={autoTune}
-                    disabled={optimizeUpload}
-                    onChange={(event) => setAutoTune(event.target.checked)}
-                  />
-                </label>
-                <p className="muted small">{tr("auto_tune_desc")}</p>
-                <label className="field inline">
-                  <span>{tr("use_temp")}</span>
-                  <input
-                    type="checkbox"
-                    checked={useTemp}
-                    onChange={(event) => setUseTemp(event.target.checked)}
-                  />
-                </label>
-                <p className="muted small">{tr("use_temp_desc")}</p>
               </div>
 
               <div className="card">
@@ -3456,62 +3695,10 @@ export default function App() {
                   />
                 </label>
                 <label className="field">
-                  <span>{tr("compression")}</span>
-                  <select
-                    value={compression}
-                    disabled={optimizeUpload}
-                    onChange={(event) =>
-                      setCompression(event.target.value as CompressionOption)
-                    }
-                  >
-                    <option value="auto">{tr("compression_auto")}</option>
-                    <option value="none">{tr("compression_none")}</option>
-                    <option value="lz4">{tr("compression_lz4")}</option>
-                    <option value="zstd">{tr("compression_zstd")}</option>
-                    <option value="lzma">{tr("compression_lzma")}</option>
-                  </select>
-                </label>
-                <label className="field">
-                  <span>{tr("connections")}</span>
-                  <input
-                    type="number"
-                    min={1}
-                    max={10}
-                    value={connections}
-                    disabled={optimizeUpload}
-                    onChange={(event) =>
-                      setConnections(
-                        Math.min(10, Math.max(1, Number(event.target.value)))
-                      )
-                    }
-                  />
-                </label>
-                <p className="muted small">{tr("connections_note")}</p>
-                <p className="muted small">{tr("connections_note_extra")}</p>
-                <label className="field">
-                  <span>{tr("resume_mode")}</span>
-                  <select
-                    value={resumeMode}
-                    onChange={(event) =>
-                      setResumeMode(event.target.value as ResumeOption)
-                    }
-                  >
-                    <option value="none">{tr("resume_off")}</option>
-                    <option value="size">{tr("resume_fast")}</option>
-                    <option value="size_mtime">{tr("resume_medium")}</option>
-                    <option value="sha256">{tr("resume_slow")}</option>
-                  </select>
-                </label>
-                {resumeMode !== "none" && (
-                  <>
-                    <p className="muted small">{tr("resume_note")}</p>
-                    <p className="muted small">{tr("resume_note_change")}</p>
-                  </>
-                )}
-                <label className="field">
                   <span>{tr("rar_extract")}</span>
                   <select
                     value={rarExtractMode}
+                    disabled={!isRarSource}
                     onChange={(event) =>
                       setRarExtractMode(event.target.value as RarExtractMode)
                     }
@@ -3521,14 +3708,18 @@ export default function App() {
                     <option value="turbo">{tr("rar_turbo")}</option>
                   </select>
                 </label>
-                <p className="muted small">{tr("rar_note")}</p>
-                <p className="muted small">
-                  {rarExtractMode === "safe"
-                    ? tr("rar_note_safe")
-                    : rarExtractMode === "turbo"
-                    ? tr("rar_note_turbo")
-                    : tr("rar_note_normal")}
-                </p>
+                {isRarSource && (
+                  <>
+                    <p className="muted small">{tr("rar_note")}</p>
+                    <p className="muted small">
+                      {rarExtractMode === "safe"
+                        ? tr("rar_note_safe")
+                        : rarExtractMode === "turbo"
+                        ? tr("rar_note_turbo")
+                        : tr("rar_note_normal")}
+                    </p>
+                  </>
+                )}
                 <label className="field inline">
                   <span>{tr("chmod_after")}</span>
                   <input
@@ -3580,6 +3771,117 @@ export default function App() {
                     onChange={(event) => setOverrideOnConflict(event.target.checked)}
                   />
                 </label>
+                <p className="muted small">{tr("override_conflict_note")}</p>
+                {!overrideOnConflict && (
+                  <p className="muted small warn">{tr("override_conflict_warn")}</p>
+                )}
+              </div>
+
+              <div className="card wide">
+                <header className="card-title">
+                  <span className="card-title-icon">⚙</span>
+                  {tr("transfer_settings")}
+                </header>
+                <div className="grid-two">
+                  <div className="stack">
+                    <div className="section-label">{tr("connection_settings")}</div>
+                    <label className="field">
+                      <span>{tr("bandwidth_limit")}</span>
+                      <input
+                        type="number"
+                        min={0}
+                        value={bandwidthLimit}
+                        disabled={optimizeUpload}
+                        onChange={(event) =>
+                          setBandwidthLimit(Number(event.target.value))
+                        }
+                      />
+                    </label>
+                    <label className="field inline">
+                      <span>{tr("auto_tune")}</span>
+                      <input
+                        type="checkbox"
+                        checked={autoTune}
+                        disabled={optimizeUpload}
+                        onChange={(event) => setAutoTune(event.target.checked)}
+                      />
+                    </label>
+                    <p className="muted small">{tr("auto_tune_desc")}</p>
+                    <label
+                      className={`field ${connectionsDisabled ? "is-disabled" : ""}`}
+                    >
+                      <span>{tr("connections")}</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={10}
+                        value={connections}
+                        disabled={connectionsDisabled}
+                        onChange={(event) =>
+                          setConnections(
+                            Math.min(10, Math.max(1, Number(event.target.value)))
+                          )
+                        }
+                      />
+                    </label>
+                    {autoTune && (
+                      <p className="muted small note-tight">
+                        {tr("connections_auto_note")}
+                      </p>
+                    )}
+                    <p className="muted small">{tr("connections_note")}</p>
+                    <p className="muted small">{tr("connections_note_extra")}</p>
+                  </div>
+                  <div className="stack">
+                    <div className="section-label">{tr("transfer_options")}</div>
+                    <label className="field">
+                      <span>{tr("compression")}</span>
+                      <select
+                        value={compression}
+                        disabled={optimizeUpload}
+                        onChange={(event) =>
+                          setCompression(event.target.value as CompressionOption)
+                        }
+                      >
+                        <option value="auto">{tr("compression_auto")}</option>
+                        <option value="none">{tr("compression_none")}</option>
+                        <option value="lz4">{tr("compression_lz4")}</option>
+                        <option value="zstd">{tr("compression_zstd")}</option>
+                        <option value="lzma">{tr("compression_lzma")}</option>
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>{tr("resume_mode")}</span>
+                      <select
+                        value={resumeMode}
+                        onChange={(event) =>
+                          setResumeMode(event.target.value as ResumeOption)
+                        }
+                      >
+                        <option value="none">{tr("resume_off")}</option>
+                        <option value="size">{tr("resume_fast")}</option>
+                        <option value="size_mtime">{tr("resume_medium")}</option>
+                        <option value="sha256">{tr("resume_slow")}</option>
+                      </select>
+                    </label>
+                    {resumeMode !== "none" && (
+                      <>
+                        <p className="muted small">{tr("resume_note")}</p>
+                        <p className="muted small">{tr("resume_note_change")}</p>
+                      </>
+                    )}
+                    <div className="card-divider" />
+                    <label className="field inline">
+                      <span>{tr("use_temp")}</span>
+                      <input
+                        type="checkbox"
+                        checked={useTemp}
+                        onChange={(event) => setUseTemp(event.target.checked)}
+                      />
+                    </label>
+                    <p className="muted small">{tr("use_temp_desc")}</p>
+                  </div>
+                </div>
               </div>
 
               <div className="card wide">
@@ -3616,7 +3918,7 @@ export default function App() {
                   <button
                     className="btn primary"
                     onClick={handleUpload}
-                    disabled={!!activeRunId || !sourcePath.trim()}
+                    disabled={!!activeRunId || scanInProgress || !sourcePath.trim()}
                   >
                     ↑ {tr("upload")}
                   </button>
@@ -3625,6 +3927,7 @@ export default function App() {
                     onClick={handleUploadQueue}
                     disabled={
                       !!activeRunId ||
+                      scanInProgress ||
                       queueData.items.filter((i) => i.status === "Pending").length === 0
                     }
                   >
@@ -3974,21 +4277,11 @@ export default function App() {
                         <div
                           className={`file-item ${isSelected ? "selected" : ""}`}
                           key={`${nameRaw}-${entryTypeRaw}-${index}`}
-                          onClick={() => {
-                            setManageSelected(index);
-                            if (!isDir) {
-                              manageClickRef.current = { index, time: Date.now() };
-                              return;
-                            }
-                            const now = Date.now();
-                            const last = manageClickRef.current;
-                            if (last.index === index && now - last.time < 350) {
-                              const nextPath = joinRemote(managePath, nameRaw);
-                              handleManageRefresh(nextPath);
-                              manageClickRef.current = { index: null, time: 0 };
-                              return;
-                            }
-                            manageClickRef.current = { index, time: now };
+                          onClick={() => setManageSelected(index)}
+                          onDoubleClick={() => {
+                            if (!isDir) return;
+                            const nextPath = joinRemote(managePath, nameRaw);
+                            handleManageRefresh(nextPath);
                           }}
                         >
                           <span className="file-name">
@@ -4594,6 +4887,34 @@ export default function App() {
                   setShowProfileCreatePrompt(false);
                   setProfileSelectValue(currentProfile ?? "");
                 }}
+              >
+                {tr("cancel")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showProfileDeleteConfirm && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            <header className="modal-title">{tr("delete_profile")}</header>
+            <p>
+              {tr("delete_profile_confirm").replace(
+                "{name}",
+                currentProfile ?? ""
+              )}
+            </p>
+            <div className="split">
+              <button
+                className="btn danger"
+                onClick={handleConfirmDeleteProfile}
+              >
+                {tr("delete")}
+              </button>
+              <button
+                className="btn ghost"
+                onClick={() => setShowProfileDeleteConfirm(false)}
               >
                 {tr("cancel")}
               </button>

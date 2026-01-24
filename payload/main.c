@@ -34,6 +34,8 @@
 #include "unrar_handler.h"
 #include "extract_queue.h"
 
+
+
 static int create_server_socket(int port) {
     int sock = socket(AF_INET, SOCK_STREAM, 0);
     if(sock < 0) {
@@ -353,6 +355,12 @@ static void process_command(struct ClientConnection *conn) {
             close_connection(conn);
             return;
         }
+        if (!is_path_safe(dest_path)) {
+            const char *error = "ERROR: Invalid path\n";
+            send(conn->sock, error, strlen(error), 0);
+            close_connection(conn);
+            return;
+        }
         int use_temp = 1;
         if (parsed >= 2 && strcasecmp(mode, "DIRECT") == 0) {
             use_temp = 0;
@@ -384,6 +392,23 @@ static void process_command(struct ClientConnection *conn) {
         args->sock = conn->sock;
         strncpy(args->args, conn->cmd_buffer + 7, sizeof(args->args) - 1);
         args->args[sizeof(args->args) - 1] = '\0';
+
+        char dest_path[PATH_MAX];
+        if (sscanf(args->args, "%s", dest_path) < 1) {
+            const char *error = "ERROR: Invalid UPLOAD format\n";
+            send(conn->sock, error, strlen(error), 0);
+            close_connection(conn);
+            free(args);
+            return;
+        }
+
+        if (!is_path_safe(dest_path)) {
+            const char *error = "ERROR: Invalid path\n";
+            send(conn->sock, error, strlen(error), 0);
+            close_connection(conn);
+            free(args);
+            return;
+        }
 
         if (pthread_create(&tid, NULL, legacy_upload_thread, args) == 0) {
             pthread_detach(tid);

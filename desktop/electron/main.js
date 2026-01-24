@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, nativeImage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -7,8 +7,11 @@ const https = require('https');
 const http = require('http');
 const crypto = require('crypto');
 const { promisify } = require('util');
+const { execFile } = require('child_process');
 const { pipeline } = require('stream');
 const streamPipeline = promisify(pipeline);
+const execFileAsync = promisify(execFile);
+const walk = require('walk');
 const tryRequire = (moduleName) => {
   try {
     return require(moduleName);
@@ -27,6 +30,7 @@ const CONNECTION_TIMEOUT_MS = 30000;
 const READ_TIMEOUT_MS = 120000;
 const PACK_BUFFER_SIZE = 16 * 1024 * 1024; // 16MB
 const SEND_CHUNK_SIZE = 4 * 1024 * 1024; // 4MB
+const WRITE_CHUNK_SIZE = 512 * 1024; // 512KB
 const MAGIC_FTX1 = 0x31585446;
 const VERSION = '1.2.2';
 
@@ -37,6 +41,282 @@ const FrameType = {
   PackLzma: 10,
   Finish: 6,
 };
+
+const ARCHIVE_EXTENSIONS = new Set(['.rar']);
+const SEVEN_Z_COMMANDS = ['7z', '7za', '7zz'];
+const COVER_CANDIDATES = [
+  'icon0.png',
+  'icon0.jpg',
+  'icon0.jpeg',
+  'icon.png',
+  'cover.png',
+  'cover.jpg',
+  'tile0.png',
+];
+
+async function tryExecFile(command, args, options = {}) {
+  try {
+    return await execFileAsync(command, args, {
+      maxBuffer: 50 * 1024 * 1024,
+      ...options,
+    });
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return null;
+    if (err && err.stdout) return { stdout: err.stdout, stderr: err.stderr || '' };
+    return null;
+  }
+}
+
+async function listArchiveEntries(archivePath) {
+  for (const cmd of SEVEN_Z_COMMANDS) {
+    const result = await tryExecFile(cmd, ['l', '-slt', archivePath], { encoding: 'utf8' });
+    if (!result || !result.stdout) continue;
+    const entries = [];
+    const lines = result.stdout.split(/\r?\n/);
+    for (const line of lines) {
+      const match = line.match(/^Path = (.+)$/);
+      if (match) {
+        entries.push(match[1].trim());
+      }
+    }
+    if (entries.length) return entries;
+  }
+  return null;
+}
+
+async function extractArchiveFile(archivePath, entryPath) {
+  for (const cmd of SEVEN_Z_COMMANDS) {
+    const result = await tryExecFile(
+      cmd,
+      ['e', '-so', '-y', '-bd', archivePath, entryPath],
+      { encoding: 'buffer' }
+    );
+    if (result && result.stdout && result.stdout.length > 0) {
+      return result.stdout;
+    }
+  }
+  return null;
+}
+
+function normalizeArchiveEntry(entry) {
+  return entry.replace(/\\/g, '/').replace(/^\.\/+/, '');
+}
+
+function findArchiveParamEntry(entries) {
+  const normalized = entries.map(normalizeArchiveEntry);
+  const sceParam = normalized.find((e) => e.toLowerCase().endsWith('/sce_sys/param.json') || e.toLowerCase() === 'sce_sys/param.json');
+  if (sceParam) return sceParam;
+  const directParam = normalized.find((e) => e.toLowerCase().endsWith('/param.json') || e.toLowerCase() === 'param.json');
+  return directParam || null;
+}
+
+function findArchiveCoverEntry(entries, paramEntry) {
+  const normalized = entries.map(normalizeArchiveEntry);
+  let preferredBase = null;
+  if (paramEntry) {
+    const lower = paramEntry.toLowerCase();
+    if (lower.includes('/sce_sys/param.json')) {
+      preferredBase = paramEntry.slice(0, lower.lastIndexOf('/sce_sys/param.json')) + '/sce_sys';
+    } else if (lower.endsWith('/param.json')) {
+      preferredBase = paramEntry.slice(0, lower.lastIndexOf('/param.json'));
+    }
+  }
+  if (preferredBase) {
+    for (const candidate of COVER_CANDIDATES) {
+      const target = `${preferredBase}/${candidate}`.toLowerCase();
+      const entry = normalized.find((e) => e.toLowerCase() === target);
+      if (entry) return entry;
+    }
+  }
+  for (const candidate of COVER_CANDIDATES) {
+    const entry = normalized.find(
+      (e) => e.toLowerCase() === candidate || e.toLowerCase().endsWith(`/${candidate}`)
+    );
+    if (entry) return entry;
+  }
+  return null;
+}
+
+function getTitleFromParam(param) {
+  if (param && typeof param.titleName === 'string') {
+    return param.titleName;
+  }
+  const localized = param && param.localizedParameters;
+  if (!localized || typeof localized !== 'object') {
+    return null;
+  }
+  let region = typeof localized.defaultLanguage === 'string' ? localized.defaultLanguage.trim() : '';
+  if (!region) region = 'en-US';
+  const normalized = region.replace('_', '-');
+  const direct = localized[normalized] && localized[normalized].titleName;
+  if (typeof direct === 'string') return direct;
+  const fallback = localized['en-US'] && localized['en-US'].titleName;
+  if (typeof fallback === 'string') return fallback;
+  return null;
+}
+
+function parseGameMetaFromParam(param) {
+  if (!param || typeof param !== 'object') return null;
+  const title = getTitleFromParam(param) || 'Unknown';
+  const title_id = typeof param.titleId === 'string' ? param.titleId : '';
+  const content_id = typeof param.contentId === 'string' ? param.contentId : '';
+  const version = typeof param.contentVersion === 'string' ? param.contentVersion : '';
+  return { title, title_id, content_id, version };
+}
+
+function readJsonFile(pathname) {
+  try {
+    return JSON.parse(fs.readFileSync(pathname, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function findParamPathForPath(sourcePath) {
+  if (!sourcePath || !sourcePath.trim()) return null;
+  let stat;
+  try {
+    stat = fs.statSync(sourcePath);
+  } catch {
+    return null;
+  }
+  if (stat.isDirectory()) {
+    const sce = path.join(sourcePath, 'sce_sys', 'param.json');
+    if (fs.existsSync(sce)) return sce;
+    const direct = path.join(sourcePath, 'param.json');
+    if (fs.existsSync(direct)) return direct;
+    return null;
+  }
+  const parent = path.dirname(sourcePath);
+  const stem = path.parse(sourcePath).name;
+  if (stem) {
+    const candidate = path.join(parent, stem);
+    const sce = path.join(candidate, 'sce_sys', 'param.json');
+    if (fs.existsSync(sce)) return sce;
+    const direct = path.join(candidate, 'param.json');
+    if (fs.existsSync(direct)) return direct;
+  }
+  return null;
+}
+
+function toRgbaPixels(image) {
+  const { width, height } = image.getSize();
+  const bgra = image.toBitmap();
+  const rgba = Buffer.alloc(bgra.length);
+  for (let i = 0; i < bgra.length; i += 4) {
+    rgba[i] = bgra[i + 2];
+    rgba[i + 1] = bgra[i + 1];
+    rgba[i + 2] = bgra[i];
+    rgba[i + 3] = bgra[i + 3];
+  }
+  return { pixels: Array.from(rgba), width, height };
+}
+
+function loadCoverImageFromPath(pathname, maxDim) {
+  let image = nativeImage.createFromPath(pathname);
+  if (image.isEmpty()) return null;
+  const size = image.getSize();
+  const maxSide = Math.max(size.width, size.height);
+  if (maxSide > maxDim) {
+    const scale = maxDim / maxSide;
+    const width = Math.max(1, Math.round(size.width * scale));
+    const height = Math.max(1, Math.round(size.height * scale));
+    image = image.resize({ width, height, quality: 'best' });
+  }
+  return toRgbaPixels(image);
+}
+
+function loadCoverImageFromBytes(bytes, maxDim) {
+  let image = nativeImage.createFromBuffer(bytes);
+  if (image.isEmpty()) return null;
+  const size = image.getSize();
+  const maxSide = Math.max(size.width, size.height);
+  if (maxSide > maxDim) {
+    const scale = maxDim / maxSide;
+    const width = Math.max(1, Math.round(size.width * scale));
+    const height = Math.max(1, Math.round(size.height * scale));
+    image = image.resize({ width, height, quality: 'best' });
+  }
+  return toRgbaPixels(image);
+}
+
+function findCoverPathForParam(paramPath) {
+  const candidates = COVER_CANDIDATES;
+  const isSceSys = path.basename(path.dirname(paramPath)).toLowerCase() === 'sce_sys';
+  if (isSceSys) {
+    const sceDir = path.dirname(paramPath);
+    for (const name of candidates) {
+      const c = path.join(sceDir, name);
+      if (fs.existsSync(c)) return c;
+    }
+    const root = path.dirname(sceDir);
+    for (const name of candidates) {
+      const c = path.join(root, name);
+      if (fs.existsSync(c)) return c;
+    }
+    return null;
+  }
+  for (const name of candidates) {
+    const c = path.join(path.dirname(paramPath), 'sce_sys', name);
+    if (fs.existsSync(c)) return c;
+  }
+  for (const name of candidates) {
+    const c = path.join(path.dirname(paramPath), name);
+    if (fs.existsSync(c)) return c;
+  }
+  return null;
+}
+
+async function loadGameMetaFromArchive(archivePath) {
+  const entries = await listArchiveEntries(archivePath);
+  if (!entries) return null;
+  const paramEntry = findArchiveParamEntry(entries);
+  if (!paramEntry) return null;
+  const paramBytes = await extractArchiveFile(archivePath, paramEntry);
+  if (!paramBytes) return null;
+  let param;
+  try {
+    param = JSON.parse(paramBytes.toString('utf8'));
+  } catch {
+    return null;
+  }
+  const meta = parseGameMetaFromParam(param);
+  if (!meta) return null;
+  const coverEntry = findArchiveCoverEntry(entries, paramEntry);
+  let cover = null;
+  if (coverEntry) {
+    const coverBytes = await extractArchiveFile(archivePath, coverEntry);
+    if (coverBytes) {
+      cover = loadCoverImageFromBytes(coverBytes, 160);
+    }
+  }
+  return { meta, cover };
+}
+
+async function loadGameMetaForPath(sourcePath) {
+  if (!sourcePath || !sourcePath.trim()) return { meta: null, cover: null };
+  const ext = path.extname(sourcePath).toLowerCase();
+  if (ARCHIVE_EXTENSIONS.has(ext)) {
+    const archiveResult = await loadGameMetaFromArchive(sourcePath);
+    if (archiveResult) return archiveResult;
+    const fallbackParamPath = findParamPathForPath(sourcePath);
+    if (fallbackParamPath) {
+      const param = readJsonFile(fallbackParamPath);
+      const meta = parseGameMetaFromParam(param);
+      const coverPath = findCoverPathForParam(fallbackParamPath);
+      const cover = coverPath ? loadCoverImageFromPath(coverPath, 160) : null;
+      return { meta, cover };
+    }
+    return { meta: null, cover: null };
+  }
+  const paramPath = findParamPathForPath(sourcePath);
+  if (!paramPath) return { meta: null, cover: null };
+  const param = readJsonFile(paramPath);
+  const meta = parseGameMetaFromParam(param);
+  const coverPath = findCoverPathForParam(paramPath);
+  const cover = coverPath ? loadCoverImageFromPath(coverPath, 160) : null;
+  return { meta, cover };
+}
 
 
 // Paths
@@ -94,6 +374,44 @@ let payloadAutoReloader = null;
 // Determine the environment
 const isDev = process.env.NODE_ENV !== 'production' || !app.isPackaged;
 
+const mainLogPath = () => path.join(app.getPath('userData'), 'ps5upload_main.log');
+const logMain = (message, data = null) => {
+  const stamp = new Date().toISOString();
+  const payload = data ? ` ${JSON.stringify(data)}` : '';
+  try {
+    fs.appendFileSync(mainLogPath(), `[${stamp}] ${message}${payload}\n`);
+  } catch {
+    // ignore logging failures
+  }
+  console.error(message, data || '');
+};
+
+process.on('uncaughtException', (err) => {
+  logMain('Uncaught exception', { message: err?.message, stack: err?.stack });
+});
+
+process.on('unhandledRejection', (err) => {
+  logMain('Unhandled rejection', { message: err?.message, stack: err?.stack });
+});
+
+app.on('render-process-gone', (_event, webContents, details) => {
+  logMain('Render process gone', { details, url: webContents?.getURL?.() });
+});
+
+app.on('child-process-gone', (_event, details) => {
+  logMain('Child process gone', { details });
+});
+
+if (process.env.ELECTRON_DISABLE_GPU === '1') {
+  app.disableHardwareAcceleration();
+  app.commandLine.appendSwitch('disable-gpu');
+}
+
+app.commandLine.appendSwitch(
+  'disable-features',
+  'AutofillServerCommunication,AutofillEnable'
+);
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -149,7 +467,7 @@ class RateLimiter {
     this.accruedDelay = 0n; // nanoseconds
   }
 
-  throttle(bytes) {
+  async throttle(bytes) {
     if (!this.limitBps || this.limitBps <= 0) {
       return;
     }
@@ -158,18 +476,16 @@ class RateLimiter {
     const elapsed = now - this.lastByteTime;
     this.lastByteTime = now;
 
-    this.accruedDelay -= elapsed;
+    this.accruedDelay = this.accruedDelay > elapsed ? this.accruedDelay - elapsed : 0n;
 
     const delayNeeded = (BigInt(bytes) * 1_000_000_000n) / BigInt(this.limitBps);
     this.accruedDelay += delayNeeded;
 
     if (this.accruedDelay > 0) {
-      // Convert nanoseconds to milliseconds, at least 1ms to avoid busy-waiting
       const sleepMs = Number(this.accruedDelay / 1_000_000n);
       if (sleepMs > 0) {
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, sleepMs);
+        await new Promise(resolve => setTimeout(resolve, sleepMs));
       }
-      this.accruedDelay = 0n; // Reset accrued delay after sleeping
     }
   }
 }
@@ -184,17 +500,17 @@ function writeAllRetry(socket, data, cancel) {
         return reject(new Error('Upload cancelled by user'));
       }
 
-      const bytesWritten = socket.write(data.slice(offset));
-      if (bytesWritten === false) { // Buffer full, wait for 'drain'
-        socket.once('drain', writeLoop);
-      } else {
-        offset += bytesWritten;
-        if (offset < data.length) {
-          setImmediate(writeLoop); // Continue writing remaining data
-        } else {
-          resolve(); // All data written
+      while (offset < data.length) {
+        const end = Math.min(offset + WRITE_CHUNK_SIZE, data.length);
+        const chunk = data.slice(offset, end);
+        const ok = socket.write(chunk);
+        offset = end;
+        if (!ok) { // Buffer full, wait for 'drain'
+          socket.once('drain', writeLoop);
+          return;
         }
       }
+      resolve(); // All data written
     };
     writeLoop();
   });
@@ -224,27 +540,52 @@ function createSocketWithTimeout(ip, port, timeout = CONNECTION_TIMEOUT_MS) {
 }
 
 async function sendSimpleCommand(ip, port, cmd) {
+  const MAX_RESPONSE_SIZE = 1024 * 1024; // 1MB limit
   const socket = await createSocketWithTimeout(ip, port);
 
   return new Promise((resolve, reject) => {
     let data = Buffer.alloc(0);
+    let resolved = false;
+
+    const cleanup = () => {
+      socket.removeAllListeners();
+      socket.destroy();
+    };
 
     socket.setTimeout(READ_TIMEOUT_MS);
     socket.on('timeout', () => {
-      socket.destroy();
+      if (resolved) return;
+      resolved = true;
+      cleanup();
       reject(new Error('Read timed out'));
     });
 
     socket.on('data', (chunk) => {
+      if (resolved) return;
       data = Buffer.concat([data, chunk]);
+      if (data.length > MAX_RESPONSE_SIZE) {
+        resolved = true;
+        cleanup();
+        reject(new Error('Response too large'));
+        return;
+      }
       if (data.includes(Buffer.from('\n'))) {
-        socket.destroy();
+        resolved = true;
+        cleanup();
         resolve(data.toString('utf8').trim());
       }
     });
 
-    socket.on('error', (err) => reject(err));
+    socket.on('error', (err) => {
+      if (resolved) return;
+      resolved = true;
+      cleanup();
+      reject(err);
+    });
+
     socket.on('close', () => {
+      if (resolved) return;
+      resolved = true;
       if (data.length > 0) {
         resolve(data.toString('utf8').trim());
       }
@@ -255,23 +596,39 @@ async function sendSimpleCommand(ip, port, cmd) {
 }
 
 async function listStorage(ip, port) {
+  const MAX_RESPONSE_SIZE = 10 * 1024 * 1024; // 10MB limit for directory listings
   const socket = await createSocketWithTimeout(ip, port);
 
   return new Promise((resolve, reject) => {
     let data = Buffer.alloc(0);
+    let resolved = false;
+
+    const cleanup = () => {
+      socket.removeAllListeners();
+      socket.destroy();
+    };
 
     socket.setTimeout(READ_TIMEOUT_MS);
     socket.on('timeout', () => {
-      socket.destroy();
+      if (resolved) return;
+      resolved = true;
+      cleanup();
       reject(new Error('Read timed out'));
     });
 
     socket.on('data', (chunk) => {
+      if (resolved) return;
       data = Buffer.concat([data, chunk]);
-      // Check for end marker "\n]\n"
+      if (data.length > MAX_RESPONSE_SIZE) {
+        resolved = true;
+        cleanup();
+        reject(new Error('Response too large'));
+        return;
+      }
       const str = data.toString('utf8');
       if (str.includes('\n]\n') || str.endsWith('\n]')) {
-        socket.destroy();
+        resolved = true;
+        cleanup();
         try {
           const jsonEnd = str.lastIndexOf(']');
           const jsonStr = str.substring(0, jsonEnd + 1);
@@ -283,8 +640,16 @@ async function listStorage(ip, port) {
       }
     });
 
-    socket.on('error', (err) => reject(err));
+    socket.on('error', (err) => {
+      if (resolved) return;
+      resolved = true;
+      cleanup();
+      reject(err);
+    });
+
     socket.on('close', () => {
+      if (resolved) return;
+      resolved = true;
       if (data.length > 0) {
         try {
           const str = data.toString('utf8');
@@ -302,22 +667,39 @@ async function listStorage(ip, port) {
 }
 
 async function listDir(ip, port, dirPath) {
+  const MAX_RESPONSE_SIZE = 10 * 1024 * 1024; // 10MB limit for directory listings
   const socket = await createSocketWithTimeout(ip, port);
 
   return new Promise((resolve, reject) => {
     let data = Buffer.alloc(0);
+    let resolved = false;
+
+    const cleanup = () => {
+      socket.removeAllListeners();
+      socket.destroy();
+    };
 
     socket.setTimeout(READ_TIMEOUT_MS);
     socket.on('timeout', () => {
-      socket.destroy();
+      if (resolved) return;
+      resolved = true;
+      cleanup();
       reject(new Error('Read timed out'));
     });
 
     socket.on('data', (chunk) => {
+      if (resolved) return;
       data = Buffer.concat([data, chunk]);
+      if (data.length > MAX_RESPONSE_SIZE) {
+        resolved = true;
+        cleanup();
+        reject(new Error('Response too large'));
+        return;
+      }
       const str = data.toString('utf8');
       if (str.includes('\n]\n') || str.endsWith('\n]')) {
-        socket.destroy();
+        resolved = true;
+        cleanup();
         try {
           const jsonEnd = str.lastIndexOf(']');
           const jsonStr = str.substring(0, jsonEnd + 1);
@@ -329,8 +711,16 @@ async function listDir(ip, port, dirPath) {
       }
     });
 
-    socket.on('error', (err) => reject(err));
+    socket.on('error', (err) => {
+      if (resolved) return;
+      resolved = true;
+      cleanup();
+      reject(err);
+    });
+
     socket.on('close', () => {
+      if (resolved) return;
+      resolved = true;
       if (data.length > 0) {
         try {
           const str = data.toString('utf8');
@@ -760,11 +1150,11 @@ function saveProfiles(data) {
 
 // ==================== File Collection ====================
 
-function collectFiles(basePath, cancel = { value: false }, progressCallback = null) {
+async function collectFiles(basePath, cancel = { value: false }, progressCallback = null) {
   const files = [];
   let totalSize = 0n;
 
-  const stat = fs.statSync(basePath);
+  const stat = await fs.promises.stat(basePath);
   if (stat.isFile()) {
     files.push({
       rel_path: path.basename(basePath),
@@ -776,18 +1166,18 @@ function collectFiles(basePath, cancel = { value: false }, progressCallback = nu
     return { files, cancelled: false };
   }
 
-  const walk = (dir, prefix = '') => {
+  const walk = async (dir, prefix = '') => {
     if (cancel.value) return;
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    const entries = await fs.promises.readdir(dir, { withFileTypes: true });
     for (const entry of entries) {
       if (cancel.value) return;
       const fullPath = path.join(dir, entry.name);
       const relPath = prefix ? `${prefix}/${entry.name}` : entry.name;
 
       if (entry.isDirectory()) {
-        walk(fullPath, relPath);
+        await walk(fullPath, relPath);
       } else if (entry.isFile()) {
-        const stat = fs.statSync(fullPath);
+        const stat = await fs.promises.stat(fullPath);
         files.push({
           rel_path: relPath.replace(/\\/g, '/'),
           abs_path: fullPath,
@@ -796,14 +1186,14 @@ function collectFiles(basePath, cancel = { value: false }, progressCallback = nu
         });
         totalSize += BigInt(stat.size);
 
-        if (progressCallback && files.length % 1000 === 0) {
+        if (progressCallback && files.length % 100 === 0) { // Update more frequently
           progressCallback(files.length, Number(totalSize));
         }
       }
     }
   };
 
-  walk(basePath);
+  await walk(basePath);
   if (progressCallback) progressCallback(files.length, Number(totalSize));
 
   return { files, cancelled: cancel.value };
@@ -981,35 +1371,65 @@ async function sendFilesV2(files, socket, options = {}) {
 }
 
 async function readUploadResponse(socket, cancel = { value: false }) {
+  const MAX_RESPONSE_SIZE = 1024 * 1024; // 1MB limit
   return new Promise((resolve, reject) => {
     let data = Buffer.alloc(0);
+    let resolved = false;
+
+    const cleanup = () => {
+      socket.removeListener('data', onData);
+      socket.removeListener('error', onError);
+      socket.removeListener('close', onClose);
+      clearTimeout(timeout);
+    };
+
     const timeout = setTimeout(() => {
+      if (resolved) return;
+      resolved = true;
+      cleanup();
       socket.destroy();
       reject(new Error('Read timeout'));
     }, 60000);
 
-    socket.on('data', (chunk) => {
+    const onData = (chunk) => {
+      if (resolved) return;
       data = Buffer.concat([data, chunk]);
+      if (data.length > MAX_RESPONSE_SIZE) {
+        resolved = true;
+        cleanup();
+        socket.destroy();
+        reject(new Error('Response too large'));
+        return;
+      }
       const str = data.toString('utf8');
       if (str.includes('\n')) {
-        clearTimeout(timeout);
+        resolved = true;
+        cleanup();
         resolve(str.trim());
       }
-    });
+    };
 
-    socket.on('error', (err) => {
-      clearTimeout(timeout);
+    const onError = (err) => {
+      if (resolved) return;
+      resolved = true;
+      cleanup();
       reject(err);
-    });
+    };
 
-    socket.on('close', () => {
-      clearTimeout(timeout);
+    const onClose = () => {
+      if (resolved) return;
+      resolved = true;
+      cleanup();
       if (data.length > 0) {
         resolve(data.toString('utf8').trim());
       } else {
         reject(new Error('Connection closed'));
       }
-    });
+    };
+
+    socket.on('data', onData);
+    socket.on('error', onError);
+    socket.on('close', onClose);
   });
 }
 
@@ -1026,19 +1446,29 @@ function parseUploadResponse(response) {
 
 // ==================== Update Checking ====================
 
-async function fetchUrl(url) {
+async function fetchUrl(url, maxRedirects = 5) {
+  if (maxRedirects <= 0) {
+    throw new Error('Too many redirects');
+  }
   return new Promise((resolve, reject) => {
     const protocol = url.startsWith('https') ? https : http;
     const req = protocol.get(url, {
       headers: { 'User-Agent': 'ps5upload-desktop' }
     }, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        fetchUrl(res.headers.location).then(resolve).catch(reject);
+        fetchUrl(res.headers.location, maxRedirects - 1).then(resolve).catch(reject);
         return;
       }
 
       let data = '';
-      res.on('data', (chunk) => { data += chunk; });
+      const MAX_SIZE = 10 * 1024 * 1024; // 10MB limit
+      res.on('data', (chunk) => {
+        data += chunk;
+        if (data.length > MAX_SIZE) {
+          req.destroy();
+          reject(new Error('Response too large'));
+        }
+      });
       res.on('end', () => resolve(data));
     });
 
@@ -1070,37 +1500,87 @@ async function fetchReleaseByTag(tag) {
 }
 
 async function downloadAsset(url, destPath) {
+  const MAX_REDIRECTS = 5;
+  const DOWNLOAD_TIMEOUT = 300000; // 5 minutes
+
   return new Promise((resolve, reject) => {
-    const file = fs.createWriteStream(destPath);
-    const protocol = url.startsWith('https') ? https : http;
+    let file = fs.createWriteStream(destPath);
+    let currentReq = null;
+    let redirectCount = 0;
+    let resolved = false;
+
+    const cleanup = (deleteFile = false) => {
+      if (currentReq) {
+        currentReq.destroy();
+        currentReq = null;
+      }
+      if (file) {
+        file.close();
+        file = null;
+      }
+      if (deleteFile) {
+        try { fs.unlinkSync(destPath); } catch (_) {}
+      }
+    };
 
     const makeRequest = (requestUrl) => {
-      const req = protocol.get(requestUrl, {
+      if (resolved) return;
+
+      if (++redirectCount > MAX_REDIRECTS) {
+        resolved = true;
+        cleanup(true);
+        reject(new Error('Too many redirects'));
+        return;
+      }
+
+      const reqProtocol = requestUrl.startsWith('https') ? https : http;
+      currentReq = reqProtocol.get(requestUrl, {
         headers: { 'User-Agent': 'ps5upload-desktop' }
       }, (res) => {
+        if (resolved) return;
+
         if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          // Follow redirect - destroy current request first
+          res.destroy();
           makeRequest(res.headers.location);
           return;
         }
 
         if (res.statusCode !== 200) {
-          file.close();
-          fs.unlinkSync(destPath);
+          resolved = true;
+          cleanup(true);
           reject(new Error(`HTTP ${res.statusCode}`));
           return;
         }
 
         res.pipe(file);
         file.on('finish', () => {
-          file.close();
+          if (resolved) return;
+          resolved = true;
+          cleanup(false);
           resolve();
+        });
+
+        file.on('error', (err) => {
+          if (resolved) return;
+          resolved = true;
+          cleanup(true);
+          reject(err);
         });
       });
 
-      req.on('error', (err) => {
-        file.close();
-        fs.unlinkSync(destPath);
+      currentReq.on('error', (err) => {
+        if (resolved) return;
+        resolved = true;
+        cleanup(true);
         reject(err);
+      });
+
+      currentReq.setTimeout(DOWNLOAD_TIMEOUT, () => {
+        if (resolved) return;
+        resolved = true;
+        cleanup(true);
+        reject(new Error('Download timeout'));
       });
     };
 
@@ -1124,23 +1604,26 @@ async function sendPayloadFile(ip, filepath) {
   const socket = await createSocketWithTimeout(ip, PAYLOAD_PORT);
 
   return new Promise((resolve, reject) => {
+    socket.on('error', (err) => {
+      reject(err);
+      socket.destroy();
+    });
+
     socket.write(fileContent, (err) => {
       if (err) {
-        socket.destroy();
         reject(err);
+        socket.destroy();
         return;
       }
+      
+      // The data is now in the OS's buffer. Given that the user
+      // has confirmed the payload is being received and executed,
+      // we can resolve the promise here to provide a responsive UI.
+      // This assumes the OS will handle the rest of the transfer reliably.
+      resolve(fileContent.length);
 
+      // We still need to end the socket to signal the end of the data.
       socket.end();
-
-      // Drain any response
-      socket.on('data', () => {});
-      socket.on('close', () => {
-        resolve(fileContent.length);
-      });
-      socket.on('error', () => {
-        resolve(fileContent.length);
-      });
     });
   });
 }
@@ -1162,12 +1645,19 @@ function probePayloadFile(filepath) {
 
 // ==================== Pollers ====================
 
+// Mutex flags to prevent overlapping poller calls
+let payloadPollerRunning = false;
+let connectionPollerRunning = false;
+let managePollerRunning = false;
+
 function startPayloadPoller() {
   if (payloadPoller) return;
 
   payloadPoller = setInterval(async () => {
+    if (payloadPollerRunning) return;
     if (!state.payloadPollEnabled || !state.payloadIp) return;
 
+    payloadPollerRunning = true;
     try {
       const status = await getPayloadStatus(state.payloadIp, TRANSFER_PORT);
       state.payloadStatus = { status, error: null, updated_at_ms: Date.now() };
@@ -1175,6 +1665,8 @@ function startPayloadPoller() {
     } catch (err) {
       state.payloadStatus = { status: null, error: err.message, updated_at_ms: Date.now() };
       emit('payload_status_update', state.payloadStatus);
+    } finally {
+      payloadPollerRunning = false;
     }
   }, 5000);
 }
@@ -1183,8 +1675,10 @@ function startConnectionPoller() {
   if (connectionPoller) return;
 
   connectionPoller = setInterval(async () => {
+    if (connectionPollerRunning) return;
     if (!state.connectionPollEnabled || !state.connectionAutoEnabled || !state.connectionIp) return;
 
+    connectionPollerRunning = true;
     try {
       const portOpen = await checkPort(state.connectionIp, TRANSFER_PORT);
       if (!portOpen) {
@@ -1205,6 +1699,8 @@ function startConnectionPoller() {
     } catch (err) {
       state.connectionStatus = { is_connected: false, status: `Error: ${err.message}`, storage_locations: [] };
       emit('connection_status_update', state.connectionStatus);
+    } finally {
+      connectionPollerRunning = false;
     }
   }, 5000);
 }
@@ -1213,8 +1709,10 @@ function startManagePoller() {
   if (managePoller) return;
 
   managePoller = setInterval(async () => {
+    if (managePollerRunning) return;
     if (!state.managePollEnabled || !state.manageIp || !state.managePath) return;
 
+    managePollerRunning = true;
     try {
       const entries = await listDir(state.manageIp, TRANSFER_PORT, state.managePath);
       state.manageListCache = { path: state.managePath, entries, error: null, updated_at_ms: Date.now() };
@@ -1222,6 +1720,8 @@ function startManagePoller() {
     } catch (err) {
       state.manageListCache = { path: state.managePath, entries: [], error: err.message, updated_at_ms: Date.now() };
       emit('manage_list_update', state.manageListCache);
+    } finally {
+      managePollerRunning = false;
     }
   }, 3000);
 }
@@ -1262,7 +1762,13 @@ function registerIpcHandlers() {
 
   // Dialogs
   ipcMain.handle('dialog_open', async (_, options) => {
-    const result = await dialog.showOpenDialog(mainWindow, options);
+    const dialogOptions = { ...options };
+    if (dialogOptions.directory) {
+      dialogOptions.properties = dialogOptions.properties || [];
+      dialogOptions.properties.push('openDirectory');
+      delete dialogOptions.directory;
+    }
+    const result = await dialog.showOpenDialog(mainWindow, dialogOptions);
     return result.canceled ? null : result.filePaths;
   });
 
@@ -1623,26 +2129,45 @@ function registerIpcHandlers() {
 
     emit('manage_log', { message: `Download ${filepath}` });
 
+    let socket = null;
+    let fileStream = null;
+
     try {
-      const socket = await createSocketWithTimeout(ip, TRANSFER_PORT);
+      socket = await createSocketWithTimeout(ip, TRANSFER_PORT);
       socket.write(`DOWNLOAD ${filepath}\n`);
 
       let headerReceived = false;
       let totalSize = 0;
       let received = 0;
       let headerBuf = Buffer.alloc(0);
+      let resolved = false;
 
-      const fileStream = fs.createWriteStream(destPath);
+      fileStream = fs.createWriteStream(destPath);
+
+      const cleanup = () => {
+        if (fileStream) {
+          fileStream.end();
+          fileStream = null;
+        }
+        if (socket) {
+          socket.removeAllListeners();
+          socket.destroy();
+          socket = null;
+        }
+      };
 
       await new Promise((resolve, reject) => {
-        socket.on('data', (chunk) => {
+        const onData = (chunk) => {
+          if (resolved) return;
+
           if (!headerReceived) {
             headerBuf = Buffer.concat([headerBuf, chunk]);
             const newlineIdx = headerBuf.indexOf('\n');
             if (newlineIdx !== -1) {
               const header = headerBuf.slice(0, newlineIdx).toString('utf8').trim();
               if (!header.startsWith('OK ')) {
-                socket.destroy();
+                resolved = true;
+                cleanup();
                 reject(new Error(`Download failed: ${header}`));
                 return;
               }
@@ -1651,39 +2176,56 @@ function registerIpcHandlers() {
               emit('manage_progress', { op: 'Download', processed: 0, total: totalSize, current_file: filepath });
 
               const remaining = headerBuf.slice(newlineIdx + 1);
-              if (remaining.length > 0) {
+              if (remaining.length > 0 && fileStream) {
                 fileStream.write(remaining);
                 received += remaining.length;
               }
             }
-          } else {
+          } else if (fileStream) {
             fileStream.write(chunk);
             received += chunk.length;
             emit('manage_progress', { op: 'Download', processed: received, total: totalSize, current_file: null });
           }
 
           if (headerReceived && received >= totalSize) {
-            fileStream.end();
-            socket.destroy();
+            resolved = true;
+            cleanup();
             resolve();
           }
-        });
+        };
 
-        socket.on('error', (err) => {
-          fileStream.end();
+        const onError = (err) => {
+          if (resolved) return;
+          resolved = true;
+          cleanup();
           reject(err);
-        });
+        };
 
-        socket.on('close', () => {
-          fileStream.end();
+        const onClose = () => {
+          if (resolved) return;
+          resolved = true;
+          cleanup();
           if (received >= totalSize) {
             resolve();
+          } else {
+            reject(new Error('Connection closed before download completed'));
           }
-        });
+        };
+
+        socket.on('data', onData);
+        socket.on('error', onError);
+        socket.on('close', onClose);
       });
 
       emit('manage_done', { op: 'Download', bytes: received, error: null });
     } catch (err) {
+      // Cleanup on error
+      if (fileStream) {
+        fileStream.end();
+      }
+      if (socket) {
+        socket.destroy();
+      }
       emit('manage_done', { op: 'Download', bytes: null, error: err.message });
     }
     return true;
@@ -1714,7 +2256,7 @@ function registerIpcHandlers() {
         if (stat.isDirectory()) {
           const folderName = path.basename(srcPath);
           dest = `${destRoot.replace(/\/$/, '')}/${folderName}`;
-          const result = collectFiles(srcPath);
+        const result = await collectFiles(srcPath);
           files = result.files;
         } else {
           dest = destRoot;
@@ -1923,22 +2465,191 @@ function registerIpcHandlers() {
     return checkDir(ip, TRANSFER_PORT, destPath);
   });
 
-  ipcMain.handle('transfer_scan', async (_, sourcePath) => {
-    state.transferRunId++;
-    const runId = state.transferRunId;
-    state.transferCancel = false;
-    state.transferStatus = { run_id: runId, status: 'Scanning', sent: 0, total: 0, files: 0, elapsed_secs: 0, current_file: '' };
+  ipcMain.handle('transfer_scan', async (_, args) => {
+    state.scanCancel = false;
+    
+    try {
+      const sourcePath = typeof args === 'string' ? args : args?.source_path;
+      const maxMs = typeof args?.max_ms === 'number' ? args.max_ms : 8000;
+      const maxFiles = typeof args?.max_files === 'number' ? args.max_files : 50000;
+      const quickCount = !!args?.quick_count;
+      const sampleLimit = typeof args?.sample_limit === 'number' ? args.sample_limit : 400;
+      if (!sourcePath || !String(sourcePath).trim()) {
+        throw new Error('Source path is required.');
+      }
 
-    setImmediate(() => {
-      const result = collectFiles(sourcePath, { value: state.transferCancel }, (filesFound, totalSize) => {
-        state.transferStatus = { ...state.transferStatus, files: filesFound, total: totalSize };
+      let stat;
+      try {
+        stat = await fs.promises.stat(sourcePath);
+      } catch (err) {
+        const code = err && err.code ? err.code : 'error';
+        throw new Error(`Scan failed to access path: ${sourcePath} (${code})`);
+      }
+
+      if (!stat.isDirectory()) {
+        throw new Error('Scan supports folders only.');
+      }
+
+      const { files, totalSize, partial, reason, elapsedMs, estimated } = await new Promise((resolve, reject) => {
+        let filesFound = 0;
+        let currentTotalSize = 0;
+        let ended = false;
+        let partialScan = false;
+        let stopReason = null;
+        let estimatedSize = false;
+        let sampleCount = 0;
+        let sampleSizeSum = 0;
+        const startedAt = Date.now();
+
+        const finish = () => {
+          const elapsedMs = Date.now() - startedAt;
+          const finalTotal = estimatedSize
+            ? (sampleCount > 0 ? Math.round((sampleSizeSum / sampleCount) * filesFound) : 0)
+            : currentTotalSize;
+          resolve({
+            files: filesFound,
+            totalSize: finalTotal,
+            partial: partialScan,
+            reason: stopReason,
+            elapsedMs,
+            estimated: estimatedSize
+          });
+        };
+
+        const stopEarly = (reason) => {
+          if (ended) return;
+          ended = true;
+          partialScan = true;
+          stopReason = reason;
+          finish();
+        };
+
+        const shouldStop = () => {
+          if (maxMs > 0 && Date.now() - startedAt >= maxMs) return 'time';
+          if (maxFiles > 0 && filesFound >= maxFiles) return 'files';
+          return null;
+        };
+
+        const withTimeout = (promise, ms) => new Promise((resolve, reject) => {
+          const timer = setTimeout(() => resolve(null), ms);
+          promise
+            .then((value) => {
+              clearTimeout(timer);
+              resolve(value);
+            })
+            .catch((err) => {
+              clearTimeout(timer);
+              reject(err);
+            });
+        });
+
+        const walkQuick = async () => {
+          const stack = [sourcePath];
+          while (stack.length > 0) {
+            if (state.scanCancel) return reject(new Error('Scan cancelled'));
+            const stop = shouldStop();
+            if (stop) return stopEarly(stop);
+            const dir = stack.pop();
+            if (!dir) continue;
+            let entries;
+            try {
+              entries = await withTimeout(
+                fs.promises.readdir(dir, { withFileTypes: true }),
+                2000
+              );
+            } catch {
+              continue;
+            }
+            if (!entries) {
+              partialScan = true;
+              stopReason = stopReason ?? 'time';
+              continue;
+            }
+            for (const entry of entries) {
+              if (state.scanCancel) return reject(new Error('Scan cancelled'));
+              const stopInner = shouldStop();
+              if (stopInner) return stopEarly(stopInner);
+              const fullPath = path.join(dir, entry.name);
+              if (entry.isDirectory()) {
+                stack.push(fullPath);
+              } else if (entry.isFile()) {
+                filesFound++;
+                if (sampleCount < sampleLimit) {
+                  try {
+                    const st = await fs.promises.stat(fullPath);
+                    sampleCount++;
+                    sampleSizeSum += st.size;
+                    currentTotalSize += st.size;
+                  } catch {
+                    // ignore stat failures
+                  }
+                }
+                emit('scan_progress', { files: filesFound, total: currentTotalSize });
+              }
+            }
+          }
+          estimatedSize = true;
+          finish();
+        };
+
+        const walkFull = () => {
+          const walker = walk.walk(sourcePath);
+
+          walker.on('file', (root, fileStats, next) => {
+            if (state.scanCancel) {
+              if (!ended) {
+                ended = true;
+                walker.emit('end');
+              }
+              return;
+            }
+            filesFound++;
+            currentTotalSize += fileStats.size;
+            emit('scan_progress', { files: filesFound, total: currentTotalSize });
+            const stop = shouldStop();
+            if (stop) {
+              partialScan = true;
+              stopReason = stop;
+              ended = true;
+              walker.emit('end');
+              return;
+            }
+            next();
+          });
+
+          walker.on('end', () => {
+            if (state.scanCancel) {
+              reject(new Error('Scan cancelled'));
+            } else {
+              finish();
+            }
+          });
+
+          walker.on('error', (root, nodeStatsArray, next) => {
+            // Ignore errors
+            next();
+          });
+        };
+
+        if (quickCount) {
+          estimatedSize = true;
+          walkQuick().catch(reject);
+        } else {
+          walkFull();
+        }
       });
 
-      const totalSize = result.files.reduce((sum, f) => sum + f.size, 0);
-      state.transferStatus = { ...state.transferStatus, files: result.files.length, total: totalSize };
-    });
+      emit('scan_complete', { files, total: totalSize, partial, reason, elapsed_ms: elapsedMs, estimated });
+      return { files, total: totalSize, partial, reason, elapsed_ms: elapsedMs, estimated };
+    } catch (err) {
+      emit('scan_error', { message: err.message });
+      throw err;
+    }
+  });
 
-    return runId;
+  ipcMain.handle('transfer_scan_cancel', () => {
+    state.scanCancel = true;
+    return true;
   });
 
   ipcMain.handle('transfer_cancel', () => {
@@ -1950,6 +2661,19 @@ function registerIpcHandlers() {
   ipcMain.handle('transfer_status', () => state.transferStatus);
 
   ipcMain.handle('transfer_start', async (_, req) => {
+    if (req && req.req) {
+      req = req.req;
+    }
+    if (!req || typeof req !== 'object') {
+      throw new Error('Transfer request missing.');
+    }
+    logMain('transfer_start request', {
+      ip: req.ip,
+      source_path: req.source_path,
+      dest_path: req.dest_path,
+      connections: req.connections,
+      compression: req.compression,
+    });
     if (!req.ip || !req.ip.trim()) throw new Error('PS5 IP address is required');
     if (!req.source_path || !req.source_path.trim()) throw new Error('Source path is required');
     if (!req.dest_path || !req.dest_path.trim()) throw new Error('Destination path is required');
@@ -1967,62 +2691,70 @@ function registerIpcHandlers() {
       if (state.uiLogEnabled) emit('transfer_log', { run_id: runId, message });
     };
 
-    setImmediate(async () => {
-      const startTime = Date.now();
+    // Use an IIFE with .catch to handle unhandled promise rejections
+    setImmediate(() => {
+      (async () => {
+        const startTime = Date.now();
 
-      try {
-        emitLog('Scanning files...');
-        const result = collectFiles(req.source_path, { value: state.transferCancel }, (filesFound, totalSize) => {
-          state.transferStatus = { ...state.transferStatus, status: 'Scanning', files: filesFound, total: totalSize };
-        });
+        try {
+          emitLog('Scanning files...');
+          const result = await collectFiles(req.source_path, { get value() { return state.transferCancel; } }, (filesFound, totalSize) => {
+            state.transferStatus = { ...state.transferStatus, status: 'Scanning', files: filesFound, total: totalSize };
+          });
 
-        if (result.cancelled) {
-          throw new Error('Cancelled');
+          if (result.cancelled) {
+            throw new Error('Cancelled');
+          }
+
+          if (result.files.length === 0) {
+            throw new Error('No files found to upload');
+          }
+
+          const totalSize = result.files.reduce((sum, f) => sum + BigInt(f.size), 0n);
+          emitLog(`Starting transfer: ${(Number(totalSize) / (1024 * 1024 * 1024)).toFixed(2)} GB using ${req.connections} connection(s)`);
+
+          state.transferStatus = { ...state.transferStatus, status: 'Uploading', files: result.files.length, total: Number(totalSize) };
+
+          const socket = await uploadV2Init(req.ip, TRANSFER_PORT, req.dest_path, req.use_temp);
+          const rateLimitBps = req.bandwidth_limit_mbps ? req.bandwidth_limit_mbps * 1024 * 1024 / 8 : null; // Convert Mbps to Bps
+
+          const uploadResult = await sendFilesV2(result.files, socket, {
+            cancel: { get value() { return state.transferCancel; } },
+            progress: (sent, filesSent, elapsed, currentFile) => {
+              state.transferStatus = {
+                run_id: runId,
+                status: 'Uploading',
+                sent,
+                total: totalSize,
+                files: filesSent,
+                elapsed_secs: elapsed,
+                current_file: currentFile || '',
+              };
+            },
+            log: emitLog,
+            compression: req.compression,
+            rateLimitBps: rateLimitBps,
+          });
+
+          const response = await readUploadResponse(socket);
+          const parsed = parseUploadResponse(response);
+
+          const elapsed = (Date.now() - startTime) / 1000;
+          state.transferStatus = { run_id: runId, status: 'Complete', sent: totalSize, total: totalSize, files: parsed.files, elapsed_secs: elapsed, current_file: '' };
+
+          emit('transfer_complete', { run_id: runId, files: parsed.files, bytes: parsed.bytes });
+        } catch (err) {
+          emit('transfer_error', { run_id: runId, message: err.message });
+          state.transferStatus = { ...state.transferStatus, status: `Error: ${err.message}` };
+        } finally {
+          state.transferActive = false;
         }
-
-        if (result.files.length === 0) {
-          throw new Error('No files found to upload');
-        }
-
-        const totalSize = result.files.reduce((sum, f) => sum + f.size, 0);
-        emitLog(`Starting transfer: ${(totalSize / (1024 * 1024 * 1024)).toFixed(2)} GB using ${req.connections} connection(s)`);
-
-        state.transferStatus = { ...state.transferStatus, status: 'Uploading', files: result.files.length, total: totalSize };
-
-        const socket = await uploadV2Init(req.ip, TRANSFER_PORT, req.dest_path, req.use_temp);
-        const rateLimitBps = req.bandwidth_limit_mbps ? req.bandwidth_limit_mbps * 1024 * 1024 / 8 : null; // Convert Mbps to Bps
-
-        const uploadResult = await sendFilesV2(result.files, socket, {
-          cancel: { value: state.transferCancel },
-          progress: (sent, filesSent, elapsed, currentFile) => {
-            state.transferStatus = {
-              run_id: runId,
-              status: 'Uploading',
-              sent,
-              total: totalSize,
-              files: filesSent,
-              elapsed_secs: elapsed,
-              current_file: currentFile || '',
-            };
-          },
-          log: emitLog,
-          compression: req.compression,
-          rateLimitBps: rateLimitBps,
-        });
-
-        const response = await readUploadResponse(socket);
-        const parsed = parseUploadResponse(response);
-
-        const elapsed = (Date.now() - startTime) / 1000;
-        state.transferStatus = { run_id: runId, status: 'Complete', sent: totalSize, total: totalSize, files: parsed.files, elapsed_secs: elapsed, current_file: '' };
-
-        emit('transfer_complete', { run_id: runId, files: parsed.files, bytes: parsed.bytes });
-      } catch (err) {
-        emit('transfer_error', { run_id: runId, message: err.message });
-        state.transferStatus = { ...state.transferStatus, status: `Error: ${err.message}` };
-      } finally {
+      })().catch((err) => {
+        // Handle any unhandled rejection from the async IIFE
+        console.error('Unhandled transfer error:', err);
+        emit('transfer_error', { run_id: runId, message: err.message || 'Unknown error' });
         state.transferActive = false;
-      }
+      });
     });
 
     return runId;
@@ -2087,7 +2819,7 @@ function registerIpcHandlers() {
 
   // Game meta (simplified)
   ipcMain.handle('game_meta_load', async (_, sourcePath) => {
-    return { meta: null, cover: null };
+    return loadGameMetaForPath(sourcePath);
   });
 
   ipcMain.handle('manage_rar_metadata', async (_, ip, filepath) => {

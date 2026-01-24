@@ -84,10 +84,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   manageDownloadFile: (ip, path, dest) => ipcRenderer.invoke('manage_download_file', ip, path, dest),
   manageDownloadDir: (ip, path, dest, compression) => ipcRenderer.invoke('manage_download_dir', ip, path, dest, compression),
   manageUpload: (ip, destRoot, paths) => ipcRenderer.invoke('manage_upload', ip, destRoot, paths),
+  manageUploadRar: (ip, rarPath, destPath, mode) => ipcRenderer.invoke('manage_upload_rar', ip, rarPath, destPath, mode),
 
   // Transfer
   transferCheckDest: (ip, destPath) => ipcRenderer.invoke('transfer_check_dest', ip, destPath),
-  transferScan: (sourcePath) => ipcRenderer.invoke('transfer_scan', sourcePath),
+  transferScan: (args) => ipcRenderer.invoke('transfer_scan', args),
+  transferScanCancel: () => ipcRenderer.invoke('transfer_scan_cancel'),
   transferCancel: () => ipcRenderer.invoke('transfer_cancel'),
   transferStatus: () => ipcRenderer.invoke('transfer_status'),
   transferStart: (req) => ipcRenderer.invoke('transfer_start', req),
@@ -118,6 +120,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       'transfer_complete',
       'transfer_error',
       'transfer_log',
+      'scan_progress',
+      'scan_complete',
+      'scan_error',
       'payload_done',
       'payload_busy',
       'payload_version',
@@ -149,6 +154,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       'transfer_complete',
       'transfer_error',
       'transfer_log',
+      'scan_progress',
+      'scan_complete',
+      'scan_error',
       'payload_done',
       'payload_busy',
       'payload_version',
@@ -172,142 +180,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   removeAllListeners: (channel) => {
     ipcRenderer.removeAllListeners(channel);
-  },
-});
-
-// Also expose a Tauri-compatible API for easier migration
-contextBridge.exposeInMainWorld('__TAURI_INTERNALS__', {
-  invoke: async (cmd, args = {}) => {
-    // Map Tauri command names to Electron IPC calls
-    const commandMap = {
-      'app_version': () => ipcRenderer.invoke('app_version'),
-      'config_load': () => ipcRenderer.invoke('config_load'),
-      'config_save': () => ipcRenderer.invoke('config_save', args.config),
-      'config_update': () => ipcRenderer.invoke('config_update', args.config),
-      'profiles_load': () => ipcRenderer.invoke('profiles_load'),
-      'profiles_save': () => ipcRenderer.invoke('profiles_save', args.data),
-      'profiles_update': () => ipcRenderer.invoke('profiles_update', args.data),
-      'queue_load': () => ipcRenderer.invoke('queue_load'),
-      'queue_save': () => ipcRenderer.invoke('queue_save', args.data),
-      'queue_update': () => ipcRenderer.invoke('queue_update', args.data),
-      'history_load': () => ipcRenderer.invoke('history_load'),
-      'history_add': () => ipcRenderer.invoke('history_add', args.record),
-      'history_clear': () => ipcRenderer.invoke('history_clear'),
-      'set_save_logs': () => ipcRenderer.invoke('set_save_logs', args.enabled),
-      'set_ui_log_enabled': () => ipcRenderer.invoke('set_ui_log_enabled', args.enabled),
-      'storage_list': () => ipcRenderer.invoke('storage_list', args.ip),
-      'port_check': () => ipcRenderer.invoke('port_check', args.ip, args.port),
-      'connection_set_ip': () => ipcRenderer.invoke('connection_set_ip', args.ip),
-      'connection_polling_set': () => ipcRenderer.invoke('connection_polling_set', args.enabled),
-      'connection_auto_set': () => ipcRenderer.invoke('connection_auto_set', args.enabled),
-      'connection_snapshot': () => ipcRenderer.invoke('connection_snapshot'),
-      'connection_connect': () => ipcRenderer.invoke('connection_connect', args.ip),
-      'payload_send': () => ipcRenderer.invoke('payload_send', args.ip, args.path),
-      'payload_download_and_send': () => ipcRenderer.invoke('payload_download_and_send', args.ip, args.fetch),
-      'payload_check': () => ipcRenderer.invoke('payload_check', args.ip),
-      'payload_probe': () => ipcRenderer.invoke('payload_probe', args.path),
-      'payload_status': () => ipcRenderer.invoke('payload_status', args.ip),
-      'payload_status_snapshot': () => ipcRenderer.invoke('payload_status_snapshot'),
-      'payload_status_refresh': () => ipcRenderer.invoke('payload_status_refresh', args.ip),
-      'payload_polling_set': () => ipcRenderer.invoke('payload_polling_set', args.enabled),
-      'payload_set_ip': () => ipcRenderer.invoke('payload_set_ip', args.ip),
-      'payload_auto_reload_set': () => ipcRenderer.invoke('payload_auto_reload_set', args.enabled, args.mode, args.localPath || args.local_path),
-      'payload_queue_extract': () => ipcRenderer.invoke('payload_queue_extract', args.ip, args.src, args.dst),
-      'payload_queue_cancel': () => ipcRenderer.invoke('payload_queue_cancel', args.ip, args.id),
-      'payload_queue_clear': () => ipcRenderer.invoke('payload_queue_clear', args.ip),
-      'dialog_open': () => {
-        const properties = ['openFile'];
-        if (args.directory) {
-          properties.length = 0;
-          properties.push('openDirectory');
-        }
-        if (args.multiple) {
-          properties.push('multiSelections');
-        }
-        return ipcRenderer.invoke('dialog_open', { ...args, properties });
-      },
-      'dialog_save': () => ipcRenderer.invoke('dialog_save', args),
-      'manage_list': () => ipcRenderer.invoke('manage_list', args.ip, args.path),
-      'manage_list_snapshot': () => ipcRenderer.invoke('manage_list_snapshot'),
-      'manage_list_refresh': () => ipcRenderer.invoke('manage_list_refresh', args.ip, args.path),
-      'manage_polling_set': () => ipcRenderer.invoke('manage_polling_set', args.enabled),
-      'manage_set_ip': () => ipcRenderer.invoke('manage_set_ip', args.ip),
-      'manage_set_path': () => ipcRenderer.invoke('manage_set_path', args.path),
-      'manage_cancel': () => ipcRenderer.invoke('manage_cancel'),
-      'manage_delete': () => ipcRenderer.invoke('manage_delete', args.ip, args.path),
-      'manage_rename': () => ipcRenderer.invoke('manage_rename', args.ip, args.src_path || args.srcPath, args.dst_path || args.dstPath),
-      'manage_create_dir': () => ipcRenderer.invoke('manage_create_dir', args.ip, args.path),
-      'manage_chmod': () => ipcRenderer.invoke('manage_chmod', args.ip, args.path),
-      'manage_move': () => ipcRenderer.invoke('manage_move', args.ip, args.src_path || args.srcPath, args.dst_path || args.dstPath),
-      'manage_copy': () => ipcRenderer.invoke('manage_copy', args.ip, args.src_path || args.srcPath, args.dst_path || args.dstPath),
-      'manage_extract': () => ipcRenderer.invoke('manage_extract', args.ip, args.src_path || args.srcPath, args.dst_path || args.dstPath),
-      'manage_download_file': () => ipcRenderer.invoke('manage_download_file', args.ip, args.path, args.dest_path || args.destPath),
-      'manage_download_dir': () => ipcRenderer.invoke('manage_download_dir', args.ip, args.path, args.dest_path || args.destPath, args.compression),
-      'manage_upload': () => ipcRenderer.invoke('manage_upload', args.ip, args.dest_root || args.destRoot, args.paths),
-      'transfer_check_dest': () => ipcRenderer.invoke('transfer_check_dest', args.ip, args.dest_path || args.destPath),
-      'transfer_scan': () => ipcRenderer.invoke('transfer_scan', args.source_path || args.sourcePath),
-      'transfer_cancel': () => ipcRenderer.invoke('transfer_cancel'),
-      'transfer_status': () => ipcRenderer.invoke('transfer_status'),
-      'transfer_start': () => ipcRenderer.invoke('transfer_start', args.req || args),
-      'update_check': () => ipcRenderer.invoke('update_check', args.include_prerelease || args.includePrerelease),
-      'update_check_tag': () => ipcRenderer.invoke('update_check_tag', args.tag),
-      'update_download_asset': () => ipcRenderer.invoke('update_download_asset', args.url, args.dest_path || args.destPath),
-      'update_current_asset_name': () => ipcRenderer.invoke('update_current_asset_name'),
-      'update_prepare_self': () => ipcRenderer.invoke('update_prepare_self', args.asset_url || args.assetUrl),
-      'update_apply_self': () => ipcRenderer.invoke('update_apply_self'),
-      'chat_info': () => ipcRenderer.invoke('chat_info'),
-      'chat_generate_name': () => ipcRenderer.invoke('chat_generate_name'),
-      'chat_start': () => ipcRenderer.invoke('chat_start'),
-      'chat_send': () => ipcRenderer.invoke('chat_send', args.name, args.text),
-      'game_meta_load': () => ipcRenderer.invoke('game_meta_load', args.source_path || args.sourcePath),
-      'manage_rar_metadata': () => ipcRenderer.invoke('manage_rar_metadata', args.ip, args.path),
-    };
-
-    const handler = commandMap[cmd];
-    if (handler) {
-      return handler();
-    }
-    throw new Error(`Unknown command: ${cmd}`);
-  },
-});
-
-// Tauri-compatible event system
-const eventListeners = new Map();
-
-contextBridge.exposeInMainWorld('__TAURI_EVENT__', {
-  listen: (event, callback) => {
-    const handler = (_event, payload) => {
-      callback({ payload });
-    };
-    ipcRenderer.on(event, handler);
-
-    if (!eventListeners.has(event)) {
-      eventListeners.set(event, []);
-    }
-    eventListeners.get(event).push({ callback, handler });
-
-    // Return unlisten function
-    return Promise.resolve(() => {
-      ipcRenderer.removeListener(event, handler);
-      const listeners = eventListeners.get(event);
-      if (listeners) {
-        const idx = listeners.findIndex(l => l.callback === callback);
-        if (idx !== -1) listeners.splice(idx, 1);
-      }
-    });
-  },
-
-  once: (event, callback) => {
-    return new Promise((resolve) => {
-      ipcRenderer.once(event, (_event, payload) => {
-        callback({ payload });
-        resolve();
-      });
-    });
-  },
-
-  emit: (event, payload) => {
-    // Emit to main process
-    ipcRenderer.send(event, payload);
   },
 });

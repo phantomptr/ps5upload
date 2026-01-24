@@ -1,4 +1,4 @@
-// Electron adapter for Tauri dialog API
+
 import { invoke } from './core';
 
 export interface OpenDialogOptions {
