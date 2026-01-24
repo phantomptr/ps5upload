@@ -13,8 +13,8 @@ New UI highlights:
 
 It is optimized for thousands of small files on a local network (where it outperforms FTP), but works over any standard network connection.
 
-![Upload](https://github.com/user-attachments/assets/79e1c599-afad-4740-8e12-cc32296d2892)
-![File Management](https://github.com/user-attachments/assets/41b3d285-1dbe-49c2-8c81-0a0e614d4aae)
+![Upload](<img width="1440" height="960" alt="image" src="https://github.com/user-attachments/assets/663b4485-0d57-4f5f-99a1-e11b069361b8" />
+)
 
 ## Why use this?
 
