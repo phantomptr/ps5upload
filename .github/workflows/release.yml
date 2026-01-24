@@ -87,9 +87,10 @@ jobs:
           if [[ "${{ matrix.platform }}" == "macos" ]]; then
             npx electron-builder --mac dmg --${{ matrix.arch }} --publish never
           elif [[ "${{ matrix.platform }}" == "windows" ]]; then
-            npx electron-builder --win nsis --${{ matrix.arch }} --publish never
+            npx electron-builder --win zip --${{ matrix.arch }} --publish never
           else
             npx electron-builder --linux AppImage --${{ matrix.arch }} --publish never
+            npx electron-builder --linux tar.gz --${{ matrix.arch }} --publish never
           fi
           if [[ "${{ matrix.platform }}" == "linux" ]]; then
             find release -type f -name "*.AppImage" -exec chmod +x {} \;
@@ -168,26 +169,44 @@ jobs:
           tag="${{ steps.tag.outputs.tag }}"
           version="${tag#v}"
           rm -f dist/**/elevate.exe dist/**/elevate.exe* || true
-          rm -f dist/PS5.Upload-${version}.AppImage dist/PS5.Upload-${version}-arm64.AppImage || true
+          rm -f dist/PS5Upload-${version}.AppImage dist/PS5Upload-${version}-arm64.AppImage || true
 
           for arch in x64 arm64; do
-            exe=$(find dist -type f -name "PS5 Upload*.exe" -path "*ps5upload-windows-${arch}*" | head -n 1 || true)
-            if [ -n "$exe" ]; then
-              cp "$exe" "dist/PS5.Upload-${version}-win-${arch}.exe"
+            zipfile=$(find dist -type f -name "*.zip" -path "*ps5upload-windows-${arch}*" | head -n 1 || true)
+            if [ -n "$zipfile" ]; then
+              outzip="dist/PS5Upload-${version}-win-${arch}.zip"
+              cp "$zipfile" "$outzip"
+              top_count=$(zipinfo -1 "$outzip" | awk -F/ 'NF{print $1}' | sort -u | wc -l | tr -d ' ')
+              if [ "$top_count" -ne 1 ]; then
+                tmpdir=$(mktemp -d)
+                folder="PS5Upload-${version}-win-${arch}"
+                mkdir -p "$tmpdir/$folder"
+                unzip -q "$outzip" -d "$tmpdir/$folder"
+                (cd "$tmpdir" && zip -qr "$outzip.tmp" "$folder")
+                mv "$outzip.tmp" "$outzip"
+                rm -rf "$tmpdir"
+              fi
             fi
           done
 
           for arch in x64 arm64; do
             dmg=$(find dist -type f -name "*.dmg" -path "*ps5upload-macos-${arch}*" | head -n 1 || true)
             if [ -n "$dmg" ]; then
-              cp "$dmg" "dist/PS5.Upload-${version}-mac-${arch}.dmg"
+              cp "$dmg" "dist/PS5Upload-${version}-mac-${arch}.dmg"
             fi
           done
 
           for arch in x64 arm64; do
             appimage=$(find dist -type f -name "*.AppImage" -path "*ps5upload-linux-${arch}*" | head -n 1 || true)
             if [ -n "$appimage" ]; then
-              cp "$appimage" "dist/PS5.Upload-${version}-linux-${arch}.AppImage"
+              cp "$appimage" "dist/PS5Upload-${version}-linux-${arch}.AppImage"
+            fi
+          done
+
+          for arch in x64 arm64; do
+            targz=$(find dist -type f -name "*.tar.gz" -path "*ps5upload-linux-${arch}*" | head -n 1 || true)
+            if [ -n "$targz" ]; then
+              cp "$targz" "dist/PS5Upload-${version}-linux-${arch}.tar.gz"
             fi
           done
 
@@ -212,7 +231,8 @@ jobs:
           name: ${{ steps.tag.outputs.tag }}
           body_path: dist/RELEASE_NOTES.md
           files: |
-            dist/PS5.Upload-*-win-*.exe
-            dist/PS5.Upload-*-mac-*.dmg
-            dist/PS5.Upload-*-linux-*.AppImage
+            dist/PS5Upload-*-win-*.zip
+            dist/PS5Upload-*-mac-*.dmg
+            dist/PS5Upload-*-linux-*.AppImage
+            dist/PS5Upload-*-linux-*.tar.gz
             dist/**/*.elf
