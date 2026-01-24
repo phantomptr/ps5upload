@@ -8,7 +8,6 @@
   "main": "electron/main.js",
   "scripts": {
     "dev": "concurrently -k \"vite\" \"wait-on http://localhost:1420 && ELECTRON_DISABLE_SANDBOX=1 ELECTRON_DISABLE_GPU=1 electron .\"",
-    "prebuild": "node scripts/prepare-icons.js",
     "build": "vite build && electron-builder",
     "build:vite": "vite build",
     "preview": "vite preview",
@@ -34,8 +33,7 @@
     "electron-builder": "^26.5.0",
     "typescript": "^5.4.0",
     "vite": "^7.3.1",
-    "wait-on": "^7.2.0",
-    "jimp": "^0.22.12"
+    "wait-on": "^7.2.0"
   },
   "overrides": {
     "tar": "7.5.6"
@@ -56,13 +54,6 @@
     "win": {
       "target": [
         {
-          "target": "nsis",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
-        },
-        {
           "target": "zip",
           "arch": [
             "x64",
@@ -78,16 +69,7 @@
           "target": "dmg",
           "arch": [
             "x64",
-            "arm64",
-            "universal"
-          ]
-        },
-        {
-          "target": "zip",
-          "arch": [
-            "x64",
-            "arm64",
-            "universal"
+            "arm64"
           ]
         }
       ],
@@ -98,20 +80,6 @@
       "target": [
         {
           "target": "AppImage",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
-        },
-        {
-          "target": "deb",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
-        },
-        {
-          "target": "zip",
           "arch": [
             "x64",
             "arm64"

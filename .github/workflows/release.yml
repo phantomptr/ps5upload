@@ -40,10 +40,6 @@ jobs:
           - os: macos-15
             platform: macos
             arch: arm64
-          - os: macos-15
-            platform: macos
-            arch: universal
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -51,7 +47,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22.12.0
           cache: npm
           cache-dependency-path: desktop/package-lock.json
 
@@ -60,30 +56,27 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential pkg-config zip \
-            libgtk-3-dev libnss3-dev libxss1 libasound2 \
+            libgtk-3-dev libnss3-dev libxss1 libasound2t64 \
             libatk-bridge2.0-0 libgtk-3-0 libdrm2 libgbm1
 
       - name: Install frontend deps
         run: |
           cd desktop
-          npm ci
+          npm install --no-audit --no-fund
+          npm install --no-save sharp --no-audit --no-fund
 
       - name: Build desktop app
         shell: bash
         run: |
           cd desktop
-          node scripts/prepare-icons.js
+          node -e "const sharp=require('sharp');const fs=require('fs');const path=require('path');const src=fs.existsSync('public/logo.png')?'public/logo.png':'../logo.png';const outDir='build';fs.mkdirSync(outDir,{recursive:true});sharp(src).resize(1024,1024,{fit:'contain',background:{r:0,g:0,b:0,alpha:0}}).png().toFile(path.join(outDir,'icon.png')).then(()=>console.log('Icon ready')).catch(err=>{console.error(err);process.exit(1);});"
           npm run build:vite
           if [[ "${{ matrix.platform }}" == "macos" ]]; then
-            if [[ "${{ matrix.arch }}" == "universal" ]]; then
-              npx electron-builder --mac --universal --publish never
-            else
-              npx electron-builder --mac --${{ matrix.arch }} --publish never
-            fi
+            npx electron-builder --mac dmg --${{ matrix.arch }} --publish never
           elif [[ "${{ matrix.platform }}" == "windows" ]]; then
-            npx electron-builder --win --${{ matrix.arch }} --publish never
+            npx electron-builder --win zip --${{ matrix.arch }} --publish never
           else
-            npx electron-builder --linux --${{ matrix.arch }} --publish never
+            npx electron-builder --linux AppImage --${{ matrix.arch }} --publish never
           fi
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
