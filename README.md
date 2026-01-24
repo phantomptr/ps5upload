@@ -14,6 +14,8 @@ New UI highlights:
 It is optimized for thousands of small files on a local network (where it outperforms FTP), but works over any standard network connection.
 
 <img width="1440" height="960" alt="Screenshot 2026-01-24 051817" src="https://github.com/user-attachments/assets/ef639887-b77c-423d-b37a-9014387cb45a" />
+<img width="1440" height="960" alt="Screenshot 2026-01-24 052003" src="https://github.com/user-attachments/assets/678fa82f-90d3-4d5c-bdc9-10171c386036" />
+
 
 ## Why use this?
 
