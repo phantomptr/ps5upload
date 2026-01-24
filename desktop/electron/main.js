@@ -382,7 +382,7 @@ let managePoller = null;
 let payloadAutoReloader = null;
 
 // Determine the environment
-const isDev = process.env.NODE_ENV !== 'production' || !app.isPackaged;
+const isDev = !app.isPackaged;
 
 const mainLogPath = () => path.join(app.getPath('userData'), 'ps5upload_main.log');
 const logMain = (message, data = null) => {
