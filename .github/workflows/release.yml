@@ -163,6 +163,33 @@ jobs:
         with:
           path: dist
 
+      - name: Normalize release assets
+        run: |
+          tag="${{ steps.tag.outputs.tag }}"
+          version="${tag#v}"
+          rm -f dist/**/elevate.exe dist/**/elevate.exe* || true
+
+          for arch in x64 arm64; do
+            exe=$(find dist -type f -name "PS5 Upload*.exe" -path "*ps5upload-windows-${arch}*" | head -n 1 || true)
+            if [ -n "$exe" ]; then
+              cp "$exe" "dist/PS5.Upload-${version}-win-${arch}.exe"
+            fi
+          done
+
+          for arch in x64 arm64; do
+            dmg=$(find dist -type f -name "*.dmg" -path "*ps5upload-macos-${arch}*" | head -n 1 || true)
+            if [ -n "$dmg" ]; then
+              cp "$dmg" "dist/PS5.Upload-${version}-mac-${arch}.dmg"
+            fi
+          done
+
+          for arch in x64 arm64; do
+            appimage=$(find dist -type f -name "*.AppImage" -path "*ps5upload-linux-${arch}*" | head -n 1 || true)
+            if [ -n "$appimage" ]; then
+              cp "$appimage" "dist/PS5.Upload-${version}-linux-${arch}.AppImage"
+            fi
+          done
+
       - name: Build release notes
         run: |
           tag="${{ steps.tag.outputs.tag }}"
@@ -184,8 +211,7 @@ jobs:
           name: ${{ steps.tag.outputs.tag }}
           body_path: dist/RELEASE_NOTES.md
           files: |
-            dist/**/*.zip
-            dist/**/*.dmg
-            dist/**/*.AppImage
-            dist/**/*.exe
+            dist/PS5.Upload-*.exe
+            dist/PS5.Upload-*.dmg
+            dist/PS5.Upload-*.AppImage
             dist/**/*.elf
