@@ -40,7 +40,7 @@
   },
   "build": {
     "appId": "com.ps5upload.desktop",
-    "productName": "PS5 Upload",
+    "productName": "PS5Upload",
     "npmRebuild": false,
     "directories": {
       "output": "release",
@@ -55,7 +55,7 @@
     "win": {
       "target": [
         {
-          "target": "nsis",
+          "target": "zip",
           "arch": [
             "x64",
             "arm64"
@@ -81,6 +81,13 @@
       "target": [
         {
           "target": "AppImage",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "tar.gz",
           "arch": [
             "x64",
             "arm64"
