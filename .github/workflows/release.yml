@@ -60,19 +60,18 @@ jobs:
             libatk-bridge2.0-0 libgtk-3-0 libdrm2 libgbm1
 
       - name: Install frontend deps
+        working-directory: desktop
         run: |
-          cd desktop
-          npm install --include=dev --no-audit --no-fund --no-package-lock
-          npm install --no-save sharp --include=dev --no-audit --no-fund --no-package-lock
+          npm install --include=dev --no-audit --no-fund
+          npm install --no-save sharp --include=dev --no-audit --no-fund
         env:
           NODE_ENV: development
           NPM_CONFIG_PRODUCTION: "false"
-          NPM_CONFIG_PACKAGE_LOCK: "false"
 
       - name: Build desktop app
         shell: bash
+        working-directory: desktop
         run: |
-          cd desktop
           node -e "const sharp=require('sharp');const fs=require('fs');const path=require('path');const src=fs.existsSync('public/logo.png')?'public/logo.png':'../logo.png';const outDir='build';fs.mkdirSync(outDir,{recursive:true});sharp(src).resize(1024,1024,{fit:'contain',background:{r:0,g:0,b:0,alpha:0}}).png().toFile(path.join(outDir,'icon.png')).then(()=>console.log('Icon ready')).catch(err=>{console.error(err);process.exit(1);});"
           npm run build:vite
           if [[ "${{ matrix.platform }}" == "macos" ]]; then
