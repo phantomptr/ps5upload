@@ -87,9 +87,12 @@ jobs:
           if [[ "${{ matrix.platform }}" == "macos" ]]; then
             npx electron-builder --mac dmg --${{ matrix.arch }} --publish never
           elif [[ "${{ matrix.platform }}" == "windows" ]]; then
-            npx electron-builder --win zip --${{ matrix.arch }} --publish never
+            npx electron-builder --win portable --${{ matrix.arch }} --publish never
           else
             npx electron-builder --linux AppImage --${{ matrix.arch }} --publish never
+          fi
+          if [[ "${{ matrix.platform }}" == "linux" ]]; then
+            find release -type f -name "*.AppImage" -exec chmod +x {} \;
           fi
         env:
           ELECTRON_BUILDER_REBUILD: "false"
@@ -183,4 +186,6 @@ jobs:
           files: |
             dist/**/*.zip
             dist/**/*.dmg
+            dist/**/*.AppImage
+            dist/**/*.exe
             dist/**/*.elf
