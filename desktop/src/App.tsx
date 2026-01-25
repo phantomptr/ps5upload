@@ -11,6 +11,19 @@ import {
 import { t } from "./i18n";
 
 const appWindow = getCurrentWindow();
+const openExternal = async (url: string) => {
+  try {
+    await invoke("open_external", { url });
+  } catch {
+    window.open(url, "_blank");
+  }
+};
+
+const toSafeNumber = (value: unknown, fallback = 0) => {
+  if (typeof value === "bigint") return Number(value);
+  if (typeof value === "number") return Number.isFinite(value) ? value : fallback;
+  return fallback;
+};
 
 type TabId = "transfer" | "payload" | "manage" | "chat";
 
@@ -126,7 +139,9 @@ type QueueItem = {
   custom_preset_path: string;
   storage_base?: string;
   dest_path?: string;
+  ps5_ip?: string;
   status: QueueStatus;
+  paused?: boolean;
   size_bytes?: number | null;
   transfer_settings?: {
     use_temp: boolean;
@@ -137,12 +152,15 @@ type QueueItem = {
     auto_tune_connections: boolean;
     optimize_upload: boolean;
     rar_extract_mode: RarExtractMode;
+    override_on_conflict?: boolean;
   };
 };
 
 type QueueData = {
   items: QueueItem[];
   next_id: number;
+  rev?: number;
+  updated_at?: number;
 };
 
 type TransferRecord = {
@@ -156,10 +174,14 @@ type TransferRecord = {
   success: boolean;
   error?: string | null;
   via_queue?: boolean;
+  game_meta?: GameMetaPayload | null;
+  cover_url?: string | null;
 };
 
 type HistoryData = {
   records: TransferRecord[];
+  rev?: number;
+  updated_at?: number;
 };
 
 type ReleaseAsset = {
@@ -255,6 +277,8 @@ type ManageListSnapshot = {
 type ExtractQueueItem = {
   id: number;
   archive_name: string;
+  source_path?: string;
+  dest_path?: string;
   status: string;
   percent: number;
   processed_bytes: number;
@@ -263,6 +287,36 @@ type ExtractQueueItem = {
   started_at: number;
   completed_at: number;
   error?: string | null;
+};
+
+type QueueHintEvent = {
+  queue_id: number;
+  source_path: string;
+  dest_path: string;
+  size_bytes?: number;
+};
+
+type QueueMeta = {
+  source_path: string;
+  dest_path: string;
+  size_bytes?: number;
+  game_meta?: GameMetaPayload | null;
+  cover_url?: string | null;
+};
+
+type LogLevel = "debug" | "info" | "warn" | "error";
+
+type LogEntry = {
+  level: LogLevel;
+  message: string;
+  time: number;
+};
+
+const LOG_LEVEL_ORDER: Record<LogLevel, number> = {
+  debug: 0,
+  info: 1,
+  warn: 2,
+  error: 3
 };
 
 type PayloadStatusResponse = {
@@ -344,6 +398,39 @@ const FileIcon = () => (
   </svg>
 );
 
+const ArchiveIcon = () => (
+  <svg className="manage-icon" viewBox="0 0 24 24" aria-hidden="true">
+    <rect
+      x="4"
+      y="6"
+      width="16"
+      height="14"
+      rx="2"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+    />
+    <path
+      d="M4 9h16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+    />
+    <path
+      d="M11.5 12h1v5h-1z"
+      fill="currentColor"
+    />
+    <path
+      d="M11.5 10h1"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+    />
+  </svg>
+);
+
+const isArchivePath = (value: string) => /\.(rar|zip|7z)$/i.test(value);
+
 const normalizeVersion = (version: string) =>
   version.replace(/^v/i, "").trim();
 
@@ -398,6 +485,11 @@ const formatTimestamp = (value?: number | null) => {
   const date = new Date(value * 1000);
   if (Number.isNaN(date.getTime())) return "-";
   return date.toLocaleString();
+};
+
+const getLeafName = (value?: string | null) => {
+  if (!value) return "";
+  return value.split(/[/\\]/).filter(Boolean).pop() || "";
 };
 
 const coverToDataUrl = (cover?: CoverPayload | null) => {
@@ -471,6 +563,17 @@ export default function App() {
     await appWindow.close();
   };
 
+  const handleToggleKeepAwake = async () => {
+    const next = !keepAwake;
+    setKeepAwake(next);
+    localStorage.setItem("ps5upload.keep_awake", next ? "true" : "false");
+    try {
+      await invoke("sleep_set", { enabled: next });
+    } catch (err) {
+      setClientLogs((prev) => [`Keep awake failed: ${String(err)}`, ...prev]);
+    }
+  };
+
   const handleToggleTheme = () => {
     setTheme((prev) => (prev === "dark" ? "light" : "dark"));
   };
@@ -487,13 +590,21 @@ export default function App() {
   const [newProfileName, setNewProfileName] = useState("");
   const [queueData, setQueueData] = useState<QueueData>({ items: [], next_id: 1 });
   const [currentQueueItemId, setCurrentQueueItemId] = useState<number | null>(null);
+  const [uploadQueueTab, setUploadQueueTab] = useState<"current" | "completed" | "failed">("current");
+  const [extractQueueTab, setExtractQueueTab] = useState<"current" | "completed" | "failed">("current");
   const [historyData, setHistoryData] = useState<HistoryData>({ records: [] });
   const [logTab, setLogTab] = useState<"client" | "payload" | "history">("client");
-  const [clientLogs, setClientLogs] = useState<string[]>([]);
-  const [payloadLogs, setPayloadLogs] = useState<string[]>([]);
+  const [queueMetaById, setQueueMetaById] = useState<Record<number, QueueMeta>>({});
+  const [queueChmodDone, setQueueChmodDone] = useState<Record<number, boolean>>({});
+  const [clientLogs, setClientLogs] = useState<Array<LogEntry | string>>([]);
+  const [payloadLogs, setPayloadLogs] = useState<Array<LogEntry | string>>([]);
+  const [logLevel, setLogLevel] = useState<LogLevel>(() => {
+    const saved = localStorage.getItem("ps5upload.log_level") as LogLevel | null;
+    return saved && LOG_LEVEL_ORDER[saved] !== undefined ? saved : "info";
+  });
   const [saveLogs, setSaveLogs] = useState(false);
-  const clientLogBuffer = useRef<string[]>([]);
-  const payloadLogBuffer = useRef<string[]>([]);
+  const clientLogBuffer = useRef<Array<LogEntry | string>>([]);
+  const payloadLogBuffer = useRef<Array<LogEntry | string>>([]);
   const clientLogFlush = useRef<ReturnType<typeof setTimeout> | null>(null);
   const payloadLogFlush = useRef<ReturnType<typeof setTimeout> | null>(null);
   const configSaveRef = useRef<AppConfig | null>(null);
@@ -509,6 +620,7 @@ export default function App() {
   const [payloadStatus, setPayloadStatus] = useState("Unknown");
   const [payloadVersion, setPayloadVersion] = useState<string | null>(null);
   const [payloadBusy, setPayloadBusy] = useState(false);
+  const [payloadReloadCooldown, setPayloadReloadCooldown] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<ReleaseInfo | null>(null);
   const [updateStatus, setUpdateStatus] = useState("Checking for updates...");
   const [updateAvailable, setUpdateAvailable] = useState(false);
@@ -528,6 +640,10 @@ export default function App() {
   } | null>(null);
   const [payloadFullStatus, setPayloadFullStatus] = useState<PayloadStatusResponse | null>(null);
   const [payloadStatusLoading, setPayloadStatusLoading] = useState(false);
+  const [payloadResetting, setPayloadResetting] = useState(false);
+  const [payloadQueueLoading, setPayloadQueueLoading] = useState(false);
+  const lastPayloadSyncAt = useRef(0);
+  const lastPayloadSyncError = useRef<{ message: string; at: number } | null>(null);
   const [payloadStatusError, setPayloadStatusError] = useState<string | null>(null);
   const [payloadLastUpdated, setPayloadLastUpdated] = useState<number | null>(null);
   const [downloadCompression, setDownloadCompression] =
@@ -537,10 +653,12 @@ export default function App() {
   const [chatDisplayName, setChatDisplayName] = useState("");
   const [configDefaults, setConfigDefaults] = useState<AppConfig | null>(null);
   const [configLoaded, setConfigLoaded] = useState(false);
+  const [keepAwake, setKeepAwake] = useState(false);
   const [ip, setIp] = useState("");
   const [connectionStatus, setConnectionStatus] = useState("Disconnected");
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
+  const [connectCooldown, setConnectCooldown] = useState(false);
   const [storageLocations, setStorageLocations] = useState<StorageLocation[]>([]);
   const [sourcePath, setSourcePath] = useState("");
   const [scanStatus, setScanStatus] = useState('idle');
@@ -628,7 +746,7 @@ export default function App() {
     (trimmedNewProfileName === NEW_PROFILE_OPTION ||
       profilesData.profiles.some((profile) => profile.name === trimmedNewProfileName));
   const isRtl = language === "ar";
-  const tr = (key: string) => t(language, key);
+  const tr = (key: string, vars?: Record<string, string | number>) => t(language, key, vars);
   const generateChatName = () => {
     try {
       if (crypto?.randomUUID) {
@@ -655,10 +773,25 @@ export default function App() {
   const chatStatusLower = chatStatus.toLowerCase();
   const isChatConnected = chatStatusLower === "connected";
   const isChatDisconnected = chatStatusLower === "disconnected";
+  const payloadStatusLower = payloadStatus.toLowerCase();
+  const payloadStatusClass =
+    payloadStatusError ||
+    payloadStatusLower.includes("error") ||
+    payloadStatusLower.includes("not detected") ||
+    payloadStatusLower.includes("closed")
+      ? "error"
+      : payloadStatusLower.includes("running") ||
+        payloadStatusLower.includes("ready") ||
+        payloadStatusLower.includes("sent") ||
+        payloadStatusLower.includes("connected") ||
+        payloadStatusLower.includes("idle") ||
+        payloadStatusLower.includes("waiting")
+      ? "ok"
+      : "warn";
   const tabs = useMemo(
     () => [
       { id: "transfer" as TabId, label: tr("transfer"), icon: "↑" },
-      { id: "payload" as TabId, label: tr("payload"), icon: "◎" },
+    { id: "payload" as TabId, label: tr("queues"), icon: "◎" },
       { id: "manage" as TabId, label: tr("manage"), icon: "≡" },
       { id: "chat" as TabId, label: tr("chat"), icon: "◈" }
     ],
@@ -678,6 +811,8 @@ export default function App() {
     currentFile: ""
   });
   const [activeRunId, setActiveRunId] = useState<number | null>(null);
+  const [transferActive, setTransferActive] = useState(false);
+  const [uploadQueueRunning, setUploadQueueRunning] = useState(false);
   const lastManageProgressUpdate = useRef(0);
   const lastManageOp = useRef("");
   const [activeTransferSource, setActiveTransferSource] = useState("");
@@ -690,6 +825,8 @@ export default function App() {
     dest: "",
     viaQueue: false,
     startedAt: null as number | null,
+    gameMeta: null as GameMetaPayload | null,
+    coverUrl: null as string | null,
     state: {
       status: "Idle",
       sent: 0,
@@ -708,6 +845,16 @@ export default function App() {
     path: "/data"
   });
   const managePathRef = useRef(managePath);
+
+  const getQueueDisplayName = (item: ExtractQueueItem) => {
+    const meta = queueMetaById[item.id];
+    return (
+      meta?.game_meta?.title ||
+      getLeafName(item.dest_path || meta?.dest_path) ||
+      getLeafName(item.source_path || meta?.source_path) ||
+      item.archive_name
+    );
+  };
   managePathRef.current = managePath;
   useEffect(() => {
     manageSelectedIndexRef.current = manageSelected;
@@ -746,38 +893,61 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!activeRunId) return;
+    if (!activeRunId && !transferActive) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
     const poll = async () => {
       if (cancelled) return;
       try {
         const status = await invoke<TransferStatusSnapshot>("transfer_status");
-        if (status.run_id === activeRunId) {
-          const nextState = {
-            status: status.status,
-            sent: status.sent,
-            total: status.total,
-            files: status.files,
-            elapsed: status.elapsed_secs,
-            currentFile: status.current_file ?? ""
-          };
-          startTransition(() => {
-            setTransferState((prev) => {
-              if (
-                prev.status === nextState.status &&
-                prev.sent === nextState.sent &&
-                prev.total === nextState.total &&
-                prev.files === nextState.files &&
-                prev.elapsed === nextState.elapsed &&
-                prev.currentFile === nextState.currentFile
-              ) {
-                return prev;
-              }
-              return { ...prev, ...nextState };
+          if (!activeRunId && status.run_id) {
+            setActiveRunId(status.run_id);
+          }
+          if (!activeRunId || status.run_id === activeRunId) {
+            const isTerminal =
+              status.status.startsWith("Complete") ||
+              status.status.startsWith("Cancelled") ||
+              status.status.startsWith("Error") ||
+              status.status.startsWith("Queued for extraction");
+            const nextState = {
+              status: status.status,
+              sent: toSafeNumber(status.sent),
+              total: toSafeNumber(status.total),
+              files: toSafeNumber(status.files),
+              elapsed: toSafeNumber(status.elapsed_secs),
+              currentFile: status.current_file ?? ""
+            };
+            startTransition(() => {
+              setTransferState((prev) => {
+                if (
+                  prev.status === nextState.status &&
+                  prev.sent === nextState.sent &&
+                  prev.total === nextState.total &&
+                  prev.files === nextState.files &&
+                  prev.elapsed === nextState.elapsed &&
+                  prev.currentFile === nextState.currentFile
+                ) {
+                  return prev;
+                }
+                return { ...prev, ...nextState };
+              });
             });
-          });
-        }
+            if (isTerminal) {
+              if (
+                status.status.startsWith("Queued for extraction") &&
+                activeTransferViaQueue &&
+                currentQueueItemId
+              ) {
+                updateQueueItemStatus(currentQueueItemId, "Completed").then(() => {
+                  processNextQueueItem();
+                });
+              }
+              setActiveRunId(null);
+              setActiveTransferSource("");
+              setActiveTransferDest("");
+              setTransferStartedAt(null);
+            }
+          }
       } catch {
         // ignore polling failures
       }
@@ -792,7 +962,55 @@ export default function App() {
         clearTimeout(timer);
       }
     };
-  }, [activeRunId]);
+  }, [activeRunId, transferActive]);
+
+  useEffect(() => {
+    if (!isConnected || !ip.trim()) {
+      setTransferActive(false);
+      return;
+    }
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const poll = async () => {
+      if (cancelled) return;
+      try {
+        const active = await invoke<boolean>("transfer_active");
+        if (!cancelled) {
+          setTransferActive(active);
+        }
+      } catch {
+        // ignore polling failures
+      }
+      if (!cancelled) {
+        timer = setTimeout(poll, 1500);
+      }
+    };
+    poll();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [isConnected, ip]);
+
+  useEffect(() => {
+    if (!activeRunId || transferActive) return;
+    if (transferStartedAt && Date.now() - transferStartedAt < 2000) return;
+    setActiveRunId(null);
+    setActiveTransferSource("");
+    setActiveTransferDest("");
+    setTransferStartedAt(null);
+  }, [activeRunId, transferActive, transferStartedAt]);
+
+  const queueAdvanceInFlight = useRef(false);
+  useEffect(() => {
+    if (!uploadQueueRunning) return;
+    if (transferActive || currentQueueItemId) return;
+    if (queueAdvanceInFlight.current) return;
+    queueAdvanceInFlight.current = true;
+    processNextQueueItem().finally(() => {
+      queueAdvanceInFlight.current = false;
+    });
+  }, [uploadQueueRunning, transferActive, currentQueueItemId]);
 
   useEffect(() => {
     localStorage.setItem("ps5upload.save_logs", saveLogs ? "true" : "false");
@@ -802,11 +1020,11 @@ export default function App() {
   }, [saveLogs]);
 
   useEffect(() => {
-    const enabled = !activeRunId;
+    const enabled = !transferActive;
     invoke("set_ui_log_enabled", { enabled }).catch(() => {
       // ignore log toggle failures
     });
-  }, [activeRunId]);
+  }, [transferActive]);
 
   useEffect(() => {
     transferSnapshot.current = {
@@ -815,6 +1033,8 @@ export default function App() {
       dest: activeTransferDest,
       viaQueue: activeTransferViaQueue,
       startedAt: transferStartedAt,
+      gameMeta,
+      coverUrl: gameCoverUrl,
       state: transferState
     };
   }, [
@@ -823,8 +1043,15 @@ export default function App() {
     activeTransferDest,
     activeTransferViaQueue,
     transferStartedAt,
-    transferState
+    transferState,
+    gameMeta,
+    gameCoverUrl
   ]);
+
+  useEffect(() => {
+    if (!isConnected || !ip.trim()) return;
+    syncPayloadState();
+  }, [isConnected, ip, queueData.updated_at, historyData.updated_at]);
 
   useEffect(() => {
     queueSnapshot.current = {
@@ -832,6 +1059,33 @@ export default function App() {
       currentId: currentQueueItemId
     };
   }, [queueData, currentQueueItemId]);
+
+  const queueNormalized = useRef(false);
+  useEffect(() => {
+    if (queueNormalized.current) return;
+    if (transferActive) return;
+    const hasInProgress = queueData.items.some((item) => item.status === "InProgress");
+    if (!hasInProgress) {
+      queueNormalized.current = true;
+      return;
+    }
+    const nextItems = queueData.items.map((item) => {
+      if (item.status !== "InProgress") return item;
+      return {
+        ...item,
+        paused: true,
+        status: "Pending",
+        transfer_settings: {
+          ...(item.transfer_settings || {}),
+          resume_mode: "size"
+        }
+      };
+    });
+    saveQueueData({ ...queueData, items: nextItems }).then(() => {
+      setCurrentQueueItemId(null);
+      queueNormalized.current = true;
+    });
+  }, [queueData, transferActive]);
 
   useEffect(() => {
     manageSnapshot.current = { ip, path: managePath };
@@ -853,12 +1107,53 @@ export default function App() {
     payloadLogBuffer.current = payloadLogs;
   }, [payloadLogs]);
 
-  const pushClientLog = (message: string) => {
-    setClientLogs((prev) => [message, ...prev].slice(0, 100));
+  useEffect(() => {
+    localStorage.setItem("ps5upload.log_level", logLevel);
+  }, [logLevel]);
+
+  const pushClientLog = (message: string, level: LogLevel = "info") => {
+    setClientLogs((prev) => [
+      { level, message, time: Date.now() },
+      ...prev
+    ].slice(0, 200));
   };
 
-  const pushPayloadLog = (message: string) => {
-    setPayloadLogs((prev) => [message, ...prev].slice(0, 100));
+  const pushPayloadLog = (message: string, level: LogLevel = "info") => {
+    setPayloadLogs((prev) => [
+      { level, message, time: Date.now() },
+      ...prev
+    ].slice(0, 200));
+  };
+
+  const pushClientLogs = (messages: string[], level: LogLevel = "info") => {
+    const now = Date.now();
+    setClientLogs((prev) => [
+      ...messages.map((message, index) => ({
+        level,
+        message,
+        time: now + index
+      })),
+      ...prev
+    ].slice(0, 200));
+  };
+
+  const pushPayloadLogs = (messages: string[], level: LogLevel = "info") => {
+    const now = Date.now();
+    setPayloadLogs((prev) => [
+      ...messages.map((message, index) => ({
+        level,
+        message,
+        time: now + index
+      })),
+      ...prev
+    ].slice(0, 200));
+  };
+
+  const normalizeLogEntry = (entry: LogEntry | string): LogEntry => {
+    if (typeof entry === "string") {
+      return { level: "info", message: entry, time: Date.now() };
+    }
+    return entry;
   };
 
   useEffect(() => {
@@ -886,6 +1181,42 @@ export default function App() {
       active = false;
     };
   }, [payloadLocalPath]);
+
+  useEffect(() => {
+    if (!payloadFullStatus?.items?.length) return;
+    let cancelled = false;
+    const pending = payloadFullStatus.items.filter(
+      (item) => item.source_path && !queueMetaById[item.id]
+    );
+    if (pending.length === 0) return;
+    const loadMeta = async () => {
+      for (const item of pending) {
+        if (cancelled) return;
+        const sourcePath = item.source_path || "";
+        if (!sourcePath) continue;
+        try {
+          const response = await invoke<GameMetaResponse>("game_meta_load", { path: sourcePath });
+          if (cancelled) return;
+          setQueueMetaById((prev) => ({
+            ...prev,
+            [item.id]: {
+              ...(prev[item.id] || {}),
+              source_path: sourcePath,
+              dest_path: item.dest_path || prev[item.id]?.dest_path || "",
+              game_meta: response.meta ?? null,
+              cover_url: coverToDataUrl(response.cover)
+            }
+          }));
+        } catch {
+          // ignore metadata failures
+        }
+      }
+    };
+    loadMeta();
+    return () => {
+      cancelled = true;
+    };
+  }, [payloadFullStatus, queueMetaById]);
 
   useEffect(() => {
     if (chatEndRef.current) {
@@ -980,7 +1311,7 @@ export default function App() {
   };
 
   const handleBrowse = async () => {
-    if (activeRunId || scanStatus === "scanning") return;
+    if (transferActive || scanStatus === "scanning") return;
     try {
       const selected = await open({
         directory: true,
@@ -996,7 +1327,7 @@ export default function App() {
   };
 
   const handleBrowseArchive = async () => {
-    if (activeRunId || scanStatus === "scanning") return;
+    if (transferActive || scanStatus === "scanning") return;
     try {
       const selected = await open({
         multiple: false,
@@ -1340,7 +1671,14 @@ export default function App() {
       try {
         const queue = await invoke<QueueData>("queue_load");
         if (!active) return;
-        setQueueData(queue);
+        applyQueueData(
+          normalizeQueueData({
+            items: queue.items || [],
+            next_id: queue.next_id || 1,
+            rev: queue.rev || 0,
+            updated_at: queue.updated_at || 0
+          })
+        );
       } catch (err) {
         setClientLogs((prev) => [`Failed to load queue: ${String(err)}`, ...prev]);
       }
@@ -1349,9 +1687,26 @@ export default function App() {
       try {
         const history = await invoke<HistoryData>("history_load");
         if (!active) return;
-        setHistoryData(history);
+        setHistoryData(
+          normalizeHistoryData({
+            records: history.records || [],
+            rev: history.rev || 0,
+            updated_at: history.updated_at || 0
+          })
+        );
       } catch (err) {
         setClientLogs((prev) => [`Failed to load history: ${String(err)}`, ...prev]);
+      }
+
+      // Load cached payload status (for offline queue history)
+      try {
+        const cached = localStorage.getItem("ps5upload.payload_status_cache");
+        if (cached && active) {
+          const parsed = JSON.parse(cached);
+          setPayloadFullStatus(parsed);
+        }
+      } catch {
+        // ignore invalid cache
       }
 
       // Load chat - independent
@@ -1394,12 +1749,23 @@ export default function App() {
     }
     if (customSaved) setCustomPreset(customSaved);
     if (subfolderSaved) setSubfolder(subfolderSaved);
+    const keepAwakeSaved = localStorage.getItem("ps5upload.keep_awake");
+    if (keepAwakeSaved) {
+      setKeepAwake(keepAwakeSaved === "true");
+    }
 
     load();
     return () => {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!configLoaded) return;
+    invoke("sleep_set", { enabled: keepAwake }).catch(() => {
+      // ignore keep awake failures
+    });
+  }, [keepAwake, configLoaded]);
 
   useEffect(() => {
     if (!configLoaded || !currentProfile) {
@@ -1638,11 +2004,11 @@ export default function App() {
 
   useEffect(() => {
     const enabled =
-      activeTab === "manage" && isConnected && ip.trim().length > 0 && !activeRunId;
+      activeTab === "manage" && isConnected && ip.trim().length > 0 && !transferActive;
     invoke("manage_polling_set", { enabled }).catch(() => {
       // ignore manage poll toggle failures
     });
-  }, [activeTab, isConnected, ip, activeRunId]);
+  }, [activeTab, isConnected, ip, transferActive]);
 
   useEffect(() => {
     invoke<ManageListSnapshot>("manage_list_snapshot")
@@ -1770,30 +2136,36 @@ export default function App() {
           const snapshot = transferSnapshot.current;
           if (snapshot.runId && event.payload.run_id !== snapshot.runId) return;
           const payload = event.payload;
+          const completeBytes = toSafeNumber(payload.bytes);
+          const completeFiles = toSafeNumber(payload.files);
           setTransferState((prev) => ({
             ...prev,
             status: "Complete",
-            sent: payload.bytes,
-            total: payload.bytes
+            sent: completeBytes,
+            total: completeBytes
           }));
           const duration =
             snapshot.state.elapsed ||
             (snapshot.startedAt ? (Date.now() - snapshot.startedAt) / 1000 : 0);
-          const speed = duration > 0 ? payload.bytes / duration : 0;
+          const speed = duration > 0 ? completeBytes / duration : 0;
           if (snapshot.source && snapshot.dest) {
             const record: TransferRecord = {
               timestamp: Math.floor(Date.now() / 1000),
               source_path: snapshot.source,
               dest_path: snapshot.dest,
-              file_count: payload.files,
-              total_bytes: payload.bytes,
+              file_count: completeFiles,
+              total_bytes: completeBytes,
               duration_secs: duration,
               speed_bps: speed,
               success: true,
-              via_queue: snapshot.viaQueue
+              via_queue: snapshot.viaQueue,
+              game_meta: snapshot.gameMeta ?? null,
+              cover_url: snapshot.coverUrl ?? null
             };
             setHistoryData((prev) => ({
-              records: [...prev.records, record].slice(-100)
+              records: [...prev.records, record].slice(-100),
+              rev: (prev.rev || 0) + 1,
+              updated_at: Date.now()
             }));
             invoke("history_add", { record }).catch(() => {
               setClientLogs((prev) => [
@@ -1830,6 +2202,68 @@ export default function App() {
           if (!mounted) return;
           const snapshot = transferSnapshot.current;
           if (snapshot.runId && event.payload.run_id !== snapshot.runId) return;
+          const rawMessage = event.payload.message || "";
+          const successMatch = rawMessage.match(/^(SUCCESS|OK)\s+(\d+)\s+(\d+)/i);
+          if (successMatch) {
+            const files = Number(successMatch[2]) || snapshot.state.files || 0;
+            const bytes = Number(successMatch[3]) || snapshot.state.total || snapshot.state.sent || 0;
+            setTransferState((prev) => ({
+              ...prev,
+              status: "Complete",
+              sent: bytes,
+              total: bytes
+            }));
+            const duration =
+              snapshot.state.elapsed ||
+              (snapshot.startedAt ? (Date.now() - snapshot.startedAt) / 1000 : 0);
+            const speed = duration > 0 ? bytes / duration : 0;
+            if (snapshot.source && snapshot.dest) {
+            const record: TransferRecord = {
+              timestamp: Math.floor(Date.now() / 1000),
+              source_path: snapshot.source,
+              dest_path: snapshot.dest,
+              file_count: files,
+              total_bytes: bytes,
+              duration_secs: duration,
+              speed_bps: speed,
+              success: true,
+              via_queue: snapshot.viaQueue,
+              game_meta: snapshot.gameMeta ?? null,
+              cover_url: snapshot.coverUrl ?? null
+            };
+              setHistoryData((prev) => ({
+                records: [...prev.records, record].slice(-100),
+                rev: (prev.rev || 0) + 1,
+                updated_at: Date.now()
+              }));
+              invoke("history_add", { record }).catch(() => {
+                setClientLogs((prev) => [
+                  "Failed to save history entry.",
+                  ...prev
+                ]);
+              });
+            }
+            if (snapshot.dest && configSnapshot.current.chmodAfterUpload) {
+              invoke("manage_chmod", {
+                ip: configSnapshot.current.ip,
+                path: snapshot.dest
+              }).catch(() => {
+                // ignore chmod failures in UI
+              });
+            }
+            if (snapshot.viaQueue && queueSnapshot.current.currentId) {
+              const id = queueSnapshot.current.currentId;
+              updateQueueItemStatus(id, "Completed").then(() => {
+                processNextQueueItem();
+              });
+            } else {
+              setActiveRunId(null);
+              setActiveTransferSource("");
+              setActiveTransferDest("");
+              setTransferStartedAt(null);
+            }
+            return;
+          }
           setTransferState((prev) => ({
             ...prev,
             status: `Error: ${event.payload.message}`
@@ -1840,20 +2274,24 @@ export default function App() {
           const speed =
             duration > 0 ? snapshot.state.sent / duration : 0;
           if (snapshot.source && snapshot.dest) {
-            const record: TransferRecord = {
-              timestamp: Math.floor(Date.now() / 1000),
-              source_path: snapshot.source,
-              dest_path: snapshot.dest,
-              file_count: snapshot.state.files,
-              total_bytes: snapshot.state.sent,
-              duration_secs: duration,
-              speed_bps: speed,
-              success: false,
-              error: event.payload.message,
-              via_queue: snapshot.viaQueue
-            };
+          const record: TransferRecord = {
+            timestamp: Math.floor(Date.now() / 1000),
+            source_path: snapshot.source,
+            dest_path: snapshot.dest,
+            file_count: snapshot.state.files,
+            total_bytes: snapshot.state.sent,
+            duration_secs: duration,
+            speed_bps: speed,
+            success: false,
+            error: event.payload.message,
+            via_queue: snapshot.viaQueue,
+            game_meta: snapshot.gameMeta ?? null,
+            cover_url: snapshot.coverUrl ?? null
+          };
             setHistoryData((prev) => ({
-              records: [...prev.records, record].slice(-100)
+              records: [...prev.records, record].slice(-100),
+              rev: (prev.rev || 0) + 1,
+              updated_at: Date.now()
             }));
             invoke("history_add", { record }).catch(() => {
               setClientLogs((prev) => [
@@ -1882,7 +2320,7 @@ export default function App() {
         "transfer_log",
         (event) => {
           if (!mounted) return;
-          if (activeRunId) return;
+          if (transferActive) return;
           clientLogBuffer.current = [
             `${event.payload.message}`,
             ...clientLogBuffer.current
@@ -1901,7 +2339,7 @@ export default function App() {
         "payload_log",
         (event) => {
           if (!mounted) return;
-          if (activeRunId) return;
+          if (transferActive) return;
           payloadLogBuffer.current = [
             `${event.payload.message}`,
             ...payloadLogBuffer.current
@@ -1963,6 +2401,39 @@ export default function App() {
           applyPayloadSnapshot(event.payload ?? null);
         }
       );
+
+      const unlistenQueueHint = await listen<QueueHintEvent>("queue_hint", (event) => {
+        if (!mounted) return;
+        const payload = event.payload;
+        if (!payload || !payload.queue_id) return;
+        setQueueMetaById((prev) => ({
+          ...prev,
+          [payload.queue_id]: {
+            ...(prev[payload.queue_id] || {}),
+            source_path: payload.source_path,
+            dest_path: payload.dest_path,
+            size_bytes: payload.size_bytes
+          }
+        }));
+        invoke<GameMetaResponse>("game_meta_load", { path: payload.source_path })
+          .then((response) => {
+            if (!mounted) return;
+            setQueueMetaById((prev) => ({
+              ...prev,
+              [payload.queue_id]: {
+                ...(prev[payload.queue_id] || {}),
+                source_path: payload.source_path,
+                dest_path: payload.dest_path,
+                size_bytes: payload.size_bytes,
+                game_meta: response.meta ?? null,
+                cover_url: coverToDataUrl(response.cover)
+              }
+            }));
+          })
+          .catch(() => {
+            // ignore metadata failures
+          });
+      });
 
       const unlistenConnectionStatus = await listen<ConnectionStatusSnapshot>(
         "connection_status_update",
@@ -2079,7 +2550,7 @@ export default function App() {
         "manage_log",
         (event) => {
           if (!mounted) return;
-          if (activeRunId) return;
+          if (transferActive) return;
           setClientLogs((prev) =>
             [`${event.payload.message}`, ...prev].slice(0, 100)
           );
@@ -2202,6 +2673,7 @@ export default function App() {
         unlistenPayloadVersion();
         unlistenPayloadBusy();
         unlistenPayloadStatus();
+        unlistenQueueHint();
         unlistenConnectionStatus();
         unlistenUpdateReady();
         unlistenUpdateError();
@@ -2225,8 +2697,7 @@ export default function App() {
     };
   }, []);
 
-  const toNumber = (value: number | bigint) =>
-    typeof value === "bigint" ? Number(value) : value;
+  const toNumber = (value: number | bigint) => toSafeNumber(value, 0);
   const transferTotal = toNumber(transferState.total || 0);
   const transferSent = toNumber(transferState.sent || 0);
   const transferPercent =
@@ -2368,8 +2839,34 @@ export default function App() {
     if (!snapshot) return;
     setPayloadFullStatus(snapshot.status ?? null);
     setPayloadStatusError(snapshot.error ?? null);
+    if (snapshot.status) {
+      localStorage.setItem(
+        "ps5upload.payload_status_cache",
+        JSON.stringify(snapshot.status)
+      );
+    }
     if (typeof snapshot.updated_at_ms === "number") {
       setPayloadLastUpdated(snapshot.updated_at_ms);
+    }
+    if (snapshot.status?.items?.length && chmodAfterUpload && ip.trim()) {
+      const completed = snapshot.status.items.filter((item) => item.status === "complete");
+      if (completed.length > 0) {
+        setQueueChmodDone((prev) => {
+          const next = { ...prev };
+          for (const item of completed) {
+            if (next[item.id]) continue;
+            const meta = queueMetaById[item.id];
+            const target = meta?.dest_path;
+            if (target) {
+              invoke("manage_chmod", { ip, path: target }).catch(() => {
+                // ignore chmod failures for queued extraction
+              });
+              next[item.id] = true;
+            }
+          }
+          return next;
+        });
+      }
     }
     if (snapshot.status?.version) {
       setPayloadStatus(`Running (v${snapshot.status.version})`);
@@ -2380,16 +2877,49 @@ export default function App() {
 
   const handleRefreshPayloadStatus = async () => {
     if (!ip.trim()) return;
+    if (payloadStatusLoading) return;
     setPayloadStatusLoading(true);
     try {
       const snapshot = await invoke<PayloadStatusSnapshot>("payload_status_refresh", { ip });
       applyPayloadSnapshot(snapshot);
+      syncPayloadState();
     } catch (err) {
       const message = String(err);
       setPayloadStatusError(message);
       setClientLogs((prev) => [`Payload status error: ${message}`, ...prev].slice(0, 100));
     }
     setPayloadStatusLoading(false);
+  };
+
+  const handlePayloadReset = async () => {
+    if (!ip.trim()) return;
+    if (payloadResetting) return;
+    setPayloadResetting(true);
+    try {
+      await invoke("payload_reset", { ip });
+      setClientLogs((prev) => ["Payload reset requested.", ...prev].slice(0, 100));
+      handleRefreshPayloadStatus();
+      handleRefreshQueueStatus();
+    } catch (err) {
+      setClientLogs((prev) => [`Payload reset failed: ${String(err)}`, ...prev].slice(0, 100));
+    }
+    setPayloadResetting(false);
+  };
+
+  const handleRefreshQueueStatus = async () => {
+    if (!ip.trim()) return;
+    if (payloadQueueLoading) return;
+    setPayloadQueueLoading(true);
+    try {
+      const snapshot = await invoke<PayloadStatusSnapshot>("payload_status_refresh", { ip });
+      applyPayloadSnapshot(snapshot);
+      syncPayloadState();
+    } catch (err) {
+      const message = String(err);
+      setPayloadStatusError(message);
+      setClientLogs((prev) => [`Queue status error: ${message}`, ...prev].slice(0, 100));
+    }
+    setPayloadQueueLoading(false);
   };
 
   const handleQueueExtract = async (src: string, dst: string) => {
@@ -2414,6 +2944,55 @@ export default function App() {
     }
   };
 
+  const handleQueuePause = async (id: number) => {
+    if (!ip.trim()) return;
+    try {
+      await invoke("payload_queue_pause", { ip, id });
+      setClientLogs((prev) => [`Paused extraction item ${id}`, ...prev].slice(0, 100));
+      handleRefreshQueueStatus();
+    } catch (err) {
+      setClientLogs((prev) => [`Queue pause failed: ${String(err)}`, ...prev].slice(0, 100));
+    }
+  };
+
+  const handleQueueRetry = async (id: number) => {
+    if (!ip.trim()) return;
+    try {
+      await invoke("payload_queue_retry", { ip, id });
+      setClientLogs((prev) => [`Requeued extraction item ${id}`, ...prev].slice(0, 100));
+      handleRefreshQueueStatus();
+    } catch (err) {
+      setClientLogs((prev) => [`Queue requeue failed: ${String(err)}`, ...prev].slice(0, 100));
+    }
+  };
+
+  const moveExtractionQueueItem = async (fromIndex: number, toIndex: number) => {
+    if (!ip.trim() || !payloadFullStatus) return;
+    if (fromIndex < 0 || toIndex < 0) return;
+    if (fromIndex === toIndex) return;
+    const items = [...payloadFullStatus.items];
+    if (fromIndex >= items.length || toIndex >= items.length) return;
+    const moving = items[fromIndex];
+    if (!moving || moving.status !== "pending") return;
+    if (!items[toIndex] || items[toIndex].status !== "pending") return;
+    items.splice(fromIndex, 1);
+    items.splice(toIndex, 0, moving);
+    try {
+      await invoke("payload_queue_reorder", { ip, ids: items.map((item) => item.id) });
+      setPayloadFullStatus({ ...payloadFullStatus, items });
+      setClientLogs((prev) => [`Reordered extraction queue (moved #${moving.id}).`, ...prev].slice(0, 100));
+      if (runningExtractItem) {
+        const firstPendingIndex = items.findIndex((entry) => entry.status === "pending");
+        if (firstPendingIndex === toIndex) {
+          handleQueuePause(runningExtractItem.id);
+          handleQueueProcess();
+        }
+      }
+    } catch (err) {
+      setClientLogs((prev) => [`Queue reorder failed: ${String(err)}`, ...prev].slice(0, 100));
+    }
+  };
+
   const handleQueueClear = async () => {
     if (!ip.trim()) return;
     try {
@@ -2422,6 +3001,28 @@ export default function App() {
       handleRefreshPayloadStatus();
     } catch (err) {
       setClientLogs((prev) => [`Queue clear failed: ${String(err)}`, ...prev].slice(0, 100));
+    }
+  };
+
+  const handleQueueClearAll = async () => {
+    if (!ip.trim()) return;
+    try {
+      await invoke("payload_queue_clear_all", { ip });
+      setClientLogs((prev) => ["Cleared extraction queue", ...prev].slice(0, 100));
+      handleRefreshPayloadStatus();
+    } catch (err) {
+      setClientLogs((prev) => [`Queue clear failed: ${String(err)}`, ...prev].slice(0, 100));
+    }
+  };
+
+  const handleQueueProcess = async () => {
+    if (!ip.trim()) return;
+    try {
+      await invoke("payload_queue_process", { ip });
+      setClientLogs((prev) => ["Extraction queue started", ...prev].slice(0, 100));
+      handleRefreshQueueStatus();
+    } catch (err) {
+      setClientLogs((prev) => [`Queue start failed: ${String(err)}`, ...prev].slice(0, 100));
     }
   };
 
@@ -2448,16 +3049,27 @@ export default function App() {
   }, [ip]);
 
   useEffect(() => {
-    const enabled = activeTab === "payload" && isConnected && ip.trim().length > 0 && !activeRunId;
+    const enabled = activeTab === "payload" && isConnected && ip.trim().length > 0;
     invoke("payload_polling_set", { enabled }).catch(() => {
       // ignore poll toggle failures
     });
-  }, [activeTab, isConnected, ip, activeRunId]);
+  }, [activeTab, isConnected, ip]);
 
   useEffect(() => {
     if (!isConnected || !ip.trim()) return;
     handleRefreshPayloadStatus();
   }, [isConnected, ip]);
+
+  useEffect(() => {
+    if (activeTab !== "payload") return;
+    const interval = setInterval(() => {
+      if (isConnected && ip.trim()) {
+        handleRefreshQueueStatus();
+      }
+      handleRefreshUploadQueue();
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [activeTab, isConnected, ip]);
 
   const handleConnect = async () => {
     if (!ip.trim()) {
@@ -2465,8 +3077,14 @@ export default function App() {
       pushClientLog("Connect blocked: missing IP");
       return false;
     }
+    if (connectCooldown) {
+      pushClientLog("Connect blocked: please wait a moment.");
+      return false;
+    }
     if (isConnecting) return false;
     if (isConnected) return true;
+    setConnectCooldown(true);
+    setTimeout(() => setConnectCooldown(false), 1000);
     setIsConnecting(true);
     setConnectionStatus("Connecting...");
     pushClientLog(`Connecting to ${ip}...`);
@@ -2527,17 +3145,26 @@ export default function App() {
     }
   };
 
-  const runPayloadReload = async (modeOverride?: "local" | "current" | "latest") => {
+  const runPayloadReload = async (
+    modeOverride?: "local" | "current" | "latest",
+    force?: boolean
+  ) => {
     if (payloadBusy || !ip.trim()) return;
-    if (payloadFullStatus?.status && !payloadStatusError) {
-      setPayloadStatus("Payload already running.");
-      pushPayloadLog("Payload already running; reload skipped.");
+    if (payloadReloadCooldown) {
+      pushPayloadLog("Payload reload blocked: please wait a moment.");
       return;
     }
-    if (payloadVersion) {
-      setPayloadStatus("Payload already running.");
-      pushPayloadLog("Payload already running; reload skipped.");
-      return;
+    if (!force) {
+      if (payloadFullStatus?.status && !payloadStatusError) {
+        setPayloadStatus("Payload already running.");
+        pushPayloadLog("Payload already running; reload skipped.");
+        return;
+      }
+      if (payloadVersion) {
+        setPayloadStatus("Payload already running.");
+        pushPayloadLog("Payload already running; reload skipped.");
+        return;
+      }
     }
     const mode = modeOverride ?? payloadReloadMode;
     if (mode === "local" && !payloadLocalPath.trim()) {
@@ -2550,6 +3177,8 @@ export default function App() {
       pushPayloadLog(`Payload probe failed: ${payloadProbe.message}`);
       return;
     }
+    setPayloadReloadCooldown(true);
+    setTimeout(() => setPayloadReloadCooldown(false), 3000);
     const portOpen = await invoke<boolean>("port_check", {
       ip,
       port: 9021
@@ -2579,7 +3208,7 @@ export default function App() {
   };
 
   const handlePayloadSend = async () => {
-    await runPayloadReload();
+    await runPayloadReload(undefined, true);
   };
 
   const handlePayloadCheck = async () => {
@@ -2594,7 +3223,7 @@ export default function App() {
   };
 
   const handlePayloadDownload = async (kind: "current" | "latest") => {
-    await runPayloadReload(kind);
+    await runPayloadReload(kind, true);
   };
 
   const handleUpdateCheck = async () => {
@@ -2667,6 +3296,35 @@ export default function App() {
 
   const handleUpload = async () => {
     setClientLogs((prev) => ["Upload clicked", ...prev].slice(0, 100));
+    if (transferActive) {
+      try {
+        const status = await invoke<TransferStatusSnapshot>("transfer_status");
+        const activeStates = [
+          "Starting",
+          "Scanning",
+          "Uploading",
+          "Uploading archive",
+          "Extracting"
+        ];
+        const isActive = activeStates.some((state) => status.status.startsWith(state));
+        if (isActive) {
+          setTransferState((prev) => ({ ...prev, status: "Transfer already running" }));
+          setClientLogs((prev) => [
+            "Upload blocked: A transfer is already running. Cancel it first.",
+            ...prev
+          ].slice(0, 100));
+          return;
+        }
+        await invoke("transfer_reset");
+      } catch {
+        setTransferState((prev) => ({ ...prev, status: "Transfer already running" }));
+        setClientLogs((prev) => [
+          "Upload blocked: A transfer is already running. Cancel it first.",
+          ...prev
+        ].slice(0, 100));
+        return;
+      }
+    }
     if (!ip.trim()) {
       setTransferState((prev) => ({ ...prev, status: "Missing IP" }));
       setClientLogs((prev) => ["Upload blocked: Missing IP", ...prev].slice(0, 100));
@@ -2721,6 +3379,7 @@ export default function App() {
           auto_tune_connections: autoTune,
           optimize_upload: optimizeUpload,
           rar_extract_mode: rarExtractMode,
+          override_on_conflict: overrideOnConflict,
           payload_version: payloadVersion,
           storage_root: storageRoot,
           required_size: transferState.total || null
@@ -2742,15 +3401,188 @@ export default function App() {
     }
   };
 
+  const sanitizeQueueData = (data: QueueData): QueueData => {
+    let inProgressSeen = false;
+    return {
+      items: (data.items || []).map((item) => {
+        const nextItem = {
+          ...item,
+          size_bytes:
+            typeof item.size_bytes === "bigint"
+              ? toSafeNumber(item.size_bytes)
+              : item.size_bytes ?? null
+        };
+        if (nextItem.status === "InProgress") {
+          if (inProgressSeen) {
+            nextItem.status = "Pending";
+            nextItem.paused = true;
+          } else {
+            inProgressSeen = true;
+          }
+        }
+        return nextItem;
+      }),
+      next_id: data.next_id || 1,
+      rev: data.rev,
+      updated_at: data.updated_at
+    };
+  };
+
+  const sanitizeHistoryData = (data: HistoryData): HistoryData => ({
+    records: (data.records || []).map((record) => ({
+      ...record,
+      file_count: toSafeNumber(record.file_count),
+      total_bytes: toSafeNumber(record.total_bytes),
+      duration_secs: toSafeNumber(record.duration_secs),
+      speed_bps: toSafeNumber(record.speed_bps)
+    })),
+    rev: data.rev,
+    updated_at: data.updated_at
+  });
+
+  const applyQueueData = (data: QueueData) => {
+    const normalized = sanitizeQueueData(data);
+    setQueueData(normalized);
+    const activeItem = normalized.items.find((item) => item.status === "InProgress");
+    if (activeItem) {
+      setCurrentQueueItemId(activeItem.id);
+    } else {
+      setCurrentQueueItemId(null);
+    }
+    return normalized;
+  };
+
   const saveQueueData = async (data: QueueData) => {
-    setQueueData(data);
+    const sanitized = sanitizeQueueData(data);
+    const rev =
+      typeof sanitized.rev === "number"
+        ? sanitized.rev
+        : (queueData.rev || 0) + 1;
+    const next = { ...sanitized, rev, updated_at: Date.now() };
+    applyQueueData(next);
     try {
-      await invoke("queue_update", { data });
+      await invoke("queue_update", { data: next });
     } catch (err) {
       setClientLogs((prev) => [
         `Failed to save queue: ${String(err)}`,
         ...prev
       ]);
+    }
+  };
+
+  const normalizeQueueData = (data: QueueData | null) =>
+    sanitizeQueueData({
+      items: data?.items || [],
+      next_id: data?.next_id || 1,
+      rev: data?.rev || 0,
+      updated_at: data?.updated_at || 0
+    });
+
+  const normalizeHistoryData = (data: HistoryData | null) =>
+    sanitizeHistoryData({
+      records: data?.records || [],
+      rev: data?.rev || 0,
+      updated_at: data?.updated_at || 0
+    });
+
+  const syncPayloadState = async () => {
+    if (!ip.trim() || !isConnected) return;
+    const now = Date.now();
+    if (now - lastPayloadSyncAt.current < 2000) return;
+    lastPayloadSyncAt.current = now;
+
+    if (payloadStatusError && payloadStatusError.includes("ECONNREFUSED")) {
+      return;
+    }
+
+    try {
+      const info = await invoke<{
+        upload_queue_rev?: number;
+        history_rev?: number;
+        upload_queue_updated_at?: number;
+        history_updated_at?: number;
+        extract_queue_updated_at?: number;
+      }>("payload_sync_info", { ip });
+
+      const localQueueRev = queueData.rev || 0;
+      const localHistoryRev = historyData.rev || 0;
+      const payloadQueueRev =
+        typeof info.upload_queue_rev === "number"
+          ? info.upload_queue_rev
+          : (info.upload_queue_updated_at || 0) * 1000;
+      const payloadHistoryRev =
+        typeof info.history_rev === "number"
+          ? info.history_rev
+          : (info.history_updated_at || 0) * 1000;
+
+      if (payloadQueueRev > localQueueRev && !transferActive) {
+        const payloadText = await invoke<string>("payload_upload_queue_get", { ip });
+        if (payloadText && payloadText.trim()) {
+          try {
+            const data = JSON.parse(payloadText);
+            const normalized = normalizeQueueData(data);
+            applyQueueData(normalized);
+            await invoke("queue_update", { data: normalized });
+            pushClientLog("Upload queue restored from payload.", "debug");
+          } catch (err) {
+            pushClientLog(`Failed to parse payload queue: ${String(err)}`, "error");
+          }
+        }
+      } else if (localQueueRev > payloadQueueRev) {
+        await invoke("payload_upload_queue_sync", {
+          ip,
+          payload: JSON.stringify(sanitizeQueueData(queueData))
+        });
+      }
+
+      if (payloadHistoryRev > localHistoryRev) {
+        const payloadText = await invoke<string>("payload_history_get", { ip });
+        if (payloadText && payloadText.trim()) {
+          try {
+            const data = JSON.parse(payloadText);
+            const normalized = normalizeHistoryData(data);
+            setHistoryData(normalized);
+            await invoke("history_save", { data: normalized });
+            pushClientLog("History restored from payload.", "debug");
+          } catch (err) {
+            pushClientLog(`Failed to parse payload history: ${String(err)}`, "error");
+          }
+        }
+      } else if (localHistoryRev > payloadHistoryRev) {
+        await invoke("payload_history_sync", {
+          ip,
+          payload: JSON.stringify(sanitizeHistoryData(historyData))
+        });
+      }
+    } catch (err) {
+      const message = String(err);
+      const last = lastPayloadSyncError.current;
+      if (!last || last.message !== message || now - last.at > 10000) {
+        pushClientLog(`Payload sync failed: ${message}`, "warn");
+        lastPayloadSyncError.current = { message, at: now };
+      }
+    }
+  };
+
+  const handleRefreshUploadQueue = async () => {
+    try {
+      const queue = await invoke<QueueData>("queue_load");
+      applyQueueData(
+        normalizeQueueData({
+          items: queue.items || [],
+          next_id: queue.next_id || 1,
+          rev: queue.rev || 0,
+          updated_at: queue.updated_at || 0
+        })
+      );
+      const hasActive = (queue.items || []).some(
+        (item) => item.status === "InProgress" || item.status === "Pending"
+      );
+      if (!hasActive) {
+        setUploadQueueRunning(false);
+      }
+    } catch (err) {
+      setClientLogs((prev) => [`Queue refresh failed: ${String(err)}`, ...prev].slice(0, 100));
     }
   };
 
@@ -2771,69 +3603,111 @@ export default function App() {
     return `${baseClean}/${presetClean}/${folder}`;
   };
 
-  const handleAddToQueue = async () => {
-    if (!sourcePath.trim()) return;
-    const nextId = queueData.next_id || 1;
-    const subfolderName = subfolder || sourcePath.split(/[/\\]/).filter(Boolean).pop() || "App";
-    const presetIndex = presetOptions.indexOf(preset);
-    const item: QueueItem = {
-      id: nextId,
-      source_path: sourcePath,
-      subfolder_name: subfolderName,
-      preset_index: presetIndex === -1 ? 0 : presetIndex,
-      custom_preset_path: customPreset,
-      storage_base: storageRoot,
-      dest_path: finalDestPath,
-      status: "Pending",
-      size_bytes: transferState.total || null,
-      transfer_settings: {
-        use_temp: useTemp,
-        connections,
-        resume_mode: resumeMode,
-        compression,
-        bandwidth_limit_mbps: bandwidthLimit,
-        auto_tune_connections: autoTune,
-        optimize_upload: optimizeUpload,
-        rar_extract_mode: rarExtractMode
+  const getBaseName = (value: string) =>
+    value.split(/[/\\]/).filter(Boolean).pop() || "App";
+
+  const buildQueueItem = (id: number, params: {
+    sourcePath: string;
+    subfolderName: string;
+    presetIndex: number;
+    customPresetPath: string;
+    storageBase?: string;
+    destPath?: string;
+    sizeBytes?: number | null;
+  }): QueueItem => ({
+    id,
+    source_path: params.sourcePath,
+    subfolder_name: params.subfolderName,
+    preset_index: params.presetIndex,
+    custom_preset_path: params.customPresetPath,
+    storage_base: params.storageBase,
+    dest_path: params.destPath,
+    ps5_ip: ip.trim() || undefined,
+    status: "Pending",
+    paused: false,
+    size_bytes: params.sizeBytes ?? null,
+    transfer_settings: {
+      use_temp: useTemp,
+      connections,
+      resume_mode: resumeMode,
+      compression,
+      bandwidth_limit_mbps: bandwidthLimit,
+      auto_tune_connections: autoTune,
+      optimize_upload: optimizeUpload,
+      rar_extract_mode: rarExtractMode,
+      override_on_conflict: overrideOnConflict
+    }
+  });
+
+  const normalizeQueueKey = (source: string, dest?: string | null) => {
+    const normalizePath = (value: string) =>
+      value.trim().replace(/\\/g, "/").replace(/\/+$/, "");
+    const srcKey = normalizePath(source || "");
+    const destKey = dest ? normalizePath(dest) : "";
+    return `${srcKey}::${destKey}`;
+  };
+
+  const addQueueItems = async (items: QueueItem[]) => {
+    if (items.length === 0) return;
+    const existingKeys = new Set(
+      queueData.items.map((item) => normalizeQueueKey(item.source_path, item.dest_path))
+    );
+    const deduped: QueueItem[] = [];
+    let skipped = 0;
+    for (const item of items) {
+      const key = normalizeQueueKey(item.source_path, item.dest_path);
+      if (existingKeys.has(key)) {
+        skipped += 1;
+        continue;
       }
-    };
-    const normalizeKey = (value: string) =>
-      value.replace(/[/\\]+/g, "/").trim().toLowerCase();
-    const itemKey = [
-      normalizeKey(item.source_path),
-      normalizeKey(item.subfolder_name || ""),
-      String(item.preset_index),
-      normalizeKey(item.custom_preset_path || ""),
-      normalizeKey(item.storage_base || ""),
-      normalizeKey(item.dest_path || "")
-    ].join("|");
-    const duplicate = queueData.items.some((existing) => {
-      const existingKey = [
-        normalizeKey(existing.source_path),
-        normalizeKey(existing.subfolder_name || ""),
-        String(existing.preset_index),
-        normalizeKey(existing.custom_preset_path || ""),
-        normalizeKey(existing.storage_base || ""),
-        normalizeKey(existing.dest_path || "")
-      ].join("|");
-      return existingKey === itemKey;
-    });
-    if (duplicate) {
-      setClientLogs((prev) => [tr("queue_duplicate"), ...prev]);
+      existingKeys.add(key);
+      deduped.push(item);
+    }
+    if (deduped.length === 0) {
+      if (skipped > 0) pushClientLog(tr("queue_duplicate"));
       return;
     }
     const nextQueue: QueueData = {
-      items: [...queueData.items, item],
-      next_id: nextId + 1
+      items: [...deduped, ...queueData.items],
+      next_id: Math.max(queueData.next_id || 1, ...deduped.map((item) => item.id + 1))
     };
     await saveQueueData(nextQueue);
+    pushClientLog(tr("queue_added", { count: deduped.length }));
+    if (skipped > 0) pushClientLog(tr("queue_duplicate"));
+  };
+
+  const handleAddToQueue = async () => {
+    if (!sourcePath.trim()) return;
+    const nextId = queueData.next_id || 1;
+    const subfolderName = subfolder || getBaseName(sourcePath);
+    const presetIndex = presetOptions.indexOf(preset);
+    const item = buildQueueItem(nextId, {
+      sourcePath,
+      subfolderName,
+      presetIndex: presetIndex === -1 ? 0 : presetIndex,
+      customPresetPath: customPreset,
+      storageBase: storageRoot,
+      destPath: finalDestPath,
+      sizeBytes: transferState.total ? toSafeNumber(transferState.total) : null
+    });
+    await addQueueItems([item]);
   };
 
   const updateQueueItemStatus = async (id: number, status: QueueStatus) => {
+    const clearPaused =
+      status === "InProgress" ||
+      status === "Completed" ||
+      typeof status === "object";
     const nextQueue: QueueData = {
       ...queueSnapshot.current.data,
       items: queueSnapshot.current.data.items.map((item) =>
-        item.id === id ? { ...item, status } : item
+        item.id === id
+          ? {
+              ...item,
+              status,
+              ...(clearPaused ? { paused: false } : null)
+            }
+          : item
       )
     };
     await saveQueueData(nextQueue);
@@ -2845,6 +3719,44 @@ export default function App() {
       items: queueData.items.filter((item) => item.id !== id)
     };
     await saveQueueData(nextQueue);
+  };
+
+  const handleRequeueUploadItem = async (id: number) => {
+    const nextQueue: QueueData = {
+      ...queueData,
+      items: queueData.items.map((item) => {
+        if (item.id !== id) return item;
+        return {
+          ...item,
+          paused: true,
+          status: "Pending",
+          transfer_settings: {
+            ...(item.transfer_settings || {}),
+            resume_mode: "size"
+          }
+        };
+      })
+    };
+    await saveQueueData(nextQueue);
+  };
+
+  const moveUploadQueueItem = async (fromIndex: number, toIndex: number) => {
+    if (fromIndex < 0 || toIndex < 0) return;
+    if (fromIndex === toIndex) return;
+    if (fromIndex >= queueData.items.length || toIndex >= queueData.items.length) return;
+    const items = [...queueData.items];
+    const moving = items[fromIndex];
+    if (!moving || moving.status !== "Pending") return;
+    if (!items[toIndex] || items[toIndex].status !== "Pending") return;
+    items.splice(fromIndex, 1);
+    items.splice(toIndex, 0, moving);
+    await saveQueueData({ ...queueData, items });
+    if (transferActive && currentQueueItemId) {
+      const firstPendingIndex = items.findIndex((entry) => entry.status === "Pending");
+      if (firstPendingIndex === toIndex) {
+        pauseActiveUploadAndRequeue(items, Math.min(firstPendingIndex + 1, items.length));
+      }
+    }
   };
 
   const handleClearCompletedQueue = async () => {
@@ -2863,6 +3775,7 @@ export default function App() {
       items: []
     };
     setCurrentQueueItemId(null);
+    setUploadQueueRunning(false);
     await saveQueueData(nextQueue);
   };
 
@@ -2892,20 +3805,42 @@ export default function App() {
   };
 
   const startQueueItem = async (item: QueueItem) => {
+    if (transferActive) {
+      return;
+    }
+    const targetIp = item.ps5_ip || ip.trim() || configSnapshot.current.ip;
+    if (!targetIp || !targetIp.trim()) {
+      await updateQueueItemStatus(item.id, { Failed: "Missing PS5 IP address." });
+      pushClientLog("Upload failed to start: PS5 IP address is required.");
+      setUploadQueueRunning(false);
+      setCurrentQueueItemId(null);
+      setActiveRunId(null);
+      setActiveTransferSource("");
+      setActiveTransferDest("");
+      setActiveTransferViaQueue(false);
+      setTransferStartedAt(null);
+      return;
+    }
+    setUploadQueueRunning(true);
+    const settings = item.transfer_settings;
     const base = item.storage_base || storageRoot;
     const dest = buildDestPathForItem(base, item);
     const itemResumeMode = settings?.resume_mode ?? resumeMode;
-    if (itemResumeMode === "none" && !overrideOnConflict) {
+    const itemOverride = settings?.override_on_conflict ?? overrideOnConflict;
+    if (itemResumeMode === "none" && !itemOverride) {
       const exists = await invoke<boolean>("transfer_check_dest", {
-        ip,
+        ip: targetIp,
         destPath: dest
       });
       if (exists) {
         await updateQueueItemStatus(item.id, { Failed: tr("destination_exists") });
         setCurrentQueueItemId(null);
+        pushClientLog(tr("destination_exists"));
+        processNextQueueItem();
         return;
       }
     }
+    pushClientLog(`Starting upload: ${item.source_path}`);
     await updateQueueItemStatus(item.id, "InProgress");
     setCurrentQueueItemId(item.id);
     setActiveTransferSource(item.source_path);
@@ -2913,10 +3848,9 @@ export default function App() {
     setActiveTransferViaQueue(true);
     setTransferStartedAt(Date.now());
     try {
-      const settings = item.transfer_settings;
       const runId = await invoke<number>("transfer_start", {
         req: {
-          ip,
+          ip: targetIp,
           source_path: item.source_path,
           dest_path: dest,
           use_temp: settings?.use_temp ?? useTemp,
@@ -2926,20 +3860,45 @@ export default function App() {
           bandwidth_limit_mbps: settings?.bandwidth_limit_mbps ?? bandwidthLimit,
           auto_tune_connections: settings?.auto_tune_connections ?? autoTune,
           optimize_upload: settings?.optimize_upload ?? optimizeUpload,
+          override_on_conflict: settings?.override_on_conflict ?? overrideOnConflict,
           rar_extract_mode: settings?.rar_extract_mode ?? rarExtractMode,
           payload_version: payloadVersion,
           storage_root: base,
           required_size: item.size_bytes || null
         }
       });
+      if (typeof runId !== "number" || Number.isNaN(runId)) {
+        throw new Error("Transfer start failed.");
+      }
       setActiveRunId(runId);
     } catch (err) {
-      await updateQueueItemStatus(item.id, { Failed: String(err) });
+      const message = String(err);
+      if (message.includes("Transfer already running")) {
+        setCurrentQueueItemId(null);
+        setActiveTransferSource("");
+        setActiveTransferDest("");
+        setActiveTransferViaQueue(false);
+        setTransferStartedAt(null);
+        setUploadQueueRunning(true);
+        pushClientLog("Transfer already running. Waiting to retry queue...");
+        return;
+      }
+      await updateQueueItemStatus(item.id, { Failed: message });
       setCurrentQueueItemId(null);
+      setActiveRunId(null);
+      setActiveTransferSource("");
+      setActiveTransferDest("");
+      setActiveTransferViaQueue(false);
+      setTransferStartedAt(null);
+      pushClientLog(`Upload failed to start: ${message}`);
+      processNextQueueItem();
     }
   };
 
   const processNextQueueItem = async () => {
+    if (transferActive) {
+      return;
+    }
     const next = queueSnapshot.current.data.items.find(
       (item) => item.status === "Pending"
     );
@@ -2953,6 +3912,7 @@ export default function App() {
       setActiveTransferDest("");
       setActiveTransferViaQueue(false);
       setTransferStartedAt(null);
+      setUploadQueueRunning(false);
     }
   };
 
@@ -2964,27 +3924,147 @@ export default function App() {
     if (!(await ensureConnected())) {
       return;
     }
-    if (currentQueueItemId) return;
-    await processNextQueueItem();
+    if (transferActive) {
+      pushClientLog("Upload already running.");
+      return;
+    }
+    pushClientLog("Starting upload queue...");
+    if (currentQueueItemId && !transferActive) {
+      setCurrentQueueItemId(null);
+    }
+    if (!transferActive) {
+      const stalled = queueSnapshot.current.data.items.filter(
+        (item) => item.status === "InProgress"
+      );
+      if (stalled.length > 0) {
+        const nextItems = queueSnapshot.current.data.items.map((item) => {
+          if (item.status !== "InProgress") return item;
+          return {
+            ...item,
+            paused: true,
+            status: "Pending",
+            transfer_settings: {
+              ...(item.transfer_settings || {}),
+              resume_mode: "size"
+            }
+          };
+        });
+        await saveQueueData({ ...queueSnapshot.current.data, items: nextItems });
+        pushClientLog(`Recovered ${stalled.length} stalled upload item(s).`);
+      }
+    }
+    setUploadQueueRunning(true);
+    const hasPending = queueSnapshot.current.data.items.some(
+      (item) => item.status === "Pending"
+    );
+    if (!hasPending) {
+      const hasCurrent = queueSnapshot.current.data.items.some(
+        (item) => item.status === "InProgress" || item.status === "Pending"
+      );
+      if (!hasCurrent) {
+        pushClientLog("Queue is empty or no pending items.");
+        setUploadQueueRunning(false);
+        return;
+      }
+      const nextItems = queueSnapshot.current.data.items.map((item) => {
+        if (item.status === "InProgress") {
+          return {
+            ...item,
+            paused: true,
+            status: "Pending",
+            transfer_settings: {
+              ...(item.transfer_settings || {}),
+              resume_mode: "size"
+            }
+          };
+        }
+        return item;
+      });
+      await saveQueueData({ ...queueSnapshot.current.data, items: nextItems });
+    }
+    try {
+      await processNextQueueItem();
+    } catch (err) {
+      setUploadQueueRunning(false);
+      pushClientLog(`Queue failed to start: ${String(err)}`);
+    }
+  };
+
+  const pauseActiveUploadAndRequeue = async (items: QueueItem[], targetIndex: number) => {
+    if (!currentQueueItemId) return;
+    try {
+      await invoke("transfer_cancel");
+    } catch (err) {
+      setTransferState((prev) => ({
+        ...prev,
+        status: `Error: ${String(err)}`
+      }));
+      return;
+    }
+
+    const nextItems = [...items];
+    const currentIndex = nextItems.findIndex((entry) => entry.id === currentQueueItemId);
+    if (currentIndex >= 0) {
+      const [activeItem] = nextItems.splice(currentIndex, 1);
+      activeItem.paused = true;
+      activeItem.transfer_settings = {
+        ...(activeItem.transfer_settings || {}),
+        resume_mode: "size"
+      };
+      activeItem.status = "Pending";
+      const insertIndex = Math.min(Math.max(targetIndex, 0), nextItems.length);
+      nextItems.splice(insertIndex, 0, activeItem);
+    }
+
+    await saveQueueData({ ...queueSnapshot.current.data, items: nextItems });
+    setTransferState((prev) => ({ ...prev, status: "Paused" }));
+    setCurrentQueueItemId(null);
+    setActiveRunId(null);
+    setActiveTransferSource("");
+    setActiveTransferDest("");
+    setActiveTransferViaQueue(false);
+    setTransferStartedAt(null);
+    setUploadQueueRunning(true);
+    processNextQueueItem();
   };
 
   const handleCancel = async () => {
     try {
+      if (currentQueueItemId) {
+        await invoke("transfer_cancel");
+        const nextItems = queueSnapshot.current.data.items.map((item) => {
+          if (item.id !== currentQueueItemId) return item;
+          return {
+            ...item,
+            paused: true,
+            status: "Pending",
+            transfer_settings: {
+              ...(item.transfer_settings || {}),
+              resume_mode: "size"
+            }
+          };
+        });
+        await saveQueueData({ ...queueSnapshot.current.data, items: nextItems });
+        setTransferState((prev) => ({ ...prev, status: "Paused" }));
+        setCurrentQueueItemId(null);
+        setActiveRunId(null);
+        setActiveTransferSource("");
+        setActiveTransferDest("");
+        setActiveTransferViaQueue(false);
+        setTransferStartedAt(null);
+        setUploadQueueRunning(false);
+        pushClientLog("Upload paused.");
+        return;
+      }
       await invoke("transfer_cancel");
       setTransferState((prev) => ({ ...prev, status: "Cancelled" }));
-      if (currentQueueItemId) {
-        updateQueueItemStatus(currentQueueItemId, { Failed: "Cancelled" }).then(
-          () => {
-            setCurrentQueueItemId(null);
-          }
-        );
-      }
       // Reset transfer state to re-enable UI
       setActiveRunId(null);
       setActiveTransferSource("");
       setActiveTransferDest("");
       setActiveTransferViaQueue(false);
       setTransferStartedAt(null);
+      setUploadQueueRunning(false);
     } catch (err) {
       setTransferState((prev) => ({
         ...prev,
@@ -3001,7 +4081,7 @@ export default function App() {
     setSubfolder("");
     setFinalPathMode("auto");
     setFinalPath("");
-    setOverrideOnConflict(false);
+    setOverrideOnConflict(true);
     setCompression("auto");
     setResumeMode("none");
     setConnections(4);
@@ -3196,6 +4276,53 @@ export default function App() {
     }
   };
 
+  const handleManageQueueUploadPaths = async (paths: string[]) => {
+    if (!paths || paths.length === 0) return;
+    const nextIdBase = queueData.next_id || 1;
+    let nextId = nextIdBase;
+    const items: QueueItem[] = [];
+    for (const filePath of paths) {
+      const name = getBaseName(filePath);
+      const destPath = joinRemote(managePath, name);
+      items.push(
+        buildQueueItem(nextId, {
+          sourcePath: filePath,
+          subfolderName: name,
+          presetIndex: 0,
+          customPresetPath: "",
+          storageBase: storageRoot,
+          destPath,
+          sizeBytes: null
+        })
+      );
+      nextId += 1;
+    }
+    await addQueueItems(items);
+    setManageStatus(tr("queue_added", { count: items.length }));
+  };
+
+  const handleManageQueueUploadFiles = async () => {
+    if (!ip.trim()) {
+      setManageStatus("Not connected");
+      return;
+    }
+    const selected = await open({ multiple: true });
+    if (!selected) return;
+    const paths = Array.isArray(selected) ? selected : [selected];
+    await handleManageQueueUploadPaths(paths);
+  };
+
+  const handleManageQueueUploadFolder = async () => {
+    if (!ip.trim()) {
+      setManageStatus("Not connected");
+      return;
+    }
+    const selected = await open({ directory: true, multiple: true });
+    if (!selected) return;
+    const paths = Array.isArray(selected) ? selected : [selected];
+    await handleManageQueueUploadPaths(paths);
+  };
+
   const handleManageUploadFolder = async () => {
     if (!ip.trim()) {
       setManageStatus("Not connected");
@@ -3377,6 +4504,37 @@ export default function App() {
     }
   };
 
+  const handleChatConnect = async () => {
+    try {
+      setChatStatus("Connecting...");
+      const started = await invoke<ChatInfo>("chat_start");
+      setChatRoomId(started.room_id);
+      setChatEnabled(started.enabled);
+    } catch (err) {
+      setChatStatus(`Error: ${String(err)}`);
+    }
+  };
+
+  const handleChatDisconnect = async () => {
+    try {
+      await invoke("chat_stop");
+      setChatEnabled(false);
+      setChatStatus("Disconnected");
+    } catch (err) {
+      setChatStatus(`Error: ${String(err)}`);
+    }
+  };
+
+  const handleChatRefresh = async () => {
+    try {
+      const info = await invoke<ChatInfo>("chat_info");
+      setChatRoomId(info.room_id);
+      setChatEnabled(info.enabled);
+    } catch (err) {
+      setChatStatus(`Error: ${String(err)}`);
+    }
+  };
+
   const status = useMemo(
     () => ({
       connection: connectionStatus,
@@ -3386,6 +4544,17 @@ export default function App() {
     }),
     [connectionStatus, payloadStatus, storageRoot, transferState.status]
   );
+  const runningExtractItem = payloadFullStatus?.items.find((item) => item.status === "running") ?? null;
+  const uploadPendingIndices = queueData.items.reduce((acc: number[], item, index) => {
+    if (item.status === "Pending") acc.push(index);
+    return acc;
+  }, []);
+  const extractionPendingIndices = payloadFullStatus?.items
+    ? payloadFullStatus.items.reduce((acc: number[], item, index) => {
+        if (item.status === "pending") acc.push(index);
+        return acc;
+      }, [])
+    : [];
   const manageActionLabel = manageDestAction
     ? manageDestAction === "Move"
       ? tr("move")
@@ -3393,6 +4562,35 @@ export default function App() {
       ? tr("copy")
       : tr("extract")
     : null;
+
+  const isUploadFailed = (item: QueueItem) => typeof item.status === "object";
+  const isUploadCompleted = (item: QueueItem) => item.status === "Completed";
+  const isUploadCurrent = (item: QueueItem) =>
+    item.status === "Pending" || item.status === "InProgress";
+  const hasUploadCurrent = queueData.items.some(isUploadCurrent);
+  const hasUploadCompleted = queueData.items.some(isUploadCompleted);
+  const hasUploadFailed = queueData.items.some(isUploadFailed);
+  const hasUploadPending = queueData.items.some((item) => item.status === "Pending");
+  const hasUploadStalled = !transferActive && queueData.items.some((item) => item.status === "InProgress");
+  const hasUploadStartable = hasUploadPending || hasUploadStalled;
+
+  const hasExtractionItems = payloadFullStatus?.items.length ? true : false;
+  const isExtractionFailed = (item: ExtractQueueItem) =>
+    item.status === "failed";
+  const isExtractionCompleted = (item: ExtractQueueItem) =>
+    item.status === "complete";
+  const hasExtractionCurrent = payloadFullStatus?.items
+    ? payloadFullStatus.items.some((item) => !isExtractionCompleted(item) && !isExtractionFailed(item))
+    : false;
+  const hasExtractionFailed = payloadFullStatus?.items
+    ? payloadFullStatus.items.some(isExtractionFailed)
+    : false;
+  const hasExtractionCompleted = payloadFullStatus?.items
+    ? payloadFullStatus.items.some(isExtractionCompleted)
+    : false;
+  const hasExtractionPending = payloadFullStatus?.items
+    ? payloadFullStatus.items.some((item) => item.status === "pending" || item.status === "idle")
+    : false;
 
   const clientAsset = updateInfo
     ? selectClientAsset(updateInfo.assets, platformInfo)
@@ -3424,10 +4622,29 @@ export default function App() {
         <div className="header-actions">
           <button
             className="btn coffee"
-            onClick={() => window.open("https://ko-fi.com/B0B81S0WUA")}
+            onClick={() => openExternal("https://ko-fi.com/B0B81S0WUA")}
             title={tr("buy_coffee")}
           >
             <span className="icon-coffee">♥</span> {tr("buy_coffee")}
+          </button>
+          <button
+            className="btn discord"
+            onClick={() => openExternal("https://discord.gg/fzK3xddtrM")}
+            title="Discord server"
+          >
+            <span className="icon-discord" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                <path d="M19.54 4.86C18.05 4.18 16.46 3.7 14.8 3.5c-.2.36-.43.84-.59 1.23-1.76-.26-3.5-.26-5.22 0-.16-.39-.4-.87-.6-1.23-1.66.2-3.25.68-4.74 1.36C1.42 8.06.82 11.2 1.12 14.28c1.55 1.15 3.05 1.85 4.53 2.31.36-.5.68-1.03.96-1.6-.52-.2-1.02-.45-1.5-.75.12-.09.24-.19.35-.29 2.9 1.35 6.05 1.35 8.92 0 .12.1.24.2.36.29-.48.3-.98.56-1.5.75.28.57.6 1.1.96 1.6 1.48-.46 2.98-1.16 4.53-2.31.35-3.55-.6-6.66-2.71-9.42ZM8.6 13.41c-.87 0-1.58-.8-1.58-1.78 0-.99.7-1.79 1.58-1.79.87 0 1.58.8 1.58 1.79 0 .98-.7 1.78-1.58 1.78Zm6.82 0c-.87 0-1.58-.8-1.58-1.78 0-.99.7-1.79 1.58-1.79.87 0 1.58.8 1.58 1.79 0 .98-.7 1.78-1.58 1.78Z"/>
+              </svg>
+            </span>
+            Discord
+          </button>
+          <button
+            className={`btn ${keepAwake ? "success" : "danger"}`}
+            onClick={handleToggleKeepAwake}
+            title={tr("keep_awake")}
+          >
+            {tr("keep_awake")} {keepAwake ? tr("on") : tr("off")}
           </button>
           <button
             className={`btn ghost theme-toggle ${theme}`}
@@ -3533,9 +4750,9 @@ export default function App() {
           </label>
           <div className="split">
             <button
-              className="btn primary"
+              className="btn success"
               onClick={handleConnect}
-              disabled={isConnecting}
+              disabled={isConnecting || connectCooldown}
             >
               {tr("connect_btn")}
             </button>
@@ -3615,13 +4832,13 @@ export default function App() {
           )}
           <div className="split">
             <button
-              className="btn primary"
+              className="btn warning"
               onClick={handlePayloadSend}
-              disabled={payloadBusy}
+              disabled={payloadBusy || payloadReloadCooldown}
             >
               {tr("payload_send")}
             </button>
-            <button className="btn" onClick={handlePayloadCheck} disabled={payloadBusy}>
+            <button className="btn info" onClick={handlePayloadCheck} disabled={payloadBusy}>
               {tr("check")}
             </button>
           </div>
@@ -3634,7 +4851,7 @@ export default function App() {
             />
           </label>
           <div className="card-divider" />
-          <div className="pill status-pill">
+          <div className={`pill status-pill ${payloadStatusClass}`}>
             {tr("status")}: {payloadStatus}
           </div>
           {payloadVersion && (
@@ -3694,7 +4911,7 @@ export default function App() {
             <div className="stack">
               <button
                 className="btn ghost"
-                onClick={() => window.open(updateInfo.html_url)}
+                onClick={() => openExternal(updateInfo.html_url)}
               >
                 {tr("open_release_page")}
               </button>
@@ -3788,9 +5005,6 @@ export default function App() {
                       {tr("cancel")}
                     </button>
                   )}
-                  <button className="btn" onClick={handleAddToQueue}>
-                    {tr("add_to_queue")}
-                  </button>
                   <button
                     className={`btn ${optimizeUpload ? "primary" : ""}`}
                     onClick={handleOptimizeToggle}
@@ -3925,6 +5139,9 @@ export default function App() {
                   <>
                     <p className="muted small">{tr("rar_note")}</p>
                     <p className="muted small">
+                      Extraction runs on the PS5. Check the Payload tab → Extraction Queue for status.
+                    </p>
+                    <p className="muted small">
                       {rarExtractMode === "safe"
                         ? tr("rar_note_safe")
                         : rarExtractMode === "turbo"
@@ -3980,7 +5197,7 @@ export default function App() {
                   <p className="muted small">{tr("final_path_note")}</p>
                 </label>
                 <label className="field inline">
-                  <span>{tr("override_conflict")}</span>
+                  <span className="override-label">{tr("override_conflict")}</span>
                   <input
                     type="checkbox"
                     checked={overrideOnConflict}
@@ -4109,141 +5326,34 @@ export default function App() {
               <div className="card wide">
                 <header className="card-title">
                   <span className="card-title-icon">▶</span>
-                  {tr("transfer_control")}
-                  {activeRunId && (
-                    <span
-                      className="status-dot active"
-                      title={tr("transfer_in_progress")}
-                    />
-                  )}
+                  {tr("actions")}
                 </header>
-                <div className="progress">
-                  <div
-                    className="progress-fill"
-                    style={{ width: `${transferPercent}%` }}
-                  />
-                </div>
-                <div className="progress-meta">
-                  <span>
-                    {formatBytes(transferState.sent)} / {formatBytes(transferState.total)}
-                  </span>
-                  <span>
-                    {transferState.files} {tr("files")}
-                  </span>
-                  <span>{transferSpeed > 0 ? `${formatBytes(transferSpeed)}/s` : "—"}</span>
-                  <span>{transferState.status}</span>
-                </div>
-                {transferState.currentFile && (
-                  <div className="pill">{transferState.currentFile}</div>
-                )}
                 <div className="split">
                   <button
                     className="btn primary"
-                    onClick={handleUpload}
-                    disabled={!!activeRunId || scanInProgress || !sourcePath.trim()}
+                    onClick={handleAddToQueue}
+                    disabled={scanInProgress || !sourcePath.trim()}
+                    title={tr("add_to_queue")}
                   >
-                    ↑ {tr("upload")}
-                  </button>
-                  <button
-                    className="btn primary"
-                    onClick={handleUploadQueue}
-                    disabled={
-                      !!activeRunId ||
-                      scanInProgress ||
-                      queueData.items.filter((i) => i.status === "Pending").length === 0
-                    }
-                  >
-                    ↑ {tr("upload_queue")} (
-                    {queueData.items.filter((i) => i.status === "Pending").length})
-                  </button>
-                  <button
-                    className="btn danger"
-                    onClick={handleCancel}
-                    disabled={!activeRunId}
-                  >
-                    {tr("stop")}
+                    +
                   </button>
                   <button
                     className="btn transfer-reset"
                     onClick={handleResetTransfer}
-                    disabled={!!activeRunId}
+                    disabled={transferActive || uploadQueueRunning}
                   >
-                    {tr("reset")}
+                    {tr("reset_settings")}
                   </button>
                 </div>
                 <p className="muted small" style={{ marginTop: 8 }}>
-                  {activeRunId
-                    ? tr("transfer_in_progress")
+                  {transferActive || uploadQueueRunning
+                    ? tr("upload_queue_only")
                     : sourcePath.trim()
                     ? tr("ready_to_upload")
                     : tr("select_source")}
                 </p>
               </div>
 
-              <div className="card wide">
-                <header className="card-title">
-                  <span className="card-title-icon">▣</span>
-                  {tr("upload_queue")}
-                  {queueData.items.length > 0 && (
-                    <span className="badge">{queueData.items.length}</span>
-                  )}
-                </header>
-                {queueData.items.length === 0 ? (
-                  <p className="muted">{tr("queue_empty")}</p>
-                ) : (
-                  <div className="stack">
-                    {queueData.items.map((item) => {
-                      const statusIcon = item.status === "Pending" ? "○"
-                        : item.status === "InProgress" ? "●"
-                        : item.status === "Completed" ? "✓"
-                        : "✗";
-                      const statusColor = item.status === "Pending" ? "#888"
-                        : item.status === "InProgress" ? "#0066cc"
-                        : item.status === "Completed" ? "#64c864"
-                        : "#c86464";
-                      return (
-                        <div className="queue-item" key={item.id}>
-                          <div>
-                            <strong>
-                              <span style={{ color: statusColor, marginRight: 6 }}>{statusIcon}</span>
-                              {item.subfolder_name}
-                              {item.size_bytes != null && (
-                                <span className="muted small" style={{ marginLeft: 8 }}>
-                                  {formatBytes(item.size_bytes)}
-                                </span>
-                              )}
-                            </strong>
-                            <div className="muted small">
-                              {buildDestPathForItem(
-                                item.storage_base || storageRoot,
-                                item
-                              )}
-                            </div>
-                          </div>
-                          <div>
-                            {item.status === "Pending" && (
-                              <button
-                                className="btn ghost small"
-                                onClick={() => handleRemoveQueueItem(item.id)}
-                              >
-                                ×
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-                <div className="split">
-                  <button className="btn" onClick={handleClearCompletedQueue}>
-                    {tr("clear_completed")}
-                  </button>
-                  <button className="btn" onClick={handleClearQueue}>
-                    {tr("clear_queue")}
-                  </button>
-                </div>
-              </div>
             </div>
           )}
 
@@ -4269,13 +5379,25 @@ export default function App() {
                         {payloadFullStatus.is_busy ? tr("busy") : tr("idle")}
                       </span>
                     </div>
-                    <button
-                      className="btn"
-                      onClick={handleRefreshPayloadStatus}
-                      disabled={payloadStatusLoading}
-                    >
-                      {payloadStatusLoading ? tr("loading") : tr("refresh")}
-                    </button>
+                    <div className={`pill ${payloadStatusClass}`}>
+                      {tr("status")}: {payloadStatus}
+                    </div>
+                    <div className="split">
+                      <button
+                        className="btn"
+                        onClick={handleRefreshPayloadStatus}
+                        disabled={payloadStatusLoading}
+                      >
+                        {payloadStatusLoading ? tr("loading") : tr("refresh")}
+                      </button>
+                      <button
+                        className="btn danger"
+                        onClick={handlePayloadReset}
+                        disabled={payloadResetting}
+                      >
+                        {payloadResetting ? tr("loading") : tr("reset")}
+                      </button>
+                    </div>
                     <p className="muted small">
                       Last update: {formatUpdatedAt(payloadLastUpdated)}
                     </p>
@@ -4287,13 +5409,22 @@ export default function App() {
                         ? `Status error: ${payloadStatusError}`
                         : `${tr("loading")}...`}
                     </p>
-                    <button
-                      className="btn"
-                      onClick={handleRefreshPayloadStatus}
-                      disabled={payloadStatusLoading}
-                    >
-                      {tr("refresh")}
-                    </button>
+                    <div className="split">
+                      <button
+                        className="btn"
+                        onClick={handleRefreshPayloadStatus}
+                        disabled={payloadStatusLoading}
+                      >
+                        {tr("refresh")}
+                      </button>
+                      <button
+                        className="btn danger"
+                        onClick={handlePayloadReset}
+                        disabled={payloadResetting}
+                      >
+                        {payloadResetting ? tr("loading") : tr("reset")}
+                      </button>
+                    </div>
                     <p className="muted small">
                       Last update: {formatUpdatedAt(payloadLastUpdated)}
                     </p>
@@ -4303,9 +5434,285 @@ export default function App() {
 
               <div className="card wide">
                 <header className="card-title">
+                  <span className="card-title-icon">▣</span>
+                  {tr("upload_queue")}
+                  {queueData.items.length > 0 && (
+                    <span className="badge">{queueData.items.length}</span>
+                  )}
+                </header>
+                <div className="queue-tabs">
+                  <button
+                    className={`queue-tab ${uploadQueueTab === "current" ? "active" : ""}`}
+                    onClick={() => setUploadQueueTab("current")}
+                  >
+                    {tr("current")}
+                  </button>
+                  <button
+                    className={`queue-tab ${uploadQueueTab === "completed" ? "active" : ""}`}
+                    onClick={() => setUploadQueueTab("completed")}
+                  >
+                    {tr("completed")}
+                  </button>
+                  <button
+                    className={`queue-tab ${uploadQueueTab === "failed" ? "active" : ""}`}
+                    onClick={() => setUploadQueueTab("failed")}
+                  >
+                    {tr("failed")}
+                  </button>
+                </div>
+                <div className="split" style={{ marginBottom: 8 }}>
+                  <button
+                    className="btn success"
+                    onClick={handleUploadQueue}
+                    disabled={
+                      uploadQueueRunning ||
+                      transferActive ||
+                      !hasUploadStartable
+                    }
+                  >
+                    {tr("start")}
+                  </button>
+                  <button
+                    className="btn danger"
+                    onClick={handleCancel}
+                    disabled={!uploadQueueRunning && !transferActive}
+                  >
+                    {tr("stop")}
+                  </button>
+                  <button className="btn" onClick={handleRefreshUploadQueue}>
+                    {tr("refresh")}
+                  </button>
+                  <button
+                    className="btn"
+                    onClick={handleClearCompletedQueue}
+                    disabled={!hasUploadCompleted}
+                  >
+                    {tr("clear_completed")}
+                  </button>
+                  <button
+                    className="btn"
+                    onClick={handleClearQueue}
+                    disabled={queueData.items.length === 0}
+                  >
+                    {tr("clear_queue")}
+                  </button>
+                </div>
+                {queueData.items.length === 0 ? (
+                  <div className="stack">
+                    <p className="muted">{tr("queue_empty")}</p>
+                  </div>
+                ) : uploadQueueTab === "current" && !hasUploadCurrent ? (
+                  <div className="stack">
+                    <p className="muted">{tr("queue_empty")}</p>
+                  </div>
+                ) : uploadQueueTab === "completed" && !hasUploadCompleted ? (
+                  <div className="stack">
+                    <p className="muted">No completed uploads yet.</p>
+                  </div>
+                ) : uploadQueueTab === "failed" && !hasUploadFailed ? (
+                  <div className="stack">
+                    <p className="muted">No failed uploads.</p>
+                  </div>
+                ) : (
+                  <div className="stack">
+                    {queueData.items.map((item, index) => {
+                      const showItem =
+                        uploadQueueTab === "current"
+                          ? isUploadCurrent(item)
+                          : uploadQueueTab === "completed"
+                          ? isUploadCompleted(item)
+                          : isUploadFailed(item);
+                      if (!showItem) return null;
+                      const statusClass = item.status === "InProgress"
+                        ? "active"
+                        : item.status === "Completed"
+                        ? "completed"
+                        : item.status === "Failed"
+                        ? "failed"
+                        : "";
+                      const isActive = item.id === currentQueueItemId;
+                      const isStalled = item.status === "InProgress" && !transferActive;
+                      const pendingPos = uploadPendingIndices.indexOf(index);
+                      const canMoveUp = item.status === "Pending" && pendingPos > 0;
+                      const canMoveDown =
+                        item.status === "Pending" && pendingPos >= 0 && pendingPos < uploadPendingIndices.length - 1;
+                      const prevPendingIndex = canMoveUp ? uploadPendingIndices[pendingPos - 1] : -1;
+                      const nextPendingIndex = canMoveDown ? uploadPendingIndices[pendingPos + 1] : -1;
+                      return (
+                        <div className={`queue-item ${statusClass}`} key={item.id}>
+                          <div>
+                            <strong>
+                              <span className="queue-type-icon">
+                                {isArchivePath(item.source_path) ? <ArchiveIcon /> : <FolderIcon />}
+                              </span>
+                              {item.subfolder_name}
+                              {item.size_bytes != null && (
+                                <span className="muted small" style={{ marginLeft: 8 }}>
+                                  {formatBytes(item.size_bytes)}
+                                </span>
+                              )}
+                            </strong>
+                            {item.paused && item.status === "Pending" && (
+                              <div className="muted small">{tr("paused")}</div>
+                            )}
+                            {isStalled && (
+                              <div className="muted small">{tr("stalled")}</div>
+                            )}
+                            <div className="muted small">
+                              {buildDestPathForItem(
+                                item.storage_base || storageRoot,
+                                item
+                              )}
+                            </div>
+                            {isActive && (
+                              <div className="progress-info" style={{ marginTop: 8 }}>
+                                <div className="progress-bar">
+                                  <div
+                                    className="progress-fill"
+                                    style={{ width: `${transferPercent}%` }}
+                                  />
+                                </div>
+                                <div className="muted small">
+                                  {formatBytes(transferState.sent)} / {formatBytes(transferState.total)} ·{" "}
+                                  {transferState.files} {tr("files")} ·{" "}
+                                  {transferSpeed > 0 ? `${formatBytes(transferSpeed)}/s` : "—"} ·{" "}
+                                  {transferState.status}
+                                </div>
+                                {transferState.currentFile && (
+                                  <div className="muted small">
+                                    {transferState.currentFile}
+                                  </div>
+                                )}
+                                {activeTransferSource && (
+                                  <div className="muted small">Source: {activeTransferSource}</div>
+                                )}
+                                {activeTransferDest && (
+                                  <div className="muted small">Destination: {activeTransferDest}</div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                          <div className="queue-controls">
+                            {item.status === "Pending" && (
+                              <>
+                                <button
+                                  className="btn ghost small queue-move"
+                                  disabled={!canMoveUp}
+                                  onClick={() => moveUploadQueueItem(index, prevPendingIndex)}
+                                >
+                                  {tr("move_up")}
+                                </button>
+                                <button
+                                  className="btn ghost small queue-move"
+                                  disabled={!canMoveDown}
+                                  onClick={() => moveUploadQueueItem(index, nextPendingIndex)}
+                                >
+                                  {tr("move_down")}
+                                </button>
+                              </>
+                            )}
+                            {item.status === "Pending" && (
+                              <button
+                                className="btn ghost small"
+                                onClick={() => handleRemoveQueueItem(item.id)}
+                              >
+                                {tr("cancel")}
+                              </button>
+                            )}
+                            {isStalled && (
+                              <button
+                                className="btn ghost small"
+                                onClick={() => handleRemoveQueueItem(item.id)}
+                              >
+                                {tr("cancel")}
+                              </button>
+                            )}
+                            {isUploadFailed(item) && (
+                              <button
+                                className="btn ghost small"
+                                onClick={() => handleRequeueUploadItem(item.id)}
+                              >
+                                {tr("requeue")}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div className="card wide">
+                <header className="card-title">
                   <span className="card-title-icon">≣</span>
                   {tr("extraction_queue")}
                 </header>
+                <div className="queue-tabs">
+                  <button
+                    className={`queue-tab ${extractQueueTab === "current" ? "active" : ""}`}
+                    onClick={() => setExtractQueueTab("current")}
+                  >
+                    {tr("current")}
+                  </button>
+                  <button
+                    className={`queue-tab ${extractQueueTab === "completed" ? "active" : ""}`}
+                    onClick={() => setExtractQueueTab("completed")}
+                  >
+                    {tr("completed")}
+                  </button>
+                  <button
+                    className={`queue-tab ${extractQueueTab === "failed" ? "active" : ""}`}
+                    onClick={() => setExtractQueueTab("failed")}
+                  >
+                    {tr("failed")}
+                  </button>
+                </div>
+                {payloadFullStatus && (
+                  <div className="split" style={{ marginBottom: 8 }}>
+                    {(() => {
+                      return (
+                        <>
+                          <button
+                            className="btn success"
+                            onClick={handleQueueProcess}
+                            disabled={!hasExtractionPending || payloadFullStatus.is_busy}
+                          >
+                            {tr("start")}
+                          </button>
+                          <button
+                            className="btn danger"
+                            onClick={() => runningExtractItem && handleQueuePause(runningExtractItem.id)}
+                            disabled={!runningExtractItem}
+                          >
+                            {tr("stop")}
+                          </button>
+                          <button
+                            className="btn"
+                            onClick={handleRefreshQueueStatus}
+                            disabled={payloadQueueLoading}
+                          >
+                            {payloadQueueLoading ? tr("loading") : tr("refresh")}
+                          </button>
+                          <button
+                            className="btn"
+                            onClick={handleQueueClear}
+                            disabled={!hasExtractionCompleted}
+                          >
+                            {tr("clear_completed")}
+                          </button>
+                          <button
+                            className="btn"
+                            onClick={handleQueueClearAll}
+                            disabled={!hasExtractionItems}
+                          >
+                            {tr("clear_queue")}
+                          </button>
+                        </>
+                      );
+                    })()}
+                  </div>
+                )}
                 {!isConnected ? (
                   <p className="muted">{tr("not_connected")}</p>
                 ) : !payloadFullStatus ? (
@@ -4317,77 +5724,197 @@ export default function App() {
                     </p>
                     <button
                       className="btn"
-                      onClick={handleRefreshPayloadStatus}
-                      disabled={payloadStatusLoading}
+                      onClick={handleRefreshQueueStatus}
+                      disabled={payloadQueueLoading}
                     >
-                      {tr("refresh")}
+                      {payloadQueueLoading ? tr("loading") : tr("refresh")}
                     </button>
                   </div>
                 ) : payloadFullStatus.items.length === 0 ? (
                   <div className="stack">
                     <p className="muted">{tr("extraction_queue_empty")}</p>
-                    <button
-                      className="btn"
-                      onClick={handleRefreshPayloadStatus}
-                      disabled={payloadStatusLoading}
-                    >
-                      {tr("refresh")}
-                    </button>
+                  </div>
+                ) : extractQueueTab === "current" && !hasExtractionCurrent ? (
+                  <div className="stack">
+                    <p className="muted">{tr("extraction_queue_empty")}</p>
+                  </div>
+                ) : extractQueueTab === "completed" && !hasExtractionCompleted ? (
+                  <div className="stack">
+                    <p className="muted">No completed extractions yet.</p>
+                  </div>
+                ) : extractQueueTab === "failed" && !hasExtractionFailed ? (
+                  <div className="stack">
+                    <p className="muted">No failed extractions.</p>
                   </div>
                 ) : (
                   <div className="stack">
-                    {payloadFullStatus.items.map((item) => (
-                      <div
-                        key={item.id}
-                        className={`queue-item ${item.status === "running" ? "active" : ""} ${item.status === "complete" ? "completed" : ""} ${item.status === "failed" ? "failed" : ""}`}
-                      >
-                        <div className="queue-item-header">
-                          <strong>{item.archive_name}</strong>
-                          <span className={`chip ${item.status === "running" ? "warn" : item.status === "complete" ? "ok" : item.status === "failed" ? "error" : ""}`}>
-                            {item.status === "running" ? tr("extracting") :
-                             item.status === "complete" ? tr("complete") :
-                             item.status === "failed" ? tr("failed") :
-                             tr("pending")}
-                          </span>
-                        </div>
-                        {item.status === "running" && (
-                          <div className="progress-info">
-                            <div className="progress-bar">
-                              <div
-                                className="progress-fill"
-                                style={{ width: `${item.percent}%` }}
-                              />
+                    {payloadFullStatus.items.map((item, itemIndex) => {
+                      const showItem =
+                        extractQueueTab === "current"
+                          ? !isExtractionCompleted(item) && !isExtractionFailed(item)
+                          : extractQueueTab === "completed"
+                          ? isExtractionCompleted(item)
+                          : isExtractionFailed(item);
+                      if (!showItem) return null;
+                      const pendingPos = extractionPendingIndices.indexOf(itemIndex);
+                      const canMoveUp = item.status === "pending" && pendingPos > 0;
+                      const canMoveDown =
+                        item.status === "pending" && pendingPos >= 0 && pendingPos < extractionPendingIndices.length - 1;
+                      const prevPendingIndex = canMoveUp ? extractionPendingIndices[pendingPos - 1] : -1;
+                      const nextPendingIndex = canMoveDown ? extractionPendingIndices[pendingPos + 1] : -1;
+                      const meta = queueMetaById[item.id];
+                      const displayName = getQueueDisplayName(item);
+                      const isCancelled =
+                        item.status === "failed" &&
+                        typeof item.error === "string" &&
+                        item.error.toLowerCase().includes("cancel");
+                      const statusLabel =
+                        item.status === "running"
+                          ? tr("extracting")
+                          : item.status === "complete"
+                          ? tr("complete")
+                          : item.status === "failed"
+                          ? isCancelled
+                            ? "Cancelled"
+                            : tr("failed")
+                          : tr("pending");
+                      const statusClass =
+                        item.status === "running"
+                          ? "warn"
+                          : item.status === "complete"
+                          ? "ok"
+                          : item.status === "failed"
+                          ? isCancelled
+                            ? "warn"
+                            : "error"
+                          : "";
+                      return (
+                        <div
+                          key={item.id}
+                          className={`queue-item ${item.status === "running" ? "active" : ""} ${item.status === "complete" ? "completed" : ""} ${item.status === "failed" ? "failed" : ""}`}
+                        >
+                          <div className="queue-item-header">
+                            <div className="queue-title">
+                              {meta?.cover_url && (
+                                <img
+                                  className="queue-cover"
+                                  src={meta.cover_url}
+                                  alt={displayName}
+                                />
+                              )}
+                              <div className="queue-text">
+                                <strong>{displayName}</strong>
+                                {meta?.game_meta?.content_id && (
+                                  <div className="muted small">
+                                    Content ID: {meta.game_meta.content_id}
+                                  </div>
+                                )}
+                                {meta?.game_meta?.title_id && (
+                                  <div className="muted small">
+                                    Title ID: {meta.game_meta.title_id}
+                                  </div>
+                                )}
+                                {meta?.game_meta?.version && (
+                                  <div className="muted small">
+                                    Version: {meta.game_meta.version}
+                                  </div>
+                                )}
+                              </div>
                             </div>
-                            <div className="muted small">
-                              {item.percent}% - {item.files_extracted} {tr("files")} - {formatBytes(item.processed_bytes)} / {formatBytes(item.total_bytes)}
-                            </div>
+                            <span className={`chip ${statusClass}`}>
+                              {statusLabel}
+                            </span>
                           </div>
-                        )}
-                        {item.status === "complete" && (
+                          {(meta?.dest_path || item.dest_path) && (
+                            <div className="muted small">{meta?.dest_path || item.dest_path}</div>
+                          )}
                           <div className="muted small">
-                            {item.files_extracted} {tr("files")} - {formatBytes(item.total_bytes)}
+                            ID #{item.id} · {item.files_extracted} {tr("files")} · {formatBytes(item.total_bytes)}{meta?.size_bytes ? ` · Upload: ${formatBytes(meta.size_bytes)}` : ""}
                           </div>
-                        )}
-                        {item.status === "failed" && item.error && (
-                          <div className="small" style={{ color: "#c86464" }}>
-                            {tr("error")}: {item.error}
-                          </div>
-                        )}
-                        {(item.status === "pending" || item.status === "running") && (
-                          <button
-                            className="btn ghost small"
-                            onClick={() => handleQueueCancel(item.id)}
-                          >
-                            {tr("cancel")}
-                          </button>
-                        )}
-                      </div>
-                    ))}
-                    <div className="split">
-                      <button className="btn" onClick={handleQueueClear}>
-                        {tr("clear_completed")}
-                      </button>
-                    </div>
+                          {(item.started_at || (item.status !== "pending" && item.status !== "running")) && (
+                            <div className="muted small">
+                              Started: {formatTimestamp(item.started_at)}
+                              {(item.status === "complete" || item.status === "failed") && item.completed_at ? (
+                                <> · Completed: {formatTimestamp(item.completed_at)}</>
+                              ) : null}
+                            </div>
+                          )}
+                          {item.status === "running" && (
+                            <div className="progress-info">
+                              <div className="progress-bar">
+                                <div
+                                  className="progress-fill"
+                                  style={{
+                                    width: `${
+                                      item.total_bytes > 0
+                                        ? Math.min(
+                                            100,
+                                            Math.floor((item.processed_bytes / item.total_bytes) * 100)
+                                          )
+                                        : item.percent
+                                    }%`
+                                  }}
+                                />
+                              </div>
+                              <div className="muted small">
+                                {item.total_bytes > 0
+                                  ? `${Math.min(
+                                      100,
+                                      Math.floor((item.processed_bytes / item.total_bytes) * 100)
+                                    )}%`
+                                  : `${item.percent}%`}{" "}
+                                - {formatBytes(item.processed_bytes)} / {formatBytes(item.total_bytes)} ·{" "}
+                                Elapsed:{" "}
+                                {formatDuration(
+                                  Math.max(0, Math.floor(Date.now() / 1000) - (item.started_at || 0))
+                                )}
+                              </div>
+                            </div>
+                          )}
+                          {item.status === "failed" && item.error && (
+                            <div className="small" style={{ color: "#c86464" }}>
+                              {isCancelled ? "Cancelled by user" : `${tr("error")}: ${item.error}`}
+                            </div>
+                          )}
+                          {item.status === "pending" && (
+                            <div className="split">
+                              <div className="queue-controls">
+                                <button
+                                  className="btn ghost small queue-move"
+                                  disabled={!canMoveUp}
+                                  onClick={() => moveExtractionQueueItem(itemIndex, prevPendingIndex)}
+                                >
+                                  {tr("move_up")}
+                                </button>
+                                <button
+                                  className="btn ghost small queue-move"
+                                  disabled={!canMoveDown}
+                                  onClick={() => moveExtractionQueueItem(itemIndex, nextPendingIndex)}
+                                >
+                                  {tr("move_down")}
+                                </button>
+                              </div>
+                              <button
+                                className="btn ghost small"
+                                onClick={() => handleQueueCancel(item.id)}
+                              >
+                                {tr("cancel")}
+                              </button>
+                            </div>
+                          )}
+                          {item.status === "failed" && (
+                            <div className="queue-controls">
+                              <button
+                                className="btn ghost small"
+                                onClick={() => handleQueueRetry(item.id)}
+                              >
+                                {tr("requeue")}
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -4511,6 +6038,20 @@ export default function App() {
                         disabled={manageBusy}
                       >
                         {tr("folder")}
+                      </button>
+                      <button
+                        className="btn"
+                        onClick={handleManageQueueUploadFiles}
+                        disabled={manageBusy}
+                      >
+                        + {tr("queue_files")}
+                      </button>
+                      <button
+                        className="btn"
+                        onClick={handleManageQueueUploadFolder}
+                        disabled={manageBusy}
+                      >
+                        + {tr("queue_folder")}
                       </button>
                     </div>
                   </div>
@@ -4693,6 +6234,17 @@ export default function App() {
                   >
                     {chatStatus}
                   </span>
+                  <div className="chat-controls">
+                    <button className="btn success" onClick={handleChatConnect}>
+                      {tr("connect_btn")}
+                    </button>
+                    <button className="btn danger" onClick={handleChatDisconnect}>
+                      {tr("disconnect")}
+                    </button>
+                    <button className="btn info" onClick={handleChatRefresh}>
+                      {tr("refresh")}
+                    </button>
+                  </div>
                 </div>
                 <div className="stats-row">
                   <span className="pill">
@@ -4788,7 +6340,7 @@ export default function App() {
                 onClick={() => {
                   invoke("history_clear")
                     .then(() => {
-                      setHistoryData({ records: [] });
+                      setHistoryData({ records: [], rev: (historyData.rev || 0) + 1, updated_at: Date.now() });
                       pushClientLog("History cleared.");
                     })
                     .catch((err) => {
@@ -4807,10 +6359,38 @@ export default function App() {
                   .map((record) => (
                     <div className="history-item" key={record.timestamp}>
                       <div className="history-main">
-                        <strong style={{ color: record.success ? "#64c864" : "#c86464" }}>
-                          {record.success ? "✓" : "✗"}{" "}
-                          {record.source_path.split(/[/\\]/).filter(Boolean).pop()}
-                        </strong>
+                        <div className="history-title">
+                          {record.cover_url && (
+                            <img
+                              className="history-cover"
+                              src={record.cover_url}
+                              alt={record.game_meta?.title || "Cover"}
+                            />
+                          )}
+                          <div className="history-text">
+                            <strong style={{ color: record.success ? "#64c864" : "#c86464" }}>
+                              {record.success ? "✓" : "✗"}{" "}
+                              {record.game_meta?.title ||
+                                getLeafName(record.dest_path) ||
+                                getLeafName(record.source_path)}
+                            </strong>
+                            {record.game_meta?.content_id && (
+                              <div className="muted small">
+                                Content ID: {record.game_meta.content_id}
+                              </div>
+                            )}
+                            {record.game_meta?.title_id && (
+                              <div className="muted small">
+                                Title ID: {record.game_meta.title_id}
+                              </div>
+                            )}
+                            {record.game_meta?.version && (
+                              <div className="muted small">
+                                Version: {record.game_meta.version}
+                              </div>
+                            )}
+                          </div>
+                        </div>
                         <div className="muted">{record.dest_path}</div>
                         <div className="muted small">
                           {formatTimestamp(record.timestamp)} · {record.via_queue ? tr("queue") : tr("single")}
@@ -4846,6 +6426,18 @@ export default function App() {
           ) : (
             <>
               <label className="field inline">
+                <span>{tr("log_level")}</span>
+                <select
+                  value={logLevel}
+                  onChange={(event) => setLogLevel(event.target.value as LogLevel)}
+                >
+                  <option value="debug">{tr("log_level_debug")}</option>
+                  <option value="info">{tr("log_level_info")}</option>
+                  <option value="warn">{tr("log_level_warn")}</option>
+                  <option value="error">{tr("log_level_error")}</option>
+                </select>
+              </label>
+              <label className="field inline">
                 <span>{tr("save_logs")}</span>
                 <input
                   type="checkbox"
@@ -4866,13 +6458,24 @@ export default function App() {
                 {tr("clear_logs")}
               </button>
               <div className="log-window">
-                {(logTab === "client" ? clientLogs : payloadLogs).length === 0 ? (
-                  <p>{tr("no_logs")}</p>
-                ) : (
-                  (logTab === "client" ? clientLogs : payloadLogs)
+                {(() => {
+                  const source = logTab === "client" ? clientLogs : payloadLogs;
+                  const normalized = source.map(normalizeLogEntry);
+                  const filtered = normalized.filter(
+                    (entry) => LOG_LEVEL_ORDER[entry.level] >= LOG_LEVEL_ORDER[logLevel]
+                  );
+                  if (filtered.length === 0) {
+                    return <p>{tr("no_logs")}</p>;
+                  }
+                  return filtered
                     .slice(0, 50)
-                    .map((entry, index) => <p key={`${index}`}>{entry}</p>)
-                )}
+                    .map((entry, index) => (
+                      <p key={`${index}`} className={`log-entry log-${entry.level}`}>
+                        <span className="log-level">{entry.level.toUpperCase()}</span>{" "}
+                        {entry.message}
+                      </p>
+                    ));
+                })()}
               </div>
             </>
           )}
@@ -4882,8 +6485,25 @@ export default function App() {
       <footer className="status-bar shell">
         <span>{status.transfer}</span>
         <span>
-          <a href="https://x.com/phantomptr">Created by PhantomPtr</a> |{" "}
-          <a href="https://github.com/phantomptr/ps5upload">Source Code</a>
+          <a
+            href="https://x.com/phantomptr"
+            onClick={(event) => {
+              event.preventDefault();
+              openExternal("https://x.com/phantomptr");
+            }}
+          >
+            Created by PhantomPtr
+          </a>{" "}
+          |{" "}
+          <a
+            href="https://github.com/phantomptr/ps5upload"
+            onClick={(event) => {
+              event.preventDefault();
+              openExternal("https://github.com/phantomptr/ps5upload");
+            }}
+          >
+            Source Code
+          </a>
         </span>
       </footer>
 

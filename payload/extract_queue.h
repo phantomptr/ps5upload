@@ -26,6 +26,8 @@ typedef struct {
     int id;
     char source_path[EXTRACT_QUEUE_PATH_MAX];
     char dest_path[EXTRACT_QUEUE_PATH_MAX];
+    char cleanup_path[EXTRACT_QUEUE_PATH_MAX];
+    int delete_source;
     char archive_name[256];
     ExtractStatus status;
     int percent;
@@ -48,8 +50,8 @@ typedef struct {
 /* Initialize the extraction queue */
 void extract_queue_init(void);
 
-/* Add an item to the extraction queue, returns item id or -1 on error */
-int extract_queue_add(const char *source_path, const char *dest_path);
+/* Add an item to the extraction queue, returns item id or -1 on error, -2 on duplicate */
+int extract_queue_add(const char *source_path, const char *dest_path, int delete_source, const char *cleanup_path);
 
 /* Get current queue status as JSON string (caller must free) */
 char *extract_queue_get_status_json(void);
@@ -62,9 +64,19 @@ int extract_queue_is_busy(void);
 
 /* Cancel a queue item by id, returns 0 on success */
 int extract_queue_cancel(int id);
+int extract_queue_pause(int id);
+int extract_queue_retry(int id);
 
 /* Clear completed/failed items from queue */
 void extract_queue_clear_done(void);
+void extract_queue_clear_all(int keep_running);
+void extract_queue_reset(void);
+
+/* Get last update time */
+time_t extract_queue_get_updated_at(void);
+
+/* Reorder queue items by ID list */
+int extract_queue_reorder(const int *ids, int count);
 
 /* Get server uptime in seconds */
 unsigned long extract_queue_get_uptime(void);

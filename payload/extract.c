@@ -126,7 +126,7 @@ int receive_folder_stream(int sock, const char *dest_path, char *err, size_t err
         // Parse FILE command: "FILE <path> <size>"
         char rel_path[PATH_MAX];
         long long file_size;
-        if (sscanf(line_buffer, "FILE %s %lld", rel_path, &file_size) != 2) {
+        if (sscanf(line_buffer, "FILE %1023s %lld", rel_path, &file_size) != 2) {
             printf("[EXTRACT] ERROR: Invalid file header: %s\n", line_buffer);
             if (err && err_len > 0) {
                 snprintf(err, err_len, "invalid file header");

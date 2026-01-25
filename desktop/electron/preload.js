@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Dialogs
   dialogOpen: (options) => ipcRenderer.invoke('dialog_open', options),
   dialogSave: (options) => ipcRenderer.invoke('dialog_save', options),
+  openExternal: (url) => ipcRenderer.invoke('open_external', url),
 
   // Config
   configLoad: () => ipcRenderer.invoke('config_load'),
@@ -32,7 +33,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // History
   historyLoad: () => ipcRenderer.invoke('history_load'),
+  historySave: (data) => ipcRenderer.invoke('history_save', data),
   historyAdd: (record) => ipcRenderer.invoke('history_add', record),
+  sleepSet: (enabled) => ipcRenderer.invoke('sleep_set', enabled),
+  sleepStatus: () => ipcRenderer.invoke('sleep_status'),
   historyClear: () => ipcRenderer.invoke('history_clear'),
 
   // Logging
@@ -66,6 +70,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
   payloadQueueExtract: (ip, src, dst) => ipcRenderer.invoke('payload_queue_extract', ip, src, dst),
   payloadQueueCancel: (ip, id) => ipcRenderer.invoke('payload_queue_cancel', ip, id),
   payloadQueueClear: (ip) => ipcRenderer.invoke('payload_queue_clear', ip),
+  payloadQueueClearAll: (ip) => ipcRenderer.invoke('payload_queue_clear_all', ip),
+  payloadReset: (ip) => ipcRenderer.invoke('payload_reset', ip),
+  payloadQueueReorder: (ip, ids) => ipcRenderer.invoke('payload_queue_reorder', ip, ids),
+  payloadQueueProcess: (ip) => ipcRenderer.invoke('payload_queue_process', ip),
+  payloadQueuePause: (ip, id) => ipcRenderer.invoke('payload_queue_pause', ip, id),
+  payloadQueueRetry: (ip, id) => ipcRenderer.invoke('payload_queue_retry', ip, id),
+  payloadSyncInfo: (ip) => ipcRenderer.invoke('payload_sync_info', ip),
+  payloadUploadQueueGet: (ip) => ipcRenderer.invoke('payload_upload_queue_get', ip),
+  payloadUploadQueueSync: (ip, payload) => ipcRenderer.invoke('payload_upload_queue_sync', ip, payload),
+  payloadHistoryGet: (ip) => ipcRenderer.invoke('payload_history_get', ip),
+  payloadHistorySync: (ip, payload) => ipcRenderer.invoke('payload_history_sync', ip, payload),
 
   // Manage
   manageList: (ip, path) => ipcRenderer.invoke('manage_list', ip, path),
@@ -93,6 +108,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   transferScanCancel: () => ipcRenderer.invoke('transfer_scan_cancel'),
   transferCancel: () => ipcRenderer.invoke('transfer_cancel'),
   transferStatus: () => ipcRenderer.invoke('transfer_status'),
+  transferActive: () => ipcRenderer.invoke('transfer_active'),
+  transferReset: () => ipcRenderer.invoke('transfer_reset'),
   transferStart: (req) => ipcRenderer.invoke('transfer_start', req),
 
   // Updates
@@ -107,6 +124,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   chatInfo: () => ipcRenderer.invoke('chat_info'),
   chatGenerateName: () => ipcRenderer.invoke('chat_generate_name'),
   chatStart: () => ipcRenderer.invoke('chat_start'),
+  chatStop: () => ipcRenderer.invoke('chat_stop'),
   chatSend: (name, text) => ipcRenderer.invoke('chat_send', name, text),
 
   // Game meta
@@ -129,6 +147,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       'payload_version',
       'payload_status_update',
       'payload_log',
+      'queue_hint',
       'connection_status_update',
       'manage_progress',
       'manage_done',
@@ -163,6 +182,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       'payload_version',
       'payload_status_update',
       'payload_log',
+      'queue_hint',
       'connection_status_update',
       'manage_progress',
       'manage_done',

@@ -95,10 +95,21 @@ export function useTransferEvents() {
           const { run_id, message } = event.payload;
           const transferState = useTransferStore.getState();
           if (transferState.runId && run_id !== transferState.runId) return;
-          
-          useTransferStore.setState({
-            status: `Error: ${message}`,
-          });
+          const successMatch = message?.match(/^(SUCCESS|OK)\s+(\d+)\s+(\d+)/i);
+          if (successMatch) {
+            const files = Number(successMatch[2]) || transferState.files || 0;
+            const bytes = Number(successMatch[3]) || transferState.total || transferState.sent || 0;
+            useTransferStore.setState({
+              status: "Complete",
+              sent: bytes,
+              total: bytes,
+              files,
+            });
+          } else {
+            useTransferStore.setState({
+              status: `Error: ${message}`,
+            });
+          }
         }),
       ]);
       return () => {

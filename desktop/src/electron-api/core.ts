@@ -31,14 +31,22 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
         return api.queueUpdate(args.data);
       case 'history_load':
         return api.historyLoad();
+      case 'history_save':
+        return api.historySave(args.data);
       case 'history_add':
         return api.historyAdd(args.record);
+      case 'sleep_set':
+        return api.sleepSet(args.enabled);
+      case 'sleep_status':
+        return api.sleepStatus();
       case 'history_clear':
         return api.historyClear();
       case 'dialog_open':
         return api.dialogOpen(args as any);
       case 'dialog_save':
         return api.dialogSave(args as any);
+      case 'open_external':
+        return api.openExternal(args.url);
       case 'set_save_logs':
         return api.setSaveLogs(args.enabled);
       case 'set_ui_log_enabled':
@@ -83,6 +91,28 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
         return api.payloadQueueCancel(args.ip, args.id);
       case 'payload_queue_clear':
         return api.payloadQueueClear(args.ip);
+      case 'payload_queue_clear_all':
+        return api.payloadQueueClearAll(args.ip);
+      case 'payload_reset':
+        return api.payloadReset(args.ip);
+      case 'payload_queue_reorder':
+        return api.payloadQueueReorder(args.ip, args.ids);
+      case 'payload_queue_process':
+        return api.payloadQueueProcess(args.ip);
+      case 'payload_queue_pause':
+        return api.payloadQueuePause(args.ip, args.id);
+      case 'payload_queue_retry':
+        return api.payloadQueueRetry(args.ip, args.id);
+      case 'payload_sync_info':
+        return api.payloadSyncInfo(args.ip);
+      case 'payload_upload_queue_get':
+        return api.payloadUploadQueueGet(args.ip);
+      case 'payload_upload_queue_sync':
+        return api.payloadUploadQueueSync(args.ip, args.payload);
+      case 'payload_history_get':
+        return api.payloadHistoryGet(args.ip);
+      case 'payload_history_sync':
+        return api.payloadHistorySync(args.ip, args.payload);
       case 'manage_list':
         return api.manageList(args.ip, args.path);
       case 'manage_list_snapshot':
@@ -129,6 +159,10 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
         return api.transferCancel();
       case 'transfer_status':
         return api.transferStatus();
+      case 'transfer_active':
+        return api.transferActive();
+      case 'transfer_reset':
+        return api.transferReset();
       case 'transfer_start':
         return api.transferStart(args.req);
       case 'update_check':
@@ -149,6 +183,8 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
         return api.chatGenerateName();
       case 'chat_start':
         return api.chatStart();
+      case 'chat_stop':
+        return api.chatStop();
       case 'chat_send':
         return api.chatSend(args.name, args.text);
       case 'game_meta_load':

@@ -13,8 +13,15 @@ const translations = {
     logs: "Logs",
     client: "Client",
     payload: "Payload",
+    queues: "Queues",
+    extraction: "Extraction",
     history: "History",
     save_logs: "Save Logs",
+    log_level: "Log level",
+    log_level_debug: "Debug",
+    log_level_info: "Info",
+    log_level_warn: "Warning",
+    log_level_error: "Error",
 
     // Profile
     profile: "Profile",
@@ -54,6 +61,11 @@ const translations = {
     payload_status: "Payload Status",
     extraction_queue: "Extraction Queue",
     extraction_queue_empty: "No extractions queued. Use Extract action from Manage tab.",
+    current: "Current",
+    completed: "Completed",
+    failed: "Failed",
+    requeue: "Requeue",
+    stalled: "Stalled",
     uptime: "Uptime",
     idle: "Idle",
     busy: "Busy",
@@ -93,7 +105,7 @@ const translations = {
     browse_folder: "Browse Folder",
     browse_archive: "Browse Archive",
     scan: "Scan",
-    add_to_queue: "+ Add to Queue",
+    add_to_queue: "Add to Queue",
     optimize: "Optimize",
     bandwidth_limit: "Bandwidth Limit (0 = Unlimited, Mbps)",
     auto_tune: "Auto-tune Connections",
@@ -147,6 +159,14 @@ const translations = {
 
     // Transfer Control
     transfer_control: "Transfer Control",
+    upload_actions: "Actions",
+    reset_settings: "Reset Settings",
+    upload_queue_only: "Upload in progress — add to queue only.",
+    current_upload: "Current Upload",
+    no_active_upload: "No upload running.",
+    current_extraction: "Current Extraction",
+    no_active_extraction: "No extraction running.",
+    start: "Start",
     transfer_settings: "Transfer Settings",
     connection_settings: "Connection Settings",
     transfer_options: "Transfer Options",
@@ -164,8 +184,14 @@ const translations = {
 
     // Upload Queue
     upload_queue: "Upload Queue",
+    queue_files: "Queue Files",
+    queue_folder: "Queue Folder",
     queue_empty: "Queue is empty. Use \"Add to Queue\" to add items.",
     queue_duplicate: "Queue already contains this item.",
+    queue_added: "Added {count} item(s) to queue.",
+    paused: "Paused",
+    move_up: "Move up",
+    move_down: "Move down",
     clear_completed: "Clear Completed",
     clear_queue: "Clear Queue",
     destination_exists: "Destination already exists.",
@@ -242,6 +268,9 @@ const translations = {
     minimize: "Minimize",
     maximize: "Maximize",
     close: "Close",
+    keep_awake: "Keep Awake",
+    on: "On",
+    off: "Off",
   },
 
   "zh-CN": {
@@ -253,6 +282,8 @@ const translations = {
     logs: "日志",
     client: "客户端",
     payload: "Payload",
+    queues: "队列",
+    extraction: "解压",
     history: "历史",
 
     // Profile
@@ -332,7 +363,7 @@ const translations = {
     browse_folder: "浏览文件夹",
     browse_archive: "浏览压缩包",
     scan: "扫描",
-    add_to_queue: "+ 添加到队列",
+    add_to_queue: "添加到队列",
     optimize: "优化",
     bandwidth_limit: "带宽限制 (Mbps)",
     auto_tune: "自动调整连接数",
@@ -384,6 +415,14 @@ const translations = {
 
     // Transfer Control
     transfer_control: "传输控制",
+    upload_actions: "Actions",
+    reset_settings: "Reset Settings",
+    upload_queue_only: "Upload in progress — add to queue only.",
+    current_upload: "Current Upload",
+    no_active_upload: "No upload running.",
+    current_extraction: "Current Extraction",
+    no_active_extraction: "No extraction running.",
+    start: "Start",
     upload: "上传",
     queue: "队列",
     stop: "停止",
@@ -397,8 +436,14 @@ const translations = {
 
     // Upload Queue
     upload_queue: "上传队列",
+    queue_files: "添加文件到队列",
+    queue_folder: "添加文件夹到队列",
     queue_empty: "队列为空。使用\"添加到队列\"添加项目。",
     queue_duplicate: "队列已包含此项目。",
+    queue_added: "已添加 {count} 个项目到队列。",
+    paused: "已暂停",
+    move_up: "上移",
+    move_down: "下移",
     clear_completed: "清除已完成",
     clear_queue: "清空队列",
     destination_exists: "目标已存在。",
@@ -485,6 +530,8 @@ const translations = {
     logs: "日誌",
     client: "客戶端",
     payload: "Payload",
+    queues: "佇列",
+    extraction: "解壓",
     history: "歷史",
 
     // Profile
@@ -564,7 +611,7 @@ const translations = {
     browse_folder: "瀏覽資料夾",
     browse_archive: "瀏覽壓縮檔",
     scan: "掃描",
-    add_to_queue: "+ 加入佇列",
+    add_to_queue: "加入佇列",
     optimize: "最佳化",
     bandwidth_limit: "頻寬限制 (Mbps)",
     auto_tune: "自動調整連接數",
@@ -616,6 +663,14 @@ const translations = {
 
     // Transfer Control
     transfer_control: "傳輸控制",
+    upload_actions: "Actions",
+    reset_settings: "Reset Settings",
+    upload_queue_only: "Upload in progress — add to queue only.",
+    current_upload: "Current Upload",
+    no_active_upload: "No upload running.",
+    current_extraction: "Current Extraction",
+    no_active_extraction: "No extraction running.",
+    start: "Start",
     upload: "上傳",
     queue: "佇列",
     stop: "停止",
@@ -629,8 +684,14 @@ const translations = {
 
     // Upload Queue
     upload_queue: "上傳佇列",
+    queue_files: "加入檔案到佇列",
+    queue_folder: "加入資料夾到佇列",
     queue_empty: "佇列為空。使用\"加入佇列\"新增項目。",
     queue_duplicate: "佇列已包含此項目。",
+    queue_added: "已加入 {count} 個項目到佇列。",
+    paused: "已暫停",
+    move_up: "上移",
+    move_down: "下移",
     clear_completed: "清除已完成",
     clear_queue: "清空佇列",
     destination_exists: "目的地已存在。",
@@ -717,6 +778,8 @@ const translations = {
     logs: "Journaux",
     client: "Client",
     payload: "Payload",
+    queues: "Files",
+    extraction: "Extraction",
     history: "Historique",
 
     // Profile
@@ -796,7 +859,7 @@ const translations = {
     browse_folder: "Parcourir dossier",
     browse_archive: "Parcourir archive",
     scan: "Scanner",
-    add_to_queue: "+ Ajouter à la file",
+    add_to_queue: "Ajouter à la file",
     optimize: "Optimiser",
     bandwidth_limit: "Limite bande passante (Mbps)",
     auto_tune: "Auto-ajuster connexions",
@@ -848,6 +911,14 @@ const translations = {
 
     // Transfer Control
     transfer_control: "Contrôle transfert",
+    upload_actions: "Actions",
+    reset_settings: "Reset Settings",
+    upload_queue_only: "Upload in progress — add to queue only.",
+    current_upload: "Current Upload",
+    no_active_upload: "No upload running.",
+    current_extraction: "Current Extraction",
+    no_active_extraction: "No extraction running.",
+    start: "Start",
     upload: "Upload",
     queue: "File",
     stop: "Arrêter",
@@ -861,8 +932,14 @@ const translations = {
 
     // Upload Queue
     upload_queue: "File d'upload",
+    queue_files: "Ajouter fichiers à la file",
+    queue_folder: "Ajouter dossier à la file",
     queue_empty: "File vide. Utilisez \"Ajouter à la file\".",
     queue_duplicate: "La file contient déjà cet élément.",
+    queue_added: "{count} élément(s) ajouté(s) à la file.",
+    paused: "En pause",
+    move_up: "Monter",
+    move_down: "Descendre",
     clear_completed: "Effacer terminés",
     clear_queue: "Vider la file",
     destination_exists: "La destination existe déjà.",
@@ -949,6 +1026,8 @@ const translations = {
     logs: "Registros",
     client: "Cliente",
     payload: "Payload",
+    queues: "Colas",
+    extraction: "Extracción",
     history: "Historial",
 
     // Profile
@@ -1028,7 +1107,7 @@ const translations = {
     browse_folder: "Examinar carpeta",
     browse_archive: "Examinar archivo",
     scan: "Escanear",
-    add_to_queue: "+ Añadir a cola",
+    add_to_queue: "Añadir a cola",
     optimize: "Optimizar",
     bandwidth_limit: "Límite de ancho de banda (Mbps)",
     auto_tune: "Auto-ajustar conexiones",
@@ -1080,6 +1159,14 @@ const translations = {
 
     // Transfer Control
     transfer_control: "Control de transferencia",
+    upload_actions: "Actions",
+    reset_settings: "Reset Settings",
+    upload_queue_only: "Upload in progress — add to queue only.",
+    current_upload: "Current Upload",
+    no_active_upload: "No upload running.",
+    current_extraction: "Current Extraction",
+    no_active_extraction: "No extraction running.",
+    start: "Start",
     upload: "Subir",
     queue: "Cola",
     stop: "Detener",
@@ -1093,8 +1180,14 @@ const translations = {
 
     // Upload Queue
     upload_queue: "Cola de subida",
+    queue_files: "Añadir archivos a cola",
+    queue_folder: "Añadir carpeta a cola",
     queue_empty: "Cola vacía. Usa \"Añadir a cola\".",
     queue_duplicate: "La cola ya contiene este elemento.",
+    queue_added: "Se añadieron {count} elemento(s) a la cola.",
+    paused: "En pausa",
+    move_up: "Subir",
+    move_down: "Bajar",
     clear_completed: "Limpiar completados",
     clear_queue: "Vaciar cola",
     destination_exists: "El destino ya existe.",
@@ -1181,6 +1274,8 @@ const translations = {
     logs: "السجلات",
     client: "العميل",
     payload: "Payload",
+    queues: "القوائم",
+    extraction: "الاستخراج",
     history: "السجل",
 
     // Profile
@@ -1260,7 +1355,7 @@ const translations = {
     browse_folder: "تصفح المجلد",
     browse_archive: "تصفح الأرشيف",
     scan: "فحص",
-    add_to_queue: "+ إضافة للقائمة",
+    add_to_queue: "إضافة للقائمة",
     optimize: "تحسين",
     bandwidth_limit: "حد النطاق الترددي (Mbps)",
     auto_tune: "ضبط تلقائي للاتصالات",
@@ -1312,6 +1407,14 @@ const translations = {
 
     // Transfer Control
     transfer_control: "التحكم في النقل",
+    upload_actions: "Actions",
+    reset_settings: "Reset Settings",
+    upload_queue_only: "Upload in progress — add to queue only.",
+    current_upload: "Current Upload",
+    no_active_upload: "No upload running.",
+    current_extraction: "Current Extraction",
+    no_active_extraction: "No extraction running.",
+    start: "Start",
     upload: "رفع",
     queue: "القائمة",
     stop: "إيقاف",
@@ -1325,8 +1428,14 @@ const translations = {
 
     // Upload Queue
     upload_queue: "قائمة الرفع",
+    queue_files: "إضافة ملفات إلى القائمة",
+    queue_folder: "إضافة مجلد إلى القائمة",
     queue_empty: "القائمة فارغة. استخدم \"إضافة للقائمة\".",
     queue_duplicate: "القائمة تحتوي هذا العنصر بالفعل.",
+    queue_added: "تمت إضافة {count} عنصرًا إلى القائمة.",
+    paused: "متوقف مؤقتًا",
+    move_up: "تحريك لأعلى",
+    move_down: "تحريك لأسفل",
     clear_completed: "مسح المكتمل",
     clear_queue: "مسح القائمة",
     destination_exists: "الوجهة موجودة بالفعل.",
@@ -1407,10 +1516,14 @@ const translations = {
 
 export type LanguageCode = keyof typeof translations;
 
-export function t(lang: string, key: string): string {
+export function t(lang: string, key: string, vars?: Record<string, string | number>): string {
   const langCode = (lang in translations ? lang : "en") as LanguageCode;
   const dict = translations[langCode];
-  return (dict as Record<string, string>)[key] ?? translations.en[key as keyof typeof translations.en] ?? key;
+  const raw = (dict as Record<string, string>)[key] ?? translations.en[key as keyof typeof translations.en] ?? key;
+  if (!vars) return raw;
+  return raw.replace(/\{(\w+)\}/g, (match, name) =>
+    Object.prototype.hasOwnProperty.call(vars, name) ? String(vars[name]) : match
+  );
 }
 
 export default translations;

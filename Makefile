@@ -5,7 +5,7 @@
 .PHONY: payload desktop
 .PHONY: setup-payload setup-desktop
 .PHONY: test-payload test-desktop
-.PHONY: clean-payload clean-desktop
+.PHONY: clean-payload clean-desktop clean-both
 .PHONY: dist dist-win dist-mac dist-linux
 
 JOBS ?= $(shell getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || echo 4)
@@ -25,6 +25,7 @@ help:
 	@echo "  make build          - Build payload and desktop app"
 	@echo "  make test           - Run all tests"
 	@echo "  make clean          - Clean all build artifacts"
+	@echo "  make clean-both     - Clean, build payload, and run desktop app"
 	@echo ""
 	@echo "Detailed Targets:"
 	@echo "  make payload        - Build PS5 payload only"
@@ -197,6 +198,11 @@ run-desktop: setup-desktop
 
 clean: clean-payload clean-desktop
 	@echo "✓ All clean!"
+
+clean-both:
+	@$(MAKE) clean
+	@$(MAKE) payload
+	@$(MAKE) run-desktop
 
 clean-payload:
 	@echo "Cleaning payload build artifacts..."

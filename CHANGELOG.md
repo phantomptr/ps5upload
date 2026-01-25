@@ -3,6 +3,24 @@
 All notable changes to this project are documented here.
 This project follows Semantic Versioning.
 
+## [1.3.0] - 2026-01-24
+
+### Added
+- Unified **Queues** area for upload + extraction with Current/Completed/Failed tabs.
+- Extraction queue view with per-item metadata (name, path, size), cover art when available, and live progress for the active item.
+- Dedicated refresh for extraction and upload queues plus clear‑completed/clear‑queue actions.
+- Log level filter (Debug/Info/Warn/Error) in the Logs panel with colored badges.
+- Payload reset action and more detailed payload logging.
+- Discord button in the header; external links now open in the system browser.
+- `make clean-both` helper (clean → build payload → run desktop).
+
+### Changed
+- Payload command/status handling now runs on a dedicated thread and is prioritized over transfers.
+- Archive uploads now surface “queued for extraction” status with improved queue labeling.
+- Connect/reload buttons have short cooldowns to prevent accidental repeats.
+- UI button colors and light/dark contrast tuned for clarity.
+- Payload logs now rotate per launch with timestamped archives.
+
 ## [1.2.3] - 2026-01-24
 
 ### Fixed

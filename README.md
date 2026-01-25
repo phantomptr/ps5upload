@@ -9,7 +9,10 @@ PS5 Upload is a fast, reliable way to move apps and homebrew to your PS5 without
 New UI highlights:
 - Cleaner Transfer and Manage layouts with clearer transfer settings.
 - Built-in quick scan + optimize options for large folders.
+- Unified Queues area with upload/extraction tabs, progress, and status.
+- Extraction queue with progress, metadata, and cover art where available.
 - History resume workflow with explicit resume mode selection.
+- Log level filtering with color-coded badges in the Logs panel.
 
 It is optimized for thousands of small files on a local network (where it outperforms FTP), but works over any standard network connection.
 
@@ -28,7 +31,7 @@ This tool fixes that by bundling files into efficient "packs" on your computer a
 | Platform | OS Version | Architecture | Notes |
 | :--- | :--- | :--- | :--- |
 | **Windows** | 10 / 11 | x64 | **Zero-Install:** No DLLs or WinRAR required. Fully portable. |
-| **macOS** | 12 (Monterey)+ | x64, ARM64 (M1+) | **Universal:** Works on Intel and Apple Silicon natively. |
+| **macOS** | 12 (Monterey)+ | x64, ARM64 (M1+) | **Native Builds:** Separate Intel/Apple Silicon downloads. |
 | **Linux** | GLIBC 2.31+ | x64, ARM64 | **Portable:** Tested on Ubuntu, Arch, Fedora, and Steam Deck. |
 
 ### Feature Support Matrix
@@ -97,13 +100,16 @@ You should see a notification pop up on your TV: **"PS5 Upload Server - Ready on
 ### 5. Manage Files (Optional)
 Open the **Manage** tab to browse your PS5's storage. You can rename, move, copy, delete, and `chmod 777` files or folders. You can also download files and folders from your PS5 to your computer.
 
-### 6. Resume Transfers (Optional)
+### 6. Queues (Optional)
+Open the **Queues** tab to see upload and extraction queues. You can refresh the queues, monitor progress, and cancel queued work.
+
+### 7. Resume Transfers (Optional)
 If a transfer was interrupted, you can enable **Resume** mode in the **Transfer** tab's settings. The next time you upload the same content to the same destination, it will skip files that are already there.
 * **Skip by size (fast)** — quickest.
 * **Skip by size + time (medium)** — more accurate.
 * **Verify SHA256 (slow)** — most accurate, slowest.
 
-### 7. Chat (Optional)
+### 8. Chat (Optional)
 Open the **Chat** tab to talk with other PS5Upload users on the same LAN. It auto-picks a display name and uses local broadcast.
 
 ## FAQ
@@ -142,7 +148,7 @@ Open the **Chat** tab to talk with other PS5Upload users on the same LAN. It aut
     *   **Windows:** `%APPDATA%\\ps5upload`
     *   **macOS:** `~/Library/Application Support/ps5upload`
     *   **Linux:** `~/.local/share/ps5upload`
-*   Logs are stored in the `logs` subfolder when **Save Logs** is enabled in the Logs tab.
+*   Logs are stored in the `logs` subfolder when **Save Logs** is enabled in the Logs tab. You can filter by level (Debug/Info/Warn/Error).
 
 **Q: Does this work on PS4?**
 *   The logic is similar, but the payload is compiled specifically for the PS5 environment. It won't run on a PS4 as-is.
@@ -184,5 +190,7 @@ Created by **PhantomPtr**.
 ## Support
 
 If you find this tool useful, consider buying me a coffee!
+
+Discord server: https://discord.gg/fzK3xddtrM
 
 [![Support me on Ko-fi](https://storage.ko-fi.com/cdn/kofi3.png?v=3)](https://ko-fi.com/B0B81S0WUA)

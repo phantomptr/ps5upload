@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, nativeImage, shell, powerSaveBlocker } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -32,11 +32,15 @@ const TRANSFER_PORT = 9113;
 const PAYLOAD_PORT = 9021;
 const CONNECTION_TIMEOUT_MS = 30000;
 const READ_TIMEOUT_MS = 120000;
+const PAYLOAD_STATUS_CONNECT_TIMEOUT_MS = 5000;
+const PAYLOAD_STATUS_READ_TIMEOUT_MS = 10000;
 const PACK_BUFFER_SIZE = 16 * 1024 * 1024; // 16MB
 const SEND_CHUNK_SIZE = 4 * 1024 * 1024; // 4MB
 const WRITE_CHUNK_SIZE = 512 * 1024; // 512KB
 const MAGIC_FTX1 = 0x31585446;
-const VERSION = '1.2.3';
+
+let sleepBlockerId = null;
+const VERSION = '1.3.0';
 
 const FrameType = {
   Pack: 4,
@@ -145,7 +149,8 @@ async function uploadRarForExtraction(ip, rarPath, destPath, mode, opts = {}) {
   const {
     cancel = { value: false },
     onProgress = () => {},
-    onLog = () => {}
+    onLog = () => {},
+    overrideOnConflict = true
   } = opts;
   const fileSize = (await fs.promises.stat(rarPath)).size;
 
@@ -164,7 +169,8 @@ async function uploadRarForExtraction(ip, rarPath, destPath, mode, opts = {}) {
     if (cancel.value) throw new Error('Upload cancelled');
 
     socket = await createSocketWithTimeout(ip, TRANSFER_PORT);
-    const cmd = `UPLOAD_RAR_${String(modeToTry || 'normal').toUpperCase()} ${destPath} ${fileSize}\n`;
+    const flag = overrideOnConflict ? '' : ' NOOVERWRITE';
+    const cmd = `UPLOAD_RAR_${String(modeToTry || 'normal').toUpperCase()} ${destPath} ${fileSize}${flag}\n`;
     socket.write(cmd);
 
     let response = '';
@@ -202,6 +208,9 @@ async function uploadRarForExtraction(ip, rarPath, destPath, mode, opts = {}) {
       modeToTry = 'normal';
       onLog('RAR mode unsupported by payload. Retrying with Normal.');
       continue;
+    }
+    if (!overrideOnConflict && (response.includes('Invalid file size') || response.includes('Invalid UPLOAD_RAR format'))) {
+      throw new Error('Payload does not support archive conflict checks. Update payload or enable Override.');
     }
 
     throw new Error(`Server rejected RAR upload: ${response}`);
@@ -249,13 +258,17 @@ async function uploadRarForExtraction(ip, rarPath, destPath, mode, opts = {}) {
     clearInterval(progressInterval);
   }
 
-  onLog('Upload complete. Waiting for extraction...');
+  onLog('Upload complete. Waiting for extraction response...');
 
   const extractResult = await new Promise((resolve, reject) => {
+    let settled = false;
     let lineBuffer = '';
     const timeout = setTimeout(() => {
       socket.destroy();
-      reject(new Error('Extraction timed out (no progress for 10m)'));
+      if (!settled) {
+        settled = true;
+        reject(new Error('Extraction timed out (no progress for 10m)'));
+      }
     }, 600000);
 
     socket.on('data', (chunk) => {
@@ -266,14 +279,31 @@ async function uploadRarForExtraction(ip, rarPath, destPath, mode, opts = {}) {
         const line = lineBuffer.substring(0, newlineIndex).trim();
         lineBuffer = lineBuffer.substring(newlineIndex + 1);
 
+        if (line.startsWith('QUEUED ')) {
+          const id = parseInt(line.split(' ')[1], 10) || 0;
+          onLog(`Extraction queued (ID ${id}).`);
+          socket.destroy();
+          if (!settled) {
+            settled = true;
+            resolve({ queuedId: id, files: 0, bytes: 0 });
+          }
+          return;
+        }
         if (line.startsWith('SUCCESS ')) {
           const parts = line.split(' ');
           const files = parseInt(parts[1], 10) || 0;
           const bytes = parseInt(parts[2], 10) || 0;
-          resolve({ files, bytes });
+          socket.destroy();
+          if (!settled) {
+            settled = true;
+            resolve({ files, bytes });
+          }
           return;
         } else if (line.startsWith('ERROR: ')) {
-          reject(new Error(`RAR extraction failed: ${line}`));
+          if (!settled) {
+            settled = true;
+            reject(new Error(`RAR extraction failed: ${line}`));
+          }
           return;
         } else if (line.startsWith('EXTRACT_PROGRESS ')) {
           const parts = line.split(' ');
@@ -297,9 +327,17 @@ async function uploadRarForExtraction(ip, rarPath, destPath, mode, opts = {}) {
       timeout.refresh();
     });
 
-    socket.on('error', reject);
+    socket.on('error', (err) => {
+      if (!settled) {
+        settled = true;
+        reject(err);
+      }
+    });
     socket.on('close', () => {
-      reject(new Error('Connection closed unexpectedly during extraction monitoring.'));
+      if (!settled) {
+        settled = true;
+        reject(new Error('Connection closed unexpectedly during extraction monitoring.'));
+      }
     });
   });
 
@@ -513,6 +551,7 @@ const state = {
   transferActive: false,
   transferRunId: 0,
   transferStatus: { run_id: 0, status: 'Idle', sent: 0, total: 0, files: 0, elapsed_secs: 0, current_file: '' },
+  transferLastUpdate: 0,
   payloadPollEnabled: false,
   payloadIp: '',
   payloadAutoReloadEnabled: false,
@@ -545,6 +584,8 @@ let payloadPoller = null;
 let connectionPoller = null;
 let managePoller = null;
 let payloadAutoReloader = null;
+let payloadAutoReloadInFlight = false;
+let payloadAutoReloadLastAttempt = 0;
 
 // Determine the environment
 const isDev = !app.isPackaged;
@@ -674,6 +715,20 @@ function startChatSocket() {
     emit('chat_status', { status: `Error: ${err.message}` });
     return { room_id: '', enabled: false };
   }
+}
+
+function stopChatSocket() {
+  if (chatSocket) {
+    try {
+      chatSocket.close();
+    } catch {
+      // ignore
+    }
+    chatSocket = null;
+  }
+  chatEnabled = false;
+  emit('chat_status', { status: 'Disconnected' });
+  return { room_id: chatRoomId, enabled: false };
 }
 
 function sendChatMessage(name, text) {
@@ -851,6 +906,103 @@ async function sendSimpleCommand(ip, port, cmd) {
   });
 }
 
+async function sendCommandWithPayload(ip, port, header, payload) {
+  const socket = await createSocketWithTimeout(ip, port);
+  return new Promise((resolve, reject) => {
+    let data = Buffer.alloc(0);
+    let resolved = false;
+
+    const cleanup = () => {
+      socket.removeAllListeners();
+      socket.destroy();
+    };
+
+    socket.setTimeout(READ_TIMEOUT_MS);
+    socket.on('timeout', () => {
+      if (resolved) return;
+      resolved = true;
+      cleanup();
+      reject(new Error('Read timed out'));
+    });
+
+    socket.on('data', (chunk) => {
+      if (resolved) return;
+      data = Buffer.concat([data, chunk]);
+      if (data.includes(Buffer.from('\n'))) {
+        resolved = true;
+        cleanup();
+        resolve(data.toString('utf8').trim());
+      }
+    });
+
+    socket.on('error', (err) => {
+      if (resolved) return;
+      resolved = true;
+      cleanup();
+      reject(err);
+    });
+
+    socket.write(header, () => {
+      socket.write(payload);
+    });
+  });
+}
+
+async function sendCommandExpectPayload(ip, port, cmd) {
+  const socket = await createSocketWithTimeout(ip, port);
+  return new Promise((resolve, reject) => {
+    let header = '';
+    let body = Buffer.alloc(0);
+    let expected = null;
+
+    const cleanup = () => {
+      socket.removeAllListeners();
+      socket.destroy();
+    };
+
+    socket.setTimeout(READ_TIMEOUT_MS);
+    socket.on('timeout', () => {
+      cleanup();
+      reject(new Error('Read timed out'));
+    });
+
+    socket.on('data', (chunk) => {
+      if (expected === null) {
+        header += chunk.toString('utf8');
+        const idx = header.indexOf('\n');
+        if (idx === -1) return;
+        const line = header.slice(0, idx).trim();
+        const rest = header.slice(idx + 1);
+        const parts = line.split(' ');
+        if (parts[0] !== 'OK') {
+          cleanup();
+          reject(new Error(line || 'Invalid response'));
+          return;
+        }
+        expected = parseInt(parts[1] || '0', 10) || 0;
+        body = Buffer.from(rest, 'utf8');
+        if (body.length >= expected) {
+          cleanup();
+          resolve(body.slice(0, expected).toString('utf8'));
+        }
+        return;
+      }
+      body = Buffer.concat([body, chunk]);
+      if (body.length >= expected) {
+        cleanup();
+        resolve(body.slice(0, expected).toString('utf8'));
+      }
+    });
+
+    socket.on('error', (err) => {
+      cleanup();
+      reject(err);
+    });
+
+    socket.write(cmd);
+  });
+}
+
 async function listStorage(ip, port) {
   const MAX_RESPONSE_SIZE = 10 * 1024 * 1024; // 10MB limit for directory listings
   const socket = await createSocketWithTimeout(ip, port);
@@ -1003,7 +1155,7 @@ async function checkDir(ip, port, dirPath) {
 }
 
 async function deletePath(ip, port, filePath) {
-  const response = await sendSimpleCommand(ip, port, `DELETE ${filePath}\n`);
+  const response = await sendSimpleCommand(ip, port, `DELETE_ASYNC ${filePath}\n`);
   if (!response.startsWith('OK')) {
     throw new Error(`Delete failed: ${response}`);
   }
@@ -1039,59 +1191,63 @@ async function getPayloadVersion(ip, port) {
 }
 
 async function getPayloadStatus(ip, port) {
-  const socket = await createSocketWithTimeout(ip, port);
+  try {
+    const socket = await createSocketWithTimeout(ip, port, PAYLOAD_STATUS_CONNECT_TIMEOUT_MS);
 
-  return new Promise((resolve, reject) => {
-    let data = Buffer.alloc(0);
-    let headerParsed = false;
-    let jsonSize = 0;
+    return await new Promise((resolve, reject) => {
+      let data = Buffer.alloc(0);
+      let headerParsed = false;
+      let jsonSize = 0;
 
-    socket.setTimeout(READ_TIMEOUT_MS);
-    socket.on('timeout', () => {
-      socket.destroy();
-      reject(new Error('Read timed out'));
-    });
-
-    socket.on('data', (chunk) => {
-      data = Buffer.concat([data, chunk]);
-
-      if (!headerParsed) {
-        const str = data.toString('utf8');
-        const newlineIdx = str.indexOf('\n');
-        if (newlineIdx !== -1) {
-          const header = str.substring(0, newlineIdx).trim();
-          if (header.startsWith('ERROR')) {
-            socket.destroy();
-            reject(new Error(`Payload status error: ${header}`));
-            return;
-          }
-          if (!header.startsWith('STATUS ')) {
-            socket.destroy();
-            reject(new Error(`Unexpected response: ${header}`));
-            return;
-          }
-          jsonSize = parseInt(header.substring(7).trim(), 10);
-          headerParsed = true;
-          data = data.slice(newlineIdx + 1);
-        }
-      }
-
-      if (headerParsed && data.length >= jsonSize) {
+      socket.setTimeout(PAYLOAD_STATUS_READ_TIMEOUT_MS);
+      socket.on('timeout', () => {
         socket.destroy();
-        try {
-          const jsonBuf = data.slice(0, jsonSize);
-          const status = JSON.parse(jsonBuf.toString('utf8'));
-          resolve(status);
-        } catch (e) {
-          reject(new Error('Invalid JSON response'));
+        reject(new Error('Read timed out'));
+      });
+
+      socket.on('data', (chunk) => {
+        data = Buffer.concat([data, chunk]);
+
+        if (!headerParsed) {
+          const str = data.toString('utf8');
+          const newlineIdx = str.indexOf('\n');
+          if (newlineIdx !== -1) {
+            const header = str.substring(0, newlineIdx).trim();
+            if (header.startsWith('ERROR')) {
+              socket.destroy();
+              reject(new Error(`Payload status error: ${header}`));
+              return;
+            }
+            if (!header.startsWith('STATUS ')) {
+              socket.destroy();
+              reject(new Error(`Unexpected response: ${header}`));
+              return;
+            }
+            jsonSize = parseInt(header.substring(7).trim(), 10);
+            headerParsed = true;
+            data = data.slice(newlineIdx + 1);
+          }
         }
-      }
+
+        if (headerParsed && data.length >= jsonSize) {
+          socket.destroy();
+          try {
+            const jsonBuf = data.slice(0, jsonSize);
+            const status = JSON.parse(jsonBuf.toString('utf8'));
+            resolve(status);
+          } catch (e) {
+            reject(new Error('Invalid JSON response'));
+          }
+        }
+      });
+
+      socket.on('error', (err) => reject(err));
+
+      socket.write('PAYLOAD_STATUS\n');
     });
-
-    socket.on('error', (err) => reject(err));
-
-    socket.write('PAYLOAD_STATUS\n');
-  });
+  } catch (err) {
+    throw err;
+  }
 }
 
 async function queueExtract(ip, port, src, dst) {
@@ -1114,6 +1270,81 @@ async function queueClear(ip, port) {
   if (!response.startsWith('OK')) {
     throw new Error(`Queue clear failed: ${response}`);
   }
+}
+
+async function queueClearAll(ip, port) {
+  const response = await sendSimpleCommand(ip, port, 'QUEUE_CLEAR_ALL\n');
+  if (!response.startsWith('OK')) {
+    throw new Error(`Queue clear failed: ${response}`);
+  }
+}
+
+async function payloadReset(ip, port) {
+  const response = await sendSimpleCommand(ip, port, 'RESET\n');
+  if (!response.startsWith('OK')) {
+    throw new Error(`Payload reset failed: ${response}`);
+  }
+}
+
+async function queueReorder(ip, port, ids) {
+  if (!Array.isArray(ids) || ids.length === 0) {
+    throw new Error('Queue reorder failed: empty list');
+  }
+  const list = ids.join(',');
+  const response = await sendSimpleCommand(ip, port, `QUEUE_REORDER ${list}\n`);
+  if (!response.startsWith('OK')) {
+    throw new Error(`Queue reorder failed: ${response}`);
+  }
+}
+
+async function queueProcess(ip, port) {
+  const response = await sendSimpleCommand(ip, port, 'QUEUE_PROCESS\n');
+  if (!response.startsWith('OK')) {
+    throw new Error(`Queue start failed: ${response}`);
+  }
+}
+
+async function queuePause(ip, port, id) {
+  const response = await sendSimpleCommand(ip, port, `QUEUE_PAUSE ${id}\n`);
+  if (!response.startsWith('OK')) {
+    throw new Error(`Queue pause failed: ${response}`);
+  }
+}
+
+async function queueRetry(ip, port, id) {
+  const response = await sendSimpleCommand(ip, port, `QUEUE_RETRY ${id}\n`);
+  if (!response.startsWith('OK')) {
+    throw new Error(`Queue retry failed: ${response}`);
+  }
+}
+
+async function syncInfo(ip, port) {
+  const response = await sendCommandExpectPayload(ip, port, 'SYNC_INFO\n');
+  return JSON.parse(response || '{}');
+}
+
+async function uploadQueueSync(ip, port, payload) {
+  const header = `UPLOAD_QUEUE_SYNC ${Buffer.byteLength(payload)}\n`;
+  const response = await sendCommandWithPayload(ip, port, header, payload);
+  if (!response.startsWith('OK')) {
+    throw new Error(`Upload queue sync failed: ${response}`);
+  }
+}
+
+async function uploadQueueGet(ip, port) {
+  return sendCommandExpectPayload(ip, port, 'UPLOAD_QUEUE_GET\n');
+}
+
+async function historySync(ip, port, payload) {
+  const header = `HISTORY_SYNC ${Buffer.byteLength(payload)}\n`;
+  const response = await sendCommandWithPayload(ip, port, header, payload);
+  if (!response.startsWith('OK')) {
+    throw new Error(`History sync failed: ${response}`);
+  }
+}
+
+async function historyGet(ip, port) {
+  return sendCommandExpectPayload(ip, port, 'HISTORY_GET\n');
 }
 
 async function uploadV2Init(ip, port, destPath, useTemp) {
@@ -1174,7 +1405,7 @@ const defaultConfig = {
   update_channel: 'stable',
   download_compression: 'none',
   chmod_after_upload: false,
-  override_on_conflict: false,
+  override_on_conflict: true,
   resume_mode: 'none',
   language: 'en',
   auto_tune_connections: true,
@@ -1285,28 +1516,41 @@ function saveConfig(config) {
 function loadHistory() {
   const historyPath = getHistoryPath();
   if (!fs.existsSync(historyPath)) {
-    return { records: [] };
+    return { records: [], rev: 0, updated_at: 0 };
   }
   try {
-    return JSON.parse(fs.readFileSync(historyPath, 'utf8'));
+    const data = JSON.parse(fs.readFileSync(historyPath, 'utf8'));
+    return {
+      records: Array.isArray(data.records) ? data.records : [],
+      rev: typeof data.rev === 'number' ? data.rev : 0,
+      updated_at: data.updated_at || 0
+    };
   } catch {
-    return { records: [] };
+    return { records: [], rev: 0, updated_at: 0 };
   }
 }
 
 function saveHistory(data) {
   ensureDir(getAppDataDir());
-  fs.writeFileSync(getHistoryPath(), JSON.stringify(data, null, 2));
+  const current = loadHistory();
+  const rev = typeof data.rev === 'number' ? data.rev : (current.rev || 0) + 1;
+  const payload = {
+    records: Array.isArray(data.records) ? data.records : [],
+    rev,
+    updated_at: data.updated_at || Date.now()
+  };
+  fs.writeFileSync(getHistoryPath(), JSON.stringify(payload, null, 2));
 }
 
 function addHistoryRecord(record) {
   const data = loadHistory();
   data.records.push(record);
+  data.updated_at = Date.now();
   saveHistory(data);
 }
 
 function clearHistory() {
-  saveHistory({ records: [] });
+  saveHistory({ records: [], updated_at: Date.now() });
 }
 
 // ==================== Queue Management ====================
@@ -1314,18 +1558,32 @@ function clearHistory() {
 function loadQueue() {
   const queuePath = getQueuePath();
   if (!fs.existsSync(queuePath)) {
-    return { items: [], next_id: 1 };
+    return { items: [], next_id: 1, rev: 0, updated_at: 0 };
   }
   try {
-    return JSON.parse(fs.readFileSync(queuePath, 'utf8'));
+    const data = JSON.parse(fs.readFileSync(queuePath, 'utf8'));
+    return {
+      items: Array.isArray(data.items) ? data.items : [],
+      next_id: data.next_id || 1,
+      rev: typeof data.rev === 'number' ? data.rev : 0,
+      updated_at: data.updated_at || 0
+    };
   } catch {
-    return { items: [], next_id: 1 };
+    return { items: [], next_id: 1, rev: 0, updated_at: 0 };
   }
 }
 
 function saveQueue(data) {
   ensureDir(getAppDataDir());
-  fs.writeFileSync(getQueuePath(), JSON.stringify(data, null, 2));
+  const current = loadQueue();
+  const rev = typeof data.rev === 'number' ? data.rev : (current.rev || 0) + 1;
+  const payload = {
+    items: Array.isArray(data.items) ? data.items : [],
+    next_id: data.next_id || 1,
+    rev,
+    updated_at: data.updated_at || Date.now()
+  };
+  fs.writeFileSync(getQueuePath(), JSON.stringify(payload, null, 2));
 }
 
 // ==================== Profiles Management ====================
@@ -1921,10 +2179,84 @@ function startPayloadPoller() {
     } catch (err) {
       state.payloadStatus = { status: null, error: err.message, updated_at_ms: Date.now() };
       emit('payload_status_update', state.payloadStatus);
+      tryAutoReloadPayload();
     } finally {
       payloadPollerRunning = false;
     }
   }, 5000);
+}
+
+async function tryAutoReloadPayload() {
+  if (!state.payloadAutoReloadEnabled || !state.payloadIp) return;
+  if (payloadAutoReloadInFlight) return;
+  const now = Date.now();
+  if (now - payloadAutoReloadLastAttempt < 15000) return;
+
+  payloadAutoReloadInFlight = true;
+  payloadAutoReloadLastAttempt = now;
+  emit('payload_busy', { busy: true });
+
+  try {
+    try {
+      await getPayloadVersion(state.payloadIp, TRANSFER_PORT);
+      emit('payload_busy', { busy: false });
+      return;
+    } catch {
+      // not running; continue to reload
+    }
+
+    const portOpen = await checkPort(state.payloadIp, PAYLOAD_PORT);
+    if (!portOpen) {
+      emit('payload_log', { message: `Auto reload failed: port ${PAYLOAD_PORT} closed.` });
+      return;
+    }
+
+    emit('payload_log', { message: 'Auto reloading payload...' });
+    if (state.payloadAutoReloadMode === 'local') {
+      if (!state.payloadAutoReloadPath || !state.payloadAutoReloadPath.trim()) {
+        emit('payload_log', { message: 'Auto reload failed: local payload path not set.' });
+        return;
+      }
+      await sendPayloadFile(state.payloadIp, state.payloadAutoReloadPath);
+    } else {
+      const fetch = state.payloadAutoReloadMode === 'latest' ? 'latest' : 'current';
+      let release;
+      if (fetch === 'current') {
+        try {
+          release = await fetchReleaseByTag(`v${VERSION}`);
+        } catch {
+          emit('payload_log', { message: `Tag v${VERSION} not found, falling back to latest release.` });
+          release = await fetchLatestRelease(false);
+        }
+      } else {
+        release = await fetchLatestRelease(false);
+      }
+
+      const asset = release.assets.find(a => a.name === 'ps5upload.elf');
+      if (!asset) {
+        emit('payload_log', { message: 'Auto reload failed: payload asset not found.' });
+        return;
+      }
+
+      const tmpPath = path.join(os.tmpdir(), `ps5upload_autoreload.elf`);
+      await downloadAsset(asset.browser_download_url, tmpPath);
+      await sendPayloadFile(state.payloadIp, tmpPath);
+    }
+
+    emit('payload_log', { message: 'Auto reload complete. Waiting for status...' });
+    setTimeout(() => {
+      if (state.payloadIp) {
+        getPayloadVersion(state.payloadIp, TRANSFER_PORT)
+          .then((version) => emit('payload_version', { version, error: null }))
+          .catch((err) => emit('payload_version', { version: null, error: err.message }));
+      }
+    }, 3000);
+  } catch (err) {
+    emit('payload_log', { message: `Auto reload error: ${err.message || String(err)}` });
+  } finally {
+    emit('payload_busy', { busy: false });
+    payloadAutoReloadInFlight = false;
+  }
 }
 
 function startConnectionPoller() {
@@ -2016,6 +2348,22 @@ function registerIpcHandlers() {
   ipcMain.handle('window_minimize', () => mainWindow?.minimize());
   ipcMain.handle('window_maximize', () => mainWindow?.isMaximized() ? mainWindow.unmaximize() : mainWindow?.maximize());
   ipcMain.handle('window_close', () => mainWindow?.close());
+  ipcMain.handle('open_external', async (_, url) => {
+    if (typeof url !== 'string' || url.trim().length === 0) {
+      throw new Error('Invalid URL');
+    }
+    let parsed;
+    try {
+      parsed = new URL(url);
+    } catch {
+      throw new Error('Invalid URL');
+    }
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      throw new Error('Unsupported URL protocol');
+    }
+    await shell.openExternal(url);
+    return true;
+  });
 
   // Dialogs
   ipcMain.handle('dialog_open', async (_, options) => {
@@ -2051,6 +2399,7 @@ function registerIpcHandlers() {
 
   // History
   ipcMain.handle('history_load', () => loadHistory());
+  ipcMain.handle('history_save', (_, data) => { saveHistory(data); return true; });
   ipcMain.handle('history_add', (_, record) => { addHistoryRecord(record); return true; });
   ipcMain.handle('history_clear', () => { clearHistory(); return true; });
 
@@ -2245,6 +2594,98 @@ function registerIpcHandlers() {
   } catch (err) {
     throw err;
   }
+  });
+
+  ipcMain.handle('payload_queue_clear_all', async (_, ip) => {
+    try {
+    if (!ip || !ip.trim()) throw new Error('Enter a PS5 address first.');
+    return queueClearAll(ip, TRANSFER_PORT);
+  } catch (err) {
+    throw err;
+  }
+  });
+
+  ipcMain.handle('payload_reset', async (_, ip) => {
+    if (!ip || !ip.trim()) throw new Error('Enter a PS5 address first.');
+    return payloadReset(ip, TRANSFER_PORT);
+  });
+
+  ipcMain.handle('payload_queue_reorder', async (_, ip, ids) => {
+    try {
+    if (!ip || !ip.trim()) throw new Error('Enter a PS5 address first.');
+    return queueReorder(ip, TRANSFER_PORT, ids);
+  } catch (err) {
+    throw err;
+  }
+  });
+
+  ipcMain.handle('payload_queue_process', async (_, ip) => {
+    try {
+    if (!ip || !ip.trim()) throw new Error('Enter a PS5 address first.');
+    return queueProcess(ip, TRANSFER_PORT);
+  } catch (err) {
+    throw err;
+  }
+  });
+
+  ipcMain.handle('payload_queue_pause', async (_, ip, id) => {
+    try {
+    if (!ip || !ip.trim()) throw new Error('Enter a PS5 address first.');
+    return queuePause(ip, TRANSFER_PORT, id);
+  } catch (err) {
+    throw err;
+  }
+  });
+
+  ipcMain.handle('payload_queue_retry', async (_, ip, id) => {
+    if (!ip || !ip.trim()) throw new Error('Enter a PS5 address first.');
+    return queueRetry(ip, TRANSFER_PORT, id);
+  });
+
+  ipcMain.handle('payload_sync_info', async (_, ip) => {
+    if (!ip || !ip.trim()) throw new Error('Enter a PS5 address first.');
+    return syncInfo(ip, TRANSFER_PORT);
+  });
+
+  ipcMain.handle('payload_upload_queue_get', async (_, ip) => {
+    if (!ip || !ip.trim()) throw new Error('Enter a PS5 address first.');
+    return uploadQueueGet(ip, TRANSFER_PORT);
+  });
+
+  ipcMain.handle('payload_upload_queue_sync', async (_, ip, payload) => {
+    if (!ip || !ip.trim()) throw new Error('Enter a PS5 address first.');
+    return uploadQueueSync(ip, TRANSFER_PORT, payload || '');
+  });
+
+  ipcMain.handle('payload_history_get', async (_, ip) => {
+    if (!ip || !ip.trim()) throw new Error('Enter a PS5 address first.');
+    return historyGet(ip, TRANSFER_PORT);
+  });
+
+  ipcMain.handle('payload_history_sync', async (_, ip, payload) => {
+    if (!ip || !ip.trim()) throw new Error('Enter a PS5 address first.');
+    return historySync(ip, TRANSFER_PORT, payload || '');
+  });
+
+  ipcMain.handle('sleep_set', (_, enabled) => {
+    if (enabled) {
+      if (sleepBlockerId == null || !powerSaveBlocker.isStarted(sleepBlockerId)) {
+        sleepBlockerId = powerSaveBlocker.start('prevent-display-sleep');
+      }
+      return { enabled: true };
+    }
+    if (sleepBlockerId != null && powerSaveBlocker.isStarted(sleepBlockerId)) {
+      powerSaveBlocker.stop(sleepBlockerId);
+    }
+    sleepBlockerId = null;
+    return { enabled: false };
+  });
+
+  ipcMain.handle('sleep_status', () => {
+    if (sleepBlockerId != null && powerSaveBlocker.isStarted(sleepBlockerId)) {
+      return { enabled: true };
+    }
+    return { enabled: false };
   });
 
   // Manage
@@ -2571,8 +3012,17 @@ function registerIpcHandlers() {
         },
         onLog: (message) => emit('manage_log', { message })
       });
+      if (extractResult.queuedId) {
+        emit('queue_hint', {
+          queue_id: extractResult.queuedId,
+          source_path: rarPath,
+          dest_path: destPath,
+          size_bytes: extractResult.fileSize
+        });
+      }
 
-      emit('manage_done', { op: 'Extract', bytes: extractResult.bytes, error: null });
+      const bytes = typeof extractResult.bytes === 'number' ? extractResult.bytes : extractResult.fileSize || 0;
+      emit('manage_done', { op: 'Extract', bytes, error: null });
       return true;
     } catch (err) {
       emit('manage_done', { op: 'Extract', bytes: null, error: err.message });
@@ -2781,10 +3231,19 @@ function registerIpcHandlers() {
   ipcMain.handle('transfer_cancel', () => {
     state.transferCancel = true;
     state.transferStatus = { ...state.transferStatus, status: 'Cancelled' };
+    state.transferLastUpdate = Date.now();
     return true;
   });
 
   ipcMain.handle('transfer_status', () => state.transferStatus);
+  ipcMain.handle('transfer_reset', () => {
+    state.transferCancel = false;
+    state.transferActive = false;
+    state.transferStatus = { run_id: 0, status: 'Idle', sent: 0, total: 0, files: 0, elapsed_secs: 0, current_file: '' };
+    state.transferLastUpdate = Date.now();
+    return true;
+  });
+  ipcMain.handle('transfer_active', () => state.transferActive);
 
   ipcMain.handle('transfer_start', async (_, req) => {
     if (req && req.req) {
@@ -2804,13 +3263,23 @@ function registerIpcHandlers() {
     if (!req.source_path || !req.source_path.trim()) throw new Error('Source path is required');
     if (!req.dest_path || !req.dest_path.trim()) throw new Error('Destination path is required');
 
-    if (state.transferActive) throw new Error('Transfer already running');
+    if (state.transferActive) {
+      const status = state.transferStatus?.status || '';
+      const isTerminal = status.startsWith('Complete') || status.startsWith('Cancelled') || status.startsWith('Error') || status.startsWith('Idle');
+      const stale = state.transferLastUpdate > 0 && Date.now() - state.transferLastUpdate > 30000;
+      if (isTerminal || stale) {
+        state.transferActive = false;
+      } else {
+        throw new Error('Transfer already running');
+      }
+    }
 
     state.transferRunId++;
     const runId = state.transferRunId;
     state.transferCancel = false;
     state.transferActive = true;
     state.transferStatus = { run_id: runId, status: 'Starting', sent: 0, total: req.required_size || 0, files: 0, elapsed_secs: 0, current_file: '' };
+    state.transferLastUpdate = Date.now();
 
     const emitLog = (message) => {
       if (state.saveLogs) writeLogLine('transfer', `[${runId}] ${message}`);
@@ -2837,6 +3306,7 @@ function registerIpcHandlers() {
               elapsed_secs: 0,
               current_file: path.basename(req.source_path),
             };
+            state.transferLastUpdate = Date.now();
 
             const extractResult = await uploadRarForExtraction(
               req.ip,
@@ -2845,6 +3315,7 @@ function registerIpcHandlers() {
               req.rar_extract_mode || 'normal',
               {
                 cancel: { get value() { return state.transferCancel; } },
+                overrideOnConflict: req.override_on_conflict !== false,
                 onProgress: (op, processed, total, currentFile) => {
                   state.transferStatus = {
                     run_id: runId,
@@ -2855,29 +3326,44 @@ function registerIpcHandlers() {
                     elapsed_secs: (Date.now() - startTime) / 1000,
                     current_file: currentFile || path.basename(req.source_path),
                   };
+                  state.transferLastUpdate = Date.now();
                 },
                 onLog: emitLog,
               }
             );
 
             const elapsed = (Date.now() - startTime) / 1000;
-            const finalTotal = extractResult.bytes || sourceStat.size;
+            const finalTotal = typeof extractResult.bytes === 'number' && extractResult.bytes > 0
+              ? extractResult.bytes
+              : sourceStat.size;
+            const isQueued = !!extractResult.queuedId;
             state.transferStatus = {
               run_id: runId,
-              status: 'Complete',
+              status: isQueued ? 'Queued for extraction' : 'Complete',
               sent: finalTotal,
               total: finalTotal,
               files: extractResult.files || 1,
               elapsed_secs: elapsed,
               current_file: '',
             };
+            state.transferLastUpdate = Date.now();
+            if (isQueued) {
+              emitLog(`Extraction queued (ID ${extractResult.queuedId}).`);
+              emit('queue_hint', {
+                queue_id: extractResult.queuedId,
+                source_path: req.source_path,
+                dest_path: req.dest_path,
+                size_bytes: sourceStat.size
+              });
+            }
             emit('transfer_complete', { run_id: runId, files: extractResult.files || 1, bytes: finalTotal });
             return;
           }
 
           emitLog('Scanning files...');
           const result = await collectFiles(req.source_path, { get value() { return state.transferCancel; } }, (filesFound, totalSize) => {
-            state.transferStatus = { ...state.transferStatus, status: 'Scanning', files: filesFound, total: totalSize };
+          state.transferStatus = { ...state.transferStatus, status: 'Scanning', files: filesFound, total: totalSize };
+          state.transferLastUpdate = Date.now();
           });
 
           if (result.cancelled) {
@@ -2892,6 +3378,7 @@ function registerIpcHandlers() {
           emitLog(`Starting transfer: ${(Number(totalSize) / (1024 * 1024 * 1024)).toFixed(2)} GB using ${req.connections} connection(s)`);
 
           state.transferStatus = { ...state.transferStatus, status: 'Uploading', files: result.files.length, total: Number(totalSize) };
+          state.transferLastUpdate = Date.now();
 
           const socket = await uploadV2Init(req.ip, TRANSFER_PORT, req.dest_path, req.use_temp);
           const rateLimitBps = req.bandwidth_limit_mbps ? req.bandwidth_limit_mbps * 1024 * 1024 / 8 : null; // Convert Mbps to Bps
@@ -2908,6 +3395,7 @@ function registerIpcHandlers() {
                 elapsed_secs: elapsed,
                 current_file: currentFile || '',
               };
+              state.transferLastUpdate = Date.now();
             },
             log: emitLog,
             compression: req.compression,
@@ -2919,11 +3407,13 @@ function registerIpcHandlers() {
 
           const elapsed = (Date.now() - startTime) / 1000;
           state.transferStatus = { run_id: runId, status: 'Complete', sent: totalSize, total: totalSize, files: parsed.files, elapsed_secs: elapsed, current_file: '' };
+          state.transferLastUpdate = Date.now();
 
           emit('transfer_complete', { run_id: runId, files: parsed.files, bytes: parsed.bytes });
         } catch (err) {
           emit('transfer_error', { run_id: runId, message: err.message });
           state.transferStatus = { ...state.transferStatus, status: `Error: ${err.message}` };
+          state.transferLastUpdate = Date.now();
         } finally {
           state.transferActive = false;
         }
@@ -2988,6 +3478,10 @@ function registerIpcHandlers() {
 
   ipcMain.handle('chat_start', () => {
     return startChatSocket();
+  });
+
+  ipcMain.handle('chat_stop', () => {
+    return stopChatSocket();
   });
 
   ipcMain.handle('chat_send', (_, name, text) => {

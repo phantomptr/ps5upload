@@ -18,7 +18,9 @@
 #include <fcntl.h>
 #include <sys/mount.h>
 #include <time.h>
+#include <ctype.h>
 #include <strings.h>
+#include <pthread.h>
 
 #include <ps5/kernel.h>
 
@@ -38,7 +40,39 @@
 #define DOWNLOAD_PACK_BUFFER_SIZE (4 * 1024 * 1024)
 #define PROBE_RAR_MAX_LINE 128
 
+static pthread_mutex_t g_payload_file_mutex = PTHREAD_MUTEX_INITIALIZER;
+#define UPLOAD_QUEUE_FILE "/data/ps5upload/upload_queue.json"
+#define HISTORY_FILE "/data/ps5upload/history.json"
+
 static int send_all(int sock, const void *buf, size_t len);
+static int recv_exact(int sock, void *buf, size_t len);
+static time_t get_file_mtime(const char *path);
+static int write_text_file(const char *path, const char *data, size_t len);
+static char *read_text_file(const char *path, size_t *out_len);
+
+static long long get_json_rev(const char *path) {
+    size_t len = 0;
+    char *data = read_text_file(path, &len);
+    if (!data) {
+        return 0;
+    }
+    long long rev = 0;
+    char *p = strstr(data, "\"rev\"");
+    if (!p) {
+        free(data);
+        return 0;
+    }
+    p = strchr(p, ':');
+    if (!p) {
+        free(data);
+        return 0;
+    }
+    p++;
+    while (*p && isspace((unsigned char)*p)) p++;
+    rev = strtoll(p, NULL, 10);
+    free(data);
+    return rev > 0 ? rev : 0;
+}
 
 static int mkdir_p(const char *path, mode_t mode, char *err, size_t err_len) {
     char tmp[PATH_MAX];
@@ -94,6 +128,9 @@ static void trim_newline(char *path) {
 static int remove_recursive(const char *path, char *err, size_t err_len) {
     struct stat st;
     if (lstat(path, &st) != 0) {
+        if (errno == ENOENT) {
+            return 0;
+        }
         snprintf(err, err_len, "lstat %s failed: %s", path, strerror(errno));
         return -1;
     }
@@ -129,6 +166,23 @@ static int remove_recursive(const char *path, char *err, size_t err_len) {
         return -1;
     }
     return 0;
+}
+
+struct DeleteTask {
+    char path[PATH_MAX];
+};
+
+static void *delete_worker(void *arg) {
+    struct DeleteTask *task = (struct DeleteTask *)arg;
+    if (!task) return NULL;
+    char err[256] = {0};
+    if (remove_recursive(task->path, err, sizeof(err)) != 0) {
+        printf("[DELETE] Failed: %s (%s)\n", task->path, err);
+    } else {
+        printf("[DELETE] Completed: %s\n", task->path);
+    }
+    free(task);
+    return NULL;
 }
 
 struct CopyProgressCtx {
@@ -624,6 +678,64 @@ static int send_all(int sock, const void *buf, size_t len) {
     return 0;
 }
 
+static int recv_exact(int sock, void *buf, size_t len) {
+    size_t read_total = 0;
+    char *ptr = (char *)buf;
+    while (read_total < len) {
+        ssize_t n = recv(sock, ptr + read_total, len - read_total, 0);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (n == 0) {
+            return -1;
+        }
+        read_total += (size_t)n;
+    }
+    return 0;
+}
+
+static time_t get_file_mtime(const char *path) {
+    struct stat st;
+    if (stat(path, &st) != 0) {
+        return 0;
+    }
+    return st.st_mtime;
+}
+
+static int write_text_file(const char *path, const char *data, size_t len) {
+    FILE *fp = fopen(path, "wb");
+    if (!fp) return -1;
+    if (len > 0 && fwrite(data, 1, len, fp) != len) {
+        fclose(fp);
+        return -1;
+    }
+    fclose(fp);
+    return 0;
+}
+
+static char *read_text_file(const char *path, size_t *out_len) {
+    FILE *fp = fopen(path, "rb");
+    if (!fp) return NULL;
+    fseek(fp, 0, SEEK_END);
+    long size = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+    if (size < 0) {
+        fclose(fp);
+        return NULL;
+    }
+    char *buf = malloc((size_t)size + 1);
+    if (!buf) {
+        fclose(fp);
+        return NULL;
+    }
+    size_t read_len = fread(buf, 1, (size_t)size, fp);
+    fclose(fp);
+    buf[read_len] = '\0';
+    if (out_len) *out_len = read_len;
+    return buf;
+}
+
 static int send_frame_header(int sock, uint32_t type, uint64_t len) {
     struct FrameHeader hdr;
     hdr.magic = MAGIC_FTX1;
@@ -1096,6 +1208,40 @@ void handle_delete_path(int client_sock, const char *path_arg) {
         send(client_sock, error_msg, strlen(error_msg), 0);
         return;
     }
+
+    const char *success = "OK\n";
+    send(client_sock, success, strlen(success), 0);
+}
+
+void handle_delete_path_async(int client_sock, const char *path_arg) {
+    char path[PATH_MAX];
+    strncpy(path, path_arg, PATH_MAX-1);
+    path[PATH_MAX-1] = '\0';
+    trim_newline(path);
+
+    if (!is_path_safe(path)) {
+        const char *error = "ERROR: Invalid path\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+
+    struct DeleteTask *task = malloc(sizeof(*task));
+    if (!task) {
+        const char *error = "ERROR: Out of memory\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+    strncpy(task->path, path, sizeof(task->path) - 1);
+    task->path[sizeof(task->path) - 1] = '\0';
+
+    pthread_t tid;
+    if (pthread_create(&tid, NULL, delete_worker, task) != 0) {
+        free(task);
+        const char *error = "ERROR: Delete thread failed\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+    pthread_detach(tid);
 
     const char *success = "OK\n";
     send(client_sock, success, strlen(success), 0);
@@ -1647,35 +1793,83 @@ void handle_get_space(int client_sock, const char *path_arg) {
 
 void handle_upload_v2_wrapper(int client_sock, const char *args) {
     char dest_path[PATH_MAX];
-    // Parse: UPLOAD_V2 <dest_path>
-    if(sscanf(args, "%s", dest_path) < 1) {
+    char mode[16] = {0};
+    // Parse: UPLOAD_V2 <dest_path> [TEMP|DIRECT]
+    const char *rest = NULL;
+    if (!args) {
         const char *error = "ERROR: Invalid UPLOAD_V2 format\n";
         send(client_sock, error, strlen(error), 0);
         return;
     }
-
+    // Manual token parse to avoid overflow
+    while (*args == ' ') args++;
+    const char *end = args;
+    while (*end != '\0' && *end != ' ') end++;
+    size_t len = (size_t)(end - args);
+    if (len == 0 || len >= sizeof(dest_path)) {
+        const char *error = "ERROR: Invalid UPLOAD_V2 format\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+    memcpy(dest_path, args, len);
+    dest_path[len] = '\0';
+    while (*end == ' ') end++;
+    rest = end;
+    if (rest && *rest) {
+        strncpy(mode, rest, sizeof(mode) - 1);
+        mode[sizeof(mode) - 1] = '\0';
+        char *space = strchr(mode, ' ');
+        if (space) {
+            *space = '\0';
+        }
+    }
     if (!is_path_safe(dest_path)) {
         const char *error = "ERROR: Invalid path\n";
         send(client_sock, error, strlen(error), 0);
         return;
     }
 
-    handle_upload_v2(client_sock, dest_path);
+    int use_temp = 1;
+    if (mode[0]) {
+        if (strcasecmp(mode, "TEMP") == 0) {
+            use_temp = 1;
+        } else if (strcasecmp(mode, "DIRECT") == 0) {
+            use_temp = 0;
+        } else {
+            const char *error = "ERROR: Invalid UPLOAD_V2 mode\n";
+            send(client_sock, error, strlen(error), 0);
+            return;
+        }
+    }
+
+    handle_upload_v2(client_sock, dest_path, use_temp);
 }
 
 void handle_upload(int client_sock, const char *args) {
     char dest_path[PATH_MAX];
-    char dummy[64]; // For old "total_size" parameter (now ignored)
 
     printf("[UPLOAD] Received UPLOAD command with args: %s\n", args);
 
     // Parse: UPLOAD <dest_path> (total_size is ignored, we'll count as we receive)
-    if(sscanf(args, "%s %s", dest_path, dummy) < 1) {
+    if (!args) {
         printf("[UPLOAD] ERROR: Failed to parse command arguments\n");
         const char *error = "ERROR: Invalid UPLOAD command format\n";
         send(client_sock, error, strlen(error), 0);
         return;
     }
+    // Safe parse of first token
+    while (*args == ' ') args++;
+    const char *end = args;
+    while (*end != '\0' && *end != ' ') end++;
+    size_t len = (size_t)(end - args);
+    if (len == 0 || len >= sizeof(dest_path)) {
+        printf("[UPLOAD] ERROR: Failed to parse command arguments\n");
+        const char *error = "ERROR: Invalid UPLOAD command format\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+    memcpy(dest_path, args, len);
+    dest_path[len] = '\0';
 
     if (!is_path_safe(dest_path)) {
         const char *error = "ERROR: Invalid path\n";
@@ -1786,6 +1980,14 @@ void handle_payload_status(int client_sock) {
     free(json);
 }
 
+void handle_payload_reset(int client_sock) {
+    transfer_request_abort();
+    transfer_cleanup();
+    extract_queue_reset();
+    const char *ok = "OK\n";
+    send_all(client_sock, ok, strlen(ok));
+}
+
 void handle_queue_extract(int client_sock, const char *args) {
     char buffer[PATH_MAX * 2];
     strncpy(buffer, args, sizeof(buffer) - 1);
@@ -1813,7 +2015,12 @@ void handle_queue_extract(int client_sock, const char *args) {
         return;
     }
 
-    int id = extract_queue_add(src, dst);
+    int id = extract_queue_add(src, dst, 0, NULL);
+    if (id == -2) {
+        const char *error = "ERROR: Duplicate extraction request\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
     if (id < 0) {
         const char *error = "ERROR: Queue full\n";
         send(client_sock, error, strlen(error), 0);
@@ -1854,4 +2061,247 @@ void handle_queue_clear(int client_sock) {
     extract_queue_clear_done();
     const char *success = "OK\n";
     send(client_sock, success, strlen(success), 0);
+}
+
+void handle_queue_clear_all(int client_sock) {
+    extract_queue_clear_all(1);
+    const char *success = "OK\n";
+    send(client_sock, success, strlen(success), 0);
+}
+
+void handle_queue_reorder(int client_sock, const char *args) {
+    char buffer[256];
+    strncpy(buffer, args, sizeof(buffer) - 1);
+    buffer[sizeof(buffer) - 1] = '\0';
+    trim_newline(buffer);
+
+    if (buffer[0] == '\0') {
+        const char *error = "ERROR: Invalid reorder list\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+
+    int ids[EXTRACT_QUEUE_MAX_ITEMS];
+    int count = 0;
+    char *token = strtok(buffer, " ,\t");
+    while (token && count < EXTRACT_QUEUE_MAX_ITEMS) {
+        int id = atoi(token);
+        if (id > 0) {
+            ids[count++] = id;
+        }
+        token = strtok(NULL, " ,\t");
+    }
+
+    if (count == 0) {
+        const char *error = "ERROR: Invalid reorder list\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+
+    if (extract_queue_reorder(ids, count) == 0) {
+        const char *success = "OK\n";
+        send(client_sock, success, strlen(success), 0);
+    } else {
+        const char *error = "ERROR: Reorder failed\n";
+        send(client_sock, error, strlen(error), 0);
+    }
+}
+
+void handle_queue_process(int client_sock) {
+    extract_queue_process();
+    const char *success = "OK\n";
+    send(client_sock, success, strlen(success), 0);
+}
+
+void handle_queue_pause(int client_sock, const char *args) {
+    char buffer[64];
+    strncpy(buffer, args, sizeof(buffer) - 1);
+    buffer[sizeof(buffer) - 1] = '\0';
+    trim_newline(buffer);
+
+    int id = atoi(buffer);
+    if (id <= 0) {
+        const char *error = "ERROR: Invalid item ID\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+
+    if (extract_queue_pause(id) == 0) {
+        const char *success = "OK\n";
+        send(client_sock, success, strlen(success), 0);
+    } else {
+        const char *error = "ERROR: Item not running\n";
+        send(client_sock, error, strlen(error), 0);
+    }
+}
+
+void handle_queue_retry(int client_sock, const char *args) {
+    char buffer[64];
+    strncpy(buffer, args ? args : "", sizeof(buffer) - 1);
+    buffer[sizeof(buffer) - 1] = '\0';
+    trim_newline(buffer);
+
+    int id = atoi(buffer);
+    if (id <= 0) {
+        const char *error = "ERROR: Invalid item ID\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+
+    if (extract_queue_retry(id) == 0) {
+        const char *success = "OK\n";
+        send(client_sock, success, strlen(success), 0);
+    } else {
+        const char *error = "ERROR: Item not found or cannot be retried\n";
+        send(client_sock, error, strlen(error), 0);
+    }
+}
+
+void handle_sync_info(int client_sock) {
+    long long upload_rev = get_json_rev(UPLOAD_QUEUE_FILE);
+    long long history_rev = get_json_rev(HISTORY_FILE);
+    time_t upload_ts = get_file_mtime(UPLOAD_QUEUE_FILE);
+    time_t history_ts = get_file_mtime(HISTORY_FILE);
+    time_t extract_ts = extract_queue_get_updated_at();
+
+    char json[256];
+    int len = snprintf(json, sizeof(json),
+        "{\"upload_queue_rev\":%lld,\"history_rev\":%lld,\"upload_queue_updated_at\":%ld,\"history_updated_at\":%ld,\"extract_queue_updated_at\":%ld}",
+        upload_rev, history_rev, (long)upload_ts, (long)history_ts, (long)extract_ts);
+    if (len < 0) {
+        const char *err = "ERROR: Sync info failed\n";
+        send_all(client_sock, err, strlen(err));
+        return;
+    }
+    char header[64];
+    int hdr_len = snprintf(header, sizeof(header), "OK %d\n", len);
+    send_all(client_sock, header, (size_t)hdr_len);
+    send_all(client_sock, json, (size_t)len);
+    send_all(client_sock, "\n", 1);
+}
+
+void handle_upload_queue_sync(int client_sock, const char *args) {
+    if (!args) {
+        const char *err = "ERROR: Invalid payload\n";
+        send_all(client_sock, err, strlen(err));
+        return;
+    }
+    long len = strtol(args, NULL, 10);
+    if (len <= 0 || len > 50 * 1024 * 1024) {
+        const char *err = "ERROR: Invalid payload size\n";
+        send_all(client_sock, err, strlen(err));
+        return;
+    }
+    struct timeval tv;
+    tv.tv_sec = 5;
+    tv.tv_usec = 0;
+    setsockopt(client_sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof(tv));
+    char *buf = malloc((size_t)len + 1);
+    if (!buf) {
+        const char *err = "ERROR: Out of memory\n";
+        send_all(client_sock, err, strlen(err));
+        return;
+    }
+    if (recv_exact(client_sock, buf, (size_t)len) != 0) {
+        free(buf);
+        const char *err = "ERROR: Payload read failed\n";
+        send_all(client_sock, err, strlen(err));
+        return;
+    }
+    buf[len] = '\0';
+    pthread_mutex_lock(&g_payload_file_mutex);
+    if (write_text_file(UPLOAD_QUEUE_FILE, buf, (size_t)len) != 0) {
+        pthread_mutex_unlock(&g_payload_file_mutex);
+        free(buf);
+        const char *err = "ERROR: Payload write failed\n";
+        send_all(client_sock, err, strlen(err));
+        return;
+    }
+    pthread_mutex_unlock(&g_payload_file_mutex);
+    free(buf);
+    const char *ok = "OK\n";
+    send_all(client_sock, ok, strlen(ok));
+}
+
+void handle_upload_queue_get(int client_sock) {
+    size_t len = 0;
+    pthread_mutex_lock(&g_payload_file_mutex);
+    char *data = read_text_file(UPLOAD_QUEUE_FILE, &len);
+    pthread_mutex_unlock(&g_payload_file_mutex);
+    if (!data) {
+        const char *ok = "OK 0\n";
+        send_all(client_sock, ok, strlen(ok));
+        return;
+    }
+    char header[64];
+    int hdr_len = snprintf(header, sizeof(header), "OK %zu\n", len);
+    send_all(client_sock, header, (size_t)hdr_len);
+    if (len > 0) {
+        send_all(client_sock, data, len);
+    }
+    send_all(client_sock, "\n", 1);
+    free(data);
+}
+
+void handle_history_sync(int client_sock, const char *args) {
+    if (!args) {
+        const char *err = "ERROR: Invalid payload\n";
+        send_all(client_sock, err, strlen(err));
+        return;
+    }
+    long len = strtol(args, NULL, 10);
+    if (len <= 0 || len > 50 * 1024 * 1024) {
+        const char *err = "ERROR: Invalid payload size\n";
+        send_all(client_sock, err, strlen(err));
+        return;
+    }
+    struct timeval tv;
+    tv.tv_sec = 5;
+    tv.tv_usec = 0;
+    setsockopt(client_sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof(tv));
+    char *buf = malloc((size_t)len + 1);
+    if (!buf) {
+        const char *err = "ERROR: Out of memory\n";
+        send_all(client_sock, err, strlen(err));
+        return;
+    }
+    if (recv_exact(client_sock, buf, (size_t)len) != 0) {
+        free(buf);
+        const char *err = "ERROR: Payload read failed\n";
+        send_all(client_sock, err, strlen(err));
+        return;
+    }
+    buf[len] = '\0';
+    pthread_mutex_lock(&g_payload_file_mutex);
+    if (write_text_file(HISTORY_FILE, buf, (size_t)len) != 0) {
+        pthread_mutex_unlock(&g_payload_file_mutex);
+        free(buf);
+        const char *err = "ERROR: Payload write failed\n";
+        send_all(client_sock, err, strlen(err));
+        return;
+    }
+    pthread_mutex_unlock(&g_payload_file_mutex);
+    free(buf);
+    const char *ok = "OK\n";
+    send_all(client_sock, ok, strlen(ok));
+}
+
+void handle_history_get(int client_sock) {
+    size_t len = 0;
+    pthread_mutex_lock(&g_payload_file_mutex);
+    char *data = read_text_file(HISTORY_FILE, &len);
+    pthread_mutex_unlock(&g_payload_file_mutex);
+    if (!data) {
+        const char *ok = "OK 0\n";
+        send_all(client_sock, ok, strlen(ok));
+        return;
+    }
+    char header[64];
+    int hdr_len = snprintf(header, sizeof(header), "OK %zu\n", len);
+    send_all(client_sock, header, (size_t)hdr_len);
+    if (len > 0) {
+        send_all(client_sock, data, len);
+    }
+    send_all(client_sock, "\n", 1);
+    free(data);
 }

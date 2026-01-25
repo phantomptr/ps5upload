@@ -19,19 +19,40 @@
 #include <sys/stat.h>
 #include <errno.h>
 #include <dirent.h>
+#include <stdint.h>
 
 static ExtractQueue g_queue;
 static pthread_mutex_t g_queue_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_t g_extract_thread;
 static volatile int g_thread_running = 0;
 static volatile int g_cancel_requested = 0;
+static volatile int g_requeue_requested = 0;
+static volatile int g_requeue_id = -1;
+static time_t g_queue_updated_at = 0;
+
+#define EXTRACT_QUEUE_FILE "/data/ps5upload/extract_queue.bin"
+#define EXTRACT_QUEUE_MAGIC 0x31515845 /* 'EXQ1' */
+#define EXTRACT_QUEUE_VERSION 1
+
+typedef struct {
+    uint32_t magic;
+    uint32_t version;
+    uint32_t count;
+    uint32_t next_id;
+    uint64_t updated_at;
+} ExtractQueueFileHeader;
 
 /* Notification interval for extraction progress (seconds) */
 #define NOTIFY_INTERVAL_SEC 5
 
 /* Forward declarations */
 static int chmod_recursive_queue(const char *path, mode_t mode);
+static int remove_recursive_queue(const char *path);
+static int mkdir_recursive_queue(const char *path);
 static void *extract_thread_func(void *arg);
+static void extract_queue_touch(void);
+static void extract_queue_save_locked(void);
+static void extract_queue_load(void);
 
 void extract_queue_init(void) {
     pthread_mutex_lock(&g_queue_mutex);
@@ -39,8 +60,11 @@ void extract_queue_init(void) {
     g_queue.next_id = 1;
     g_queue.current_index = -1;
     g_queue.server_start_time = time(NULL);
+    g_queue_updated_at = time(NULL);
     pthread_mutex_unlock(&g_queue_mutex);
     printf("[EXTRACT_QUEUE] Initialized\n");
+
+    extract_queue_load();
 }
 
 static const char *get_archive_name(const char *path) {
@@ -48,12 +72,22 @@ static const char *get_archive_name(const char *path) {
     return name ? name + 1 : path;
 }
 
-int extract_queue_add(const char *source_path, const char *dest_path) {
+int extract_queue_add(const char *source_path, const char *dest_path, int delete_source, const char *cleanup_path) {
     if (!source_path || !dest_path) {
         return -1;
     }
 
     pthread_mutex_lock(&g_queue_mutex);
+
+    for (int i = 0; i < g_queue.count; i++) {
+        ExtractQueueItem *existing = &g_queue.items[i];
+        if ((existing->status == EXTRACT_STATUS_PENDING || existing->status == EXTRACT_STATUS_RUNNING) &&
+            strcmp(existing->source_path, source_path) == 0 &&
+            strcmp(existing->dest_path, dest_path) == 0) {
+            pthread_mutex_unlock(&g_queue_mutex);
+            return -2;
+        }
+    }
 
     if (g_queue.count >= EXTRACT_QUEUE_MAX_ITEMS) {
         pthread_mutex_unlock(&g_queue_mutex);
@@ -67,6 +101,12 @@ int extract_queue_add(const char *source_path, const char *dest_path) {
     item->id = g_queue.next_id++;
     strncpy(item->source_path, source_path, sizeof(item->source_path) - 1);
     strncpy(item->dest_path, dest_path, sizeof(item->dest_path) - 1);
+    if (cleanup_path && cleanup_path[0]) {
+        strncpy(item->cleanup_path, cleanup_path, sizeof(item->cleanup_path) - 1);
+    } else {
+        item->cleanup_path[0] = '\0';
+    }
+    item->delete_source = delete_source ? 1 : 0;
     strncpy(item->archive_name, get_archive_name(source_path), sizeof(item->archive_name) - 1);
     item->status = EXTRACT_STATUS_PENDING;
     item->percent = 0;
@@ -79,6 +119,7 @@ int extract_queue_add(const char *source_path, const char *dest_path) {
 
     int id = item->id;
     g_queue.count++;
+    extract_queue_touch();
 
     pthread_mutex_unlock(&g_queue_mutex);
 
@@ -129,8 +170,8 @@ char *extract_queue_get_status_json(void) {
     unsigned long uptime = (unsigned long)difftime(time(NULL), g_queue.server_start_time);
 
     int pos = snprintf(buf, buf_size,
-        "{\"version\":\"%s\",\"uptime\":%lu,\"queue_count\":%d,\"is_busy\":%s,\"items\":[",
-        PS5_UPLOAD_VERSION, uptime, g_queue.count, g_thread_running ? "true" : "false");
+        "{\"version\":\"%s\",\"uptime\":%lu,\"queue_count\":%d,\"is_busy\":%s,\"updated_at\":%ld,\"items\":[",
+        PS5_UPLOAD_VERSION, uptime, g_queue.count, g_thread_running ? "true" : "false", (long)g_queue_updated_at);
     if (pos < 0 || (size_t)pos >= buf_size) {
         buf[buf_size - 1] = '\0';
         pthread_mutex_unlock(&g_queue_mutex);
@@ -156,11 +197,16 @@ char *extract_queue_get_status_json(void) {
 
         json_escape_string(item->archive_name, escaped, sizeof(escaped));
 
+        char src_escaped[EXTRACT_QUEUE_PATH_MAX * 2];
+        char dst_escaped[EXTRACT_QUEUE_PATH_MAX * 2];
+        json_escape_string(item->source_path, src_escaped, sizeof(src_escaped));
+        json_escape_string(item->dest_path, dst_escaped, sizeof(dst_escaped));
+
         int wrote = snprintf(buf + pos, buf_size - (size_t)pos,
-            "{\"id\":%d,\"archive_name\":\"%s\",\"status\":\"%s\","
+            "{\"id\":%d,\"archive_name\":\"%s\",\"source_path\":\"%s\",\"dest_path\":\"%s\",\"status\":\"%s\","
             "\"percent\":%d,\"processed_bytes\":%llu,\"total_bytes\":%llu,"
             "\"files_extracted\":%d,\"started_at\":%ld,\"completed_at\":%ld",
-            item->id, escaped, status_str,
+            item->id, escaped, src_escaped, dst_escaped, status_str,
             item->percent, item->processed_bytes, item->total_bytes,
             item->files_extracted, (long)item->started_at, (long)item->completed_at);
         if (wrote < 0) {
@@ -262,6 +308,7 @@ static void *extract_thread_func(void *arg) {
     item->started_at = time(NULL);
     g_queue.current_index = index;
     g_cancel_requested = 0;
+    extract_queue_touch();
 
     char source[EXTRACT_QUEUE_PATH_MAX];
     char dest[EXTRACT_QUEUE_PATH_MAX];
@@ -276,7 +323,26 @@ static void *extract_thread_func(void *arg) {
 
 
     /* Create destination directory */
-    mkdir(dest, 0777);
+    if (mkdir_recursive_queue(dest) != 0) {
+        pthread_mutex_lock(&g_queue_mutex);
+        item->status = EXTRACT_STATUS_FAILED;
+        item->completed_at = time(NULL);
+        snprintf(item->error_msg, sizeof(item->error_msg), "Create dest failed: %s", strerror(errno));
+        g_queue.current_index = -1;
+        g_thread_running = 0;
+        extract_queue_touch();
+        pthread_mutex_unlock(&g_queue_mutex);
+
+        if (item->delete_source) {
+            unlink(source);
+            if (item->cleanup_path[0]) {
+                remove_recursive_queue(item->cleanup_path);
+            }
+        }
+
+        extract_queue_process();
+        return NULL;
+    }
 
     /* Scan archive first */
     int file_count = 0;
@@ -289,8 +355,15 @@ static void *extract_thread_func(void *arg) {
         item->completed_at = time(NULL);
         snprintf(item->error_msg, sizeof(item->error_msg), "Scan failed: %s", unrar_strerror(scan_result));
         g_queue.current_index = -1;
+        extract_queue_touch();
         pthread_mutex_unlock(&g_queue_mutex);
 
+        if (item->delete_source) {
+            unlink(source);
+            if (item->cleanup_path[0]) {
+                remove_recursive_queue(item->cleanup_path);
+            }
+        }
 
         /* Continue with next item */
         extract_queue_process();
@@ -316,8 +389,19 @@ static void *extract_thread_func(void *arg) {
     pthread_mutex_lock(&g_queue_mutex);
 
     if (g_cancel_requested) {
-        item->status = EXTRACT_STATUS_FAILED;
-        snprintf(item->error_msg, sizeof(item->error_msg), "Cancelled");
+        if (g_requeue_requested && g_requeue_id == item->id) {
+            item->status = EXTRACT_STATUS_PENDING;
+            item->percent = 0;
+            item->processed_bytes = 0;
+            item->total_bytes = 0;
+            item->files_extracted = 0;
+            item->started_at = 0;
+            item->completed_at = 0;
+            item->error_msg[0] = '\0';
+        } else {
+            item->status = EXTRACT_STATUS_FAILED;
+            snprintf(item->error_msg, sizeof(item->error_msg), "Cancelled");
+        }
     } else if (extract_result != UNRAR_OK) {
         item->status = EXTRACT_STATUS_FAILED;
         snprintf(item->error_msg, sizeof(item->error_msg), "Extract failed: %s", unrar_strerror(extract_result));
@@ -335,18 +419,94 @@ static void *extract_thread_func(void *arg) {
         /* Notifications disabled */
     }
 
-    item->completed_at = time(NULL);
+    if (item->status != EXTRACT_STATUS_PENDING) {
+        item->completed_at = time(NULL);
+    }
     g_queue.current_index = -1;
     g_thread_running = 0;
+    g_requeue_requested = 0;
+    g_requeue_id = -1;
+    extract_queue_touch();
 
     pthread_mutex_unlock(&g_queue_mutex);
 
     printf("[EXTRACT_QUEUE] Extraction finished for %s\n", source);
 
+    if (item->delete_source) {
+        unlink(source);
+        if (item->cleanup_path[0]) {
+            remove_recursive_queue(item->cleanup_path);
+        }
+    }
+
     /* Process next item */
     extract_queue_process();
 
     return NULL;
+}
+
+static int mkdir_recursive_queue(const char *path) {
+    char tmp[EXTRACT_QUEUE_PATH_MAX];
+    char *p = NULL;
+    size_t len;
+
+    if (!path || !*path) {
+        errno = EINVAL;
+        return -1;
+    }
+    strncpy(tmp, path, sizeof(tmp) - 1);
+    tmp[sizeof(tmp) - 1] = '\0';
+    len = strlen(tmp);
+    if (len == 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (tmp[len - 1] == '/') {
+        tmp[len - 1] = 0;
+    }
+
+    for (p = tmp + 1; *p; p++) {
+        if (*p == '/') {
+            *p = 0;
+            if (mkdir(tmp, 0777) != 0 && errno != EEXIST) {
+                return -1;
+            }
+            chmod(tmp, 0777);
+            *p = '/';
+        }
+    }
+    if (mkdir(tmp, 0777) != 0 && errno != EEXIST) {
+        return -1;
+    }
+    chmod(tmp, 0777);
+    return 0;
+}
+
+static int remove_recursive_queue(const char *path) {
+    DIR *dir = opendir(path);
+    if (!dir) {
+        return (errno == ENOENT) ? 0 : -1;
+    }
+    struct dirent *ent;
+    char buf[EXTRACT_QUEUE_PATH_MAX];
+    while ((ent = readdir(dir)) != NULL) {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) {
+            continue;
+        }
+        snprintf(buf, sizeof(buf), "%s/%s", path, ent->d_name);
+        struct stat st;
+        if (stat(buf, &st) == 0 && S_ISDIR(st.st_mode)) {
+            if (remove_recursive_queue(buf) != 0) {
+                closedir(dir);
+                return -1;
+            }
+            rmdir(buf);
+        } else {
+            unlink(buf);
+        }
+    }
+    closedir(dir);
+    return rmdir(path);
 }
 
 void extract_queue_process(void) {
@@ -400,11 +560,65 @@ int extract_queue_cancel(int id) {
                 g_queue.items[i].status = EXTRACT_STATUS_FAILED;
                 strncpy(g_queue.items[i].error_msg, "Cancelled", sizeof(g_queue.items[i].error_msg) - 1);
                 g_queue.items[i].completed_at = time(NULL);
+                extract_queue_touch();
                 pthread_mutex_unlock(&g_queue_mutex);
                 return 0;
             } else if (g_queue.items[i].status == EXTRACT_STATUS_RUNNING) {
                 /* Request cancellation of running extraction */
                 g_cancel_requested = 1;
+                extract_queue_touch();
+                pthread_mutex_unlock(&g_queue_mutex);
+                return 0;
+            }
+            break;
+        }
+    }
+
+    pthread_mutex_unlock(&g_queue_mutex);
+    return -1;
+}
+
+int extract_queue_pause(int id) {
+    pthread_mutex_lock(&g_queue_mutex);
+
+    for (int i = 0; i < g_queue.count; i++) {
+        if (g_queue.items[i].id == id) {
+            if (g_queue.items[i].status == EXTRACT_STATUS_RUNNING) {
+                g_requeue_requested = 1;
+                g_requeue_id = id;
+                g_cancel_requested = 1;
+                extract_queue_touch();
+                pthread_mutex_unlock(&g_queue_mutex);
+                return 0;
+            }
+            if (g_queue.items[i].status == EXTRACT_STATUS_PENDING) {
+                extract_queue_touch();
+                pthread_mutex_unlock(&g_queue_mutex);
+                return 0;
+            }
+            break;
+        }
+    }
+
+    pthread_mutex_unlock(&g_queue_mutex);
+    return -1;
+}
+
+int extract_queue_retry(int id) {
+    pthread_mutex_lock(&g_queue_mutex);
+
+    for (int i = 0; i < g_queue.count; i++) {
+        if (g_queue.items[i].id == id) {
+            if (g_queue.items[i].status == EXTRACT_STATUS_FAILED) {
+                g_queue.items[i].status = EXTRACT_STATUS_PENDING;
+                g_queue.items[i].percent = 0;
+                g_queue.items[i].processed_bytes = 0;
+                g_queue.items[i].total_bytes = 0;
+                g_queue.items[i].files_extracted = 0;
+                g_queue.items[i].started_at = 0;
+                g_queue.items[i].completed_at = 0;
+                g_queue.items[i].error_msg[0] = '\0';
+                extract_queue_touch();
                 pthread_mutex_unlock(&g_queue_mutex);
                 return 0;
             }
@@ -430,9 +644,180 @@ void extract_queue_clear_done(void) {
         }
     }
     g_queue.count = write_idx;
+    extract_queue_touch();
 
     pthread_mutex_unlock(&g_queue_mutex);
     printf("[EXTRACT_QUEUE] Cleared completed/failed items, %d remaining\n", write_idx);
+}
+
+void extract_queue_clear_all(int keep_running) {
+    pthread_mutex_lock(&g_queue_mutex);
+
+    int write_idx = 0;
+    for (int i = 0; i < g_queue.count; i++) {
+        if (keep_running && g_queue.items[i].status == EXTRACT_STATUS_RUNNING) {
+            if (write_idx != i) {
+                g_queue.items[write_idx] = g_queue.items[i];
+            }
+            write_idx++;
+        }
+    }
+    g_queue.count = write_idx;
+    extract_queue_touch();
+
+    pthread_mutex_unlock(&g_queue_mutex);
+    printf("[EXTRACT_QUEUE] Cleared queue, %d remaining\n", write_idx);
+}
+
+void extract_queue_reset(void) {
+    pthread_mutex_lock(&g_queue_mutex);
+    int running_index = -1;
+    for (int i = 0; i < g_queue.count; i++) {
+        if (g_queue.items[i].status == EXTRACT_STATUS_RUNNING) {
+            running_index = i;
+            break;
+        }
+    }
+
+    if (running_index >= 0) {
+        g_cancel_requested = 1;
+        ExtractQueueItem running = g_queue.items[running_index];
+        g_queue.items[0] = running;
+        g_queue.count = 1;
+        g_queue.current_index = 0;
+    } else {
+        g_queue.count = 0;
+        g_queue.current_index = -1;
+    }
+    extract_queue_touch();
+    pthread_mutex_unlock(&g_queue_mutex);
+}
+
+int extract_queue_reorder(const int *ids, int count) {
+    if (!ids || count <= 0) return -1;
+    pthread_mutex_lock(&g_queue_mutex);
+
+    if (g_queue.count <= 1) {
+        pthread_mutex_unlock(&g_queue_mutex);
+        return 0;
+    }
+
+    ExtractQueueItem reordered[EXTRACT_QUEUE_MAX_ITEMS];
+    int used[EXTRACT_QUEUE_MAX_ITEMS];
+    for (int i = 0; i < EXTRACT_QUEUE_MAX_ITEMS; i++) {
+        used[i] = 0;
+    }
+
+    int write_idx = 0;
+
+    /* Keep running item(s) at the front in original order */
+    for (int i = 0; i < g_queue.count; i++) {
+        if (g_queue.items[i].status == EXTRACT_STATUS_RUNNING) {
+            reordered[write_idx++] = g_queue.items[i];
+            used[i] = 1;
+        }
+    }
+
+    /* Add items in requested order */
+    for (int i = 0; i < count; i++) {
+        int id = ids[i];
+        for (int j = 0; j < g_queue.count; j++) {
+            if (used[j]) continue;
+            if (g_queue.items[j].id == id) {
+                reordered[write_idx++] = g_queue.items[j];
+                used[j] = 1;
+                break;
+            }
+        }
+    }
+
+    /* Append remaining items in original order */
+    for (int i = 0; i < g_queue.count; i++) {
+        if (used[i]) continue;
+        reordered[write_idx++] = g_queue.items[i];
+    }
+
+    if (write_idx > g_queue.count) {
+        write_idx = g_queue.count;
+    }
+
+    for (int i = 0; i < write_idx; i++) {
+        g_queue.items[i] = reordered[i];
+    }
+    extract_queue_touch();
+
+    pthread_mutex_unlock(&g_queue_mutex);
+    return 0;
+}
+
+time_t extract_queue_get_updated_at(void) {
+    pthread_mutex_lock(&g_queue_mutex);
+    time_t ts = g_queue_updated_at;
+    pthread_mutex_unlock(&g_queue_mutex);
+    return ts;
+}
+
+static void extract_queue_touch(void) {
+    g_queue_updated_at = time(NULL);
+    extract_queue_save_locked();
+}
+
+static void extract_queue_save_locked(void) {
+    FILE *fp = fopen(EXTRACT_QUEUE_FILE, "wb");
+    if (!fp) {
+        return;
+    }
+    ExtractQueueFileHeader header;
+    header.magic = EXTRACT_QUEUE_MAGIC;
+    header.version = EXTRACT_QUEUE_VERSION;
+    header.count = (uint32_t)g_queue.count;
+    header.next_id = (uint32_t)g_queue.next_id;
+    header.updated_at = (uint64_t)g_queue_updated_at;
+    fwrite(&header, sizeof(header), 1, fp);
+    if (g_queue.count > 0) {
+        fwrite(g_queue.items, sizeof(ExtractQueueItem), (size_t)g_queue.count, fp);
+    }
+    fclose(fp);
+}
+
+static void extract_queue_load(void) {
+    FILE *fp = fopen(EXTRACT_QUEUE_FILE, "rb");
+    if (!fp) {
+        return;
+    }
+    ExtractQueueFileHeader header;
+    if (fread(&header, sizeof(header), 1, fp) != 1) {
+        fclose(fp);
+        return;
+    }
+    if (header.magic != EXTRACT_QUEUE_MAGIC || header.version != EXTRACT_QUEUE_VERSION) {
+        fclose(fp);
+        return;
+    }
+    int count = (int)header.count;
+    if (count < 0) count = 0;
+    if (count > EXTRACT_QUEUE_MAX_ITEMS) count = EXTRACT_QUEUE_MAX_ITEMS;
+    if (count > 0) {
+        if (fread(g_queue.items, sizeof(ExtractQueueItem), (size_t)count, fp) != (size_t)count) {
+            fclose(fp);
+            return;
+        }
+    }
+    fclose(fp);
+
+    pthread_mutex_lock(&g_queue_mutex);
+    g_queue.count = count;
+    g_queue.next_id = (int)header.next_id;
+    g_queue_updated_at = (time_t)header.updated_at;
+    for (int i = 0; i < g_queue.count; i++) {
+        if (g_queue.items[i].status == EXTRACT_STATUS_RUNNING) {
+            g_queue.items[i].status = EXTRACT_STATUS_PENDING;
+            g_queue.items[i].percent = 0;
+            g_queue.items[i].processed_bytes = 0;
+            g_queue.items[i].started_at = 0;
+        }
+    }
+    pthread_mutex_unlock(&g_queue_mutex);
 }
 
 unsigned long extract_queue_get_uptime(void) {

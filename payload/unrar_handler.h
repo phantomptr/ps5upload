@@ -11,10 +11,10 @@
  * Receives a RAR file over the socket and extracts to dest_path
  *
  * Protocol:
- * 1. Client sends: UPLOAD_RAR <dest_path> <file_size>\n
+ * 1. Client sends: UPLOAD_RAR <dest_path> <file_size> [NOOVERWRITE]\n
  * 2. Server responds: READY\n
  * 3. Client sends: <file_size> bytes of RAR data
- * 4. Server extracts and responds: SUCCESS <files> <bytes>\n or ERROR: <message>\n
+ * 4. Server queues extraction and responds: QUEUED <id>\n or ERROR: <message>\n
  *
  * sock: client socket
  * args: command arguments (dest_path file_size)

@@ -210,6 +210,7 @@ static long long g_total_bytes = 0;
 static int g_total_files = 0;
 static uint64_t g_session_counter = 0;
 static pthread_mutex_t g_session_counter_lock = PTHREAD_MUTEX_INITIALIZER;
+static volatile sig_atomic_t g_abort_transfer = 0;
 
 static void log_memory_stats(const char *tag) {
     int pool_count = 0;
@@ -368,6 +369,46 @@ static void close_current_file(ConnState *state) {
     state->current_fd = -1;
     state->current_path[0] = '\0';
     state->current_full_path[0] = '\0';
+}
+
+static int validate_pack_payload(const uint8_t *pack_buf, size_t pack_len) {
+    if (!pack_buf || pack_len < 4) {
+        return -1;
+    }
+    size_t offset = 0;
+    uint32_t record_count = 0;
+    memcpy(&record_count, pack_buf, 4);
+    offset += 4;
+
+    // Basic sanity: each record must have at least 2 bytes path_len + 8 bytes data_len
+    if (record_count > (pack_len / 10)) {
+        return -1;
+    }
+
+    for (uint32_t i = 0; i < record_count; i++) {
+        if (pack_len - offset < 2) {
+            return -1;
+        }
+        uint16_t path_len = 0;
+        memcpy(&path_len, pack_buf + offset, 2);
+        offset += 2;
+        if (path_len == 0 || path_len >= PATH_MAX) {
+            return -1;
+        }
+        if (pack_len - offset < (size_t)path_len + 8) {
+            return -1;
+        }
+        offset += path_len;
+
+        uint64_t data_len = 0;
+        memcpy(&data_len, pack_buf + offset, 8);
+        offset += 8;
+        if (data_len > pack_len - offset) {
+            return -1;
+        }
+        offset += (size_t)data_len;
+    }
+    return 0;
 }
 
 static int path_is_dir(const char *path) {
@@ -631,13 +672,17 @@ static void write_pack_data(uint64_t session_id, const char *dest_root, const ui
     offset += 4;
 
     for (uint32_t i = 0; i < record_count; i++) {
-        if (offset + 2 > pack_len) break;
+        if (pack_len - offset < 2) break;
 
         uint16_t path_len;
         memcpy(&path_len, pack_buf + offset, 2);
         offset += 2;
 
-        if (offset + path_len + 8 > pack_len) break;
+        if (path_len == 0 || path_len >= PATH_MAX) {
+            printf("[FTX] Writer: invalid path length %u\n", path_len);
+            return;
+        }
+        if (pack_len - offset < (size_t)path_len + 8) break;
 
         char rel_path[PATH_MAX];
         memcpy(rel_path, pack_buf + offset, path_len);
@@ -648,7 +693,10 @@ static void write_pack_data(uint64_t session_id, const char *dest_root, const ui
         memcpy(&data_len, pack_buf + offset, 8);
         offset += 8;
 
-        if (offset + data_len > pack_len) break;
+        if (data_len > pack_len - offset) {
+            printf("[FTX] Writer: invalid data length %llu\n", (unsigned long long)data_len);
+            return;
+        }
 
         char full_path[PATH_MAX];
         snprintf(full_path, sizeof(full_path), "%s/%s", dest_root, rel_path);
@@ -685,7 +733,7 @@ static void write_pack_data(uint64_t session_id, const char *dest_root, const ui
         }
 
         if (state->current_fd >= 0) {
-            ssize_t written = write(state->current_fd, pack_buf + offset, data_len);
+            ssize_t written = write(state->current_fd, pack_buf + offset, (size_t)data_len);
             if (written > 0) {
                 g_total_bytes += written;
             }
@@ -706,7 +754,7 @@ static void write_pack_data(uint64_t session_id, const char *dest_root, const ui
             pthread_mutex_unlock(&g_log_state.mutex);
         }
 
-        offset += data_len;
+        offset += (size_t)data_len;
     }
 }
 
@@ -733,9 +781,9 @@ static void *disk_writer_thread(void *arg) {
     return NULL;
 }
 
-static void init_worker_pool(void) {
+static int init_worker_pool(void) {
     if (g_workers_initialized) {
-        return;
+        return 0;
     }
 
     printf("[FTX] Initializing writer thread...\n");
@@ -743,10 +791,12 @@ static void init_worker_pool(void) {
 
     if (pthread_create(&g_writer_thread, NULL, disk_writer_thread, NULL) != 0) {
         printf("[FTX] Failed to create writer thread: %s\n", strerror(errno));
-        exit(1);
+        g_workers_initialized = 0;
+        return -1;
     }
     
     g_workers_initialized = 1;
+    return 0;
 }
 
 static void cleanup_worker_pool(void) {
@@ -757,6 +807,7 @@ static void cleanup_worker_pool(void) {
     pthread_mutex_lock(&g_queue.mutex);
     g_queue.closed = 1;
     pthread_cond_broadcast(&g_queue.not_empty);
+    pthread_cond_broadcast(&g_queue.not_full);
     pthread_mutex_unlock(&g_queue.mutex);
 
     pthread_join(g_writer_thread, NULL);
@@ -770,6 +821,19 @@ void transfer_cleanup(void) {
     // Reset global counters
     g_total_bytes = 0;
     g_total_files = 0;
+}
+
+void transfer_request_abort(void) {
+    g_abort_transfer = 1;
+    pthread_mutex_lock(&g_queue.mutex);
+    g_queue.closed = 1;
+    pthread_cond_broadcast(&g_queue.not_empty);
+    pthread_cond_broadcast(&g_queue.not_full);
+    pthread_mutex_unlock(&g_queue.mutex);
+}
+
+int transfer_abort_requested(void) {
+    return g_abort_transfer ? 1 : 0;
 }
 
 int transfer_idle_cleanup(void) {
@@ -808,7 +872,9 @@ static int upload_session_start(UploadSession *session, const char *dest_root) {
     }
 
     if (!g_workers_initialized) {
-        init_worker_pool();
+        if (init_worker_pool() != 0) {
+            return -1;
+        }
     }
 
     // Reset global counters for this session to avoid accumulation across transfers
@@ -816,6 +882,7 @@ static int upload_session_start(UploadSession *session, const char *dest_root) {
     g_total_files = 0;
 
     memset(session, 0, sizeof(*session));
+    g_abort_transfer = 0;
     pthread_mutex_lock(&g_session_counter_lock);
     session->session_id = ++g_session_counter;
     pthread_mutex_unlock(&g_session_counter_lock);
@@ -905,6 +972,13 @@ int upload_session_feed(UploadSession *session, const uint8_t *data, size_t len,
     }
     if (error) {
         *error = 0;
+    }
+    if (g_abort_transfer) {
+        session->error = 1;
+        if (error) {
+            *error = 1;
+        }
+        return 0;
     }
 
     size_t offset = 0;
@@ -996,6 +1070,17 @@ int upload_session_feed(UploadSession *session, const uint8_t *data, size_t len,
                         return 0;
                     }
                     session->body_bytes = session->body_len;
+                }
+
+                if (validate_pack_payload(session->body, session->body_len) != 0) {
+                    printf("[FTX] invalid pack payload, dropping\n");
+                    free_pack_buffer(session->body);
+                    session->body = NULL;
+                    session->error = 1;
+                    if (error) {
+                        *error = 1;
+                    }
+                    return 0;
                 }
 
                 int res = enqueue_pack(session);
@@ -1156,17 +1241,20 @@ void upload_session_destroy(UploadSession *session) {
         g_active_sessions--;
     }
     pthread_mutex_unlock(&g_mem_stats_mutex);
+    if (g_active_sessions == 0 && g_abort_transfer) {
+        g_abort_transfer = 0;
+    }
     transfer_idle_cleanup();
 }
 
-void handle_upload_v2(int client_sock, const char *dest_root) {
+void handle_upload_v2(int client_sock, const char *dest_root, int use_temp) {
     printf("[FTX] Starting V2 Upload to %s\n", dest_root);
 
     const char *ready = "READY\n";
     send(client_sock, ready, strlen(ready), 0);
 
 
-    UploadSession *session = upload_session_create(dest_root, 1);
+    UploadSession *session = upload_session_create(dest_root, use_temp ? 1 : 0);
     if (!session) {
         const char *err = "ERROR: Upload init failed\n";
         send(client_sock, err, strlen(err), 0);
