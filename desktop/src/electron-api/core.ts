@@ -93,8 +93,12 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
         return api.payloadQueueClear(args.ip);
       case 'payload_queue_clear_all':
         return api.payloadQueueClearAll(args.ip);
+      case 'payload_queue_clear_failed':
+        return api.payloadQueueClearFailed(args.ip);
       case 'payload_reset':
         return api.payloadReset(args.ip);
+      case 'payload_clear_tmp':
+        return api.payloadClearTmp(args.ip);
       case 'payload_queue_reorder':
         return api.payloadQueueReorder(args.ip, args.ids);
       case 'payload_queue_process':

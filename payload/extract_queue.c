@@ -333,12 +333,7 @@ static void *extract_thread_func(void *arg) {
         extract_queue_touch();
         pthread_mutex_unlock(&g_queue_mutex);
 
-        if (item->delete_source) {
-            unlink(source);
-            if (item->cleanup_path[0]) {
-                remove_recursive_queue(item->cleanup_path);
-            }
-        }
+        /* keep failed/cancelled archives for requeue; cleanup only on success */
 
         extract_queue_process();
         return NULL;
@@ -355,15 +350,13 @@ static void *extract_thread_func(void *arg) {
         item->completed_at = time(NULL);
         snprintf(item->error_msg, sizeof(item->error_msg), "Scan failed: %s", unrar_strerror(scan_result));
         g_queue.current_index = -1;
+        g_thread_running = 0;
+        g_requeue_requested = 0;
+        g_requeue_id = -1;
         extract_queue_touch();
         pthread_mutex_unlock(&g_queue_mutex);
 
-        if (item->delete_source) {
-            unlink(source);
-            if (item->cleanup_path[0]) {
-                remove_recursive_queue(item->cleanup_path);
-            }
-        }
+        /* keep failed/cancelled archives for requeue; cleanup only on success */
 
         /* Continue with next item */
         extract_queue_process();
@@ -432,7 +425,7 @@ static void *extract_thread_func(void *arg) {
 
     printf("[EXTRACT_QUEUE] Extraction finished for %s\n", source);
 
-    if (item->delete_source) {
+    if (item->delete_source && item->status == EXTRACT_STATUS_COMPLETE) {
         unlink(source);
         if (item->cleanup_path[0]) {
             remove_recursive_queue(item->cleanup_path);
@@ -667,6 +660,25 @@ void extract_queue_clear_all(int keep_running) {
 
     pthread_mutex_unlock(&g_queue_mutex);
     printf("[EXTRACT_QUEUE] Cleared queue, %d remaining\n", write_idx);
+}
+
+void extract_queue_clear_failed(void) {
+    pthread_mutex_lock(&g_queue_mutex);
+
+    int write_idx = 0;
+    for (int i = 0; i < g_queue.count; i++) {
+        if (g_queue.items[i].status != EXTRACT_STATUS_FAILED) {
+            if (write_idx != i) {
+                g_queue.items[write_idx] = g_queue.items[i];
+            }
+            write_idx++;
+        }
+    }
+    g_queue.count = write_idx;
+    extract_queue_touch();
+
+    pthread_mutex_unlock(&g_queue_mutex);
+    printf("[EXTRACT_QUEUE] Cleared failed items, %d remaining\n", write_idx);
 }
 
 void extract_queue_reset(void) {

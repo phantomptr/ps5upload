@@ -3015,6 +3015,28 @@ export default function App() {
     }
   };
 
+  const handleQueueClearFailed = async () => {
+    if (!ip.trim()) return;
+    try {
+      await invoke("payload_queue_clear_failed", { ip });
+      setClientLogs((prev) => ["Cleared failed extraction items", ...prev].slice(0, 100));
+      handleRefreshPayloadStatus();
+    } catch (err) {
+      setClientLogs((prev) => [`Queue clear failed: ${String(err)}`, ...prev].slice(0, 100));
+    }
+  };
+
+  const handleClearTmp = async () => {
+    if (!ip.trim()) return;
+    try {
+      pushClientLog("Clearing PS5 temp folders...", "info");
+      await invoke("payload_clear_tmp", { ip });
+      pushClientLog("PS5 temp folders cleared.", "info");
+    } catch (err) {
+      pushClientLog(`Clear tmp failed: ${String(err)}`, "error");
+    }
+  };
+
   const handleQueueProcess = async () => {
     if (!ip.trim()) return;
     try {
@@ -3765,6 +3787,14 @@ export default function App() {
       items: queueData.items.filter(
         (item) => item.status !== "Completed" && typeof item.status !== "object"
       )
+    };
+    await saveQueueData(nextQueue);
+  };
+
+  const handleClearFailedQueue = async () => {
+    const nextQueue: QueueData = {
+      ...queueData,
+      items: queueData.items.filter((item) => !isUploadFailed(item))
     };
     await saveQueueData(nextQueue);
   };
@@ -5491,6 +5521,13 @@ export default function App() {
                   </button>
                   <button
                     className="btn"
+                    onClick={handleClearFailedQueue}
+                    disabled={!hasUploadFailed}
+                  >
+                    {tr("clear_failed")}
+                  </button>
+                  <button
+                    className="btn"
                     onClick={handleClearQueue}
                     disabled={queueData.items.length === 0}
                   >
@@ -5703,10 +5740,24 @@ export default function App() {
                           </button>
                           <button
                             className="btn"
+                            onClick={handleQueueClearFailed}
+                            disabled={!hasExtractionFailed}
+                          >
+                            {tr("clear_failed")}
+                          </button>
+                          <button
+                            className="btn"
                             onClick={handleQueueClearAll}
                             disabled={!hasExtractionItems}
                           >
                             {tr("clear_queue")}
+                          </button>
+                          <button
+                            className="btn"
+                            onClick={handleClearTmp}
+                            disabled={!isConnected || payloadQueueLoading}
+                          >
+                            {tr("clear_tmp")}
                           </button>
                         </>
                       );
