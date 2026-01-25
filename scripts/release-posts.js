@@ -28,6 +28,7 @@ for (const line of section.split('\n')) {
 const pick = (count) => bullets.slice(0, count);
 const joinBullets = (items, prefix = '• ') => items.map((item) => `${prefix}${item}`).join('\n');
 
+const discordInvite = 'https://discord.gg/fzK3xddtrM';
 const xPost = `PS5 Upload v${version} is out! ${releaseUrl}\nDiscord: ${discordInvite}\nHighlights below 👇`;
 
 const buildThread = (items) => {
@@ -64,7 +65,6 @@ const buildThread = (items) => {
 
 const replies = buildThread(pick(12));
 
-const discordInvite = 'https://discord.gg/fzK3xddtrM';
 const discordPost = [
   `@everyone`,
   `## PS5 Upload v${version} is live!`,
