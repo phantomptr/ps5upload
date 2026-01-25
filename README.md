@@ -16,9 +16,10 @@ New UI highlights:
 
 It is optimized for thousands of small files on a local network (where it outperforms FTP), but works over any standard network connection.
 
-<img width="1440" height="960" alt="Screenshot 2026-01-24 051817" src="https://github.com/user-attachments/assets/ef639887-b77c-423d-b37a-9014387cb45a" />
-<img width="1440" height="960" alt="Screenshot 2026-01-24 052003" src="https://github.com/user-attachments/assets/678fa82f-90d3-4d5c-bdc9-10171c386036" />
-
+<img width="1911" height="1166" alt="Screenshot 2026-01-24 225424" src="https://github.com/user-attachments/assets/2773fd4b-ef2c-4b95-936c-1be3ab34e977" />
+<img width="1913" height="1163" alt="Screenshot 2026-01-24 225409" src="https://github.com/user-attachments/assets/59376d5d-1dc6-484b-917a-3aec349053c7" />
+<img width="1916" height="1162" alt="Screenshot 2026-01-24 225359" src="https://github.com/user-attachments/assets/e7684da2-c0ee-438e-9d6b-88aeb3d67005" />
+<img width="1908" height="1151" alt="Screenshot 2026-01-24 225349" src="https://github.com/user-attachments/assets/93788efd-63d3-434a-8656-8f6788c6cea2" />
 
 ## Why use this?
 
