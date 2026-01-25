@@ -3,6 +3,18 @@
 All notable changes to this project are documented here.
 This project follows Semantic Versioning.
 
+## [1.3.1] - 2026-01-24
+
+### Fixed
+- Extraction queue no longer gets stuck in a “pending” state after a stop or scan failure.
+- Upload path parsing hardened to prevent payload crashes on long or complex paths.
+- Failed extractions keep their RARs for requeue instead of being deleted automatically.
+
+### Changed
+- Payload logs now rotate per launch and capture more startup details.
+- Added “Clear tmp” and “Clear failed” actions for extraction queue maintenance.
+- Added “Clear failed” for upload queue.
+
 ## [1.3.0] - 2026-01-24
 
 ### Added

@@ -40,7 +40,7 @@ const WRITE_CHUNK_SIZE = 512 * 1024; // 512KB
 const MAGIC_FTX1 = 0x31585446;
 
 let sleepBlockerId = null;
-const VERSION = '1.3.0';
+const VERSION = '1.3.1';
 
 const FrameType = {
   Pack: 4,
@@ -1279,11 +1279,26 @@ async function queueClearAll(ip, port) {
   }
 }
 
+async function queueClearFailed(ip, port) {
+  const response = await sendSimpleCommand(ip, port, 'QUEUE_CLEAR_FAILED\n');
+  if (!response.startsWith('OK')) {
+    throw new Error(`Queue clear failed: ${response}`);
+  }
+}
+
 async function payloadReset(ip, port) {
   const response = await sendSimpleCommand(ip, port, 'RESET\n');
   if (!response.startsWith('OK')) {
     throw new Error(`Payload reset failed: ${response}`);
   }
+}
+
+async function payloadClearTmp(ip, port) {
+  const response = await sendSimpleCommand(ip, port, 'CLEAR_TMP\n');
+  if (!response.startsWith('OK')) {
+    throw new Error(`Clear tmp failed: ${response}`);
+  }
+  return response.trim();
 }
 
 async function queueReorder(ip, port, ids) {
@@ -2605,9 +2620,23 @@ function registerIpcHandlers() {
   }
   });
 
+  ipcMain.handle('payload_queue_clear_failed', async (_, ip) => {
+    try {
+    if (!ip || !ip.trim()) throw new Error('Enter a PS5 address first.');
+    return queueClearFailed(ip, TRANSFER_PORT);
+  } catch (err) {
+    throw err;
+  }
+  });
+
   ipcMain.handle('payload_reset', async (_, ip) => {
     if (!ip || !ip.trim()) throw new Error('Enter a PS5 address first.');
     return payloadReset(ip, TRANSFER_PORT);
+  });
+
+  ipcMain.handle('payload_clear_tmp', async (_, ip) => {
+    if (!ip || !ip.trim()) throw new Error('Enter a PS5 address first.');
+    return payloadClearTmp(ip, TRANSFER_PORT);
   });
 
   ipcMain.handle('payload_queue_reorder', async (_, ip, ids) => {

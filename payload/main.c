@@ -539,6 +539,8 @@ static int is_comm_command(const char *cmd) {
     if (strncmp(cmd, "SYNC_INFO", 9) == 0) return 1;
     if (strncmp(cmd, "UPLOAD_QUEUE_", 13) == 0) return 1;
     if (strncmp(cmd, "HISTORY_", 8) == 0) return 1;
+    if (strncmp(cmd, "CLEAR_TMP", 9) == 0) return 1;
+    if (strncmp(cmd, "QUEUE_CLEAR_FAILED", 18) == 0) return 1;
     return 0;
 }
 
@@ -658,6 +660,16 @@ static void process_command(struct ClientConnection *conn) {
 
     if (strncmp(conn->cmd_buffer, "LIST_STORAGE", 12) == 0) {
         handle_list_storage(conn->sock);
+        close_connection(conn);
+        return;
+    }
+    if (strncmp(conn->cmd_buffer, "CLEAR_TMP", 9) == 0) {
+        handle_clear_tmp(conn->sock);
+        close_connection(conn);
+        return;
+    }
+    if (strncmp(conn->cmd_buffer, "QUEUE_CLEAR_FAILED", 18) == 0) {
+        handle_queue_clear_failed(conn->sock);
         close_connection(conn);
         return;
     }

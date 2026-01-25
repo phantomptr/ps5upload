@@ -1791,6 +1791,60 @@ void handle_get_space(int client_sock, const char *path_arg) {
     send_all(client_sock, msg, strlen(msg));
 }
 
+void handle_clear_tmp(int client_sock) {
+    const char *mount_points[] = {
+        "/data",
+        "/mnt/ext0",
+        "/mnt/ext1",
+        "/mnt/usb0",
+        "/mnt/usb1",
+        "/mnt/usb2",
+        "/mnt/usb3",
+        "/mnt/usb4",
+        "/mnt/usb5",
+        "/mnt/usb6",
+        "/mnt/usb7",
+        NULL
+    };
+
+    int cleared = 0;
+    int errors = 0;
+    char last_err[256] = {0};
+
+    for (int i = 0; mount_points[i] != NULL; i++) {
+        const char *root = mount_points[i];
+        struct stat st;
+        if (stat(root, &st) != 0 || !S_ISDIR(st.st_mode)) {
+            continue;
+        }
+        char tmp_path[PATH_MAX];
+        snprintf(tmp_path, sizeof(tmp_path), "%s/ps5upload/tmp", root);
+
+        char err[256] = {0};
+        if (remove_recursive(tmp_path, err, sizeof(err)) != 0) {
+            errors++;
+            if (last_err[0] == '\0') {
+                snprintf(last_err, sizeof(last_err), "%s", err);
+            }
+            continue;
+        }
+        mkdir(tmp_path, 0777);
+        chmod(tmp_path, 0777);
+        cleared++;
+    }
+
+    if (errors > 0) {
+        char msg[512];
+        snprintf(msg, sizeof(msg), "ERROR: Clear tmp failed: %s\n", last_err[0] ? last_err : "unknown error");
+        send(client_sock, msg, strlen(msg), 0);
+        return;
+    }
+
+    char msg[128];
+    snprintf(msg, sizeof(msg), "OK %d\n", cleared);
+    send_all(client_sock, msg, strlen(msg));
+}
+
 void handle_upload_v2_wrapper(int client_sock, const char *args) {
     char dest_path[PATH_MAX];
     char mode[16] = {0};
@@ -2065,6 +2119,12 @@ void handle_queue_clear(int client_sock) {
 
 void handle_queue_clear_all(int client_sock) {
     extract_queue_clear_all(1);
+    const char *success = "OK\n";
+    send(client_sock, success, strlen(success), 0);
+}
+
+void handle_queue_clear_failed(int client_sock) {
+    extract_queue_clear_failed();
     const char *success = "OK\n";
     send(client_sock, success, strlen(success), 0);
 }

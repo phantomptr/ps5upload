@@ -254,6 +254,8 @@ const translations = {
     // Logs
     clear_history: "Clear History",
     clear_logs: "Clear Logs",
+    clear_tmp: "Clear tmp",
+    clear_failed: "Clear failed",
     no_history: "No history yet.",
     no_logs: "No logs yet.",
     single: "Single",

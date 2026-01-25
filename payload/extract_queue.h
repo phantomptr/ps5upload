@@ -70,6 +70,7 @@ int extract_queue_retry(int id);
 /* Clear completed/failed items from queue */
 void extract_queue_clear_done(void);
 void extract_queue_clear_all(int keep_running);
+void extract_queue_clear_failed(void);
 void extract_queue_reset(void);
 
 /* Get last update time */
