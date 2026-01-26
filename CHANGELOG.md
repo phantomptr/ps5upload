@@ -7,6 +7,7 @@ This project follows Semantic Versioning.
 
 ### Fixed
 - RAR Temp Storage now actually controls where the archive is staged before extraction (it was previously ignored and always used the destination drive).
+- Many many bug fixes, e,g. Manage Tab functions
 
 ### Changed
 - Payload accepts a temp storage override for RAR uploads, so archives can be staged on a different mount than the final extraction target.
