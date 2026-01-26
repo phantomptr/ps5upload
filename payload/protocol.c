@@ -18,6 +18,7 @@
 #include <fcntl.h>
 #include <sys/mount.h>
 #include <time.h>
+#include <sys/time.h>
 #include <ctype.h>
 #include <strings.h>
 #include <pthread.h>
@@ -663,13 +664,18 @@ struct DownloadPack {
 static int send_all(int sock, const void *buf, size_t len) {
     const uint8_t *p = (const uint8_t *)buf;
     size_t sent = 0;
+    time_t last_ok = time(NULL);
     while (sent < len) {
         ssize_t n = send(sock, p + sent, len - sent, 0);
         if (n > 0) {
             sent += (size_t)n;
+            last_ok = time(NULL);
             continue;
         }
         if (n < 0 && (errno == EWOULDBLOCK || errno == EAGAIN || errno == EINTR)) {
+            if (time(NULL) - last_ok > 60) {
+                return -1;
+            }
             usleep(1000);
             continue;
         }
@@ -777,9 +783,10 @@ static int download_pack_send_raw(int sock, struct DownloadPack *pack) {
     if (send_frame_header(sock, FRAME_PACK, pack->len) != 0) {
         return -1;
     }
-    if (send_all(sock, pack->buf, pack->len) != 0) {
-        return -1;
-    }
+        if (send_all(sock, pack->buf, pack->len) != 0) {
+            payload_log("[DOWNLOAD_DIR] send failed (%s)", strerror(errno));
+            return -1;
+        }
     return 0;
 }
 
@@ -807,9 +814,11 @@ static int download_pack_flush(int sock, struct DownloadPack *pack) {
             return -1;
         }
         if (send_all(sock, tmp, out_len) != 0) {
+            payload_log("[DOWNLOAD_DIR] send failed (%s)", strerror(errno));
             free(tmp);
             return -1;
         }
+        payload_touch_activity();
         free(tmp);
     } else if (pack->compress == DL_COMP_ZSTD) {
         size_t max_dst = ZSTD_compressBound(pack->len);
@@ -830,9 +839,11 @@ static int download_pack_flush(int sock, struct DownloadPack *pack) {
             return -1;
         }
         if (send_all(sock, tmp, out_len) != 0) {
+            payload_log("[DOWNLOAD_DIR] send failed (%s)", strerror(errno));
             free(tmp);
             return -1;
         }
+        payload_touch_activity();
         free(tmp);
     } else if (pack->compress == DL_COMP_LZMA) {
         size_t max_dst = pack->len + (pack->len / 3) + 256;
@@ -862,14 +873,17 @@ static int download_pack_flush(int sock, struct DownloadPack *pack) {
             return -1;
         }
         if (send_all(sock, tmp, out_len) != 0) {
+            payload_log("[DOWNLOAD_DIR] send failed (%s)", strerror(errno));
             free(tmp);
             return -1;
         }
+        payload_touch_activity();
         free(tmp);
     } else {
         if (download_pack_send_raw(sock, pack) != 0) {
             return -1;
         }
+        payload_touch_activity();
     }
     download_pack_reset(pack);
     return 0;
@@ -981,8 +995,7 @@ static enum DownloadCompression pick_auto_compression(const char *path) {
     return best;
 }
 
-static int send_file_records(int sock, struct DownloadPack *pack, const char *rel_path, const char *path) {
-    int fd = open(path, O_RDONLY);
+static int send_file_records_fd(int sock, struct DownloadPack *pack, const char *rel_path, int fd, uint64_t *out_bytes) {
     if (fd < 0) {
         return -1;
     }
@@ -991,29 +1004,173 @@ static int send_file_records(int sock, struct DownloadPack *pack, const char *re
     size_t overhead = 2 + path_len + 8;
     size_t max_chunk = DOWNLOAD_PACK_BUFFER_SIZE - 4 - overhead;
     if (max_chunk == 0) {
-        close(fd);
         return -1;
     }
 
     uint8_t *buf = malloc(max_chunk);
     if (!buf) {
-        close(fd);
         return -1;
     }
 
     ssize_t n;
+    uint64_t total_read = 0;
     while ((n = read(fd, buf, max_chunk)) > 0) {
         if (download_pack_add_record(sock, pack, rel_path, buf, (uint64_t)n) != 0) {
             free(buf);
-            close(fd);
             return -1;
         }
+        total_read += (uint64_t)n;
+        payload_touch_activity();
     }
 
     free(buf);
-    close(fd);
+    payload_touch_activity();
+    if (n < 0) {
+        printf("[DOWNLOAD] read failed (%s)\n", strerror(errno));
+    }
+    if (out_bytes) {
+        *out_bytes = total_read;
+    }
     return (n < 0) ? -1 : 0;
 }
+
+static int send_file_records(int sock, struct DownloadPack *pack, const char *rel_path, const char *path) {
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        return -1;
+    }
+    int result = send_file_records_fd(sock, pack, rel_path, fd, NULL);
+    close(fd);
+    payload_touch_activity();
+    return result;
+}
+
+
+// Thread arguments for raw file download
+struct DownloadRawArgs {
+    int sock;
+    char path[PATH_MAX];
+};
+
+static void *download_raw_thread(void *arg) {
+    struct DownloadRawArgs *args = (struct DownloadRawArgs *)arg;
+    if (!args) {
+        return NULL;
+    }
+
+    int sock = args->sock;
+    char *path = args->path;
+
+    payload_log("[DOWNLOAD_RAW] Thread started for %s", path);
+
+    // Set socket to have shorter send timeout for responsiveness
+    struct timeval snd_to;
+    snd_to.tv_sec = 15;
+    snd_to.tv_usec = 0;
+    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &snd_to, sizeof(snd_to));
+
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        char error_msg[320];
+        snprintf(error_msg, sizeof(error_msg), "ERROR: open failed: %s\n", strerror(errno));
+        send(sock, error_msg, strlen(error_msg), 0);
+        close(sock);
+        free(args);
+        return NULL;
+    }
+
+    struct stat st;
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
+        const char *error = "ERROR: Not a file\n";
+        send(sock, error, strlen(error), 0);
+        close(fd);
+        close(sock);
+        free(args);
+        return NULL;
+    }
+
+    char ready[96];
+    snprintf(ready, sizeof(ready), "READY %llu\n", (unsigned long long)st.st_size);
+    if (send_all(sock, ready, strlen(ready)) != 0) {
+        close(fd);
+        close(sock);
+        free(args);
+        return NULL;
+    }
+    payload_touch_activity();
+
+    uint8_t buffer[64 * 1024];
+    ssize_t n;
+    while ((n = read(fd, buffer, sizeof(buffer))) > 0) {
+        if (send_all(sock, buffer, (size_t)n) != 0) {
+            payload_log("[DOWNLOAD_RAW] Send failed for %s", path);
+            close(fd);
+            close(sock);
+            free(args);
+            return NULL;
+        }
+        payload_touch_activity();
+    }
+
+    close(fd);
+    payload_log("[DOWNLOAD_RAW] Complete %s", path);
+    close(sock);
+    free(args);
+    return NULL;
+}
+
+void handle_download_raw(int client_sock, const char *path_arg) {
+    char path[PATH_MAX];
+    strncpy(path, path_arg, PATH_MAX-1);
+    path[PATH_MAX-1] = '\0';
+    trim_newline(path);
+
+    payload_log("[DOWNLOAD_RAW] %s", path);
+    payload_touch_activity();
+
+    if (!is_path_safe(path)) {
+        const char *error = "ERROR: Invalid path\n";
+        send(client_sock, error, strlen(error), 0);
+        close(client_sock);
+        return;
+    }
+
+    // Quick stat check before spawning thread
+    struct stat st;
+    if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) {
+        const char *error = "ERROR: Not a file\n";
+        send(client_sock, error, strlen(error), 0);
+        close(client_sock);
+        return;
+    }
+
+    // Allocate args for thread
+    struct DownloadRawArgs *args = malloc(sizeof(struct DownloadRawArgs));
+    if (!args) {
+        const char *error = "ERROR: Out of memory\n";
+        send(client_sock, error, strlen(error), 0);
+        close(client_sock);
+        return;
+    }
+
+    args->sock = client_sock;
+    strncpy(args->path, path, sizeof(args->path) - 1);
+    args->path[sizeof(args->path) - 1] = '\0';
+
+    // Create detached thread for download
+    pthread_t tid;
+    if (pthread_create(&tid, NULL, download_raw_thread, args) != 0) {
+        const char *error = "ERROR: Failed to start download\n";
+        send(client_sock, error, strlen(error), 0);
+        close(client_sock);
+        free(args);
+        return;
+    }
+    pthread_detach(tid);
+
+    // Return immediately - thread owns the socket now
+}
+
 
 static int send_dir_recursive(int sock, struct DownloadPack *pack, const char *base_path, const char *rel_path) {
     char path[PATH_MAX];
@@ -1056,7 +1213,7 @@ static int send_dir_recursive(int sock, struct DownloadPack *pack, const char *b
                 return -1;
             }
         } else if (S_ISREG(st.st_mode)) {
-            printf("[DOWNLOAD_DIR] Sending %s\n", child_rel);
+            payload_log("[DOWNLOAD_DIR] Sending %s", child_rel);
             if (send_file_records(sock, pack, child_rel, child_path) != 0) {
                 closedir(dir);
                 return -1;
@@ -1561,22 +1718,33 @@ void handle_download_file(int client_sock, const char *path_arg) {
     path[PATH_MAX-1] = '\0';
     trim_newline(path);
 
+    printf("[DOWNLOAD] %s\n", path);
     if (!is_path_safe(path)) {
         const char *error = "ERROR: Invalid path\n";
         send(client_sock, error, strlen(error), 0);
         return;
     }
 
+    payload_touch_activity();
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        char error_msg[320];
+        snprintf(error_msg, sizeof(error_msg), "ERROR: open failed: %s\n", strerror(errno));
+        send(client_sock, error_msg, strlen(error_msg), 0);
+        return;
+    }
     struct stat st;
-    if (stat(path, &st) != 0) {
+    if (fstat(fd, &st) != 0) {
         char error_msg[320];
         snprintf(error_msg, sizeof(error_msg), "ERROR: stat failed: %s\n", strerror(errno));
         send(client_sock, error_msg, strlen(error_msg), 0);
+        close(fd);
         return;
     }
     if (!S_ISREG(st.st_mode)) {
         const char *error = "ERROR: Not a file\n";
         send(client_sock, error, strlen(error), 0);
+        close(fd);
         return;
     }
 
@@ -1594,24 +1762,120 @@ void handle_download_file(int client_sock, const char *path_arg) {
         fclose(fp);
         return;
     }
+    printf("[DOWNLOAD] OK size=%lld\n", (long long)st.st_size);
+    payload_touch_activity();
 
     char buffer[64 * 1024];
     size_t n;
     while ((n = fread(buffer, 1, sizeof(buffer), fp)) > 0) {
         if (send_all(client_sock, buffer, n) != 0) {
+            printf("[DOWNLOAD] send failed (%s)\n", strerror(errno));
             break;
         }
+        payload_touch_activity();
     }
 
     fclose(fp);
+    printf("[DOWNLOAD] Complete %s\n", path);
 }
 
-void handle_download_dir(int client_sock, const char *path_arg) {
+void handle_download_v2(int client_sock, const char *path_arg) {
     char path[PATH_MAX];
     strncpy(path, path_arg, PATH_MAX-1);
     path[PATH_MAX-1] = '\0';
     trim_newline(path);
 
+    payload_log("[DOWNLOAD_V2] %s", path);
+    payload_touch_activity();
+
+    if (!is_path_safe(path)) {
+        const char *error = "ERROR: Invalid path\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        char error_msg[320];
+        snprintf(error_msg, sizeof(error_msg), "ERROR: open failed: %s\n", strerror(errno));
+        send(client_sock, error_msg, strlen(error_msg), 0);
+        return;
+    }
+    struct stat st;
+    if (fstat(fd, &st) != 0) {
+        char error_msg[320];
+        snprintf(error_msg, sizeof(error_msg), "ERROR: stat failed: %s\n", strerror(errno));
+        send(client_sock, error_msg, strlen(error_msg), 0);
+        close(fd);
+        return;
+    }
+    if (!S_ISREG(st.st_mode)) {
+        const char *error = "ERROR: Not a file\n";
+        send(client_sock, error, strlen(error), 0);
+        close(fd);
+        return;
+    }
+
+    char ready[96];
+    snprintf(ready, sizeof(ready), "READY %llu\n", (unsigned long long)st.st_size);
+    if (send_all(client_sock, ready, strlen(ready)) != 0) {
+        close(fd);
+        return;
+    }
+    payload_touch_activity();
+
+    struct DownloadPack pack;
+    if (download_pack_init(&pack, DL_COMP_NONE) != 0) {
+        send_error_frame(client_sock, "Download failed: OOM");
+        close(fd);
+        return;
+    }
+
+    const char *name = strrchr(path, '/');
+    const char *rel = name ? name + 1 : path;
+    uint64_t bytes_sent = 0;
+    if (send_file_records_fd(client_sock, &pack, rel, fd, &bytes_sent) != 0) {
+        payload_log("[DOWNLOAD_V2] Failed while streaming %s", path);
+        send_error_frame(client_sock, "Download failed");
+        free(pack.buf);
+        close(fd);
+        return;
+    }
+    close(fd);
+    if ((uint64_t)st.st_size != bytes_sent) {
+        payload_log("[DOWNLOAD_V2] Size mismatch %s sent=%llu expected=%llu",
+            path,
+            (unsigned long long)bytes_sent,
+            (unsigned long long)st.st_size);
+        send_error_frame(client_sock, "Download size mismatch");
+        free(pack.buf);
+        return;
+    }
+
+    if (download_pack_flush(client_sock, &pack) != 0) {
+        payload_log("[DOWNLOAD_V2] Failed flush for %s", path);
+        send_error_frame(client_sock, "Download failed");
+        free(pack.buf);
+        return;
+    }
+    free(pack.buf);
+
+    struct FrameHeader finish;
+    finish.magic = MAGIC_FTX1;
+    finish.type = FRAME_FINISH;
+    finish.body_len = 0;
+    send_all(client_sock, &finish, sizeof(finish));
+    payload_log("[DOWNLOAD_V2] Complete %s", path);
+}
+
+void handle_download_dir(int client_sock, const char *path_arg) {
+    payload_touch_activity();
+    char path[PATH_MAX];
+    strncpy(path, path_arg, PATH_MAX-1);
+    path[PATH_MAX-1] = '\0';
+    trim_newline(path);
+
+    payload_log("[DOWNLOAD_DIR] %s", path);
     enum DownloadCompression compression = DL_COMP_NONE;
     int auto_requested = 0;
     char *tag = strstr(path, " LZ4");
@@ -1680,6 +1944,7 @@ void handle_download_dir(int client_sock, const char *path_arg) {
     if (send_all(client_sock, ready, strlen(ready)) != 0) {
         return;
     }
+    payload_touch_activity();
 
     struct DownloadPack pack;
     if (download_pack_init(&pack, compression) != 0) {
@@ -1687,20 +1952,21 @@ void handle_download_dir(int client_sock, const char *path_arg) {
         return;
     }
 
-    printf("[DOWNLOAD_DIR] Streaming %s\n", path);
+    payload_log("[DOWNLOAD_DIR] Streaming %s", path);
     if (send_dir_recursive(client_sock, &pack, path, NULL) != 0) {
-        printf("[DOWNLOAD_DIR] Failed while streaming %s\n", path);
+        payload_log("[DOWNLOAD_DIR] Failed while streaming %s", path);
         send_error_frame(client_sock, "Download failed");
         free(pack.buf);
         return;
     }
 
     if (download_pack_flush(client_sock, &pack) != 0) {
-        printf("[DOWNLOAD_DIR] Failed flush for %s\n", path);
+        payload_log("[DOWNLOAD_DIR] Failed flush for %s", path);
         send_error_frame(client_sock, "Download failed");
         free(pack.buf);
         return;
     }
+    payload_touch_activity();
     free(pack.buf);
 
     struct FrameHeader finish;
@@ -1708,7 +1974,7 @@ void handle_download_dir(int client_sock, const char *path_arg) {
     finish.type = FRAME_FINISH;
     finish.body_len = 0;
     send_all(client_sock, &finish, sizeof(finish));
-    printf("[DOWNLOAD_DIR] Completed %s\n", path);
+    payload_log("[DOWNLOAD_DIR] Completed %s", path);
 }
 
 void handle_hash_file(int client_sock, const char *path_arg) {

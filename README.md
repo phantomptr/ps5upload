@@ -97,6 +97,7 @@ You should see a notification pop up on your TV: **"PS5 Upload Server - Ready on
     *   Pick a preset location (like `homebrew` or `etaHEN/games`).
     *   Give your folder a name.
 4.  **Upload:** Click **Upload** in the bottom right. The bar will track real-time progress.
+5.  **RAR uploads (optional):** If your source is a `.rar`, you can pick a **RAR Extract Mode** and (optionally) a **RAR Temp Storage** in Transfer settings to control where the archive is staged before extraction.
 
 ### 5. Manage Files (Optional)
 Open the **Manage** tab to browse your PS5's storage. You can rename, move, copy, delete, and `chmod 777` files or folders. You can also download files and folders from your PS5 to your computer.

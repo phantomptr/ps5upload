@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <time.h>
 
 typedef struct UploadSession UploadSession;
 
@@ -20,5 +21,7 @@ void transfer_cleanup(void);
 int transfer_idle_cleanup(void);
 void transfer_request_abort(void);
 int transfer_abort_requested(void);
+int transfer_is_active(void);
+time_t transfer_last_progress(void);
 
 #endif

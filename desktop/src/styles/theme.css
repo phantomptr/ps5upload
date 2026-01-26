@@ -905,6 +905,19 @@ input::placeholder {
   transition: width 0.3s ease;
 }
 
+.progress-fill.streaming {
+  animation: streaming-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes streaming-pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
 .progress-meta {
   display: flex;
   justify-content: space-between;

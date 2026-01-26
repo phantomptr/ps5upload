@@ -152,7 +152,7 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
       case 'manage_upload':
         return api.manageUpload(args.ip, args.dest_root, args.paths);
       case 'manage_upload_rar':
-        return api.manageUploadRar(args.ip, args.rar_path, args.dest_path, args.mode);
+        return api.manageUploadRar(args.ip, args.rar_path, args.dest_path, args.mode, args.temp_root);
       case 'transfer_check_dest':
         return api.transferCheckDest(args.ip, args.destPath);
       case 'transfer_scan':

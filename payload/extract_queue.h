@@ -85,4 +85,8 @@ unsigned long extract_queue_get_uptime(void);
 /* Get current running item progress for notifications */
 const ExtractQueueItem *extract_queue_get_current(void);
 
+/* Get last progress time and running state */
+time_t extract_queue_get_last_progress(void);
+int extract_queue_is_running(void);
+
 #endif /* EXTRACT_QUEUE_H */

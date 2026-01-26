@@ -1,29 +1,21 @@
-import { create } from 'zustand';
+import { proxy } from 'valtio';
 
-export type TransferState = {
-  status: string;
-  sent: number;
-  total: number;
-  files: number;
-  elapsed: number;
-  currentFile: string;
-  runId: number | null;
-  source: string;
-  dest: string;
-  viaQueue: boolean;
-  startedAt: number | null;
-};
-
-export const useTransferStore = create<TransferState>()((set) => ({
-  status: "Idle",
-  sent: 0,
-  total: 0,
-  files: 0,
-  elapsed: 0,
-  currentFile: "",
-  runId: null,
-  source: "",
-  dest: "",
-  viaQueue: false,
-  startedAt: null,
-}));
+export const state = proxy({
+  ver: '',
+  showUpdate: false,
+  updateUrl: '',
+  cwd: '',
+  ip: '',
+  dest: '',
+  rarMode: 'rebuild',
+  rarTemp: '',
+  port: '9090',
+  pending: false,
+  progress: {},
+  managePending: false,
+  manageStep: 'inactive',
+  manageFile: '',
+  manageTotal: 0,
+  manageProcessed: 0,
+  manageCancel: false
+});

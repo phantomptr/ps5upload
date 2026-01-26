@@ -9,7 +9,8 @@ const http = require('http');
 const crypto = require('crypto');
 const { promisify } = require('util');
 const { execFile } = require('child_process');
-const { pipeline } = require('stream');
+const { pipeline, PassThrough } = require('stream');
+const { once } = require('events');
 const streamPipeline = promisify(pipeline);
 const execFileAsync = promisify(execFile);
 if (process.platform === 'linux') {
@@ -26,6 +27,7 @@ const tryRequire = (moduleName) => {
 const lz4 = tryRequire('lz4');
 const fzstd = tryRequire('fzstd');
 const lzma = tryRequire('lzma-native');
+const tar = tryRequire('tar');
 
 // Constants
 const TRANSFER_PORT = 9113;
@@ -40,7 +42,18 @@ const WRITE_CHUNK_SIZE = 512 * 1024; // 512KB
 const MAGIC_FTX1 = 0x31585446;
 
 let sleepBlockerId = null;
-const VERSION = '1.3.1';
+const VERSION = '1.3.2';
+
+function beginManageOperation(op) {
+  state.manageDoneEmitted = false;
+  state.manageActiveOp = op;
+}
+
+function emitManageDone(payload) {
+  if (state.manageDoneEmitted) return;
+  state.manageDoneEmitted = true;
+  emit('manage_done', payload);
+}
 
 const FrameType = {
   Pack: 4,
@@ -48,6 +61,7 @@ const FrameType = {
   PackZstd: 9,
   PackLzma: 10,
   Finish: 6,
+  Error: 7,
 };
 
 const ARCHIVE_EXTENSIONS = new Set(['.rar']);
@@ -150,7 +164,8 @@ async function uploadRarForExtraction(ip, rarPath, destPath, mode, opts = {}) {
     cancel = { value: false },
     onProgress = () => {},
     onLog = () => {},
-    overrideOnConflict = true
+    overrideOnConflict = true,
+    tempRoot = ''
   } = opts;
   const fileSize = (await fs.promises.stat(rarPath)).size;
 
@@ -170,7 +185,13 @@ async function uploadRarForExtraction(ip, rarPath, destPath, mode, opts = {}) {
 
     socket = await createSocketWithTimeout(ip, TRANSFER_PORT);
     const flag = overrideOnConflict ? '' : ' NOOVERWRITE';
-    const cmd = `UPLOAD_RAR_${String(modeToTry || 'normal').toUpperCase()} ${destPath} ${fileSize}${flag}\n`;
+    const cleanedTempRoot = typeof tempRoot === 'string' ? tempRoot.trim() : '';
+    if (cleanedTempRoot && /\s/.test(cleanedTempRoot)) {
+      socket.destroy();
+      throw new Error('Temp storage path must not contain spaces.');
+    }
+    const tmpToken = cleanedTempRoot ? ` TMP=${cleanedTempRoot}` : '';
+    const cmd = `UPLOAD_RAR_${String(modeToTry || 'normal').toUpperCase()} ${destPath} ${fileSize}${tmpToken}${flag}\n`;
     socket.write(cmd);
 
     let response = '';
@@ -566,7 +587,10 @@ const state = {
   manageIp: '',
   managePath: '/data',
   manageActive: false,
+  manageActiveOp: null,
+  manageDoneEmitted: false,
   manageCancel: false,
+  manageSocket: null,
   manageListCache: { path: '', entries: [], error: null, updated_at_ms: 0 },
   saveLogs: false,
   uiLogEnabled: true,
@@ -799,6 +823,35 @@ class RateLimiter {
       }
     }
   }
+}
+
+const sleepMs = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+const shouldDeprioritizeManage = () => state.transferActive;
+
+async function manageDeprioritize() {
+  if (shouldDeprioritizeManage()) {
+    await sleepMs(5);
+  }
+}
+
+function runManageTask(op, fn) {
+  if (state.manageActive) {
+    throw new Error('Another manage task is already running');
+  }
+  beginManageOperation(op);
+  state.manageActive = true;
+  state.manageCancel = false;
+  setImmediate(async () => {
+    try {
+      await fn();
+    } finally {
+      state.manageActive = false;
+      state.manageCancel = false;
+      state.manageActiveOp = null;
+    }
+  });
+  return true;
 }
 
 // Robust socket write
@@ -1739,7 +1792,14 @@ async function sendFrameHeader(socket, frameType, length, cancel) {
 }
 
 async function sendFilesV2(files, socket, options = {}) {
-  const { cancel = { value: false }, progress = () => {}, log = () => {}, compression = 'none', rateLimitBps = null } = options;
+  const {
+    cancel = { value: false },
+    progress = () => {},
+    log = () => {},
+    compression = 'none',
+    rateLimitBps = null,
+    deprioritize = false
+  } = options;
 
   let totalSentBytes = 0n;
   let totalSentFiles = 0;
@@ -1808,6 +1868,9 @@ async function sendFilesV2(files, socket, options = {}) {
     await sendFrameHeader(socket, frameType, payload.length, cancel);
     await writeAllRetry(socket, payload, cancel);
     limiter.throttle(payload.length); // Apply rate limit to compressed/actual sent bytes
+    if (deprioritize) {
+      await manageDeprioritize();
+    }
 
     totalSentBytes += packBytesAdded;
     totalSentFiles += packFilesAdded;
@@ -1870,6 +1933,9 @@ async function sendFilesV2(files, socket, options = {}) {
 
         const elapsed = (Date.now() - startTime) / 1000;
         progress(Number(totalSentBytes) + Number(packBytesAdded), totalSentFiles + packFilesAdded, elapsed, file.rel_path);
+        if (deprioritize) {
+          await manageDeprioritize();
+        }
       }
     }
 
@@ -1971,6 +2037,322 @@ function parseUploadResponse(response) {
     return { files: 0, bytes: 0 };
   }
   throw new Error(response);
+}
+
+function createSocketReader(socket) {
+  let buffer = Buffer.alloc(0);
+  let ended = false;
+  let error = null;
+  const waiters = new Set();
+
+  const notify = () => {
+    for (const waiter of Array.from(waiters)) {
+      waiter();
+    }
+  };
+
+  const onData = (chunk) => {
+    buffer = Buffer.concat([buffer, chunk]);
+    notify();
+  };
+  const onError = (err) => {
+    error = err;
+    notify();
+  };
+  const onClose = () => {
+    ended = true;
+    notify();
+  };
+
+  socket.on('data', onData);
+  socket.on('error', onError);
+  socket.on('close', onClose);
+  socket.on('end', onClose);
+
+  const awaitCondition = (predicate, timeoutMs) => new Promise((resolve, reject) => {
+    if (error) return reject(error);
+    if (predicate()) return resolve();
+    if (ended) return reject(new Error('Connection closed'));
+
+    const waiter = () => {
+      if (error) {
+        cleanup();
+        reject(error);
+        return;
+      }
+      if (predicate()) {
+        cleanup();
+        resolve();
+        return;
+      }
+      if (ended) {
+        cleanup();
+        reject(new Error('Connection closed'));
+      }
+    };
+
+    let timeout = null;
+    if (timeoutMs) {
+      timeout = setTimeout(() => {
+        cleanup();
+        reject(new Error('Read timeout'));
+      }, timeoutMs);
+    }
+
+    const cleanup = () => {
+      waiters.delete(waiter);
+      if (timeout) clearTimeout(timeout);
+    };
+
+    waiters.add(waiter);
+  });
+
+  return {
+    readExact: async (length, timeoutMs) => {
+      if (length === 0) return Buffer.alloc(0);
+      await awaitCondition(() => buffer.length >= length, timeoutMs);
+      const out = buffer.slice(0, length);
+      buffer = buffer.slice(length);
+      return out;
+    },
+    readLine: async (timeoutMs, maxBytes = 1024 * 1024) => {
+      await awaitCondition(() => buffer.indexOf(0x0a) !== -1 || buffer.length > maxBytes, timeoutMs);
+      const idx = buffer.indexOf(0x0a);
+      if (idx === -1) {
+        throw new Error('Line too long');
+      }
+      const line = buffer.slice(0, idx).toString('utf8');
+      buffer = buffer.slice(idx + 1);
+      return line;
+    },
+    close: () => {
+      socket.removeListener('data', onData);
+      socket.removeListener('error', onError);
+      socket.removeListener('close', onClose);
+      socket.removeListener('end', onClose);
+      waiters.clear();
+    }
+  };
+}
+
+async function readFtxFrame(reader, timeoutMs = READ_TIMEOUT_MS) {
+  const header = await reader.readExact(16, timeoutMs);
+  const magic = header.readUInt32LE(0);
+  if (magic !== MAGIC_FTX1) {
+    const err = new Error(`Invalid frame magic: ${magic.toString(16)}`);
+    err.code = 'FTX_UNSUPPORTED';
+    throw err;
+  }
+  const type = header.readUInt32LE(4);
+  const len = Number(header.readBigUInt64LE(8));
+  if (!Number.isFinite(len) || len < 0 || len > 64 * 1024 * 1024) {
+    throw new Error(`Invalid frame length: ${len}`);
+  }
+  const body = len > 0 ? await reader.readExact(len, timeoutMs) : Buffer.alloc(0);
+  return { type, body };
+}
+
+async function decodePackFrame(frameType, body) {
+  if (frameType === FrameType.Pack) {
+    return body;
+  }
+  if (frameType === FrameType.PackLz4) {
+    if (!lz4) throw new Error('lz4 module unavailable');
+    if (body.length < 4) throw new Error('Invalid LZ4 frame');
+    const rawLen = body.readUInt32LE(0);
+    const compressed = body.slice(4);
+    const out = Buffer.alloc(rawLen);
+    const decoded = lz4.decodeBlock(compressed, out);
+    if (decoded < 0) throw new Error('LZ4 decode failed');
+    return decoded === rawLen ? out : out.slice(0, decoded);
+  }
+  if (frameType === FrameType.PackZstd) {
+    if (!fzstd) throw new Error('fzstd module unavailable');
+    if (body.length < 4) throw new Error('Invalid ZSTD frame');
+    const rawLen = body.readUInt32LE(0);
+    const compressed = body.slice(4);
+    const out = Buffer.alloc(rawLen);
+    const result = fzstd.decompress(compressed, out);
+    return Buffer.from(result.buffer, result.byteOffset, result.byteLength);
+  }
+  if (frameType === FrameType.PackLzma) {
+    if (!lzma) throw new Error('lzma-native module unavailable');
+    if (body.length < 17) throw new Error('Invalid LZMA frame');
+    const props = body.slice(4, 9);
+    const raw64 = body.slice(9, 17);
+    const compressed = body.slice(17);
+    const lzmaBuffer = Buffer.concat([props, raw64, compressed]);
+    const result = await lzma.decompress(lzmaBuffer);
+    return Buffer.isBuffer(result) ? result : Buffer.from(result);
+  }
+  throw new Error(`Unsupported frame type ${frameType}`);
+}
+
+function parsePackRecords(packBuffer, onRecord) {
+  if (packBuffer.length < 4) {
+    throw new Error('Invalid pack payload');
+  }
+  const records = packBuffer.readUInt32LE(0);
+  let offset = 4;
+  for (let i = 0; i < records; i++) {
+    if (offset + 2 > packBuffer.length) throw new Error('Invalid pack record header');
+    const pathLen = packBuffer.readUInt16LE(offset);
+    offset += 2;
+    if (offset + pathLen + 8 > packBuffer.length) throw new Error('Invalid pack record path');
+    const relPath = packBuffer.slice(offset, offset + pathLen).toString('utf8');
+    offset += pathLen;
+    const dataLen = Number(packBuffer.readBigUInt64LE(offset));
+    offset += 8;
+    if (offset + dataLen > packBuffer.length) throw new Error('Invalid pack record data');
+    const data = packBuffer.slice(offset, offset + dataLen);
+    offset += dataLen;
+    onRecord(relPath, data);
+  }
+}
+
+function ensureDownloadPath(baseDir, relPath) {
+  const root = path.resolve(baseDir);
+  const target = path.resolve(baseDir, relPath);
+  if (target !== root && !target.startsWith(root + path.sep)) {
+    throw new Error('Invalid download path');
+  }
+  return target;
+}
+
+async function downloadFtx(ip, command, options) {
+  const {
+    mode,
+    destPath,
+    cancel = { value: false },
+    progress = () => {},
+    expectedRelPath = null,
+  } = options;
+
+  let socket = null;
+  let reader = null;
+  let currentPath = null;
+  let currentRelPath = null;
+  let currentStream = null;
+  let received = 0;
+  let lastActivity = Date.now();
+
+  const closeStream = async () => {
+    if (currentStream) {
+      await new Promise((resolve) => currentStream.end(resolve));
+      currentStream = null;
+      currentRelPath = null;
+      currentPath = null;
+    }
+  };
+
+  const openStream = (relPath) => {
+    if (mode === 'file') {
+      if (expectedRelPath && relPath && relPath !== expectedRelPath) {
+        throw new Error(`Unexpected file path: ${relPath}`);
+      }
+      if (currentPath !== destPath) {
+        currentPath = destPath;
+        currentRelPath = relPath;
+        currentStream = fs.createWriteStream(destPath, { flags: 'w' });
+      }
+      return;
+    }
+
+    const target = ensureDownloadPath(destPath, relPath);
+    if (currentPath !== target) {
+      currentPath = target;
+      currentRelPath = relPath;
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      currentStream = fs.createWriteStream(target, { flags: 'w' });
+    }
+  };
+
+  try {
+    socket = await createSocketWithTimeout(ip, TRANSFER_PORT);
+    socket.setTimeout(0);
+    state.manageSocket = socket;
+    reader = createSocketReader(socket);
+
+    socket.write(command);
+    const line = (await reader.readLine(30000)).trim();
+    if (line.startsWith('ERROR')) {
+      const err = new Error(line);
+      if (line.includes('Unknown command')) err.code = 'FTX_UNSUPPORTED';
+      throw err;
+    }
+    const match = line.match(/^READY\s+(\d+)(?:\s+COMP\s+\w+)?/i);
+    if (!match) {
+      const err = new Error(`Unexpected response: ${line}`);
+      err.code = 'FTX_UNSUPPORTED';
+      throw err;
+    }
+    const totalSize = Number(match[1]);
+    if (mode === 'dir') {
+      fs.mkdirSync(destPath, { recursive: true });
+    }
+    progress(0, totalSize, null);
+
+    while (true) {
+      if (cancel.value) {
+        const err = new Error('Download cancelled');
+        err.code = 'CANCELLED';
+        throw err;
+      }
+      const timeout = received >= totalSize ? 5000 : READ_TIMEOUT_MS;
+      let frame;
+      try {
+        frame = await readFtxFrame(reader, timeout);
+      } catch (err) {
+        if (
+          received >= totalSize &&
+          (err.message === 'Read timeout' || err.message === 'Connection closed')
+        ) {
+          break;
+        }
+        throw err;
+      }
+      if (frame.type === FrameType.Finish) {
+        break;
+      }
+      if (frame.type === FrameType.Error) {
+        throw new Error(frame.body.toString('utf8') || 'Download failed');
+      }
+      const pack = await decodePackFrame(frame.type, frame.body);
+      const records = [];
+      parsePackRecords(pack, (relPath, data) => records.push({ relPath, data }));
+      for (const record of records) {
+        if (!record.relPath) throw new Error('Invalid record path');
+        if (record.relPath !== currentRelPath && currentStream) {
+          await closeStream();
+        }
+        openStream(record.relPath);
+        if (record.data.length > 0) {
+          if (!currentStream.write(record.data)) {
+            await new Promise((resolve) => currentStream.once('drain', resolve));
+          }
+        }
+        received += record.data.length;
+        lastActivity = Date.now();
+        progress(received, totalSize, record.relPath);
+      }
+    }
+
+    if (received < totalSize && Date.now() - lastActivity > 5000) {
+      throw new Error(`Download incomplete: ${received}/${totalSize}`);
+    }
+    await closeStream();
+    reader.close();
+    return { bytes: received };
+  } catch (err) {
+    await closeStream();
+    if (reader) reader.close();
+    if (socket) socket.destroy();
+    throw err;
+  } finally {
+    if (state.manageSocket === socket) {
+      state.manageSocket = null;
+    }
+  }
 }
 
 // ==================== Update Checking ====================
@@ -2741,32 +3123,61 @@ function registerIpcHandlers() {
   ipcMain.handle('manage_polling_set', (_, enabled) => { state.managePollEnabled = enabled; return true; });
   ipcMain.handle('manage_set_ip', (_, ip) => { state.manageIp = ip.trim(); return true; });
   ipcMain.handle('manage_set_path', (_, dirPath) => { state.managePath = dirPath.trim(); return true; });
-  ipcMain.handle('manage_cancel', () => { state.manageCancel = true; return true; });
+  ipcMain.handle('manage_cancel', () => {
+    state.manageCancel = true;
+    if (state.manageSocket) {
+      try {
+        state.manageSocket.destroy();
+      } catch {
+        // ignore
+      }
+    }
+    if (state.manageActive && !state.manageDoneEmitted) {
+      emitManageDone({
+        op: state.manageActiveOp || 'Manage',
+        bytes: null,
+        error: 'Cancelled by user'
+      });
+      state.manageActive = false;
+      state.manageActiveOp = null;
+    }
+    return true;
+  });
 
   ipcMain.handle('manage_delete', async (_, ip, filepath) => {
     if (!ip || !ip.trim()) throw new Error('Enter a PS5 address first.');
     if (!filepath || !filepath.trim()) throw new Error('Select a path to delete.');
 
-    emit('manage_log', { message: `Delete ${filepath}` });
-    try {
-      await deletePath(ip, TRANSFER_PORT, filepath);
-      emit('manage_done', { op: 'Delete', bytes: null, error: null });
-    } catch (err) {
-      emit('manage_done', { op: 'Delete', bytes: null, error: err.message });
-    }
-    return true;
+    return runManageTask('Delete', async () => {
+      emit('manage_log', { message: `Delete ${filepath}` });
+      let tick = 0;
+      const timer = setInterval(() => {
+        tick += 1;
+        emit('manage_progress', { op: 'Delete', processed: tick, total: 0, current_file: filepath });
+      }, 1000);
+      emit('manage_progress', { op: 'Delete', processed: 1, total: 0, current_file: filepath });
+      try {
+        await deletePath(ip, TRANSFER_PORT, filepath);
+        emitManageDone({ op: 'Delete', bytes: null, error: null });
+      } catch (err) {
+        emitManageDone({ op: 'Delete', bytes: null, error: err.message });
+      } finally {
+        clearInterval(timer);
+      }
+    });
   });
 
   ipcMain.handle('manage_rename', async (_, ip, srcPath, dstPath) => {
     if (!ip || !ip.trim()) throw new Error('Enter a PS5 address first.');
     if (!srcPath || !srcPath.trim() || !dstPath || !dstPath.trim()) throw new Error('Source and destination are required.');
 
+    beginManageOperation('Rename');
     emit('manage_log', { message: `Rename ${srcPath} -> ${dstPath}` });
     try {
       await movePath(ip, TRANSFER_PORT, srcPath, dstPath);
-      emit('manage_done', { op: 'Rename', bytes: null, error: null });
+      emitManageDone({ op: 'Rename', bytes: null, error: null });
     } catch (err) {
-      emit('manage_done', { op: 'Rename', bytes: null, error: err.message });
+      emitManageDone({ op: 'Rename', bytes: null, error: err.message });
     }
     return true;
   });
@@ -2775,12 +3186,13 @@ function registerIpcHandlers() {
     if (!ip || !ip.trim()) throw new Error('Enter a PS5 address first.');
     if (!dirPath || !dirPath.trim()) throw new Error('Folder path is required.');
 
+    beginManageOperation('Create');
     emit('manage_log', { message: `Create folder ${dirPath}` });
     try {
       await createPath(ip, TRANSFER_PORT, dirPath);
-      emit('manage_done', { op: 'Create', bytes: null, error: null });
+      emitManageDone({ op: 'Create', bytes: null, error: null });
     } catch (err) {
-      emit('manage_done', { op: 'Create', bytes: null, error: err.message });
+      emitManageDone({ op: 'Create', bytes: null, error: err.message });
     }
     return true;
   });
@@ -2789,12 +3201,13 @@ function registerIpcHandlers() {
     if (!ip || !ip.trim()) throw new Error('Enter a PS5 address first.');
     if (!filepath || !filepath.trim()) throw new Error('Select a path.');
 
+    beginManageOperation('chmod');
     emit('manage_log', { message: `chmod 777 ${filepath}` });
     try {
       await chmod777(ip, TRANSFER_PORT, filepath);
-      emit('manage_done', { op: 'chmod', bytes: null, error: null });
+      emitManageDone({ op: 'chmod', bytes: null, error: null });
     } catch (err) {
-      emit('manage_done', { op: 'chmod', bytes: null, error: err.message });
+      emitManageDone({ op: 'chmod', bytes: null, error: err.message });
     }
     return true;
   });
@@ -2803,12 +3216,13 @@ function registerIpcHandlers() {
     if (!ip || !ip.trim()) throw new Error('Enter a PS5 address first.');
     if (!srcPath || !srcPath.trim() || !dstPath || !dstPath.trim()) throw new Error('Source and destination are required.');
 
+    beginManageOperation('Move');
     emit('manage_log', { message: `Move ${srcPath} -> ${dstPath}` });
     try {
       await movePath(ip, TRANSFER_PORT, srcPath, dstPath);
-      emit('manage_done', { op: 'Move', bytes: null, error: null });
+      emitManageDone({ op: 'Move', bytes: null, error: null });
     } catch (err) {
-      emit('manage_done', { op: 'Move', bytes: null, error: err.message });
+      emitManageDone({ op: 'Move', bytes: null, error: err.message });
     }
     return true;
   });
@@ -2817,153 +3231,590 @@ function registerIpcHandlers() {
     if (!ip || !ip.trim()) throw new Error('Enter a PS5 address first.');
     if (!srcPath || !srcPath.trim() || !dstPath || !dstPath.trim()) throw new Error('Source and destination are required.');
 
-    emit('manage_log', { message: `Copy ${srcPath} -> ${dstPath}` });
-
-    // Copy is done via COPY command
-    try {
-      const response = await sendSimpleCommand(ip, TRANSFER_PORT, `COPY ${srcPath}\t${dstPath}\n`);
-      if (!response.startsWith('OK')) {
-        throw new Error(`Copy failed: ${response}`);
+    return runManageTask('Copy', async () => {
+      emit('manage_log', { message: `Copy ${srcPath} -> ${dstPath}` });
+      emit('manage_progress', { op: 'Copy', processed: 0, total: 0, current_file: null });
+      try {
+        await copyWithProgress(
+          ip,
+          srcPath,
+          dstPath,
+          { get value() { return state.manageCancel; } },
+          (processed, total) => {
+            emit('manage_progress', { op: 'Copy', processed, total, current_file: null });
+          },
+          (message) => emit('manage_log', { message })
+        );
+        emitManageDone({ op: 'Copy', bytes: null, error: null });
+      } catch (err) {
+        emitManageDone({ op: 'Copy', bytes: null, error: err.message });
+        throw err;
       }
-      emit('manage_done', { op: 'Copy', bytes: null, error: null });
-    } catch (err) {
-      emit('manage_done', { op: 'Copy', bytes: null, error: err.message });
-      throw err;
-    }
-    return true;
+    });
   });
 
   ipcMain.handle('manage_extract', async (_, ip, srcPath, dstPath) => {
     if (!ip || !ip.trim()) throw new Error('Enter a PS5 address first.');
     if (!srcPath || !srcPath.trim() || !dstPath || !dstPath.trim()) throw new Error('Source and destination are required.');
 
-    emit('manage_log', { message: `Extract ${srcPath} -> ${dstPath}` });
-
-    try {
-      const response = await sendSimpleCommand(ip, TRANSFER_PORT, `EXTRACT_ARCHIVE ${srcPath}\t${dstPath}\n`);
-      if (!response.startsWith('OK')) {
-        throw new Error(`Extract failed: ${response}`);
+    return runManageTask('Extract', async () => {
+      emit('manage_log', { message: `Extract ${srcPath} -> ${dstPath}` });
+      try {
+        await extractArchiveWithProgress(
+          ip,
+          srcPath,
+          dstPath,
+          { get value() { return state.manageCancel; } },
+          (processed, total, currentFile) => {
+            emit('manage_progress', { op: 'Extract', processed, total, current_file: currentFile });
+          },
+          (message) => emit('manage_log', { message })
+        );
+        emitManageDone({ op: 'Extract', bytes: null, error: null });
+      } catch (err) {
+        emitManageDone({ op: 'Extract', bytes: null, error: err.message });
       }
-      emit('manage_done', { op: 'Extract', bytes: null, error: null });
-    } catch (err) {
-      emit('manage_done', { op: 'Extract', bytes: null, error: err.message });
-    }
-    return true;
+    });
   });
 
   ipcMain.handle('manage_download_file', async (_, ip, filepath, destPath) => {
     if (!ip || !ip.trim()) throw new Error('Enter a PS5 address first.');
     if (!filepath || !filepath.trim() || !destPath || !destPath.trim()) throw new Error('Source and destination are required.');
 
-    emit('manage_log', { message: `Download ${filepath}` });
+    return runManageTask('Download', async () => {
+      emit('manage_log', { message: `Download ${filepath}` });
+      let totalSize = 0;
 
-    let socket = null;
-    let fileStream = null;
+      try {
+        const result = await downloadFtx(ip, `DOWNLOAD_V2 ${filepath}\n`, {
+          mode: 'file',
+          destPath,
+          expectedRelPath: path.basename(filepath),
+          cancel: { get value() { return state.manageCancel; } },
+          progress: (processed, total, currentFile) => {
+            totalSize = total;
+            emit('manage_progress', { op: 'Download', processed, total, current_file: currentFile });
+          },
+        });
+        emit('manage_progress', { op: 'Download', processed: totalSize, total: totalSize, current_file: null });
+        emitManageDone({ op: 'Download', bytes: result.bytes, error: null });
+      } catch (err) {
+        if (err && err.code === 'FTX_UNSUPPORTED') {
+          try {
+            const bytes = await downloadFileLegacy(ip, filepath, destPath);
+            emitManageDone({ op: 'Download', bytes, error: null });
+          } catch (legacyErr) {
+            emitManageDone({ op: 'Download', bytes: null, error: legacyErr.message });
+          }
+          return;
+        }
+        // Clean up partial file on error
+        try {
+          fs.unlinkSync(destPath);
+        } catch {
+          // ignore cleanup errors
+        }
+        emitManageDone({ op: 'Download', bytes: null, error: err.message });
+      }
+    });
+  });
 
-    try {
-      socket = await createSocketWithTimeout(ip, TRANSFER_PORT);
-      socket.write(`DOWNLOAD ${filepath}\n`);
+  // Helper: recursively list all files in a remote directory
+  async function listDirRecursive(ip, port, remotePath, basePath = '') {
+    const entries = await listDir(ip, port, remotePath);
+    let files = [];
+    for (const entry of entries) {
+      const entryPath = remotePath + '/' + entry.name;
+      const relPath = basePath ? basePath + '/' + entry.name : entry.name;
+      if (entry.type === 'd' || entry.is_dir) {
+        const subFiles = await listDirRecursive(ip, port, entryPath, relPath);
+        files = files.concat(subFiles);
+      } else if (entry.type === 'f' || entry.is_file || entry.type === '-') {
+        files.push({ remotePath: entryPath, relPath, size: entry.size || 0 });
+      }
+    }
+    return files;
+  }
 
-      let headerReceived = false;
+  // Helper: download a single file with progress
+  async function downloadSingleFile(ip, remotePath, localPath, onProgress) {
+    const socket = await createSocketWithTimeout(ip, TRANSFER_PORT);
+    socket.setTimeout(0);
+
+    return new Promise((resolve, reject) => {
+      let headerBuf = Buffer.alloc(0);
+      let headerDone = false;
       let totalSize = 0;
       let received = 0;
-      let headerBuf = Buffer.alloc(0);
-      let resolved = false;
+      let fileStream = null;
+      let lastProgress = Date.now();
+      let stallTimer = null;
 
-      fileStream = fs.createWriteStream(destPath);
-
-      const cleanup = () => {
+      const cleanup = (err) => {
+        if (stallTimer) {
+          clearInterval(stallTimer);
+          stallTimer = null;
+        }
+        socket.removeAllListeners();
         if (fileStream) {
           fileStream.end();
-          fileStream = null;
         }
-        if (socket) {
-          socket.removeAllListeners();
-          socket.destroy();
-          socket = null;
+        socket.destroy();
+        if (err) {
+          // Clean up partial file
+          try { fs.unlinkSync(localPath); } catch (e) { /* ignore */ }
+          reject(err);
+        } else {
+          resolve(received);
         }
       };
 
-      await new Promise((resolve, reject) => {
-        const onData = (chunk) => {
-          if (resolved) return;
+      socket.write(`DOWNLOAD_RAW ${remotePath}\n`);
 
-          if (!headerReceived) {
-            headerBuf = Buffer.concat([headerBuf, chunk]);
-            const newlineIdx = headerBuf.indexOf('\n');
-            if (newlineIdx !== -1) {
-              const header = headerBuf.slice(0, newlineIdx).toString('utf8').trim();
-              if (!header.startsWith('OK ')) {
-                resolved = true;
-                cleanup();
-                reject(new Error(`Download failed: ${header}`));
-                return;
-              }
-              totalSize = parseInt(header.substring(3).trim(), 10);
-              headerReceived = true;
-              emit('manage_progress', { op: 'Download', processed: 0, total: totalSize, current_file: filepath });
-
-              const remaining = headerBuf.slice(newlineIdx + 1);
-              if (remaining.length > 0 && fileStream) {
-                fileStream.write(remaining);
-                received += remaining.length;
-              }
-            }
-          } else if (fileStream) {
-            fileStream.write(chunk);
-            received += chunk.length;
-            emit('manage_progress', { op: 'Download', processed: received, total: totalSize, current_file: null });
+      socket.on('data', (chunk) => {
+        if (state.manageCancel) {
+          cleanup(new Error('Download cancelled'));
+          return;
+        }
+        if (!headerDone) {
+          headerBuf = Buffer.concat([headerBuf, chunk]);
+          const idx = headerBuf.indexOf('\n');
+          if (idx === -1) return;
+          const line = headerBuf.slice(0, idx).toString('utf8').trim();
+          const remainder = headerBuf.slice(idx + 1);
+          headerBuf = Buffer.alloc(0);
+          if (line.startsWith('ERROR')) {
+            cleanup(new Error(line));
+            return;
           }
-
-          if (headerReceived && received >= totalSize) {
-            resolved = true;
-            cleanup();
-            resolve();
+          const match = line.match(/^READY\s+(\d+)/i);
+          if (!match) {
+            cleanup(new Error(`Unexpected response: ${line}`));
+            return;
           }
-        };
-
-        const onError = (err) => {
-          if (resolved) return;
-          resolved = true;
-          cleanup();
-          reject(err);
-        };
-
-        const onClose = () => {
-          if (resolved) return;
-          resolved = true;
-          cleanup();
-          if (received >= totalSize) {
-            resolve();
-          } else {
-            reject(new Error('Connection closed before download completed'));
+          totalSize = Number(match[1]);
+          headerDone = true;
+          fileStream = fs.createWriteStream(localPath, { flags: 'w' });
+          if (remainder.length > 0) {
+            received += remainder.length;
+            fileStream.write(remainder);
           }
-        };
-
-        socket.on('data', onData);
-        socket.on('error', onError);
-        socket.on('close', onClose);
+        } else {
+          received += chunk.length;
+          if (!fileStream.write(chunk)) {
+            socket.pause();
+            fileStream.once('drain', () => socket.resume());
+          }
+        }
+        lastProgress = Date.now();
+        if (onProgress) onProgress(received, totalSize);
       });
 
-      emit('manage_done', { op: 'Download', bytes: received, error: null });
+      socket.on('error', (err) => cleanup(err));
+      socket.on('close', () => {
+        if (headerDone && received >= totalSize) {
+          cleanup();
+        } else if (headerDone) {
+          cleanup(new Error(`Incomplete: ${received}/${totalSize}`));
+        } else {
+          cleanup(new Error('Connection closed before response'));
+        }
+      });
+      socket.on('end', () => {
+        if (headerDone && received >= totalSize) {
+          cleanup();
+        }
+      });
+
+      stallTimer = setInterval(() => {
+        if (Date.now() - lastProgress > 60000) {
+          cleanup(new Error('Download stalled'));
+        }
+      }, 1000);
+    });
+  }
+
+  async function downloadFileLegacy(ip, filepath, destPath) {
+    let socket = null;
+    let fileStream = null;
+    let totalSize = 0;
+    let received = 0;
+
+    try {
+      socket = await createSocketWithTimeout(ip, TRANSFER_PORT);
+      socket.setTimeout(0); // Disable timeout, rely on stall detection
+      state.manageSocket = socket;
+      socket.write(`DOWNLOAD_RAW ${filepath}\n`);
+
+      fileStream = fs.createWriteStream(destPath, { flags: 'w' });
+      let headerBuf = Buffer.alloc(0);
+      let headerDone = false;
+      let lastProgress = Date.now();
+      let lastLogAt = 0;
+
+      await new Promise((resolve, reject) => {
+        let stallTimer = null;
+        const cleanup = (err) => {
+          if (stallTimer) {
+            clearInterval(stallTimer);
+            stallTimer = null;
+          }
+          socket.removeAllListeners();
+          if (err) {
+            reject(err);
+          } else {
+            resolve();
+          }
+        };
+
+        const writeChunk = (buf) => {
+          if (buf.length === 0) return;
+          if (!fileStream.write(buf)) {
+            socket.pause();
+            fileStream.once('drain', () => socket.resume());
+          }
+        };
+
+        socket.on('data', (chunk) => {
+          if (state.manageCancel) {
+            cleanup(new Error('Download cancelled by user'));
+            return;
+          }
+          if (!headerDone) {
+            headerBuf = Buffer.concat([headerBuf, chunk]);
+            const idx = headerBuf.indexOf('\n');
+            if (idx === -1) return;
+            const line = headerBuf.slice(0, idx).toString('utf8').trim();
+            const remainder = headerBuf.slice(idx + 1);
+            headerBuf = Buffer.alloc(0);
+            if (line.startsWith('ERROR')) {
+              cleanup(new Error(line));
+              return;
+            }
+            const match = line.match(/^READY\s+(\d+)/i);
+            if (!match) {
+              cleanup(new Error(`Unexpected response: ${line}`));
+              return;
+            }
+            totalSize = Number(match[1]);
+            headerDone = true;
+            emit('manage_progress', { op: 'Download', processed: 0, total: totalSize, current_file: filepath });
+            if (remainder.length > 0) {
+              received += remainder.length;
+              writeChunk(remainder);
+            }
+          } else {
+            received += chunk.length;
+            writeChunk(chunk);
+          }
+          lastProgress = Date.now();
+          emit('manage_progress', { op: 'Download', processed: received, total: totalSize, current_file: null });
+          const now = Date.now();
+          if (now - lastLogAt > 5000) {
+            lastLogAt = now;
+            emit('manage_log', { message: `Downloading... ${received}/${totalSize}` });
+          }
+        });
+
+        socket.on('timeout', () => cleanup(new Error('Download timed out')));
+        socket.on('error', (err) => cleanup(err));
+        socket.on('close', () => cleanup());
+        socket.on('end', () => cleanup());
+
+        stallTimer = setInterval(() => {
+          if (!headerDone) {
+            // Allow 30 seconds for header
+            if (Date.now() - lastProgress > 30000) {
+              cleanup(new Error('Download timed out waiting for response'));
+            }
+            return;
+          }
+          // Allow 120 seconds of no data before stall
+          if (Date.now() - lastProgress > 120000) {
+            cleanup(new Error(`Download stalled at ${received}/${totalSize}`));
+          }
+        }, 1000);
+      });
+
+      await new Promise((resolve) => fileStream.end(resolve));
+      if (received < totalSize) {
+        throw new Error(`Download incomplete: ${received}/${totalSize}`);
+      }
+      emit('manage_progress', { op: 'Download', processed: totalSize, total: totalSize, current_file: null });
+      return received;
     } catch (err) {
-      // Cleanup on error
       if (fileStream) {
         fileStream.end();
       }
       if (socket) {
         socket.destroy();
       }
-      emit('manage_done', { op: 'Download', bytes: null, error: err.message });
+      // Clean up partial file on error
+      try {
+        fs.unlinkSync(destPath);
+      } catch {
+        // Ignore cleanup errors
+      }
+      throw err;
+    } finally {
+      if (state.manageSocket === socket) {
+        state.manageSocket = null;
+      }
     }
-    return true;
-  });
+  }
+
+  async function downloadDirLegacy(ip, dirPath, destPath) {
+    // Step 1: List all files recursively
+    emit('manage_log', { message: 'Scanning directory...' });
+    const files = await listDirRecursive(ip, TRANSFER_PORT, dirPath);
+
+    if (files.length === 0) {
+      await fs.promises.mkdir(destPath, { recursive: true });
+      emit('manage_progress', { op: 'Download', processed: 0, total: 0, current_file: null });
+      return { bytes: 0, files: 0 };
+    }
+
+    const totalBytes = files.reduce((sum, f) => sum + (f.size || 0), 0);
+    emit('manage_log', { message: `Found ${files.length} files (${totalBytes} bytes)` });
+    emit('manage_progress', { op: 'Download', processed: 0, total: totalBytes, current_file: null });
+
+    // Step 2: Download each file
+    let downloadedBytes = 0;
+    let downloadedFiles = 0;
+
+    for (const file of files) {
+      if (state.manageCancel) {
+        throw new Error('Download cancelled by user');
+      }
+
+      const localFilePath = path.join(destPath, file.relPath);
+      const localDir = path.dirname(localFilePath);
+      await fs.promises.mkdir(localDir, { recursive: true });
+
+      emit('manage_progress', {
+        op: 'Download',
+        processed: downloadedBytes,
+        total: totalBytes,
+        current_file: file.relPath
+      });
+
+      const bytes = await downloadSingleFile(ip, file.remotePath, localFilePath, (received) => {
+        emit('manage_progress', {
+          op: 'Download',
+          processed: downloadedBytes + received,
+          total: totalBytes,
+          current_file: file.relPath
+        });
+      });
+
+      downloadedBytes += bytes;
+      downloadedFiles++;
+    }
+
+    emit('manage_progress', { op: 'Download', processed: downloadedBytes, total: totalBytes, current_file: null });
+    emit('manage_log', { message: `Downloaded ${downloadedFiles} files` });
+    return { bytes: downloadedBytes, files: downloadedFiles };
+  }
+
+  async function extractArchiveWithProgress(ip, srcPath, dstPath, cancel, onProgress, onLog) {
+    const socket = await createSocketWithTimeout(ip, TRANSFER_PORT);
+    socket.setTimeout(0);
+    state.manageSocket = socket;
+
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      let lineBuffer = '';
+      let cancelledSent = false;
+      let lastActivity = Date.now();
+
+      const cleanup = (err) => {
+        if (settled) return;
+        settled = true;
+        clearInterval(timer);
+        socket.removeAllListeners();
+        socket.destroy();
+        if (err) {
+          reject(err);
+        } else {
+          resolve(true);
+        }
+      };
+
+      const timer = setInterval(() => {
+        if (cancel?.value && !cancelledSent) {
+          cancelledSent = true;
+          try { socket.write('CANCEL\n'); } catch { /* ignore */ }
+        }
+        if (Date.now() - lastActivity > 600000) {
+          cleanup(new Error('Extraction timed out (no progress for 10m)'));
+        }
+      }, 1000);
+
+      socket.on('data', (chunk) => {
+        lastActivity = Date.now();
+        lineBuffer += chunk.toString('utf8');
+        let newlineIndex;
+        while ((newlineIndex = lineBuffer.indexOf('\n')) !== -1) {
+          const line = lineBuffer.substring(0, newlineIndex).trim();
+          lineBuffer = lineBuffer.substring(newlineIndex + 1);
+
+          if (line.startsWith('OK')) {
+            cleanup();
+            return;
+          }
+          if (line.startsWith('ERROR')) {
+            cleanup(new Error(line));
+            return;
+          }
+          if (line.startsWith('EXTRACT_PROGRESS ')) {
+            const parts = line.split(' ');
+            const processed = parseInt(parts[2], 10) || 0;
+            const total = parseInt(parts[3], 10) || 0;
+            let currentFile = null;
+            if (parts.length > 4) {
+              currentFile = parts.slice(4).join(' ');
+            }
+            onProgress(processed, total, currentFile);
+            continue;
+          }
+          if (line.startsWith('EXTRACTING ')) {
+            onLog(line);
+          }
+        }
+      });
+
+      socket.on('error', (err) => cleanup(err));
+      socket.on('close', () => {
+        if (!settled) {
+          cleanup(new Error('Connection closed unexpectedly during extraction.'));
+        }
+      });
+
+      socket.write(`EXTRACT_ARCHIVE ${srcPath}\t${dstPath}\n`);
+    }).finally(() => {
+      if (state.manageSocket === socket) {
+        state.manageSocket = null;
+      }
+    });
+  }
+
+  async function copyWithProgress(ip, srcPath, dstPath, cancel, onProgress, onLog) {
+    const socket = await createSocketWithTimeout(ip, TRANSFER_PORT);
+    socket.setTimeout(0);
+    state.manageSocket = socket;
+
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      let lineBuffer = '';
+      let cancelledSent = false;
+      let lastActivity = Date.now();
+
+      const cleanup = (err) => {
+        if (settled) return;
+        settled = true;
+        clearInterval(timer);
+        socket.removeAllListeners();
+        socket.destroy();
+        if (err) {
+          reject(err);
+        } else {
+          resolve(true);
+        }
+      };
+
+      const timer = setInterval(() => {
+        if (cancel?.value && !cancelledSent) {
+          cancelledSent = true;
+          try { socket.write('CANCEL\n'); } catch { /* ignore */ }
+        }
+        if (Date.now() - lastActivity > 600000) {
+          cleanup(new Error('Copy timed out (no progress for 10m)'));
+        }
+      }, 1000);
+
+      socket.on('data', (chunk) => {
+        lastActivity = Date.now();
+        lineBuffer += chunk.toString('utf8');
+        let newlineIndex;
+        while ((newlineIndex = lineBuffer.indexOf('\n')) !== -1) {
+          const line = lineBuffer.substring(0, newlineIndex).trim();
+          lineBuffer = lineBuffer.substring(newlineIndex + 1);
+
+          if (line.startsWith('OK')) {
+            cleanup();
+            return;
+          }
+          if (line.startsWith('ERROR')) {
+            cleanup(new Error(line));
+            return;
+          }
+          if (line.startsWith('COPY_PROGRESS ')) {
+            const parts = line.split(' ');
+            const processed = parseInt(parts[1], 10) || 0;
+            const total = parseInt(parts[2], 10) || 0;
+            onProgress(processed, total, null);
+            continue;
+          }
+          if (line.length > 0) {
+            onLog(line);
+          }
+        }
+      });
+
+      socket.on('error', (err) => cleanup(err));
+      socket.on('close', () => {
+        if (!settled) {
+          cleanup(new Error('Connection closed unexpectedly during copy.'));
+        }
+      });
+
+      socket.write(`COPY ${srcPath}\t${dstPath}\n`);
+    }).finally(() => {
+      if (state.manageSocket === socket) {
+        state.manageSocket = null;
+      }
+    });
+  }
 
   ipcMain.handle('manage_download_dir', async (_, ip, dirPath, destPath, compression) => {
-    // Simplified version - download files individually
-    emit('manage_log', { message: `Download ${dirPath}` });
-    emit('manage_done', { op: 'Download', bytes: null, error: 'Directory download not yet implemented' });
-    return true;
+    if (!ip || !ip.trim()) throw new Error('Enter a PS5 address first.');
+    if (!dirPath || !dirPath.trim() || !destPath || !destPath.trim()) throw new Error('Source and destination are required.');
+
+    return runManageTask('Download', async () => {
+      emit('manage_log', { message: `Download ${dirPath}` });
+      let totalSize = 0;
+      const comp = (compression || 'none').toLowerCase();
+      let compTag = '';
+      if (comp === 'lz4') compTag = ' LZ4';
+      else if (comp === 'zstd') compTag = ' ZSTD';
+      else if (comp === 'lzma') compTag = ' LZMA';
+      else if (comp === 'auto') compTag = ' AUTO';
+
+      try {
+        const result = await downloadFtx(ip, `DOWNLOAD_DIR ${dirPath}${compTag}\n`, {
+          mode: 'dir',
+          destPath,
+          cancel: { get value() { return state.manageCancel; } },
+          progress: (processed, total, currentFile) => {
+            totalSize = total;
+            emit('manage_progress', { op: 'Download', processed, total, current_file: currentFile });
+          },
+        });
+        emit('manage_progress', { op: 'Download', processed: totalSize, total: totalSize, current_file: null });
+        emitManageDone({ op: 'Download', bytes: result.bytes, error: null });
+      } catch (err) {
+        if (err && err.code === 'FTX_UNSUPPORTED') {
+          try {
+            const result = await downloadDirLegacy(ip, dirPath, destPath);
+            emitManageDone({ op: 'Download', bytes: result.bytes, error: null });
+          } catch (legacyErr) {
+            emitManageDone({ op: 'Download', bytes: null, error: legacyErr.message });
+          }
+          return;
+        }
+        emitManageDone({ op: 'Download', bytes: null, error: err.message });
+      }
+    });
   });
 
   ipcMain.handle('manage_upload', async (_, ip, destRoot, paths) => {
@@ -2971,66 +3822,87 @@ function registerIpcHandlers() {
     if (!destRoot || !destRoot.trim()) throw new Error('Destination path is required.');
     if (!paths || paths.length === 0) throw new Error('Select at least one file or folder.');
 
-    emit('manage_log', { message: 'Upload started.' });
+    return runManageTask('Upload', async () => {
+      emit('manage_log', { message: 'Upload started.' });
 
-    try {
-      let totalBytes = 0;
+      try {
+        let totalBytes = 0;
+        let totalFiles = 0;
+        const batches = [];
 
-      for (const srcPath of paths) {
-        const stat = fs.statSync(srcPath);
-        let files;
-        let dest;
+        for (const srcPath of paths) {
+          if (state.manageCancel) {
+            throw new Error('Upload cancelled by user');
+          }
+          const stat = fs.statSync(srcPath);
+          let files;
+          let dest;
 
-        if (stat.isDirectory()) {
-          const folderName = path.basename(srcPath);
-          dest = `${destRoot.replace(/\/$/, '')}/${folderName}`;
-        const result = await collectFiles(srcPath);
-          files = result.files;
-        } else {
-          dest = destRoot;
-          files = [{
-            rel_path: path.basename(srcPath),
-            abs_path: srcPath,
-            size: stat.size,
-            mtime: Math.floor(stat.mtimeMs / 1000),
-          }];
+          if (stat.isDirectory()) {
+            const folderName = path.basename(srcPath);
+            dest = `${destRoot.replace(/\/$/, '')}/${folderName}`;
+            const result = await collectFiles(srcPath);
+            files = result.files;
+          } else {
+            dest = destRoot;
+            files = [{
+              rel_path: path.basename(srcPath),
+              abs_path: srcPath,
+              size: stat.size,
+              mtime: Math.floor(stat.mtimeMs / 1000),
+            }];
+          }
+
+          const batchBytes = files.reduce((sum, f) => sum + f.size, 0);
+          totalBytes += batchBytes;
+          totalFiles += files.length;
+          batches.push({ dest, files, batchBytes });
         }
 
-        const batchBytes = files.reduce((sum, f) => sum + f.size, 0);
-        totalBytes += batchBytes;
-
+        let processedBase = 0;
         emit('manage_progress', { op: 'Upload', processed: 0, total: totalBytes, current_file: null });
 
-        const socket = await uploadV2Init(ip, TRANSFER_PORT, dest, false);
-        await sendFilesV2(files, socket, {
-          progress: (sent, filesSent, elapsed) => {
-            emit('manage_progress', { op: 'Upload', processed: sent, total: totalBytes, current_file: null });
-          },
-          log: (msg) => emit('manage_log', { message: msg }),
-        });
+        for (const batch of batches) {
+          if (state.manageCancel) {
+            throw new Error('Upload cancelled by user');
+          }
 
-        const response = await readUploadResponse(socket);
-        parseUploadResponse(response);
+          const socket = await uploadV2Init(ip, TRANSFER_PORT, batch.dest, false);
+          await sendFilesV2(batch.files, socket, {
+            cancel: { get value() { return state.manageCancel; } },
+            deprioritize: true,
+            progress: (sent) => {
+              emit('manage_progress', { op: 'Upload', processed: processedBase + sent, total: totalBytes, current_file: null });
+            },
+            log: (msg) => emit('manage_log', { message: msg }),
+          });
+
+          const response = await readUploadResponse(socket);
+          parseUploadResponse(response);
+          processedBase += batch.batchBytes;
+          emit('manage_progress', { op: 'Upload', processed: processedBase, total: totalBytes, current_file: null });
+        }
+
+        emitManageDone({ op: 'Upload', bytes: totalBytes, files: totalFiles, error: null });
+      } catch (err) {
+        emitManageDone({ op: 'Upload', bytes: null, error: err.message });
       }
-
-      emit('manage_done', { op: 'Upload', bytes: totalBytes, error: null });
-    } catch (err) {
-      emit('manage_done', { op: 'Upload', bytes: null, error: err.message });
-    }
-    return true;
+    });
   });
 
   // Upload RAR for server-side extraction
-  ipcMain.handle('manage_upload_rar', async (_, ip, rarPath, destPath, mode) => {
+  ipcMain.handle('manage_upload_rar', async (_, ip, rarPath, destPath, mode, tempRoot) => {
     if (!ip || !ip.trim()) throw new Error('Enter a PS5 address first.');
     if (!rarPath || !rarPath.trim()) throw new Error('RAR file path is required.');
     if (!destPath || !destPath.trim()) throw new Error('Destination path is required.');
 
+    beginManageOperation('Extract');
     emit('manage_log', { message: `Uploading RAR ${rarPath} for extraction to ${destPath}` });
 
     try {
       const extractResult = await uploadRarForExtraction(ip, rarPath, destPath, mode, {
         cancel: { get value() { return state.manageCancel; } },
+        tempRoot,
         onProgress: (op, processed, total, currentFile) => {
           emit('manage_progress', {
             op: op === 'Upload' ? 'Extract' : 'Extract',
@@ -3051,10 +3923,10 @@ function registerIpcHandlers() {
       }
 
       const bytes = typeof extractResult.bytes === 'number' ? extractResult.bytes : extractResult.fileSize || 0;
-      emit('manage_done', { op: 'Extract', bytes, error: null });
+      emitManageDone({ op: 'Extract', bytes, error: null });
       return true;
     } catch (err) {
-      emit('manage_done', { op: 'Extract', bytes: null, error: err.message });
+      emitManageDone({ op: 'Extract', bytes: null, error: err.message });
       throw err;
     }
   });
@@ -3344,6 +4216,7 @@ function registerIpcHandlers() {
               req.rar_extract_mode || 'normal',
               {
                 cancel: { get value() { return state.transferCancel; } },
+                tempRoot: req.rar_temp_root,
                 overrideOnConflict: req.override_on_conflict !== false,
                 onProgress: (op, processed, total, currentFile) => {
                   state.transferStatus = {

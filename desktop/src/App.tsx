@@ -63,6 +63,7 @@ type ManageProgressEvent = {
 type ManageDoneEvent = {
   op: string;
   bytes?: number | null;
+  files?: number | null;
   error?: string | null;
 };
 
@@ -152,6 +153,7 @@ type QueueItem = {
     auto_tune_connections: boolean;
     optimize_upload: boolean;
     rar_extract_mode: RarExtractMode;
+    rar_temp_root?: string;
     override_on_conflict?: boolean;
   };
 };
@@ -224,6 +226,7 @@ type AppConfig = {
   optimize_upload: boolean;
   chat_display_name: string;
   rar_extract_mode: string;
+  rar_temp: string;
   window_width: number;
   window_height: number;
   window_x: number;
@@ -592,6 +595,7 @@ export default function App() {
   const [currentQueueItemId, setCurrentQueueItemId] = useState<number | null>(null);
   const [uploadQueueTab, setUploadQueueTab] = useState<"current" | "completed" | "failed">("current");
   const [extractQueueTab, setExtractQueueTab] = useState<"current" | "completed" | "failed">("current");
+  const [extractionStopping, setExtractionStopping] = useState(false);
   const [historyData, setHistoryData] = useState<HistoryData>({ records: [] });
   const [logTab, setLogTab] = useState<"client" | "payload" | "history">("client");
   const [queueMetaById, setQueueMetaById] = useState<Record<number, QueueMeta>>({});
@@ -650,6 +654,7 @@ export default function App() {
     useState<DownloadCompressionOption>("auto");
   const [chmodAfterUpload, setChmodAfterUpload] = useState(true);
   const [rarExtractMode, setRarExtractMode] = useState<RarExtractMode>("normal");
+  const [rarTemp, setRarTemp] = useState("");
   const [chatDisplayName, setChatDisplayName] = useState("");
   const [configDefaults, setConfigDefaults] = useState<AppConfig | null>(null);
   const [configLoaded, setConfigLoaded] = useState(false);
@@ -700,6 +705,10 @@ export default function App() {
   const [manageDestOpen, setManageDestOpen] = useState(false);
   const [manageDestAction, setManageDestAction] = useState<ManageAction | null>(null);
   const [manageDestStatus, setManageDestStatus] = useState("");
+  const [manageDestFilename, setManageDestFilename] = useState("");
+  const [noticeOpen, setNoticeOpen] = useState(false);
+  const [noticeTitle, setNoticeTitle] = useState("");
+  const [noticeLines, setNoticeLines] = useState<string[]>([]);
   const [manageBusy, setManageBusy] = useState(false);
   const [manageProgress, setManageProgress] = useState({
     op: "",
@@ -708,6 +717,18 @@ export default function App() {
     currentFile: "",
     speed_bps: 0
   });
+  const [manageModalOpen, setManageModalOpen] = useState(false);
+  const [manageModalDone, setManageModalDone] = useState(false);
+  const [manageModalError, setManageModalError] = useState<string | null>(null);
+  const [manageModalOp, setManageModalOp] = useState("");
+  const [manageModalStatus, setManageModalStatus] = useState("");
+  const [manageModalStartedAt, setManageModalStartedAt] = useState<number | null>(
+    null
+  );
+  const manageModalStartedAtRef = useRef<number | null>(null);
+  const [manageModalSummary, setManageModalSummary] = useState<string | null>(null);
+  const [manageModalLastProgressAt, setManageModalLastProgressAt] = useState<number | null>(null);
+  const manageModalOpRef = useRef("");
   const manageSpeedRef = useRef({
     op: "",
     processed: 0,
@@ -1601,6 +1622,7 @@ export default function App() {
         );
         setChmodAfterUpload(normalizedConfig.chmod_after_upload ?? false);
         setRarExtractMode((normalizedConfig.rar_extract_mode as RarExtractMode) || "normal");
+        setRarTemp(normalizedConfig.rar_temp || "");
         setChatDisplayName(normalizedConfig.chat_display_name ?? "");
         setIncludePrerelease(normalizedConfig.update_channel === "all");
         setLanguage(normalizedConfig.language || "en");
@@ -1959,7 +1981,7 @@ export default function App() {
     const entry = manageSelectedEntry;
     if (
       !entry ||
-      entry.entry_type !== "file" ||
+      getEntryType(entry) !== "file" ||
       !entry.name.toLowerCase().endsWith(".rar") ||
       !ip.trim()
     ) {
@@ -2073,7 +2095,8 @@ export default function App() {
       download_compression: downloadCompression,
       chmod_after_upload: chmodAfterUpload,
       chat_display_name: chatDisplayName,
-      rar_extract_mode: rarExtractMode
+      rar_extract_mode: rarExtractMode,
+      rar_temp: rarTemp
     };
 
     configSaveRef.current = nextConfig;
@@ -2108,7 +2131,8 @@ export default function App() {
     downloadCompression,
     chmodAfterUpload,
     chatDisplayName,
-    rarExtractMode
+    rarExtractMode,
+    rarTemp
   ]);
 
   useEffect(() => {
@@ -2460,13 +2484,17 @@ export default function App() {
         "manage_progress",
         (event) => {
           if (!mounted) return;
+          setManageModalLastProgressAt(Date.now());
           setManageBusy(true);
           const now = Date.now();
           if (event.payload.op !== lastManageOp.current) {
             lastManageOp.current = event.payload.op;
             lastManageProgressUpdate.current = 0;
           }
-          if (now - lastManageProgressUpdate.current < 1000) {
+          if (
+            now - lastManageProgressUpdate.current < 1000 &&
+            !(event.payload.total > 0 && event.payload.processed >= event.payload.total)
+          ) {
             return;
           }
           lastManageProgressUpdate.current = now;
@@ -2518,6 +2546,35 @@ export default function App() {
             currentFile: "",
             speed_bps: 0
           });
+          setManageModalLastProgressAt(null);
+          if (manageModalOpRef.current === event.payload.op) {
+            setManageModalDone(true);
+            setManageModalError(event.payload.error ?? null);
+            setManageModalStatus(
+              event.payload.error
+                ? event.payload.error.toLowerCase().includes("cancel")
+                  ? "Cancelled"
+                  : "Failed"
+                : "Done"
+            );
+            if (!event.payload.error && manageModalOpRef.current === "Upload") {
+              const elapsedMs = manageModalStartedAtRef.current
+                ? Date.now() - manageModalStartedAtRef.current
+                : 0;
+              const elapsedSec =
+                elapsedMs > 0 ? Math.max(1, Math.round(elapsedMs / 1000)) : 0;
+              const bytes = event.payload.bytes ?? manageProgress.processed;
+              const files =
+                typeof event.payload.files === "number"
+                  ? event.payload.files
+                  : null;
+              setManageModalSummary(
+                `${formatBytes(bytes || 0)} • ${
+                  files !== null ? `${files} files` : "files"
+                } • ${elapsedSec}s`
+              );
+            }
+          }
           if (event.payload.error) {
             setManageStatus(`${event.payload.op} failed: ${event.payload.error}`);
             setClientLogs((prev) =>
@@ -2550,7 +2607,6 @@ export default function App() {
         "manage_log",
         (event) => {
           if (!mounted) return;
-          if (transferActive) return;
           setClientLogs((prev) =>
             [`${event.payload.message}`, ...prev].slice(0, 100)
           );
@@ -2734,7 +2790,14 @@ export default function App() {
       : "";
   const connectionsDisabled = optimizeUpload || autoTune;
   const isRarSource = /\.rar$/i.test(sourcePath.trim());
-  const isArchiveSource = /\.(zip|rar|7z)$/i.test(sourcePath.trim());
+  const isArchiveSource = useMemo(
+    () => isArchivePath(sourcePath),
+    [sourcePath]
+  );
+  const isRar = useMemo(
+    () => isArchivePath(sourcePath) && sourcePath.toLowerCase().endsWith(".rar"),
+    [sourcePath]
+  );
 
   const formatUptime = (seconds: number) => {
     const days = Math.floor(seconds / 86400);
@@ -2927,6 +2990,14 @@ export default function App() {
     try {
       const id = await invoke<number>("payload_queue_extract", { ip, src, dst });
       setClientLogs((prev) => [`Queued extraction (ID: ${id}): ${src}`, ...prev].slice(0, 100));
+      setNoticeTitle("Extraction queued");
+      setNoticeLines([
+        `ID: ${id}`,
+        `Source: ${src}`,
+        `Destination: ${dst}`,
+        "Check the Queues tab for progress."
+      ]);
+      setNoticeOpen(true);
       handleRefreshPayloadStatus();
     } catch (err) {
       setClientLogs((prev) => [`Queue extract failed: ${String(err)}`, ...prev].slice(0, 100));
@@ -3023,6 +3094,32 @@ export default function App() {
       handleRefreshPayloadStatus();
     } catch (err) {
       setClientLogs((prev) => [`Queue clear failed: ${String(err)}`, ...prev].slice(0, 100));
+    }
+  };
+
+  const handleQueueStopAll = async () => {
+    if (!ip.trim()) return;
+    try {
+      if (!payloadFullStatus?.items?.length) return;
+      setExtractionStopping(true);
+      const cancellable = payloadFullStatus.items.filter(
+        (item) => item.status === "pending" || item.status === "running" || item.status === "idle"
+      );
+      for (const item of cancellable) {
+        try {
+          await invoke("payload_queue_cancel", { ip, id: item.id });
+        } catch {
+          // ignore non-cancellable items
+        }
+      }
+      setClientLogs((prev) => ["Extraction queue stopped", ...prev].slice(0, 100));
+      await handleRefreshQueueStatus();
+    } catch (err) {
+      setClientLogs((prev) => [`Queue stop failed: ${String(err)}`, ...prev].slice(0, 100));
+    } finally {
+      setTimeout(() => {
+        handleRefreshQueueStatus().finally(() => setExtractionStopping(false));
+      }, 1000);
     }
   };
 
@@ -3401,6 +3498,7 @@ export default function App() {
           auto_tune_connections: autoTune,
           optimize_upload: optimizeUpload,
           rar_extract_mode: rarExtractMode,
+          rar_temp_root: rarTemp,
           override_on_conflict: overrideOnConflict,
           payload_version: payloadVersion,
           storage_root: storageRoot,
@@ -3543,8 +3641,39 @@ export default function App() {
           try {
             const data = JSON.parse(payloadText);
             const normalized = normalizeQueueData(data);
-            applyQueueData(normalized);
-            await invoke("queue_update", { data: normalized });
+            const localByKey = new Map(
+              queueData.items.map((item) => [
+                normalizeQueueKey(item.source_path, item.dest_path),
+                item
+              ])
+            );
+            const mergedItems = normalized.items.map((item) => {
+              const key = normalizeQueueKey(item.source_path, item.dest_path);
+              const local = localByKey.get(key);
+              if (local && (local.status === "Completed" || typeof local.status === "object")) {
+                return { ...item, status: local.status };
+              }
+              return item;
+            });
+            const localTerminal = queueData.items.filter(
+              (item) =>
+                (item.status === "Completed" || typeof item.status === "object") &&
+                !normalized.items.some(
+                  (p) =>
+                    normalizeQueueKey(p.source_path, p.dest_path) ===
+                    normalizeQueueKey(item.source_path, item.dest_path)
+                )
+            );
+            const merged = normalizeQueueData({
+              ...normalized,
+              items: [...mergedItems, ...localTerminal],
+              next_id: Math.max(
+                normalized.next_id || 1,
+                ...[...mergedItems, ...localTerminal].map((item) => item.id + 1)
+              )
+            });
+            applyQueueData(merged);
+            await invoke("queue_update", { data: merged });
             pushClientLog("Upload queue restored from payload.", "debug");
           } catch (err) {
             pushClientLog(`Failed to parse payload queue: ${String(err)}`, "error");
@@ -3657,6 +3786,7 @@ export default function App() {
       auto_tune_connections: autoTune,
       optimize_upload: optimizeUpload,
       rar_extract_mode: rarExtractMode,
+      rar_temp_root: rarTemp,
       override_on_conflict: overrideOnConflict
     }
   });
@@ -3696,6 +3826,15 @@ export default function App() {
     await saveQueueData(nextQueue);
     pushClientLog(tr("queue_added", { count: deduped.length }));
     if (skipped > 0) pushClientLog(tr("queue_duplicate"));
+    const first = deduped[0];
+    setNoticeTitle("Upload queued");
+    setNoticeLines([
+      `Added: ${deduped.length} item${deduped.length > 1 ? "s" : ""}`,
+      `Source: ${first.source_path}`,
+      `Destination: ${first.dest_path || "(default)"}`,
+      "Check the Upload Queue tab for progress."
+    ]);
+    setNoticeOpen(true);
   };
 
   const handleAddToQueue = async () => {
@@ -3892,6 +4031,7 @@ export default function App() {
           optimize_upload: settings?.optimize_upload ?? optimizeUpload,
           override_on_conflict: settings?.override_on_conflict ?? overrideOnConflict,
           rar_extract_mode: settings?.rar_extract_mode ?? rarExtractMode,
+          rar_temp_root: settings?.rar_temp_root ?? rarTemp,
           payload_version: payloadVersion,
           storage_root: base,
           required_size: item.size_bytes || null
@@ -4243,6 +4383,11 @@ export default function App() {
     const nextPath = storageRoot || managePath || "/data";
     setManageDestPath(nextPath);
     setManageDestSelected(null);
+    if (getEntryType(manageSelectedEntry) === "file") {
+      setManageDestFilename(manageSelectedEntry.name);
+    } else {
+      setManageDestFilename("");
+    }
     refreshManageDest(nextPath);
   };
 
@@ -4254,23 +4399,58 @@ export default function App() {
       ? joinRemote(manageDestPath, destEntry.name)
       : manageDestPath;
     const srcPath = joinRemote(managePath, manageSelectedEntry.name);
-    const dstPath = joinRemote(destBase, manageSelectedEntry.name);
+    const destName = getEntryType(manageSelectedEntry) === "file"
+      ? (manageDestFilename.trim() || manageSelectedEntry.name)
+      : manageSelectedEntry.name;
+    const dstPath = joinRemote(destBase, destName);
 
     setManageDestOpen(false);
     setManageBusy(true);
     setManageStatus(`${manageDestAction}...`);
+    if (manageDestAction === "Move") {
+      setManageModalOpen(true);
+      setManageModalDone(false);
+      setManageModalError(null);
+      setManageModalSummary(null);
+      setManageModalOp("Move");
+      manageModalOpRef.current = "Move";
+      setManageModalStatus("Moving...");
+      const startAt = Date.now();
+      setManageModalStartedAt(startAt);
+      manageModalStartedAtRef.current = startAt;
+    }
     try {
       if (manageDestAction === "Move") {
         await invoke("manage_copy", { ip, src_path: srcPath, dst_path: dstPath });
         await invoke("manage_delete", { ip, path: srcPath });
+        setManageModalDone(true);
+        setManageModalError(null);
+        setManageModalStatus("Done");
       } else if (manageDestAction === "Copy") {
+        setManageModalOpen(true);
+        setManageModalDone(false);
+        setManageModalError(null);
+        setManageModalSummary(null);
+        setManageModalOp("Copy");
+        manageModalOpRef.current = "Copy";
+        setManageModalStatus("Copying...");
+        const startAt = Date.now();
+        setManageModalStartedAt(startAt);
+        manageModalStartedAtRef.current = startAt;
         await invoke("manage_copy", { ip, src_path: srcPath, dst_path: dstPath });
       } else if (manageDestAction === "Extract") {
         await handleQueueExtract(srcPath, destBase);
+        setManageBusy(false);
+        setManageStatus("Extraction queued.");
       }
     } catch (err) {
       setManageBusy(false);
       setManageStatus(`Error: ${String(err)}`);
+      if (manageDestAction === "Move") {
+        setManageModalDone(true);
+        setManageModalError(String(err));
+        setManageModalStatus("Failed");
+      }
     } finally {
       setManageDestAction(null);
     }
@@ -4280,6 +4460,12 @@ export default function App() {
     try {
       await invoke("manage_cancel");
       setManageStatus("Cancelling...");
+      setManageModalOpen(false);
+      setManageModalStatus("");
+      setManageModalSummary(null);
+      setManageModalStartedAt(null);
+      manageModalStartedAtRef.current = null;
+      setManageModalLastProgressAt(null);
     } catch (err) {
       setClientLogs((prev) => [
         `Failed to cancel: ${String(err)}`,
@@ -4288,16 +4474,29 @@ export default function App() {
     }
   };
 
-  const handleManageUploadFiles = async () => {
+  const handleManageUpload = async () => {
     if (!ip.trim()) {
       setManageStatus("Not connected");
       return;
     }
-    const selected = await open({ multiple: true });
+    const selected = await open({ multiple: true, directory: false });
     if (!selected) return;
     const paths = Array.isArray(selected) ? selected : [selected];
+    if (!paths.length) return;
     setManageBusy(true);
-    setManageStatus("Uploading...");
+    setManageModalOpen(true);
+    setManageModalDone(false);
+    setManageModalError(null);
+    setManageModalSummary(null);
+    setManageModalOp("Upload");
+    manageModalOpRef.current = "Upload";
+    setManageModalStatus("Uploading...");
+    const startAt = Date.now();
+    setManageModalStartedAt(startAt);
+    manageModalStartedAtRef.current = startAt;
+    setManageStatus(
+      transferActive ? "Uploading (deprioritized)..." : "Uploading..."
+    );
     try {
       await invoke("manage_upload", { ip, dest_root: managePath, paths });
     } catch (err) {
@@ -4306,63 +4505,29 @@ export default function App() {
     }
   };
 
-  const handleManageQueueUploadPaths = async (paths: string[]) => {
-    if (!paths || paths.length === 0) return;
-    const nextIdBase = queueData.next_id || 1;
-    let nextId = nextIdBase;
-    const items: QueueItem[] = [];
-    for (const filePath of paths) {
-      const name = getBaseName(filePath);
-      const destPath = joinRemote(managePath, name);
-      items.push(
-        buildQueueItem(nextId, {
-          sourcePath: filePath,
-          subfolderName: name,
-          presetIndex: 0,
-          customPresetPath: "",
-          storageBase: storageRoot,
-          destPath,
-          sizeBytes: null
-        })
-      );
-      nextId += 1;
-    }
-    await addQueueItems(items);
-    setManageStatus(tr("queue_added", { count: items.length }));
-  };
-
-  const handleManageQueueUploadFiles = async () => {
-    if (!ip.trim()) {
-      setManageStatus("Not connected");
-      return;
-    }
-    const selected = await open({ multiple: true });
-    if (!selected) return;
-    const paths = Array.isArray(selected) ? selected : [selected];
-    await handleManageQueueUploadPaths(paths);
-  };
-
-  const handleManageQueueUploadFolder = async () => {
-    if (!ip.trim()) {
-      setManageStatus("Not connected");
-      return;
-    }
-    const selected = await open({ directory: true, multiple: true });
-    if (!selected) return;
-    const paths = Array.isArray(selected) ? selected : [selected];
-    await handleManageQueueUploadPaths(paths);
-  };
-
   const handleManageUploadFolder = async () => {
     if (!ip.trim()) {
       setManageStatus("Not connected");
       return;
     }
-    const selected = await open({ directory: true, multiple: true });
+    const selected = await open({ multiple: true, directory: true });
     if (!selected) return;
     const paths = Array.isArray(selected) ? selected : [selected];
+    if (!paths.length) return;
     setManageBusy(true);
-    setManageStatus("Uploading...");
+    setManageModalOpen(true);
+    setManageModalDone(false);
+    setManageModalError(null);
+    setManageModalSummary(null);
+    setManageModalOp("Upload");
+    manageModalOpRef.current = "Upload";
+    setManageModalStatus("Uploading...");
+    const startAt = Date.now();
+    setManageModalStartedAt(startAt);
+    manageModalStartedAtRef.current = startAt;
+    setManageStatus(
+      transferActive ? "Uploading (deprioritized)..." : "Uploading..."
+    );
     try {
       await invoke("manage_upload", { ip, dest_root: managePath, paths });
     } catch (err) {
@@ -4385,8 +4550,10 @@ export default function App() {
     const srcPath = joinRemote(managePath, manageSelectedEntry.name);
     try {
       setManageBusy(true);
-      setManageStatus("Downloading...");
-      if (manageSelectedEntry.entry_type === "dir") {
+      setManageStatus(
+        transferActive ? "Downloading (deprioritized)..." : "Downloading..."
+      );
+      if (getEntryType(manageSelectedEntry) === "dir") {
         const destRoot = await open({
           directory: true,
           multiple: false,
@@ -4397,10 +4564,20 @@ export default function App() {
           return;
         }
         const destPath = joinLocalPath(destRoot, manageSelectedEntry.name);
+        setManageModalOpen(true);
+        setManageModalDone(false);
+        setManageModalError(null);
+        setManageModalSummary(null);
+        setManageModalOp("Download");
+        manageModalOpRef.current = "Download";
+        setManageModalStatus("Downloading...");
+        const startAt = Date.now();
+        setManageModalStartedAt(startAt);
+        manageModalStartedAtRef.current = startAt;
         await invoke("manage_download_dir", {
           ip,
           path: srcPath,
-      dest_path: finalDestPath,
+          dest_path: destPath,
           compression: downloadCompression
         });
       } else {
@@ -4411,6 +4588,16 @@ export default function App() {
           setManageBusy(false);
           return;
         }
+        setManageModalOpen(true);
+        setManageModalDone(false);
+        setManageModalError(null);
+        setManageModalSummary(null);
+        setManageModalOp("Download");
+        manageModalOpRef.current = "Download";
+        setManageModalStatus("Downloading...");
+        const startAt = Date.now();
+        setManageModalStartedAt(startAt);
+        manageModalStartedAtRef.current = startAt;
         await invoke("manage_download_file", {
           ip,
           path: srcPath,
@@ -4465,6 +4652,16 @@ export default function App() {
     setShowDeleteConfirm(false);
     setManageBusy(true);
     setManageStatus("Deleting...");
+    setManageModalOpen(true);
+    setManageModalDone(false);
+    setManageModalError(null);
+    setManageModalSummary(null);
+    setManageModalOp("Delete");
+    manageModalOpRef.current = "Delete";
+    setManageModalStatus("Deleting...");
+    const startAt = Date.now();
+    setManageModalStartedAt(startAt);
+    manageModalStartedAtRef.current = startAt;
     try {
       await invoke("manage_delete", { ip, path: target });
     } catch (err) {
@@ -4609,6 +4806,9 @@ export default function App() {
     item.status === "failed";
   const isExtractionCompleted = (item: ExtractQueueItem) =>
     item.status === "complete";
+  const hasExtractionRunning = payloadFullStatus?.items
+    ? payloadFullStatus.items.some((item) => item.status === "running")
+    : false;
   const hasExtractionCurrent = payloadFullStatus?.items
     ? payloadFullStatus.items.some((item) => !isExtractionCompleted(item) && !isExtractionFailed(item))
     : false;
@@ -5151,36 +5351,40 @@ export default function App() {
                     onChange={(event) => setSubfolder(event.target.value)}
                   />
                 </label>
-                <label className="field">
-                  <span>{tr("rar_extract")}</span>
-                  <select
-                    value={rarExtractMode}
-                    disabled={!isRarSource}
-                    onChange={(event) =>
-                      setRarExtractMode(event.target.value as RarExtractMode)
-                    }
-                  >
-                    <option value="normal">{tr("rar_normal")}</option>
-                    <option value="safe">{tr("rar_safe")}</option>
-                    <option value="turbo">{tr("rar_turbo")}</option>
-                  </select>
-                </label>
-                {isRarSource && (
-                  <>
-                    <p className="muted small">{tr("rar_note")}</p>
-                    <p className="muted small">
-                      Extraction runs on the PS5. Check the Payload tab → Extraction Queue for status.
-                    </p>
-                    <p className="muted small">
-                      {rarExtractMode === "safe"
-                        ? tr("rar_note_safe")
-                        : rarExtractMode === "turbo"
-                        ? tr("rar_note_turbo")
-                        : tr("rar_note_normal")}
-                    </p>
-                  </>
-                )}
-                <label className="field inline">
+{isRar && (
+  <>
+    <div className="form-row">
+      <label htmlFor="rar-mode">RAR Extract Mode</label>
+      <select
+        id="rar-mode"
+        value={rarExtractMode}
+        onChange={(e) =>
+          setRarExtractMode(e.target.value as RarExtractMode)
+        }
+      >
+        <option value="normal">Normal</option>
+        <option value="safe">Safe</option>
+        <option value="turbo">Turbo</option>
+      </select>
+    </div>
+    <div className="form-row">
+      <label htmlFor="rar-temp-storage">RAR Temp Storage</label>
+      <select
+        id="rar-temp-storage"
+        value={rarTemp}
+        onChange={(e) => setRarTemp(e.target.value)}
+        disabled={transferActive}
+      >
+        <option value="">{`Default (same as ${storageRoot})`}</option>
+        {storageLocations.map((loc) => (
+          <option key={`rar-temp-${loc.path}`} value={loc.path}>
+            {loc.path} ({loc.free_gb.toFixed(1)} GB free)
+          </option>
+        ))}
+      </select>
+    </div>
+  </>
+)}                <label className="field inline">
                   <span>{tr("chmod_after")}</span>
                   <input
                     type="checkbox"
@@ -5702,7 +5906,7 @@ export default function App() {
                     className={`queue-tab ${extractQueueTab === "failed" ? "active" : ""}`}
                     onClick={() => setExtractQueueTab("failed")}
                   >
-                    {tr("failed")}
+                    Stopped
                   </button>
                 </div>
                 {payloadFullStatus && (
@@ -5713,14 +5917,14 @@ export default function App() {
                           <button
                             className="btn success"
                             onClick={handleQueueProcess}
-                            disabled={!hasExtractionPending || payloadFullStatus.is_busy}
+                            disabled={!hasExtractionPending || payloadFullStatus.is_busy || extractionStopping}
                           >
                             {tr("start")}
                           </button>
                           <button
                             className="btn danger"
-                            onClick={() => runningExtractItem && handleQueuePause(runningExtractItem.id)}
-                            disabled={!runningExtractItem}
+                            onClick={handleQueueStopAll}
+                            disabled={!hasExtractionRunning || extractionStopping}
                           >
                             {tr("stop")}
                           </button>
@@ -5996,7 +6200,6 @@ export default function App() {
                     ↻ {tr("refresh")}
                   </button>
                 </div>
-                {manageStatus && <p className="muted small">{manageStatus}</p>}
                 <p className="muted small">
                   Last update: {formatUpdatedAt(manageLastUpdated)}
                 </p>
@@ -6056,12 +6259,12 @@ export default function App() {
                   {manageSelectedEntry ? (
                     <div className="selected-item">
                       <span className="selected-item-icon">
-                        {manageSelectedEntry.entry_type === "dir" ? <FolderIcon /> : <FileIcon />}
+                        {getEntryType(manageSelectedEntry) === "dir" ? <FolderIcon /> : <FileIcon />}
                       </span>
                       <div className="selected-item-info">
                         <div className="selected-item-name">{manageSelectedEntry.name}</div>
                         <div className="selected-item-type">
-                          {manageSelectedEntry.entry_type === "dir"
+                          {getEntryType(manageSelectedEntry) === "dir"
                             ? tr("folder")
                             : formatBytes(manageSelectedEntry.size)}
                         </div>
@@ -6072,57 +6275,40 @@ export default function App() {
                       {tr("select_file")}
                     </p>
                   )}
-
-                  <div className="action-group">
-                    <div className="action-group-title">↑ {tr("upload_title")}</div>
-                    <div className="action-buttons">
-                      <button
-                        className="btn"
-                        onClick={handleManageUploadFiles}
-                        disabled={manageBusy}
-                      >
-                        {tr("files")}
-                      </button>
-                      <button
-                        className="btn"
-                        onClick={handleManageUploadFolder}
-                        disabled={manageBusy}
-                      >
-                        {tr("folder")}
-                      </button>
-                      <button
-                        className="btn"
-                        onClick={handleManageQueueUploadFiles}
-                        disabled={manageBusy}
-                      >
-                        + {tr("queue_files")}
-                      </button>
-                      <button
-                        className="btn"
-                        onClick={handleManageQueueUploadFolder}
-                        disabled={manageBusy}
-                      >
-                        + {tr("queue_folder")}
-                      </button>
-                    </div>
-                  </div>
+                  <p className="muted small" style={{ textAlign: "center", marginBottom: "10px" }}>
+                    {tr("manage_transfer_warning")}
+                  </p>
 
                   <div className="action-group">
                     <div className="action-group-title">↓ {tr("transfer")}</div>
                     <div className="action-buttons">
                       <button
                         className="btn primary"
+                        onClick={handleManageUpload}
+                        disabled={manageBusy}
+                      >
+                        {tr("upload")} {tr("file")}
+                      </button>
+                      <button
+                        className="btn"
+                        onClick={handleManageUploadFolder}
+                        disabled={manageBusy}
+                      >
+                        {tr("upload")} {tr("folder")}
+                      </button>
+                      <button
+                        className="btn primary"
                         onClick={handleManageDownload}
                         disabled={!manageSelectedEntry || manageBusy}
                       >
-                        ↓ {tr("download")}
+                        {tr("download")}
                       </button>
                       <button
                         className="btn"
                         onClick={() => handleOpenDestPicker("Move")}
                         disabled={!manageSelectedEntry || manageBusy}
                       >
-                        → {tr("move")}
+                        {tr("move")}
                       </button>
                       <button
                         className="btn"
@@ -6137,7 +6323,7 @@ export default function App() {
                         disabled={
                           !manageSelectedEntry ||
                           manageBusy ||
-                          manageSelectedEntry.entry_type !== "file" ||
+                          getEntryType(manageSelectedEntry) !== "file" ||
                           !manageSelectedEntry.name.toLowerCase().endsWith(".rar")
                         }
                       >
@@ -6145,6 +6331,11 @@ export default function App() {
                       </button>
                     </div>
                     <p className="muted small">{tr("extract_note")}</p>
+                    {transferActive && (
+                      <div className="muted small" style={{ marginTop: "6px" }}>
+                        {tr("manage_deprioritized")}
+                      </div>
+                    )}
                   </div>
 
                   <label className="field">
@@ -6198,53 +6389,6 @@ export default function App() {
                       </button>
                     </div>
                   </div>
-
-                  {manageProgress.op && (
-                    <div className="stack" style={{ marginTop: "8px" }}>
-                      <div className="progress">
-                        <div
-                          className="progress-fill"
-                          style={{
-                            width:
-                              manageProgress.total > 0
-                                ? `${Math.min(
-                                    100,
-                                    (manageProgress.processed /
-                                      manageProgress.total) *
-                                      100
-                                  )}%`
-                                : "0%"
-                          }}
-                        />
-                      </div>
-                  <div className="progress-meta">
-                    <span>
-                      {manageProgress.op}{" "}
-                      {formatBytes(manageProgress.processed)} /{" "}
-                      {formatBytes(manageProgress.total)}
-                    </span>
-                    <span>
-                      {manageProgress.speed_bps > 0
-                        ? `${formatBytes(manageProgress.speed_bps)}/s`
-                        : "—"}
-                    </span>
-                    <span>
-                      {manageProgress.total > 0
-                        ? `${Math.round(
-                            (manageProgress.processed / manageProgress.total) *
-                                  100
-                              )}%`
-                            : "0%"}
-                        </span>
-                      </div>
-                      {manageProgress.currentFile && (
-                        <div className="pill">{manageProgress.currentFile}</div>
-                      )}
-                      <button className="btn danger" onClick={handleManageCancel}>
-                        {tr("stop")}
-                      </button>
-                    </div>
-                  )}
 
                   {manageMeta && (
                     <div className="meta-block">
@@ -6558,6 +6702,92 @@ export default function App() {
         </span>
       </footer>
 
+      {manageModalOpen && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            <header className="modal-title">{manageModalOp} Progress</header>
+            <p className="muted">{manageModalStatus || manageStatus}</p>
+            {!manageModalDone && (
+              <>
+                <div className="progress">
+                  <div
+                    className={`progress-fill${manageProgress.total === 0 && manageProgress.processed > 0 ? " streaming" : ""}`}
+                    style={{
+                      width:
+                        manageProgress.total > 0
+                          ? `${Math.min(
+                              100,
+                              (manageProgress.processed /
+                                manageProgress.total) *
+                                100
+                            )}%`
+                          : manageProgress.processed > 0
+                            ? "100%"
+                            : "0%"
+                    }}
+                  />
+                </div>
+                <div className="progress-meta">
+                  <span>
+                    {manageProgress.total > 0
+                      ? `${formatBytes(manageProgress.processed)} / ${formatBytes(manageProgress.total)}`
+                      : `${formatBytes(manageProgress.processed)} transferred`}
+                  </span>
+                  <span>
+                    {manageProgress.speed_bps > 0
+                      ? `${formatBytes(manageProgress.speed_bps)}/s`
+                      : "—"}
+                  </span>
+                  <span>
+                    {manageProgress.total > 0
+                      ? `${Math.round(
+                          (manageProgress.processed /
+                            manageProgress.total) *
+                            100
+                        )}%`
+                      : "streaming"}
+                  </span>
+                </div>
+                {manageModalLastProgressAt && (
+                  <div className="muted small" style={{ marginTop: "6px" }}>
+                    Last activity {Math.max(0, Math.round((Date.now() - manageModalLastProgressAt) / 1000))}s ago
+                  </div>
+                )}
+                {manageProgress.currentFile && (
+                  <div className="pill">{manageProgress.currentFile}</div>
+                )}
+              </>
+            )}
+            {manageModalDone && manageModalOp === "Upload" && manageModalSummary && (
+              <div className="pill">{manageModalSummary}</div>
+            )}
+            <div className="split">
+              {!manageModalDone ? (
+                <button className="btn danger" onClick={handleManageCancel}>
+                  {tr("stop")}
+                </button>
+              ) : (
+                <button
+                  className="btn primary"
+                  onClick={() => {
+                  setManageModalOpen(false);
+                  setManageModalDone(false);
+                  setManageModalError(null);
+                  setManageModalStatus("");
+                  setManageModalSummary(null);
+                  setManageModalStartedAt(null);
+                  manageModalStartedAtRef.current = null;
+                  setManageModalLastProgressAt(null);
+                }}
+              >
+                OK
+              </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {manageDestOpen && (
         <div className="modal-backdrop">
           <div className="modal">
@@ -6581,30 +6811,39 @@ export default function App() {
               </button>
             </div>
             <p className="muted">{manageDestStatus}</p>
-            <div className="table">
-              <div className="table-row header">
-                <span>{tr("name")}</span>
-                <span>{tr("type")}</span>
-                <span>{tr("size")}</span>
-                <span>{tr("modified")}</span>
-              </div>
-              {manageDestEntries.map((entry, index) => (
-                <div
-                  className={`table-row ${manageDestSelected === index ? "selected" : ""}`}
-                  key={`${entry.name}-${index}`}
-                  onClick={() => setManageDestSelected(index)}
-                  onDoubleClick={() => {
-                    setManageDestPath(joinRemote(manageDestPath, entry.name));
-                    refreshManageDest(joinRemote(manageDestPath, entry.name));
-                  }}
-                >
-                  <span>▸ {entry.name}</span>
-                  <span>{entry.entry_type}</span>
-                  <span>-</span>
-                  <span>{formatTimestamp(entry.mtime)}</span>
+              <div className="table">
+                <div className="table-row header">
+                  <span>{tr("name")}</span>
+                  <span>{tr("type")}</span>
+                  <span>{tr("size")}</span>
+                  <span>{tr("modified")}</span>
                 </div>
-              ))}
-            </div>
+                {manageDestEntries.map((entry, index) => (
+                  <div
+                    className={`table-row ${manageDestSelected === index ? "selected" : ""}`}
+                    key={`${entry.name}-${index}`}
+                    onClick={() => setManageDestSelected(index)}
+                    onDoubleClick={() => {
+                      setManageDestPath(joinRemote(manageDestPath, entry.name));
+                      refreshManageDest(joinRemote(manageDestPath, entry.name));
+                    }}
+                  >
+                    <span>▸ {entry.name}</span>
+                    <span>{getEntryType(entry)}</span>
+                    <span>-</span>
+                    <span>{formatTimestamp(entry.mtime)}</span>
+                  </div>
+                ))}
+              </div>
+              {manageSelectedEntry && getEntryType(manageSelectedEntry) === "file" && (
+                <label className="field">
+                  <span>Destination file name</span>
+                  <input
+                    value={manageDestFilename}
+                    onChange={(event) => setManageDestFilename(event.target.value)}
+                  />
+                </label>
+              )}
             <p className="muted">
               {tr("destination")}: {manageDestPreview}
             </p>
@@ -6620,6 +6859,33 @@ export default function App() {
                 }}
               >
                 {tr("cancel")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {noticeOpen && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            <header className="modal-title">{noticeTitle}</header>
+            <div className="stack">
+              {noticeLines.map((line, index) => (
+                <div key={`${index}-${line}`} className="muted">
+                  {line}
+                </div>
+              ))}
+            </div>
+            <div className="split">
+              <button
+                className="btn primary"
+                onClick={() => {
+                  setNoticeOpen(false);
+                  setNoticeTitle("");
+                  setNoticeLines([]);
+                }}
+              >
+                OK
               </button>
             </div>
           </div>
