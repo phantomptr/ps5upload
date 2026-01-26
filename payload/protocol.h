@@ -29,7 +29,9 @@ void handle_extract_archive(int client_sock, const char *args);
 void handle_probe_rar(int client_sock, const char *args);
 void handle_chmod_777(int client_sock, const char *path);
 void handle_download_file(int client_sock, const char *path);
+void handle_download_v2(int client_sock, const char *path);
 void handle_download_dir(int client_sock, const char *path);
+void handle_download_raw(int client_sock, const char *path);
 void handle_hash_file(int client_sock, const char *path);
 void handle_get_space(int client_sock, const char *path);
 void handle_version(int client_sock);
@@ -52,5 +54,7 @@ void handle_upload_queue_sync(int client_sock, const char *args);
 void handle_upload_queue_get(int client_sock);
 void handle_history_sync(int client_sock, const char *args);
 void handle_history_get(int client_sock);
+void payload_touch_activity(void);
+void payload_log(const char *fmt, ...);
 
 #endif

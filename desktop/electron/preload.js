@@ -102,7 +102,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   manageDownloadFile: (ip, path, dest) => ipcRenderer.invoke('manage_download_file', ip, path, dest),
   manageDownloadDir: (ip, path, dest, compression) => ipcRenderer.invoke('manage_download_dir', ip, path, dest, compression),
   manageUpload: (ip, destRoot, paths) => ipcRenderer.invoke('manage_upload', ip, destRoot, paths),
-  manageUploadRar: (ip, rarPath, destPath, mode) => ipcRenderer.invoke('manage_upload_rar', ip, rarPath, destPath, mode),
+  manageUploadRar: (ip, rarPath, destPath, mode, tempRoot) => ipcRenderer.invoke('manage_upload_rar', ip, rarPath, destPath, mode, tempRoot),
 
   // Transfer
   transferCheckDest: (ip, destPath) => ipcRenderer.invoke('transfer_check_dest', ip, destPath),

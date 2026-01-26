@@ -25,6 +25,7 @@ static ExtractQueue g_queue;
 static pthread_mutex_t g_queue_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_t g_extract_thread;
 static volatile int g_thread_running = 0;
+static volatile time_t g_last_extract_progress = 0;
 static volatile int g_cancel_requested = 0;
 static volatile int g_requeue_requested = 0;
 static volatile int g_requeue_id = -1;
@@ -273,6 +274,7 @@ static int extraction_progress_callback(const char *filename, unsigned long long
         item->total_bytes = total_size;
         item->files_extracted = files_done;
         item->percent = (total_size > 0) ? (int)((total_processed * 100) / total_size) : 0;
+        g_last_extract_progress = time(NULL);
 
         /* Notifications disabled */
     }
@@ -306,6 +308,7 @@ static void *extract_thread_func(void *arg) {
     ExtractQueueItem *item = &g_queue.items[index];
     item->status = EXTRACT_STATUS_RUNNING;
     item->started_at = time(NULL);
+    g_last_extract_progress = time(NULL);
     g_queue.current_index = index;
     g_cancel_requested = 0;
     extract_queue_touch();
@@ -841,6 +844,14 @@ const ExtractQueueItem *extract_queue_get_current(void) {
         return &g_queue.items[g_queue.current_index];
     }
     return NULL;
+}
+
+time_t extract_queue_get_last_progress(void) {
+    return g_last_extract_progress;
+}
+
+int extract_queue_is_running(void) {
+    return extract_queue_is_busy();
 }
 
 static int chmod_recursive_queue(const char *path, mode_t mode) {

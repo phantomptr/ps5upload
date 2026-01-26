@@ -16,12 +16,12 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <sys/stat.h>
-#include <signal.h>
 #include <stdarg.h>
 #include <pthread.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <ifaddrs.h>
+#include <signal.h>
 #include <time.h>
 
 #include <ps5/kernel.h>
@@ -37,6 +37,65 @@
 
 
 static pthread_mutex_t g_log_mutex = PTHREAD_MUTEX_INITIALIZER;
+static const char *g_pid_file = "/data/ps5upload/payload.pid";
+static const char *g_kill_file = "/data/ps5upload/kill.req";
+static volatile time_t g_last_activity = 0;
+static const int g_idle_timeout_sec = 120;
+static const int g_transfer_stall_sec = 60;
+static const int g_extract_stall_sec = 60;
+
+void payload_log(const char *fmt, ...);
+void payload_touch_activity(void);
+
+static void *kill_watch_thread(void *arg) {
+    (void)arg;
+    while (1) {
+        if (access(g_kill_file, F_OK) == 0) {
+            unlink(g_kill_file);
+            notify_info("PS5 Upload Server", "Kill request received.");
+            transfer_cleanup();
+            extract_queue_reset();
+            unlink(g_pid_file);
+            exit(EXIT_SUCCESS);
+        }
+        usleep(250 * 1000);
+    }
+    return NULL;
+}
+
+static void *idle_watch_thread(void *arg) {
+    (void)arg;
+    while (1) {
+        time_t now = time(NULL);
+        if (transfer_is_active()) {
+            time_t last = transfer_last_progress();
+            if (last > 0 && (now - last) > g_transfer_stall_sec) {
+                payload_log("[WATCHDOG] Transfer stall: %ld sec without progress", (long)(now - last));
+            }
+        }
+        if (extract_queue_is_running()) {
+            time_t last = extract_queue_get_last_progress();
+            if (last > 0 && (now - last) > g_extract_stall_sec) {
+                payload_log("[WATCHDOG] Extract stall: %ld sec without progress", (long)(now - last));
+            }
+        }
+        if (g_last_activity > 0 && (now - g_last_activity) > g_idle_timeout_sec) {
+            if (transfer_is_active() || extract_queue_is_running()) {
+                payload_log("[WATCHDOG] Idle timeout but active transfer/extract. activity_age=%ld", (long)(now - g_last_activity));
+                g_last_activity = now;
+            } else {
+                payload_log("[WATCHDOG] Idle timeout hit (%d sec). Exiting.", g_idle_timeout_sec);
+                notify_info("PS5 Upload Server", "Idle watchdog timeout.");
+                transfer_cleanup();
+                extract_queue_reset();
+                unlink(g_pid_file);
+                exit(EXIT_SUCCESS);
+            }
+        }
+        usleep(500 * 1000);
+    }
+    return NULL;
+}
 
 static void payload_log_rotate(void) {
     mkdir("/data/ps5upload", 0777);
@@ -72,7 +131,7 @@ static void payload_log_write(const char *path, const char *line) {
     }
 }
 
-static void payload_log(const char *fmt, ...) {
+void payload_log(const char *fmt, ...) {
     pthread_mutex_lock(&g_log_mutex);
     mkdir("/data/ps5upload", 0777);
     mkdir("/data/ps5upload/logs", 0777);
@@ -84,6 +143,10 @@ static void payload_log(const char *fmt, ...) {
     payload_log_write("/data/ps5upload/payload.log", line);
     payload_log_write("/data/ps5upload/logs/payload.log", line);
     pthread_mutex_unlock(&g_log_mutex);
+}
+
+void payload_touch_activity(void) {
+    g_last_activity = time(NULL);
 }
 
 static void crash_handler(int sig) {
@@ -100,6 +163,18 @@ static void crash_handler(int sig) {
     _exit(1);
 }
 
+static void write_pid_file(void) {
+    int fd = open(g_pid_file, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    if (fd < 0) {
+        return;
+    }
+    char buf[32];
+    int len = snprintf(buf, sizeof(buf), "%d\n", (int)getpid());
+    if (len > 0) {
+        write(fd, buf, (size_t)len);
+    }
+    close(fd);
+}
 
 static int create_server_socket(int port) {
     int sock = socket(AF_INET, SOCK_STREAM, 0);
@@ -329,10 +404,12 @@ static void *command_thread(void *arg) {
         close(req.sock);
         return NULL;
     }
+    g_last_activity = time(NULL);
 
     if (is_comm_command(req.buffer)) {
         payload_log("[COMM] %s", req.buffer);
         enqueue_comm_request(&req);
+        g_last_activity = time(NULL);
         return NULL;
     }
 
@@ -349,6 +426,7 @@ static void *command_thread(void *arg) {
     conn.cmd_buffer[conn.cmd_len] = '\0';
 
     payload_log("[CMD] %s", conn.cmd_buffer);
+    g_last_activity = time(NULL);
     process_command(&conn);
     close_connection(&conn);
     return NULL;
@@ -359,6 +437,11 @@ static void set_socket_buffers(int sock) {
     int buf_size = 2 * 1024 * 1024; // 2MB
     setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &buf_size, sizeof(buf_size));
     setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &buf_size, sizeof(buf_size));
+
+    struct timeval snd_to;
+    snd_to.tv_sec = 30;
+    snd_to.tv_usec = 0;
+    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &snd_to, sizeof(snd_to));
 
     // Enable TCP_NODELAY for lower latency
     int nodelay = 1;
@@ -631,6 +714,7 @@ static void *comm_worker_thread(void *arg) {
     memcpy(conn.cmd_buffer, req->buffer, conn.cmd_len);
     conn.cmd_buffer[conn.cmd_len] = '\0';
     free(req);
+    g_last_activity = time(NULL);
     process_command(&conn);
     close_connection(&conn);
     return NULL;
@@ -653,6 +737,7 @@ static void process_command(struct ClientConnection *conn) {
             close_connection(conn);
             notify_info("PS5 Upload Server", "Shutting down...");
             transfer_cleanup();
+            unlink(g_pid_file);
             exit(EXIT_SUCCESS);
         }
         return;
@@ -726,6 +811,17 @@ static void process_command(struct ClientConnection *conn) {
     if (strncmp(conn->cmd_buffer, "CHMOD777 ", 9) == 0) {
         handle_chmod_777(conn->sock, conn->cmd_buffer + 9);
         close_connection(conn);
+        return;
+    }
+    if (strncmp(conn->cmd_buffer, "DOWNLOAD_V2 ", 12) == 0) {
+        handle_download_v2(conn->sock, conn->cmd_buffer + 12);
+        close_connection(conn);
+        return;
+    }
+    if (strncmp(conn->cmd_buffer, "DOWNLOAD_RAW ", 13) == 0) {
+        handle_download_raw(conn->sock, conn->cmd_buffer + 13);
+        // Thread now owns the socket - mark as transferred so we don't close it
+        conn->sock = -1;
         return;
     }
     if (strncmp(conn->cmd_buffer, "DOWNLOAD ", 9) == 0) {
@@ -973,9 +1069,25 @@ int main(void) {
     mkdir("/data/ps5upload", 0777);
     mkdir("/data/ps5upload/logs", 0777);
     mkdir("/data/ps5upload/requests", 0777);
+    unlink(g_kill_file);
     payload_log_rotate();
+    write_pid_file();
+    g_last_activity = time(NULL);
     payload_log("[INIT] Payload start v%s", PS5_UPLOAD_VERSION);
     payload_log("[INIT] pid=%d port=%d", (int)pid, SERVER_PORT);
+
+    pthread_t kill_tid;
+    if (pthread_create(&kill_tid, NULL, kill_watch_thread, NULL) == 0) {
+        pthread_detach(kill_tid);
+    } else {
+        payload_log("[INIT] Failed to create kill watch thread");
+    }
+    pthread_t idle_tid;
+    if (pthread_create(&idle_tid, NULL, idle_watch_thread, NULL) == 0) {
+        pthread_detach(idle_tid);
+    } else {
+        payload_log("[INIT] Failed to create idle watch thread");
+    }
     
     // Temp cleanup handled per-upload based on destination root.
 

@@ -38,16 +38,22 @@ static int g_last_mkdir_errno;
 static void send_all(int sock, const char *data) {
     size_t len = strlen(data);
     size_t sent = 0;
+    time_t last_ok = time(NULL);
     while (sent < len) {
         ssize_t n = send(sock, data + sent, len - sent, 0);
         if (n < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                if (time(NULL) - last_ok > 10) {
+                    break;
+                }
                 usleep(1000);
                 continue;
             }
             break; 
         }
         sent += n;
+        last_ok = time(NULL);
+        payload_touch_activity();
     }
 }
 
@@ -80,6 +86,49 @@ static void build_temp_dir(const char *dest_path, char *out, size_t out_len) {
     char root[PATH_MAX];
     get_storage_root(dest_path, root, sizeof(root));
     snprintf(out, out_len, "%s/ps5upload/tmp", root);
+}
+
+static int ends_with(const char *value, const char *suffix) {
+    if (!value || !suffix) return 0;
+    size_t vlen = strlen(value);
+    size_t slen = strlen(suffix);
+    if (slen > vlen) return 0;
+    return strncmp(value + vlen - slen, suffix, slen) == 0;
+}
+
+static void rstrip_space(char *value) {
+    if (!value) return;
+    size_t len = strlen(value);
+    while (len > 0 && (value[len - 1] == ' ' || value[len - 1] == '\t')) {
+        value[len - 1] = '\0';
+        len--;
+    }
+}
+
+static void rstrip_slash(char *value) {
+    if (!value) return;
+    size_t len = strlen(value);
+    while (len > 1 && value[len - 1] == '/') {
+        value[len - 1] = '\0';
+        len--;
+    }
+}
+
+static void build_temp_dir_override(const char *dest_path, const char *override_root, char *out, size_t out_len) {
+    if (override_root && override_root[0] != '\0') {
+        char root[PATH_MAX];
+        strncpy(root, override_root, sizeof(root) - 1);
+        root[sizeof(root) - 1] = '\0';
+        rstrip_space(root);
+        rstrip_slash(root);
+        if (ends_with(root, "/ps5upload/tmp")) {
+            snprintf(out, out_len, "%s", root);
+            return;
+        }
+        snprintf(out, out_len, "%s/ps5upload/tmp", root);
+        return;
+    }
+    build_temp_dir(dest_path, out, out_len);
 }
 
 static int mkdir_recursive_ex(const char *path, char *err, size_t err_len) {
@@ -370,6 +419,8 @@ void handle_upload_rar(int sock, const char *args, UnrarMode mode) {
     char dest_path[PATH_MAX];
     unsigned long long file_size = 0;
     int allow_overwrite = 1;
+    char temp_root_override[PATH_MAX];
+    temp_root_override[0] = '\0';
 
     /* Parse arguments: dest_path file_size
        Since dest_path can contain spaces, we parse from the end.
@@ -388,35 +439,53 @@ void handle_upload_rar(int sock, const char *args, UnrarMode mode) {
         len--;
     }
 
-    // Find the last space, which should separate path and size (or optional flag)
-    char *last_space = strrchr(args_copy, ' ');
-    if (!last_space) {
+    rstrip_space(args_copy);
+
+    char *size_token = NULL;
+    while (1) {
+        char *last_space = strrchr(args_copy, ' ');
+        if (!last_space) {
+            break;
+        }
+        char *tail_token = last_space + 1;
+        if (*tail_token == '\0') {
+            *last_space = '\0';
+            rstrip_space(args_copy);
+            continue;
+        }
+        if (strcasecmp(tail_token, "OVERWRITE") == 0 || strcasecmp(tail_token, "NOOVERWRITE") == 0) {
+            allow_overwrite = (strcasecmp(tail_token, "NOOVERWRITE") != 0);
+            *last_space = '\0';
+            rstrip_space(args_copy);
+            continue;
+        }
+        if (strncasecmp(tail_token, "TMP=", 4) == 0) {
+            const char *value = tail_token + 4;
+            if (!*value) {
+                const char *error = "ERROR: Invalid TMP path\n";
+                send_all(sock, error);
+                return;
+            }
+            strncpy(temp_root_override, value, sizeof(temp_root_override) - 1);
+            temp_root_override[sizeof(temp_root_override) - 1] = '\0';
+            *last_space = '\0';
+            rstrip_space(args_copy);
+            continue;
+        }
+        size_token = tail_token;
+        *last_space = '\0';
+        break;
+    }
+
+    if (!size_token) {
         const char *error = "ERROR: Invalid UPLOAD_RAR format (expected: UPLOAD_RAR <dest> <size>)\n";
         send_all(sock, error);
         return;
     }
 
-    // Optional overwrite flag at end: OVERWRITE or NOOVERWRITE
-    char *tail_token = last_space + 1;
-    if (strcasecmp(tail_token, "OVERWRITE") == 0 || strcasecmp(tail_token, "NOOVERWRITE") == 0) {
-        allow_overwrite = (strcasecmp(tail_token, "NOOVERWRITE") != 0);
-        *last_space = '\0';
-        len = strlen(args_copy);
-        while (len > 0 && args_copy[len - 1] == ' ') {
-            args_copy[len - 1] = '\0';
-            len--;
-        }
-        last_space = strrchr(args_copy, ' ');
-        if (!last_space) {
-            const char *error = "ERROR: Invalid UPLOAD_RAR format (expected: UPLOAD_RAR <dest> <size>)\n";
-            send_all(sock, error);
-            return;
-        }
-    }
-
     // Parse size
     char *endptr;
-    file_size = strtoull(last_space + 1, &endptr, 10);
+    file_size = strtoull(size_token, &endptr, 10);
     if (*endptr != '\0') {
         const char *error = "ERROR: Invalid file size format\n";
         send_all(sock, error);
@@ -424,7 +493,7 @@ void handle_upload_rar(int sock, const char *args, UnrarMode mode) {
     }
 
     // Parse path
-    *last_space = '\0'; // Null-terminate path at the space
+    rstrip_space(args_copy);
     strncpy(dest_path, args_copy, sizeof(dest_path) - 1);
     dest_path[sizeof(dest_path) - 1] = '\0';
     if (dest_path[0] == '\0') {
@@ -441,6 +510,11 @@ void handle_upload_rar(int sock, const char *args, UnrarMode mode) {
 
     if (!is_path_safe(dest_path)) {
         const char *error = "ERROR: Invalid path\n";
+        send_all(sock, error);
+        return;
+    }
+    if (temp_root_override[0] != '\0' && !is_path_safe(temp_root_override)) {
+        const char *error = "ERROR: Invalid temp storage path\n";
         send_all(sock, error);
         return;
     }
@@ -470,7 +544,7 @@ void handle_upload_rar(int sock, const char *args, UnrarMode mode) {
     char temp_root[PATH_MAX];
     char temp_dir[PATH_MAX];
     static unsigned int temp_counter = 0;
-    build_temp_dir(dest_path, temp_root, sizeof(temp_root));
+    build_temp_dir_override(dest_path, temp_root_override, temp_root, sizeof(temp_root));
     if (mkdir_recursive_ex(temp_root, mkdir_err, sizeof(mkdir_err)) != 0) {
         char error[256];
         if (mkdir_err[0] == '\0') {

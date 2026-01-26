@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 This project follows Semantic Versioning.
 
+## [1.3.2] - 2026-01-26
+
+### Fixed
+- RAR Temp Storage now actually controls where the archive is staged before extraction (it was previously ignored and always used the destination drive).
+
+### Changed
+- Payload accepts a temp storage override for RAR uploads, so archives can be staged on a different mount than the final extraction target.
+
 ## [1.3.1] - 2026-01-24
 
 ### Fixed

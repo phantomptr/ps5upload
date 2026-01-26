@@ -7,6 +7,7 @@ endif
 include $(PS5_PAYLOAD_SDK)/toolchain/prospero.mk
 
 TARGET := ps5upload.elf
+KILLER_TARGET := ps5uploadkiller.elf
 
 # C sources
 C_SRCS := main.c storage.c protocol.c extract.c notify.c transfer.c lz4.c sha256.c unrar_handler.c extract_queue.c \
@@ -112,15 +113,27 @@ THIRD_PARTY_CFLAGS := -Wno-unneeded-internal-declaration -Wno-empty-body
 UNRAR_CXXFLAGS := $(CXXFLAGS) -w
 LDADD := -lkernel -lpthread -lc++
 
-.PHONY: all clean test info help
+.PHONY: all clean test info help killer
 
-all: $(TARGET)
+all: $(TARGET) $(KILLER_TARGET)
 	@echo "✓ Payload built: $(TARGET)"
 	@echo "  Load this file on your PS5 using your payload loader"
+	@echo "✓ Killer built: $(KILLER_TARGET)"
+	@echo "  Load this file to stop ps5upload if it is stuck"
 
 $(TARGET): $(OBJS)
 	@echo "Linking $(TARGET) with C++..."
 	$(CXX) $(CXXFLAGS) -o $@ $(OBJS) $(LDADD)
+
+killer: $(KILLER_TARGET)
+	@echo "✓ Killer built: $(KILLER_TARGET)"
+
+KILLER_SRCS := killer.c notify.c
+KILLER_OBJS := $(KILLER_SRCS:.c=.o)
+
+$(KILLER_TARGET): $(KILLER_OBJS)
+	@echo "Linking $(KILLER_TARGET)..."
+	$(CC) $(CFLAGS) -o $@ $(KILLER_OBJS) -lkernel -lpthread
 
 # C sources
 %.o: %.c

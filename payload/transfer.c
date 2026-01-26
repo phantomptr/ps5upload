@@ -211,6 +211,7 @@ static int g_total_files = 0;
 static uint64_t g_session_counter = 0;
 static pthread_mutex_t g_session_counter_lock = PTHREAD_MUTEX_INITIALIZER;
 static volatile sig_atomic_t g_abort_transfer = 0;
+static volatile time_t g_last_transfer_progress = 0;
 
 static void log_memory_stats(const char *tag) {
     int pool_count = 0;
@@ -836,6 +837,18 @@ int transfer_abort_requested(void) {
     return g_abort_transfer ? 1 : 0;
 }
 
+int transfer_is_active(void) {
+    int active = 0;
+    pthread_mutex_lock(&g_mem_stats_mutex);
+    active = g_active_sessions > 0;
+    pthread_mutex_unlock(&g_mem_stats_mutex);
+    return active;
+}
+
+time_t transfer_last_progress(void) {
+    return g_last_transfer_progress;
+}
+
 int transfer_idle_cleanup(void) {
     int active_sessions = 0;
     size_t in_use = 0;
@@ -983,6 +996,9 @@ int upload_session_feed(UploadSession *session, const uint8_t *data, size_t len,
 
     size_t offset = 0;
     session->bytes_received += len;
+    if (len > 0) {
+        g_last_transfer_progress = time(NULL);
+    }
     if (session->bytes_received - session->last_log_bytes >= (512ULL * 1024 * 1024)) {
         printf("[FTX] recv %.2f GB, packs %llu\n",
                session->bytes_received / (1024.0 * 1024.0 * 1024.0),
@@ -1208,6 +1224,7 @@ UploadSession *upload_session_create(const char *dest_root, int use_temp) {
     pthread_mutex_lock(&g_mem_stats_mutex);
     g_active_sessions++;
     pthread_mutex_unlock(&g_mem_stats_mutex);
+    g_last_transfer_progress = time(NULL);
     session->use_temp = use_temp ? 1 : 0;
     if (upload_session_start(session, dest_root) != 0) {
         pthread_mutex_lock(&g_mem_stats_mutex);
