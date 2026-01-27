@@ -68,21 +68,16 @@ jobs:
             || npm install vite@7.3.1 @vitejs/plugin-react@4.2.0 --include=dev --no-audit --no-fund
           node -e "const fs=require('fs');const ok=fs.existsSync('node_modules/@vitejs/plugin-react/package.json');console.log('plugin-react exists:',ok); process.exit(ok?0:1);" \
             || npm install @vitejs/plugin-react@4.2.0 --include=dev --no-audit --no-fund
-          npm install --no-save sharp --include=dev --include=optional --no-audit --no-fund
         env:
           NODE_ENV: development
-
-      - name: Install sharp
-        working-directory: desktop
-        shell: bash
-        run: |
-          npm install --no-save sharp --include=dev --include=optional --no-audit --no-fund
 
       - name: Build desktop app
         shell: bash
         working-directory: desktop
         run: |
-          node -e "const sharp=require('sharp');const fs=require('fs');const path=require('path');const src=fs.existsSync('public/logo.png')?'public/logo.png':'../logo.png';const outDir='build';fs.mkdirSync(outDir,{recursive:true});sharp(src).resize(1024,1024,{fit:'contain',background:{r:0,g:0,b:0,alpha:0}}).png().toFile(path.join(outDir,'icon.png')).then(()=>console.log('Icon ready')).catch(err=>{console.error(err);process.exit(1);});"
+          test -f build/icons/windows/icon.ico
+          test -f build/icons/macos/icon.icns
+          test -d build/icons/linux/hicolor
           npm run build:vite
           if [[ "${{ matrix.platform }}" == "macos" ]]; then
             npx electron-builder --mac dmg --${{ matrix.arch }} --publish never

@@ -3,6 +3,11 @@
 All notable changes to this project are documented here.
 This project follows Semantic Versioning.
 
+## [1.3.3] - 2026-01-26
+
+### Added
+- Started changelog entries for 1.3.3.
+
 ## [1.3.2] - 2026-01-26
 
 ### Fixed

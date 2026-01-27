@@ -42,7 +42,7 @@ const WRITE_CHUNK_SIZE = 512 * 1024; // 512KB
 const MAGIC_FTX1 = 0x31585446;
 
 let sleepBlockerId = null;
-const VERSION = '1.3.2';
+const VERSION = '1.3.3';
 
 function beginManageOperation(op) {
   state.manageDoneEmitted = false;
@@ -667,8 +667,14 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 960,
+    minWidth: 1024,
+    minHeight: 720,
     frame: false,
     transparent: true,
+    resizable: true,
+    maximizable: true,
+    minimizable: true,
+    fullscreenable: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,

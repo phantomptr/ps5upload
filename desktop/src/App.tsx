@@ -322,6 +322,28 @@ const LOG_LEVEL_ORDER: Record<LogLevel, number> = {
   error: 3
 };
 
+const inferLogLevel = (message: string): LogLevel => {
+  const text = message.toLowerCase();
+  if (
+    text.includes("error") ||
+    text.includes("failed") ||
+    text.includes("failure") ||
+    text.includes("exception")
+  ) {
+    return "error";
+  }
+  if (
+    text.includes("warn") ||
+    text.includes("cancel") ||
+    text.includes("stalled") ||
+    text.includes("disconnected") ||
+    text.includes("not connected")
+  ) {
+    return "warn";
+  }
+  return "info";
+};
+
 type PayloadStatusResponse = {
   version: string;
   uptime: number;
@@ -861,6 +883,8 @@ export default function App() {
     data: queueData,
     currentId: currentQueueItemId
   });
+  const uploadQueueStatusRef = useRef<Record<number, QueueStatus>>({});
+  const extractQueueStatusRef = useRef<Record<number, { status: string; error?: string | null }>>({});
   const manageSnapshot = useRef({
     ip: "",
     path: "/data"
@@ -1172,7 +1196,7 @@ export default function App() {
 
   const normalizeLogEntry = (entry: LogEntry | string): LogEntry => {
     if (typeof entry === "string") {
-      return { level: "info", message: entry, time: Date.now() };
+      return { level: inferLogLevel(entry), message: entry, time: Date.now() };
     }
     return entry;
   };
@@ -2206,6 +2230,12 @@ export default function App() {
               // ignore chmod failures in UI
             });
           }
+          if (!snapshot.viaQueue && snapshot.source && snapshot.dest) {
+            pushClientLog(
+              `Transfer completed: ${getBaseName(snapshot.source)} → ${snapshot.dest}`,
+              "info"
+            );
+          }
           if (snapshot.viaQueue && queueSnapshot.current.currentId) {
             const id = queueSnapshot.current.currentId;
             updateQueueItemStatus(id, "Completed").then(() => {
@@ -2275,6 +2305,12 @@ export default function App() {
                 // ignore chmod failures in UI
               });
             }
+            if (!snapshot.viaQueue && snapshot.source && snapshot.dest) {
+              pushClientLog(
+                `Transfer completed: ${getBaseName(snapshot.source)} → ${snapshot.dest}`,
+                "info"
+              );
+            }
             if (snapshot.viaQueue && queueSnapshot.current.currentId) {
               const id = queueSnapshot.current.currentId;
               updateQueueItemStatus(id, "Completed").then(() => {
@@ -2332,6 +2368,14 @@ export default function App() {
               }
             );
           } else {
+            if (snapshot.source && snapshot.dest) {
+              pushClientLog(
+                `Transfer failed: ${getBaseName(snapshot.source)} → ${snapshot.dest} (${event.payload.message})`,
+                "error"
+              );
+            } else {
+              pushClientLog(`Transfer failed: ${event.payload.message}`, "error");
+            }
             // Reset active run ID to re-enable UI (non-queue transfer)
             setActiveRunId(null);
             setActiveTransferSource("");
@@ -2577,14 +2621,13 @@ export default function App() {
           }
           if (event.payload.error) {
             setManageStatus(`${event.payload.op} failed: ${event.payload.error}`);
-            setClientLogs((prev) =>
-              [
-                `${event.payload.op} failed: ${event.payload.error}`,
-                ...prev
-              ].slice(0, 100)
+            pushClientLog(
+              `${event.payload.op} failed: ${event.payload.error}`,
+              event.payload.error.toLowerCase().includes("cancel") ? "warn" : "error"
             );
           } else {
             setManageStatus(`${event.payload.op} complete`);
+            pushClientLog(`${event.payload.op} completed.`, "info");
             const snapshot = manageSnapshot.current;
             if (snapshot.ip.trim()) {
               invoke<ManageListSnapshot>("manage_list_refresh", {
@@ -2900,6 +2943,30 @@ export default function App() {
 
   const applyPayloadSnapshot = (snapshot: PayloadStatusSnapshot | null) => {
     if (!snapshot) return;
+    if (snapshot.status?.items?.length) {
+      const nextStatus: Record<number, { status: string; error?: string | null }> = {};
+      for (const item of snapshot.status.items) {
+        const prev = extractQueueStatusRef.current[item.id];
+        nextStatus[item.id] = { status: item.status, error: item.error ?? null };
+        if (prev && prev.status === item.status && prev.error === (item.error ?? null)) {
+          continue;
+        }
+        if (item.status === "complete") {
+          pushClientLog(
+            `Extraction completed: ${getQueueDisplayName(item)} (ID ${item.id})`,
+            "info"
+          );
+        } else if (item.status === "failed") {
+          const message = item.error || "Unknown error";
+          const level = message.toLowerCase().includes("cancel") ? "warn" : "error";
+          pushClientLog(
+            `Extraction failed: ${getQueueDisplayName(item)} (ID ${item.id}) - ${message}`,
+            level
+          );
+        }
+      }
+      extractQueueStatusRef.current = nextStatus;
+    }
     setPayloadFullStatus(snapshot.status ?? null);
     setPayloadStatusError(snapshot.error ?? null);
     if (snapshot.status) {
@@ -3243,7 +3310,6 @@ export default function App() {
     setPayloadVersion(null);
     setIsConnected(false);
     setIsConnecting(false);
-    setPayloadFullStatus(null);
     setPayloadStatusError(null);
     pushClientLog("Disconnected.");
   };
@@ -3854,11 +3920,38 @@ export default function App() {
     await addQueueItems([item]);
   };
 
+  const logUploadQueueTerminal = (item: QueueItem, status: QueueStatus) => {
+    const label = item.subfolder_name || getBaseName(item.source_path);
+    const base = item.storage_base || storageRoot;
+    const dest = buildDestPathForItem(base, item);
+    if (status === "Completed") {
+      pushClientLog(`Upload completed: ${label} → ${dest}`, "info");
+      return;
+    }
+    if (typeof status === "object") {
+      const message = status.Failed || "Unknown error";
+      const level = message.toLowerCase().includes("cancel") ? "warn" : "error";
+      pushClientLog(`Upload failed: ${label} → ${dest} (${message})`, level);
+    }
+  };
+
   const updateQueueItemStatus = async (id: number, status: QueueStatus) => {
     const clearPaused =
       status === "InProgress" ||
       status === "Completed" ||
       typeof status === "object";
+    const currentItem = queueSnapshot.current.data.items.find((item) => item.id === id);
+    if (currentItem) {
+      const prevStatus = currentItem.status;
+      const nextIsTerminal =
+        status === "Completed" || typeof status === "object";
+      const prevIsTerminal =
+        prevStatus === "Completed" || typeof prevStatus === "object";
+      if (nextIsTerminal && (!prevIsTerminal || prevStatus !== status)) {
+        logUploadQueueTerminal(currentItem, status);
+      }
+      uploadQueueStatusRef.current[id] = status;
+    }
     const nextQueue: QueueData = {
       ...queueSnapshot.current.data,
       items: queueSnapshot.current.data.items.map((item) =>
@@ -4474,6 +4567,49 @@ export default function App() {
     }
   };
 
+  const handleManageResetUI = async () => {
+    try {
+      await invoke("manage_cancel");
+    } catch (err) {
+      pushClientLog(`Manage cancel failed: ${String(err)}`, "warn");
+    }
+    setManageBusy(false);
+    setManageStatus(isConnected ? "Connected" : "Not connected");
+    setManageEntries([]);
+    setManageSelected(null);
+    manageSelectionRef.current = null;
+    setManageMeta(null);
+    setManageCoverUrl(null);
+    setManageModalOpen(false);
+    setManageModalDone(false);
+    setManageModalError(null);
+    setManageModalOp("");
+    setManageModalStatus("");
+    setManageModalSummary(null);
+    setManageModalStartedAt(null);
+    manageModalStartedAtRef.current = null;
+    setManageModalLastProgressAt(null);
+    setManageProgress({
+      op: "",
+      processed: 0,
+      total: 0,
+      currentFile: "",
+      speed_bps: 0
+    });
+    setManageDestOpen(false);
+    setManageDestAction(null);
+    setManageDestStatus("");
+    setManageDestEntries([]);
+    setManageDestSelected(null);
+    setManageDestFilename("");
+    setShowRenamePrompt(false);
+    setShowDeleteConfirm(false);
+    setShowCreatePrompt(false);
+    setRenameValue("");
+    setNewFolderName("");
+    pushClientLog("Manage UI reset.", "info");
+  };
+
   const handleManageUpload = async () => {
     if (!ip.trim()) {
       setManageStatus("Not connected");
@@ -4772,16 +4908,15 @@ export default function App() {
     [connectionStatus, payloadStatus, storageRoot, transferState.status]
   );
   const runningExtractItem = payloadFullStatus?.items.find((item) => item.status === "running") ?? null;
+  const extractionItems = payloadFullStatus?.items ?? [];
   const uploadPendingIndices = queueData.items.reduce((acc: number[], item, index) => {
     if (item.status === "Pending") acc.push(index);
     return acc;
   }, []);
-  const extractionPendingIndices = payloadFullStatus?.items
-    ? payloadFullStatus.items.reduce((acc: number[], item, index) => {
-        if (item.status === "pending") acc.push(index);
-        return acc;
-      }, [])
-    : [];
+  const extractionPendingIndices = extractionItems.reduce((acc: number[], item, index) => {
+    if (item.status === "pending") acc.push(index);
+    return acc;
+  }, []);
   const manageActionLabel = manageDestAction
     ? manageDestAction === "Move"
       ? tr("move")
@@ -4794,6 +4929,9 @@ export default function App() {
   const isUploadCompleted = (item: QueueItem) => item.status === "Completed";
   const isUploadCurrent = (item: QueueItem) =>
     item.status === "Pending" || item.status === "InProgress";
+  const uploadCurrentCount = queueData.items.filter(isUploadCurrent).length;
+  const uploadCompletedCount = queueData.items.filter(isUploadCompleted).length;
+  const uploadFailedCount = queueData.items.filter(isUploadFailed).length;
   const hasUploadCurrent = queueData.items.some(isUploadCurrent);
   const hasUploadCompleted = queueData.items.some(isUploadCompleted);
   const hasUploadFailed = queueData.items.some(isUploadFailed);
@@ -4801,26 +4939,25 @@ export default function App() {
   const hasUploadStalled = !transferActive && queueData.items.some((item) => item.status === "InProgress");
   const hasUploadStartable = hasUploadPending || hasUploadStalled;
 
-  const hasExtractionItems = payloadFullStatus?.items.length ? true : false;
+  const hasExtractionItems = extractionItems.length > 0;
   const isExtractionFailed = (item: ExtractQueueItem) =>
     item.status === "failed";
   const isExtractionCompleted = (item: ExtractQueueItem) =>
     item.status === "complete";
-  const hasExtractionRunning = payloadFullStatus?.items
-    ? payloadFullStatus.items.some((item) => item.status === "running")
-    : false;
-  const hasExtractionCurrent = payloadFullStatus?.items
-    ? payloadFullStatus.items.some((item) => !isExtractionCompleted(item) && !isExtractionFailed(item))
-    : false;
-  const hasExtractionFailed = payloadFullStatus?.items
-    ? payloadFullStatus.items.some(isExtractionFailed)
-    : false;
-  const hasExtractionCompleted = payloadFullStatus?.items
-    ? payloadFullStatus.items.some(isExtractionCompleted)
-    : false;
-  const hasExtractionPending = payloadFullStatus?.items
-    ? payloadFullStatus.items.some((item) => item.status === "pending" || item.status === "idle")
-    : false;
+  const extractionCurrentCount = extractionItems.filter(
+    (item) => !isExtractionCompleted(item) && !isExtractionFailed(item)
+  ).length;
+  const extractionCompletedCount = extractionItems.filter(isExtractionCompleted).length;
+  const extractionFailedCount = extractionItems.filter(isExtractionFailed).length;
+  const hasExtractionRunning = extractionItems.some((item) => item.status === "running");
+  const hasExtractionCurrent = extractionItems.some(
+    (item) => !isExtractionCompleted(item) && !isExtractionFailed(item)
+  );
+  const hasExtractionFailed = extractionItems.some(isExtractionFailed);
+  const hasExtractionCompleted = extractionItems.some(isExtractionCompleted);
+  const hasExtractionPending = extractionItems.some(
+    (item) => item.status === "pending" || item.status === "idle"
+  );
 
   const clientAsset = updateInfo
     ? selectClientAsset(updateInfo.assets, platformInfo)
@@ -5572,7 +5709,7 @@ export default function App() {
                     +
                   </button>
                   <button
-                    className="btn transfer-reset"
+                    className="btn warning transfer-reset"
                     onClick={handleResetTransfer}
                     disabled={transferActive || uploadQueueRunning}
                   >
@@ -5670,9 +5807,6 @@ export default function App() {
                 <header className="card-title">
                   <span className="card-title-icon">▣</span>
                   {tr("upload_queue")}
-                  {queueData.items.length > 0 && (
-                    <span className="badge">{queueData.items.length}</span>
-                  )}
                 </header>
                 <div className="queue-tabs">
                   <button
@@ -5680,18 +5814,27 @@ export default function App() {
                     onClick={() => setUploadQueueTab("current")}
                   >
                     {tr("current")}
+                    {uploadCurrentCount > 0 && (
+                      <span className="badge">{uploadCurrentCount}</span>
+                    )}
                   </button>
                   <button
                     className={`queue-tab ${uploadQueueTab === "completed" ? "active" : ""}`}
                     onClick={() => setUploadQueueTab("completed")}
                   >
                     {tr("completed")}
+                    {uploadCompletedCount > 0 && (
+                      <span className="badge">{uploadCompletedCount}</span>
+                    )}
                   </button>
                   <button
                     className={`queue-tab ${uploadQueueTab === "failed" ? "active" : ""}`}
                     onClick={() => setUploadQueueTab("failed")}
                   >
                     {tr("failed")}
+                    {uploadFailedCount > 0 && (
+                      <span className="badge">{uploadFailedCount}</span>
+                    )}
                   </button>
                 </div>
                 <div className="split" style={{ marginBottom: 8 }}>
@@ -5895,18 +6038,27 @@ export default function App() {
                     onClick={() => setExtractQueueTab("current")}
                   >
                     {tr("current")}
+                    {extractionCurrentCount > 0 && (
+                      <span className="badge">{extractionCurrentCount}</span>
+                    )}
                   </button>
                   <button
                     className={`queue-tab ${extractQueueTab === "completed" ? "active" : ""}`}
                     onClick={() => setExtractQueueTab("completed")}
                   >
                     {tr("completed")}
+                    {extractionCompletedCount > 0 && (
+                      <span className="badge">{extractionCompletedCount}</span>
+                    )}
                   </button>
                   <button
                     className={`queue-tab ${extractQueueTab === "failed" ? "active" : ""}`}
                     onClick={() => setExtractQueueTab("failed")}
                   >
                     Stopped
+                    {extractionFailedCount > 0 && (
+                      <span className="badge">{extractionFailedCount}</span>
+                    )}
                   </button>
                 </div>
                 {payloadFullStatus && (
@@ -5917,42 +6069,47 @@ export default function App() {
                           <button
                             className="btn success"
                             onClick={handleQueueProcess}
-                            disabled={!hasExtractionPending || payloadFullStatus.is_busy || extractionStopping}
+                            disabled={
+                              !isConnected ||
+                              !hasExtractionPending ||
+                              payloadFullStatus.is_busy ||
+                              extractionStopping
+                            }
                           >
                             {tr("start")}
                           </button>
                           <button
                             className="btn danger"
                             onClick={handleQueueStopAll}
-                            disabled={!hasExtractionRunning || extractionStopping}
+                            disabled={!isConnected || !hasExtractionRunning || extractionStopping}
                           >
                             {tr("stop")}
                           </button>
                           <button
                             className="btn"
                             onClick={handleRefreshQueueStatus}
-                            disabled={payloadQueueLoading}
+                            disabled={!isConnected || payloadQueueLoading}
                           >
                             {payloadQueueLoading ? tr("loading") : tr("refresh")}
                           </button>
                           <button
                             className="btn"
                             onClick={handleQueueClear}
-                            disabled={!hasExtractionCompleted}
+                            disabled={!isConnected || !hasExtractionCompleted}
                           >
                             {tr("clear_completed")}
                           </button>
                           <button
                             className="btn"
                             onClick={handleQueueClearFailed}
-                            disabled={!hasExtractionFailed}
+                            disabled={!isConnected || !hasExtractionFailed}
                           >
                             {tr("clear_failed")}
                           </button>
                           <button
                             className="btn"
                             onClick={handleQueueClearAll}
-                            disabled={!hasExtractionItems}
+                            disabled={!isConnected || !hasExtractionItems}
                           >
                             {tr("clear_queue")}
                           </button>
@@ -5968,22 +6125,24 @@ export default function App() {
                     })()}
                   </div>
                 )}
-                {!isConnected ? (
-                  <p className="muted">{tr("not_connected")}</p>
-                ) : !payloadFullStatus ? (
+                {!payloadFullStatus ? (
                   <div className="stack">
                     <p className="muted">
-                      {payloadStatusError
+                      {!isConnected
+                        ? tr("not_connected")
+                        : payloadStatusError
                         ? `Status error: ${payloadStatusError}`
                         : `${tr("loading")}...`}
                     </p>
-                    <button
-                      className="btn"
-                      onClick={handleRefreshQueueStatus}
-                      disabled={payloadQueueLoading}
-                    >
-                      {payloadQueueLoading ? tr("loading") : tr("refresh")}
-                    </button>
+                    {isConnected && (
+                      <button
+                        className="btn"
+                        onClick={handleRefreshQueueStatus}
+                        disabled={payloadQueueLoading}
+                      >
+                        {payloadQueueLoading ? tr("loading") : tr("refresh")}
+                      </button>
+                    )}
                   </div>
                 ) : payloadFullStatus.items.length === 0 ? (
                   <div className="stack">
@@ -6003,6 +6162,9 @@ export default function App() {
                   </div>
                 ) : (
                   <div className="stack">
+                    {!isConnected && (
+                      <p className="muted small">Showing cached queue (disconnected).</p>
+                    )}
                     {payloadFullStatus.items.map((item, itemIndex) => {
                       const showItem =
                         extractQueueTab === "current"
@@ -6278,6 +6440,11 @@ export default function App() {
                   <p className="muted small" style={{ textAlign: "center", marginBottom: "10px" }}>
                     {tr("manage_transfer_warning")}
                   </p>
+                  <div className="split" style={{ marginBottom: "8px" }}>
+                    <button className="btn warning" onClick={handleManageResetUI}>
+                      Reset UI
+                    </button>
+                  </div>
 
                   <div className="action-group">
                     <div className="action-group-title">↓ {tr("transfer")}</div>
@@ -6623,6 +6790,7 @@ export default function App() {
               <label className="field inline">
                 <span>{tr("log_level")}</span>
                 <select
+                  className="log-level-select"
                   value={logLevel}
                   onChange={(event) => setLogLevel(event.target.value as LogLevel)}
                 >

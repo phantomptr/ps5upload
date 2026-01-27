@@ -1160,6 +1160,9 @@ input::placeholder {
   font-weight: 600;
   letter-spacing: 0.02em;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   border-bottom: 2px solid transparent;
   transition: color 0.2s ease, border-color 0.2s ease;
 }
@@ -1296,6 +1299,26 @@ input::placeholder {
 
 .log-entry.log-error .log-level {
   background: rgba(239, 68, 68, 0.16);
+  color: var(--ps-red);
+}
+
+.log-level-select {
+  font-weight: 600;
+}
+
+.log-level-select option[value="debug"] {
+  color: var(--ps-steel);
+}
+
+.log-level-select option[value="info"] {
+  color: var(--ps-blue);
+}
+
+.log-level-select option[value="warn"] {
+  color: var(--ps-orange);
+}
+
+.log-level-select option[value="error"] {
   color: var(--ps-red);
 }
 

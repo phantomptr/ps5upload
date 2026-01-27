@@ -1,7 +1,7 @@
 {
   "name": "ps5upload-desktop",
   "private": true,
-  "version": "1.3.2",
+  "version": "1.3.3",
   "description": "PS5 Upload Desktop Application",
   "homepage": "https://github.com/phantomptr/ps5upload",
   "author": "PhantomPtr <phantomptr@gmail.com>",
@@ -62,7 +62,7 @@
           ]
         }
       ],
-      "icon": "build/icon.png"
+      "icon": "build/icons/windows/icon.ico"
     },
     "mac": {
       "target": [
@@ -74,7 +74,7 @@
           ]
         }
       ],
-      "icon": "build/icon.png",
+      "icon": "build/icons/macos/icon.icns",
       "category": "public.app-category.utilities"
     },
     "linux": {
@@ -91,7 +91,7 @@
         "--no-sandbox",
         "--disable-setuid-sandbox"
       ],
-      "icon": "build/icon.png",
+      "icon": "build/icons/linux/hicolor",
       "category": "Utility",
       "maintainer": "PhantomPtr <phantomptr@gmail.com>"
     },
