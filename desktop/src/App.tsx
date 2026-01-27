@@ -383,6 +383,169 @@ const formatBytes = (bytes: number | bigint) => {
   return `${value} B`;
 };
 
+const renderInlineMarkdown = (text: string, onLink: (url: string) => void, keyPrefix: string) => {
+  const parts = text.split(/(`[^`]+`)/g);
+  const nodes: Array<JSX.Element | string> = [];
+  let nodeIndex = 0;
+
+  const pushNode = (node: JSX.Element | string) => {
+    nodes.push(
+      <span key={`${keyPrefix}-${nodeIndex}`}>{node}</span>
+    );
+    nodeIndex += 1;
+  };
+
+  const renderLinksAndBold = (segment: string) => {
+    const regex = /(\[([^\]]+)\]\(([^)]+)\))|(\*\*([^*]+)\*\*)/;
+    let remaining = segment;
+    while (remaining.length > 0) {
+      const match = regex.exec(remaining);
+      if (!match) {
+        pushNode(remaining);
+        break;
+      }
+      if (match.index > 0) {
+        pushNode(remaining.slice(0, match.index));
+      }
+      if (match[1]) {
+        const label = match[2];
+        const url = match[3];
+        pushNode(
+          <a
+            href={url}
+            onClick={(event) => {
+              event.preventDefault();
+              onLink(url);
+            }}
+          >
+            {label}
+          </a>
+        );
+      } else if (match[4]) {
+        pushNode(<strong>{match[5]}</strong>);
+      }
+      remaining = remaining.slice(match.index + match[0].length);
+    }
+  };
+
+  parts.forEach((part) => {
+    if (part.startsWith("`") && part.endsWith("`")) {
+      pushNode(<code>{part.slice(1, -1)}</code>);
+    } else if (part.length > 0) {
+      renderLinksAndBold(part);
+    }
+  });
+
+  return nodes;
+};
+
+const renderMarkdownBlocks = (markdown: string, onLink: (url: string) => void) => {
+  const lines = markdown.replace(/\r\n/g, "\n").split("\n");
+  const blocks: Array<JSX.Element> = [];
+  let paragraph: string[] = [];
+  let listItems: string[] = [];
+  let listType: "ul" | "ol" | null = null;
+  let inCode = false;
+  let codeLines: string[] = [];
+
+  const flushParagraph = () => {
+    if (paragraph.length === 0) return;
+    const text = paragraph.join(" ").trim();
+    blocks.push(
+      <p key={`p-${blocks.length}`}>
+        {renderInlineMarkdown(text, onLink, `p-${blocks.length}`)}
+      </p>
+    );
+    paragraph = [];
+  };
+
+  const flushList = () => {
+    if (!listType || listItems.length === 0) return;
+    const items = listItems.map((item, index) => (
+      <li key={`li-${blocks.length}-${index}`}>
+        {renderInlineMarkdown(item, onLink, `li-${blocks.length}-${index}`)}
+      </li>
+    ));
+    blocks.push(
+      listType === "ul" ? (
+        <ul key={`ul-${blocks.length}`}>{items}</ul>
+      ) : (
+        <ol key={`ol-${blocks.length}`}>{items}</ol>
+      )
+    );
+    listItems = [];
+    listType = null;
+  };
+
+  const flushCode = () => {
+    if (!inCode) return;
+    blocks.push(
+      <pre key={`code-${blocks.length}`}>
+        <code>{codeLines.join("\n")}</code>
+      </pre>
+    );
+    codeLines = [];
+    inCode = false;
+  };
+
+  lines.forEach((line) => {
+    if (line.trim().startsWith("```")) {
+      flushParagraph();
+      flushList();
+      if (inCode) {
+        flushCode();
+      } else {
+        inCode = true;
+      }
+      return;
+    }
+    if (inCode) {
+      codeLines.push(line);
+      return;
+    }
+    if (!line.trim()) {
+      flushParagraph();
+      flushList();
+      return;
+    }
+    const headingMatch = line.match(/^(#{1,6})\s+(.*)$/);
+    if (headingMatch) {
+      flushParagraph();
+      flushList();
+      const level = headingMatch[1].length;
+      const text = headingMatch[2].trim();
+      const Tag = `h${level}` as keyof JSX.IntrinsicElements;
+      blocks.push(
+        <Tag key={`h-${blocks.length}`}>
+          {renderInlineMarkdown(text, onLink, `h-${blocks.length}`)}
+        </Tag>
+      );
+      return;
+    }
+    const orderedMatch = line.match(/^\s*\d+\.\s+(.*)$/);
+    const unorderedMatch = line.match(/^\s*[-*]\s+(.*)$/);
+    if (orderedMatch || unorderedMatch) {
+      const itemText = (orderedMatch ? orderedMatch[1] : unorderedMatch?.[1] || "").trim();
+      const nextType = orderedMatch ? "ol" : "ul";
+      if (listType && listType !== nextType) {
+        flushList();
+      }
+      listType = nextType;
+      listItems.push(itemText);
+      return;
+    }
+    paragraph.push(line.trim());
+  });
+
+  flushParagraph();
+  flushList();
+  if (inCode) {
+    flushCode();
+  }
+
+  return blocks;
+};
+
 const joinRemote = (...parts: string[]) =>
   parts
     .filter(Boolean)
@@ -782,6 +945,9 @@ export default function App() {
     acked: 0,
     rejected: 0
   });
+  const [faqContent, setFaqContent] = useState("");
+  const [faqLoading, setFaqLoading] = useState(true);
+  const [faqError, setFaqError] = useState<string | null>(null);
   const NEW_PROFILE_OPTION = "__new_profile__";
   const trimmedNewProfileName = newProfileName.trim();
   const newProfileExists =
@@ -836,7 +1002,7 @@ export default function App() {
       { id: "transfer" as TabId, label: tr("transfer"), icon: "↑" },
     { id: "payload" as TabId, label: tr("queues"), icon: "◎" },
       { id: "manage" as TabId, label: tr("manage"), icon: "≡" },
-      { id: "chat" as TabId, label: tr("chat"), icon: "◈" }
+      { id: "chat" as TabId, label: tr("faq"), icon: "?" }
     ],
     [language]
   );
@@ -1155,6 +1321,28 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("ps5upload.log_level", logLevel);
   }, [logLevel]);
+
+  useEffect(() => {
+    let active = true;
+    const loadFaq = async () => {
+      setFaqLoading(true);
+      setFaqError(null);
+      try {
+        const content = await invoke<string>("faq_load");
+        if (!active) return;
+        setFaqContent(content);
+      } catch (err) {
+        if (!active) return;
+        setFaqError(String(err));
+      } finally {
+        if (active) setFaqLoading(false);
+      }
+    };
+    loadFaq();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const pushClientLog = (message: string, level: LogLevel = "info") => {
     setClientLogs((prev) => [
@@ -1755,27 +1943,10 @@ export default function App() {
         // ignore invalid cache
       }
 
-      // Load chat - independent
-      try {
-        const info = await invoke<ChatInfo>("chat_info");
-        if (!active) return;
-        setChatRoomId(info.room_id);
-        setChatEnabled(info.enabled);
-        if (info.enabled) {
-          setChatStatus("Connecting...");
-          const started = await invoke<ChatInfo>("chat_start");
-          if (active) {
-            setChatRoomId(started.room_id);
-            setChatEnabled(started.enabled);
-          }
-        } else if (active) {
-          setChatStatus("Disabled");
-        }
-      } catch {
-        if (active) {
-          setChatEnabled(false);
-          setChatStatus("Disabled");
-        }
+      // Chat disabled (FAQ tab)
+      if (active) {
+        setChatEnabled(false);
+        setChatStatus("Disabled");
       }
 
       // Mark loading complete
@@ -2986,7 +3157,7 @@ export default function App() {
           for (const item of completed) {
             if (next[item.id]) continue;
             const meta = queueMetaById[item.id];
-            const target = meta?.dest_path;
+            const target = item.dest_path || meta?.dest_path;
             if (target) {
               invoke("manage_chmod", { ip, path: target }).catch(() => {
                 // ignore chmod failures for queued extraction
@@ -4847,6 +5018,19 @@ export default function App() {
     }
   };
 
+  const handleFaqReload = async () => {
+    setFaqLoading(true);
+    setFaqError(null);
+    try {
+      const content = await invoke<string>("faq_load");
+      setFaqContent(content);
+    } catch (err) {
+      setFaqError(String(err));
+    } finally {
+      setFaqLoading(false);
+    }
+  };
+
   const handleChatSend = async () => {
     if (!chatEnabled) {
       setChatStatus("Chat unavailable");
@@ -6583,84 +6767,41 @@ export default function App() {
 
           {activeTab === "chat" && (
             <div className="grid-two chat-grid">
-              <div className="card wide chat-card">
+              <div className="card wide faq-card">
                 <header className="card-title">
-                  <span className="card-title-icon">◇</span>
-                  {tr("community")}
-                </header>
-                <div className="chip-row">
-                  <span
-                    className={`chip chat-status ${
-                      isChatConnected ? "ok" : isChatDisconnected ? "warn" : ""
-                    }`}
-                  >
-                    {chatStatus}
-                  </span>
-                  <div className="chat-controls">
-                    <button className="btn success" onClick={handleChatConnect}>
-                      {tr("connect_btn")}
+                  <span className="card-title-icon">?</span>
+                  {tr("faq")}
+                  <div className="faq-actions">
+                    <button
+                      className="btn ghost small"
+                      onClick={() =>
+                        openExternal(
+                          "https://github.com/phantomptr/ps5upload/blob/main/FAQ.md"
+                        )
+                      }
+                    >
+                      {tr("open_faq")}
                     </button>
-                    <button className="btn danger" onClick={handleChatDisconnect}>
-                      {tr("disconnect")}
-                    </button>
-                    <button className="btn info" onClick={handleChatRefresh}>
+                    <button className="btn info small" onClick={handleFaqReload}>
                       {tr("refresh")}
                     </button>
                   </div>
-                </div>
-                <div className="stats-row">
-                  <span className="pill">
-                    {tr("sent")}: {chatStats.sent}
-                  </span>
-                  <span className="pill">
-                    {tr("received")}: {chatStats.received}
-                  </span>
-                  <span className="pill">
-                    {tr("acked")}: {chatStats.acked}
-                  </span>
-                  <span className="pill">
-                    {tr("rejected")}: {chatStats.rejected}
-                  </span>
-                </div>
-                <label className="field">
-                  <span>{tr("display_name")}</span>
-                  <input
-                    value={chatDisplayName}
-                    onChange={(event) => setChatDisplayName(event.target.value)}
-                    placeholder={tr("display_name")}
-                  />
-                </label>
-                <div className="chat-window">
-                  {chatMessages.length === 0 ? (
-                    <p className="muted">{tr("no_messages")}</p>
+                </header>
+                <div className="faq-window">
+                  {faqLoading ? (
+                    <p className="muted">{tr("loading")}...</p>
+                  ) : faqError ? (
+                    <div className="stack">
+                      <p className="muted">FAQ failed to load: {faqError}</p>
+                      <button className="btn" onClick={handleFaqReload}>
+                        {tr("refresh")}
+                      </button>
+                    </div>
                   ) : (
-                    chatMessages.map((msg, index) => (
-                      <div
-                        key={`${msg.time}-${msg.sender}-${index}`}
-                        className={`chat-line ${msg.local ? "local" : ""}`}
-                      >
-                        <span className="chat-time">[{msg.time}]</span>{" "}
-                        <strong>{msg.local ? tr("you") : msg.sender}:</strong>{" "}
-                        {msg.text}
-                      </div>
-                    ))
+                    <div className="faq-content">
+                      {renderMarkdownBlocks(faqContent, openExternal)}
+                    </div>
                   )}
-                  <div ref={chatEndRef} />
-                </div>
-                <div className="inline-field chat-input">
-                  <input
-                    placeholder={tr("type_message")}
-                    value={chatInput}
-                    onChange={(event) => setChatInput(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        handleChatSend();
-                      }
-                    }}
-                  />
-                  <button className="btn primary" onClick={handleChatSend}>
-                    {tr("send")}
-                  </button>
                 </div>
               </div>
             </div>

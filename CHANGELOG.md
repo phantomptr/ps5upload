@@ -3,10 +3,22 @@
 All notable changes to this project are documented here.
 This project follows Semantic Versioning.
 
-## [1.3.3] - 2026-01-26
+## [1.3.3] - 2026-01-27
 
 ### Added
-- Started changelog entries for 1.3.3.
+- FAQ tab with embedded, scrollable README FAQ (bundled into desktop builds).
+- Per‑tab queue badges for Upload + Extraction queues.
+- Manage “Reset UI” action for recovering from stuck state.
+
+### Changed
+- Desktop window is now resizable with responsive layout.
+- Platform icon bundles (Windows .ico, macOS .icns, Linux hicolor) wired into release builds.
+- Log level dropdown now color‑coded by level.
+
+### Fixed
+- Upload/extraction completion now logs regardless of success/failure.
+- Extraction queue remains visible when disconnected (cached view).
+- chmod 777 after archive extraction now targets the final extracted folder.
 
 ## [1.3.2] - 2026-01-26
 

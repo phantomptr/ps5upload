@@ -146,6 +146,10 @@ Use **Manage** to:
 - macOS: `~/Library/Application Support/ps5upload/logs`
 - Linux: `~/.local/share/ps5upload/logs`
 
+**In‑app help**:
+- The **FAQ** tab is bundled with the desktop app and works offline.
+- Use **Refresh** in the FAQ tab to reload it after updates.
+
 **Payload logs**:
 - `/data/ps5upload/payload.log`
 - Rotated per launch in `/data/ps5upload/logs/`

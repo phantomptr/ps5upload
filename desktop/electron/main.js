@@ -626,6 +626,13 @@ const logMain = (message, data = null) => {
   console.error(message, data || '');
 };
 
+const resolveFaqPath = () => {
+  if (isDev) {
+    return path.join(__dirname, '..', '..', 'FAQ.md');
+  }
+  return path.join(process.resourcesPath, 'FAQ.md');
+};
+
 process.on('uncaughtException', (err) => {
   logMain('Uncaught exception', { message: err?.message, stack: err?.stack });
 });
@@ -2809,6 +2816,15 @@ function registerIpcHandlers() {
   // Logging
   ipcMain.handle('set_save_logs', (_, enabled) => { state.saveLogs = enabled; return true; });
   ipcMain.handle('set_ui_log_enabled', (_, enabled) => { state.uiLogEnabled = enabled; return true; });
+  ipcMain.handle('faq_load', () => {
+    const faqPath = resolveFaqPath();
+    try {
+      return fs.readFileSync(faqPath, 'utf8');
+    } catch (err) {
+      logMain('FAQ load failed', { path: faqPath, message: err?.message || String(err) });
+      throw new Error('FAQ not available.');
+    }
+  });
 
   // Storage
   ipcMain.handle('storage_list', async (_, ip) => {

@@ -42,6 +42,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Logging
   setSaveLogs: (enabled) => ipcRenderer.invoke('set_save_logs', enabled),
   setUiLogEnabled: (enabled) => ipcRenderer.invoke('set_ui_log_enabled', enabled),
+  faqLoad: () => ipcRenderer.invoke('faq_load'),
 
   // Storage
   storageList: (ip) => ipcRenderer.invoke('storage_list', ip),

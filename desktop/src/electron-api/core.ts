@@ -51,6 +51,8 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
         return api.setSaveLogs(args.enabled);
       case 'set_ui_log_enabled':
         return api.setUiLogEnabled(args.enabled);
+      case 'faq_load':
+        return api.faqLoad();
       case 'storage_list':
         return api.storageList(args.ip);
       case 'port_check':
