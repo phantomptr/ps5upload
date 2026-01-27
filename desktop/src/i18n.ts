@@ -10,6 +10,7 @@ const translations = {
     transfer: "Transfer",
     manage: "Manage",
     chat: "Chat",
+    faq: "FAQ",
     logs: "Logs",
     client: "Client",
     payload: "Payload",
@@ -22,6 +23,7 @@ const translations = {
     log_level_info: "Info",
     log_level_warn: "Warning",
     log_level_error: "Error",
+    open_faq: "Open FAQ",
 
     // Profile
     profile: "Profile",

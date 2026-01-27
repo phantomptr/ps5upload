@@ -1333,6 +1333,98 @@ input::placeholder {
   min-height: 0;
 }
 
+.faq-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.faq-actions {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 8px;
+}
+
+.faq-window {
+  background: var(--ps-shell);
+  border: 1px solid var(--ps-border);
+  border-radius: 12px;
+  padding: 16px;
+  max-height: 70vh;
+  overflow: auto;
+}
+
+.faq-content {
+  color: var(--ps-white);
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+
+.faq-content h1,
+.faq-content h2,
+.faq-content h3,
+.faq-content h4 {
+  margin: 18px 0 10px;
+  color: var(--ps-white);
+}
+
+.faq-content h1 {
+  font-size: 1.4rem;
+}
+
+.faq-content h2 {
+  font-size: 1.2rem;
+}
+
+.faq-content h3 {
+  font-size: 1.05rem;
+}
+
+.faq-content p {
+  margin: 8px 0;
+}
+
+.faq-content ul,
+.faq-content ol {
+  margin: 8px 0 8px 18px;
+  padding-left: 14px;
+}
+
+.faq-content li {
+  margin: 4px 0;
+}
+
+.faq-content code {
+  background: rgba(148, 163, 184, 0.2);
+  padding: 2px 6px;
+  border-radius: 6px;
+  font-family: "SF Mono", "Monaco", "Consolas", monospace;
+  font-size: 0.9em;
+}
+
+.faq-content pre {
+  background: rgba(15, 23, 42, 0.85);
+  color: #e2e8f0;
+  padding: 12px 14px;
+  border-radius: 12px;
+  overflow: auto;
+}
+
+.faq-content pre code {
+  background: transparent;
+  padding: 0;
+  color: inherit;
+}
+
+.faq-content a {
+  color: var(--ps-blue);
+  text-decoration: none;
+}
+
+.faq-content a:hover {
+  text-decoration: underline;
+}
+
 .chat-input {
   margin-top: 10px;
 }
@@ -1653,6 +1745,11 @@ input::placeholder {
 .app[dir="rtl"] .action-buttons,
 .app[dir="rtl"] .tabs {
   flex-direction: row-reverse;
+}
+
+.app[dir="rtl"] .faq-actions {
+  margin-left: 0;
+  margin-right: auto;
 }
 
 .app[dir="rtl"] input,

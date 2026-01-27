@@ -13,6 +13,8 @@ New UI highlights:
 - Extraction queue with progress, metadata, and cover art where available.
 - History resume workflow with explicit resume mode selection.
 - Log level filtering with color-coded badges in the Logs panel.
+- FAQ tab with an embedded, scrollable help panel.
+- Manage “Reset UI” action for quick recovery from stuck states.
 
 It is optimized for thousands of small files on a local network (where it outperforms FTP), but works over any standard network connection.
 
@@ -39,6 +41,7 @@ This tool fixes that by bundling files into efficient "packs" on your computer a
 - **Instant Streaming:** Supported on all platforms (ZIP, 7Z, RAR, and Folders).
 - **Zero-Install Archives:** ZIP and 7Z are supported via pure-Rust libraries (no external software needed). RAR is statically linked into the binary for maximum portability.
 - **AV Clean:** Optimized release builds with stripped symbols and proper manifests to minimize false positives.
+- **Resizable UI:** Desktop window is resizable with responsive layout.
 
 ## Quick Start Guide
 
@@ -100,7 +103,7 @@ You should see a notification pop up on your TV: **"PS5 Upload Server - Ready on
 5.  **RAR uploads (optional):** If your source is a `.rar`, you can pick a **RAR Extract Mode** and (optionally) a **RAR Temp Storage** in Transfer settings to control where the archive is staged before extraction.
 
 ### 5. Manage Files (Optional)
-Open the **Manage** tab to browse your PS5's storage. You can rename, move, copy, delete, and `chmod 777` files or folders. You can also download files and folders from your PS5 to your computer.
+Open the **Manage** tab to browse your PS5's storage. You can rename, move, copy, delete, and `chmod 777` files or folders. You can also download files and folders from your PS5 to your computer. If something gets stuck, use **Reset UI** in Manage to recover.
 
 ### 6. Queues (Optional)
 Open the **Queues** tab to see upload and extraction queues. You can refresh the queues, monitor progress, and cancel queued work.
@@ -111,8 +114,8 @@ If a transfer was interrupted, you can enable **Resume** mode in the **Transfer*
 * **Skip by size + time (medium)** — more accurate.
 * **Verify SHA256 (slow)** — most accurate, slowest.
 
-### 8. Chat (Optional)
-Open the **Chat** tab to talk with other PS5Upload users on the same LAN. It auto-picks a display name and uses local broadcast.
+### 8. FAQ (Optional)
+Open the **FAQ** tab for built‑in help and troubleshooting (offline, bundled with the app).
 
 ## FAQ
 
@@ -151,6 +154,9 @@ Open the **Chat** tab to talk with other PS5Upload users on the same LAN. It aut
     *   **macOS:** `~/Library/Application Support/ps5upload`
     *   **Linux:** `~/.local/share/ps5upload`
 *   Logs are stored in the `logs` subfolder when **Save Logs** is enabled in the Logs tab. You can filter by level (Debug/Info/Warn/Error).
+
+**Q: Where can I find help inside the app?**
+*   Open the **FAQ** tab for bundled help and troubleshooting (works offline).
 
 **Q: Does this work on PS4?**
 *   The logic is similar, but the payload is compiled specifically for the PS5 environment. It won't run on a PS4 as-is.
