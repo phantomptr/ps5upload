@@ -77,7 +77,7 @@ jobs:
         run: |
           test -f icons/bundles/windows/icon.ico
           test -f icons/bundles/macos/icon.icns
-          test -d icons/bundles/linux/hicolor
+          test -f icons/linux/icon_512x512.png
           npm run build:vite
           if [[ "${{ matrix.platform }}" == "macos" ]]; then
             npx electron-builder --mac dmg --${{ matrix.arch }} --publish never

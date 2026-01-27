@@ -96,7 +96,7 @@
         "--no-sandbox",
         "--disable-setuid-sandbox"
       ],
-      "icon": "icons/bundles/linux/hicolor",
+      "icon": "icons/linux/icon_512x512.png",
       "category": "Utility",
       "maintainer": "PhantomPtr <phantomptr@gmail.com>"
     },
