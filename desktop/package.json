@@ -67,7 +67,7 @@
           ]
         }
       ],
-      "icon": "build/icons/windows/icon.ico"
+      "icon": "icons/bundles/windows/icon.ico"
     },
     "mac": {
       "target": [
@@ -79,7 +79,7 @@
           ]
         }
       ],
-      "icon": "build/icons/macos/icon.icns",
+      "icon": "icons/bundles/macos/icon.icns",
       "category": "public.app-category.utilities"
     },
     "linux": {
@@ -96,7 +96,7 @@
         "--no-sandbox",
         "--disable-setuid-sandbox"
       ],
-      "icon": "build/icons/linux/hicolor",
+      "icon": "icons/bundles/linux/hicolor",
       "category": "Utility",
       "maintainer": "PhantomPtr <phantomptr@gmail.com>"
     },
