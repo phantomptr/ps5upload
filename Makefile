@@ -7,6 +7,7 @@
 .PHONY: test-payload test-desktop
 .PHONY: clean-payload clean-desktop clean-both
 .PHONY: dist dist-win dist-mac dist-linux
+.PHONY: release-post
 
 JOBS ?= $(shell getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || echo 4)
 
@@ -41,6 +42,7 @@ help:
 	@echo "  make dist-win       - Build Windows installer"
 	@echo "  make dist-mac       - Build macOS app bundle"
 	@echo "  make dist-linux     - Build Linux packages (AppImage, deb)"
+	@echo "  make release-post   - Generate release post copy from CHANGELOG.md"
 	@echo ""
 	@echo "Examples:"
 	@echo "  make setup          # First time setup"
@@ -252,3 +254,6 @@ install-hooks:
 # Convenience aliases
 dev: run-desktop
 start: run-desktop
+
+release-post:
+	@./scripts/release-posts.sh
