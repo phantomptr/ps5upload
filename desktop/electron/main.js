@@ -42,7 +42,7 @@ const WRITE_CHUNK_SIZE = 512 * 1024; // 512KB
 const MAGIC_FTX1 = 0x31585446;
 
 let sleepBlockerId = null;
-const VERSION = '1.3.4';
+const VERSION = '1.3.5';
 
 function beginManageOperation(op) {
   state.manageDoneEmitted = false;
