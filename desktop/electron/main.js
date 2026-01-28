@@ -36,13 +36,13 @@ const CONNECTION_TIMEOUT_MS = 30000;
 const READ_TIMEOUT_MS = 120000;
 const PAYLOAD_STATUS_CONNECT_TIMEOUT_MS = 5000;
 const PAYLOAD_STATUS_READ_TIMEOUT_MS = 10000;
-const PACK_BUFFER_SIZE = 16 * 1024 * 1024; // 16MB
+const PACK_BUFFER_SIZE = 32 * 1024 * 1024; // 32MB
 const SEND_CHUNK_SIZE = 4 * 1024 * 1024; // 4MB
 const WRITE_CHUNK_SIZE = 512 * 1024; // 512KB
 const MAGIC_FTX1 = 0x31585446;
 
 let sleepBlockerId = null;
-const VERSION = '1.3.3';
+const VERSION = '1.3.4';
 
 function beginManageOperation(op) {
   state.manageDoneEmitted = false;
@@ -184,6 +184,10 @@ async function uploadRarForExtraction(ip, rarPath, destPath, mode, opts = {}) {
     if (cancel.value) throw new Error('Upload cancelled');
 
     socket = await createSocketWithTimeout(ip, TRANSFER_PORT);
+    tuneUploadSocket(socket);
+    if (String(modeToTry || '').toLowerCase() === 'turbo') {
+      onLog('Turbo mode: progress updates are reduced; totals may be unavailable.');
+    }
     const flag = overrideOnConflict ? '' : ' NOOVERWRITE';
     const cleanedTempRoot = typeof tempRoot === 'string' ? tempRoot.trim() : '';
     if (cleanedTempRoot && /\s/.test(cleanedTempRoot)) {
@@ -894,6 +898,19 @@ function writeAllRetry(socket, data, cancel) {
 }
 
 // ==================== TCP Protocol ====================
+const UPLOAD_SOCKET_BUFFER_SIZE = 8 * 1024 * 1024;
+
+function tuneUploadSocket(socket) {
+  if (!socket) return;
+  socket.setNoDelay(true);
+  socket.setKeepAlive(true, 1000);
+  if (typeof socket.setSendBufferSize === 'function') {
+    socket.setSendBufferSize(UPLOAD_SOCKET_BUFFER_SIZE);
+  }
+  if (typeof socket.setRecvBufferSize === 'function') {
+    socket.setRecvBufferSize(UPLOAD_SOCKET_BUFFER_SIZE);
+  }
+}
 
 function createSocketWithTimeout(ip, port, timeout = CONNECTION_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
@@ -1431,6 +1448,15 @@ async function historyGet(ip, port) {
 async function uploadV2Init(ip, port, destPath, useTemp) {
   const socket = await createSocketWithTimeout(ip, port);
   const mode = useTemp ? 'TEMP' : 'DIRECT';
+  tuneUploadSocket(socket);
+  const flags = [];
+  if (config.optimize_upload || config.chmod_after_upload) {
+    flags.push('NOCHMOD');
+  }
+  if (config.chmod_after_upload) {
+    flags.push('CHMOD_END');
+  }
+  const flagStr = flags.length ? ` ${flags.join(' ')}` : '';
 
   return new Promise((resolve, reject) => {
     let data = Buffer.alloc(0);
@@ -1457,7 +1483,7 @@ async function uploadV2Init(ip, port, destPath, useTemp) {
     socket.on('data', onData);
     socket.on('error', (err) => reject(err));
 
-    socket.write(`UPLOAD_V2 ${destPath} ${mode}\n`);
+    socket.write(`UPLOAD_V2 ${destPath} ${mode}${flagStr}\n`);
   });
 }
 

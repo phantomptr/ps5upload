@@ -99,6 +99,7 @@ Add items from **Transfer** or **Manage**.
 - **Start / Stop** queue
 - **Reorder** items
 - **Clear Completed / Clear Failed / Clear Queue**
+- **Info** button shows the exact upload parameters for that item
 
 ### Extraction Queue
 Archive extractions happen on the PS5 and appear here.
@@ -107,6 +108,7 @@ Archive extractions happen on the PS5 and appear here.
 - **Requeue** failed items
 - **Clear Completed / Clear Failed / Clear Queue**
 - **Clear tmp**: deletes `/ps5upload/tmp` on all storage roots
+Note: extraction progress updates are periodic. A short delay before progress appears is normal; the item will show "Waiting for payload status..." until the first update arrives.
 
 ---
 

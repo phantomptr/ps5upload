@@ -33,7 +33,7 @@ static time_t g_queue_updated_at = 0;
 
 #define EXTRACT_QUEUE_FILE "/data/ps5upload/extract_queue.bin"
 #define EXTRACT_QUEUE_MAGIC 0x31515845 /* 'EXQ1' */
-#define EXTRACT_QUEUE_VERSION 1
+#define EXTRACT_QUEUE_VERSION 2
 
 typedef struct {
     uint32_t magic;
@@ -73,7 +73,7 @@ static const char *get_archive_name(const char *path) {
     return name ? name + 1 : path;
 }
 
-int extract_queue_add(const char *source_path, const char *dest_path, int delete_source, const char *cleanup_path) {
+int extract_queue_add(const char *source_path, const char *dest_path, int delete_source, const char *cleanup_path, int unrar_mode) {
     if (!source_path || !dest_path) {
         return -1;
     }
@@ -109,6 +109,10 @@ int extract_queue_add(const char *source_path, const char *dest_path, int delete
     }
     item->delete_source = delete_source ? 1 : 0;
     strncpy(item->archive_name, get_archive_name(source_path), sizeof(item->archive_name) - 1);
+    if (unrar_mode != EXTRACT_RAR_FAST && unrar_mode != EXTRACT_RAR_SAFE && unrar_mode != EXTRACT_RAR_TURBO) {
+        unrar_mode = EXTRACT_RAR_FAST;
+    }
+    item->unrar_mode = unrar_mode;
     item->status = EXTRACT_STATUS_PENDING;
     item->percent = 0;
     item->processed_bytes = 0;
@@ -279,9 +283,17 @@ static int extraction_progress_callback(const char *filename, unsigned long long
         /* Notifications disabled */
     }
 
+    int sleep_needed = 1;
+    if (g_queue.current_index >= 0 && g_queue.current_index < g_queue.count) {
+        if (g_queue.items[g_queue.current_index].unrar_mode == EXTRACT_RAR_TURBO) {
+            sleep_needed = 0;
+        }
+    }
     pthread_mutex_unlock(&g_queue_mutex);
 
-    usleep(1000); /* Yield CPU */
+    if (sleep_needed) {
+        usleep(1000); /* Yield CPU */
+    }
     return 0;
 }
 
@@ -323,6 +335,9 @@ static void *extract_thread_func(void *arg) {
     pthread_mutex_unlock(&g_queue_mutex);
 
     printf("[EXTRACT_QUEUE] Starting extraction: %s -> %s\n", source, dest);
+    if (item->unrar_mode == EXTRACT_RAR_TURBO) {
+        printf("[EXTRACT_QUEUE] Turbo mode: per-file progress updates disabled; totals may be unavailable\n");
+    }
 
 
     /* Create destination directory */
@@ -342,43 +357,61 @@ static void *extract_thread_func(void *arg) {
         return NULL;
     }
 
-    /* Scan archive first */
     int file_count = 0;
     unsigned long long total_size = 0;
-    int scan_result = unrar_scan(source, &file_count, &total_size, NULL, 0);
+    int use_scan = (item->unrar_mode == EXTRACT_RAR_SAFE);
+    if (use_scan) {
+        int scan_result = unrar_scan(source, &file_count, &total_size, NULL, 0);
+        if (scan_result != UNRAR_OK) {
+            pthread_mutex_lock(&g_queue_mutex);
+            item->status = EXTRACT_STATUS_FAILED;
+            item->completed_at = time(NULL);
+            snprintf(item->error_msg, sizeof(item->error_msg), "Scan failed: %s", unrar_strerror(scan_result));
+            g_queue.current_index = -1;
+            g_thread_running = 0;
+            g_requeue_requested = 0;
+            g_requeue_id = -1;
+            extract_queue_touch();
+            pthread_mutex_unlock(&g_queue_mutex);
 
-    if (scan_result != UNRAR_OK) {
+            /* keep failed/cancelled archives for requeue; cleanup only on success */
+
+            /* Continue with next item */
+            extract_queue_process();
+            return NULL;
+        }
+
         pthread_mutex_lock(&g_queue_mutex);
-        item->status = EXTRACT_STATUS_FAILED;
-        item->completed_at = time(NULL);
-        snprintf(item->error_msg, sizeof(item->error_msg), "Scan failed: %s", unrar_strerror(scan_result));
-        g_queue.current_index = -1;
-        g_thread_running = 0;
-        g_requeue_requested = 0;
-        g_requeue_id = -1;
-        extract_queue_touch();
+        item->total_bytes = total_size;
         pthread_mutex_unlock(&g_queue_mutex);
-
-        /* keep failed/cancelled archives for requeue; cleanup only on success */
-
-        /* Continue with next item */
-        extract_queue_process();
-        return NULL;
     }
-
-    pthread_mutex_lock(&g_queue_mutex);
-    item->total_bytes = total_size;
-    pthread_mutex_unlock(&g_queue_mutex);
 
     /* Extract */
     unrar_extract_opts opts;
-    opts.keepalive_interval_sec = UNRAR_FAST_KEEPALIVE_SEC;
-    opts.sleep_every_bytes = UNRAR_FAST_SLEEP_EVERY_BYTES;
-    opts.sleep_us = UNRAR_FAST_SLEEP_US;
+    if (item->unrar_mode == EXTRACT_RAR_SAFE) {
+        opts.keepalive_interval_sec = UNRAR_SAFE_KEEPALIVE_SEC;
+        opts.sleep_every_bytes = UNRAR_SAFE_SLEEP_EVERY_BYTES;
+        opts.sleep_us = UNRAR_SAFE_SLEEP_US;
+        opts.trust_paths = UNRAR_SAFE_TRUST_PATHS;
+        opts.progress_file_start = UNRAR_SAFE_PROGRESS_FILE_START;
+    } else if (item->unrar_mode == EXTRACT_RAR_TURBO) {
+        opts.keepalive_interval_sec = UNRAR_TURBO_KEEPALIVE_SEC;
+        opts.sleep_every_bytes = UNRAR_TURBO_SLEEP_EVERY_BYTES;
+        opts.sleep_us = UNRAR_TURBO_SLEEP_US;
+        opts.trust_paths = UNRAR_TURBO_TRUST_PATHS;
+        opts.progress_file_start = UNRAR_TURBO_PROGRESS_FILE_START;
+    } else {
+        opts.keepalive_interval_sec = UNRAR_FAST_KEEPALIVE_SEC;
+        opts.sleep_every_bytes = UNRAR_FAST_SLEEP_EVERY_BYTES;
+        opts.sleep_us = UNRAR_FAST_SLEEP_US;
+        opts.trust_paths = UNRAR_FAST_TRUST_PATHS;
+        opts.progress_file_start = UNRAR_FAST_PROGRESS_FILE_START;
+    }
 
     int extracted_count = 0;
     unsigned long long extracted_bytes = 0;
-    int extract_result = unrar_extract(source, dest, 0, total_size, &opts,
+    unsigned long long progress_total = use_scan ? total_size : 0;
+    int extract_result = unrar_extract(source, dest, 0, progress_total, &opts,
                                        extraction_progress_callback, NULL,
                                        &extracted_count, &extracted_bytes);
 

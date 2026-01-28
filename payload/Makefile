@@ -94,18 +94,18 @@ OBJS := $(C_OBJS) $(UNRAR_OBJS)
 VERSION := $(shell cat ../VERSION)
 
 # Common flags
-COMMON_FLAGS := -O2 -DPS5_UPLOAD_VERSION=\"$(VERSION)\" -DSERVER_PORT_STR=\"9113\" -D_7ZIP_ST \
+COMMON_FLAGS := -O3 -flto -DPS5_UPLOAD_VERSION=\"$(VERSION)\" -DSERVER_PORT_STR=\"9113\" -D_7ZIP_ST \
 	-Ithird_party/zstd -Ithird_party/lzma_sdk -Ithird_party/unrar -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE
 
 # C flags
 CFLAGS := -Wall $(COMMON_FLAGS)
 
 # C++ flags for unrar
-# Note: Disable USE_SSE (x86 only), disable RAR_SMP (threading), disable large pages
+# Note: Disable USE_SSE (x86 only), enable RAR_SMP (threading), disable large pages
 CXXFLAGS := -std=c++11 $(COMMON_FLAGS) \
 	-D_UNIX -DSILENT -DRARDLL -DLITTLE_ENDIAN -DALLOW_MISALIGNED \
 	-D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE \
-	-UUSE_SSE -URAR_SMP \
+	-UUSE_SSE -DRAR_SMP \
 	-Wno-switch -Wno-dangling-else \
 	-Wno-delete-non-virtual-dtor -Wno-unused-variable -fno-rtti
 

@@ -22,6 +22,13 @@ typedef enum {
     EXTRACT_STATUS_FAILED = 3
 } ExtractStatus;
 
+/* Match UnrarMode values in unrar_handler.h */
+typedef enum {
+    EXTRACT_RAR_FAST = 0,
+    EXTRACT_RAR_SAFE = 1,
+    EXTRACT_RAR_TURBO = 2
+} ExtractRarMode;
+
 typedef struct {
     int id;
     char source_path[EXTRACT_QUEUE_PATH_MAX];
@@ -29,6 +36,7 @@ typedef struct {
     char cleanup_path[EXTRACT_QUEUE_PATH_MAX];
     int delete_source;
     char archive_name[256];
+    int unrar_mode;
     ExtractStatus status;
     int percent;
     unsigned long long processed_bytes;
@@ -51,7 +59,7 @@ typedef struct {
 void extract_queue_init(void);
 
 /* Add an item to the extraction queue, returns item id or -1 on error, -2 on duplicate */
-int extract_queue_add(const char *source_path, const char *dest_path, int delete_source, const char *cleanup_path);
+int extract_queue_add(const char *source_path, const char *dest_path, int delete_source, const char *cleanup_path, int unrar_mode);
 
 /* Get current queue status as JSON string (caller must free) */
 char *extract_queue_get_status_json(void);

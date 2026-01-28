@@ -185,8 +185,9 @@ static int CALLBACK unrar_callback(UINT msg, LPARAM user_data, LPARAM p1, LPARAM
                     now - ctx->last_update_time >= (time_t)ctx->keepalive_interval_sec) {
                     ctx->last_update_time = now;
                     /* Re-send the current file status to keep the client connection alive */
+                    unsigned long long total_for_cb = ctx->use_dynamic_total ? 0 : ctx->progress_total_size;
                     if (ctx->callback(ctx->current_filename, ctx->current_file_size, ctx->files_done,
-                                      ctx->total_processed, ctx->progress_total_size, ctx->user_data) != 0) {
+                                      ctx->total_processed, total_for_cb, ctx->user_data) != 0) {
                         ctx->abort_flag = 1;
                         return -1;
                     }
@@ -477,13 +478,17 @@ extern "C" int unrar_extract(const char *rar_path, const char *dest_dir, int str
         if (ctx.use_dynamic_total) {
             ctx.progress_total_size += file_size;
         }
-        ctx.last_update_time = time(NULL);
-
-        /* Report progress before extraction */
-        if (progress) {
-            if (progress(header.FileName, file_size, ctx.files_done, ctx.total_processed, ctx.progress_total_size, user_data) != 0) {
-                result = UNRAR_ERR_EXTRACT;
-                break;
+        /* Report progress before extraction (throttled by keepalive interval) */
+        if (progress && local_opts.progress_file_start) {
+            time_t now = time(NULL);
+            if (ctx.keepalive_interval_sec == 0 ||
+                now - ctx.last_update_time >= (time_t)ctx.keepalive_interval_sec) {
+                unsigned long long total_for_cb = ctx.use_dynamic_total ? 0 : ctx.progress_total_size;
+                if (progress(header.FileName, file_size, ctx.files_done, ctx.total_processed, total_for_cb, user_data) != 0) {
+                    result = UNRAR_ERR_EXTRACT;
+                    break;
+                }
+                ctx.last_update_time = now;
             }
         }
 
@@ -502,9 +507,24 @@ extern "C" int unrar_extract(const char *rar_path, const char *dest_dir, int str
         }
 
         std::string sanitized;
-        if (!sanitize_target_path(target_name, sanitized)) {
-            RARProcessFile(hArc, RAR_SKIP, NULL, NULL);
-            continue;
+        if (local_opts.trust_paths) {
+            const char *p = target_name;
+            if (isalpha((unsigned char)p[0]) && p[1] == ':') {
+                p += 2;
+            }
+            while (*p == '/' || *p == '\\') {
+                p++;
+            }
+            if (*p == '\0') {
+                RARProcessFile(hArc, RAR_SKIP, NULL, NULL);
+                continue;
+            }
+            sanitized = normalize_path(p);
+        } else {
+            if (!sanitize_target_path(target_name, sanitized)) {
+                RARProcessFile(hArc, RAR_SKIP, NULL, NULL);
+                continue;
+            }
         }
 
         std::string full_dest = std::string(dest_dir) + "/" + sanitized;
