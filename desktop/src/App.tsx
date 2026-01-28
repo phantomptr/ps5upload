@@ -819,6 +819,30 @@ export default function App() {
   const [includePrerelease, setIncludePrerelease] = useState(false);
   const [platformInfo, setPlatformInfo] = useState<PlatformInfo | null>(null);
   const [language, setLanguage] = useState("en");
+  const [langMenuOpen, setLangMenuOpen] = useState(false);
+  const langMenuRef = useRef<HTMLDivElement | null>(null);
+  const languages = [
+    { code: "en", label: "English" },
+    { code: "zh-CN", label: "简体中文" },
+    { code: "zh-TW", label: "繁體中文" },
+    { code: "hi", label: "हिन्दी" },
+    { code: "es", label: "Español" },
+    { code: "ar", label: "العربية" },
+    { code: "bn", label: "বাংলা" },
+    { code: "pt-BR", label: "Português (Brasil)" },
+    { code: "ru", label: "Русский" },
+    { code: "ja", label: "日本語" },
+    { code: "de", label: "Deutsch" },
+    { code: "fr", label: "Français" },
+    { code: "ko", label: "한국어" },
+    { code: "tr", label: "Türkçe" },
+    { code: "vi", label: "Tiếng Việt" },
+    { code: "id", label: "Bahasa Indonesia" },
+    { code: "it", label: "Italiano" },
+    { code: "th", label: "ไทย" }
+  ];
+  const currentLanguageLabel =
+    languages.find((item) => item.code === language)?.label || "English";
   const [autoConnect, setAutoConnect] = useState(false);
   const [payloadAutoReload, setPayloadAutoReload] = useState(false);
   const [payloadReloadMode, setPayloadReloadMode] = useState<
@@ -1012,6 +1036,18 @@ export default function App() {
     document.documentElement.dir = isRtl ? "rtl" : "ltr";
     document.documentElement.lang = language;
   }, [isRtl, language]);
+
+  useEffect(() => {
+    if (!langMenuOpen) return;
+    const handleClick = (event: MouseEvent) => {
+      if (!langMenuRef.current) return;
+      if (!langMenuRef.current.contains(event.target as Node)) {
+        setLangMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [langMenuOpen]);
   const [transferState, setTransferState] = useState<TransferState>({
     status: "Idle",
     sent: 0,
@@ -1020,7 +1056,7 @@ export default function App() {
     elapsed: 0,
     currentFile: ""
   });
-  const transferSpeedRef = useRef({ sent: 0, at: 0, ema: 0 });
+  const transferSpeedRef = useRef({ sent: 0, elapsed: 0, ema: 0 });
   const [transferSpeedEma, setTransferSpeedEma] = useState(0);
   const [transferUpdatedAt, setTransferUpdatedAt] = useState<number | null>(null);
   const [activeRunId, setActiveRunId] = useState<number | null>(null);
@@ -1171,7 +1207,7 @@ export default function App() {
         // ignore polling failures
       }
       if (!cancelled) {
-        timer = setTimeout(poll, 1000);
+        timer = setTimeout(poll, 500);
       }
     };
     poll();
@@ -1188,18 +1224,27 @@ export default function App() {
     const now = Date.now();
     setTransferUpdatedAt(now);
     const sent = toSafeNumber(transferState.sent, 0);
+    const nowElapsed =
+      transferState.elapsed > 0
+        ? transferState.elapsed
+        : transferStartedAt
+        ? (Date.now() - transferStartedAt) / 1000
+        : 0;
     const prev = transferSpeedRef.current;
-    if (!prev.at || sent < prev.sent || transferState.status.startsWith("Idle")) {
-      transferSpeedRef.current = { sent, at: now, ema: 0 };
+    if (!prev.elapsed || sent < prev.sent || transferState.status.startsWith("Idle")) {
+      transferSpeedRef.current = { sent, elapsed: nowElapsed, ema: 0 };
       setTransferSpeedEma(0);
       return;
     }
-    const elapsed = (now - prev.at) / 1000;
-    if (elapsed <= 0) return;
+    const elapsedDelta = nowElapsed - prev.elapsed;
+    if (elapsedDelta <= 0) return;
+    if (elapsedDelta < 0.5) return;
     const delta = sent - prev.sent;
-    const inst = delta > 0 ? delta / elapsed : 0;
-    const nextEma = prev.ema > 0 ? prev.ema * 0.7 + inst * 0.3 : inst;
-    transferSpeedRef.current = { sent, at: now, ema: nextEma };
+    const inst = delta > 0 ? delta / elapsedDelta : 0;
+    const tau = 3;
+    const alpha = 1 - Math.exp(-elapsedDelta / tau);
+    const nextEma = prev.ema > 0 ? prev.ema + (inst - prev.ema) * alpha : inst;
+    transferSpeedRef.current = { sent, elapsed: nowElapsed, ema: nextEma };
     setTransferSpeedEma(nextEma);
   }, [transferState.sent, transferState.status, transferActive, activeRunId]);
 
@@ -1221,7 +1266,7 @@ export default function App() {
         // ignore polling failures
       }
       if (!cancelled) {
-        timer = setTimeout(poll, 1500);
+        timer = setTimeout(poll, 500);
       }
     };
     poll();
@@ -1572,7 +1617,7 @@ export default function App() {
   };
 
   const handleBrowse = async () => {
-    if (transferActive || scanStatus === "scanning") return;
+    if (scanStatus === "scanning") return;
     try {
       const selected = await open({
         directory: true,
@@ -1588,7 +1633,7 @@ export default function App() {
   };
 
   const handleBrowseArchive = async () => {
-    if (transferActive || scanStatus === "scanning") return;
+    if (scanStatus === "scanning") return;
     try {
       const selected = await open({
         multiple: false,
@@ -3042,9 +3087,8 @@ export default function App() {
   const transferSpeedReady =
     transferElapsedDisplay >= transferSpeedMinElapsedSec &&
     transferSent >= transferSpeedMinBytes;
-  const transferSpeedDisplay = transferSpeedReady
-    ? (transferSpeedEma > 0 ? transferSpeedEma : transferSpeedInstant)
-    : 0;
+  const transferSpeedDisplay =
+    transferSpeedReady && transferSpeedEma > 0 ? transferSpeedEma : 0;
   const transferEtaSeconds =
     transferTotal > transferSent && transferSpeedDisplay > 0
       ? Math.ceil((transferTotal - transferSent) / transferSpeedDisplay)
@@ -3547,7 +3591,7 @@ export default function App() {
       payloadFullStatus?.items?.some((item) => item.status === "running") ?? false;
     const shouldPoll = activeTab === "payload" || hasRunningExtraction;
     if (!shouldPoll) return;
-    const intervalMs = hasRunningExtraction ? 1000 : 5000;
+    const intervalMs = hasRunningExtraction ? 500 : 5000;
     const interval = setInterval(() => {
       if (isConnected && ip.trim()) {
         handleRefreshQueueStatus();
@@ -5397,20 +5441,41 @@ export default function App() {
           >
             {theme === "dark" ? "◐" : "◑"}
           </button>
-          <label className="lang-switch" aria-label={tr("language")}>
+          <div className="lang-switch" aria-label={tr("language")} ref={langMenuRef}>
             <span>{tr("language")}</span>
-            <select
-              value={language}
-              onChange={(event) => setLanguage(event.target.value)}
-            >
-              <option value="en">English</option>
-              <option value="zh-CN">简体中文</option>
-              <option value="zh-TW">繁體中文</option>
-              <option value="fr">Français</option>
-              <option value="es">Español</option>
-              <option value="ar">العربية</option>
-            </select>
-          </label>
+            <div className={`lang-select ${langMenuOpen ? "open" : ""}`}>
+              <button
+                className="lang-select-trigger"
+                type="button"
+                aria-haspopup="listbox"
+                aria-expanded={langMenuOpen}
+                onClick={() => setLangMenuOpen((prev) => !prev)}
+              >
+                <span className="lang-select-label">{currentLanguageLabel}</span>
+                <span className="lang-select-caret">▾</span>
+              </button>
+              {langMenuOpen && (
+                <div className="lang-select-menu" role="listbox">
+                  {languages.map((item) => (
+                    <button
+                      key={item.code}
+                      type="button"
+                      role="option"
+                      aria-selected={item.code === language}
+                      className={`lang-select-option ${item.code === language ? "active" : ""}`}
+                      onClick={() => {
+                        setLanguage(item.code);
+                        setLangMenuOpen(false);
+                      }}
+                    >
+                      <span className="lang-native">{item.label}</span>
+                      <span className="lang-code">{item.code}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
           <div className="window-controls">
             <button
               className="window-btn minimize"
@@ -5620,7 +5685,7 @@ export default function App() {
                     onChange={() => setStorageRoot(loc.path)}
                   />
                   <span>
-                    {loc.path} ({loc.free_gb.toFixed(1)} GB free)
+                    {loc.path} ({tr("gb_free", { size: loc.free_gb.toFixed(1) })})
                   </span>
                 </label>
               ))}
@@ -5818,7 +5883,7 @@ export default function App() {
                     {storageLocations.length > 0 ? (
                       storageLocations.map((loc) => (
                         <option key={loc.path} value={loc.path}>
-                          {loc.path} ({loc.free_gb.toFixed(1)} GB free)
+                          {loc.path} ({tr("gb_free", { size: loc.free_gb.toFixed(1) })})
                         </option>
                       ))
                     ) : (
@@ -5865,7 +5930,7 @@ export default function App() {
 {isRar && (
   <>
     <div className="form-row">
-      <label htmlFor="rar-mode">RAR Extract Mode</label>
+      <label htmlFor="rar-mode">{tr("rar_extract")}</label>
       <select
         id="rar-mode"
         value={rarExtractMode}
@@ -5873,23 +5938,22 @@ export default function App() {
           setRarExtractMode(e.target.value as RarExtractMode)
         }
       >
-        <option value="normal">Normal</option>
-        <option value="safe">Safe</option>
-        <option value="turbo">Turbo</option>
+        <option value="normal">{tr("rar_normal")}</option>
+        <option value="safe">{tr("rar_safe")}</option>
+        <option value="turbo">{tr("rar_turbo")}</option>
       </select>
     </div>
     <div className="form-row">
-      <label htmlFor="rar-temp-storage">RAR Temp Storage</label>
+      <label htmlFor="rar-temp-storage">{tr("rar_temp_storage")}</label>
       <select
         id="rar-temp-storage"
         value={rarTemp}
         onChange={(e) => setRarTemp(e.target.value)}
-        disabled={transferActive}
       >
-        <option value="">{`Default (same as ${storageRoot})`}</option>
+        <option value="">{tr("rar_temp_default", { path: storageRoot })}</option>
         {storageLocations.map((loc) => (
           <option key={`rar-temp-${loc.path}`} value={loc.path}>
-            {loc.path} ({loc.free_gb.toFixed(1)} GB free)
+            {loc.path} ({tr("gb_free", { size: loc.free_gb.toFixed(1) })})
           </option>
         ))}
       </select>
@@ -6085,7 +6149,6 @@ export default function App() {
                   <button
                     className="btn warning transfer-reset"
                     onClick={handleResetTransfer}
-                    disabled={transferActive || uploadQueueRunning}
                   >
                     {tr("reset_settings")}
                   </button>

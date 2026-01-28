@@ -66,6 +66,17 @@ Plug drives **before** loading the payload and ensure they are writable.
 
 ---
 
+## Language & UI
+
+**Q: How do I change the UI language?**  
+Use the language selector in the top-right of the app window.  
+Supported: English, 简体中文, 繁體中文, Français, Español, العربية, Tiếng Việt, हिन्दी, বাংলা, Português (Brasil), Русский, 日本語, Türkçe, Bahasa Indonesia, ไทย, 한국어, Deutsch, Italiano.
+
+**Q: Why do I see squares/boxes instead of text in some languages?**  
+Update to **v1.3.5** or newer. We bundle Noto fonts so Hindi/Bengali/Thai/Korean text renders properly on Windows, macOS, and Linux.
+
+---
+
 ## Transfers & Settings
 
 ### Upload (single transfer)
