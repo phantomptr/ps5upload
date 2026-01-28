@@ -1574,7 +1574,7 @@ function loadConfig() {
         case 'chmod_after_upload': config.chmod_after_upload = ['1', 'true', 'yes', 'on'].includes(value.toLowerCase()); break;
         case 'override_on_conflict': config.override_on_conflict = ['1', 'true', 'yes', 'on'].includes(value.toLowerCase()); break;
         case 'resume_mode': config.resume_mode = ['size', 'size_mtime', 'sha256'].includes(value) ? value : 'none'; break;
-        case 'language': config.language = ['zh-CN', 'zh-TW', 'fr', 'es', 'ar'].includes(value) ? value : 'en'; break;
+        case 'language': config.language = ['zh-CN', 'zh-TW', 'fr', 'es', 'ar', 'vi', 'hi', 'bn', 'pt-BR', 'ru', 'ja', 'tr', 'id', 'th', 'ko', 'de', 'it'].includes(value) ? value : 'en'; break;
         case 'auto_tune_connections': config.auto_tune_connections = ['1', 'true', 'yes', 'on'].includes(value.toLowerCase()); break;
         case 'auto_check_payload': config.auto_check_payload = ['1', 'true', 'yes', 'on'].includes(value.toLowerCase()); break;
         case 'payload_auto_reload': config.payload_auto_reload = ['1', 'true', 'yes', 'on'].includes(value.toLowerCase()); break;

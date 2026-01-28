@@ -1,6 +1,35 @@
 :root {
   color-scheme: light;
-  font-family: "Inter", "SF Pro Display", "Segoe UI", system-ui, sans-serif;
+  --ps-font-ui:
+    "Noto Sans",
+    "Noto Sans Devanagari",
+    "Noto Sans Bengali",
+    "Noto Sans Thai",
+    "Noto Sans KR",
+    "Inter",
+    "Noto Sans CJK SC",
+    "Noto Sans CJK TC",
+    "Noto Sans CJK JP",
+    "Kohinoor Devanagari",
+    "Kohinoor Bangla",
+    "Devanagari Sangam MN",
+    "Bengali Sangam MN",
+    "Thonburi",
+    "SF Pro Display",
+    "SF Pro Text",
+    "Hiragino Sans",
+    "PingFang SC",
+    "PingFang TC",
+    "Yu Gothic",
+    "Meiryo",
+    "Malgun Gothic",
+    "Apple SD Gothic Neo",
+    "Nirmala UI",
+    "Leelawadee UI",
+    "Segoe UI",
+    system-ui,
+    sans-serif;
+  font-family: var(--ps-font-ui);
   font-size: 14px;
   --ps-white: #1b1f26;
   --ps-shell: #ffffff;
@@ -19,6 +48,7 @@
   --ps-surface-alt: #f1f5f9;
   --ps-gradient: linear-gradient(135deg, #2a6bff 0%, #0ea5e9 100%);
 }
+
 
 :root[data-theme="dark"] {
   color-scheme: dark;
@@ -52,6 +82,7 @@ body {
   min-height: 100vh;
   overflow: hidden;
   line-height: 1.45;
+  font-family: inherit;
 }
 
 #root {
@@ -174,9 +205,83 @@ body {
   color: var(--ps-steel);
 }
 
-.lang-switch select {
+.lang-select {
+  position: relative;
+}
+
+.lang-select-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   padding: 6px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--ps-border);
+  background: var(--ps-surface-alt);
+  color: var(--ps-white);
   font-size: 0.85rem;
+  font-family: var(--ps-font-ui);
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.lang-select-trigger:hover {
+  border-color: var(--ps-blue);
+}
+
+.lang-select-caret {
+  font-size: 0.7rem;
+  opacity: 0.7;
+}
+
+.lang-select-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  min-width: 240px;
+  max-height: 320px;
+  overflow: auto;
+  background: var(--ps-shell);
+  border: 1px solid var(--ps-border);
+  border-radius: 12px;
+  box-shadow: 0 16px 30px var(--ps-shadow);
+  padding: 6px;
+  z-index: 50;
+  font-family: var(--ps-font-ui);
+}
+
+.lang-select-option {
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: var(--ps-white);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--ps-font-ui);
+}
+
+.lang-select-option:hover {
+  background: var(--ps-surface-alt);
+}
+
+.lang-select-option.active {
+  background: rgba(42, 107, 255, 0.15);
+  border: 1px solid rgba(42, 107, 255, 0.4);
+}
+
+.lang-native {
+  font-weight: 600;
+}
+
+.lang-code {
+  font-size: 0.75rem;
+  color: var(--ps-steel);
 }
 
 .btn.discord {
@@ -574,6 +679,7 @@ select {
   padding: 10px 12px;
   border-radius: 10px;
   font-size: 0.95rem;
+  font-family: inherit;
   transition: all 0.15s ease;
 }
 
@@ -1258,7 +1364,7 @@ input::placeholder {
   max-height: 100%;
   flex: 1;
   font-size: 0.85rem;
-  font-family: "SF Mono", "Monaco", "Consolas", monospace;
+  font-family: "SF Mono", "Monaco", "Consolas", var(--ps-font-ui);
   color: var(--ps-steel);
   overflow-y: auto;
   overflow-x: hidden;
@@ -1398,7 +1504,7 @@ input::placeholder {
   background: rgba(148, 163, 184, 0.2);
   padding: 2px 6px;
   border-radius: 6px;
-  font-family: "SF Mono", "Monaco", "Consolas", monospace;
+  font-family: "SF Mono", "Monaco", "Consolas", var(--ps-font-ui);
   font-size: 0.9em;
 }
 
@@ -1800,4 +1906,10 @@ input::placeholder {
   .path-row {
     flex-wrap: wrap;
   }
+}
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
 }

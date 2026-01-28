@@ -3,6 +3,23 @@
 All notable changes to this project are documented here.
 This project follows Semantic Versioning.
 
+## [1.3.5] - 2026-01-28
+
+### Added
+- New UI languages: Vietnamese, Hindi, Bengali, Portuguese (Brazil), Russian, Japanese, Turkish, Indonesian, Thai, Korean, German, Italian.
+
+### Changed
+- Transfer/extraction UI refresh now uses 500ms polling while active for smoother updates.
+- Source browse is allowed while an upload is in progress, so new items can be queued.
+- Transfer reset and RAR temp storage selection stay enabled during uploads.
+- UI font stack expanded for better multilingual glyph coverage.
+- Language selector now uses a custom menu so bundled fonts render correctly on Linux.
+
+### Fixed
+- Upload speed readout no longer spikes to unrealistic values at the start of transfers.
+- Uploads no longer fail after scanning with “config is not defined”.
+- Multilingual UI no longer shows square glyphs in logs or panels on Linux.
+
 ## [1.3.4] - 2026-01-28
 
 ### Added
@@ -21,7 +38,6 @@ This project follows Semantic Versioning.
 ### Fixed
 - Archive uploads no longer trigger chmod on the upload destination (chmod only applies to extracted folder when enabled).
 - Transfer speed/ETA now waits for a minimum time window to avoid unrealistic spikes.
-- Uploads no longer fail after scanning with “config is not defined”.
 
 ## [1.3.3] - 2026-01-27
 
