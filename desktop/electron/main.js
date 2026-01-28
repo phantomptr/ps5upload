@@ -1456,15 +1456,19 @@ async function historyGet(ip, port) {
   return sendCommandExpectPayload(ip, port, 'HISTORY_GET\n');
 }
 
-async function uploadV2Init(ip, port, destPath, useTemp) {
+async function uploadV2Init(ip, port, destPath, useTemp, opts = {}) {
   const socket = await createSocketWithTimeout(ip, port);
   const mode = useTemp ? 'TEMP' : 'DIRECT';
   tuneUploadSocket(socket);
   const flags = [];
-  if (config.optimize_upload || config.chmod_after_upload) {
+  const {
+    optimize_upload = false,
+    chmod_after_upload = false,
+  } = opts;
+  if (optimize_upload || chmod_after_upload) {
     flags.push('NOCHMOD');
   }
-  if (config.chmod_after_upload) {
+  if (chmod_after_upload) {
     flags.push('CHMOD_END');
   }
   const flagStr = flags.length ? ` ${flags.join(' ')}` : '';
@@ -4346,7 +4350,10 @@ function registerIpcHandlers() {
           state.transferStatus = { ...state.transferStatus, status: 'Uploading', files: result.files.length, total: Number(totalSize) };
           state.transferLastUpdate = Date.now();
 
-          const socket = await uploadV2Init(req.ip, TRANSFER_PORT, req.dest_path, req.use_temp);
+          const socket = await uploadV2Init(req.ip, TRANSFER_PORT, req.dest_path, req.use_temp, {
+            optimize_upload: req.optimize_upload,
+            chmod_after_upload: req.chmod_after_upload,
+          });
           const rateLimitBps = req.bandwidth_limit_mbps ? req.bandwidth_limit_mbps * 1024 * 1024 / 8 : null; // Convert Mbps to Bps
 
           const uploadResult = await sendFilesV2(result.files, socket, {
