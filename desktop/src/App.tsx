@@ -152,6 +152,7 @@ type QueueItem = {
     bandwidth_limit_mbps: number;
     auto_tune_connections: boolean;
     optimize_upload: boolean;
+    chmod_after_upload?: boolean;
     rar_extract_mode: RarExtractMode;
     rar_temp_root?: string;
     override_on_conflict?: boolean;
@@ -3864,6 +3865,7 @@ export default function App() {
           bandwidth_limit_mbps: bandwidthLimit,
           auto_tune_connections: autoTune,
           optimize_upload: optimizeUpload,
+          chmod_after_upload: chmodAfterUpload,
           rar_extract_mode: rarExtractMode,
           rar_temp_root: rarTemp,
           override_on_conflict: overrideOnConflict,
@@ -4152,6 +4154,7 @@ export default function App() {
       bandwidth_limit_mbps: bandwidthLimit,
       auto_tune_connections: autoTune,
       optimize_upload: optimizeUpload,
+      chmod_after_upload: chmodAfterUpload,
       rar_extract_mode: rarExtractMode,
       rar_temp_root: rarTemp,
       override_on_conflict: overrideOnConflict
@@ -4423,6 +4426,7 @@ export default function App() {
           bandwidth_limit_mbps: settings?.bandwidth_limit_mbps ?? bandwidthLimit,
           auto_tune_connections: settings?.auto_tune_connections ?? autoTune,
           optimize_upload: settings?.optimize_upload ?? optimizeUpload,
+          chmod_after_upload: settings?.chmod_after_upload ?? chmodAfterUpload,
           override_on_conflict: settings?.override_on_conflict ?? overrideOnConflict,
           rar_extract_mode: settings?.rar_extract_mode ?? rarExtractMode,
           rar_temp_root: settings?.rar_temp_root ?? rarTemp,

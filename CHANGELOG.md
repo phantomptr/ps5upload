@@ -21,6 +21,7 @@ This project follows Semantic Versioning.
 ### Fixed
 - Archive uploads no longer trigger chmod on the upload destination (chmod only applies to extracted folder when enabled).
 - Transfer speed/ETA now waits for a minimum time window to avoid unrealistic spikes.
+- Uploads no longer fail after scanning with “config is not defined”.
 
 ## [1.3.3] - 2026-01-27
 
