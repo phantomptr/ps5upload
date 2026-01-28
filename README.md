@@ -13,6 +13,8 @@ New UI highlights:
 - Extraction queue with progress, metadata, and cover art where available.
 - Progress UI with ETA, average speed, elapsed time, and last update.
 - Upload queue item info popup with per-item transfer parameters.
+- Automatic maintenance when idle to keep the payload healthy.
+- Extraction Stop retries automatically; progress messaging now shows “Starting extraction…” before bytes appear.
 - History resume workflow with explicit resume mode selection.
 - Log level filtering with color-coded badges in the Logs panel.
 - FAQ tab with an embedded, scrollable help panel.

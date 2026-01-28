@@ -9,13 +9,18 @@ This project follows Semantic Versioning.
 - Upload queue item info popup showing per-item transfer parameters.
 - Progress UI now shows ETA, avg speed, elapsed time, and last update.
 - Extraction queue shows a “waiting for payload status” hint before the first status update.
+- Payload maintenance command for safe cleanup when idle (buffers/tmp/log rotation).
 
 ### Changed
 - Extraction status polling accelerates while extractions are running and triggers immediate refresh after queue hints.
 - Failed upload/extraction items show short detail summaries in the queue list.
+- Desktop triggers periodic maintenance when idle and after queue transitions.
+- Extraction queue Stop now retries automatically and cancels in parallel to avoid repeated clicks.
+- Extraction progress messaging now shows “Starting extraction…” when bytes are still at 0.
 
 ### Fixed
 - Archive uploads no longer trigger chmod on the upload destination (chmod only applies to extracted folder when enabled).
+- Transfer speed/ETA now waits for a minimum time window to avoid unrealistic spikes.
 
 ## [1.3.3] - 2026-01-27
 

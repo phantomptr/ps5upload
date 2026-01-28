@@ -2049,7 +2049,7 @@ void handle_get_space(int client_sock, const char *path_arg) {
     send_all(client_sock, msg, strlen(msg));
 }
 
-void handle_clear_tmp(int client_sock) {
+int clear_tmp_all(int *cleared, int *errors, char *last_err, size_t last_err_len) {
     const char *mount_points[] = {
         "/data",
         "/mnt/ext0",
@@ -2065,9 +2065,9 @@ void handle_clear_tmp(int client_sock) {
         NULL
     };
 
-    int cleared = 0;
-    int errors = 0;
-    char last_err[256] = {0};
+    int cleared_local = 0;
+    int errors_local = 0;
+    char last_err_local[256] = {0};
 
     for (int i = 0; mount_points[i] != NULL; i++) {
         const char *root = mount_points[i];
@@ -2080,24 +2080,45 @@ void handle_clear_tmp(int client_sock) {
 
         char err[256] = {0};
         if (remove_recursive(tmp_path, err, sizeof(err)) != 0) {
-            errors++;
-            if (last_err[0] == '\0') {
-                snprintf(last_err, sizeof(last_err), "%s", err);
+            errors_local++;
+            if (last_err_local[0] == '\0') {
+                snprintf(last_err_local, sizeof(last_err_local), "%s", err);
             }
             continue;
         }
         mkdir(tmp_path, 0777);
         chmod(tmp_path, 0777);
-        cleared++;
+        cleared_local++;
     }
 
+    if (cleared) {
+        *cleared = cleared_local;
+    }
+    if (errors) {
+        *errors = errors_local;
+    }
+    if (last_err && last_err_len > 0) {
+        if (last_err_local[0]) {
+            strncpy(last_err, last_err_local, last_err_len - 1);
+            last_err[last_err_len - 1] = '\0';
+        } else {
+            last_err[0] = '\0';
+        }
+    }
+    return errors_local > 0 ? -1 : 0;
+}
+
+void handle_clear_tmp(int client_sock) {
+    int cleared = 0;
+    int errors = 0;
+    char last_err[256] = {0};
+    clear_tmp_all(&cleared, &errors, last_err, sizeof(last_err));
     if (errors > 0) {
         char msg[512];
         snprintf(msg, sizeof(msg), "ERROR: Clear tmp failed: %s\n", last_err[0] ? last_err : "unknown error");
         send(client_sock, msg, strlen(msg), 0);
         return;
     }
-
     char msg[128];
     snprintf(msg, sizeof(msg), "OK %d\n", cleared);
     send_all(client_sock, msg, strlen(msg));

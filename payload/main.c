@@ -612,6 +612,7 @@ static int read_command_line(int sock, char *out, size_t cap, size_t *out_len) {
 static int is_comm_command(const char *cmd) {
     if (!cmd) return 0;
     if (strncmp(cmd, "RESET", 5) == 0) return 1;
+    if (strncmp(cmd, "MAINTENANCE", 11) == 0) return 1;
     if (strncmp(cmd, "DELETE_ASYNC ", 13) == 0) return 1;
     if (strncmp(cmd, "PAYLOAD_STATUS", 14) == 0) return 1;
     if (strncmp(cmd, "STATUS", 6) == 0) return 1;
@@ -625,6 +626,31 @@ static int is_comm_command(const char *cmd) {
     if (strncmp(cmd, "CLEAR_TMP", 9) == 0) return 1;
     if (strncmp(cmd, "QUEUE_CLEAR_FAILED", 18) == 0) return 1;
     return 0;
+}
+
+static void handle_maintenance(int client_sock) {
+    if (transfer_is_active() || extract_queue_is_running() || extract_queue_has_pending()) {
+        const char *busy = "BUSY\n";
+        send(client_sock, busy, strlen(busy), 0);
+        return;
+    }
+    int cleaned = transfer_idle_cleanup();
+    int cleared = 0;
+    int errors = 0;
+    char last_err[256] = {0};
+    clear_tmp_all(&cleared, &errors, last_err, sizeof(last_err));
+    payload_log_rotate();
+
+    char msg[256];
+    snprintf(
+        msg,
+        sizeof(msg),
+        "OK cleaned=%d tmp_cleared=%d tmp_errors=%d logs_rotated=1\n",
+        cleaned,
+        cleared,
+        errors
+    );
+    send(client_sock, msg, strlen(msg), 0);
 }
 
 static void enqueue_comm_request(const struct CommandRequest *req) {
@@ -750,6 +776,11 @@ static void process_command(struct ClientConnection *conn) {
     }
     if (strncmp(conn->cmd_buffer, "CLEAR_TMP", 9) == 0) {
         handle_clear_tmp(conn->sock);
+        close_connection(conn);
+        return;
+    }
+    if (strncmp(conn->cmd_buffer, "MAINTENANCE", 11) == 0) {
+        handle_maintenance(conn->sock);
         close_connection(conn);
         return;
     }

@@ -1032,6 +1032,9 @@ export default function App() {
   const [activeTransferViaQueue, setActiveTransferViaQueue] = useState(false);
   const [transferStartedAt, setTransferStartedAt] = useState<number | null>(null);
   const [uploadInfoItem, setUploadInfoItem] = useState<QueueItem | null>(null);
+  const maintenanceRequestedRef = useRef(false);
+  const lastMaintenanceAtRef = useRef(0);
+  const extractionStopAttemptsRef = useRef(0);
   const transferSnapshot = useRef({
     runId: null as number | null,
     source: "",
@@ -2447,6 +2450,7 @@ export default function App() {
             setActiveTransferDest("");
             setTransferStartedAt(null);
           }
+          maintenanceRequestedRef.current = true;
         }
       );
       const unlistenError = await listen<TransferErrorEvent>(
@@ -2571,6 +2575,7 @@ export default function App() {
               }
             );
           }
+          maintenanceRequestedRef.current = true;
           const level = event.payload.message.toLowerCase().includes("cancel")
             ? "warn"
             : "error";
@@ -3031,8 +3036,14 @@ export default function App() {
       : 0;
   const transferSpeedInstant =
     transferElapsedDisplay > 0 ? transferSent / transferElapsedDisplay : 0;
-  const transferSpeedDisplay =
-    transferSpeedEma > 0 ? transferSpeedEma : transferSpeedInstant;
+  const transferSpeedMinElapsedSec = 3;
+  const transferSpeedMinBytes = 1 * 1024 * 1024;
+  const transferSpeedReady =
+    transferElapsedDisplay >= transferSpeedMinElapsedSec &&
+    transferSent >= transferSpeedMinBytes;
+  const transferSpeedDisplay = transferSpeedReady
+    ? (transferSpeedEma > 0 ? transferSpeedEma : transferSpeedInstant)
+    : 0;
   const transferEtaSeconds =
     transferTotal > transferSent && transferSpeedDisplay > 0
       ? Math.ceil((transferTotal - transferSent) / transferSpeedDisplay)
@@ -3195,6 +3206,7 @@ export default function App() {
             `Extraction completed: ${getQueueDisplayName(item)} (ID ${item.id})`,
             "info"
           );
+          maintenanceRequestedRef.current = true;
         } else if (item.status === "failed") {
           const message = item.error || "Unknown error";
           const level = message.toLowerCase().includes("cancel") ? "warn" : "error";
@@ -3202,6 +3214,7 @@ export default function App() {
             `Extraction failed: ${getQueueDisplayName(item)} (ID ${item.id}) - ${message}`,
             level
           );
+          maintenanceRequestedRef.current = true;
           const nowSec = Math.floor(Date.now() / 1000);
           const finishedAt = item.completed_at || nowSec;
           const elapsedSec =
@@ -3423,28 +3436,52 @@ export default function App() {
 
   const handleQueueStopAll = async () => {
     if (!ip.trim()) return;
-    try {
-      if (!payloadFullStatus?.items?.length) return;
-      setExtractionStopping(true);
-      const cancellable = payloadFullStatus.items.filter(
+    if (extractionStopping) return;
+    if (!payloadFullStatus?.items?.length) return;
+    setExtractionStopping(true);
+    setClientLogs((prev) => ["Stopping extraction queue...", ...prev].slice(0, 100));
+    extractionStopAttemptsRef.current = 0;
+    const maxAttempts = 8;
+    const attemptIntervalMs = 800;
+    const refreshTimeoutMs = 2000;
+    const attemptStop = async () => {
+      extractionStopAttemptsRef.current += 1;
+      const attempt = extractionStopAttemptsRef.current;
+      let snapshot: PayloadStatusSnapshot | null = null;
+      try {
+        snapshot = await Promise.race([
+          invoke<PayloadStatusSnapshot>("payload_status_refresh", { ip }),
+          new Promise<PayloadStatusSnapshot>((_, reject) =>
+            setTimeout(() => reject(new Error("Status refresh timed out")), refreshTimeoutMs)
+          )
+        ]);
+        applyPayloadSnapshot(snapshot);
+      } catch {
+        // ignore refresh errors; fall back to cached status
+      }
+      const items = snapshot?.status?.items || payloadFullStatus?.items || [];
+      const active = items.filter(
         (item) => item.status === "pending" || item.status === "running" || item.status === "idle"
       );
-      for (const item of cancellable) {
-        try {
-          await invoke("payload_queue_cancel", { ip, id: item.id });
-        } catch {
-          // ignore non-cancellable items
-        }
+      if (active.length === 0) {
+        setClientLogs((prev) => ["Extraction queue stopped", ...prev].slice(0, 100));
+        setExtractionStopping(false);
+        return;
       }
-      setClientLogs((prev) => ["Extraction queue stopped", ...prev].slice(0, 100));
-      await handleRefreshQueueStatus();
-    } catch (err) {
-      setClientLogs((prev) => [`Queue stop failed: ${String(err)}`, ...prev].slice(0, 100));
-    } finally {
-      setTimeout(() => {
-        handleRefreshQueueStatus().finally(() => setExtractionStopping(false));
-      }, 1000);
-    }
+      await Promise.allSettled(
+        active.map((item) => invoke("payload_queue_cancel", { ip, id: item.id }))
+      );
+      if (attempt < maxAttempts) {
+        setTimeout(attemptStop, attemptIntervalMs);
+      } else {
+        setClientLogs((prev) => ["Extraction queue stop requested", ...prev].slice(0, 100));
+        setTimeout(() => setExtractionStopping(false), 500);
+      }
+    };
+    attemptStop().catch(() => {
+      setClientLogs((prev) => ["Queue stop failed", ...prev].slice(0, 100));
+      setExtractionStopping(false);
+    });
   };
 
   const handleClearTmp = async () => {
@@ -5255,6 +5292,43 @@ export default function App() {
     (item) => item.status === "pending" || item.status === "idle"
   );
 
+  const maintenanceBlocked =
+    !isConnected ||
+    !ip.trim() ||
+    transferActive ||
+    hasExtractionRunning ||
+    hasExtractionPending ||
+    payloadFullStatus?.is_busy;
+
+  const runPayloadMaintenance = async (reason: string) => {
+    if (maintenanceBlocked) return;
+    const now = Date.now();
+    if (now - lastMaintenanceAtRef.current < 5 * 60 * 1000) return;
+    lastMaintenanceAtRef.current = now;
+    maintenanceRequestedRef.current = false;
+    try {
+      const response = await invoke<string>("payload_maintenance", { ip });
+      if (response && !response.startsWith("BUSY")) {
+        pushPayloadLog(`Maintenance (${reason}): ${response}`);
+      }
+    } catch (err) {
+      pushPayloadLog(`Maintenance failed: ${String(err)}`);
+    }
+  };
+
+  useEffect(() => {
+    if (maintenanceBlocked) return;
+    const interval = setInterval(() => {
+      runPayloadMaintenance("interval");
+    }, 5 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [maintenanceBlocked, ip]);
+
+  useEffect(() => {
+    if (!maintenanceRequestedRef.current) return;
+    runPayloadMaintenance("transition");
+  }, [maintenanceBlocked, ip, transferState.status, payloadLastUpdated]);
+
   const clientAsset = updateInfo
     ? selectClientAsset(updateInfo.assets, platformInfo)
     : null;
@@ -6660,7 +6734,12 @@ export default function App() {
                                 />
                               </div>
                               <div className="muted small">
-                                {item.total_bytes > 0 ? `${extractionPercent}%` : "Streaming"} ·{" "}
+                                {item.processed_bytes === 0
+                                  ? "Starting extraction..."
+                                  : item.total_bytes > 0
+                                  ? `${extractionPercent}%`
+                                  : "Streaming"}{" "}
+                                ·{" "}
                                 {item.total_bytes > 0
                                   ? `${formatBytes(item.processed_bytes)} / ${formatBytes(item.total_bytes)}`
                                   : `${formatBytes(item.processed_bytes)} extracted`}{" "}

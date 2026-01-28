@@ -659,6 +659,28 @@ int extract_queue_retry(int id) {
     return -1;
 }
 
+int extract_queue_count(void) {
+    int count = 0;
+    pthread_mutex_lock(&g_queue_mutex);
+    count = g_queue.count;
+    pthread_mutex_unlock(&g_queue_mutex);
+    return count;
+}
+
+int extract_queue_has_pending(void) {
+    int pending = 0;
+    pthread_mutex_lock(&g_queue_mutex);
+    for (int i = 0; i < g_queue.count; i++) {
+        if (g_queue.items[i].status == EXTRACT_STATUS_PENDING ||
+            g_queue.items[i].status == EXTRACT_STATUS_RUNNING) {
+            pending = 1;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_queue_mutex);
+    return pending;
+}
+
 void extract_queue_clear_done(void) {
     pthread_mutex_lock(&g_queue_mutex);
 

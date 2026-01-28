@@ -108,7 +108,8 @@ Archive extractions happen on the PS5 and appear here.
 - **Requeue** failed items
 - **Clear Completed / Clear Failed / Clear Queue**
 - **Clear tmp**: deletes `/ps5upload/tmp` on all storage roots
-Note: extraction progress updates are periodic. A short delay before progress appears is normal; the item will show "Waiting for payload status..." until the first update arrives.
+Note: extraction progress updates are periodic. A short delay before progress appears is normal; the item will show "Waiting for payload status..." and then "Starting extraction..." before bytes begin to move.
+Stop retries automatically—no need to click multiple times.
 
 ---
 
@@ -142,6 +143,9 @@ Use **Manage** to:
 **Logs panel**:
 - Filter by **Debug / Info / Warn / Error**
 - Optional **Save Logs**
+  
+**Automatic maintenance**:
+When idle (no active transfer or extraction), PS5 Upload performs safe cleanup (buffer cleanup, log rotation, and temp cleanup) to reduce the chance of payload slowdowns.
 
 **Log locations**:
 - Windows: `%APPDATA%\\ps5upload\\logs`

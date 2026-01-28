@@ -1384,6 +1384,17 @@ async function payloadClearTmp(ip, port) {
   return response.trim();
 }
 
+async function payloadMaintenance(ip, port) {
+  const response = await sendSimpleCommand(ip, port, 'MAINTENANCE\n');
+  if (response.startsWith('BUSY')) {
+    return response.trim();
+  }
+  if (!response.startsWith('OK')) {
+    throw new Error(`Maintenance failed: ${response}`);
+  }
+  return response.trim();
+}
+
 async function queueReorder(ip, port, ids) {
   if (!Array.isArray(ids) || ids.length === 0) {
     throw new Error('Queue reorder failed: empty list');
@@ -3067,6 +3078,11 @@ function registerIpcHandlers() {
   ipcMain.handle('payload_clear_tmp', async (_, ip) => {
     if (!ip || !ip.trim()) throw new Error('Enter a PS5 address first.');
     return payloadClearTmp(ip, TRANSFER_PORT);
+  });
+
+  ipcMain.handle('payload_maintenance', async (_, ip) => {
+    if (!ip || !ip.trim()) throw new Error('Enter a PS5 address first.');
+    return payloadMaintenance(ip, TRANSFER_PORT);
   });
 
   ipcMain.handle('payload_queue_reorder', async (_, ip, ids) => {
