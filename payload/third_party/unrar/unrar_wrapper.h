@@ -34,6 +34,8 @@ typedef struct {
     unsigned int keepalive_interval_sec;
     unsigned long long sleep_every_bytes;
     unsigned int sleep_us;
+    unsigned int trust_paths;
+    unsigned int progress_file_start;
 } unrar_extract_opts;
 
 /* Extract a RAR archive to a destination directory

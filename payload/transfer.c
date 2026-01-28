@@ -18,10 +18,14 @@
 #include "lz4.h"
 #include "zstd.h"
 #include "LzmaLib.h"
+#include "config.h"
 
 // Optimized for single-process threaded concurrency
-#define PACK_BUFFER_SIZE (16 * 1024 * 1024)   // 16MB buffer (Increased for throughput)
-#define PACK_QUEUE_DEPTH 4                    // 4 * 16MB = 64MB heap usage
+#define PACK_BUFFER_SIZE (32 * 1024 * 1024)   // 32MB buffer (Increased for throughput)
+#define PACK_QUEUE_DEPTH 8                    // 8 * 32MB = 256MB heap usage
+#define WRITER_THREAD_COUNT 2                 // Writer threads; per-session queue shard
+/* Socket read buffer for upload v2 */
+#define UPLOAD_V2_RECV_BUFFER_SIZE (256 * 1024)
 
 #define POOL_SIZE 16
 static uint8_t *g_buffer_pool[POOL_SIZE];
@@ -182,6 +186,8 @@ typedef struct UploadSession {
     int enqueue_pending;
     uint64_t last_backpressure_log;
     uint64_t session_id;
+    int chmod_each_file;
+    int chmod_final;
 } UploadSession;
 
 typedef struct PackJob {
@@ -190,6 +196,7 @@ typedef struct PackJob {
     char dest_root[PATH_MAX];
     uint64_t session_id;
     int is_close;
+    uint8_t chmod_each_file;
 } PackJob;
 
 typedef struct PackQueue {
@@ -203,8 +210,13 @@ typedef struct PackQueue {
     pthread_cond_t not_full;
 } PackQueue;
 
-static PackQueue g_queue;
-static pthread_t g_writer_thread;
+static PackQueue g_queues[WRITER_THREAD_COUNT];
+static pthread_t g_writer_threads[WRITER_THREAD_COUNT];
+typedef struct {
+    PackQueue *queue;
+    int index;
+} WriterThreadArgs;
+static WriterThreadArgs g_writer_args[WRITER_THREAD_COUNT];
 static int g_workers_initialized = 0;
 static long long g_total_bytes = 0;
 static int g_total_files = 0;
@@ -212,6 +224,10 @@ static uint64_t g_session_counter = 0;
 static pthread_mutex_t g_session_counter_lock = PTHREAD_MUTEX_INITIALIZER;
 static volatile sig_atomic_t g_abort_transfer = 0;
 static volatile time_t g_last_transfer_progress = 0;
+static pthread_mutex_t g_backpressure_mutex = PTHREAD_MUTEX_INITIALIZER;
+static uint64_t g_backpressure_total_events = 0;
+static uint64_t g_backpressure_total_wait_ms = 0;
+static uint64_t g_backpressure_last_log_ms = 0;
 
 static void log_memory_stats(const char *tag) {
     int pool_count = 0;
@@ -228,12 +244,31 @@ static void log_memory_stats(const char *tag) {
     pool_count = g_pool_count;
     pthread_mutex_unlock(&g_pool_mutex);
 
-    pthread_mutex_lock(&g_queue.mutex);
-    queue_count = g_queue.count;
-    pthread_mutex_unlock(&g_queue.mutex);
+    for (int i = 0; i < WRITER_THREAD_COUNT; i++) {
+        pthread_mutex_lock(&g_queues[i].mutex);
+        queue_count += g_queues[i].count;
+        pthread_mutex_unlock(&g_queues[i].mutex);
+    }
 
     printf("[FTX] MEM %s: pack_in_use=%zu pool=%d queue=%zu sessions=%d\n",
            tag, in_use, pool_count, queue_count, active_sessions);
+}
+
+static inline PackQueue *queue_for_session(uint64_t session_id) {
+    if (WRITER_THREAD_COUNT <= 1) {
+        return &g_queues[0];
+    }
+    return &g_queues[session_id % WRITER_THREAD_COUNT];
+}
+
+static int queue_index_from_ptr(const PackQueue *q) {
+    if (!q) {
+        return -1;
+    }
+    if (q >= g_queues && q < g_queues + WRITER_THREAD_COUNT) {
+        return (int)(q - g_queues);
+    }
+    return -1;
 }
 
 typedef struct {
@@ -251,6 +286,7 @@ typedef struct SessionWriterState {
     char dir_cache[PATH_MAX];
     char last_dest_root[PATH_MAX];
     int current_fd;
+    int chmod_each_file;
     struct SessionWriterState *next;
 } SessionWriterState;
 
@@ -274,14 +310,38 @@ static void queue_init(PackQueue *q) {
     pthread_cond_init(&q->not_full, NULL);
 }
 
-static int queue_push(PackQueue *q, uint8_t *data, size_t len, const char *dest_root, uint64_t session_id, int is_close) {
+static int queue_push(PackQueue *q, uint8_t *data, size_t len, const char *dest_root, uint64_t session_id, int is_close, int chmod_each_file) {
+    uint64_t wait_start_ms = 0;
+    uint64_t wait_ms = 0;
     pthread_mutex_lock(&q->mutex);
     while (q->count >= PACK_QUEUE_DEPTH && !q->closed) {
+        if (wait_start_ms == 0) {
+            wait_start_ms = now_ms();
+        }
         pthread_cond_wait(&q->not_full, &q->mutex);
     }
     if (q->closed) {
         pthread_mutex_unlock(&q->mutex);
         return -1;
+    }
+
+    if (wait_start_ms != 0) {
+        wait_ms = now_ms() - wait_start_ms;
+        pthread_mutex_lock(&g_backpressure_mutex);
+        g_backpressure_total_events++;
+        g_backpressure_total_wait_ms += wait_ms;
+        uint64_t now = now_ms();
+        if (now - g_backpressure_last_log_ms >= 2000) {
+            int qidx = queue_index_from_ptr(q);
+            printf("[FTX] backpressure: queue full (queue=%d depth=%d waited=%llums total_wait=%llums events=%llu session=%llu)\n",
+                   qidx, PACK_QUEUE_DEPTH,
+                   (unsigned long long)wait_ms,
+                   (unsigned long long)g_backpressure_total_wait_ms,
+                   (unsigned long long)g_backpressure_total_events,
+                   (unsigned long long)session_id);
+            g_backpressure_last_log_ms = now;
+        }
+        pthread_mutex_unlock(&g_backpressure_mutex);
     }
 
     PackJob *job = &q->jobs[q->write_idx];
@@ -291,6 +351,7 @@ static int queue_push(PackQueue *q, uint8_t *data, size_t len, const char *dest_
     job->dest_root[PATH_MAX - 1] = '\0';
     job->session_id = session_id;
     job->is_close = is_close;
+    job->chmod_each_file = (uint8_t)(chmod_each_file ? 1 : 0);
 
     q->write_idx = (q->write_idx + 1) % PACK_QUEUE_DEPTH;
     q->count++;
@@ -355,6 +416,42 @@ static int mkdir_recursive(const char *path, char *cache) {
         strncpy(cache, path, PATH_MAX - 1);
         cache[PATH_MAX - 1] = '\0';
     }
+    return 0;
+}
+
+static int chmod_recursive(const char *path, mode_t mode, char *err, size_t err_len) {
+    struct stat st;
+    if (lstat(path, &st) != 0) {
+        snprintf(err, err_len, "lstat %s failed: %s", path, strerror(errno));
+        return -1;
+    }
+
+    if (chmod(path, mode) != 0) {
+        snprintf(err, err_len, "chmod %s failed: %s", path, strerror(errno));
+        return -1;
+    }
+
+    if (S_ISDIR(st.st_mode)) {
+        DIR *dir = opendir(path);
+        if (!dir) {
+            snprintf(err, err_len, "opendir %s failed: %s", path, strerror(errno));
+            return -1;
+        }
+        struct dirent *entry;
+        while ((entry = readdir(dir)) != NULL) {
+            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+                continue;
+            }
+            char child[PATH_MAX];
+            snprintf(child, sizeof(child), "%s/%s", path, entry->d_name);
+            if (chmod_recursive(child, mode, err, err_len) != 0) {
+                closedir(dir);
+                return -1;
+            }
+        }
+        closedir(dir);
+    }
+
     return 0;
 }
 
@@ -584,7 +681,9 @@ static SessionWriterState *get_writer_state(uint64_t session_id, const char *des
             if (strcmp(dest_root, state->last_dest_root) != 0) {
                 if (state->current_fd >= 0) {
                     close(state->current_fd);
-                    chmod(state->current_full_path, 0777);
+                    if (state->chmod_each_file) {
+                        chmod(state->current_full_path, 0777);
+                    }
                     state->current_fd = -1;
                 }
                 state->current_path[0] = '\0';
@@ -607,6 +706,7 @@ static SessionWriterState *get_writer_state(uint64_t session_id, const char *des
     memset(state, 0, sizeof(*state));
     state->session_id = session_id;
     state->current_fd = -1;
+    state->chmod_each_file = 1;
     strncpy(state->last_dest_root, dest_root, PATH_MAX - 1);
     state->last_dest_root[PATH_MAX - 1] = '\0';
     state->next = g_writer_states;
@@ -623,7 +723,9 @@ static void release_writer_state(uint64_t session_id) {
         if (state->session_id == session_id) {
             if (state->current_fd >= 0) {
                 close(state->current_fd);
-                chmod(state->current_full_path, 0777);
+                if (state->chmod_each_file) {
+                    chmod(state->current_full_path, 0777);
+                }
                 state->current_fd = -1;
             }
             *prev = state->next;
@@ -645,7 +747,9 @@ static void cleanup_all_writer_states(void) {
         SessionWriterState *next = state->next;
         if (state->current_fd >= 0) {
             close(state->current_fd);
-            chmod(state->current_full_path, 0777);
+            if (state->chmod_each_file) {
+                chmod(state->current_full_path, 0777);
+            }
         }
         free(state);
         state = next;
@@ -654,7 +758,7 @@ static void cleanup_all_writer_states(void) {
     pthread_mutex_unlock(&g_writer_state_mutex);
 }
 
-static void write_pack_data(uint64_t session_id, const char *dest_root, const uint8_t *pack_buf, size_t pack_len, int is_close) {
+static void write_pack_data(uint64_t session_id, const char *dest_root, const uint8_t *pack_buf, size_t pack_len, int is_close, int chmod_each_file) {
     if (is_close) {
         release_writer_state(session_id);
         return;
@@ -663,6 +767,7 @@ static void write_pack_data(uint64_t session_id, const char *dest_root, const ui
     if (!state) {
         return;
     }
+    state->chmod_each_file = chmod_each_file ? 1 : 0;
     size_t offset = 0;
     uint32_t record_count = 0;
 
@@ -712,7 +817,9 @@ static void write_pack_data(uint64_t session_id, const char *dest_root, const ui
         if (strncmp(rel_path, state->current_path, PATH_MAX) != 0) {
             if (state->current_fd >= 0) {
                 close(state->current_fd);
-                chmod(state->current_full_path, 0777);
+                if (state->chmod_each_file) {
+                    chmod(state->current_full_path, 0777);
+                }
                 state->current_fd = -1;
             }
             strncpy(state->current_path, rel_path, PATH_MAX - 1);
@@ -760,8 +867,10 @@ static void write_pack_data(uint64_t session_id, const char *dest_root, const ui
 }
 
 static void *disk_writer_thread(void *arg) {
-    (void)arg;
-    printf("[FTX] Disk writer thread started\n");
+    WriterThreadArgs *thread_args = (WriterThreadArgs *)arg;
+    PackQueue *queue = thread_args ? thread_args->queue : NULL;
+    int index = thread_args ? thread_args->index : -1;
+    printf("[FTX] Disk writer thread started (%d)\n", index);
     
     // Init log state
     pthread_mutex_init(&g_log_state.mutex, NULL);
@@ -769,8 +878,8 @@ static void *disk_writer_thread(void *arg) {
     g_log_state.last_ms = 0;
 
     PackJob job;
-    while (queue_pop(&g_queue, &job)) {
-        write_pack_data(job.session_id, job.dest_root, job.data, job.len, job.is_close);
+    while (queue && queue_pop(queue, &job)) {
+        write_pack_data(job.session_id, job.dest_root, job.data, job.len, job.is_close, job.chmod_each_file);
         
         // Ownership was transferred to us, so we free it
         if (job.data) {
@@ -778,7 +887,7 @@ static void *disk_writer_thread(void *arg) {
         }
     }
     
-    printf("[FTX] Disk writer thread stopped\n");
+    printf("[FTX] Disk writer thread stopped (%d)\n", index);
     return NULL;
 }
 
@@ -787,13 +896,19 @@ static int init_worker_pool(void) {
         return 0;
     }
 
-    printf("[FTX] Initializing writer thread...\n");
-    queue_init(&g_queue);
+    printf("[FTX] Initializing writer threads...\n");
+    for (int i = 0; i < WRITER_THREAD_COUNT; i++) {
+        queue_init(&g_queues[i]);
+        g_writer_args[i].queue = &g_queues[i];
+        g_writer_args[i].index = i;
+    }
 
-    if (pthread_create(&g_writer_thread, NULL, disk_writer_thread, NULL) != 0) {
-        printf("[FTX] Failed to create writer thread: %s\n", strerror(errno));
-        g_workers_initialized = 0;
-        return -1;
+    for (int i = 0; i < WRITER_THREAD_COUNT; i++) {
+        if (pthread_create(&g_writer_threads[i], NULL, disk_writer_thread, &g_writer_args[i]) != 0) {
+            printf("[FTX] Failed to create writer thread %d: %s\n", i, strerror(errno));
+            g_workers_initialized = 0;
+            return -1;
+        }
     }
     
     g_workers_initialized = 1;
@@ -805,13 +920,17 @@ static void cleanup_worker_pool(void) {
         return;
     }
 
-    pthread_mutex_lock(&g_queue.mutex);
-    g_queue.closed = 1;
-    pthread_cond_broadcast(&g_queue.not_empty);
-    pthread_cond_broadcast(&g_queue.not_full);
-    pthread_mutex_unlock(&g_queue.mutex);
+    for (int i = 0; i < WRITER_THREAD_COUNT; i++) {
+        pthread_mutex_lock(&g_queues[i].mutex);
+        g_queues[i].closed = 1;
+        pthread_cond_broadcast(&g_queues[i].not_empty);
+        pthread_cond_broadcast(&g_queues[i].not_full);
+        pthread_mutex_unlock(&g_queues[i].mutex);
+    }
 
-    pthread_join(g_writer_thread, NULL);
+    for (int i = 0; i < WRITER_THREAD_COUNT; i++) {
+        pthread_join(g_writer_threads[i], NULL);
+    }
     g_workers_initialized = 0;
 }
 
@@ -826,11 +945,13 @@ void transfer_cleanup(void) {
 
 void transfer_request_abort(void) {
     g_abort_transfer = 1;
-    pthread_mutex_lock(&g_queue.mutex);
-    g_queue.closed = 1;
-    pthread_cond_broadcast(&g_queue.not_empty);
-    pthread_cond_broadcast(&g_queue.not_full);
-    pthread_mutex_unlock(&g_queue.mutex);
+    for (int i = 0; i < WRITER_THREAD_COUNT; i++) {
+        pthread_mutex_lock(&g_queues[i].mutex);
+        g_queues[i].closed = 1;
+        pthread_cond_broadcast(&g_queues[i].not_empty);
+        pthread_cond_broadcast(&g_queues[i].not_full);
+        pthread_mutex_unlock(&g_queues[i].mutex);
+    }
 }
 
 int transfer_abort_requested(void) {
@@ -864,9 +985,11 @@ int transfer_idle_cleanup(void) {
         return 0;
     }
 
-    pthread_mutex_lock(&g_queue.mutex);
-    queue_count = g_queue.count;
-    pthread_mutex_unlock(&g_queue.mutex);
+    for (int i = 0; i < WRITER_THREAD_COUNT; i++) {
+        pthread_mutex_lock(&g_queues[i].mutex);
+        queue_count += g_queues[i].count;
+        pthread_mutex_unlock(&g_queues[i].mutex);
+    }
 
     if (queue_count == 0) {
         cleanup_all_writer_states();
@@ -957,7 +1080,8 @@ static int upload_session_start(UploadSession *session, const char *dest_root) {
 
 static int enqueue_pack(UploadSession *session) {
     // Transfer ownership of session->body to queue
-    int push_result = queue_push(&g_queue, session->body, session->body_len, session->state.dest_root, session->session_id, 0);
+    PackQueue *queue = queue_for_session(session->session_id);
+    int push_result = queue_push(queue, session->body, session->body_len, session->state.dest_root, session->session_id, 0, session->chmod_each_file);
     if (push_result == -1) {
         printf("[FTX] enqueue failed (queue closed)\n");
         // Queue rejected, we still own the buffer - free it to avoid leak
@@ -1131,15 +1255,16 @@ static int upload_session_finish(UploadSession *session) {
         return -1;
     }
 
-    if (queue_push(&g_queue, NULL, 0, session->state.dest_root, session->session_id, 1) == -1) {
+    PackQueue *queue = queue_for_session(session->session_id);
+    if (queue_push(queue, NULL, 0, session->state.dest_root, session->session_id, 1, session->chmod_each_file) == -1) {
         return -1;
     }
 
-    pthread_mutex_lock(&g_queue.mutex);
-    while (g_queue.count > 0 && !g_queue.closed) {
-        pthread_cond_wait(&g_queue.not_full, &g_queue.mutex);
+    pthread_mutex_lock(&queue->mutex);
+    while (queue->count > 0 && !queue->closed) {
+        pthread_cond_wait(&queue->not_full, &queue->mutex);
     }
-    pthread_mutex_unlock(&g_queue.mutex);
+    pthread_mutex_unlock(&queue->mutex);
 
     close_current_file(&session->state);
 
@@ -1210,6 +1335,14 @@ int upload_session_finalize(UploadSession *session) {
         (void)rmdir(temp_parent);
     }
 
+    if (!session->error && session->chmod_final) {
+        char chmod_err[256] = {0};
+        if (chmod_recursive(session->final_dest_root, 0777, chmod_err, sizeof(chmod_err)) != 0) {
+            printf("[FTX] chmod_recursive failed: %s\n", chmod_err);
+            session->error = 1;
+        }
+    }
+
     printf("[FTX] finalize done (ok=%d)\n", session->error ? 0 : 1);
     log_memory_stats("finalize");
     session->finalized = 1;
@@ -1264,8 +1397,19 @@ void upload_session_destroy(UploadSession *session) {
     transfer_idle_cleanup();
 }
 
-void handle_upload_v2(int client_sock, const char *dest_root, int use_temp) {
+void handle_upload_v2(int client_sock, const char *dest_root, int use_temp, int chmod_each_file, int chmod_final) {
     printf("[FTX] Starting V2 Upload to %s\n", dest_root);
+    if (!chmod_each_file) {
+        printf("[FTX] Upload: per-file chmod disabled\n");
+    }
+    if (chmod_final) {
+        printf("[FTX] Upload: recursive chmod at end enabled\n");
+    }
+
+    int rcvbuf = UPLOAD_RCVBUF_SIZE;
+    if (rcvbuf > 0) {
+        setsockopt(client_sock, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
+    }
 
     const char *ready = "READY\n";
     send(client_sock, ready, strlen(ready), 0);
@@ -1277,12 +1421,20 @@ void handle_upload_v2(int client_sock, const char *dest_root, int use_temp) {
         send(client_sock, err, strlen(err), 0);
         return;
     }
+    session->chmod_each_file = chmod_each_file ? 1 : 0;
+    session->chmod_final = chmod_final ? 1 : 0;
 
-    uint8_t buffer[64 * 1024];
+    uint8_t *buffer = malloc(UPLOAD_V2_RECV_BUFFER_SIZE);
+    if (!buffer) {
+        upload_session_destroy(session);
+        const char *err = "ERROR: Upload failed\n";
+        send(client_sock, err, strlen(err), 0);
+        return;
+    }
     int done = 0;
     int error = 0;
     while (!done && !error) {
-        ssize_t n = recv(client_sock, buffer, sizeof(buffer), 0);
+        ssize_t n = recv(client_sock, buffer, UPLOAD_V2_RECV_BUFFER_SIZE, 0);
         if (n <= 0) {
             error = 1;
             break;
@@ -1290,6 +1442,7 @@ void handle_upload_v2(int client_sock, const char *dest_root, int use_temp) {
         upload_session_feed(session, buffer, (size_t)n, &done, &error);
 
     }
+    free(buffer);
 
     if (error) {
         upload_session_destroy(session);

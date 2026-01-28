@@ -369,6 +369,9 @@ int extract_rar_file(const char *rar_path, const char *dest_dir, int strip_root,
     }
 
     printf("[RAR] Extracting %s to %s (strip_root=%d)\n", rar_path, dest_dir, strip_root);
+    if (mode == UNRAR_MODE_TURBO) {
+        printf("[RAR] Turbo mode: per-file progress updates disabled; totals may be unavailable\n");
+    }
 
     /* Scan first to get file count (safe mode only) */
     int count = 0;
@@ -392,14 +395,20 @@ int extract_rar_file(const char *rar_path, const char *dest_dir, int strip_root,
         opts.keepalive_interval_sec = UNRAR_SAFE_KEEPALIVE_SEC;
         opts.sleep_every_bytes = UNRAR_SAFE_SLEEP_EVERY_BYTES;
         opts.sleep_us = UNRAR_SAFE_SLEEP_US;
+        opts.trust_paths = UNRAR_SAFE_TRUST_PATHS;
+        opts.progress_file_start = UNRAR_SAFE_PROGRESS_FILE_START;
     } else if (mode == UNRAR_MODE_TURBO) {
         opts.keepalive_interval_sec = UNRAR_TURBO_KEEPALIVE_SEC;
         opts.sleep_every_bytes = UNRAR_TURBO_SLEEP_EVERY_BYTES;
         opts.sleep_us = UNRAR_TURBO_SLEEP_US;
+        opts.trust_paths = UNRAR_TURBO_TRUST_PATHS;
+        opts.progress_file_start = UNRAR_TURBO_PROGRESS_FILE_START;
     } else {
         opts.keepalive_interval_sec = UNRAR_FAST_KEEPALIVE_SEC;
         opts.sleep_every_bytes = UNRAR_FAST_SLEEP_EVERY_BYTES;
         opts.sleep_us = UNRAR_FAST_SLEEP_US;
+        opts.trust_paths = UNRAR_FAST_TRUST_PATHS;
+        opts.progress_file_start = UNRAR_FAST_PROGRESS_FILE_START;
     }
     int extract_result = unrar_extract(rar_path, dest_dir, strip_root, (mode == UNRAR_MODE_SAFE) ? size : 0,
                                        &opts, extraction_progress, user_data, &count, &size);
@@ -573,7 +582,7 @@ void handle_upload_rar(int sock, const char *args, UnrarMode mode) {
         return;
     }
 
-    int queue_id = extract_queue_add(temp_path, dest_path, 1, temp_dir);
+    int queue_id = extract_queue_add(temp_path, dest_path, 1, temp_dir, (int)mode);
     if (queue_id == -2) {
         const char *error = "ERROR: Duplicate extraction request\n";
         send_all(sock, error);

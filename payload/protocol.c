@@ -1588,24 +1588,16 @@ void handle_extract_archive(int client_sock, const char *args) {
         return;
     }
 
-    int count = 0;
-    unsigned long long size = 0;
-    int scan_result = unrar_scan(src, &count, &size, NULL, 0);
-    if (scan_result != UNRAR_OK) {
-        char error_msg[320];
-        snprintf(error_msg, sizeof(error_msg), "ERROR: %s\n", unrar_strerror(scan_result));
-        send(client_sock, error_msg, strlen(error_msg), 0);
-        return;
-    }
-
     unrar_extract_opts opts;
     opts.keepalive_interval_sec = UNRAR_FAST_KEEPALIVE_SEC;
     opts.sleep_every_bytes = UNRAR_FAST_SLEEP_EVERY_BYTES;
     opts.sleep_us = UNRAR_FAST_SLEEP_US;
+    opts.trust_paths = UNRAR_FAST_TRUST_PATHS;
+    opts.progress_file_start = UNRAR_FAST_PROGRESS_FILE_START;
 
     int extracted_count = 0;
     unsigned long long total_bytes = 0;
-    int extract_result = unrar_extract(src, dst, 0, size, &opts, extract_progress, &progress,
+    int extract_result = unrar_extract(src, dst, 0, 0, &opts, extract_progress, &progress,
                                        &extracted_count, &total_bytes);
     if (extract_result != UNRAR_OK) {
         const char *err = progress.cancelled ? "ERROR: Cancelled\n" : unrar_strerror(extract_result);
@@ -2114,6 +2106,8 @@ void handle_clear_tmp(int client_sock) {
 void handle_upload_v2_wrapper(int client_sock, const char *args) {
     char dest_path[PATH_MAX];
     char mode[16] = {0};
+    int chmod_each_file = 1;
+    int chmod_final = 0;
     // Parse: UPLOAD_V2 <dest_path> [TEMP|DIRECT]
     const char *rest = NULL;
     if (!args) {
@@ -2136,11 +2130,23 @@ void handle_upload_v2_wrapper(int client_sock, const char *args) {
     while (*end == ' ') end++;
     rest = end;
     if (rest && *rest) {
-        strncpy(mode, rest, sizeof(mode) - 1);
-        mode[sizeof(mode) - 1] = '\0';
-        char *space = strchr(mode, ' ');
-        if (space) {
-            *space = '\0';
+        char opts[128];
+        strncpy(opts, rest, sizeof(opts) - 1);
+        opts[sizeof(opts) - 1] = '\0';
+        char *save = NULL;
+        char *token = strtok_r(opts, " ", &save);
+        if (token) {
+            strncpy(mode, token, sizeof(mode) - 1);
+            mode[sizeof(mode) - 1] = '\0';
+        }
+        while ((token = strtok_r(NULL, " ", &save)) != NULL) {
+            if (strcasecmp(token, "NOCHMOD") == 0) {
+                chmod_each_file = 0;
+            } else if (strcasecmp(token, "CHMOD_END") == 0 || strcasecmp(token, "CHMOD_FINAL") == 0) {
+                chmod_final = 1;
+            } else if (strcasecmp(token, "CHMOD_EACH") == 0) {
+                chmod_each_file = 1;
+            }
         }
     }
     if (!is_path_safe(dest_path)) {
@@ -2162,7 +2168,7 @@ void handle_upload_v2_wrapper(int client_sock, const char *args) {
         }
     }
 
-    handle_upload_v2(client_sock, dest_path, use_temp);
+    handle_upload_v2(client_sock, dest_path, use_temp, chmod_each_file, chmod_final);
 }
 
 void handle_upload(int client_sock, const char *args) {
@@ -2224,6 +2230,10 @@ void handle_upload(int client_sock, const char *args) {
 
     // Send ready signal
     printf("[UPLOAD] Sending READY signal to client\n");
+    int rcvbuf = UPLOAD_RCVBUF_SIZE;
+    if (rcvbuf > 0) {
+        setsockopt(client_sock, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
+    }
     const char *ready = "READY\n";
     send(client_sock, ready, strlen(ready), 0);
 
@@ -2335,7 +2345,7 @@ void handle_queue_extract(int client_sock, const char *args) {
         return;
     }
 
-    int id = extract_queue_add(src, dst, 0, NULL);
+    int id = extract_queue_add(src, dst, 0, NULL, EXTRACT_RAR_FAST);
     if (id == -2) {
         const char *error = "ERROR: Duplicate extraction request\n";
         send(client_sock, error, strlen(error), 0);

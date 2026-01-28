@@ -14,7 +14,7 @@ function formatBytes(bytes: number) {
 export const TransferProgress: React.FC = () => {
   const { status, sent, total, files, currentFile } = useTransferStore();
 
-  const transferPercent = total > 0 ? Math.min(100, (sent / total) * 100) : 0;
+  const transferPercent = total > 0 ? Math.min(100, (sent / total) * 100) : sent > 0 ? 100 : 0;
 
   return (
     <div className="card wide">
@@ -24,13 +24,13 @@ export const TransferProgress: React.FC = () => {
       </header>
       <div className="progress">
         <div
-          className="progress-fill"
+          className={`progress-fill${total > 0 ? "" : sent > 0 ? " streaming" : ""}`}
           style={{ width: `${transferPercent}%` }}
         />
       </div>
       <div className="progress-meta">
         <span>
-          {formatBytes(sent)} / {formatBytes(total)}
+          {total > 0 ? `${formatBytes(sent)} / ${formatBytes(total)}` : `${formatBytes(sent)} transferred`}
         </span>
         <span>
           {files} files

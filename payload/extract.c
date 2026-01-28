@@ -98,7 +98,13 @@ int receive_folder_stream(int sock, const char *dest_path, char *err, size_t err
     }
     chmod(dest_path, 0777);
 
-    char buffer[BUFFER_SIZE];
+    char *buffer = malloc(BUFFER_SIZE);
+    if (!buffer) {
+        if (err && err_len > 0) {
+            snprintf(err, err_len, "oom");
+        }
+        return -1;
+    }
     char line_buffer[PATH_MAX + 256];
     long long total_bytes = 0;
     int file_count = 0;
@@ -114,7 +120,7 @@ int receive_folder_stream(int sock, const char *dest_path, char *err, size_t err
             if (err && err_len > 0) {
                 snprintf(err, err_len, "connection lost");
             }
-            return -1;
+            goto cleanup_error;
         }
 
         // Check for completion
@@ -131,7 +137,7 @@ int receive_folder_stream(int sock, const char *dest_path, char *err, size_t err
             if (err && err_len > 0) {
                 snprintf(err, err_len, "invalid file header");
             }
-            return -1;
+            goto cleanup_error;
         }
 
         // Build full path
@@ -151,7 +157,7 @@ int receive_folder_stream(int sock, const char *dest_path, char *err, size_t err
                 if (err && err_len > 0) {
                     snprintf(err, err_len, "mkdir failed: %s", strerror(errno));
                 }
-                return -1;
+                goto cleanup_error;
             }
         }
 
@@ -162,7 +168,11 @@ int receive_folder_stream(int sock, const char *dest_path, char *err, size_t err
             if (err && err_len > 0) {
                 snprintf(err, err_len, "fopen failed: %s", strerror(errno));
             }
-            return -1;
+            goto cleanup_error;
+        }
+        char *io_buf = malloc(BUFFER_SIZE);
+        if (io_buf) {
+            setvbuf(fp, io_buf, _IOFBF, BUFFER_SIZE);
         }
 
         // Receive file data
@@ -172,19 +182,21 @@ int receive_folder_stream(int sock, const char *dest_path, char *err, size_t err
             if (recv_exact(sock, buffer, to_recv) != 0) {
                 printf("[EXTRACT] ERROR: Failed to receive file data\n");
                 fclose(fp);
+                free(io_buf);
                 if (err && err_len > 0) {
                     snprintf(err, err_len, "recv failed");
                 }
-                return -1;
+                goto cleanup_error;
             }
 
             if (fwrite(buffer, 1, to_recv, fp) != to_recv) {
                 printf("[EXTRACT] ERROR: Failed to write file data\n");
                 fclose(fp);
+                free(io_buf);
                 if (err && err_len > 0) {
                     snprintf(err, err_len, "write failed");
                 }
-                return -1;
+                goto cleanup_error;
             }
 
             remaining -= to_recv;
@@ -193,6 +205,7 @@ int receive_folder_stream(int sock, const char *dest_path, char *err, size_t err
         }
 
         fclose(fp);
+        free(io_buf);
         chmod(full_path, 0777);
         file_count++;
 
@@ -202,8 +215,14 @@ int receive_folder_stream(int sock, const char *dest_path, char *err, size_t err
     printf("[EXTRACT] Upload complete: %d files, %.2f MB total\n",
            file_count, total_bytes / (1024.0 * 1024.0));
 
+    free(buffer);
+
     if (out_total_bytes) *out_total_bytes = total_bytes;
     if (out_file_count) *out_file_count = file_count;
 
     return 0;
+
+cleanup_error:
+    free(buffer);
+    return -1;
 }

@@ -11,6 +11,8 @@ New UI highlights:
 - Built-in quick scan + optimize options for large folders.
 - Unified Queues area with upload/extraction tabs, progress, and status.
 - Extraction queue with progress, metadata, and cover art where available.
+- Progress UI with ETA, average speed, elapsed time, and last update.
+- Upload queue item info popup with per-item transfer parameters.
 - History resume workflow with explicit resume mode selection.
 - Log level filtering with color-coded badges in the Logs panel.
 - FAQ tab with an embedded, scrollable help panel.
@@ -107,6 +109,7 @@ Open the **Manage** tab to browse your PS5's storage. You can rename, move, copy
 
 ### 6. Queues (Optional)
 Open the **Queues** tab to see upload and extraction queues. You can refresh the queues, monitor progress, and cancel queued work.
+Tip: Click **info** on an upload queue item to view the exact parameters used for that upload.
 
 ### 7. Resume Transfers (Optional)
 If a transfer was interrupted, you can enable **Resume** mode in the **Transfer** tab's settings. The next time you upload the same content to the same destination, it will skip files that are already there.

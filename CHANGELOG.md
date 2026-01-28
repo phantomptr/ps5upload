@@ -3,6 +3,20 @@
 All notable changes to this project are documented here.
 This project follows Semantic Versioning.
 
+## [1.3.4] - 2026-01-28
+
+### Added
+- Upload queue item info popup showing per-item transfer parameters.
+- Progress UI now shows ETA, avg speed, elapsed time, and last update.
+- Extraction queue shows a “waiting for payload status” hint before the first status update.
+
+### Changed
+- Extraction status polling accelerates while extractions are running and triggers immediate refresh after queue hints.
+- Failed upload/extraction items show short detail summaries in the queue list.
+
+### Fixed
+- Archive uploads no longer trigger chmod on the upload destination (chmod only applies to extracted folder when enabled).
+
 ## [1.3.3] - 2026-01-27
 
 ### Added
