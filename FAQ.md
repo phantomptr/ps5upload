@@ -1,6 +1,7 @@
 # PS5 Upload FAQ
 
 Welcome! This FAQ covers setup, features, troubleshooting, and platform‑specific tips.
+Latest release: **v1.3.7**.
 
 ---
 
@@ -156,6 +157,7 @@ Use **Manage** to:
 **Logs panel**:
 - Filter by **Debug / Info / Warn / Error**
 - Optional **Save Logs**
+- Resume scans now log a summary (skipped vs. remaining) in client logs after scanning.
   
 **Automatic maintenance**:
 When idle (no active transfer or extraction), PS5 Upload performs safe cleanup (buffer cleanup, log rotation, and temp cleanup) to reduce the chance of payload slowdowns.

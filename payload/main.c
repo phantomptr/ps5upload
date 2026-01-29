@@ -23,8 +23,26 @@
 #include <ifaddrs.h>
 #include <signal.h>
 #include <time.h>
+#include <sys/syscall.h>
+#include <sys/mman.h>
+#include <sched.h>
 
 #include <ps5/kernel.h>
+
+/* Full capability mask - grants all permissions */
+static const uint8_t g_full_caps[16] = {
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff
+};
+
+/* Auth IDs from etaHEN - grants system-level privileges */
+#define AUTHID_SYSTEM_PROCESS   0x4800000000010003ULL  /* System process auth ID */
+#define AUTHID_SHELLCORE        0x4800000000000007ULL  /* ShellCore auth ID */
+
+/* sys_budget_set - removes resource budget constraints so kernel won't kill us */
+static int sys_budget_set(long budget) {
+    return (int)syscall(0x23b, budget);
+}
 
 #include "config.h"
 #include "storage.h"
@@ -187,11 +205,12 @@ static int create_server_socket(int port) {
     int opt = 1;
     setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
-    // Increased to 2MB to improve throughput
-    int buf_size = 2 * 1024 * 1024; // 2MB
-    setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &buf_size, sizeof(buf_size));
-    setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &buf_size, sizeof(buf_size));
-    
+    // Large socket buffers for high throughput on GigE networks
+    int rcv_buf = SOCKET_RCVBUF_SIZE;
+    int snd_buf = SOCKET_SNDBUF_SIZE;
+    setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &rcv_buf, sizeof(rcv_buf));
+    setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &snd_buf, sizeof(snd_buf));
+
     // Prevent SIGPIPE on write to closed socket (BSD/PS5 specific)
     int no_sigpipe = 1;
     setsockopt(sock, SOL_SOCKET, SO_NOSIGPIPE, &no_sigpipe, sizeof(no_sigpipe));
@@ -433,17 +452,18 @@ static void *command_thread(void *arg) {
 }
 
 static void set_socket_buffers(int sock) {
-    // Increased to 2MB to improve throughput
-    int buf_size = 2 * 1024 * 1024; // 2MB
-    setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &buf_size, sizeof(buf_size));
-    setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &buf_size, sizeof(buf_size));
+    // Large socket buffers for high throughput on GigE networks
+    int rcv_buf = SOCKET_RCVBUF_SIZE;
+    int snd_buf = SOCKET_SNDBUF_SIZE;
+    setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &rcv_buf, sizeof(rcv_buf));
+    setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &snd_buf, sizeof(snd_buf));
 
     struct timeval snd_to;
-    snd_to.tv_sec = 30;
+    snd_to.tv_sec = 60;  // Increased timeout for large transfers
     snd_to.tv_usec = 0;
     setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &snd_to, sizeof(snd_to));
 
-    // Enable TCP_NODELAY for lower latency
+    // Enable TCP_NODELAY for lower latency on small packets
     int nodelay = 1;
     setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
 
@@ -494,7 +514,8 @@ static void *upload_worker_thread(void *arg) {
         return NULL;
     }
 
-    uint8_t *buffer = malloc(64 * 1024);
+    // Large recv buffer for high throughput (512KB instead of 64KB)
+    uint8_t *buffer = malloc(UPLOAD_RECV_CHUNK_SIZE);
     if (!buffer) {
         const char *err = "ERROR: Upload init failed\n";
         send(args->sock, err, strlen(err), 0);
@@ -515,11 +536,11 @@ static void *upload_worker_thread(void *arg) {
             upload_session_feed(session, NULL, 0, &done, &error);
             if (error) break;
             if (upload_session_backpressure(session)) {
-                usleep(1000);
+                usleep(BACKPRESSURE_POLL_US);  // Faster polling (100us vs 1000us)
                 continue;
             }
         }
-        ssize_t n = recv(args->sock, buffer, 64 * 1024, 0);
+        ssize_t n = recv(args->sock, buffer, UPLOAD_RECV_CHUNK_SIZE, 0);
         if (n < 0) {
             if (errno == EINTR) {
                 continue;
@@ -1092,10 +1113,52 @@ int main(void) {
     // Create logging directory
     printf("[INIT] Creating log directories...\n");
     
-    // Use direct mkdir instead of system() for speed
-    // Set root vnode once for the lifetime of the server to ensure full FS access.
+    // Enhanced kernel-level privilege escalation (based on etaHEN techniques)
+    // This provides: jail escape, root UID, full capabilities, system auth ID,
+    // and removes resource budget constraints to prevent kernel from killing us.
     pid_t pid = getpid();
+    printf("[INIT] Raising privileges...\n");
+
+    // 1. Escape jail and set root directory
     kernel_set_proc_rootdir(pid, kernel_get_root_vnode());
+    kernel_set_proc_jaildir(pid, 0);  // Full jail escape (0, not root vnode)
+
+    // 2. Set all UID/GID to root
+    kernel_set_ucred_uid(pid, 0);
+    kernel_set_ucred_ruid(pid, 0);
+    kernel_set_ucred_svuid(pid, 0);
+    kernel_set_ucred_rgid(pid, 0);
+    kernel_set_ucred_svgid(pid, 0);
+
+    // 3. Grant full capabilities (prevents permission denied errors)
+    kernel_set_ucred_caps(pid, g_full_caps);
+
+    // 4. Set auth ID for system-level privileges (ShellCore identity)
+    kernel_set_ucred_authid(pid, AUTHID_SHELLCORE);
+
+    // 5. Remove resource budget constraints (prevents kernel from killing us)
+    if (sys_budget_set(0) < 0) {
+        printf("[INIT] Warning: sys_budget_set failed (may be unsupported)\n");
+    }
+
+    // 6. Lock memory pages to prevent swapping (improves stability during heavy I/O)
+#ifdef MCL_CURRENT
+    if (mlockall(MCL_CURRENT | MCL_FUTURE) < 0) {
+        printf("[INIT] Warning: mlockall failed (non-critical)\n");
+    }
+#endif
+
+    // 7. Set high priority scheduling for better responsiveness
+    struct sched_param sp;
+    sp.sched_priority = sched_get_priority_max(SCHED_RR);
+    if (sp.sched_priority > 0) {
+        if (sched_setscheduler(0, SCHED_RR, &sp) < 0) {
+            // Real-time scheduling unavailable - continue with default priority
+            printf("[INIT] Warning: sched_setscheduler failed (non-critical)\n");
+        }
+    }
+
+    printf("[INIT] Privileges raised successfully (kernel-level control enabled)\n");
     
     mkdir("/data/ps5upload", 0777);
     mkdir("/data/ps5upload/logs", 0777);

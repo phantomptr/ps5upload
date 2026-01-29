@@ -36,7 +36,7 @@ const CONNECTION_TIMEOUT_MS = 30000;
 const READ_TIMEOUT_MS = 120000;
 const PAYLOAD_STATUS_CONNECT_TIMEOUT_MS = 5000;
 const PAYLOAD_STATUS_READ_TIMEOUT_MS = 10000;
-const PACK_BUFFER_SIZE = 32 * 1024 * 1024; // 32MB
+const PACK_BUFFER_SIZE = 48 * 1024 * 1024; // 48MB
 const PACK_BUFFER_MIN = 4 * 1024 * 1024; // 4MB
 const SEND_CHUNK_SIZE = 4 * 1024 * 1024; // 4MB
 const SEND_CHUNK_MIN = 512 * 1024; // 512KB
@@ -49,7 +49,8 @@ const WRITE_CHUNK_SIZE = 512 * 1024; // 512KB
 const MAGIC_FTX1 = 0x31585446;
 
 let sleepBlockerId = null;
-const VERSION = '1.3.6';
+const VERSION = '1.3.7';
+const IS_WINDOWS = process.platform === 'win32';
 
 function beginManageOperation(op) {
   state.manageDoneEmitted = false;
@@ -689,7 +690,8 @@ function createWindow() {
     minWidth: 1024,
     minHeight: 720,
     frame: false,
-    transparent: true,
+    transparent: !IS_WINDOWS,
+    backgroundColor: IS_WINDOWS ? '#0f172a' : '#00000000',
     resizable: true,
     maximizable: true,
     minimizable: true,
@@ -2873,7 +2875,7 @@ function startPayloadPoller() {
     } finally {
       payloadPollerRunning = false;
     }
-  }, 5000);
+  }, 1000);
 }
 
 async function tryAutoReloadPayload() {
@@ -4664,7 +4666,9 @@ function registerIpcHandlers() {
             }
 
             filesToUpload = filtered;
-            emitLog(`Resume scan done: ${skipped} file(s) already present, ${filesToUpload.length} to upload.`);
+            const resumeSummary = `Resume scan done: ${skipped} file(s) already present, ${filesToUpload.length} to upload.`;
+            emitLog(resumeSummary);
+            emit('manage_log', { message: resumeSummary });
             state.transferStatus = { ...state.transferStatus, status: 'Scanning', files: filesToUpload.length, total: Number(filesToUpload.length) };
             state.transferLastUpdate = Date.now();
           }
@@ -4692,8 +4696,8 @@ function registerIpcHandlers() {
           }
           if (req.auto_tune_connections) {
             if (avgSize < SMALL_FILE_AVG_BYTES || fileCount >= 200000) {
-              basePackLimit = 16 * 1024 * 1024;
-              baseChunkSize = 2 * 1024 * 1024;
+              basePackLimit = 24 * 1024 * 1024;
+              baseChunkSize = 4 * 1024 * 1024;
             }
           }
           state.transferMeta = {

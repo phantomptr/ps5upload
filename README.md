@@ -5,6 +5,7 @@
 </p>
 
 PS5 Upload is a fast, reliable way to move apps and homebrew to your PS5 without the pain of slow transfers.
+Current release: **v1.3.7**.
 
 New UI highlights:
 - Cleaner Transfer and Manage layouts with clearer transfer settings.
@@ -120,9 +121,9 @@ Tip: Click **info** on an upload queue item to view the exact parameters used fo
 
 ### 7. Resume Transfers (Optional)
 If a transfer was interrupted, you can enable **Resume** mode in the **Transfer** tab's settings. The next time you upload the same content to the same destination, it will skip files that are already there.
-* **Skip by size (fast)** — quickest.
-* **Skip by size + time (medium)** — more accurate.
-* **Verify SHA256 (slow)** — most accurate, slowest.
+* **Fastest (size-only)** — quickest.
+* **Faster/Fast** — hashes files above size thresholds.
+* **Normal (SHA256)** — most accurate, slowest.
 
 ### 8. FAQ (Optional)
 Open the **FAQ** tab for built‑in help and troubleshooting (offline, bundled with the app).

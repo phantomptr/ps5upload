@@ -266,6 +266,8 @@ type ResumeOption = "none" | "size" | "hash_large" | "hash_medium" | "sha256";
 
 type DownloadCompressionOption = "auto" | "none" | "lz4" | "zstd" | "lzma";
 
+type OptimizeMode = "none" | "optimize" | "deep";
+
 type RarExtractMode = "normal" | "safe" | "turbo";
 
 type GameMetaPayload = {
@@ -375,11 +377,23 @@ type PayloadStatusResponse = {
   extract_last_progress?: number;
   system?: {
     cpu_percent: number;
+    proc_cpu_percent?: number;
     rss_bytes: number;
     thread_count: number;
     mem_total_bytes: number;
     mem_free_bytes: number;
     page_size: number;
+    net_rx_bytes?: number;
+    net_tx_bytes?: number;
+    net_rx_bps?: number;
+    net_tx_bps?: number;
+    cpu_supported?: boolean;
+    proc_cpu_supported?: boolean;
+    rss_supported?: boolean;
+    thread_supported?: boolean;
+    mem_total_supported?: boolean;
+    mem_free_supported?: boolean;
+    net_supported?: boolean;
   };
   transfer?: {
     pack_in_use: number;
@@ -892,6 +906,10 @@ export default function App() {
   ];
   const currentLanguageLabel =
     languages.find((item) => item.code === language)?.label || "English";
+  useEffect(() => {
+    if (!platformInfo?.platform) return;
+    document.documentElement.dataset.platform = platformInfo.platform;
+  }, [platformInfo]);
   const [autoConnect, setAutoConnect] = useState(false);
   const [payloadAutoReload, setPayloadAutoReload] = useState(false);
   const [payloadReloadMode, setPayloadReloadMode] = useState<
@@ -947,7 +965,10 @@ export default function App() {
   const [resumeMode, setResumeMode] = useState<ResumeOption>("none");
   const [connections, setConnections] = useState(4);
   const [bandwidthLimit, setBandwidthLimit] = useState(0);
-  const [optimizeUpload, setOptimizeUpload] = useState(false);
+  const [optimizeMode, setOptimizeMode] = useState<OptimizeMode>("none");
+  const optimizeActive = optimizeMode !== "none";
+  const [scanMode, setScanMode] = useState<OptimizeMode | null>(null);
+  const optimizePendingRef = useRef<OptimizeMode | null>(null);
   const [autoTune, setAutoTune] = useState(true);
   const [useTemp, setUseTemp] = useState(false);
   const [managePath, setManagePath] = useState("/data");
@@ -1719,20 +1740,34 @@ export default function App() {
     }
   };
 
-  const scanLimitMs = 10000;
-  const scanLimitFiles = 20000;
+  const optimizeSampleLimitMs = 10000;
+  const optimizeSampleLimitFiles = 50000;
 
-  const handleScan = async () => {
-    if (scanStatus === 'scanning' || !sourcePath) return;
+  const restoreOptimizeSnapshot = () => {
+    if (!optimizeSnapshot.current) return;
+    setConnections(optimizeSnapshot.current.connections);
+    setCompression(optimizeSnapshot.current.compression);
+    setBandwidthLimit(optimizeSnapshot.current.bandwidth);
+    setAutoTune(optimizeSnapshot.current.autoTune);
+    optimizeSnapshot.current = null;
+  };
+
+  const runOptimizeScan = async (mode: OptimizeMode) => {
+    if (!sourcePath.trim()) return;
     if (isArchiveSource) {
       setScanStatus("error");
       setScanError(tr("scan_archive_not_supported"));
+      optimizePendingRef.current = null;
+      setOptimizeMode("none");
+      setScanMode(null);
+      restoreOptimizeSnapshot();
       return;
     }
     setClientLogs((prev) => [
-      `Scan started: ${sourcePath}`,
+      `${mode === "deep" ? "Deep optimize" : "Optimize"} scan started: ${sourcePath}`,
       ...prev
     ].slice(0, 100));
+    setScanMode(mode);
     setScanStatus('scanning');
     setScanError(null);
     setScanFiles(0);
@@ -1743,17 +1778,46 @@ export default function App() {
     try {
       await invoke("transfer_scan", {
         source_path: sourcePath,
-        max_ms: scanLimitMs,
-        max_files: scanLimitFiles,
-        quick_count: true,
-        sample_limit: 800
+        max_ms: mode === "deep" ? 0 : optimizeSampleLimitMs,
+        max_files: mode === "deep" ? 0 : optimizeSampleLimitFiles,
+        quick_count: mode !== "deep",
+        sample_limit: mode === "deep" ? 0 : 1200
       });
     } catch (err) {
       setScanStatus('error');
       const message = err instanceof Error ? err.message : String(err);
       setScanError(message);
       setClientLogs((prev) => [`Scan error: ${message}`, ...prev].slice(0, 100));
+      optimizePendingRef.current = null;
+      setOptimizeMode("none");
+      setScanMode(null);
+      restoreOptimizeSnapshot();
     }
+  };
+
+  const handleOptimizeMode = async (mode: OptimizeMode) => {
+    if (mode === "none") return;
+    if (scanStatus === 'scanning') {
+      if (optimizePendingRef.current === mode) {
+        await handleCancelScan();
+      }
+      return;
+    }
+    if (optimizeMode === mode) {
+      resetScan();
+      return;
+    }
+    if (!optimizeSnapshot.current) {
+      optimizeSnapshot.current = {
+        connections,
+        compression,
+        bandwidth: bandwidthLimit,
+        autoTune
+      };
+    }
+    setOptimizeMode(mode);
+    optimizePendingRef.current = mode;
+    await runOptimizeScan(mode);
   };
 
   const handleCancelScan = async () => {
@@ -1762,6 +1826,10 @@ export default function App() {
     setScanStatus('cancelled');
     setScanError(null);
     setClientLogs((prev) => ["Scan cancelled", ...prev].slice(0, 100));
+    optimizePendingRef.current = null;
+    setOptimizeMode("none");
+    setScanMode(null);
+    restoreOptimizeSnapshot();
   };
 
   const resetScan = () => {
@@ -1772,14 +1840,11 @@ export default function App() {
     setScanPartial(false);
     setScanPartialReason(null);
     setScanEstimated(false);
-    setOptimizeUpload(false);
+    setScanMode(null);
+    optimizePendingRef.current = null;
+    setOptimizeMode("none");
+    restoreOptimizeSnapshot();
   };
-
-  useEffect(() => {
-    if (scanStatus !== "completed" && optimizeUpload) {
-      setOptimizeUpload(false);
-    }
-  }, [scanStatus, optimizeUpload]);
 
   const computeOptimizeSettings = () => {
     if (scanFiles <= 0 || scanTotal <= 0) {
@@ -1811,34 +1876,18 @@ export default function App() {
     return { connections, compression, bandwidth: 0 };
   };
 
-  const handleOptimizeToggle = () => {
-    if (scanStatus !== "completed") return;
-    if (!optimizeUpload) {
-      optimizeSnapshot.current = {
-        connections,
-        compression,
-        bandwidth: bandwidthLimit,
-        autoTune
-      };
-      const nextSettings = computeOptimizeSettings();
-      setAutoTune(false);
-      setConnections(nextSettings.connections);
-      setCompression(nextSettings.compression);
-      setBandwidthLimit(nextSettings.bandwidth);
-      const tag = scanPartial ? " (sampled)" : "";
-      setClientLogs((prev) => [
-        `Optimize${tag}: connections=${nextSettings.connections}, compression=${nextSettings.compression}, bandwidth=${nextSettings.bandwidth === 0 ? "unlimited" : `${nextSettings.bandwidth} Mbps`}`,
-        ...prev
-      ].slice(0, 100));
-    }
-    if (optimizeUpload && optimizeSnapshot.current) {
-      setConnections(optimizeSnapshot.current.connections);
-      setCompression(optimizeSnapshot.current.compression);
-      setBandwidthLimit(optimizeSnapshot.current.bandwidth);
-      setAutoTune(optimizeSnapshot.current.autoTune);
-      optimizeSnapshot.current = null;
-    }
-    setOptimizeUpload((prev) => !prev);
+  const applyOptimizeSettings = () => {
+    const nextSettings = computeOptimizeSettings();
+    setAutoTune(false);
+    setConnections(nextSettings.connections);
+    setCompression(nextSettings.compression);
+    setBandwidthLimit(nextSettings.bandwidth);
+    const tag = scanPartial ? " (sampled)" : "";
+    const label = optimizeMode === "deep" ? "Deep optimize" : "Optimize";
+    setClientLogs((prev) => [
+      `${label}${tag}: connections=${nextSettings.connections}, compression=${nextSettings.compression}, bandwidth=${nextSettings.bandwidth === 0 ? "unlimited" : `${nextSettings.bandwidth} Mbps`}`,
+      ...prev
+    ].slice(0, 100));
   };
 
   const handleSaveCurrentProfile = async () => {
@@ -1952,7 +2001,7 @@ export default function App() {
         setOverrideOnConflict(normalizedConfig.override_on_conflict ?? false);
         setResumeMode(normalizeResumeMode(normalizedConfig.resume_mode));
         setAutoTune(normalizedConfig.auto_tune_connections ?? true);
-        setOptimizeUpload(normalizedConfig.optimize_upload ?? false);
+        setOptimizeMode(normalizedConfig.optimize_upload ? "optimize" : "none");
         setUseTemp(normalizedConfig.use_temp ?? false);
         setAutoConnect(normalizedConfig.auto_connect ?? false);
         setPayloadAutoReload(
@@ -2443,7 +2492,7 @@ export default function App() {
       override_on_conflict: overrideOnConflict,
       resume_mode: resumeMode,
       auto_tune_connections: autoTune,
-      optimize_upload: optimizeUpload,
+      optimize_upload: optimizeActive,
       update_channel: includePrerelease ? "all" : "stable",
       language,
       auto_check_payload: payloadAutoReload,
@@ -2477,7 +2526,7 @@ export default function App() {
     overrideOnConflict,
     resumeMode,
     autoTune,
-    optimizeUpload,
+    optimizeActive,
     includePrerelease,
     theme,
     windowSize,
@@ -3101,11 +3150,18 @@ export default function App() {
           setScanPartial(!!event.payload.partial);
           setScanPartialReason(event.payload.reason ?? null);
           setScanEstimated(!!event.payload.estimated);
-          const label = event.payload.partial || event.payload.estimated ? "Scan sampled" : "Scan complete";
+          const label =
+            scanMode === "deep"
+              ? tr("deep_optimize_ready")
+              : tr("optimize_ready");
           setClientLogs((prev) => [
             `${label}: ${event.payload.files} files, ${formatBytes(event.payload.total)}`,
             ...prev
           ].slice(0, 100));
+          if (optimizePendingRef.current) {
+            applyOptimizeSettings();
+            optimizePendingRef.current = null;
+          }
         }
       );
 
@@ -3119,6 +3175,12 @@ export default function App() {
             `Scan error: ${event.payload.message}`,
             ...prev
           ].slice(0, 100));
+          if (optimizePendingRef.current) {
+            optimizePendingRef.current = null;
+            setOptimizeMode("none");
+            restoreOptimizeSnapshot();
+          }
+          setScanMode(null);
         }
       );
 
@@ -3193,34 +3255,35 @@ export default function App() {
     transferState.status.startsWith("Uploading archive") ||
     transferState.status.startsWith("Extracting");
   const scanInProgress = scanStatus === "scanning";
-  const scanCompleted = scanStatus === "completed";
   const scanSummary =
     scanFiles > 0 || scanTotal > 0
       ? `${scanFiles} ${tr("files")} | ${formatBytes(scanTotal)}`
       : "";
   const scanPartialNote = scanPartial
     ? scanPartialReason === "time"
-      ? `Sampled for ~${Math.round(scanLimitMs / 1000)}s.`
-      : scanPartialReason === "files"
-      ? `Sampled first ${scanLimitFiles} files.`
-      : "Sampled scan."
+      ? tr("optimize_sample_time", { seconds: Math.round(optimizeSampleLimitMs / 1000) })
+    : scanPartialReason === "files"
+      ? tr("optimize_sample_files", { count: optimizeSampleLimitFiles })
+      : tr("optimize_sampled")
     : "";
   const scanEstimateNote = scanEstimated
-    ? "Size is estimated from a quick sample."
+    ? tr("optimize_estimated")
     : "";
   const scanStatusLabel =
     scanStatus === "scanning"
-      ? "Scanning..."
-    : scanStatus === "completed" && scanPartial
-      ? "Scan sampled"
-      : scanStatus === "completed"
-      ? "Scan complete"
+      ? scanMode === "deep"
+        ? tr("deep_optimize_scanning")
+        : tr("optimize_scanning")
+    : scanStatus === "completed"
+      ? scanMode === "deep"
+        ? tr("deep_optimize_ready")
+        : tr("optimize_ready")
       : scanStatus === "cancelled"
-      ? "Scan cancelled"
+      ? tr("scan_cancelled")
       : scanStatus === "error"
-      ? "Scan error"
+      ? tr("scan_error")
       : "";
-  const connectionsDisabled = optimizeUpload || autoTune;
+  const connectionsDisabled = optimizeActive || autoTune;
   const isRarSource = /\.rar$/i.test(sourcePath.trim());
   const isArchiveSource = useMemo(
     () => isArchivePath(sourcePath),
@@ -3230,6 +3293,11 @@ export default function App() {
     () => isArchivePath(sourcePath) && sourcePath.toLowerCase().endsWith(".rar"),
     [sourcePath]
   );
+  const canOptimize = sourcePath.trim().length > 0 && !isArchiveSource;
+  const optimizeButtonDisabled =
+    !canOptimize || (scanInProgress && optimizePendingRef.current !== "optimize");
+  const deepOptimizeButtonDisabled =
+    !canOptimize || (scanInProgress && optimizePendingRef.current !== "deep");
 
   const formatUptime = (seconds: number) => {
     const days = Math.floor(seconds / 86400);
@@ -3686,7 +3754,7 @@ export default function App() {
       payloadFullStatus?.items?.some((item) => item.status === "running") ?? false;
     const shouldPoll = activeTab === "payload" || hasRunningExtraction;
     if (!shouldPoll) return;
-    const intervalMs = hasRunningExtraction ? 500 : 5000;
+    const intervalMs = 1000;
     const interval = setInterval(() => {
       if (isConnected && ip.trim()) {
         handleRefreshQueueStatus();
@@ -4198,7 +4266,7 @@ export default function App() {
       compression,
       bandwidth_limit_mbps: bandwidthLimit,
       auto_tune_connections: autoTune,
-      optimize_upload: optimizeUpload,
+      optimize_upload: optimizeActive,
       chmod_after_upload: chmodAfterUpload,
       rar_extract_mode: rarExtractMode,
       rar_temp_root: rarTemp,
@@ -4545,7 +4613,7 @@ export default function App() {
           compression,
           bandwidth_limit_mbps: bandwidthLimit,
           auto_tune_connections: autoTune,
-          optimize_upload: optimizeUpload,
+          optimize_upload: optimizeActive,
           chmod_after_upload: chmodAfterUpload,
           rar_extract_mode: rarExtractMode,
           rar_temp_root: rarTemp,
@@ -4711,7 +4779,7 @@ export default function App() {
           compression: settings?.compression ?? compression,
           bandwidth_limit_mbps: settings?.bandwidth_limit_mbps ?? bandwidthLimit,
           auto_tune_connections: settings?.auto_tune_connections ?? autoTune,
-          optimize_upload: settings?.optimize_upload ?? optimizeUpload,
+          optimize_upload: settings?.optimize_upload ?? optimizeActive,
           chmod_after_upload: settings?.chmod_after_upload ?? chmodAfterUpload,
           override_on_conflict: settings?.override_on_conflict ?? overrideOnConflict,
           rar_extract_mode: settings?.rar_extract_mode ?? rarExtractMode,
@@ -4943,7 +5011,8 @@ export default function App() {
     setResumeMode("none");
     setConnections(4);
     setBandwidthLimit(0);
-    setOptimizeUpload(false);
+    setOptimizeMode("none");
+    restoreOptimizeSnapshot();
     setAutoTune(true);
     setUseTemp(false);
     setTransferState({
@@ -6095,29 +6164,32 @@ export default function App() {
                 </label>
                 <div className="split">
                   <button
-                    className="btn"
-                    onClick={handleScan}
-                    disabled={scanInProgress || !sourcePath.trim() || isArchiveSource}
-                  >
-                    {tr("scan")}
-                  </button>
-                  {scanInProgress && (
-                    <button className="btn danger" onClick={handleCancelScan}>
-                      {tr("cancel")}
-                    </button>
-                  )}
-                  <button
-                    className={`btn ${optimizeUpload ? "primary" : ""}`}
-                    onClick={handleOptimizeToggle}
-                    disabled={!scanCompleted}
+                    className={`btn ${optimizeMode === "optimize" ? "primary" : ""}`}
+                    onClick={() => handleOptimizeMode("optimize")}
+                    disabled={optimizeButtonDisabled}
                   >
                     {tr("optimize")}
+                  </button>
+                  <button
+                    className={`btn ${optimizeMode === "deep" ? "primary" : ""}`}
+                    onClick={() => handleOptimizeMode("deep")}
+                    disabled={deepOptimizeButtonDisabled}
+                  >
+                    {tr("deep_optimize")}
                   </button>
                 </div>
                 {scanStatus !== "idle" && (
                   <div className="stack">
                     {scanStatusLabel && (
                       <div className="pill status-pill">{scanStatusLabel}</div>
+                    )}
+                    {(scanStatus === "scanning" || scanStatus === "completed") && (
+                      <div className="progress">
+                        <div
+                          className={`progress-fill ${scanStatus === "scanning" ? "streaming" : ""}`}
+                          style={{ width: "100%" }}
+                        />
+                      </div>
                     )}
                     {scanSummary && <p className="muted small">{scanSummary}</p>}
                     {scanPartialNote && (
@@ -6131,12 +6203,12 @@ export default function App() {
                     )}
                   </div>
                 )}
-                <p className="muted small">{tr("scan_help")}</p>
+                <p className="muted small">{tr("optimize_help")}</p>
+                <p className="muted small">{tr("deep_optimize_help")}</p>
                 {isArchiveSource && (
                   <p className="muted small">{tr("scan_archive_not_supported")}</p>
                 )}
-                <p className="muted small">{tr("optimize_help")}</p>
-                {optimizeUpload && (
+                {optimizeActive && (
                   <p className="muted small">{tr("optimize_lock_note")}</p>
                 )}
                 {gameMeta && (
@@ -6333,7 +6405,7 @@ export default function App() {
                         type="number"
                         min={0}
                         value={bandwidthLimit}
-                        disabled={optimizeUpload}
+                        disabled={optimizeActive}
                         onChange={(event) =>
                           setBandwidthLimit(Number(event.target.value))
                         }
@@ -6344,7 +6416,7 @@ export default function App() {
                       <input
                         type="checkbox"
                         checked={autoTune}
-                        disabled={optimizeUpload}
+                        disabled={optimizeActive}
                         onChange={(event) => setAutoTune(event.target.checked)}
                       />
                     </label>
@@ -6381,7 +6453,7 @@ export default function App() {
                       <span>{tr("compression")}</span>
                       <select
                         value={compression}
-                        disabled={optimizeUpload}
+                        disabled={optimizeActive}
                         onChange={(event) =>
                           setCompression(event.target.value as CompressionOption)
                         }
@@ -6498,6 +6570,19 @@ export default function App() {
                             <span>
                               {payloadFullStatus.system.cpu_percent >= 0
                                 ? `${payloadFullStatus.system.cpu_percent.toFixed(1)}%`
+                                : payloadFullStatus.system.cpu_supported === false
+                                ? tr("restricted")
+                                : "—"}
+                            </span>
+                          </div>
+                          <div className="payload-metric-row">
+                            <span>{tr("payload_cpu_usage")}</span>
+                            <span>
+                              {payloadFullStatus.system.proc_cpu_percent != null &&
+                              payloadFullStatus.system.proc_cpu_percent >= 0
+                                ? `${payloadFullStatus.system.proc_cpu_percent.toFixed(1)}%`
+                                : payloadFullStatus.system.proc_cpu_supported === false
+                                ? tr("restricted")
                                 : "—"}
                             </span>
                           </div>
@@ -6506,6 +6591,28 @@ export default function App() {
                             <span>
                               {payloadFullStatus.system.rss_bytes >= 0
                                 ? formatBytes(payloadFullStatus.system.rss_bytes)
+                                : payloadFullStatus.system.rss_supported === false
+                                ? tr("restricted")
+                                : "—"}
+                            </span>
+                          </div>
+                          <div className="payload-metric-row">
+                            <span>{tr("memory_total")}</span>
+                            <span>
+                              {payloadFullStatus.system.mem_total_bytes >= 0
+                                ? formatBytes(payloadFullStatus.system.mem_total_bytes)
+                                : payloadFullStatus.system.mem_total_supported === false
+                                ? tr("restricted")
+                                : "—"}
+                            </span>
+                          </div>
+                          <div className="payload-metric-row">
+                            <span>{tr("memory_free")}</span>
+                            <span>
+                              {payloadFullStatus.system.mem_free_bytes >= 0
+                                ? formatBytes(payloadFullStatus.system.mem_free_bytes)
+                                : payloadFullStatus.system.mem_free_supported === false
+                                ? tr("restricted")
                                 : "—"}
                             </span>
                           </div>
@@ -6514,6 +6621,52 @@ export default function App() {
                             <span>
                               {payloadFullStatus.system.thread_count >= 0
                                 ? payloadFullStatus.system.thread_count
+                                : payloadFullStatus.system.thread_supported === false
+                                ? tr("restricted")
+                                : "—"}
+                            </span>
+                          </div>
+                          <div className="payload-metric-row">
+                            <span>{tr("net_rx")}</span>
+                            <span>
+                              {payloadFullStatus.system.net_rx_bytes != null &&
+                              payloadFullStatus.system.net_rx_bytes >= 0
+                                ? formatBytes(payloadFullStatus.system.net_rx_bytes)
+                                : payloadFullStatus.system.net_supported === false
+                                ? tr("restricted")
+                                : "—"}
+                            </span>
+                          </div>
+                          <div className="payload-metric-row">
+                            <span>{tr("net_tx")}</span>
+                            <span>
+                              {payloadFullStatus.system.net_tx_bytes != null &&
+                              payloadFullStatus.system.net_tx_bytes >= 0
+                                ? formatBytes(payloadFullStatus.system.net_tx_bytes)
+                                : payloadFullStatus.system.net_supported === false
+                                ? tr("restricted")
+                                : "—"}
+                            </span>
+                          </div>
+                          <div className="payload-metric-row">
+                            <span>{tr("net_rx_rate")}</span>
+                            <span>
+                              {payloadFullStatus.system.net_rx_bps != null &&
+                              payloadFullStatus.system.net_rx_bps >= 0
+                                ? `${formatBytes(payloadFullStatus.system.net_rx_bps)}/s`
+                                : payloadFullStatus.system.net_supported === false
+                                ? tr("restricted")
+                                : "—"}
+                            </span>
+                          </div>
+                          <div className="payload-metric-row">
+                            <span>{tr("net_tx_rate")}</span>
+                            <span>
+                              {payloadFullStatus.system.net_tx_bps != null &&
+                              payloadFullStatus.system.net_tx_bps >= 0
+                                ? `${formatBytes(payloadFullStatus.system.net_tx_bps)}/s`
+                                : payloadFullStatus.system.net_supported === false
+                                ? tr("restricted")
                                 : "—"}
                             </span>
                           </div>
@@ -6541,7 +6694,7 @@ export default function App() {
                           <div className="payload-metric-row">
                             <span>{tr("backpressure")}</span>
                             <span>
-                              {payloadFullStatus.transfer.backpressure_events} ·{" "}
+                              {payloadFullStatus.transfer.backpressure_events} /{" "}
                               {payloadFullStatus.transfer.backpressure_wait_ms} ms
                             </span>
                           </div>
@@ -6797,7 +6950,7 @@ export default function App() {
                       const nextPendingIndex = canMoveDown ? uploadPendingIndices[pendingPos + 1] : -1;
                       return (
                         <div className={`queue-item ${statusClass}`} key={item.id}>
-                          <div>
+                          <div className="queue-item-body">
                             <strong>
                               <span className="queue-type-icon">
                                 {isArchivePath(item.source_path) ? <ArchiveIcon /> : <FolderIcon />}
@@ -7183,6 +7336,7 @@ export default function App() {
                           key={item.id}
                           className={`queue-item ${item.status === "running" ? "active" : ""} ${item.status === "complete" ? "completed" : ""} ${item.status === "failed" ? "failed" : ""}`}
                         >
+                          <div className="queue-item-body">
                           <div className="queue-item-header">
                             <div className="queue-title">
                               {meta?.cover_url && (
@@ -7348,6 +7502,7 @@ export default function App() {
                               </button>
                             </div>
                           )}
+                          </div>
                         </div>
                       );
                     })}
@@ -7953,7 +8108,7 @@ export default function App() {
               const effectiveOptimize =
                 isActiveItem && transferState.effectiveOptimize != null
                   ? transferState.effectiveOptimize
-                  : settings.optimize_upload ?? optimizeUpload;
+                  : settings.optimize_upload ?? optimizeActive;
               const rarTempLabel = settings.rar_temp_root ?? rarTemp;
               const resumeModeValue = normalizeResumeMode(settings.resume_mode ?? resumeMode);
               const resumeModeLabel =

@@ -3,6 +3,18 @@
 All notable changes to this project are documented here.
 This project follows Semantic Versioning.
 
+## [1.3.7] - 2026-01-29
+
+### Added
+- PS5-native system metrics (CPU, memory, threads) via kernel APIs with safe fallbacks when restricted.
+
+### Changed
+- System metrics now prefer kernel sources over sysctl for jailed environments.
+- Resume scan summary now appears in client logs after scanning (skipped vs. remaining).
+
+### Fixed
+- Metrics panel now reports restricted fields explicitly when the payload cannot access them.
+
 ## [1.3.6] - 2026-01-29
 
 ### Added
