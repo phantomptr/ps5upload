@@ -5,7 +5,7 @@
 </p>
 
 PS5 Upload is a fast, reliable way to move apps and homebrew to your PS5 without the pain of slow transfers.
-Current release: **v1.3.7**.
+Current release: **v1.3.8**.
 
 New UI highlights:
 - Cleaner Transfer and Manage layouts with clearer transfer settings.

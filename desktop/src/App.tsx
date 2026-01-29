@@ -1848,20 +1848,32 @@ export default function App() {
 
   const computeOptimizeSettings = () => {
     if (scanFiles <= 0 || scanTotal <= 0) {
-      return { connections: 2, compression: "lz4" as CompressionOption, bandwidth: 0 };
+      return { connections: 2, compression: "lz4" as CompressionOption, bandwidth: 0, autoTune: false };
     }
     const kb = 1024;
     const mb = 1024 * 1024;
     const avgSize = scanTotal / scanFiles;
+    const isDeep = optimizeMode === "deep";
+    const tinyFiles = avgSize < 64 * kb || scanFiles >= 200000;
+    const smallFiles = avgSize < 256 * kb || scanFiles >= 100000;
+    const mediumSmallFiles = avgSize < 1 * mb;
+
     let connections = 4;
     let compression: CompressionOption = "lz4";
+    let autoTune = false;
 
-    if (avgSize < 256 * kb || scanFiles >= 100000) {
-      connections = 1;
+    if (tinyFiles) {
+      connections = 8;
+      compression = "none";
+      autoTune = true;
+    } else if (smallFiles) {
+      connections = isDeep ? 8 : 6;
+      compression = "none";
+      autoTune = true;
+    } else if (mediumSmallFiles) {
+      connections = isDeep ? 6 : 4;
       compression = "lz4";
-    } else if (avgSize < 1 * mb) {
-      connections = 2;
-      compression = "lz4";
+      autoTune = isDeep && scanFiles >= 50000;
     } else if (avgSize < 8 * mb) {
       connections = 4;
       compression = "lz4";
@@ -1873,12 +1885,12 @@ export default function App() {
       compression = "none";
     }
 
-    return { connections, compression, bandwidth: 0 };
+    return { connections, compression, bandwidth: 0, autoTune };
   };
 
   const applyOptimizeSettings = () => {
     const nextSettings = computeOptimizeSettings();
-    setAutoTune(false);
+    setAutoTune(!!nextSettings.autoTune);
     setConnections(nextSettings.connections);
     setCompression(nextSettings.compression);
     setBandwidthLimit(nextSettings.bandwidth);
