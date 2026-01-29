@@ -109,6 +109,8 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
         return api.payloadQueuePause(args.ip, args.id);
       case 'payload_queue_retry':
         return api.payloadQueueRetry(args.ip, args.id);
+      case 'payload_queue_remove':
+        return api.payloadQueueRemove(args.ip, args.id);
       case 'payload_sync_info':
         return api.payloadSyncInfo(args.ip);
       case 'payload_upload_queue_get':

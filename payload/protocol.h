@@ -50,6 +50,7 @@ void handle_queue_reorder(int client_sock, const char *args);
 void handle_queue_process(int client_sock);
 void handle_queue_pause(int client_sock, const char *args);
 void handle_queue_retry(int client_sock, const char *args);
+void handle_queue_remove(int client_sock, const char *args);
 void handle_sync_info(int client_sock);
 void handle_upload_queue_sync(int client_sock, const char *args);
 void handle_upload_queue_get(int client_sock);

@@ -7,6 +7,7 @@ This project follows Semantic Versioning.
 
 ### Added
 - Payload upload safeguards: memory-pressure backoff and queue wait timeouts to avoid hangs under heavy load.
+- Remove button for completed/stopped upload and extraction queue items.
 
 ### Changed
 - Optimize/Deep Optimize now choose more aggressive settings for very large small-file uploads (higher connections, auto-tune, and less compression).

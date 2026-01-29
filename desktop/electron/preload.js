@@ -79,6 +79,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   payloadQueueProcess: (ip) => ipcRenderer.invoke('payload_queue_process', ip),
   payloadQueuePause: (ip, id) => ipcRenderer.invoke('payload_queue_pause', ip, id),
   payloadQueueRetry: (ip, id) => ipcRenderer.invoke('payload_queue_retry', ip, id),
+  payloadQueueRemove: (ip, id) => ipcRenderer.invoke('payload_queue_remove', ip, id),
   payloadSyncInfo: (ip) => ipcRenderer.invoke('payload_sync_info', ip),
   payloadUploadQueueGet: (ip) => ipcRenderer.invoke('payload_upload_queue_get', ip),
   payloadUploadQueueSync: (ip, payload) => ipcRenderer.invoke('payload_upload_queue_sync', ip, payload),

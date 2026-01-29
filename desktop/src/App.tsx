@@ -3594,6 +3594,17 @@ export default function App() {
     }
   };
 
+  const handleQueueRemove = async (id: number) => {
+    if (!ip.trim()) return;
+    try {
+      await invoke("payload_queue_remove", { ip, id });
+      setClientLogs((prev) => [`Removed extraction item ${id}`, ...prev].slice(0, 100));
+      handleRefreshQueueStatus();
+    } catch (err) {
+      setClientLogs((prev) => [`Queue remove failed: ${String(err)}`, ...prev].slice(0, 100));
+    }
+  };
+
   const moveExtractionQueueItem = async (fromIndex: number, toIndex: number) => {
     if (!ip.trim() || !payloadFullStatus) return;
     if (fromIndex < 0 || toIndex < 0) return;
@@ -7130,6 +7141,14 @@ export default function App() {
                                 </button>
                               </>
                             )}
+                            {(isUploadCompleted(item) || isUploadFailed(item)) && (
+                              <button
+                                className="btn ghost small"
+                                onClick={() => handleRemoveQueueItem(item.id)}
+                              >
+                                {tr("delete")}
+                              </button>
+                            )}
                           </div>
                         </div>
                       );
@@ -7511,6 +7530,24 @@ export default function App() {
                                 onClick={() => handleQueueRetry(item.id)}
                               >
                                 {tr("requeue")}
+                              </button>
+                              <button
+                                className="btn ghost small"
+                                onClick={() => handleQueueRemove(item.id)}
+                                disabled={!isConnected}
+                              >
+                                {tr("delete")}
+                              </button>
+                            </div>
+                          )}
+                          {item.status === "complete" && (
+                            <div className="queue-controls">
+                              <button
+                                className="btn ghost small"
+                                onClick={() => handleQueueRemove(item.id)}
+                                disabled={!isConnected}
+                              >
+                                {tr("delete")}
                               </button>
                             </div>
                           )}

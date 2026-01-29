@@ -695,6 +695,33 @@ int extract_queue_retry(int id) {
     return -1;
 }
 
+int extract_queue_remove(int id) {
+    pthread_mutex_lock(&g_queue_mutex);
+    int index = -1;
+    for (int i = 0; i < g_queue.count; i++) {
+        if (g_queue.items[i].id == id) {
+            index = i;
+            break;
+        }
+    }
+    if (index == -1) {
+        pthread_mutex_unlock(&g_queue_mutex);
+        return -1;
+    }
+    if (g_queue.items[index].status == EXTRACT_STATUS_RUNNING ||
+        g_queue.items[index].status == EXTRACT_STATUS_PENDING) {
+        pthread_mutex_unlock(&g_queue_mutex);
+        return -2;
+    }
+    for (int i = index; i < g_queue.count - 1; i++) {
+        g_queue.items[i] = g_queue.items[i + 1];
+    }
+    g_queue.count--;
+    extract_queue_touch();
+    pthread_mutex_unlock(&g_queue_mutex);
+    return 0;
+}
+
 int extract_queue_count(void) {
     int count = 0;
     pthread_mutex_lock(&g_queue_mutex);

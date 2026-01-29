@@ -951,6 +951,11 @@ static void process_command(struct ClientConnection *conn) {
         close_connection(conn);
         return;
     }
+    if (strncmp(conn->cmd_buffer, "QUEUE_REMOVE ", 13) == 0) {
+        handle_queue_remove(conn->sock, conn->cmd_buffer + 13);
+        close_connection(conn);
+        return;
+    }
     if (strncmp(conn->cmd_buffer, "SYNC_INFO", 9) == 0) {
         handle_sync_info(conn->sock);
         close_connection(conn);

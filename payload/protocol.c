@@ -2514,6 +2514,26 @@ void handle_queue_retry(int client_sock, const char *args) {
     }
 }
 
+void handle_queue_remove(int client_sock, const char *args) {
+    int id = atoi(args);
+    if (id <= 0) {
+        const char *error = "ERROR: Invalid QUEUE_REMOVE format\n";
+        send_all(client_sock, error, strlen(error));
+        return;
+    }
+    int res = extract_queue_remove(id);
+    if (res == 0) {
+        const char *ok = "OK\n";
+        send_all(client_sock, ok, strlen(ok));
+    } else if (res == -2) {
+        const char *error = "ERROR: Cannot remove active/pending item\n";
+        send_all(client_sock, error, strlen(error));
+    } else {
+        const char *error = "ERROR: Queue remove failed\n";
+        send_all(client_sock, error, strlen(error));
+    }
+}
+
 void handle_sync_info(int client_sock) {
     long long upload_rev = get_json_rev(UPLOAD_QUEUE_FILE);
     long long history_rev = get_json_rev(HISTORY_FILE);
