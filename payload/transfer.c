@@ -21,6 +21,7 @@
 #include "zstd.h"
 #include "LzmaLib.h"
 #include "config.h"
+#include "system_stats.h"
 
 // Optimized for single-process threaded concurrency
 #define PACK_BUFFER_SIZE (48 * 1024 * 1024)   // 48MB buffer (Increased for throughput)
@@ -28,6 +29,12 @@
 #define WRITER_THREAD_COUNT 4                 // Writer threads; per-session queue shard
 /* Socket read buffer for upload v2 */
 #define UPLOAD_V2_RECV_BUFFER_SIZE (512 * 1024)  // Increased from 256KB
+/* Memory pressure guard */
+#define MEM_LOW_BYTES (256LL * 1024 * 1024)
+#define MEM_RECOVER_BYTES (384LL * 1024 * 1024)
+#define MEM_CHECK_INTERVAL_MS 250
+#define QUEUE_WAIT_TIMEOUT_MS 5000
+#define QUEUE_WAIT_MAX_MS 30000
 
 // Buffer pool with reduced locking via atomics
 #define POOL_SIZE 16
@@ -265,6 +272,7 @@ typedef struct {
 } GlobalLogState;
 
 static GlobalLogState g_log_state;
+static pthread_once_t g_log_once = PTHREAD_ONCE_INIT;
 
 typedef struct SessionWriterState {
     uint64_t session_id;
@@ -286,6 +294,39 @@ static uint64_t now_ms(void) {
     return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)(ts.tv_nsec / 1000000ULL);
 }
 
+static void init_log_state(void) {
+    pthread_mutex_init(&g_log_state.mutex, NULL);
+    g_log_state.bytes = 0;
+    g_log_state.last_ms = 0;
+}
+
+static int memory_pressure_active(void) {
+    static uint64_t last_check = 0;
+    static int last_low = 0;
+    uint64_t now = now_ms();
+    if (now - last_check < MEM_CHECK_INTERVAL_MS) {
+        return last_low;
+    }
+    last_check = now;
+    SystemStats stats;
+    if (get_system_stats(&stats) != 0 || !stats.mem_free_supported || stats.mem_free_bytes < 0) {
+        return last_low;
+    }
+    if (last_low) {
+        last_low = stats.mem_free_bytes < MEM_RECOVER_BYTES;
+    } else {
+        last_low = stats.mem_free_bytes < MEM_LOW_BYTES;
+    }
+    return last_low;
+}
+
+static void sleep_ms(unsigned ms) {
+    struct timespec ts;
+    ts.tv_sec = ms / 1000;
+    ts.tv_nsec = (long)(ms % 1000) * 1000000L;
+    nanosleep(&ts, NULL);
+}
+
 static void queue_init(PackQueue *q) {
     memset(q, 0, sizeof(*q));
     q->read_idx = 0;
@@ -305,7 +346,25 @@ static int queue_push(PackQueue *q, uint8_t *data, size_t len, const char *dest_
         if (wait_start_ms == 0) {
             wait_start_ms = now_ms();
         }
-        pthread_cond_wait(&q->not_full, &q->mutex);
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_sec += QUEUE_WAIT_TIMEOUT_MS / 1000;
+        ts.tv_nsec += (long)(QUEUE_WAIT_TIMEOUT_MS % 1000) * 1000000L;
+        if (ts.tv_nsec >= 1000000000L) {
+            ts.tv_sec += 1;
+            ts.tv_nsec -= 1000000000L;
+        }
+        int rc = pthread_cond_timedwait(&q->not_full, &q->mutex, &ts);
+        if (rc == ETIMEDOUT) {
+            uint64_t waited = now_ms() - wait_start_ms;
+            if (waited >= QUEUE_WAIT_MAX_MS) {
+                printf("[FTX] backpressure: queue stalled for %llums (session=%llu)\n",
+                       (unsigned long long)waited,
+                       (unsigned long long)session_id);
+                pthread_mutex_unlock(&q->mutex);
+                return -1;
+            }
+        }
     }
     if (q->closed) {
         pthread_mutex_unlock(&q->mutex);
@@ -871,10 +930,7 @@ static void *disk_writer_thread(void *arg) {
     int index = thread_args ? thread_args->index : -1;
     printf("[FTX] Disk writer thread started (%d)\n", index);
     
-    // Init log state
-    pthread_mutex_init(&g_log_state.mutex, NULL);
-    g_log_state.bytes = 0;
-    g_log_state.last_ms = 0;
+    pthread_once(&g_log_once, init_log_state);
 
     PackJob job;
     while (queue && queue_pop(queue, &job)) {
@@ -1184,6 +1240,29 @@ int upload_session_feed(UploadSession *session, const uint8_t *data, size_t len,
                            (unsigned long long)session->header.body_len);
                     session->error = 1;
                 } else {
+                    int wait_ms = 0;
+                    while (memory_pressure_active()) {
+                        if (g_abort_transfer) {
+                            session->error = 1;
+                            break;
+                        }
+                        if (wait_ms == 0 || (wait_ms % 2000) == 0) {
+                            printf("[FTX] memory pressure: delaying pack alloc\n");
+                        }
+                        sleep_ms(50);
+                        wait_ms += 50;
+                        if (wait_ms >= QUEUE_WAIT_MAX_MS) {
+                            printf("[FTX] memory pressure: giving up after %dms\n", wait_ms);
+                            session->error = 1;
+                            break;
+                        }
+                    }
+                    if (session->error) {
+                        if (error) {
+                            *error = 1;
+                        }
+                        return 0;
+                    }
                     session->body_len = session->header.body_len;
                     session->body = alloc_pack_buffer(session->body_len);
                     
@@ -1287,8 +1366,25 @@ static int upload_session_finish(UploadSession *session) {
     }
 
     pthread_mutex_lock(&queue->mutex);
+    uint64_t wait_start = now_ms();
     while (queue->count > 0 && !queue->closed) {
-        pthread_cond_wait(&queue->not_full, &queue->mutex);
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_sec += QUEUE_WAIT_TIMEOUT_MS / 1000;
+        ts.tv_nsec += (long)(QUEUE_WAIT_TIMEOUT_MS % 1000) * 1000000L;
+        if (ts.tv_nsec >= 1000000000L) {
+            ts.tv_sec += 1;
+            ts.tv_nsec -= 1000000000L;
+        }
+        int rc = pthread_cond_timedwait(&queue->not_full, &queue->mutex, &ts);
+        if (rc == ETIMEDOUT) {
+            uint64_t waited = now_ms() - wait_start;
+            if (waited >= QUEUE_WAIT_MAX_MS) {
+                printf("[FTX] finalize wait timeout after %llums\n", (unsigned long long)waited);
+                pthread_mutex_unlock(&queue->mutex);
+                return -1;
+            }
+        }
     }
     pthread_mutex_unlock(&queue->mutex);
 

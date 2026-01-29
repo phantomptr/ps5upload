@@ -2187,12 +2187,18 @@ async function sendFilesV2(files, socket, options = {}) {
     recordCount++;
   };
 
-  for (const file of files) {
+  const logEachFile = files.length <= 10000;
+  const logInterval = logEachFile ? 1 : Math.max(250, Math.floor(files.length / 200));
+
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
     if (cancel.value) {
       throw new Error('Upload cancelled by user');
     }
 
-    log(`Packing: ${file.rel_path}`);
+    if (logEachFile || i % logInterval === 0) {
+      log(logEachFile ? `Packing: ${file.rel_path}` : `Packing... ${i + 1}/${files.length}`);
+    }
 
     const relPathBytes = Buffer.from(file.rel_path, 'utf8');
     let sawData = false;

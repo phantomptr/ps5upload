@@ -3,6 +3,19 @@
 All notable changes to this project are documented here.
 This project follows Semantic Versioning.
 
+## [1.3.8] - 2026-01-29
+
+### Added
+- Payload upload safeguards: memory-pressure backoff and queue wait timeouts to avoid hangs under heavy load.
+
+### Changed
+- Optimize/Deep Optimize now choose more aggressive settings for very large small-file uploads (higher connections, auto-tune, and less compression).
+- Resume scan summary now appears in client logs after scanning (skipped vs. remaining).
+
+### Fixed
+- Transfer packing logs are throttled on huge uploads to reduce overhead.
+- i18n duplicate key warnings resolved.
+
 ## [1.3.7] - 2026-01-29
 
 ### Added
@@ -11,6 +24,7 @@ This project follows Semantic Versioning.
 ### Changed
 - System metrics now prefer kernel sources over sysctl for jailed environments.
 - Resume scan summary now appears in client logs after scanning (skipped vs. remaining).
+- Optimize/Deep Optimize now choose more aggressive settings for very large small-file uploads (higher connections, auto-tune, and less compression).
 
 ### Fixed
 - Metrics panel now reports restricted fields explicitly when the payload cannot access them.

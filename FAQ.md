@@ -1,7 +1,7 @@
 # PS5 Upload FAQ
 
 Welcome! This FAQ covers setup, features, troubleshooting, and platform‑specific tips.
-Latest release: **v1.3.7**.
+Latest release: **v1.3.8**.
 
 ---
 
