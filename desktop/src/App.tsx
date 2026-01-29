@@ -1139,6 +1139,11 @@ export default function App() {
   const [activeRunId, setActiveRunId] = useState<number | null>(null);
   const [transferActive, setTransferActive] = useState(false);
   const [uploadQueueRunning, setUploadQueueRunning] = useState(false);
+  const lastTransferActiveAtRef = useRef<number>(0);
+  const lastPayloadUptimeRef = useRef<number | null>(null);
+  const lastPayloadRestartAtRef = useRef<number | null>(null);
+  const lastConnectedRef = useRef(false);
+  const autoResumeInFlightRef = useRef(false);
   const lastManageProgressUpdate = useRef(0);
   const lastManageOp = useRef("");
   const [activeTransferSource, setActiveTransferSource] = useState("");
@@ -1305,6 +1310,18 @@ export default function App() {
   }, [activeRunId, transferActive]);
 
   useEffect(() => {
+    const status = transferState.status;
+    const isActiveStatus =
+      status.startsWith("Uploading") ||
+      status.startsWith("Scanning") ||
+      status.startsWith("Resume scan") ||
+      status.startsWith("Starting");
+    if (transferActive || isActiveStatus) {
+      lastTransferActiveAtRef.current = Date.now();
+    }
+  }, [transferActive, transferState.status]);
+
+  useEffect(() => {
     if (!activeRunId && !transferActive) return;
     const now = Date.now();
     setTransferUpdatedAt(now);
@@ -1360,6 +1377,73 @@ export default function App() {
       if (timer) clearTimeout(timer);
     };
   }, [isConnected, ip]);
+
+  const autoResumeAfterPayloadRestart = async (reason: string) => {
+    if (autoResumeInFlightRef.current) return;
+    if (transferActive || uploadQueueRunning || !isConnected) return;
+    const lastActiveAt = lastTransferActiveAtRef.current;
+    if (!lastActiveAt || Date.now() - lastActiveAt > 10 * 60 * 1000) return;
+
+    const nowSec = Math.floor(Date.now() / 1000);
+    const candidates = queueSnapshot.current.data.items.filter((item) => {
+      if (item.status !== "Pending" && item.status !== "InProgress") return false;
+      if (!item.last_started_at) return false;
+      return nowSec - item.last_started_at < 6 * 60 * 60;
+    });
+    if (candidates.length === 0) return;
+
+    candidates.sort((a, b) => (b.last_started_at || 0) - (a.last_started_at || 0));
+    const target = candidates[0];
+
+    autoResumeInFlightRef.current = true;
+    try {
+      const nextItems = queueSnapshot.current.data.items.map((item) => {
+        if (item.id !== target.id) return item;
+        return {
+          ...item,
+          paused: false,
+          status: "Pending",
+          last_run_action: "resume",
+          transfer_settings: {
+            ...(item.transfer_settings || {}),
+            resume_mode: "size",
+            use_temp: false
+          }
+        };
+      });
+      await saveQueueData({ ...queueSnapshot.current.data, items: nextItems });
+      pushClientLog(`Auto-resume after ${reason}: ${target.source_path}`, "info");
+      setUploadQueueRunning(true);
+      processNextQueueItem();
+    } finally {
+      autoResumeInFlightRef.current = false;
+    }
+  };
+
+  useEffect(() => {
+    const connected = isConnected && !!payloadFullStatus;
+    if (!connected) {
+      lastConnectedRef.current = false;
+      return;
+    }
+    const uptime = payloadFullStatus?.uptime ?? null;
+    const prevUptime = lastPayloadUptimeRef.current;
+    let restarted = false;
+    if (uptime != null && prevUptime != null && uptime < prevUptime) {
+      restarted = true;
+    }
+    const reconnected = !lastConnectedRef.current && isConnected;
+    lastConnectedRef.current = isConnected;
+    if (uptime != null) {
+      lastPayloadUptimeRef.current = uptime;
+    }
+    if (restarted) {
+      lastPayloadRestartAtRef.current = Date.now();
+      autoResumeAfterPayloadRestart("payload restart");
+    } else if (reconnected && lastPayloadRestartAtRef.current && Date.now() - lastPayloadRestartAtRef.current < 2 * 60 * 1000) {
+      autoResumeAfterPayloadRestart("reconnect");
+    }
+  }, [isConnected, payloadFullStatus, transferActive, uploadQueueRunning]);
 
   useEffect(() => {
     if (!activeRunId || transferActive) return;
@@ -3263,6 +3347,15 @@ export default function App() {
       : null;
   const transferPercentLabel =
     transferTotal > 0 ? `${Math.floor(transferPercent)}%` : "Streaming";
+  const transferStatusLower = transferState.status.toLowerCase();
+  const transferIsTerminal =
+    transferState.status.startsWith("Complete") ||
+    transferState.status.startsWith("Cancelled") ||
+    transferState.status.startsWith("Error") ||
+    transferState.status.startsWith("Queued for extraction") ||
+    transferState.status === tr("stopped") ||
+    transferStatusLower === tr("stopped").toLowerCase();
+  const transferBusy = transferActive && !transferIsTerminal;
   const showTransferUpdateNote =
     transferState.status.startsWith("Uploading archive") ||
     transferState.status.startsWith("Extracting");
@@ -5635,7 +5728,7 @@ export default function App() {
   const hasUploadCompleted = queueData.items.some(isUploadCompleted);
   const hasUploadFailed = queueData.items.some(isUploadFailed);
   const hasUploadPending = queueData.items.some((item) => item.status === "Pending");
-  const hasUploadStalled = !transferActive && queueData.items.some((item) => item.status === "InProgress");
+  const hasUploadStalled = !transferBusy && queueData.items.some((item) => item.status === "InProgress");
   const hasUploadStartable = hasUploadPending || hasUploadStalled;
 
   const historyDurationByKey = useMemo(() => {
@@ -6840,7 +6933,7 @@ export default function App() {
                     onClick={handleUploadQueue}
                     disabled={
                       uploadQueueRunning ||
-                      transferActive ||
+                      transferBusy ||
                       !hasUploadStartable
                     }
                   >
@@ -6849,7 +6942,7 @@ export default function App() {
                   <button
                     className="btn danger"
                     onClick={handleCancel}
-                    disabled={!uploadQueueRunning && !transferActive}
+                    disabled={!uploadQueueRunning && !transferBusy}
                   >
                     {tr("stop")}
                   </button>
