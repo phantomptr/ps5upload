@@ -74,6 +74,7 @@ int extract_queue_is_busy(void);
 int extract_queue_cancel(int id);
 int extract_queue_pause(int id);
 int extract_queue_retry(int id);
+int extract_queue_remove(int id);
 int extract_queue_count(void);
 int extract_queue_has_pending(void);
 

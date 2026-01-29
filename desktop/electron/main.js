@@ -1532,6 +1532,13 @@ async function queueRetry(ip, port, id) {
   }
 }
 
+async function queueRemove(ip, port, id) {
+  const response = await sendSimpleCommand(ip, port, `QUEUE_REMOVE ${id}\n`);
+  if (!response.startsWith('OK')) {
+    throw new Error(`Queue remove failed: ${response}`);
+  }
+}
+
 async function syncInfo(ip, port) {
   const response = await sendCommandExpectPayload(ip, port, 'SYNC_INFO\n');
   return JSON.parse(response || '{}');
@@ -3366,6 +3373,11 @@ function registerIpcHandlers() {
   ipcMain.handle('payload_queue_retry', async (_, ip, id) => {
     if (!ip || !ip.trim()) throw new Error('Enter a PS5 address first.');
     return queueRetry(ip, TRANSFER_PORT, id);
+  });
+
+  ipcMain.handle('payload_queue_remove', async (_, ip, id) => {
+    if (!ip || !ip.trim()) throw new Error('Enter a PS5 address first.');
+    return queueRemove(ip, TRANSFER_PORT, id);
   });
 
   ipcMain.handle('payload_sync_info', async (_, ip) => {
