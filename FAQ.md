@@ -73,7 +73,7 @@ Use the language selector in the top-right of the app window.
 Supported: English, 简体中文, 繁體中文, Français, Español, العربية, Tiếng Việt, हिन्दी, বাংলা, Português (Brasil), Русский, 日本語, Türkçe, Bahasa Indonesia, ไทย, 한국어, Deutsch, Italiano.
 
 **Q: Why do I see squares/boxes instead of text in some languages?**  
-Update to **v1.3.5** or newer. We bundle Noto fonts so Hindi/Bengali/Thai/Korean text renders properly on Windows, macOS, and Linux.
+Update to **v1.3.6** or newer. We bundle Noto fonts so Hindi/Bengali/Thai/Korean text renders properly on Windows, macOS, and Linux.
 
 ---
 
@@ -83,7 +83,7 @@ Update to **v1.3.5** or newer. We bundle Noto fonts so Hindi/Bengali/Thai/Korean
 - **Source:** folder or archive
 - **Destination:** storage + preset + folder name
 - **Override if conflict found:** must be ON to overwrite
-- **Resume Mode:** skips existing files (size/time/hash)
+- **Resume Mode:** skips existing files (size-only / thresholded hash / full SHA256)
 - **Compression:** Auto / None / LZ4 / ZSTD
 - **Connections:** number of parallel streams
 
@@ -91,13 +91,15 @@ Update to **v1.3.5** or newer. We bundle Noto fonts so Hindi/Bengali/Thai/Korean
 - **Scan** estimates size and file count quickly.
 - **Optimize** suggests best compression/connections based on scan.
 - **Scan is required for Optimize.**
+- **Auto-tune** adjusts packing and pacing during upload; it may enable Optimize for small-file batches.
 - Archives aren’t scanned.
 
 ### Resume Mode
 Modes:
-- **Size** (fastest)
-- **Size+Time** (balanced)
-- **SHA256** (slowest, most accurate)
+- **Fastest** (size only)
+- **Faster** (hash files ≥ 1 GB)
+- **Fast** (hash files ≥ 128 MB)
+- **Normal** (hash all files, SHA256)
 
 When **Resume** is enabled, **Override** is disabled (resume avoids overwriting).
 

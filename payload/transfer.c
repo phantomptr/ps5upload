@@ -13,6 +13,7 @@
 #include <signal.h>
 #include <stdint.h>
 
+#include "transfer.h"
 #include "protocol_defs.h"
 #include "notify.h"
 #include "lz4.h"
@@ -968,6 +969,39 @@ int transfer_is_active(void) {
 
 time_t transfer_last_progress(void) {
     return g_last_transfer_progress;
+}
+
+int transfer_get_stats(TransferStats *out) {
+    if (!out) {
+        return -1;
+    }
+
+    memset(out, 0, sizeof(*out));
+
+    pthread_mutex_lock(&g_mem_stats_mutex);
+    out->pack_in_use = g_pack_in_use;
+    out->active_sessions = g_active_sessions;
+    pthread_mutex_unlock(&g_mem_stats_mutex);
+
+    pthread_mutex_lock(&g_pool_mutex);
+    out->pool_count = g_pool_count;
+    pthread_mutex_unlock(&g_pool_mutex);
+
+    for (int i = 0; i < WRITER_THREAD_COUNT; i++) {
+        pthread_mutex_lock(&g_queues[i].mutex);
+        out->queue_count += g_queues[i].count;
+        pthread_mutex_unlock(&g_queues[i].mutex);
+    }
+
+    pthread_mutex_lock(&g_backpressure_mutex);
+    out->backpressure_events = g_backpressure_total_events;
+    out->backpressure_wait_ms = g_backpressure_total_wait_ms;
+    pthread_mutex_unlock(&g_backpressure_mutex);
+
+    out->last_progress = g_last_transfer_progress;
+    out->abort_requested = g_abort_transfer ? 1 : 0;
+    out->workers_initialized = g_workers_initialized ? 1 : 0;
+    return 0;
 }
 
 int transfer_idle_cleanup(void) {

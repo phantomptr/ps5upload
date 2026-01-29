@@ -16,9 +16,11 @@ New UI highlights:
 - Smoother transfer/extraction updates and less spiky speed readout.
 - Expanded UI language support (Vietnamese, Hindi, Bengali, Portuguese‑BR, Russian, Japanese, Turkish, Indonesian, Thai, Korean, German, Italian).
 - Bundled Noto fonts so non‑Latin UI text renders correctly on Windows, macOS, and Linux.
+- Keep Awake now supports Auto mode (sleep allowed after 15 minutes idle).
 - Automatic maintenance when idle to keep the payload healthy.
 - Extraction Stop retries automatically; progress messaging now shows “Starting extraction…” before bytes appear.
-- History resume workflow with explicit resume mode selection.
+- History resume workflow with 4 resume tiers (size-only, thresholded hash, full SHA256).
+- Auto-tune adapts pack size/pacing and may enable Optimize for small-file batches.
 - Log level filtering with color-coded badges in the Logs panel.
 - FAQ tab with an embedded, scrollable help panel.
 - Manage “Reset UI” action for quick recovery from stuck states.

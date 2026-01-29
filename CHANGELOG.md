@@ -3,6 +3,17 @@
 All notable changes to this project are documented here.
 This project follows Semantic Versioning.
 
+## [1.3.6] - 2026-01-29
+
+### Added
+- Keep Awake now has an Auto mode that allows sleep after 15 minutes of inactivity (no current upload or extraction).
+- Resume modes now include Fastest/Faster/Fast/Normal tiers with size-based hashing thresholds.
+- Auto-tune now explains its behavior (pack size/pacing; may enable Optimize without changing connections).
+
+### Changed
+- Resume “size + time” has been removed (PS5 clock drift can make it unreliable); legacy configs are normalized to size-only.
+- Upload info popup now shows the effective Optimize state for active transfers.
+
 ## [1.3.5] - 2026-01-28
 
 ### Added

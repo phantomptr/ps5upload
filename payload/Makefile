@@ -10,7 +10,7 @@ TARGET := ps5upload.elf
 KILLER_TARGET := ps5uploadkiller.elf
 
 # C sources
-C_SRCS := main.c storage.c protocol.c extract.c notify.c transfer.c lz4.c sha256.c unrar_handler.c extract_queue.c \
+C_SRCS := main.c storage.c protocol.c extract.c notify.c transfer.c lz4.c sha256.c unrar_handler.c extract_queue.c system_stats.c \
 	third_party/zstd/zstd.c \
 	third_party/lzma_sdk/Alloc.c \
 	third_party/lzma_sdk/CpuArch.c \
@@ -20,7 +20,7 @@ C_SRCS := main.c storage.c protocol.c extract.c notify.c transfer.c lz4.c sha256
 	third_party/lzma_sdk/LzFind.c \
 	third_party/lzma_sdk/Sort.c
 
-C_OBJS := main.o storage.o protocol.o extract.o notify.o transfer.o lz4.o sha256.o unrar_handler.o extract_queue.o \
+C_OBJS := main.o storage.o protocol.o extract.o notify.o transfer.o lz4.o sha256.o unrar_handler.o extract_queue.o system_stats.o \
 	third_party/zstd/zstd.o \
 	third_party/lzma_sdk/Alloc.o \
 	third_party/lzma_sdk/CpuArch.o \

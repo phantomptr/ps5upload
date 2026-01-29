@@ -25,6 +25,14 @@ const toSafeNumber = (value: unknown, fallback = 0) => {
   return fallback;
 };
 
+const normalizeResumeMode = (value?: string | null): ResumeOption => {
+  if (value === "sha256") return "sha256";
+  if (value === "hash_large") return "hash_large";
+  if (value === "hash_medium") return "hash_medium";
+  if (value === "size" || value === "size_mtime") return "size";
+  return "none";
+};
+
 type TabId = "transfer" | "payload" | "manage" | "chat";
 
 type TransferCompleteEvent = {
@@ -46,6 +54,10 @@ type TransferStatusSnapshot = {
   files: number;
   elapsed_secs: number;
   current_file: string;
+  requested_optimize?: boolean | null;
+  auto_tune_connections?: boolean | null;
+  effective_optimize?: boolean | null;
+  effective_compression?: string | null;
 };
 
 type TransferLogEvent = {
@@ -131,6 +143,7 @@ type ProfilesData = {
 };
 
 type QueueStatus = "Pending" | "InProgress" | "Completed" | { Failed: string };
+const USER_STOPPED_SENTINEL = "__USER_STOPPED__";
 
 type QueueItem = {
   id: number;
@@ -144,6 +157,15 @@ type QueueItem = {
   status: QueueStatus;
   paused?: boolean;
   size_bytes?: number | null;
+  attempts?: number;
+  last_run_action?: "new" | "resume" | "requeue";
+  last_started_at?: number;
+  last_completed_at?: number;
+  last_failed_at?: number;
+  last_failed_bytes?: number;
+  last_failed_total_bytes?: number;
+  last_failed_files?: number;
+  last_failed_elapsed_sec?: number;
   transfer_settings?: {
     use_temp: boolean;
     connections: number;
@@ -240,7 +262,7 @@ const presetOptions = ["etaHEN/games", "homebrew", "custom"] as const;
 
 type CompressionOption = "auto" | "none" | "lz4" | "zstd" | "lzma";
 
-type ResumeOption = "none" | "size" | "size_mtime" | "sha256";
+type ResumeOption = "none" | "size" | "hash_large" | "hash_medium" | "sha256";
 
 type DownloadCompressionOption = "auto" | "none" | "lz4" | "zstd" | "lzma";
 
@@ -350,6 +372,26 @@ type PayloadStatusResponse = {
   uptime: number;
   queue_count: number;
   is_busy: boolean;
+  extract_last_progress?: number;
+  system?: {
+    cpu_percent: number;
+    rss_bytes: number;
+    thread_count: number;
+    mem_total_bytes: number;
+    mem_free_bytes: number;
+    page_size: number;
+  };
+  transfer?: {
+    pack_in_use: number;
+    pool_count: number;
+    queue_count: number;
+    active_sessions: number;
+    backpressure_events: number;
+    backpressure_wait_ms: number;
+    last_progress: number;
+    abort_requested: boolean;
+    workers_initialized: boolean;
+  };
   items: ExtractQueueItem[];
 };
 
@@ -371,6 +413,10 @@ type TransferState = {
   files: number;
   elapsed: number;
   currentFile: string;
+  requestedOptimize?: boolean | null;
+  autoTuneConnections?: boolean | null;
+  effectiveOptimize?: boolean | null;
+  effectiveCompression?: string | null;
 };
 
 const formatBytes = (bytes: number | bigint) => {
@@ -752,20 +798,21 @@ export default function App() {
     await appWindow.close();
   };
 
-  const handleToggleKeepAwake = async () => {
-    const next = !keepAwake;
-    setKeepAwake(next);
-    localStorage.setItem("ps5upload.keep_awake", next ? "true" : "false");
-    try {
-      await invoke("sleep_set", { enabled: next });
-    } catch (err) {
-      setClientLogs((prev) => [`Keep awake failed: ${String(err)}`, ...prev]);
+  const handleToggleKeepAwake = () => {
+    const next =
+      keepAwakeMode === "off" ? "on" : keepAwakeMode === "on" ? "auto" : "off";
+    setKeepAwakeMode(next);
+    localStorage.setItem("ps5upload.keep_awake_mode", next);
+    if (next !== "auto") {
+      localStorage.setItem("ps5upload.keep_awake", next === "on" ? "true" : "false");
     }
   };
 
   const handleToggleTheme = () => {
     setTheme((prev) => (prev === "dark" ? "light" : "dark"));
   };
+
+  const KEEP_AWAKE_IDLE_MS = 15 * 60 * 1000;
 
   const [appVersion, setAppVersion] = useState("...");
   const [profilesData, setProfilesData] = useState<ProfilesData>({
@@ -782,6 +829,8 @@ export default function App() {
   const [uploadQueueTab, setUploadQueueTab] = useState<"current" | "completed" | "failed">("current");
   const [extractQueueTab, setExtractQueueTab] = useState<"current" | "completed" | "failed">("current");
   const [extractionStopping, setExtractionStopping] = useState(false);
+  const [extractionActionById, setExtractionActionById] = useState<Record<number, "requeue">>({});
+  const uploadQueueRetryTimeoutRef = useRef<number | null>(null);
   const [historyData, setHistoryData] = useState<HistoryData>({ records: [] });
   const [logTab, setLogTab] = useState<"client" | "payload" | "history">("client");
   const [queueMetaById, setQueueMetaById] = useState<Record<number, QueueMeta>>({});
@@ -868,7 +917,9 @@ export default function App() {
   const [chatDisplayName, setChatDisplayName] = useState("");
   const [configDefaults, setConfigDefaults] = useState<AppConfig | null>(null);
   const [configLoaded, setConfigLoaded] = useState(false);
-  const [keepAwake, setKeepAwake] = useState(false);
+  const [keepAwakeMode, setKeepAwakeMode] = useState<"off" | "on" | "auto">("off");
+  const [keepAwakeAutoHold, setKeepAwakeAutoHold] = useState(false);
+  const keepAwakeAutoTimeoutRef = useRef<number | null>(null);
   const [ip, setIp] = useState("");
   const [connectionStatus, setConnectionStatus] = useState("Disconnected");
   const [isConnected, setIsConnected] = useState(false);
@@ -956,6 +1007,7 @@ export default function App() {
   const [newFolderName, setNewFolderName] = useState("");
   const [showResumePrompt, setShowResumePrompt] = useState(false);
   const [resumeRecord, setResumeRecord] = useState<TransferRecord | null>(null);
+  const [resumeQueueItem, setResumeQueueItem] = useState<QueueItem | null>(null);
   const [resumeChoice, setResumeChoice] = useState<ResumeOption>("size");
   const [gameMeta, setGameMeta] = useState<GameMetaPayload | null>(null);
   const [gameCoverUrl, setGameCoverUrl] = useState<string | null>(null);
@@ -1054,7 +1106,11 @@ export default function App() {
     total: 0,
     files: 0,
     elapsed: 0,
-    currentFile: ""
+    currentFile: "",
+    requestedOptimize: null,
+    autoTuneConnections: null,
+    effectiveOptimize: null,
+    effectiveCompression: null
   });
   const transferSpeedRef = useRef({ sent: 0, elapsed: 0, ema: 0 });
   const [transferSpeedEma, setTransferSpeedEma] = useState(0);
@@ -1170,7 +1226,11 @@ export default function App() {
               total: toSafeNumber(status.total),
               files: toSafeNumber(status.files),
               elapsed: toSafeNumber(status.elapsed_secs),
-              currentFile: status.current_file ?? ""
+              currentFile: status.current_file ?? "",
+              requestedOptimize: status.requested_optimize ?? null,
+              autoTuneConnections: status.auto_tune_connections ?? null,
+              effectiveOptimize: status.effective_optimize ?? null,
+              effectiveCompression: status.effective_compression ?? null
             };
             startTransition(() => {
               setTransferState((prev) => {
@@ -1180,7 +1240,11 @@ export default function App() {
                   prev.total === nextState.total &&
                   prev.files === nextState.files &&
                   prev.elapsed === nextState.elapsed &&
-                  prev.currentFile === nextState.currentFile
+                  prev.currentFile === nextState.currentFile &&
+                  prev.requestedOptimize === nextState.requestedOptimize &&
+                  prev.autoTuneConnections === nextState.autoTuneConnections &&
+                  prev.effectiveOptimize === nextState.effectiveOptimize &&
+                  prev.effectiveCompression === nextState.effectiveCompression
                 ) {
                   return prev;
                 }
@@ -1886,7 +1950,7 @@ export default function App() {
         setCompression((normalizedConfig.compression as CompressionOption) || "auto");
         setBandwidthLimit(normalizedConfig.bandwidth_limit_mbps || 0);
         setOverrideOnConflict(normalizedConfig.override_on_conflict ?? false);
-        setResumeMode((normalizedConfig.resume_mode as ResumeOption) || "none");
+        setResumeMode(normalizeResumeMode(normalizedConfig.resume_mode));
         setAutoTune(normalizedConfig.auto_tune_connections ?? true);
         setOptimizeUpload(normalizedConfig.optimize_upload ?? false);
         setUseTemp(normalizedConfig.use_temp ?? false);
@@ -2039,9 +2103,14 @@ export default function App() {
     }
     if (customSaved) setCustomPreset(customSaved);
     if (subfolderSaved) setSubfolder(subfolderSaved);
-    const keepAwakeSaved = localStorage.getItem("ps5upload.keep_awake");
-    if (keepAwakeSaved) {
-      setKeepAwake(keepAwakeSaved === "true");
+    const keepAwakeModeSaved = localStorage.getItem("ps5upload.keep_awake_mode");
+    if (keepAwakeModeSaved === "on" || keepAwakeModeSaved === "off" || keepAwakeModeSaved === "auto") {
+      setKeepAwakeMode(keepAwakeModeSaved);
+    } else {
+      const keepAwakeSaved = localStorage.getItem("ps5upload.keep_awake");
+      if (keepAwakeSaved) {
+        setKeepAwakeMode(keepAwakeSaved === "true" ? "on" : "off");
+      }
     }
 
     load();
@@ -2051,11 +2120,32 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!configLoaded) return;
-    invoke("sleep_set", { enabled: keepAwake }).catch(() => {
-      // ignore keep awake failures
-    });
-  }, [keepAwake, configLoaded]);
+    if (keepAwakeMode !== "auto") {
+      if (keepAwakeAutoTimeoutRef.current != null) {
+        window.clearTimeout(keepAwakeAutoTimeoutRef.current);
+        keepAwakeAutoTimeoutRef.current = null;
+      }
+      setKeepAwakeAutoHold(false);
+    }
+  }, [keepAwakeMode]);
+
+  useEffect(() => {
+    return () => {
+      if (keepAwakeAutoTimeoutRef.current != null) {
+        window.clearTimeout(keepAwakeAutoTimeoutRef.current);
+        keepAwakeAutoTimeoutRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (uploadQueueRetryTimeoutRef.current != null) {
+        window.clearTimeout(uploadQueueRetryTimeoutRef.current);
+        uploadQueueRetryTimeoutRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!configLoaded || !currentProfile) {
@@ -2615,11 +2705,15 @@ export default function App() {
           }
           if (snapshot.viaQueue && queueSnapshot.current.currentId) {
             const id = queueSnapshot.current.currentId;
-            updateQueueItemStatus(id, { Failed: event.payload.message }).then(
-              () => {
-                processNextQueueItem();
-              }
-            );
+            updateQueueItemStatus(id, { Failed: event.payload.message }, {
+              last_failed_at: Math.floor(Date.now() / 1000),
+              last_failed_bytes: snapshot.state.sent,
+              last_failed_total_bytes: snapshot.state.total,
+              last_failed_files: snapshot.state.files,
+              last_failed_elapsed_sec: duration
+            }).then(() => {
+              processNextQueueItem();
+            });
           }
           maintenanceRequestedRef.current = true;
           const level = event.payload.message.toLowerCase().includes("cancel")
@@ -3413,6 +3507,7 @@ export default function App() {
     try {
       await invoke("payload_queue_retry", { ip, id });
       setClientLogs((prev) => [`Requeued extraction item ${id}`, ...prev].slice(0, 100));
+      setExtractionActionById((prev) => ({ ...prev, [id]: "requeue" }));
       handleRefreshQueueStatus();
     } catch (err) {
       setClientLogs((prev) => [`Queue requeue failed: ${String(err)}`, ...prev].slice(0, 100));
@@ -3827,111 +3922,11 @@ export default function App() {
 
   const handleUpload = async () => {
     setClientLogs((prev) => ["Upload clicked", ...prev].slice(0, 100));
-    if (transferActive) {
-      try {
-        const status = await invoke<TransferStatusSnapshot>("transfer_status");
-        const activeStates = [
-          "Starting",
-          "Scanning",
-          "Uploading",
-          "Uploading archive",
-          "Extracting"
-        ];
-        const isActive = activeStates.some((state) => status.status.startsWith(state));
-        if (isActive) {
-          setTransferState((prev) => ({ ...prev, status: "Transfer already running" }));
-          setClientLogs((prev) => [
-            "Upload blocked: A transfer is already running. Cancel it first.",
-            ...prev
-          ].slice(0, 100));
-          return;
-        }
-        await invoke("transfer_reset");
-      } catch {
-        setTransferState((prev) => ({ ...prev, status: "Transfer already running" }));
-        setClientLogs((prev) => [
-          "Upload blocked: A transfer is already running. Cancel it first.",
-          ...prev
-        ].slice(0, 100));
-        return;
-      }
-    }
-    if (!ip.trim()) {
-      setTransferState((prev) => ({ ...prev, status: "Missing IP" }));
-      setClientLogs((prev) => ["Upload blocked: Missing IP", ...prev].slice(0, 100));
-      return;
-    }
-    if (!sourcePath.trim()) {
-      setTransferState((prev) => ({ ...prev, status: "Missing source" }));
-      setClientLogs((prev) => ["Upload blocked: Missing source", ...prev].slice(0, 100));
-      return;
-    }
-    if (!finalDestPath.trim()) {
-      setTransferState((prev) => ({ ...prev, status: "Missing destination" }));
-      setClientLogs((prev) => ["Upload blocked: Missing destination", ...prev].slice(0, 100));
-      return;
-    }
-    if (!(await ensureConnected())) {
-      setTransferState((prev) => ({ ...prev, status: "Not connected" }));
-      setClientLogs((prev) => ["Upload blocked: Not connected", ...prev].slice(0, 100));
-      return;
-    }
-
-    try {
-      setClientLogs((prev) => [
-        `Upload preparing: ${sourcePath} -> ${finalDestPath}`,
-        ...prev
-      ].slice(0, 100));
-      const shouldCheckDest = resumeMode === "none" && !overrideOnConflict;
-      const exists = shouldCheckDest
-        ? await invoke<boolean>("transfer_check_dest", {
-            ip,
-            destPath: finalDestPath
-          })
-        : false;
-      if (exists && !overrideOnConflict) {
-        setTransferState((prev) => ({ ...prev, status: tr("destination_exists") }));
-        setClientLogs((prev) => [
-          "Upload blocked: Destination already exists",
-          ...prev
-        ].slice(0, 100));
-        return;
-      }
-      const runId = await invoke<number>("transfer_start", {
-        req: {
-          ip,
-          source_path: sourcePath,
-          dest_path: finalDestPath,
-          use_temp: useTemp,
-          connections,
-          resume_mode: resumeMode,
-          compression,
-          bandwidth_limit_mbps: bandwidthLimit,
-          auto_tune_connections: autoTune,
-          optimize_upload: optimizeUpload,
-          chmod_after_upload: chmodAfterUpload,
-          rar_extract_mode: rarExtractMode,
-          rar_temp_root: rarTemp,
-          override_on_conflict: overrideOnConflict,
-          payload_version: payloadVersion,
-          storage_root: storageRoot,
-          required_size: transferState.total || null
-        }
-      });
-      setActiveRunId(runId);
-      setActiveTransferSource(sourcePath);
-      setActiveTransferDest(finalDestPath);
-      setActiveTransferViaQueue(false);
-      setTransferStartedAt(Date.now());
-      const startMsg = `Upload started: ${sourcePath} -> ${finalDestPath}`;
-      setClientLogs((prev) => [startMsg, ...prev].slice(0, 100));
-    } catch (err) {
-      setClientLogs((prev) => [`Upload failed: ${String(err)}`, ...prev].slice(0, 100));
-      setTransferState((prev) => ({
-        ...prev,
-        status: `Error: ${String(err)}`
-      }));
-    }
+    await startUploadWithParams({
+      sourcePath,
+      destPath: finalDestPath,
+      resumeOverride: resumeMode
+    });
   };
 
   const sanitizeQueueData = (data: QueueData): QueueData => {
@@ -3945,6 +3940,12 @@ export default function App() {
               ? toSafeNumber(item.size_bytes)
               : item.size_bytes ?? null
         };
+        if (nextItem.transfer_settings?.resume_mode) {
+          nextItem.transfer_settings = {
+            ...nextItem.transfer_settings,
+            resume_mode: normalizeResumeMode(nextItem.transfer_settings.resume_mode)
+          };
+        }
         if (nextItem.status === "InProgress") {
           if (inProgressSeen) {
             nextItem.status = "Pending";
@@ -4278,17 +4279,26 @@ export default function App() {
     }
     if (typeof status === "object") {
       const message = status.Failed || "Unknown error";
-      const level = message.toLowerCase().includes("cancel") ? "warn" : "error";
-      pushClientLog(`Upload failed: ${label} → ${dest} (${message})`, level);
+      if (message === USER_STOPPED_SENTINEL || message === tr("stopped")) {
+        pushClientLog(`Upload stopped: ${label} → ${dest}`, "warn");
+      } else {
+        const level = message.toLowerCase().includes("cancel") ? "warn" : "error";
+        pushClientLog(`Upload failed: ${label} → ${dest} (${message})`, level);
+      }
     }
   };
 
-  const updateQueueItemStatus = async (id: number, status: QueueStatus) => {
+  const updateQueueItemStatus = async (
+    id: number,
+    status: QueueStatus,
+    updates?: Partial<QueueItem>
+  ) => {
     const clearPaused =
       status === "InProgress" ||
       status === "Completed" ||
       typeof status === "object";
     const currentItem = queueSnapshot.current.data.items.find((item) => item.id === id);
+    const nowSec = Math.floor(Date.now() / 1000);
     if (currentItem) {
       const prevStatus = currentItem.status;
       const nextIsTerminal =
@@ -4307,6 +4317,32 @@ export default function App() {
           ? {
               ...item,
               status,
+              ...(status === "InProgress" && item.status !== "InProgress"
+                ? {
+                    attempts: (item.attempts ?? 0) + 1,
+                    last_started_at: updates?.last_started_at ?? nowSec,
+                    last_run_action: updates?.last_run_action ?? item.last_run_action ?? "new"
+                  }
+                : null),
+              ...(status === "Completed"
+                ? {
+                    last_completed_at: updates?.last_completed_at ?? nowSec
+                  }
+                : null),
+              ...(typeof status === "object"
+                ? {
+                    last_failed_at: updates?.last_failed_at ?? nowSec,
+                    last_failed_bytes:
+                      updates?.last_failed_bytes ?? item.last_failed_bytes,
+                    last_failed_total_bytes:
+                      updates?.last_failed_total_bytes ?? item.last_failed_total_bytes,
+                    last_failed_files:
+                      updates?.last_failed_files ?? item.last_failed_files,
+                    last_failed_elapsed_sec:
+                      updates?.last_failed_elapsed_sec ?? item.last_failed_elapsed_sec
+                  }
+                : null),
+              ...(updates ? updates : null),
               ...(clearPaused ? { paused: false } : null)
             }
           : item
@@ -4332,9 +4368,11 @@ export default function App() {
           ...item,
           paused: true,
           status: "Pending",
+          last_run_action: "requeue",
           transfer_settings: {
             ...(item.transfer_settings || {}),
-            resume_mode: "size"
+            resume_mode: "none",
+            override_on_conflict: true
           }
         };
       })
@@ -4391,12 +4429,158 @@ export default function App() {
 
   const handleResumeFromHistory = (record: TransferRecord) => {
     setResumeRecord(record);
+    setResumeQueueItem(null);
     setResumeChoice("size");
     setShowResumePrompt(true);
   };
 
+  const handleResumeFromFailedItem = (item: QueueItem) => {
+    setResumeQueueItem(item);
+    setResumeRecord(null);
+    setResumeChoice("size");
+    setShowResumePrompt(true);
+  };
+
+  const startUploadWithParams = async (params: {
+    sourcePath: string;
+    destPath: string;
+    resumeOverride?: ResumeOption;
+  }) => {
+    if (transferActive) {
+      try {
+        const status = await invoke<TransferStatusSnapshot>("transfer_status");
+        const activeStates = [
+          "Starting",
+          "Scanning",
+          "Uploading",
+          "Uploading archive",
+          "Extracting"
+        ];
+        const isActive = activeStates.some((state) => status.status.startsWith(state));
+        if (isActive) {
+          setTransferState((prev) => ({ ...prev, status: "Transfer already running" }));
+          setClientLogs((prev) => [
+            "Upload blocked: A transfer is already running. Cancel it first.",
+            ...prev
+          ].slice(0, 100));
+          return;
+        }
+        await invoke("transfer_reset");
+      } catch {
+        setTransferState((prev) => ({ ...prev, status: "Transfer already running" }));
+        setClientLogs((prev) => [
+          "Upload blocked: A transfer is already running. Cancel it first.",
+          ...prev
+        ].slice(0, 100));
+        return;
+      }
+    }
+    if (!ip.trim()) {
+      setTransferState((prev) => ({ ...prev, status: "Missing IP" }));
+      setClientLogs((prev) => ["Upload blocked: Missing IP", ...prev].slice(0, 100));
+      return;
+    }
+    if (!params.sourcePath.trim()) {
+      setTransferState((prev) => ({ ...prev, status: "Missing source" }));
+      setClientLogs((prev) => ["Upload blocked: Missing source", ...prev].slice(0, 100));
+      return;
+    }
+    if (!params.destPath.trim()) {
+      setTransferState((prev) => ({ ...prev, status: "Missing destination" }));
+      setClientLogs((prev) => ["Upload blocked: Missing destination", ...prev].slice(0, 100));
+      return;
+    }
+    if (!(await ensureConnected())) {
+      setTransferState((prev) => ({ ...prev, status: "Not connected" }));
+      setClientLogs((prev) => ["Upload blocked: Not connected", ...prev].slice(0, 100));
+      return;
+    }
+    if (payloadUnderLoad) {
+      setNoticeTitle(tr("payload_status"));
+      setNoticeLines([tr("payload_busy"), tr("try_again")]);
+      setNoticeOpen(true);
+      setClientLogs((prev) => ["Upload delayed: Payload is busy.", ...prev].slice(0, 100));
+      return;
+    }
+
+    const resumeToUse = normalizeResumeMode(params.resumeOverride ?? resumeMode);
+    const useTempForRun =
+      resumeToUse !== "none" && useTemp
+        ? false
+        : useTemp;
+    if (resumeToUse !== "none" && useTemp) {
+      setNoticeTitle(tr("resume"));
+      setNoticeLines([tr("resume_requires_direct")]);
+      setNoticeOpen(true);
+      pushClientLog("Resume forced Direct mode (Temp off).");
+    }
+    try {
+      setClientLogs((prev) => [
+        `Upload preparing: ${params.sourcePath} -> ${params.destPath}`,
+        ...prev
+      ].slice(0, 100));
+      const shouldCheckDest = resumeToUse === "none" && !overrideOnConflict;
+      const exists = shouldCheckDest
+        ? await invoke<boolean>("transfer_check_dest", {
+            ip,
+            destPath: params.destPath
+          })
+        : false;
+      if (exists && !overrideOnConflict) {
+        setTransferState((prev) => ({ ...prev, status: tr("destination_exists") }));
+        setClientLogs((prev) => [
+          "Upload blocked: Destination already exists",
+          ...prev
+        ].slice(0, 100));
+        return;
+      }
+      const runId = await invoke<number>("transfer_start", {
+        req: {
+          ip,
+          source_path: params.sourcePath,
+          dest_path: params.destPath,
+          use_temp: useTempForRun,
+          connections,
+          resume_mode: resumeToUse,
+          compression,
+          bandwidth_limit_mbps: bandwidthLimit,
+          auto_tune_connections: autoTune,
+          optimize_upload: optimizeUpload,
+          chmod_after_upload: chmodAfterUpload,
+          rar_extract_mode: rarExtractMode,
+          rar_temp_root: rarTemp,
+          override_on_conflict: overrideOnConflict,
+          payload_version: payloadVersion,
+          storage_root: storageRoot,
+          required_size: transferState.total || null
+        }
+      });
+      setActiveRunId(runId);
+      setActiveTransferSource(params.sourcePath);
+      setActiveTransferDest(params.destPath);
+      setActiveTransferViaQueue(false);
+      setTransferStartedAt(Date.now());
+      const startMsg = `Upload started: ${params.sourcePath} -> ${params.destPath}`;
+      setClientLogs((prev) => [startMsg, ...prev].slice(0, 100));
+    } catch (err) {
+      setClientLogs((prev) => [`Upload failed: ${String(err)}`, ...prev].slice(0, 100));
+      setTransferState((prev) => ({
+        ...prev,
+        status: `Error: ${String(err)}`
+      }));
+    }
+  };
+
   const handleConfirmResumeFromHistory = () => {
     if (!resumeRecord) return;
+    if (isArchivePath(resumeRecord.source_path)) {
+      setNoticeTitle(tr("resume"));
+      setNoticeLines([tr("resume_unsupported_archive")]);
+      setNoticeOpen(true);
+      setShowResumePrompt(false);
+      setResumeRecord(null);
+      return;
+    }
     setSourcePath(resumeRecord.source_path);
     setFinalPathMode("manual");
     setFinalPath(resumeRecord.dest_path);
@@ -4408,14 +4592,59 @@ export default function App() {
       pushClientLog(`Destination set: ${resumeRecord.dest_path}`);
     }
     pushClientLog(`Resume mode set: ${resumeChoice}.`);
-    setTimeout(() => {
-      handleUpload();
-    }, 0);
+    startUploadWithParams({
+      sourcePath: resumeRecord.source_path,
+      destPath: resumeRecord.dest_path,
+      resumeOverride: resumeChoice
+    });
     setResumeRecord(null);
+  };
+
+  const handleConfirmResumeFromQueue = async () => {
+    if (!resumeQueueItem) return;
+    if (isArchivePath(resumeQueueItem.source_path)) {
+      setNoticeTitle(tr("resume"));
+      setNoticeLines([tr("resume_unsupported_archive")]);
+      setNoticeOpen(true);
+      setShowResumePrompt(false);
+      setResumeQueueItem(null);
+      return;
+    }
+    const nextQueue: QueueData = {
+      ...queueData,
+      items: queueData.items.map((item) => {
+        if (item.id !== resumeQueueItem.id) return item;
+        return {
+          ...item,
+          status: "Pending",
+          last_run_action: "resume",
+          transfer_settings: {
+            ...(item.transfer_settings || {}),
+            resume_mode: resumeChoice,
+            use_temp: false
+          }
+        };
+      })
+    };
+    pushClientLog("Resume set to Direct mode (Temp off).");
+    await saveQueueData(nextQueue);
+    setUploadQueueTab("current");
+    setShowResumePrompt(false);
+    setResumeQueueItem(null);
   };
 
   const startQueueItem = async (item: QueueItem) => {
     if (transferActive) {
+      return;
+    }
+    if (payloadUnderLoad) {
+      pushClientLog("Upload queue paused: Payload is busy.", "warn");
+      if (uploadQueueRetryTimeoutRef.current == null) {
+        uploadQueueRetryTimeoutRef.current = window.setTimeout(() => {
+          uploadQueueRetryTimeoutRef.current = null;
+          processNextQueueItem();
+        }, 10000);
+      }
       return;
     }
     const targetIp = item.ps5_ip || ip.trim() || configSnapshot.current.ip;
@@ -4435,8 +4664,13 @@ export default function App() {
     const settings = item.transfer_settings;
     const base = item.storage_base || storageRoot;
     const dest = buildDestPathForItem(base, item);
-    const itemResumeMode = settings?.resume_mode ?? resumeMode;
+    const itemResumeMode = normalizeResumeMode(settings?.resume_mode ?? resumeMode);
     const itemOverride = settings?.override_on_conflict ?? overrideOnConflict;
+    let itemUseTemp = settings?.use_temp ?? useTemp;
+    if (itemResumeMode !== "none" && itemUseTemp) {
+      itemUseTemp = false;
+      pushClientLog("Resume forced Direct mode (Temp off).", "warn");
+    }
     if (itemResumeMode === "none" && !itemOverride) {
       const exists = await invoke<boolean>("transfer_check_dest", {
         ip: targetIp,
@@ -4451,7 +4685,15 @@ export default function App() {
       }
     }
     pushClientLog(`Starting upload: ${item.source_path}`);
-    await updateQueueItemStatus(item.id, "InProgress");
+    const runAction =
+      item.last_run_action === "requeue"
+        ? "requeue"
+        : itemResumeMode !== "none"
+        ? "resume"
+        : "new";
+    await updateQueueItemStatus(item.id, "InProgress", {
+      last_run_action: runAction
+    });
     setCurrentQueueItemId(item.id);
     setActiveTransferSource(item.source_path);
     setActiveTransferDest(dest);
@@ -4463,9 +4705,9 @@ export default function App() {
           ip: targetIp,
           source_path: item.source_path,
           dest_path: dest,
-          use_temp: settings?.use_temp ?? useTemp,
+          use_temp: itemUseTemp,
           connections: settings?.connections ?? connections,
-          resume_mode: settings?.resume_mode ?? resumeMode,
+          resume_mode: itemResumeMode,
           compression: settings?.compression ?? compression,
           bandwidth_limit_mbps: settings?.bandwidth_limit_mbps ?? bandwidthLimit,
           auto_tune_connections: settings?.auto_tune_connections ?? autoTune,
@@ -4555,6 +4797,7 @@ export default function App() {
             ...item,
             paused: true,
             status: "Pending",
+            last_run_action: "resume",
             transfer_settings: {
               ...(item.transfer_settings || {}),
               resume_mode: "size"
@@ -4644,20 +4887,22 @@ export default function App() {
     try {
       if (currentQueueItemId) {
         await invoke("transfer_cancel");
-        const nextItems = queueSnapshot.current.data.items.map((item) => {
-          if (item.id !== currentQueueItemId) return item;
-          return {
-            ...item,
-            paused: true,
-            status: "Pending",
-            transfer_settings: {
-              ...(item.transfer_settings || {}),
-              resume_mode: "size"
-            }
-          };
-        });
-        await saveQueueData({ ...queueSnapshot.current.data, items: nextItems });
-        setTransferState((prev) => ({ ...prev, status: "Paused" }));
+        const nowSec = Math.floor(Date.now() / 1000);
+        const elapsedSec = transferStartedAt
+          ? Math.max(0, Math.floor((Date.now() - transferStartedAt) / 1000))
+          : 0;
+        await updateQueueItemStatus(
+          currentQueueItemId,
+          { Failed: USER_STOPPED_SENTINEL },
+          {
+            last_failed_at: nowSec,
+            last_failed_bytes: transferState.sent,
+            last_failed_total_bytes: transferState.total,
+            last_failed_files: transferState.files,
+            last_failed_elapsed_sec: elapsedSec
+          }
+        );
+        setTransferState((prev) => ({ ...prev, status: tr("stopped") }));
         setCurrentQueueItemId(null);
         setActiveRunId(null);
         setActiveTransferSource("");
@@ -4665,11 +4910,11 @@ export default function App() {
         setActiveTransferViaQueue(false);
         setTransferStartedAt(null);
         setUploadQueueRunning(false);
-        pushClientLog("Upload paused.");
+        pushClientLog("Upload stopped by user.");
         return;
       }
       await invoke("transfer_cancel");
-      setTransferState((prev) => ({ ...prev, status: "Cancelled" }));
+      setTransferState((prev) => ({ ...prev, status: tr("stopped") }));
       // Reset transfer state to re-enable UI
       setActiveRunId(null);
       setActiveTransferSource("");
@@ -5339,6 +5584,45 @@ export default function App() {
   const hasExtractionPending = extractionItems.some(
     (item) => item.status === "pending" || item.status === "idle"
   );
+  const payloadUnderLoad = !!payloadFullStatus?.is_busy || hasExtractionRunning;
+
+  const keepAwakeActivity =
+    transferActive ||
+    hasUploadCurrent ||
+    hasExtractionCurrent ||
+    manageBusy ||
+    payloadFullStatus?.is_busy;
+
+  useEffect(() => {
+    if (keepAwakeMode !== "auto") {
+      return;
+    }
+    if (keepAwakeActivity) {
+      if (keepAwakeAutoTimeoutRef.current != null) {
+        window.clearTimeout(keepAwakeAutoTimeoutRef.current);
+        keepAwakeAutoTimeoutRef.current = null;
+      }
+      setKeepAwakeAutoHold(true);
+      return;
+    }
+    if (keepAwakeAutoTimeoutRef.current == null) {
+      setKeepAwakeAutoHold(true);
+      keepAwakeAutoTimeoutRef.current = window.setTimeout(() => {
+        setKeepAwakeAutoHold(false);
+        keepAwakeAutoTimeoutRef.current = null;
+      }, KEEP_AWAKE_IDLE_MS);
+    }
+  }, [keepAwakeMode, keepAwakeActivity, KEEP_AWAKE_IDLE_MS]);
+
+  const shouldKeepAwake =
+    keepAwakeMode === "on" ? true : keepAwakeMode === "auto" ? keepAwakeAutoHold : false;
+
+  useEffect(() => {
+    if (!configLoaded) return;
+    invoke("sleep_set", { enabled: shouldKeepAwake }).catch(() => {
+      // ignore keep awake failures
+    });
+  }, [shouldKeepAwake, configLoaded]);
 
   const maintenanceBlocked =
     !isConnected ||
@@ -5425,11 +5709,22 @@ export default function App() {
             Discord
           </button>
           <button
-            className={`btn ${keepAwake ? "success" : "danger"}`}
+            className={`btn ${
+              keepAwakeMode === "on"
+                ? "success"
+                : keepAwakeMode === "auto"
+                ? "warning"
+                : "danger"
+            }`}
             onClick={handleToggleKeepAwake}
             title={tr("keep_awake")}
           >
-            {tr("keep_awake")} {keepAwake ? tr("on") : tr("off")}
+            {tr("keep_awake")}{" "}
+            {keepAwakeMode === "on"
+              ? tr("on")
+              : keepAwakeMode === "auto"
+              ? tr("auto")
+              : tr("off")}
           </button>
           <button
             className={`btn ghost theme-toggle ${theme}`}
@@ -6054,6 +6349,7 @@ export default function App() {
                       />
                     </label>
                     <p className="muted small">{tr("auto_tune_desc")}</p>
+                    <p className="muted small">{tr("auto_tune_note")}</p>
                     <label
                       className={`field ${connectionsDisabled ? "is-disabled" : ""}`}
                     >
@@ -6106,9 +6402,10 @@ export default function App() {
                         }
                       >
                         <option value="none">{tr("resume_off")}</option>
-                        <option value="size">{tr("resume_fast")}</option>
-                        <option value="size_mtime">{tr("resume_medium")}</option>
-                        <option value="sha256">{tr("resume_slow")}</option>
+                        <option value="size">{tr("resume_fastest")}</option>
+                        <option value="hash_large">{tr("resume_faster")}</option>
+                        <option value="hash_medium">{tr("resume_fast_hash")}</option>
+                        <option value="sha256">{tr("resume_normal")}</option>
                       </select>
                     </label>
                     {resumeMode !== "none" && (
@@ -6175,22 +6472,109 @@ export default function App() {
                 {!isConnected ? (
                   <p className="muted">{tr("not_connected")}</p>
                 ) : payloadFullStatus ? (
-                  <div className="stack">
-                    <div className="stats-row">
-                      <span className="pill">
-                        {tr("version")}: {payloadFullStatus.version}
-                      </span>
-                      <span className="pill">
-                        {tr("uptime")}: {formatUptime(payloadFullStatus.uptime)}
-                      </span>
-                      <span className={`pill ${payloadFullStatus.is_busy ? "warn" : "ok"}`}>
-                        {payloadFullStatus.is_busy ? tr("busy") : tr("idle")}
-                      </span>
+                  <div className="payload-status">
+                    <div className="payload-status-top">
+                      <div className="payload-status-pills">
+                        <span className="pill">
+                          {tr("version")}: {payloadFullStatus.version}
+                        </span>
+                        <span className="pill">
+                          {tr("uptime")}: {formatUptime(payloadFullStatus.uptime)}
+                        </span>
+                        <span className={`pill ${payloadFullStatus.is_busy ? "warn" : "ok"}`}>
+                          {payloadFullStatus.is_busy ? tr("busy") : tr("idle")}
+                        </span>
+                      </div>
+                      <div className={`payload-status-state pill ${payloadStatusClass}`}>
+                        {tr("status")}: {payloadStatus}
+                      </div>
                     </div>
-                    <div className={`pill ${payloadStatusClass}`}>
-                      {tr("status")}: {payloadStatus}
+                    <div className="payload-status-grid">
+                      {payloadFullStatus.system && (
+                        <div className="payload-metric-card">
+                          <div className="payload-metric-title">{tr("system_metrics")}</div>
+                          <div className="payload-metric-row">
+                            <span>{tr("cpu_usage")}</span>
+                            <span>
+                              {payloadFullStatus.system.cpu_percent >= 0
+                                ? `${payloadFullStatus.system.cpu_percent.toFixed(1)}%`
+                                : "—"}
+                            </span>
+                          </div>
+                          <div className="payload-metric-row">
+                            <span>{tr("memory_usage")}</span>
+                            <span>
+                              {payloadFullStatus.system.rss_bytes >= 0
+                                ? formatBytes(payloadFullStatus.system.rss_bytes)
+                                : "—"}
+                            </span>
+                          </div>
+                          <div className="payload-metric-row">
+                            <span>{tr("thread_count")}</span>
+                            <span>
+                              {payloadFullStatus.system.thread_count >= 0
+                                ? payloadFullStatus.system.thread_count
+                                : "—"}
+                            </span>
+                          </div>
+                        </div>
+                      )}
+                      {payloadFullStatus.transfer && (
+                        <div className="payload-metric-card">
+                          <div className="payload-metric-title">{tr("transfer_metrics")}</div>
+                          <div className="payload-metric-row">
+                            <span>{tr("active_sessions")}</span>
+                            <span>{payloadFullStatus.transfer.active_sessions}</span>
+                          </div>
+                          <div className="payload-metric-row">
+                            <span>{tr("writer_queue")}</span>
+                            <span>{payloadFullStatus.transfer.queue_count}</span>
+                          </div>
+                          <div className="payload-metric-row">
+                            <span>{tr("pack_in_use")}</span>
+                            <span>{payloadFullStatus.transfer.pack_in_use}</span>
+                          </div>
+                          <div className="payload-metric-row">
+                            <span>{tr("pool_count")}</span>
+                            <span>{payloadFullStatus.transfer.pool_count}</span>
+                          </div>
+                          <div className="payload-metric-row">
+                            <span>{tr("backpressure")}</span>
+                            <span>
+                              {payloadFullStatus.transfer.backpressure_events} ·{" "}
+                              {payloadFullStatus.transfer.backpressure_wait_ms} ms
+                            </span>
+                          </div>
+                          <div className="payload-metric-row">
+                            <span>{tr("last_progress")}</span>
+                            <span>
+                              {payloadFullStatus.transfer.last_progress
+                                ? formatTimestamp(payloadFullStatus.transfer.last_progress)
+                                : "—"}
+                            </span>
+                          </div>
+                          <div className="payload-metric-row">
+                            <span>{tr("abort_requested")}</span>
+                            <span>
+                              {payloadFullStatus.transfer.abort_requested ? tr("on") : tr("off")}
+                            </span>
+                          </div>
+                          <div className="payload-metric-row">
+                            <span>{tr("workers_initialized")}</span>
+                            <span>
+                              {payloadFullStatus.transfer.workers_initialized ? tr("on") : tr("off")}
+                            </span>
+                          </div>
+                          {payloadFullStatus.extract_last_progress ? (
+                            <div className="payload-metric-row">
+                              <span>{tr("extract_last_progress")}</span>
+                              <span>{formatTimestamp(payloadFullStatus.extract_last_progress)}</span>
+                            </div>
+                          ) : null}
+                        </div>
+                      )}
                     </div>
-                    <div className="split">
+                    <div className="payload-status-actions">
                       <button
                         className="btn"
                         onClick={handleRefreshPayloadStatus}
@@ -6206,7 +6590,7 @@ export default function App() {
                         {payloadResetting ? tr("loading") : tr("reset")}
                       </button>
                     </div>
-                    <p className="muted small">
+                    <p className="muted small payload-status-updated">
                       Last update: {formatUpdatedAt(payloadLastUpdated)}
                     </p>
                   </div>
@@ -6268,7 +6652,7 @@ export default function App() {
                     className={`queue-tab ${uploadQueueTab === "failed" ? "active" : ""}`}
                     onClick={() => setUploadQueueTab("failed")}
                   >
-                    {tr("failed")}
+                    {tr("stopped")}
                     {uploadFailedCount > 0 && (
                       <span className="badge">{uploadFailedCount}</span>
                     )}
@@ -6308,7 +6692,7 @@ export default function App() {
                     onClick={handleClearFailedQueue}
                     disabled={!hasUploadFailed}
                   >
-                    {tr("clear_failed")}
+                    {tr("clear_stopped")}
                   </button>
                   <button
                     className="btn"
@@ -6332,7 +6716,7 @@ export default function App() {
                   </div>
                 ) : uploadQueueTab === "failed" && !hasUploadFailed ? (
                   <div className="stack">
-                    <p className="muted">No failed uploads.</p>
+                    <p className="muted">{tr("no_stopped_uploads")}</p>
                   </div>
                 ) : (
                   <div className="stack">
@@ -6356,6 +6740,9 @@ export default function App() {
                       const uploadFailedMessage = isUploadFailed(item)
                         ? (item.status as { Failed: string }).Failed
                         : "";
+                      const isUserStopped =
+                        uploadFailedMessage === USER_STOPPED_SENTINEL ||
+                        uploadFailedMessage === tr("stopped");
                       const destPathForItem = buildDestPathForItem(
                         item.storage_base || storageRoot,
                         item
@@ -6367,7 +6754,41 @@ export default function App() {
                           : isUploadFailed(item)
                           ? historyDurationByKey.get(historyKey)?.failed
                           : null) ?? null;
+                      const runActionLabel =
+                        item.last_run_action === "resume"
+                          ? tr("resumed")
+                          : item.last_run_action === "requeue"
+                          ? tr("requeued")
+                          : null;
+                      const resumeSupported = !isArchivePath(item.source_path);
+                      const failedAt =
+                        item.last_failed_at ? formatTimestamp(item.last_failed_at) : null;
+                      const failedDetailParts: string[] = [];
+                      if (item.last_failed_bytes != null) {
+                        if (item.last_failed_total_bytes && item.last_failed_total_bytes > 0) {
+                          failedDetailParts.push(
+                            `${formatBytes(item.last_failed_bytes)} / ${formatBytes(
+                              item.last_failed_total_bytes
+                            )}`
+                          );
+                        } else {
+                          failedDetailParts.push(
+                            `${formatBytes(item.last_failed_bytes)} transferred`
+                          );
+                        }
+                      }
+                      if (item.last_failed_files != null) {
+                        failedDetailParts.push(`${item.last_failed_files} ${tr("files")}`);
+                      }
+                      if (item.last_failed_elapsed_sec != null) {
+                        failedDetailParts.push(
+                          `Elapsed ${formatDuration(item.last_failed_elapsed_sec)}`
+                        );
+                      }
                       const queueSettings = item.transfer_settings || {};
+                      const isSkipping =
+                        transferState.status.toLowerCase().includes("resume scan") ||
+                        transferState.status.toLowerCase().includes("skipping");
                       const pendingPos = uploadPendingIndices.indexOf(index);
                       const canMoveUp = item.status === "Pending" && pendingPos > 0;
                       const canMoveDown =
@@ -6397,6 +6818,9 @@ export default function App() {
                             <div className="muted small">
                               {destPathForItem}
                             </div>
+                            {runActionLabel && (isUploadCompleted(item) || isUploadFailed(item) || isActive) && (
+                              <div className="muted small">{runActionLabel}</div>
+                            )}
                             {isUploadCompleted(item) && (
                               <div className="muted small">
                                 Duration{" "}
@@ -6407,8 +6831,14 @@ export default function App() {
                             )}
                             {isUploadFailed(item) && (
                               <div className="muted small">
-                                Failed: {uploadFailedMessage || "Unknown error"}
-                                {item.size_bytes != null
+                                {isUserStopped ? tr("stopped") : tr("failed")}:{" "}
+                                {isUserStopped
+                                  ? tr("stopped_by_user")
+                                  : uploadFailedMessage || "Unknown error"}
+                                {failedAt ? ` · ${tr("failed_at", { time: failedAt })}` : ""}
+                                {failedDetailParts.length > 0
+                                  ? ` · ${failedDetailParts.join(" · ")}`
+                                  : item.size_bytes != null
                                   ? ` · ${formatBytes(item.size_bytes)}`
                                   : ""}
                               </div>
@@ -6422,27 +6852,39 @@ export default function App() {
                                   />
                                 </div>
                                 <div className="muted small">
-                                  {transferPercentLabel} ·{" "}
-                                  {transferTotal > 0
-                                    ? `${formatBytes(transferState.sent)} / ${formatBytes(transferState.total)}`
-                                    : `${formatBytes(transferState.sent)} transferred`}{" "}
-                                  · {transferState.files} {tr("files")} ·{" "}
-                                  {transferSpeedDisplay > 0
-                                    ? `Avg ${formatBytes(transferSpeedDisplay)}/s`
-                                    : "Avg —"}{" "}
-                                  ·{" "}
-                                  {transferElapsedDisplay > 0
-                                    ? `Elapsed ${formatDuration(transferElapsedDisplay)}`
-                                    : "Elapsed —"}{" "}
-                                  ·{" "}
-                                  {transferEtaSeconds != null
-                                    ? `ETA ${formatDuration(transferEtaSeconds)}`
-                                    : "ETA —"}{" "}
-                                  ·{" "}
-                                  {transferUpdatedAt
-                                    ? `Updated ${formatUpdatedAt(transferUpdatedAt)}`
-                                    : "Updated —"}{" "}
-                                  · {transferState.status}
+                                  {isSkipping ? (
+                                    <>
+                                      {tr("skipping")} ·{" "}
+                                      {transferState.total > 0
+                                        ? `${transferState.files} / ${transferState.total} ${tr("files")}`
+                                        : `${transferState.files} ${tr("files")}`}{" "}
+                                      · {transferState.status}
+                                    </>
+                                  ) : (
+                                    <>
+                                      {transferPercentLabel} ·{" "}
+                                      {transferTotal > 0
+                                        ? `${formatBytes(transferState.sent)} / ${formatBytes(transferState.total)}`
+                                        : `${formatBytes(transferState.sent)} transferred`}{" "}
+                                      · {transferState.files} {tr("files")} ·{" "}
+                                      {transferSpeedDisplay > 0
+                                        ? `Avg ${formatBytes(transferSpeedDisplay)}/s`
+                                        : "Avg —"}{" "}
+                                      ·{" "}
+                                      {transferElapsedDisplay > 0
+                                        ? `Elapsed ${formatDuration(transferElapsedDisplay)}`
+                                        : "Elapsed —"}{" "}
+                                      ·{" "}
+                                      {transferEtaSeconds != null
+                                        ? `ETA ${formatDuration(transferEtaSeconds)}`
+                                        : "ETA —"}{" "}
+                                      ·{" "}
+                                      {transferUpdatedAt
+                                        ? `Updated ${formatUpdatedAt(transferUpdatedAt)}`
+                                        : "Updated —"}{" "}
+                                      · {transferState.status}
+                                    </>
+                                  )}
                                 </div>
                                 {showTransferUpdateNote && (
                                   <div className="muted small">
@@ -6506,12 +6948,22 @@ export default function App() {
                               </button>
                             )}
                             {isUploadFailed(item) && (
-                              <button
-                                className="btn ghost small"
-                                onClick={() => handleRequeueUploadItem(item.id)}
-                              >
-                                {tr("requeue")}
-                              </button>
+                              <>
+                                <button
+                                  className="btn ghost small"
+                                  onClick={() => handleResumeFromFailedItem(item)}
+                                  disabled={!resumeSupported}
+                                  title={!resumeSupported ? tr("resume_unsupported_archive") : undefined}
+                                >
+                                  {tr("resume")}
+                                </button>
+                                <button
+                                  className="btn ghost small"
+                                  onClick={() => handleRequeueUploadItem(item.id)}
+                                >
+                                  {tr("requeue")}
+                                </button>
+                              </>
                             )}
                           </div>
                         </div>
@@ -6722,6 +7174,10 @@ export default function App() {
                               Math.floor((item.processed_bytes / item.total_bytes) * 100)
                             )
                           : null;
+                      const extractionActionLabel =
+                        extractionActionById[item.id] === "requeue"
+                          ? tr("requeued")
+                          : null;
                       return (
                         <div
                           key={item.id}
@@ -6762,13 +7218,16 @@ export default function App() {
                           {(meta?.dest_path || item.dest_path) && (
                             <div className="muted small">{meta?.dest_path || item.dest_path}</div>
                           )}
+                          {extractionActionLabel && (item.status === "failed" || item.status === "complete" || item.status === "running") && (
+                            <div className="muted small">{extractionActionLabel}</div>
+                          )}
                           <div className="muted small">
                             ID #{item.id} · {item.files_extracted} {tr("files")} · {item.total_bytes > 0 ? formatBytes(item.total_bytes) : `${formatBytes(item.processed_bytes)} extracted`}{meta?.size_bytes ? ` · Upload: ${formatBytes(meta.size_bytes)}` : ""}
                           </div>
                           {(item.started_at || (item.status !== "pending" && item.status !== "running")) && (
                             <div className="muted small">
                               Started: {formatTimestamp(item.started_at)}
-                              {(item.status === "complete" || item.status === "failed") && item.completed_at ? (
+                              {item.status === "complete" && item.completed_at ? (
                                 <> · Completed: {formatTimestamp(item.completed_at)}</>
                               ) : null}
                             </div>
@@ -6839,7 +7298,9 @@ export default function App() {
                           )}
                           {item.status === "failed" && (
                             <div className="muted small">
-                              Failed ·{" "}
+                              {item.completed_at
+                                ? `${tr("failed_at", { time: formatTimestamp(item.completed_at) })} · `
+                                : `${tr("failed")} · `}
                               {item.total_bytes > 0
                                 ? `${formatBytes(item.processed_bytes)} / ${formatBytes(item.total_bytes)}`
                                 : `${formatBytes(item.processed_bytes)} extracted`}{" "}
@@ -7488,47 +7949,211 @@ export default function App() {
                   : tr("unlimited");
               const onLabel = tr("on");
               const offLabel = tr("off");
+              const isActiveItem = uploadInfoItem.id === currentQueueItemId;
+              const effectiveOptimize =
+                isActiveItem && transferState.effectiveOptimize != null
+                  ? transferState.effectiveOptimize
+                  : settings.optimize_upload ?? optimizeUpload;
               const rarTempLabel = settings.rar_temp_root ?? rarTemp;
+              const resumeModeValue = normalizeResumeMode(settings.resume_mode ?? resumeMode);
+              const resumeModeLabel =
+                resumeModeValue === "none"
+                  ? tr("resume_off")
+                  : resumeModeValue === "size"
+                  ? tr("resume_fastest")
+                  : resumeModeValue === "hash_large"
+                  ? tr("resume_faster")
+                  : resumeModeValue === "hash_medium"
+                  ? tr("resume_fast_hash")
+                  : tr("resume_normal");
+              const resumeBehavior =
+                resumeModeValue !== "none"
+                  ? tr("resume_behavior_skip")
+                  : tr("resume_behavior_reupload");
+              const tempEffective = (settings.use_temp ?? useTemp)
+                ? onLabel
+                : offLabel;
+              const lastRunLabel =
+                uploadInfoItem.last_run_action === "resume"
+                  ? tr("resumed")
+                  : uploadInfoItem.last_run_action === "requeue"
+                  ? tr("requeued")
+                  : tr("new");
+              const lastFailedParts: string[] = [];
+              const lastFailedReason =
+                uploadInfoItem.status && typeof uploadInfoItem.status === "object"
+                  ? (uploadInfoItem.status as { Failed: string }).Failed
+                  : null;
+              const lastFailedIsStopped =
+                lastFailedReason === USER_STOPPED_SENTINEL ||
+                lastFailedReason === tr("stopped");
+              if (uploadInfoItem.last_failed_at) {
+                lastFailedParts.push(
+                  tr("failed_at", { time: formatTimestamp(uploadInfoItem.last_failed_at) })
+                );
+              }
+              if (uploadInfoItem.last_failed_bytes != null) {
+                if (uploadInfoItem.last_failed_total_bytes && uploadInfoItem.last_failed_total_bytes > 0) {
+                  lastFailedParts.push(
+                    `${formatBytes(uploadInfoItem.last_failed_bytes)} / ${formatBytes(
+                      uploadInfoItem.last_failed_total_bytes
+                    )}`
+                  );
+                } else {
+                  lastFailedParts.push(
+                    `${formatBytes(uploadInfoItem.last_failed_bytes)} transferred`
+                  );
+                }
+              }
+              if (uploadInfoItem.last_failed_files != null) {
+                lastFailedParts.push(`${uploadInfoItem.last_failed_files} ${tr("files")}`);
+              }
+              if (uploadInfoItem.last_failed_elapsed_sec != null) {
+                lastFailedParts.push(
+                  `Elapsed ${formatDuration(uploadInfoItem.last_failed_elapsed_sec)}`
+                );
+              }
               return (
-                <div className="stack">
-                  <div className="muted">
+                <div className="info-modal">
+                  <div className="info-title">
                     {uploadInfoItem.subfolder_name || getBaseName(uploadInfoItem.source_path)}
                   </div>
-                  <div className="muted small">
-                    {tr("source")}: {uploadInfoItem.source_path}
+
+                  <div className="info-section">
+                    <div className="info-section-title">{tr("source")}</div>
+                    <div className="info-grid">
+                      <div className="info-row">
+                        <div className="info-label">{tr("source")}</div>
+                        <div className="info-value">{uploadInfoItem.source_path}</div>
+                      </div>
+                      <div className="info-row">
+                        <div className="info-label">{tr("subfolder")}</div>
+                        <div className="info-value">{uploadInfoItem.subfolder_name || "—"}</div>
+                      </div>
+                      <div className="info-row">
+                        <div className="info-label">{tr("destination")}</div>
+                        <div className="info-value">{destPath}</div>
+                      </div>
+                      <div className="info-row">
+                        <div className="info-label">{tr("storage_label")}</div>
+                        <div className="info-value">{uploadInfoItem.storage_base || storageRoot}</div>
+                      </div>
+                      <div className="info-row">
+                        <div className="info-label">{tr("ps5_ip")}</div>
+                        <div className="info-value">{effectiveIp}</div>
+                      </div>
+                      <div className="info-row">
+                        <div className="info-label">{tr("size")}</div>
+                        <div className="info-value">
+                          {uploadInfoItem.size_bytes != null
+                            ? formatBytes(uploadInfoItem.size_bytes)
+                            : "—"}
+                        </div>
+                      </div>
+                    </div>
                   </div>
-                  <div className="muted small">
-                    {tr("destination")}: {destPath}
+
+                  <div className="info-section">
+                    <div className="info-section-title">{tr("transfer_settings")}</div>
+                    <div className="info-grid">
+                      <div className="info-row">
+                        <div className="info-label">{tr("connections")}</div>
+                        <div className="info-value">{settings.connections ?? connections}</div>
+                      </div>
+                      <div className="info-row">
+                        <div className="info-label">{tr("temp_short")}</div>
+                        <div className="info-value">
+                          <span className={`info-badge ${tempEffective === onLabel ? "on" : "off"}`}>
+                            {tempEffective}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="info-row">
+                        <div className="info-label">{tr("resume_mode")}</div>
+                        <div className="info-value">{resumeModeLabel}</div>
+                      </div>
+                      <div className="info-row">
+                        <div className="info-label">{tr("resume")}</div>
+                        <div className="info-value">{resumeBehavior}</div>
+                      </div>
+                      {resumeModeValue !== "none" && (
+                        <div className="info-note">
+                          {tr("resume_file_level")}
+                        </div>
+                      )}
+                      <div className="info-row">
+                        <div className="info-label">{tr("compression")}</div>
+                        <div className="info-value">{settings.compression ?? compression}</div>
+                      </div>
+                      <div className="info-row">
+                        <div className="info-label">{tr("bandwidth")}</div>
+                        <div className="info-value">{bandwidth}</div>
+                      </div>
+                      <div className="info-row">
+                        <div className="info-label">{tr("auto_tune_short")}</div>
+                        <div className="info-value">
+                          <span className={`info-badge ${(settings.auto_tune_connections ?? autoTune) ? "on" : "off"}`}>
+                            {(settings.auto_tune_connections ?? autoTune) ? onLabel : offLabel}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="info-row">
+                        <div className="info-label">{tr("optimize_short")}</div>
+                        <div className="info-value">
+                          <span className={`info-badge ${effectiveOptimize ? "on" : "off"}`}>
+                            {effectiveOptimize ? onLabel : offLabel}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="info-row">
+                        <div className="info-label">{tr("override_short")}</div>
+                        <div className="info-value">
+                          <span className={`info-badge ${(settings.override_on_conflict ?? overrideOnConflict) ? "on" : "off"}`}>
+                            {(settings.override_on_conflict ?? overrideOnConflict) ? onLabel : offLabel}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="info-row">
+                        <div className="info-label">{tr("chmod_after")}</div>
+                        <div className="info-value">
+                          <span className={`info-badge ${(settings.chmod_after_upload ?? chmodAfterUpload) ? "on" : "off"}`}>
+                            {(settings.chmod_after_upload ?? chmodAfterUpload) ? onLabel : offLabel}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="info-row">
+                        <div className="info-label">{tr("rar_mode")}</div>
+                        <div className="info-value">{settings.rar_extract_mode ?? rarExtractMode}</div>
+                      </div>
+                      <div className="info-row">
+                        <div className="info-label">{tr("rar_temp")}</div>
+                        <div className="info-value">{rarTempLabel || "—"}</div>
+                      </div>
+                    </div>
                   </div>
-                  <div className="muted small">
-                    {tr("ps5_ip")}: {effectiveIp}
-                  </div>
-                  <div className="muted small">
-                    {tr("size")}:{" "}
-                    {uploadInfoItem.size_bytes != null
-                      ? formatBytes(uploadInfoItem.size_bytes)
-                      : "—"}
-                  </div>
-                  <div className="muted small">
-                    {tr("connections")}: {settings.connections ?? connections} ·{" "}
-                    {tr("temp_short")}: {(settings.use_temp ?? useTemp) ? onLabel : offLabel} ·{" "}
-                    {tr("resume_mode")}: {settings.resume_mode ?? resumeMode}
-                  </div>
-                  <div className="muted small">
-                    {tr("compression")}: {settings.compression ?? compression} ·{" "}
-                    {tr("bandwidth")}: {bandwidth}
-                  </div>
-                  <div className="muted small">
-                    {tr("auto_tune_short")}:{" "}
-                    {(settings.auto_tune_connections ?? autoTune) ? onLabel : offLabel} ·{" "}
-                    {tr("optimize_short")}:{" "}
-                    {(settings.optimize_upload ?? optimizeUpload) ? onLabel : offLabel} ·{" "}
-                    {tr("override_short")}:{" "}
-                    {(settings.override_on_conflict ?? overrideOnConflict) ? onLabel : offLabel}
-                  </div>
-                  <div className="muted small">
-                    {tr("rar_mode")}: {settings.rar_extract_mode ?? rarExtractMode} ·{" "}
-                    {tr("rar_temp")}: {rarTempLabel || "—"}
+
+                  <div className="info-section">
+                    <div className="info-section-title">{tr("last_run")}</div>
+                    <div className="info-grid">
+                      <div className="info-row">
+                        <div className="info-label">{tr("last_run")}</div>
+                        <div className="info-value">{lastRunLabel}</div>
+                      </div>
+                      {lastFailedParts.length > 0 && (
+                        <div className="info-row">
+                          <div className="info-label">{tr("last_failed")}</div>
+                          <div className="info-value">{lastFailedParts.join(" · ")}</div>
+                        </div>
+                      )}
+                      {lastFailedReason && (
+                        <div className="info-row">
+                          <div className="info-label">{lastFailedIsStopped ? tr("stopped") : tr("failed")}</div>
+                          <div className="info-value">
+                            {lastFailedIsStopped ? tr("stopped_by_user") : lastFailedReason}
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
               );
@@ -7672,31 +8297,67 @@ export default function App() {
         </div>
       )}
 
-      {showResumePrompt && resumeRecord && (
+      {showResumePrompt && (resumeRecord || resumeQueueItem) && (
         <div className="modal-backdrop">
           <div className="modal">
             <header className="modal-title">{tr("resume_mode")}</header>
-            <p className="muted">{tr("resume_note")}</p>
-            <label className="field">
-              <span>{tr("resume_mode")}</span>
-              <select
-                value={resumeChoice}
-                onChange={(event) => setResumeChoice(event.target.value as ResumeOption)}
-              >
-                <option value="size">{tr("resume_fast")}</option>
-                <option value="size_mtime">{tr("resume_medium")}</option>
-                <option value="sha256">{tr("resume_slow")}</option>
-              </select>
-            </label>
+            {(() => {
+              const sourcePath = resumeRecord?.source_path ?? resumeQueueItem?.source_path ?? "";
+              const destPath =
+                resumeRecord?.dest_path ??
+                (resumeQueueItem
+                  ? buildDestPathForItem(
+                      resumeQueueItem.storage_base || storageRoot,
+                      resumeQueueItem
+                    )
+                  : "");
+              const resumeSupported = sourcePath ? !isArchivePath(sourcePath) : true;
+              return (
+                <>
+                  <p className="muted">{tr("resume_note")}</p>
+                  <p className="muted small">{tr("resume_file_level")}</p>
+                  <div className="muted small">
+                    {tr("source")}: {sourcePath || "—"}
+                  </div>
+                  <div className="muted small">
+                    {tr("destination")}: {destPath || "—"}
+                  </div>
+                  {!resumeSupported && (
+                    <div className="muted small">{tr("resume_unsupported_archive")}</div>
+                  )}
+                  {resumeSupported && (
+                    <label className="field">
+                      <span>{tr("resume_mode")}</span>
+                      <select
+                        value={resumeChoice}
+                        onChange={(event) => setResumeChoice(event.target.value as ResumeOption)}
+                      >
+                        <option value="size">{tr("resume_fastest")}</option>
+                        <option value="hash_large">{tr("resume_faster")}</option>
+                        <option value="hash_medium">{tr("resume_fast_hash")}</option>
+                        <option value="sha256">{tr("resume_normal")}</option>
+                      </select>
+                    </label>
+                  )}
+                </>
+              );
+            })()}
             <div className="split">
-              <button className="btn primary" onClick={handleConfirmResumeFromHistory}>
-                {tr("resume")}
-              </button>
+              {resumeQueueItem ? (
+                <button className="btn primary" onClick={handleConfirmResumeFromQueue}>
+                  {tr("resume")}
+                </button>
+              ) : (
+                <button className="btn primary" onClick={handleConfirmResumeFromHistory}>
+                  {tr("resume")}
+                </button>
+              )}
               <button
                 className="btn ghost"
                 onClick={() => {
                   setShowResumePrompt(false);
                   setResumeRecord(null);
+                  setResumeQueueItem(null);
                 }}
               >
                 {tr("cancel")}

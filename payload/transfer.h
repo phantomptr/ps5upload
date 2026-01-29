@@ -7,6 +7,18 @@
 
 typedef struct UploadSession UploadSession;
 
+typedef struct {
+    size_t pack_in_use;
+    int pool_count;
+    size_t queue_count;
+    int active_sessions;
+    uint64_t backpressure_events;
+    uint64_t backpressure_wait_ms;
+    time_t last_progress;
+    int abort_requested;
+    int workers_initialized;
+} TransferStats;
+
 UploadSession *upload_session_create(const char *dest_root, int use_temp);
 int upload_session_finalize(UploadSession *session);
 void upload_session_destroy(UploadSession *session);
@@ -23,5 +35,6 @@ void transfer_request_abort(void);
 int transfer_abort_requested(void);
 int transfer_is_active(void);
 time_t transfer_last_progress(void);
+int transfer_get_stats(TransferStats *out);
 
 #endif

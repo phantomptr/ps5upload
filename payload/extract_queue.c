@@ -9,6 +9,8 @@
 #include "extract_queue.h"
 #include "notify.h"
 #include "config.h"
+#include "transfer.h"
+#include "system_stats.h"
 #include "third_party/unrar/unrar_wrapper.h"
 
 #include <stdio.h>
@@ -173,10 +175,31 @@ char *extract_queue_get_status_json(void) {
     }
 
     unsigned long uptime = (unsigned long)difftime(time(NULL), g_queue.server_start_time);
+    TransferStats transfer_stats;
+    transfer_get_stats(&transfer_stats);
+    SystemStats sys_stats;
+    get_system_stats(&sys_stats);
+    time_t last_extract_progress = extract_queue_get_last_progress();
 
     int pos = snprintf(buf, buf_size,
-        "{\"version\":\"%s\",\"uptime\":%lu,\"queue_count\":%d,\"is_busy\":%s,\"updated_at\":%ld,\"items\":[",
-        PS5_UPLOAD_VERSION, uptime, g_queue.count, g_thread_running ? "true" : "false", (long)g_queue_updated_at);
+        "{\"version\":\"%s\",\"uptime\":%lu,\"queue_count\":%d,\"is_busy\":%s,"
+        "\"updated_at\":%ld,\"extract_last_progress\":%ld,"
+        "\"system\":{\"cpu_percent\":%.2f,\"rss_bytes\":%lld,\"thread_count\":%d,"
+        "\"mem_total_bytes\":%lld,\"mem_free_bytes\":%lld,\"page_size\":%d},"
+        "\"transfer\":{\"pack_in_use\":%zu,\"pool_count\":%d,\"queue_count\":%zu,"
+        "\"active_sessions\":%d,\"backpressure_events\":%llu,\"backpressure_wait_ms\":%llu,"
+        "\"last_progress\":%ld,\"abort_requested\":%s,\"workers_initialized\":%s},\"items\":[",
+        PS5_UPLOAD_VERSION, uptime, g_queue.count, g_thread_running ? "true" : "false",
+        (long)g_queue_updated_at, (long)last_extract_progress,
+        sys_stats.cpu_percent, sys_stats.rss_bytes, sys_stats.thread_count,
+        sys_stats.mem_total_bytes, sys_stats.mem_free_bytes, sys_stats.page_size,
+        transfer_stats.pack_in_use, transfer_stats.pool_count, transfer_stats.queue_count,
+        transfer_stats.active_sessions,
+        (unsigned long long)transfer_stats.backpressure_events,
+        (unsigned long long)transfer_stats.backpressure_wait_ms,
+        (long)transfer_stats.last_progress,
+        transfer_stats.abort_requested ? "true" : "false",
+        transfer_stats.workers_initialized ? "true" : "false");
     if (pos < 0 || (size_t)pos >= buf_size) {
         buf[buf_size - 1] = '\0';
         pthread_mutex_unlock(&g_queue_mutex);
