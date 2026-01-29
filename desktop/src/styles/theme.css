@@ -93,6 +93,11 @@ body {
   background: transparent;
 }
 
+:root[data-platform="win32"] #root,
+:root[data-platform="win32"] .app {
+  border-radius: 0;
+}
+
 .app {
   display: grid;
   grid-template-columns: minmax(280px, 320px) minmax(0, 1fr) minmax(320px, 400px);
@@ -1386,6 +1391,12 @@ input::placeholder {
   background: var(--ps-surface-alt);
   border: 1px solid var(--ps-border);
   gap: 12px;
+}
+
+.queue-item-body {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .history-main {

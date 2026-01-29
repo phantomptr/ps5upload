@@ -12,6 +12,7 @@
 #include <time.h>
 #include <signal.h>
 #include <stdint.h>
+#include <stdatomic.h>
 
 #include "transfer.h"
 #include "protocol_defs.h"
@@ -22,74 +23,60 @@
 #include "config.h"
 
 // Optimized for single-process threaded concurrency
-#define PACK_BUFFER_SIZE (32 * 1024 * 1024)   // 32MB buffer (Increased for throughput)
-#define PACK_QUEUE_DEPTH 8                    // 8 * 32MB = 256MB heap usage
-#define WRITER_THREAD_COUNT 2                 // Writer threads; per-session queue shard
+#define PACK_BUFFER_SIZE (48 * 1024 * 1024)   // 48MB buffer (Increased for throughput)
+#define PACK_QUEUE_DEPTH 10                   // 10 * 48MB = 480MB heap usage
+#define WRITER_THREAD_COUNT 4                 // Writer threads; per-session queue shard
 /* Socket read buffer for upload v2 */
-#define UPLOAD_V2_RECV_BUFFER_SIZE (256 * 1024)
+#define UPLOAD_V2_RECV_BUFFER_SIZE (512 * 1024)  // Increased from 256KB
 
+// Buffer pool with reduced locking via atomics
 #define POOL_SIZE 16
 static uint8_t *g_buffer_pool[POOL_SIZE];
 static int g_pool_count = 0;
 static pthread_mutex_t g_pool_mutex = PTHREAD_MUTEX_INITIALIZER;
-static size_t g_pack_in_use = 0;
-static int g_active_sessions = 0;
-static pthread_mutex_t g_mem_stats_mutex = PTHREAD_MUTEX_INITIALIZER;
+static atomic_size_t g_pack_in_use = 0;  // Atomic - no mutex needed
+static atomic_int g_active_sessions = 0; // Atomic - no mutex needed
 
 static uint8_t *alloc_pack_buffer(size_t size) {
     if (size > PACK_BUFFER_SIZE) {
         uint8_t *ptr = malloc(size);
-        pthread_mutex_lock(&g_mem_stats_mutex);
         if (ptr) {
-            g_pack_in_use++;
+            atomic_fetch_add(&g_pack_in_use, 1);  // Atomic increment - no mutex
         }
-        pthread_mutex_unlock(&g_mem_stats_mutex);
         return ptr;
     }
-    
+
     pthread_mutex_lock(&g_pool_mutex);
     if (g_pool_count > 0) {
         uint8_t *ptr = g_buffer_pool[--g_pool_count];
         pthread_mutex_unlock(&g_pool_mutex);
-        pthread_mutex_lock(&g_mem_stats_mutex);
-        g_pack_in_use++;
-        pthread_mutex_unlock(&g_mem_stats_mutex);
+        atomic_fetch_add(&g_pack_in_use, 1);  // Atomic increment - no mutex
         return ptr;
     }
     pthread_mutex_unlock(&g_pool_mutex);
-    
+
     void *ptr = NULL;
     if (posix_memalign(&ptr, 4096, PACK_BUFFER_SIZE) != 0) {
         return NULL; // Fallback to NULL if OOM
     }
-    pthread_mutex_lock(&g_mem_stats_mutex);
-    g_pack_in_use++;
-    pthread_mutex_unlock(&g_mem_stats_mutex);
+    atomic_fetch_add(&g_pack_in_use, 1);  // Atomic increment - no mutex
     return ptr;
 }
 
 static void free_pack_buffer(uint8_t *ptr) {
     if (!ptr) return;
-    
+
     pthread_mutex_lock(&g_pool_mutex);
     if (g_pool_count < POOL_SIZE) {
         g_buffer_pool[g_pool_count++] = ptr;
         pthread_mutex_unlock(&g_pool_mutex);
-        pthread_mutex_lock(&g_mem_stats_mutex);
-        if (g_pack_in_use > 0) {
-            g_pack_in_use--;
-        }
-        pthread_mutex_unlock(&g_mem_stats_mutex);
+        atomic_fetch_sub(&g_pack_in_use, 1);  // Atomic decrement - no mutex
         return;
     }
     pthread_mutex_unlock(&g_pool_mutex);
-    
+
     free(ptr);
-    pthread_mutex_lock(&g_mem_stats_mutex);
-    if (g_pack_in_use > 0) {
-        g_pack_in_use--;
-    }
-    pthread_mutex_unlock(&g_mem_stats_mutex);
+    atomic_fetch_sub(&g_pack_in_use, 1);  // Atomic decrement - no mutex
 }
 
 static int decompress_pack_body(uint32_t frame_type, uint8_t **body, size_t *body_len) {
@@ -236,10 +223,9 @@ static void log_memory_stats(const char *tag) {
     int active_sessions = 0;
     size_t queue_count = 0;
 
-    pthread_mutex_lock(&g_mem_stats_mutex);
-    in_use = g_pack_in_use;
-    active_sessions = g_active_sessions;
-    pthread_mutex_unlock(&g_mem_stats_mutex);
+    // Atomic reads - no mutex needed
+    in_use = atomic_load(&g_pack_in_use);
+    active_sessions = atomic_load(&g_active_sessions);
 
     pthread_mutex_lock(&g_pool_mutex);
     pool_count = g_pool_count;
@@ -566,7 +552,14 @@ static int copy_file(const char *src, const char *dst) {
         return -1;
     }
 
-    char *buf = malloc(1024 * 1024);
+    // Hint to kernel: sequential read, don't cache after use
+#ifdef POSIX_FADV_SEQUENTIAL
+    posix_fadvise(in_fd, 0, 0, POSIX_FADV_SEQUENTIAL);
+#endif
+
+    // Larger buffer for better throughput (4MB instead of 1MB)
+    const size_t buf_size = 4 * 1024 * 1024;
+    char *buf = malloc(buf_size);
     if (!buf) {
         close(in_fd);
         close(out_fd);
@@ -575,7 +568,7 @@ static int copy_file(const char *src, const char *dst) {
 
     int result = 0;
     for (;;) {
-        ssize_t n = read(in_fd, buf, 1024 * 1024);
+        ssize_t n = read(in_fd, buf, buf_size);
         if (n == 0) {
             break;
         }
@@ -595,6 +588,11 @@ static int copy_file(const char *src, const char *dst) {
         if (result != 0) {
             break;
         }
+    }
+
+    // Sync data to disk before closing (improves reliability)
+    if (result == 0) {
+        fdatasync(out_fd);
     }
 
     free(buf);
@@ -960,11 +958,7 @@ int transfer_abort_requested(void) {
 }
 
 int transfer_is_active(void) {
-    int active = 0;
-    pthread_mutex_lock(&g_mem_stats_mutex);
-    active = g_active_sessions > 0;
-    pthread_mutex_unlock(&g_mem_stats_mutex);
-    return active;
+    return atomic_load(&g_active_sessions) > 0;  // Atomic read - no mutex
 }
 
 time_t transfer_last_progress(void) {
@@ -978,10 +972,9 @@ int transfer_get_stats(TransferStats *out) {
 
     memset(out, 0, sizeof(*out));
 
-    pthread_mutex_lock(&g_mem_stats_mutex);
-    out->pack_in_use = g_pack_in_use;
-    out->active_sessions = g_active_sessions;
-    pthread_mutex_unlock(&g_mem_stats_mutex);
+    // Atomic reads - no mutex needed
+    out->pack_in_use = atomic_load(&g_pack_in_use);
+    out->active_sessions = atomic_load(&g_active_sessions);
 
     pthread_mutex_lock(&g_pool_mutex);
     out->pool_count = g_pool_count;
@@ -1010,10 +1003,9 @@ int transfer_idle_cleanup(void) {
     size_t queue_count = 0;
     int cleaned = 0;
 
-    pthread_mutex_lock(&g_mem_stats_mutex);
-    active_sessions = g_active_sessions;
-    in_use = g_pack_in_use;
-    pthread_mutex_unlock(&g_mem_stats_mutex);
+    // Atomic reads - no mutex needed
+    active_sessions = atomic_load(&g_active_sessions);
+    in_use = atomic_load(&g_pack_in_use);
 
     if (active_sessions != 0 || in_use != 0 || !g_workers_initialized) {
         return 0;
@@ -1388,17 +1380,11 @@ UploadSession *upload_session_create(const char *dest_root, int use_temp) {
     if (!session) {
         return NULL;
     }
-    pthread_mutex_lock(&g_mem_stats_mutex);
-    g_active_sessions++;
-    pthread_mutex_unlock(&g_mem_stats_mutex);
+    atomic_fetch_add(&g_active_sessions, 1);  // Atomic increment
     g_last_transfer_progress = time(NULL);
     session->use_temp = use_temp ? 1 : 0;
     if (upload_session_start(session, dest_root) != 0) {
-        pthread_mutex_lock(&g_mem_stats_mutex);
-        if (g_active_sessions > 0) {
-            g_active_sessions--;
-        }
-        pthread_mutex_unlock(&g_mem_stats_mutex);
+        atomic_fetch_sub(&g_active_sessions, 1);  // Atomic decrement
         free(session);
         return NULL;
     }
@@ -1420,12 +1406,10 @@ void upload_session_destroy(UploadSession *session) {
         session->body = NULL;
     }
     free(session);
-    pthread_mutex_lock(&g_mem_stats_mutex);
-    if (g_active_sessions > 0) {
-        g_active_sessions--;
-    }
-    pthread_mutex_unlock(&g_mem_stats_mutex);
-    if (g_active_sessions == 0 && g_abort_transfer) {
+
+    // Atomic decrement and check
+    int prev = atomic_fetch_sub(&g_active_sessions, 1);
+    if (prev <= 1 && g_abort_transfer) {  // prev was 1, now 0
         g_abort_transfer = 0;
     }
     transfer_idle_cleanup();

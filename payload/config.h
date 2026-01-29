@@ -8,13 +8,21 @@
 #define MAX_CONNECTIONS 12
 #define RECV_TIMEOUT_SEC 300  // 5 minutes
 
-// Buffer sizes
+// Buffer sizes - optimized for high throughput
 #define BUFFER_SIZE (4 * 1024 * 1024)  // 4MB transfer buffer
 #define CMD_BUFFER_SIZE 4096
 
+// Socket buffer tuning - larger buffers for GigE networks
+#define SOCKET_RCVBUF_SIZE (16 * 1024 * 1024)  // 16MB socket receive buffer
+#define SOCKET_SNDBUF_SIZE (16 * 1024 * 1024)  // 16MB socket send buffer
+
 // Upload throughput tuning
-#define UPLOAD_RCVBUF_SIZE (8 * 1024 * 1024)  // 8MB socket receive buffer
+#define UPLOAD_RCVBUF_SIZE (16 * 1024 * 1024)  // 16MB socket receive buffer
+#define UPLOAD_RECV_CHUNK_SIZE (512 * 1024)    // 512KB recv chunks (was 64KB)
 #define MAX_PATH_LEN 4096
+
+// Backpressure tuning - avoid busy spinning
+#define BACKPRESSURE_POLL_US 100  // 100us between backpressure checks (was 1000us)
 
 // Default paths
 #define DEFAULT_GAMES_PATH "/mnt/usb0/games"

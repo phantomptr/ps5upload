@@ -22,15 +22,16 @@
 #include <errno.h>
 #include <dirent.h>
 #include <stdint.h>
+#include <stdatomic.h>
 
 static ExtractQueue g_queue;
 static pthread_mutex_t g_queue_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_t g_extract_thread;
-static volatile int g_thread_running = 0;
-static volatile time_t g_last_extract_progress = 0;
-static volatile int g_cancel_requested = 0;
-static volatile int g_requeue_requested = 0;
-static volatile int g_requeue_id = -1;
+static atomic_int g_thread_running = 0;         // Atomic for lock-free read
+static atomic_long g_last_extract_progress = 0; // Atomic for lock-free read
+static atomic_int g_cancel_requested = 0;       // Atomic for lock-free signal
+static atomic_int g_requeue_requested = 0;
+static atomic_int g_requeue_id = -1;
 static time_t g_queue_updated_at = 0;
 
 #define EXTRACT_QUEUE_FILE "/data/ps5upload/extract_queue.bin"
@@ -167,7 +168,7 @@ char *extract_queue_get_status_json(void) {
     pthread_mutex_lock(&g_queue_mutex);
 
     /* Calculate buffer size needed */
-    size_t buf_size = 4096 + (g_queue.count * 2048);
+    size_t buf_size = 6144 + (g_queue.count * 2048);
     char *buf = malloc(buf_size);
     if (!buf) {
         pthread_mutex_unlock(&g_queue_mutex);
@@ -184,15 +185,26 @@ char *extract_queue_get_status_json(void) {
     int pos = snprintf(buf, buf_size,
         "{\"version\":\"%s\",\"uptime\":%lu,\"queue_count\":%d,\"is_busy\":%s,"
         "\"updated_at\":%ld,\"extract_last_progress\":%ld,"
-        "\"system\":{\"cpu_percent\":%.2f,\"rss_bytes\":%lld,\"thread_count\":%d,"
-        "\"mem_total_bytes\":%lld,\"mem_free_bytes\":%lld,\"page_size\":%d},"
+        "\"system\":{\"cpu_percent\":%.2f,\"proc_cpu_percent\":%.2f,\"rss_bytes\":%lld,\"thread_count\":%d,"
+        "\"mem_total_bytes\":%lld,\"mem_free_bytes\":%lld,\"page_size\":%d,"
+        "\"net_rx_bytes\":%lld,\"net_tx_bytes\":%lld,\"net_rx_bps\":%lld,\"net_tx_bps\":%lld,"
+        "\"cpu_supported\":%s,\"proc_cpu_supported\":%s,\"rss_supported\":%s,\"thread_supported\":%s,"
+        "\"mem_total_supported\":%s,\"mem_free_supported\":%s,\"net_supported\":%s},"
         "\"transfer\":{\"pack_in_use\":%zu,\"pool_count\":%d,\"queue_count\":%zu,"
         "\"active_sessions\":%d,\"backpressure_events\":%llu,\"backpressure_wait_ms\":%llu,"
         "\"last_progress\":%ld,\"abort_requested\":%s,\"workers_initialized\":%s},\"items\":[",
         PS5_UPLOAD_VERSION, uptime, g_queue.count, g_thread_running ? "true" : "false",
         (long)g_queue_updated_at, (long)last_extract_progress,
-        sys_stats.cpu_percent, sys_stats.rss_bytes, sys_stats.thread_count,
+        sys_stats.cpu_percent, sys_stats.proc_cpu_percent, sys_stats.rss_bytes, sys_stats.thread_count,
         sys_stats.mem_total_bytes, sys_stats.mem_free_bytes, sys_stats.page_size,
+        sys_stats.net_rx_bytes, sys_stats.net_tx_bytes, sys_stats.net_rx_bps, sys_stats.net_tx_bps,
+        sys_stats.cpu_supported ? "true" : "false",
+        sys_stats.proc_cpu_supported ? "true" : "false",
+        sys_stats.rss_supported ? "true" : "false",
+        sys_stats.thread_supported ? "true" : "false",
+        sys_stats.mem_total_supported ? "true" : "false",
+        sys_stats.mem_free_supported ? "true" : "false",
+        sys_stats.net_supported ? "true" : "false",
         transfer_stats.pack_in_use, transfer_stats.pool_count, transfer_stats.queue_count,
         transfer_stats.active_sessions,
         (unsigned long long)transfer_stats.backpressure_events,
@@ -289,7 +301,8 @@ static int extraction_progress_callback(const char *filename, unsigned long long
     (void)filename;
     (void)file_size;
 
-    if (g_cancel_requested) {
+    // Atomic read - no lock needed for cancel check
+    if (atomic_load(&g_cancel_requested)) {
         return 1; /* Stop extraction */
     }
 
@@ -301,7 +314,7 @@ static int extraction_progress_callback(const char *filename, unsigned long long
         item->total_bytes = total_size;
         item->files_extracted = files_done;
         item->percent = (total_size > 0) ? (int)((total_processed * 100) / total_size) : 0;
-        g_last_extract_progress = time(NULL);
+        atomic_store(&g_last_extract_progress, (long)time(NULL));  // Atomic write
 
         /* Notifications disabled */
     }
@@ -315,7 +328,7 @@ static int extraction_progress_callback(const char *filename, unsigned long long
     pthread_mutex_unlock(&g_queue_mutex);
 
     if (sleep_needed) {
-        usleep(1000); /* Yield CPU */
+        usleep(100); /* Yield CPU - reduced from 1000us for better throughput */
     }
     return 0;
 }
@@ -925,11 +938,11 @@ const ExtractQueueItem *extract_queue_get_current(void) {
 }
 
 time_t extract_queue_get_last_progress(void) {
-    return g_last_extract_progress;
+    return (time_t)atomic_load(&g_last_extract_progress);  // Lock-free read
 }
 
 int extract_queue_is_running(void) {
-    return extract_queue_is_busy();
+    return atomic_load(&g_thread_running);  // Lock-free read
 }
 
 static int chmod_recursive_queue(const char *path, mode_t mode) {
