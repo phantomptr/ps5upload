@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 This project follows Semantic Versioning.
 
+## [1.3.9] - 2026-01-30
+
+### Fixed
+- Uploads with many small files (e.g., 500K+ files) no longer stall or fail due to backpressure timeouts.
+- Payload now waits indefinitely for disk I/O to catch up instead of giving up after 30 seconds.
+- Client now logs "Waiting for server to catch up..." when socket buffer is full, so users know the transfer is still alive.
+- Enhanced adaptive upload tuning on client: Client now reacts more aggressively to payload backpressure by significantly reducing pack size and increasing inter-packet delays, vastly improving stability and preventing hangs for large transfers.
+- Optimized payload memory usage: Reduced payload's internal queue depth from 10 to 4 (480MB to 192MB) to lessen memory pressure on the PS5, making it less prone to stalls during heavy load.
+
 ## [1.3.8] - 2026-01-29
 
 ### Added

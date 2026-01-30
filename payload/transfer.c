@@ -25,7 +25,7 @@
 
 // Optimized for single-process threaded concurrency
 #define PACK_BUFFER_SIZE (48 * 1024 * 1024)   // 48MB buffer (Increased for throughput)
-#define PACK_QUEUE_DEPTH 10                   // 10 * 48MB = 480MB heap usage
+#define PACK_QUEUE_DEPTH 4                    // 4 * 48MB = 192MB heap usage
 #define WRITER_THREAD_COUNT 4                 // Writer threads; per-session queue shard
 /* Socket read buffer for upload v2 */
 #define UPLOAD_V2_RECV_BUFFER_SIZE (512 * 1024)  // Increased from 256KB
@@ -344,7 +344,19 @@ static int queue_push(PackQueue *q, uint8_t *data, size_t len, const char *dest_
     while (q->count >= PACK_QUEUE_DEPTH && !q->closed) {
         if (wait_start_ms == 0) {
             wait_start_ms = now_ms();
+            last_log_ms = wait_start_ms;
         }
+
+        // Check for hard timeout
+        uint64_t now = now_ms();
+        if (now - wait_start_ms > 300000) { // 5-minute timeout
+            printf("[FTX] ERROR: backpressure queue full, timed out after %llus. Aborting session %llu.\n",
+                   (unsigned long long)((now - wait_start_ms) / 1000),
+                   (unsigned long long)session_id);
+            pthread_mutex_unlock(&q->mutex);
+            return -1;
+        }
+
         struct timespec ts;
         clock_gettime(CLOCK_REALTIME, &ts);
         ts.tv_sec += QUEUE_WAIT_TIMEOUT_MS / 1000;
@@ -355,7 +367,7 @@ static int queue_push(PackQueue *q, uint8_t *data, size_t len, const char *dest_
         }
         int rc = pthread_cond_timedwait(&q->not_full, &q->mutex, &ts);
         if (rc == ETIMEDOUT) {
-            uint64_t now = now_ms();
+            now = now_ms();
             // Log every 30 seconds while waiting (don't give up, just inform)
             if (now - last_log_ms >= 30000) {
                 uint64_t waited = now - wait_start_ms;
@@ -1363,8 +1375,17 @@ static int upload_session_finish(UploadSession *session) {
 
     pthread_mutex_lock(&queue->mutex);
     uint64_t wait_start = now_ms();
-    uint64_t last_log_ms = 0;
+    uint64_t last_log_ms = wait_start;
     while (queue->count > 0 && !queue->closed) {
+        // Check for hard timeout
+        uint64_t now = now_ms();
+        if (now - wait_start > 300000) { // 5-minute timeout
+            printf("[FTX] ERROR: finalize timed out waiting for queue to drain after %llus. Proceeding with cleanup.\n",
+                   (unsigned long long)((now - wait_start) / 1000));
+            session->error = 1; // Mark session as errored
+            break; // Exit loop to allow cleanup
+        }
+        
         struct timespec ts;
         clock_gettime(CLOCK_REALTIME, &ts);
         ts.tv_sec += QUEUE_WAIT_TIMEOUT_MS / 1000;
@@ -1375,7 +1396,7 @@ static int upload_session_finish(UploadSession *session) {
         }
         int rc = pthread_cond_timedwait(&queue->not_full, &queue->mutex, &ts);
         if (rc == ETIMEDOUT) {
-            uint64_t now = now_ms();
+            now = now_ms();
             // Log every 30 seconds while waiting for queue to drain
             if (now - last_log_ms >= 30000) {
                 uint64_t waited = now - wait_start;

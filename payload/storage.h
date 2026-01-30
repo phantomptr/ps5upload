@@ -9,6 +9,7 @@ __BEGIN_DECLS
 
 void handle_list_storage(int client_sock);
 void handle_list_dir(int client_sock, const char *path);
+void handle_list_dir_recursive(int client_sock, const char *path);
 
 __END_DECLS
 

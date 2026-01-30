@@ -887,14 +887,57 @@ function runManageTask(op, fn) {
   return true;
 }
 
-// Robust socket write
-function writeAllRetry(socket, data, cancel) {
+// Robust socket write with backpressure logging
+function writeAllRetry(socket, data, cancel, log = () => {}) {
   return new Promise((resolve, reject) => {
     let offset = 0;
+    let drainWaitStart = null;
+    let drainLogInterval = null;
+    let finished = false;
+
+    const cleanup = () => {
+      if (drainLogInterval) {
+        clearInterval(drainLogInterval);
+        drainLogInterval = null;
+      }
+      socket.removeListener('error', onError);
+      socket.removeListener('close', onClose);
+    };
+
+    const onError = (err) => {
+      if (finished) return;
+      finished = true;
+      cleanup();
+      reject(err);
+    };
+
+    const onClose = () => {
+      if (finished) return;
+      finished = true;
+      cleanup();
+      reject(new Error('Connection closed while writing'));
+    };
+
+    socket.on('error', onError);
+    socket.on('close', onClose);
+
     const writeLoop = () => {
+      if (finished) return;
+
       if (cancel.value) {
+        finished = true;
+        cleanup();
         socket.destroy();
         return reject(new Error('Upload cancelled by user'));
+      }
+
+      // If we were waiting for drain, clear the log interval
+      if (drainWaitStart) {
+        if (drainLogInterval) {
+          clearInterval(drainLogInterval);
+          drainLogInterval = null;
+        }
+        drainWaitStart = null;
       }
 
       while (offset < data.length) {
@@ -903,10 +946,20 @@ function writeAllRetry(socket, data, cancel) {
         const ok = socket.write(chunk);
         offset = end;
         if (!ok) { // Buffer full, wait for 'drain'
+          drainWaitStart = Date.now();
+          // Log every 30 seconds while waiting for drain
+          drainLogInterval = setInterval(() => {
+            if (drainWaitStart) {
+              const waited = Math.floor((Date.now() - drainWaitStart) / 1000);
+              log(`Waiting for server to catch up... (${waited}s)`);
+            }
+          }, 30000);
           socket.once('drain', writeLoop);
           return;
         }
       }
+      finished = true;
+      cleanup();
       resolve(); // All data written
     };
     writeLoop();
@@ -1244,6 +1297,82 @@ async function listDir(ip, port, dirPath) {
   });
 }
 
+async function listDirRecursive(ip, port, dirPath) {
+  // 600MB limit for recursive listing, for ~300k files
+  const MAX_RESPONSE_SIZE = 600 * 1024 * 1024;
+  const socket = await createSocketWithTimeout(ip, port);
+
+  return new Promise((resolve, reject) => {
+    let data = Buffer.alloc(0);
+    let resolved = false;
+
+    const cleanup = () => {
+      socket.removeAllListeners();
+      socket.destroy();
+    };
+
+    // 5 minute timeout for large directories
+    socket.setTimeout(300000);
+    socket.on('timeout', () => {
+      if (resolved) return;
+      resolved = true;
+      cleanup();
+      reject(new Error('Read timed out'));
+    });
+
+    socket.on('data', (chunk) => {
+      if (resolved) return;
+      data = Buffer.concat([data, chunk]);
+      if (data.length > MAX_RESPONSE_SIZE) {
+        resolved = true;
+        cleanup();
+        reject(new Error('Response too large'));
+        return;
+      }
+      const str = data.toString('utf8');
+      if (str.includes('\n]\n') || str.endsWith('\n]')) {
+        resolved = true;
+        cleanup();
+        try {
+          const jsonEnd = str.lastIndexOf(']');
+          const jsonStr = str.substring(0, jsonEnd + 1);
+          const entries = JSON.parse(jsonStr);
+          resolve(entries);
+        } catch (e) {
+          reject(new Error('Invalid JSON response'));
+        }
+      }
+    });
+
+    socket.on('error', (err) => {
+      if (resolved) return;
+      resolved = true;
+      cleanup();
+      reject(err);
+    });
+
+    socket.on('close', () => {
+      if (resolved) return;
+      resolved = true;
+      if (data.length > 0) {
+        try {
+          const str = data.toString('utf8');
+          const jsonEnd = str.lastIndexOf(']');
+          const jsonStr = str.substring(0, jsonEnd + 1);
+          resolve(JSON.parse(jsonStr));
+        } catch (e) {
+          reject(new Error('Invalid JSON response'));
+        }
+      } else {
+        // Resolve with empty array if connection closes with no data
+        resolve([]);
+      }
+    });
+
+    socket.write(`LIST_DIR_RECURSIVE ${dirPath}\n`);
+  });
+}
+
 async function hashFileLocal(filePath) {
   return new Promise((resolve, reject) => {
     const hash = crypto.createHash('sha256');
@@ -1288,6 +1417,29 @@ async function mapWithConcurrency(items, limit, iterator) {
 }
 
 async function buildRemoteIndex(ip, port, destRoot, files, onProgress, onLog) {
+  const index = new Map();
+  let entries;
+  try {
+    entries = await listDirRecursive(ip, port, destRoot);
+  } catch (err) {
+    onLog?.(`Resume scan: failed to list recursively ${destRoot}: ${err.message || err}`);
+    // Fallback to old method
+    return buildRemoteIndexLegacy(ip, port, destRoot, files, onProgress, onLog);
+  }
+
+  for (const entry of entries || []) {
+    if (!entry || entry.type !== 'file') continue;
+    index.set(entry.name.replace(/\\/g, '/'), {
+      size: Number(entry.size) || 0,
+      mtime: Number(entry.mtime) || 0
+    });
+  }
+  if (onProgress) onProgress(1, 1); // Signal completion
+  return index;
+}
+
+// Legacy implementation for fallback
+async function buildRemoteIndexLegacy(ip, port, destRoot, files, onProgress, onLog) {
   const dirSet = new Set();
   for (const file of files) {
     const rel = file.rel_path || '';
@@ -1957,12 +2109,12 @@ async function collectFiles(basePath, cancel = { value: false }, progressCallbac
 
 // ==================== Transfer ====================
 
-async function sendFrameHeader(socket, frameType, length, cancel) {
+async function sendFrameHeader(socket, frameType, length, cancel, log = () => {}) {
   const header = Buffer.alloc(16);
   header.writeUInt32LE(MAGIC_FTX1, 0);
   header.writeUInt32LE(frameType, 4);
   header.writeBigUInt64LE(BigInt(length), 8);
-  await writeAllRetry(socket, header, cancel);
+  await writeAllRetry(socket, header, cancel, log);
 }
 
 function createAdaptiveUploadTuner({ ip, basePackLimit, baseChunkSize, userRateLimitBps, log }) {
@@ -2002,18 +2154,18 @@ function createAdaptiveUploadTuner({ ip, basePackLimit, baseChunkSize, userRateL
     }
 
     if (pressure >= 2) {
-      state.packLimit = clamp(Math.floor(state.packLimit * 0.5), PACK_BUFFER_MIN, basePackLimit);
-      state.paceMs = clamp(state.paceMs + 5, 5, 50);
+      state.packLimit = clamp(Math.floor(state.packLimit * 0.25), PACK_BUFFER_MIN, basePackLimit);
+      state.paceMs = clamp(state.paceMs + 20, 20, 200);
       state.stableTicks = 0;
     } else if (pressure === 1) {
-      state.paceMs = clamp(Math.max(state.paceMs, 5), 5, 30);
-      state.packLimit = clamp(state.packLimit, PACK_BUFFER_MIN, basePackLimit);
+      state.packLimit = clamp(Math.floor(state.packLimit * 0.75), PACK_BUFFER_MIN, basePackLimit);
+      state.paceMs = clamp(Math.max(state.paceMs, 10), 10, 100);
       state.stableTicks = 0;
     } else {
       state.stableTicks += 1;
       if (state.stableTicks >= 2) {
-        state.paceMs = clamp(state.paceMs - 5, 0, 20);
-        state.packLimit = clamp(state.packLimit + 1 * 1024 * 1024, PACK_BUFFER_MIN, basePackLimit);
+        state.paceMs = clamp(state.paceMs - 2, 0, 20);
+        state.packLimit = clamp(state.packLimit + 512 * 1024, PACK_BUFFER_MIN, basePackLimit);
       }
     }
 
@@ -2163,8 +2315,8 @@ async function sendFilesV2(files, socket, options = {}) {
     }
 
     applyAdaptiveRate();
-    await sendFrameHeader(socket, frameType, payload.length, cancel);
-    await writeAllRetry(socket, payload, cancel);
+    await sendFrameHeader(socket, frameType, payload.length, cancel, log);
+    await writeAllRetry(socket, payload, cancel, log);
     limiter.throttle(payload.length); // Apply rate limit to compressed/actual sent bytes
     if (deprioritize) {
       await manageDeprioritize();
@@ -2196,6 +2348,7 @@ async function sendFilesV2(files, socket, options = {}) {
 
   const logEachFile = files.length <= 10000;
   const logInterval = logEachFile ? 1 : Math.max(250, Math.floor(files.length / 200));
+  const TINY_FILE_THRESHOLD = 64 * 1024;
 
   for (let i = 0; i < files.length; i++) {
     const file = files[i];
@@ -2208,6 +2361,23 @@ async function sendFilesV2(files, socket, options = {}) {
     }
 
     const relPathBytes = Buffer.from(file.rel_path, 'utf8');
+
+    // Fast path for tiny files to avoid stream overhead
+    if (file.size < TINY_FILE_THRESHOLD) {
+      const data = await fs.promises.readFile(file.abs_path);
+      const overhead = 2 + relPathBytes.length + 8;
+      const packLimit = clamp(packLimitFn(), PACK_BUFFER_MIN, PACK_BUFFER_SIZE);
+      if (packLimit - packBuffer.length <= overhead + data.length) {
+        await flushPack();
+      }
+      addRecord(relPathBytes, data);
+      packFilesAdded++;
+      const elapsed = (Date.now() - startTime) / 1000;
+      progress(Number(totalSentBytes) + Number(packBytesAdded), totalSentFiles + packFilesAdded, elapsed, file.rel_path);
+      continue;
+    }
+
+    // Slow path for larger files
     let sawData = false;
     const stream = fs.createReadStream(file.abs_path, { highWaterMark: streamChunkBytes });
 
@@ -2267,7 +2437,7 @@ async function sendFilesV2(files, socket, options = {}) {
   }
 
   // Send finish frame
-  await sendFrameHeader(socket, FrameType.Finish, 0, cancel);
+  await sendFrameHeader(socket, FrameType.Finish, 0, cancel, log);
   limiter.throttle(16); // Account for finish frame header
 
   return { files: totalSentFiles, bytes: Number(totalSentBytes) };

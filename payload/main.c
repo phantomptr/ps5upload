@@ -815,6 +815,11 @@ static void process_command(struct ClientConnection *conn) {
         close_connection(conn);
         return;
     }
+    if (strncmp(conn->cmd_buffer, "LIST_DIR_RECURSIVE ", 19) == 0) {
+        handle_list_dir_recursive(conn->sock, conn->cmd_buffer + 19);
+        close_connection(conn);
+        return;
+    }
     if (strncmp(conn->cmd_buffer, "TEST_WRITE ", 11) == 0) {
         handle_test_write(conn->sock, conn->cmd_buffer + 11);
         close_connection(conn);

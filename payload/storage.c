@@ -199,3 +199,79 @@ void handle_list_dir(int client_sock, const char *path_arg) {
 
     send(client_sock, "]\n", 2, 0);
 }
+
+static int list_dir_recursive_helper(int client_sock, const char *base_path, const char *rel_path, int *first) {
+    char path[PATH_MAX];
+    snprintf(path, sizeof(path), "%s/%s", base_path, rel_path);
+
+    DIR *dir = opendir(path);
+    if (!dir) {
+        return -1;
+    }
+
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+
+        char child_path[PATH_MAX];
+        snprintf(child_path, sizeof(child_path), "%s/%s", path, entry->d_name);
+
+        char child_rel_path[PATH_MAX];
+        if (strlen(rel_path) > 0) {
+            snprintf(child_rel_path, sizeof(child_rel_path), "%s/%s", rel_path, entry->d_name);
+        } else {
+            snprintf(child_rel_path, sizeof(child_rel_path), "%s", entry->d_name);
+        }
+
+        struct stat st;
+        if (stat(child_path, &st) == 0) {
+            if (S_ISDIR(st.st_mode)) {
+                if (list_dir_recursive_helper(client_sock, base_path, child_rel_path, first) != 0) {
+                    // silently ignore directories we can't read
+                }
+            } else if (S_ISREG(st.st_mode)) {
+                char line[PATH_MAX + 128];
+                int written = snprintf(line, sizeof(line),
+                    "%s  {\"name\":\"%s\",\"type\":\"file\",\"size\":%ld,\"mtime\":%ld}\n",
+                    *first ? "" : ",",
+                    child_rel_path, (long)st.st_size, (long)st.st_mtime);
+                if (written > 0) {
+                    send(client_sock, line, (size_t)written, 0);
+                }
+                *first = 0;
+            }
+        }
+    }
+
+    closedir(dir);
+    return 0;
+}
+
+void handle_list_dir_recursive(int client_sock, const char *path_arg) {
+    char path[PATH_MAX];
+    strncpy(path, path_arg, PATH_MAX-1);
+    path[PATH_MAX-1] = '\0';
+
+    // Remove trailing newline if present
+    size_t len = strlen(path);
+    if(len > 0 && path[len-1] == '\n') {
+        path[len-1] = '\0';
+    }
+
+    DIR *dir = opendir(path);
+    if(!dir) {
+        const char *error = "ERROR: Cannot open directory\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+    closedir(dir); // Just used for validation
+
+    send(client_sock, "[\n", 2, 0);
+    
+    int first = 1;
+    list_dir_recursive_helper(client_sock, path, "", &first);
+
+    send(client_sock, "]\n", 2, 0);
+}
