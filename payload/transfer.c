@@ -34,7 +34,6 @@
 #define MEM_RECOVER_BYTES (384LL * 1024 * 1024)
 #define MEM_CHECK_INTERVAL_MS 250
 #define QUEUE_WAIT_TIMEOUT_MS 5000
-#define QUEUE_WAIT_MAX_MS 30000
 
 // Buffer pool with reduced locking via atomics
 #define POOL_SIZE 16
@@ -340,7 +339,7 @@ static void queue_init(PackQueue *q) {
 
 static int queue_push(PackQueue *q, uint8_t *data, size_t len, const char *dest_root, uint64_t session_id, int is_close, int chmod_each_file) {
     uint64_t wait_start_ms = 0;
-    uint64_t wait_ms = 0;
+    uint64_t last_log_ms = 0;
     pthread_mutex_lock(&q->mutex);
     while (q->count >= PACK_QUEUE_DEPTH && !q->closed) {
         if (wait_start_ms == 0) {
@@ -356,13 +355,14 @@ static int queue_push(PackQueue *q, uint8_t *data, size_t len, const char *dest_
         }
         int rc = pthread_cond_timedwait(&q->not_full, &q->mutex, &ts);
         if (rc == ETIMEDOUT) {
-            uint64_t waited = now_ms() - wait_start_ms;
-            if (waited >= QUEUE_WAIT_MAX_MS) {
-                printf("[FTX] backpressure: queue stalled for %llums (session=%llu)\n",
-                       (unsigned long long)waited,
+            uint64_t now = now_ms();
+            // Log every 30 seconds while waiting (don't give up, just inform)
+            if (now - last_log_ms >= 30000) {
+                uint64_t waited = now - wait_start_ms;
+                printf("[FTX] backpressure: queue full, waiting... (%llus so far, session=%llu)\n",
+                       (unsigned long long)(waited / 1000),
                        (unsigned long long)session_id);
-                pthread_mutex_unlock(&q->mutex);
-                return -1;
+                last_log_ms = now;
             }
         }
     }
@@ -372,7 +372,7 @@ static int queue_push(PackQueue *q, uint8_t *data, size_t len, const char *dest_
     }
 
     if (wait_start_ms != 0) {
-        wait_ms = now_ms() - wait_start_ms;
+        uint64_t wait_ms = now_ms() - wait_start_ms;
         pthread_mutex_lock(&g_backpressure_mutex);
         g_backpressure_total_events++;
         g_backpressure_total_wait_ms += wait_ms;
@@ -1165,7 +1165,7 @@ static int enqueue_pack(UploadSession *session) {
     PackQueue *queue = queue_for_session(session->session_id);
     int push_result = queue_push(queue, session->body, session->body_len, session->state.dest_root, session->session_id, 0, session->chmod_each_file);
     if (push_result == -1) {
-        printf("[FTX] enqueue failed (queue closed)\n");
+        printf("[FTX] enqueue failed (queue closed/aborted)\n");
         // Queue rejected, we still own the buffer - free it to avoid leak
         free_pack_buffer(session->body);
         session->body = NULL;
@@ -1246,16 +1246,12 @@ int upload_session_feed(UploadSession *session, const uint8_t *data, size_t len,
                             session->error = 1;
                             break;
                         }
-                        if (wait_ms == 0 || (wait_ms % 2000) == 0) {
-                            printf("[FTX] memory pressure: delaying pack alloc\n");
+                        // Log every 30 seconds while waiting (don't give up)
+                        if (wait_ms == 0 || (wait_ms % 30000) == 0) {
+                            printf("[FTX] memory pressure: delaying pack alloc (%ds so far)\n", wait_ms / 1000);
                         }
                         sleep_ms(50);
                         wait_ms += 50;
-                        if (wait_ms >= QUEUE_WAIT_MAX_MS) {
-                            printf("[FTX] memory pressure: giving up after %dms\n", wait_ms);
-                            session->error = 1;
-                            break;
-                        }
                     }
                     if (session->error) {
                         if (error) {
@@ -1367,6 +1363,7 @@ static int upload_session_finish(UploadSession *session) {
 
     pthread_mutex_lock(&queue->mutex);
     uint64_t wait_start = now_ms();
+    uint64_t last_log_ms = 0;
     while (queue->count > 0 && !queue->closed) {
         struct timespec ts;
         clock_gettime(CLOCK_REALTIME, &ts);
@@ -1378,11 +1375,13 @@ static int upload_session_finish(UploadSession *session) {
         }
         int rc = pthread_cond_timedwait(&queue->not_full, &queue->mutex, &ts);
         if (rc == ETIMEDOUT) {
-            uint64_t waited = now_ms() - wait_start;
-            if (waited >= QUEUE_WAIT_MAX_MS) {
-                printf("[FTX] finalize wait timeout after %llums\n", (unsigned long long)waited);
-                pthread_mutex_unlock(&queue->mutex);
-                return -1;
+            uint64_t now = now_ms();
+            // Log every 30 seconds while waiting for queue to drain
+            if (now - last_log_ms >= 30000) {
+                uint64_t waited = now - wait_start;
+                printf("[FTX] finalize: waiting for queue to drain (%llus so far, %zu remaining)\n",
+                       (unsigned long long)(waited / 1000), queue->count);
+                last_log_ms = now;
             }
         }
     }
