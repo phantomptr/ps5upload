@@ -62,7 +62,9 @@ type TransferStatusSnapshot = {
 
 type TransferLogEvent = {
   run_id: number;
-  message: string;
+  message?: string;
+  key?: string;
+  params?: Record<string, string | number>;
 };
 
 type ManageProgressEvent = {

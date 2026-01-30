@@ -851,8 +851,10 @@ static void process_command(struct ClientConnection *conn) {
         return;
     }
     if (strncmp(conn->cmd_buffer, "EXTRACT_ARCHIVE ", 16) == 0) {
-        handle_extract_archive(conn->sock, conn->cmd_buffer + 16);
-        close_connection(conn);
+        if (handle_extract_archive(conn->sock, conn->cmd_buffer + 16) != 0) {
+            // Socket ownership transferred to worker thread
+            conn->sock = -1;
+        }
         return;
     }
     if (strncmp(conn->cmd_buffer, "MOVE ", 5) == 0) {

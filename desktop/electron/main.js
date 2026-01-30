@@ -2117,7 +2117,7 @@ async function sendFrameHeader(socket, frameType, length, cancel, log = () => {}
   await writeAllRetry(socket, header, cancel, log);
 }
 
-function createAdaptiveUploadTuner({ ip, basePackLimit, baseChunkSize, userRateLimitBps, log }) {
+function createAdaptiveUploadTuner({ ip, basePackLimit, baseChunkSize, userRateLimitBps, log, runId }) {
   const state = {
     packLimit: basePackLimit,
     chunkSize: baseChunkSize,
@@ -2127,12 +2127,23 @@ function createAdaptiveUploadTuner({ ip, basePackLimit, baseChunkSize, userRateL
     lastBackpressureEvents: 0,
     lastBackpressureWaitMs: 0,
     lastMode: '',
+    hardPauseUntil: 0,
   };
 
   let timer = null;
 
   const applyStatus = (status) => {
     if (!status || !status.transfer) return;
+
+    if (state.hardPauseUntil > Date.now()) {
+      // Still in hard pause, do nothing
+      return;
+    }
+    if (state.hardPauseUntil > 0) {
+      emit('transfer_log', { run_id: runId, key: 'log.payload.recovered' });
+      state.hardPauseUntil = 0;
+    }
+
     const transfer = status.transfer || {};
     const queueCount = Number(transfer.queue_count || 0);
     const packInUse = Number(transfer.pack_in_use || 0);
@@ -2144,24 +2155,39 @@ function createAdaptiveUploadTuner({ ip, basePackLimit, baseChunkSize, userRateL
     state.lastBackpressureWaitMs = backpressureWaitMs;
 
     let pressure = 0;
-    if (queueCount >= 256) pressure += 2;
-    else if (queueCount >= 64) pressure += 1;
-    if (packInUse >= 64) pressure += 1;
+    // More aggressive pressure calculation based on queue depth
+    if (queueCount >= 4) { // Assumes PACK_QUEUE_DEPTH of 4 in payload
+      pressure = 3; // Critical
+    } else if (queueCount >= 3) {
+      pressure = 2; // High
+    } else if (queueCount > 0) {
+      pressure = 1; // Low
+    }
+    
+    if (packInUse >= 8) pressure += 1;
     if (deltaEvents > 0 || deltaWait > 200) pressure += 1;
     if (typeof transfer.last_progress === 'number' && transfer.last_progress > 0) {
       const ageSec = Math.max(0, Date.now() / 1000 - transfer.last_progress);
       if (ageSec > 5) pressure += 1;
     }
 
-    if (pressure >= 2) {
+    if (pressure >= 3) { // Critical pressure
+      emit('transfer_log', { run_id: runId, key: 'log.payload.criticalPressure', params: { seconds: 10 } });
+      state.hardPauseUntil = Date.now() + 10000;
+      state.packLimit = PACK_BUFFER_MIN;
+      state.paceMs = 200; // Resume at a very slow pace
+      state.stableTicks = 0;
+    } else if (pressure >= 2) { // High pressure
+      emit('transfer_log', { run_id: runId, key: 'log.payload.highPressure' });
       state.packLimit = clamp(Math.floor(state.packLimit * 0.25), PACK_BUFFER_MIN, basePackLimit);
       state.paceMs = clamp(state.paceMs + 20, 20, 200);
       state.stableTicks = 0;
-    } else if (pressure === 1) {
+    } else if (pressure === 1) { // Low pressure
+      emit('transfer_log', { run_id: runId, key: 'log.payload.pressure' });
       state.packLimit = clamp(Math.floor(state.packLimit * 0.75), PACK_BUFFER_MIN, basePackLimit);
       state.paceMs = clamp(Math.max(state.paceMs, 10), 10, 100);
       state.stableTicks = 0;
-    } else {
+    } else { // No pressure
       state.stableTicks += 1;
       if (state.stableTicks >= 2) {
         state.paceMs = clamp(state.paceMs - 2, 0, 20);
@@ -2204,7 +2230,13 @@ function createAdaptiveUploadTuner({ ip, basePackLimit, baseChunkSize, userRateL
     start,
     stop,
     getPackLimit: () => state.packLimit,
-    getPaceDelayMs: () => state.paceMs,
+    getPaceDelayMs: async () => {
+      const hardPauseMs = state.hardPauseUntil - Date.now();
+      if (hardPauseMs > 0) {
+        await sleepMs(hardPauseMs);
+      }
+      return state.paceMs;
+    },
     getRateLimitBps: () => state.rateLimitBps,
     getChunkSize: () => state.chunkSize,
   };
@@ -2249,7 +2281,7 @@ async function sendFilesV2(files, socket, options = {}) {
   };
 
   const maybePace = async () => {
-    const delayMs = paceDelayFn();
+    const delayMs = await paceDelayFn();
     if (delayMs > 0) {
       await sleepMs(delayMs);
     }
@@ -4916,6 +4948,7 @@ function registerIpcHandlers() {
                 baseChunkSize,
                 userRateLimitBps: rateLimitBps,
                 log: emitLog,
+                runId,
               })
             : null;
 

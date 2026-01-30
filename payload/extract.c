@@ -1,5 +1,5 @@
 /* Copyright (C) 2025 PS5 Upload Contributors
- *
+ * 
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
  * Free Software Foundation; either version 3, or (at your option) any
@@ -15,10 +15,262 @@
 #include <errno.h>
 #include <time.h>
 #include <limits.h>
+#include <pthread.h>
+#include <strings.h>
+#include <dirent.h> // Added for DIR, opendir, readdir, closedir
+#include <sys/types.h> // Added for types used by dirent.h
 
 #include "extract.h"
 #include "notify.h"
 #include "config.h"
+#include "protocol_defs.h"
+#include "third_party/unrar/unrar_wrapper.h"
+
+// Helper to send exact number of bytes
+static int send_all(int sock, const void *buf, size_t len) {
+    const uint8_t *p = (const uint8_t *)buf;
+    size_t sent = 0;
+    time_t last_ok = time(NULL);
+    while (sent < len) {
+        ssize_t n = send(sock, p + sent, len - sent, 0);
+        if (n > 0) {
+            sent += (size_t)n;
+            last_ok = time(NULL);
+            continue;
+        }
+        if (n < 0 && (errno == EWOULDBLOCK || errno == EAGAIN || errno == EINTR)) {
+            if (time(NULL) - last_ok > 60) {
+                return -1;
+            }
+            usleep(1000);
+            continue;
+        }
+        return -1;
+    }
+    return 0;
+}
+
+// Helper to check for file extension
+static int has_extension(const char *path, const char *ext) {
+    const char *dot = strrchr(path, '.');
+    if (!dot) {
+        return 0;
+    }
+    return strcasecmp(dot, ext) == 0;
+}
+
+// Helper for recursive chmod
+static int chmod_recursive(const char *path, mode_t mode, char *err, size_t err_len) {
+    struct stat st;
+    if (lstat(path, &st) != 0) {
+        snprintf(err, err_len, "lstat %s failed: %s", path, strerror(errno));
+        return -1;
+    }
+
+    if (chmod(path, mode) != 0) {
+        snprintf(err, err_len, "chmod %s failed: %s", path, strerror(errno));
+        return -1;
+    }
+
+    if (S_ISDIR(st.st_mode)) {
+        DIR *dir = opendir(path);
+        if (!dir) {
+            snprintf(err, err_len, "opendir %s failed: %s", path, strerror(errno));
+            return -1;
+        }
+        struct dirent *entry;
+        while ((entry = readdir(dir)) != NULL) {
+            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+                continue;
+            }
+            char child[PATH_MAX];
+            snprintf(child, sizeof(child), "%s/%s", path, entry->d_name);
+            if (chmod_recursive(child, mode, err, err_len) != 0) {
+                closedir(dir);
+                return -1;
+            }
+        }
+        closedir(dir);
+    }
+
+    return 0;
+}
+
+
+// --- Threaded Extraction Logic ---
+
+struct ExtractProgressCtx {
+    int sock;
+    time_t last_send;
+    unsigned int min_interval_sec;
+    char last_filename[PATH_MAX];
+    int cancelled;
+    time_t last_notify;
+    unsigned int notify_interval_sec;
+};
+
+struct extract_thread_args {
+    char src[PATH_MAX];
+    char dst[PATH_MAX];
+    int client_sock;
+};
+
+static void extract_check_cancel(struct ExtractProgressCtx *ctx) {
+    if (!ctx || ctx->sock < 0 || ctx->cancelled) {
+        return;
+    }
+    char buf[64];
+    ssize_t n = recv(ctx->sock, buf, sizeof(buf) - 1, MSG_DONTWAIT);
+    if (n == 0) { // Connection closed by peer
+        ctx->cancelled = 1;
+        return;
+    }
+    if (n < 0) {
+        if (errno == EWOULDBLOCK || errno == EAGAIN || errno == EINTR) {
+            return; // No data, not an error
+        }
+        ctx->cancelled = 1; // Any other error, assume cancelled
+        return;
+    }
+    buf[n] = '\0';
+    if (strstr(buf, "CANCEL") != NULL) {
+        ctx->cancelled = 1;
+    }
+}
+
+static int extract_progress(const char *filename, unsigned long long file_size,
+                            int files_done, unsigned long long total_processed,
+                            unsigned long long total_size, void *user_data) {
+    (void)file_size;
+    (void)files_done;
+    struct ExtractProgressCtx *ctx = (struct ExtractProgressCtx *)user_data;
+    if (!ctx) {
+        return 0;
+    }
+    extract_check_cancel(ctx);
+    if (ctx->cancelled) {
+        return 1;
+    }
+    time_t now = time(NULL);
+    int filename_changed = (strncmp(ctx->last_filename, filename, sizeof(ctx->last_filename)) != 0);
+    if (!filename_changed && ctx->min_interval_sec > 0 &&
+        now - ctx->last_send < (time_t)ctx->min_interval_sec) {
+        return 0;
+    }
+    if (filename_changed) {
+        strncpy(ctx->last_filename, filename, sizeof(ctx->last_filename) - 1);
+        ctx->last_filename[sizeof(ctx->last_filename) - 1] = '\0';
+    }
+    ctx->last_send = now;
+
+    int percent = (total_size > 0) ? (int)((total_processed * 100) / total_size) : 0;
+    char msg[PATH_MAX + 128];
+    int len = snprintf(msg, sizeof(msg), "EXTRACT_PROGRESS %d %llu %llu %s\n",
+                       percent, total_processed, total_size, filename);
+    if (len > 0 && send_all(ctx->sock, msg, (size_t)len) != 0) {
+        ctx->cancelled = 1;
+        return 1;
+    }
+    (void)percent;
+    return 0;
+}
+
+
+static void* extract_thread_main(void *arg) {
+    struct extract_thread_args* args = (struct extract_thread_args*)arg;
+    if (!args) {
+        return NULL;
+    }
+    
+    // The socket is now owned by this thread.
+    int sock = args->client_sock;
+
+    if (mkdir(args->dst, 0777) != 0 && errno != EEXIST) {
+        char error_msg[320];
+        snprintf(error_msg, sizeof(error_msg), "ERROR: mkdir %s failed: %s\n", args->dst, strerror(errno));
+        send_all(sock, error_msg, strlen(error_msg));
+        goto cleanup;
+    }
+
+    struct ExtractProgressCtx progress;
+    memset(&progress, 0, sizeof(progress));
+    progress.sock = sock;
+    progress.min_interval_sec = UNRAR_FAST_PROGRESS_INTERVAL_SEC;
+    progress.last_send = time(NULL);
+    progress.notify_interval_sec = 10;
+    progress.last_notify = 0;
+
+    if (!has_extension(args->src, ".rar")) {
+        const char *error = "ERROR: Unsupported archive type\n";
+        send_all(sock, error, strlen(error));
+        goto cleanup;
+    }
+
+    unrar_extract_opts opts;
+    opts.keepalive_interval_sec = UNRAR_FAST_KEEPALIVE_SEC;
+    opts.sleep_every_bytes = UNRAR_FAST_SLEEP_EVERY_BYTES;
+    opts.sleep_us = UNRAR_FAST_SLEEP_US;
+    opts.trust_paths = UNRAR_FAST_TRUST_PATHS;
+    opts.progress_file_start = UNRAR_FAST_PROGRESS_FILE_START;
+
+    int extracted_count = 0;
+    unsigned long long total_bytes = 0;
+    int extract_result = unrar_extract(args->src, args->dst, 0, 0, &opts, extract_progress, &progress,
+                                       &extracted_count, &total_bytes);
+
+    if (extract_result != UNRAR_OK) {
+        const char *err_str = progress.cancelled ? "Cancelled" : unrar_strerror(extract_result);
+        char error_msg[320];
+        snprintf(error_msg, sizeof(error_msg), "ERROR: %s\n", err_str);
+        send_all(sock, error_msg, strlen(error_msg));
+        goto cleanup;
+    }
+
+    char chmod_err[256] = {0};
+    if (chmod_recursive(args->dst, 0777, chmod_err, sizeof(chmod_err)) != 0) {
+        char error_msg[320];
+        snprintf(error_msg, sizeof(error_msg), "ERROR: %s\n", chmod_err);
+        send_all(sock, error_msg, strlen(error_msg));
+        goto cleanup;
+    }
+
+    const char *success = "OK\n";
+    send_all(sock, success, strlen(success));
+
+cleanup:
+    close(sock);
+    free(args);
+    return NULL;
+}
+
+int start_threaded_extraction(int client_sock, const char *src, const char *dst) {
+    struct extract_thread_args *args = malloc(sizeof(struct extract_thread_args));
+    if (!args) {
+        const char *error = "ERROR: Out of memory\n";
+        send_all(client_sock, error, strlen(error));
+        return -1;
+    }
+
+    strncpy(args->src, src, sizeof(args->src) - 1);
+    args->src[sizeof(args->src) - 1] = '\0';
+    strncpy(args->dst, dst, sizeof(args->dst) - 1);
+    args->dst[sizeof(args->dst) - 1] = '\0';
+    args->client_sock = client_sock;
+    
+    pthread_t tid;
+    if (pthread_create(&tid, NULL, extract_thread_main, args) != 0) {
+        free(args);
+        const char *error = "ERROR: Failed to create extraction thread\n";
+        send_all(client_sock, error, strlen(error));
+        return -1;
+    }
+
+    pthread_detach(tid);
+    return 0; // Success, socket ownership transferred
+}
+
+
+// --- Original code from extract.c ---
 
 // Create directories recursively
 static int mkdir_recursive(const char *path) {

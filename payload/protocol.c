@@ -568,83 +568,9 @@ static int chmod_recursive(const char *path, mode_t mode, char *err, size_t err_
     return 0;
 }
 
-struct ExtractProgressCtx {
-    int sock;
-    time_t last_send;
-    unsigned int min_interval_sec;
-    char last_filename[PATH_MAX];
-    int cancelled;
-    time_t last_notify;
-    unsigned int notify_interval_sec;
-};
 
-static void extract_check_cancel(struct ExtractProgressCtx *ctx) {
-    if (!ctx || ctx->sock < 0 || ctx->cancelled) {
-        return;
-    }
-    char buf[64];
-    ssize_t n = recv(ctx->sock, buf, sizeof(buf) - 1, MSG_DONTWAIT);
-    if (n == 0) {
-        ctx->cancelled = 1;
-        return;
-    }
-    if (n < 0) {
-        if (errno == EWOULDBLOCK || errno == EAGAIN || errno == EINTR) {
-            return;
-        }
-        ctx->cancelled = 1;
-        return;
-    }
-    buf[n] = '\0';
-    if (strstr(buf, "CANCEL") != NULL) {
-        ctx->cancelled = 1;
-    }
-}
 
-static int extract_progress(const char *filename, unsigned long long file_size,
-                            int files_done, unsigned long long total_processed,
-                            unsigned long long total_size, void *user_data) {
-    (void)file_size;
-    (void)files_done;
-    struct ExtractProgressCtx *ctx = (struct ExtractProgressCtx *)user_data;
-    if (!ctx) {
-        return 0;
-    }
-    extract_check_cancel(ctx);
-    if (ctx->cancelled) {
-        return 1;
-    }
-    time_t now = time(NULL);
-    int filename_changed = (strncmp(ctx->last_filename, filename, sizeof(ctx->last_filename)) != 0);
-    if (!filename_changed && ctx->min_interval_sec > 0 &&
-        now - ctx->last_send < (time_t)ctx->min_interval_sec) {
-        return 0;
-    }
-    if (filename_changed) {
-        strncpy(ctx->last_filename, filename, sizeof(ctx->last_filename) - 1);
-        ctx->last_filename[sizeof(ctx->last_filename) - 1] = '\0';
-    }
-    ctx->last_send = now;
 
-    int percent = (total_size > 0) ? (int)((total_processed * 100) / total_size) : 0;
-    char msg[PATH_MAX + 128];
-    int len = snprintf(msg, sizeof(msg), "EXTRACT_PROGRESS %d %llu %llu %s\n",
-                       percent, total_processed, total_size, filename);
-    if (len > 0 && send_all(ctx->sock, msg, (size_t)len) != 0) {
-        ctx->cancelled = 1;
-        return 1;
-    }
-    (void)percent;
-    return 0;
-}
-
-static int has_extension(const char *path, const char *ext) {
-    const char *dot = strrchr(path, '.');
-    if (!dot) {
-        return 0;
-    }
-    return strcasecmp(dot, ext) == 0;
-}
 
 
 enum DownloadCompression {
@@ -1540,7 +1466,7 @@ void handle_copy_path(int client_sock, const char *args) {
     send(client_sock, success, strlen(success), 0);
 }
 
-void handle_extract_archive(int client_sock, const char *args) {
+int handle_extract_archive(int client_sock, const char *args) {
     char buffer[PATH_MAX * 2];
     strncpy(buffer, args, sizeof(buffer) - 1);
     buffer[sizeof(buffer) - 1] = '\0';
@@ -1550,7 +1476,7 @@ void handle_extract_archive(int client_sock, const char *args) {
     if (!sep) {
         const char *error = "ERROR: Invalid EXTRACT_ARCHIVE format\n";
         send(client_sock, error, strlen(error), 0);
-        return;
+        return 0; // Do not hijack socket
     }
     *sep = '\0';
     const char *src = buffer;
@@ -1558,65 +1484,21 @@ void handle_extract_archive(int client_sock, const char *args) {
     if (!*src || !*dst) {
         const char *error = "ERROR: Invalid EXTRACT_ARCHIVE format\n";
         send(client_sock, error, strlen(error), 0);
-        return;
+        return 0; // Do not hijack socket
     }
 
     if (!is_path_safe(src) || !is_path_safe(dst)) {
         const char *error = "ERROR: Invalid path\n";
         send(client_sock, error, strlen(error), 0);
-        return;
+        return 0; // Do not hijack socket
     }
 
-    if (mkdir(dst, 0777) != 0 && errno != EEXIST) {
-        char error_msg[320];
-        snprintf(error_msg, sizeof(error_msg), "ERROR: mkdir %s failed: %s\n", dst, strerror(errno));
-        send(client_sock, error_msg, strlen(error_msg), 0);
-        return;
+    if (start_threaded_extraction(client_sock, src, dst) != 0) {
+        // start_threaded_extraction sends its own error message on failure
+        return 0; // Do not hijack socket
     }
 
-    struct ExtractProgressCtx progress;
-    memset(&progress, 0, sizeof(progress));
-    progress.sock = client_sock;
-    progress.min_interval_sec = UNRAR_FAST_PROGRESS_INTERVAL_SEC;
-    progress.last_send = time(NULL);
-    progress.notify_interval_sec = 10;
-    progress.last_notify = 0;
-
-    if (!has_extension(src, ".rar")) {
-        const char *error = "ERROR: Unsupported archive type\n";
-        send(client_sock, error, strlen(error), 0);
-        return;
-    }
-
-    unrar_extract_opts opts;
-    opts.keepalive_interval_sec = UNRAR_FAST_KEEPALIVE_SEC;
-    opts.sleep_every_bytes = UNRAR_FAST_SLEEP_EVERY_BYTES;
-    opts.sleep_us = UNRAR_FAST_SLEEP_US;
-    opts.trust_paths = UNRAR_FAST_TRUST_PATHS;
-    opts.progress_file_start = UNRAR_FAST_PROGRESS_FILE_START;
-
-    int extracted_count = 0;
-    unsigned long long total_bytes = 0;
-    int extract_result = unrar_extract(src, dst, 0, 0, &opts, extract_progress, &progress,
-                                       &extracted_count, &total_bytes);
-    if (extract_result != UNRAR_OK) {
-        const char *err = progress.cancelled ? "ERROR: Cancelled\n" : unrar_strerror(extract_result);
-        char error_msg[320];
-        snprintf(error_msg, sizeof(error_msg), "ERROR: %s\n", err);
-        send(client_sock, error_msg, strlen(error_msg), 0);
-        return;
-    }
-
-    char chmod_err[256] = {0};
-    if (chmod_recursive(dst, 0777, chmod_err, sizeof(chmod_err)) != 0) {
-        char error_msg[320];
-        snprintf(error_msg, sizeof(error_msg), "ERROR: %s\n", chmod_err);
-        send(client_sock, error_msg, strlen(error_msg), 0);
-        return;
-    }
-
-    const char *success = "OK\n";
-    send(client_sock, success, strlen(success), 0);
+    return 1; // Hijack socket
 }
 
 void handle_probe_rar(int client_sock, const char *args) {
