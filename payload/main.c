@@ -83,20 +83,59 @@ static void *kill_watch_thread(void *arg) {
 
 static void *idle_watch_thread(void *arg) {
     (void)arg;
+    static int transfer_stall_count = 0;
+    static int abort_in_progress = 0;
+    static time_t abort_request_time = 0;
+    const int g_stall_grace_period_sec = 15; // 15s grace period
+
     while (1) {
         time_t now = time(NULL);
-        if (transfer_is_active()) {
-            time_t last = transfer_last_progress();
-            if (last > 0 && (now - last) > g_transfer_stall_sec) {
-                payload_log("[WATCHDOG] Transfer stall: %ld sec without progress", (long)(now - last));
+
+        if (abort_in_progress && (now - abort_request_time) < g_stall_grace_period_sec) {
+            // In grace period, do nothing but sleep
+        } else {
+            abort_in_progress = 0; // Grace period over, resume normal checks
+
+            if (transfer_is_active()) {
+                time_t last = transfer_last_progress();
+                if (last > 0 && (now - last) > g_transfer_stall_sec) {
+                    transfer_stall_count++;
+                    payload_log("[WATCHDOG] Transfer stall detected (count=%d): %ld sec without progress",
+                                transfer_stall_count, (long)(now - last));
+
+                    if (transfer_stall_count > 1) {
+                        payload_log("[WATCHDOG] Unrecoverable stall detected after grace period. Forcing payload exit.");
+                        notify_error("PS5 Upload Server", "Unrecoverable stall. Restarting.");
+                        transfer_cleanup();
+                        extract_queue_reset();
+                        unlink(g_pid_file);
+                        exit(EXIT_FAILURE);
+                    } else {
+                        payload_log("[WATCHDOG] Attempting to abort stalled transfer. Entering %ds grace period.", g_stall_grace_period_sec);
+                        notify_info("PS5 Upload Server", "Transfer stalled. Attempting recovery...");
+                        transfer_request_abort();
+                        abort_in_progress = 1;
+                        abort_request_time = now;
+                    }
+                } else {
+                    if (transfer_stall_count > 0) {
+                        payload_log("[WATCHDOG] Transfer has recovered from stall.");
+                        notify_info("PS5 Upload Server", "Transfer recovered from stall.");
+                    }
+                    transfer_stall_count = 0;
+                }
+            } else {
+                transfer_stall_count = 0;
             }
         }
+
         if (extract_queue_is_running()) {
             time_t last = extract_queue_get_last_progress();
             if (last > 0 && (now - last) > g_extract_stall_sec) {
                 payload_log("[WATCHDOG] Extract stall: %ld sec without progress", (long)(now - last));
             }
         }
+
         if (g_last_activity > 0 && (now - g_last_activity) > g_idle_timeout_sec) {
             if (transfer_is_active() || extract_queue_is_running()) {
                 payload_log("[WATCHDOG] Idle timeout but active transfer/extract. activity_age=%ld", (long)(now - g_last_activity));
@@ -110,7 +149,7 @@ static void *idle_watch_thread(void *arg) {
                 exit(EXIT_SUCCESS);
             }
         }
-        usleep(500 * 1000);
+        usleep(1000 * 1000); // Check every 1 second
     }
     return NULL;
 }
