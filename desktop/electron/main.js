@@ -2901,14 +2901,32 @@ async function fetchUrl(url, maxRedirects = 5) {
   });
 }
 
+const normalizeVersion = (version) => String(version || '').replace(/^v/i, "").trim();
+
+const compareVersions = (v1, v2) => {
+  const a = normalizeVersion(v1).split(".").map(Number);
+  const b = normalizeVersion(v2).split(".").map(Number);
+  const len = Math.max(a.length, b.length);
+  for (let i = 0; i < len; i++) {
+    const av = Number.isFinite(a[i]) ? a[i] : 0;
+    const bv = Number.isFinite(b[i]) ? b[i] : 0;
+    if (av > bv) return 1;
+    if (av < bv) return -1;
+  }
+  return 0;
+};
+
 async function fetchLatestRelease(includePrerelease = false) {
   const apiUrl = 'https://api.github.com/repos/phantomptr/ps5upload/releases';
   const data = await fetchUrl(apiUrl);
   const releases = JSON.parse(data);
 
-  for (const release of releases) {
-    if (!includePrerelease && release.prerelease) continue;
-    return release;
+  const sorted = releases
+    .filter(r => includePrerelease || !r.prerelease)
+    .sort((a, b) => compareVersions(b.tag_name, a.tag_name));
+
+  if (sorted.length > 0) {
+    return sorted[0];
   }
 
   throw new Error('No release found');
