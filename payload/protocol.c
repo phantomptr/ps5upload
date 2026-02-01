@@ -1631,12 +1631,12 @@ void handle_download_file(int client_sock, const char *path_arg) {
     }
 
     char header[128];
-    snprintf(header, sizeof(header), "OK %lld\n", (long long)st.st_size);
+    snprintf(header, sizeof(header), "OK %llu\n", (unsigned long long)st.st_size);
     if (send_all(client_sock, header, strlen(header)) != 0) {
         fclose(fp);
         return;
     }
-    printf("[DOWNLOAD] OK size=%lld\n", (long long)st.st_size);
+    printf("[DOWNLOAD] OK size=%llu\n", (unsigned long long)st.st_size);
     payload_touch_activity();
 
     char buffer[64 * 1024];
@@ -2006,32 +2006,63 @@ void handle_clear_tmp(int client_sock) {
     send_all(client_sock, msg, strlen(msg));
 }
 
+static int parse_quoted_token(const char *src, char *out, size_t out_cap, const char **rest) {
+    if (!src || !out || out_cap == 0) return -1;
+    while (*src == ' ' || *src == '\t') src++;
+    if (*src == '\0') return -1;
+    size_t len = 0;
+    if (*src == '"') {
+        src++;
+        while (*src && *src != '"') {
+            char ch = *src++;
+            if (ch == '\\') {
+                char esc = *src++;
+                if (esc == '\0') return -1;
+                switch (esc) {
+                    case 'n': ch = '\n'; break;
+                    case 'r': ch = '\r'; break;
+                    case 't': ch = '\t'; break;
+                    case '\\': ch = '\\'; break;
+                    case '"': ch = '"'; break;
+                    default: ch = esc; break;
+                }
+            }
+            if (len + 1 >= out_cap) return -1;
+            out[len++] = ch;
+        }
+        if (*src != '"') return -1;
+        src++;
+    } else {
+        while (*src && *src != ' ' && *src != '\t') {
+            if (len + 1 >= out_cap) return -1;
+            out[len++] = *src++;
+        }
+    }
+    out[len] = '\0';
+    if (rest) {
+        while (*src == ' ' || *src == '\t') src++;
+        *rest = src;
+    }
+    return 0;
+}
+
 void handle_upload_v2_wrapper(int client_sock, const char *args) {
     char dest_path[PATH_MAX];
     char mode[16] = {0};
     int chmod_each_file = 1;
     int chmod_final = 0;
-    // Parse: UPLOAD_V2 <dest_path> [TEMP|DIRECT]
+    // Parse: UPLOAD_V2 <dest_path> [TEMP|DIRECT ...]
     const char *rest = NULL;
     if (!args) {
         const char *error = "ERROR: Invalid UPLOAD_V2 format\n";
         send(client_sock, error, strlen(error), 0);
         return;
     }
-    // Manual token parse to avoid overflow
-    while (*args == ' ') args++;
-    const char *end = args;
-    while (*end != '\0' && *end != ' ') end++;
-    size_t len = (size_t)(end - args);
-    if (len == 0 || len >= sizeof(dest_path)) {
+    if (parse_quoted_token(args, dest_path, sizeof(dest_path), &rest) != 0) {
         const char *error = "ERROR: Invalid UPLOAD_V2 format\n";
         send(client_sock, error, strlen(error), 0);
         return;
     }
-    memcpy(dest_path, args, len);
-    dest_path[len] = '\0';
-    while (*end == ' ') end++;
-    rest = end;
     if (rest && *rest) {
         char opts[128];
         strncpy(opts, rest, sizeof(opts) - 1);
@@ -2055,6 +2086,7 @@ void handle_upload_v2_wrapper(int client_sock, const char *args) {
     if (!is_path_safe(dest_path)) {
         const char *error = "ERROR: Invalid path\n";
         send(client_sock, error, strlen(error), 0);
+        printf("[UPLOAD_V2] ERROR: Invalid path: %s\n", dest_path);
         return;
     }
 
@@ -2071,6 +2103,9 @@ void handle_upload_v2_wrapper(int client_sock, const char *args) {
         }
     }
 
+    printf("[UPLOAD_V2] Request: dest=%s mode=%s chmod_each=%d chmod_final=%d\n",
+           dest_path, use_temp ? "TEMP" : "DIRECT",
+           chmod_each_file ? 1 : 0, chmod_final ? 1 : 0);
     handle_upload_v2(client_sock, dest_path, use_temp, chmod_each_file, chmod_final);
 }
 
@@ -2086,19 +2121,13 @@ void handle_upload(int client_sock, const char *args) {
         send(client_sock, error, strlen(error), 0);
         return;
     }
-    // Safe parse of first token
-    while (*args == ' ') args++;
-    const char *end = args;
-    while (*end != '\0' && *end != ' ') end++;
-    size_t len = (size_t)(end - args);
-    if (len == 0 || len >= sizeof(dest_path)) {
+    // Safe parse of first token (supports quoted paths)
+    if (parse_quoted_token(args, dest_path, sizeof(dest_path), NULL) != 0) {
         printf("[UPLOAD] ERROR: Failed to parse command arguments\n");
         const char *error = "ERROR: Invalid UPLOAD command format\n";
         send(client_sock, error, strlen(error), 0);
         return;
     }
-    memcpy(dest_path, args, len);
-    dest_path[len] = '\0';
 
     if (!is_path_safe(dest_path)) {
         const char *error = "ERROR: Invalid path\n";
@@ -2144,7 +2173,7 @@ void handle_upload(int client_sock, const char *args) {
     printf("[UPLOAD] Starting direct file stream reception...\n");
     time_t start_time = time(NULL);
     char extract_err[256] = {0};
-    long long total_bytes = 0;
+    unsigned long long total_bytes = 0;
     int file_count = 0;
 
     int result = receive_folder_stream(client_sock, dest_path, extract_err, sizeof(extract_err),
@@ -2160,7 +2189,7 @@ void handle_upload(int client_sock, const char *args) {
         fprintf(log_fp, "\n=== Upload Results ===\n");
         fprintf(log_fp, "Status: %s\n", (result == 0) ? "SUCCESS" : "FAILED");
         fprintf(log_fp, "Files transferred: %d\n", file_count);
-        fprintf(log_fp, "Total bytes: %lld (%.2f MB)\n", total_bytes, total_bytes / (1024.0 * 1024.0));
+        fprintf(log_fp, "Total bytes: %llu (%.2f MB)\n", total_bytes, total_bytes / (1024.0 * 1024.0));
         fprintf(log_fp, "Duration: %.1f seconds\n", elapsed_secs);
         if(elapsed_secs > 0) {
             double speed_mbps = (total_bytes / (1024.0 * 1024.0)) / elapsed_secs;
@@ -2178,7 +2207,7 @@ void handle_upload(int client_sock, const char *args) {
 
         // Send success with metrics
         char success_msg[256];
-        snprintf(success_msg, sizeof(success_msg), "SUCCESS %d %lld\n", file_count, total_bytes);
+        snprintf(success_msg, sizeof(success_msg), "SUCCESS %d %llu\n", file_count, total_bytes);
         send(client_sock, success_msg, strlen(success_msg), 0);
 
     } else {

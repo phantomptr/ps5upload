@@ -3,7 +3,6 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const net = require('net');
-const dgram = require('dgram');
 const https = require('https');
 const http = require('http');
 const crypto = require('crypto');
@@ -49,7 +48,7 @@ const WRITE_CHUNK_SIZE = 512 * 1024; // 512KB
 const MAGIC_FTX1 = 0x31585446;
 
 let sleepBlockerId = null;
-const VERSION = '1.3.9';
+const VERSION = '1.3.10';
 const IS_WINDOWS = process.platform === 'win32';
 
 function beginManageOperation(op) {
@@ -167,6 +166,87 @@ function findArchiveCoverEntry(entries, paramEntry) {
   return null;
 }
 
+async function sendFileOverSocket(socket, filePath, fileSize, opts = {}) {
+  const {
+    cancel = { value: false },
+    onProgress = () => {},
+    onLog = () => {},
+    chunkSize = 1024 * 1024
+  } = opts;
+  const handle = await fs.promises.open(filePath, 'r');
+  const buffer = Buffer.allocUnsafe(chunkSize);
+  let position = 0;
+  let sentBytes = 0;
+  let closed = false;
+  let socketError = null;
+  let lastLogBytes = 0;
+  let lastLogTime = Date.now();
+
+  const progressInterval = setInterval(() => {
+    onProgress('Upload', sentBytes, fileSize, path.basename(filePath));
+  }, 1000);
+
+  const onClose = () => {
+    closed = true;
+    onLog(`RAR upload socket closed after ${sentBytes}/${fileSize} bytes`);
+  };
+  const onError = (err) => {
+    socketError = err;
+    closed = true;
+    onLog(`RAR upload socket error after ${sentBytes}/${fileSize} bytes: ${err && err.message ? err.message : err}`);
+  };
+  socket.on('close', onClose);
+  socket.on('error', onError);
+
+  const waitForDrain = () => new Promise((resolve, reject) => {
+    const onDrain = () => cleanup(resolve);
+    const onError = (err) => cleanup(() => reject(err));
+    const onCloseWhile = () => cleanup(() => reject(new Error('Connection closed while writing')));
+    const cleanup = (fn) => {
+      socket.off('drain', onDrain);
+      socket.off('error', onError);
+      socket.off('close', onCloseWhile);
+      fn();
+    };
+    socket.once('drain', onDrain);
+    socket.once('error', onError);
+    socket.once('close', onCloseWhile);
+  });
+
+  try {
+    while (position < fileSize) {
+      if (cancel.value) throw new Error('Upload cancelled');
+      if (socketError) throw socketError;
+      if (closed || socket.destroyed) throw new Error('Connection closed while writing');
+      const toRead = Math.min(chunkSize, fileSize - position);
+      const { bytesRead } = await handle.read(buffer, 0, toRead, position);
+      if (bytesRead === 0) {
+        throw new Error(`Unexpected EOF at ${position}/${fileSize}`);
+      }
+      position += bytesRead;
+      sentBytes += bytesRead;
+      const chunk = buffer.subarray(0, bytesRead);
+      if (!socket.write(chunk)) {
+        onLog(`RAR upload backpressure at ${sentBytes}/${fileSize} bytes`);
+        await waitForDrain();
+      }
+      if (sentBytes - lastLogBytes >= 64 * 1024 * 1024 || Date.now() - lastLogTime >= 10000) {
+        onLog(`RAR upload progress: ${sentBytes}/${fileSize} bytes`);
+        lastLogBytes = sentBytes;
+        lastLogTime = Date.now();
+      }
+    }
+    onProgress('Upload', sentBytes, fileSize, path.basename(filePath));
+    onLog(`RAR upload complete: ${sentBytes}/${fileSize} bytes`);
+    return sentBytes;
+  } finally {
+    clearInterval(progressInterval);
+    socket.off('close', onClose);
+    socket.off('error', onError);
+    await handle.close();
+  }
+}
+
 async function uploadRarForExtraction(ip, rarPath, destPath, mode, opts = {}) {
   const {
     cancel = { value: false },
@@ -176,6 +256,9 @@ async function uploadRarForExtraction(ip, rarPath, destPath, mode, opts = {}) {
     tempRoot = ''
   } = opts;
   const fileSize = (await fs.promises.stat(rarPath)).size;
+  if (!Number.isSafeInteger(fileSize)) {
+    throw new Error(`RAR file too large for safe integer math: ${fileSize}`);
+  }
 
   try {
     await createPath(ip, TRANSFER_PORT, destPath);
@@ -203,7 +286,7 @@ async function uploadRarForExtraction(ip, rarPath, destPath, mode, opts = {}) {
       throw new Error('Temp storage path must not contain spaces.');
     }
     const tmpToken = cleanedTempRoot ? ` TMP=${cleanedTempRoot}` : '';
-    const cmd = `UPLOAD_RAR_${String(modeToTry || 'normal').toUpperCase()} ${destPath} ${fileSize}${tmpToken}${flag}\n`;
+    const cmd = `UPLOAD_RAR_${String(modeToTry || 'normal').toUpperCase()} ${escapeCommandPath(destPath)} ${fileSize}${tmpToken}${flag}\n`;
     socket.write(cmd);
 
     let response = '';
@@ -249,46 +332,10 @@ async function uploadRarForExtraction(ip, rarPath, destPath, mode, opts = {}) {
     throw new Error(`Server rejected RAR upload: ${response}`);
   }
 
-  const fileStream = fs.createReadStream(rarPath);
-  let sentBytes = 0;
-  const progressInterval = setInterval(() => {
-    onProgress('Upload', sentBytes, fileSize, path.basename(rarPath));
-  }, 1000);
-
   try {
-    await new Promise((resolve, reject) => {
-      fileStream.on('data', (chunk) => {
-        if (cancel.value) {
-          fileStream.destroy();
-          socket.destroy();
-          return reject(new Error('Upload cancelled'));
-        }
-        if (!socket.write(chunk)) {
-          fileStream.pause();
-          socket.once('drain', () => {
-            fileStream.resume();
-          });
-        }
-        sentBytes += chunk.length;
-      });
-
-      fileStream.on('end', () => {
-        socket.end();
-        resolve();
-      });
-
-      fileStream.on('error', (err) => {
-        socket.destroy();
-        reject(err);
-      });
-
-      socket.on('error', (err) => {
-        fileStream.destroy();
-        reject(err);
-      });
-    });
+    await sendFileOverSocket(socket, rarPath, fileSize, { cancel, onProgress, onLog });
+    socket.end();
   } finally {
-    clearInterval(progressInterval);
   }
 
   onLog('Upload complete. Waiting for extraction response...');
@@ -583,6 +630,8 @@ const state = {
   transferCancel: false,
   transferActive: false,
   transferRunId: 0,
+  transferAbort: null,
+  transferSocket: null,
   transferStatus: { run_id: 0, status: 'Idle', sent: 0, total: 0, files: 0, elapsed_secs: 0, current_file: '' },
   transferMeta: { requested_optimize: null, auto_tune_connections: null, effective_optimize: null, effective_compression: null },
   transferLastUpdate: 0,
@@ -607,14 +656,8 @@ const state = {
   manageListCache: { path: '', entries: [], error: null, updated_at_ms: 0 },
   saveLogs: false,
   uiLogEnabled: true,
-  chatSender: null,
 };
 
-let chatSocket = null;
-let chatRoomId = 'LAN';
-let chatEnabled = false;
-const chatInstanceId = crypto.randomUUID();
-const CHAT_PORT = 9234;
 
 // Pollers
 let payloadPoller = null;
@@ -721,89 +764,6 @@ function emit(channel, data) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(channel, data);
   }
-}
-
-function startChatSocket() {
-  if (chatSocket) {
-    return { room_id: chatRoomId, enabled: chatEnabled };
-  }
-
-  try {
-    const socket = dgram.createSocket({ type: 'udp4', reuseAddr: true });
-    chatSocket = socket;
-
-    socket.on('error', (err) => {
-      chatEnabled = false;
-      emit('chat_status', { status: `Error: ${err.message}` });
-    });
-
-    socket.on('message', (msg) => {
-      let payload = null;
-      try {
-        payload = JSON.parse(msg.toString('utf8'));
-      } catch {
-        return;
-      }
-      if (!payload || payload.instance_id === chatInstanceId) return;
-      const time = payload.time || new Date().toLocaleTimeString();
-      emit('chat_message', {
-        time,
-        sender: payload.name || 'User',
-        text: payload.text || '',
-        local: false,
-      });
-    });
-
-    socket.bind(CHAT_PORT, () => {
-      socket.setBroadcast(true);
-      chatEnabled = true;
-      emit('chat_status', { status: 'Connected' });
-    });
-
-    return { room_id: chatRoomId, enabled: true };
-  } catch (err) {
-    chatEnabled = false;
-    emit('chat_status', { status: `Error: ${err.message}` });
-    return { room_id: '', enabled: false };
-  }
-}
-
-function stopChatSocket() {
-  if (chatSocket) {
-    try {
-      chatSocket.close();
-    } catch {
-      // ignore
-    }
-    chatSocket = null;
-  }
-  chatEnabled = false;
-  emit('chat_status', { status: 'Disconnected' });
-  return { room_id: chatRoomId, enabled: false };
-}
-
-function sendChatMessage(name, text) {
-  if (!chatSocket) {
-    const info = startChatSocket();
-    if (!info.enabled) {
-      throw new Error('Chat unavailable');
-    }
-  }
-  const payload = {
-    instance_id: chatInstanceId,
-    name,
-    text,
-    time: new Date().toLocaleTimeString(),
-  };
-  const buffer = Buffer.from(JSON.stringify(payload));
-  chatSocket.send(buffer, 0, buffer.length, CHAT_PORT, '255.255.255.255');
-  emit('chat_message', {
-    time: payload.time,
-    sender: name,
-    text,
-    local: true,
-  });
-  emit('chat_ack', { ok: true });
 }
 
 // Log writing
@@ -981,6 +941,17 @@ function tuneUploadSocket(socket) {
   }
 }
 
+function escapeCommandPath(value) {
+  const text = String(value ?? '');
+  const escaped = text
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r')
+    .replace(/\t/g, '\\t');
+  return `"${escaped}"`;
+}
+
 function createSocketWithTimeout(ip, port, timeout = CONNECTION_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
     const socket = new net.Socket();
@@ -1002,7 +973,7 @@ function createSocketWithTimeout(ip, port, timeout = CONNECTION_TIMEOUT_MS) {
   });
 }
 
-async function sendSimpleCommand(ip, port, cmd) {
+async function sendSimpleCommand(ip, port, cmd, signal) {
   const MAX_RESPONSE_SIZE = 1024 * 1024; // 1MB limit
   const socket = await createSocketWithTimeout(ip, port);
 
@@ -1013,6 +984,16 @@ async function sendSimpleCommand(ip, port, cmd) {
     const cleanup = () => {
       socket.removeAllListeners();
       socket.destroy();
+      if (signal) {
+        signal.removeEventListener('abort', onAbort);
+      }
+    };
+
+    const onAbort = () => {
+      if (resolved) return;
+      resolved = true;
+      cleanup();
+      reject(new Error('Cancelled'));
     };
 
     socket.setTimeout(READ_TIMEOUT_MS);
@@ -1053,6 +1034,14 @@ async function sendSimpleCommand(ip, port, cmd) {
         resolve(data.toString('utf8').trim());
       }
     });
+
+    if (signal) {
+      if (signal.aborted) {
+        onAbort();
+        return;
+      }
+      signal.addEventListener('abort', onAbort);
+    }
 
     socket.write(cmd);
   });
@@ -1186,6 +1175,12 @@ async function listStorage(ip, port) {
         return;
       }
       const str = data.toString('utf8');
+      if (str.startsWith('ERROR:')) {
+        resolved = true;
+        cleanup();
+        reject(new Error(str.trim()));
+        return;
+      }
       if (str.includes('\n]\n') || str.endsWith('\n]')) {
         resolved = true;
         cleanup();
@@ -1213,6 +1208,10 @@ async function listStorage(ip, port) {
       if (data.length > 0) {
         try {
           const str = data.toString('utf8');
+          if (str.startsWith('ERROR:')) {
+            reject(new Error(str.trim()));
+            return;
+          }
           const jsonEnd = str.lastIndexOf(']');
           const jsonStr = str.substring(0, jsonEnd + 1);
           resolve(JSON.parse(jsonStr));
@@ -1226,7 +1225,7 @@ async function listStorage(ip, port) {
   });
 }
 
-async function listDir(ip, port, dirPath) {
+async function listDir(ip, port, dirPath, signal) {
   const MAX_RESPONSE_SIZE = 10 * 1024 * 1024; // 10MB limit for directory listings
   const socket = await createSocketWithTimeout(ip, port);
 
@@ -1237,6 +1236,16 @@ async function listDir(ip, port, dirPath) {
     const cleanup = () => {
       socket.removeAllListeners();
       socket.destroy();
+      if (signal) {
+        signal.removeEventListener('abort', onAbort);
+      }
+    };
+
+    const onAbort = () => {
+      if (resolved) return;
+      resolved = true;
+      cleanup();
+      reject(new Error('Cancelled'));
     };
 
     socket.setTimeout(READ_TIMEOUT_MS);
@@ -1257,6 +1266,12 @@ async function listDir(ip, port, dirPath) {
         return;
       }
       const str = data.toString('utf8');
+      if (str.startsWith('ERROR:')) {
+        resolved = true;
+        cleanup();
+        reject(new Error(str.trim()));
+        return;
+      }
       if (str.includes('\n]\n') || str.endsWith('\n]')) {
         resolved = true;
         cleanup();
@@ -1266,7 +1281,8 @@ async function listDir(ip, port, dirPath) {
           const entries = JSON.parse(jsonStr);
           resolve(entries);
         } catch (e) {
-          reject(new Error('Invalid JSON response'));
+          const snippet = str.length > 200 ? `${str.slice(0, 200)}...` : str;
+          reject(new Error(`Invalid JSON response: ${snippet}`));
         }
       }
     });
@@ -1284,31 +1300,107 @@ async function listDir(ip, port, dirPath) {
       if (data.length > 0) {
         try {
           const str = data.toString('utf8');
+          if (str.startsWith('ERROR:')) {
+            reject(new Error(str.trim()));
+            return;
+          }
           const jsonEnd = str.lastIndexOf(']');
           const jsonStr = str.substring(0, jsonEnd + 1);
           resolve(JSON.parse(jsonStr));
         } catch (e) {
-          reject(new Error('Invalid JSON response'));
+          const str = data.toString('utf8');
+          const snippet = str.length > 200 ? `${str.slice(0, 200)}...` : str;
+          reject(new Error(`Invalid JSON response: ${snippet}`));
         }
       }
     });
+
+    if (signal) {
+      if (signal.aborted) {
+        onAbort();
+        return;
+      }
+      signal.addEventListener('abort', onAbort);
+    }
 
     socket.write(`LIST_DIR ${dirPath}\n`);
   });
 }
 
-async function listDirRecursive(ip, port, dirPath) {
-  // 600MB limit for recursive listing, for ~300k files
-  const MAX_RESPONSE_SIZE = 600 * 1024 * 1024;
+async function listDirRecursive(ip, port, dirPath, signal, onEntry = null, options = {}) {
+  const { collect = true } = options;
   const socket = await createSocketWithTimeout(ip, port);
 
   return new Promise((resolve, reject) => {
-    let data = Buffer.alloc(0);
+    let buffer = '';
     let resolved = false;
+    let sawStart = false;
+    let done = false;
+    const entries = collect ? [] : null;
 
     const cleanup = () => {
       socket.removeAllListeners();
       socket.destroy();
+      if (signal) {
+        signal.removeEventListener('abort', onAbort);
+      }
+    };
+
+    const onAbort = () => {
+      if (resolved) return;
+      resolved = true;
+      cleanup();
+      reject(new Error('Cancelled'));
+    };
+
+    const handleLine = (line) => {
+      let text = line.trim();
+      if (!text) return true;
+      if (text.startsWith('ERROR:')) {
+        resolved = true;
+        cleanup();
+        reject(new Error(text));
+        return false;
+      }
+      if (!sawStart) {
+        if (text.startsWith('ERROR')) {
+          resolved = true;
+          cleanup();
+          reject(new Error(text));
+          return false;
+        }
+        if (text.startsWith('[')) {
+          sawStart = true;
+          text = text.slice(1).trim();
+          if (!text) return true;
+        }
+      }
+      if (text.startsWith(']')) {
+        done = true;
+        resolved = true;
+        cleanup();
+        resolve(entries || []);
+        return false;
+      }
+      if (text[0] === ',') {
+        text = text.slice(1).trim();
+      }
+      if (text.endsWith(',')) {
+        text = text.slice(0, -1).trim();
+      }
+      if (!text) return true;
+      try {
+        const entry = JSON.parse(text);
+        if (collect && entries) entries.push(entry);
+        if (onEntry) onEntry(entry);
+      } catch (e) {
+        resolved = true;
+        cleanup();
+        const snippet = text.length > 200 ? `${text.slice(0, 200)}...` : text;
+        reject(new Error(`Invalid JSON response: ${snippet}`));
+        return false;
+      }
+      return true;
     };
 
     // 5 minute timeout for large directories
@@ -1322,25 +1414,12 @@ async function listDirRecursive(ip, port, dirPath) {
 
     socket.on('data', (chunk) => {
       if (resolved) return;
-      data = Buffer.concat([data, chunk]);
-      if (data.length > MAX_RESPONSE_SIZE) {
-        resolved = true;
-        cleanup();
-        reject(new Error('Response too large'));
-        return;
-      }
-      const str = data.toString('utf8');
-      if (str.includes('\n]\n') || str.endsWith('\n]')) {
-        resolved = true;
-        cleanup();
-        try {
-          const jsonEnd = str.lastIndexOf(']');
-          const jsonStr = str.substring(0, jsonEnd + 1);
-          const entries = JSON.parse(jsonStr);
-          resolve(entries);
-        } catch (e) {
-          reject(new Error('Invalid JSON response'));
-        }
+      buffer += chunk.toString('utf8');
+      let idx;
+      while ((idx = buffer.indexOf('\n')) !== -1) {
+        const line = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 1);
+        if (!handleLine(line)) return;
       }
     });
 
@@ -1353,33 +1432,45 @@ async function listDirRecursive(ip, port, dirPath) {
 
     socket.on('close', () => {
       if (resolved) return;
-      resolved = true;
-      if (data.length > 0) {
-        try {
-          const str = data.toString('utf8');
-          const jsonEnd = str.lastIndexOf(']');
-          const jsonStr = str.substring(0, jsonEnd + 1);
-          resolve(JSON.parse(jsonStr));
-        } catch (e) {
-          reject(new Error('Invalid JSON response'));
-        }
-      } else {
-        // Resolve with empty array if connection closes with no data
-        resolve([]);
+      if (buffer.length > 0) {
+        handleLine(buffer);
       }
+      if (done) return;
+      resolved = true;
+      cleanup();
+      reject(new Error('Connection closed'));
     });
+
+    if (signal) {
+      if (signal.aborted) {
+        onAbort();
+        return;
+      }
+      signal.addEventListener('abort', onAbort);
+    }
 
     socket.write(`LIST_DIR_RECURSIVE ${dirPath}\n`);
   });
 }
 
-async function hashFileLocal(filePath) {
+async function hashFileLocal(filePath, signal) {
   return new Promise((resolve, reject) => {
     const hash = crypto.createHash('sha256');
     const stream = fs.createReadStream(filePath);
+    const onAbort = () => {
+      stream.destroy(new Error('Cancelled'));
+    };
     stream.on('data', chunk => hash.update(chunk));
     stream.on('error', reject);
     stream.on('end', () => resolve(hash.digest('hex')));
+    if (signal) {
+      if (signal.aborted) {
+        onAbort();
+        return;
+      }
+      signal.addEventListener('abort', onAbort, { once: true });
+      stream.on('close', () => signal.removeEventListener('abort', onAbort));
+    }
   });
 }
 
@@ -1416,30 +1507,43 @@ async function mapWithConcurrency(items, limit, iterator) {
   });
 }
 
-async function buildRemoteIndex(ip, port, destRoot, files, onProgress, onLog) {
+async function buildRemoteIndex(ip, port, destRoot, files, onProgress, onLog, signal) {
   const index = new Map();
   let entries;
+  const totalHint = Array.isArray(files) ? files.length : 0;
+  onLog?.(`Resume scan: listing remote tree via LIST_DIR_RECURSIVE at ${destRoot}`);
   try {
-    entries = await listDirRecursive(ip, port, destRoot);
+    let seen = 0;
+    await listDirRecursive(
+      ip,
+      port,
+      destRoot,
+      signal,
+      (entry) => {
+        if (!entry || entry.type !== 'file') return;
+        index.set(entry.name.replace(/\\/g, '/'), {
+          size: Number(entry.size) || 0,
+          mtime: Number(entry.mtime) || 0
+        });
+        seen += 1;
+        if (onProgress) onProgress(Math.min(seen, totalHint || seen), totalHint || seen);
+      },
+      { collect: false }
+    );
   } catch (err) {
     onLog?.(`Resume scan: failed to list recursively ${destRoot}: ${err.message || err}`);
+    onLog?.(`Resume scan: LIST_DIR_RECURSIVE failed, falling back to legacy listing. Reason: ${err.message || err}`);
     // Fallback to old method
-    return buildRemoteIndexLegacy(ip, port, destRoot, files, onProgress, onLog);
+    return buildRemoteIndexLegacy(ip, port, destRoot, files, onProgress, onLog, signal);
   }
 
-  for (const entry of entries || []) {
-    if (!entry || entry.type !== 'file') continue;
-    index.set(entry.name.replace(/\\/g, '/'), {
-      size: Number(entry.size) || 0,
-      mtime: Number(entry.mtime) || 0
-    });
-  }
+  onLog?.(`Resume scan: recursive listing complete, ${index.size} remote file(s) indexed`);
   if (onProgress) onProgress(1, 1); // Signal completion
   return index;
 }
 
 // Legacy implementation for fallback
-async function buildRemoteIndexLegacy(ip, port, destRoot, files, onProgress, onLog) {
+async function buildRemoteIndexLegacy(ip, port, destRoot, files, onProgress, onLog, signal) {
   const dirSet = new Set();
   for (const file of files) {
     const rel = file.rel_path || '';
@@ -1450,12 +1554,13 @@ async function buildRemoteIndexLegacy(ip, port, destRoot, files, onProgress, onL
   const dirs = Array.from(dirSet);
   const total = dirs.length;
   let done = 0;
+  onLog?.(`Resume scan: legacy listing ${total} director${total === 1 ? 'y' : 'ies'} under ${destRoot}`);
 
   const index = new Map();
   const listOne = async (dir) => {
     const remoteDir = joinRemotePath(destRoot, dir);
     try {
-      const entries = await listDir(ip, port, remoteDir);
+      const entries = await listDir(ip, port, remoteDir, signal);
       for (const entry of entries || []) {
         if (!entry || entry.type !== 'file') continue;
         const relPath = dir ? `${dir}/${entry.name}` : entry.name;
@@ -1474,11 +1579,12 @@ async function buildRemoteIndexLegacy(ip, port, destRoot, files, onProgress, onL
 
   const concurrency = 4;
   await mapWithConcurrency(dirs, concurrency, listOne);
+  onLog?.(`Resume scan: legacy listing complete, ${index.size} remote file(s) indexed`);
   return index;
 }
 
-async function hashFileRemote(ip, port, filePath) {
-  const response = await sendSimpleCommand(ip, port, `HASH_FILE ${filePath}\n`);
+async function hashFileRemote(ip, port, filePath, signal) {
+  const response = await sendSimpleCommand(ip, port, `HASH_FILE ${filePath}\n`, signal);
   if (response.startsWith('OK ')) {
     return response.substring(3).trim();
   }
@@ -1720,7 +1826,7 @@ async function historyGet(ip, port) {
   return sendCommandExpectPayload(ip, port, 'HISTORY_GET\n');
 }
 
-async function uploadV2Init(ip, port, destPath, useTemp, opts = {}) {
+async function uploadV2Init(ip, port, destPath, useTemp, opts = {}, signal) {
   const socket = await createSocketWithTimeout(ip, port);
   const mode = useTemp ? 'TEMP' : 'DIRECT';
   tuneUploadSocket(socket);
@@ -1746,12 +1852,20 @@ async function uploadV2Init(ip, port, destPath, useTemp, opts = {}) {
       reject(new Error('Read timed out'));
     });
 
+    const onAbort = () => {
+      socket.destroy();
+      reject(new Error('Cancelled'));
+    };
+
     const onData = (chunk) => {
       data = Buffer.concat([data, chunk]);
       const response = data.toString('utf8').trim();
       if (response === 'READY') {
         socket.removeListener('data', onData);
         socket.setTimeout(0);
+        if (signal) {
+          signal.removeEventListener('abort', onAbort);
+        }
         resolve(socket);
       } else if (response.length > 0 && !response.startsWith('READY')) {
         socket.destroy();
@@ -1762,7 +1876,15 @@ async function uploadV2Init(ip, port, destPath, useTemp, opts = {}) {
     socket.on('data', onData);
     socket.on('error', (err) => reject(err));
 
-    socket.write(`UPLOAD_V2 ${destPath} ${mode}${flagStr}\n`);
+    if (signal) {
+      if (signal.aborted) {
+        onAbort();
+        return;
+      }
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+
+    socket.write(`UPLOAD_V2 ${escapeCommandPath(destPath)} ${mode}${flagStr}\n`);
   });
 }
 
@@ -1800,7 +1922,6 @@ const defaultConfig = {
   payload_reload_mode: 'current',
   payload_local_path: '',
   optimize_upload: false,
-  chat_display_name: '',
   rar_extract_mode: 'turbo',
   window_width: 1440,
   window_height: 960,
@@ -1853,7 +1974,6 @@ function loadConfig() {
         case 'payload_reload_mode': config.payload_reload_mode = ['local', 'current', 'latest'].includes(value) ? value : 'current'; break;
         case 'payload_local_path': config.payload_local_path = value; break;
         case 'optimize_upload': config.optimize_upload = ['1', 'true', 'yes', 'on'].includes(value.toLowerCase()); break;
-        case 'chat_display_name': config.chat_display_name = value; break;
         case 'rar_extract_mode': config.rar_extract_mode = ['normal', 'safe', 'turbo'].includes(value) ? value : 'turbo'; break;
         case 'window_width': config.window_width = parseInt(value, 10) || 1440; break;
         case 'window_height': config.window_height = parseInt(value, 10) || 960; break;
@@ -1895,7 +2015,6 @@ function saveConfig(config) {
     `payload_reload_mode=${config.payload_reload_mode}`,
     `payload_local_path=${config.payload_local_path}`,
     `optimize_upload=${config.optimize_upload}`,
-    `chat_display_name=${config.chat_display_name}`,
     `rar_extract_mode=${config.rar_extract_mode}`,
     `window_width=${config.window_width || 1440}`,
     `window_height=${config.window_height || 960}`,
@@ -2008,7 +2127,6 @@ function loadProfiles() {
           connections: 1,
           use_temp: false,
           auto_tune_connections: true,
-          chat_display_name: '',
         };
       } else if (currentProfile && trimmed.includes('=')) {
         const idx = trimmed.indexOf('=');
@@ -2022,7 +2140,6 @@ function loadProfiles() {
           case 'connections': currentProfile.connections = parseInt(value, 10) || 1; break;
           case 'use_temp': currentProfile.use_temp = ['1', 'true', 'yes', 'on'].includes(value.toLowerCase()); break;
           case 'auto_tune_connections': currentProfile.auto_tune_connections = ['1', 'true', 'yes', 'on'].includes(value.toLowerCase()); break;
-          case 'chat_display_name': currentProfile.chat_display_name = value; break;
           case 'default': if (value === 'true') defaultProfile = currentProfile.name; break;
         }
       }
@@ -2047,7 +2164,6 @@ function saveProfiles(data) {
     lines.push(`connections=${profile.connections}`);
     lines.push(`use_temp=${profile.use_temp}`);
     lines.push(`auto_tune_connections=${profile.auto_tune_connections}`);
-    lines.push(`chat_display_name=${profile.chat_display_name}`);
     if (data.default_profile === profile.name) {
       lines.push('default=true');
     }
@@ -2064,6 +2180,9 @@ async function collectFiles(basePath, cancel = { value: false }, progressCallbac
 
   const stat = await fs.promises.stat(basePath);
   if (stat.isFile()) {
+    if (!Number.isSafeInteger(stat.size)) {
+      throw new Error(`File too large for safe integer math: ${basePath}`);
+    }
     files.push({
       rel_path: path.basename(basePath),
       abs_path: basePath,
@@ -2086,6 +2205,9 @@ async function collectFiles(basePath, cancel = { value: false }, progressCallbac
         await walk(fullPath, relPath);
       } else if (entry.isFile()) {
         const stat = await fs.promises.stat(fullPath);
+        if (!Number.isSafeInteger(stat.size)) {
+          throw new Error(`File too large for safe integer math: ${fullPath}`);
+        }
         files.push({
           rel_path: relPath.replace(/\\/g, '/'),
           abs_path: fullPath,
@@ -2117,7 +2239,7 @@ async function sendFrameHeader(socket, frameType, length, cancel, log = () => {}
   await writeAllRetry(socket, header, cancel, log);
 }
 
-function createAdaptiveUploadTuner({ ip, basePackLimit, baseChunkSize, userRateLimitBps, log, runId }) {
+function createAdaptiveUploadTuner({ ip, basePackLimit, baseChunkSize, userRateLimitBps, log, runId, allowPayloadTune }) {
   const state = {
     packLimit: basePackLimit,
     chunkSize: baseChunkSize,
@@ -2128,6 +2250,7 @@ function createAdaptiveUploadTuner({ ip, basePackLimit, baseChunkSize, userRateL
     lastBackpressureWaitMs: 0,
     lastMode: '',
     hardPauseUntil: 0,
+    lastPayloadTune: '',
   };
 
   let timer = null;
@@ -2149,6 +2272,13 @@ function createAdaptiveUploadTuner({ ip, basePackLimit, baseChunkSize, userRateL
     const packInUse = Number(transfer.pack_in_use || 0);
     const backpressureEvents = Number(transfer.backpressure_events || 0);
     const backpressureWaitMs = Number(transfer.backpressure_wait_ms || 0);
+    const packQueueCount = Number(transfer.pack_queue_count || 0);
+    const recvRateBps = Number(transfer.recv_rate_bps || 0);
+    const writeRateBps = Number(transfer.write_rate_bps || 0);
+    const recommendPack = Number(transfer.recommend_pack_limit || 0);
+    const recommendPace = Number(transfer.recommend_pace_ms || 0);
+    const recommendRate = Number(transfer.recommend_rate_limit_bps || 0);
+    const tuneLevel = Number(transfer.tune_level ?? -1);
     const deltaEvents = backpressureEvents - state.lastBackpressureEvents;
     const deltaWait = backpressureWaitMs - state.lastBackpressureWaitMs;
     state.lastBackpressureEvents = backpressureEvents;
@@ -2165,7 +2295,9 @@ function createAdaptiveUploadTuner({ ip, basePackLimit, baseChunkSize, userRateL
     }
     
     if (packInUse >= 8) pressure += 1;
+    if (packQueueCount >= 3) pressure += 1;
     if (deltaEvents > 0 || deltaWait > 200) pressure += 1;
+    if (writeRateBps > 0 && recvRateBps > writeRateBps * 1.5) pressure += 1;
     if (typeof transfer.last_progress === 'number' && transfer.last_progress > 0) {
       const ageSec = Math.max(0, Date.now() / 1000 - transfer.last_progress);
       if (ageSec > 5) pressure += 1;
@@ -2195,13 +2327,39 @@ function createAdaptiveUploadTuner({ ip, basePackLimit, baseChunkSize, userRateL
       }
     }
 
-    const nextMode = `${state.packLimit}-${state.paceMs}`;
+    const payloadTuneAllowed = allowPayloadTune || tuneLevel >= 2;
+    if (payloadTuneAllowed && recommendPack > 0) {
+      state.packLimit = Math.min(state.packLimit, recommendPack);
+    }
+    if (payloadTuneAllowed && recommendPace > state.paceMs) {
+      state.paceMs = recommendPace;
+    }
+    if (payloadTuneAllowed && recommendRate > 0) {
+      if (!state.rateLimitBps || recommendRate < state.rateLimitBps) {
+        state.rateLimitBps = recommendRate;
+      }
+    } else if (userRateLimitBps) {
+      state.rateLimitBps = userRateLimitBps;
+    } else {
+      state.rateLimitBps = null;
+    }
+
+    const nextMode = `${state.packLimit}-${state.paceMs}-${state.rateLimitBps || 0}`;
     if (nextMode !== state.lastMode) {
       log(
-        `Adaptive tune: pack=${(state.packLimit / (1024 * 1024)).toFixed(1)} MB, pace=${state.paceMs}ms ` +
-        `(queue=${queueCount}, pack=${packInUse}, backpressure+${Math.max(deltaEvents, 0)})`
+        `Adaptive tune: pack=${(state.packLimit / (1024 * 1024)).toFixed(1)} MB, pace=${state.paceMs}ms, ` +
+        `rate=${state.rateLimitBps ? `${(state.rateLimitBps / (1024 * 1024)).toFixed(1)} MB/s` : 'unlimited'} ` +
+        `(queue=${queueCount}, packq=${packQueueCount}, pack=${packInUse}, backpressure+${Math.max(deltaEvents, 0)})`
       );
       state.lastMode = nextMode;
+    }
+
+    if (tuneLevel >= 0) {
+      const payloadTune = `tune=${tuneLevel} pack=${recommendPack} pace=${recommendPace} rate=${recommendRate}`;
+      if (payloadTune !== state.lastPayloadTune) {
+        log(`Payload tune: level=${tuneLevel} pack=${recommendPack} pace=${recommendPace} rate=${recommendRate}${payloadTuneAllowed ? '' : ' (safety-only)'}`);
+        state.lastPayloadTune = payloadTune;
+      }
     }
   };
 
@@ -3069,7 +3227,7 @@ async function sendPayloadFile(ip, filepath) {
 
 function probePayloadFile(filepath) {
   if (!payloadPathIsElf(filepath)) {
-    return { is_ps5upload: false, message: 'Payload must be a .elf or .bin file.' };
+    return { is_ps5upload: false, code: 'payload_probe_invalid_ext' };
   }
 
   const nameMatch = filepath.toLowerCase().includes('ps5upload');
@@ -3077,9 +3235,9 @@ function probePayloadFile(filepath) {
   const signatureMatch = content.includes(Buffer.from('ps5upload')) || content.includes(Buffer.from('PS5UPLOAD'));
 
   if (nameMatch || signatureMatch) {
-    return { is_ps5upload: true, message: 'PS5Upload payload detected.' };
+    return { is_ps5upload: true, code: 'payload_probe_detected' };
   }
-  return { is_ps5upload: false, message: 'No PS5Upload signature found. Use only if you trust this payload.' };
+  return { is_ps5upload: false, code: 'payload_probe_no_signature' };
 }
 
 // ==================== Pollers ====================
@@ -3435,6 +3593,10 @@ function registerIpcHandlers() {
         release = await fetchLatestRelease(false);
       }
 
+      const logMsg = `[VERSION CHECK] Identified latest release as: ${release.tag_name}. Downloading payload...`;
+      console.log(logMsg);
+      emit('payload_log', { message: logMsg });
+
       const asset = release.assets.find(a => a.name === 'ps5upload.elf');
       if (!asset) throw new Error('Payload asset not found');
 
@@ -3472,14 +3634,16 @@ function registerIpcHandlers() {
     return probePayloadFile(filepath);
   });
 
-  ipcMain.handle('payload_status', async (_, ip) => {
+  ipcMain.handle('payload_status', async (_, ipArg) => {
+    const ip = typeof ipArg === 'string' ? ipArg : ipArg?.ip;
     if (!ip || !ip.trim()) throw new Error('Enter a PS5 address first.');
     return getPayloadStatus(ip, TRANSFER_PORT);
   });
 
   ipcMain.handle('payload_status_snapshot', () => state.payloadStatus || { status: null, error: null, updated_at_ms: 0 });
 
-  ipcMain.handle('payload_status_refresh', async (_, ip) => {
+  ipcMain.handle('payload_status_refresh', async (_, ipArg) => {
+    const ip = typeof ipArg === 'string' ? ipArg : ipArg?.ip;
     if (!ip || !ip.trim()) throw new Error('Enter a PS5 address first.');
 
     try {
@@ -4678,8 +4842,15 @@ function registerIpcHandlers() {
 
   ipcMain.handle('transfer_cancel', () => {
     state.transferCancel = true;
+    if (state.transferAbort) {
+      state.transferAbort.abort();
+    }
+    if (state.transferSocket) {
+      state.transferSocket.destroy();
+    }
     state.transferStatus = { ...state.transferStatus, status: 'Cancelled' };
     state.transferLastUpdate = Date.now();
+    state.transferActive = false;
     return true;
   });
 
@@ -4726,6 +4897,8 @@ function registerIpcHandlers() {
     state.transferRunId++;
     const runId = state.transferRunId;
     state.transferCancel = false;
+    const transferAbort = new AbortController();
+    state.transferAbort = transferAbort;
     state.transferActive = true;
     state.transferStatus = { run_id: runId, status: 'Starting', sent: 0, total: req.required_size || 0, files: 0, elapsed_secs: 0, current_file: '' };
     state.transferMeta = {
@@ -4745,6 +4918,7 @@ function registerIpcHandlers() {
     setImmediate(() => {
       (async () => {
         const startTime = Date.now();
+        let watchdog = null;
 
         try {
           const sourceStat = await fs.promises.stat(req.source_path);
@@ -4858,7 +5032,8 @@ function registerIpcHandlers() {
                 state.transferStatus = { ...state.transferStatus, status: 'Resume scan', files: done, total };
                 state.transferLastUpdate = Date.now();
               },
-              emitLog
+              emitLog,
+              transferAbort.signal
             );
 
             let skipped = 0;
@@ -4890,8 +5065,8 @@ function registerIpcHandlers() {
               const remotePath = joinRemotePath(destRoot, rel);
               try {
                 const [localHash, remoteHash] = await Promise.all([
-                  hashFileLocal(file.abs_path),
-                  hashFileRemote(req.ip, TRANSFER_PORT, remotePath)
+                  hashFileLocal(file.abs_path, transferAbort.signal),
+                  hashFileRemote(req.ip, TRANSFER_PORT, remotePath, transferAbort.signal)
                 ]);
                 if (localHash === remoteHash) {
                   skipped++;
@@ -4953,28 +5128,65 @@ function registerIpcHandlers() {
 
           state.transferStatus = { ...state.transferStatus, status: 'Uploading', files: filesToUpload.length, total: Number(totalSize) };
           state.transferLastUpdate = Date.now();
+          emitLog('Connecting upload socket...');
 
-          const socket = await uploadV2Init(req.ip, TRANSFER_PORT, req.dest_path, req.use_temp, {
-            optimize_upload: effectiveOptimize,
-            chmod_after_upload: req.chmod_after_upload,
-          });
+          const socket = await uploadV2Init(
+            req.ip,
+            TRANSFER_PORT,
+            req.dest_path,
+            req.use_temp,
+            {
+              optimize_upload: effectiveOptimize,
+              chmod_after_upload: req.chmod_after_upload,
+            },
+            transferAbort.signal
+          );
+          emitLog('Upload socket READY.');
+          state.transferSocket = socket;
           const rateLimitBps = req.bandwidth_limit_mbps ? req.bandwidth_limit_mbps * 1024 * 1024 / 8 : null; // Convert Mbps to Bps
-          const adaptiveTuner = req.auto_tune_connections
-            ? createAdaptiveUploadTuner({
-                ip: req.ip,
-                basePackLimit,
-                baseChunkSize,
-                userRateLimitBps: rateLimitBps,
-                log: emitLog,
-                runId,
-              })
-            : null;
+          const adaptiveTuner = createAdaptiveUploadTuner({
+            ip: req.ip,
+            basePackLimit,
+            baseChunkSize,
+            userRateLimitBps: rateLimitBps,
+            log: emitLog,
+            runId,
+            allowPayloadTune: !!req.auto_tune_connections,
+          });
+
+          watchdog = setInterval(async () => {
+            if (!state.transferActive || state.transferStatus.run_id !== runId) return;
+            if (state.transferStatus.status !== 'Uploading') return;
+            const ageMs = Date.now() - state.transferLastUpdate;
+            if (ageMs < 15000) return;
+            let status = state.payloadStatus?.status;
+            if (!status) {
+              try {
+                status = await getPayloadStatus(req.ip, TRANSFER_PORT);
+              } catch {
+                return;
+              }
+            }
+            const transfer = status?.transfer || {};
+            const idle = Number(transfer.active_sessions || 0) === 0 &&
+              Number(transfer.queue_count || 0) === 0 &&
+              Number(transfer.pack_in_use || 0) === 0;
+            if (idle) {
+              emitLog('Watchdog: payload idle with no progress; aborting transfer.');
+              state.transferCancel = true;
+              if (state.transferAbort) state.transferAbort.abort();
+              if (state.transferSocket) state.transferSocket.destroy();
+              state.transferStatus = { ...state.transferStatus, status: 'Error: Payload stalled/idle' };
+              state.transferLastUpdate = Date.now();
+              emit('transfer_error', { run_id: runId, message: 'Payload stalled/idle' });
+              state.transferActive = false;
+            }
+          }, 5000);
+          if (watchdog.unref) watchdog.unref();
 
           let parsed;
           try {
-            if (adaptiveTuner) {
-              adaptiveTuner.start();
-            }
+            adaptiveTuner.start();
 
             await sendFilesV2(filesToUpload, socket, {
               cancel: { get value() { return state.transferCancel; } },
@@ -5003,9 +5215,7 @@ function registerIpcHandlers() {
             const response = await readUploadResponse(socket);
             parsed = parseUploadResponse(response);
           } finally {
-            if (adaptiveTuner) {
-              adaptiveTuner.stop();
-            }
+            adaptiveTuner.stop();
           }
 
           const elapsed = (Date.now() - startTime) / 1000;
@@ -5015,16 +5225,45 @@ function registerIpcHandlers() {
           emit('transfer_complete', { run_id: runId, files: parsed.files, bytes: parsed.bytes });
         } catch (err) {
           emit('transfer_error', { run_id: runId, message: err.message });
-          state.transferStatus = { ...state.transferStatus, status: `Error: ${err.message}` };
-          state.transferLastUpdate = Date.now();
+          // Only update status if this is still the active transfer
+          if (state.transferStatus.run_id === runId) {
+            state.transferStatus = { ...state.transferStatus, status: `Error: ${err.message}` };
+            state.transferLastUpdate = Date.now();
+          }
         } finally {
-          state.transferActive = false;
+          if (watchdog) {
+            clearInterval(watchdog);
+            watchdog = null;
+          }
+          // Only clean up socket if it's still ours
+          if (state.transferSocket && state.transferStatus.run_id === runId) {
+            state.transferSocket.destroy();
+            state.transferSocket = null;
+          }
+          if (state.transferAbort === transferAbort) {
+            state.transferAbort = null;
+          }
+          // Only reset transferActive if this is still the active transfer
+          if (state.transferStatus.run_id === runId) {
+            state.transferActive = false;
+          }
         }
       })().catch((err) => {
         // Handle any unhandled rejection from the async IIFE
         console.error('Unhandled transfer error:', err);
         emit('transfer_error', { run_id: runId, message: err.message || 'Unknown error' });
-        state.transferActive = false;
+        // Only clean up socket if it's still ours
+        if (state.transferSocket && state.transferStatus.run_id === runId) {
+          state.transferSocket.destroy();
+          state.transferSocket = null;
+        }
+        if (state.transferAbort === transferAbort) {
+          state.transferAbort = null;
+        }
+        // Only reset transferActive if this is still the active transfer
+        if (state.transferStatus.run_id === runId) {
+          state.transferActive = false;
+        }
       });
     });
 
@@ -5070,29 +5309,6 @@ function registerIpcHandlers() {
     return true;
   });
 
-  // Chat (LAN broadcast)
-  ipcMain.handle('chat_info', () => {
-    return { room_id: chatRoomId, enabled: true };
-  });
-
-  ipcMain.handle('chat_generate_name', () => {
-    return `User${Math.floor(Math.random() * 10000)}`;
-  });
-
-  ipcMain.handle('chat_start', () => {
-    return startChatSocket();
-  });
-
-  ipcMain.handle('chat_stop', () => {
-    return stopChatSocket();
-  });
-
-  ipcMain.handle('chat_send', (_, name, text) => {
-    if (!name || !text) return false;
-    sendChatMessage(String(name), String(text));
-    return true;
-  });
-
   // Game meta (simplified)
   ipcMain.handle('game_meta_load', async (_, sourcePath) => {
     return loadGameMetaForPath(sourcePath);
@@ -5120,14 +5336,6 @@ app.on('window-all-closed', () => {
   if (payloadPoller) clearInterval(payloadPoller);
   if (connectionPoller) clearInterval(connectionPoller);
   if (managePoller) clearInterval(managePoller);
-  if (chatSocket) {
-    try {
-      chatSocket.close();
-    } catch {
-      // ignore
-    }
-    chatSocket = null;
-  }
 
   if (process.platform !== 'darwin') app.quit();
 });

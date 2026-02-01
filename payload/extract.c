@@ -333,7 +333,7 @@ static int recv_line(int sock, char *buffer, size_t max_size) {
 }
 
 int receive_folder_stream(int sock, const char *dest_path, char *err, size_t err_len,
-                          long long *out_total_bytes, int *out_file_count) {
+                          unsigned long long *out_total_bytes, int *out_file_count) {
     if (err && err_len > 0) {
         err[0] = '\0';
     }
@@ -358,7 +358,7 @@ int receive_folder_stream(int sock, const char *dest_path, char *err, size_t err
         return -1;
     }
     char line_buffer[PATH_MAX + 256];
-    long long total_bytes = 0;
+    unsigned long long total_bytes = 0;
     int file_count = 0;
 
     printf("[EXTRACT] Waiting for file stream...\n");
@@ -383,8 +383,8 @@ int receive_folder_stream(int sock, const char *dest_path, char *err, size_t err
 
         // Parse FILE command: "FILE <path> <size>"
         char rel_path[PATH_MAX];
-        long long file_size;
-        if (sscanf(line_buffer, "FILE %1023s %lld", rel_path, &file_size) != 2) {
+        unsigned long long file_size;
+        if (sscanf(line_buffer, "FILE %1023s %llu", rel_path, &file_size) != 2) {
             printf("[EXTRACT] ERROR: Invalid file header: %s\n", line_buffer);
             if (err && err_len > 0) {
                 snprintf(err, err_len, "invalid file header");
@@ -396,7 +396,7 @@ int receive_folder_stream(int sock, const char *dest_path, char *err, size_t err
         char full_path[PATH_MAX];
         snprintf(full_path, sizeof(full_path), "%s/%s", dest_path, rel_path);
 
-        printf("[EXTRACT] Receiving file: %s (%lld bytes)\n", rel_path, file_size);
+        printf("[EXTRACT] Receiving file: %s (%llu bytes)\n", rel_path, file_size);
 
         // Create parent directories
         char dir_path[PATH_MAX];
@@ -428,9 +428,9 @@ int receive_folder_stream(int sock, const char *dest_path, char *err, size_t err
         }
 
         // Receive file data
-        long long remaining = file_size;
+        unsigned long long remaining = file_size;
         while (remaining > 0) {
-            size_t to_recv = (remaining < BUFFER_SIZE) ? remaining : BUFFER_SIZE;
+            size_t to_recv = (remaining < BUFFER_SIZE) ? (size_t)remaining : BUFFER_SIZE;
             if (recv_exact(sock, buffer, to_recv) != 0) {
                 printf("[EXTRACT] ERROR: Failed to receive file data\n");
                 fclose(fp);
@@ -451,8 +451,8 @@ int receive_folder_stream(int sock, const char *dest_path, char *err, size_t err
                 goto cleanup_error;
             }
 
-            remaining -= to_recv;
-            total_bytes += to_recv;
+            remaining -= (unsigned long long)to_recv;
+            total_bytes += (unsigned long long)to_recv;
 
         }
 

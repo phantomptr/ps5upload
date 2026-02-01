@@ -124,13 +124,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   updatePrepareSelf: (assetUrl) => ipcRenderer.invoke('update_prepare_self', assetUrl),
   updateApplySelf: () => ipcRenderer.invoke('update_apply_self'),
 
-  // Chat
-  chatInfo: () => ipcRenderer.invoke('chat_info'),
-  chatGenerateName: () => ipcRenderer.invoke('chat_generate_name'),
-  chatStart: () => ipcRenderer.invoke('chat_start'),
-  chatStop: () => ipcRenderer.invoke('chat_stop'),
-  chatSend: (name, text) => ipcRenderer.invoke('chat_send', name, text),
-
   // Game meta
   gameMetaLoad: (sourcePath) => ipcRenderer.invoke('game_meta_load', sourcePath),
   manageRarMetadata: (ip, filepath) => ipcRenderer.invoke('manage_rar_metadata', ip, filepath),
@@ -157,9 +150,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
       'manage_done',
       'manage_log',
       'manage_list_update',
-      'chat_message',
-      'chat_status',
-      'chat_ack',
       'update_ready',
       'update_error',
     ];
@@ -192,9 +182,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
       'manage_done',
       'manage_log',
       'manage_list_update',
-      'chat_message',
-      'chat_status',
-      'chat_ack',
       'update_ready',
       'update_error',
     ];

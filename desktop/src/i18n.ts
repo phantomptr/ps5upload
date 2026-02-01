@@ -1,15 +1,15 @@
 // i18n translations for PS5 Upload webapp
+
 // Mirrors core/src/i18n.rs
-
 type TranslationKey = keyof typeof translations.en;
-
 const translations = {
+
   en: {
+
     // Navigation
     connect: "Connect",
     transfer: "Transfer",
     manage: "Manage",
-    chat: "Chat",
     faq: "FAQ",
     logs: "Logs",
     restricted: "Restricted",
@@ -63,7 +63,23 @@ const translations = {
     payload_local_required: "Select a local payload file first.",
     payload_status: "Payload Status",
     payload_busy: "Payload is busy.",
+    connected: "Connected",
+    disconnected: "Disconnected",
+    connecting: "Connecting...",
+    missing_ip: "Missing IP",
+    error_prefix: "Error: {error}",
+    status_error: "Status error: {error}",
+    payload_running_version: "Running (v{version})",
+    payload_not_detected_error: "Not detected ({error})",
+    payload_already_running: "Payload already running.",
+    payload_port_closed: "Port {port} closed",
+    payload_waiting: "Waiting for payload...",
+    payload_sent: "Sent ({bytes})",
+    payload_probe_invalid_ext: "Payload must be a .elf or .bin file.",
+    payload_probe_detected: "PS5Upload payload detected.",
+    payload_probe_no_signature: "No PS5Upload signature found. Use only if you trust this payload.",
     system_metrics: "System metrics",
+    network_metrics: "Network metrics",
     cpu_usage: "CPU",
     payload_cpu_usage: "Payload CPU",
     memory_usage: "Memory (RSS)",
@@ -75,11 +91,28 @@ const translations = {
     net_rx_rate: "Net RX rate",
     net_tx_rate: "Net TX rate",
     transfer_metrics: "Transfer metrics",
+    queue_metrics: "Queue metrics",
+    tuning_metrics: "Tuning metrics",
     pack_in_use: "Packs in use",
     pool_count: "Pool",
     writer_queue: "Writer queue",
+    pack_queue: "Pack queue",
     active_sessions: "Active sessions",
     backpressure: "Backpressure",
+    recv_rate: "Recv rate",
+    write_rate: "Write rate",
+    bytes_received: "Bytes received",
+    bytes_written: "Bytes written",
+    tune_level: "Tune level",
+    recommend_pack: "Suggested pack",
+    recommend_pace: "Suggested pace",
+    recommend_rate: "Suggested rate",
+    bottleneck: "Bottleneck",
+    bottleneck_payload_disk: "Payload disk write",
+    bottleneck_payload_cpu: "Payload CPU",
+    bottleneck_network_upload: "Network (client → payload)",
+    bottleneck_client: "Client read/CPU",
+    bottleneck_unknown: "No clear bottleneck",
     last_progress: "Last progress",
     abort_requested: "Abort requested",
     workers_initialized: "Workers initialized",
@@ -302,7 +335,6 @@ const translations = {
     item: "item",
     cannot_undo: "This cannot be undone.",
     create: "Create",
-
     community: "Community",
 
     // Chat
@@ -350,12 +382,13 @@ const translations = {
     off: "Off",
     gb_free: "{size} GB free",
   },
+
   "vi": {
+
     // Navigation
     connect: "Kết nối",
     transfer: "Truyền",
     manage: "Quản lý",
-    chat: "Chat",
     faq: "FAQ",
     logs: "Nhật ký",
     restricted: "Bị hạn chế",
@@ -648,7 +681,6 @@ const translations = {
     item: "mục",
     cannot_undo: "Không thể hoàn tác.",
     create: "Tạo",
-
     community: "Cộng đồng",
 
     // Chat
@@ -698,11 +730,11 @@ const translations = {
   },
 
   "hi": {
+
     // Navigation
     connect: "कनेक्ट",
     transfer: "ट्रांसफर",
     manage: "प्रबंधन",
-    chat: "चैट",
     faq: "FAQ",
     logs: "लॉग्स",
     restricted: "प्रतिबंधित",
@@ -995,7 +1027,6 @@ const translations = {
     item: "आइटम",
     cannot_undo: "इसे वापस नहीं किया जा सकता।",
     create: "बनाएँ",
-
     community: "समुदाय",
 
     // Chat
@@ -1045,11 +1076,11 @@ const translations = {
   },
 
   "bn": {
+
     // Navigation
     connect: "সংযোগ",
     transfer: "ট্রান্সফার",
     manage: "ম্যানেজ",
-    chat: "চ্যাট",
     faq: "FAQ",
     logs: "লগ",
     restricted: "সীমাবদ্ধ",
@@ -1342,7 +1373,6 @@ const translations = {
     item: "আইটেম",
     cannot_undo: "এটি পূর্বাবস্থায় ফেরানো যাবে না।",
     create: "তৈরি",
-
     community: "কমিউনিটি",
 
     // Chat
@@ -1392,11 +1422,11 @@ const translations = {
   },
 
   "pt-BR": {
+
     // Navigation
     connect: "Conectar",
     transfer: "Transferir",
     manage: "Gerenciar",
-    chat: "Chat",
     faq: "FAQ",
     logs: "Logs",
     restricted: "Restrito",
@@ -1689,7 +1719,6 @@ const translations = {
     item: "item",
     cannot_undo: "Isso não pode ser desfeito.",
     create: "Criar",
-
     community: "Comunidade",
 
     // Chat
@@ -1739,11 +1768,11 @@ const translations = {
   },
 
   "ru": {
+
     // Navigation
     connect: "Подключить",
     transfer: "Передача",
     manage: "Управление",
-    chat: "Чат",
     faq: "FAQ",
     logs: "Логи",
     restricted: "Ограничено",
@@ -2036,7 +2065,6 @@ const translations = {
     item: "элемент",
     cannot_undo: "Это нельзя отменить.",
     create: "Создать",
-
     community: "Сообщество",
 
     // Chat
@@ -2086,11 +2114,11 @@ const translations = {
   },
 
   "ja": {
+
     // Navigation
     connect: "接続",
     transfer: "転送",
     manage: "管理",
-    chat: "チャット",
     faq: "FAQ",
     logs: "ログ",
     restricted: "制限あり",
@@ -2383,7 +2411,6 @@ const translations = {
     item: "項目",
     cannot_undo: "元に戻せません。",
     create: "作成",
-
     community: "コミュニティ",
 
     // Chat
@@ -2433,11 +2460,11 @@ const translations = {
   },
 
   "tr": {
+
     // Navigation
     connect: "Bağlan",
     transfer: "Aktarım",
     manage: "Yönet",
-    chat: "Sohbet",
     faq: "SSS",
     logs: "Kayıtlar",
     restricted: "Kısıtlı",
@@ -2730,7 +2757,6 @@ const translations = {
     item: "öğe",
     cannot_undo: "Geri alınamaz.",
     create: "Oluştur",
-
     community: "Topluluk",
 
     // Chat
@@ -2780,11 +2806,11 @@ const translations = {
   },
 
   "id": {
+
     // Navigation
     connect: "Hubungkan",
     transfer: "Transfer",
     manage: "Kelola",
-    chat: "Chat",
     faq: "FAQ",
     logs: "Log",
     restricted: "Terbatas",
@@ -3077,7 +3103,6 @@ const translations = {
     item: "item",
     cannot_undo: "Ini tidak dapat dibatalkan.",
     create: "Buat",
-
     community: "Komunitas",
 
     // Chat
@@ -3127,11 +3152,11 @@ const translations = {
   },
 
   "th": {
+
     // Navigation
     connect: "เชื่อมต่อ",
     transfer: "ถ่ายโอน",
     manage: "จัดการ",
-    chat: "แชต",
     faq: "FAQ",
     logs: "บันทึก",
     restricted: "ถูกจำกัด",
@@ -3424,7 +3449,6 @@ const translations = {
     item: "รายการ",
     cannot_undo: "ไม่สามารถย้อนกลับได้",
     create: "สร้าง",
-
     community: "ชุมชน",
 
     // Chat
@@ -3474,11 +3498,11 @@ const translations = {
   },
 
   "ko": {
+
     // Navigation
     connect: "연결",
     transfer: "전송",
     manage: "관리",
-    chat: "채팅",
     faq: "FAQ",
     logs: "로그",
     restricted: "제한됨",
@@ -3771,7 +3795,6 @@ const translations = {
     item: "항목",
     cannot_undo: "되돌릴 수 없습니다.",
     create: "생성",
-
     community: "커뮤니티",
 
     // Chat
@@ -3821,11 +3844,11 @@ const translations = {
   },
 
   "de": {
+
     // Navigation
     connect: "Verbinden",
     transfer: "Übertragen",
     manage: "Verwalten",
-    chat: "Chat",
     faq: "FAQ",
     logs: "Logs",
     restricted: "Eingeschränkt",
@@ -4118,7 +4141,6 @@ const translations = {
     item: "Element",
     cannot_undo: "Das kann nicht rückgängig gemacht werden.",
     create: "Erstellen",
-
     community: "Community",
 
     // Chat
@@ -4168,11 +4190,11 @@ const translations = {
   },
 
   "it": {
+
     // Navigation
     connect: "Connetti",
     transfer: "Trasferisci",
     manage: "Gestisci",
-    chat: "Chat",
     faq: "FAQ",
     logs: "Log",
     restricted: "Limitato",
@@ -4465,7 +4487,6 @@ const translations = {
     item: "elemento",
     cannot_undo: "Operazione irreversibile.",
     create: "Crea",
-
     community: "Community",
 
     // Chat
@@ -4513,12 +4534,13 @@ const translations = {
     off: "Disattivo",
     gb_free: "{size} GB liberi",
   },
+
   "zh-CN": {
+
     // Navigation
     connect: "连接",
     transfer: "传输",
     manage: "管理",
-    chat: "聊天",
     logs: "日志",
     restricted: "受限",
     client: "客户端",
@@ -4840,11 +4862,11 @@ const translations = {
   },
 
   "zh-TW": {
+
     // Navigation
     connect: "連接",
     transfer: "傳輸",
     manage: "管理",
-    chat: "聊天",
     logs: "日誌",
     restricted: "受限",
     client: "客戶端",
@@ -5166,11 +5188,11 @@ const translations = {
   },
 
   fr: {
+
     // Navigation
     connect: "Connexion",
     transfer: "Transfert",
     manage: "Gérer",
-    chat: "Chat",
     logs: "Journaux",
     restricted: "Restreint",
     client: "Client",
@@ -5490,11 +5512,11 @@ const translations = {
   },
 
   es: {
+
     // Navigation
     connect: "Conectar",
     transfer: "Transferir",
     manage: "Gestionar",
-    chat: "Chat",
     logs: "Registros",
     restricted: "Restringido",
     client: "Cliente",
@@ -5814,11 +5836,11 @@ const translations = {
   },
 
   ar: {
+
     // Navigation
     connect: "اتصال",
     transfer: "نقل",
     manage: "إدارة",
-    chat: "دردشة",
     logs: "السجلات",
     restricted: "مقيد",
     client: "العميل",
@@ -6137,9 +6159,7 @@ const translations = {
     off: "إيقاف",
   },
 };
-
 export type LanguageCode = keyof typeof translations;
-
 export function t(lang: string, key: string, vars?: Record<string, string | number>): string {
   const langCode = (lang in translations ? lang : "en") as LanguageCode;
   const dict = translations[langCode];
@@ -6149,5 +6169,4 @@ export function t(lang: string, key: string, vars?: Record<string, string | numb
     Object.prototype.hasOwnProperty.call(vars, name) ? String(vars[name]) : match
   );
 }
-
 export default translations;

@@ -54,3 +54,5 @@ temp/
 
 # Misc
 .claude/
+
+debug/

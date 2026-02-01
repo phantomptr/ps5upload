@@ -185,16 +185,6 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
         return api.updatePrepareSelf(args.asset_url);
       case 'update_apply_self':
         return api.updateApplySelf();
-      case 'chat_info':
-        return api.chatInfo();
-      case 'chat_generate_name':
-        return api.chatGenerateName();
-      case 'chat_start':
-        return api.chatStart();
-      case 'chat_stop':
-        return api.chatStop();
-      case 'chat_send':
-        return api.chatSend(args.name, args.text);
       case 'game_meta_load':
         return api.gameMetaLoad(args.path);
       case 'manage_rar_metadata':

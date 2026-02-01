@@ -188,12 +188,13 @@ body {
 }
 
 .payload-status-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  display: flex;
+  flex-direction: column;
   gap: 10px;
 }
 
 .payload-metric-card {
+  width: 100%;
   padding: 10px 12px;
   border-radius: 12px;
   border: 1px solid var(--ps-border);
@@ -1514,8 +1515,7 @@ input::placeholder {
   border-color: var(--ps-blue);
 }
 
-/* Chat & Log Windows */
-.chat-window,
+/* Log Windows */
 .log-window {
   background: var(--ps-surface-alt);
   border: 1px solid var(--ps-border);
@@ -1589,15 +1589,8 @@ input::placeholder {
   color: var(--ps-red);
 }
 
-.chat-grid {
+.faq-grid {
   height: 100%;
-}
-
-.chat-card {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-height: 0;
 }
 
 .faq-card {
@@ -1690,36 +1683,6 @@ input::placeholder {
 
 .faq-content a:hover {
   text-decoration: underline;
-}
-
-.chat-input {
-  margin-top: 10px;
-}
-
-.chat-status.ok {
-  color: var(--ps-green);
-  border-color: rgba(34, 197, 94, 0.35);
-  background: rgba(34, 197, 94, 0.12);
-}
-
-.chat-status.warn {
-  color: var(--ps-red);
-  border-color: rgba(239, 68, 68, 0.35);
-  background: rgba(239, 68, 68, 0.12);
-}
-
-.chat-line {
-  margin-bottom: 6px;
-  line-height: 1.5;
-}
-
-.chat-line.local {
-  color: var(--ps-cyan);
-}
-
-.chat-time {
-  color: var(--ps-steel);
-  font-size: 0.75rem;
 }
 
 /* Meta Block */
@@ -1900,12 +1863,6 @@ input::placeholder {
   flex-wrap: wrap;
 }
 
-.chat-controls {
-  display: inline-flex;
-  gap: 8px;
-  margin-left: auto;
-}
-
 .chip {
   padding: 6px 12px;
   border-radius: 999px;
@@ -1956,7 +1913,6 @@ input::placeholder {
 .app .file-item,
 .app .queue-item,
 .app .history-item,
-.app .chat-window,
 .app .log-window,
 .app .modal,
 .app .modal-backdrop,

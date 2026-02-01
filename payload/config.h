@@ -24,6 +24,9 @@
 // Backpressure tuning - avoid busy spinning
 #define BACKPRESSURE_POLL_US 100  // 100us between backpressure checks (was 1000us)
 
+// Thread stack size - ensure enough stack for worker threads
+#define THREAD_STACK_SIZE (512 * 1024)  // 512KB stack per thread
+
 // Default paths
 #define DEFAULT_GAMES_PATH "/mnt/usb0/games"
 #define FALLBACK_PATH "/data/games"

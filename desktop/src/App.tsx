@@ -33,7 +33,7 @@ const normalizeResumeMode = (value?: string | null): ResumeOption => {
   return "none";
 };
 
-type TabId = "transfer" | "payload" | "manage" | "chat";
+type TabId = "transfer" | "payload" | "manage" | "faq";
 
 type TransferCompleteEvent = {
   run_id: number;
@@ -85,27 +85,6 @@ type ManageLogEvent = {
   message: string;
 };
 
-type ChatMessageEvent = {
-  time: string;
-  sender: string;
-  text: string;
-  local: boolean;
-};
-
-type ChatStatusEvent = {
-  status: string;
-};
-
-type ChatAckEvent = {
-  ok: boolean;
-  reason?: string | null;
-};
-
-type ChatInfo = {
-  room_id: string;
-  enabled: boolean;
-};
-
 type StorageLocation = {
   path: string;
   storage_type: string;
@@ -136,7 +115,6 @@ type Profile = {
   connections: number;
   use_temp: boolean;
   auto_tune_connections: boolean;
-  chat_display_name: string;
 };
 
 type ProfilesData = {
@@ -249,7 +227,6 @@ type AppConfig = {
   payload_reload_mode: string;
   payload_local_path: string;
   optimize_upload: boolean;
-  chat_display_name: string;
   rar_extract_mode: string;
   rar_temp: string;
   window_width: number;
@@ -287,7 +264,8 @@ type CoverPayload = {
 
 type PayloadProbeResult = {
   is_ps5upload: boolean;
-  message: string;
+  code?: string | null;
+  message?: string | null;
 };
 
 type GameMetaResponse = {
@@ -351,6 +329,9 @@ const LOG_LEVEL_ORDER: Record<LogLevel, number> = {
 
 const inferLogLevel = (message: string): LogLevel => {
   const text = message.toLowerCase();
+  if (text.includes("[tune]") || /\bdebug\b/.test(text)) {
+    return "debug";
+  }
   if (
     text.includes("error") ||
     text.includes("failed") ||
@@ -401,9 +382,18 @@ type PayloadStatusResponse = {
     pack_in_use: number;
     pool_count: number;
     queue_count: number;
+    pack_queue_count?: number;
     active_sessions: number;
     backpressure_events: number;
     backpressure_wait_ms: number;
+    bytes_received?: number;
+    bytes_written?: number;
+    recv_rate_bps?: number;
+    write_rate_bps?: number;
+    tune_level?: number;
+    recommend_pack_limit?: number;
+    recommend_pace_ms?: number;
+    recommend_rate_limit_bps?: number;
     last_progress: number;
     abort_requested: boolean;
     workers_initialized: boolean;
@@ -416,6 +406,8 @@ type PayloadStatusSnapshot = {
   error?: string | null;
   updated_at_ms: number;
 };
+
+type StatusKind = "info" | "ok" | "warn" | "error";
 
 const isPresetOption = (
   value: string
@@ -873,6 +865,7 @@ export default function App() {
   const lastScanLogAt = useRef(0);
   const [payloadLocalPath, setPayloadLocalPath] = useState("");
   const [payloadStatus, setPayloadStatus] = useState("Unknown");
+  const [payloadStatusKind, setPayloadStatusKind] = useState<StatusKind>("info");
   const [payloadVersion, setPayloadVersion] = useState<string | null>(null);
   const [payloadBusy, setPayloadBusy] = useState(false);
   const [payloadReloadCooldown, setPayloadReloadCooldown] = useState(false);
@@ -934,7 +927,6 @@ export default function App() {
   const [chmodAfterUpload, setChmodAfterUpload] = useState(true);
   const [rarExtractMode, setRarExtractMode] = useState<RarExtractMode>("normal");
   const [rarTemp, setRarTemp] = useState("");
-  const [chatDisplayName, setChatDisplayName] = useState("");
   const [configDefaults, setConfigDefaults] = useState<AppConfig | null>(null);
   const [configLoaded, setConfigLoaded] = useState(false);
   const [keepAwakeMode, setKeepAwakeMode] = useState<"off" | "on" | "auto">("off");
@@ -1010,6 +1002,7 @@ export default function App() {
     null
   );
   const manageModalStartedAtRef = useRef<number | null>(null);
+  const statusErrorLogRef = useRef<{ key: string; at: number } | null>(null);
   const [manageModalSummary, setManageModalSummary] = useState<string | null>(null);
   const [manageModalLastProgressAt, setManageModalLastProgressAt] = useState<number | null>(null);
   const manageModalOpRef = useRef("");
@@ -1034,17 +1027,6 @@ export default function App() {
   const [resumeChoice, setResumeChoice] = useState<ResumeOption>("size");
   const [gameMeta, setGameMeta] = useState<GameMetaPayload | null>(null);
   const [gameCoverUrl, setGameCoverUrl] = useState<string | null>(null);
-  const [chatRoomId, setChatRoomId] = useState("");
-  const [chatEnabled, setChatEnabled] = useState(false);
-  const [chatStatus, setChatStatus] = useState("Disconnected");
-  const [chatMessages, setChatMessages] = useState<ChatMessageEvent[]>([]);
-  const [chatInput, setChatInput] = useState("");
-  const [chatStats, setChatStats] = useState({
-    sent: 0,
-    received: 0,
-    acked: 0,
-    rejected: 0
-  });
   const [faqContent, setFaqContent] = useState("");
   const [faqLoading, setFaqLoading] = useState(true);
   const [faqError, setFaqError] = useState<string | null>(null);
@@ -1056,53 +1038,24 @@ export default function App() {
       profilesData.profiles.some((profile) => profile.name === trimmedNewProfileName));
   const isRtl = language === "ar";
   const tr = (key: string, vars?: Record<string, string | number>) => t(language, key, vars);
-  const generateChatName = () => {
-    try {
-      if (crypto?.randomUUID) {
-        return `user-${crypto.randomUUID()}`;
-      }
-    } catch {
-      // Fallback below
-    }
-    const bytes = new Uint8Array(10);
-    try {
-      if (crypto?.getRandomValues) {
-        crypto.getRandomValues(bytes);
-      } else {
-        throw new Error("No crypto");
-      }
-    } catch {
-      for (let i = 0; i < bytes.length; i += 1) {
-        bytes[i] = Math.floor(Math.random() * 256);
-      }
-    }
-    const suffix = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
-    return `user-${suffix}`;
+  const setPayloadStatusDisplay = (label: string, kind: StatusKind = "info") => {
+    setPayloadStatus(label);
+    setPayloadStatusKind(kind);
   };
-  const chatStatusLower = chatStatus.toLowerCase();
-  const isChatConnected = chatStatusLower === "connected";
-  const isChatDisconnected = chatStatusLower === "disconnected";
-  const payloadStatusLower = payloadStatus.toLowerCase();
   const payloadStatusClass =
-    payloadStatusError ||
-    payloadStatusLower.includes("error") ||
-    payloadStatusLower.includes("not detected") ||
-    payloadStatusLower.includes("closed")
+    payloadStatusError || payloadStatusKind === "error"
       ? "error"
-      : payloadStatusLower.includes("running") ||
-        payloadStatusLower.includes("ready") ||
-        payloadStatusLower.includes("sent") ||
-        payloadStatusLower.includes("connected") ||
-        payloadStatusLower.includes("idle") ||
-        payloadStatusLower.includes("waiting")
+      : payloadStatusKind === "warn"
+      ? "warn"
+      : payloadStatusKind === "ok"
       ? "ok"
-      : "warn";
+      : "info";
   const tabs = useMemo(
     () => [
       { id: "transfer" as TabId, label: tr("transfer"), icon: "↑" },
-    { id: "payload" as TabId, label: tr("queues"), icon: "◎" },
+      { id: "payload" as TabId, label: tr("queues"), icon: "◎" },
       { id: "manage" as TabId, label: tr("manage"), icon: "≡" },
-      { id: "chat" as TabId, label: tr("faq"), icon: "?" }
+      { id: "faq" as TabId, label: tr("faq"), icon: "?" }
     ],
     [language]
   );
@@ -1136,6 +1089,9 @@ export default function App() {
     effectiveCompression: null
   });
   const transferSpeedRef = useRef({ sent: 0, elapsed: 0, ema: 0 });
+  const lastBottleneckRef = useRef<string | null>(null);
+  const lastBottleneckAtRef = useRef(0);
+  const bottleneckStableRef = useRef(0);
   const [transferSpeedEma, setTransferSpeedEma] = useState(0);
   const [transferUpdatedAt, setTransferUpdatedAt] = useState<number | null>(null);
   const [activeRunId, setActiveRunId] = useState<number | null>(null);
@@ -1203,7 +1159,6 @@ export default function App() {
     chmodAfterUpload: false
   });
   const languageRef = useRef(language);
-  const chatEndRef = useRef<HTMLDivElement | null>(null);
 
   const destBase = preset === "custom" ? customPreset : preset;
   const defaultDestPath = useMemo(
@@ -1589,6 +1544,7 @@ export default function App() {
   }, []);
 
   const pushClientLog = (message: string, level: LogLevel = "info") => {
+    if (!message || message === "undefined") return;
     setClientLogs((prev) => [
       { level, message, time: Date.now() },
       ...prev
@@ -1596,6 +1552,7 @@ export default function App() {
   };
 
   const pushPayloadLog = (message: string, level: LogLevel = "info") => {
+    if (!message || message === "undefined") return;
     setPayloadLogs((prev) => [
       { level, message, time: Date.now() },
       ...prev
@@ -1626,6 +1583,16 @@ export default function App() {
     ].slice(0, 200));
   };
 
+  const shouldLogStatusError = (key: string, minMs = 10000) => {
+    const now = Date.now();
+    const last = statusErrorLogRef.current;
+    if (!last || last.key !== key || now - last.at >= minMs) {
+      statusErrorLogRef.current = { key, at: now };
+      return true;
+    }
+    return false;
+  };
+
   const normalizeLogEntry = (entry: LogEntry | string): LogEntry => {
     if (typeof entry === "string") {
       return { level: inferLogLevel(entry), message: entry, time: Date.now() };
@@ -1642,16 +1609,19 @@ export default function App() {
     invoke<PayloadProbeResult>("payload_probe", { path: payloadLocalPath })
       .then((result) => {
         if (!active) return;
+        const message = result.code
+          ? tr(result.code)
+          : result.message || tr("error_prefix", { error: "Unknown probe result" });
         setPayloadProbe({
           ok: result.is_ps5upload,
-          message: result.message
+          message
         });
       })
       .catch((err) => {
         if (!active) return;
         setPayloadProbe({
           ok: false,
-          message: `Error: ${String(err)}`
+          message: tr("error_prefix", { error: String(err) })
         });
       });
     return () => {
@@ -1695,20 +1665,12 @@ export default function App() {
     };
   }, [payloadFullStatus, queueMetaById]);
 
-  useEffect(() => {
-    if (chatEndRef.current) {
-      chatEndRef.current.scrollIntoView({ behavior: "smooth" });
-    }
-  }, [chatMessages]);
-
   const applyProfile = (profile: Profile) => {
     setIp(profile.address);
     setStorageRoot(profile.storage || "/data");
     setConnections(profile.connections || 1);
     setUseTemp(profile.use_temp ?? false);
     setAutoTune(profile.auto_tune_connections ?? true);
-    const resolvedChatName = profile.chat_display_name?.trim();
-    setChatDisplayName(resolvedChatName ? resolvedChatName : generateChatName());
     const nextPreset = presetOptions[profile.preset_index] ?? presetOptions[0];
     setPreset(nextPreset);
     setCustomPreset(profile.custom_preset_path || "");
@@ -1741,8 +1703,7 @@ export default function App() {
       custom_preset_path: customPreset,
       connections,
       use_temp: useTemp,
-      auto_tune_connections: autoTune,
-      chat_display_name: chatDisplayName
+      auto_tune_connections: autoTune
     };
   };
 
@@ -1753,8 +1714,7 @@ export default function App() {
     a.custom_preset_path === b.custom_preset_path &&
     a.connections === b.connections &&
     a.use_temp === b.use_temp &&
-    a.auto_tune_connections === b.auto_tune_connections &&
-    a.chat_display_name === b.chat_display_name;
+    a.auto_tune_connections === b.auto_tune_connections;
 
   const handleSelectProfile = async (name: string | null) => {
     if (name === NEW_PROFILE_OPTION) {
@@ -1771,17 +1731,6 @@ export default function App() {
     }
     const profile = profilesData.profiles.find((item) => item.name === name);
     if (profile) {
-      const chatName = profile.chat_display_name?.trim();
-      if (!chatName) {
-        const generated = generateChatName();
-        const resolvedProfile = { ...profile, chat_display_name: generated };
-        const nextProfiles = profilesData.profiles.map((item) =>
-          item.name === name ? resolvedProfile : item
-        );
-        applyProfile(resolvedProfile);
-        await persistProfiles({ profiles: nextProfiles, default_profile: name });
-        return;
-      }
       applyProfile(profile);
       await persistProfiles({ ...profilesData, default_profile: name });
     }
@@ -1849,10 +1798,10 @@ export default function App() {
       restoreOptimizeSnapshot();
       return;
     }
-    setClientLogs((prev) => [
+    pushClientLog(
       `${mode === "deep" ? "Deep optimize" : "Optimize"} scan started: ${sourcePath}`,
-      ...prev
-    ].slice(0, 100));
+      "debug"
+    );
     setScanMode(mode);
     setScanStatus('scanning');
     setScanError(null);
@@ -1873,7 +1822,7 @@ export default function App() {
       setScanStatus('error');
       const message = err instanceof Error ? err.message : String(err);
       setScanError(message);
-      setClientLogs((prev) => [`Scan error: ${message}`, ...prev].slice(0, 100));
+      pushClientLog(`Scan error: ${message}`, "error");
       optimizePendingRef.current = null;
       setOptimizeMode("none");
       setScanMode(null);
@@ -1911,7 +1860,7 @@ export default function App() {
     await invoke("transfer_scan_cancel");
     setScanStatus('cancelled');
     setScanError(null);
-    setClientLogs((prev) => ["Scan cancelled", ...prev].slice(0, 100));
+    pushClientLog("Scan cancelled", "debug");
     optimizePendingRef.current = null;
     setOptimizeMode("none");
     setScanMode(null);
@@ -1932,16 +1881,23 @@ export default function App() {
     restoreOptimizeSnapshot();
   };
 
-  const computeOptimizeSettings = () => {
-    if (scanFiles <= 0 || scanTotal <= 0) {
+  const computeOptimizeSettings = (
+    filesOverride?: number,
+    totalOverride?: number,
+    modeOverride?: OptimizeMode | null
+  ) => {
+    const files = typeof filesOverride === "number" ? filesOverride : scanFiles;
+    const total = typeof totalOverride === "number" ? totalOverride : scanTotal;
+    const mode = typeof modeOverride === "string" ? modeOverride : optimizeMode;
+    if (files <= 0 || total <= 0) {
       return { connections: 2, compression: "lz4" as CompressionOption, bandwidth: 0, autoTune: false };
     }
     const kb = 1024;
     const mb = 1024 * 1024;
-    const avgSize = scanTotal / scanFiles;
-    const isDeep = optimizeMode === "deep";
-    const tinyFiles = avgSize < 64 * kb || scanFiles >= 200000;
-    const smallFiles = avgSize < 256 * kb || scanFiles >= 100000;
+    const avgSize = total / files;
+    const isDeep = mode === "deep";
+    const tinyFiles = avgSize < 64 * kb || files >= 200000;
+    const smallFiles = avgSize < 256 * kb || files >= 100000;
     const mediumSmallFiles = avgSize < 1 * mb;
 
     let connections = 4;
@@ -1959,7 +1915,7 @@ export default function App() {
     } else if (mediumSmallFiles) {
       connections = isDeep ? 6 : 4;
       compression = "lz4";
-      autoTune = isDeep && scanFiles >= 50000;
+      autoTune = isDeep && files >= 50000;
     } else if (avgSize < 8 * mb) {
       connections = 4;
       compression = "lz4";
@@ -1974,14 +1930,18 @@ export default function App() {
     return { connections, compression, bandwidth: 0, autoTune };
   };
 
-  const applyOptimizeSettings = () => {
-    const nextSettings = computeOptimizeSettings();
+  const applyOptimizeSettings = (
+    filesOverride?: number,
+    totalOverride?: number,
+    modeOverride?: OptimizeMode | null
+  ) => {
+    const nextSettings = computeOptimizeSettings(filesOverride, totalOverride, modeOverride);
     setAutoTune(!!nextSettings.autoTune);
     setConnections(nextSettings.connections);
     setCompression(nextSettings.compression);
     setBandwidthLimit(nextSettings.bandwidth);
     const tag = scanPartial ? " (sampled)" : "";
-    const label = optimizeMode === "deep" ? "Deep optimize" : "Optimize";
+    const label = (modeOverride ?? optimizeMode) === "deep" ? "Deep optimize" : "Optimize";
     setClientLogs((prev) => [
       `${label}${tag}: connections=${nextSettings.connections}, compression=${nextSettings.compression}, bandwidth=${nextSettings.bandwidth === 0 ? "unlimited" : `${nextSettings.bandwidth} Mbps`}`,
       ...prev
@@ -2119,13 +2079,8 @@ export default function App() {
         setChmodAfterUpload(normalizedConfig.chmod_after_upload ?? false);
         setRarExtractMode((normalizedConfig.rar_extract_mode as RarExtractMode) || "normal");
         setRarTemp(normalizedConfig.rar_temp || "");
-        setChatDisplayName(normalizedConfig.chat_display_name ?? "");
         setIncludePrerelease(normalizedConfig.update_channel === "all");
         setLanguage(normalizedConfig.language || "en");
-
-        if (!normalizedConfig.chat_display_name?.trim() && active) {
-          setChatDisplayName(generateChatName());
-        }
       } catch (err) {
         setClientLogs((prev) => [`Failed to load config: ${String(err)}`, ...prev]);
       }
@@ -2225,12 +2180,6 @@ export default function App() {
         }
       } catch {
         // ignore invalid cache
-      }
-
-      // Chat disabled (FAQ tab)
-      if (active) {
-        setChatEnabled(false);
-        setChatStatus("Disabled");
       }
 
       // Mark loading complete
@@ -2599,7 +2548,6 @@ export default function App() {
       payload_local_path: payloadLocalPath,
       download_compression: downloadCompression,
       chmod_after_upload: chmodAfterUpload,
-      chat_display_name: chatDisplayName,
       rar_extract_mode: rarExtractMode,
       rar_temp: rarTemp
     };
@@ -2635,7 +2583,6 @@ export default function App() {
     payloadLocalPath,
     downloadCompression,
     chmodAfterUpload,
-    chatDisplayName,
     rarExtractMode,
     rarTemp
   ]);
@@ -2902,10 +2849,9 @@ export default function App() {
         (event) => {
           if (!mounted) return;
           if (transferActive) return;
-          clientLogBuffer.current = [
-            `${event.payload.message}`,
-            ...clientLogBuffer.current
-          ].slice(0, 100);
+          const message = event.payload?.message;
+          if (!message || message === "undefined") return;
+          clientLogBuffer.current = [message, ...clientLogBuffer.current].slice(0, 100);
           if (!clientLogFlush.current) {
             clientLogFlush.current = setTimeout(() => {
               if (!mounted) return;
@@ -2921,10 +2867,9 @@ export default function App() {
         (event) => {
           if (!mounted) return;
           if (transferActive) return;
-          payloadLogBuffer.current = [
-            `${event.payload.message}`,
-            ...payloadLogBuffer.current
-          ].slice(0, 100);
+          const message = event.payload?.message;
+          if (!message || message === "undefined") return;
+          payloadLogBuffer.current = [message, ...payloadLogBuffer.current].slice(0, 100);
           if (!payloadLogFlush.current) {
             payloadLogFlush.current = setTimeout(() => {
               if (!mounted) return;
@@ -2942,14 +2887,17 @@ export default function App() {
         if (!mounted) return;
         setPayloadBusy(false);
         if (event.payload?.error) {
-          setPayloadStatus(`Error: ${event.payload.error}`);
+          setPayloadStatusDisplay(tr("error_prefix", { error: event.payload.error }), "error");
           payloadLogBuffer.current = [
             `Payload failed: ${event.payload.error}`,
             ...payloadLogBuffer.current
           ].slice(0, 100);
           setPayloadLogs(payloadLogBuffer.current);
         } else if (typeof event.payload?.bytes === "number") {
-          setPayloadStatus(`Sent (${formatBytes(event.payload.bytes)})`);
+          setPayloadStatusDisplay(
+            tr("payload_sent", { bytes: formatBytes(event.payload.bytes) }),
+            "ok"
+          );
         }
       });
 
@@ -2960,10 +2908,16 @@ export default function App() {
         if (!mounted) return;
         if (event.payload?.version) {
           setPayloadVersion(event.payload.version);
-          setPayloadStatus(`Running (v${event.payload.version})`);
+          setPayloadStatusDisplay(
+            tr("payload_running_version", { version: event.payload.version }),
+            "ok"
+          );
         } else if (event.payload?.error) {
           setPayloadVersion(null);
-          setPayloadStatus(`Not detected (${event.payload.error})`);
+          setPayloadStatusDisplay(
+            tr("payload_not_detected_error", { error: event.payload.error }),
+            "error"
+          );
         }
       });
 
@@ -3164,9 +3118,9 @@ export default function App() {
         "manage_log",
         (event) => {
           if (!mounted) return;
-          setClientLogs((prev) =>
-            [`${event.payload.message}`, ...prev].slice(0, 100)
-          );
+          const message = String(event.payload.message || "");
+          const level = inferLogLevel(message);
+          pushClientLog(message, level === "info" ? "debug" : level);
         }
       );
 
@@ -3178,42 +3132,6 @@ export default function App() {
         }
       );
 
-      const unlistenChatMessage = await listen<ChatMessageEvent>(
-        "chat_message",
-        (event) => {
-          if (!mounted) return;
-          setChatMessages((prev) => {
-            const next = [...prev, event.payload];
-            if (next.length > 500) {
-              next.splice(0, next.length - 500);
-            }
-            return next;
-          });
-          setChatStats((prev) => ({
-            ...prev,
-            sent: prev.sent + (event.payload.local ? 1 : 0),
-            received: prev.received + (event.payload.local ? 0 : 1)
-          }));
-        }
-      );
-
-      const unlistenChatStatus = await listen<ChatStatusEvent>(
-        "chat_status",
-        (event) => {
-          if (!mounted) return;
-          setChatStatus(event.payload.status);
-        }
-      );
-
-      const unlistenChatAck = await listen<ChatAckEvent>("chat_ack", (event) => {
-        if (!mounted) return;
-        setChatStats((prev) => ({
-          ...prev,
-          acked: prev.acked + (event.payload.ok ? 1 : 0),
-          rejected: prev.rejected + (event.payload.ok ? 0 : 1)
-        }));
-      });
-
       const unlistenScanProgress = await listen<{ files: number, total: number }>(
         "scan_progress",
         (event) => {
@@ -3221,12 +3139,12 @@ export default function App() {
           setScanFiles(event.payload.files);
           setScanTotal(event.payload.total);
           const now = Date.now();
-          if (now - lastScanLogAt.current >= 1000) {
+          if (now - lastScanLogAt.current >= 2000) {
             lastScanLogAt.current = now;
-            setClientLogs((prev) => [
+            pushClientLog(
               `Scanning... ${event.payload.files} files, ${formatBytes(event.payload.total)}`,
-              ...prev
-            ].slice(0, 100));
+              "debug"
+            );
           }
         }
       );
@@ -3252,12 +3170,12 @@ export default function App() {
             scanMode === "deep"
               ? tr("deep_optimize_ready")
               : tr("optimize_ready");
-          setClientLogs((prev) => [
+          pushClientLog(
             `${label}: ${event.payload.files} files, ${formatBytes(event.payload.total)}`,
-            ...prev
-          ].slice(0, 100));
+            "info"
+          );
           if (optimizePendingRef.current) {
-            applyOptimizeSettings();
+            applyOptimizeSettings(event.payload.files, event.payload.total, scanMode);
             optimizePendingRef.current = null;
           }
         }
@@ -3269,10 +3187,7 @@ export default function App() {
           if (!mounted) return;
           setScanStatus('error');
           setScanError(event.payload.message);
-          setClientLogs((prev) => [
-            `Scan error: ${event.payload.message}`,
-            ...prev
-          ].slice(0, 100));
+          pushClientLog(`Scan error: ${event.payload.message}`, "error");
           if (optimizePendingRef.current) {
             optimizePendingRef.current = null;
             setOptimizeMode("none");
@@ -3307,9 +3222,6 @@ export default function App() {
         unlistenManageDone();
         unlistenManageLog();
         unlistenManageList();
-        unlistenChatMessage();
-        unlistenChatStatus();
-        unlistenChatAck();
         unlistenScanProgress();
         unlistenScanComplete();
         unlistenScanError();
@@ -3343,6 +3255,57 @@ export default function App() {
     transferSent >= transferSpeedMinBytes;
   const transferSpeedDisplay =
     transferSpeedReady && transferSpeedEma > 0 ? transferSpeedEma : 0;
+  const transferBottleneck = useMemo(() => {
+    const transfer = payloadFullStatus?.transfer;
+    if (!transfer) return null;
+    const active = (transfer.active_sessions ?? 0) > 0 || transferActive;
+    if (!active) return null;
+    const recvBps = toSafeNumber(transfer.recv_rate_bps, 0);
+    const writeBps = toSafeNumber(transfer.write_rate_bps, 0);
+    const backpressureMs = toSafeNumber(transfer.backpressure_wait_ms, 0);
+    const backpressureEvents = toSafeNumber(transfer.backpressure_events, 0);
+    const writerQueue = toSafeNumber(transfer.queue_count, 0);
+    const packQueue = toSafeNumber(transfer.pack_queue_count, 0);
+    const payloadCpu = toSafeNumber(payloadFullStatus?.system?.cpu_percent, -1);
+    const payloadProcCpu = toSafeNumber(payloadFullStatus?.system?.proc_cpu_percent, -1);
+    const payloadNetRx = toSafeNumber(payloadFullStatus?.system?.net_rx_bps, -1);
+    const clientSendBps = transferSpeedDisplay;
+    const hasBackpressure = backpressureEvents > 0 || backpressureMs > 0;
+    const queueBusy = writerQueue > 0 || packQueue > 0;
+
+    if (hasBackpressure && queueBusy) return { key: "payload_disk", label: tr("bottleneck_payload_disk") };
+    if (writeBps > 0 && recvBps > writeBps * 1.5) return { key: "payload_disk", label: tr("bottleneck_payload_disk") };
+    if (payloadCpu >= 85 || payloadProcCpu >= 85) return { key: "payload_cpu", label: tr("bottleneck_payload_cpu") };
+    if (payloadNetRx >= 0 && clientSendBps > 0 && payloadNetRx < clientSendBps * 0.7) {
+      return { key: "network", label: tr("bottleneck_network_upload") };
+    }
+    if (clientSendBps > 0 && clientSendBps < 2 * 1024 * 1024) {
+      return { key: "client", label: tr("bottleneck_client") };
+    }
+    return { key: "unknown", label: tr("bottleneck_unknown") };
+  }, [payloadFullStatus, transferSpeedDisplay, transferActive]);
+  useEffect(() => {
+    if (!transferActive || !transferBottleneck) {
+      lastBottleneckRef.current = null;
+      return;
+    }
+    const now = Date.now();
+    const rawKey = transferBottleneck.key;
+    const label = transferBottleneck.label;
+    const last = lastBottleneckRef.current;
+    if (!last || last !== rawKey) {
+      lastBottleneckRef.current = rawKey;
+      bottleneckStableRef.current = 0;
+      lastBottleneckAtRef.current = now;
+      return;
+    }
+    bottleneckStableRef.current += 1;
+    if (bottleneckStableRef.current < 3) return;
+    if (now - lastBottleneckAtRef.current < 10000) return;
+    if (rawKey === "unknown") return;
+    lastBottleneckAtRef.current = now;
+    pushClientLog(`Bottleneck: ${label}`, "debug");
+  }, [transferBottleneck, transferActive]);
   const transferEtaSeconds =
     transferTotal > transferSent && transferSpeedDisplay > 0
       ? Math.ceil((transferTotal - transferSent) / transferSpeedDisplay)
@@ -3424,11 +3387,16 @@ export default function App() {
 
   const applyConnectionSnapshot = (snapshot: ConnectionStatusSnapshot | null) => {
     if (!snapshot) return;
-    setConnectionStatus(snapshot.status);
+    const statusLabel = snapshot.is_connected
+      ? tr("connected")
+      : tr("not_connected");
+    setConnectionStatus(statusLabel);
     setIsConnected(snapshot.is_connected);
     setIsConnecting(false);
     setManageStatus((prev) =>
-      snapshot.is_connected ? (prev === "Not connected" ? "Connected" : prev) : "Not connected"
+      snapshot.is_connected
+        ? (prev === tr("not_connected") ? tr("connected") : prev)
+        : tr("not_connected")
     );
     const available = snapshot.storage_locations;
     setStorageLocations(available);
@@ -3583,16 +3551,19 @@ export default function App() {
       }
     }
     if (snapshot.status?.version) {
-      setPayloadStatus(`Running (v${snapshot.status.version})`);
+      setPayloadStatusDisplay(
+        tr("payload_running_version", { version: snapshot.status.version }),
+        "ok"
+      );
     } else if (snapshot.error) {
-      setPayloadStatus(`Status error: ${snapshot.error}`);
+      setPayloadStatusDisplay(tr("status_error", { error: snapshot.error }), "error");
     }
   };
 
-  const handleRefreshPayloadStatus = async () => {
+  const handleRefreshPayloadStatus = async (silent = false) => {
     if (!ip.trim()) return;
-    if (payloadStatusLoading) return;
-    setPayloadStatusLoading(true);
+    if (payloadStatusLoading && !silent) return;
+    if (!silent) setPayloadStatusLoading(true);
     try {
       const snapshot = await invoke<PayloadStatusSnapshot>("payload_status_refresh", { ip });
       applyPayloadSnapshot(snapshot);
@@ -3600,9 +3571,11 @@ export default function App() {
     } catch (err) {
       const message = String(err);
       setPayloadStatusError(message);
-      setClientLogs((prev) => [`Payload status error: ${message}`, ...prev].slice(0, 100));
+      if (shouldLogStatusError(`payload_status:${message}`)) {
+        pushClientLog(`Payload status error: ${message}`, "warn");
+      }
     }
-    setPayloadStatusLoading(false);
+    if (!silent) setPayloadStatusLoading(false);
   };
 
   const handlePayloadReset = async () => {
@@ -3612,18 +3585,18 @@ export default function App() {
     try {
       await invoke("payload_reset", { ip });
       setClientLogs((prev) => ["Payload reset requested.", ...prev].slice(0, 100));
-      handleRefreshPayloadStatus();
-      handleRefreshQueueStatus();
+      handleRefreshPayloadStatus(true);
+      handleRefreshQueueStatus(true);
     } catch (err) {
       setClientLogs((prev) => [`Payload reset failed: ${String(err)}`, ...prev].slice(0, 100));
     }
     setPayloadResetting(false);
   };
 
-  const handleRefreshQueueStatus = async () => {
+  const handleRefreshQueueStatus = async (silent = false) => {
     if (!ip.trim()) return;
-    if (payloadQueueLoading) return;
-    setPayloadQueueLoading(true);
+    if (payloadQueueLoading && !silent) return;
+    if (!silent) setPayloadQueueLoading(true);
     try {
       const snapshot = await invoke<PayloadStatusSnapshot>("payload_status_refresh", { ip });
       applyPayloadSnapshot(snapshot);
@@ -3631,9 +3604,11 @@ export default function App() {
     } catch (err) {
       const message = String(err);
       setPayloadStatusError(message);
-      setClientLogs((prev) => [`Queue status error: ${message}`, ...prev].slice(0, 100));
+      if (shouldLogStatusError(`queue_status:${message}`)) {
+        pushClientLog(`Queue status error: ${message}`, "warn");
+      }
     }
-    setPayloadQueueLoading(false);
+    if (!silent) setPayloadQueueLoading(false);
   };
 
   const handleQueueExtract = async (src: string, dst: string) => {
@@ -3863,7 +3838,7 @@ export default function App() {
 
   useEffect(() => {
     if (!isConnected || !ip.trim()) return;
-    handleRefreshPayloadStatus();
+    handleRefreshPayloadStatus(true);
   }, [isConnected, ip]);
 
   useEffect(() => {
@@ -3875,7 +3850,7 @@ export default function App() {
     const intervalMs = 1000;
     const interval = setInterval(() => {
       if (isConnected && ip.trim()) {
-        handleRefreshQueueStatus();
+        handleRefreshQueueStatus(true);
       }
       if (activeTab === "payload") {
         handleRefreshUploadQueue();
@@ -3886,7 +3861,7 @@ export default function App() {
 
   const handleConnect = async () => {
     if (!ip.trim()) {
-      setConnectionStatus("Missing IP");
+      setConnectionStatus(tr("missing_ip"));
       pushClientLog("Connect blocked: missing IP");
       return false;
     }
@@ -3899,7 +3874,7 @@ export default function App() {
     setConnectCooldown(true);
     setTimeout(() => setConnectCooldown(false), 1000);
     setIsConnecting(true);
-    setConnectionStatus("Connecting...");
+    setConnectionStatus(tr("connecting"));
     pushClientLog(`Connecting to ${ip}...`);
     try {
       const snapshot = await invoke<ConnectionStatusSnapshot>(
@@ -3914,7 +3889,7 @@ export default function App() {
       }
       return snapshot.is_connected;
     } catch (err) {
-      setConnectionStatus(`Error: ${String(err)}`);
+      setConnectionStatus(tr("error_prefix", { error: String(err) }));
       setIsConnected(false);
       pushClientLog(`Connection error: ${String(err)}`);
       return false;
@@ -3930,15 +3905,15 @@ export default function App() {
 
   const handleDisconnect = () => {
     setStorageLocations([]);
-    setConnectionStatus("Disconnected");
+    setConnectionStatus(tr("disconnected"));
     setManageEntries([]);
-    setManageStatus("Not connected");
-    setPayloadStatus("Disconnected");
+    setManageStatus(tr("not_connected"));
+    setPayloadStatusDisplay(tr("disconnected"), "warn");
     setPayloadVersion(null);
     setIsConnected(false);
     setIsConnecting(false);
     setPayloadStatusError(null);
-    pushClientLog("Disconnected.");
+    pushClientLog(tr("disconnected") + ".");
   };
 
   const handlePayloadBrowse = async () => {
@@ -3949,11 +3924,11 @@ export default function App() {
       });
       if (typeof selected === "string") {
         setPayloadLocalPath(selected);
-        pushPayloadLog(`Payload selected: ${selected}`);
+        pushPayloadLog(`Payload selected: ${selected}`, "info");
       }
     } catch (err) {
-      setPayloadStatus(`Error: ${String(err)}`);
-      pushPayloadLog(`Payload browse error: ${String(err)}`);
+      setPayloadStatusDisplay(tr("error_prefix", { error: String(err) }), "error");
+      pushPayloadLog(`Payload browse error: ${String(err)}`, "error");
     }
   };
 
@@ -3963,30 +3938,30 @@ export default function App() {
   ) => {
     if (payloadBusy || !ip.trim()) return;
     if (payloadReloadCooldown) {
-      pushPayloadLog("Payload reload blocked: please wait a moment.");
+      pushPayloadLog("Payload reload blocked: please wait a moment.", "debug");
       return;
     }
     if (!force) {
       if (payloadFullStatus?.status && !payloadStatusError) {
-        setPayloadStatus("Payload already running.");
-        pushPayloadLog("Payload already running; reload skipped.");
+        setPayloadStatusDisplay(tr("payload_already_running"), "warn");
+        pushPayloadLog("Payload already running; reload skipped.", "debug");
         return;
       }
       if (payloadVersion) {
-        setPayloadStatus("Payload already running.");
-        pushPayloadLog("Payload already running; reload skipped.");
+        setPayloadStatusDisplay(tr("payload_already_running"), "warn");
+        pushPayloadLog("Payload already running; reload skipped.", "debug");
         return;
       }
     }
     const mode = modeOverride ?? payloadReloadMode;
     if (mode === "local" && !payloadLocalPath.trim()) {
-      setPayloadStatus(tr("payload_local_required"));
-      pushPayloadLog("Payload reload blocked: local payload path required.");
+      setPayloadStatusDisplay(tr("payload_local_required"), "warn");
+      pushPayloadLog("Payload reload blocked: local payload path required.", "warn");
       return;
     }
     if (mode === "local" && payloadProbe && !payloadProbe.ok) {
-      setPayloadStatus(payloadProbe.message);
-      pushPayloadLog(`Payload probe failed: ${payloadProbe.message}`);
+      setPayloadStatusDisplay(payloadProbe.message, "error");
+      pushPayloadLog(`Payload probe failed: ${payloadProbe.message}`, "error");
       return;
     }
     setPayloadReloadCooldown(true);
@@ -3996,26 +3971,26 @@ export default function App() {
       port: 9021
     });
     if (!portOpen) {
-      setPayloadStatus("Port 9021 closed");
-      pushPayloadLog("Payload reload failed: port 9021 closed.");
+      setPayloadStatusDisplay(tr("payload_port_closed", { port: 9021 }), "error");
+      pushPayloadLog("Payload reload failed: port 9021 closed.", "error");
       return;
     }
-    setPayloadStatus(tr("payload_sending"));
-    pushPayloadLog(`Sending payload (${mode})...`);
+    setPayloadStatusDisplay(tr("payload_sending"), "info");
+    pushPayloadLog(`Sending payload (${mode})...`, "info");
     try {
       if (mode === "local") {
         await invoke("payload_send", { ip, path: payloadLocalPath });
       } else {
         await invoke("payload_download_and_send", { ip, fetch: mode });
       }
-      setPayloadStatus("Waiting for payload...");
-      pushPayloadLog("Payload sent. Waiting for status...");
+      setPayloadStatusDisplay(tr("payload_waiting"), "info");
+      pushPayloadLog("Payload sent. Waiting for status...", "info");
       setTimeout(() => {
         handlePayloadCheck();
       }, 3000);
     } catch (err) {
-      setPayloadStatus(`Error: ${String(err)}`);
-      pushPayloadLog(`Payload send error: ${String(err)}`);
+      setPayloadStatusDisplay(tr("error_prefix", { error: String(err) }), "error");
+      pushPayloadLog(`Payload send error: ${String(err)}`, "error");
     }
   };
 
@@ -4025,12 +4000,12 @@ export default function App() {
 
   const handlePayloadCheck = async () => {
     try {
-      setPayloadStatus("Checking...");
-      pushPayloadLog("Checking payload status...");
+      setPayloadStatusDisplay(tr("checking"), "info");
+      pushPayloadLog("Checking payload status...", "debug");
       await invoke("payload_check", { ip });
     } catch (err) {
-      setPayloadStatus(`Error: ${String(err)}`);
-      pushPayloadLog(`Payload check error: ${String(err)}`);
+      setPayloadStatusDisplay(tr("error_prefix", { error: String(err) }), "error");
+      pushPayloadLog(`Payload check error: ${String(err)}`, "error");
     }
   };
 
@@ -4107,7 +4082,7 @@ export default function App() {
   };
 
   const handleUpload = async () => {
-    setClientLogs((prev) => ["Upload clicked", ...prev].slice(0, 100));
+    pushClientLog("Upload clicked", "debug");
     await startUploadWithParams({
       sourcePath,
       destPath: finalDestPath,
@@ -4333,7 +4308,10 @@ export default function App() {
         setUploadQueueRunning(false);
       }
     } catch (err) {
-      setClientLogs((prev) => [`Queue refresh failed: ${String(err)}`, ...prev].slice(0, 100));
+      const message = String(err);
+      if (shouldLogStatusError(`upload_queue:${message}`)) {
+        pushClientLog(`Queue refresh failed: ${message}`, "warn");
+      }
     }
   };
 
@@ -4662,7 +4640,7 @@ export default function App() {
       }
     }
     if (!ip.trim()) {
-      setTransferState((prev) => ({ ...prev, status: "Missing IP" }));
+      setTransferState((prev) => ({ ...prev, status: tr("missing_ip") }));
       setClientLogs((prev) => ["Upload blocked: Missing IP", ...prev].slice(0, 100));
       return;
     }
@@ -4677,7 +4655,7 @@ export default function App() {
       return;
     }
     if (!(await ensureConnected())) {
-      setTransferState((prev) => ({ ...prev, status: "Not connected" }));
+      setTransferState((prev) => ({ ...prev, status: tr("not_connected") }));
       setClientLogs((prev) => ["Upload blocked: Not connected", ...prev].slice(0, 100));
       return;
     }
@@ -4958,7 +4936,7 @@ export default function App() {
 
   const handleUploadQueue = async () => {
     if (!ip.trim()) {
-      setConnectionStatus("Missing IP");
+      setConnectionStatus(tr("missing_ip"));
       return;
     }
     if (!(await ensureConnected())) {
@@ -5638,57 +5616,6 @@ export default function App() {
       setFaqError(String(err));
     } finally {
       setFaqLoading(false);
-    }
-  };
-
-  const handleChatSend = async () => {
-    if (!chatEnabled) {
-      setChatStatus("Chat unavailable");
-      return;
-    }
-    const name = chatDisplayName.trim();
-    if (!name) {
-      setChatStatus("Set a display name");
-      return;
-    }
-    const text = chatInput.trim();
-    if (!text) return;
-    try {
-      await invoke("chat_send", { name, text });
-      setChatInput("");
-    } catch (err) {
-      setChatStatus(`Send failed: ${String(err)}`);
-    }
-  };
-
-  const handleChatConnect = async () => {
-    try {
-      setChatStatus("Connecting...");
-      const started = await invoke<ChatInfo>("chat_start");
-      setChatRoomId(started.room_id);
-      setChatEnabled(started.enabled);
-    } catch (err) {
-      setChatStatus(`Error: ${String(err)}`);
-    }
-  };
-
-  const handleChatDisconnect = async () => {
-    try {
-      await invoke("chat_stop");
-      setChatEnabled(false);
-      setChatStatus("Disconnected");
-    } catch (err) {
-      setChatStatus(`Error: ${String(err)}`);
-    }
-  };
-
-  const handleChatRefresh = async () => {
-    try {
-      const info = await invoke<ChatInfo>("chat_info");
-      setChatRoomId(info.room_id);
-      setChatEnabled(info.enabled);
-    } catch (err) {
-      setChatStatus(`Error: ${String(err)}`);
     }
   };
 
@@ -6674,6 +6601,11 @@ export default function App() {
                         <span className={`pill ${payloadFullStatus.is_busy ? "warn" : "ok"}`}>
                           {payloadFullStatus.is_busy ? tr("busy") : tr("idle")}
                         </span>
+                        {transferBottleneck ? (
+                          <span className="pill warn">
+                            {tr("bottleneck")}: {transferBottleneck.label}
+                          </span>
+                        ) : null}
                       </div>
                       <div className={`payload-status-state pill ${payloadStatusClass}`}>
                         {tr("status")}: {payloadStatus}
@@ -6683,109 +6615,96 @@ export default function App() {
                       {payloadFullStatus.system && (
                         <div className="payload-metric-card">
                           <div className="payload-metric-title">{tr("system_metrics")}</div>
+                          {payloadFullStatus.system.cpu_percent >= 0 && (
+                            <div className="payload-metric-row">
+                              <span>{tr("cpu_usage")}</span>
+                              <span>{`${payloadFullStatus.system.cpu_percent.toFixed(1)}%`}</span>
+                            </div>
+                          )}
+                          {payloadFullStatus.system.proc_cpu_percent != null &&
+                          payloadFullStatus.system.proc_cpu_percent >= 0 ? (
+                            <div className="payload-metric-row">
+                              <span>{tr("payload_cpu_usage")}</span>
+                              <span>{`${payloadFullStatus.system.proc_cpu_percent.toFixed(1)}%`}</span>
+                            </div>
+                          ) : null}
+                          {payloadFullStatus.system.rss_bytes >= 0 && (
+                            <div className="payload-metric-row">
+                              <span>{tr("memory_usage")}</span>
+                              <span>{formatBytes(payloadFullStatus.system.rss_bytes)}</span>
+                            </div>
+                          )}
+                          {payloadFullStatus.system.mem_total_bytes >= 0 && (
+                            <div className="payload-metric-row">
+                              <span>{tr("memory_total")}</span>
+                              <span>{formatBytes(payloadFullStatus.system.mem_total_bytes)}</span>
+                            </div>
+                          )}
+                          {payloadFullStatus.system.mem_free_bytes >= 0 && (
+                            <div className="payload-metric-row">
+                              <span>{tr("memory_free")}</span>
+                              <span>{formatBytes(payloadFullStatus.system.mem_free_bytes)}</span>
+                            </div>
+                          )}
+                          {payloadFullStatus.system.thread_count >= 0 && (
+                            <div className="payload-metric-row">
+                              <span>{tr("thread_count")}</span>
+                              <span>{payloadFullStatus.system.thread_count}</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      {payloadFullStatus.system && (
+                        <div className="payload-metric-card">
+                          <div className="payload-metric-title">{tr("network_metrics")}</div>
+                          {payloadFullStatus.system.net_rx_bytes != null &&
+                          payloadFullStatus.system.net_rx_bytes >= 0 ? (
+                            <div className="payload-metric-row">
+                              <span>{tr("net_rx")}</span>
+                              <span>{formatBytes(payloadFullStatus.system.net_rx_bytes)}</span>
+                            </div>
+                          ) : null}
+                          {payloadFullStatus.system.net_tx_bytes != null &&
+                          payloadFullStatus.system.net_tx_bytes >= 0 ? (
+                            <div className="payload-metric-row">
+                              <span>{tr("net_tx")}</span>
+                              <span>{formatBytes(payloadFullStatus.system.net_tx_bytes)}</span>
+                            </div>
+                          ) : null}
+                          {payloadFullStatus.system.net_rx_bps != null &&
+                          payloadFullStatus.system.net_rx_bps >= 0 ? (
+                            <div className="payload-metric-row">
+                              <span>{tr("net_rx_rate")}</span>
+                              <span>{`${formatBytes(payloadFullStatus.system.net_rx_bps)}/s`}</span>
+                            </div>
+                          ) : null}
+                          {payloadFullStatus.system.net_tx_bps != null &&
+                          payloadFullStatus.system.net_tx_bps >= 0 ? (
+                            <div className="payload-metric-row">
+                              <span>{tr("net_tx_rate")}</span>
+                              <span>{`${formatBytes(payloadFullStatus.system.net_tx_bps)}/s`}</span>
+                            </div>
+                          ) : null}
+                        </div>
+                      )}
+                      {payloadFullStatus.transfer && (
+                        <div className="payload-metric-card">
+                          <div className="payload-metric-title">{tr("queue_metrics")}</div>
                           <div className="payload-metric-row">
-                            <span>{tr("cpu_usage")}</span>
-                            <span>
-                              {payloadFullStatus.system.cpu_percent >= 0
-                                ? `${payloadFullStatus.system.cpu_percent.toFixed(1)}%`
-                                : payloadFullStatus.system.cpu_supported === false
-                                ? tr("restricted")
-                                : "—"}
-                            </span>
+                            <span>{tr("writer_queue")}</span>
+                            <span>{payloadFullStatus.transfer.queue_count}</span>
                           </div>
+                          {payloadFullStatus.transfer.pack_queue_count != null && (
+                            <div className="payload-metric-row">
+                              <span>{tr("pack_queue")}</span>
+                              <span>{payloadFullStatus.transfer.pack_queue_count}</span>
+                            </div>
+                          )}
                           <div className="payload-metric-row">
-                            <span>{tr("payload_cpu_usage")}</span>
+                            <span>{tr("backpressure")}</span>
                             <span>
-                              {payloadFullStatus.system.proc_cpu_percent != null &&
-                              payloadFullStatus.system.proc_cpu_percent >= 0
-                                ? `${payloadFullStatus.system.proc_cpu_percent.toFixed(1)}%`
-                                : payloadFullStatus.system.proc_cpu_supported === false
-                                ? tr("restricted")
-                                : "—"}
-                            </span>
-                          </div>
-                          <div className="payload-metric-row">
-                            <span>{tr("memory_usage")}</span>
-                            <span>
-                              {payloadFullStatus.system.rss_bytes >= 0
-                                ? formatBytes(payloadFullStatus.system.rss_bytes)
-                                : payloadFullStatus.system.rss_supported === false
-                                ? tr("restricted")
-                                : "—"}
-                            </span>
-                          </div>
-                          <div className="payload-metric-row">
-                            <span>{tr("memory_total")}</span>
-                            <span>
-                              {payloadFullStatus.system.mem_total_bytes >= 0
-                                ? formatBytes(payloadFullStatus.system.mem_total_bytes)
-                                : payloadFullStatus.system.mem_total_supported === false
-                                ? tr("restricted")
-                                : "—"}
-                            </span>
-                          </div>
-                          <div className="payload-metric-row">
-                            <span>{tr("memory_free")}</span>
-                            <span>
-                              {payloadFullStatus.system.mem_free_bytes >= 0
-                                ? formatBytes(payloadFullStatus.system.mem_free_bytes)
-                                : payloadFullStatus.system.mem_free_supported === false
-                                ? tr("restricted")
-                                : "—"}
-                            </span>
-                          </div>
-                          <div className="payload-metric-row">
-                            <span>{tr("thread_count")}</span>
-                            <span>
-                              {payloadFullStatus.system.thread_count >= 0
-                                ? payloadFullStatus.system.thread_count
-                                : payloadFullStatus.system.thread_supported === false
-                                ? tr("restricted")
-                                : "—"}
-                            </span>
-                          </div>
-                          <div className="payload-metric-row">
-                            <span>{tr("net_rx")}</span>
-                            <span>
-                              {payloadFullStatus.system.net_rx_bytes != null &&
-                              payloadFullStatus.system.net_rx_bytes >= 0
-                                ? formatBytes(payloadFullStatus.system.net_rx_bytes)
-                                : payloadFullStatus.system.net_supported === false
-                                ? tr("restricted")
-                                : "—"}
-                            </span>
-                          </div>
-                          <div className="payload-metric-row">
-                            <span>{tr("net_tx")}</span>
-                            <span>
-                              {payloadFullStatus.system.net_tx_bytes != null &&
-                              payloadFullStatus.system.net_tx_bytes >= 0
-                                ? formatBytes(payloadFullStatus.system.net_tx_bytes)
-                                : payloadFullStatus.system.net_supported === false
-                                ? tr("restricted")
-                                : "—"}
-                            </span>
-                          </div>
-                          <div className="payload-metric-row">
-                            <span>{tr("net_rx_rate")}</span>
-                            <span>
-                              {payloadFullStatus.system.net_rx_bps != null &&
-                              payloadFullStatus.system.net_rx_bps >= 0
-                                ? `${formatBytes(payloadFullStatus.system.net_rx_bps)}/s`
-                                : payloadFullStatus.system.net_supported === false
-                                ? tr("restricted")
-                                : "—"}
-                            </span>
-                          </div>
-                          <div className="payload-metric-row">
-                            <span>{tr("net_tx_rate")}</span>
-                            <span>
-                              {payloadFullStatus.system.net_tx_bps != null &&
-                              payloadFullStatus.system.net_tx_bps >= 0
-                                ? `${formatBytes(payloadFullStatus.system.net_tx_bps)}/s`
-                                : payloadFullStatus.system.net_supported === false
-                                ? tr("restricted")
-                                : "—"}
+                              {payloadFullStatus.transfer.backpressure_events} /{" "}
+                              {payloadFullStatus.transfer.backpressure_wait_ms} ms
                             </span>
                           </div>
                         </div>
@@ -6798,10 +6717,6 @@ export default function App() {
                             <span>{payloadFullStatus.transfer.active_sessions}</span>
                           </div>
                           <div className="payload-metric-row">
-                            <span>{tr("writer_queue")}</span>
-                            <span>{payloadFullStatus.transfer.queue_count}</span>
-                          </div>
-                          <div className="payload-metric-row">
                             <span>{tr("pack_in_use")}</span>
                             <span>{payloadFullStatus.transfer.pack_in_use}</span>
                           </div>
@@ -6809,13 +6724,30 @@ export default function App() {
                             <span>{tr("pool_count")}</span>
                             <span>{payloadFullStatus.transfer.pool_count}</span>
                           </div>
-                          <div className="payload-metric-row">
-                            <span>{tr("backpressure")}</span>
-                            <span>
-                              {payloadFullStatus.transfer.backpressure_events} /{" "}
-                              {payloadFullStatus.transfer.backpressure_wait_ms} ms
-                            </span>
-                          </div>
+                          {payloadFullStatus.transfer.recv_rate_bps != null && (
+                            <div className="payload-metric-row">
+                              <span>{tr("recv_rate")}</span>
+                              <span>{`${formatBytes(payloadFullStatus.transfer.recv_rate_bps)}/s`}</span>
+                            </div>
+                          )}
+                          {payloadFullStatus.transfer.write_rate_bps != null && (
+                            <div className="payload-metric-row">
+                              <span>{tr("write_rate")}</span>
+                              <span>{`${formatBytes(payloadFullStatus.transfer.write_rate_bps)}/s`}</span>
+                            </div>
+                          )}
+                          {payloadFullStatus.transfer.bytes_received != null && (
+                            <div className="payload-metric-row">
+                              <span>{tr("bytes_received")}</span>
+                              <span>{formatBytes(payloadFullStatus.transfer.bytes_received)}</span>
+                            </div>
+                          )}
+                          {payloadFullStatus.transfer.bytes_written != null && (
+                            <div className="payload-metric-row">
+                              <span>{tr("bytes_written")}</span>
+                              <span>{formatBytes(payloadFullStatus.transfer.bytes_written)}</span>
+                            </div>
+                          )}
                           <div className="payload-metric-row">
                             <span>{tr("last_progress")}</span>
                             <span>
@@ -6840,6 +6772,41 @@ export default function App() {
                             <div className="payload-metric-row">
                               <span>{tr("extract_last_progress")}</span>
                               <span>{formatTimestamp(payloadFullStatus.extract_last_progress)}</span>
+                            </div>
+                          ) : null}
+                        </div>
+                      )}
+                      {payloadFullStatus.transfer && (
+                        <div className="payload-metric-card">
+                          <div className="payload-metric-title">{tr("tuning_metrics")}</div>
+                          {payloadFullStatus.transfer.tune_level != null && (
+                            <div className="payload-metric-row">
+                              <span>{tr("tune_level")}</span>
+                              <span>{payloadFullStatus.transfer.tune_level}</span>
+                            </div>
+                          )}
+                          {payloadFullStatus.transfer.recommend_pack_limit != null && (
+                            <div className="payload-metric-row">
+                              <span>{tr("recommend_pack")}</span>
+                              <span>{formatBytes(payloadFullStatus.transfer.recommend_pack_limit)}</span>
+                            </div>
+                          )}
+                          {payloadFullStatus.transfer.recommend_pace_ms != null && (
+                            <div className="payload-metric-row">
+                              <span>{tr("recommend_pace")}</span>
+                              <span>{`${payloadFullStatus.transfer.recommend_pace_ms} ms`}</span>
+                            </div>
+                          )}
+                          {payloadFullStatus.transfer.recommend_rate_limit_bps != null && (
+                            <div className="payload-metric-row">
+                              <span>{tr("recommend_rate")}</span>
+                              <span>{`${formatBytes(payloadFullStatus.transfer.recommend_rate_limit_bps)}/s`}</span>
+                            </div>
+                          )}
+                          {transferBottleneck ? (
+                            <div className="payload-metric-row">
+                              <span>{tr("bottleneck")}</span>
+                              <span>{transferBottleneck.label}</span>
                             </div>
                           ) : null}
                         </div>
@@ -7899,8 +7866,8 @@ export default function App() {
             </div>
           )}
 
-          {activeTab === "chat" && (
-            <div className="grid-two chat-grid">
+          {activeTab === "faq" && (
+            <div className="grid-two faq-grid">
               <div className="card wide faq-card">
                 <header className="card-title">
                   <span className="card-title-icon">?</span>

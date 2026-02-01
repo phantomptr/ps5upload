@@ -16,7 +16,7 @@ int start_threaded_extraction(int client_sock, const char *src, const char *dst)
 // Returns 0 on success, -1 on failure
 // Sets out_total_bytes and out_file_count if provided (can be NULL)
 int receive_folder_stream(int sock, const char *dest_path, char *err, size_t err_len,
-                          long long *out_total_bytes, int *out_file_count);
+                          unsigned long long *out_total_bytes, int *out_file_count);
 
 __END_DECLS
 

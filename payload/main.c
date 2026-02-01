@@ -104,7 +104,11 @@ static void *idle_watch_thread(void *arg) {
                                 transfer_stall_count, (long)(now - last));
 
                     if (transfer_stall_count > 1) {
-                        payload_log("[WATCHDOG] Unrecoverable stall detected after grace period. Forcing payload exit.");
+                        TransferStats stats;
+                        transfer_get_stats(&stats);
+                        payload_log("[WATCHDOG] Unrecoverable stall. State: sessions=%zu packs=%zu queue=%zu pool=%d",
+                                    stats.active_sessions, stats.pack_in_use, stats.queue_count, stats.pool_count);
+                        payload_log("[WATCHDOG] Forcing payload exit.");
                         notify_error("PS5 Upload Server", "Unrecoverable stall. Restarting.");
                         transfer_cleanup();
                         extract_queue_reset();
@@ -206,18 +210,75 @@ void payload_touch_activity(void) {
     g_last_activity = time(NULL);
 }
 
+static const char *signal_name(int sig) {
+    switch (sig) {
+        case SIGSEGV: return "SIGSEGV";
+        case SIGABRT: return "SIGABRT";
+        case SIGBUS:  return "SIGBUS";
+        case SIGILL:  return "SIGILL";
+        case SIGFPE:  return "SIGFPE";
+        case SIGPIPE: return "SIGPIPE";
+        case SIGTERM: return "SIGTERM";
+        case SIGKILL: return "SIGKILL";
+        default:      return "UNKNOWN";
+    }
+}
+
 static void crash_handler(int sig) {
     // Minimal, signal-safe logging to avoid deadlocks on mutex.
     int fd = open("/data/ps5upload/payload_crash.log", O_WRONLY | O_CREAT | O_APPEND, 0666);
     if (fd >= 0) {
+        char buf[512];
+        time_t now = time(NULL);
+        int len = snprintf(buf, sizeof(buf),
+            "\n========== CRASH REPORT ==========\n"
+            "Time: %ld\n"
+            "Signal: %d (%s)\n"
+            "PID: %d\n"
+            "Transfer active: %d\n"
+            "Last progress: %ld sec ago\n"
+            "===================================\n",
+            (long)now,
+            sig, signal_name(sig),
+            (int)getpid(),
+            transfer_is_active(),
+            (long)(now - transfer_last_progress())
+        );
+        if (len > 0) {
+            write(fd, buf, (size_t)len);
+        }
+        fsync(fd);
+        close(fd);
+    }
+    // Also write to main log
+    int fd2 = open("/data/ps5upload/payload.log", O_WRONLY | O_CREAT | O_APPEND, 0666);
+    if (fd2 >= 0) {
         char buf[128];
-        int len = snprintf(buf, sizeof(buf), "[CRASH] signal=%d\n", sig);
+        int len = snprintf(buf, sizeof(buf), "[CRASH] signal=%d (%s)\n", sig, signal_name(sig));
+        if (len > 0) {
+            write(fd2, buf, (size_t)len);
+        }
+        fsync(fd2);
+        close(fd2);
+    }
+    _exit(1);
+}
+
+static void exit_handler(void) {
+    // Log clean exits for debugging
+    int fd = open("/data/ps5upload/payload_exit.log", O_WRONLY | O_CREAT | O_APPEND, 0666);
+    if (fd >= 0) {
+        char buf[256];
+        time_t now = time(NULL);
+        int len = snprintf(buf, sizeof(buf),
+            "[EXIT] time=%ld pid=%d transfer_active=%d\n",
+            (long)now, (int)getpid(), transfer_is_active()
+        );
         if (len > 0) {
             write(fd, buf, (size_t)len);
         }
         close(fd);
     }
-    _exit(1);
 }
 
 static void write_pid_file(void) {
@@ -415,27 +476,46 @@ static int parse_first_token(const char *src, char *out, size_t out_cap, const c
     if (!src || !out || out_cap == 0) {
         return -1;
     }
-    while (*src == ' ') {
+    while (*src == ' ' || *src == '\t') {
         src++;
     }
     if (*src == '\0') {
         return -1;
     }
-    const char *end = src;
-    while (*end != '\0' && *end != ' ') {
-        end++;
+    size_t len = 0;
+    if (*src == '"') {
+        src++;
+        while (*src && *src != '"') {
+            char ch = *src++;
+            if (ch == '\\') {
+                char esc = *src++;
+                if (esc == '\0') return -1;
+                switch (esc) {
+                    case 'n': ch = '\n'; break;
+                    case 'r': ch = '\r'; break;
+                    case 't': ch = '\t'; break;
+                    case '\\': ch = '\\'; break;
+                    case '"': ch = '"'; break;
+                    default: ch = esc; break;
+                }
+            }
+            if (len + 1 >= out_cap) return -1;
+            out[len++] = ch;
+        }
+        if (*src != '"') return -1;
+        src++;
+    } else {
+        while (*src != '\0' && *src != ' ' && *src != '\t') {
+            if (len + 1 >= out_cap) return -1;
+            out[len++] = *src++;
+        }
     }
-    size_t len = (size_t)(end - src);
-    if (len == 0 || len >= out_cap) {
-        return -1;
-    }
-    memcpy(out, src, len);
     out[len] = '\0';
     if (rest) {
-        while (*end == ' ') {
-            end++;
+        while (*src == ' ' || *src == '\t') {
+            src++;
         }
-        *rest = end;
+        *rest = src;
     }
     return 0;
 }
@@ -520,120 +600,6 @@ struct LegacyUploadArgs {
     int sock;
     char args[CMD_BUFFER_SIZE];
 };
-
-struct UploadWorkerArgs {
-    int sock;
-    char dest_path[PATH_MAX];
-    int use_temp;
-};
-
-static void *upload_worker_thread(void *arg) {
-    struct UploadWorkerArgs *args = (struct UploadWorkerArgs *)arg;
-    if (!args) {
-        return NULL;
-    }
-    payload_log("[UPLOAD] worker start dest=%s temp=%d", args->dest_path, args->use_temp);
-    if (set_blocking(args->sock) != 0) {
-        payload_log("[UPLOAD] set_blocking failed");
-        close(args->sock);
-        free(args);
-        return NULL;
-    }
-    struct timeval tv;
-    tv.tv_sec = 1;
-    tv.tv_usec = 0;
-    setsockopt(args->sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof(tv));
-    UploadSession *session = upload_session_create(args->dest_path, args->use_temp);
-    if (!session) {
-        const char *err = "ERROR: Upload init failed\n";
-        send(args->sock, err, strlen(err), 0);
-        payload_log("[UPLOAD] session create failed");
-        close(args->sock);
-        free(args);
-        return NULL;
-    }
-
-    // Large recv buffer for high throughput (512KB instead of 64KB)
-    uint8_t *buffer = malloc(UPLOAD_RECV_CHUNK_SIZE);
-    if (!buffer) {
-        const char *err = "ERROR: Upload init failed\n";
-        send(args->sock, err, strlen(err), 0);
-        payload_log("[UPLOAD] buffer alloc failed");
-        close(args->sock);
-        free(args);
-        return NULL;
-    }
-    int done = 0;
-    int error = 0;
-    while (!done && !error) {
-        if (transfer_abort_requested()) {
-            payload_log("[UPLOAD] abort requested");
-            error = 1;
-            break;
-        }
-        if (upload_session_backpressure(session)) {
-            upload_session_feed(session, NULL, 0, &done, &error);
-            if (error) break;
-            if (upload_session_backpressure(session)) {
-                usleep(BACKPRESSURE_POLL_US);  // Faster polling (100us vs 1000us)
-                continue;
-            }
-        }
-        ssize_t n = recv(args->sock, buffer, UPLOAD_RECV_CHUNK_SIZE, 0);
-        if (n < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                continue;
-            }
-            payload_log("[UPLOAD] recv error: %s", strerror(errno));
-            error = 1;
-            break;
-        }
-        if (n == 0) {
-            payload_log("[UPLOAD] recv EOF");
-            error = 1;
-            break;
-        }
-        upload_session_feed(session, buffer, (size_t)n, &done, &error);
-    }
-
-    if (error) {
-        free(buffer);
-        upload_session_destroy(session);
-        const char *err = "ERROR: Upload failed\n";
-        send(args->sock, err, strlen(err), 0);
-        payload_log("[UPLOAD] failed");
-        close(args->sock);
-        free(args);
-        return NULL;
-    }
-
-    int files = 0;
-    long long bytes = 0;
-    int finalize_ok = (upload_session_finalize(session) == 0);
-    upload_session_stats(session, &files, &bytes);
-    upload_session_destroy(session);
-    free(buffer);
-
-    if (!finalize_ok) {
-        const char *err = "ERROR: Upload finalize failed\n";
-        send(args->sock, err, strlen(err), 0);
-        payload_log("[UPLOAD] finalize failed");
-        close(args->sock);
-        free(args);
-        return NULL;
-    }
-
-    char response[256];
-    snprintf(response, sizeof(response), "SUCCESS %d %lld\n", files, bytes);
-    send(args->sock, response, strlen(response), 0);
-    payload_log("[UPLOAD] complete files=%d bytes=%lld", files, bytes);
-    close(args->sock);
-    free(args);
-    return NULL;
-}
 
 static void *legacy_upload_thread(void *arg) {
     struct LegacyUploadArgs *args = (struct LegacyUploadArgs *)arg;
@@ -1043,58 +1009,9 @@ static void process_command(struct ClientConnection *conn) {
         return;
     }
     if (strncmp(conn->cmd_buffer, "UPLOAD_V2 ", 10) == 0) {
-        char dest_path[PATH_MAX];
-        char mode[16] = {0};
-        const char *rest = NULL;
-        if (parse_first_token(conn->cmd_buffer + 10, dest_path, sizeof(dest_path), &rest) != 0) {
-            const char *error = "ERROR: Invalid UPLOAD_V2 format\n";
-            send(conn->sock, error, strlen(error), 0);
-            close_connection(conn);
-            return;
-        }
-        if (rest && *rest) {
-            strncpy(mode, rest, sizeof(mode) - 1);
-            mode[sizeof(mode) - 1] = '\0';
-            char *space = strchr(mode, ' ');
-            if (space) {
-                *space = '\0';
-            }
-        }
-        if (!is_path_safe(dest_path)) {
-            const char *error = "ERROR: Invalid path\n";
-            send(conn->sock, error, strlen(error), 0);
-            close_connection(conn);
-            return;
-        }
-        int use_temp = 1;
-        if (mode[0] && strcasecmp(mode, "DIRECT") == 0) {
-            use_temp = 0;
-        }
-        payload_log("[UPLOAD] V2 start dest=%s temp=%d", dest_path, use_temp);
-        const char *ready = "READY\n";
-        send(conn->sock, ready, strlen(ready), 0);
-        struct UploadWorkerArgs *args = malloc(sizeof(*args));
-        if (!args) {
-            const char *error = "ERROR: Upload init failed\n";
-            send(conn->sock, error, strlen(error), 0);
-            close_connection(conn);
-            return;
-        }
-        args->sock = conn->sock;
-        args->use_temp = use_temp;
-        strncpy(args->dest_path, dest_path, sizeof(args->dest_path) - 1);
-        args->dest_path[sizeof(args->dest_path) - 1] = '\0';
-
-        pthread_t tid;
-        if (pthread_create(&tid, NULL, upload_worker_thread, args) == 0) {
-            pthread_detach(tid);
-            conn->sock = -1;
-            return;
-        }
-
-        free(args);
-        const char *error = "ERROR: Upload init failed\n";
-        send(conn->sock, error, strlen(error), 0);
+        // Use the synchronous handler from transfer.c via protocol.c wrapper
+        // This handles READY, session creation, and data reception all in one call
+        handle_upload_v2_wrapper(conn->sock, conn->cmd_buffer + 10);
         close_connection(conn);
         return;
     }
@@ -1147,11 +1064,17 @@ static void process_command(struct ClientConnection *conn) {
 }
 
 int main(void) {
+    // Register exit handler to log clean exits
+    atexit(exit_handler);
+
+    // Signal handlers
     signal(SIGPIPE, SIG_IGN);
     signal(SIGSEGV, crash_handler);
     signal(SIGABRT, crash_handler);
     signal(SIGBUS, crash_handler);
     signal(SIGILL, crash_handler);
+    signal(SIGFPE, crash_handler);
+    signal(SIGTERM, crash_handler);  // Log when killed
     printf("╔════════════════════════════════════════╗\n");
     printf("║     PS5 Upload Server v%s      ║\n", PS5_UPLOAD_VERSION);
     printf("║                                        ║\n");

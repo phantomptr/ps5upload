@@ -234,9 +234,10 @@ static int extraction_progress(const char *filename, unsigned long long file_siz
     return 0;  /* Continue extraction */
 }
 
-char *receive_rar_to_temp(int sock, size_t file_size, const char *temp_dir) {
+char *receive_rar_to_temp(int sock, unsigned long long file_size, const char *temp_dir) {
     /* Debug off_t size */
     printf("[RAR] sizeof(off_t) = %zu\n", sizeof(off_t));
+    payload_log("[RAR] receive start: size=%llu temp_dir=%s", file_size, temp_dir ? temp_dir : "(null)");
 
     /* Create temp directory if needed */
     mkdir_recursive_ex(temp_dir, NULL, 0);
@@ -244,6 +245,7 @@ char *receive_rar_to_temp(int sock, size_t file_size, const char *temp_dir) {
     /* Generate temp file path */
     char *temp_path = malloc(PATH_MAX);
     if (!temp_path) {
+        payload_log("[RAR] ERROR: temp_path alloc failed");
         return NULL;
     }
 
@@ -270,41 +272,69 @@ char *receive_rar_to_temp(int sock, size_t file_size, const char *temp_dir) {
     /* Open temp file for writing */
     if (fd < 0) {
         perror("[RAR] Failed to create temp file");
+        payload_log("[RAR] ERROR: failed to create temp file (errno=%d %s)", errno, strerror(errno));
         free(temp_path);
         return NULL;
     }
+    payload_log("[RAR] temp file: %s", temp_path);
 
     /* Receive data */
     unsigned char *buffer = malloc(RECV_BUFFER_SIZE);
     if (!buffer) {
+        payload_log("[RAR] ERROR: receive buffer alloc failed");
         close(fd);
         unlink(temp_path);
         free(temp_path);
         return NULL;
     }
 
-    size_t received = 0;
+    unsigned long long received = 0;
     int last_percent = -1;
 
+    time_t last_recv = time(NULL);
     while (received < file_size) {
-        size_t to_recv = file_size - received;
+        unsigned long long remaining = file_size - received;
+        size_t to_recv = (remaining > (unsigned long long)RECV_BUFFER_SIZE) ? RECV_BUFFER_SIZE : (size_t)remaining;
         if (to_recv > RECV_BUFFER_SIZE) {
             to_recv = RECV_BUFFER_SIZE;
         }
 
         ssize_t n = recv(sock, buffer, to_recv, 0);
         if (n <= 0) {
-            if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            if (n == 0) {
+                payload_log("[RAR] ERROR: client closed connection (received=%llu/%llu)", received, file_size);
+                close(fd);
+                unlink(temp_path);
+                free(buffer);
+                free(temp_path);
+                return NULL;
+            }
+            if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
+                payload_touch_activity();
+                time_t now = time(NULL);
+                if (now - last_recv > 60) {
+                    printf("[RAR] Receive timeout: no data for 60 seconds\n");
+                    payload_log("[RAR] ERROR: receive timeout after 60s (received=%llu/%llu)", received, file_size);
+                    close(fd);
+                    unlink(temp_path);
+                    free(buffer);
+                    free(temp_path);
+                    return NULL;
+                }
                 usleep(1000);
                 continue;
             }
-            perror("[RAR] Receive error");
+            printf("[RAR] Receive error: %s (errno=%d, received=%llu/%llu)\n",
+                   strerror(errno), errno, received, file_size);
+            payload_log("[RAR] ERROR: receive error (errno=%d %s received=%llu/%llu)", errno, strerror(errno), received, file_size);
             close(fd);
             unlink(temp_path);
             free(buffer);
             free(temp_path);
             return NULL;
         }
+        last_recv = time(NULL);
+        payload_touch_activity();
 
         /* Write loop to handle partial writes */
         size_t to_write = (size_t)n;
@@ -314,6 +344,7 @@ char *receive_rar_to_temp(int sock, size_t file_size, const char *temp_dir) {
             if (w < 0) {
                 if (errno == EINTR) continue;
                 perror("[RAR] Write error");
+                payload_log("[RAR] ERROR: write error (errno=%d %s received=%llu/%llu)", errno, strerror(errno), received, file_size);
                 close(fd);
                 unlink(temp_path);
                 free(buffer);
@@ -336,7 +367,8 @@ char *receive_rar_to_temp(int sock, size_t file_size, const char *temp_dir) {
     close(fd);
     free(buffer);
 
-    printf("[RAR] Received %zu bytes to %s\n", received, temp_path);
+    printf("[RAR] Received %llu bytes to %s\n", received, temp_path);
+    payload_log("[RAR] receive complete: bytes=%llu path=%s", received, temp_path);
     return temp_path;
 }
 
@@ -354,6 +386,7 @@ int extract_rar_file(const char *rar_path, const char *dest_dir, int strip_root,
     if (stat(dest_dir, &st) == 0 && !S_ISDIR(st.st_mode)) {
         snprintf(g_last_mkdir_err, sizeof(g_last_mkdir_err), "destination exists and is not a directory");
         printf("[RAR] ERROR: Destination exists and is not a directory: %s\n", dest_dir);
+        payload_log("[RAR] ERROR: destination exists and is not a directory: %s", dest_dir);
         return -2;
     }
     if (mkdir_recursive_ex(dest_dir, mkdir_err, sizeof(mkdir_err)) != 0) {
@@ -364,13 +397,16 @@ int extract_rar_file(const char *rar_path, const char *dest_dir, int strip_root,
         g_last_mkdir_errno = errno;
         printf("[RAR] Warning: failed to create destination path (will try extract anyway): %s (%s)\n",
                dest_dir, mkdir_err);
+        payload_log("[RAR] WARN: mkdir failed for dest=%s err=%s", dest_dir, mkdir_err);
         g_last_mkdir_err[0] = '\0';
         g_last_mkdir_errno = 0;
     }
 
     printf("[RAR] Extracting %s to %s (strip_root=%d)\n", rar_path, dest_dir, strip_root);
+    payload_log("[RAR] extract start: rar=%s dest=%s strip_root=%d mode=%d", rar_path, dest_dir, strip_root, (int)mode);
     if (mode == UNRAR_MODE_TURBO) {
         printf("[RAR] Turbo mode: per-file progress updates disabled; totals may be unavailable\n");
+        payload_log("[RAR] turbo mode: progress updates reduced");
     }
 
     /* Scan first to get file count (safe mode only) */
@@ -380,12 +416,14 @@ int extract_rar_file(const char *rar_path, const char *dest_dir, int strip_root,
         int scan_result = unrar_scan(rar_path, &count, &size, NULL, 0);
         if (scan_result != UNRAR_OK) {
             printf("[RAR] Scan failed: %s\n", unrar_strerror(scan_result));
+            payload_log("[RAR] ERROR: scan failed: %s", unrar_strerror(scan_result));
             return scan_result;
         }
     }
 
     if (mode == UNRAR_MODE_SAFE) {
         printf("[RAR] Archive contains %d files, %llu bytes uncompressed\n", count, size);
+        payload_log("[RAR] archive scan: files=%d bytes=%llu", count, size);
     }
 
     /* Extract */
@@ -414,6 +452,7 @@ int extract_rar_file(const char *rar_path, const char *dest_dir, int strip_root,
                                        &opts, extraction_progress, user_data, &count, &size);
     if (extract_result != UNRAR_OK) {
         printf("[RAR] Extraction failed: %s\n", unrar_strerror(extract_result));
+        payload_log("[RAR] ERROR: extraction failed: %s", unrar_strerror(extract_result));
         return extract_result;
     }
 
@@ -421,6 +460,7 @@ int extract_rar_file(const char *rar_path, const char *dest_dir, int strip_root,
     if (total_bytes) *total_bytes = size;
 
     printf("[RAR] Extraction complete: %d files, %llu bytes\n", count, size);
+    payload_log("[RAR] extract complete: files=%d bytes=%llu", count, size);
     return UNRAR_OK;
 }
 
@@ -473,6 +513,7 @@ void handle_upload_rar(int sock, const char *args, UnrarMode mode) {
             if (!*value) {
                 const char *error = "ERROR: Invalid TMP path\n";
                 send_all(sock, error);
+                payload_log("[RAR] ERROR: invalid TMP path (empty)");
                 return;
             }
             strncpy(temp_root_override, value, sizeof(temp_root_override) - 1);
@@ -489,6 +530,7 @@ void handle_upload_rar(int sock, const char *args, UnrarMode mode) {
     if (!size_token) {
         const char *error = "ERROR: Invalid UPLOAD_RAR format (expected: UPLOAD_RAR <dest> <size>)\n";
         send_all(sock, error);
+        payload_log("[RAR] ERROR: invalid UPLOAD_RAR format args=%s", args ? args : "(null)");
         return;
     }
 
@@ -498,6 +540,7 @@ void handle_upload_rar(int sock, const char *args, UnrarMode mode) {
     if (*endptr != '\0') {
         const char *error = "ERROR: Invalid file size format\n";
         send_all(sock, error);
+        payload_log("[RAR] ERROR: invalid file size format token=%s", size_token);
         return;
     }
 
@@ -505,26 +548,59 @@ void handle_upload_rar(int sock, const char *args, UnrarMode mode) {
     rstrip_space(args_copy);
     strncpy(dest_path, args_copy, sizeof(dest_path) - 1);
     dest_path[sizeof(dest_path) - 1] = '\0';
+    if (dest_path[0] == '"' && dest_path[strlen(dest_path) - 1] == '"') {
+        char unquoted[PATH_MAX];
+        size_t out_len = 0;
+        size_t in_len = strlen(dest_path);
+        for (size_t i = 1; i + 1 < in_len; i++) {
+            char ch = dest_path[i];
+            if (ch == '\\' && i + 1 < in_len - 1) {
+                char esc = dest_path[++i];
+                switch (esc) {
+                    case 'n': ch = '\n'; break;
+                    case 'r': ch = '\r'; break;
+                    case 't': ch = '\t'; break;
+                    case '\\': ch = '\\'; break;
+                    case '"': ch = '"'; break;
+                    default: ch = esc; break;
+                }
+            }
+            if (out_len + 1 >= sizeof(unquoted)) {
+                out_len = 0;
+                break;
+            }
+            unquoted[out_len++] = ch;
+        }
+        unquoted[out_len] = '\0';
+        if (out_len > 0) {
+            strncpy(dest_path, unquoted, sizeof(dest_path) - 1);
+            dest_path[sizeof(dest_path) - 1] = '\0';
+        }
+    }
     if (dest_path[0] == '\0') {
         const char *error = "ERROR: Invalid destination path\n";
         send_all(sock, error);
+        payload_log("[RAR] ERROR: empty destination path");
         return;
     }
 
     if (file_size == 0 || file_size > (500ULL * 1024 * 1024 * 1024)) {  /* Max 500GB */
         const char *error = "ERROR: Invalid file size\n";
         send_all(sock, error);
+        payload_log("[RAR] ERROR: invalid file size %llu for dest=%s", file_size, dest_path);
         return;
     }
 
     if (!is_path_safe(dest_path)) {
         const char *error = "ERROR: Invalid path\n";
         send_all(sock, error);
+        payload_log("[RAR] ERROR: invalid dest path: %s", dest_path);
         return;
     }
     if (temp_root_override[0] != '\0' && !is_path_safe(temp_root_override)) {
         const char *error = "ERROR: Invalid temp storage path\n";
         send_all(sock, error);
+        payload_log("[RAR] ERROR: invalid temp root override: %s", temp_root_override);
         return;
     }
 
@@ -533,17 +609,22 @@ void handle_upload_rar(int sock, const char *args, UnrarMode mode) {
         if (stat(dest_path, &st) == 0) {
             const char *error = "ERROR: Destination already exists\n";
             send_all(sock, error);
+            payload_log("[RAR] ERROR: destination already exists: %s", dest_path);
             return;
         }
         if (errno != ENOENT) {
             char error[256];
             snprintf(error, sizeof(error), "ERROR: Unable to access destination: %s\n", strerror(errno));
             send_all(sock, error);
+            payload_log("[RAR] ERROR: dest access failed: %s (%s)", dest_path, strerror(errno));
             return;
         }
     }
 
     printf("[RAR] Upload request: %s (%llu bytes)\n", dest_path, file_size);
+    payload_log("[RAR] upload request: dest=%s size=%llu mode=%d allow_overwrite=%d temp_root=%s",
+                dest_path, file_size, (int)mode, allow_overwrite,
+                temp_root_override[0] ? temp_root_override : "(auto)");
 
     /* Send ready signal */
     const char *ready = "READY\n";
@@ -561,6 +642,7 @@ void handle_upload_rar(int sock, const char *args, UnrarMode mode) {
         }
         snprintf(error, sizeof(error), "ERROR: Failed to create temp root: %s\n", mkdir_err);
         send_all(sock, error);
+        payload_log("[RAR] ERROR: temp root create failed: %s", mkdir_err);
         return;
     }
     snprintf(temp_dir, sizeof(temp_dir), "%s/rar_%d_%u", temp_root, (int)getpid(), temp_counter++);
@@ -571,14 +653,16 @@ void handle_upload_rar(int sock, const char *args, UnrarMode mode) {
         }
         snprintf(error, sizeof(error), "ERROR: Failed to create temp directory: %s\n", mkdir_err);
         send_all(sock, error);
+        payload_log("[RAR] ERROR: temp dir create failed: %s", mkdir_err);
         return;
     }
 
     /* Receive RAR file to temp */
-    char *temp_path = receive_rar_to_temp(sock, (size_t)file_size, temp_dir);
+    char *temp_path = receive_rar_to_temp(sock, file_size, temp_dir);
     if (!temp_path) {
         const char *error = "ERROR: Failed to receive RAR file\n";
         send_all(sock, error);
+        payload_log("[RAR] ERROR: failed to receive RAR file (dest=%s size=%llu)", dest_path, file_size);
         return;
     }
 
@@ -587,12 +671,14 @@ void handle_upload_rar(int sock, const char *args, UnrarMode mode) {
         const char *error = "ERROR: Duplicate extraction request\n";
         send_all(sock, error);
         free(temp_path);
+        payload_log("[RAR] ERROR: duplicate extraction request dest=%s temp=%s", dest_path, temp_path);
         return;
     }
     if (queue_id < 0) {
         const char *error = "ERROR: Failed to queue extraction\n";
         send_all(sock, error);
         free(temp_path);
+        payload_log("[RAR] ERROR: failed to queue extraction dest=%s temp=%s", dest_path, temp_path);
         return;
     }
     free(temp_path);

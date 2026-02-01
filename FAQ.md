@@ -95,6 +95,13 @@ Update to **v1.3.6** or newer. We bundle Noto fonts so Hindi/Bengali/Thai/Korean
 - **Auto-tune** adjusts packing and pacing during upload; it may enable Optimize for small-file batches.
 - Archives aren’t scanned.
 
+### Bottleneck & Tuning
+**Q: What does the Bottleneck indicator mean?**  
+It’s a best‑guess of what’s limiting speed right now: network, payload CPU, payload disk write, or the client side. It updates as conditions change, so a flip between “Network” and “Payload disk write” during heavy uploads is normal.
+
+**Q: What are “Suggested pack / pace / rate”?**  
+These are payload‑side recommendations to keep transfers stable. When auto‑tune is enabled, the client will follow them. When auto‑tune is off, the client still applies safety‑only limits to avoid overload.
+
 ### Resume Mode
 Modes:
 - **Fastest** (size only)

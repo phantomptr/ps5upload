@@ -12,6 +12,8 @@ New UI highlights:
 - Built-in quick scan + optimize options for large folders.
 - Unified Queues area with upload/extraction tabs, progress, and status.
 - Extraction queue with progress, metadata, and cover art where available.
+- New metrics panels (System, Network, Queue, Transfer, Tuning) with a live bottleneck indicator.
+- Payload tuning suggestions (pack size, pacing, rate) surfaced during transfers.
 - Progress UI with ETA, average speed, elapsed time, and last update.
 - Upload queue item info popup with per-item transfer parameters.
 - Smoother transfer/extraction updates and less spiky speed readout.
@@ -22,6 +24,7 @@ New UI highlights:
 - Extraction Stop retries automatically; progress messaging now shows “Starting extraction…” before bytes appear.
 - History resume workflow with 4 resume tiers (size-only, thresholded hash, full SHA256).
 - Auto-tune adapts pack size/pacing and may enable Optimize for small-file batches.
+- Uploads and archives now accept folder names with spaces, tabs, and brackets.
 - Log level filtering with color-coded badges in the Logs panel.
 - FAQ tab with an embedded, scrollable help panel.
 - Manage “Reset UI” action for quick recovery from stuck states.

@@ -24,6 +24,13 @@ Look at your TV. You should see a notification bubble:
 
 Once you see that, you can open the PS5 Upload desktop app on your PC and connect.
 
+## Debugger Payload (Optional)
+For deep crash/performance diagnostics, you can also send `ps5uploaddebugger.elf` **alongside** the main payload.
+It continuously captures payload status snapshots and tails crash/log files into a structured session folder under:
+`/data/ps5upload/debug/session_<timestamp>_pid<id>/`.
+
+You can pull these logs over FTP using `scripts/pull_ps5_debug.py` from the repo root.
+
 ## For Developers: Building
 
 If you want to modify the C code or compile it yourself, you need the [PS5 Payload SDK](https://github.com/ps5-payload-dev/sdk).

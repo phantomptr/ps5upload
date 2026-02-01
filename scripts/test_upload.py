@@ -54,7 +54,8 @@ def main():
         return
 
     # Handshake
-    cmd = f"UPLOAD_V2 {args.dest} DIRECT\n"
+    escaped = args.dest.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
+    cmd = f"UPLOAD_V2 \"{escaped}\" DIRECT\n"
     print(f"Sending command: {cmd.strip()}")
     sock.sendall(cmd.encode('utf-8'))
 
