@@ -48,7 +48,7 @@ const WRITE_CHUNK_SIZE = 512 * 1024; // 512KB
 const MAGIC_FTX1 = 0x31585446;
 
 let sleepBlockerId = null;
-const VERSION = '1.3.10';
+const VERSION = '1.3.11';
 const IS_WINDOWS = process.platform === 'win32';
 
 function beginManageOperation(op) {
@@ -64,9 +64,14 @@ function emitManageDone(payload) {
 
 const FrameType = {
   Pack: 4,
+  PackAck: 5,
   PackLz4: 8,
   PackZstd: 9,
   PackLzma: 10,
+  PackV3: 11,
+  PackLz4V3: 12,
+  PackZstdV3: 13,
+  PackLzmaV3: 14,
   Finish: 6,
   Error: 7,
 };
@@ -656,6 +661,8 @@ const state = {
   manageListCache: { path: '', entries: [], error: null, updated_at_ms: 0 },
   saveLogs: false,
   uiLogEnabled: true,
+  scanCache: null,
+  scanInProgressKey: null,
 };
 
 
@@ -853,6 +860,7 @@ function writeAllRetry(socket, data, cancel, log = () => {}) {
     let offset = 0;
     let drainWaitStart = null;
     let drainLogInterval = null;
+    let drainNotified = false;
     let finished = false;
 
     const cleanup = () => {
@@ -898,6 +906,7 @@ function writeAllRetry(socket, data, cancel, log = () => {}) {
           drainLogInterval = null;
         }
         drainWaitStart = null;
+        drainNotified = false;
       }
 
       while (offset < data.length) {
@@ -907,13 +916,17 @@ function writeAllRetry(socket, data, cancel, log = () => {}) {
         offset = end;
         if (!ok) { // Buffer full, wait for 'drain'
           drainWaitStart = Date.now();
-          // Log every 30 seconds while waiting for drain
+          if (!drainNotified) {
+            drainNotified = true;
+            log('[debug] Waiting for server to catch up...');
+          }
+          // Log every 120 seconds while waiting for drain
           drainLogInterval = setInterval(() => {
             if (drainWaitStart) {
               const waited = Math.floor((Date.now() - drainWaitStart) / 1000);
-              log(`Waiting for server to catch up... (${waited}s)`);
+              log(`[debug] Waiting for server to catch up... (${waited}s)`);
             }
-          }, 30000);
+          }, 120000);
           socket.once('drain', writeLoop);
           return;
         }
@@ -1826,6 +1839,32 @@ async function historyGet(ip, port) {
   return sendCommandExpectPayload(ip, port, 'HISTORY_GET\n');
 }
 
+async function requestPayloadShutdown(ip, port) {
+  try {
+    const socket = await createSocketWithTimeout(ip, port, 2000);
+    socket.setTimeout(2000);
+    return await new Promise((resolve) => {
+      let data = Buffer.alloc(0);
+      socket.on('timeout', () => {
+        socket.destroy();
+        resolve(false);
+      });
+      socket.on('error', () => resolve(false));
+      socket.on('data', (chunk) => {
+        data = Buffer.concat([data, chunk]);
+        if (data.toString('utf8').includes('\n')) {
+          const line = data.toString('utf8').trim();
+          socket.destroy();
+          resolve(line.startsWith('OK'));
+        }
+      });
+      socket.write('SHUTDOWN\n');
+    });
+  } catch {
+    return false;
+  }
+}
+
 async function uploadV2Init(ip, port, destPath, useTemp, opts = {}, signal) {
   const socket = await createSocketWithTimeout(ip, port);
   const mode = useTemp ? 'TEMP' : 'DIRECT';
@@ -1885,6 +1924,68 @@ async function uploadV2Init(ip, port, destPath, useTemp, opts = {}, signal) {
     }
 
     socket.write(`UPLOAD_V2 ${escapeCommandPath(destPath)} ${mode}${flagStr}\n`);
+  });
+}
+
+async function uploadV3Init(ip, port, destPath, useTemp, opts = {}, signal) {
+  const socket = await createSocketWithTimeout(ip, port);
+  const mode = useTemp ? 'TEMP' : 'DIRECT';
+  tuneUploadSocket(socket);
+  const flags = [];
+  const {
+    optimize_upload = false,
+    chmod_after_upload = false,
+  } = opts;
+  if (optimize_upload || chmod_after_upload) {
+    flags.push('NOCHMOD');
+  }
+  if (chmod_after_upload) {
+    flags.push('CHMOD_END');
+  }
+  const flagStr = flags.length ? ` ${flags.join(' ')}` : '';
+
+  return new Promise((resolve, reject) => {
+    let data = Buffer.alloc(0);
+
+    socket.setTimeout(READ_TIMEOUT_MS);
+    socket.on('timeout', () => {
+      socket.destroy();
+      reject(new Error('Read timed out'));
+    });
+
+    const onAbort = () => {
+      socket.destroy();
+      reject(new Error('Cancelled'));
+    };
+
+    const onData = (chunk) => {
+      data = Buffer.concat([data, chunk]);
+      const response = data.toString('utf8').trim();
+      if (response === 'READY') {
+        socket.removeListener('data', onData);
+        socket.setTimeout(0);
+        if (signal) {
+          signal.removeEventListener('abort', onAbort);
+        }
+        resolve(socket);
+      } else if (response.length > 0 && !response.startsWith('READY')) {
+        socket.destroy();
+        reject(new Error(`Server rejected V3 upload: ${response}`));
+      }
+    };
+
+    socket.on('data', onData);
+    socket.on('error', (err) => reject(err));
+
+    if (signal) {
+      if (signal.aborted) {
+        onAbort();
+        return;
+      }
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+
+    socket.write(`UPLOAD_V3 ${escapeCommandPath(destPath)} ${mode}${flagStr}\n`);
   });
 }
 
@@ -2237,6 +2338,330 @@ async function sendFrameHeader(socket, frameType, length, cancel, log = () => {}
   header.writeUInt32LE(frameType, 4);
   header.writeBigUInt64LE(BigInt(length), 8);
   await writeAllRetry(socket, header, cancel, log);
+}
+
+async function sendPackPayload(socket, frameType, payload, cancel, log) {
+  await sendFrameHeader(socket, frameType, payload.length, cancel, log);
+  await writeAllRetry(socket, payload, cancel, log);
+}
+
+async function sendFilesV3(files, socketRef, options = {}) {
+  const {
+    cancel = { value: false },
+    progress = () => {},
+    log = () => {},
+    compression = 'none',
+    rateLimitBps = null,
+    packLimitBytes = PACK_BUFFER_SIZE,
+    streamChunkBytes = SEND_CHUNK_SIZE,
+    deprioritize = false,
+    getPackLimit,
+    getPaceDelayMs,
+    getRateLimitBps,
+    reconnect,
+    maxInflight = 4,
+    maxRetries = 10,
+  } = options;
+
+  let totalSentBytes = 0n;
+  let totalSentFiles = 0;
+  const startTime = Date.now();
+  let limiter = new RateLimiter(rateLimitBps);
+  const packLimitFn = typeof getPackLimit === 'function'
+    ? getPackLimit
+    : () => packLimitBytes;
+  const paceDelayFn = typeof getPaceDelayMs === 'function'
+    ? getPaceDelayMs
+    : () => 0;
+  const rateLimitFn = typeof getRateLimitBps === 'function'
+    ? getRateLimitBps
+    : () => rateLimitBps;
+
+  const inflight = new Map();
+  let packId = 1;
+  let retries = 0;
+  let responseBuffer = Buffer.alloc(0);
+  let ackBuffer = Buffer.alloc(0);
+  let ackWaiterResolve = null;
+
+  const applyAdaptiveRate = () => {
+    const nextLimit = rateLimitFn();
+    if (typeof limiter.setLimitBps === 'function') {
+      limiter.setLimitBps(nextLimit);
+    } else {
+      limiter.limitBps = nextLimit;
+    }
+  };
+
+  const maybePace = async () => {
+    const delayMs = await paceDelayFn();
+    if (delayMs > 0) {
+      await sleepMs(delayMs);
+    }
+  };
+
+  const waitForAck = () => new Promise((resolve) => {
+    ackWaiterResolve = resolve;
+  });
+
+  const onAck = (ackId) => {
+    if (inflight.has(ackId)) {
+      inflight.delete(ackId);
+    }
+    if (ackWaiterResolve && inflight.size < maxInflight) {
+      const resolve = ackWaiterResolve;
+      ackWaiterResolve = null;
+      resolve();
+    }
+  };
+
+  const attachAckReader = (socket) => {
+    const onData = (chunk) => {
+      ackBuffer = Buffer.concat([ackBuffer, chunk]);
+      while (ackBuffer.length >= 16) {
+        const magic = ackBuffer.readUInt32LE(0);
+        if (magic !== MAGIC_FTX1) {
+          responseBuffer = Buffer.concat([responseBuffer, ackBuffer]);
+          ackBuffer = Buffer.alloc(0);
+          return;
+        }
+        const type = ackBuffer.readUInt32LE(4);
+        const bodyLen = Number(ackBuffer.readBigUInt64LE(8));
+        if (ackBuffer.length < 16 + bodyLen) return;
+        const body = ackBuffer.subarray(16, 16 + bodyLen);
+        ackBuffer = ackBuffer.subarray(16 + bodyLen);
+        if (type === FrameType.PackAck && bodyLen >= 8) {
+          const ackId = Number(body.readBigUInt64LE(0));
+          onAck(ackId);
+        } else {
+          responseBuffer = Buffer.concat([responseBuffer, body]);
+        }
+      }
+    };
+    socket.on('data', onData);
+    return () => socket.off('data', onData);
+  };
+
+  let detachAckReader = attachAckReader(socketRef.current);
+
+  const resendInflight = async () => {
+    const entries = Array.from(inflight.entries()).sort((a, b) => a[0] - b[0]);
+    for (const [, entry] of entries) {
+      await sendPackPayload(socketRef.current, entry.frameType, entry.payload, cancel, log);
+      limiter.throttle(entry.payload.length);
+    }
+  };
+
+  const handleReconnect = async () => {
+    if (!reconnect) throw new Error('Reconnect not available');
+    retries += 1;
+    if (retries > maxRetries) throw new Error('Upload retry limit reached');
+    try {
+      socketRef.current.destroy();
+    } catch {}
+    socketRef.current = await reconnect();
+    detachAckReader();
+    detachAckReader = attachAckReader(socketRef.current);
+    await resendInflight();
+  };
+
+  let packBuffer = Buffer.alloc(12); // PackId (8) + Record count (4)
+  let packBytesAdded = 0n;
+  let packFilesAdded = 0;
+  let recordCount = 0;
+
+  const flushPack = async (lastFile = false) => {
+    if (recordCount === 0 && !lastFile) return;
+
+    packBuffer.writeBigUInt64LE(BigInt(packId), 0);
+    packBuffer.writeUInt32LE(recordCount, 8);
+
+    let frameType = FrameType.PackV3;
+    let payload = packBuffer;
+
+    if (compression !== 'none') {
+      log(`Compressing pack (${compression})...`);
+      let compressed;
+      try {
+        if (compression === 'lz4') {
+          if (!lz4) throw new Error('lz4 module unavailable');
+          compressed = lz4.encode(packBuffer);
+          frameType = FrameType.PackLz4V3;
+        } else if (compression === 'zstd') {
+          if (!fzstd) throw new Error('fzstd module unavailable');
+          compressed = fzstd.compress(packBuffer);
+          frameType = FrameType.PackZstdV3;
+        } else if (compression === 'lzma') {
+          if (!lzma) throw new Error('lzma-native module unavailable');
+          compressed = await lzma.compress(packBuffer);
+          frameType = FrameType.PackLzmaV3;
+        }
+      } catch (e) {
+        log(`Compression failed (${compression}): ${e.message}. Sending uncompressed.`);
+        compressed = null;
+        frameType = FrameType.PackV3;
+      }
+
+      if (compressed && compressed.length < packBuffer.length) {
+        if (compression === 'zstd' || compression === 'lzma') {
+          const originalSizeBuf = Buffer.alloc(4);
+          originalSizeBuf.writeUInt32LE(packBuffer.length, 0);
+          payload = Buffer.concat([originalSizeBuf, compressed]);
+        } else {
+          payload = compressed;
+        }
+      } else {
+        log(`Compressed size was larger or equal for ${compression}. Sending uncompressed.`);
+        frameType = FrameType.PackV3;
+      }
+    }
+
+    const currentPackId = packId;
+    const entry = { payload, frameType, bytes: packBytesAdded, files: packFilesAdded };
+    inflight.set(currentPackId, entry);
+
+    applyAdaptiveRate();
+    try {
+      await sendPackPayload(socketRef.current, frameType, payload, cancel, log);
+    } catch (err) {
+      await handleReconnect();
+      await sendPackPayload(socketRef.current, frameType, payload, cancel, log);
+    }
+
+    limiter.throttle(payload.length);
+    if (deprioritize) {
+      await manageDeprioritize();
+    }
+    await maybePace();
+
+    totalSentBytes += packBytesAdded;
+    totalSentFiles += packFilesAdded;
+    packId += 1;
+
+    const elapsed = (Date.now() - startTime) / 1000;
+    progress(Number(totalSentBytes), totalSentFiles, elapsed, null);
+
+    packBuffer = Buffer.alloc(12);
+    packBytesAdded = 0n;
+    packFilesAdded = 0;
+    recordCount = 0;
+
+    while (inflight.size >= maxInflight) {
+      await waitForAck();
+    }
+  };
+
+  const addRecord = (relPathBytes, data) => {
+    const recordHeader = Buffer.alloc(2 + relPathBytes.length + 8);
+    recordHeader.writeUInt16LE(relPathBytes.length, 0);
+    relPathBytes.copy(recordHeader, 2);
+    recordHeader.writeBigUInt64LE(BigInt(data.length), 2 + relPathBytes.length);
+
+    packBuffer = Buffer.concat([packBuffer, recordHeader, data]);
+    packBytesAdded += BigInt(data.length);
+    recordCount++;
+  };
+
+  const logEachFile = files.length <= 10000;
+  const logInterval = logEachFile ? 1 : Math.max(250, Math.floor(files.length / 200));
+  const TINY_FILE_THRESHOLD = 64 * 1024;
+
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    if (cancel.value) {
+      throw new Error('Upload cancelled by user');
+    }
+
+    if (logEachFile || i % logInterval === 0) {
+      log(logEachFile ? `Packing: ${file.rel_path}` : `Packing... ${i + 1}/${files.length}`);
+    }
+
+    const relPathBytes = Buffer.from(file.rel_path, 'utf8');
+
+    if (file.size < TINY_FILE_THRESHOLD) {
+      const data = await fs.promises.readFile(file.abs_path);
+      const overhead = 2 + relPathBytes.length + 8;
+      const packLimit = clamp(packLimitFn(), PACK_BUFFER_MIN, PACK_BUFFER_SIZE);
+      if (packLimit - packBuffer.length <= overhead + data.length) {
+        await flushPack();
+      }
+      addRecord(relPathBytes, data);
+      packFilesAdded++;
+      const elapsed = (Date.now() - startTime) / 1000;
+      progress(Number(totalSentBytes) + Number(packBytesAdded), totalSentFiles + packFilesAdded, elapsed, file.rel_path);
+      continue;
+    }
+
+    let sawData = false;
+    const stream = fs.createReadStream(file.abs_path, { highWaterMark: streamChunkBytes });
+
+    for await (const chunk of stream) {
+      if (cancel.value) {
+        stream.destroy();
+        throw new Error('Upload cancelled by user');
+      }
+
+      sawData = true;
+      let offset = 0;
+
+      while (offset < chunk.length) {
+        const overhead = 2 + relPathBytes.length + 8;
+        const packLimit = clamp(packLimitFn(), PACK_BUFFER_MIN, PACK_BUFFER_SIZE);
+        const remaining = packLimit - packBuffer.length;
+
+        if (remaining <= overhead) {
+          await flushPack();
+          continue;
+        }
+
+        const maxData = remaining - overhead;
+        const sliceLen = Math.min(maxData, chunk.length - offset);
+        const dataSlice = sliceLen === chunk.length ? chunk : chunk.slice(offset, offset + sliceLen);
+
+        addRecord(relPathBytes, dataSlice);
+        offset += sliceLen;
+
+        const elapsed = (Date.now() - startTime) / 1000;
+        progress(Number(totalSentBytes) + Number(packBytesAdded), totalSentFiles + packFilesAdded, elapsed, file.rel_path);
+        if (deprioritize) {
+          await manageDeprioritize();
+        }
+        await maybePace();
+      }
+    }
+
+    if (!sawData) {
+      const overhead = 2 + relPathBytes.length + 8;
+      const packLimit = clamp(packLimitFn(), PACK_BUFFER_MIN, PACK_BUFFER_SIZE);
+      if (packLimit - packBuffer.length <= overhead) {
+        await flushPack();
+      }
+      addRecord(relPathBytes, Buffer.alloc(0));
+    }
+
+    packFilesAdded++;
+
+    const elapsed = (Date.now() - startTime) / 1000;
+    progress(Number(totalSentBytes) + Number(packBytesAdded), totalSentFiles + packFilesAdded, elapsed, file.rel_path);
+  }
+
+  if (recordCount > 0) {
+    await flushPack(true);
+  }
+
+  while (inflight.size > 0) {
+    await waitForAck();
+  }
+
+  await sendFrameHeader(socketRef.current, FrameType.Finish, 0, cancel, log);
+  limiter.throttle(16);
+
+  if (ackBuffer.length > 0) {
+    responseBuffer = Buffer.concat([responseBuffer, ackBuffer]);
+    ackBuffer = Buffer.alloc(0);
+  }
+  detachAckReader();
+  return { files: totalSentFiles, bytes: Number(totalSentBytes), responseBuffer };
 }
 
 function createAdaptiveUploadTuner({ ip, basePackLimit, baseChunkSize, userRateLimitBps, log, runId, allowPayloadTune }) {
@@ -2633,10 +3058,10 @@ async function sendFilesV2(files, socket, options = {}) {
   return { files: totalSentFiles, bytes: Number(totalSentBytes) };
 }
 
-async function readUploadResponse(socket, cancel = { value: false }) {
+async function readUploadResponse(socket, cancel = { value: false }, initialData = null) {
   const MAX_RESPONSE_SIZE = 1024 * 1024; // 1MB limit
   return new Promise((resolve, reject) => {
-    let data = Buffer.alloc(0);
+    let data = initialData && initialData.length ? Buffer.from(initialData) : Buffer.alloc(0);
     let resolved = false;
 
     const cleanup = () => {
@@ -3269,7 +3694,8 @@ function startPayloadPoller() {
   }, 1000);
 }
 
-async function tryAutoReloadPayload() {
+async function tryAutoReloadPayload(options = {}) {
+  const { force = false, reason = '' } = options || {};
   if (!state.payloadAutoReloadEnabled || !state.payloadIp) return;
   if (payloadAutoReloadInFlight) return;
   const now = Date.now();
@@ -3280,12 +3706,17 @@ async function tryAutoReloadPayload() {
   emit('payload_busy', { busy: true });
 
   try {
-    try {
-      await getPayloadVersion(state.payloadIp, TRANSFER_PORT);
-      emit('payload_busy', { busy: false });
-      return;
-    } catch {
-      // not running; continue to reload
+    if (!force) {
+      try {
+        await getPayloadVersion(state.payloadIp, TRANSFER_PORT);
+        emit('payload_busy', { busy: false });
+        return;
+      } catch {
+        // not running; continue to reload
+      }
+    } else {
+      emit('payload_log', { message: `Auto reload forced${reason ? ` (${reason})` : ''}.` });
+      await requestPayloadShutdown(state.payloadIp, TRANSFER_PORT);
     }
 
     const portOpen = await checkPort(state.payloadIp, PAYLOAD_PORT);
@@ -3340,6 +3771,12 @@ async function tryAutoReloadPayload() {
     emit('payload_busy', { busy: false });
     payloadAutoReloadInFlight = false;
   }
+}
+
+async function triggerPayloadRecovery(reason) {
+  if (!state.payloadAutoReloadEnabled || !state.payloadIp) return;
+  emit('payload_log', { message: `Payload recovery: ${reason}` });
+  await tryAutoReloadPayload({ force: true, reason });
 }
 
 function startConnectionPoller() {
@@ -4578,18 +5015,42 @@ function registerIpcHandlers() {
             throw new Error('Upload cancelled by user');
           }
 
-          const socket = await uploadV2Init(ip, TRANSFER_PORT, batch.dest, false);
-          await sendFilesV2(batch.files, socket, {
-            cancel: { get value() { return state.manageCancel; } },
-            deprioritize: true,
-            progress: (sent) => {
-              emit('manage_progress', { op: 'Upload', processed: processedBase + sent, total: totalBytes, current_file: null });
-            },
-            log: (msg) => emit('manage_log', { message: msg }),
-          });
+          let socket = null;
+          let useV3 = true;
+          try {
+            socket = await uploadV3Init(ip, TRANSFER_PORT, batch.dest, false);
+          } catch (err) {
+            emit('manage_log', { message: `Upload V3 unavailable, falling back to V2: ${err.message || err}` });
+            useV3 = false;
+            socket = await uploadV2Init(ip, TRANSFER_PORT, batch.dest, false);
+          }
 
-          const response = await readUploadResponse(socket);
-          parseUploadResponse(response);
+          if (useV3) {
+            const socketRef = { current: socket };
+            const result = await sendFilesV3(batch.files, socketRef, {
+              cancel: { get value() { return state.manageCancel; } },
+              deprioritize: true,
+              progress: (sent) => {
+                emit('manage_progress', { op: 'Upload', processed: processedBase + sent, total: totalBytes, current_file: null });
+              },
+              log: (msg) => emit('manage_log', { message: msg }),
+              reconnect: async () => uploadV3Init(ip, TRANSFER_PORT, batch.dest, false),
+            });
+            const response = await readUploadResponse(socketRef.current, { value: false }, result.responseBuffer);
+            parseUploadResponse(response);
+          } else {
+            await sendFilesV2(batch.files, socket, {
+              cancel: { get value() { return state.manageCancel; } },
+              deprioritize: true,
+              progress: (sent) => {
+                emit('manage_progress', { op: 'Upload', processed: processedBase + sent, total: totalBytes, current_file: null });
+              },
+              log: (msg) => emit('manage_log', { message: msg }),
+            });
+
+            const response = await readUploadResponse(socket);
+            parseUploadResponse(response);
+          }
           processedBase += batch.batchBytes;
           emit('manage_progress', { op: 'Upload', processed: processedBase, total: totalBytes, current_file: null });
         }
@@ -4649,7 +5110,7 @@ function registerIpcHandlers() {
 
   ipcMain.handle('transfer_scan', async (_, args) => {
     state.scanCancel = false;
-    
+    const cacheWindowMs = 60000;
     try {
       const sourcePath = typeof args === 'string' ? args : args?.source_path;
       const maxMs = typeof args?.max_ms === 'number' ? args.max_ms : 8000;
@@ -4659,6 +5120,17 @@ function registerIpcHandlers() {
       if (!sourcePath || !String(sourcePath).trim()) {
         throw new Error('Source path is required.');
       }
+      const scanKey = JSON.stringify({ sourcePath, maxMs, maxFiles, quickCount, sampleLimit });
+      const now = Date.now();
+      if (state.scanInProgressKey === scanKey) {
+        return { deduped: true };
+      }
+      if (state.scanCache && state.scanCache.key === scanKey && (now - state.scanCache.completed_at) < cacheWindowMs) {
+        const cached = state.scanCache.result;
+        emit('scan_complete', cached);
+        return cached;
+      }
+      state.scanInProgressKey = scanKey;
 
       let stat;
       try {
@@ -4827,11 +5299,15 @@ function registerIpcHandlers() {
         }
       });
 
-      emit('scan_complete', { files, total: totalSize, partial, reason, elapsed_ms: elapsedMs, estimated });
-      return { files, total: totalSize, partial, reason, elapsed_ms: elapsedMs, estimated };
+      const result = { files, total: totalSize, partial, reason, elapsed_ms: elapsedMs, estimated };
+      state.scanCache = { key: scanKey, result, completed_at: Date.now() };
+      emit('scan_complete', result);
+      return result;
     } catch (err) {
       emit('scan_error', { message: err.message });
       throw err;
+    } finally {
+      state.scanInProgressKey = null;
     }
   });
 
@@ -5130,17 +5606,35 @@ function registerIpcHandlers() {
           state.transferLastUpdate = Date.now();
           emitLog('Connecting upload socket...');
 
-          const socket = await uploadV2Init(
-            req.ip,
-            TRANSFER_PORT,
-            req.dest_path,
-            req.use_temp,
-            {
-              optimize_upload: effectiveOptimize,
-              chmod_after_upload: req.chmod_after_upload,
-            },
-            transferAbort.signal
-          );
+          let socket = null;
+          let useV3 = true;
+          try {
+            socket = await uploadV3Init(
+              req.ip,
+              TRANSFER_PORT,
+              req.dest_path,
+              req.use_temp,
+              {
+                optimize_upload: effectiveOptimize,
+                chmod_after_upload: req.chmod_after_upload,
+              },
+              transferAbort.signal
+            );
+          } catch (err) {
+            emitLog(`Upload V3 unavailable, falling back to V2: ${err.message || err}`);
+            useV3 = false;
+            socket = await uploadV2Init(
+              req.ip,
+              TRANSFER_PORT,
+              req.dest_path,
+              req.use_temp,
+              {
+                optimize_upload: effectiveOptimize,
+                chmod_after_upload: req.chmod_after_upload,
+              },
+              transferAbort.signal
+            );
+          }
           emitLog('Upload socket READY.');
           state.transferSocket = socket;
           const rateLimitBps = req.bandwidth_limit_mbps ? req.bandwidth_limit_mbps * 1024 * 1024 / 8 : null; // Convert Mbps to Bps
@@ -5180,6 +5674,7 @@ function registerIpcHandlers() {
               state.transferLastUpdate = Date.now();
               emit('transfer_error', { run_id: runId, message: 'Payload stalled/idle' });
               state.transferActive = false;
+              triggerPayloadRecovery('payload stalled/idle').catch(() => {});
             }
           }, 5000);
           if (watchdog.unref) watchdog.unref();
@@ -5187,33 +5682,72 @@ function registerIpcHandlers() {
           let parsed;
           try {
             adaptiveTuner.start();
+            if (useV3) {
+              const socketRef = { current: socket };
+              const result = await sendFilesV3(filesToUpload, socketRef, {
+                cancel: { get value() { return state.transferCancel; } },
+                progress: (sent, filesSent, elapsed, currentFile) => {
+                  state.transferStatus = {
+                    run_id: runId,
+                    status: 'Uploading',
+                    sent,
+                    total: totalSize,
+                    files: filesSent,
+                    elapsed_secs: elapsed,
+                    current_file: currentFile || '',
+                  };
+                  state.transferLastUpdate = Date.now();
+                },
+                log: emitLog,
+                compression: effectiveCompression,
+                rateLimitBps: rateLimitBps,
+                packLimitBytes: basePackLimit,
+                streamChunkBytes: baseChunkSize,
+                getPackLimit: adaptiveTuner?.getPackLimit,
+                getPaceDelayMs: adaptiveTuner?.getPaceDelayMs,
+                getRateLimitBps: adaptiveTuner?.getRateLimitBps,
+                reconnect: async () => uploadV3Init(
+                  req.ip,
+                  TRANSFER_PORT,
+                  req.dest_path,
+                  req.use_temp,
+                  {
+                    optimize_upload: effectiveOptimize,
+                    chmod_after_upload: req.chmod_after_upload,
+                  },
+                  transferAbort.signal
+                ),
+              });
+              const response = await readUploadResponse(socketRef.current, { value: false }, result.responseBuffer);
+              parsed = parseUploadResponse(response);
+            } else {
+              await sendFilesV2(filesToUpload, socket, {
+                cancel: { get value() { return state.transferCancel; } },
+                progress: (sent, filesSent, elapsed, currentFile) => {
+                  state.transferStatus = {
+                    run_id: runId,
+                    status: 'Uploading',
+                    sent,
+                    total: totalSize,
+                    files: filesSent,
+                    elapsed_secs: elapsed,
+                    current_file: currentFile || '',
+                  };
+                  state.transferLastUpdate = Date.now();
+                },
+                log: emitLog,
+                compression: effectiveCompression,
+                rateLimitBps: rateLimitBps,
+                packLimitBytes: basePackLimit,
+                streamChunkBytes: baseChunkSize,
+                getPackLimit: adaptiveTuner?.getPackLimit,
+                getPaceDelayMs: adaptiveTuner?.getPaceDelayMs,
+                getRateLimitBps: adaptiveTuner?.getRateLimitBps,
+              });
 
-            await sendFilesV2(filesToUpload, socket, {
-              cancel: { get value() { return state.transferCancel; } },
-              progress: (sent, filesSent, elapsed, currentFile) => {
-                state.transferStatus = {
-                  run_id: runId,
-                  status: 'Uploading',
-                  sent,
-                  total: totalSize,
-                  files: filesSent,
-                  elapsed_secs: elapsed,
-                  current_file: currentFile || '',
-                };
-                state.transferLastUpdate = Date.now();
-              },
-              log: emitLog,
-              compression: effectiveCompression,
-              rateLimitBps: rateLimitBps,
-              packLimitBytes: basePackLimit,
-              streamChunkBytes: baseChunkSize,
-              getPackLimit: adaptiveTuner?.getPackLimit,
-              getPaceDelayMs: adaptiveTuner?.getPaceDelayMs,
-              getRateLimitBps: adaptiveTuner?.getRateLimitBps,
-            });
-
-            const response = await readUploadResponse(socket);
-            parsed = parseUploadResponse(response);
+              const response = await readUploadResponse(socket);
+              parsed = parseUploadResponse(response);
+            }
           } finally {
             adaptiveTuner.stop();
           }

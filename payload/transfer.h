@@ -37,6 +37,7 @@ void upload_session_stats(UploadSession *session, int *files, unsigned long long
 
 // Legacy blocking handler for compatibility
 void handle_upload_v2(int client_sock, const char *dest_root, int use_temp, int chmod_each_file, int chmod_final);
+void handle_upload_v3(int client_sock, const char *dest_root, int use_temp, int chmod_each_file, int chmod_final);
 
 void transfer_cleanup(void);
 int transfer_idle_cleanup(void);

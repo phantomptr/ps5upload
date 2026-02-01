@@ -49,6 +49,8 @@ typedef struct {
     uint8_t *data; // Malloc'd data for the file
     size_t len;
     int chmod_mode; // Mode to apply after write
+    uint64_t pack_id;
+    uint64_t session_id;
 } FileWriteJob;
 
 // New queue for batching small file writes
@@ -77,6 +79,8 @@ typedef struct UploadSession {
     uint64_t session_id;
     int chmod_each_file;
     int chmod_final;
+    int ack_enabled;
+    int client_sock;
 } UploadSession;
 
 typedef struct PackJob {
@@ -84,6 +88,8 @@ typedef struct PackJob {
     size_t len;
     char dest_root[PATH_MAX];
     uint64_t session_id;
+    uint64_t pack_id;
+    uint32_t frame_type;
     int is_close;
     uint8_t chmod_each_file;
 } PackJob;
@@ -116,6 +122,115 @@ static volatile unsigned long long g_upload_bytes_recv = 0;
 static atomic_ullong g_upload_bytes_written = 0;
 static atomic_ullong g_backpressure_events = 0;
 static atomic_ullong g_backpressure_wait_ms = 0;
+
+#define MAX_ACK_SESSIONS 4
+#define MAX_PACK_ACKS 512
+typedef struct {
+    uint64_t session_id;
+    int sock;
+    int active;
+} AckSession;
+
+typedef struct {
+    uint64_t session_id;
+    uint64_t pack_id;
+    uint32_t remaining;
+    int active;
+} PackAckState;
+
+static AckSession g_ack_sessions[MAX_ACK_SESSIONS];
+static PackAckState g_pack_acks[MAX_PACK_ACKS];
+static pthread_mutex_t g_ack_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+static void register_ack_session(uint64_t session_id, int sock) {
+    pthread_mutex_lock(&g_ack_mutex);
+    for (int i = 0; i < MAX_ACK_SESSIONS; i++) {
+        if (!g_ack_sessions[i].active) {
+            g_ack_sessions[i].session_id = session_id;
+            g_ack_sessions[i].sock = sock;
+            g_ack_sessions[i].active = 1;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_ack_mutex);
+}
+
+static void unregister_ack_session(uint64_t session_id) {
+    pthread_mutex_lock(&g_ack_mutex);
+    for (int i = 0; i < MAX_ACK_SESSIONS; i++) {
+        if (g_ack_sessions[i].active && g_ack_sessions[i].session_id == session_id) {
+            g_ack_sessions[i].active = 0;
+            g_ack_sessions[i].sock = -1;
+            break;
+        }
+    }
+    for (int i = 0; i < MAX_PACK_ACKS; i++) {
+        if (g_pack_acks[i].active && g_pack_acks[i].session_id == session_id) {
+            g_pack_acks[i].active = 0;
+        }
+    }
+    pthread_mutex_unlock(&g_ack_mutex);
+}
+
+static void send_pack_ack(uint64_t session_id, uint64_t pack_id) {
+    pthread_mutex_lock(&g_ack_mutex);
+    for (int i = 0; i < MAX_ACK_SESSIONS; i++) {
+        if (g_ack_sessions[i].active && g_ack_sessions[i].session_id == session_id) {
+            struct FrameHeader hdr;
+            hdr.magic = MAGIC_FTX1;
+            hdr.type = FRAME_PACK_ACK;
+            hdr.body_len = 8;
+            uint8_t payload[8];
+            memcpy(payload, &pack_id, 8);
+            send(g_ack_sessions[i].sock, &hdr, sizeof(hdr), 0);
+            send(g_ack_sessions[i].sock, payload, sizeof(payload), 0);
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_ack_mutex);
+}
+
+static void pack_ack_register(uint64_t session_id, uint64_t pack_id, uint32_t remaining) {
+    if (pack_id == 0) return;
+    if (remaining == 0) {
+        send_pack_ack(session_id, pack_id);
+        return;
+    }
+    pthread_mutex_lock(&g_ack_mutex);
+    for (int i = 0; i < MAX_PACK_ACKS; i++) {
+        if (!g_pack_acks[i].active) {
+            g_pack_acks[i].active = 1;
+            g_pack_acks[i].session_id = session_id;
+            g_pack_acks[i].pack_id = pack_id;
+            g_pack_acks[i].remaining = remaining;
+            pthread_mutex_unlock(&g_ack_mutex);
+            return;
+        }
+    }
+    pthread_mutex_unlock(&g_ack_mutex);
+}
+
+static void pack_ack_complete(uint64_t session_id, uint64_t pack_id) {
+    if (pack_id == 0) return;
+    pthread_mutex_lock(&g_ack_mutex);
+    for (int i = 0; i < MAX_PACK_ACKS; i++) {
+        if (g_pack_acks[i].active &&
+            g_pack_acks[i].session_id == session_id &&
+            g_pack_acks[i].pack_id == pack_id) {
+            if (g_pack_acks[i].remaining > 0) {
+                g_pack_acks[i].remaining -= 1;
+            }
+            if (g_pack_acks[i].remaining == 0) {
+                g_pack_acks[i].active = 0;
+                pthread_mutex_unlock(&g_ack_mutex);
+                send_pack_ack(session_id, pack_id);
+                return;
+            }
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_ack_mutex);
+}
 
 static uint8_t *alloc_pack_buffer(size_t size) {
     if (size > PACK_BUFFER_SIZE) {
@@ -159,13 +274,13 @@ static int decompress_pack_body(uint32_t frame_type, uint8_t **body, size_t *bod
     uint8_t *out = alloc_pack_buffer(raw_len);
     if (!out) return -1;
     int ok = 0;
-    if (frame_type == FRAME_PACK_LZ4) {
+    if (frame_type == FRAME_PACK_LZ4 || frame_type == FRAME_PACK_LZ4_V3) {
         int decoded = LZ4_decompress_safe((const char *)(*body) + 4, (char *)out, (int)(*body_len - 4), (int)raw_len);
         ok = (decoded >= 0 && (uint32_t)decoded == raw_len);
-    } else if (frame_type == FRAME_PACK_ZSTD) {
+    } else if (frame_type == FRAME_PACK_ZSTD || frame_type == FRAME_PACK_ZSTD_V3) {
         size_t decoded = ZSTD_decompress(out, raw_len, *body + 4, *body_len - 4);
         ok = !ZSTD_isError(decoded) && decoded == raw_len;
-    } else if (frame_type == FRAME_PACK_LZMA) {
+    } else if (frame_type == FRAME_PACK_LZMA || frame_type == FRAME_PACK_LZMA_V3) {
         if (*body_len < 17) { free_pack_buffer(out); return -1; }
         SizeT dest_len = (SizeT)raw_len;
         SizeT src_len = (SizeT)(*body_len - 17);
@@ -206,7 +321,7 @@ static void queue_destroy(PackQueue *q) {
     pthread_mutex_destroy(&q->mutex);
 }
 
-static int pack_queue_push(PackQueue *q, uint8_t *data, size_t len, const char *dest_root, uint64_t session_id, int is_close, int chmod_each_file) {
+static int pack_queue_push(PackQueue *q, uint8_t *data, size_t len, const char *dest_root, uint64_t session_id, uint32_t frame_type, int is_close, int chmod_each_file) {
     pthread_mutex_lock(&q->mutex);
     while (atomic_load(&q->count) >= PACK_QUEUE_DEPTH && !q->closed) {
         struct timeval wait_start;
@@ -232,7 +347,10 @@ static int pack_queue_push(PackQueue *q, uint8_t *data, size_t len, const char *
     PackJob *job = &q->jobs[q->write_idx];
     job->data = data; job->len = len; strncpy(job->dest_root, dest_root, PATH_MAX - 1);
     job->dest_root[PATH_MAX - 1] = '\0';
-    job->session_id = session_id; job->is_close = is_close; job->chmod_each_file = (uint8_t)(chmod_each_file ? 1 : 0);
+    job->session_id = session_id;
+    job->frame_type = frame_type;
+    job->is_close = is_close;
+    job->chmod_each_file = (uint8_t)(chmod_each_file ? 1 : 0);
     
     q->write_idx = (q->write_idx + 1) % PACK_QUEUE_DEPTH;
     atomic_fetch_add(&q->count, 1);
@@ -335,13 +453,16 @@ static void *file_writer_thread(void *arg) {
             if (fd >= 0) {
                 if (job->len > 0) write(fd, job->data, job->len);
                 close(fd);
-                if (job->len > 0) {
-                    atomic_fetch_add(&g_upload_bytes_written, (unsigned long long)job->len);
-                }
+            if (job->len > 0) {
+                atomic_fetch_add(&g_upload_bytes_written, (unsigned long long)job->len);
+            }
             } else {
                 printf("[FTX] Writer: Failed to open %s: %s\n", job->path, strerror(errno));
             }
             free(job->data);
+            if (job->pack_id != 0) {
+                pack_ack_complete(job->session_id, job->pack_id);
+            }
 
             // Update progress periodically during batch
             if ((i & 0xFF) == 0) {
@@ -372,9 +493,22 @@ static void *pack_processor_thread(void *arg) {
 
         size_t offset = 0;
         uint32_t record_count = 0;
-        if (job.len < 4) { free_pack_buffer(job.data); continue; }
-        memcpy(&record_count, job.data, 4);
-        offset += 4;
+        uint64_t pack_id = 0;
+        if (job.frame_type == FRAME_PACK_V3 ||
+            job.frame_type == FRAME_PACK_LZ4_V3 ||
+            job.frame_type == FRAME_PACK_ZSTD_V3 ||
+            job.frame_type == FRAME_PACK_LZMA_V3) {
+            if (job.len < 12) { free_pack_buffer(job.data); continue; }
+            memcpy(&pack_id, job.data, 8);
+            offset += 8;
+            memcpy(&record_count, job.data + offset, 4);
+            offset += 4;
+            pack_ack_register(job.session_id, pack_id, record_count);
+        } else {
+            if (job.len < 4) { free_pack_buffer(job.data); continue; }
+            memcpy(&record_count, job.data, 4);
+            offset += 4;
+        }
 
         for (uint32_t i = 0; i < record_count; i++) {
             pthread_mutex_lock(&g_file_write_mutex);
@@ -419,6 +553,8 @@ static void *pack_processor_thread(void *arg) {
             if (new_job.len > 0) memcpy(new_job.data, job.data + offset, new_job.len);
             offset += (size_t)data_len;
             new_job.chmod_mode = job.chmod_each_file ? 0777 : 0666;
+            new_job.pack_id = pack_id;
+            new_job.session_id = job.session_id;
 
             pthread_mutex_lock(&g_file_write_mutex);
             g_file_write_queue[g_file_write_queue_tail] = new_job;
@@ -718,7 +854,7 @@ static int upload_session_start(UploadSession *session, const char *dest_root) {
 
 static int enqueue_pack(UploadSession *session) {
     PackQueue *queue = &g_queues[session->session_id % WRITER_THREAD_COUNT];
-    int push_result = pack_queue_push(queue, session->body, (size_t)session->body_len, session->dest_root, session->session_id, 0, session->chmod_each_file);
+    int push_result = pack_queue_push(queue, session->body, (size_t)session->body_len, session->dest_root, session->session_id, session->header.type, 0, session->chmod_each_file);
     if (push_result == -1) {
         printf("[FTX] ERROR: pack_queue_push failed (session=%llu len=%llu)\n",
                (unsigned long long)session->session_id, (unsigned long long)session->body_len);
@@ -750,7 +886,8 @@ int upload_session_feed(UploadSession *session, const uint8_t *data, size_t len,
                 break; 
             }
             if (session->header.type == FRAME_FINISH) { if (done) *done = 1; return 0; }
-            if (session->header.type >= FRAME_PACK && session->header.type <= FRAME_PACK_LZMA) {
+            if ((session->header.type >= FRAME_PACK && session->header.type <= FRAME_PACK_LZMA) ||
+                (session->header.type >= FRAME_PACK_V3 && session->header.type <= FRAME_PACK_LZMA_V3)) {
                 if (session->header.body_len > PACK_BUFFER_SIZE) { session->error = 1; break; }
                 session->body_len = session->header.body_len;
                 if (session->body_len > SIZE_MAX) {
@@ -775,7 +912,8 @@ int upload_session_feed(UploadSession *session, const uint8_t *data, size_t len,
             offset += take;
 
             if (session->body_bytes == session->body_len) {
-                if (session->header.type != FRAME_PACK) {
+                if (session->header.type != FRAME_PACK &&
+                    session->header.type != FRAME_PACK_V3) {
                     if (decompress_pack_body(session->header.type, &session->body, &session->body_len) != 0)
                         { printf("[FTX] ERROR: decompress_pack_body failed (type=%u)\n", session->header.type); session->error = 1; break; }
                 }
@@ -805,12 +943,10 @@ static int upload_session_finish(UploadSession *session) {
         size_t current = atomic_load(&g_file_write_queue_count);
         time_t now = time(NULL);
 
-        // Update watchdog progress
-        g_last_transfer_progress = now;
-
         if (current != last_count) {
             last_count = current;
             last_progress = now;
+            g_last_transfer_progress = now;
         }
 
         // Timeout if no progress for 60 seconds
@@ -861,6 +997,9 @@ void upload_session_destroy(UploadSession *session) {
         upload_session_finalize(session);
     }
     if (session->body) { free_pack_buffer(session->body); }
+    if (session->ack_enabled) {
+        unregister_ack_session(session->session_id);
+    }
     free(session);
     if (atomic_fetch_sub(&g_active_sessions, 1) <= 1) {
         if (g_abort_transfer) g_abort_transfer = 0;
@@ -886,6 +1025,7 @@ void handle_upload_v2(int client_sock, const char *dest_root, int use_temp, int 
         printf("[FTX] ERROR: Upload init failed\n");
         return; 
     }
+    session->ack_enabled = 0;
     session->chmod_each_file = chmod_each_file;
     session->chmod_final = chmod_final;
 
@@ -907,8 +1047,7 @@ void handle_upload_v2(int client_sock, const char *dest_root, int use_temp, int 
         ssize_t n = recv(client_sock, buffer, UPLOAD_V2_RECV_BUFFER_SIZE, 0);
         if (n < 0) {
             if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {
-                // Timeout or interrupt - update progress and continue
-                g_last_transfer_progress = time(NULL);
+                // Timeout or interrupt - do not update progress (no data received)
                 continue;
             }
             printf("[FTX] Upload recv error: %s\n", strerror(errno));
@@ -945,4 +1084,86 @@ void handle_upload_v2(int client_sock, const char *dest_root, int use_temp, int 
         printf("[FTX] Upload V2 end: SUCCESS after %llu bytes\n", g_upload_bytes_recv);
     }
     upload_session_destroy(session);
+}
+
+void handle_upload_v3(int client_sock, const char *dest_root, int use_temp, int chmod_each_file, int chmod_final) {
+    const char *ready = "READY\n";
+    send(client_sock, ready, strlen(ready), 0);
+    g_upload_bytes_recv = 0;
+    atomic_store(&g_upload_bytes_written, 0);
+    atomic_store(&g_backpressure_events, 0);
+    atomic_store(&g_backpressure_wait_ms, 0);
+    g_upload_last_log = time(NULL);
+    printf("[FTX] Upload V3 start: dest=%s mode=%s chmod_each=%d chmod_final=%d\n",
+           dest_root ? dest_root : "(null)", use_temp ? "TEMP" : "DIRECT",
+           chmod_each_file ? 1 : 0, chmod_final ? 1 : 0);
+    UploadSession *session = upload_session_create(dest_root, use_temp);
+    if (!session) {
+        const char *err = "ERROR: Upload init failed\n";
+        send(client_sock, err, strlen(err), 0);
+        printf("[FTX] ERROR: Upload init failed\n");
+        return;
+    }
+    session->ack_enabled = 1;
+    session->client_sock = client_sock;
+    register_ack_session(session->session_id, client_sock);
+    session->chmod_each_file = chmod_each_file;
+    session->chmod_final = chmod_final;
+
+    struct timeval tv;
+    tv.tv_sec = 30;
+    tv.tv_usec = 0;
+    setsockopt(client_sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    uint8_t *buffer = malloc(UPLOAD_V2_RECV_BUFFER_SIZE);
+    if (!buffer) {
+        upload_session_destroy(session);
+        const char *err = "ERROR: Upload buffer failed\n";
+        send(client_sock, err, strlen(err), 0);
+        return;
+    }
+    int done = 0, error = 0;
+    while (!done && !error && !g_abort_transfer) {
+        ssize_t n = recv(client_sock, buffer, UPLOAD_V2_RECV_BUFFER_SIZE, 0);
+        if (n < 0) {
+            if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {
+                continue;
+            }
+            printf("[FTX] Upload recv error: %s\n", strerror(errno));
+            error = 1;
+            break;
+        }
+        if (n == 0) {
+            printf("[FTX] Upload recv: client closed connection.\n");
+            error = 1;
+            break;
+        }
+        g_upload_bytes_recv += (unsigned long long)n;
+        g_last_transfer_progress = time(NULL);
+        upload_session_feed(session, buffer, (size_t)n, &done, &error);
+        time_t now = time(NULL);
+        if (now - g_upload_last_log >= 5) {
+            g_upload_last_log = now;
+            printf("[FTX] Upload recv: %llu bytes, queue=%zu, pack_in_use=%zu, workers=%d\n",
+                   g_upload_bytes_recv,
+                   atomic_load(&g_file_write_queue_count),
+                   atomic_load(&g_pack_in_use),
+                   g_workers_initialized);
+        }
+    }
+    free(buffer);
+
+    if (error && !g_abort_transfer) {
+        const char *err = "ERROR: Upload failed on client side\n";
+        send(client_sock, err, strlen(err), 0);
+        printf("[FTX] ERROR: Upload failed on client side\n");
+        upload_session_destroy(session);
+        return;
+    }
+
+    upload_session_finalize(session);
+    upload_session_destroy(session);
+
+    const char *ok = "OK\n";
+    send(client_sock, ok, strlen(ok), 0);
 }

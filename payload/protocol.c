@@ -2109,6 +2109,68 @@ void handle_upload_v2_wrapper(int client_sock, const char *args) {
     handle_upload_v2(client_sock, dest_path, use_temp, chmod_each_file, chmod_final);
 }
 
+void handle_upload_v3_wrapper(int client_sock, const char *args) {
+    char dest_path[PATH_MAX];
+    char mode[16] = {0};
+    int chmod_each_file = 1;
+    int chmod_final = 0;
+    const char *rest = NULL;
+    if (!args) {
+        const char *error = "ERROR: Invalid UPLOAD_V3 format\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+    if (parse_quoted_token(args, dest_path, sizeof(dest_path), &rest) != 0) {
+        const char *error = "ERROR: Invalid UPLOAD_V3 format\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+    if (rest && *rest) {
+        char opts[128];
+        strncpy(opts, rest, sizeof(opts) - 1);
+        opts[sizeof(opts) - 1] = '\0';
+        char *save = NULL;
+        char *token = strtok_r(opts, " ", &save);
+        if (token) {
+            strncpy(mode, token, sizeof(mode) - 1);
+            mode[sizeof(mode) - 1] = '\0';
+        }
+        while ((token = strtok_r(NULL, " ", &save)) != NULL) {
+            if (strcasecmp(token, "NOCHMOD") == 0) {
+                chmod_each_file = 0;
+            } else if (strcasecmp(token, "CHMOD_END") == 0 || strcasecmp(token, "CHMOD_FINAL") == 0) {
+                chmod_final = 1;
+            } else if (strcasecmp(token, "CHMOD_EACH") == 0) {
+                chmod_each_file = 1;
+            }
+        }
+    }
+    if (!is_path_safe(dest_path)) {
+        const char *error = "ERROR: Invalid path\n";
+        send(client_sock, error, strlen(error), 0);
+        printf("[UPLOAD_V3] ERROR: Invalid path: %s\n", dest_path);
+        return;
+    }
+
+    int use_temp = 1;
+    if (mode[0]) {
+        if (strcasecmp(mode, "TEMP") == 0) {
+            use_temp = 1;
+        } else if (strcasecmp(mode, "DIRECT") == 0) {
+            use_temp = 0;
+        } else {
+            const char *error = "ERROR: Invalid UPLOAD_V3 mode\n";
+            send(client_sock, error, strlen(error), 0);
+            return;
+        }
+    }
+
+    printf("[UPLOAD_V3] Request: dest=%s mode=%s chmod_each=%d chmod_final=%d\n",
+           dest_path, use_temp ? "TEMP" : "DIRECT",
+           chmod_each_file ? 1 : 0, chmod_final ? 1 : 0);
+    handle_upload_v3(client_sock, dest_path, use_temp, chmod_each_file, chmod_final);
+}
+
 void handle_upload(int client_sock, const char *args) {
     char dest_path[PATH_MAX];
 

@@ -3,12 +3,27 @@
 All notable changes to this project are documented here.
 This project follows Semantic Versioning.
 
+## [1.3.11] - 2026-02-01
+
+### Added
+- Upload V3 protocol with per‑pack ACKs and replay to recover cleanly from payload hiccups.
+- Direct‑Ethernet speed guide added to the FAQ.
+
+### Changed
+- Scan requests are deduped for identical sources/settings to avoid repeated scans.
+- Logging defaults reduced for noisy transfer events (more debug‑only).
+
+### Fixed
+- Payload stalls now trigger safer recovery paths on the client.
+- “Undefined” log entries are filtered out from UI logs.
+
 ## [1.3.10] - 2026-01-30
 
 ### Added
 - **Bottleneck indicator** in Payload Status to show the likely limiting side (network, payload CPU, payload disk, or client).
 - **New metrics panels** (System, Network, Queue, Transfer, Tuning) with clearer grouping and reduced clutter.
 - **Tuning suggestions** from the payload (suggested pack size, pacing, and rate) surfaced in the desktop UI.
+- **Upload V3 protocol** with per‑pack ACKs and replay to recover cleanly from payload hiccups.
 
 ### Changed
 - **Adaptive tuning** now runs continuously for stability (even if auto‑tune is off, it applies safety‑only limits).

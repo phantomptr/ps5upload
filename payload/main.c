@@ -86,13 +86,44 @@ static void *idle_watch_thread(void *arg) {
     static int transfer_stall_count = 0;
     static int abort_in_progress = 0;
     static time_t abort_request_time = 0;
+    static unsigned long long abort_last_recv = 0;
+    static unsigned long long abort_last_written = 0;
+    static time_t abort_last_progress_time = 0;
     const int g_stall_grace_period_sec = 15; // 15s grace period
+    const int g_abort_stall_sec = 30; // 30s stuck after abort => force exit
 
     while (1) {
         time_t now = time(NULL);
 
-        if (abort_in_progress && (now - abort_request_time) < g_stall_grace_period_sec) {
-            // In grace period, do nothing but sleep
+        if (abort_in_progress) {
+            TransferStats stats;
+            transfer_get_stats(&stats);
+            if (abort_last_progress_time == 0) {
+                abort_last_progress_time = now;
+                abort_last_recv = stats.bytes_received;
+                abort_last_written = stats.bytes_written;
+            }
+            if (stats.bytes_received != abort_last_recv || stats.bytes_written != abort_last_written) {
+                abort_last_recv = stats.bytes_received;
+                abort_last_written = stats.bytes_written;
+                abort_last_progress_time = now;
+                abort_request_time = now; // extend grace if progress resumes
+            }
+
+            if ((now - abort_request_time) < g_stall_grace_period_sec) {
+                // In grace period, do nothing but sleep
+            } else if (transfer_is_active() && (now - abort_last_progress_time) >= g_abort_stall_sec) {
+                payload_log("[WATCHDOG] Abort stuck: no progress for %ds after abort (sessions=%zu packs=%zu queue=%zu). Forcing exit.",
+                            g_abort_stall_sec, stats.active_sessions, stats.pack_in_use, stats.queue_count);
+                notify_error("PS5 Upload Server", "Transfer stuck after abort. Restarting.");
+                transfer_cleanup();
+                extract_queue_reset();
+                unlink(g_pid_file);
+                exit(EXIT_FAILURE);
+            } else if (!transfer_is_active()) {
+                abort_in_progress = 0;
+                abort_last_progress_time = 0;
+            }
         } else {
             abort_in_progress = 0; // Grace period over, resume normal checks
 
@@ -120,6 +151,11 @@ static void *idle_watch_thread(void *arg) {
                         transfer_request_abort();
                         abort_in_progress = 1;
                         abort_request_time = now;
+                        abort_last_progress_time = now;
+                        TransferStats stats;
+                        transfer_get_stats(&stats);
+                        abort_last_recv = stats.bytes_received;
+                        abort_last_written = stats.bytes_written;
                     }
                 } else {
                     if (transfer_stall_count > 0) {
@@ -1005,6 +1041,11 @@ static void process_command(struct ClientConnection *conn) {
     }
     if (strncmp(conn->cmd_buffer, "UPLOAD_RAR ", 11) == 0) {
         handle_upload_rar(conn->sock, conn->cmd_buffer + 11, UNRAR_MODE_FAST);
+        close_connection(conn);
+        return;
+    }
+    if (strncmp(conn->cmd_buffer, "UPLOAD_V3 ", 10) == 0) {
+        handle_upload_v3_wrapper(conn->sock, conn->cmd_buffer + 10);
         close_connection(conn);
         return;
     }
