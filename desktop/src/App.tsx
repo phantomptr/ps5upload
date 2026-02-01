@@ -329,7 +329,13 @@ const LOG_LEVEL_ORDER: Record<LogLevel, number> = {
 
 const inferLogLevel = (message: string): LogLevel => {
   const text = message.toLowerCase();
-  if (text.includes("[tune]") || /\bdebug\b/.test(text)) {
+  if (
+    text.includes("[tune]") ||
+    text.includes("adaptive tune") ||
+    text.includes("payload tune") ||
+    text.includes("waiting for server to catch up") ||
+    /\bdebug\b/.test(text)
+  ) {
     return "debug";
   }
   if (
@@ -962,6 +968,16 @@ export default function App() {
   const [optimizeMode, setOptimizeMode] = useState<OptimizeMode>("none");
   const optimizeActive = optimizeMode !== "none";
   const [scanMode, setScanMode] = useState<OptimizeMode | null>(null);
+  const scanKeyRef = useRef<string | null>(null);
+  const lastScanRef = useRef<{
+    key: string;
+    completedAt: number;
+    files: number;
+    total: number;
+    partial: boolean;
+    reason: string | null;
+    estimated: boolean;
+  } | null>(null);
   const optimizePendingRef = useRef<OptimizeMode | null>(null);
   const [autoTune, setAutoTune] = useState(true);
   const [useTemp, setUseTemp] = useState(false);
@@ -1561,8 +1577,10 @@ export default function App() {
 
   const pushClientLogs = (messages: string[], level: LogLevel = "info") => {
     const now = Date.now();
+    const filtered = messages.filter((message) => message && message !== "undefined");
+    if (filtered.length === 0) return;
     setClientLogs((prev) => [
-      ...messages.map((message, index) => ({
+      ...filtered.map((message, index) => ({
         level,
         message,
         time: now + index
@@ -1573,8 +1591,10 @@ export default function App() {
 
   const pushPayloadLogs = (messages: string[], level: LogLevel = "info") => {
     const now = Date.now();
+    const filtered = messages.filter((message) => message && message !== "undefined");
+    if (filtered.length === 0) return;
     setPayloadLogs((prev) => [
-      ...messages.map((message, index) => ({
+      ...filtered.map((message, index) => ({
         level,
         message,
         time: now + index
@@ -1798,6 +1818,28 @@ export default function App() {
       restoreOptimizeSnapshot();
       return;
     }
+    const maxMs = mode === "deep" ? 0 : optimizeSampleLimitMs;
+    const maxFiles = mode === "deep" ? 0 : optimizeSampleLimitFiles;
+    const quickCount = mode !== "deep";
+    const sampleLimit = mode === "deep" ? 0 : 1200;
+    const scanKey = JSON.stringify({ sourcePath, mode, maxMs, maxFiles, quickCount, sampleLimit });
+    const cached = lastScanRef.current;
+    if (cached && cached.key === scanKey && Date.now() - cached.completedAt < 60000) {
+      setScanMode(mode);
+      setScanStatus("completed");
+      setScanFiles(cached.files);
+      setScanTotal(cached.total);
+      setScanPartial(cached.partial);
+      setScanPartialReason(cached.reason);
+      setScanEstimated(cached.estimated);
+      const label = mode === "deep" ? tr("deep_optimize_ready") : tr("optimize_ready");
+      pushClientLog(`${label}: ${cached.files} files, ${formatBytes(cached.total)} (cached)`, "debug");
+      if (optimizePendingRef.current) {
+        applyOptimizeSettings(cached.files, cached.total, mode);
+        optimizePendingRef.current = null;
+      }
+      return;
+    }
     pushClientLog(
       `${mode === "deep" ? "Deep optimize" : "Optimize"} scan started: ${sourcePath}`,
       "debug"
@@ -1810,13 +1852,14 @@ export default function App() {
     setScanPartial(false);
     setScanPartialReason(null);
     setScanEstimated(false);
+    scanKeyRef.current = scanKey;
     try {
       await invoke("transfer_scan", {
         source_path: sourcePath,
-        max_ms: mode === "deep" ? 0 : optimizeSampleLimitMs,
-        max_files: mode === "deep" ? 0 : optimizeSampleLimitFiles,
-        quick_count: mode !== "deep",
-        sample_limit: mode === "deep" ? 0 : 1200
+        max_ms: maxMs,
+        max_files: maxFiles,
+        quick_count: quickCount,
+        sample_limit: sampleLimit
       });
     } catch (err) {
       setScanStatus('error');
@@ -1827,6 +1870,7 @@ export default function App() {
       setOptimizeMode("none");
       setScanMode(null);
       restoreOptimizeSnapshot();
+      scanKeyRef.current = null;
     }
   };
 
@@ -1865,6 +1909,7 @@ export default function App() {
     setOptimizeMode("none");
     setScanMode(null);
     restoreOptimizeSnapshot();
+    scanKeyRef.current = null;
   };
 
   const resetScan = () => {
@@ -1879,6 +1924,8 @@ export default function App() {
     optimizePendingRef.current = null;
     setOptimizeMode("none");
     restoreOptimizeSnapshot();
+    scanKeyRef.current = null;
+    lastScanRef.current = null;
   };
 
   const computeOptimizeSettings = (
@@ -3166,6 +3213,18 @@ export default function App() {
           setScanPartial(!!event.payload.partial);
           setScanPartialReason(event.payload.reason ?? null);
           setScanEstimated(!!event.payload.estimated);
+          if (scanKeyRef.current) {
+            lastScanRef.current = {
+              key: scanKeyRef.current,
+              completedAt: Date.now(),
+              files: event.payload.files,
+              total: event.payload.total,
+              partial: !!event.payload.partial,
+              reason: event.payload.reason ?? null,
+              estimated: !!event.payload.estimated
+            };
+            scanKeyRef.current = null;
+          }
           const label =
             scanMode === "deep"
               ? tr("deep_optimize_ready")
@@ -3188,6 +3247,7 @@ export default function App() {
           setScanStatus('error');
           setScanError(event.payload.message);
           pushClientLog(`Scan error: ${event.payload.message}`, "error");
+          scanKeyRef.current = null;
           if (optimizePendingRef.current) {
             optimizePendingRef.current = null;
             setOptimizeMode("none");
@@ -3300,8 +3360,8 @@ export default function App() {
       return;
     }
     bottleneckStableRef.current += 1;
-    if (bottleneckStableRef.current < 3) return;
-    if (now - lastBottleneckAtRef.current < 10000) return;
+    if (bottleneckStableRef.current < 5) return;
+    if (now - lastBottleneckAtRef.current < 60000) return;
     if (rawKey === "unknown") return;
     lastBottleneckAtRef.current = now;
     pushClientLog(`Bottleneck: ${label}`, "debug");

@@ -1,7 +1,7 @@
 # PS5 Upload FAQ
 
 Welcome! This FAQ covers setup, features, troubleshooting, and platform‑specific tips.
-Latest release: **v1.3.10**.
+Latest release: **v1.3.11**.
 
 ---
 
@@ -102,6 +102,56 @@ It’s a best‑guess of what’s limiting speed right now: network, payload CPU
 **Q: What are “Suggested pack / pace / rate”?**  
 These are payload‑side recommendations to keep transfers stable. When auto‑tune is enabled, the client will follow them. When auto‑tune is off, the client still applies safety‑only limits to avoid overload.
 
+**Q: How do uploads recover from payload hiccups?**  
+The client uses Upload V3 when available, which includes per‑pack ACKs and a replay window. If the payload stalls or restarts, the client can resend any unacknowledged packs and continue without corrupting data.
+
+### Best Speed (Direct Ethernet)
+**Q: How do I get the fastest transfer speeds?**  
+Speed varies based on disk, CPU, file count, and network. The most reliable way is a direct Ethernet cable between your PC and PS5 (1 Gb/s or better).
+
+Use these static IPs:
+- **PC:** `192.168.137.1`
+- **PS5:** `192.168.137.2`
+- **Subnet mask:** `255.255.255.0`
+- **Gateway:** `192.168.137.1`
+- **DNS:** not required (anything is fine)
+
+**Windows (PC side)**
+1. Control Panel → Network and Internet → Network and Sharing Center → Change adapter settings.
+2. Right‑click your Ethernet adapter → Properties → Internet Protocol Version 4 (TCP/IPv4).
+3. Set:
+   - IP address: `192.168.137.1`
+   - Subnet mask: `255.255.255.0`
+   - Default gateway: `192.168.137.1`
+   - DNS: leave blank or any value
+4. Apply, then connect the Ethernet cable directly to the PS5.
+
+**macOS (PC side)**
+1. System Settings → Network → select Ethernet.
+2. Configure IPv4: **Manually**.
+3. Set:
+   - IP address: `192.168.137.1`
+   - Subnet mask: `255.255.255.0`
+   - Router: `192.168.137.1`
+4. Apply, then connect the Ethernet cable directly to the PS5.
+
+**Linux (PC side)**
+1. Network settings → Wired → IPv4 → **Manual**.
+2. Set:
+   - Address: `192.168.137.1`
+   - Netmask: `255.255.255.0`
+   - Gateway: `192.168.137.1`
+3. Apply, then connect the Ethernet cable directly to the PS5.
+
+**PS5 side**
+1. Settings → Network → Set Up Internet Connection → Use a LAN Cable.
+2. Choose **Manual**.
+3. Set:
+   - IP address: `192.168.137.2`
+   - Subnet mask: `255.255.255.0`
+   - Default gateway: `192.168.137.1`
+   - DNS: any or leave empty
+
 ### Resume Mode
 Modes:
 - **Fastest** (size only)
@@ -199,8 +249,8 @@ Start the extraction queue, refresh, or **Clear tmp**.
 Reload the payload and reconnect.
 
 **Q: My transfer hangs or my PS5 freezes with a large folder.**
-This can happen with folders containing tens of thousands of small files. As of **v1.3.10**, the payload has been significantly improved to handle this. It now batches file writes to prevent overwhelming the PS5's operating system. If you still experience issues:
-*   Ensure you are using the payload from v1.3.10 or newer.
+This can happen with folders containing tens of thousands of small files. As of **v1.3.11**, the payload has been significantly improved to handle this. It now batches file writes to prevent overwhelming the PS5's operating system. If you still experience issues:
+*   Ensure you are using the payload from v1.3.11 or newer.
 *   The transfer may appear to pause momentarily—this is the new backpressure system working to keep the PS5 stable. It will resume automatically.
 
 
