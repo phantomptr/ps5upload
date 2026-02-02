@@ -7,9 +7,20 @@ This project follows Semantic Versioning.
 
 ### Removed
 - Legacy UPLOAD (V1) and UPLOAD_V2 handlers from the payload; standard uploads are V3-only.
+- Mix threshold setting and split-by-threshold behavior; mix now runs continuously until both sides meet.
 
 ### Changed
 - Test upload script now targets UPLOAD_V3 only.
+- Mix mode now pulls smallest files for payload and largest files for FTP, continuously, with safer fallback handling.
+- FTP uploads now use a mature client library with better progress tracking and connection handling (FTP upload enabled).
+- Upload speed display now uses EMA for smoother, more accurate live speed.
+- Noisy per-file packing logs are filtered from the UI.
+- Settings/history/queue data are normalized on load to the latest templates.
+
+### Fixed
+- FTP connect/auth edge cases that could block uploads.
+- Mix mode fallback and V3 response parsing issues that caused false errors.
+- Miscellaneous desktop/runtime errors and transfer log noise.
 
 ## [1.3.11] - 2026-02-01
 

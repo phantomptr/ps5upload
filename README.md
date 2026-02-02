@@ -30,7 +30,7 @@ New UI highlights:
 - FAQ tab with an embedded, scrollable help panel.
 - Manage “Reset UI” action for quick recovery from stuck states.
 
-It is optimized for thousands of small files on a local network (where it outperforms FTP), but works over any standard network connection.
+It is optimized for thousands of small files on a local network, and supports both payload and FTP transfer modes (including a hybrid mix mode).
 
 <img width="1911" height="1166" alt="Screenshot 2026-01-24 225424" src="https://github.com/user-attachments/assets/2773fd4b-ef2c-4b95-936c-1be3ab34e977" />
 <img width="1913" height="1163" alt="Screenshot 2026-01-24 225409" src="https://github.com/user-attachments/assets/59376d5d-1dc6-484b-917a-3aec349053c7" />
@@ -39,7 +39,7 @@ It is optimized for thousands of small files on a local network (where it outper
 
 ## Why use this?
 
-If you've ever tried to upload a homebrew app containing 10,000 small assets via FTP, you know the pain. It takes forever.
+If you've ever tried to upload a homebrew app containing 10,000 small assets, you know the pain. It takes forever.
 
 This tool fixes that by bundling files into efficient "packs" on your computer and streaming them directly to the PS5's disk. No per-file handshakes, no temporary archive steps.
 
