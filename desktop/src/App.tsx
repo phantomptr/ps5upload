@@ -1514,12 +1514,7 @@ export default function App() {
     });
   }, [saveLogs]);
 
-  useEffect(() => {
-    const enabled = !transferActive;
-    invoke("set_ui_log_enabled", { enabled }).catch(() => {
-      // ignore log toggle failures
-    });
-  }, [transferActive]);
+  
 
   useEffect(() => {
     transferSnapshot.current = {
