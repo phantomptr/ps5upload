@@ -215,6 +215,7 @@ Use **Manage** to:
 - `chmod 777`
 - extract RAR archives
 - upload files/folders into the queue
+- download files/folders (folder downloads run sequentially for stability)
 
 ---
 

@@ -117,7 +117,7 @@ You should see a notification pop up on your TV: **"PS5 Upload Server - Ready on
 5.  **RAR uploads (optional):** If your source is a `.rar`, you can pick a **RAR Extract Mode** and (optionally) a **RAR Temp Storage** in Transfer settings to control where the archive is staged before extraction.
 
 ### 5. Manage Files (Optional)
-Open the **Manage** tab to browse your PS5's storage. You can rename, move, copy, delete, and `chmod 777` files or folders. You can also download files and folders from your PS5 to your computer. If something gets stuck, use **Reset UI** in Manage to recover.
+Open the **Manage** tab to browse your PS5's storage. You can rename, move, copy, delete, and `chmod 777` files or folders. You can also download files and folders from your PS5 to your computer (folder downloads run in a safe, sequential mode for stability). If something gets stuck, use **Reset UI** in Manage to recover.
 
 ### 6. Queues (Optional)
 Open the **Queues** tab to see upload and extraction queues. You can refresh the queues, monitor progress, and cancel queued work.

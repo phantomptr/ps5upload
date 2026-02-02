@@ -1067,22 +1067,9 @@ static int send_file_records(int sock, struct DownloadPack *pack, const char *re
 }
 
 
-// Thread arguments for raw file download
-struct DownloadRawArgs {
-    int sock;
-    char path[PATH_MAX];
-};
-
-static void *download_raw_thread(void *arg) {
-    struct DownloadRawArgs *args = (struct DownloadRawArgs *)arg;
-    if (!args) {
-        return NULL;
-    }
-
-    int sock = args->sock;
-    char *path = args->path;
-
-    payload_log("[DOWNLOAD_RAW] Thread started for %s", path);
+static int download_raw_stream(int sock, const char *path) {
+    payload_set_crash_context("DOWNLOAD_RAW_STREAM", path, NULL);
+    payload_log("[DOWNLOAD_RAW] Stream start for %s", path);
 
     // Set socket to have shorter send timeout for responsiveness
     struct timeval snd_to;
@@ -1096,8 +1083,7 @@ static void *download_raw_thread(void *arg) {
         snprintf(error_msg, sizeof(error_msg), "ERROR: open failed: %s\n", strerror(errno));
         send(sock, error_msg, strlen(error_msg), 0);
         close(sock);
-        free(args);
-        return NULL;
+        return -1;
     }
 
     struct stat st;
@@ -1106,8 +1092,7 @@ static void *download_raw_thread(void *arg) {
         send(sock, error, strlen(error), 0);
         close(fd);
         close(sock);
-        free(args);
-        return NULL;
+        return -1;
     }
 
     char ready[96];
@@ -1115,8 +1100,7 @@ static void *download_raw_thread(void *arg) {
     if (send_all(sock, ready, strlen(ready)) != 0) {
         close(fd);
         close(sock);
-        free(args);
-        return NULL;
+        return -1;
     }
     payload_touch_activity();
 
@@ -1127,8 +1111,7 @@ static void *download_raw_thread(void *arg) {
             payload_log("[DOWNLOAD_RAW] Send failed for %s", path);
             close(fd);
             close(sock);
-            free(args);
-            return NULL;
+            return -1;
         }
         payload_touch_activity();
     }
@@ -1136,8 +1119,7 @@ static void *download_raw_thread(void *arg) {
     close(fd);
     payload_log("[DOWNLOAD_RAW] Complete %s", path);
     close(sock);
-    free(args);
-    return NULL;
+    return 0;
 }
 
 void handle_download_raw(int client_sock, const char *path_arg) {
@@ -1165,31 +1147,8 @@ void handle_download_raw(int client_sock, const char *path_arg) {
         return;
     }
 
-    // Allocate args for thread
-    struct DownloadRawArgs *args = malloc(sizeof(struct DownloadRawArgs));
-    if (!args) {
-        const char *error = "ERROR: Out of memory\n";
-        send(client_sock, error, strlen(error), 0);
-        close(client_sock);
-        return;
-    }
-
-    args->sock = client_sock;
-    strncpy(args->path, path, sizeof(args->path) - 1);
-    args->path[sizeof(args->path) - 1] = '\0';
-
-    // Create detached thread for download
-    pthread_t tid;
-    if (pthread_create(&tid, NULL, download_raw_thread, args) != 0) {
-        const char *error = "ERROR: Failed to start download\n";
-        send(client_sock, error, strlen(error), 0);
-        close(client_sock);
-        free(args);
-        return;
-    }
-    pthread_detach(tid);
-
-    // Return immediately - thread owns the socket now
+    // Stream directly on this connection for stability
+    download_raw_stream(client_sock, path);
 }
 
 
@@ -1203,7 +1162,8 @@ static int send_dir_recursive(int sock, struct DownloadPack *pack, const char *b
 
     DIR *dir = opendir(path);
     if (!dir) {
-        return -1;
+        payload_log("[DOWNLOAD_DIR] opendir failed: %s (%s)", path, strerror(errno));
+        return 0;
     }
 
     struct dirent *entry;
@@ -1222,23 +1182,24 @@ static int send_dir_recursive(int sock, struct DownloadPack *pack, const char *b
 
         struct stat st;
         if (lstat(child_path, &st) != 0) {
-            closedir(dir);
-            return -1;
+            payload_log("[DOWNLOAD_DIR] lstat failed: %s (%s)", child_path, strerror(errno));
+            continue;
         }
         if (S_ISLNK(st.st_mode)) {
             continue;
         }
         if (S_ISDIR(st.st_mode)) {
             if (send_dir_recursive(sock, pack, base_path, child_rel) != 0) {
-                closedir(dir);
-                return -1;
+                payload_log("[DOWNLOAD_DIR] recurse failed: %s", child_rel);
+                continue;
             }
         } else if (S_ISREG(st.st_mode)) {
             payload_log("[DOWNLOAD_DIR] Sending %s", child_rel);
             if (send_file_records(sock, pack, child_rel, child_path) != 0) {
-                closedir(dir);
-                return -1;
+                payload_log("[DOWNLOAD_DIR] send_file_records failed: %s", child_rel);
+                continue;
             }
+            usleep(1000);
         }
     }
 
@@ -1249,7 +1210,8 @@ static int send_dir_recursive(int sock, struct DownloadPack *pack, const char *b
 static int calc_dir_size(const char *path, uint64_t *total) {
     DIR *dir = opendir(path);
     if (!dir) {
-        return -1;
+        payload_log("[DOWNLOAD_DIR] opendir failed (size): %s (%s)", path, strerror(errno));
+        return 0;
     }
     struct dirent *entry;
     while ((entry = readdir(dir)) != NULL) {
@@ -1260,16 +1222,15 @@ static int calc_dir_size(const char *path, uint64_t *total) {
         snprintf(child, sizeof(child), "%s/%s", path, entry->d_name);
         struct stat st;
         if (lstat(child, &st) != 0) {
-            closedir(dir);
-            return -1;
+            payload_log("[DOWNLOAD_DIR] lstat failed (size): %s (%s)", child, strerror(errno));
+            continue;
         }
         if (S_ISLNK(st.st_mode)) {
             continue;
         }
         if (S_ISDIR(st.st_mode)) {
             if (calc_dir_size(child, total) != 0) {
-                closedir(dir);
-                return -1;
+                continue;
             }
         } else if (S_ISREG(st.st_mode)) {
             *total += (uint64_t)st.st_size;
@@ -1972,7 +1933,8 @@ void handle_download_dir(int client_sock, const char *path_arg) {
         return;
     }
 
-    payload_log("[DOWNLOAD_DIR] Streaming %s", path);
+    payload_log("[DOWNLOAD_DIR] Streaming %s (total=%llu, comp=%s)", path,
+        (unsigned long long)total_size, comp_label);
     if (send_dir_recursive(client_sock, &pack, path, NULL) != 0) {
         payload_log("[DOWNLOAD_DIR] Failed while streaming %s", path);
         send_error_frame(client_sock, "Download failed");

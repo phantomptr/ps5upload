@@ -16,11 +16,13 @@ This project follows Semantic Versioning.
 - Upload speed display now uses EMA for smoother, more accurate live speed.
 - Noisy per-file packing logs are filtered from the UI.
 - Settings/history/queue data are normalized on load to the latest templates.
+- Manage folder downloads now use a safe, sequential per-file transfer path for stability.
 
 ### Fixed
 - FTP connect/auth edge cases that could block uploads.
 - Mix mode fallback and V3 response parsing issues that caused false errors.
 - Miscellaneous desktop/runtime errors and transfer log noise.
+- Manage download stability improvements with retries and safer file enumeration.
 
 ## [1.3.11] - 2026-02-01
 

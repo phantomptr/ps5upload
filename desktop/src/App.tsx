@@ -1180,6 +1180,9 @@ export default function App() {
   const maintenanceRequestedRef = useRef(false);
   const lastMaintenanceAtRef = useRef(0);
   const extractionStopAttemptsRef = useRef(0);
+  const extractionSpeedRef = useRef(
+    new Map<number, { lastBytes: number; lastAt: number; ema: number }>()
+  );
   const transferSnapshot = useRef({
     runId: null as number | null,
     source: "",
@@ -1370,6 +1373,34 @@ export default function App() {
         ? (Date.now() - transferStartedAt) / 1000
         : 0;
   }, [transferState.sent, transferState.status, transferActive, activeRunId]);
+
+  useEffect(() => {
+    if (!payloadFullStatus?.items) return;
+    const now = payloadLastUpdated ?? Date.now();
+    const next = new Map(extractionSpeedRef.current);
+    const activeIds = new Set<number>();
+    for (const item of payloadFullStatus.items) {
+      if (item.status !== "running") continue;
+      activeIds.add(item.id);
+      const processed = toSafeNumber(item.processed_bytes, 0);
+      const prev = next.get(item.id);
+      if (!prev) {
+        next.set(item.id, { lastBytes: processed, lastAt: now, ema: 0 });
+        continue;
+      }
+      const elapsed = (now - prev.lastAt) / 1000;
+      if (elapsed <= 0) continue;
+      const delta = processed - prev.lastBytes;
+      const inst = delta > 0 ? delta / elapsed : 0;
+      const alpha = 1 - Math.exp(-elapsed / 3);
+      const ema = prev.ema > 0 ? prev.ema + (inst - prev.ema) * alpha : inst;
+      next.set(item.id, { lastBytes: processed, lastAt: now, ema });
+    }
+    for (const [id] of next) {
+      if (!activeIds.has(id)) next.delete(id);
+    }
+    extractionSpeedRef.current = next;
+  }, [payloadFullStatus, payloadLastUpdated]);
 
   useEffect(() => {
     if (!isConnected || !ip.trim()) {
@@ -3550,6 +3581,13 @@ export default function App() {
     !canOptimize || (scanInProgress && optimizePendingRef.current !== "optimize");
   const deepOptimizeButtonDisabled =
     !canOptimize || (scanInProgress && optimizePendingRef.current !== "deep");
+
+  useEffect(() => {
+    if (!isArchiveSource) return;
+    if (uploadMode === "mix") {
+      setUploadMode("payload");
+    }
+  }, [isArchiveSource, uploadMode]);
 
   const formatUptime = (seconds: number) => {
     const days = Math.floor(seconds / 86400);
@@ -6754,8 +6792,12 @@ export default function App() {
                         }
                       >
                         <option value="payload">{tr("upload_mode_payload")}</option>
-                        <option value="ftp">{tr("upload_mode_ftp")}</option>
-                        <option value="mix">{tr("upload_mode_mix")}</option>
+                        <option value="ftp">
+                          {tr("upload_mode_ftp")}
+                        </option>
+                        <option value="mix" disabled={isArchiveSource}>
+                          {tr("upload_mode_mix")}
+                        </option>
                       </select>
                     </label>
                     {uploadMode !== "payload" && (
@@ -7671,8 +7713,12 @@ export default function App() {
                       const extractionElapsedSec = item.started_at
                         ? Math.max(1, Math.floor(Date.now() / 1000) - item.started_at)
                         : 0;
+                      const extractionEma =
+                        extractionSpeedRef.current.get(item.id)?.ema ?? 0;
                       const extractionSpeed =
-                        extractionElapsedSec > 0
+                        extractionEma > 0
+                          ? extractionEma
+                          : extractionElapsedSec > 0
                           ? item.processed_bytes / extractionElapsedSec
                           : 0;
                       const extractionEta =
@@ -8013,7 +8059,7 @@ export default function App() {
                         {tr("upload")} {tr("file")}
                       </button>
                       <button
-                        className="btn"
+                        className="btn primary"
                         onClick={handleManageUploadFolder}
                         disabled={manageBusy}
                       >
