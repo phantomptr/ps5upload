@@ -66,7 +66,7 @@ First, your PS5 needs to be listening for the connection. You need to send the `
 If you're on Linux or macOS, this is the fastest way. Replace the IP with your PS5's IP.
 ```bash
 # Send to port 9021 (common for payload loaders)
-nc -w 1 192.168.0.xxx 9021 < payload/ps5upload.elf
+nc -w 1 192.168.137.xxx 9021 < payload/ps5upload.elf
 ```
 
 **Option B: ELF Loader Tool**
