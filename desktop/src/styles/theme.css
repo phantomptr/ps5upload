@@ -1090,7 +1090,7 @@ input::placeholder {
   overflow: auto;
   border: 1px solid var(--ps-border);
   border-radius: 14px;
-  background: rgba(9, 14, 26, 0.6);
+  background: var(--ps-surface-alt);
 }
 
 .manage-list table {
@@ -1997,7 +1997,6 @@ input::placeholder {
       "right"
       "status";
   }
-
   .panel {
     width: 100%;
   }
@@ -2029,4 +2028,14 @@ input,
 select,
 textarea {
   font-family: inherit;
+}
+
+.status-error {
+  color: var(--ps-red);
+  font-weight: 600;
+}
+
+.status-stopped {
+  color: var(--ps-orange);
+  font-weight: 600;
 }

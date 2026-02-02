@@ -33,7 +33,9 @@ const normalizeResumeMode = (value?: string | null): ResumeOption => {
   return "none";
 };
 
-type TabId = "transfer" | "payload" | "manage" | "faq";
+type TabId = "transfer" | "status" | "queues" | "manage" | "faq";
+type UploadMode = "payload" | "ftp" | "mix";
+type FtpPortOption = "auto" | "1337" | "2121";
 
 type TransferCompleteEvent = {
   run_id: number;
@@ -54,6 +56,12 @@ type TransferStatusSnapshot = {
   files: number;
   elapsed_secs: number;
   current_file: string;
+  payload_sent?: number;
+  ftp_sent?: number;
+  payload_speed_bps?: number;
+  ftp_speed_bps?: number;
+  total_speed_bps?: number;
+  upload_mode?: UploadMode | null;
   requested_optimize?: boolean | null;
   auto_tune_connections?: boolean | null;
   effective_optimize?: boolean | null;
@@ -155,6 +163,9 @@ type QueueItem = {
     auto_tune_connections: boolean;
     optimize_upload: boolean;
     chmod_after_upload?: boolean;
+    upload_mode?: UploadMode;
+    ftp_port?: FtpPortOption;
+    ftp_mix_threshold_mb?: number;
     rar_extract_mode: RarExtractMode;
     rar_temp_root?: string;
     override_on_conflict?: boolean;
@@ -174,8 +185,13 @@ type TransferRecord = {
   dest_path: string;
   file_count: number;
   total_bytes: number;
+  payload_bytes?: number | null;
+  ftp_bytes?: number | null;
   duration_secs: number;
   speed_bps: number;
+  payload_speed_bps?: number | null;
+  ftp_speed_bps?: number | null;
+  upload_mode?: UploadMode | null;
   success: boolean;
   error?: string | null;
   via_queue?: boolean;
@@ -229,6 +245,9 @@ type AppConfig = {
   optimize_upload: boolean;
   rar_extract_mode: string;
   rar_temp: string;
+  upload_mode?: UploadMode;
+  ftp_port?: string | number;
+  ftp_mix_threshold_mb?: number;
   window_width: number;
   window_height: number;
   window_x: number;
@@ -427,6 +446,12 @@ type TransferState = {
   files: number;
   elapsed: number;
   currentFile: string;
+  payloadSent?: number;
+  ftpSent?: number;
+  payloadSpeedBps?: number;
+  ftpSpeedBps?: number;
+  totalSpeedBps?: number;
+  uploadMode?: UploadMode | null;
   requestedOptimize?: boolean | null;
   autoTuneConnections?: boolean | null;
   effectiveOptimize?: boolean | null;
@@ -441,7 +466,29 @@ const formatBytes = (bytes: number | bigint) => {
   if (value >= gb) return `${(value / gb).toFixed(2)} GB`;
   if (value >= mb) return `${(value / mb).toFixed(2)} MB`;
   if (value >= kb) return `${(value / kb).toFixed(2)} KB`;
-  return `${value} B`;
+  return `${value.toFixed(2)} B`;
+};
+
+const formatSpeed = (bps: number) => (bps > 0 ? `${formatBytes(bps)}/s` : "—");
+
+const buildUploadSpeedLabel = (
+  mode: UploadMode | null | undefined,
+  payloadBps: number,
+  ftpBps: number,
+  totalBps: number,
+  useAvgLabel = false,
+  totalLabel = "Total",
+  payloadLabel = "Payload",
+  ftpLabel = "FTP"
+) => {
+  const avg = useAvgLabel ? "Avg " : "";
+  if (mode === "mix") {
+    return `${avg}${payloadLabel} ${formatSpeed(payloadBps)} · ${avg}${ftpLabel} ${formatSpeed(ftpBps)} · ${avg}${totalLabel} ${formatSpeed(totalBps)}`;
+  }
+  if (mode === "ftp") {
+    return `${avg}${ftpLabel} ${formatSpeed(ftpBps || totalBps)}`;
+  }
+  return `${avg}${payloadLabel} ${formatSpeed(payloadBps || totalBps)}`;
 };
 
 const renderInlineMarkdown = (text: string, onLink: (url: string) => void, keyPrefix: string) => {
@@ -963,6 +1010,9 @@ export default function App() {
   const [overrideOnConflict, setOverrideOnConflict] = useState(true);
   const [compression, setCompression] = useState<CompressionOption>("auto");
   const [resumeMode, setResumeMode] = useState<ResumeOption>("none");
+  const [uploadMode, setUploadMode] = useState<UploadMode>("payload");
+  const [ftpPort, setFtpPort] = useState<FtpPortOption>("auto");
+  const [ftpMixThreshold, setFtpMixThreshold] = useState(1);
   const [connections, setConnections] = useState(4);
   const [bandwidthLimit, setBandwidthLimit] = useState(0);
   const [optimizeMode, setOptimizeMode] = useState<OptimizeMode>("none");
@@ -1069,7 +1119,8 @@ export default function App() {
   const tabs = useMemo(
     () => [
       { id: "transfer" as TabId, label: tr("transfer"), icon: "↑" },
-      { id: "payload" as TabId, label: tr("queues"), icon: "◎" },
+      { id: "queues" as TabId, label: tr("queues"), icon: "▣" },
+      { id: "status" as TabId, label: tr("status"), icon: "◎" },
       { id: "manage" as TabId, label: tr("manage"), icon: "≡" },
       { id: "faq" as TabId, label: tr("faq"), icon: "?" }
     ],
@@ -1099,6 +1150,12 @@ export default function App() {
     files: 0,
     elapsed: 0,
     currentFile: "",
+    payloadSent: 0,
+    ftpSent: 0,
+    payloadSpeedBps: 0,
+    ftpSpeedBps: 0,
+    totalSpeedBps: 0,
+    uploadMode: null,
     requestedOptimize: null,
     autoTuneConnections: null,
     effectiveOptimize: null,
@@ -1226,6 +1283,12 @@ export default function App() {
               files: toSafeNumber(status.files),
               elapsed: toSafeNumber(status.elapsed_secs),
               currentFile: status.current_file ?? "",
+              payloadSent: toSafeNumber(status.payload_sent),
+              ftpSent: toSafeNumber(status.ftp_sent),
+              payloadSpeedBps: toSafeNumber(status.payload_speed_bps),
+              ftpSpeedBps: toSafeNumber(status.ftp_speed_bps),
+              totalSpeedBps: toSafeNumber(status.total_speed_bps),
+              uploadMode: (status.upload_mode as UploadMode | null | undefined) ?? null,
               requestedOptimize: status.requested_optimize ?? null,
               autoTuneConnections: status.auto_tune_connections ?? null,
               effectiveOptimize: status.effective_optimize ?? null,
@@ -1240,6 +1303,12 @@ export default function App() {
                   prev.files === nextState.files &&
                   prev.elapsed === nextState.elapsed &&
                   prev.currentFile === nextState.currentFile &&
+                  prev.payloadSent === nextState.payloadSent &&
+                  prev.ftpSent === nextState.ftpSent &&
+                  prev.payloadSpeedBps === nextState.payloadSpeedBps &&
+                  prev.ftpSpeedBps === nextState.ftpSpeedBps &&
+                  prev.totalSpeedBps === nextState.totalSpeedBps &&
+                  prev.uploadMode === nextState.uploadMode &&
                   prev.requestedOptimize === nextState.requestedOptimize &&
                   prev.autoTuneConnections === nextState.autoTuneConnections &&
                   prev.effectiveOptimize === nextState.effectiveOptimize &&
@@ -2105,6 +2174,24 @@ export default function App() {
         setBandwidthLimit(normalizedConfig.bandwidth_limit_mbps || 0);
         setOverrideOnConflict(normalizedConfig.override_on_conflict ?? false);
         setResumeMode(normalizeResumeMode(normalizedConfig.resume_mode));
+        setUploadMode(
+          normalizedConfig.upload_mode === "ftp" || normalizedConfig.upload_mode === "mix"
+            ? normalizedConfig.upload_mode
+            : "payload"
+        );
+        const ftpPortValue =
+          normalizedConfig.ftp_port === 1337 ||
+          normalizedConfig.ftp_port === "1337" ||
+          normalizedConfig.ftp_port === 2121 ||
+          normalizedConfig.ftp_port === "2121"
+            ? String(normalizedConfig.ftp_port)
+            : "auto";
+        setFtpPort(ftpPortValue as FtpPortOption);
+        setFtpMixThreshold(
+          typeof normalizedConfig.ftp_mix_threshold_mb === "number"
+            ? Math.max(1, normalizedConfig.ftp_mix_threshold_mb)
+            : 1
+        );
         setAutoTune(normalizedConfig.auto_tune_connections ?? true);
         setOptimizeMode(normalizedConfig.optimize_upload ? "optimize" : "none");
         setUseTemp(normalizedConfig.use_temp ?? false);
@@ -2585,6 +2672,9 @@ export default function App() {
       bandwidth_limit_mbps: bandwidthLimit,
       override_on_conflict: overrideOnConflict,
       resume_mode: resumeMode,
+      upload_mode: uploadMode,
+      ftp_port: ftpPort,
+      ftp_mix_threshold_mb: ftpMixThreshold,
       auto_tune_connections: autoTune,
       optimize_upload: optimizeActive,
       update_channel: includePrerelease ? "all" : "stable",
@@ -2618,6 +2708,9 @@ export default function App() {
     bandwidthLimit,
     overrideOnConflict,
     resumeMode,
+    uploadMode,
+    ftpPort,
+    ftpMixThreshold,
     autoTune,
     optimizeActive,
     includePrerelease,
@@ -2672,14 +2765,21 @@ export default function App() {
             (snapshot.startedAt ? (Date.now() - snapshot.startedAt) / 1000 : 0);
           const speed = duration > 0 ? completeBytes / duration : 0;
           if (snapshot.source && snapshot.dest) {
+            const payloadBytes = toSafeNumber(snapshot.state.payloadSent, 0);
+            const ftpBytes = toSafeNumber(snapshot.state.ftpSent, 0);
             const record: TransferRecord = {
               timestamp: Math.floor(Date.now() / 1000),
               source_path: snapshot.source,
               dest_path: snapshot.dest,
               file_count: completeFiles,
               total_bytes: completeBytes,
+              payload_bytes: payloadBytes || null,
+              ftp_bytes: ftpBytes || null,
               duration_secs: duration,
               speed_bps: speed,
+              payload_speed_bps: payloadBytes > 0 && duration > 0 ? payloadBytes / duration : null,
+              ftp_speed_bps: ftpBytes > 0 && duration > 0 ? ftpBytes / duration : null,
+              upload_mode: snapshot.state.uploadMode ?? uploadMode,
               success: true,
               via_queue: snapshot.viaQueue,
               game_meta: snapshot.gameMeta ?? null,
@@ -2752,14 +2852,21 @@ export default function App() {
               (snapshot.startedAt ? (Date.now() - snapshot.startedAt) / 1000 : 0);
             const speed = duration > 0 ? bytes / duration : 0;
             if (snapshot.source && snapshot.dest) {
+            const payloadBytes = toSafeNumber(snapshot.state.payloadSent, 0);
+            const ftpBytes = toSafeNumber(snapshot.state.ftpSent, 0);
             const record: TransferRecord = {
               timestamp: Math.floor(Date.now() / 1000),
               source_path: snapshot.source,
               dest_path: snapshot.dest,
               file_count: files,
               total_bytes: bytes,
+              payload_bytes: payloadBytes || null,
+              ftp_bytes: ftpBytes || null,
               duration_secs: duration,
               speed_bps: speed,
+              payload_speed_bps: payloadBytes > 0 && duration > 0 ? payloadBytes / duration : null,
+              ftp_speed_bps: ftpBytes > 0 && duration > 0 ? ftpBytes / duration : null,
+              upload_mode: snapshot.state.uploadMode ?? uploadMode,
               success: true,
               via_queue: snapshot.viaQueue,
               game_meta: snapshot.gameMeta ?? null,
@@ -2818,14 +2925,21 @@ export default function App() {
           const speed =
             duration > 0 ? snapshot.state.sent / duration : 0;
           if (snapshot.source && snapshot.dest) {
+          const payloadBytes = toSafeNumber(snapshot.state.payloadSent, 0);
+          const ftpBytes = toSafeNumber(snapshot.state.ftpSent, 0);
           const record: TransferRecord = {
             timestamp: Math.floor(Date.now() / 1000),
             source_path: snapshot.source,
             dest_path: snapshot.dest,
             file_count: snapshot.state.files,
             total_bytes: snapshot.state.sent,
+            payload_bytes: payloadBytes || null,
+            ftp_bytes: ftpBytes || null,
             duration_secs: duration,
             speed_bps: speed,
+            payload_speed_bps: payloadBytes > 0 && duration > 0 ? payloadBytes / duration : null,
+            ftp_speed_bps: ftpBytes > 0 && duration > 0 ? ftpBytes / duration : null,
+            upload_mode: snapshot.state.uploadMode ?? uploadMode,
             success: false,
             error: event.payload.message,
             via_queue: snapshot.viaQueue,
@@ -3046,6 +3160,18 @@ export default function App() {
           setManageModalLastProgressAt(Date.now());
           setManageBusy(true);
           const now = Date.now();
+          if (
+            event.payload.current_file &&
+            event.payload.processed === 0 &&
+            event.payload.total === 0
+          ) {
+            setManageProgress((prev) => ({
+              ...prev,
+              op: event.payload.op,
+              currentFile: event.payload.current_file ?? prev.currentFile
+            }));
+            return;
+          }
           if (event.payload.op !== lastManageOp.current) {
             lastManageOp.current = event.payload.op;
             lastManageProgressUpdate.current = 0;
@@ -3298,6 +3424,8 @@ export default function App() {
   const toNumber = (value: number | bigint) => toSafeNumber(value, 0);
   const transferTotal = toNumber(transferState.total || 0);
   const transferSent = toNumber(transferState.sent || 0);
+  const transferPayloadSent = toNumber(transferState.payloadSent || 0);
+  const transferFtpSent = toNumber(transferState.ftpSent || 0);
   const transferPercent =
     transferTotal > 0 ? Math.min(100, (transferSent / transferTotal) * 100) : 0;
   const transferElapsedDisplay =
@@ -3315,9 +3443,50 @@ export default function App() {
     transferSent >= transferSpeedMinBytes;
   const transferSpeedDisplay =
     transferSpeedReady && transferSpeedEma > 0 ? transferSpeedEma : 0;
+  const transferPayloadSpeedRaw = toSafeNumber(transferState.payloadSpeedBps, 0);
+  const transferFtpSpeedRaw = toSafeNumber(transferState.ftpSpeedBps, 0);
+  const transferTotalSpeedRaw = toSafeNumber(transferState.totalSpeedBps, 0);
+  const transferTotalSpeedDisplay =
+    transferTotalSpeedRaw > 0 ? transferTotalSpeedRaw : transferSpeedDisplay;
+  const transferPayloadSpeedDisplay =
+    transferPayloadSpeedRaw > 0
+      ? transferPayloadSpeedRaw
+      : transferState.uploadMode !== "ftp"
+      ? transferSpeedDisplay
+      : 0;
+  const transferFtpSpeedDisplay =
+    transferFtpSpeedRaw > 0
+      ? transferFtpSpeedRaw
+      : transferState.uploadMode === "ftp"
+      ? transferSpeedDisplay
+      : 0;
+  const transferModeForDisplay = transferState.uploadMode ?? uploadMode;
+  const transferModeLabel =
+    transferModeForDisplay === "ftp"
+      ? tr("upload_mode_ftp")
+      : transferModeForDisplay === "mix"
+      ? tr("upload_mode_mix")
+      : tr("upload_mode_payload");
+  const transferSpeedSummary = buildUploadSpeedLabel(
+    transferModeForDisplay,
+    transferPayloadSpeedDisplay,
+    transferFtpSpeedDisplay,
+    transferTotalSpeedDisplay,
+    false,
+    tr("total"),
+    tr("upload_mode_payload"),
+    tr("upload_mode_ftp")
+  );
+  const transferPayloadSpeedLabel = formatSpeed(transferPayloadSpeedDisplay);
+  const transferFtpSpeedLabel = formatSpeed(transferFtpSpeedDisplay);
+  const transferTotalSpeedLabel = formatSpeed(transferTotalSpeedDisplay);
+  const transferPayloadBytesLabel = transferPayloadSent > 0 ? formatBytes(transferPayloadSent) : "—";
+  const transferFtpBytesLabel = transferFtpSent > 0 ? formatBytes(transferFtpSent) : "—";
+  const transferTotalBytesLabel = transferSent > 0 ? formatBytes(transferSent) : "—";
   const transferBottleneck = useMemo(() => {
     const transfer = payloadFullStatus?.transfer;
     if (!transfer) return null;
+    if (transferState.uploadMode === "ftp") return null;
     const active = (transfer.active_sessions ?? 0) > 0 || transferActive;
     if (!active) return null;
     const recvBps = toSafeNumber(transfer.recv_rate_bps, 0);
@@ -3329,7 +3498,7 @@ export default function App() {
     const payloadCpu = toSafeNumber(payloadFullStatus?.system?.cpu_percent, -1);
     const payloadProcCpu = toSafeNumber(payloadFullStatus?.system?.proc_cpu_percent, -1);
     const payloadNetRx = toSafeNumber(payloadFullStatus?.system?.net_rx_bps, -1);
-    const clientSendBps = transferSpeedDisplay;
+    const clientSendBps = transferPayloadSpeedDisplay || transferSpeedDisplay;
     const hasBackpressure = backpressureEvents > 0 || backpressureMs > 0;
     const queueBusy = writerQueue > 0 || packQueue > 0;
 
@@ -3343,7 +3512,7 @@ export default function App() {
       return { key: "client", label: tr("bottleneck_client") };
     }
     return { key: "unknown", label: tr("bottleneck_unknown") };
-  }, [payloadFullStatus, transferSpeedDisplay, transferActive]);
+  }, [payloadFullStatus, transferPayloadSpeedDisplay, transferSpeedDisplay, transferActive, transferState.uploadMode]);
   useEffect(() => {
     if (!transferActive || !transferBottleneck) {
       lastBottleneckRef.current = null;
@@ -3367,8 +3536,8 @@ export default function App() {
     pushClientLog(`Bottleneck: ${label}`, "debug");
   }, [transferBottleneck, transferActive]);
   const transferEtaSeconds =
-    transferTotal > transferSent && transferSpeedDisplay > 0
-      ? Math.ceil((transferTotal - transferSent) / transferSpeedDisplay)
+    transferTotal > transferSent && transferTotalSpeedDisplay > 0
+      ? Math.ceil((transferTotal - transferSent) / transferTotalSpeedDisplay)
       : null;
   const transferPercentLabel =
     transferTotal > 0 ? `${Math.floor(transferPercent)}%` : "Streaming";
@@ -3890,7 +4059,7 @@ export default function App() {
   }, [ip]);
 
   useEffect(() => {
-    const enabled = activeTab === "payload" && isConnected && ip.trim().length > 0;
+    const enabled = activeTab === "status" && isConnected && ip.trim().length > 0;
     invoke("payload_polling_set", { enabled }).catch(() => {
       // ignore poll toggle failures
     });
@@ -3905,14 +4074,14 @@ export default function App() {
     if (!isConnected || !ip.trim()) return;
     const hasRunningExtraction =
       payloadFullStatus?.items?.some((item) => item.status === "running") ?? false;
-    const shouldPoll = activeTab === "payload" || hasRunningExtraction;
+    const shouldPoll = activeTab === "queues" || hasRunningExtraction;
     if (!shouldPoll) return;
     const intervalMs = 1000;
     const interval = setInterval(() => {
       if (isConnected && ip.trim()) {
         handleRefreshQueueStatus(true);
       }
-      if (activeTab === "payload") {
+      if (activeTab === "queues") {
         handleRefreshUploadQueue();
       }
     }, intervalMs);
@@ -4188,8 +4357,12 @@ export default function App() {
       ...record,
       file_count: toSafeNumber(record.file_count),
       total_bytes: toSafeNumber(record.total_bytes),
+      payload_bytes: record.payload_bytes != null ? toSafeNumber(record.payload_bytes) : null,
+      ftp_bytes: record.ftp_bytes != null ? toSafeNumber(record.ftp_bytes) : null,
       duration_secs: toSafeNumber(record.duration_secs),
-      speed_bps: toSafeNumber(record.speed_bps)
+      speed_bps: toSafeNumber(record.speed_bps),
+      payload_speed_bps: record.payload_speed_bps != null ? toSafeNumber(record.payload_speed_bps) : null,
+      ftp_speed_bps: record.ftp_speed_bps != null ? toSafeNumber(record.ftp_speed_bps) : null
     })),
     rev: data.rev,
     updated_at: data.updated_at
@@ -4424,6 +4597,9 @@ export default function App() {
       auto_tune_connections: autoTune,
       optimize_upload: optimizeActive,
       chmod_after_upload: chmodAfterUpload,
+      upload_mode: uploadMode,
+      ftp_port: ftpPort,
+      ftp_mix_threshold_mb: ftpMixThreshold,
       rar_extract_mode: rarExtractMode,
       rar_temp_root: rarTemp,
       override_on_conflict: overrideOnConflict
@@ -4767,6 +4943,9 @@ export default function App() {
           connections,
           resume_mode: resumeToUse,
           compression,
+          upload_mode: uploadMode,
+          ftp_port: ftpPort,
+          ftp_mix_threshold_mb: ftpMixThreshold,
           bandwidth_limit_mbps: bandwidthLimit,
           auto_tune_connections: autoTune,
           optimize_upload: optimizeActive,
@@ -4933,6 +5112,9 @@ export default function App() {
           connections: settings?.connections ?? connections,
           resume_mode: itemResumeMode,
           compression: settings?.compression ?? compression,
+          upload_mode: settings?.upload_mode ?? uploadMode,
+          ftp_port: settings?.ftp_port ?? ftpPort,
+          ftp_mix_threshold_mb: settings?.ftp_mix_threshold_mb ?? ftpMixThreshold,
           bandwidth_limit_mbps: settings?.bandwidth_limit_mbps ?? bandwidthLimit,
           auto_tune_connections: settings?.auto_tune_connections ?? autoTune,
           optimize_upload: settings?.optimize_upload ?? optimizeActive,
@@ -5165,6 +5347,9 @@ export default function App() {
     setOverrideOnConflict(true);
     setCompression("auto");
     setResumeMode("none");
+    setUploadMode("payload");
+    setFtpPort("auto");
+    setFtpMixThreshold(1);
     setConnections(4);
     setBandwidthLimit(0);
     setOptimizeMode("none");
@@ -5333,8 +5518,7 @@ export default function App() {
     }
     try {
       if (manageDestAction === "Move") {
-        await invoke("manage_copy", { ip, src_path: srcPath, dst_path: dstPath });
-        await invoke("manage_delete", { ip, path: srcPath });
+        await invoke("manage_move", { ip, src_path: srcPath, dst_path: dstPath });
         setManageModalDone(true);
         setManageModalError(null);
         setManageModalStatus("Done");
@@ -5453,7 +5637,14 @@ export default function App() {
       transferActive ? "Uploading (deprioritized)..." : "Uploading..."
     );
     try {
-      await invoke("manage_upload", { ip, dest_root: managePath, paths });
+      await invoke("manage_upload", {
+        ip,
+        dest_root: managePath,
+        paths,
+        upload_mode: uploadMode,
+        ftp_port: ftpPort,
+        ftp_mix_threshold_mb: ftpMixThreshold
+      });
     } catch (err) {
       setManageBusy(false);
       setManageStatus(`Error: ${String(err)}`);
@@ -5484,7 +5675,14 @@ export default function App() {
       transferActive ? "Uploading (deprioritized)..." : "Uploading..."
     );
     try {
-      await invoke("manage_upload", { ip, dest_root: managePath, paths });
+      await invoke("manage_upload", {
+        ip,
+        dest_root: managePath,
+        paths,
+        upload_mode: uploadMode,
+        ftp_port: ftpPort,
+        ftp_mix_threshold_mb: ftpMixThreshold
+      });
     } catch (err) {
       setManageBusy(false);
       setManageStatus(`Error: ${String(err)}`);
@@ -6246,7 +6444,7 @@ export default function App() {
         <section className="content">
           {activeTab === "transfer" && (
             <div className="grid-two">
-              <div className="card source-card">
+              <div className="card wide source-card">
                 <header className="card-title">
                   <span className="card-title-icon">▢</span>
                   {tr("source")}
@@ -6341,7 +6539,7 @@ export default function App() {
                 )}
               </div>
 
-              <div className="card">
+              <div className="card wide">
                 <header className="card-title">
                   <span className="card-title-icon">◉</span>
                   {tr("destination")}
@@ -6549,6 +6747,7 @@ export default function App() {
                         {tr("connections_auto_note")}
                       </p>
                     )}
+                    <p className="muted small">{tr("ftp_connections_hint")}</p>
                     <p className="muted small">{tr("connections_note")}</p>
                     <p className="muted small">{tr("connections_note_extra")}</p>
                   </div>
@@ -6590,6 +6789,55 @@ export default function App() {
                         <p className="muted small">{tr("resume_note")}</p>
                         <p className="muted small">{tr("resume_override_note")}</p>
                         <p className="muted small">{tr("resume_note_change")}</p>
+                      </>
+                    )}
+                    <label className="field">
+                      <span>{tr("upload_mode")}</span>
+                      <select
+                        value={uploadMode}
+                        onChange={(event) =>
+                          setUploadMode(event.target.value as UploadMode)
+                        }
+                      >
+                        <option value="payload">{tr("upload_mode_payload")}</option>
+                        <option value="ftp">{tr("upload_mode_ftp")}</option>
+                        <option value="mix">{tr("upload_mode_mix")}</option>
+                      </select>
+                    </label>
+                    {uploadMode !== "payload" && (
+                      <label className="field">
+                        <span>{tr("ftp_port")}</span>
+                        <select
+                          value={ftpPort}
+                          onChange={(event) =>
+                            setFtpPort(event.target.value as FtpPortOption)
+                          }
+                        >
+                          <option value="auto">{tr("ftp_port_auto")}</option>
+                          <option value="1337">1337</option>
+                          <option value="2121">2121</option>
+                        </select>
+                      </label>
+                    )}
+                    {uploadMode === "mix" && (
+                      <>
+                        <label className="field">
+                          <span>{tr("ftp_mix_threshold")}</span>
+                          <input
+                            type="number"
+                            min={1}
+                            step={1}
+                            value={ftpMixThreshold}
+                            onChange={(event) =>
+                              setFtpMixThreshold(
+                                Number.isFinite(Number(event.target.value))
+                                  ? Math.max(1, Number(event.target.value))
+                                  : 1
+                              )
+                            }
+                          />
+                        </label>
+                        <p className="muted small">{tr("ftp_mix_threshold_desc")}</p>
                       </>
                     )}
                     <div className="card-divider" />
@@ -6639,9 +6887,9 @@ export default function App() {
             </div>
           )}
 
-          {activeTab === "payload" && (
+          {activeTab === "status" && (
             <div className="grid-two">
-              <div className="card">
+              <div className="card wide">
                 <header className="card-title">
                   <span className="card-title-icon">◎</span>
                   {tr("payload_status")}
@@ -6836,6 +7084,35 @@ export default function App() {
                           ) : null}
                         </div>
                       )}
+                      <div className="payload-metric-card">
+                        <div className="payload-metric-title">{tr("client_transfer")}</div>
+                        <div className="payload-metric-row">
+                          <span>{tr("upload_mode")}</span>
+                          <span>{transferModeLabel}</span>
+                        </div>
+                        <div className="payload-metric-row">
+                          <span>{tr("upload_mode_payload")}</span>
+                          <span>
+                            {transferPayloadSpeedLabel} · {transferPayloadBytesLabel}
+                          </span>
+                        </div>
+                        <div className="payload-metric-row">
+                          <span>{tr("upload_mode_ftp")}</span>
+                          <span>
+                            {transferFtpSpeedLabel} · {transferFtpBytesLabel}
+                          </span>
+                        </div>
+                        <div className="payload-metric-row">
+                          <span>{tr("total")}</span>
+                          <span>
+                            {transferTotalSpeedLabel} · {transferTotalBytesLabel}
+                          </span>
+                        </div>
+                        <div className="payload-metric-row">
+                          <span>{tr("status")}</span>
+                          <span>{transferState.status}</span>
+                        </div>
+                      </div>
                       {payloadFullStatus.transfer && (
                         <div className="payload-metric-card">
                           <div className="payload-metric-title">{tr("tuning_metrics")}</div>
@@ -6921,7 +7198,11 @@ export default function App() {
                   </div>
                 )}
               </div>
+            </div>
+          )}
 
+          {activeTab === "queues" && (
+            <div className="grid-two">
               <div className="card wide">
                 <header className="card-title">
                   <span className="card-title-icon">▣</span>
@@ -7026,13 +7307,6 @@ export default function App() {
                           ? isUploadCompleted(item)
                           : isUploadFailed(item);
                       if (!showItem) return null;
-                      const statusClass = item.status === "InProgress"
-                        ? "active"
-                        : item.status === "Completed"
-                        ? "completed"
-                        : item.status === "Failed"
-                        ? "failed"
-                        : "";
                       const isActive = item.id === currentQueueItemId;
                       const isStalled = item.status === "InProgress" && !transferActive;
                       const uploadFailedMessage = isUploadFailed(item)
@@ -7041,6 +7315,13 @@ export default function App() {
                       const isUserStopped =
                         uploadFailedMessage === USER_STOPPED_SENTINEL ||
                         uploadFailedMessage === tr("stopped");
+                      const statusClass = item.status === "InProgress"
+                        ? "active"
+                        : item.status === "Completed"
+                        ? "completed"
+                        : isUploadFailed(item)
+                        ? isUserStopped ? "stopped" : "failed"
+                        : "";
                       const destPathForItem = buildDestPathForItem(
                         item.storage_base || storageRoot,
                         item
@@ -7133,7 +7414,7 @@ export default function App() {
                                 {isUserStopped
                                   ? tr("stopped_by_user")
                                   : uploadFailedMessage || "Unknown error"}
-                                {failedAt ? ` · ${tr("failed_at", { time: failedAt })}` : ""}
+                                {failedAt ? ` · ${isUserStopped ? tr("stopped_at", { time: failedAt }) : tr("failed_at", { time: failedAt })}` : ""}
                                 {failedDetailParts.length > 0
                                   ? ` · ${failedDetailParts.join(" · ")}`
                                   : item.size_bytes != null
@@ -7165,10 +7446,7 @@ export default function App() {
                                         ? `${formatBytes(transferState.sent)} / ${formatBytes(transferState.total)}`
                                         : `${formatBytes(transferState.sent)} transferred`}{" "}
                                       · {transferState.files} {tr("files")} ·{" "}
-                                      {transferSpeedDisplay > 0
-                                        ? `Avg ${formatBytes(transferSpeedDisplay)}/s`
-                                        : "Avg —"}{" "}
-                                      ·{" "}
+                                      {transferSpeedSummary} ·{" "}
                                       {transferElapsedDisplay > 0
                                         ? `Elapsed ${formatDuration(transferElapsedDisplay)}`
                                         : "Elapsed —"}{" "}
@@ -8020,7 +8298,28 @@ export default function App() {
                 historyData.records
                   .slice()
                   .reverse()
-                  .map((record) => (
+                  .map((record) => {
+                    const recordMode = record.upload_mode ?? "payload";
+                    const durationSec = record.duration_secs || 0;
+                    const payloadSpeed =
+                      record.payload_bytes && durationSec > 0
+                        ? record.payload_bytes / durationSec
+                        : 0;
+                    const ftpSpeed =
+                      record.ftp_bytes && durationSec > 0
+                        ? record.ftp_bytes / durationSec
+                        : 0;
+                    const historySpeedLabel = buildUploadSpeedLabel(
+                      recordMode,
+                      payloadSpeed,
+                      ftpSpeed,
+                      record.speed_bps || 0,
+                      false,
+                      tr("total"),
+                      tr("upload_mode_payload"),
+                      tr("upload_mode_ftp")
+                    );
+                    return (
                     <div className="history-item" key={record.timestamp}>
                       <div className="history-main">
                         <div className="history-title">
@@ -8071,7 +8370,7 @@ export default function App() {
                         </span>
                         <span className="history-metric history-metric-split">
                           <span>{formatBytes(record.total_bytes)}</span>
-                          <span>{formatBytes(record.speed_bps)}/s</span>
+                          <span>{historySpeedLabel}</span>
                         </span>
                         <span className="history-metric">
                           {formatDuration(record.duration_secs)}
@@ -8084,7 +8383,8 @@ export default function App() {
                         </button>
                       </div>
                     </div>
-                  ))
+                  );
+                })
               )}
             </div>
           ) : (
@@ -8299,6 +8599,15 @@ export default function App() {
               const tempEffective = (settings.use_temp ?? useTemp)
                 ? onLabel
                 : offLabel;
+              const uploadModeValue = settings.upload_mode ?? uploadMode;
+              const uploadModeLabel =
+                uploadModeValue === "ftp"
+                  ? tr("upload_mode_ftp")
+                  : uploadModeValue === "mix"
+                  ? tr("upload_mode_mix")
+                  : tr("upload_mode_payload");
+              const ftpPortLabel = settings.ftp_port ?? ftpPort;
+              const ftpThresholdLabel = settings.ftp_mix_threshold_mb ?? ftpMixThreshold;
               const lastRunLabel =
                 uploadInfoItem.last_run_action === "resume"
                   ? tr("resumed")
@@ -8411,6 +8720,22 @@ export default function App() {
                         <div className="info-label">{tr("compression")}</div>
                         <div className="info-value">{settings.compression ?? compression}</div>
                       </div>
+                      <div className="info-row">
+                        <div className="info-label">{tr("upload_mode")}</div>
+                        <div className="info-value">{uploadModeLabel}</div>
+                      </div>
+                      {uploadModeValue !== "payload" && (
+                        <div className="info-row">
+                          <div className="info-label">{tr("ftp_port")}</div>
+                          <div className="info-value">{ftpPortLabel}</div>
+                        </div>
+                      )}
+                      {uploadModeValue === "mix" && (
+                        <div className="info-row">
+                          <div className="info-label">{tr("ftp_mix_threshold")}</div>
+                          <div className="info-value">{`${ftpThresholdLabel} MB`}</div>
+                        </div>
+                      )}
                       <div className="info-row">
                         <div className="info-label">{tr("bandwidth")}</div>
                         <div className="info-value">{bandwidth}</div>

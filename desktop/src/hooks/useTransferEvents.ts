@@ -105,6 +105,10 @@ export function useTransferEvents() {
               total: bytes,
               files,
             });
+          } else if (message === 'Stopped by user') {
+            useTransferStore.setState({
+              status: "Stopped",
+            });
           } else {
             useTransferStore.setState({
               status: `Error: ${message}`,
