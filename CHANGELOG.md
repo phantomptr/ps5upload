@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 This project follows Semantic Versioning.
 
+## [1.4.2] - 2026-02-02
+
+### Added
+- Auto-recovery for payload uploads: waits for payload to recover, resumes by size, and continues automatically.
+- Payload status now reports abort timestamp, reason, and last session id for better diagnostics.
+
+### Fixed
+- Abort handling now force-closes active upload sockets so payload doesn’t hang in an active session state.
+
 ## [1.4.1] - 2026-02-02
 
 ### Added

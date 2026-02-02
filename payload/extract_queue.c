@@ -194,7 +194,8 @@ char *extract_queue_get_status_json(void) {
         "\"active_sessions\":%d,\"backpressure_events\":%llu,\"backpressure_wait_ms\":%llu,"
         "\"bytes_received\":%llu,\"bytes_written\":%llu,\"recv_rate_bps\":%llu,\"write_rate_bps\":%llu,"
         "\"tune_level\":%d,\"recommend_pack_limit\":%llu,\"recommend_pace_ms\":%llu,\"recommend_rate_limit_bps\":%llu,"
-        "\"last_progress\":%ld,\"abort_requested\":%s,\"workers_initialized\":%s},\"items\":[",
+        "\"last_progress\":%ld,\"abort_requested\":%s,\"workers_initialized\":%s,"
+        "\"abort_at\":%ld,\"abort_session_id\":%llu,\"abort_reason\":\"%s\"},\"items\":[",
         PS5_UPLOAD_VERSION, uptime, g_queue.count, g_thread_running ? "true" : "false",
         (long)g_queue_updated_at, (long)last_extract_progress,
         sys_stats.cpu_percent, sys_stats.proc_cpu_percent, sys_stats.rss_bytes, sys_stats.thread_count,
@@ -221,7 +222,10 @@ char *extract_queue_get_status_json(void) {
         (unsigned long long)transfer_stats.recommend_rate_limit_bps,
         (long)transfer_stats.last_progress,
         transfer_stats.abort_requested ? "true" : "false",
-        transfer_stats.workers_initialized ? "true" : "false");
+        transfer_stats.workers_initialized ? "true" : "false",
+        (long)transfer_stats.abort_at,
+        (unsigned long long)transfer_stats.abort_session_id,
+        transfer_stats.abort_reason);
     if (pos < 0 || (size_t)pos >= buf_size) {
         buf[buf_size - 1] = '\0';
         pthread_mutex_unlock(&g_queue_mutex);

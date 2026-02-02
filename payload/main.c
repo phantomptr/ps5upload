@@ -151,7 +151,7 @@ static void *idle_watch_thread(void *arg) {
                     } else {
                         payload_log("[WATCHDOG] Attempting to abort stalled transfer. Entering %ds grace period.", g_stall_grace_period_sec);
                         notify_info("PS5 Upload Server", "Transfer stalled. Attempting recovery...");
-                        transfer_request_abort();
+                        transfer_request_abort_with_reason("watchdog_stall");
                         abort_in_progress = 1;
                         abort_request_time = now;
                         abort_last_progress_time = now;

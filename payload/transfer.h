@@ -26,6 +26,9 @@ typedef struct {
     time_t last_progress;
     int abort_requested;
     int workers_initialized;
+    time_t abort_at;
+    uint64_t abort_session_id;
+    char abort_reason[128];
 } TransferStats;
 
 UploadSession *upload_session_create(const char *dest_root, int use_temp);
@@ -41,6 +44,7 @@ void handle_upload_v3(int client_sock, const char *dest_root, int use_temp, int 
 void transfer_cleanup(void);
 int transfer_idle_cleanup(void);
 void transfer_request_abort(void);
+void transfer_request_abort_with_reason(const char *reason);
 int transfer_abort_requested(void);
 int transfer_is_active(void);
 time_t transfer_last_progress(void);

@@ -1,7 +1,7 @@
 # PS5 Upload FAQ
 
 Welcome! This FAQ covers setup, features, troubleshooting, and platform‑specific tips.
-Latest release: **v1.4.1**.
+Latest release: **v1.4.2**.
 
 ---
 
@@ -113,7 +113,7 @@ It’s a best‑guess of what’s limiting speed right now: network, payload CPU
 These are payload‑side recommendations to keep transfers stable. When auto‑tune is enabled, the client will follow them. When auto‑tune is off, the client still applies safety‑only limits to avoid overload.
 
 **Q: How do uploads recover from payload hiccups?**  
-The client uses Upload V3 when available, which includes per‑pack ACKs and a replay window. If the payload stalls or restarts, the client can resend any unacknowledged packs and continue without corrupting data.
+The client uses Upload V3 when available, which includes per‑pack ACKs and a replay window. If the payload stalls or restarts, the client waits for it to recover (short window), then resumes by checking which files already exist and re-uploading only what’s missing.
 
 ### Best Speed (Direct Ethernet)
 **Q: How do I get the fastest transfer speeds?**  
