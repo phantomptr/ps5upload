@@ -3,6 +3,17 @@
 All notable changes to this project are documented here.
 This project follows Semantic Versioning.
 
+## [1.4.1] - 2026-02-02
+
+### Added
+- Separate FTP connections control and live display of active FTP connections during transfers.
+- FTP service reminder when FTP/Mix is selected (ftpsrv or etaHEN FTP service).
+
+### Changed
+- Mix/FTP uploads now abort if FTP is unavailable instead of silently falling back.
+- Auto-tune/Optimize now tune both payload and FTP in Mix mode.
+- Added small-file pacing safeguards for payload and FTP to reduce client/payload overload.
+
 ## [1.4.0] - 2026-02-01
 
 ### Removed

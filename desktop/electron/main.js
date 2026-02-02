@@ -49,7 +49,7 @@ const WRITE_CHUNK_SIZE = 512 * 1024; // 512KB
 const MAGIC_FTX1 = 0x31585446;
 
 let sleepBlockerId = null;
-const VERSION = '1.4.0';
+const VERSION = '1.4.1';
 const IS_WINDOWS = process.platform === 'win32';
 
 function beginManageOperation(op) {
@@ -634,6 +634,17 @@ const normalizeFtpPort = (value) => {
   return 'auto';
 };
 
+const formatFtpPortLabel = (preferredPort) => (preferredPort ? String(preferredPort) : '1337/2121');
+
+const getFtpServiceHint = () =>
+  'FTP requires ftpsrv running or the etaHEN FTP service enabled on the PS5.';
+
+const buildFtpUnavailableError = (preferredPort) =>
+  new Error(
+    `FTP not detected on port${preferredPort ? '' : 's'} ${formatFtpPortLabel(preferredPort)}. ` +
+    'Make sure ftpsrv is running or the etaHEN FTP service is enabled.'
+  );
+
 const formatBytes = (bytes) => {
   const value = typeof bytes === 'bigint' ? Number(bytes) : Number(bytes);
   if (!Number.isFinite(value) || value < 0) return '0 B';
@@ -712,66 +723,79 @@ const uploadFilesViaFtp = async (host, port, destRoot, files, opts = {}) => {
         let idx = 0;
         return () => (idx < files.length ? files[idx++] : null);
       })();
-  const client = new ftp.Client(0);
-  client.ftp.verbose = false;
   const cancel = opts.cancel || { value: false };
   const log = opts.log;
   const onProgress = opts.onProgress;
   const onFile = opts.onFile;
   const onFileDone = opts.onFileDone;
   const onSkipFile = opts.onSkipFile;
+  const maxConnections = 6;
+  const connections = clamp(Math.floor(opts.connections || 1), 1, maxConnections);
+  const throttleMs = Math.max(0, Number(opts.throttle_ms || 0));
+  const smallFileThreshold = Math.max(0, Number(opts.small_file_threshold || 0));
   let totalSent = 0;
   let totalFiles = 0;
-  let currentName = '';
-  let lastBytes = 0;
+  const runWorker = async () => {
+    const client = new ftp.Client(0);
+    client.ftp.verbose = false;
+    let currentName = '';
+    let lastBytes = 0;
+    client.trackProgress((info) => {
+      if (info.type !== 'upload') return;
+      if (info.name !== currentName) {
+        currentName = info.name || '';
+        lastBytes = 0;
+        if (onFile && currentName) onFile(currentName);
+      }
+      const delta = Math.max(0, info.bytes - lastBytes);
+      if (delta > 0) {
+        totalSent += delta;
+        lastBytes = info.bytes;
+        if (onProgress) onProgress(totalSent, currentName);
+      }
+    });
 
-  client.trackProgress((info) => {
-    if (info.type !== 'upload') return;
-    if (info.name !== currentName) {
-      currentName = info.name || '';
-      lastBytes = 0;
-      if (onFile && currentName) onFile(currentName);
+    try {
+      await accessFtpClient(client, host, port);
+      while (true) {
+        const file = getNextFile();
+        if (!file) break;
+        if (cancel.value) throw new Error('Upload cancelled by user');
+        const rel = String(file.rel_path || '').replace(/\\/g, '/');
+        const remotePath = joinRemotePath(destRoot, rel);
+        const remoteDir = path.posix.dirname(remotePath);
+        if (remoteDir && remoteDir !== '.' && remoteDir !== '/') {
+          await client.ensureDir(remoteDir);
+        }
+        try {
+          await client.uploadFrom(file.abs_path, remotePath);
+        } catch (err) {
+          const code = err?.code;
+          if (code === 'ENOENT' || code === 'EACCES' || code === 'EPERM') {
+            if (log) log(`Skipping missing/unreadable file: ${file.rel_path}`, 'warn');
+            if (typeof onSkipFile === 'function') onSkipFile(file, err);
+            continue;
+          }
+          throw err;
+        }
+        totalFiles += 1;
+        if (onFileDone) onFileDone(file);
+        if (throttleMs > 0 && (smallFileThreshold <= 0 || file.size <= smallFileThreshold)) {
+          await sleepMs(throttleMs);
+        }
+      }
+    } finally {
+      client.trackProgress();
+      client.close();
     }
-    const delta = Math.max(0, info.bytes - lastBytes);
-    if (delta > 0) {
-      totalSent += delta;
-      lastBytes = info.bytes;
-      if (onProgress) onProgress(totalSent, currentName);
-    }
-  });
+  };
 
   try {
-    await accessFtpClient(client, host, port);
-    while (true) {
-      const file = getNextFile();
-      if (!file) break;
-      if (cancel.value) throw new Error('Upload cancelled by user');
-      const rel = String(file.rel_path || '').replace(/\\/g, '/');
-      const remotePath = joinRemotePath(destRoot, rel);
-      const remoteDir = path.posix.dirname(remotePath);
-      if (remoteDir && remoteDir !== '.' && remoteDir !== '/') {
-        await client.ensureDir(remoteDir);
-      }
-      try {
-        await client.uploadFrom(file.abs_path, remotePath);
-      } catch (err) {
-        const code = err?.code;
-        if (code === 'ENOENT' || code === 'EACCES' || code === 'EPERM') {
-          if (log) log(`Skipping missing/unreadable file: ${file.rel_path}`, 'warn');
-          if (typeof onSkipFile === 'function') onSkipFile(file, err);
-          continue;
-        }
-        throw err;
-      }
-      totalFiles += 1;
-      if (onFileDone) onFileDone(file);
-    }
+    const workers = Array.from({ length: connections }, () => runWorker());
+    await Promise.all(workers);
   } catch (err) {
     if (log) log(`FTP upload failed: ${err.message || err}`, 'error');
     throw err;
-  } finally {
-    client.trackProgress();
-    client.close();
   }
   return { bytes: totalSent, files: totalFiles };
 };
@@ -808,7 +832,7 @@ const state = {
   transferAbort: null,
   transferSocket: null,
   transferStatus: { run_id: 0, status: 'Idle', sent: 0, total: 0, files: 0, elapsed_secs: 0, current_file: '' },
-  transferMeta: { requested_optimize: null, auto_tune_connections: null, effective_optimize: null, effective_compression: null },
+  transferMeta: { requested_optimize: null, auto_tune_connections: null, effective_optimize: null, effective_compression: null, requested_ftp_connections: null, effective_ftp_connections: null },
   transferLastUpdate: 0,
   payloadPollEnabled: false,
   payloadIp: '',
@@ -2226,6 +2250,7 @@ const defaultConfig = {
   address: '192.168.0.100',
   storage: '/data',
   connections: 1,
+  ftp_connections: 1,
   use_temp: false,
   auto_connect: false,
   theme: 'dark',
@@ -2270,6 +2295,7 @@ function loadConfig() {
         case 'address': config.address = value; break;
         case 'storage': config.storage = value; break;
         case 'connections': config.connections = Math.max(1, parseInt(value, 10) || 1); break;
+        case 'ftp_connections': config.ftp_connections = Math.max(1, parseInt(value, 10) || 1); break;
         case 'use_temp': config.use_temp = ['1', 'true', 'yes', 'on'].includes(value.toLowerCase()); break;
         case 'auto_connect': config.auto_connect = ['1', 'true', 'yes', 'on'].includes(value.toLowerCase()); break;
         case 'theme': config.theme = value === 'light' ? 'light' : 'dark'; break;
@@ -2324,6 +2350,7 @@ function serializeConfig(config) {
     `address=${config.address}`,
     `storage=${config.storage}`,
     `connections=${config.connections}`,
+    `ftp_connections=${config.ftp_connections}`,
     `use_temp=${config.use_temp}`,
     `auto_connect=${config.auto_connect}`,
     `theme=${config.theme}`,
@@ -2456,6 +2483,7 @@ function loadProfiles() {
           preset_index: 0,
           custom_preset_path: '',
           connections: 1,
+          ftp_connections: 1,
           use_temp: false,
           auto_tune_connections: true,
         };
@@ -2469,6 +2497,7 @@ function loadProfiles() {
           case 'preset_index': currentProfile.preset_index = parseInt(value, 10) || 0; break;
           case 'custom_preset_path': currentProfile.custom_preset_path = value; break;
           case 'connections': currentProfile.connections = parseInt(value, 10) || 1; break;
+          case 'ftp_connections': currentProfile.ftp_connections = parseInt(value, 10) || 1; break;
           case 'use_temp': currentProfile.use_temp = ['1', 'true', 'yes', 'on'].includes(value.toLowerCase()); break;
           case 'auto_tune_connections': currentProfile.auto_tune_connections = ['1', 'true', 'yes', 'on'].includes(value.toLowerCase()); break;
           case 'default': if (value === 'true') defaultProfile = currentProfile.name; break;
@@ -2493,6 +2522,7 @@ function saveProfiles(data) {
     lines.push(`preset_index=${profile.preset_index}`);
     lines.push(`custom_preset_path=${profile.custom_preset_path}`);
     lines.push(`connections=${profile.connections}`);
+    lines.push(`ftp_connections=${profile.ftp_connections ?? 1}`);
     lines.push(`use_temp=${profile.use_temp}`);
     lines.push(`auto_tune_connections=${profile.auto_tune_connections}`);
     if (data.default_profile === profile.name) {
@@ -5707,7 +5737,11 @@ function registerIpcHandlers() {
           }
         }
         const preferredFtpPort = normalizeFtpPort(opts?.ftp_port);
+        const resolvedFtpPort = preferredFtpPort === 'auto' ? null : preferredFtpPort;
         emit('manage_log', { message: `Manage upload mode: ${uploadMode} (ftp_port=${preferredFtpPort})` });
+        if (uploadMode === 'ftp' || uploadMode === 'mix') {
+          emit('manage_log', { message: getFtpServiceHint() });
+        }
 
         for (const srcPath of paths) {
           if (state.manageCancel) {
@@ -5750,8 +5784,9 @@ function registerIpcHandlers() {
 
           const tryFtpFallback = async (message) => {
             emit('manage_log', { message });
-            const ftpPort = await detectFtpPort(ip, preferredFtpPort === 'auto' ? null : preferredFtpPort);
-            if (!ftpPort) throw new Error('FTP not detected on ports 1337/2121 (no FTP banner).');
+            emit('manage_log', { message: getFtpServiceHint() });
+            const ftpPort = await detectFtpPort(ip, resolvedFtpPort);
+            if (!ftpPort) throw buildFtpUnavailableError(resolvedFtpPort);
             await uploadFilesViaFtp(ip, ftpPort, batch.dest, batch.files, {
               cancel: { get value() { return state.manageCancel; } },
               log: (msg, level) => emit('manage_log', { message: level ? `${level}: ${msg}` : msg }),
@@ -5763,8 +5798,8 @@ function registerIpcHandlers() {
           };
 
           if (uploadMode === 'ftp') {
-            const ftpPort = await detectFtpPort(ip, preferredFtpPort === 'auto' ? null : preferredFtpPort);
-            if (!ftpPort) throw new Error('FTP not detected on ports 1337/2121 (no FTP banner).');
+            const ftpPort = await detectFtpPort(ip, resolvedFtpPort);
+            if (!ftpPort) throw buildFtpUnavailableError(resolvedFtpPort);
             await uploadFilesViaFtp(ip, ftpPort, batch.dest, batch.files, {
               cancel: { get value() { return state.manageCancel; } },
               log: (msg, level) => emit('manage_log', { message: level ? `${level}: ${msg}` : msg }),
@@ -5857,9 +5892,11 @@ function registerIpcHandlers() {
 
     try {
       let uploadMode = 'payload';
+      let preferredFtpPort = 'auto';
       try {
         const config = loadConfig();
         uploadMode = normalizeUploadMode(config?.upload_mode);
+        preferredFtpPort = normalizeFtpPort(config?.ftp_port);
       } catch {
         uploadMode = 'payload';
       }
@@ -5867,8 +5904,10 @@ function registerIpcHandlers() {
       let extractResult;
       if (uploadMode === 'ftp') {
         const stat = await fs.promises.stat(rarPath);
-        const ftpPort = await detectFtpPort(ip, null);
-        if (!ftpPort) throw new Error('FTP not detected on ports 1337/2121 (no FTP banner).');
+        const resolvedFtpPort = preferredFtpPort === 'auto' ? null : preferredFtpPort;
+        emit('manage_log', { message: getFtpServiceHint() });
+        const ftpPort = await detectFtpPort(ip, resolvedFtpPort);
+        if (!ftpPort) throw buildFtpUnavailableError(resolvedFtpPort);
         await createPath(ip, TRANSFER_PORT, destPath);
         const rarName = path.basename(rarPath);
         const cleanedTempRoot = typeof tempRoot === 'string' ? tempRoot.trim() : '';
@@ -6175,7 +6214,7 @@ function registerIpcHandlers() {
     state.transferCancel = false;
     state.transferActive = false;
     state.transferStatus = createTransferStatus();
-    state.transferMeta = { requested_optimize: null, auto_tune_connections: null, effective_optimize: null, effective_compression: null };
+    state.transferMeta = { requested_optimize: null, auto_tune_connections: null, effective_optimize: null, effective_compression: null, requested_ftp_connections: null, effective_ftp_connections: null };
     state.transferLastUpdate = Date.now();
     return true;
   });
@@ -6193,6 +6232,7 @@ function registerIpcHandlers() {
       source_path: req.source_path,
       dest_path: req.dest_path,
       connections: req.connections,
+      ftp_connections: req.ftp_connections,
       compression: req.compression,
     });
     if (!req.ip || !req.ip.trim()) throw new Error('PS5 IP address is required');
@@ -6222,6 +6262,8 @@ function registerIpcHandlers() {
       auto_tune_connections: !!req.auto_tune_connections,
       effective_optimize: null,
       effective_compression: req.compression || null,
+      requested_ftp_connections: req.ftp_connections ?? null,
+      effective_ftp_connections: null,
     };
     state.transferLastUpdate = Date.now();
 
@@ -6243,6 +6285,7 @@ const emitLog = (message, level = 'info', force = false) => {
 
         try {
           let uploadMode = normalizeUploadMode(req.upload_mode);
+          const requestedFtpConnections = clamp(Math.floor(req.ftp_connections || 1), 1, 6);
           const sourceStat = await fs.promises.stat(req.source_path);
           const isRar = sourceStat.isFile() && path.extname(req.source_path).toLowerCase() === '.rar';
 
@@ -6255,9 +6298,11 @@ const emitLog = (message, level = 'info', force = false) => {
             emitLog(`Uploading RAR for extraction: ${req.source_path}`, 'info');
             if (uploadMode === 'ftp') {
               const preferred = normalizeFtpPort(req.ftp_port);
-              const ftpPort = await detectFtpPort(req.ip, preferred === 'auto' ? null : preferred);
+              const resolvedFtpPort = preferred === 'auto' ? null : preferred;
+              emitLog(getFtpServiceHint(), 'info');
+              const ftpPort = await detectFtpPort(req.ip, resolvedFtpPort);
               if (!ftpPort) {
-                throw new Error('FTP not detected on ports 1337/2121 (no FTP banner).');
+                throw buildFtpUnavailableError(resolvedFtpPort);
               }
               await createPath(req.ip, TRANSFER_PORT, req.dest_path);
               const rarSpeed = { lastAt: Date.now(), lastSent: 0, ema: 0 };
@@ -6594,13 +6639,11 @@ const emitLog = (message, level = 'info', force = false) => {
           let ftpPort = null;
           if (uploadMode !== 'payload') {
             const preferred = normalizeFtpPort(req.ftp_port);
-            ftpPort = await detectFtpPort(req.ip, preferred === 'auto' ? null : preferred);
+            const resolvedFtpPort = preferred === 'auto' ? null : preferred;
+            emitLog(getFtpServiceHint(), 'info');
+            ftpPort = await detectFtpPort(req.ip, resolvedFtpPort);
             if (!ftpPort) {
-              if (uploadMode === 'ftp') {
-                throw new Error('FTP not detected on ports 1337/2121 (no FTP banner).');
-              }
-              emitLog('FTP not detected on ports 1337/2121 (no FTP banner); falling back to payload-only.', 'warn');
-              uploadMode = 'payload';
+              throw buildFtpUnavailableError(resolvedFtpPort);
             }
           }
           state.transferStatus = { ...state.transferStatus, upload_mode: uploadMode };
@@ -6610,6 +6653,10 @@ const emitLog = (message, level = 'info', force = false) => {
           let mixSorted = null;
           let mixLow = 0;
           let mixHigh = -1;
+          let mixPayloadBytesEstimate = 0;
+          let mixFtpBytesEstimate = 0;
+          let mixPayloadCountEstimate = 0;
+          let mixFtpCountEstimate = 0;
           if (uploadMode === 'mix') {
             mixSorted = [...filesToUpload].sort((a, b) => a.size - b.size);
             mixLow = 0;
@@ -6620,6 +6667,10 @@ const emitLog = (message, level = 'info', force = false) => {
             const ftpBytesEstimate = mixSorted
               .slice(Math.floor(mixSorted.length / 2))
               .reduce((sum, f) => sum + f.size, 0);
+            mixPayloadBytesEstimate = payloadBytesEstimate;
+            mixFtpBytesEstimate = ftpBytesEstimate;
+            mixPayloadCountEstimate = Math.max(1, Math.floor(mixSorted.length / 2));
+            mixFtpCountEstimate = Math.max(1, mixSorted.length - mixPayloadCountEstimate);
             emitLog(
               'Mix mode: payload pulls the smallest remaining files, FTP pulls the largest, and both keep going until they meet.',
               'info',
@@ -6651,17 +6702,25 @@ const emitLog = (message, level = 'info', force = false) => {
 
           const payloadTotalSize = Array.isArray(payloadFiles)
             ? payloadFiles.reduce((sum, f) => sum + BigInt(f.size), 0n)
-            : 0n;
+            : BigInt(mixPayloadBytesEstimate || 0);
           const ftpTotalSize = Array.isArray(ftpFiles)
             ? ftpFiles.reduce((sum, f) => sum + BigInt(f.size), 0n)
-            : 0n;
-          const payloadFileCount = Array.isArray(payloadFiles) ? payloadFiles.length : 0;
+            : BigInt(mixFtpBytesEstimate || 0);
+          const payloadFileCount = Array.isArray(payloadFiles) ? payloadFiles.length : mixPayloadCountEstimate;
+          const ftpFileCount = Array.isArray(ftpFiles) ? ftpFiles.length : mixFtpCountEstimate;
           const avgPayloadSize = payloadFileCount > 0 ? Number(payloadTotalSize) / payloadFileCount : 0;
+          const avgFtpSize = ftpFileCount > 0 ? Number(ftpTotalSize) / ftpFileCount : 0;
+          let effectiveFtpConnections = requestedFtpConnections;
 
           let effectiveCompression = req.compression;
           let effectiveOptimize = !!req.optimize_upload;
           let basePackLimit = PACK_BUFFER_SIZE;
           let baseChunkSize = SEND_CHUNK_SIZE;
+          let extraPaceMs = 0;
+          let ftpThrottleMs = 0;
+          const kb = 1024;
+          const mb = 1024 * 1024;
+          const ftpSmallFileThreshold = 256 * kb;
           const allowCompression = payloadFileCount > 0;
           if (payloadFileCount > 0) {
             if (req.compression === 'auto') {
@@ -6683,6 +6742,27 @@ const emitLog = (message, level = 'info', force = false) => {
                 basePackLimit = 24 * 1024 * 1024;
                 baseChunkSize = 4 * 1024 * 1024;
               }
+            }
+            const tinyPayloadBatch = avgPayloadSize < 64 * kb || payloadFileCount >= 100000;
+            const smallPayloadBatch = avgPayloadSize < 256 * kb || payloadFileCount >= 50000;
+            if (tinyPayloadBatch) {
+              basePackLimit = Math.min(basePackLimit, 12 * mb);
+              baseChunkSize = Math.min(baseChunkSize, 256 * kb);
+              extraPaceMs = Math.max(extraPaceMs, 5);
+            } else if (smallPayloadBatch) {
+              basePackLimit = Math.min(basePackLimit, 24 * mb);
+              baseChunkSize = Math.min(baseChunkSize, 512 * kb);
+              extraPaceMs = Math.max(extraPaceMs, 2);
+            }
+          }
+          if (ftpFileCount > 0) {
+            const ftpThrottleBoost = req.auto_tune_connections ? 2 : 0;
+            const tinyFtpBatch = avgFtpSize < 128 * kb || ftpFileCount >= 100000;
+            const smallFtpBatch = avgFtpSize < 512 * kb || ftpFileCount >= 50000;
+            if (tinyFtpBatch) {
+              ftpThrottleMs = Math.max(ftpThrottleMs, 5 + ftpThrottleBoost);
+            } else if (smallFtpBatch) {
+              ftpThrottleMs = Math.max(ftpThrottleMs, 2 + ftpThrottleBoost);
             }
           }
 
@@ -6711,7 +6791,24 @@ const emitLog = (message, level = 'info', force = false) => {
           if (payloadFileCount > 0 && !!req.optimize_upload !== effectiveOptimize) {
             emitLog('Auto-tune optimize: enabled to reduce per-file overhead.', 'debug');
           }
-          emitLog(`Starting transfer: ${(Number(totalSize) / (1024 * 1024 * 1024)).toFixed(2)} GB using ${req.connections} connection(s)`, 'info');
+          if (extraPaceMs > 0 && payloadFileCount > 0) {
+            emitLog(`Small-file safeguard: payload pacing floor ${extraPaceMs}ms, pack ${(basePackLimit / (1024 * 1024)).toFixed(1)} MB.`, 'info');
+          }
+          if (ftpThrottleMs > 0 && ftpFileCount > 0) {
+            emitLog(`Small-file safeguard: FTP delay ${ftpThrottleMs}ms between small files.`, 'info');
+          }
+          if (uploadMode !== 'payload') {
+            state.transferMeta.effective_ftp_connections = effectiveFtpConnections;
+          }
+          const connectionSummary = uploadMode === 'payload'
+            ? `payload=${req.connections}`
+            : uploadMode === 'ftp'
+            ? `ftp=${effectiveFtpConnections}`
+            : `payload=${req.connections}, ftp=${effectiveFtpConnections}`;
+          emitLog(
+            `Starting transfer: ${(Number(totalSize) / (1024 * 1024 * 1024)).toFixed(2)} GB using ${connectionSummary} connection(s)`,
+            'info'
+          );
 
           let payloadSent = 0n;
           let payloadFilesSent = 0;
@@ -6809,6 +6906,10 @@ const emitLog = (message, level = 'info', force = false) => {
               runId,
               allowPayloadTune: !!req.auto_tune_connections,
             });
+            const getPaceDelayMs = async () => {
+              const baseDelay = await adaptiveTuner.getPaceDelayMs();
+              return Math.max(baseDelay, extraPaceMs);
+            };
 
             watchdog = setInterval(async () => {
               if (!state.transferActive || state.transferStatus.run_id !== runId) return;
@@ -6858,6 +6959,7 @@ const emitLog = (message, level = 'info', force = false) => {
                 packLimitBytes: basePackLimit,
                 streamChunkBytes: baseChunkSize,
                 getPackLimit: adaptiveTuner?.getPackLimit,
+                getPaceDelayMs,
                 reconnect: async () => uploadV3Init(
                   req.ip,
                   TRANSFER_PORT,
@@ -6883,6 +6985,7 @@ const emitLog = (message, level = 'info', force = false) => {
                 packLimitBytes: basePackLimit,
                 streamChunkBytes: baseChunkSize,
                 getPackLimit: adaptiveTuner?.getPackLimit,
+                getPaceDelayMs,
                 onSkipFile: (file) => missingFiles.add(file.rel_path),
               }));
               const response = await readUploadResponse(socketRef.current, { value: false }, result.responseBuffer);
@@ -6913,7 +7016,7 @@ const emitLog = (message, level = 'info', force = false) => {
                 packLimitBytes: basePackLimit,
                 streamChunkBytes: baseChunkSize,
                 getPackLimit: adaptiveTuner?.getPackLimit,
-                getPaceDelayMs: adaptiveTuner?.getPaceDelayMs,
+                getPaceDelayMs,
                 getRateLimitBps: adaptiveTuner?.getRateLimitBps,
                 onSkipFile: (file) => missingFiles.add(file.rel_path),
               });
@@ -6929,10 +7032,13 @@ const emitLog = (message, level = 'info', force = false) => {
             if (!files) return;
             if (Array.isArray(files) && files.length === 0) return;
             if (!ftp) throw new Error('FTP library unavailable.');
-            emitLog(`FTP upload on port ${ftpPort}...`, 'info');
+            emitLog(`FTP upload on port ${ftpPort} (${effectiveFtpConnections} connection(s))...`, 'info');
             const result = await uploadFilesViaFtp(req.ip, ftpPort, req.dest_path, files, {
               cancel: { get value() { return state.transferCancel; } },
               log: emitLog,
+              connections: effectiveFtpConnections,
+              throttle_ms: ftpThrottleMs,
+              small_file_threshold: ftpSmallFileThreshold,
               onProgress: (totalSent, currentFile) => {
                 ftpSent = BigInt(totalSent);
                 updateProgress(currentFile, uploadMode === 'ftp' ? 'Uploading (FTP)' : 'Uploading');

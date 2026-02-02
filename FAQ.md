@@ -1,7 +1,7 @@
 # PS5 Upload FAQ
 
 Welcome! This FAQ covers setup, features, troubleshooting, and platform‑specific tips.
-Latest release: **v1.4.0**.
+Latest release: **v1.4.1**.
 
 ---
 
@@ -86,16 +86,17 @@ Update to **v1.3.6** or newer. We bundle Noto fonts so Hindi/Bengali/Thai/Korean
 - **Override if conflict found:** must be ON to overwrite
 - **Resume Mode:** skips existing files (size-only / thresholded hash / full SHA256)
 - **Compression:** Auto / None / LZ4 / ZSTD
-- **Connections:** number of parallel streams
+- **Connections (payload):** number of parallel payload streams
+- **Connections (FTP):** number of parallel FTP uploads (only active in FTP/Mix)
 
 ### Upload Modes (Payload / FTP / Mix)
 **Q: What’s the difference between Payload, FTP, and Mix?**  
 - **Payload:** Streams packed data directly to the PS5 via the payload. Best for many small files.
-- **FTP:** Uses FTP for file-by-file uploads. Reliable and compatible with standard FTP workflows.
+- **FTP:** Uses FTP for file-by-file uploads. Reliable and compatible with standard FTP workflows. Requires ftpsrv or the etaHEN FTP service enabled.
 - **Mix:** Runs both at once. Payload always pulls the **smallest** remaining file, FTP always pulls the **largest** remaining file, and both keep going until they meet. No threshold and no duplicate uploads.
 
 **Q: If one side fails in Mix, what happens?**  
-Remaining files are handed to the other side once so the transfer can complete.
+If FTP is unavailable, Mix aborts and asks you to enable FTP (ftpsrv/etaHEN). If a side fails mid-transfer, remaining files are handed to the other side once so the transfer can complete.
 
 ### Scan & Optimize
 - **Scan** estimates size and file count quickly.
