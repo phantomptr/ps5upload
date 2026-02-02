@@ -11,6 +11,16 @@ function formatBytes(bytes: number) {
   return `${bytes} B`;
 }
 
+const getStatusClass = (status: string) => {
+  if (status.startsWith('Error')) {
+    return 'status-error';
+  }
+  if (status === 'Stopped') {
+    return 'status-stopped';
+  }
+  return '';
+};
+
 export const TransferProgress: React.FC = () => {
   const { status, sent, total, files, currentFile } = useTransferStore();
 
@@ -35,7 +45,7 @@ export const TransferProgress: React.FC = () => {
         <span>
           {files} files
         </span>
-        <span>{status}</span>
+        <span className={getStatusClass(status)}>{status}</span>
       </div>
       {currentFile && (
         <div className="pill">{currentFile}</div>
