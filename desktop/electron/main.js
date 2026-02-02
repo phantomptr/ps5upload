@@ -49,7 +49,7 @@ const WRITE_CHUNK_SIZE = 512 * 1024; // 512KB
 const MAGIC_FTX1 = 0x31585446;
 
 let sleepBlockerId = null;
-const VERSION = '1.4.1';
+const VERSION = '1.4.2';
 const IS_WINDOWS = process.platform === 'win32';
 
 function beginManageOperation(op) {
@@ -6880,87 +6880,67 @@ const emitLog = (message, level = 'info', force = false) => {
           const rateLimitBps = req.bandwidth_limit_mbps ? req.bandwidth_limit_mbps * 1024 * 1024 / 8 : null; // Convert Mbps to Bps
           const missingFiles = new Set();
 
+          const waitForPayloadRecovery = async () => {
+            const deadline = Date.now() + 180000;
+            while (Date.now() < deadline) {
+              if (state.transferCancel || transferAbort.signal.aborted) return false;
+              try {
+                const status = await getPayloadStatus(req.ip, TRANSFER_PORT);
+                if (status && !status.is_busy) {
+                  const transfer = status.transfer || {};
+                  if (Number(transfer.active_sessions || 0) === 0 && !transfer.abort_requested) {
+                    return true;
+                  }
+                }
+              } catch {
+                // ignore transient status failures
+              }
+              await sleepMs(2000);
+            }
+            return false;
+          };
+
+          const filterResumeBySize = async (files) => {
+            const destRoot = String(req.dest_path || '').replace(/\\/g, '/');
+            try {
+              const remoteIndex = await buildRemoteIndex(
+                req.ip,
+                TRANSFER_PORT,
+                destRoot,
+                files,
+                () => {},
+                debugLog,
+                transferAbort.signal
+              );
+              let skipped = 0;
+              const filtered = [];
+              for (const file of files) {
+                const rel = file.rel_path.replace(/\\/g, '/');
+                const remote = remoteIndex.get(rel);
+                if (remote && Number(file.size) === Number(remote.size)) {
+                  skipped++;
+                  continue;
+                }
+                filtered.push(file);
+              }
+              emitLog(`Auto-resume: ${skipped} file(s) already present, ${filtered.length} to upload.`, 'info');
+              return filtered;
+            } catch (err) {
+              emitLog(`Auto-resume scan failed; retrying full payload upload. ${err.message || err}`, 'warn');
+              return files;
+            }
+          };
+
           const runPayloadUpload = async (files) => {
             if (!files) return;
             if (Array.isArray(files) && files.length === 0) return;
-            emitLog('Connecting upload socket...', 'info');
-            const socket = await uploadV3Init(
-              req.ip,
-              TRANSFER_PORT,
-              req.dest_path,
-              req.use_temp,
-              {
-                optimize_upload: effectiveOptimize,
-                chmod_after_upload: req.chmod_after_upload,
-              },
-              transferAbort.signal
-            );
-            emitLog('Upload socket READY.', 'info');
-            state.transferSocket = socket;
-            const adaptiveTuner = createAdaptiveUploadTuner({
-              ip: req.ip,
-              basePackLimit,
-              baseChunkSize,
-              userRateLimitBps: rateLimitBps,
-              log: debugLog,
-              runId,
-              allowPayloadTune: !!req.auto_tune_connections,
-            });
-            const getPaceDelayMs = async () => {
-              const baseDelay = await adaptiveTuner.getPaceDelayMs();
-              return Math.max(baseDelay, extraPaceMs);
-            };
-
-            watchdog = setInterval(async () => {
-              if (!state.transferActive || state.transferStatus.run_id !== runId) return;
-              if (!state.transferStatus.status.startsWith('Uploading')) return;
-              const ageMs = Date.now() - state.transferLastUpdate;
-              if (ageMs < 15000) return;
-              let status = state.payloadStatus?.status;
-              if (!status) {
-                try {
-                  status = await getPayloadStatus(req.ip, TRANSFER_PORT);
-                } catch {
-                  return;
-                }
-              }
-              const transfer = status?.transfer || {};
-              const idle = Number(transfer.active_sessions || 0) === 0 &&
-                Number(transfer.queue_count || 0) === 0 &&
-                Number(transfer.pack_in_use || 0) === 0;
-              if (idle) {
-                emitLog('Watchdog: payload idle with no progress; aborting transfer.', 'warn');
-                state.transferCancel = true;
-                if (state.transferAbort) state.transferAbort.abort();
-                if (state.transferSocket) state.transferSocket.destroy();
-                state.transferStatus = { ...state.transferStatus, status: 'Error: Payload stalled/idle' };
-                state.transferLastUpdate = Date.now();
-                emit('transfer_error', { run_id: runId, message: 'Payload stalled/idle' });
-                state.transferActive = false;
-                triggerPayloadRecovery('payload stalled/idle').catch(() => {});
-              }
-            }, 5000);
-            if (watchdog.unref) watchdog.unref();
-
-            try {
-              adaptiveTuner.start();
-              const socketRef = { current: socket };
-              const isDynamic = typeof files === 'function';
-              const result = await (isDynamic ? sendFilesV3Dynamic(files, socketRef, {
-                cancel: { get value() { return state.transferCancel; } },
-                progress: (sent, filesSent, elapsed, currentFile) => {
-                  payloadSent = BigInt(sent);
-                  payloadFilesSent = filesSent;
-                  updateProgress(currentFile);
-                },
-                log: debugLog,
-                compression: effectiveCompression,
-                rateLimitBps: rateLimitBps,
-                packLimitBytes: basePackLimit,
-                streamChunkBytes: baseChunkSize,
-                getPackLimit: adaptiveTuner?.getPackLimit,
-                getPaceDelayMs,
-                reconnect: async () => uploadV3Init(
+            let attemptFiles = files;
+            let recoveryAttempted = false;
+            while (true) {
+              let adaptiveTuner = null;
+              try {
+                emitLog('Connecting upload socket...', 'info');
+                const socket = await uploadV3Init(
                   req.ip,
                   TRANSFER_PORT,
                   req.dest_path,
@@ -6970,61 +6950,163 @@ const emitLog = (message, level = 'info', force = false) => {
                     chmod_after_upload: req.chmod_after_upload,
                   },
                   transferAbort.signal
-                ),
-                onSkipFile: (file) => missingFiles.add(file.rel_path),
-              }) : sendFilesV3(files, socketRef, {
-                cancel: { get value() { return state.transferCancel; } },
-                progress: (sent, filesSent, elapsed, currentFile) => {
-                  payloadSent = BigInt(sent);
-                  payloadFilesSent = filesSent;
-                  updateProgress(currentFile);
-                },
-                log: debugLog,
-                compression: effectiveCompression,
-                rateLimitBps: rateLimitBps,
-                packLimitBytes: basePackLimit,
-                streamChunkBytes: baseChunkSize,
-                getPackLimit: adaptiveTuner?.getPackLimit,
-                getPaceDelayMs,
-                onSkipFile: (file) => missingFiles.add(file.rel_path),
-              }));
-              const response = await readUploadResponse(socketRef.current, { value: false }, result.responseBuffer);
-              parsed = parseUploadResponse(response);
-            } catch (err) {
-              if (err?.message === 'V3_UNSUPPORTED') {
-                emitLog('Payload does not support V3 yet; using V2.', 'info');
-              } else {
-                debugLog(`V3 upload failed, falling back to V2: ${err.message}`);
-              }
-              await sendFilesV2(files, socket, {
-                cancel: { get value() { return state.transferCancel; } },
-                progress: (sent, filesSent, elapsed, currentFile) => {
-                  state.transferStatus = {
-                    run_id: runId,
-                    status: 'Uploading',
-                    sent,
-                    total: totalSize,
-                    files: filesSent,
-                    elapsed_secs: elapsed,
-                    current_file: currentFile || '',
-                  };
-                  state.transferLastUpdate = Date.now();
-                },
-                log: debugLog,
-                compression: effectiveCompression,
-                rateLimitBps: rateLimitBps,
-                packLimitBytes: basePackLimit,
-                streamChunkBytes: baseChunkSize,
-                getPackLimit: adaptiveTuner?.getPackLimit,
-                getPaceDelayMs,
-                getRateLimitBps: adaptiveTuner?.getRateLimitBps,
-                onSkipFile: (file) => missingFiles.add(file.rel_path),
-              });
+                );
+                emitLog('Upload socket READY.', 'info');
+                state.transferSocket = socket;
+                adaptiveTuner = createAdaptiveUploadTuner({
+                  ip: req.ip,
+                  basePackLimit,
+                  baseChunkSize,
+                  userRateLimitBps: rateLimitBps,
+                  log: debugLog,
+                  runId,
+                  allowPayloadTune: !!req.auto_tune_connections,
+                });
+                const getPaceDelayMs = async () => {
+                  const baseDelay = await adaptiveTuner.getPaceDelayMs();
+                  return Math.max(baseDelay, extraPaceMs);
+                };
 
-              const response = await readUploadResponse(socket);
-              parsed = parseUploadResponse(response);
-            } finally {
-              adaptiveTuner.stop();
+                watchdog = setInterval(async () => {
+                  if (!state.transferActive || state.transferStatus.run_id !== runId) return;
+                  if (!state.transferStatus.status.startsWith('Uploading')) return;
+                  const ageMs = Date.now() - state.transferLastUpdate;
+                  if (ageMs < 15000) return;
+                  let status = state.payloadStatus?.status;
+                  if (!status) {
+                    try {
+                      status = await getPayloadStatus(req.ip, TRANSFER_PORT);
+                    } catch {
+                      return;
+                    }
+                  }
+                  const transfer = status?.transfer || {};
+                  const idle = Number(transfer.active_sessions || 0) === 0 &&
+                    Number(transfer.queue_count || 0) === 0 &&
+                    Number(transfer.pack_in_use || 0) === 0;
+                  if (idle) {
+                    emitLog('Watchdog: payload idle with no progress; aborting transfer.', 'warn');
+                    state.transferCancel = true;
+                    if (state.transferAbort) state.transferAbort.abort();
+                    if (state.transferSocket) state.transferSocket.destroy();
+                    state.transferStatus = { ...state.transferStatus, status: 'Error: Payload stalled/idle' };
+                    state.transferLastUpdate = Date.now();
+                    emit('transfer_error', { run_id: runId, message: 'Payload stalled/idle' });
+                    state.transferActive = false;
+                    triggerPayloadRecovery('payload stalled/idle').catch(() => {});
+                  }
+                }, 5000);
+                if (watchdog.unref) watchdog.unref();
+
+                try {
+                  adaptiveTuner.start();
+                  const socketRef = { current: socket };
+                  const isDynamic = typeof attemptFiles === 'function';
+                  const result = await (isDynamic ? sendFilesV3Dynamic(attemptFiles, socketRef, {
+                    cancel: { get value() { return state.transferCancel; } },
+                    progress: (sent, filesSent, elapsed, currentFile) => {
+                      payloadSent = BigInt(sent);
+                      payloadFilesSent = filesSent;
+                      updateProgress(currentFile);
+                    },
+                    log: debugLog,
+                    compression: effectiveCompression,
+                    rateLimitBps: rateLimitBps,
+                    packLimitBytes: basePackLimit,
+                    streamChunkBytes: baseChunkSize,
+                    getPackLimit: adaptiveTuner?.getPackLimit,
+                    getPaceDelayMs,
+                    reconnect: async () => uploadV3Init(
+                      req.ip,
+                      TRANSFER_PORT,
+                      req.dest_path,
+                      req.use_temp,
+                      {
+                        optimize_upload: effectiveOptimize,
+                        chmod_after_upload: req.chmod_after_upload,
+                      },
+                      transferAbort.signal
+                    ),
+                    onSkipFile: (file) => missingFiles.add(file.rel_path),
+                  }) : sendFilesV3(attemptFiles, socketRef, {
+                    cancel: { get value() { return state.transferCancel; } },
+                    progress: (sent, filesSent, elapsed, currentFile) => {
+                      payloadSent = BigInt(sent);
+                      payloadFilesSent = filesSent;
+                      updateProgress(currentFile);
+                    },
+                    log: debugLog,
+                    compression: effectiveCompression,
+                    rateLimitBps: rateLimitBps,
+                    packLimitBytes: basePackLimit,
+                    streamChunkBytes: baseChunkSize,
+                    getPackLimit: adaptiveTuner?.getPackLimit,
+                    getPaceDelayMs,
+                    onSkipFile: (file) => missingFiles.add(file.rel_path),
+                  }));
+                  const response = await readUploadResponse(socketRef.current, { value: false }, result.responseBuffer);
+                  parsed = parseUploadResponse(response);
+                } catch (err) {
+                  if (err?.message === 'V3_UNSUPPORTED') {
+                    emitLog('Payload does not support V3 yet; using V2.', 'info');
+                  } else {
+                    debugLog(`V3 upload failed, falling back to V2: ${err.message}`);
+                  }
+                  await sendFilesV2(attemptFiles, socket, {
+                    cancel: { get value() { return state.transferCancel; } },
+                    progress: (sent, filesSent, elapsed, currentFile) => {
+                      state.transferStatus = {
+                        run_id: runId,
+                        status: 'Uploading',
+                        sent,
+                        total: totalSize,
+                        files: filesSent,
+                        elapsed_secs: elapsed,
+                        current_file: currentFile || '',
+                      };
+                      state.transferLastUpdate = Date.now();
+                    },
+                    log: debugLog,
+                    compression: effectiveCompression,
+                    rateLimitBps: rateLimitBps,
+                    packLimitBytes: basePackLimit,
+                    streamChunkBytes: baseChunkSize,
+                    getPackLimit: adaptiveTuner?.getPackLimit,
+                    getPaceDelayMs,
+                    getRateLimitBps: adaptiveTuner?.getRateLimitBps,
+                    onSkipFile: (file) => missingFiles.add(file.rel_path),
+                  });
+
+                  const response = await readUploadResponse(socket);
+                  parsed = parseUploadResponse(response);
+                }
+              } catch (err) {
+                if (!recoveryAttempted && !state.transferCancel && !transferAbort.signal.aborted) {
+                  recoveryAttempted = true;
+                  emitLog(`Payload error; attempting auto-recovery. ${err?.message || err}`, 'warn');
+                  const recovered = await waitForPayloadRecovery();
+                  if (!recovered) {
+                    throw new Error('Payload did not recover within 3 minutes.');
+                  }
+                  let retryFiles = attemptFiles;
+                  if (Array.isArray(attemptFiles)) {
+                    retryFiles = await filterResumeBySize(attemptFiles);
+                  } else if (typeof attemptFiles === 'function' && uploadMode === 'mix') {
+                    retryFiles = await filterResumeBySize(getRemainingMixFiles());
+                  }
+                  if (Array.isArray(retryFiles) && retryFiles.length === 0) {
+                    emitLog('Auto-recovery: all files already present after resume scan.', 'info');
+                    return;
+                  }
+                  emitLog('Payload recovered; resuming upload...', 'info');
+                  attemptFiles = retryFiles;
+                  continue;
+                }
+                throw err;
+              } finally {
+                if (adaptiveTuner) adaptiveTuner.stop();
+              }
+              return;
             }
           };
 

@@ -131,6 +131,10 @@ static volatile unsigned long long g_upload_bytes_recv = 0;
 static atomic_ullong g_upload_bytes_written = 0;
 static atomic_ullong g_backpressure_events = 0;
 static atomic_ullong g_backpressure_wait_ms = 0;
+static volatile time_t g_abort_at = 0;
+static uint64_t g_last_session_id = 0;
+static uint64_t g_abort_session_id = 0;
+static char g_abort_reason[128] = {0};
 
 #define MAX_ACK_SESSIONS 4
 #define MAX_PACK_ACKS 512
@@ -176,6 +180,16 @@ static void unregister_ack_session(uint64_t session_id) {
     for (int i = 0; i < MAX_PACK_ACKS; i++) {
         if (g_pack_acks[i].active && g_pack_acks[i].session_id == session_id) {
             g_pack_acks[i].active = 0;
+        }
+    }
+    pthread_mutex_unlock(&g_ack_mutex);
+}
+
+static void abort_active_client_sockets(void) {
+    pthread_mutex_lock(&g_ack_mutex);
+    for (int i = 0; i < MAX_ACK_SESSIONS; i++) {
+        if (g_ack_sessions[i].active && g_ack_sessions[i].sock >= 0) {
+            shutdown(g_ack_sessions[i].sock, SHUT_RDWR);
         }
     }
     pthread_mutex_unlock(&g_ack_mutex);
@@ -703,8 +717,21 @@ void transfer_cleanup(void) {
 }
 
 void transfer_request_abort(void) {
+    transfer_request_abort_with_reason("abort_requested");
+}
+
+void transfer_request_abort_with_reason(const char *reason) {
     g_abort_transfer = 1;
-    printf("[FTX] Abort requested.\n");
+    g_abort_at = time(NULL);
+    g_abort_session_id = g_last_session_id;
+    if (reason && reason[0]) {
+        snprintf(g_abort_reason, sizeof(g_abort_reason), "%s", reason);
+    } else {
+        g_abort_reason[0] = '\0';
+    }
+    printf("[FTX] Abort requested (%s).\n", g_abort_reason[0] ? g_abort_reason : "unknown");
+    g_last_transfer_progress = time(NULL);
+    abort_active_client_sockets();
     // Don't block here - let the upload loop exit and cleanup naturally
     // Wake up any threads that might be waiting
     if (g_workers_initialized) {
@@ -742,6 +769,9 @@ int transfer_get_stats(TransferStats *out) {
     out->last_progress = g_last_transfer_progress;
     out->abort_requested = g_abort_transfer;
     out->workers_initialized = g_workers_initialized;
+    out->abort_at = g_abort_at;
+    out->abort_session_id = g_abort_session_id;
+    snprintf(out->abort_reason, sizeof(out->abort_reason), "%s", g_abort_reason);
     out->backpressure_events = atomic_load(&g_backpressure_events);
     out->backpressure_wait_ms = atomic_load(&g_backpressure_wait_ms);
     out->bytes_received = g_upload_bytes_recv;
@@ -1045,6 +1075,7 @@ UploadSession *upload_session_create(const char *dest_root, int use_temp) {
         free(session);
         return NULL;
     }
+    g_last_session_id = session->session_id;
     return session;
 }
 
@@ -1130,6 +1161,14 @@ void handle_upload_v3(int client_sock, const char *dest_root, int use_temp, int 
         }
     }
     free(buffer);
+
+    if (g_abort_transfer) {
+        const char *err = "ERROR: Upload aborted\n";
+        send(client_sock, err, strlen(err), 0);
+        upload_session_finalize(session);
+        upload_session_destroy(session);
+        return;
+    }
 
     if (error && !g_abort_transfer) {
         const char *err = "ERROR: Upload failed on client side\n";

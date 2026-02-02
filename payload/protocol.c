@@ -2235,7 +2235,7 @@ void handle_payload_status(int client_sock) {
 }
 
 void handle_payload_reset(int client_sock) {
-    transfer_request_abort();
+    transfer_request_abort_with_reason("payload_reset");
     transfer_cleanup();
     extract_queue_reset();
     const char *ok = "OK\n";
