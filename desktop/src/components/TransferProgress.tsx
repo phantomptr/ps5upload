@@ -22,9 +22,50 @@ const getStatusClass = (status: string) => {
 };
 
 export const TransferProgress: React.FC = () => {
-  const { status, sent, total, files, currentFile } = useTransferStore();
+  const { status, sent, total, files, currentFile, payloadFiles, payloadSize, ftpFiles, ftpSize } = useTransferStore();
 
   const transferPercent = total > 0 ? Math.min(100, (sent / total) * 100) : sent > 0 ? 100 : 0;
+
+  if (status === 'Summary') {
+    return (
+      <div className="card wide">
+        <header className="card-title">
+          <span className="card-title-icon">▶</span>
+          Transfer Summary
+        </header>
+        <div className="progress-meta">
+          {payloadFiles > 0 && (
+            <span>
+              Payload: {payloadFiles} files ({formatBytes(payloadSize)})
+            </span>
+          )}
+          {ftpFiles > 0 && (
+            <span>
+              FTP: {ftpFiles} files ({formatBytes(ftpSize)})
+            </span>
+          )}
+          <span className={getStatusClass(status)}>Ready to Upload</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (status === 'Scanning') {
+    return (
+      <div className="card wide">
+        <header className="card-title">
+          <span className="card-title-icon">▶</span>
+          Transfer Progress
+        </header>
+        <div className="progress-meta">
+          <span>
+            Scanning for files...
+          </span>
+          <span className={getStatusClass(status)}>{status}</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="card wide">

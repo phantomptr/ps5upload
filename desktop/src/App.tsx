@@ -165,7 +165,6 @@ type QueueItem = {
     chmod_after_upload?: boolean;
     upload_mode?: UploadMode;
     ftp_port?: FtpPortOption;
-    ftp_mix_threshold_mb?: number;
     rar_extract_mode: RarExtractMode;
     rar_temp_root?: string;
     override_on_conflict?: boolean;
@@ -247,7 +246,6 @@ type AppConfig = {
   rar_temp: string;
   upload_mode?: UploadMode;
   ftp_port?: string | number;
-  ftp_mix_threshold_mb?: number;
   window_width: number;
   window_height: number;
   window_x: number;
@@ -1012,7 +1010,6 @@ export default function App() {
   const [resumeMode, setResumeMode] = useState<ResumeOption>("none");
   const [uploadMode, setUploadMode] = useState<UploadMode>("payload");
   const [ftpPort, setFtpPort] = useState<FtpPortOption>("auto");
-  const [ftpMixThreshold, setFtpMixThreshold] = useState(1);
   const [connections, setConnections] = useState(4);
   const [bandwidthLimit, setBandwidthLimit] = useState(0);
   const [optimizeMode, setOptimizeMode] = useState<OptimizeMode>("none");
@@ -1161,11 +1158,9 @@ export default function App() {
     effectiveOptimize: null,
     effectiveCompression: null
   });
-  const transferSpeedRef = useRef({ sent: 0, elapsed: 0, ema: 0 });
   const lastBottleneckRef = useRef<string | null>(null);
   const lastBottleneckAtRef = useRef(0);
   const bottleneckStableRef = useRef(0);
-  const [transferSpeedEma, setTransferSpeedEma] = useState(0);
   const [transferUpdatedAt, setTransferUpdatedAt] = useState<number | null>(null);
   const [activeRunId, setActiveRunId] = useState<number | null>(null);
   const [transferActive, setTransferActive] = useState(false);
@@ -1374,22 +1369,6 @@ export default function App() {
         : transferStartedAt
         ? (Date.now() - transferStartedAt) / 1000
         : 0;
-    const prev = transferSpeedRef.current;
-    if (!prev.elapsed || sent < prev.sent || transferState.status.startsWith("Idle")) {
-      transferSpeedRef.current = { sent, elapsed: nowElapsed, ema: 0 };
-      setTransferSpeedEma(0);
-      return;
-    }
-    const elapsedDelta = nowElapsed - prev.elapsed;
-    if (elapsedDelta <= 0) return;
-    if (elapsedDelta < 0.5) return;
-    const delta = sent - prev.sent;
-    const inst = delta > 0 ? delta / elapsedDelta : 0;
-    const tau = 3;
-    const alpha = 1 - Math.exp(-elapsedDelta / tau);
-    const nextEma = prev.ema > 0 ? prev.ema + (inst - prev.ema) * alpha : inst;
-    transferSpeedRef.current = { sent, elapsed: nowElapsed, ema: nextEma };
-    setTransferSpeedEma(nextEma);
   }, [transferState.sent, transferState.status, transferActive, activeRunId]);
 
   useEffect(() => {
@@ -2182,11 +2161,6 @@ export default function App() {
             ? String(normalizedConfig.ftp_port)
             : "auto";
         setFtpPort(ftpPortValue as FtpPortOption);
-        setFtpMixThreshold(
-          typeof normalizedConfig.ftp_mix_threshold_mb === "number"
-            ? Math.max(1, normalizedConfig.ftp_mix_threshold_mb)
-            : 1
-        );
         setAutoTune(normalizedConfig.auto_tune_connections ?? true);
         setOptimizeMode(normalizedConfig.optimize_upload ? "optimize" : "none");
         setUseTemp(normalizedConfig.use_temp ?? false);
@@ -2669,7 +2643,6 @@ export default function App() {
       resume_mode: resumeMode,
       upload_mode: uploadMode,
       ftp_port: ftpPort,
-      ftp_mix_threshold_mb: ftpMixThreshold,
       auto_tune_connections: autoTune,
       optimize_upload: optimizeActive,
       update_channel: includePrerelease ? "all" : "stable",
@@ -2705,7 +2678,6 @@ export default function App() {
     resumeMode,
     uploadMode,
     ftpPort,
-    ftpMixThreshold,
     autoTune,
     optimizeActive,
     includePrerelease,
@@ -3007,6 +2979,7 @@ export default function App() {
           if (transferActive) return;
           const message = event.payload?.message;
           if (!message || message === "undefined") return;
+          if (message.includes("Packing:")) return;
           clientLogBuffer.current = [message, ...clientLogBuffer.current].slice(0, 100);
           if (!clientLogFlush.current) {
             clientLogFlush.current = setTimeout(() => {
@@ -3025,6 +2998,7 @@ export default function App() {
           if (transferActive) return;
           const message = event.payload?.message;
           if (!message || message === "undefined") return;
+          if (message.includes("Packing:")) return;
           payloadLogBuffer.current = [message, ...payloadLogBuffer.current].slice(0, 100);
           if (!payloadLogFlush.current) {
             payloadLogFlush.current = setTimeout(() => {
@@ -3429,32 +3403,16 @@ export default function App() {
       : transferStartedAt
       ? (Date.now() - transferStartedAt) / 1000
       : 0;
-  const transferSpeedInstant =
-    transferElapsedDisplay > 0 ? transferSent / transferElapsedDisplay : 0;
-  const transferSpeedMinElapsedSec = 3;
-  const transferSpeedMinBytes = 1 * 1024 * 1024;
-  const transferSpeedReady =
-    transferElapsedDisplay >= transferSpeedMinElapsedSec &&
-    transferSent >= transferSpeedMinBytes;
-  const transferSpeedDisplay =
-    transferSpeedReady && transferSpeedEma > 0 ? transferSpeedEma : 0;
   const transferPayloadSpeedRaw = toSafeNumber(transferState.payloadSpeedBps, 0);
   const transferFtpSpeedRaw = toSafeNumber(transferState.ftpSpeedBps, 0);
   const transferTotalSpeedRaw = toSafeNumber(transferState.totalSpeedBps, 0);
   const transferTotalSpeedDisplay =
-    transferTotalSpeedRaw > 0 ? transferTotalSpeedRaw : transferSpeedDisplay;
-  const transferPayloadSpeedDisplay =
-    transferPayloadSpeedRaw > 0
-      ? transferPayloadSpeedRaw
-      : transferState.uploadMode !== "ftp"
-      ? transferSpeedDisplay
-      : 0;
-  const transferFtpSpeedDisplay =
-    transferFtpSpeedRaw > 0
-      ? transferFtpSpeedRaw
-      : transferState.uploadMode === "ftp"
-      ? transferSpeedDisplay
-      : 0;
+    transferTotalSpeedRaw > 0
+      ? transferTotalSpeedRaw
+      : transferPayloadSpeedRaw + transferFtpSpeedRaw;
+  const transferSpeedDisplay = transferTotalSpeedDisplay;
+  const transferPayloadSpeedDisplay = transferPayloadSpeedRaw;
+  const transferFtpSpeedDisplay = transferFtpSpeedRaw;
   const transferModeForDisplay = transferState.uploadMode ?? uploadMode;
   const transferModeLabel =
     transferModeForDisplay === "ftp"
@@ -3493,7 +3451,7 @@ export default function App() {
     const payloadCpu = toSafeNumber(payloadFullStatus?.system?.cpu_percent, -1);
     const payloadProcCpu = toSafeNumber(payloadFullStatus?.system?.proc_cpu_percent, -1);
     const payloadNetRx = toSafeNumber(payloadFullStatus?.system?.net_rx_bps, -1);
-    const clientSendBps = transferPayloadSpeedDisplay || transferSpeedDisplay;
+    const clientSendBps = transferPayloadSpeedDisplay || transferTotalSpeedDisplay;
     const hasBackpressure = backpressureEvents > 0 || backpressureMs > 0;
     const queueBusy = writerQueue > 0 || packQueue > 0;
 
@@ -3507,7 +3465,7 @@ export default function App() {
       return { key: "client", label: tr("bottleneck_client") };
     }
     return { key: "unknown", label: tr("bottleneck_unknown") };
-  }, [payloadFullStatus, transferPayloadSpeedDisplay, transferSpeedDisplay, transferActive, transferState.uploadMode]);
+  }, [payloadFullStatus, transferPayloadSpeedDisplay, transferTotalSpeedDisplay, transferActive, transferState.uploadMode]);
   useEffect(() => {
     if (!transferActive || !transferBottleneck) {
       lastBottleneckRef.current = null;
@@ -4331,6 +4289,12 @@ export default function App() {
             resume_mode: normalizeResumeMode(nextItem.transfer_settings.resume_mode)
           };
         }
+        if (nextItem.transfer_settings && "ftp_mix_threshold_mb" in nextItem.transfer_settings) {
+          const { ftp_mix_threshold_mb: _unused, ...rest } = nextItem.transfer_settings as {
+            ftp_mix_threshold_mb?: number;
+          };
+          nextItem.transfer_settings = rest;
+        }
         if (nextItem.status === "InProgress") {
           if (inProgressSeen) {
             nextItem.status = "Pending";
@@ -4594,7 +4558,6 @@ export default function App() {
       chmod_after_upload: chmodAfterUpload,
       upload_mode: uploadMode,
       ftp_port: ftpPort,
-      ftp_mix_threshold_mb: ftpMixThreshold,
       rar_extract_mode: rarExtractMode,
       rar_temp_root: rarTemp,
       override_on_conflict: overrideOnConflict
@@ -4940,7 +4903,6 @@ export default function App() {
           compression,
           upload_mode: uploadMode,
           ftp_port: ftpPort,
-          ftp_mix_threshold_mb: ftpMixThreshold,
           bandwidth_limit_mbps: bandwidthLimit,
           auto_tune_connections: autoTune,
           optimize_upload: optimizeActive,
@@ -5109,7 +5071,6 @@ export default function App() {
           compression: settings?.compression ?? compression,
           upload_mode: settings?.upload_mode ?? uploadMode,
           ftp_port: settings?.ftp_port ?? ftpPort,
-          ftp_mix_threshold_mb: settings?.ftp_mix_threshold_mb ?? ftpMixThreshold,
           bandwidth_limit_mbps: settings?.bandwidth_limit_mbps ?? bandwidthLimit,
           auto_tune_connections: settings?.auto_tune_connections ?? autoTune,
           optimize_upload: settings?.optimize_upload ?? optimizeActive,
@@ -5638,7 +5599,6 @@ export default function App() {
         paths,
         upload_mode: uploadMode,
         ftp_port: ftpPort,
-        ftp_mix_threshold_mb: ftpMixThreshold
       });
     } catch (err) {
       setManageBusy(false);
@@ -5676,7 +5636,6 @@ export default function App() {
         paths,
         upload_mode: uploadMode,
         ftp_port: ftpPort,
-        ftp_mix_threshold_mb: ftpMixThreshold
       });
     } catch (err) {
       setManageBusy(false);
@@ -6813,27 +6772,6 @@ export default function App() {
                           <option value="2121">2121</option>
                         </select>
                       </label>
-                    )}
-                    {uploadMode === "mix" && (
-                      <>
-                        <label className="field">
-                          <span>{tr("ftp_mix_threshold")}</span>
-                          <input
-                            type="number"
-                            min={1}
-                            step={1}
-                            value={ftpMixThreshold}
-                            onChange={(event) =>
-                              setFtpMixThreshold(
-                                Number.isFinite(Number(event.target.value))
-                                  ? Math.max(1, Number(event.target.value))
-                                  : 1
-                              )
-                            }
-                          />
-                        </label>
-                        <p className="muted small">{tr("ftp_mix_threshold_desc")}</p>
-                      </>
                     )}
                     <div className="card-divider" />
                     <label className="field inline">
@@ -8602,7 +8540,6 @@ export default function App() {
                   ? tr("upload_mode_mix")
                   : tr("upload_mode_payload");
               const ftpPortLabel = settings.ftp_port ?? ftpPort;
-              const ftpThresholdLabel = settings.ftp_mix_threshold_mb ?? ftpMixThreshold;
               const lastRunLabel =
                 uploadInfoItem.last_run_action === "resume"
                   ? tr("resumed")
@@ -8723,12 +8660,6 @@ export default function App() {
                         <div className="info-row">
                           <div className="info-label">{tr("ftp_port")}</div>
                           <div className="info-value">{ftpPortLabel}</div>
-                        </div>
-                      )}
-                      {uploadModeValue === "mix" && (
-                        <div className="info-row">
-                          <div className="info-label">{tr("ftp_mix_threshold")}</div>
-                          <div className="info-value">{`${ftpThresholdLabel} MB`}</div>
                         </div>
                       )}
                       <div className="info-row">

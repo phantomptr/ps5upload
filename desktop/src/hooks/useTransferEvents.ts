@@ -4,6 +4,7 @@ import { useTransferStore } from '../state';
 import {
   TransferProgressEvent,
   TransferScanEvent,
+  TransferSummaryReadyEvent,
   TransferCompleteEvent,
   TransferErrorEvent,
 } from '../types';
@@ -64,6 +65,20 @@ export function useTransferEvents() {
             status: "Scanning",
             files: files_found,
             total: total_size,
+          });
+        }),
+        listen<TransferSummaryReadyEvent>("transfer_summary_ready", (event) => {
+          if (!mounted) return;
+          const { run_id, payload_files, payload_size, ftp_files, ftp_size } = event.payload;
+          const transferState = useTransferStore.getState();
+          if (transferState.runId && run_id !== transferState.runId) return;
+
+          useTransferStore.setState({
+            status: "Summary",
+            payloadFiles: payload_files,
+            payloadSize: payload_size,
+            ftpFiles: ftp_files,
+            ftpSize: ftp_size,
           });
         }),
         listen<TransferCompleteEvent>("transfer_complete", (event) => {

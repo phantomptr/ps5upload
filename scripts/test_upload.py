@@ -8,7 +8,6 @@ import uuid
 
 # Constants
 MAGIC_FTX1 = 0x31585446
-FRAME_PACK = 4
 FRAME_PACK_ACK = 5
 FRAME_FINISH = 6
 FRAME_PACK_V3 = 11
@@ -22,9 +21,6 @@ def send_all(sock, data):
         if sent == 0:
             raise RuntimeError("Socket connection broken")
         total_sent += sent
-
-def create_pack_header_v2(record_count):
-    return struct.pack('<I', record_count)
 
 def create_pack_header_v3(pack_id, record_count):
     return struct.pack('<QI', pack_id, record_count)
@@ -57,9 +53,9 @@ def read_frame(sock):
     body = recv_exact(sock, body_len) if body_len else b''
     return frame_type, body
 
-def send_handshake(sock, dest, use_v3):
+def send_handshake(sock, dest):
     escaped = dest.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
-    cmd = f"UPLOAD_V3 \"{escaped}\" DIRECT\n" if use_v3 else f"UPLOAD_V2 \"{escaped}\" DIRECT\n"
+    cmd = f"UPLOAD_V3 \"{escaped}\" DIRECT\n"
     print(f"Sending command: {cmd.strip()}")
     sock.sendall(cmd.encode('utf-8'))
 
@@ -75,8 +71,7 @@ def main():
     parser.add_argument('--num-files', type=int, default=300000, help='Total number of files to send')
     parser.add_argument('--file-size', type=int, default=1024, help='Size of each small file in bytes')
     parser.add_argument('--dest', default='/data/test_upload_many_small_files', help='Destination path on PS5')
-    parser.add_argument('--force-v2', action='store_true', help='Force legacy V2 protocol')
-    parser.add_argument('--ack-window', type=int, default=4, help='Max in-flight packs before waiting for ACK (V3 only)')
+    parser.add_argument('--ack-window', type=int, default=4, help='Max in-flight packs before waiting for ACK')
     args = parser.parse_args()
 
     print(f"Connecting to {args.ip}:{args.port}...")
@@ -90,27 +85,12 @@ def main():
         print(f"Connection failed: {e}")
         return
 
-    use_v3 = not args.force_v2
     try:
-        send_handshake(sock, args.dest, use_v3)
+        send_handshake(sock, args.dest)
     except Exception as e:
-        if args.force_v2:
-            print(f"Handshake failed: {e}")
-            sock.close()
-            return
-        print(f"V3 handshake failed ({e}), retrying with V2...")
+        print(f"Handshake failed: {e}")
         sock.close()
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.connect((args.ip, args.port))
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 16 * 1024 * 1024)
-        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        use_v3 = False
-        try:
-            send_handshake(sock, args.dest, False)
-        except Exception as err:
-            print(f"V2 handshake failed: {err}")
-            sock.close()
-            return
+        return
 
     files_sent = 0
     total_bytes_sent = 0
@@ -127,10 +107,7 @@ def main():
 
     while files_sent < args.num_files:
         pack_body = bytearray()
-        if use_v3:
-            pack_body.extend(create_pack_header_v3(pack_id, 0))
-        else:
-            pack_body.extend(create_pack_header_v2(0)) # Placeholder for record count
+        pack_body.extend(create_pack_header_v3(pack_id, 0))
         
         records_in_pack = 0
         
@@ -154,28 +131,24 @@ def main():
             files_sent += 1
 
         # Update the record count in the pack header
-        if use_v3:
-            pack_body[8:12] = struct.pack('<I', records_in_pack)
-        else:
-            pack_body[0:4] = struct.pack('<I', records_in_pack)
+        pack_body[8:12] = struct.pack('<I', records_in_pack)
         
         # Send Frame Header
-        send_frame_header(sock, FRAME_PACK_V3 if use_v3 else FRAME_PACK, len(pack_body))
+        send_frame_header(sock, FRAME_PACK_V3, len(pack_body))
         
         # Send Pack Body
         send_all(sock, pack_body)
         total_bytes_sent += len(pack_body)
-        if use_v3:
-            inflight[pack_id] = time.time()
-            pack_id += 1
-            while len(inflight) >= max(1, args.ack_window):
-                frame_type, body = read_frame(sock)
-                if frame_type == FRAME_PACK_ACK and len(body) >= 8:
-                    ack_id = struct.unpack('<Q', body[:8])[0]
-                    inflight.pop(ack_id, None)
-                else:
-                    print(f"\nUnexpected frame type {frame_type} while waiting for ACK.")
-                    break
+        inflight[pack_id] = time.time()
+        pack_id += 1
+        while len(inflight) >= max(1, args.ack_window):
+            frame_type, body = read_frame(sock)
+            if frame_type == FRAME_PACK_ACK and len(body) >= 8:
+                ack_id = struct.unpack('<Q', body[:8])[0]
+                inflight.pop(ack_id, None)
+            else:
+                print(f"\nUnexpected frame type {frame_type} while waiting for ACK.")
+                break
         
         # Progress update
         elapsed = time.time() - start_time
@@ -191,15 +164,14 @@ def main():
     try:
         # Set a timeout for the final response
         sock.settimeout(60.0) # 60 seconds
-        if use_v3:
-            while inflight:
-                frame_type, body = read_frame(sock)
-                if frame_type == FRAME_PACK_ACK and len(body) >= 8:
-                    ack_id = struct.unpack('<Q', body[:8])[0]
-                    inflight.pop(ack_id, None)
-                else:
-                    print(f"Unexpected frame type {frame_type} while waiting for ACK.")
-                    break
+        while inflight:
+            frame_type, body = read_frame(sock)
+            if frame_type == FRAME_PACK_ACK and len(body) >= 8:
+                ack_id = struct.unpack('<Q', body[:8])[0]
+                inflight.pop(ack_id, None)
+            else:
+                print(f"Unexpected frame type {frame_type} while waiting for ACK.")
+                break
         final_resp = sock.recv(1024).decode('utf-8').strip()
         print(f"Final Response: {final_resp}")
     except socket.timeout:

@@ -14,6 +14,14 @@ export type TransferScanEvent = {
   total_size: number;
 };
 
+export type TransferSummaryReadyEvent = {
+  run_id: number;
+  payload_files: number;
+  payload_size: number;
+  ftp_files: number;
+  ftp_size: number;
+};
+
 export type TransferCompleteEvent = {
   run_id: number;
   files: number;

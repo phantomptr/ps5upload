@@ -19,7 +19,11 @@ enum FrameType {
     FRAME_PACK_V3 = 11,
     FRAME_PACK_LZ4_V3 = 12,
     FRAME_PACK_ZSTD_V3 = 13,
-    FRAME_PACK_LZMA_V3 = 14
+    FRAME_PACK_LZMA_V3 = 14,
+    FRAME_PACK_V4 = 15,
+    FRAME_PACK_LZ4_V4 = 16,
+    FRAME_PACK_ZSTD_V4 = 17,
+    FRAME_PACK_LZMA_V4 = 18
 };
 
 struct FrameHeader {
@@ -34,6 +38,7 @@ struct FrameHeader {
 // [Record2]...
 
 // Record Format:
-// [PathLen:2] [PathBytes] [DataLen:8] [DataBytes]
+// V3: [PathLen:2] [PathBytes] [DataLen:8] [DataBytes]
+// V4: [PathLen:2] [Flags:2] [PathBytes] [DataLen:8] [Offset?:8] [TotalSize?:8] [DataBytes]
 
 #endif

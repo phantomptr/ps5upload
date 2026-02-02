@@ -55,6 +55,9 @@ static int sys_budget_set(long budget) {
 
 
 static pthread_mutex_t g_log_mutex = PTHREAD_MUTEX_INITIALIZER;
+static char g_last_op[64] = {0};
+static char g_last_path[PATH_MAX] = {0};
+static char g_last_path2[PATH_MAX] = {0};
 static const char *g_pid_file = "/data/ps5upload/payload.pid";
 static const char *g_kill_file = "/data/ps5upload/kill.req";
 static volatile time_t g_last_activity = 0;
@@ -246,6 +249,24 @@ void payload_touch_activity(void) {
     g_last_activity = time(NULL);
 }
 
+void payload_set_crash_context(const char *op, const char *path, const char *path2) {
+    if (op) {
+        snprintf(g_last_op, sizeof(g_last_op), "%s", op);
+    } else {
+        g_last_op[0] = '\0';
+    }
+    if (path) {
+        snprintf(g_last_path, sizeof(g_last_path), "%s", path);
+    } else {
+        g_last_path[0] = '\0';
+    }
+    if (path2) {
+        snprintf(g_last_path2, sizeof(g_last_path2), "%s", path2);
+    } else {
+        g_last_path2[0] = '\0';
+    }
+}
+
 static const char *signal_name(int sig) {
     switch (sig) {
         case SIGSEGV: return "SIGSEGV";
@@ -273,12 +294,18 @@ static void crash_handler(int sig) {
             "PID: %d\n"
             "Transfer active: %d\n"
             "Last progress: %ld sec ago\n"
+            "Last op: %s\n"
+            "Last path: %s\n"
+            "Last path2: %s\n"
             "===================================\n",
             (long)now,
             sig, signal_name(sig),
             (int)getpid(),
             transfer_is_active(),
-            (long)(now - transfer_last_progress())
+            (long)(now - transfer_last_progress()),
+            g_last_op,
+            g_last_path,
+            g_last_path2
         );
         if (len > 0) {
             write(fd, buf, (size_t)len);
@@ -508,7 +535,7 @@ static int set_blocking(int sock) {
     return 0;
 }
 
-static int parse_first_token(const char *src, char *out, size_t out_cap, const char **rest) {
+__attribute__((unused)) static int parse_first_token(const char *src, char *out, size_t out_cap, const char **rest) {
     if (!src || !out || out_cap == 0) {
         return -1;
     }
@@ -626,26 +653,28 @@ static void set_socket_buffers(int sock) {
     int keepalive = 1;
     setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, &keepalive, sizeof(keepalive));
 
+#ifdef TCP_KEEPIDLE
+    int keepidle = 10;
+    setsockopt(sock, IPPROTO_TCP, TCP_KEEPIDLE, &keepidle, sizeof(keepidle));
+#endif
+#ifdef TCP_KEEPINTVL
+    int keepintvl = 5;
+    setsockopt(sock, IPPROTO_TCP, TCP_KEEPINTVL, &keepintvl, sizeof(keepintvl));
+#endif
+#ifdef TCP_KEEPCNT
+    int keepcnt = 3;
+    setsockopt(sock, IPPROTO_TCP, TCP_KEEPCNT, &keepcnt, sizeof(keepcnt));
+#endif
+
+#ifdef TCP_MAXSEG
+    int maxseg = 1460;
+    setsockopt(sock, IPPROTO_TCP, TCP_MAXSEG, &maxseg, sizeof(maxseg));
+#endif
+
 #ifdef SO_NOSIGPIPE
     int no_sigpipe = 1;
     setsockopt(sock, SOL_SOCKET, SO_NOSIGPIPE, &no_sigpipe, sizeof(no_sigpipe));
 #endif
-}
-
-struct LegacyUploadArgs {
-    int sock;
-    char args[CMD_BUFFER_SIZE];
-};
-
-static void *legacy_upload_thread(void *arg) {
-    struct LegacyUploadArgs *args = (struct LegacyUploadArgs *)arg;
-    if (!args) {
-        return NULL;
-    }
-    handle_upload(args->sock, args->args);
-    close(args->sock);
-    free(args);
-    return NULL;
 }
 
 static int read_command_line(int sock, char *out, size_t cap, size_t *out_len) {
@@ -1046,55 +1075,6 @@ static void process_command(struct ClientConnection *conn) {
     }
     if (strncmp(conn->cmd_buffer, "UPLOAD_V3 ", 10) == 0) {
         handle_upload_v3_wrapper(conn->sock, conn->cmd_buffer + 10);
-        close_connection(conn);
-        return;
-    }
-    if (strncmp(conn->cmd_buffer, "UPLOAD_V2 ", 10) == 0) {
-        // Use the synchronous handler from transfer.c via protocol.c wrapper
-        // This handles READY, session creation, and data reception all in one call
-        handle_upload_v2_wrapper(conn->sock, conn->cmd_buffer + 10);
-        close_connection(conn);
-        return;
-    }
-    if (strncmp(conn->cmd_buffer, "UPLOAD ", 7) == 0) {
-        pthread_t tid;
-        struct LegacyUploadArgs *args = malloc(sizeof(*args));
-        if (!args) {
-            const char *error = "ERROR: Legacy upload failed\n";
-            send(conn->sock, error, strlen(error), 0);
-            close_connection(conn);
-            return;
-        }
-        args->sock = conn->sock;
-        strncpy(args->args, conn->cmd_buffer + 7, sizeof(args->args) - 1);
-        args->args[sizeof(args->args) - 1] = '\0';
-
-        char dest_path[PATH_MAX];
-        if (parse_first_token(args->args, dest_path, sizeof(dest_path), NULL) != 0) {
-            const char *error = "ERROR: Invalid UPLOAD format\n";
-            send(conn->sock, error, strlen(error), 0);
-            close_connection(conn);
-            free(args);
-            return;
-        }
-
-        if (!is_path_safe(dest_path)) {
-            const char *error = "ERROR: Invalid path\n";
-            send(conn->sock, error, strlen(error), 0);
-            close_connection(conn);
-            free(args);
-            return;
-        }
-
-        if (pthread_create(&tid, NULL, legacy_upload_thread, args) == 0) {
-            pthread_detach(tid);
-            conn->sock = -1;
-            return;
-        }
-
-        free(args);
-        const char *error = "ERROR: Legacy upload failed\n";
-        send(conn->sock, error, strlen(error), 0);
         close_connection(conn);
         return;
     }

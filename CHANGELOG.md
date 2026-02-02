@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 This project follows Semantic Versioning.
 
+## [1.4.0] - 2026-02-01
+
+### Removed
+- Legacy UPLOAD (V1) and UPLOAD_V2 handlers from the payload; standard uploads are V3-only.
+
+### Changed
+- Test upload script now targets UPLOAD_V3 only.
+
 ## [1.3.11] - 2026-02-01
 
 ### Added
@@ -12,10 +20,17 @@ This project follows Semantic Versioning.
 ### Changed
 - Scan requests are deduped for identical sources/settings to avoid repeated scans.
 - Logging defaults reduced for noisy transfer events (more debug‑only).
+- Keep Awake now blocks both display sleep and app suspension for better cross‑platform reliability.
 
 ### Fixed
 - Payload stalls now trigger safer recovery paths on the client.
 - “Undefined” log entries are filtered out from UI logs.
+- Manage Move now streams progress without closing the connection mid‑operation (better large folder moves).
+- Payload remove (used by move‑across‑devices) is now iterative to avoid deep recursion crashes.
+- Added detailed payload logging for Move/Copy to aid debugger investigations.
+- Crash handler now captures last Move/Copy path context to pinpoint SIGBUS issues.
+- Copy/move file IO now uses heap buffers to avoid stack overflows on large copies.
+- Copy/Move now logs scan size, copy/remove completion, and OK send failures.
 
 ## [1.3.10] - 2026-01-30
 

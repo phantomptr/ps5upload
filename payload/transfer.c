@@ -16,6 +16,7 @@
 #include <stdatomic.h>
 
 #include "transfer.h"
+#include "config.h"
 #include <errno.h>
 #include "protocol_defs.h"
 #include "notify.h"
@@ -32,7 +33,7 @@
 #define WRITER_THREAD_COUNT 4
 #define FILE_WRITE_QUEUE_DEPTH (16 * 1024)
 #define FILE_WRITE_INTERVAL_MS 250
-#define UPLOAD_V2_RECV_BUFFER_SIZE (512 * 1024)
+#define UPLOAD_RECV_BUFFER_SIZE (512 * 1024)
 #define TUNE_PACK_MIN (4 * 1024 * 1024)
 
 // Buffer pool for large packs
@@ -49,6 +50,9 @@ typedef struct {
     uint8_t *data; // Malloc'd data for the file
     size_t len;
     int chmod_mode; // Mode to apply after write
+    uint64_t offset;
+    uint64_t total_size;
+    uint8_t flags;
     uint64_t pack_id;
     uint64_t session_id;
 } FileWriteJob;
@@ -62,6 +66,11 @@ static pthread_mutex_t g_file_write_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_file_write_queue_not_empty_cond = PTHREAD_COND_INITIALIZER;
 static pthread_cond_t g_file_write_queue_not_full_cond = PTHREAD_COND_INITIALIZER;
 static int g_file_writer_shutdown = 0;
+
+// V4 record flags
+#define RECORD_FLAG_HAS_OFFSET 0x01
+#define RECORD_FLAG_HAS_TOTAL  0x02
+#define RECORD_FLAG_TRUNCATE   0x04
 
 typedef struct UploadSession {
     struct FrameHeader header;
@@ -274,13 +283,13 @@ static int decompress_pack_body(uint32_t frame_type, uint8_t **body, size_t *bod
     uint8_t *out = alloc_pack_buffer(raw_len);
     if (!out) return -1;
     int ok = 0;
-    if (frame_type == FRAME_PACK_LZ4 || frame_type == FRAME_PACK_LZ4_V3) {
+    if (frame_type == FRAME_PACK_LZ4 || frame_type == FRAME_PACK_LZ4_V3 || frame_type == FRAME_PACK_LZ4_V4) {
         int decoded = LZ4_decompress_safe((const char *)(*body) + 4, (char *)out, (int)(*body_len - 4), (int)raw_len);
         ok = (decoded >= 0 && (uint32_t)decoded == raw_len);
-    } else if (frame_type == FRAME_PACK_ZSTD || frame_type == FRAME_PACK_ZSTD_V3) {
+    } else if (frame_type == FRAME_PACK_ZSTD || frame_type == FRAME_PACK_ZSTD_V3 || frame_type == FRAME_PACK_ZSTD_V4) {
         size_t decoded = ZSTD_decompress(out, raw_len, *body + 4, *body_len - 4);
         ok = !ZSTD_isError(decoded) && decoded == raw_len;
-    } else if (frame_type == FRAME_PACK_LZMA || frame_type == FRAME_PACK_LZMA_V3) {
+    } else if (frame_type == FRAME_PACK_LZMA || frame_type == FRAME_PACK_LZMA_V3 || frame_type == FRAME_PACK_LZMA_V4) {
         if (*body_len < 17) { free_pack_buffer(out); return -1; }
         SizeT dest_len = (SizeT)raw_len;
         SizeT src_len = (SizeT)(*body_len - 17);
@@ -449,13 +458,30 @@ static void *file_writer_thread(void *arg) {
                 *last_slash = '/';
             }
 
-            int fd = open(job->path, O_WRONLY | O_CREAT | O_TRUNC, job->chmod_mode);
-            if (fd >= 0) {
-                if (job->len > 0) write(fd, job->data, job->len);
-                close(fd);
-            if (job->len > 0) {
-                atomic_fetch_add(&g_upload_bytes_written, (unsigned long long)job->len);
+            int open_flags = O_WRONLY | O_CREAT;
+            if ((job->flags & RECORD_FLAG_HAS_OFFSET) == 0 || (job->flags & RECORD_FLAG_TRUNCATE)) {
+                open_flags |= O_TRUNC;
             }
+            int fd = open(job->path, open_flags, job->chmod_mode);
+            if (fd >= 0) {
+                if ((job->flags & RECORD_FLAG_HAS_TOTAL) && job->total_size > 0 && job->offset == 0) {
+                    if (lseek(fd, (off_t)(job->total_size - 1), SEEK_SET) >= 0) {
+                        (void)write(fd, "", 1);
+                    }
+                    lseek(fd, 0, SEEK_SET);
+                }
+                if (job->len > 0) {
+                    if (job->flags & RECORD_FLAG_HAS_OFFSET) {
+                        ssize_t w = pwrite(fd, job->data, job->len, (off_t)job->offset);
+                        (void)w;
+                    } else {
+                        (void)write(fd, job->data, job->len);
+                    }
+                }
+                close(fd);
+                if (job->len > 0) {
+                    atomic_fetch_add(&g_upload_bytes_written, (unsigned long long)job->len);
+                }
             } else {
                 printf("[FTX] Writer: Failed to open %s: %s\n", job->path, strerror(errno));
             }
@@ -497,7 +523,11 @@ static void *pack_processor_thread(void *arg) {
         if (job.frame_type == FRAME_PACK_V3 ||
             job.frame_type == FRAME_PACK_LZ4_V3 ||
             job.frame_type == FRAME_PACK_ZSTD_V3 ||
-            job.frame_type == FRAME_PACK_LZMA_V3) {
+            job.frame_type == FRAME_PACK_LZMA_V3 ||
+            job.frame_type == FRAME_PACK_V4 ||
+            job.frame_type == FRAME_PACK_LZ4_V4 ||
+            job.frame_type == FRAME_PACK_ZSTD_V4 ||
+            job.frame_type == FRAME_PACK_LZMA_V4) {
             if (job.len < 12) { free_pack_buffer(job.data); continue; }
             memcpy(&pack_id, job.data, 8);
             offset += 8;
@@ -536,6 +566,16 @@ static void *pack_processor_thread(void *arg) {
 
             if (job.len - offset < 2) break;
             uint16_t path_len; memcpy(&path_len, job.data + offset, 2); offset += 2;
+            uint16_t flags = 0;
+            int is_v4 = (job.frame_type == FRAME_PACK_V4 ||
+                         job.frame_type == FRAME_PACK_LZ4_V4 ||
+                         job.frame_type == FRAME_PACK_ZSTD_V4 ||
+                         job.frame_type == FRAME_PACK_LZMA_V4);
+            if (is_v4) {
+                if (job.len - offset < 2) break;
+                memcpy(&flags, job.data + offset, 2);
+                offset += 2;
+            }
             if (path_len == 0 || path_len >= PATH_MAX || job.len - offset < (size_t)path_len + 8) break;
 
             FileWriteJob new_job;
@@ -543,6 +583,18 @@ static void *pack_processor_thread(void *arg) {
             offset += path_len;
 
             uint64_t data_len; memcpy(&data_len, job.data + offset, 8); offset += 8;
+            uint64_t file_offset = 0;
+            uint64_t total_size = 0;
+            if (is_v4 && (flags & RECORD_FLAG_HAS_OFFSET)) {
+                if (job.len - offset < 8) break;
+                memcpy(&file_offset, job.data + offset, 8);
+                offset += 8;
+            }
+            if (is_v4 && (flags & RECORD_FLAG_HAS_TOTAL)) {
+                if (job.len - offset < 8) break;
+                memcpy(&total_size, job.data + offset, 8);
+                offset += 8;
+            }
             if (data_len > job.len - offset) break;
             if (data_len > SIZE_MAX) break;
 
@@ -553,6 +605,9 @@ static void *pack_processor_thread(void *arg) {
             if (new_job.len > 0) memcpy(new_job.data, job.data + offset, new_job.len);
             offset += (size_t)data_len;
             new_job.chmod_mode = job.chmod_each_file ? 0777 : 0666;
+            new_job.offset = file_offset;
+            new_job.total_size = total_size;
+            new_job.flags = (uint8_t)flags;
             new_job.pack_id = pack_id;
             new_job.session_id = job.session_id;
 
@@ -887,7 +942,8 @@ int upload_session_feed(UploadSession *session, const uint8_t *data, size_t len,
             }
             if (session->header.type == FRAME_FINISH) { if (done) *done = 1; return 0; }
             if ((session->header.type >= FRAME_PACK && session->header.type <= FRAME_PACK_LZMA) ||
-                (session->header.type >= FRAME_PACK_V3 && session->header.type <= FRAME_PACK_LZMA_V3)) {
+                (session->header.type >= FRAME_PACK_V3 && session->header.type <= FRAME_PACK_LZMA_V3) ||
+                (session->header.type >= FRAME_PACK_V4 && session->header.type <= FRAME_PACK_LZMA_V4)) {
                 if (session->header.body_len > PACK_BUFFER_SIZE) { session->error = 1; break; }
                 session->body_len = session->header.body_len;
                 if (session->body_len > SIZE_MAX) {
@@ -913,7 +969,8 @@ int upload_session_feed(UploadSession *session, const uint8_t *data, size_t len,
 
             if (session->body_bytes == session->body_len) {
                 if (session->header.type != FRAME_PACK &&
-                    session->header.type != FRAME_PACK_V3) {
+                    session->header.type != FRAME_PACK_V3 &&
+                    session->header.type != FRAME_PACK_V4) {
                     if (decompress_pack_body(session->header.type, &session->body, &session->body_len) != 0)
                         { printf("[FTX] ERROR: decompress_pack_body failed (type=%u)\n", session->header.type); session->error = 1; break; }
                 }
@@ -1007,85 +1064,6 @@ void upload_session_destroy(UploadSession *session) {
     }
 }
 
-void handle_upload_v2(int client_sock, const char *dest_root, int use_temp, int chmod_each_file, int chmod_final) {
-    const char *ready = "READY\n";
-    send(client_sock, ready, strlen(ready), 0);
-    g_upload_bytes_recv = 0;
-    atomic_store(&g_upload_bytes_written, 0);
-    atomic_store(&g_backpressure_events, 0);
-    atomic_store(&g_backpressure_wait_ms, 0);
-    g_upload_last_log = time(NULL);
-    printf("[FTX] Upload V2 start: dest=%s mode=%s chmod_each=%d chmod_final=%d\n",
-           dest_root ? dest_root : "(null)", use_temp ? "TEMP" : "DIRECT",
-           chmod_each_file ? 1 : 0, chmod_final ? 1 : 0);
-    UploadSession *session = upload_session_create(dest_root, use_temp);
-    if (!session) { 
-        const char *err = "ERROR: Upload init failed\n";
-        send(client_sock, err, strlen(err), 0);
-        printf("[FTX] ERROR: Upload init failed\n");
-        return; 
-    }
-    session->ack_enabled = 0;
-    session->chmod_each_file = chmod_each_file;
-    session->chmod_final = chmod_final;
-
-    // Set a longer recv timeout for uploads (inherited timeout may be too short)
-    struct timeval tv;
-    tv.tv_sec = 30;
-    tv.tv_usec = 0;
-    setsockopt(client_sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-
-    uint8_t *buffer = malloc(UPLOAD_V2_RECV_BUFFER_SIZE);
-    if (!buffer) {
-        upload_session_destroy(session);
-        const char *err = "ERROR: Upload buffer failed\n";
-        send(client_sock, err, strlen(err), 0);
-        return;
-    }
-    int done = 0, error = 0;
-    while (!done && !error && !g_abort_transfer) {
-        ssize_t n = recv(client_sock, buffer, UPLOAD_V2_RECV_BUFFER_SIZE, 0);
-        if (n < 0) {
-            if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {
-                // Timeout or interrupt - do not update progress (no data received)
-                continue;
-            }
-            printf("[FTX] Upload recv error: %s\n", strerror(errno));
-            error = 1;
-            break;
-        }
-        if (n == 0) {
-            printf("[FTX] Upload recv: client closed connection.\n");
-            error = 1;
-            break;
-        }
-        g_upload_bytes_recv += (unsigned long long)n;
-        g_last_transfer_progress = time(NULL);
-        upload_session_feed(session, buffer, (size_t)n, &done, &error);
-        time_t now = time(NULL);
-        if (now - g_upload_last_log >= 5) {
-            g_upload_last_log = now;
-            printf("[FTX] Upload recv: %llu bytes, queue=%zu, pack_in_use=%zu, workers=%d\n",
-                   g_upload_bytes_recv,
-                   atomic_load(&g_file_write_queue_count),
-                   atomic_load(&g_pack_in_use),
-                   g_workers_initialized);
-        }
-    }
-    free(buffer);
-    
-    if (error && !g_abort_transfer) {
-        const char *err = "ERROR: Upload failed on client side\n";
-        send(client_sock, err, strlen(err), 0);
-        printf("[FTX] Upload V2 end: ERROR after %llu bytes\n", g_upload_bytes_recv);
-    } else {
-        const char *ok = "SUCCESS\n";
-        send(client_sock, ok, strlen(ok), 0);
-        printf("[FTX] Upload V2 end: SUCCESS after %llu bytes\n", g_upload_bytes_recv);
-    }
-    upload_session_destroy(session);
-}
-
 void handle_upload_v3(int client_sock, const char *dest_root, int use_temp, int chmod_each_file, int chmod_final) {
     const char *ready = "READY\n";
     send(client_sock, ready, strlen(ready), 0);
@@ -1111,11 +1089,11 @@ void handle_upload_v3(int client_sock, const char *dest_root, int use_temp, int 
     session->chmod_final = chmod_final;
 
     struct timeval tv;
-    tv.tv_sec = 30;
+    tv.tv_sec = RECV_TIMEOUT_SEC;
     tv.tv_usec = 0;
     setsockopt(client_sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
-    uint8_t *buffer = malloc(UPLOAD_V2_RECV_BUFFER_SIZE);
+    uint8_t *buffer = malloc(UPLOAD_RECV_BUFFER_SIZE);
     if (!buffer) {
         upload_session_destroy(session);
         const char *err = "ERROR: Upload buffer failed\n";
@@ -1124,7 +1102,7 @@ void handle_upload_v3(int client_sock, const char *dest_root, int use_temp, int 
     }
     int done = 0, error = 0;
     while (!done && !error && !g_abort_transfer) {
-        ssize_t n = recv(client_sock, buffer, UPLOAD_V2_RECV_BUFFER_SIZE, 0);
+        ssize_t n = recv(client_sock, buffer, UPLOAD_RECV_BUFFER_SIZE, 0);
         if (n < 0) {
             if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {
                 continue;

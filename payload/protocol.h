@@ -19,8 +19,6 @@ static inline int is_path_safe(const char *path) {
 void handle_test_write(int client_sock, const char *path);
 void handle_create_path(int client_sock, const char *path);
 void handle_check_dir(int client_sock, const char *path);
-void handle_upload(int client_sock, const char *args);
-void handle_upload_v2_wrapper(int client_sock, const char *args);
 void handle_upload_v3_wrapper(int client_sock, const char *args);
 void handle_delete_path(int client_sock, const char *path);
 void handle_delete_path_async(int client_sock, const char *path);

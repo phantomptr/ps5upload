@@ -38,6 +38,8 @@
 #include "third_party/unrar/unrar_wrapper.h"
 #include "extract_queue.h"
 
+void payload_set_crash_context(const char *op, const char *path, const char *path2);
+
 #define DOWNLOAD_PACK_BUFFER_SIZE (4 * 1024 * 1024)
 #define PROBE_RAR_MAX_LINE 128
 
@@ -50,6 +52,7 @@ static int recv_exact(int sock, void *buf, size_t len);
 static time_t get_file_mtime(const char *path);
 static int write_text_file(const char *path, const char *data, size_t len);
 static char *read_text_file(const char *path, size_t *out_len);
+static int parse_quoted_token(const char *src, char *out, size_t out_cap, const char **rest);
 
 static long long get_json_rev(const char *path) {
     size_t len = 0;
@@ -126,46 +129,100 @@ static void trim_newline(char *path) {
 
 
 
+struct RemoveNode {
+    char path[PATH_MAX];
+    int visited;
+};
+
 static int remove_recursive(const char *path, char *err, size_t err_len) {
-    struct stat st;
-    if (lstat(path, &st) != 0) {
-        if (errno == ENOENT) {
-            return 0;
-        }
-        snprintf(err, err_len, "lstat %s failed: %s", path, strerror(errno));
+    size_t cap = 64;
+    size_t len = 0;
+    struct RemoveNode *stack = (struct RemoveNode *)malloc(cap * sizeof(*stack));
+    if (!stack) {
+        snprintf(err, err_len, "Out of memory");
         return -1;
     }
+    snprintf(stack[0].path, sizeof(stack[0].path), "%s", path);
+    stack[0].visited = 0;
+    len = 1;
 
-    if (S_ISDIR(st.st_mode)) {
-        DIR *dir = opendir(path);
-        if (!dir) {
-            snprintf(err, err_len, "opendir %s failed: %s", path, strerror(errno));
-            return -1;
-        }
-        struct dirent *entry;
-        while ((entry = readdir(dir)) != NULL) {
-            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+    while (len > 0) {
+        struct RemoveNode node = stack[--len];
+        payload_set_crash_context("REMOVE_NODE", node.path, NULL);
+        struct stat st;
+        if (lstat(node.path, &st) != 0) {
+            if (errno == ENOENT) {
                 continue;
             }
-            char child[PATH_MAX];
-            snprintf(child, sizeof(child), "%s/%s", path, entry->d_name);
-            if (remove_recursive(child, err, err_len) != 0) {
-                closedir(dir);
-                return -1;
-            }
-        }
-        closedir(dir);
-        if (rmdir(path) != 0) {
-            snprintf(err, err_len, "rmdir %s failed: %s", path, strerror(errno));
+            snprintf(err, err_len, "lstat %s failed: %s", node.path, strerror(errno));
+            free(stack);
             return -1;
         }
-        return 0;
+
+        if (S_ISDIR(st.st_mode)) {
+            if (!node.visited) {
+                if (len == cap) {
+                    cap *= 2;
+                    struct RemoveNode *next = (struct RemoveNode *)realloc(stack, cap * sizeof(*stack));
+                    if (!next) {
+                        snprintf(err, err_len, "Out of memory");
+                        free(stack);
+                        return -1;
+                    }
+                    stack = next;
+                }
+                stack[len].visited = 1;
+                snprintf(stack[len].path, sizeof(stack[len].path), "%s", node.path);
+                len++;
+
+                DIR *dir = opendir(node.path);
+                if (!dir) {
+                    snprintf(err, err_len, "opendir %s failed: %s", node.path, strerror(errno));
+                    free(stack);
+                    return -1;
+                }
+                struct dirent *entry;
+                while ((entry = readdir(dir)) != NULL) {
+                    if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+                        continue;
+                    }
+                    char child[PATH_MAX];
+                    snprintf(child, sizeof(child), "%s/%s", node.path, entry->d_name);
+                    payload_set_crash_context("REMOVE_CHILD", child, NULL);
+                    if (len == cap) {
+                        cap *= 2;
+                        struct RemoveNode *next = (struct RemoveNode *)realloc(stack, cap * sizeof(*stack));
+                        if (!next) {
+                            closedir(dir);
+                            snprintf(err, err_len, "Out of memory");
+                            free(stack);
+                            return -1;
+                        }
+                        stack = next;
+                    }
+                    stack[len].visited = 0;
+                    snprintf(stack[len].path, sizeof(stack[len].path), "%s", child);
+                    len++;
+                }
+                closedir(dir);
+                continue;
+            }
+            if (rmdir(node.path) != 0) {
+                snprintf(err, err_len, "rmdir %s failed: %s", node.path, strerror(errno));
+                free(stack);
+                return -1;
+            }
+            continue;
+        }
+
+        if (unlink(node.path) != 0) {
+            snprintf(err, err_len, "unlink %s failed: %s", node.path, strerror(errno));
+            free(stack);
+            return -1;
+        }
     }
 
-    if (unlink(path) != 0) {
-        snprintf(err, err_len, "unlink %s failed: %s", path, strerror(errno));
-        return -1;
-    }
+    free(stack);
     return 0;
 }
 
@@ -241,6 +298,7 @@ static void copy_progress_send(struct CopyProgressCtx *ctx, int force) {
                        ctx->prefix, ctx->processed, ctx->total);
     if (len > 0) {
         if (send_all(ctx->sock, msg, (size_t)len) != 0) {
+            payload_log("[%s] Progress send failed", ctx->prefix ? ctx->prefix : "COPY");
             ctx->cancelled = 1;
             return;
         }
@@ -248,6 +306,25 @@ static void copy_progress_send(struct CopyProgressCtx *ctx, int force) {
         ctx->bytes_since_send = 0;
     }
     (void)force;
+}
+
+static void copy_progress_file(struct CopyProgressCtx *ctx, const char *path) {
+    if (!ctx || ctx->sock < 0 || !path) {
+        return;
+    }
+    copy_progress_check_cancel(ctx);
+    if (ctx->cancelled) {
+        return;
+    }
+    const char *prefix = ctx->prefix ? ctx->prefix : "COPY_PROGRESS";
+    char msg[PATH_MAX + 32];
+    int len = snprintf(msg, sizeof(msg), "%s_FILE %s\n", prefix, path);
+    if (len > 0) {
+        if (send_all(ctx->sock, msg, (size_t)len) != 0) {
+            payload_log("[%s] File send failed", prefix);
+            ctx->cancelled = 1;
+        }
+    }
 }
 
 static void copy_progress_add(struct CopyProgressCtx *ctx, unsigned long long bytes) {
@@ -295,6 +372,7 @@ static int scan_size_recursive(const char *src, unsigned long long *total,
 
     while (len > 0) {
         struct ScanNode node = stack[--len];
+        payload_set_crash_context("SCAN_SIZE", node.path, NULL);
         struct stat st;
         if (lstat(node.path, &st) != 0) {
             snprintf(err, err_len, "lstat %s failed: %s", node.path, strerror(errno));
@@ -320,6 +398,7 @@ static int scan_size_recursive(const char *src, unsigned long long *total,
                 }
                 char child_src[PATH_MAX];
                 snprintf(child_src, sizeof(child_src), "%s/%s", node.path, entry->d_name);
+                payload_set_crash_context("SCAN_SIZE", child_src, NULL);
                 if (lstat(child_src, &st) != 0) {
                     closedir(dir);
                     snprintf(err, err_len, "lstat %s failed: %s", child_src, strerror(errno));
@@ -368,6 +447,8 @@ static int scan_size_recursive(const char *src, unsigned long long *total,
 
 static int copy_file(const char *src, const char *dst, mode_t mode,
                      char *err, size_t err_len, struct CopyProgressCtx *ctx) {
+    payload_set_crash_context("COPY_FILE", src, dst);
+    copy_progress_file(ctx, src);
     int in_fd = open(src, O_RDONLY);
     if (in_fd < 0) {
         snprintf(err, err_len, "open %s failed: %s", src, strerror(errno));
@@ -381,11 +462,19 @@ static int copy_file(const char *src, const char *dst, mode_t mode,
         return -1;
     }
 
-    char buffer[256 * 1024];
+    const size_t buffer_len = 256 * 1024;
+    char *buffer = (char *)malloc(buffer_len);
+    if (!buffer) {
+        snprintf(err, err_len, "Out of memory");
+        close(in_fd);
+        close(out_fd);
+        return -1;
+    }
     ssize_t n;
-    while ((n = read(in_fd, buffer, sizeof(buffer))) > 0) {
+    while ((n = read(in_fd, buffer, buffer_len)) > 0) {
         if (ctx && ctx->cancelled) {
             snprintf(err, err_len, "Cancelled");
+            free(buffer);
             close(in_fd);
             close(out_fd);
             return -1;
@@ -395,6 +484,7 @@ static int copy_file(const char *src, const char *dst, mode_t mode,
             ssize_t w = write(out_fd, buffer + written, (size_t)(n - written));
             if (w < 0) {
                 snprintf(err, err_len, "write %s failed: %s", dst, strerror(errno));
+                free(buffer);
                 close(in_fd);
                 close(out_fd);
                 return -1;
@@ -403,6 +493,7 @@ static int copy_file(const char *src, const char *dst, mode_t mode,
             copy_progress_add(ctx, (unsigned long long)w);
             if (ctx && ctx->cancelled) {
                 snprintf(err, err_len, "Cancelled");
+                free(buffer);
                 close(in_fd);
                 close(out_fd);
                 return -1;
@@ -411,11 +502,13 @@ static int copy_file(const char *src, const char *dst, mode_t mode,
     }
     if (n < 0) {
         snprintf(err, err_len, "read %s failed: %s", src, strerror(errno));
+        free(buffer);
         close(in_fd);
         close(out_fd);
         return -1;
     }
 
+    free(buffer);
     close(in_fd);
     close(out_fd);
     return 0;
@@ -441,6 +534,7 @@ static int copy_recursive(const char *src, const char *dst, char *err, size_t er
 
     while (len > 0) {
         struct CopyNode node = stack[--len];
+        payload_set_crash_context("COPY_NODE", node.src, node.dst);
         struct stat st;
         if (lstat(node.src, &st) != 0) {
             snprintf(err, err_len, "lstat %s failed: %s", node.src, strerror(errno));
@@ -479,6 +573,7 @@ static int copy_recursive(const char *src, const char *dst, char *err, size_t er
                 char child_dst[PATH_MAX];
                 snprintf(child_src, sizeof(child_src), "%s/%s", node.src, entry->d_name);
                 snprintf(child_dst, sizeof(child_dst), "%s/%s", node.dst, entry->d_name);
+                payload_set_crash_context("COPY_CHILD", child_src, child_dst);
                 if (lstat(child_src, &st) != 0) {
                     closedir(dir);
                     snprintf(err, err_len, "lstat %s failed: %s", child_src, strerror(errno));
@@ -1186,8 +1281,22 @@ static int calc_dir_size(const char *path, uint64_t *total) {
 
 void handle_check_dir(int client_sock, const char *path_arg) {
     char path[PATH_MAX];
-    strncpy(path, path_arg, PATH_MAX-1);
-    path[PATH_MAX-1] = '\0';
+    if (!path_arg) {
+        const char *error = "ERROR: Invalid path\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+    if (path_arg[0] == '"') {
+        const char *rest = NULL;
+        if (parse_quoted_token(path_arg, path, sizeof(path), &rest) != 0) {
+            const char *error = "ERROR: Invalid path\n";
+            send(client_sock, error, strlen(error), 0);
+            return;
+        }
+    } else {
+        strncpy(path, path_arg, PATH_MAX-1);
+        path[PATH_MAX-1] = '\0';
+    }
     
     // Remove trailing newline
     trim_newline(path);
@@ -1248,8 +1357,22 @@ void handle_test_write(int client_sock, const char *path_arg) {
 
 void handle_create_path(int client_sock, const char *path_arg) {
     char path[PATH_MAX];
-    strncpy(path, path_arg, PATH_MAX-1);
-    path[PATH_MAX-1] = '\0';
+    if (!path_arg) {
+        const char *error = "ERROR: Invalid path\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+    if (path_arg[0] == '"') {
+        const char *rest = NULL;
+        if (parse_quoted_token(path_arg, path, sizeof(path), &rest) != 0) {
+            const char *error = "ERROR: Invalid path\n";
+            send(client_sock, error, strlen(error), 0);
+            return;
+        }
+    } else {
+        strncpy(path, path_arg, PATH_MAX-1);
+        path[PATH_MAX-1] = '\0';
+    }
 
     // Remove trailing newline
     trim_newline(path);
@@ -1357,13 +1480,18 @@ void handle_move_path(int client_sock, const char *args) {
         return;
     }
 
+    payload_set_crash_context("MOVE_REQUEST", src, dst);
+    payload_log("[MOVE] Request: %s -> %s", src, dst);
     if (rename(src, dst) == 0) {
         const char *success = "OK\n";
         send(client_sock, success, strlen(success), 0);
+        payload_log("[MOVE] Rename success: %s -> %s", src, dst);
         return;
     }
 
     if (errno == EXDEV) {
+        payload_set_crash_context("MOVE_CROSS_DEVICE", src, dst);
+        payload_log("[MOVE] Cross-device move detected, copying then removing: %s -> %s", src, dst);
         struct CopyProgressCtx progress;
         memset(&progress, 0, sizeof(progress));
         progress.sock = client_sock;
@@ -1379,25 +1507,34 @@ void handle_move_path(int client_sock, const char *args) {
             char error_msg[320];
             snprintf(error_msg, sizeof(error_msg), "ERROR: %s\n", err);
             send(client_sock, error_msg, strlen(error_msg), 0);
+            payload_log("[MOVE] Scan failed: %s (%s)", src, err);
             return;
         }
         progress.total = total_size;
+        payload_log("[MOVE] Scan complete: %s bytes=%llu", src, total_size);
         copy_progress_send(&progress, 1);
         if (copy_recursive(src, dst, err, sizeof(err), &progress) != 0) {
             char error_msg[320];
             snprintf(error_msg, sizeof(error_msg), "ERROR: %s\n", err);
             send(client_sock, error_msg, strlen(error_msg), 0);
+            payload_log("[MOVE] Copy failed: %s -> %s (%s)", src, dst, err);
             return;
         }
         copy_progress_send(&progress, 1);
+        payload_log("[MOVE] Copy complete: %s -> %s", src, dst);
         if (remove_recursive(src, err, sizeof(err)) != 0) {
             char error_msg[320];
             snprintf(error_msg, sizeof(error_msg), "ERROR: %s\n", err);
             send(client_sock, error_msg, strlen(error_msg), 0);
+            payload_log("[MOVE] Remove failed: %s (%s)", src, err);
             return;
         }
+        payload_log("[MOVE] Remove complete: %s", src);
         const char *success = "OK\n";
-        send(client_sock, success, strlen(success), 0);
+        if (send(client_sock, success, strlen(success), 0) < 0) {
+            payload_log("[MOVE] Send OK failed: %s", strerror(errno));
+        }
+        payload_log("[MOVE] Completed: %s -> %s", src, dst);
         return;
     }
 
@@ -1405,6 +1542,7 @@ void handle_move_path(int client_sock, const char *args) {
         char error_msg[320];
         snprintf(error_msg, sizeof(error_msg), "ERROR: rename failed: %s\n", strerror(errno));
         send(client_sock, error_msg, strlen(error_msg), 0);
+        payload_log("[MOVE] Rename failed: %s -> %s (%s)", src, dst, strerror(errno));
     }
 }
 
@@ -1435,6 +1573,8 @@ void handle_copy_path(int client_sock, const char *args) {
         return;
     }
 
+    payload_set_crash_context("COPY_REQUEST", src, dst);
+    payload_log("[COPY] Request: %s -> %s", src, dst);
     struct CopyProgressCtx progress;
     memset(&progress, 0, sizeof(progress));
     progress.sock = client_sock;
@@ -1450,20 +1590,26 @@ void handle_copy_path(int client_sock, const char *args) {
         char error_msg[320];
         snprintf(error_msg, sizeof(error_msg), "ERROR: %s\n", err);
         send(client_sock, error_msg, strlen(error_msg), 0);
+        payload_log("[COPY] Scan failed: %s (%s)", src, err);
         return;
     }
     progress.total = total_size;
+    payload_log("[COPY] Scan complete: %s bytes=%llu", src, total_size);
     copy_progress_send(&progress, 1);
     if (copy_recursive(src, dst, err, sizeof(err), &progress) != 0) {
         char error_msg[320];
         snprintf(error_msg, sizeof(error_msg), "ERROR: %s\n", err);
         send(client_sock, error_msg, strlen(error_msg), 0);
+        payload_log("[COPY] Copy failed: %s -> %s (%s)", src, dst, err);
         return;
     }
     copy_progress_send(&progress, 1);
 
     const char *success = "OK\n";
-    send(client_sock, success, strlen(success), 0);
+    if (send(client_sock, success, strlen(success), 0) < 0) {
+        payload_log("[COPY] Send OK failed: %s", strerror(errno));
+    }
+    payload_log("[COPY] Completed: %s -> %s", src, dst);
 }
 
 int handle_extract_archive(int client_sock, const char *args) {
@@ -2046,69 +2192,6 @@ static int parse_quoted_token(const char *src, char *out, size_t out_cap, const 
     return 0;
 }
 
-void handle_upload_v2_wrapper(int client_sock, const char *args) {
-    char dest_path[PATH_MAX];
-    char mode[16] = {0};
-    int chmod_each_file = 1;
-    int chmod_final = 0;
-    // Parse: UPLOAD_V2 <dest_path> [TEMP|DIRECT ...]
-    const char *rest = NULL;
-    if (!args) {
-        const char *error = "ERROR: Invalid UPLOAD_V2 format\n";
-        send(client_sock, error, strlen(error), 0);
-        return;
-    }
-    if (parse_quoted_token(args, dest_path, sizeof(dest_path), &rest) != 0) {
-        const char *error = "ERROR: Invalid UPLOAD_V2 format\n";
-        send(client_sock, error, strlen(error), 0);
-        return;
-    }
-    if (rest && *rest) {
-        char opts[128];
-        strncpy(opts, rest, sizeof(opts) - 1);
-        opts[sizeof(opts) - 1] = '\0';
-        char *save = NULL;
-        char *token = strtok_r(opts, " ", &save);
-        if (token) {
-            strncpy(mode, token, sizeof(mode) - 1);
-            mode[sizeof(mode) - 1] = '\0';
-        }
-        while ((token = strtok_r(NULL, " ", &save)) != NULL) {
-            if (strcasecmp(token, "NOCHMOD") == 0) {
-                chmod_each_file = 0;
-            } else if (strcasecmp(token, "CHMOD_END") == 0 || strcasecmp(token, "CHMOD_FINAL") == 0) {
-                chmod_final = 1;
-            } else if (strcasecmp(token, "CHMOD_EACH") == 0) {
-                chmod_each_file = 1;
-            }
-        }
-    }
-    if (!is_path_safe(dest_path)) {
-        const char *error = "ERROR: Invalid path\n";
-        send(client_sock, error, strlen(error), 0);
-        printf("[UPLOAD_V2] ERROR: Invalid path: %s\n", dest_path);
-        return;
-    }
-
-    int use_temp = 1;
-    if (mode[0]) {
-        if (strcasecmp(mode, "TEMP") == 0) {
-            use_temp = 1;
-        } else if (strcasecmp(mode, "DIRECT") == 0) {
-            use_temp = 0;
-        } else {
-            const char *error = "ERROR: Invalid UPLOAD_V2 mode\n";
-            send(client_sock, error, strlen(error), 0);
-            return;
-        }
-    }
-
-    printf("[UPLOAD_V2] Request: dest=%s mode=%s chmod_each=%d chmod_final=%d\n",
-           dest_path, use_temp ? "TEMP" : "DIRECT",
-           chmod_each_file ? 1 : 0, chmod_final ? 1 : 0);
-    handle_upload_v2(client_sock, dest_path, use_temp, chmod_each_file, chmod_final);
-}
-
 void handle_upload_v3_wrapper(int client_sock, const char *args) {
     char dest_path[PATH_MAX];
     char mode[16] = {0};
@@ -2169,121 +2252,6 @@ void handle_upload_v3_wrapper(int client_sock, const char *args) {
            dest_path, use_temp ? "TEMP" : "DIRECT",
            chmod_each_file ? 1 : 0, chmod_final ? 1 : 0);
     handle_upload_v3(client_sock, dest_path, use_temp, chmod_each_file, chmod_final);
-}
-
-void handle_upload(int client_sock, const char *args) {
-    char dest_path[PATH_MAX];
-
-    printf("[UPLOAD] Received UPLOAD command with args: %s\n", args);
-
-    // Parse: UPLOAD <dest_path> (total_size is ignored, we'll count as we receive)
-    if (!args) {
-        printf("[UPLOAD] ERROR: Failed to parse command arguments\n");
-        const char *error = "ERROR: Invalid UPLOAD command format\n";
-        send(client_sock, error, strlen(error), 0);
-        return;
-    }
-    // Safe parse of first token (supports quoted paths)
-    if (parse_quoted_token(args, dest_path, sizeof(dest_path), NULL) != 0) {
-        printf("[UPLOAD] ERROR: Failed to parse command arguments\n");
-        const char *error = "ERROR: Invalid UPLOAD command format\n";
-        send(client_sock, error, strlen(error), 0);
-        return;
-    }
-
-    if (!is_path_safe(dest_path)) {
-        const char *error = "ERROR: Invalid path\n";
-        send(client_sock, error, strlen(error), 0);
-        return;
-    }
-
-    printf("[UPLOAD] Destination: %s\n", dest_path);
-
-    // Log request to file
-    time_t now = time(NULL);
-    struct tm *tm_info = localtime(&now);
-    char log_filename[512];
-    snprintf(log_filename, sizeof(log_filename),
-             "/data/ps5upload/requests/ps5upload_request_%04d%02d%02d_%02d%02d%02d.txt",
-             tm_info->tm_year + 1900, tm_info->tm_mon + 1, tm_info->tm_mday,
-             tm_info->tm_hour, tm_info->tm_min, tm_info->tm_sec);
-
-    FILE *log_fp = fopen(log_filename, "w");
-    if(log_fp) {
-        fprintf(log_fp, "=== PS5 Upload Request ===\n");
-        fprintf(log_fp, "Timestamp: %s", asctime(tm_info));
-        fprintf(log_fp, "Destination: %s\n", dest_path);
-        fclose(log_fp);
-    }
-
-    printf("[UPLOAD] Using root vnode for filesystem access\n");
-
-    // Check if writable
-    printf("[UPLOAD] Checking write access to destination parent\n");
-    // We don't create the directory yet - receive_folder_stream will do that
-
-    // Send ready signal
-    printf("[UPLOAD] Sending READY signal to client\n");
-    int rcvbuf = UPLOAD_RCVBUF_SIZE;
-    if (rcvbuf > 0) {
-        setsockopt(client_sock, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
-    }
-    const char *ready = "READY\n";
-    send(client_sock, ready, strlen(ready), 0);
-
-    // Receive folder stream directly (no tar/compression)
-    printf("[UPLOAD] Starting direct file stream reception...\n");
-    time_t start_time = time(NULL);
-    char extract_err[256] = {0};
-    unsigned long long total_bytes = 0;
-    int file_count = 0;
-
-    int result = receive_folder_stream(client_sock, dest_path, extract_err, sizeof(extract_err),
-                                       &total_bytes, &file_count);
-
-    time_t end_time = time(NULL);
-    double elapsed_secs = difftime(end_time, start_time);
-
-
-    // Update request log with results
-    log_fp = fopen(log_filename, "a");
-    if(log_fp) {
-        fprintf(log_fp, "\n=== Upload Results ===\n");
-        fprintf(log_fp, "Status: %s\n", (result == 0) ? "SUCCESS" : "FAILED");
-        fprintf(log_fp, "Files transferred: %d\n", file_count);
-        fprintf(log_fp, "Total bytes: %llu (%.2f MB)\n", total_bytes, total_bytes / (1024.0 * 1024.0));
-        fprintf(log_fp, "Duration: %.1f seconds\n", elapsed_secs);
-        if(elapsed_secs > 0) {
-            double speed_mbps = (total_bytes / (1024.0 * 1024.0)) / elapsed_secs;
-            fprintf(log_fp, "Average speed: %.2f MB/s\n", speed_mbps);
-        }
-        if(result != 0 && extract_err[0] != '\0') {
-            fprintf(log_fp, "Error: %s\n", extract_err);
-        }
-        fclose(log_fp);
-    }
-
-    if(result == 0) {
-        printf("[UPLOAD] SUCCESS: %d files, %.2f MB, %.1f seconds\n",
-               file_count, total_bytes / (1024.0 * 1024.0), elapsed_secs);
-
-        // Send success with metrics
-        char success_msg[256];
-        snprintf(success_msg, sizeof(success_msg), "SUCCESS %d %llu\n", file_count, total_bytes);
-        send(client_sock, success_msg, strlen(success_msg), 0);
-
-    } else {
-        printf("[UPLOAD] ERROR: Upload failed\n");
-        char error_msg[320];
-        if(extract_err[0] != '\0') {
-            printf("[UPLOAD] Error details: %s\n", extract_err);
-            snprintf(error_msg, sizeof(error_msg), "ERROR: %s\n", extract_err);
-        } else {
-            snprintf(error_msg, sizeof(error_msg), "ERROR: Upload failed\n");
-        }
-        send(client_sock, error_msg, strlen(error_msg), 0);
-
-    }
 }
 
 void handle_payload_status(int client_sock) {

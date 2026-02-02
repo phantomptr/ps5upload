@@ -21,6 +21,46 @@
 #include "storage.h"
 #include "config.h"
 
+static int parse_quoted_token(const char *src, char *out, size_t out_cap, const char **rest) {
+    if (!src || !out || out_cap == 0) return -1;
+    while (*src == ' ' || *src == '\t') src++;
+    if (*src == '\0') return -1;
+    size_t len = 0;
+    if (*src == '"') {
+        src++;
+        while (*src && *src != '"') {
+            char ch = *src++;
+            if (ch == '\\') {
+                char esc = *src++;
+                if (esc == '\0') return -1;
+                switch (esc) {
+                    case 'n': ch = '\n'; break;
+                    case 'r': ch = '\r'; break;
+                    case 't': ch = '\t'; break;
+                    case '\\': ch = '\\'; break;
+                    case '"': ch = '"'; break;
+                    default: ch = esc; break;
+                }
+            }
+            if (len + 1 >= out_cap) return -1;
+            out[len++] = ch;
+        }
+        if (*src != '"') return -1;
+        src++;
+    } else {
+        while (*src && *src != ' ' && *src != '\t') {
+            if (len + 1 >= out_cap) return -1;
+            out[len++] = *src++;
+        }
+    }
+    out[len] = '\0';
+    if (rest) {
+        while (*src == ' ' || *src == '\t') src++;
+        *rest = src;
+    }
+    return 0;
+}
+
 // Check if a directory exists and is non-empty
 static int is_dir_non_empty(const char *path) {
     DIR *dir = opendir(path);
@@ -152,8 +192,22 @@ void handle_list_storage(int client_sock) {
 
 void handle_list_dir(int client_sock, const char *path_arg) {
     char path[PATH_MAX];
-    strncpy(path, path_arg, PATH_MAX-1);
-    path[PATH_MAX-1] = '\0';
+    if (!path_arg) {
+        const char *error = "ERROR: Invalid path\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+    if (path_arg[0] == '"') {
+        const char *rest = NULL;
+        if (parse_quoted_token(path_arg, path, sizeof(path), &rest) != 0) {
+            const char *error = "ERROR: Invalid path\n";
+            send(client_sock, error, strlen(error), 0);
+            return;
+        }
+    } else {
+        strncpy(path, path_arg, PATH_MAX-1);
+        path[PATH_MAX-1] = '\0';
+    }
 
     // Remove trailing newline if present
     size_t len = strlen(path);
@@ -251,8 +305,22 @@ static int list_dir_recursive_helper(int client_sock, const char *base_path, con
 
 void handle_list_dir_recursive(int client_sock, const char *path_arg) {
     char path[PATH_MAX];
-    strncpy(path, path_arg, PATH_MAX-1);
-    path[PATH_MAX-1] = '\0';
+    if (!path_arg) {
+        const char *error = "ERROR: Invalid path\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+    if (path_arg[0] == '"') {
+        const char *rest = NULL;
+        if (parse_quoted_token(path_arg, path, sizeof(path), &rest) != 0) {
+            const char *error = "ERROR: Invalid path\n";
+            send(client_sock, error, strlen(error), 0);
+            return;
+        }
+    } else {
+        strncpy(path, path_arg, PATH_MAX-1);
+        path[PATH_MAX-1] = '\0';
+    }
 
     // Remove trailing newline if present
     size_t len = strlen(path);
