@@ -88,6 +88,15 @@ Update to **v1.3.6** or newer. We bundle Noto fonts so Hindi/Bengali/Thai/Korean
 - **Compression:** Auto / None / LZ4 / ZSTD
 - **Connections:** number of parallel streams
 
+### Upload Modes (Payload / FTP / Mix)
+**Q: What’s the difference between Payload, FTP, and Mix?**  
+- **Payload:** Streams packed data directly to the PS5 via the payload. Best for many small files.
+- **FTP:** Uses FTP for file-by-file uploads. Reliable and compatible with standard FTP workflows.
+- **Mix:** Runs both at once. Payload always pulls the **smallest** remaining file, FTP always pulls the **largest** remaining file, and both keep going until they meet. No threshold and no duplicate uploads.
+
+**Q: If one side fails in Mix, what happens?**  
+Remaining files are handed to the other side once so the transfer can complete.
+
 ### Scan & Optimize
 - **Scan** estimates size and file count quickly.
 - **Optimize** suggests best compression/connections based on scan.
