@@ -948,8 +948,9 @@ static void process_command(struct ClientConnection *conn) {
         return;
     }
     if (strncmp(conn->cmd_buffer, "DOWNLOAD_RAW ", 13) == 0) {
+        payload_set_crash_context("DOWNLOAD_RAW", conn->cmd_buffer + 13, NULL);
         handle_download_raw(conn->sock, conn->cmd_buffer + 13);
-        // Thread now owns the socket - mark as transferred so we don't close it
+        // Handler owns/closed the socket.
         conn->sock = -1;
         return;
     }

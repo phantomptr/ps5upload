@@ -49,7 +49,7 @@ const WRITE_CHUNK_SIZE = 512 * 1024; // 512KB
 const MAGIC_FTX1 = 0x31585446;
 
 let sleepBlockerId = null;
-const VERSION = '1.3.11';
+const VERSION = '1.4.0';
 const IS_WINDOWS = process.platform === 'win32';
 
 function beginManageOperation(op) {
@@ -233,11 +233,9 @@ async function sendFileOverSocket(socket, filePath, fileSize, opts = {}) {
       sentBytes += bytesRead;
       const chunk = buffer.subarray(0, bytesRead);
       if (!socket.write(chunk)) {
-        onLog(`RAR upload backpressure at ${sentBytes}/${fileSize} bytes`);
         await waitForDrain();
       }
       if (sentBytes - lastLogBytes >= 64 * 1024 * 1024 || Date.now() - lastLogTime >= 10000) {
-        onLog(`RAR upload progress: ${sentBytes}/${fileSize} bytes`);
         lastLogBytes = sentBytes;
         lastLogTime = Date.now();
       }
@@ -625,6 +623,7 @@ const ensureDir = (dir) => {
 };
 
 const normalizeUploadMode = (mode) => {
+  if (typeof mode === 'string') mode = mode.toLowerCase();
   if (mode === 'ftp' || mode === 'mix') return mode;
   return 'payload';
 };
@@ -720,6 +719,7 @@ const uploadFilesViaFtp = async (host, port, destRoot, files, opts = {}) => {
   const onProgress = opts.onProgress;
   const onFile = opts.onFile;
   const onFileDone = opts.onFileDone;
+  const onSkipFile = opts.onSkipFile;
   let totalSent = 0;
   let totalFiles = 0;
   let currentName = '';
@@ -752,7 +752,17 @@ const uploadFilesViaFtp = async (host, port, destRoot, files, opts = {}) => {
       if (remoteDir && remoteDir !== '.' && remoteDir !== '/') {
         await client.ensureDir(remoteDir);
       }
-      await client.uploadFrom(file.abs_path, remotePath);
+      try {
+        await client.uploadFrom(file.abs_path, remotePath);
+      } catch (err) {
+        const code = err?.code;
+        if (code === 'ENOENT' || code === 'EACCES' || code === 'EPERM') {
+          if (log) log(`Skipping missing/unreadable file: ${file.rel_path}`, 'warn');
+          if (typeof onSkipFile === 'function') onSkipFile(file, err);
+          continue;
+        }
+        throw err;
+      }
       totalFiles += 1;
       if (onFileDone) onFileDone(file);
     }
@@ -771,6 +781,23 @@ const getHistoryPath = () => path.join(getAppDataDir(), 'ps5upload_history.json'
 const getQueuePath = () => path.join(getAppDataDir(), 'ps5upload_queue.json');
 const getProfilesPath = () => path.join(getAppDataDir(), 'ps5upload_profiles.ini');
 const getLogsDir = () => path.join(getAppDataDir(), 'logs');
+
+const createTransferStatus = (overrides = {}) => ({
+  run_id: 0,
+  status: 'Idle',
+  sent: 0,
+  total: 0,
+  files: 0,
+  elapsed_secs: 0,
+  current_file: '',
+  payload_sent: 0,
+  ftp_sent: 0,
+  payload_speed_bps: 0,
+  ftp_speed_bps: 0,
+  total_speed_bps: 0,
+  upload_mode: null,
+  ...overrides,
+});
 
 // State
 let mainWindow = null;
@@ -1599,6 +1626,38 @@ async function listDirRecursive(ip, port, dirPath, signal, onEntry = null, optio
   });
 }
 
+  async function listDirRecursiveCompat(ip, port, dirPath, signal, onLog) {
+    const abortSignal = signal && typeof signal.addEventListener === 'function' ? signal : null;
+    const files = [];
+    const stack = [{ path: dirPath, rel: '' }];
+    while (stack.length > 0) {
+      if (abortSignal?.aborted) throw new Error('Cancelled');
+      const current = stack.pop();
+      const entries = await listDir(ip, port, current.path, abortSignal || undefined);
+      if (typeof onLog === 'function') {
+        onLog(`ListDir ${current.path}: ${entries.length} entries`);
+        if (entries.length > 0) {
+          const sample = entries.slice(0, 5).map((entry) => entry.name).join(', ');
+          onLog(`ListDir sample: ${sample}`);
+        }
+      }
+      for (const entry of entries) {
+        const name = entry.name;
+        const relPath = current.rel ? `${current.rel}/${name}` : name;
+        const remotePath = `${current.path}/${name}`;
+        const entryType = (entry.entry_type || entry.type || '').toLowerCase();
+        const isDir = entry.is_dir || entryType === 'd' || entryType === 'dir' || entryType === 'directory';
+        const isFile = entry.is_file || entryType === 'f' || entryType === '-' || entryType === 'file';
+        if (isDir) {
+          stack.push({ path: remotePath, rel: relPath });
+        } else if (isFile) {
+          files.push({ remotePath, relPath, size: entry.size || 0 });
+        }
+      }
+  }
+  return files;
+}
+
 async function hashFileLocal(filePath, signal) {
   return new Promise((resolve, reject) => {
     const hash = crypto.createHash('sha256');
@@ -1840,6 +1899,30 @@ async function getPayloadStatus(ip, port) {
   } catch (err) {
     throw err;
   }
+}
+
+async function ensurePayloadReady(ip) {
+  let lastErr = null;
+  let recoveryTriggered = false;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await getPayloadStatus(ip, TRANSFER_PORT);
+      return true;
+    } catch (err) {
+      lastErr = err;
+      const message = err?.message || String(err);
+      if (!recoveryTriggered && message.includes('ECONNREFUSED')) {
+        recoveryTriggered = true;
+        try {
+          await triggerPayloadRecovery('manage download connection refused');
+        } catch {
+          // ignore recovery failures
+        }
+      }
+      await sleepMs(1000);
+    }
+  }
+  throw new Error(`Payload not ready: ${lastErr?.message || lastErr}`);
 }
 
 async function queueExtract(ip, port, src, dst) {
@@ -2450,6 +2533,20 @@ async function collectFiles(basePath, cancel = { value: false }, progressCallbac
       const relPath = prefix ? `${prefix}/${entry.name}` : entry.name;
 
       if (entry.isDirectory()) {
+        if (entry.name.toLowerCase().endsWith('.asar')) {
+          const stat = await fs.promises.stat(fullPath);
+          if (!Number.isSafeInteger(stat.size)) {
+            throw new Error(`File too large for safe integer math: ${fullPath}`);
+          }
+          files.push({
+            rel_path: relPath.replace(/\\/g, '/'),
+            abs_path: fullPath,
+            size: Number(stat.size),
+            mtime: Math.floor(stat.mtimeMs / 1000),
+          });
+          totalSize += BigInt(stat.size);
+          continue;
+        }
         await walk(fullPath, relPath);
       } else if (entry.isFile()) {
         const stat = await fs.promises.stat(fullPath);
@@ -2508,6 +2605,7 @@ async function sendFilesV3(files, socketRef, options = {}) {
     reconnect,
     maxInflight = 4,
     maxRetries = 10,
+    onSkipFile,
   } = options;
 
   let totalSentBytes = 0n;
@@ -2713,6 +2811,11 @@ async function sendFilesV3(files, socketRef, options = {}) {
   const logInterval = logEachFile ? 1 : Math.max(250, Math.floor(files.length / 200));
   const TINY_FILE_THRESHOLD = 64 * 1024;
 
+  const shouldSkipReadError = (err) => {
+    const code = err?.code;
+    return code === 'ENOENT' || code === 'EACCES' || code === 'EPERM';
+  };
+
   for (let i = 0; i < files.length; i++) {
     const file = files[i];
     if (cancel.value) {
@@ -2726,7 +2829,17 @@ async function sendFilesV3(files, socketRef, options = {}) {
     const relPathBytes = Buffer.from(file.rel_path, 'utf8');
 
     if (file.size < TINY_FILE_THRESHOLD) {
-      const data = await fs.promises.readFile(file.abs_path);
+      let data;
+      try {
+        data = await fs.promises.readFile(file.abs_path);
+      } catch (err) {
+        if (shouldSkipReadError(err)) {
+          log(`Skipping missing/unreadable file: ${file.rel_path}`);
+          if (typeof onSkipFile === 'function') onSkipFile(file, err);
+          continue;
+        }
+        throw err;
+      }
       const overhead = 2 + relPathBytes.length + 8;
       const packLimit = clamp(packLimitFn(), PACK_BUFFER_MIN, PACK_BUFFER_SIZE);
       if (packLimit - packBuffer.length <= overhead + data.length) {
@@ -2740,41 +2853,60 @@ async function sendFilesV3(files, socketRef, options = {}) {
     }
 
     let sawData = false;
-    const stream = fs.createReadStream(file.abs_path, { highWaterMark: streamChunkBytes });
-
-    for await (const chunk of stream) {
-      if (cancel.value) {
-        stream.destroy();
-        throw new Error('Upload cancelled by user');
+    let stream;
+    try {
+      stream = fs.createReadStream(file.abs_path, { highWaterMark: streamChunkBytes });
+    } catch (err) {
+      if (shouldSkipReadError(err)) {
+        log(`Skipping missing/unreadable file: ${file.rel_path}`);
+        if (typeof onSkipFile === 'function') onSkipFile(file, err);
+        continue;
       }
+      throw err;
+    }
 
-      sawData = true;
-      let offset = 0;
-
-      while (offset < chunk.length) {
-        const overhead = 2 + relPathBytes.length + 8;
-        const packLimit = clamp(packLimitFn(), PACK_BUFFER_MIN, PACK_BUFFER_SIZE);
-        const remaining = packLimit - packBuffer.length;
-
-        if (remaining <= overhead) {
-          await flushPack();
-          continue;
+    try {
+      for await (const chunk of stream) {
+        if (cancel.value) {
+          stream.destroy();
+          throw new Error('Upload cancelled by user');
         }
 
-        const maxData = remaining - overhead;
-        const sliceLen = Math.min(maxData, chunk.length - offset);
-        const dataSlice = sliceLen === chunk.length ? chunk : chunk.slice(offset, offset + sliceLen);
+        sawData = true;
+        let offset = 0;
 
-        addRecord(relPathBytes, dataSlice);
-        offset += sliceLen;
+        while (offset < chunk.length) {
+          const overhead = 2 + relPathBytes.length + 8;
+          const packLimit = clamp(packLimitFn(), PACK_BUFFER_MIN, PACK_BUFFER_SIZE);
+          const remaining = packLimit - packBuffer.length;
 
-        const elapsed = (Date.now() - startTime) / 1000;
-        progress(Number(totalSentBytes) + Number(packBytesAdded), totalSentFiles + packFilesAdded, elapsed, file.rel_path);
-        if (deprioritize) {
-          await manageDeprioritize();
+          if (remaining <= overhead) {
+            await flushPack();
+            continue;
+          }
+
+          const maxData = remaining - overhead;
+          const sliceLen = Math.min(maxData, chunk.length - offset);
+          const dataSlice = sliceLen === chunk.length ? chunk : chunk.slice(offset, offset + sliceLen);
+
+          addRecord(relPathBytes, dataSlice);
+          offset += sliceLen;
+
+          const elapsed = (Date.now() - startTime) / 1000;
+          progress(Number(totalSentBytes) + Number(packBytesAdded), totalSentFiles + packFilesAdded, elapsed, file.rel_path);
+          if (deprioritize) {
+            await manageDeprioritize();
+          }
+          await maybePace();
         }
-        await maybePace();
       }
+    } catch (err) {
+      if (shouldSkipReadError(err) && !sawData) {
+        log(`Skipping missing/unreadable file: ${file.rel_path}`);
+        if (typeof onSkipFile === 'function') onSkipFile(file, err);
+        continue;
+      }
+      throw err;
     }
 
     if (!sawData) {
@@ -2827,6 +2959,7 @@ async function sendFilesV3Dynamic(getNextFile, socketRef, options = {}) {
     reconnect,
     maxInflight = 4,
     maxRetries = 10,
+    onSkipFile,
   } = options;
 
   let totalSentBytes = 0n;
@@ -3029,6 +3162,11 @@ async function sendFilesV3Dynamic(getNextFile, socketRef, options = {}) {
 
   const TINY_FILE_THRESHOLD = 64 * 1024;
 
+  const shouldSkipReadError = (err) => {
+    const code = err?.code;
+    return code === 'ENOENT' || code === 'EACCES' || code === 'EPERM';
+  };
+
   while (true) {
     const file = getNextFile();
     if (!file) break;
@@ -3038,7 +3176,17 @@ async function sendFilesV3Dynamic(getNextFile, socketRef, options = {}) {
     const relPathBytes = Buffer.from(file.rel_path, 'utf8');
 
     if (file.size < TINY_FILE_THRESHOLD) {
-      const data = await fs.promises.readFile(file.abs_path);
+      let data;
+      try {
+        data = await fs.promises.readFile(file.abs_path);
+      } catch (err) {
+        if (shouldSkipReadError(err)) {
+          log(`Skipping missing/unreadable file: ${file.rel_path}`);
+          if (typeof onSkipFile === 'function') onSkipFile(file, err);
+          continue;
+        }
+        throw err;
+      }
       const overhead = 2 + relPathBytes.length + 8;
       const packLimit = clamp(packLimitFn(), PACK_BUFFER_MIN, PACK_BUFFER_SIZE);
       if (packLimit - packBuffer.length <= overhead + data.length) {
@@ -3051,41 +3199,60 @@ async function sendFilesV3Dynamic(getNextFile, socketRef, options = {}) {
       continue;
     }
 
-    const stream = fs.createReadStream(file.abs_path, { highWaterMark: streamChunkBytes });
-
-    for await (const chunk of stream) {
-      if (cancel.value) {
-        stream.destroy();
-        throw new Error('Upload cancelled by user');
+    let stream;
+    try {
+      stream = fs.createReadStream(file.abs_path, { highWaterMark: streamChunkBytes });
+    } catch (err) {
+      if (shouldSkipReadError(err)) {
+        log(`Skipping missing/unreadable file: ${file.rel_path}`);
+        if (typeof onSkipFile === 'function') onSkipFile(file, err);
+        continue;
       }
+      throw err;
+    }
 
-      let offset = 0;
-
-      while (offset < chunk.length) {
-        const overhead = 2 + relPathBytes.length + 8;
-        const packLimit = clamp(packLimitFn(), PACK_BUFFER_MIN, PACK_BUFFER_SIZE);
-        const remaining = packLimit - packBuffer.length;
-
-        if (remaining <= overhead) {
-          await flushPack();
-          continue;
+    try {
+      for await (const chunk of stream) {
+        if (cancel.value) {
+          stream.destroy();
+          throw new Error('Upload cancelled by user');
         }
 
-        const maxData = remaining - overhead;
-        const sliceLen = Math.min(maxData, chunk.length - offset);
-        const slice = chunk.subarray(offset, offset + sliceLen);
-        offset += sliceLen;
-        addRecord(relPathBytes, slice);
-        const elapsed = (Date.now() - startTime) / 1000;
-        progress(Number(totalSentBytes) + Number(packBytesAdded), totalSentFiles + packFilesAdded, elapsed, file.rel_path);
-        if (deprioritize) {
-          await manageDeprioritize();
-        }
-        await maybePace();
-        if (packBuffer.length >= packLimit) {
-          await flushPack();
+        let offset = 0;
+
+        while (offset < chunk.length) {
+          const overhead = 2 + relPathBytes.length + 8;
+          const packLimit = clamp(packLimitFn(), PACK_BUFFER_MIN, PACK_BUFFER_SIZE);
+          const remaining = packLimit - packBuffer.length;
+
+          if (remaining <= overhead) {
+            await flushPack();
+            continue;
+          }
+
+          const maxData = remaining - overhead;
+          const sliceLen = Math.min(maxData, chunk.length - offset);
+          const slice = chunk.subarray(offset, offset + sliceLen);
+          offset += sliceLen;
+          addRecord(relPathBytes, slice);
+          const elapsed = (Date.now() - startTime) / 1000;
+          progress(Number(totalSentBytes) + Number(packBytesAdded), totalSentFiles + packFilesAdded, elapsed, file.rel_path);
+          if (deprioritize) {
+            await manageDeprioritize();
+          }
+          await maybePace();
+          if (packBuffer.length >= packLimit) {
+            await flushPack();
+          }
         }
       }
+    } catch (err) {
+      if (shouldSkipReadError(err)) {
+        log(`Skipping missing/unreadable file: ${file.rel_path}`);
+        if (typeof onSkipFile === 'function') onSkipFile(file, err);
+        continue;
+      }
+      throw err;
     }
 
     packFilesAdded++;
@@ -3286,6 +3453,7 @@ async function sendFilesV2(files, socket, options = {}) {
     getPackLimit,
     getPaceDelayMs,
     getRateLimitBps,
+    onSkipFile,
   } = options;
   const getNextFile = typeof files === 'function'
     ? files
@@ -3315,6 +3483,11 @@ async function sendFilesV2(files, socket, options = {}) {
     } else {
       limiter.limitBps = nextLimit;
     }
+  };
+
+  const shouldSkipReadError = (err) => {
+    const code = err?.code;
+    return code === 'ENOENT' || code === 'EACCES' || code === 'EPERM';
   };
 
   const maybePace = async () => {
@@ -3428,7 +3601,17 @@ async function sendFilesV2(files, socket, options = {}) {
 
     // Fast path for tiny files to avoid stream overhead
     if (file.size < TINY_FILE_THRESHOLD) {
-      const data = await fs.promises.readFile(file.abs_path);
+      let data;
+      try {
+        data = await fs.promises.readFile(file.abs_path);
+      } catch (err) {
+        if (shouldSkipReadError(err)) {
+          log(`Skipping missing/unreadable file: ${file.rel_path}`);
+          if (typeof onSkipFile === 'function') onSkipFile(file, err);
+          continue;
+        }
+        throw err;
+      }
       const overhead = 2 + relPathBytes.length + 8;
       const packLimit = clamp(packLimitFn(), PACK_BUFFER_MIN, PACK_BUFFER_SIZE);
       if (packLimit - packBuffer.length <= overhead + data.length) {
@@ -3443,41 +3626,60 @@ async function sendFilesV2(files, socket, options = {}) {
 
     // Slow path for larger files
     let sawData = false;
-    const stream = fs.createReadStream(file.abs_path, { highWaterMark: streamChunkBytes });
-
-    for await (const chunk of stream) {
-      if (cancel.value) {
-        stream.destroy();
-        throw new Error('Upload cancelled by user');
+    let stream;
+    try {
+      stream = fs.createReadStream(file.abs_path, { highWaterMark: streamChunkBytes });
+    } catch (err) {
+      if (shouldSkipReadError(err)) {
+        log(`Skipping missing/unreadable file: ${file.rel_path}`);
+        if (typeof onSkipFile === 'function') onSkipFile(file, err);
+        continue;
       }
+      throw err;
+    }
 
-      sawData = true;
-      let offset = 0;
-
-      while (offset < chunk.length) {
-        const overhead = 2 + relPathBytes.length + 8;
-        const packLimit = clamp(packLimitFn(), PACK_BUFFER_MIN, PACK_BUFFER_SIZE);
-        const remaining = packLimit - packBuffer.length;
-
-        if (remaining <= overhead) {
-          await flushPack();
-          continue;
+    try {
+      for await (const chunk of stream) {
+        if (cancel.value) {
+          stream.destroy();
+          throw new Error('Upload cancelled by user');
         }
 
-        const maxData = remaining - overhead;
-        const sliceLen = Math.min(maxData, chunk.length - offset);
-        const dataSlice = sliceLen === chunk.length ? chunk : chunk.slice(offset, offset + sliceLen);
+        sawData = true;
+        let offset = 0;
 
-        addRecord(relPathBytes, dataSlice);
-        offset += sliceLen;
+        while (offset < chunk.length) {
+          const overhead = 2 + relPathBytes.length + 8;
+          const packLimit = clamp(packLimitFn(), PACK_BUFFER_MIN, PACK_BUFFER_SIZE);
+          const remaining = packLimit - packBuffer.length;
 
-        const elapsed = (Date.now() - startTime) / 1000;
-        progress(Number(totalSentBytes) + Number(packBytesAdded), totalSentFiles + packFilesAdded, elapsed, file.rel_path);
-        if (deprioritize) {
-          await manageDeprioritize();
+          if (remaining <= overhead) {
+            await flushPack();
+            continue;
+          }
+
+          const maxData = remaining - overhead;
+          const sliceLen = Math.min(maxData, chunk.length - offset);
+          const dataSlice = sliceLen === chunk.length ? chunk : chunk.slice(offset, offset + sliceLen);
+
+          addRecord(relPathBytes, dataSlice);
+          offset += sliceLen;
+
+          const elapsed = (Date.now() - startTime) / 1000;
+          progress(Number(totalSentBytes) + Number(packBytesAdded), totalSentFiles + packFilesAdded, elapsed, file.rel_path);
+          if (deprioritize) {
+            await manageDeprioritize();
+          }
+          await maybePace();
         }
-        await maybePace();
       }
+    } catch (err) {
+      if (shouldSkipReadError(err) && !sawData) {
+        log(`Skipping missing/unreadable file: ${file.rel_path}`);
+        if (typeof onSkipFile === 'function') onSkipFile(file, err);
+        continue;
+      }
+      throw err;
     }
 
     if (!sawData) {
@@ -4486,8 +4688,15 @@ function registerIpcHandlers() {
       console.log(logMsg);
       emit('payload_log', { message: logMsg });
 
-      const asset = release.assets.find(a => a.name === 'ps5upload.elf');
-      if (!asset) throw new Error('Payload asset not found');
+      const assets = Array.isArray(release?.assets) ? release.assets : [];
+      let asset = assets.find(a => a.name === 'ps5upload.elf');
+      if (!asset) {
+        asset = assets.find(a => a.name && a.name.endsWith('.elf'));
+      }
+      if (!asset) {
+        const names = assets.map(a => a?.name).filter(Boolean).join(', ') || 'none';
+        throw new Error(`Payload asset not found. Assets: ${names}`);
+      }
 
       const tmpPath = path.join(os.tmpdir(), `ps5upload_${fetch}.elf`);
       await downloadAsset(asset.browser_download_url, tmpPath);
@@ -4882,6 +5091,7 @@ function registerIpcHandlers() {
     if (!filepath || !filepath.trim() || !destPath || !destPath.trim()) throw new Error('Source and destination are required.');
 
     return runManageTask('Download', async () => {
+      await ensurePayloadReady(ip);
       emit('manage_log', { message: `Download ${filepath}` });
       let totalSize = 0;
 
@@ -5216,6 +5426,68 @@ function registerIpcHandlers() {
     return { bytes: downloadedBytes, files: downloadedFiles };
   }
 
+  async function downloadDirSafe(ip, dirPath, destPath, onProgress, cancel, onLog) {
+    const files = await listDirRecursiveCompat(ip, TRANSFER_PORT, dirPath, null, onLog);
+    if (typeof onLog === 'function') {
+      onLog(`Safe download list: ${files.length} file(s)`);
+    }
+    if (files.length === 0) {
+      throw new Error('No files found in directory (payload list returned empty).');
+    }
+    await ensurePayloadReady(ip);
+    let downloadedBytes = 0;
+    let totalBytes = files.reduce((sum, f) => sum + (f.size || 0), 0);
+    onProgress(0, totalBytes, null);
+    for (const file of files) {
+      if (cancel?.value) throw new Error('Download cancelled');
+      const localPath = ensureDownloadPath(destPath, file.relPath);
+      await fs.promises.mkdir(path.dirname(localPath), { recursive: true });
+      let attempts = 0;
+      while (attempts < 3) {
+        attempts += 1;
+        try {
+          const bytes = await downloadFtx(ip, `DOWNLOAD_V2 ${file.remotePath}\n`, {
+            mode: 'file',
+            destPath: localPath,
+            expectedRelPath: path.basename(file.remotePath),
+            cancel,
+            progress: (received) => {
+              onProgress(downloadedBytes + received, totalBytes, file.relPath);
+            },
+          }).then((result) => result.bytes);
+          downloadedBytes += bytes;
+          onProgress(downloadedBytes, totalBytes, file.relPath);
+          break;
+        } catch (err) {
+          const message = err?.message || String(err);
+          if (err && err.code === 'FTX_UNSUPPORTED') {
+            const bytes = await downloadSingleFile(ip, file.remotePath, localPath, (received) => {
+              onProgress(downloadedBytes + received, totalBytes, file.relPath);
+            });
+            downloadedBytes += bytes;
+            onProgress(downloadedBytes, totalBytes, file.relPath);
+            break;
+          }
+          if (message.includes('ECONNREFUSED') || message.includes('Connection closed before response')) {
+            if (typeof onLog === 'function') {
+              onLog(`Download retry after connection refused: ${file.relPath}`);
+            }
+            try {
+              await triggerPayloadRecovery('manage download refused');
+            } catch {
+              // ignore recovery failures
+            }
+            await ensurePayloadReady(ip);
+          }
+          if (attempts >= 3) throw err;
+          await sleepMs(200);
+        }
+      }
+      await sleepMs(25);
+    }
+    return { bytes: downloadedBytes };
+  }
+
   async function extractArchiveWithProgress(ip, srcPath, dstPath, cancel, onProgress, onLog) {
     const socket = await createSocketWithTimeout(ip, TRANSFER_PORT);
     socket.setTimeout(0);
@@ -5381,6 +5653,7 @@ function registerIpcHandlers() {
     if (!dirPath || !dirPath.trim() || !destPath || !destPath.trim()) throw new Error('Source and destination are required.');
 
     return runManageTask('Download', async () => {
+      await ensurePayloadReady(ip);
       emit('manage_log', { message: `Download ${dirPath}` });
       let totalSize = 0;
       const comp = (compression || 'none').toLowerCase();
@@ -5391,33 +5664,27 @@ function registerIpcHandlers() {
       else if (comp === 'auto') compTag = ' AUTO';
 
       try {
-        const result = await downloadFtx(ip, `DOWNLOAD_DIR ${dirPath}${compTag}\n`, {
-          mode: 'dir',
+        const result = await downloadDirSafe(
+          ip,
+          dirPath,
           destPath,
-          cancel: { get value() { return state.manageCancel; } },
-          progress: (processed, total, currentFile) => {
+          (processed, total, currentFile) => {
             totalSize = total;
             emit('manage_progress', { op: 'Download', processed, total, current_file: currentFile });
           },
-        });
+          { get value() { return state.manageCancel; } },
+          (message) => emit('manage_log', { message })
+        );
         emit('manage_progress', { op: 'Download', processed: totalSize, total: totalSize, current_file: null });
         emitManageDone({ op: 'Download', bytes: result.bytes, error: null });
       } catch (err) {
-        if (err && err.code === 'FTX_UNSUPPORTED') {
-          try {
-            const result = await downloadDirLegacy(ip, dirPath, destPath);
-            emitManageDone({ op: 'Download', bytes: result.bytes, error: null });
-          } catch (legacyErr) {
-            emitManageDone({ op: 'Download', bytes: null, error: legacyErr.message });
-          }
-          return;
-        }
-        emitManageDone({ op: 'Download', bytes: null, error: err.message });
+        const message = err?.message || String(err);
+        emitManageDone({ op: 'Download', bytes: null, error: message });
       }
     });
   });
 
-  ipcMain.handle('manage_upload', async (_, ip, destRoot, paths) => {
+  ipcMain.handle('manage_upload', async (_, ip, destRoot, paths, opts = {}) => {
     if (!ip || !ip.trim()) throw new Error('Enter a PS5 address first.');
     if (!destRoot || !destRoot.trim()) throw new Error('Destination path is required.');
     if (!paths || paths.length === 0) throw new Error('Select at least one file or folder.');
@@ -5430,6 +5697,18 @@ function registerIpcHandlers() {
         let totalFiles = 0;
         const batches = [];
 
+        let uploadMode = normalizeUploadMode(opts?.upload_mode);
+        if (!opts || opts.upload_mode == null) {
+          try {
+            const config = loadConfig();
+            uploadMode = normalizeUploadMode(config?.upload_mode);
+          } catch {
+            uploadMode = 'payload';
+          }
+        }
+        const preferredFtpPort = normalizeFtpPort(opts?.ftp_port);
+        emit('manage_log', { message: `Manage upload mode: ${uploadMode} (ftp_port=${preferredFtpPort})` });
+
         for (const srcPath of paths) {
           if (state.manageCancel) {
             throw new Error('Upload cancelled by user');
@@ -5437,6 +5716,7 @@ function registerIpcHandlers() {
           const stat = fs.statSync(srcPath);
           let files;
           let dest;
+          let isArchive = false;
 
           if (stat.isDirectory()) {
             const folderName = path.basename(srcPath);
@@ -5451,6 +5731,7 @@ function registerIpcHandlers() {
               size: stat.size,
               mtime: Math.floor(stat.mtimeMs / 1000),
             }];
+            isArchive = /\.(rar|zip|7z)$/i.test(srcPath);
           }
 
           const batchBytes = files.reduce((sum, f) => sum + f.size, 0);
@@ -5467,41 +5748,92 @@ function registerIpcHandlers() {
             throw new Error('Upload cancelled by user');
           }
 
-          let socket = null;
-          let useV3 = true;
-          try {
-            socket = await uploadV3Init(ip, TRANSFER_PORT, batch.dest, false);
-          } catch (err) {
-            emit('manage_log', { message: `Upload V3 unavailable, falling back to V2: ${err.message || err}` });
-            useV3 = false;
-            socket = await uploadV2Init(ip, TRANSFER_PORT, batch.dest, false);
-          }
-
-          if (useV3) {
-            const socketRef = { current: socket };
-            const result = await sendFilesV3(batch.files, socketRef, {
+          const tryFtpFallback = async (message) => {
+            emit('manage_log', { message });
+            const ftpPort = await detectFtpPort(ip, preferredFtpPort === 'auto' ? null : preferredFtpPort);
+            if (!ftpPort) throw new Error('FTP not detected on ports 1337/2121 (no FTP banner).');
+            await uploadFilesViaFtp(ip, ftpPort, batch.dest, batch.files, {
               cancel: { get value() { return state.manageCancel; } },
-              deprioritize: true,
-              progress: (sent) => {
-                emit('manage_progress', { op: 'Upload', processed: processedBase + sent, total: totalBytes, current_file: null });
+              log: (msg, level) => emit('manage_log', { message: level ? `${level}: ${msg}` : msg }),
+              onProgress: (sent, currentFile) => {
+                emit('manage_progress', { op: 'Upload', processed: processedBase + sent, total: totalBytes, current_file: currentFile });
               },
-              log: (msg) => emit('manage_log', { message: msg }),
-              reconnect: async () => uploadV3Init(ip, TRANSFER_PORT, batch.dest, false),
+              onFileDone: () => {},
             });
-            const response = await readUploadResponse(socketRef.current, { value: false }, result.responseBuffer);
-            parseUploadResponse(response);
+          };
+
+          if (uploadMode === 'ftp') {
+            const ftpPort = await detectFtpPort(ip, preferredFtpPort === 'auto' ? null : preferredFtpPort);
+            if (!ftpPort) throw new Error('FTP not detected on ports 1337/2121 (no FTP banner).');
+            await uploadFilesViaFtp(ip, ftpPort, batch.dest, batch.files, {
+              cancel: { get value() { return state.manageCancel; } },
+              log: (msg, level) => emit('manage_log', { message: level ? `${level}: ${msg}` : msg }),
+              onProgress: (sent, currentFile) => {
+                emit('manage_progress', { op: 'Upload', processed: processedBase + sent, total: totalBytes, current_file: currentFile });
+              },
+              onFileDone: () => {},
+            });
           } else {
-            await sendFilesV2(batch.files, socket, {
-              cancel: { get value() { return state.manageCancel; } },
-              deprioritize: true,
-              progress: (sent) => {
-                emit('manage_progress', { op: 'Upload', processed: processedBase + sent, total: totalBytes, current_file: null });
-              },
-              log: (msg) => emit('manage_log', { message: msg }),
-            });
+            let socket = null;
+            let useV3 = true;
+            try {
+              socket = await uploadV3Init(ip, TRANSFER_PORT, batch.dest, false);
+            } catch (err) {
+              emit('manage_log', { message: `Upload V3 unavailable, falling back to V2: ${err.message || err}` });
+              useV3 = false;
+              try {
+                socket = await uploadV2Init(ip, TRANSFER_PORT, batch.dest, false);
+              } catch (v2Err) {
+                const msg = `V2 upload rejected; trying FTP fallback. ${v2Err.message || v2Err}`;
+                await tryFtpFallback(msg);
+                processedBase += batch.batchBytes;
+                emit('manage_progress', { op: 'Upload', processed: processedBase, total: totalBytes, current_file: null });
+                continue;
+              }
+            }
 
-            const response = await readUploadResponse(socket);
-            parseUploadResponse(response);
+            if (useV3) {
+              const socketRef = { current: socket };
+              try {
+                const result = await sendFilesV3(batch.files, socketRef, {
+                  cancel: { get value() { return state.manageCancel; } },
+                  deprioritize: true,
+                  progress: (sent) => {
+                    emit('manage_progress', { op: 'Upload', processed: processedBase + sent, total: totalBytes, current_file: null });
+                  },
+                  log: (msg) => emit('manage_log', { message: msg }),
+                  reconnect: async () => uploadV3Init(ip, TRANSFER_PORT, batch.dest, false),
+                });
+                const response = await readUploadResponse(socketRef.current, { value: false }, result.responseBuffer);
+                parseUploadResponse(response);
+              } catch (v3Err) {
+                const msg = `V3 upload failed; trying FTP fallback. ${v3Err.message || v3Err}`;
+                await tryFtpFallback(msg);
+                processedBase += batch.batchBytes;
+                emit('manage_progress', { op: 'Upload', processed: processedBase, total: totalBytes, current_file: null });
+                continue;
+              }
+            } else {
+              try {
+                await sendFilesV2(batch.files, socket, {
+                  cancel: { get value() { return state.manageCancel; } },
+                  deprioritize: true,
+                  progress: (sent) => {
+                    emit('manage_progress', { op: 'Upload', processed: processedBase + sent, total: totalBytes, current_file: null });
+                  },
+                  log: (msg) => emit('manage_log', { message: msg }),
+                });
+
+                const response = await readUploadResponse(socket);
+                parseUploadResponse(response);
+              } catch (v2Err) {
+                const msg = `V2 upload failed; trying FTP fallback. ${v2Err.message || v2Err}`;
+                await tryFtpFallback(msg);
+                processedBase += batch.batchBytes;
+                emit('manage_progress', { op: 'Upload', processed: processedBase, total: totalBytes, current_file: null });
+                continue;
+              }
+            }
           }
           processedBase += batch.batchBytes;
           emit('manage_progress', { op: 'Upload', processed: processedBase, total: totalBytes, current_file: null });
@@ -5524,19 +5856,75 @@ function registerIpcHandlers() {
     emit('manage_log', { message: `Uploading RAR ${rarPath} for extraction to ${destPath}` });
 
     try {
-      const extractResult = await uploadRarForExtraction(ip, rarPath, destPath, mode, {
-        cancel: { get value() { return state.manageCancel; } },
-        tempRoot,
-        onProgress: (op, processed, total, currentFile) => {
-          emit('manage_progress', {
-            op: op === 'Upload' ? 'Extract' : 'Extract',
-            processed,
-            total,
-            current_file: currentFile
-          });
-        },
-        onLog: (message) => emit('manage_log', { message })
-      });
+      let uploadMode = 'payload';
+      try {
+        const config = loadConfig();
+        uploadMode = normalizeUploadMode(config?.upload_mode);
+      } catch {
+        uploadMode = 'payload';
+      }
+
+      let extractResult;
+      if (uploadMode === 'ftp') {
+        const stat = await fs.promises.stat(rarPath);
+        const ftpPort = await detectFtpPort(ip, null);
+        if (!ftpPort) throw new Error('FTP not detected on ports 1337/2121 (no FTP banner).');
+        await createPath(ip, TRANSFER_PORT, destPath);
+        const rarName = path.basename(rarPath);
+        const cleanedTempRoot = typeof tempRoot === 'string' ? tempRoot.trim() : '';
+        const rarRemoteDir = cleanedTempRoot || destPath;
+        const rarRemotePath = joinRemotePath(rarRemoteDir, rarName);
+
+        await uploadFilesViaFtp(ip, ftpPort, rarRemoteDir, [{
+          rel_path: rarName,
+          abs_path: rarPath,
+          size: Number(stat.size),
+          mtime: Math.floor(stat.mtimeMs / 1000),
+        }], {
+          cancel: { get value() { return state.manageCancel; } },
+          log: (msg, level) => emit('manage_log', { message: level ? `${level}: ${msg}` : msg }),
+          onProgress: (processed, currentFile) => {
+            emit('manage_progress', {
+              op: 'Extract',
+              processed,
+              total: Number(stat.size),
+              current_file: currentFile
+            });
+          },
+          onFileDone: () => {},
+        });
+
+        await extractArchiveWithProgress(
+          ip,
+          rarRemotePath,
+          destPath,
+          { get value() { return state.manageCancel; } },
+          (processed, total, currentFile) => {
+            emit('manage_progress', {
+              op: 'Extract',
+              processed,
+              total,
+              current_file: currentFile
+            });
+          },
+          (message) => emit('manage_log', { message })
+        );
+        extractResult = { fileSize: stat.size, bytes: stat.size, files: 1, queuedId: null };
+      } else {
+        extractResult = await uploadRarForExtraction(ip, rarPath, destPath, mode, {
+          cancel: { get value() { return state.manageCancel; } },
+          tempRoot,
+          onProgress: (op, processed, total, currentFile) => {
+            emit('manage_progress', {
+              op: op === 'Upload' ? 'Extract' : 'Extract',
+              processed,
+              total,
+              current_file: currentFile
+            });
+          },
+          onLog: (message) => emit('manage_log', { message })
+        });
+      }
       if (extractResult.queuedId) {
         emit('queue_hint', {
           queue_id: extractResult.queuedId,
@@ -5850,13 +6238,142 @@ const emitLog = (message, level = 'info', force = false) => {
         let watchdog = null;
         let filesToUpload = [];
         let totalSize = 0n;
+        const prevNoAsar = process.noAsar;
+        process.noAsar = true;
 
         try {
+          let uploadMode = normalizeUploadMode(req.upload_mode);
           const sourceStat = await fs.promises.stat(req.source_path);
           const isRar = sourceStat.isFile() && path.extname(req.source_path).toLowerCase() === '.rar';
 
           if (isRar) {
+            if (uploadMode === 'mix') {
+              emitLog('Archive uploads do not support Mix mode; switching to payload.', 'info');
+              uploadMode = 'payload';
+              state.transferStatus = { ...state.transferStatus, upload_mode: uploadMode };
+            }
             emitLog(`Uploading RAR for extraction: ${req.source_path}`, 'info');
+            if (uploadMode === 'ftp') {
+              const preferred = normalizeFtpPort(req.ftp_port);
+              const ftpPort = await detectFtpPort(req.ip, preferred === 'auto' ? null : preferred);
+              if (!ftpPort) {
+                throw new Error('FTP not detected on ports 1337/2121 (no FTP banner).');
+              }
+              await createPath(req.ip, TRANSFER_PORT, req.dest_path);
+              const rarSpeed = { lastAt: Date.now(), lastSent: 0, ema: 0 };
+              const rarName = path.basename(req.source_path);
+              const tempRoot = typeof req.rar_temp_root === 'string' ? req.rar_temp_root.trim() : '';
+              const rarRemoteDir = tempRoot || req.dest_path;
+              const rarRemotePath = joinRemotePath(rarRemoteDir, rarName);
+              state.transferStatus = createTransferStatus({
+                run_id: runId,
+                status: 'Uploading archive',
+                sent: 0,
+                total: sourceStat.size,
+                files: 1,
+                elapsed_secs: 0,
+                current_file: rarName,
+                upload_mode: 'ftp',
+              });
+              state.transferLastUpdate = Date.now();
+
+              await uploadFilesViaFtp(req.ip, ftpPort, rarRemoteDir, [{
+                rel_path: rarName,
+                abs_path: req.source_path,
+                size: Number(sourceStat.size),
+                mtime: Math.floor(sourceStat.mtimeMs / 1000),
+              }], {
+                cancel: { get value() { return state.transferCancel; } },
+                log: emitLog,
+                onProgress: (totalSent, currentFile) => {
+                  const now = Date.now();
+                  const elapsed = (now - rarSpeed.lastAt) / 1000;
+                  if (elapsed > 0) {
+                    const delta = totalSent - rarSpeed.lastSent;
+                    const inst = delta > 0 ? delta / elapsed : 0;
+                    const alpha = 1 - Math.exp(-elapsed / 3);
+                    rarSpeed.ema = rarSpeed.ema > 0 ? rarSpeed.ema + (inst - rarSpeed.ema) * alpha : inst;
+                    rarSpeed.lastAt = now;
+                    rarSpeed.lastSent = totalSent;
+                  }
+                  state.transferStatus = createTransferStatus({
+                    run_id: runId,
+                    status: 'Uploading archive',
+                    sent: totalSent,
+                    total: sourceStat.size,
+                    files: 1,
+                    elapsed_secs: (Date.now() - startTime) / 1000,
+                    current_file: currentFile || rarName,
+                    ftp_sent: totalSent,
+                    payload_sent: 0,
+                    payload_speed_bps: 0,
+                    ftp_speed_bps: rarSpeed.ema,
+                    total_speed_bps: rarSpeed.ema,
+                    upload_mode: 'ftp',
+                  });
+                  state.transferLastUpdate = Date.now();
+                },
+                onFileDone: () => {},
+              });
+
+              emitLog('Archive upload complete. Starting extraction...', 'info');
+              const extractSpeed = { lastAt: Date.now(), lastSent: 0, ema: 0 };
+              await extractArchiveWithProgress(
+                req.ip,
+                rarRemotePath,
+                req.dest_path,
+                { get value() { return state.transferCancel; } },
+                (processed, total, currentFile) => {
+                  const now = Date.now();
+                  const elapsed = (now - extractSpeed.lastAt) / 1000;
+                  if (elapsed > 0) {
+                    const delta = processed - extractSpeed.lastSent;
+                    const inst = delta > 0 ? delta / elapsed : 0;
+                    const alpha = 1 - Math.exp(-elapsed / 3);
+                    extractSpeed.ema = extractSpeed.ema > 0 ? extractSpeed.ema + (inst - extractSpeed.ema) * alpha : inst;
+                    extractSpeed.lastAt = now;
+                    extractSpeed.lastSent = processed;
+                  }
+                  state.transferStatus = createTransferStatus({
+                    run_id: runId,
+                    status: 'Extracting',
+                    sent: processed,
+                    total: total || sourceStat.size,
+                    files: 1,
+                    elapsed_secs: (Date.now() - startTime) / 1000,
+                    current_file: currentFile || rarName,
+                    payload_sent: processed,
+                    payload_speed_bps: extractSpeed.ema,
+                    ftp_speed_bps: 0,
+                    total_speed_bps: extractSpeed.ema,
+                    upload_mode: 'ftp',
+                  });
+                  state.transferLastUpdate = Date.now();
+                },
+                debugLog
+              );
+
+              const elapsed = (Date.now() - startTime) / 1000;
+              state.transferStatus = createTransferStatus({
+                run_id: runId,
+                status: 'Complete',
+                sent: sourceStat.size,
+                total: sourceStat.size,
+                files: 1,
+                elapsed_secs: elapsed,
+                current_file: '',
+                upload_mode: 'ftp',
+              });
+              state.transferLastUpdate = Date.now();
+              emit('transfer_complete', { run_id: runId, files: 1, bytes: sourceStat.size });
+              return;
+            }
+
+            const rarSpeed = {
+              lastAt: Date.now(),
+              lastSent: 0,
+              ema: 0,
+            };
             state.transferStatus = createTransferStatus({
               run_id: runId,
               status: 'Uploading archive',
@@ -5878,6 +6395,16 @@ const emitLog = (message, level = 'info', force = false) => {
                 tempRoot: req.rar_temp_root,
                 overrideOnConflict: req.override_on_conflict !== false,
                 onProgress: (op, processed, total, currentFile) => {
+                  const now = Date.now();
+                  const elapsed = (now - rarSpeed.lastAt) / 1000;
+                  if (elapsed > 0) {
+                    const delta = processed - rarSpeed.lastSent;
+                    const inst = delta > 0 ? delta / elapsed : 0;
+                    const alpha = 1 - Math.exp(-elapsed / 3);
+                    rarSpeed.ema = rarSpeed.ema > 0 ? rarSpeed.ema + (inst - rarSpeed.ema) * alpha : inst;
+                    rarSpeed.lastAt = now;
+                    rarSpeed.lastSent = processed;
+                  }
                   state.transferStatus = createTransferStatus({
                     run_id: runId,
                     status: op === 'Extract' ? 'Extracting' : 'Uploading archive',
@@ -5886,6 +6413,11 @@ const emitLog = (message, level = 'info', force = false) => {
                     files: 1,
                     elapsed_secs: (Date.now() - startTime) / 1000,
                     current_file: currentFile || path.basename(req.source_path),
+                    payload_sent: processed,
+                    payload_speed_bps: rarSpeed.ema,
+                    ftp_speed_bps: 0,
+                    total_speed_bps: rarSpeed.ema,
+                    upload_mode: 'payload',
                   });
                   state.transferLastUpdate = Date.now();
                 },
@@ -5946,7 +6478,6 @@ const emitLog = (message, level = 'info', force = false) => {
             if (mode === 'hash_medium') return size >= RESUME_HASH_MED_BYTES;
             return false;
           };
-          let uploadMode = normalizeUploadMode(req.upload_mode);
           const resumeMode = normalizeResumeMode(req.resume_mode);
           filesToUpload = result.files;
           if (resumeMode && resumeMode !== 'none' && uploadMode !== 'ftp') {
@@ -6056,6 +6587,10 @@ const emitLog = (message, level = 'info', force = false) => {
 
           totalSize = filesToUpload.reduce((sum, f) => sum + BigInt(f.size), 0n);
           const fileCount = filesToUpload.length;
+          if (uploadMode === 'mix' && fileCount <= 1) {
+            emitLog('Mix mode disabled for single-file transfer; using payload.', 'info');
+            uploadMode = 'payload';
+          }
           let ftpPort = null;
           if (uploadMode !== 'payload') {
             const preferred = normalizeFtpPort(req.ftp_port);
@@ -6127,6 +6662,7 @@ const emitLog = (message, level = 'info', force = false) => {
           let effectiveOptimize = !!req.optimize_upload;
           let basePackLimit = PACK_BUFFER_SIZE;
           let baseChunkSize = SEND_CHUNK_SIZE;
+          const allowCompression = payloadFileCount > 0;
           if (payloadFileCount > 0) {
             if (req.compression === 'auto') {
               if (avgPayloadSize < SMALL_FILE_AVG_BYTES || payloadFileCount >= 100000) {
@@ -6155,8 +6691,22 @@ const emitLog = (message, level = 'info', force = false) => {
             effective_optimize: payloadFileCount > 0 ? effectiveOptimize : null,
             effective_compression: payloadFileCount > 0 ? effectiveCompression : null,
           };
-          if (payloadFileCount > 0 && req.compression !== effectiveCompression) {
+          if (allowCompression && req.compression !== effectiveCompression) {
             emitLog(`Auto-tune compression: ${req.compression} -> ${effectiveCompression}`, 'debug');
+          }
+          if (allowCompression) {
+            if (effectiveCompression === 'lz4' && !lz4) {
+              emitLog('Compression lz4 unavailable; using none.', 'warn');
+              effectiveCompression = 'none';
+            } else if (effectiveCompression === 'zstd' && !fzstd) {
+              emitLog('Compression zstd unavailable; using none.', 'warn');
+              effectiveCompression = 'none';
+            } else if (effectiveCompression === 'lzma' && !lzma) {
+              emitLog('Compression lzma unavailable; using none.', 'warn');
+              effectiveCompression = 'none';
+            }
+          } else {
+            effectiveCompression = 'none';
           }
           if (payloadFileCount > 0 && !!req.optimize_upload !== effectiveOptimize) {
             emitLog('Auto-tune optimize: enabled to reduce per-file overhead.', 'debug');
@@ -6231,6 +6781,7 @@ const emitLog = (message, level = 'info', force = false) => {
 
           let parsed = { files: fileCount, bytes: Number(totalSize) };
           const rateLimitBps = req.bandwidth_limit_mbps ? req.bandwidth_limit_mbps * 1024 * 1024 / 8 : null; // Convert Mbps to Bps
+          const missingFiles = new Set();
 
           const runPayloadUpload = async (files) => {
             if (!files) return;
@@ -6318,6 +6869,7 @@ const emitLog = (message, level = 'info', force = false) => {
                   },
                   transferAbort.signal
                 ),
+                onSkipFile: (file) => missingFiles.add(file.rel_path),
               }) : sendFilesV3(files, socketRef, {
                 cancel: { get value() { return state.transferCancel; } },
                 progress: (sent, filesSent, elapsed, currentFile) => {
@@ -6331,6 +6883,7 @@ const emitLog = (message, level = 'info', force = false) => {
                 packLimitBytes: basePackLimit,
                 streamChunkBytes: baseChunkSize,
                 getPackLimit: adaptiveTuner?.getPackLimit,
+                onSkipFile: (file) => missingFiles.add(file.rel_path),
               }));
               const response = await readUploadResponse(socketRef.current, { value: false }, result.responseBuffer);
               parsed = parseUploadResponse(response);
@@ -6362,6 +6915,7 @@ const emitLog = (message, level = 'info', force = false) => {
                 getPackLimit: adaptiveTuner?.getPackLimit,
                 getPaceDelayMs: adaptiveTuner?.getPaceDelayMs,
                 getRateLimitBps: adaptiveTuner?.getRateLimitBps,
+                onSkipFile: (file) => missingFiles.add(file.rel_path),
               });
 
               const response = await readUploadResponse(socket);
@@ -6388,6 +6942,7 @@ const emitLog = (message, level = 'info', force = false) => {
                 ftpFilesSent += 1;
                 updateProgress('');
               },
+              onSkipFile: (file) => missingFiles.add(file.rel_path),
             });
             ftpSent = BigInt(result.bytes);
             ftpFilesSent = result.files;
@@ -6445,7 +7000,11 @@ const emitLog = (message, level = 'info', force = false) => {
           });
           state.transferLastUpdate = Date.now();
 
-          emit('transfer_complete', { run_id: runId, files: parsed.files, bytes: parsed.bytes });
+          const skippedFiles = missingFiles.size;
+          if (skippedFiles > 0) {
+            emitLog(`Skipped ${skippedFiles} missing/unreadable file(s).`, 'warn');
+          }
+          emit('transfer_complete', { run_id: runId, files: parsed.files, bytes: parsed.bytes, skipped: skippedFiles });
         } catch (err) {
           emit('transfer_error', { run_id: runId, message: err.message });
           // Only update status if this is still the active transfer
@@ -6454,6 +7013,7 @@ const emitLog = (message, level = 'info', force = false) => {
             state.transferLastUpdate = Date.now();
           }
         } finally {
+          process.noAsar = prevNoAsar;
           if (watchdog) {
             clearInterval(watchdog);
             watchdog = null;
