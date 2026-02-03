@@ -408,6 +408,7 @@ type PayloadStatusResponse = {
   transfer?: {
     pack_in_use: number;
     pool_count: number;
+    small_pool_count?: number;
     queue_count: number;
     pack_queue_count?: number;
     active_sessions: number;
@@ -7084,6 +7085,12 @@ export default function App() {
                             <span>{tr("pool_count")}</span>
                             <span>{payloadFullStatus.transfer.pool_count}</span>
                           </div>
+                          {payloadFullStatus.transfer.small_pool_count != null && (
+                            <div className="payload-metric-row">
+                              <span>{tr("small_pool_count")}</span>
+                              <span>{payloadFullStatus.transfer.small_pool_count}</span>
+                            </div>
+                          )}
                           {payloadFullStatus.transfer.recv_rate_bps != null && (
                             <div className="payload-metric-row">
                               <span>{tr("recv_rate")}</span>

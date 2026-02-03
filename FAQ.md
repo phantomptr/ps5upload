@@ -1,7 +1,7 @@
 # PS5 Upload FAQ
 
 Welcome! This FAQ covers setup, features, troubleshooting, and platform‑specific tips.
-Latest release: **v1.4.2**.
+Latest release: **v1.4.3**.
 
 ---
 
@@ -260,9 +260,9 @@ Start the extraction queue, refresh, or **Clear tmp**.
 Reload the payload and reconnect.
 
 **Q: My transfer hangs or my PS5 freezes with a large folder.**
-This can happen with folders containing tens of thousands of small files. As of **v1.3.11**, the payload has been significantly improved to handle this. It now batches file writes to prevent overwhelming the PS5's operating system. If you still experience issues:
-*   Ensure you are using the payload from v1.3.11 or newer.
-*   The transfer may appear to pause momentarily—this is the new backpressure system working to keep the PS5 stable. It will resume automatically.
+This can happen with folders containing tens of thousands of small files. As of **v1.3.11**, the payload batches file writes to prevent overwhelming the PS5. As of **v1.4.3**, it also pauses recv under backpressure, verifies full writes, and reuses file descriptors for chunked writes. If you still experience issues:
+*   Ensure you are using the payload from v1.4.3 or newer.
+*   The transfer may appear to pause momentarily—this is backpressure working to keep the PS5 stable. It will resume automatically.
 
 
 ---

@@ -44,11 +44,20 @@ static pthread_mutex_t g_pool_mutex = PTHREAD_MUTEX_INITIALIZER;
 static atomic_size_t g_pack_in_use = 0;
 static atomic_int g_active_sessions = 0;
 
+// Small-file buffer pool to reduce malloc/free churn
+#define SMALL_FILE_POOL_BUF_SIZE (256 * 1024)
+#define SMALL_FILE_POOL_SIZE 64
+static uint8_t *g_small_file_pool[SMALL_FILE_POOL_SIZE];
+static size_t g_small_file_pool_count = 0;
+static pthread_mutex_t g_small_file_pool_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 // New structure for individual file write operations
 typedef struct {
     char path[PATH_MAX];
     uint8_t *data; // Malloc'd data for the file
     size_t len;
+    size_t alloc_size;
+    uint8_t from_pool;
     int chmod_mode; // Mode to apply after write
     uint64_t offset;
     uint64_t total_size;
@@ -65,6 +74,7 @@ static atomic_size_t g_file_write_queue_count = 0;
 static pthread_mutex_t g_file_write_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_file_write_queue_not_empty_cond = PTHREAD_COND_INITIALIZER;
 static pthread_cond_t g_file_write_queue_not_full_cond = PTHREAD_COND_INITIALIZER;
+static pthread_cond_t g_file_write_queue_empty_cond = PTHREAD_COND_INITIALIZER;
 static int g_file_writer_shutdown = 0;
 
 // V4 record flags
@@ -193,6 +203,48 @@ static void abort_active_client_sockets(void) {
         }
     }
     pthread_mutex_unlock(&g_ack_mutex);
+}
+
+static uint8_t *alloc_small_file_buffer(size_t len, uint8_t *from_pool) {
+    if (from_pool) *from_pool = 0;
+    if (len > SMALL_FILE_POOL_BUF_SIZE) {
+        return malloc(len);
+    }
+    pthread_mutex_lock(&g_small_file_pool_mutex);
+    if (g_small_file_pool_count > 0) {
+        uint8_t *ptr = g_small_file_pool[--g_small_file_pool_count];
+        pthread_mutex_unlock(&g_small_file_pool_mutex);
+        if (from_pool) *from_pool = 1;
+        return ptr;
+    }
+    pthread_mutex_unlock(&g_small_file_pool_mutex);
+    uint8_t *ptr = malloc(SMALL_FILE_POOL_BUF_SIZE);
+    if (ptr && from_pool) *from_pool = 1;
+    return ptr;
+}
+
+static void free_small_file_buffer(uint8_t *ptr, uint8_t from_pool) {
+    if (!ptr) return;
+    if (!from_pool) {
+        free(ptr);
+        return;
+    }
+    pthread_mutex_lock(&g_small_file_pool_mutex);
+    if (g_small_file_pool_count < SMALL_FILE_POOL_SIZE) {
+        g_small_file_pool[g_small_file_pool_count++] = ptr;
+        pthread_mutex_unlock(&g_small_file_pool_mutex);
+        return;
+    }
+    pthread_mutex_unlock(&g_small_file_pool_mutex);
+    free(ptr);
+}
+
+static void cleanup_small_file_pool(void) {
+    pthread_mutex_lock(&g_small_file_pool_mutex);
+    while (g_small_file_pool_count > 0) {
+        free(g_small_file_pool[--g_small_file_pool_count]);
+    }
+    pthread_mutex_unlock(&g_small_file_pool_mutex);
 }
 
 static void send_pack_ack(uint64_t session_id, uint64_t pack_id) {
@@ -426,6 +478,11 @@ static void *file_writer_thread(void *arg) {
 
     printf("[FTX] Batched file writer thread started.\n");
 
+    int current_fd = -1;
+    char current_path[PATH_MAX] = {0};
+    int current_path_set = 0;
+    int current_prealloc_done = 0;
+
     while (!g_file_writer_shutdown) {
         size_t job_count = 0;
         pthread_mutex_lock(&g_file_write_mutex);
@@ -455,6 +512,9 @@ static void *file_writer_thread(void *arg) {
         }
         atomic_fetch_sub(&g_file_write_queue_count, to_process);
         job_count = to_process;
+        if (atomic_load(&g_file_write_queue_count) == 0) {
+            pthread_cond_broadcast(&g_file_write_queue_empty_cond);
+        }
 
         pthread_cond_broadcast(&g_file_write_queue_not_full_cond);
         pthread_mutex_unlock(&g_file_write_mutex);
@@ -473,33 +533,83 @@ static void *file_writer_thread(void *arg) {
             }
 
             int open_flags = O_WRONLY | O_CREAT;
-            if ((job->flags & RECORD_FLAG_HAS_OFFSET) == 0 || (job->flags & RECORD_FLAG_TRUNCATE)) {
-                open_flags |= O_TRUNC;
+            int want_trunc = ((job->flags & RECORD_FLAG_HAS_OFFSET) == 0) || (job->flags & RECORD_FLAG_TRUNCATE);
+            int need_open = 0;
+            if (current_fd < 0 || !current_path_set || strcmp(current_path, job->path) != 0) {
+                need_open = 1;
             }
-            int fd = open(job->path, open_flags, job->chmod_mode);
-            if (fd >= 0) {
-                if ((job->flags & RECORD_FLAG_HAS_TOTAL) && job->total_size > 0 && job->offset == 0) {
-                    if (lseek(fd, (off_t)(job->total_size - 1), SEEK_SET) >= 0) {
-                        (void)write(fd, "", 1);
-                    }
-                    lseek(fd, 0, SEEK_SET);
+            if (need_open) {
+                if (current_fd >= 0) {
+                    close(current_fd);
+                    current_fd = -1;
                 }
-                if (job->len > 0) {
-                    if (job->flags & RECORD_FLAG_HAS_OFFSET) {
-                        ssize_t w = pwrite(fd, job->data, job->len, (off_t)job->offset);
-                        (void)w;
+                if (want_trunc && job->offset == 0) {
+                    open_flags |= O_TRUNC;
+                }
+                current_fd = open(job->path, open_flags, job->chmod_mode);
+                current_prealloc_done = 0;
+                if (current_fd >= 0) {
+                    snprintf(current_path, sizeof(current_path), "%s", job->path);
+                    current_path_set = 1;
+                }
+            }
+
+            int write_ok = 1;
+            if (current_fd >= 0) {
+                if (!current_prealloc_done &&
+                    (job->flags & RECORD_FLAG_HAS_TOTAL) &&
+                    job->total_size > 0 &&
+                    job->offset == 0) {
+                    if (lseek(current_fd, (off_t)(job->total_size - 1), SEEK_SET) >= 0) {
+                        if (write(current_fd, "", 1) < 0) {
+                            write_ok = 0;
+                        }
                     } else {
-                        (void)write(fd, job->data, job->len);
+                        write_ok = 0;
+                    }
+                    if (lseek(current_fd, 0, SEEK_SET) < 0) {
+                        write_ok = 0;
+                    }
+                    current_prealloc_done = 1;
+                }
+                if (write_ok && job->len > 0) {
+                    size_t written = 0;
+                    while (written < job->len) {
+                        ssize_t w;
+                        if (job->flags & RECORD_FLAG_HAS_OFFSET) {
+                            w = pwrite(current_fd,
+                                       job->data + written,
+                                       job->len - written,
+                                       (off_t)(job->offset + written));
+                        } else {
+                            w = write(current_fd, job->data + written, job->len - written);
+                        }
+                        if (w < 0) {
+                            if (errno == EINTR) continue;
+                            write_ok = 0;
+                            break;
+                        }
+                        if (w == 0) {
+                            write_ok = 0;
+                            break;
+                        }
+                        written += (size_t)w;
                     }
                 }
-                close(fd);
-                if (job->len > 0) {
+                if (!write_ok) {
+                    printf("[FTX] Writer: Write failed for %s: %s\n", job->path, strerror(errno));
+                    transfer_request_abort_with_reason("write_failed");
+                    close(current_fd);
+                    current_fd = -1;
+                    current_path_set = 0;
+                } else if (job->len > 0) {
                     atomic_fetch_add(&g_upload_bytes_written, (unsigned long long)job->len);
                 }
             } else {
                 printf("[FTX] Writer: Failed to open %s: %s\n", job->path, strerror(errno));
+                transfer_request_abort_with_reason("open_failed");
             }
-            free(job->data);
+            free_small_file_buffer(job->data, job->from_pool);
             if (job->pack_id != 0) {
                 pack_ack_complete(job->session_id, job->pack_id);
             }
@@ -511,6 +621,9 @@ static void *file_writer_thread(void *arg) {
         }
     }
 
+    if (current_fd >= 0) {
+        close(current_fd);
+    }
     free(local_batch);
     printf("[FTX] Batched file writer thread stopped.\n");
     return NULL;
@@ -613,8 +726,10 @@ static void *pack_processor_thread(void *arg) {
             if (data_len > SIZE_MAX) break;
 
             new_job.len = (size_t)data_len;
-            new_job.data = malloc(new_job.len > 0 ? new_job.len : 1);
+            new_job.from_pool = 0;
+            new_job.data = alloc_small_file_buffer(new_job.len > 0 ? new_job.len : 1, &new_job.from_pool);
             if (!new_job.data) { offset += (size_t)data_len; continue; }
+            new_job.alloc_size = new_job.from_pool ? SMALL_FILE_POOL_BUF_SIZE : new_job.len;
 
             if (new_job.len > 0) memcpy(new_job.data, job.data + offset, new_job.len);
             offset += (size_t)data_len;
@@ -695,9 +810,9 @@ static void cleanup_worker_pool(void) {
     pthread_join(g_file_writer_thread, NULL);
 
     // Clean up any remaining jobs in file write queue
-    for(size_t i = 0; i < atomic_load(&g_file_write_queue_count); ++i) {
+    for (size_t i = 0; i < atomic_load(&g_file_write_queue_count); ++i) {
         size_t idx = (g_file_write_queue_head + i) % FILE_WRITE_QUEUE_DEPTH;
-        free(g_file_write_queue[idx].data);
+        free_small_file_buffer(g_file_write_queue[idx].data, g_file_write_queue[idx].from_pool);
     }
     atomic_init(&g_file_write_queue_count, 0);
     g_file_write_queue_head = 0;
@@ -714,6 +829,7 @@ static void cleanup_worker_pool(void) {
 void transfer_cleanup(void) {
     cleanup_worker_pool();
     cleanup_buffer_pool();
+    cleanup_small_file_pool();
 }
 
 void transfer_request_abort(void) {
@@ -766,6 +882,9 @@ int transfer_get_stats(TransferStats *out) {
     pthread_mutex_lock(&g_pool_mutex);
     out->pool_count = g_pool_count;
     pthread_mutex_unlock(&g_pool_mutex);
+    pthread_mutex_lock(&g_small_file_pool_mutex);
+    out->small_pool_count = g_small_file_pool_count;
+    pthread_mutex_unlock(&g_small_file_pool_mutex);
     out->last_progress = g_last_transfer_progress;
     out->abort_requested = g_abort_transfer;
     out->workers_initialized = g_workers_initialized;
@@ -896,6 +1015,7 @@ int transfer_idle_cleanup(void) {
     // If workers not initialized, just cleanup buffer pool
     if (!g_workers_initialized) {
         cleanup_buffer_pool();
+        cleanup_small_file_pool();
         return 1;
     }
 
@@ -912,6 +1032,7 @@ int transfer_idle_cleanup(void) {
            atomic_load(&g_pack_in_use), atomic_load(&g_file_write_queue_count));
     cleanup_worker_pool();
     cleanup_buffer_pool();
+    cleanup_small_file_pool();
     return 1;
 }
 
@@ -1026,7 +1147,8 @@ static int upload_session_finish(UploadSession *session) {
     size_t last_count = 0;
     time_t last_progress = start;
 
-    while(atomic_load(&g_file_write_queue_count) > 0 && !g_abort_transfer) {
+    pthread_mutex_lock(&g_file_write_mutex);
+    while (atomic_load(&g_file_write_queue_count) > 0 && !g_abort_transfer) {
         size_t current = atomic_load(&g_file_write_queue_count);
         time_t now = time(NULL);
 
@@ -1045,8 +1167,13 @@ static int upload_session_finish(UploadSession *session) {
         if ((now - start) % 5 == 0) {
             printf("[FTX] Finalizing... waiting for %zu files to be written.\n", current);
         }
-        sleep_ms(250);
+
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_sec += 1;
+        pthread_cond_timedwait(&g_file_write_queue_empty_cond, &g_file_write_mutex, &ts);
     }
+    pthread_mutex_unlock(&g_file_write_mutex);
     if (session->body) { free_pack_buffer(session->body); session->body = NULL; }
     return 0;
 }
@@ -1133,6 +1260,22 @@ void handle_upload_v3(int client_sock, const char *dest_root, int use_temp, int 
     }
     int done = 0, error = 0;
     while (!done && !error && !g_abort_transfer) {
+        if (upload_session_backpressure(session)) {
+            struct timeval wait_start;
+            gettimeofday(&wait_start, NULL);
+            usleep(BACKPRESSURE_POLL_US);
+            struct timeval wait_end;
+            gettimeofday(&wait_end, NULL);
+            long long waited_us =
+                (long long)(wait_end.tv_sec - wait_start.tv_sec) * 1000000LL +
+                (long long)(wait_end.tv_usec - wait_start.tv_usec);
+            if (waited_us > 0) {
+                atomic_fetch_add(&g_backpressure_events, 1);
+                atomic_fetch_add(&g_backpressure_wait_ms, (unsigned long long)(waited_us / 1000LL));
+            }
+            g_last_transfer_progress = time(NULL);
+            continue;
+        }
         ssize_t n = recv(client_sock, buffer, UPLOAD_RECV_BUFFER_SIZE, 0);
         if (n < 0) {
             if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {

@@ -3,6 +3,17 @@
 All notable changes to this project are documented here.
 This project follows Semantic Versioning.
 
+## [1.4.3] - 2026-02-02
+
+### Added
+- Payload-side backpressure to pause recv when the writer queue is saturated.
+- Small-file buffer pool to reduce malloc/free churn during large directory uploads.
+
+### Changed
+- File writes now verify full writes and abort on any write error to avoid silent corruption.
+- File writer reuses open file descriptors for sequential chunk writes to reduce overhead.
+- Finalize now waits on writer signals instead of polling sleeps for faster, safer shutdown.
+
 ## [1.4.2] - 2026-02-02
 
 ### Added

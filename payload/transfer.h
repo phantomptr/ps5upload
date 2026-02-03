@@ -10,6 +10,7 @@ typedef struct UploadSession UploadSession;
 typedef struct {
     size_t pack_in_use;
     int pool_count;
+    size_t small_pool_count;
     size_t queue_count;
     size_t pack_queue_count;
     int active_sessions;

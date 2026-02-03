@@ -190,7 +190,7 @@ char *extract_queue_get_status_json(void) {
         "\"net_rx_bytes\":%lld,\"net_tx_bytes\":%lld,\"net_rx_bps\":%lld,\"net_tx_bps\":%lld,"
         "\"cpu_supported\":%s,\"proc_cpu_supported\":%s,\"rss_supported\":%s,\"thread_supported\":%s,"
         "\"mem_total_supported\":%s,\"mem_free_supported\":%s,\"net_supported\":%s},"
-        "\"transfer\":{\"pack_in_use\":%zu,\"pool_count\":%d,\"queue_count\":%zu,\"pack_queue_count\":%zu,"
+        "\"transfer\":{\"pack_in_use\":%zu,\"pool_count\":%d,\"small_pool_count\":%zu,\"queue_count\":%zu,\"pack_queue_count\":%zu,"
         "\"active_sessions\":%d,\"backpressure_events\":%llu,\"backpressure_wait_ms\":%llu,"
         "\"bytes_received\":%llu,\"bytes_written\":%llu,\"recv_rate_bps\":%llu,\"write_rate_bps\":%llu,"
         "\"tune_level\":%d,\"recommend_pack_limit\":%llu,\"recommend_pace_ms\":%llu,\"recommend_rate_limit_bps\":%llu,"
@@ -208,7 +208,7 @@ char *extract_queue_get_status_json(void) {
         sys_stats.mem_total_supported ? "true" : "false",
         sys_stats.mem_free_supported ? "true" : "false",
         sys_stats.net_supported ? "true" : "false",
-        transfer_stats.pack_in_use, transfer_stats.pool_count, transfer_stats.queue_count, transfer_stats.pack_queue_count,
+        transfer_stats.pack_in_use, transfer_stats.pool_count, transfer_stats.small_pool_count, transfer_stats.queue_count, transfer_stats.pack_queue_count,
         transfer_stats.active_sessions,
         (unsigned long long)transfer_stats.backpressure_events,
         (unsigned long long)transfer_stats.backpressure_wait_ms,
