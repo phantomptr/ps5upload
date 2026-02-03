@@ -189,6 +189,13 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
         return api.gameMetaLoad(args.path);
       case 'manage_rar_metadata':
         return api.manageRarMetadata(args.ip, args.path);
+      case 'games_scan':
+        return api.gamesScan(args.ip, args.storage_paths, args.scan_paths);
+      case 'games_scan_stats':
+        if (typeof api.gamesScanStats !== 'function') {
+          return Promise.reject(new Error('games_scan_stats API missing. Please restart the app after updating.'));
+        }
+        return api.gamesScanStats(args.ip, args.path);
       default:
         return Promise.reject(new Error(`Unknown command: ${cmd}`));
     }

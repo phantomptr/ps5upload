@@ -49,7 +49,7 @@ const WRITE_CHUNK_SIZE = 512 * 1024; // 512KB
 const MAGIC_FTX1 = 0x31585446;
 
 let sleepBlockerId = null;
-const VERSION = '1.4.3';
+const VERSION = '1.4.4';
 const IS_WINDOWS = process.platform === 'win32';
 
 function beginManageOperation(op) {
@@ -88,6 +88,7 @@ const COVER_CANDIDATES = [
   'cover.jpg',
   'tile0.png',
 ];
+const DEFAULT_GAMES_SCAN_PATHS = ['etaHEN/games', 'homebrew'];
 
 async function tryExecFile(command, args, options = {}) {
   try {
@@ -607,6 +608,275 @@ async function loadGameMetaForPath(sourcePath) {
   const coverPath = findCoverPathForParam(paramPath);
   const cover = coverPath ? loadCoverImageFromPath(coverPath, 160) : null;
   return { meta, cover };
+}
+
+function isRemoteDirEntry(entry) {
+  if (!entry || typeof entry !== 'object') return false;
+  const entryType = String(entry.entry_type || entry.type || '').toLowerCase();
+  return Boolean(entry.is_dir) || entryType === 'd' || entryType === 'dir' || entryType === 'directory';
+}
+
+function joinRemoteScanPath(...parts) {
+  return parts
+    .filter((part) => typeof part === 'string' && part.trim().length > 0)
+    .map((part, index) => {
+      const value = String(part);
+      if (index === 0) return value.replace(/\/+$/, '') || '/';
+      return value.replace(/^\/+/, '').replace(/\/+$/, '');
+    })
+    .join('/');
+}
+
+function normalizeRemoteScanSubpath(value) {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
+  return normalized || null;
+}
+
+async function downloadRemoteFileToBuffer(ip, remotePath, maxBytes = 8 * 1024 * 1024) {
+  const socket = await createSocketWithTimeout(ip, TRANSFER_PORT);
+  socket.setTimeout(0);
+  return new Promise((resolve, reject) => {
+    let headerDone = false;
+    let expectedSize = 0;
+    let headerBuf = Buffer.alloc(0);
+    const chunks = [];
+    let received = 0;
+    let settled = false;
+
+    const finish = (err, value) => {
+      if (settled) return;
+      settled = true;
+      socket.removeAllListeners();
+      socket.destroy();
+      if (err) {
+        reject(err);
+        return;
+      }
+      resolve(value);
+    };
+
+    socket.on('data', (chunk) => {
+      if (!headerDone) {
+        headerBuf = Buffer.concat([headerBuf, chunk]);
+        const nl = headerBuf.indexOf('\n');
+        if (nl === -1) return;
+        const line = headerBuf.slice(0, nl).toString('utf8').trim();
+        const remainder = headerBuf.slice(nl + 1);
+        headerBuf = Buffer.alloc(0);
+        if (line.startsWith('ERROR')) {
+          finish(new Error(line));
+          return;
+        }
+        const match = line.match(/^(?:OK|READY)\s+(\d+)/i);
+        if (!match) {
+          finish(new Error(`Unexpected response: ${line}`));
+          return;
+        }
+        expectedSize = Number(match[1]);
+        if (!Number.isFinite(expectedSize) || expectedSize < 0) {
+          finish(new Error(`Invalid size for ${remotePath}`));
+          return;
+        }
+        if (expectedSize > maxBytes) {
+          finish(new Error(`File too large for scan: ${remotePath}`));
+          return;
+        }
+        headerDone = true;
+        if (remainder.length > 0) {
+          chunks.push(remainder);
+          received += remainder.length;
+        }
+      } else {
+        chunks.push(chunk);
+        received += chunk.length;
+      }
+
+      if (received > maxBytes) {
+        finish(new Error(`File exceeded scan limit: ${remotePath}`));
+        return;
+      }
+      if (headerDone && received >= expectedSize) {
+        finish(null, Buffer.concat(chunks, received).subarray(0, expectedSize));
+      }
+    });
+
+    socket.on('error', (err) => finish(err));
+    socket.on('close', () => {
+      if (!headerDone) {
+        finish(new Error(`Connection closed before response for ${remotePath}`));
+        return;
+      }
+      if (received >= expectedSize) {
+        finish(null, Buffer.concat(chunks, received).subarray(0, expectedSize));
+      } else {
+        finish(new Error(`Incomplete download for ${remotePath}: ${received}/${expectedSize}`));
+      }
+    });
+    socket.on('end', () => {
+      if (!headerDone) return;
+      if (received >= expectedSize) {
+        finish(null, Buffer.concat(chunks, received).subarray(0, expectedSize));
+      }
+    });
+
+    // Use DOWNLOAD for metadata reads; DOWNLOAD_RAW has been unstable on some payload builds.
+    socket.write(`DOWNLOAD ${remotePath}\n`);
+  });
+}
+
+async function loadRemoteGameMetaForPath(ip, gamePath) {
+  const paramCandidates = [
+    joinRemoteScanPath(gamePath, 'sce_sys', 'param.json'),
+    joinRemoteScanPath(gamePath, 'param.json')
+  ];
+  let markerFile = null;
+  let meta = null;
+  for (const paramPath of paramCandidates) {
+    try {
+      const bytes = await downloadRemoteFileToBuffer(ip, paramPath, 512 * 1024);
+      const parsed = JSON.parse(bytes.toString('utf8'));
+      const parsedMeta = parseGameMetaFromParam(parsed);
+      if (parsedMeta) {
+        markerFile = paramPath;
+        meta = parsedMeta;
+        break;
+      }
+    } catch {
+      // Not every folder contains game metadata; ignore and continue.
+    }
+  }
+  if (!meta) {
+    return { marker_file: null, meta: null, cover: null };
+  }
+
+  let cover = null;
+  if (markerFile) {
+    const isSceSysParam = markerFile.toLowerCase().includes('/sce_sys/param.json');
+    const sceBase = isSceSysParam
+      ? markerFile.slice(0, markerFile.toLowerCase().lastIndexOf('/param.json'))
+      : joinRemoteScanPath(gamePath, 'sce_sys');
+    for (const name of COVER_CANDIDATES) {
+      const candidates = isSceSysParam
+        ? [joinRemoteScanPath(sceBase, name), joinRemoteScanPath(gamePath, name)]
+        : [joinRemoteScanPath(sceBase, name), joinRemoteScanPath(gamePath, name)];
+      for (const candidate of candidates) {
+        try {
+          const bytes = await downloadRemoteFileToBuffer(ip, candidate, 8 * 1024 * 1024);
+          cover = loadCoverImageFromBytes(bytes, 160);
+          if (cover) break;
+        } catch {
+          // Try the next candidate.
+        }
+      }
+      if (cover) break;
+    }
+  }
+
+  return { marker_file: markerFile, meta, cover };
+}
+
+async function scanRemoteGames(ip, storagePaths = [], scanPaths = []) {
+  const scannedStorage = [];
+  const skippedStorage = [];
+  const scannedGamesDirs = [];
+  const games = [];
+
+  const roots = Array.isArray(storagePaths)
+    ? storagePaths.filter((value) => typeof value === 'string' && value.trim().length > 0)
+    : [];
+  const requestedSubpathsRaw = Array.isArray(scanPaths) ? scanPaths : [];
+  const requestedSubpaths = requestedSubpathsRaw
+    .map(normalizeRemoteScanSubpath)
+    .filter((value, index, array) => value && array.indexOf(value) === index);
+  const scanSubpaths = requestedSubpaths.length > 0 ? requestedSubpaths : DEFAULT_GAMES_SCAN_PATHS;
+
+  for (const storagePath of roots) {
+    try {
+      await listDir(ip, TRANSFER_PORT, storagePath);
+      scannedStorage.push(storagePath);
+    } catch {
+      skippedStorage.push(storagePath);
+      continue;
+    }
+
+    for (const subpath of scanSubpaths) {
+      const gamesDir = joinRemoteScanPath(storagePath, subpath);
+      let folderEntries = [];
+      try {
+        folderEntries = await listDir(ip, TRANSFER_PORT, gamesDir);
+        scannedGamesDirs.push(gamesDir);
+      } catch {
+        continue;
+      }
+      const gameFolders = folderEntries.filter((entry) => isRemoteDirEntry(entry) && entry.name);
+      const found = await mapWithConcurrency(gameFolders, 1, async (entry) => {
+        const folderName = String(entry.name);
+        const gamePath = joinRemoteScanPath(gamesDir, folderName);
+        try {
+          const details = await loadRemoteGameMetaForPath(ip, gamePath);
+          if (!details.marker_file && !details.meta) return null;
+          return {
+            storage_path: storagePath,
+            games_path: gamesDir,
+            path: gamePath,
+            folder_name: folderName,
+            marker_file: details.marker_file || null,
+            meta: details.meta || null,
+            cover: details.cover || null
+          };
+        } catch {
+          return null;
+        }
+      });
+      for (const item of found) {
+        if (item) games.push(item);
+      }
+    }
+  }
+
+  return {
+    games,
+    scanned_storage: scannedStorage,
+    scanned_games_dirs: scannedGamesDirs,
+    skipped_storage: skippedStorage,
+    scan_paths: scanSubpaths
+  };
+}
+
+async function scanRemoteGameStats(ip, gamePath) {
+  if (!gamePath || typeof gamePath !== 'string' || !gamePath.trim()) {
+    throw new Error('Invalid game path.');
+  }
+  let scannedFiles = 0;
+  let totalSize = 0;
+  const entries = await listDirRecursive(
+    ip,
+    TRANSFER_PORT,
+    gamePath,
+    null,
+    (entry) => {
+      const sizeValue = Number(entry && entry.size);
+      scannedFiles += 1;
+      if (Number.isFinite(sizeValue) && sizeValue > 0) {
+        totalSize += sizeValue;
+      }
+      if ((scannedFiles % 200) === 0) {
+        emit('payload_log', {
+          message: `[GAMES_SCAN_PROGRESS] path=${gamePath} files=${scannedFiles} bytes=${totalSize}`
+        });
+      }
+    }
+  );
+  const fileCount = Array.isArray(entries) ? entries.length : scannedFiles;
+  emit('payload_log', {
+    message: `[GAMES_SCAN_COMPLETE] path=${gamePath} files=${fileCount} bytes=${totalSize}`
+  });
+  return {
+    path: gamePath,
+    file_count: fileCount,
+    total_size: totalSize,
+  };
 }
 
 
@@ -7287,6 +7557,23 @@ const emitLog = (message, level = 'info', force = false) => {
 
   ipcMain.handle('manage_rar_metadata', async (_, ip, filepath) => {
     return { meta: null, cover: null };
+  });
+
+  ipcMain.handle('games_scan', async (_, ip, storagePaths, scanPaths) => {
+    if (!ip || !ip.trim()) throw new Error('Enter a PS5 address first.');
+    let roots = Array.isArray(storagePaths)
+      ? storagePaths.filter((value) => typeof value === 'string' && value.trim().length > 0)
+      : [];
+    if (roots.length === 0) {
+      const locations = await listStorage(ip, TRANSFER_PORT);
+      roots = (locations || []).map((item) => item.path).filter(Boolean);
+    }
+    return scanRemoteGames(ip, roots, scanPaths);
+  });
+
+  ipcMain.handle('games_scan_stats', async (_, ip, gamePath) => {
+    if (!ip || !ip.trim()) throw new Error('Enter a PS5 address first.');
+    return scanRemoteGameStats(ip, gamePath);
   });
 }
 

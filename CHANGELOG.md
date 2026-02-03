@@ -3,6 +3,24 @@
 All notable changes to this project are documented here.
 This project follows Semantic Versioning.
 
+## [1.4.4] - 2026-02-03
+
+### Added
+- New **Games** tab scan paths with defaults (`etaHEN/games`, `homebrew`) plus multiple custom scan paths.
+- Storage filter toggles for Games results (show/hide by storage root).
+- Duplicate game detection and grouping (by Content ID, then Title ID, then folder fallback).
+- Per-game **Scan files/size** action with live progress and single active scan limit.
+- Per-game **Delete game** action with in-app styled confirmation modal and in-item deleting indicator.
+- Games search bar filtering by displayed metadata (title, IDs, version, path, etc.).
+
+### Changed
+- Games metadata reads now use the safer `DOWNLOAD` path instead of `DOWNLOAD_RAW` to improve payload stability.
+- Games item UI refreshed: clearer action placement and stronger path visibility.
+
+### Fixed
+- Added payload-side logging/crash context for directory listing and download paths to improve debugger diagnostics.
+- Fixed `gamesScanStats` frontend invocation handling and stale-preload error messaging.
+
 ## [1.4.3] - 2026-02-02
 
 ### Added

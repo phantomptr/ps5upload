@@ -881,11 +881,13 @@ static void process_command(struct ClientConnection *conn) {
         return;
     }
     if (strncmp(conn->cmd_buffer, "LIST_DIR ", 9) == 0) {
+        payload_set_crash_context("LIST_DIR", conn->cmd_buffer + 9, NULL);
         handle_list_dir(conn->sock, conn->cmd_buffer + 9);
         close_connection(conn);
         return;
     }
     if (strncmp(conn->cmd_buffer, "LIST_DIR_RECURSIVE ", 19) == 0) {
+        payload_set_crash_context("LIST_DIR_RECURSIVE", conn->cmd_buffer + 19, NULL);
         handle_list_dir_recursive(conn->sock, conn->cmd_buffer + 19);
         close_connection(conn);
         return;

@@ -1,7 +1,7 @@
 # PS5 Upload FAQ
 
 Welcome! This FAQ covers setup, features, troubleshooting, and platform‑specific tips.
-Latest release: **v1.4.3**.
+Latest release: **v1.4.4**.
 
 ---
 
@@ -64,6 +64,34 @@ Typical writable paths:
 
 **Q: Storage doesn’t show up?**  
 Plug drives **before** loading the payload and ensure they are writable.
+
+---
+
+## Games Tab
+
+**Q: Which paths does Games scan use?**  
+Per storage root (for example `/data`, `/mnt/ext0`, `/mnt/ext1`, `/mnt/usb0`), Games scans:
+- `etaHEN/games`
+- `homebrew`
+- plus any custom scan paths you add in the Games tab.
+
+**Q: Can I hide/show games by storage?**  
+Yes. Use the storage toggle buttons in the Games tab header.
+
+**Q: Can I search the game list?**  
+Yes. The Games search box matches title, path, folder name, content ID, title ID, version, and marker file info.
+
+**Q: How are duplicates detected?**  
+Duplicates are grouped by:
+1. `content_id` (preferred),
+2. `title_id`,
+3. folder name (fallback).
+
+**Q: Why is “Scan files/size” limited to one at a time?**  
+To reduce payload load and improve stability, only one per-game file/size scan runs at a time.
+
+**Q: Why does game delete use an in-app popup instead of native confirm?**  
+The app uses a styled in-app modal so the confirmation matches the desktop theme and UX.
 
 ---
 
@@ -258,6 +286,9 @@ Start the extraction queue, refresh, or **Clear tmp**.
 
 **“Connection refused / timed out”**  
 Reload the payload and reconnect.
+
+**“api.gamesScanStats is not a function”**  
+Restart the desktop app after updating. This means the preload bridge is stale and still using the old API surface.
 
 **Q: My transfer hangs or my PS5 freezes with a large folder.**
 This can happen with folders containing tens of thousands of small files. As of **v1.3.11**, the payload batches file writes to prevent overwhelming the PS5. As of **v1.4.3**, it also pauses recv under backpressure, verifies full writes, and reuses file descriptors for chunked writes. If you still experience issues:

@@ -1104,11 +1104,22 @@ static int download_raw_stream(int sock, const char *path) {
     }
     payload_touch_activity();
 
-    uint8_t buffer[64 * 1024];
+    // Use heap allocation instead of stack to avoid stack overflow
+    // (default thread stack on PS5 may be smaller than 64KB + call chain overhead)
+    const size_t bufsize = 64 * 1024;
+    uint8_t *buffer = (uint8_t *)malloc(bufsize);
+    if (!buffer) {
+        payload_log("[DOWNLOAD_RAW] malloc failed for %s", path);
+        close(fd);
+        close(sock);
+        return -1;
+    }
+
     ssize_t n;
-    while ((n = read(fd, buffer, sizeof(buffer))) > 0) {
+    while ((n = read(fd, buffer, bufsize)) > 0) {
         if (send_all(sock, buffer, (size_t)n) != 0) {
             payload_log("[DOWNLOAD_RAW] Send failed for %s", path);
+            free(buffer);
             close(fd);
             close(sock);
             return -1;
@@ -1116,6 +1127,7 @@ static int download_raw_stream(int sock, const char *path) {
         payload_touch_activity();
     }
 
+    free(buffer);
     close(fd);
     payload_log("[DOWNLOAD_RAW] Complete %s", path);
     close(sock);
@@ -1699,6 +1711,8 @@ void handle_download_file(int client_sock, const char *path_arg) {
     path[PATH_MAX-1] = '\0';
     trim_newline(path);
 
+    payload_set_crash_context("DOWNLOAD", path, NULL);
+    payload_log("[DOWNLOAD] %s", path);
     printf("[DOWNLOAD] %s\n", path);
     if (!is_path_safe(path)) {
         const char *error = "ERROR: Invalid path\n";
@@ -1728,6 +1742,7 @@ void handle_download_file(int client_sock, const char *path_arg) {
         close(fd);
         return;
     }
+    close(fd);
 
     FILE *fp = fopen(path, "rb");
     if (!fp) {
@@ -1746,9 +1761,17 @@ void handle_download_file(int client_sock, const char *path_arg) {
     printf("[DOWNLOAD] OK size=%llu\n", (unsigned long long)st.st_size);
     payload_touch_activity();
 
-    char buffer[64 * 1024];
+    // Use heap allocation to avoid stack overflow
+    const size_t bufsize = 64 * 1024;
+    char *buffer = (char *)malloc(bufsize);
+    if (!buffer) {
+        printf("[DOWNLOAD] malloc failed\n");
+        fclose(fp);
+        return;
+    }
+
     size_t n;
-    while ((n = fread(buffer, 1, sizeof(buffer), fp)) > 0) {
+    while ((n = fread(buffer, 1, bufsize, fp)) > 0) {
         if (send_all(client_sock, buffer, n) != 0) {
             printf("[DOWNLOAD] send failed (%s)\n", strerror(errno));
             break;
@@ -1756,7 +1779,9 @@ void handle_download_file(int client_sock, const char *path_arg) {
         payload_touch_activity();
     }
 
+    free(buffer);
     fclose(fp);
+    payload_log("[DOWNLOAD] Complete %s", path);
     printf("[DOWNLOAD] Complete %s\n", path);
 }
 
@@ -1989,11 +2014,22 @@ void handle_hash_file(int client_sock, const char *path_arg) {
 
     Sha256Ctx ctx;
     sha256_init(&ctx);
-    uint8_t buffer[64 * 1024];
+
+    // Use heap allocation to avoid stack overflow
+    const size_t bufsize = 64 * 1024;
+    uint8_t *buffer = (uint8_t *)malloc(bufsize);
+    if (!buffer) {
+        const char *error = "ERROR: malloc failed\n";
+        send(client_sock, error, strlen(error), 0);
+        fclose(fp);
+        return;
+    }
+
     size_t n = 0;
-    while ((n = fread(buffer, 1, sizeof(buffer), fp)) > 0) {
+    while ((n = fread(buffer, 1, bufsize, fp)) > 0) {
         sha256_update(&ctx, buffer, n);
     }
+    free(buffer);
     fclose(fp);
 
     uint8_t hash[32];

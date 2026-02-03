@@ -9,17 +9,23 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 #include <unistd.h>
 #include <dirent.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
 #include <limits.h>
+#include <time.h>
 
 #include <ps5/kernel.h>
 
 #include "storage.h"
 #include "config.h"
+
+void payload_log(const char *fmt, ...);
+void payload_touch_activity(void);
+void payload_set_crash_context(const char *op, const char *path, const char *path2);
 
 static int parse_quoted_token(const char *src, char *out, size_t out_cap, const char **rest) {
     if (!src || !out || out_cap == 0) return -1;
@@ -214,13 +220,22 @@ void handle_list_dir(int client_sock, const char *path_arg) {
     if(len > 0 && path[len-1] == '\n') {
         path[len-1] = '\0';
     }
+    payload_set_crash_context("LIST_DIR", path, NULL);
+    payload_log("[LIST_DIR] Start %s", path);
+    payload_touch_activity();
 
     DIR *dir = opendir(path);
     if(!dir) {
+        payload_log("[LIST_DIR] ERROR: open failed %s (%s)", path, strerror(errno));
         const char *error = "ERROR: Cannot open directory\n";
         send(client_sock, error, strlen(error), 0);
         return;
     }
+
+    time_t started_at = time(NULL);
+    int listed_count = 0;
+    int file_count = 0;
+    int dir_count = 0;
 
     send(client_sock, "[\n", 2, 0);
     int first = 1;
@@ -245,6 +260,15 @@ void handle_list_dir(int client_sock, const char *path_arg) {
             if (written > 0) {
                 send(client_sock, line, (size_t)written, 0);
             }
+            listed_count++;
+            if (S_ISDIR(st.st_mode)) {
+                dir_count++;
+            } else {
+                file_count++;
+            }
+            if ((listed_count % 128) == 0) {
+                payload_touch_activity();
+            }
             first = 0;
         }
     }
@@ -252,14 +276,19 @@ void handle_list_dir(int client_sock, const char *path_arg) {
     closedir(dir);
 
     send(client_sock, "]\n", 2, 0);
+    payload_touch_activity();
+    payload_log("[LIST_DIR] Complete %s entries=%d dirs=%d files=%d elapsed=%lds",
+        path, listed_count, dir_count, file_count, (long)(time(NULL) - started_at));
 }
 
-static int list_dir_recursive_helper(int client_sock, const char *base_path, const char *rel_path, int *first) {
+static int list_dir_recursive_helper(int client_sock, const char *base_path, const char *rel_path,
+                                     int *first, int *file_count, int *dir_count, int *error_count) {
     char path[PATH_MAX];
     snprintf(path, sizeof(path), "%s/%s", base_path, rel_path);
 
     DIR *dir = opendir(path);
     if (!dir) {
+        if (error_count) (*error_count)++;
         return -1;
     }
 
@@ -282,7 +311,8 @@ static int list_dir_recursive_helper(int client_sock, const char *base_path, con
         struct stat st;
         if (stat(child_path, &st) == 0) {
             if (S_ISDIR(st.st_mode)) {
-                if (list_dir_recursive_helper(client_sock, base_path, child_rel_path, first) != 0) {
+                if (dir_count) (*dir_count)++;
+                if (list_dir_recursive_helper(client_sock, base_path, child_rel_path, first, file_count, dir_count, error_count) != 0) {
                     // silently ignore directories we can't read
                 }
             } else if (S_ISREG(st.st_mode)) {
@@ -293,6 +323,12 @@ static int list_dir_recursive_helper(int client_sock, const char *base_path, con
                     child_rel_path, (long)st.st_size, (long)st.st_mtime);
                 if (written > 0) {
                     send(client_sock, line, (size_t)written, 0);
+                }
+                if (file_count) {
+                    (*file_count)++;
+                    if (((*file_count) % 128) == 0) {
+                        payload_touch_activity();
+                    }
                 }
                 *first = 0;
             }
@@ -327,9 +363,13 @@ void handle_list_dir_recursive(int client_sock, const char *path_arg) {
     if(len > 0 && path[len-1] == '\n') {
         path[len-1] = '\0';
     }
+    payload_set_crash_context("LIST_DIR_RECURSIVE", path, NULL);
+    payload_log("[LIST_DIR_RECURSIVE] Start %s", path);
+    payload_touch_activity();
 
     DIR *dir = opendir(path);
     if(!dir) {
+        payload_log("[LIST_DIR_RECURSIVE] ERROR: open failed %s (%s)", path, strerror(errno));
         const char *error = "ERROR: Cannot open directory\n";
         send(client_sock, error, strlen(error), 0);
         return;
@@ -339,7 +379,14 @@ void handle_list_dir_recursive(int client_sock, const char *path_arg) {
     send(client_sock, "[\n", 2, 0);
     
     int first = 1;
-    list_dir_recursive_helper(client_sock, path, "", &first);
+    int file_count = 0;
+    int dir_count = 0;
+    int error_count = 0;
+    time_t started_at = time(NULL);
+    list_dir_recursive_helper(client_sock, path, "", &first, &file_count, &dir_count, &error_count);
 
     send(client_sock, "]\n", 2, 0);
+    payload_touch_activity();
+    payload_log("[LIST_DIR_RECURSIVE] Complete %s dirs=%d files=%d errors=%d elapsed=%lds",
+        path, dir_count, file_count, error_count, (long)(time(NULL) - started_at));
 }

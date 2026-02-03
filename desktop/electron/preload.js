@@ -127,6 +127,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Game meta
   gameMetaLoad: (sourcePath) => ipcRenderer.invoke('game_meta_load', sourcePath),
   manageRarMetadata: (ip, filepath) => ipcRenderer.invoke('manage_rar_metadata', ip, filepath),
+  gamesScan: (ip, storagePaths, scanPaths) =>
+    ipcRenderer.invoke('games_scan', ip, storagePaths, scanPaths),
+  gamesScanStats: (ip, gamePath) => ipcRenderer.invoke('games_scan_stats', ip, gamePath),
 
   // Event listeners
   on: (channel, callback) => {

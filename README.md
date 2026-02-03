@@ -5,7 +5,7 @@
 </p>
 
 PS5 Upload is a fast, reliable way to move apps and homebrew to your PS5 without the pain of slow transfers.
-Current release: **v1.4.3**.
+Current release: **v1.4.4**.
 
 New UI highlights:
 - Cleaner Transfer and Manage layouts with clearer transfer settings.
@@ -30,6 +30,8 @@ New UI highlights:
 - Log level filtering with color-coded badges in the Logs panel.
 - FAQ tab with an embedded, scrollable help panel.
 - Manage “Reset UI” action for quick recovery from stuck states.
+- Games tab with targeted storage scans (`etaHEN/games`, `homebrew`), custom scan paths, and duplicate detection.
+- Games tools: storage filters, search, per-game size/file scan, and delete with confirmation.
 
 It is optimized for thousands of small files on a local network, and supports both payload and FTP transfer modes (including a hybrid mix mode). FTP requires ftpsrv or the etaHEN FTP service enabled. Payload uploads auto-recover after a payload restart (within a short window) and resume missing files automatically.
 
@@ -130,7 +132,17 @@ If a transfer was interrupted, you can enable **Resume** mode in the **Transfer*
 * **Faster/Fast** — hashes files above size thresholds.
 * **Normal (SHA256)** — most accurate, slowest.
 
-### 8. FAQ (Optional)
+### 8. Games (Optional)
+Open the **Games** tab to scan game folders across storage roots.  
+You can:
+- keep scans limited to `etaHEN/games` and `homebrew` (plus optional custom paths),
+- filter by storage root,
+- search by title/path/ID/version,
+- detect duplicates,
+- scan per-game total files/size,
+- delete a game folder with confirmation.
+
+### 9. FAQ (Optional)
 Open the **FAQ** tab for built‑in help and troubleshooting (offline, bundled with the app).
 
 ## FAQ
@@ -173,6 +185,9 @@ Open the **FAQ** tab for built‑in help and troubleshooting (offline, bundled w
 
 **Q: Where can I find help inside the app?**
 *   Open the **FAQ** tab for bundled help and troubleshooting (works offline).
+
+**Q: Can I browse and manage discovered games quickly?**
+*   Yes. Use the **Games** tab to scan, filter, search, detect duplicates, check per-game size/file counts, and delete game folders.
 
 **Q: Does this work on PS4?**
 *   The logic is similar, but the payload is compiled specifically for the PS5 environment. It won't run on a PS4 as-is.

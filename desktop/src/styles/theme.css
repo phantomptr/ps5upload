@@ -1593,6 +1593,35 @@ input::placeholder {
   height: 100%;
 }
 
+.games-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 70vh;
+  overflow: auto;
+}
+
+.games-path {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--ps-white);
+  word-break: break-word;
+}
+
+.games-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.games-item-actions {
+  display: inline-flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 .faq-card {
   display: flex;
   flex-direction: column;

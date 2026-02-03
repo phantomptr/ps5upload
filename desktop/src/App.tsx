@@ -33,7 +33,7 @@ const normalizeResumeMode = (value?: string | null): ResumeOption => {
   return "none";
 };
 
-type TabId = "transfer" | "status" | "queues" | "manage" | "faq";
+type TabId = "transfer" | "status" | "queues" | "manage" | "games" | "faq";
 type UploadMode = "payload" | "ftp" | "mix";
 type FtpPortOption = "auto" | "1337" | "2121";
 
@@ -259,6 +259,7 @@ type AppConfig = {
 type ThemeMode = "dark" | "light";
 
 const presetOptions = ["etaHEN/games", "homebrew", "custom"] as const;
+const defaultGamesScanPaths = ["etaHEN/games", "homebrew"] as const;
 
 type CompressionOption = "auto" | "none" | "lz4" | "zstd" | "lzma";
 
@@ -292,6 +293,40 @@ type PayloadProbeResult = {
 type GameMetaResponse = {
   meta?: GameMetaPayload | null;
   cover?: CoverPayload | null;
+};
+
+type GamesScanItem = {
+  storage_path: string;
+  games_path: string;
+  path: string;
+  folder_name: string;
+  marker_file?: string | null;
+  meta?: GameMetaPayload | null;
+  cover?: CoverPayload | null;
+};
+
+type GamesScanResponse = {
+  games: GamesScanItem[];
+  scanned_storage: string[];
+  scanned_games_dirs: string[];
+  skipped_storage: string[];
+  scan_paths?: string[];
+};
+
+type GameScanViewItem = GamesScanItem & {
+  cover_url: string | null;
+};
+
+type DuplicateGameInfo = {
+  count: number;
+  kind: "content_id" | "title_id" | "folder";
+  value: string;
+};
+
+type GameScanStatsResponse = {
+  path: string;
+  file_count: number;
+  total_size: number;
 };
 
 type ManageAction = "Move" | "Copy" | "Extract";
@@ -666,6 +701,9 @@ const joinRemote = (...parts: string[]) =>
       return part.replace(/^\//, "").replace(/\/$/, "");
     })
     .join("/");
+
+const normalizeGamesScanPath = (value: string) =>
+  value.trim().replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, "");
 
 const FolderIcon = () => (
   <svg className="manage-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -1098,6 +1136,31 @@ export default function App() {
   const [resumeChoice, setResumeChoice] = useState<ResumeOption>("size");
   const [gameMeta, setGameMeta] = useState<GameMetaPayload | null>(null);
   const [gameCoverUrl, setGameCoverUrl] = useState<string | null>(null);
+  const [gamesScanning, setGamesScanning] = useState(false);
+  const [gamesScanError, setGamesScanError] = useState<string | null>(null);
+  const [gamesScanResult, setGamesScanResult] = useState<GamesScanResponse | null>(null);
+  const [gamesFound, setGamesFound] = useState<GameScanViewItem[]>([]);
+  const [gamesLastScanAt, setGamesLastScanAt] = useState<number | null>(null);
+  const [gamesScanCustomPathInput, setGamesScanCustomPathInput] = useState("");
+  const [gamesScanCustomPaths, setGamesScanCustomPaths] = useState<string[]>([]);
+  const [gamesSearchQuery, setGamesSearchQuery] = useState("");
+  const [gamesVisibleStoragePaths, setGamesVisibleStoragePaths] = useState<string[]>([]);
+  const [gamesStatsByPath, setGamesStatsByPath] = useState<
+    Record<string, { file_count: number; total_size: number }>
+  >({});
+  const [gamesStatsProgressByPath, setGamesStatsProgressByPath] = useState<
+    Record<string, { file_count: number; total_size: number }>
+  >({});
+  const [gamesStatsLoadingPath, setGamesStatsLoadingPath] = useState<string | null>(null);
+  const [gamesDeletingPath, setGamesDeletingPath] = useState<string | null>(null);
+  const [gamesDeleteProgress, setGamesDeleteProgress] = useState<{
+    processed: number;
+    total: number;
+    currentFile: string;
+  } | null>(null);
+  const [gameDeleteTarget, setGameDeleteTarget] = useState<{ path: string; title: string } | null>(
+    null
+  );
   const [faqContent, setFaqContent] = useState("");
   const [faqLoading, setFaqLoading] = useState(true);
   const [faqError, setFaqError] = useState<string | null>(null);
@@ -1127,10 +1190,16 @@ export default function App() {
       { id: "queues" as TabId, label: tr("queues"), icon: "▣" },
       { id: "status" as TabId, label: tr("status"), icon: "◎" },
       { id: "manage" as TabId, label: tr("manage"), icon: "≡" },
+      { id: "games" as TabId, label: "Games", icon: "▦" },
       { id: "faq" as TabId, label: tr("faq"), icon: "?" }
     ],
     [language]
   );
+  const gamesDeletingPathRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    gamesDeletingPathRef.current = gamesDeletingPath;
+  }, [gamesDeletingPath]);
 
   useEffect(() => {
     document.documentElement.dir = isRtl ? "rtl" : "ltr";
@@ -2372,6 +2441,7 @@ export default function App() {
     const presetSaved = localStorage.getItem("ps5upload.preset");
     const customSaved = localStorage.getItem("ps5upload.custom_preset");
     const subfolderSaved = localStorage.getItem("ps5upload.subfolder");
+    const gamesScanPathsSaved = localStorage.getItem("ps5upload.games_scan_paths");
 
     if (sourceSaved) setSourcePath(sourceSaved);
     if (presetSaved && isPresetOption(presetSaved)) {
@@ -2379,6 +2449,23 @@ export default function App() {
     }
     if (customSaved) setCustomPreset(customSaved);
     if (subfolderSaved) setSubfolder(subfolderSaved);
+    if (gamesScanPathsSaved) {
+      try {
+        const parsed = JSON.parse(gamesScanPathsSaved);
+        if (Array.isArray(parsed)) {
+          const normalized = parsed
+            .map((value) => normalizeGamesScanPath(String(value)))
+            .filter((value, index, array) => value.length > 0 && array.indexOf(value) === index);
+          setGamesScanCustomPaths(
+            normalized.filter(
+              (value) => !defaultGamesScanPaths.includes(value as (typeof defaultGamesScanPaths)[number])
+            )
+          );
+        }
+      } catch {
+        // Ignore invalid saved games scan paths.
+      }
+    }
     const keepAwakeModeSaved = localStorage.getItem("ps5upload.keep_awake_mode");
     if (keepAwakeModeSaved === "on" || keepAwakeModeSaved === "off" || keepAwakeModeSaved === "auto") {
       setKeepAwakeMode(keepAwakeModeSaved);
@@ -2789,6 +2876,10 @@ export default function App() {
   }, [sourcePath, preset, customPreset, subfolder]);
 
   useEffect(() => {
+    localStorage.setItem("ps5upload.games_scan_paths", JSON.stringify(gamesScanCustomPaths));
+  }, [gamesScanCustomPaths]);
+
+  useEffect(() => {
     let mounted = true;
     const unlisten = async () => {
       const unlistenComplete = await listen<TransferCompleteEvent>(
@@ -3077,6 +3168,35 @@ export default function App() {
           if (transferActive) return;
           const message = event.payload?.message;
           if (!message || message === "undefined") return;
+          if (message.startsWith("[GAMES_SCAN_PROGRESS] ")) {
+            const match = message.match(
+              /^\[GAMES_SCAN_PROGRESS\]\s+path=(.+)\s+files=(\d+)\s+bytes=(\d+)$/i
+            );
+            if (match) {
+              const [, path, filesRaw, bytesRaw] = match;
+              setGamesStatsProgressByPath((prev) => ({
+                ...prev,
+                [path]: {
+                  file_count: Number(filesRaw) || 0,
+                  total_size: Number(bytesRaw) || 0
+                }
+              }));
+            }
+          } else if (message.startsWith("[GAMES_SCAN_COMPLETE] ")) {
+            const match = message.match(
+              /^\[GAMES_SCAN_COMPLETE\]\s+path=(.+)\s+files=(\d+)\s+bytes=(\d+)$/i
+            );
+            if (match) {
+              const [, path, filesRaw, bytesRaw] = match;
+              setGamesStatsProgressByPath((prev) => ({
+                ...prev,
+                [path]: {
+                  file_count: Number(filesRaw) || 0,
+                  total_size: Number(bytesRaw) || 0
+                }
+              }));
+            }
+          }
           if (message.includes("Packing:")) return;
           payloadLogBuffer.current = [message, ...payloadLogBuffer.current].slice(0, 100);
           if (!payloadLogFlush.current) {
@@ -3205,6 +3325,13 @@ export default function App() {
         "manage_progress",
         (event) => {
           if (!mounted) return;
+          if (event.payload.op === "Delete" && gamesDeletingPathRef.current) {
+            setGamesDeleteProgress({
+              processed: event.payload.processed || 0,
+              total: event.payload.total || 0,
+              currentFile: event.payload.current_file || ""
+            });
+          }
           setManageModalLastProgressAt(Date.now());
           setManageBusy(true);
           const now = Date.now();
@@ -3263,6 +3390,24 @@ export default function App() {
         "manage_done",
         (event) => {
           if (!mounted) return;
+          if (event.payload.op === "Delete" && gamesDeletingPathRef.current) {
+            const deletingPath = gamesDeletingPathRef.current;
+            if (!event.payload.error) {
+              setGamesFound((prev) => prev.filter((entry) => entry.path !== deletingPath));
+              setGamesStatsByPath((prev) => {
+                const next = { ...prev };
+                delete next[deletingPath];
+                return next;
+              });
+              setGamesStatsProgressByPath((prev) => {
+                const next = { ...prev };
+                delete next[deletingPath];
+                return next;
+              });
+            }
+            setGamesDeletingPath(null);
+            setGamesDeleteProgress(null);
+          }
           setManageBusy(false);
           lastManageProgressUpdate.current = 0;
           lastManageOp.current = "";
@@ -5923,6 +6068,210 @@ export default function App() {
     }
   };
 
+  const gamesScanPaths = useMemo(() => {
+    const merged = [...defaultGamesScanPaths, ...gamesScanCustomPaths];
+    return merged.filter((value, index) => merged.indexOf(value) === index);
+  }, [gamesScanCustomPaths]);
+
+  const handleAddGamesScanPath = () => {
+    const normalized = normalizeGamesScanPath(gamesScanCustomPathInput);
+    if (!normalized) return;
+    if (defaultGamesScanPaths.includes(normalized as (typeof defaultGamesScanPaths)[number])) {
+      setGamesScanCustomPathInput("");
+      return;
+    }
+    setGamesScanCustomPaths((prev) => (prev.includes(normalized) ? prev : [...prev, normalized]));
+    setGamesScanCustomPathInput("");
+  };
+
+  const handleRemoveGamesScanPath = (value: string) => {
+    setGamesScanCustomPaths((prev) => prev.filter((item) => item !== value));
+  };
+
+  const handleGamesScan = async () => {
+    if (gamesScanning) return;
+    if (!ip.trim()) {
+      setGamesScanError("Not connected");
+      return;
+    }
+    setGamesScanning(true);
+    setGamesScanError(null);
+    try {
+      const storagePaths = storageLocations.map((loc) => loc.path).filter(Boolean);
+      const response = await invoke<GamesScanResponse>("games_scan", {
+        ip,
+        storage_paths: storagePaths,
+        scan_paths: gamesScanPaths
+      });
+      const nextItems = (response.games || []).map((item) => ({
+        ...item,
+        cover_url: coverToDataUrl(item.cover)
+      }));
+      setGamesScanResult(response);
+      setGamesFound(nextItems);
+      setGamesVisibleStoragePaths(response.scanned_storage || []);
+      setGamesStatsByPath({});
+      setGamesStatsProgressByPath({});
+      setGamesLastScanAt(Date.now());
+    } catch (err) {
+      setGamesScanError(String(err));
+    } finally {
+      setGamesScanning(false);
+    }
+  };
+
+  const duplicateGamesByPath = useMemo(() => {
+    const grouped = new Map<string, { item: GameScanViewItem; kind: DuplicateGameInfo["kind"]; value: string }[]>();
+    for (const item of gamesFound) {
+      const contentId = item.meta?.content_id?.trim();
+      const titleId = item.meta?.title_id?.trim();
+      const folderName = item.folder_name?.trim();
+      let key = "";
+      let kind: DuplicateGameInfo["kind"] = "folder";
+      let value = "";
+      if (contentId) {
+        kind = "content_id";
+        value = contentId.toUpperCase();
+        key = `${kind}:${value}`;
+      } else if (titleId) {
+        kind = "title_id";
+        value = titleId.toUpperCase();
+        key = `${kind}:${value}`;
+      } else if (folderName) {
+        kind = "folder";
+        value = folderName.toLowerCase();
+        key = `${kind}:${value}`;
+      }
+      if (!key) continue;
+      const list = grouped.get(key) || [];
+      list.push({ item, kind, value });
+      grouped.set(key, list);
+    }
+
+    const marked = new Map<string, DuplicateGameInfo>();
+    for (const list of grouped.values()) {
+      if (list.length < 2) continue;
+      for (const entry of list) {
+        marked.set(entry.item.path, {
+          count: list.length,
+          kind: entry.kind,
+          value: entry.value
+        });
+      }
+    }
+    return marked;
+  }, [gamesFound]);
+
+  const duplicateGamesMarkedCount = duplicateGamesByPath.size;
+
+  const toggleGamesStorageVisibility = (storagePath: string) => {
+    setGamesVisibleStoragePaths((prev) =>
+      prev.includes(storagePath)
+        ? prev.filter((value) => value !== storagePath)
+        : [...prev, storagePath]
+    );
+  };
+
+  const handleScanGameStats = async (gamePath: string) => {
+    if (!ip.trim()) {
+      setGamesScanError("Not connected");
+      return;
+    }
+    if (gamesStatsLoadingPath) return;
+    setGamesStatsLoadingPath(gamePath);
+    setGamesStatsProgressByPath((prev) => ({
+      ...prev,
+      [gamePath]: { file_count: 0, total_size: 0 }
+    }));
+    try {
+      const result = await invoke<GameScanStatsResponse>("games_scan_stats", {
+        ip,
+        path: gamePath
+      });
+      setGamesStatsByPath((prev) => ({
+        ...prev,
+        [gamePath]: {
+          file_count: result.file_count || 0,
+          total_size: result.total_size || 0
+        }
+      }));
+      setGamesStatsProgressByPath((prev) => ({
+        ...prev,
+        [gamePath]: {
+          file_count: result.file_count || 0,
+          total_size: result.total_size || 0
+        }
+      }));
+    } catch (err) {
+      setGamesScanError(String(err));
+    } finally {
+      setGamesStatsLoadingPath(null);
+    }
+  };
+
+  const handleDeleteGame = async (item: GameScanViewItem) => {
+    if (gamesDeletingPath) return;
+    const title = item.meta?.title || item.folder_name || item.path;
+    setGameDeleteTarget({ path: item.path, title });
+  };
+
+  const handleConfirmDeleteGame = async () => {
+    if (!gameDeleteTarget) return;
+    if (!ip.trim()) {
+      setGamesScanError("Not connected");
+      return;
+    }
+    setGamesDeletingPath(gameDeleteTarget.path);
+    setGamesDeleteProgress(null);
+    setGameDeleteTarget(null);
+    try {
+      await invoke("manage_delete", { ip, path: gameDeleteTarget.path });
+    } catch (err) {
+      setGamesDeletingPath(null);
+      setGamesDeleteProgress(null);
+      setGamesScanError(String(err));
+    }
+  };
+
+  const filteredGames = useMemo(() => {
+    const visibleSet = new Set(gamesVisibleStoragePaths);
+    const hasStorageFilter =
+      !!gamesScanResult && Array.isArray(gamesScanResult.scanned_storage) && gamesScanResult.scanned_storage.length > 0;
+    const query = gamesSearchQuery.trim().toLowerCase();
+    const list = gamesFound.filter((item) => {
+      if (hasStorageFilter && !visibleSet.has(item.storage_path)) return false;
+      if (!query) return true;
+      const haystack = [
+        item.meta?.title,
+        item.path,
+        item.storage_path,
+        item.games_path,
+        item.folder_name,
+        item.meta?.content_id,
+        item.meta?.title_id,
+        item.meta?.version,
+        item.marker_file
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(query);
+    });
+
+    return [...list].sort((a, b) => {
+      const aDup = duplicateGamesByPath.get(a.path);
+      const bDup = duplicateGamesByPath.get(b.path);
+      const aGroup = aDup
+        ? `0:${aDup.kind}:${aDup.value}`
+        : `1:${(a.meta?.title || a.folder_name || a.path).toLowerCase()}`;
+      const bGroup = bDup
+        ? `0:${bDup.kind}:${bDup.value}`
+        : `1:${(b.meta?.title || b.folder_name || b.path).toLowerCase()}`;
+      if (aGroup !== bGroup) return aGroup.localeCompare(bGroup);
+      return a.path.localeCompare(b.path);
+    });
+  }, [gamesFound, gamesVisibleStoragePaths, gamesSearchQuery, duplicateGamesByPath, gamesScanResult]);
+
   const status = useMemo(
     () => ({
       connection: connectionStatus,
@@ -8273,6 +8622,210 @@ export default function App() {
             </div>
           )}
 
+          {activeTab === "games" && (
+            <div className="grid-two">
+              <div className="card wide faq-card">
+                <header className="card-title">
+                  <span className="card-title-icon">▦</span>
+                  Games
+                  <div className="faq-actions">
+                    <button
+                      className="btn info small"
+                      onClick={handleGamesScan}
+                      disabled={gamesScanning}
+                    >
+                      {gamesScanning ? `${tr("loading")}...` : "Scan"}
+                    </button>
+                  </div>
+                </header>
+                <p className="muted small">
+                  Scans these folders under each storage root and reads metadata from
+                  <code> sce_sys/param.json </code>
+                  (or
+                  <code> param.json </code>
+                  ).
+                </p>
+                <p className="muted small">
+                  Default scan paths: <code>etaHEN/games</code>, <code>homebrew</code>
+                </p>
+                <p className="muted small">
+                  Each path is relative to every storage root (for example:{" "}
+                  <code>/data</code>, <code>/mnt/ext0</code>, <code>/mnt/ext1</code>,{" "}
+                  <code>/mnt/usb0</code>).
+                </p>
+                <div className="path-row">
+                  <input
+                    type="text"
+                    placeholder="Custom scan path (example: myfolder/games)"
+                    value={gamesScanCustomPathInput}
+                    onChange={(event) => setGamesScanCustomPathInput(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        handleAddGamesScanPath();
+                      }
+                    }}
+                  />
+                  <button className="btn ghost" onClick={handleAddGamesScanPath}>
+                    Add path
+                  </button>
+                </div>
+                {gamesScanCustomPaths.length > 0 && (
+                  <div className="faq-window">
+                    {gamesScanCustomPaths.map((scanPath) => (
+                      <div className="path-row" key={scanPath}>
+                        <input value={scanPath} readOnly />
+                        <button
+                          className="btn danger"
+                          onClick={() => handleRemoveGamesScanPath(scanPath)}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <p className="muted small">
+                  Active scan paths: <code>{gamesScanPaths.join(", ")}</code>
+                </p>
+                <p className="muted small">Last scan: {formatUpdatedAt(gamesLastScanAt)}</p>
+                {gamesScanResult && (
+                  <p className="muted small">
+                    Storage scanned: {gamesScanResult.scanned_storage.length} · Games folders:{" "}
+                    {gamesScanResult.scanned_games_dirs.length} · Duplicates marked:{" "}
+                    {duplicateGamesMarkedCount}
+                  </p>
+                )}
+                {gamesScanResult && gamesScanResult.scanned_storage.length > 0 && (
+                  <div className="action-buttons">
+                    {gamesScanResult.scanned_storage.map((storagePath) => (
+                      <button
+                        key={storagePath}
+                        className={`btn small ${
+                          gamesVisibleStoragePaths.includes(storagePath) ? "info" : "ghost"
+                        }`}
+                        onClick={() => toggleGamesStorageVisibility(storagePath)}
+                      >
+                        {storagePath}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <div className="path-row">
+                  <input
+                    type="text"
+                    placeholder="Search by title, path, ID, version..."
+                    value={gamesSearchQuery}
+                    onChange={(event) => setGamesSearchQuery(event.target.value)}
+                  />
+                </div>
+                {gamesScanError && <p className="muted small warn">{gamesScanError}</p>}
+                {filteredGames.length === 0 ? (
+                  <div className="faq-window">
+                    <p className="muted">
+                      {gamesScanning ? "Scanning for games..." : "No games found for current filters."}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="games-list">
+                    {filteredGames.map((item) => {
+                      const title = item.meta?.title || item.folder_name;
+                      const duplicateInfo = duplicateGamesByPath.get(item.path);
+                      const stats = gamesStatsByPath[item.path];
+                      const statsProgress = gamesStatsProgressByPath[item.path];
+                      const statsLoading = gamesStatsLoadingPath === item.path;
+                      const anotherStatsScanActive =
+                        !!gamesStatsLoadingPath && gamesStatsLoadingPath !== item.path;
+                      const itemDeleting = gamesDeletingPath === item.path;
+                      return (
+                        <div className="queue-item" key={item.path}>
+                          {item.cover_url && (
+                            <img
+                              className="queue-cover"
+                              src={item.cover_url}
+                              alt={title}
+                            />
+                          )}
+                          <div className="queue-item-body">
+                            <div className="games-header-row">
+                              <div className="queue-title">
+                                <strong>{title}</strong>
+                              </div>
+                              <div className="games-item-actions">
+                                <button
+                                  className="btn info small"
+                                  onClick={() => handleScanGameStats(item.path)}
+                                  disabled={statsLoading || anotherStatsScanActive || itemDeleting}
+                                >
+                                  {statsLoading ? "Scanning..." : "Scan files/size"}
+                                </button>
+                                <button
+                                  className="btn danger small"
+                                  onClick={() => handleDeleteGame(item)}
+                                  disabled={itemDeleting}
+                                >
+                                  {itemDeleting ? "Deleting..." : "Delete game"}
+                                </button>
+                              </div>
+                            </div>
+                            <div className="games-path">{item.path}</div>
+                            {itemDeleting && (
+                              <div className="muted small warn">
+                                Deleting...
+                                {gamesDeleteProgress &&
+                                (gamesDeleteProgress.total > 0 || gamesDeleteProgress.processed > 0)
+                                  ? ` ${formatBytes(gamesDeleteProgress.processed)} / ${formatBytes(
+                                      gamesDeleteProgress.total
+                                    )}`
+                                  : ""}
+                              </div>
+                            )}
+                            {statsLoading && statsProgress && (
+                              <div className="muted small">
+                                Scanning files/size... {statsProgress.file_count} files ·{" "}
+                                {formatBytes(statsProgress.total_size)}
+                              </div>
+                            )}
+                            {stats && (
+                              <div className="muted small">
+                                Files: {stats.file_count} · Size: {formatBytes(stats.total_size)}
+                              </div>
+                            )}
+                            {item.meta?.content_id && (
+                              <div className="muted small">
+                                Content ID: {item.meta.content_id}
+                              </div>
+                            )}
+                            {item.meta?.title_id && (
+                              <div className="muted small">Title ID: {item.meta.title_id}</div>
+                            )}
+                            {item.meta?.version && (
+                              <div className="muted small">Version: {item.meta.version}</div>
+                            )}
+                            {item.marker_file && (
+                              <div className="muted small">Detected by: {item.marker_file}</div>
+                            )}
+                            {duplicateInfo && (
+                              <div className="muted small warn">
+                                Duplicate game ({duplicateInfo.count} copies, by{" "}
+                                {duplicateInfo.kind === "content_id"
+                                  ? "Content ID"
+                                  : duplicateInfo.kind === "title_id"
+                                  ? "Title ID"
+                                  : "Folder"}
+                                : {duplicateInfo.value})
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {activeTab === "faq" && (
             <div className="grid-two faq-grid">
               <div className="card wide faq-card">
@@ -9106,6 +9659,27 @@ export default function App() {
                 className="btn ghost"
                 onClick={() => setShowDeleteConfirm(false)}
               >
+                {tr("cancel")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {gameDeleteTarget && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            <header className="modal-title">Delete game</header>
+            <p>
+              Delete <strong>{gameDeleteTarget.title}</strong>?
+            </p>
+            <p className="muted small">{gameDeleteTarget.path}</p>
+            <p className="muted small warn">This cannot be undone.</p>
+            <div className="split">
+              <button className="btn primary" onClick={handleConfirmDeleteGame}>
+                Delete
+              </button>
+              <button className="btn ghost" onClick={() => setGameDeleteTarget(null)}>
                 {tr("cancel")}
               </button>
             </div>
