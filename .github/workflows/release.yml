@@ -17,6 +17,22 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  build-app:
+    name: build-app-bundle
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build app bundle
+        run: make package-app
+
+      - name: Upload app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ps5upload-app
+          path: dist/ps5upload-app.zip
+
   build-desktop:
     name: build-desktop-${{ matrix.platform }}-${{ matrix.arch }}
     runs-on: ${{ matrix.os }}
@@ -141,6 +157,7 @@ jobs:
     name: create-release
     runs-on: ubuntu-24.04
     needs:
+      - build-app
       - build-desktop
       - build-payload
     steps:
@@ -202,6 +219,11 @@ jobs:
             fi
           done
 
+          appzip=$(find dist -type f -name "ps5upload-app.zip" -path "*ps5upload-app*" | head -n 1 || true)
+          if [ -n "$appzip" ]; then
+            cp "$appzip" "dist/PS5Upload-app-${version}.zip"
+          fi
+
       - name: Build release notes
         run: |
           tag="${{ steps.tag.outputs.tag }}"
@@ -223,6 +245,7 @@ jobs:
           name: ${{ steps.tag.outputs.tag }}
           body_path: dist/RELEASE_NOTES.md
           files: |
+            dist/PS5Upload-app-*.zip
             dist/PS5Upload-*-win-*.zip
             dist/PS5Upload-*-mac-*.dmg
             dist/PS5Upload-*-linux-*.tar.gz
