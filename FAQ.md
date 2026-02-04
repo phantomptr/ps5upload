@@ -62,6 +62,14 @@ APP_HOST=0.0.0.0 APP_PORT=10331 make run-app
 
 **Important:** In browser mode, file/folder browsing for upload/download uses paths on the machine running the app service, not the remote browser device.
 
+**Q: Is there a release zip for browser app mode?**  
+Yes. Download `PS5Upload-app-<version>.zip` from Releases, extract it, then run:
+```bash
+cd ps5upload-app/app
+npm install --no-audit --no-fund
+npm start -- --host 0.0.0.0 --port 10331
+```
+
 ---
 
 ## Connect & Storage

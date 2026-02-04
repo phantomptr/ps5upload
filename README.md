@@ -122,6 +122,12 @@ Open `http://<host-ip>:10331` in your browser.
 This mode serves the desktop UI in browser form, and host-side path operations are resolved on the machine running the app service.
 See `app/README.md` for full details and API endpoints.
 
+Release bundle option:
+- Download `PS5Upload-app-<version>.zip` from Releases.
+- Unzip, then from the extracted `ps5upload-app/app` folder run:
+  - `npm install --no-audit --no-fund`
+  - `npm start -- --host 0.0.0.0 --port 10331`
+
 ### 3. Connect the App (Computer)
 1.  In the left panel of the app, go to the **Connect** section.
 2.  Type your PS5's IP address (e.g., `192.168.0.105`).
