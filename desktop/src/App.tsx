@@ -67,6 +67,8 @@ type TransferStatusSnapshot = {
   effective_optimize?: boolean | null;
   effective_compression?: string | null;
   effective_ftp_connections?: number | null;
+  payload_transfer_path?: string | null;
+  payload_workers?: number | null;
 };
 
 type TransferLogEvent = {
@@ -81,6 +83,7 @@ type ManageProgressEvent = {
   processed: number;
   total: number;
   current_file?: string | null;
+  speed_bps?: number;
 };
 
 type ManageDoneEvent = {
@@ -282,6 +285,7 @@ type CoverPayload = {
   pixels: number[];
   width: number;
   height: number;
+  data_url?: string;
 };
 
 type PayloadProbeResult = {
@@ -470,6 +474,18 @@ type PayloadStatusSnapshot = {
   updated_at_ms: number;
 };
 
+type PayloadCapabilities = {
+  schema_version: number;
+  source: string;
+  payload_version?: string | null;
+  firmware?: string | null;
+  features?: Record<string, boolean | null | undefined>;
+  limits?: Record<string, number | string | null | undefined>;
+  commands?: string[];
+  notes?: string[];
+  updated_at_ms?: number;
+};
+
 type StatusKind = "info" | "ok" | "warn" | "error";
 
 const isPresetOption = (
@@ -495,6 +511,8 @@ type TransferState = {
   effectiveOptimize?: boolean | null;
   effectiveCompression?: string | null;
   effectiveFtpConnections?: number | null;
+  payloadTransferPath?: string | null;
+  payloadWorkers?: number | null;
 };
 
 const formatBytes = (bytes: number | bigint) => {
@@ -832,6 +850,10 @@ const getLeafName = (value?: string | null) => {
 
 const coverToDataUrl = (cover?: CoverPayload | null) => {
   if (!cover) return null;
+  if (typeof cover.data_url === "string" && cover.data_url.trim()) {
+    return cover.data_url;
+  }
+  if (!Array.isArray(cover.pixels) || !cover.width || !cover.height) return null;
   const canvas = document.createElement("canvas");
   canvas.width = cover.width;
   canvas.height = cover.height;
@@ -963,6 +985,8 @@ export default function App() {
   const [payloadStatus, setPayloadStatus] = useState("Unknown");
   const [payloadStatusKind, setPayloadStatusKind] = useState<StatusKind>("info");
   const [payloadVersion, setPayloadVersion] = useState<string | null>(null);
+  const [payloadCaps, setPayloadCaps] = useState<PayloadCapabilities | null>(null);
+  const [payloadCapsError, setPayloadCapsError] = useState<string | null>(null);
   const [payloadBusy, setPayloadBusy] = useState(false);
   const [payloadReloadCooldown, setPayloadReloadCooldown] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<ReleaseInfo | null>(null);
@@ -975,6 +999,7 @@ export default function App() {
   const [language, setLanguage] = useState("en");
   const [langMenuOpen, setLangMenuOpen] = useState(false);
   const langMenuRef = useRef<HTMLDivElement | null>(null);
+  const isWebMode = Boolean(window.__PS5UPLOAD_WEB_MODE__);
   const languages = [
     { code: "en", label: "English" },
     { code: "zh-CN", label: "简体中文" },
@@ -1056,7 +1081,7 @@ export default function App() {
   const [uploadMode, setUploadMode] = useState<UploadMode>("payload");
   const [ftpPort, setFtpPort] = useState<FtpPortOption>("auto");
   const [connections, setConnections] = useState(4);
-  const [ftpConnections, setFtpConnections] = useState(1);
+  const [ftpConnections, setFtpConnections] = useState(6);
   const [bandwidthLimit, setBandwidthLimit] = useState(0);
   const [optimizeMode, setOptimizeMode] = useState<OptimizeMode>("none");
   const optimizeActive = optimizeMode !== "none";
@@ -1184,6 +1209,14 @@ export default function App() {
       : payloadStatusKind === "ok"
       ? "ok"
       : "info";
+  const payloadCapsFeatureEntries = useMemo(
+    () => Object.entries(payloadCaps?.features || {}),
+    [payloadCaps]
+  );
+  const payloadCapsFeatureSupported = useMemo(
+    () => payloadCapsFeatureEntries.filter(([, supported]) => supported === true).length,
+    [payloadCapsFeatureEntries]
+  );
   const tabs = useMemo(
     () => [
       { id: "transfer" as TabId, label: tr("transfer"), icon: "↑" },
@@ -1233,7 +1266,9 @@ export default function App() {
     requestedOptimize: null,
     autoTuneConnections: null,
     effectiveOptimize: null,
-    effectiveCompression: null
+    effectiveCompression: null,
+    payloadTransferPath: null,
+    payloadWorkers: null
   });
   const lastBottleneckRef = useRef<string | null>(null);
   const lastBottleneckAtRef = useRef(0);
@@ -1368,7 +1403,9 @@ export default function App() {
               autoTuneConnections: status.auto_tune_connections ?? null,
               effectiveOptimize: status.effective_optimize ?? null,
               effectiveCompression: status.effective_compression ?? null,
-              effectiveFtpConnections: status.effective_ftp_connections ?? null
+              effectiveFtpConnections: status.effective_ftp_connections ?? null,
+              payloadTransferPath: status.payload_transfer_path ?? null,
+              payloadWorkers: status.payload_workers ?? null
             };
             startTransition(() => {
               setTransferState((prev) => {
@@ -1389,7 +1426,9 @@ export default function App() {
                   prev.autoTuneConnections === nextState.autoTuneConnections &&
                   prev.effectiveOptimize === nextState.effectiveOptimize &&
                   prev.effectiveCompression === nextState.effectiveCompression &&
-                  prev.effectiveFtpConnections === nextState.effectiveFtpConnections
+                  prev.effectiveFtpConnections === nextState.effectiveFtpConnections &&
+                  prev.payloadTransferPath === nextState.payloadTransferPath &&
+                  prev.payloadWorkers === nextState.payloadWorkers
                 ) {
                   return prev;
                 }
@@ -1846,8 +1885,8 @@ export default function App() {
   const applyProfile = (profile: Profile) => {
     setIp(profile.address);
     setStorageRoot(profile.storage || "/data");
-    setConnections(profile.connections || 1);
-    setFtpConnections(profile.ftp_connections || 1);
+    setConnections(profile.connections || 4);
+    setFtpConnections(profile.ftp_connections || 6);
     setUseTemp(profile.use_temp ?? false);
     setAutoTune(profile.auto_tune_connections ?? true);
     const nextPreset = presetOptions[profile.preset_index] ?? presetOptions[0];
@@ -2289,7 +2328,7 @@ export default function App() {
         setIp(normalizedConfig.address ?? "");
         setStorageRoot(normalizedConfig.storage || "/data");
         setConnections(normalizedConfig.connections || 4);
-        setFtpConnections(normalizedConfig.ftp_connections || 1);
+        setFtpConnections(normalizedConfig.ftp_connections || 6);
         setCompression((normalizedConfig.compression as CompressionOption) || "auto");
         setBandwidthLimit(normalizedConfig.bandwidth_limit_mbps || 0);
         setOverrideOnConflict(normalizedConfig.override_on_conflict ?? false);
@@ -3352,7 +3391,7 @@ export default function App() {
             lastManageProgressUpdate.current = 0;
           }
           if (
-            now - lastManageProgressUpdate.current < 1000 &&
+            now - lastManageProgressUpdate.current < 300 &&
             !(event.payload.total > 0 && event.payload.processed >= event.payload.total)
           ) {
             return;
@@ -3360,13 +3399,14 @@ export default function App() {
           lastManageProgressUpdate.current = now;
           const prev = manageSpeedRef.current;
           const nextProcessed = event.payload.processed;
-          let speed = prev.speed;
+          const payloadSpeed = toSafeNumber(event.payload.speed_bps, 0);
+          let speed = payloadSpeed > 0 ? payloadSpeed : prev.speed;
           if (prev.op !== event.payload.op) {
             speed = 0;
-          } else if (prev.at > 0 && nextProcessed >= prev.processed) {
+          } else if (payloadSpeed <= 0 && prev.at > 0 && nextProcessed >= prev.processed) {
             const delta = nextProcessed - prev.processed;
             const elapsed = (now - prev.at) / 1000;
-            if (elapsed > 0) {
+            if (elapsed > 0 && delta > 0) {
               speed = delta / elapsed;
             }
           }
@@ -3660,6 +3700,24 @@ export default function App() {
   const transferPayloadBytesLabel = transferPayloadSent > 0 ? formatBytes(transferPayloadSent) : "—";
   const transferFtpBytesLabel = transferFtpSent > 0 ? formatBytes(transferFtpSent) : "—";
   const transferTotalBytesLabel = transferSent > 0 ? formatBytes(transferSent) : "—";
+  const transferPathLabel =
+    transferState.payloadTransferPath === "parallel_v4_chunk"
+      ? "Parallel V4 chunks"
+      : transferState.payloadTransferPath === "parallel_files"
+      ? "Parallel files"
+      : transferState.payloadTransferPath === "single_stream"
+      ? "Single stream"
+      : "—";
+  const transferPathClass =
+    transferState.payloadTransferPath === "parallel_v4_chunk" || transferState.payloadTransferPath === "parallel_files"
+      ? "ok"
+      : transferState.payloadTransferPath === "single_stream"
+      ? "warn"
+      : "";
+  const transferWorkersClass =
+    (transferState.payloadWorkers ?? 1) > 1
+      ? "ok"
+      : "warn";
   const transferBottleneck = useMemo(() => {
     const transfer = payloadFullStatus?.transfer;
     if (!transfer) return null;
@@ -4245,6 +4303,29 @@ export default function App() {
   }, [ip]);
 
   useEffect(() => {
+    if (!isConnected || !ip.trim()) {
+      setPayloadCaps(null);
+      setPayloadCapsError(null);
+      return;
+    }
+    let cancelled = false;
+    invoke<PayloadCapabilities>("payload_caps", { ip })
+      .then((caps) => {
+        if (cancelled) return;
+        setPayloadCaps(caps || null);
+        setPayloadCapsError(null);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setPayloadCaps(null);
+        setPayloadCapsError(String(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isConnected, ip]);
+
+  useEffect(() => {
     const enabled = activeTab === "status" && isConnected && ip.trim().length > 0;
     invoke("payload_polling_set", { enabled }).catch(() => {
       // ignore poll toggle failures
@@ -4667,9 +4748,9 @@ export default function App() {
             const merged = normalizeQueueData({
               ...normalized,
               items: [...mergedItems, ...localTerminal],
-              next_id: Math.max(
-                normalized.next_id || 1,
-                ...[...mergedItems, ...localTerminal].map((item) => item.id + 1)
+              next_id: [...mergedItems, ...localTerminal].reduce(
+                (maxId, item) => Math.max(maxId, item.id + 1),
+                normalized.next_id || 1
               )
             });
             applyQueueData(merged);
@@ -4828,7 +4909,10 @@ export default function App() {
     }
     const nextQueue: QueueData = {
       items: [...deduped, ...queueData.items],
-      next_id: Math.max(queueData.next_id || 1, ...deduped.map((item) => item.id + 1))
+      next_id: deduped.reduce(
+        (maxId, item) => Math.max(maxId, item.id + 1),
+        queueData.next_id || 1
+      )
     };
     await saveQueueData(nextQueue);
     pushClientLog(tr("queue_added", { count: deduped.length }));
@@ -5543,7 +5627,7 @@ export default function App() {
     setFtpPort("auto");
     setFtpMixThreshold(1);
     setConnections(4);
-    setFtpConnections(1);
+    setFtpConnections(6);
     setBandwidthLimit(0);
     setOptimizeMode("none");
     restoreOptimizeSnapshot();
@@ -6391,7 +6475,9 @@ export default function App() {
     });
   }, [shouldKeepAwake, configLoaded]);
 
+  const maintenanceSupported = payloadCaps?.features?.maintenance !== false;
   const maintenanceBlocked =
+    !maintenanceSupported ||
     !isConnected ||
     !ip.trim() ||
     transferActive ||
@@ -6538,32 +6624,34 @@ export default function App() {
               )}
             </div>
           </div>
-          <div className="window-controls">
-            <button
-              className="window-btn minimize"
-              onClick={handleMinimize}
-              aria-label={tr("minimize")}
-              title={tr("minimize")}
-            >
-              —
-            </button>
-            <button
-              className="window-btn maximize"
-              onClick={handleToggleMaximize}
-              aria-label={tr("maximize")}
-              title={tr("maximize")}
-            >
-              □
-            </button>
-            <button
-              className="window-btn close"
-              onClick={handleCloseWindow}
-              aria-label={tr("close")}
-              title={tr("close")}
-            >
-              ×
-            </button>
-          </div>
+          {!isWebMode && (
+            <div className="window-controls">
+              <button
+                className="window-btn minimize"
+                onClick={handleMinimize}
+                aria-label={tr("minimize")}
+                title={tr("minimize")}
+              >
+                —
+              </button>
+              <button
+                className="window-btn maximize"
+                onClick={handleToggleMaximize}
+                aria-label={tr("maximize")}
+                title={tr("maximize")}
+              >
+                □
+              </button>
+              <button
+                className="window-btn close"
+                onClick={handleCloseWindow}
+                aria-label={tr("close")}
+                title={tr("close")}
+              >
+                ×
+              </button>
+            </div>
+          )}
         </div>
       </header>
 
@@ -7321,6 +7409,42 @@ export default function App() {
                         {tr("status")}: {payloadStatus}
                       </div>
                     </div>
+                    <div className="payload-metric-card" style={{ marginTop: 10 }}>
+                      <div className="payload-metric-title">Capabilities</div>
+                      {payloadCaps ? (
+                        <>
+                          <div className="payload-metric-row">
+                            <span>Source</span>
+                            <span>{payloadCaps.source || "unknown"}</span>
+                          </div>
+                          <div className="payload-metric-row">
+                            <span>Schema</span>
+                            <span>v{payloadCaps.schema_version || 1}</span>
+                          </div>
+                          <div className="payload-metric-row">
+                            <span>Features</span>
+                            <span>
+                              {payloadCapsFeatureSupported} / {payloadCapsFeatureEntries.length || 0}
+                            </span>
+                          </div>
+                          <div className="payload-metric-row">
+                            <span>Commands</span>
+                            <span>{payloadCaps.commands?.length || 0}</span>
+                          </div>
+                          {payloadCaps.notes && payloadCaps.notes.length > 0 ? (
+                            <div className="payload-metric-row">
+                              <span>Notes</span>
+                              <span>{payloadCaps.notes[0]}</span>
+                            </div>
+                          ) : null}
+                        </>
+                      ) : (
+                        <div className="payload-metric-row">
+                          <span>Capabilities</span>
+                          <span>{payloadCapsError ? `Error: ${payloadCapsError}` : "Unavailable"}</span>
+                        </div>
+                      )}
+                    </div>
                     <div className="payload-status-grid">
                       {payloadFullStatus.system && (
                         <div className="payload-metric-card">
@@ -7502,6 +7626,22 @@ export default function App() {
                           <div className="payload-metric-row">
                             <span>{tr("connections_ftp")}</span>
                             <span>{transferState.effectiveFtpConnections ?? ftpConnections}</span>
+                          </div>
+                        )}
+                        {(transferModeForDisplay === "payload" || transferModeForDisplay === "mix") && (
+                          <div className="payload-metric-row">
+                            <span>Payload path</span>
+                            <span>
+                              <span className={`pill ${transferPathClass}`.trim()}>{transferPathLabel}</span>
+                            </span>
+                          </div>
+                        )}
+                        {(transferModeForDisplay === "payload" || transferModeForDisplay === "mix") && (
+                          <div className="payload-metric-row">
+                            <span>Payload workers</span>
+                            <span>
+                              <span className={`pill ${transferWorkersClass}`.trim()}>{transferState.payloadWorkers ?? 1}</span>
+                            </span>
                           </div>
                         )}
                         <div className="payload-metric-row">

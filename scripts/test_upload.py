@@ -10,7 +10,7 @@ import uuid
 MAGIC_FTX1 = 0x31585446
 FRAME_PACK_ACK = 5
 FRAME_FINISH = 6
-FRAME_PACK_V3 = 11
+FRAME_PACK_V4 = 15
 PACK_BUFFER_SIZE = 4 * 1024 * 1024  # 4MB pack size
 DUMMY_CHUNK = b'\xAA' * 1024 # Reusable 1KB chunk for file data
 
@@ -22,12 +22,23 @@ def send_all(sock, data):
             raise RuntimeError("Socket connection broken")
         total_sent += sent
 
-def create_pack_header_v3(pack_id, record_count):
+def create_pack_header_v4(pack_id, record_count):
     return struct.pack('<QI', pack_id, record_count)
 
-def create_file_record(rel_path, data):
+def create_file_record_v4(rel_path, data, offset=0, total_size=None, truncate=False):
     path_bytes = rel_path.encode('utf-8')
-    header = struct.pack('<H', len(path_bytes)) + path_bytes + struct.pack('<Q', len(data))
+    flags = 0x01 | 0x02  # HAS_OFFSET | HAS_TOTAL
+    if truncate:
+        flags |= 0x04
+    total = len(data) if total_size is None else int(total_size)
+    header = (
+        struct.pack('<H', len(path_bytes)) +
+        struct.pack('<H', flags) +
+        path_bytes +
+        struct.pack('<Q', len(data)) +
+        struct.pack('<Q', int(offset)) +
+        struct.pack('<Q', total)
+    )
     return header + data
 
 def send_frame_header(sock, frame_type, body_len):
@@ -55,7 +66,7 @@ def read_frame(sock):
 
 def send_handshake(sock, dest):
     escaped = dest.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
-    cmd = f"UPLOAD_V3 \"{escaped}\" DIRECT\n"
+    cmd = f"UPLOAD_V4 \"{escaped}\" DIRECT\n"
     print(f"Sending command: {cmd.strip()}")
     sock.sendall(cmd.encode('utf-8'))
 
@@ -107,7 +118,7 @@ def main():
 
     while files_sent < args.num_files:
         pack_body = bytearray()
-        pack_body.extend(create_pack_header_v3(pack_id, 0))
+        pack_body.extend(create_pack_header_v4(pack_id, 0))
         
         records_in_pack = 0
         
@@ -115,7 +126,7 @@ def main():
             # Generate a unique path for each file to avoid overwriting
             file_path = f"file_{files_sent:06d}_{uuid.uuid4().hex[:8]}.bin"
             
-            record = create_file_record(file_path, dummy_file_data)
+            record = create_file_record_v4(file_path, dummy_file_data, 0, len(dummy_file_data), True)
 
             # Check if pack would exceed buffer size
             if len(pack_body) + len(record) > PACK_BUFFER_SIZE:
@@ -134,7 +145,7 @@ def main():
         pack_body[8:12] = struct.pack('<I', records_in_pack)
         
         # Send Frame Header
-        send_frame_header(sock, FRAME_PACK_V3, len(pack_body))
+        send_frame_header(sock, FRAME_PACK_V4, len(pack_body))
         
         # Send Pack Body
         send_all(sock, pack_body)

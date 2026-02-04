@@ -1,0 +1,255 @@
+:root {
+  --ps-white: #1b1f26;
+  --ps-shell: #ffffff;
+  --ps-core: #f4f6f8;
+  --ps-blue: #2a6bff;
+  --ps-cyan: #0ea5e9;
+  --ps-green: #22c55e;
+  --ps-border: rgba(16, 24, 40, 0.1);
+  --ps-shadow: rgba(16, 24, 40, 0.09);
+  --ps-muted: #546274;
+  --ps-panel: #ffffff;
+  --ps-surface-alt: #f1f5f9;
+  --ps-gradient: linear-gradient(135deg, #2a6bff 0%, #0ea5e9 100%);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "Noto Sans", "Segoe UI", system-ui, sans-serif;
+  color: var(--ps-white);
+  background: radial-gradient(circle at 20% 10%, #e7f0ff 0%, #f3f6fa 35%, #f6f8fb 100%);
+}
+
+.bg-orb {
+  position: fixed;
+  border-radius: 999px;
+  filter: blur(42px);
+  z-index: 0;
+  pointer-events: none;
+}
+
+.orb-a {
+  width: 260px;
+  height: 260px;
+  background: rgba(42, 107, 255, 0.19);
+  top: -70px;
+  right: 8%;
+}
+
+.orb-b {
+  width: 220px;
+  height: 220px;
+  background: rgba(14, 165, 233, 0.15);
+  bottom: -60px;
+  left: 5%;
+}
+
+.app-shell {
+  position: relative;
+  z-index: 1;
+  width: min(1200px, 96vw);
+  margin: 18px auto;
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr) 320px;
+  grid-template-rows: auto minmax(560px, 1fr);
+  grid-template-areas:
+    "top top top"
+    "left main right";
+  gap: 14px;
+}
+
+.panel {
+  background: var(--ps-panel);
+  border: 1px solid var(--ps-border);
+  border-radius: 16px;
+  box-shadow: 0 8px 24px var(--ps-shadow);
+  padding: 16px;
+}
+
+.topbar {
+  grid-area: top;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  background: linear-gradient(120deg, #f9fcff 0%, #eef6ff 100%);
+}
+
+.left {
+  grid-area: left;
+}
+
+.main {
+  grid-area: main;
+}
+
+.right {
+  grid-area: right;
+}
+
+h1 {
+  margin: 0;
+  font-size: 1.65rem;
+}
+
+h2 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+h3 {
+  margin: 12px 0 8px;
+  font-size: 0.97rem;
+}
+
+.eyebrow {
+  margin: 0 0 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  font-size: 0.75rem;
+  color: var(--ps-blue);
+  font-weight: 700;
+}
+
+.subtitle {
+  margin: 6px 0 0;
+  color: var(--ps-muted);
+}
+
+.muted {
+  color: var(--ps-muted);
+  margin: 8px 0 12px;
+}
+
+.pill {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  border: 1px solid var(--ps-border);
+  background: #fff;
+}
+
+.pill.ok {
+  background: rgba(34, 197, 94, 0.14);
+  color: #0f6a34;
+  border-color: rgba(34, 197, 94, 0.35);
+}
+
+.stack {
+  display: grid;
+  gap: 10px;
+}
+
+label {
+  display: grid;
+  gap: 6px;
+  font-size: 0.9rem;
+  color: var(--ps-muted);
+}
+
+input,
+button {
+  font: inherit;
+  border-radius: 10px;
+  border: 1px solid var(--ps-border);
+  padding: 10px 12px;
+}
+
+input {
+  background: #fff;
+}
+
+button {
+  border: 0;
+  background: var(--ps-gradient);
+  color: #fff;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+button:hover {
+  filter: brightness(1.05);
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.metric {
+  border: 1px solid var(--ps-border);
+  border-radius: 12px;
+  background: var(--ps-surface-alt);
+  padding: 10px;
+}
+
+.metric-label {
+  margin: 0;
+  color: var(--ps-muted);
+  font-size: 0.82rem;
+}
+
+.metric-value {
+  margin: 6px 0 0;
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+
+.interface-list {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+}
+
+.interface-list li {
+  border: 1px solid var(--ps-border);
+  border-radius: 10px;
+  padding: 10px;
+  background: #fff;
+}
+
+pre {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.log,
+.code {
+  border: 1px solid var(--ps-border);
+  border-radius: 10px;
+  background: #f8fafc;
+  padding: 10px;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  overflow-x: auto;
+}
+
+.code {
+  margin-bottom: 8px;
+}
+
+@media (max-width: 1120px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto;
+    grid-template-areas:
+      "top"
+      "main"
+      "left"
+      "right";
+  }
+
+  .metric-grid {
+    grid-template-columns: 1fr;
+  }
+}

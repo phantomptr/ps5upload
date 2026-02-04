@@ -61,6 +61,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   payloadSend: (ip, filepath) => ipcRenderer.invoke('payload_send', ip, filepath),
   payloadDownloadAndSend: (ip, fetch) => ipcRenderer.invoke('payload_download_and_send', ip, fetch),
   payloadCheck: (ip) => ipcRenderer.invoke('payload_check', ip),
+  payloadCaps: (ip) => ipcRenderer.invoke('payload_caps', ip),
   payloadProbe: (filepath) => ipcRenderer.invoke('payload_probe', filepath),
   payloadStatus: (ip) => ipcRenderer.invoke('payload_status', ip),
   payloadStatusSnapshot: () => ipcRenderer.invoke('payload_status_snapshot'),

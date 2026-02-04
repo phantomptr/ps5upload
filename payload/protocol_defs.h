@@ -9,17 +9,9 @@ enum FrameType {
     FRAME_HELLO = 1,
     FRAME_HELLO_ACK = 2,
     FRAME_MANIFEST = 3,
-    FRAME_PACK = 4,
     FRAME_PACK_ACK = 5,
     FRAME_FINISH = 6,
     FRAME_ERROR = 7,
-    FRAME_PACK_LZ4 = 8,
-    FRAME_PACK_ZSTD = 9,
-    FRAME_PACK_LZMA = 10,
-    FRAME_PACK_V3 = 11,
-    FRAME_PACK_LZ4_V3 = 12,
-    FRAME_PACK_ZSTD_V3 = 13,
-    FRAME_PACK_LZMA_V3 = 14,
     FRAME_PACK_V4 = 15,
     FRAME_PACK_LZ4_V4 = 16,
     FRAME_PACK_ZSTD_V4 = 17,
@@ -32,13 +24,12 @@ struct FrameHeader {
     uint64_t body_len;
 } __attribute__((packed));
 
-// Inside a PACK frame:
+// Inside a PACK_V4 frame:
 // [RecordCount:4]
 // [Record1]
 // [Record2]...
 
-// Record Format:
-// V3: [PathLen:2] [PathBytes] [DataLen:8] [DataBytes]
-// V4: [PathLen:2] [Flags:2] [PathBytes] [DataLen:8] [Offset?:8] [TotalSize?:8] [DataBytes]
+// Record Format (V4):
+// [PathLen:2] [Flags:2] [PathBytes] [DataLen:8] [Offset?:8] [TotalSize?:8] [DataBytes]
 
 #endif

@@ -3,6 +3,25 @@
 All notable changes to this project are documented here.
 This project follows Semantic Versioning.
 
+## [1.4.5] - 2026-02-03
+
+### Added
+- New `app/` runtime that serves PS5Upload in browser mode (backend + frontend in one process).
+- Web bridge support so browser mode reuses the desktop UI flow.
+- New app packaging workflow: `.github/workflows/app-package.yml` publishes a downloadable app zip bundle.
+- New Make targets: `make app`, `make setup-app`, `make run-app`, and `make package-app`.
+- Added `app/README.md` and `shared/README.md` with setup/runtime details.
+
+### Changed
+- Version update script now updates app + desktop package versions and lockfiles together.
+- `make run-app` now prepares and serves the desktop UI bundle for web mode.
+- Moved debug/test helpers to `scripts/test-crash-debug.js` and `scripts/test-games-scan.js`.
+- Transfer protocol is now V4-only across desktop + payload for upload/download pack frames.
+- Test upload tooling now targets `UPLOAD_V4`.
+
+### Notes
+- In web mode, file/folder browse/upload/download paths are resolved on the host machine running the app service.
+
 ## [1.4.4] - 2026-02-03
 
 ### Added

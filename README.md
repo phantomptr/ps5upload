@@ -5,7 +5,7 @@
 </p>
 
 PS5 Upload is a fast, reliable way to move apps and homebrew to your PS5 without the pain of slow transfers.
-Current release: **v1.4.4**.
+Current release: **v1.4.5**.
 
 New UI highlights:
 - Cleaner Transfer and Manage layouts with clearer transfer settings.
@@ -14,7 +14,7 @@ New UI highlights:
 - Extraction queue with progress, metadata, and cover art where available.
 - New metrics panels (System, Network, Queue, Transfer, Tuning) with a live bottleneck indicator.
 - Payload tuning suggestions (pack size, pacing, rate) surfaced during transfers.
-- Upload V3 protocol with per-pack ACKs and replay for recovery after payload hiccups.
+- Upload V4 protocol with per-pack ACKs and replay for recovery after payload hiccups.
 - Payload-side backpressure and write validation for safer large-folder uploads.
 - Progress UI with ETA, average speed, elapsed time, and last update.
 - Upload queue item info popup with per-item transfer parameters.
@@ -102,6 +102,25 @@ You should see a notification pop up on your TV: **"PS5 Upload Server - Ready on
    ```bash
    ./ps5upload-desktop --no-sandbox
    ```
+
+### Optional: Remote Browser App Mode (`app/`)
+If you want browser access (backend + frontend in one process), use the app service:
+
+```bash
+make app
+make run-app
+```
+
+By default it binds to `0.0.0.0:10331`.
+To expose on LAN, run:
+
+```bash
+APP_HOST=0.0.0.0 APP_PORT=10331 make run-app
+```
+
+Open `http://<host-ip>:10331` in your browser.
+This mode serves the desktop UI in browser form, and host-side path operations are resolved on the machine running the app service.
+See `app/README.md` for full details and API endpoints.
 
 ### 3. Connect the App (Computer)
 1.  In the left panel of the app, go to the **Connect** section.
