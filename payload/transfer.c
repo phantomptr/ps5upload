@@ -33,7 +33,7 @@
 #define WRITER_THREAD_COUNT 4
 #define FILE_WRITE_QUEUE_DEPTH (16 * 1024)
 #define FILE_WRITE_INTERVAL_MS 250
-#define UPLOAD_RECV_BUFFER_SIZE (512 * 1024)
+#define UPLOAD_RECV_BUFFER_SIZE (2 * 1024 * 1024)
 #define TUNE_PACK_MIN (4 * 1024 * 1024)
 
 // Buffer pool for large packs
@@ -349,13 +349,13 @@ static int decompress_pack_body(uint32_t frame_type, uint8_t **body, size_t *bod
     uint8_t *out = alloc_pack_buffer(raw_len);
     if (!out) return -1;
     int ok = 0;
-    if (frame_type == FRAME_PACK_LZ4 || frame_type == FRAME_PACK_LZ4_V3 || frame_type == FRAME_PACK_LZ4_V4) {
+    if (frame_type == FRAME_PACK_LZ4_V4) {
         int decoded = LZ4_decompress_safe((const char *)(*body) + 4, (char *)out, (int)(*body_len - 4), (int)raw_len);
         ok = (decoded >= 0 && (uint32_t)decoded == raw_len);
-    } else if (frame_type == FRAME_PACK_ZSTD || frame_type == FRAME_PACK_ZSTD_V3 || frame_type == FRAME_PACK_ZSTD_V4) {
+    } else if (frame_type == FRAME_PACK_ZSTD_V4) {
         size_t decoded = ZSTD_decompress(out, raw_len, *body + 4, *body_len - 4);
         ok = !ZSTD_isError(decoded) && decoded == raw_len;
-    } else if (frame_type == FRAME_PACK_LZMA || frame_type == FRAME_PACK_LZMA_V3 || frame_type == FRAME_PACK_LZMA_V4) {
+    } else if (frame_type == FRAME_PACK_LZMA_V4) {
         if (*body_len < 17) { free_pack_buffer(out); return -1; }
         SizeT dest_len = (SizeT)raw_len;
         SizeT src_len = (SizeT)(*body_len - 17);
@@ -460,6 +460,25 @@ static int mkdir_recursive(const char *path, char *cache) {
     chmod(tmp, 0777);
     if (cache) { strncpy(cache, path, PATH_MAX - 1); cache[PATH_MAX-1] = '\0'; }
     return 0;
+}
+
+static int is_relative_record_path_safe(const char *rel_path, size_t len) {
+    if (!rel_path || len == 0 || len >= PATH_MAX) return 0;
+    if (rel_path[0] == '/' || rel_path[0] == '\\') return 0;
+
+    size_t seg_start = 0;
+    for (size_t i = 0; i <= len; i++) {
+        int is_sep = (i == len) || rel_path[i] == '/' || rel_path[i] == '\\';
+        if (!is_sep) continue;
+        size_t seg_len = i - seg_start;
+        if (seg_len == 0) return 0;
+        if (seg_len == 1 && rel_path[seg_start] == '.') return 0;
+        if (seg_len == 2 &&
+            rel_path[seg_start] == '.' &&
+            rel_path[seg_start + 1] == '.') return 0;
+        seg_start = i + 1;
+    }
+    return 1;
 }
 
 // Batch size for file writer - heap allocated to avoid stack overflow
@@ -647,11 +666,7 @@ static void *pack_processor_thread(void *arg) {
         size_t offset = 0;
         uint32_t record_count = 0;
         uint64_t pack_id = 0;
-        if (job.frame_type == FRAME_PACK_V3 ||
-            job.frame_type == FRAME_PACK_LZ4_V3 ||
-            job.frame_type == FRAME_PACK_ZSTD_V3 ||
-            job.frame_type == FRAME_PACK_LZMA_V3 ||
-            job.frame_type == FRAME_PACK_V4 ||
+        if (job.frame_type == FRAME_PACK_V4 ||
             job.frame_type == FRAME_PACK_LZ4_V4 ||
             job.frame_type == FRAME_PACK_ZSTD_V4 ||
             job.frame_type == FRAME_PACK_LZMA_V4) {
@@ -662,9 +677,8 @@ static void *pack_processor_thread(void *arg) {
             offset += 4;
             pack_ack_register(job.session_id, pack_id, record_count);
         } else {
-            if (job.len < 4) { free_pack_buffer(job.data); continue; }
-            memcpy(&record_count, job.data, 4);
-            offset += 4;
+            free_pack_buffer(job.data);
+            continue;
         }
 
         for (uint32_t i = 0; i < record_count; i++) {
@@ -694,30 +708,36 @@ static void *pack_processor_thread(void *arg) {
             if (job.len - offset < 2) break;
             uint16_t path_len; memcpy(&path_len, job.data + offset, 2); offset += 2;
             uint16_t flags = 0;
-            int is_v4 = (job.frame_type == FRAME_PACK_V4 ||
-                         job.frame_type == FRAME_PACK_LZ4_V4 ||
-                         job.frame_type == FRAME_PACK_ZSTD_V4 ||
-                         job.frame_type == FRAME_PACK_LZMA_V4);
-            if (is_v4) {
-                if (job.len - offset < 2) break;
-                memcpy(&flags, job.data + offset, 2);
-                offset += 2;
-            }
+            if (job.len - offset < 2) break;
+            memcpy(&flags, job.data + offset, 2);
+            offset += 2;
             if (path_len == 0 || path_len >= PATH_MAX || job.len - offset < (size_t)path_len + 8) break;
 
             FileWriteJob new_job;
-            snprintf(new_job.path, sizeof(new_job.path), "%s/%.*s", job.dest_root, path_len, job.data + offset);
+            char rel_path[PATH_MAX];
+            memcpy(rel_path, job.data + offset, path_len);
+            rel_path[path_len] = '\0';
+            if (!is_relative_record_path_safe(rel_path, path_len)) {
+                printf("[FTX] Invalid upload record path rejected: %s\n", rel_path);
+                transfer_request_abort_with_reason("invalid_path");
+                break;
+            }
+            if (snprintf(new_job.path, sizeof(new_job.path), "%s/%s", job.dest_root, rel_path) >= (int)sizeof(new_job.path)) {
+                printf("[FTX] Upload record path too long: %s\n", rel_path);
+                transfer_request_abort_with_reason("path_too_long");
+                break;
+            }
             offset += path_len;
 
             uint64_t data_len; memcpy(&data_len, job.data + offset, 8); offset += 8;
             uint64_t file_offset = 0;
             uint64_t total_size = 0;
-            if (is_v4 && (flags & RECORD_FLAG_HAS_OFFSET)) {
+            if (flags & RECORD_FLAG_HAS_OFFSET) {
                 if (job.len - offset < 8) break;
                 memcpy(&file_offset, job.data + offset, 8);
                 offset += 8;
             }
-            if (is_v4 && (flags & RECORD_FLAG_HAS_TOTAL)) {
+            if (flags & RECORD_FLAG_HAS_TOTAL) {
                 if (job.len - offset < 8) break;
                 memcpy(&total_size, job.data + offset, 8);
                 offset += 8;
@@ -1092,9 +1112,10 @@ int upload_session_feed(UploadSession *session, const uint8_t *data, size_t len,
                 break; 
             }
             if (session->header.type == FRAME_FINISH) { if (done) *done = 1; return 0; }
-            if ((session->header.type >= FRAME_PACK && session->header.type <= FRAME_PACK_LZMA) ||
-                (session->header.type >= FRAME_PACK_V3 && session->header.type <= FRAME_PACK_LZMA_V3) ||
-                (session->header.type >= FRAME_PACK_V4 && session->header.type <= FRAME_PACK_LZMA_V4)) {
+            if (session->header.type == FRAME_PACK_V4 ||
+                session->header.type == FRAME_PACK_LZ4_V4 ||
+                session->header.type == FRAME_PACK_ZSTD_V4 ||
+                session->header.type == FRAME_PACK_LZMA_V4) {
                 if (session->header.body_len > PACK_BUFFER_SIZE) { session->error = 1; break; }
                 session->body_len = session->header.body_len;
                 if (session->body_len > SIZE_MAX) {
@@ -1119,9 +1140,7 @@ int upload_session_feed(UploadSession *session, const uint8_t *data, size_t len,
             offset += take;
 
             if (session->body_bytes == session->body_len) {
-                if (session->header.type != FRAME_PACK &&
-                    session->header.type != FRAME_PACK_V3 &&
-                    session->header.type != FRAME_PACK_V4) {
+                if (session->header.type != FRAME_PACK_V4) {
                     if (decompress_pack_body(session->header.type, &session->body, &session->body_len) != 0)
                         { printf("[FTX] ERROR: decompress_pack_body failed (type=%u)\n", session->header.type); session->error = 1; break; }
                 }
@@ -1222,7 +1241,7 @@ void upload_session_destroy(UploadSession *session) {
     }
 }
 
-void handle_upload_v3(int client_sock, const char *dest_root, int use_temp, int chmod_each_file, int chmod_final) {
+void handle_upload_v4(int client_sock, const char *dest_root, int use_temp, int chmod_each_file, int chmod_final) {
     const char *ready = "READY\n";
     send(client_sock, ready, strlen(ready), 0);
     g_upload_bytes_recv = 0;
@@ -1230,7 +1249,7 @@ void handle_upload_v3(int client_sock, const char *dest_root, int use_temp, int 
     atomic_store(&g_backpressure_events, 0);
     atomic_store(&g_backpressure_wait_ms, 0);
     g_upload_last_log = time(NULL);
-    printf("[FTX] Upload V3 start: dest=%s mode=%s chmod_each=%d chmod_final=%d\n",
+    printf("[FTX] Upload V4 start: dest=%s mode=%s chmod_each=%d chmod_final=%d\n",
            dest_root ? dest_root : "(null)", use_temp ? "TEMP" : "DIRECT",
            chmod_each_file ? 1 : 0, chmod_final ? 1 : 0);
     UploadSession *session = upload_session_create(dest_root, use_temp);

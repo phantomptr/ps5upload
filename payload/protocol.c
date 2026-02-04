@@ -801,7 +801,7 @@ static void download_pack_reset(struct DownloadPack *pack) {
 }
 
 static int download_pack_send_raw(int sock, struct DownloadPack *pack) {
-    if (send_frame_header(sock, FRAME_PACK, pack->len) != 0) {
+    if (send_frame_header(sock, FRAME_PACK_V4, pack->len) != 0) {
         return -1;
     }
         if (send_all(sock, pack->buf, pack->len) != 0) {
@@ -830,7 +830,7 @@ static int download_pack_flush(int sock, struct DownloadPack *pack) {
             return download_pack_send_raw(sock, pack);
         }
         size_t out_len = (size_t)compressed + 4;
-        if (send_frame_header(sock, FRAME_PACK_LZ4, out_len) != 0) {
+        if (send_frame_header(sock, FRAME_PACK_LZ4_V4, out_len) != 0) {
             free(tmp);
             return -1;
         }
@@ -855,7 +855,7 @@ static int download_pack_flush(int sock, struct DownloadPack *pack) {
             return download_pack_send_raw(sock, pack);
         }
         size_t out_len = compressed + 4;
-        if (send_frame_header(sock, FRAME_PACK_ZSTD, out_len) != 0) {
+        if (send_frame_header(sock, FRAME_PACK_ZSTD_V4, out_len) != 0) {
             free(tmp);
             return -1;
         }
@@ -889,7 +889,7 @@ static int download_pack_flush(int sock, struct DownloadPack *pack) {
         uint64_t raw64 = pack->len;
         memcpy(tmp + 9, &raw64, 8);
         size_t out_len = dest_len + 17;
-        if (send_frame_header(sock, FRAME_PACK_LZMA, out_len) != 0) {
+        if (send_frame_header(sock, FRAME_PACK_LZMA_V4, out_len) != 0) {
             free(tmp);
             return -1;
         }
@@ -913,7 +913,7 @@ static int download_pack_flush(int sock, struct DownloadPack *pack) {
 static int download_pack_add_record(int sock, struct DownloadPack *pack, const char *rel_path,
                                     const uint8_t *data, uint64_t data_len) {
     size_t path_len = strlen(rel_path);
-    size_t overhead = 2 + path_len + 8;
+    size_t overhead = 2 + 2 + path_len + 8;
     if (overhead + data_len > DOWNLOAD_PACK_BUFFER_SIZE - 4) {
         return -1;
     }
@@ -925,6 +925,9 @@ static int download_pack_add_record(int sock, struct DownloadPack *pack, const c
 
     uint16_t path_len_u16 = (uint16_t)path_len;
     memcpy(pack->buf + pack->len, &path_len_u16, 2);
+    pack->len += 2;
+    uint16_t flags = 0;
+    memcpy(pack->buf + pack->len, &flags, 2);
     pack->len += 2;
     memcpy(pack->buf + pack->len, rel_path, path_len);
     pack->len += path_len;
@@ -1022,7 +1025,7 @@ static int send_file_records_fd(int sock, struct DownloadPack *pack, const char 
     }
 
     size_t path_len = strlen(rel_path);
-    size_t overhead = 2 + path_len + 8;
+    size_t overhead = 2 + 2 + path_len + 8;
     size_t max_chunk = DOWNLOAD_PACK_BUFFER_SIZE - 4 - overhead;
     if (max_chunk == 0) {
         return -1;
@@ -1067,7 +1070,7 @@ static int send_file_records(int sock, struct DownloadPack *pack, const char *re
 }
 
 
-static int download_raw_stream(int sock, const char *path) {
+static int download_raw_stream(int sock, const char *path, uint64_t start_offset, int include_offset_in_ready) {
     payload_set_crash_context("DOWNLOAD_RAW_STREAM", path, NULL);
     payload_log("[DOWNLOAD_RAW] Stream start for %s", path);
 
@@ -1095,8 +1098,32 @@ static int download_raw_stream(int sock, const char *path) {
         return -1;
     }
 
-    char ready[96];
-    snprintf(ready, sizeof(ready), "READY %llu\n", (unsigned long long)st.st_size);
+    if (start_offset > (uint64_t)st.st_size) {
+        const char *error = "ERROR: Invalid offset\n";
+        send(sock, error, strlen(error), 0);
+        close(fd);
+        close(sock);
+        return -1;
+    }
+    if (start_offset > 0) {
+        if (lseek(fd, (off_t)start_offset, SEEK_SET) < 0) {
+            char error_msg[320];
+            snprintf(error_msg, sizeof(error_msg), "ERROR: seek failed: %s\n", strerror(errno));
+            send(sock, error_msg, strlen(error_msg), 0);
+            close(fd);
+            close(sock);
+            return -1;
+        }
+    }
+
+    char ready[128];
+    if (include_offset_in_ready) {
+        snprintf(ready, sizeof(ready), "READY %llu %llu\n",
+            (unsigned long long)st.st_size,
+            (unsigned long long)start_offset);
+    } else {
+        snprintf(ready, sizeof(ready), "READY %llu\n", (unsigned long long)st.st_size);
+    }
     if (send_all(sock, ready, strlen(ready)) != 0) {
         close(fd);
         close(sock);
@@ -1160,7 +1187,221 @@ void handle_download_raw(int client_sock, const char *path_arg) {
     }
 
     // Stream directly on this connection for stability
-    download_raw_stream(client_sock, path);
+    download_raw_stream(client_sock, path, 0, 0);
+}
+
+void handle_download_raw_from(int client_sock, const char *args) {
+    if (!args) {
+        const char *error = "ERROR: Invalid DOWNLOAD_RAW_FROM format\n";
+        send(client_sock, error, strlen(error), 0);
+        close(client_sock);
+        return;
+    }
+
+    // Format: DOWNLOAD_RAW_FROM <offset>\t<path>
+    const char *tab = strchr(args, '\t');
+    if (!tab) {
+        const char *error = "ERROR: Invalid DOWNLOAD_RAW_FROM format\n";
+        send(client_sock, error, strlen(error), 0);
+        close(client_sock);
+        return;
+    }
+
+    char offset_buf[32];
+    size_t offset_len = (size_t)(tab - args);
+    if (offset_len == 0 || offset_len >= sizeof(offset_buf)) {
+        const char *error = "ERROR: Invalid offset\n";
+        send(client_sock, error, strlen(error), 0);
+        close(client_sock);
+        return;
+    }
+    memcpy(offset_buf, args, offset_len);
+    offset_buf[offset_len] = '\0';
+
+    char *endptr = NULL;
+    unsigned long long parsed = strtoull(offset_buf, &endptr, 10);
+    if (endptr == offset_buf || (endptr && *endptr != '\0')) {
+        const char *error = "ERROR: Invalid offset\n";
+        send(client_sock, error, strlen(error), 0);
+        close(client_sock);
+        return;
+    }
+    uint64_t start_offset = (uint64_t)parsed;
+
+    char path[PATH_MAX];
+    strncpy(path, tab + 1, PATH_MAX - 1);
+    path[PATH_MAX - 1] = '\0';
+    trim_newline(path);
+
+    payload_log("[DOWNLOAD_RAW_FROM] offset=%llu path=%s",
+        (unsigned long long)start_offset, path);
+    payload_touch_activity();
+
+    if (!is_path_safe(path)) {
+        const char *error = "ERROR: Invalid path\n";
+        send(client_sock, error, strlen(error), 0);
+        close(client_sock);
+        return;
+    }
+
+    struct stat st;
+    if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) {
+        const char *error = "ERROR: Not a file\n";
+        send(client_sock, error, strlen(error), 0);
+        close(client_sock);
+        return;
+    }
+
+    download_raw_stream(client_sock, path, start_offset, 1);
+}
+
+void handle_download_raw_range(int client_sock, const char *args) {
+    if (!args) {
+        const char *error = "ERROR: Invalid DOWNLOAD_RAW_RANGE format\n";
+        send(client_sock, error, strlen(error), 0);
+        close(client_sock);
+        return;
+    }
+
+    // Format: DOWNLOAD_RAW_RANGE <offset> <length>\t<path>
+    const char *tab = strchr(args, '\t');
+    if (!tab) {
+        const char *error = "ERROR: Invalid DOWNLOAD_RAW_RANGE format\n";
+        send(client_sock, error, strlen(error), 0);
+        close(client_sock);
+        return;
+    }
+
+    char meta[96];
+    size_t meta_len = (size_t)(tab - args);
+    if (meta_len == 0 || meta_len >= sizeof(meta)) {
+        const char *error = "ERROR: Invalid range\n";
+        send(client_sock, error, strlen(error), 0);
+        close(client_sock);
+        return;
+    }
+    memcpy(meta, args, meta_len);
+    meta[meta_len] = '\0';
+
+    unsigned long long offset_ull = 0;
+    unsigned long long length_ull = 0;
+    if (sscanf(meta, "%llu %llu", &offset_ull, &length_ull) != 2) {
+        const char *error = "ERROR: Invalid range\n";
+        send(client_sock, error, strlen(error), 0);
+        close(client_sock);
+        return;
+    }
+
+    uint64_t start_offset = (uint64_t)offset_ull;
+    uint64_t req_len = (uint64_t)length_ull;
+    if (req_len == 0) {
+        const char *error = "ERROR: Invalid length\n";
+        send(client_sock, error, strlen(error), 0);
+        close(client_sock);
+        return;
+    }
+
+    char path[PATH_MAX];
+    strncpy(path, tab + 1, PATH_MAX - 1);
+    path[PATH_MAX - 1] = '\0';
+    trim_newline(path);
+
+    payload_log("[DOWNLOAD_RAW_RANGE] offset=%llu len=%llu path=%s",
+        (unsigned long long)start_offset,
+        (unsigned long long)req_len,
+        path);
+    payload_touch_activity();
+
+    if (!is_path_safe(path)) {
+        const char *error = "ERROR: Invalid path\n";
+        send(client_sock, error, strlen(error), 0);
+        close(client_sock);
+        return;
+    }
+
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        char error_msg[320];
+        snprintf(error_msg, sizeof(error_msg), "ERROR: open failed: %s\n", strerror(errno));
+        send(client_sock, error_msg, strlen(error_msg), 0);
+        close(client_sock);
+        return;
+    }
+
+    struct stat st;
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
+        const char *error = "ERROR: Not a file\n";
+        send(client_sock, error, strlen(error), 0);
+        close(fd);
+        close(client_sock);
+        return;
+    }
+
+    uint64_t total_size = (uint64_t)st.st_size;
+    if (start_offset > total_size) {
+        const char *error = "ERROR: Invalid offset\n";
+        send(client_sock, error, strlen(error), 0);
+        close(fd);
+        close(client_sock);
+        return;
+    }
+    if (lseek(fd, (off_t)start_offset, SEEK_SET) < 0) {
+        char error_msg[320];
+        snprintf(error_msg, sizeof(error_msg), "ERROR: seek failed: %s\n", strerror(errno));
+        send(client_sock, error_msg, strlen(error_msg), 0);
+        close(fd);
+        close(client_sock);
+        return;
+    }
+
+    uint64_t remain = total_size - start_offset;
+    uint64_t send_len = req_len < remain ? req_len : remain;
+
+    char ready[128];
+    snprintf(ready, sizeof(ready), "READY %llu %llu %llu\n",
+        (unsigned long long)total_size,
+        (unsigned long long)start_offset,
+        (unsigned long long)send_len);
+    if (send_all(client_sock, ready, strlen(ready)) != 0) {
+        close(fd);
+        close(client_sock);
+        return;
+    }
+    payload_touch_activity();
+
+    const size_t bufsize = 256 * 1024;
+    uint8_t *buffer = (uint8_t *)malloc(bufsize);
+    if (!buffer) {
+        const char *error = "ERROR: OOM\n";
+        send(client_sock, error, strlen(error), 0);
+        close(fd);
+        close(client_sock);
+        return;
+    }
+
+    uint64_t sent = 0;
+    while (sent < send_len) {
+        size_t to_read = (size_t)((send_len - sent) > (uint64_t)bufsize ? bufsize : (send_len - sent));
+        ssize_t n = read(fd, buffer, to_read);
+        if (n <= 0) {
+            free(buffer);
+            close(fd);
+            close(client_sock);
+            return;
+        }
+        if (send_all(client_sock, buffer, (size_t)n) != 0) {
+            free(buffer);
+            close(fd);
+            close(client_sock);
+            return;
+        }
+        sent += (uint64_t)n;
+        payload_touch_activity();
+    }
+
+    free(buffer);
+    close(fd);
+    close(client_sock);
 }
 
 
@@ -2190,19 +2431,19 @@ static int parse_quoted_token(const char *src, char *out, size_t out_cap, const 
     return 0;
 }
 
-void handle_upload_v3_wrapper(int client_sock, const char *args) {
+void handle_upload_v4_wrapper(int client_sock, const char *args) {
     char dest_path[PATH_MAX];
     char mode[16] = {0};
     int chmod_each_file = 1;
     int chmod_final = 0;
     const char *rest = NULL;
     if (!args) {
-        const char *error = "ERROR: Invalid UPLOAD_V3 format\n";
+        const char *error = "ERROR: Invalid UPLOAD_V4 format\n";
         send(client_sock, error, strlen(error), 0);
         return;
     }
     if (parse_quoted_token(args, dest_path, sizeof(dest_path), &rest) != 0) {
-        const char *error = "ERROR: Invalid UPLOAD_V3 format\n";
+        const char *error = "ERROR: Invalid UPLOAD_V4 format\n";
         send(client_sock, error, strlen(error), 0);
         return;
     }
@@ -2229,7 +2470,7 @@ void handle_upload_v3_wrapper(int client_sock, const char *args) {
     if (!is_path_safe(dest_path)) {
         const char *error = "ERROR: Invalid path\n";
         send(client_sock, error, strlen(error), 0);
-        printf("[UPLOAD_V3] ERROR: Invalid path: %s\n", dest_path);
+        printf("[UPLOAD_V4] ERROR: Invalid path: %s\n", dest_path);
         return;
     }
 
@@ -2240,16 +2481,16 @@ void handle_upload_v3_wrapper(int client_sock, const char *args) {
         } else if (strcasecmp(mode, "DIRECT") == 0) {
             use_temp = 0;
         } else {
-            const char *error = "ERROR: Invalid UPLOAD_V3 mode\n";
+            const char *error = "ERROR: Invalid UPLOAD_V4 mode\n";
             send(client_sock, error, strlen(error), 0);
             return;
         }
     }
 
-    printf("[UPLOAD_V3] Request: dest=%s mode=%s chmod_each=%d chmod_final=%d\n",
+    printf("[UPLOAD_V4] Request: dest=%s mode=%s chmod_each=%d chmod_final=%d\n",
            dest_path, use_temp ? "TEMP" : "DIRECT",
            chmod_each_file ? 1 : 0, chmod_final ? 1 : 0);
-    handle_upload_v3(client_sock, dest_path, use_temp, chmod_each_file, chmod_final);
+    handle_upload_v4(client_sock, dest_path, use_temp, chmod_each_file, chmod_final);
 }
 
 void handle_payload_status(int client_sock) {

@@ -11,6 +11,17 @@ export default defineConfig({
   },
   build: {
     outDir: "dist",
-    emptyOutDir: true
+    emptyOutDir: true,
+    chunkSizeWarningLimit: 900,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes("node_modules")) return;
+          if (id.includes("@svar-ui/react-filemanager")) return "vendor-filemanager";
+          if (id.includes("react")) return "vendor-react";
+          return "vendor";
+        }
+      }
+    }
   }
 });

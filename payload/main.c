@@ -949,6 +949,20 @@ static void process_command(struct ClientConnection *conn) {
         close_connection(conn);
         return;
     }
+    if (strncmp(conn->cmd_buffer, "DOWNLOAD_RAW_FROM ", 18) == 0) {
+        payload_set_crash_context("DOWNLOAD_RAW_FROM", conn->cmd_buffer + 18, NULL);
+        handle_download_raw_from(conn->sock, conn->cmd_buffer + 18);
+        // Handler owns/closed the socket.
+        conn->sock = -1;
+        return;
+    }
+    if (strncmp(conn->cmd_buffer, "DOWNLOAD_RAW_RANGE ", 19) == 0) {
+        payload_set_crash_context("DOWNLOAD_RAW_RANGE", conn->cmd_buffer + 19, NULL);
+        handle_download_raw_range(conn->sock, conn->cmd_buffer + 19);
+        // Handler owns/closed the socket.
+        conn->sock = -1;
+        return;
+    }
     if (strncmp(conn->cmd_buffer, "DOWNLOAD_RAW ", 13) == 0) {
         payload_set_crash_context("DOWNLOAD_RAW", conn->cmd_buffer + 13, NULL);
         handle_download_raw(conn->sock, conn->cmd_buffer + 13);
@@ -1076,8 +1090,8 @@ static void process_command(struct ClientConnection *conn) {
         close_connection(conn);
         return;
     }
-    if (strncmp(conn->cmd_buffer, "UPLOAD_V3 ", 10) == 0) {
-        handle_upload_v3_wrapper(conn->sock, conn->cmd_buffer + 10);
+    if (strncmp(conn->cmd_buffer, "UPLOAD_V4 ", 10) == 0) {
+        handle_upload_v4_wrapper(conn->sock, conn->cmd_buffer + 10);
         close_connection(conn);
         return;
     }

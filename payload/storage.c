@@ -110,9 +110,16 @@ void handle_list_storage(int client_sock) {
     };
 
     char response[8192];
-    int offset = 0;
+    size_t offset = 0;
+    int entries_added = 0;
 
-    offset += sprintf(response, "[\n");
+    int written = snprintf(response + offset, sizeof(response) - offset, "[\n");
+    if (written < 0 || (size_t)written >= sizeof(response) - offset) {
+        const char *error = "ERROR: Response buffer overflow\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+    offset += (size_t)written;
 
     for (int i = 0; mount_points[i] != NULL; i++) {
         const char *path = mount_points[i];
@@ -175,21 +182,35 @@ void handle_list_storage(int client_sock) {
 
         printf("[STORAGE] %s: Valid mount point (Free: %.2f GB / Total: %.2f GB)\n", path, free_gb, total_gb);
 
-        offset += sprintf(response + offset,
+        written = snprintf(response + offset, sizeof(response) - offset,
             "  {\"path\":\"%s\",\"type\":\"%s\",\"free_gb\":%.1f,\"total_gb\":%.1f},\n",
             path,
             fs_type,
             free_gb,
             total_gb);
+        if (written < 0 || (size_t)written >= sizeof(response) - offset) {
+            break;
+        }
+        offset += (size_t)written;
+        entries_added += 1;
     }
 
     // Remove trailing comma if we added entries
-    if (offset > 2 && response[offset-2] == ',') {
+    if (entries_added > 0 && offset > 2 && response[offset - 2] == ',') {
         offset -= 2;
-        offset += sprintf(response + offset, "\n");
+        written = snprintf(response + offset, sizeof(response) - offset, "\n");
+        if (written > 0 && (size_t)written < sizeof(response) - offset) {
+            offset += (size_t)written;
+        }
     }
 
-    offset += sprintf(response + offset, "]\n");
+    written = snprintf(response + offset, sizeof(response) - offset, "]\n");
+    if (written < 0 || (size_t)written >= sizeof(response) - offset) {
+        const char *error = "ERROR: Response buffer overflow\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+    offset += (size_t)written;
 
     printf("[STORAGE] Scan complete, found storage locations\n");
 

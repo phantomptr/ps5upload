@@ -2,12 +2,13 @@
 # Makes building, testing, and setup simple
 
 .PHONY: all setup build test clean help
-.PHONY: payload desktop
-.PHONY: setup-payload setup-desktop
+.PHONY: payload desktop app
+.PHONY: setup-payload setup-desktop setup-app
 .PHONY: test-payload test-desktop
 .PHONY: clean-payload clean-desktop clean-both
 .PHONY: dist dist-win dist-mac dist-linux
 .PHONY: release-post
+.PHONY: run-app package-app
 
 JOBS ?= $(shell getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || echo 4)
 
@@ -31,11 +32,15 @@ help:
 	@echo "Detailed Targets:"
 	@echo "  make payload        - Build PS5 payload only"
 	@echo "  make desktop        - Build desktop app (Electron + React)"
+	@echo "  make app            - Prepare app service (backend + frontend)"
 	@echo "  make setup-payload  - Check/setup payload build environment"
 	@echo "  make setup-desktop  - Check toolchain for desktop app"
+	@echo "  make setup-app      - Check toolchain for app service"
 	@echo "  make test-payload   - Test payload build"
 	@echo "  make test-desktop   - Test desktop app build"
 	@echo "  make run-desktop    - Run desktop app in development mode"
+	@echo "  make run-app        - Run app service (backend + frontend)"
+	@echo "  make package-app    - Create app zip bundle in dist/"
 	@echo ""
 	@echo "Distribution:"
 	@echo "  make dist           - Build distribution packages for current platform"
@@ -105,6 +110,23 @@ setup-desktop:
 	@cd desktop && npm install
 	@echo "✓ Desktop dependencies installed"
 
+setup-app:
+	@echo "Checking app service toolchain..."
+	@command -v node >/dev/null 2>&1 || { \
+		echo "ERROR: Node.js is not installed!"; \
+		echo "Install Node.js from https://nodejs.org"; \
+		exit 1; \
+	}
+	@command -v npm >/dev/null 2>&1 || { \
+		echo "ERROR: npm is not installed!"; \
+		echo "Install Node.js from https://nodejs.org"; \
+		exit 1; \
+	}
+	@echo "✓ Node.js toolchain found: node $$(node --version), npm $$(npm --version)"
+	@echo "Installing app dependencies..."
+	@cd app && npm install
+	@echo "✓ App dependencies installed"
+
 #──────────────────────────────────────────────────────────────────────────────
 # Build
 #──────────────────────────────────────────────────────────────────────────────
@@ -130,6 +152,9 @@ desktop: setup-desktop
 	@echo "Building desktop app (Electron)..."
 	@cd desktop && npm run build:vite
 	@echo "✓ Desktop app built: desktop/dist/"
+
+app: setup-app desktop
+	@echo "✓ App service ready (desktop UI bundled for web mode)"
 
 #──────────────────────────────────────────────────────────────────────────────
 # Distribution
@@ -193,6 +218,27 @@ test-desktop: setup-desktop
 run-desktop: setup-desktop
 	@echo "Starting PS5 Upload desktop app..."
 	@cd desktop && npm run dev
+
+run-app: app
+	@echo "Starting PS5 Upload app service..."
+	@echo "Use APP_HOST and APP_PORT to customize bind address."
+	@cd app && npm run start
+
+package-app:
+	@echo "Packaging app bundle..."
+	@mkdir -p dist
+	@rm -rf dist/ps5upload-app
+	@mkdir -p dist/ps5upload-app
+	@cp -r app dist/ps5upload-app/
+	@cp -r shared dist/ps5upload-app/
+	@cp -r desktop dist/ps5upload-app/
+	@rm -rf dist/ps5upload-app/app/node_modules
+	@rm -rf dist/ps5upload-app/desktop/node_modules
+	@rm -rf dist/ps5upload-app/desktop/dist
+	@rm -rf dist/ps5upload-app/desktop/release
+	@cp README.md CHANGELOG.md FAQ.md Makefile VERSION dist/ps5upload-app/
+	@cd dist && zip -qr ps5upload-app.zip ps5upload-app
+	@echo "✓ App bundle created: dist/ps5upload-app.zip"
 
 #──────────────────────────────────────────────────────────────────────────────
 # Clean

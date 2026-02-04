@@ -2,6 +2,10 @@
 
 export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
     const api = window.electronAPI;
+    const webApi = (window as unknown as { ps5uploadWebAPI?: { invoke?: (cmd: string, args?: Record<string, unknown>) => Promise<T> } }).ps5uploadWebAPI;
+    if (!api && webApi?.invoke) {
+      return webApi.invoke(cmd, args);
+    }
     if (!api) {
       throw new Error('Electron API not available');
     }
@@ -73,6 +77,8 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
         return api.payloadDownloadAndSend(args.ip, args.fetch);
       case 'payload_check':
         return api.payloadCheck(args.ip);
+      case 'payload_caps':
+        return api.payloadCaps(args.ip);
       case 'payload_probe':
         return api.payloadProbe(args.path);
       case 'payload_status':
