@@ -3,6 +3,25 @@
 All notable changes to this project are documented here.
 This project follows Semantic Versioning.
 
+## [1.4.6] - 2026-02-04
+
+### Added
+- Payload/desktop/app startup verification for payload send flows (upload success now also validates payload startup/version).
+- New **Mad Max** payload fast path for large single-file uploads using direct raw streaming.
+- New parallel offset fast path (`UPLOAD_FAST_OFFSET`) for Mad Max large-file chunk uploads.
+- New **Mad Max** UI mode in the Transfer source panel (grouped with Optimize/Deep Optimize).
+
+### Changed
+- Desktop "current" payload reload now prefers local `payload/ps5upload.elf` before release download.
+- Mad Max now runs fixed max settings (locked profile): payload connections/workers, chunk size, no compression, unlimited bandwidth.
+- Mad Max is now selectable for archive sources from the same optimize controls area.
+- Payload startup defaults to a safer initialization profile to reduce firmware-dependent load crashes.
+- Payload upload pipeline defaults tuned for higher throughput (larger recv buffer and deeper worker queues).
+
+### Fixed
+- Reduced false-positive payload send success by failing early when payload startup verification does not pass.
+- Improved diagnostics around payload reload/startup mismatches (for example sending new ELF while old payload keeps running).
+
 ## [1.4.5] - 2026-02-03
 
 ### Added

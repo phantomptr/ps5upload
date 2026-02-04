@@ -52,7 +52,7 @@ function createTransferStatus(overrides = {}) {
 const defaultConfig = {
   address: '192.168.0.100',
   storage: '/data',
-  connections: 4,
+  connections: 6,
   ftp_connections: 6,
   use_temp: false,
   auto_connect: false,
@@ -1403,6 +1403,22 @@ function payloadPathIsElf(filepath) {
   return ext === '.elf' || ext === '.bin';
 }
 
+function findLocalPayloadElf() {
+  const candidates = [
+    path.resolve(__dirname, '../payload/ps5upload.elf'),
+    path.resolve(process.cwd(), 'payload/ps5upload.elf'),
+    path.resolve(process.cwd(), 'ps5upload.elf'),
+  ];
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p) && payloadPathIsElf(p)) return p;
+    } catch {
+      // ignore
+    }
+  }
+  return null;
+}
+
 function probePayloadFile(filepath) {
   if (!payloadPathIsElf(filepath)) {
     return { is_ps5upload: false, code: 'payload_probe_invalid_ext' };
@@ -1433,6 +1449,26 @@ async function sendPayloadFile(ip, filepath) {
       socket.end();
     });
   });
+}
+
+async function waitForPayloadStartup(ip, expectedVersion = null, timeoutMs = 15000, pollMs = 500) {
+  const startedAt = Date.now();
+  let lastErr = null;
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      const version = await getPayloadVersion(ip, TRANSFER_PORT);
+      if (!expectedVersion || String(version) === String(expectedVersion)) {
+        return { ok: true, version };
+      }
+      return { ok: false, version, error: `Running ${version}, expected ${expectedVersion}` };
+    } catch (err) {
+      lastErr = err;
+    }
+    // eslint-disable-next-line no-await-in-loop
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((resolve) => setTimeout(resolve, Math.max(100, Number(pollMs) || 500)));
+  }
+  return { ok: false, version: null, error: `Payload did not start in ${Math.round(timeoutMs / 1000)}s: ${lastErr && lastErr.message ? lastErr.message : String(lastErr || 'timeout')}` };
 }
 
 function compareVersions(a, b) {
@@ -1728,12 +1764,31 @@ async function handleInvoke(cmd, args, runtime) {
       const filepath = (args && args.path ? String(args.path) : '').trim();
       if (!ip) throw new Error('Enter a PS5 address first.');
       if (!filepath) throw new Error('Select a payload (.elf/.bin) file first.');
-      return sendPayloadFile(ip, filepath);
+      const sent = await sendPayloadFile(ip, filepath);
+      const probe = probePayloadFile(filepath);
+      if (probe && probe.is_ps5upload) {
+        const startup = await waitForPayloadStartup(ip, runtime.version, 15000, 500);
+        if (!startup.ok) {
+          throw new Error(`Payload upload completed but startup verification failed: ${startup.error}`);
+        }
+      }
+      return sent;
     }
     case 'payload_download_and_send': {
       const ip = (args && args.ip ? String(args.ip) : '').trim();
       const fetchMode = (args && args.fetch ? String(args.fetch) : 'latest').trim();
       if (!ip) throw new Error('Enter a PS5 address first.');
+      if (fetchMode === 'current') {
+        const localPayload = findLocalPayloadElf();
+        if (localPayload) {
+          const sent = await sendPayloadFile(ip, localPayload);
+          const startup = await waitForPayloadStartup(ip, runtime.version, 15000, 500);
+          if (!startup.ok) {
+            throw new Error(`Payload upload completed but startup verification failed: ${startup.error}`);
+          }
+          return sent;
+        }
+      }
       let release;
       if (fetchMode === 'current') {
         try {
@@ -1750,7 +1805,13 @@ async function handleInvoke(cmd, args, runtime) {
       if (!asset || !asset.browser_download_url) throw new Error('Payload asset not found in release');
       const tmpPath = path.join(os.tmpdir(), `ps5upload_${fetchMode}.elf`);
       await downloadAsset(asset.browser_download_url, tmpPath);
-      return sendPayloadFile(ip, tmpPath);
+      const sent = await sendPayloadFile(ip, tmpPath);
+      const expected = fetchMode === 'current' ? runtime.version : null;
+      const startup = await waitForPayloadStartup(ip, expected, 15000, 500);
+      if (!startup.ok) {
+        throw new Error(`Payload upload completed but startup verification failed: ${startup.error}`);
+      }
+      return sent;
     }
     case 'payload_check': {
       const ip = (args && args.ip ? String(args.ip) : '').trim();

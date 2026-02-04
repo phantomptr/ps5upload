@@ -29,11 +29,11 @@
 
 // Optimized for single-process threaded concurrency
 #define PACK_BUFFER_SIZE (48 * 1024 * 1024)
-#define PACK_QUEUE_DEPTH 4
-#define WRITER_THREAD_COUNT 4
+#define PACK_QUEUE_DEPTH 8
+#define WRITER_THREAD_COUNT 6
 #define FILE_WRITE_QUEUE_DEPTH (16 * 1024)
 #define FILE_WRITE_INTERVAL_MS 250
-#define UPLOAD_RECV_BUFFER_SIZE (2 * 1024 * 1024)
+#define UPLOAD_RECV_BUFFER_SIZE (8 * 1024 * 1024)
 #define TUNE_PACK_MIN (4 * 1024 * 1024)
 
 // Buffer pool for large packs

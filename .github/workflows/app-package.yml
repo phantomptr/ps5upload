@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Version tag for naming (example: v1.4.5)"
+        description: "Version tag for naming (example: v1.4.6)"
         required: false
         default: ""
 

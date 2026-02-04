@@ -270,7 +270,7 @@ type ResumeOption = "none" | "size" | "hash_large" | "hash_medium" | "sha256";
 
 type DownloadCompressionOption = "auto" | "none" | "lz4" | "zstd" | "lzma";
 
-type OptimizeMode = "none" | "optimize" | "deep";
+type OptimizeMode = "none" | "optimize" | "deep" | "madmax";
 
 type RarExtractMode = "normal" | "safe" | "turbo";
 
@@ -2077,6 +2077,29 @@ export default function App() {
 
   const handleOptimizeMode = async (mode: OptimizeMode) => {
     if (mode === "none") return;
+    if (mode === "madmax") {
+      if (scanStatus === "scanning") return;
+      if (optimizeMode === "madmax") {
+        resetScan();
+        return;
+      }
+      if (!optimizeSnapshot.current) {
+        optimizeSnapshot.current = {
+          connections,
+          ftpConnections,
+          compression,
+          bandwidth: bandwidthLimit,
+          autoTune
+        };
+      }
+      setOptimizeMode("madmax");
+      optimizePendingRef.current = null;
+      setScanMode(null);
+      setScanStatus("idle");
+      setScanError(null);
+      applyOptimizeSettings(undefined, undefined, "madmax");
+      return;
+    }
     if (scanStatus === 'scanning') {
       if (optimizePendingRef.current === mode) {
         await handleCancelScan();
@@ -2138,6 +2161,15 @@ export default function App() {
     const files = typeof filesOverride === "number" ? filesOverride : scanFiles;
     const total = typeof totalOverride === "number" ? totalOverride : scanTotal;
     const mode = typeof modeOverride === "string" ? modeOverride : optimizeMode;
+    if (mode === "madmax") {
+      return {
+        connections: 8,
+        ftpConnections: 1,
+        compression: "none" as CompressionOption,
+        bandwidth: 0,
+        autoTune: false
+      };
+    }
     if (files <= 0 || total <= 0) {
       return {
         connections: 2,
@@ -2215,7 +2247,8 @@ export default function App() {
     setCompression(nextSettings.compression);
     setBandwidthLimit(nextSettings.bandwidth);
     const tag = scanPartial ? " (sampled)" : "";
-    const label = (modeOverride ?? optimizeMode) === "deep" ? "Deep optimize" : "Optimize";
+    const mode = (modeOverride ?? optimizeMode);
+    const label = mode === "deep" ? "Deep optimize" : mode === "madmax" ? "Mad Max" : "Optimize";
     setClientLogs((prev) => [
       `${label}${tag}: connections=${nextSettings.connections}, ftp=${nextSettings.ftpConnections}, compression=${nextSettings.compression}, bandwidth=${nextSettings.bandwidth === 0 ? "unlimited" : `${nextSettings.bandwidth} Mbps`}`,
       ...prev
@@ -3834,6 +3867,8 @@ export default function App() {
     !canOptimize || (scanInProgress && optimizePendingRef.current !== "optimize");
   const deepOptimizeButtonDisabled =
     !canOptimize || (scanInProgress && optimizePendingRef.current !== "deep");
+  const madMaxButtonDisabled =
+    !sourcePath.trim() || (scanInProgress && optimizePendingRef.current !== "madmax");
 
   useEffect(() => {
     if (!isArchiveSource) return;
@@ -6963,6 +6998,13 @@ export default function App() {
                   >
                     {tr("deep_optimize")}
                   </button>
+                  <button
+                    className={`btn ${optimizeMode === "madmax" ? "primary" : ""}`}
+                    onClick={() => handleOptimizeMode("madmax")}
+                    disabled={madMaxButtonDisabled}
+                  >
+                    Mad Max
+                  </button>
                 </div>
                 {scanStatus !== "idle" && (
                   <div className="stack">
@@ -6991,6 +7033,7 @@ export default function App() {
                 )}
                 <p className="muted small">{tr("optimize_help")}</p>
                 <p className="muted small">{tr("deep_optimize_help")}</p>
+                <p className="muted small">Mad Max: fixed max profile (payload=8, FTP=1, compression=none, bandwidth=unlimited).</p>
                 {isArchiveSource && (
                   <p className="muted small">{tr("scan_archive_not_supported")}</p>
                 )}

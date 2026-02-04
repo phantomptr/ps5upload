@@ -20,6 +20,8 @@ void handle_test_write(int client_sock, const char *path);
 void handle_create_path(int client_sock, const char *path);
 void handle_check_dir(int client_sock, const char *path);
 void handle_upload_v4_wrapper(int client_sock, const char *args);
+void handle_upload_fast_wrapper(int client_sock, const char *args);
+void handle_upload_fast_offset_wrapper(int client_sock, const char *args);
 void handle_delete_path(int client_sock, const char *path);
 void handle_delete_path_async(int client_sock, const char *path);
 void handle_move_path(int client_sock, const char *args);

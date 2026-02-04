@@ -2493,6 +2493,318 @@ void handle_upload_v4_wrapper(int client_sock, const char *args) {
     handle_upload_v4(client_sock, dest_path, use_temp, chmod_each_file, chmod_final);
 }
 
+void handle_upload_fast_wrapper(int client_sock, const char *args) {
+    char dest_root[PATH_MAX];
+    char rel_path[PATH_MAX];
+    char mode[16] = {0};
+    char size_token[64] = {0};
+    const char *rest = NULL;
+    uint64_t total_size = 0;
+    int chmod_final = 0;
+
+    if (!args) {
+        const char *error = "ERROR: Invalid UPLOAD_FAST format\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+
+    if (parse_quoted_token(args, dest_root, sizeof(dest_root), &rest) != 0 ||
+        parse_quoted_token(rest, rel_path, sizeof(rel_path), &rest) != 0 ||
+        parse_quoted_token(rest, size_token, sizeof(size_token), &rest) != 0) {
+        const char *error = "ERROR: Invalid UPLOAD_FAST format\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+
+    if (rest && *rest) {
+        if (parse_quoted_token(rest, mode, sizeof(mode), &rest) != 0) {
+            const char *error = "ERROR: Invalid UPLOAD_FAST mode\n";
+            send(client_sock, error, strlen(error), 0);
+            return;
+        }
+    }
+    if (rest && *rest) {
+        char opt[16] = {0};
+        if (parse_quoted_token(rest, opt, sizeof(opt), &rest) == 0) {
+            if (strcasecmp(opt, "CHMOD_END") == 0 || strcmp(opt, "1") == 0) {
+                chmod_final = 1;
+            }
+        }
+    }
+
+    if (!is_path_safe(dest_root)) {
+        const char *error = "ERROR: Invalid destination path\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+    if (strstr(rel_path, "..")) {
+        const char *error = "ERROR: Invalid relative path\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+
+    errno = 0;
+    unsigned long long parsed_size = strtoull(size_token, NULL, 10);
+    if (errno != 0) {
+        const char *error = "ERROR: Invalid upload size\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+    total_size = (uint64_t)parsed_size;
+
+    // Mad Max mode is a direct single-file stream path.
+    if (mode[0] && strcasecmp(mode, "DIRECT") != 0) {
+        const char *error = "ERROR: UPLOAD_FAST supports DIRECT mode only\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+
+    char final_path[PATH_MAX];
+    if (snprintf(final_path, sizeof(final_path), "%s/%s", dest_root, rel_path) >= (int)sizeof(final_path)) {
+        const char *error = "ERROR: Destination path too long\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+
+    char parent_path[PATH_MAX];
+    strncpy(parent_path, final_path, sizeof(parent_path) - 1);
+    parent_path[sizeof(parent_path) - 1] = '\0';
+    char *slash = strrchr(parent_path, '/');
+    if (slash && slash != parent_path) {
+        *slash = '\0';
+        char mkerr[128] = {0};
+        if (mkdir_p(parent_path, 0777, mkerr, sizeof(mkerr)) != 0) {
+            char error[256];
+            snprintf(error, sizeof(error), "ERROR: %s\n", mkerr[0] ? mkerr : "mkdir failed");
+            send(client_sock, error, strlen(error), 0);
+            return;
+        }
+    }
+
+    int fd = open(final_path, O_WRONLY | O_CREAT | O_TRUNC, chmod_final ? 0777 : 0666);
+    if (fd < 0) {
+        char error[256];
+        snprintf(error, sizeof(error), "ERROR: open failed: %s\n", strerror(errno));
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+
+    const char *ready = "READY\n";
+    if (send_all(client_sock, ready, strlen(ready)) != 0) {
+        close(fd);
+        return;
+    }
+
+    size_t buf_size = 8 * 1024 * 1024;
+    uint8_t *buffer = (uint8_t *)malloc(buf_size);
+    if (!buffer) {
+        close(fd);
+        const char *error = "ERROR: Out of memory\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+
+    uint64_t received = 0;
+    while (received < total_size) {
+        size_t want = (size_t)((total_size - received) > (uint64_t)buf_size ? (uint64_t)buf_size : (total_size - received));
+        ssize_t n = recv(client_sock, buffer, want, 0);
+        if (n <= 0) {
+            free(buffer);
+            close(fd);
+            const char *error = "ERROR: Upload stream interrupted\n";
+            send(client_sock, error, strlen(error), 0);
+            return;
+        }
+
+        size_t written = 0;
+        while (written < (size_t)n) {
+            ssize_t w = write(fd, buffer + written, (size_t)n - written);
+            if (w <= 0) {
+                free(buffer);
+                close(fd);
+                const char *error = "ERROR: Write failed\n";
+                send(client_sock, error, strlen(error), 0);
+                return;
+            }
+            written += (size_t)w;
+        }
+        received += (uint64_t)n;
+        payload_touch_activity();
+    }
+
+    free(buffer);
+    close(fd);
+    if (chmod_final) {
+        chmod(final_path, 0777);
+    }
+
+    char ok[128];
+    snprintf(ok, sizeof(ok), "OK %llu\n", (unsigned long long)received);
+    send_all(client_sock, ok, strlen(ok));
+}
+
+void handle_upload_fast_offset_wrapper(int client_sock, const char *args) {
+    char dest_root[PATH_MAX];
+    char rel_path[PATH_MAX];
+    char offset_token[64] = {0};
+    char total_token[64] = {0};
+    char len_token[64] = {0};
+    const char *rest = NULL;
+    uint64_t file_offset = 0;
+    uint64_t total_size = 0;
+    uint64_t chunk_len = 0;
+    int chmod_final = 0;
+
+    if (!args) {
+        const char *error = "ERROR: Invalid UPLOAD_FAST_OFFSET format\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+
+    if (parse_quoted_token(args, dest_root, sizeof(dest_root), &rest) != 0 ||
+        parse_quoted_token(rest, rel_path, sizeof(rel_path), &rest) != 0 ||
+        parse_quoted_token(rest, offset_token, sizeof(offset_token), &rest) != 0 ||
+        parse_quoted_token(rest, total_token, sizeof(total_token), &rest) != 0 ||
+        parse_quoted_token(rest, len_token, sizeof(len_token), &rest) != 0) {
+        const char *error = "ERROR: Invalid UPLOAD_FAST_OFFSET format\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+
+    if (rest && *rest) {
+        char token[32] = {0};
+        if (parse_quoted_token(rest, token, sizeof(token), &rest) == 0) {
+            if (strcasecmp(token, "CHMOD_END") == 0 || strcmp(token, "1") == 0) {
+                chmod_final = 1;
+            }
+        }
+    }
+
+    if (!is_path_safe(dest_root) || strstr(rel_path, "..")) {
+        const char *error = "ERROR: Invalid path\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+
+    errno = 0;
+    file_offset = (uint64_t)strtoull(offset_token, NULL, 10);
+    if (errno != 0) {
+        const char *error = "ERROR: Invalid offset\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+    errno = 0;
+    total_size = (uint64_t)strtoull(total_token, NULL, 10);
+    if (errno != 0) {
+        const char *error = "ERROR: Invalid total size\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+    errno = 0;
+    chunk_len = (uint64_t)strtoull(len_token, NULL, 10);
+    if (errno != 0) {
+        const char *error = "ERROR: Invalid chunk length\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+    if (chunk_len == 0 || file_offset > total_size || chunk_len > (total_size - file_offset)) {
+        const char *error = "ERROR: Invalid chunk range\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+
+    char final_path[PATH_MAX];
+    if (snprintf(final_path, sizeof(final_path), "%s/%s", dest_root, rel_path) >= (int)sizeof(final_path)) {
+        const char *error = "ERROR: Destination path too long\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+
+    char parent_path[PATH_MAX];
+    strncpy(parent_path, final_path, sizeof(parent_path) - 1);
+    parent_path[sizeof(parent_path) - 1] = '\0';
+    char *slash = strrchr(parent_path, '/');
+    if (slash && slash != parent_path) {
+        *slash = '\0';
+        char mkerr[128] = {0};
+        if (mkdir_p(parent_path, 0777, mkerr, sizeof(mkerr)) != 0) {
+            char error[256];
+            snprintf(error, sizeof(error), "ERROR: %s\n", mkerr[0] ? mkerr : "mkdir failed");
+            send(client_sock, error, strlen(error), 0);
+            return;
+        }
+    }
+
+    int fd = open(final_path, O_WRONLY | O_CREAT, chmod_final ? 0777 : 0666);
+    if (fd < 0) {
+        char error[256];
+        snprintf(error, sizeof(error), "ERROR: open failed: %s\n", strerror(errno));
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+    if (ftruncate(fd, (off_t)total_size) != 0) {
+        close(fd);
+        char error[256];
+        snprintf(error, sizeof(error), "ERROR: ftruncate failed: %s\n", strerror(errno));
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+
+    const char *ready = "READY\n";
+    if (send_all(client_sock, ready, strlen(ready)) != 0) {
+        close(fd);
+        return;
+    }
+
+    size_t buf_size = 8 * 1024 * 1024;
+    uint8_t *buffer = (uint8_t *)malloc(buf_size);
+    if (!buffer) {
+        close(fd);
+        const char *error = "ERROR: Out of memory\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
+
+    uint64_t received = 0;
+    while (received < chunk_len) {
+        size_t want = (size_t)((chunk_len - received) > (uint64_t)buf_size ? (uint64_t)buf_size : (chunk_len - received));
+        ssize_t n = recv(client_sock, buffer, want, 0);
+        if (n <= 0) {
+            free(buffer);
+            close(fd);
+            const char *error = "ERROR: Upload stream interrupted\n";
+            send(client_sock, error, strlen(error), 0);
+            return;
+        }
+
+        size_t written = 0;
+        while (written < (size_t)n) {
+            ssize_t w = pwrite(fd, buffer + written, (size_t)n - written, (off_t)(file_offset + received + written));
+            if (w <= 0) {
+                free(buffer);
+                close(fd);
+                const char *error = "ERROR: Write failed\n";
+                send(client_sock, error, strlen(error), 0);
+                return;
+            }
+            written += (size_t)w;
+        }
+
+        received += (uint64_t)n;
+        payload_touch_activity();
+    }
+
+    free(buffer);
+    close(fd);
+    if (chmod_final) {
+        chmod(final_path, 0777);
+    }
+
+    char ok[128];
+    snprintf(ok, sizeof(ok), "OK %llu\n", (unsigned long long)received);
+    send_all(client_sock, ok, strlen(ok));
+}
+
 void handle_payload_status(int client_sock) {
     char *json = extract_queue_get_status_json();
     if (!json) {

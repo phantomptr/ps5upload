@@ -46,10 +46,13 @@ const SMALL_FILE_AVG_BYTES = 256 * 1024; // 256KB
 const RESUME_HASH_LARGE_BYTES = 1024 * 1024 * 1024; // 1GB
 const RESUME_HASH_MED_BYTES = 128 * 1024 * 1024; // 128MB
 const WRITE_CHUNK_SIZE = 512 * 1024; // 512KB
+const MAD_MAX_WORKERS = 8;
+const MAD_MAX_CHUNK_SIZE = 32 * 1024 * 1024;
+const MAD_MAX_MIN_FILE_SIZE = 64 * 1024 * 1024;
 const MAGIC_FTX1 = 0x31585446;
 
 let sleepBlockerId = null;
-const VERSION = '1.4.5';
+const VERSION = '1.4.6';
 const IS_WINDOWS = process.platform === 'win32';
 
 function beginManageOperation(op) {
@@ -2592,7 +2595,7 @@ async function getSpace(ip, port, path) {
 const defaultConfig = {
   address: '192.168.0.100',
   storage: '/data',
-  connections: 4,
+  connections: 8,
   ftp_connections: 6,
   use_temp: false,
   auto_connect: false,
@@ -2825,7 +2828,7 @@ function loadProfiles() {
           storage: '',
           preset_index: 0,
           custom_preset_path: '',
-          connections: 4,
+          connections: 8,
           ftp_connections: 6,
           use_temp: false,
           auto_tune_connections: true,
@@ -2839,7 +2842,7 @@ function loadProfiles() {
           case 'storage': currentProfile.storage = value; break;
           case 'preset_index': currentProfile.preset_index = parseInt(value, 10) || 0; break;
           case 'custom_preset_path': currentProfile.custom_preset_path = value; break;
-          case 'connections': currentProfile.connections = parseInt(value, 10) || 4; break;
+          case 'connections': currentProfile.connections = parseInt(value, 10) || 8; break;
           case 'ftp_connections': currentProfile.ftp_connections = parseInt(value, 10) || 6; break;
           case 'use_temp': currentProfile.use_temp = ['1', 'true', 'yes', 'on'].includes(value.toLowerCase()); break;
           case 'auto_tune_connections': currentProfile.auto_tune_connections = ['1', 'true', 'yes', 'on'].includes(value.toLowerCase()); break;
@@ -3936,6 +3939,118 @@ async function runPayloadUploadParallelSingleFileV4(file, opts = {}) {
   }));
 }
 
+async function runPayloadUploadMadMaxSingleFile(file, opts = {}) {
+  const {
+    ip,
+    destPath,
+    cancel,
+    chmodAfterUpload = false,
+    onProgress = () => {},
+    log = () => {},
+  } = opts;
+
+  const totalSize = Number(file?.size || 0);
+  if (!ip || !destPath || !file?.abs_path || !file?.rel_path || totalSize < 0) {
+    throw new Error('Mad Max upload: invalid parameters');
+  }
+
+  // Mad Max uses a fixed max-throughput profile by design.
+  const workerCount = MAD_MAX_WORKERS;
+  const chunkSize = MAD_MAX_CHUNK_SIZE;
+  const chunks = [];
+  for (let offset = 0; offset < totalSize; offset += chunkSize) {
+    const len = Math.min(chunkSize, totalSize - offset);
+    chunks.push({ offset, len });
+  }
+
+  const workerQueues = Array.from({ length: workerCount }, () => []);
+  for (let i = 0; i < chunks.length; i += 1) {
+    workerQueues[i % workerCount].push(chunks[i]);
+  }
+  const activeQueues = workerQueues.filter((q) => q.length > 0);
+  const workerProgress = new Array(activeQueues.length).fill(0);
+
+  const sendChunk = async (chunk) => {
+    const socket = await createSocketWithTimeout(ip, TRANSFER_PORT);
+    tuneUploadSocket(socket);
+    let buffer = Buffer.alloc(0);
+
+    const readLine = () => new Promise((resolve, reject) => {
+      const onData = (data) => {
+        buffer = Buffer.concat([buffer, data]);
+        const idx = buffer.indexOf(0x0a);
+        if (idx < 0) return;
+        const line = buffer.subarray(0, idx).toString('utf8').trim();
+        buffer = buffer.subarray(idx + 1);
+        socket.off('data', onData);
+        socket.off('error', onErr);
+        resolve(line);
+      };
+      const onErr = (err) => {
+        socket.off('data', onData);
+        socket.off('error', onErr);
+        reject(err);
+      };
+      socket.on('data', onData);
+      socket.on('error', onErr);
+    });
+
+    try {
+      const chmodToken = chmodAfterUpload ? 'CHMOD_END' : '0';
+      const cmd = `UPLOAD_FAST_OFFSET ${escapeCommandPath(destPath)} ${escapeCommandPath(file.rel_path)} ${chunk.offset} ${totalSize} ${chunk.len} ${chmodToken}\n`;
+      socket.write(cmd);
+
+      const ready = await Promise.race([
+        readLine(),
+        sleepMs(READ_TIMEOUT_MS).then(() => { throw new Error('Mad Max offset handshake timeout'); }),
+      ]);
+      if (!ready.startsWith('READY')) {
+        throw new Error(`Mad Max offset rejected: ${ready || 'no response'}`);
+      }
+
+      const fd = await fs.promises.open(file.abs_path, 'r');
+      try {
+        let remaining = chunk.len;
+        let pos = chunk.offset;
+        const ioBuf = Buffer.allocUnsafe(8 * 1024 * 1024);
+        while (remaining > 0) {
+          if (cancel?.value) throw new Error('Upload cancelled by user');
+          const take = Math.min(ioBuf.length, remaining);
+          const { bytesRead } = await fd.read(ioBuf, 0, take, pos);
+          if (bytesRead <= 0) throw new Error('Mad Max offset read failed');
+          await writeAllRetry(socket, ioBuf.subarray(0, bytesRead), cancel || { value: false }, log);
+          remaining -= bytesRead;
+          pos += bytesRead;
+        }
+      } finally {
+        await fd.close().catch(() => {});
+      }
+
+      const result = await Promise.race([
+        readLine(),
+        sleepMs(READ_TIMEOUT_MS).then(() => { throw new Error('Mad Max offset completion timeout'); }),
+      ]);
+      if (!result.startsWith('OK')) {
+        throw new Error(`Mad Max offset failed: ${result || 'unknown response'}`);
+      }
+    } finally {
+      try {
+        socket.destroy();
+      } catch {}
+    }
+  };
+
+  await Promise.all(activeQueues.map(async (queue, idx) => {
+    for (const chunk of queue) {
+      if (cancel?.value) throw new Error('Upload cancelled by user');
+      await sendChunk(chunk);
+      workerProgress[idx] += chunk.len;
+      const sent = workerProgress.reduce((sum, v) => sum + v, 0);
+      onProgress(sent, 1, file.rel_path);
+    }
+  }));
+}
+
 function createAdaptiveUploadTuner({ ip, basePackLimit, baseChunkSize, userRateLimitBps, log, runId, allowPayloadTune }) {
   const state = {
     packLimit: basePackLimit,
@@ -3983,20 +4098,20 @@ function createAdaptiveUploadTuner({ ip, basePackLimit, baseChunkSize, userRateL
 
     let pressure = 0;
     // queue_count is a deep write queue (up to thousands), so tiny thresholds over-throttle.
-    if (queueCount >= 12000) pressure += 2;
-    else if (queueCount >= 8000) pressure += 1;
+    if (queueCount >= 15000) pressure += 2;
+    else if (queueCount >= 12000) pressure += 1;
 
     // pack_queue_count is a shallow queue (~16); treat near-full as real pressure.
     if (packQueueCount >= 15) pressure += 3;
-    else if (packQueueCount >= 12) pressure += 2;
-    else if (packQueueCount >= 8) pressure += 1;
+    else if (packQueueCount >= 14) pressure += 2;
+    else if (packQueueCount >= 13) pressure += 1;
 
-    if (packInUse >= 14) pressure += 1;
-    if (deltaEvents > 0 || deltaWait > 400) pressure += 1;
-    if (writeRateBps > 0 && recvRateBps > writeRateBps * 2.0) pressure += 1;
+    if (packInUse >= 15) pressure += 1;
+    if (deltaEvents > 0 || deltaWait > 1500) pressure += 1;
+    if (writeRateBps > 0 && recvRateBps > writeRateBps * 3.0) pressure += 1;
     if (typeof transfer.last_progress === 'number' && transfer.last_progress > 0) {
       const ageSec = Math.max(0, Date.now() / 1000 - transfer.last_progress);
-      if (ageSec > 5) pressure += 1;
+      if (ageSec > 10) pressure += 1;
     }
 
     if (pressure >= 5) { // Critical pressure
@@ -4010,31 +4125,27 @@ function createAdaptiveUploadTuner({ ip, basePackLimit, baseChunkSize, userRateL
       state.packLimit = clamp(Math.floor(state.packLimit * 0.7), PACK_BUFFER_MIN, basePackLimit);
       state.paceMs = clamp(state.paceMs + 8, 0, 60);
       state.stableTicks = 0;
-    } else if (pressure >= 1) { // Low pressure
+    } else if (pressure >= 2) { // Low pressure
       emit('transfer_log', { run_id: runId, key: 'log.payload.pressure' });
-      state.packLimit = clamp(Math.floor(state.packLimit * 0.9), PACK_BUFFER_MIN, basePackLimit);
-      state.paceMs = clamp(Math.max(state.paceMs, 2), 0, 40);
+      state.packLimit = clamp(Math.floor(state.packLimit * 0.95), PACK_BUFFER_MIN, basePackLimit);
+      state.paceMs = clamp(Math.max(state.paceMs, 1), 0, 40);
       state.stableTicks = 0;
     } else { // No pressure
       state.stableTicks += 1;
       if (state.stableTicks >= 2) {
-        state.paceMs = clamp(state.paceMs - 1, 0, 16);
-        state.packLimit = clamp(state.packLimit + 1024 * 1024, PACK_BUFFER_MIN, basePackLimit);
+        state.paceMs = clamp(state.paceMs - 2, 0, 16);
+        state.packLimit = clamp(state.packLimit + 2 * 1024 * 1024, PACK_BUFFER_MIN, basePackLimit);
       }
     }
 
     const payloadTuneAllowed = allowPayloadTune || tuneLevel >= 2;
-    if (payloadTuneAllowed && recommendPack > 0) {
+    if (payloadTuneAllowed && tuneLevel >= 2 && recommendPack > 0) {
       state.packLimit = Math.min(state.packLimit, recommendPack);
     }
-    if (payloadTuneAllowed && recommendPace > state.paceMs) {
+    if (payloadTuneAllowed && tuneLevel >= 2 && recommendPace > state.paceMs) {
       state.paceMs = recommendPace;
     }
-    if (payloadTuneAllowed && recommendRate > 0) {
-      if (!state.rateLimitBps || recommendRate < state.rateLimitBps) {
-        state.rateLimitBps = recommendRate;
-      }
-    } else if (userRateLimitBps) {
+    if (userRateLimitBps) {
       state.rateLimitBps = userRateLimitBps;
     } else {
       state.rateLimitBps = null;
@@ -4716,6 +4827,22 @@ function payloadPathIsElf(filepath) {
   return ext === '.elf' || ext === '.bin';
 }
 
+function findLocalPayloadElf() {
+  const candidates = [
+    path.resolve(__dirname, '../../payload/ps5upload.elf'),
+    path.resolve(process.cwd(), 'payload/ps5upload.elf'),
+    path.resolve(process.cwd(), 'ps5upload.elf'),
+  ];
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p) && payloadPathIsElf(p)) return p;
+    } catch {
+      // ignore
+    }
+  }
+  return null;
+}
+
 async function sendPayloadFile(ip, filepath) {
   if (!payloadPathIsElf(filepath)) {
     throw new Error('Payload must be a .elf or .bin file.');
@@ -4747,6 +4874,28 @@ async function sendPayloadFile(ip, filepath) {
       socket.end();
     });
   });
+}
+
+async function waitForPayloadStartup(ip, opts = {}) {
+  const timeoutMs = Math.max(2000, Number(opts.timeoutMs) || 15000);
+  const pollMs = Math.max(250, Number(opts.pollMs) || 500);
+  const expectedVersion = opts.expectedVersion ? String(opts.expectedVersion).trim() : '';
+  const startedAt = Date.now();
+  let lastErr = null;
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      const version = await getPayloadVersion(ip, TRANSFER_PORT);
+      if (!expectedVersion || version === expectedVersion) {
+        return { ok: true, version };
+      }
+      // Payload started, but not the expected version.
+      return { ok: false, version, error: `Running ${version}, expected ${expectedVersion}` };
+    } catch (err) {
+      lastErr = err;
+    }
+    await sleepMs(pollMs);
+  }
+  return { ok: false, version: null, error: `Payload did not start in ${Math.round(timeoutMs / 1000)}s: ${lastErr?.message || lastErr || 'timeout'}` };
 }
 
 function probePayloadFile(filepath) {
@@ -4833,27 +4982,39 @@ async function tryAutoReloadPayload(options = {}) {
       await sendPayloadFile(state.payloadIp, state.payloadAutoReloadPath);
     } else {
       const fetch = state.payloadAutoReloadMode === 'latest' ? 'latest' : 'current';
-      let release;
       if (fetch === 'current') {
-        try {
-          release = await fetchReleaseByTag(`v${VERSION}`);
-        } catch {
-          emit('payload_log', { message: `Tag v${VERSION} not found, falling back to latest release.` });
-          release = await fetchLatestRelease(false);
+        const localPayload = findLocalPayloadElf();
+        if (localPayload) {
+          emit('payload_log', { message: `Auto reload using local payload: ${localPayload}` });
+          await sendPayloadFile(state.payloadIp, localPayload);
+        } else {
+          let release;
+          try {
+            release = await fetchReleaseByTag(`v${VERSION}`);
+          } catch {
+            emit('payload_log', { message: `Tag v${VERSION} not found, falling back to latest release.` });
+            release = await fetchLatestRelease(false);
+          }
+          const asset = release.assets.find(a => a.name === 'ps5upload.elf');
+          if (!asset) {
+            emit('payload_log', { message: 'Auto reload failed: payload asset not found.' });
+            return;
+          }
+          const tmpPath = path.join(os.tmpdir(), 'ps5upload_autoreload.elf');
+          await downloadAsset(asset.browser_download_url, tmpPath);
+          await sendPayloadFile(state.payloadIp, tmpPath);
         }
       } else {
-        release = await fetchLatestRelease(false);
+        const release = await fetchLatestRelease(false);
+        const asset = release.assets.find(a => a.name === 'ps5upload.elf');
+        if (!asset) {
+          emit('payload_log', { message: 'Auto reload failed: payload asset not found.' });
+          return;
+        }
+        const tmpPath = path.join(os.tmpdir(), 'ps5upload_autoreload.elf');
+        await downloadAsset(asset.browser_download_url, tmpPath);
+        await sendPayloadFile(state.payloadIp, tmpPath);
       }
-
-      const asset = release.assets.find(a => a.name === 'ps5upload.elf');
-      if (!asset) {
-        emit('payload_log', { message: 'Auto reload failed: payload asset not found.' });
-        return;
-      }
-
-      const tmpPath = path.join(os.tmpdir(), `ps5upload_autoreload.elf`);
-      await downloadAsset(asset.browser_download_url, tmpPath);
-      await sendPayloadFile(state.payloadIp, tmpPath);
     }
 
     emit('payload_log', { message: 'Auto reload complete. Waiting for status...' });
@@ -5096,6 +5257,14 @@ function registerIpcHandlers() {
       emit('payload_log', { message: `Payload path: ${filepath}` });
 
       const bytes = await sendPayloadFile(ip, filepath);
+      const probe = probePayloadFile(filepath);
+      if (probe?.is_ps5upload) {
+        const startup = await waitForPayloadStartup(ip, { timeoutMs: 15000, pollMs: 500, expectedVersion: VERSION });
+        if (!startup.ok) {
+          throw new Error(`Payload upload completed but startup verification failed: ${startup.error}`);
+        }
+        emit('payload_log', { message: `Payload started: v${startup.version}` });
+      }
       emit('payload_log', { message: 'Payload sent successfully.' });
       emit('payload_done', { bytes, error: null });
     } catch (err) {
@@ -5114,6 +5283,21 @@ function registerIpcHandlers() {
     emit('payload_busy', { busy: true });
 
     try {
+      if (fetch === 'current') {
+        const localPayload = findLocalPayloadElf();
+        if (localPayload) {
+          emit('payload_log', { message: `Using local payload: ${localPayload}` });
+          const bytes = await sendPayloadFile(ip, localPayload);
+          const startup = await waitForPayloadStartup(ip, { timeoutMs: 15000, pollMs: 500, expectedVersion: VERSION });
+          if (!startup.ok) {
+            throw new Error(`Payload upload completed but startup verification failed: ${startup.error}`);
+          }
+          emit('payload_log', { message: `Payload started: v${startup.version}` });
+          emit('payload_done', { bytes, error: null });
+          return true;
+        }
+      }
+
       const logLabel = fetch === 'current' ? `Downloading payload v${VERSION}...` : 'Downloading latest payload...';
       emit('payload_log', { message: logLabel });
 
@@ -5149,6 +5333,12 @@ function registerIpcHandlers() {
       emit('payload_log', { message: `Payload downloaded: ${tmpPath}` });
 
       const bytes = await sendPayloadFile(ip, tmpPath);
+      const expectVersion = fetch === 'current' ? VERSION : null;
+      const startup = await waitForPayloadStartup(ip, { timeoutMs: 15000, pollMs: 500, expectedVersion: expectVersion });
+      if (!startup.ok) {
+        throw new Error(`Payload upload completed but startup verification failed: ${startup.error}`);
+      }
+      emit('payload_log', { message: `Payload started: v${startup.version}` });
       emit('payload_done', { bytes, error: null });
     } catch (err) {
       emit('payload_done', { bytes: null, error: err.message });
@@ -7242,7 +7432,7 @@ const emitLog = (message, level = 'info', force = false) => {
           if (uploadMode !== 'payload') {
             state.transferMeta.effective_ftp_connections = effectiveFtpConnections;
           }
-          const effectivePayloadConnections = clamp(Math.floor(Number(req.connections) || 4), 1, 6);
+  const effectivePayloadConnections = clamp(Math.floor(Number(req.connections) || 4), 1, 8);
           const connectionSummary = uploadMode === 'payload'
             ? `payload=${effectivePayloadConnections}`
             : uploadMode === 'ftp'
@@ -7382,6 +7572,32 @@ const emitLog = (message, level = 'info', force = false) => {
             while (true) {
               let adaptiveTuner = null;
               try {
+                const madMaxEligible = Array.isArray(attemptFiles) &&
+                  attemptFiles.length === 1 &&
+                  Number(attemptFiles[0]?.size || 0) >= MAD_MAX_MIN_FILE_SIZE;
+                if (madMaxEligible) {
+                  emitLog(`Payload Mad Max mode: locked max profile (${MAD_MAX_WORKERS} workers, ${(MAD_MAX_CHUNK_SIZE / (1024 * 1024)).toFixed(0)}MB chunks).`, 'info');
+                  state.transferStatus = {
+                    ...state.transferStatus,
+                    payload_transfer_path: 'mad_max_single',
+                    payload_workers: MAD_MAX_WORKERS,
+                  };
+                  await runPayloadUploadMadMaxSingleFile(attemptFiles[0], {
+                    ip: req.ip,
+                    destPath: req.dest_path,
+                    cancel: { get value() { return state.transferCancel; } },
+                    chmodAfterUpload: !!req.chmod_after_upload,
+                    log: debugLog,
+                    onProgress: (sent, filesSent, currentFile) => {
+                      payloadSent = BigInt(sent);
+                      payloadFilesSent = filesSent;
+                      updateProgress(currentFile);
+                    },
+                  });
+                  parsed = { files: 1, bytes: Number(payloadSent) };
+                  return;
+                }
+
                 const isParallelCandidate = Array.isArray(attemptFiles) && effectivePayloadConnections > 1;
                 if (isParallelCandidate) {
                   const uploadInit = async () => uploadPayloadInit(

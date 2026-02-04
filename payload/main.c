@@ -29,6 +29,20 @@
 
 #include <ps5/kernel.h>
 
+/* sys_budget_set - removes resource budget constraints so kernel won't kill us */
+static int sys_budget_set(long budget) {
+    return (int)syscall(0x23b, budget);
+}
+
+/*
+ * Some firmware/exploit combinations are sensitive to aggressive ucred/jail edits
+ * during early payload init. Keep startup conservative by default.
+ */
+#ifndef ENABLE_AGGRESSIVE_PRIV_ESC
+#define ENABLE_AGGRESSIVE_PRIV_ESC 0
+#endif
+
+#if ENABLE_AGGRESSIVE_PRIV_ESC
 /* Full capability mask - grants all permissions */
 static const uint8_t g_full_caps[16] = {
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
@@ -38,11 +52,7 @@ static const uint8_t g_full_caps[16] = {
 /* Auth IDs from etaHEN - grants system-level privileges */
 #define AUTHID_SYSTEM_PROCESS   0x4800000000010003ULL  /* System process auth ID */
 #define AUTHID_SHELLCORE        0x4800000000000007ULL  /* ShellCore auth ID */
-
-/* sys_budget_set - removes resource budget constraints so kernel won't kill us */
-static int sys_budget_set(long budget) {
-    return (int)syscall(0x23b, budget);
-}
+#endif
 
 #include "config.h"
 #include "storage.h"
@@ -1095,6 +1105,16 @@ static void process_command(struct ClientConnection *conn) {
         close_connection(conn);
         return;
     }
+    if (strncmp(conn->cmd_buffer, "UPLOAD_FAST ", 12) == 0) {
+        handle_upload_fast_wrapper(conn->sock, conn->cmd_buffer + 12);
+        close_connection(conn);
+        return;
+    }
+    if (strncmp(conn->cmd_buffer, "UPLOAD_FAST_OFFSET ", 19) == 0) {
+        handle_upload_fast_offset_wrapper(conn->sock, conn->cmd_buffer + 19);
+        close_connection(conn);
+        return;
+    }
 
     const char *error = "ERROR: Unknown command\n";
     send(conn->sock, error, strlen(error), 0);
@@ -1125,42 +1145,35 @@ int main(void) {
     // Create logging directory
     printf("[INIT] Creating log directories...\n");
     
-    // Enhanced kernel-level privilege escalation (based on etaHEN techniques)
-    // This provides: jail escape, root UID, full capabilities, system auth ID,
-    // and removes resource budget constraints to prevent kernel from killing us.
     pid_t pid = getpid();
-    printf("[INIT] Raising privileges...\n");
+    printf("[INIT] Applying safe startup profile...\n");
 
-    // 1. Escape jail and set root directory
+#if ENABLE_AGGRESSIVE_PRIV_ESC
+    printf("[INIT] Aggressive privilege escalation enabled.\n");
     kernel_set_proc_rootdir(pid, kernel_get_root_vnode());
-    kernel_set_proc_jaildir(pid, 0);  // Full jail escape (0, not root vnode)
-
-    // 2. Set all UID/GID to root
+    kernel_set_proc_jaildir(pid, 0);
     kernel_set_ucred_uid(pid, 0);
     kernel_set_ucred_ruid(pid, 0);
     kernel_set_ucred_svuid(pid, 0);
     kernel_set_ucred_rgid(pid, 0);
     kernel_set_ucred_svgid(pid, 0);
-
-    // 3. Grant full capabilities (prevents permission denied errors)
     kernel_set_ucred_caps(pid, g_full_caps);
-
-    // 4. Set auth ID for system-level privileges (ShellCore identity)
     kernel_set_ucred_authid(pid, AUTHID_SHELLCORE);
+#endif
 
-    // 5. Remove resource budget constraints (prevents kernel from killing us)
+    // Keep only low-risk tuning enabled by default.
     if (sys_budget_set(0) < 0) {
         printf("[INIT] Warning: sys_budget_set failed (may be unsupported)\n");
     }
 
-    // 6. Lock memory pages to prevent swapping (improves stability during heavy I/O)
+    // Lock memory pages to prevent swapping (improves stability during heavy I/O)
 #ifdef MCL_CURRENT
     if (mlockall(MCL_CURRENT | MCL_FUTURE) < 0) {
         printf("[INIT] Warning: mlockall failed (non-critical)\n");
     }
 #endif
 
-    // 7. Set high priority scheduling for better responsiveness
+    // Set high priority scheduling for better responsiveness
     struct sched_param sp;
     sp.sched_priority = sched_get_priority_max(SCHED_RR);
     if (sp.sched_priority > 0) {
@@ -1170,7 +1183,7 @@ int main(void) {
         }
     }
 
-    printf("[INIT] Privileges raised successfully (kernel-level control enabled)\n");
+    printf("[INIT] Startup profile applied.\n");
     
     mkdir("/data/ps5upload", 0777);
     mkdir("/data/ps5upload/logs", 0777);
