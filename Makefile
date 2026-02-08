@@ -217,7 +217,19 @@ test-desktop: setup-desktop
 
 run-desktop: setup-desktop
 	@echo "Starting PS5 Upload desktop app..."
-	@cd desktop && npm run dev
+	@if [ -z "$$DISPLAY" ] && [ -z "$$WAYLAND_DISPLAY" ]; then \
+		if command -v xvfb-run >/dev/null 2>&1; then \
+			echo "No display detected, using xvfb-run..."; \
+			cd desktop && xvfb-run --auto-servernum npm run dev; \
+		else \
+			echo "ERROR: No display server found ($$DISPLAY / $$WAYLAND_DISPLAY not set)."; \
+			echo "  Install xvfb to run headless: sudo apt-get install -y xvfb"; \
+			echo "  Or run this on a machine with a display server."; \
+			exit 1; \
+		fi; \
+	else \
+		cd desktop && npm run dev; \
+	fi
 
 run-app: app
 	@echo "Starting PS5 Upload app service..."

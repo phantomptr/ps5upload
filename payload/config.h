@@ -5,7 +5,7 @@
 
 // Network settings
 #define SERVER_PORT 9113
-#define MAX_CONNECTIONS 12
+#define MAX_CONNECTIONS 32
 #define RECV_TIMEOUT_SEC 300  // 5 minutes
 
 // Buffer sizes - optimized for high throughput
