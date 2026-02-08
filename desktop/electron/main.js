@@ -65,6 +65,20 @@ const MAD_MAX_DEFAULT_CHUNK_BYTES = 512 * 1024 * 1024; // 512MB
 const MAD_MAX_MIN_FILE_SIZE = 64 * 1024 * 1024;
 const MAGIC_FTX1 = 0x31585446;
 
+const UploadCmd = {
+  StartUpload: 0x10,
+  UploadChunk: 0x11,
+  EndUpload: 0x12,
+};
+
+const UploadResp = {
+  Ok: 0x01,
+  Error: 0x02,
+  Data: 0x03,
+  Ready: 0x04,
+  Progress: 0x05,
+};
+
 let sleepBlockerId = null;
 const VERSION = '1.4.7';
 const IS_WINDOWS = process.platform === 'win32';
@@ -1473,6 +1487,9 @@ function tuneUploadSocket(socket) {
   if (!socket) return;
   socket.setNoDelay(true);
   socket.setKeepAlive(true, 1000);
+  socket.setTimeout(15 * 60 * 1000, () => {
+    try { socket.destroy(new Error('Upload socket timeout')); } catch {}
+  });
   if (typeof socket.setSendBufferSize === 'function') {
     socket.setSendBufferSize(UPLOAD_SOCKET_BUFFER_SIZE);
   }
@@ -4325,23 +4342,24 @@ async function runPayloadUploadLaneSingleFile(file, opts = {}) {
   const runWorker = async (queue, idx) => {
     const socket = await createSocketWithTimeout(ip, TRANSFER_PORT);
     tuneUploadSocket(socket);
-    const lineReader = createSocketLineReader(socket);
+    const reader = createSocketReader(socket);
     const fd = await fs.promises.open(file.abs_path, 'r');
     try {
       for (const chunk of queue) {
         if (cancel?.value) throw new Error('Upload cancelled by user');
         if (chunk.offset !== 0) await waitForPrealloc();
 
-        const chmodToken = chmodAfterUpload ? 'CHMOD_END' : '0';
-        const cmd = `UPLOAD_FAST_OFFSET ${escapeCommandPath(destPath)} ${escapeCommandPath(file.rel_path)} ${chunk.offset} ${totalSize} ${chunk.len} ${chmodToken}\n`;
+        const remotePath = joinRemotePath(destPath, file.rel_path);
+        const startPayload = buildUploadStartPayload(remotePath, totalSize, chunk.offset);
         if (typeof log === 'function') {
           log(`Lane ${idx + 1}/${activeQueues.length}: start chunk @ ${formatBytes(chunk.offset)} (${formatBytes(chunk.len)})`);
         }
-        socket.write(cmd);
+        await writeBinaryCommand(socket, UploadCmd.StartUpload, startPayload, cancel, log);
 
-        const ready = await lineReader.readLine(READ_TIMEOUT_MS);
-        if (!ready.startsWith('READY')) {
-          throw new Error(`Lane offset rejected: ${ready || 'no response'}`);
+        const readyResp = await readBinaryResponse(reader, READ_TIMEOUT_MS);
+        if (readyResp.code !== UploadResp.Ready) {
+          const msg = readyResp.data?.length ? readyResp.data.toString('utf8') : 'no response';
+          throw new Error(`Lane offset rejected: ${msg}`);
         }
         if (chunk.offset === 0 && !preallocResolved) {
           preallocResolved = true;
@@ -4350,13 +4368,15 @@ async function runPayloadUploadLaneSingleFile(file, opts = {}) {
 
         let remaining = chunk.len;
         let pos = chunk.offset;
-        const ioBuf = Buffer.allocUnsafe(8 * 1024 * 1024);
+        const ioBuf = Buffer.allocUnsafe(5 + 8 * 1024 * 1024);
         while (remaining > 0) {
           if (cancel?.value) throw new Error('Upload cancelled by user');
-          const take = Math.min(ioBuf.length, remaining);
-          const { bytesRead } = await fd.read(ioBuf, 0, take, pos);
+          const take = Math.min(ioBuf.length - 5, remaining);
+          const { bytesRead } = await fd.read(ioBuf, 5, take, pos);
           if (bytesRead <= 0) throw new Error('Lane offset read failed');
-          await writeAllRetry(socket, ioBuf.subarray(0, bytesRead), cancel || { value: false }, log);
+          ioBuf[0] = UploadCmd.UploadChunk;
+          ioBuf.writeUInt32LE(bytesRead, 1);
+          await writeAllRetry(socket, ioBuf.subarray(0, 5 + bytesRead), cancel || { value: false }, log);
           remaining -= bytesRead;
           pos += bytesRead;
           workerProgress[idx] += bytesRead;
@@ -4364,9 +4384,11 @@ async function runPayloadUploadLaneSingleFile(file, opts = {}) {
           onProgress(sent, 1, file.rel_path);
         }
 
-        const result = await lineReader.readLine(READ_TIMEOUT_MS);
-        if (!result.startsWith('OK')) {
-          throw new Error(`Lane offset failed: ${result || 'unknown response'}`);
+        await writeBinaryCommand(socket, UploadCmd.EndUpload, Buffer.alloc(0), cancel, log);
+        const endResp = await readBinaryResponse(reader, READ_TIMEOUT_MS);
+        if (endResp.code !== UploadResp.Ok) {
+          const msg = endResp.data?.length ? endResp.data.toString('utf8') : 'unknown response';
+          throw new Error(`Lane offset failed: ${msg}`);
         }
 
         // Chunk complete; progress already updated during streaming
@@ -4374,6 +4396,7 @@ async function runPayloadUploadLaneSingleFile(file, opts = {}) {
     } finally {
       await fd.close().catch(() => {});
       try {
+        reader.close();
         socket.destroy();
       } catch {}
     }
@@ -4408,31 +4431,35 @@ async function runPayloadUploadFastMultiFile(files, opts = {}) {
   const uploadOneFile = async (file, idx) => {
     const socket = await createSocketWithTimeout(ip, TRANSFER_PORT);
     tuneUploadSocket(socket);
+    const reader = createSocketReader(socket);
 
     try {
-      const chmodToken = chmodAfterUpload ? 'CHMOD_END' : '0';
-      const cmd = `UPLOAD_FAST ${escapeCommandPath(destPath)} ${escapeCommandPath(file.rel_path)} ${file.size} DIRECT ${chmodToken}\n`;
-      socket.write(cmd);
+      const remotePath = joinRemotePath(destPath, file.rel_path);
+      const startPayload = buildUploadStartPayload(remotePath, file.size, 0);
+      await writeBinaryCommand(socket, UploadCmd.StartUpload, startPayload, cancel, log);
 
       // Wait for READY
-      const response = await readLineFromSocket(socket, READ_TIMEOUT_MS);
-      if (!response.startsWith('READY')) {
-        throw new Error(`Upload rejected: ${response}`);
+      const readyResp = await readBinaryResponse(reader, READ_TIMEOUT_MS);
+      if (readyResp.code !== UploadResp.Ready) {
+        const msg = readyResp.data?.length ? readyResp.data.toString('utf8') : 'no response';
+        throw new Error(`Upload rejected: ${msg}`);
       }
 
       // Stream file data with 8MB buffer
       if (file.size > 0) {
         const fd = await fs.promises.open(file.abs_path, 'r');
         try {
-          const ioBuf = Buffer.allocUnsafe(8 * 1024 * 1024);
+          const ioBuf = Buffer.allocUnsafe(5 + 8 * 1024 * 1024);
           let remaining = file.size;
           let pos = 0;
           while (remaining > 0) {
             if (cancel.value) throw new Error('Upload cancelled');
-            const take = Math.min(ioBuf.length, remaining);
-            const { bytesRead } = await fd.read(ioBuf, 0, take, pos);
+            const take = Math.min(ioBuf.length - 5, remaining);
+            const { bytesRead } = await fd.read(ioBuf, 5, take, pos);
             if (bytesRead <= 0) throw new Error('Read failed');
-            await writeAllRetry(socket, ioBuf.subarray(0, bytesRead), cancel, log);
+            ioBuf[0] = UploadCmd.UploadChunk;
+            ioBuf.writeUInt32LE(bytesRead, 1);
+            await writeAllRetry(socket, ioBuf.subarray(0, 5 + bytesRead), cancel, log);
             remaining -= bytesRead;
             pos += bytesRead;
             totalSent += bytesRead;
@@ -4444,13 +4471,16 @@ async function runPayloadUploadFastMultiFile(files, opts = {}) {
       }
 
       // Wait for OK
-      const result = await readLineFromSocket(socket, READ_TIMEOUT_MS);
-      if (!result.startsWith('OK')) {
-        throw new Error(`Upload failed: ${result}`);
+      await writeBinaryCommand(socket, UploadCmd.EndUpload, Buffer.alloc(0), cancel, log);
+      const endResp = await readBinaryResponse(reader, READ_TIMEOUT_MS);
+      if (endResp.code !== UploadResp.Ok) {
+        const msg = endResp.data?.length ? endResp.data.toString('utf8') : 'unknown response';
+        throw new Error(`Upload failed: ${msg}`);
       }
       completedFiles++;
     } finally {
       try { socket.destroy(); } catch {}
+      try { reader.close(); } catch {}
     }
   };
 
@@ -4835,6 +4865,34 @@ function createSocketReader(socket) {
       waiters.clear();
     }
   };
+}
+
+function buildUploadStartPayload(remotePath, totalSize, offset) {
+  const pathBuf = Buffer.from(String(remotePath || ''), 'utf8');
+  const payload = Buffer.alloc(pathBuf.length + 1 + 8 + 8);
+  pathBuf.copy(payload, 0);
+  payload.writeBigUInt64LE(BigInt(totalSize), pathBuf.length + 1);
+  payload.writeBigUInt64LE(BigInt(offset), pathBuf.length + 9);
+  return payload;
+}
+
+async function readBinaryResponse(reader, timeoutMs = READ_TIMEOUT_MS) {
+  const header = await reader.readExact(5, timeoutMs);
+  const code = header.readUInt8(0);
+  const len = header.readUInt32LE(1);
+  const data = len > 0 ? await reader.readExact(len, timeoutMs) : Buffer.alloc(0);
+  return { code, data };
+}
+
+async function writeBinaryCommand(socket, cmd, payload, cancel, log = () => {}) {
+  const body = payload || Buffer.alloc(0);
+  const header = Buffer.alloc(5);
+  header[0] = cmd;
+  header.writeUInt32LE(body.length, 1);
+  await writeAllRetry(socket, header, cancel || { value: false }, log);
+  if (body.length > 0) {
+    await writeAllRetry(socket, body, cancel || { value: false }, log);
+  }
 }
 
 async function readFtxFrame(reader, timeoutMs = READ_TIMEOUT_MS) {
@@ -8045,7 +8103,6 @@ const emitLog = (message, level = 'info', force = false) => {
               }
             };
             while (true) {
-              let adaptiveTuner = null;
               try {
                 const madMaxEligible = Array.isArray(attemptFiles) &&
                   attemptFiles.length === 1 &&
@@ -8109,200 +8166,52 @@ const emitLog = (message, level = 'info', force = false) => {
                     return;
                   }
 
-                  const uploadInit = async () => uploadPayloadInit(
-                    req.ip,
-                    TRANSFER_PORT,
-                    req.dest_path,
-                    req.use_temp,
-                    {
-                      optimize_upload: effectiveOptimize,
-                      chmod_after_upload: req.chmod_after_upload,
+                  await ensurePrecreate();
+                  emitLog(`Payload binary multi-file mode: ${effectivePayloadConnections} workers.`, 'info');
+                  state.transferStatus = {
+                    ...state.transferStatus,
+                    payload_transfer_path: 'binary_multi_file',
+                    payload_workers: effectivePayloadConnections,
+                  };
+                  await runPayloadUploadFastMultiFile(attemptFiles, {
+                    ip: req.ip,
+                    destPath: req.dest_path,
+                    connections: effectivePayloadConnections,
+                    cancel: { get value() { return state.transferCancel; } },
+                    chmodAfterUpload: !!req.chmod_after_upload,
+                    onSkipFile: (file) => missingFiles.add(file.rel_path),
+                    log: debugLog,
+                    onProgress: (sent, filesSent, currentFile) => {
+                      payloadSent = BigInt(sent);
+                      payloadFilesSent = filesSent;
+                      updateProgress(currentFile);
                     },
-                    transferAbort.signal
-                  );
-                  try {
-                    await ensurePrecreate();
-                    // Prefer fast per-file UPLOAD_FAST path for fastest behavior
-                    try {
-                      emitLog(`Payload fast multi-file mode: ${effectivePayloadConnections} workers.`, 'info');
-                      state.transferStatus = {
-                        ...state.transferStatus,
-                        payload_transfer_path: 'fast_multi_file',
-                        payload_workers: effectivePayloadConnections,
-                      };
-                      await runPayloadUploadFastMultiFile(attemptFiles, {
-                        ip: req.ip,
-                        destPath: req.dest_path,
-                        connections: effectivePayloadConnections,
-                        cancel: { get value() { return state.transferCancel; } },
-                        chmodAfterUpload: !!req.chmod_after_upload,
-                        onSkipFile: (file) => missingFiles.add(file.rel_path),
-                        log: debugLog,
-                        onProgress: (sent, filesSent, currentFile) => {
-                          payloadSent = BigInt(sent);
-                          payloadFilesSent = filesSent;
-                          updateProgress(currentFile);
-                        },
-                      });
-                    } catch (fastErr) {
-                      // Fall back to V4 pack path if UPLOAD_FAST is unsupported
-                      if (fastErr?.message?.includes('PAYLOAD_UNSUPPORTED') ||
-                          fastErr?.message?.includes('Unknown command')) {
-                        emitLog(`Fast multi-file not supported, falling back to V4 parallel mode.`, 'warn');
-                        state.transferStatus = {
-                          ...state.transferStatus,
-                          payload_transfer_path: 'parallel_files',
-                          payload_workers: effectivePayloadConnections,
-                        };
-                        await runPayloadUploadParallelFiles(attemptFiles, {
-                          connections: effectivePayloadConnections,
-                          uploadInit,
-                          cancel: { get value() { return state.transferCancel; } },
-                          compression: effectiveCompression,
-                          rateLimitBps,
-                          packLimitBytes: basePackLimit,
-                          streamChunkBytes: baseChunkSize,
-                          extraPaceMs,
-                          onSkipFile: (file) => missingFiles.add(file.rel_path),
-                          log: debugLog,
-                          onProgress: (sent, filesSent, currentFile) => {
-                            payloadSent = BigInt(sent);
-                            payloadFilesSent = filesSent;
-                            updateProgress(currentFile);
-                          },
-                        });
-                      } else {
-                        throw fastErr;
-                      }
-                    }
-                    parsed = { files: payloadFilesSent || attemptFiles.length, bytes: Number(payloadSent) };
-                    return;
-                  } catch (err) {
-                    if (err?.message === 'PAYLOAD_UNSUPPORTED') {
-                      throw new Error('Payload is too old for required V4 upload path. Please update payload.');
-                    }
-                    throw err;
-                  }
+                  });
+                  parsed = { files: payloadFilesSent || attemptFiles.length, bytes: Number(payloadSent) };
+                  return;
                 }
 
-                emitLog('Connecting upload socket...', 'info');
+                emitLog('Payload binary upload (single worker).', 'info');
                 state.transferStatus = {
                   ...state.transferStatus,
-                  payload_transfer_path: 'single_stream',
+                  payload_transfer_path: 'binary_single',
                   payload_workers: 1,
                 };
-                const socket = await uploadPayloadInit(
-                  req.ip,
-                  TRANSFER_PORT,
-                  req.dest_path,
-                  req.use_temp,
-                  {
-                    optimize_upload: effectiveOptimize,
-                    chmod_after_upload: req.chmod_after_upload,
-                  },
-                  transferAbort.signal
-                );
-                emitLog('Upload socket READY.', 'info');
-                state.transferSocket = socket;
-                adaptiveTuner = createAdaptiveUploadTuner({
+                await runPayloadUploadFastMultiFile(attemptFiles, {
                   ip: req.ip,
-                  basePackLimit,
-                  baseChunkSize,
-                  userRateLimitBps: rateLimitBps,
+                  destPath: req.dest_path,
+                  connections: 1,
+                  cancel: { get value() { return state.transferCancel; } },
+                  chmodAfterUpload: !!req.chmod_after_upload,
+                  onSkipFile: (file) => missingFiles.add(file.rel_path),
                   log: debugLog,
-                  runId,
-                  allowPayloadTune: !!req.auto_tune_connections,
+                  onProgress: (sent, filesSent, currentFile) => {
+                    payloadSent = BigInt(sent);
+                    payloadFilesSent = filesSent;
+                    updateProgress(currentFile);
+                  },
                 });
-                const getPaceDelayMs = async () => {
-                  const baseDelay = await adaptiveTuner.getPaceDelayMs();
-                  return Math.max(baseDelay, extraPaceMs);
-                };
-
-                watchdog = setInterval(async () => {
-                  if (!state.transferActive || state.transferStatus.run_id !== runId) return;
-                  if (!state.transferStatus.status.startsWith('Uploading')) return;
-                  const ageMs = Date.now() - state.transferLastUpdate;
-                  if (ageMs < 15000) return;
-                  let status = state.payloadStatus?.status;
-                  if (!status) {
-                    try {
-                      status = await getPayloadStatus(req.ip, TRANSFER_PORT);
-                    } catch {
-                      return;
-                    }
-                  }
-                  const transfer = status?.transfer || {};
-                  const idle = Number(transfer.active_sessions || 0) === 0 &&
-                    Number(transfer.queue_count || 0) === 0 &&
-                    Number(transfer.pack_in_use || 0) === 0;
-                  if (idle) {
-                    emitLog('Watchdog: payload idle with no progress; aborting transfer.', 'warn');
-                    state.transferCancel = true;
-                    if (state.transferAbort) state.transferAbort.abort();
-                    if (state.transferSocket) state.transferSocket.destroy();
-                    state.transferStatus = { ...state.transferStatus, status: 'Error: Payload stalled/idle' };
-                    state.transferLastUpdate = Date.now();
-                    emit('transfer_error', { run_id: runId, message: 'Payload stalled/idle' });
-                    state.transferActive = false;
-                    triggerPayloadRecovery('payload stalled/idle').catch(() => {});
-                  }
-                }, 5000);
-                if (watchdog.unref) watchdog.unref();
-
-                try {
-                  adaptiveTuner.start();
-                  const socketRef = { current: socket };
-                  const isDynamic = typeof attemptFiles === 'function';
-                  const result = await (isDynamic ? sendFilesPayloadV4Dynamic(attemptFiles, socketRef, {
-                    cancel: { get value() { return state.transferCancel; } },
-                    progress: (sent, filesSent, elapsed, currentFile) => {
-                      payloadSent = BigInt(sent);
-                      payloadFilesSent = filesSent;
-                      updateProgress(currentFile);
-                    },
-                    log: debugLog,
-                    compression: effectiveCompression,
-                    rateLimitBps: rateLimitBps,
-                    packLimitBytes: basePackLimit,
-                    streamChunkBytes: baseChunkSize,
-                    getPackLimit: adaptiveTuner?.getPackLimit,
-                    getPaceDelayMs,
-                    reconnect: async () => uploadPayloadInit(
-                      req.ip,
-                      TRANSFER_PORT,
-                      req.dest_path,
-                      req.use_temp,
-                      {
-                        optimize_upload: effectiveOptimize,
-                        chmod_after_upload: req.chmod_after_upload,
-                      },
-                      transferAbort.signal
-                    ),
-                    onSkipFile: (file) => missingFiles.add(file.rel_path),
-                  }) : sendFilesPayloadV4(attemptFiles, socketRef, {
-                    cancel: { get value() { return state.transferCancel; } },
-                    progress: (sent, filesSent, elapsed, currentFile) => {
-                      payloadSent = BigInt(sent);
-                      payloadFilesSent = filesSent;
-                      updateProgress(currentFile);
-                    },
-                    log: debugLog,
-                    compression: effectiveCompression,
-                    rateLimitBps: rateLimitBps,
-                    packLimitBytes: basePackLimit,
-                    streamChunkBytes: baseChunkSize,
-                    getPackLimit: adaptiveTuner?.getPackLimit,
-                    getPaceDelayMs,
-                    onSkipFile: (file) => missingFiles.add(file.rel_path),
-                  }));
-                  const response = await readUploadResponse(socketRef.current, { value: false }, result.responseBuffer);
-                  parsed = parseUploadResponse(response);
-                } catch (err) {
-                  if (err?.message === 'PAYLOAD_UNSUPPORTED') {
-                    throw new Error('Payload is too old for required V4 upload path. Please update payload.');
-                  }
-                  throw err;
-                }
+                parsed = { files: payloadFilesSent || (Array.isArray(attemptFiles) ? attemptFiles.length : fileCount), bytes: Number(payloadSent) };
               } catch (err) {
                 if (!recoveryAttempted && !state.transferCancel && !transferAbort.signal.aborted) {
                   recoveryAttempted = true;
@@ -8326,8 +8235,6 @@ const emitLog = (message, level = 'info', force = false) => {
                   continue;
                 }
                 throw err;
-              } finally {
-                if (adaptiveTuner) adaptiveTuner.stop();
               }
               return;
             }

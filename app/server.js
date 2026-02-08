@@ -35,6 +35,18 @@ const READ_TIMEOUT_MS = 120000;
 const PAYLOAD_STATUS_CONNECT_TIMEOUT_MS = 5000;
 const PAYLOAD_STATUS_READ_TIMEOUT_MS = 10000;
 const UPLOAD_SOCKET_BUFFER_SIZE = 8 * 1024 * 1024;
+const UploadCmd = {
+  StartUpload: 0x10,
+  UploadChunk: 0x11,
+  EndUpload: 0x12,
+};
+const UploadResp = {
+  Ok: 0x01,
+  Error: 0x02,
+  Data: 0x03,
+  Ready: 0x04,
+  Progress: 0x05,
+};
 const LANE_CONNECTIONS = 4;
 const LANE_HUGE_FILE_BYTES = 20 * 1024 * 1024 * 1024;
 const LANE_LARGE_FILE_BYTES = 4 * 1024 * 1024 * 1024;
@@ -438,6 +450,9 @@ function tuneUploadSocket(socket) {
   if (!socket) return;
   socket.setNoDelay(true);
   socket.setKeepAlive(true, 1000);
+  socket.setTimeout(15 * 60 * 1000, () => {
+    try { socket.destroy(new Error('Upload socket timeout')); } catch {}
+  });
   if (typeof socket.setSendBufferSize === 'function') {
     socket.setSendBufferSize(UPLOAD_SOCKET_BUFFER_SIZE);
   }
@@ -516,6 +531,118 @@ function createSocketLineReader(socket) {
       });
     }),
   };
+}
+
+function createSocketReader(socket) {
+  let buffer = Buffer.alloc(0);
+  let ended = false;
+  let error = null;
+  const waiters = new Set();
+
+  const notify = () => {
+    for (const waiter of Array.from(waiters)) waiter();
+  };
+
+  const onData = (chunk) => {
+    buffer = Buffer.concat([buffer, chunk]);
+    notify();
+  };
+  const onError = (err) => {
+    error = err;
+    notify();
+  };
+  const onClose = () => {
+    ended = true;
+    notify();
+  };
+
+  socket.on('data', onData);
+  socket.on('error', onError);
+  socket.on('close', onClose);
+  socket.on('end', onClose);
+
+  const awaitCondition = (predicate, timeoutMs) => new Promise((resolve, reject) => {
+    if (error) return reject(error);
+    if (predicate()) return resolve();
+    if (ended) return reject(new Error('Connection closed'));
+
+    const waiter = () => {
+      if (error) {
+        cleanup();
+        reject(error);
+        return;
+      }
+      if (predicate()) {
+        cleanup();
+        resolve();
+        return;
+      }
+      if (ended) {
+        cleanup();
+        reject(new Error('Connection closed'));
+      }
+    };
+
+    let timeout = null;
+    if (timeoutMs) {
+      timeout = setTimeout(() => {
+        cleanup();
+        reject(new Error('Read timeout'));
+      }, timeoutMs);
+    }
+
+    const cleanup = () => {
+      waiters.delete(waiter);
+      if (timeout) clearTimeout(timeout);
+    };
+
+    waiters.add(waiter);
+  });
+
+  return {
+    readExact: async (length, timeoutMs) => {
+      if (length === 0) return Buffer.alloc(0);
+      await awaitCondition(() => buffer.length >= length, timeoutMs);
+      const out = buffer.slice(0, length);
+      buffer = buffer.slice(length);
+      return out;
+    },
+    close: () => {
+      socket.removeListener('data', onData);
+      socket.removeListener('error', onError);
+      socket.removeListener('close', onClose);
+      socket.removeListener('end', onClose);
+      waiters.clear();
+    },
+  };
+}
+
+function buildUploadStartPayload(remotePath, totalSize, offset) {
+  const pathBuf = Buffer.from(String(remotePath || ''), 'utf8');
+  const payload = Buffer.alloc(pathBuf.length + 1 + 8 + 8);
+  pathBuf.copy(payload, 0);
+  payload.writeBigUInt64LE(BigInt(totalSize), pathBuf.length + 1);
+  payload.writeBigUInt64LE(BigInt(offset), pathBuf.length + 9);
+  return payload;
+}
+
+async function readBinaryResponse(reader, timeoutMs = READ_TIMEOUT_MS) {
+  const header = await reader.readExact(5, timeoutMs);
+  const code = header.readUInt8(0);
+  const len = header.readUInt32LE(1);
+  const data = len > 0 ? await reader.readExact(len, timeoutMs) : Buffer.alloc(0);
+  return { code, data };
+}
+
+async function writeBinaryCommand(socket, cmd, payload) {
+  const body = payload || Buffer.alloc(0);
+  const header = Buffer.alloc(5);
+  header[0] = cmd;
+  header.writeUInt32LE(body.length, 1);
+  await writeAll(socket, header);
+  if (body.length > 0) {
+    await writeAll(socket, body);
+  }
 }
 
 function writeAll(socket, buffer) {
@@ -1211,27 +1338,30 @@ async function uploadFastOneFile(ip, destRoot, file, options = {}) {
   const chmodAfterUpload = Boolean(options.chmodAfterUpload);
   const socket = await createSocketWithTimeout(ip, TRANSFER_PORT);
   tuneUploadSocket(socket);
-  const lineReader = createSocketLineReader(socket);
+  const reader = createSocketReader(socket);
   try {
-    const chmodToken = chmodAfterUpload ? 'CHMOD_END' : '0';
-    const cmd = `UPLOAD_FAST ${escapeCommandPath(destRoot)} ${escapeCommandPath(file.rel_path)} ${file.size} DIRECT ${chmodToken}\n`;
-    socket.write(cmd);
-    const ready = await lineReader.readLine(READ_TIMEOUT_MS);
-    if (!ready.startsWith('READY')) {
-      throw new Error(`Upload rejected: ${ready}`);
+    const remotePath = joinRemotePath(destRoot, file.rel_path);
+    const startPayload = buildUploadStartPayload(remotePath, file.size, 0);
+    await writeBinaryCommand(socket, UploadCmd.StartUpload, startPayload);
+    const readyResp = await readBinaryResponse(reader, READ_TIMEOUT_MS);
+    if (readyResp.code !== UploadResp.Ready) {
+      const msg = readyResp.data?.length ? readyResp.data.toString('utf8') : 'no response';
+      throw new Error(`Upload rejected: ${msg}`);
     }
     if (Number(file.size) > 0) {
       const fd = await fs.promises.open(file.abs_path, 'r');
       try {
-        const buf = Buffer.allocUnsafe(8 * 1024 * 1024);
+        const buf = Buffer.allocUnsafe(5 + 8 * 1024 * 1024);
         let remaining = Number(file.size);
         let pos = 0;
         while (remaining > 0) {
           if (shouldCancel && shouldCancel()) throw new Error('Transfer cancelled');
-          const take = Math.min(buf.length, remaining);
-          const { bytesRead } = await fd.read(buf, 0, take, pos);
+          const take = Math.min(buf.length - 5, remaining);
+          const { bytesRead } = await fd.read(buf, 5, take, pos);
           if (bytesRead <= 0) throw new Error('Read failed');
-          await writeAll(socket, buf.subarray(0, bytesRead));
+          buf[0] = UploadCmd.UploadChunk;
+          buf.writeUInt32LE(bytesRead, 1);
+          await writeAll(socket, buf.subarray(0, 5 + bytesRead));
           remaining -= bytesRead;
           pos += bytesRead;
           if (onProgress) onProgress(bytesRead);
@@ -1240,12 +1370,15 @@ async function uploadFastOneFile(ip, destRoot, file, options = {}) {
         await fd.close().catch(() => {});
       }
     }
-    const result = await lineReader.readLine(READ_TIMEOUT_MS);
-    if (!result.startsWith('OK')) {
-      throw new Error(`Upload failed: ${result}`);
+    await writeBinaryCommand(socket, UploadCmd.EndUpload, Buffer.alloc(0));
+    const endResp = await readBinaryResponse(reader, READ_TIMEOUT_MS);
+    if (endResp.code !== UploadResp.Ok) {
+      const msg = endResp.data?.length ? endResp.data.toString('utf8') : 'unknown response';
+      throw new Error(`Upload failed: ${msg}`);
     }
     return true;
   } finally {
+    try { reader.close(); } catch {}
     try { socket.destroy(); } catch {}
   }
 }
@@ -1313,20 +1446,20 @@ async function uploadLaneSingleFile(ip, destRoot, file, options = {}) {
   const runWorker = async (queue, idx) => {
     const socket = await createSocketWithTimeout(ip, TRANSFER_PORT);
     tuneUploadSocket(socket);
-    const lineReader = createSocketLineReader(socket);
+    const reader = createSocketReader(socket);
     const fd = await fs.promises.open(file.abs_path, 'r');
     try {
       for (const chunk of queue) {
         if (shouldCancel && shouldCancel()) throw new Error('Transfer cancelled');
         if (chunk.offset !== 0) await waitForPrealloc();
 
-        const chmodToken = chmodAfterUpload ? 'CHMOD_END' : '0';
-        const cmd = `UPLOAD_FAST_OFFSET ${escapeCommandPath(destRoot)} ${escapeCommandPath(file.rel_path)} ${chunk.offset} ${totalSize} ${chunk.len} ${chmodToken}\n`;
-        socket.write(cmd);
-
-        const ready = await lineReader.readLine(READ_TIMEOUT_MS);
-        if (!ready.startsWith('READY')) {
-          throw new Error(`Lane rejected: ${ready}`);
+        const remotePath = joinRemotePath(destRoot, file.rel_path);
+        const startPayload = buildUploadStartPayload(remotePath, totalSize, chunk.offset);
+        await writeBinaryCommand(socket, UploadCmd.StartUpload, startPayload);
+        const readyResp = await readBinaryResponse(reader, READ_TIMEOUT_MS);
+        if (readyResp.code !== UploadResp.Ready) {
+          const msg = readyResp.data?.length ? readyResp.data.toString('utf8') : 'no response';
+          throw new Error(`Lane rejected: ${msg}`);
         }
         if (chunk.offset === 0 && !preallocResolved) {
           preallocResolved = true;
@@ -1335,20 +1468,24 @@ async function uploadLaneSingleFile(ip, destRoot, file, options = {}) {
 
         let remaining = chunk.len;
         let pos = chunk.offset;
-        const buf = Buffer.allocUnsafe(8 * 1024 * 1024);
+        const buf = Buffer.allocUnsafe(5 + 8 * 1024 * 1024);
         while (remaining > 0) {
           if (shouldCancel && shouldCancel()) throw new Error('Transfer cancelled');
-          const take = Math.min(buf.length, remaining);
-          const { bytesRead } = await fd.read(buf, 0, take, pos);
+          const take = Math.min(buf.length - 5, remaining);
+          const { bytesRead } = await fd.read(buf, 5, take, pos);
           if (bytesRead <= 0) throw new Error('Read failed');
-          await writeAll(socket, buf.subarray(0, bytesRead));
+          buf[0] = UploadCmd.UploadChunk;
+          buf.writeUInt32LE(bytesRead, 1);
+          await writeAll(socket, buf.subarray(0, 5 + bytesRead));
           remaining -= bytesRead;
           pos += bytesRead;
         }
 
-        const result = await lineReader.readLine(READ_TIMEOUT_MS);
-        if (!result.startsWith('OK')) {
-          throw new Error(`Lane failed: ${result}`);
+        await writeBinaryCommand(socket, UploadCmd.EndUpload, Buffer.alloc(0));
+        const endResp = await readBinaryResponse(reader, READ_TIMEOUT_MS);
+        if (endResp.code !== UploadResp.Ok) {
+          const msg = endResp.data?.length ? endResp.data.toString('utf8') : 'unknown response';
+          throw new Error(`Lane failed: ${msg}`);
         }
 
         workerProgress[idx] += chunk.len;
@@ -1357,6 +1494,7 @@ async function uploadLaneSingleFile(ip, destRoot, file, options = {}) {
       }
     } finally {
       await fd.close().catch(() => {});
+      try { reader.close(); } catch {}
       try { socket.destroy(); } catch {}
     }
   };

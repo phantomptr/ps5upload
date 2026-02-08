@@ -63,6 +63,157 @@ static const uint8_t g_full_caps[16] = {
 #include "unrar_handler.h"
 #include "extract_queue.h"
 
+// Binary upload protocol (PS5-Upload-Suite compatible)
+#define CMD_START_UPLOAD 0x10
+#define CMD_UPLOAD_CHUNK 0x11
+#define CMD_END_UPLOAD   0x12
+
+#define RESP_OK    0x01
+#define RESP_ERROR 0x02
+#define RESP_DATA  0x03
+#define RESP_READY 0x04
+#define RESP_PROGRESS 0x05
+
+typedef struct FileMutexEntry {
+    char path[PATH_MAX];
+    pthread_mutex_t mutex;
+    int ref_count;
+    struct FileMutexEntry *next;
+} FileMutexEntry;
+
+static pthread_mutex_t g_file_mutex_list_lock = PTHREAD_MUTEX_INITIALIZER;
+static FileMutexEntry *g_file_mutex_list = NULL;
+
+static pthread_mutex_t *get_file_mutex(const char *path) {
+    if (!path) return NULL;
+    pthread_mutex_lock(&g_file_mutex_list_lock);
+    FileMutexEntry *entry = g_file_mutex_list;
+    while (entry) {
+        if (strcmp(entry->path, path) == 0) {
+            entry->ref_count++;
+            pthread_mutex_unlock(&g_file_mutex_list_lock);
+            return &entry->mutex;
+        }
+        entry = entry->next;
+    }
+    entry = (FileMutexEntry *)malloc(sizeof(FileMutexEntry));
+    if (!entry) {
+        pthread_mutex_unlock(&g_file_mutex_list_lock);
+        return NULL;
+    }
+    memset(entry, 0, sizeof(*entry));
+    strncpy(entry->path, path, sizeof(entry->path) - 1);
+    pthread_mutex_init(&entry->mutex, NULL);
+    entry->ref_count = 1;
+    entry->next = g_file_mutex_list;
+    g_file_mutex_list = entry;
+    pthread_mutex_unlock(&g_file_mutex_list_lock);
+    return &entry->mutex;
+}
+
+static void release_file_mutex(const char *path) {
+    if (!path) return;
+    pthread_mutex_lock(&g_file_mutex_list_lock);
+    FileMutexEntry **pp = &g_file_mutex_list;
+    while (*pp) {
+        FileMutexEntry *entry = *pp;
+        if (strcmp(entry->path, path) == 0) {
+            entry->ref_count--;
+            if (entry->ref_count <= 0) {
+                *pp = entry->next;
+                pthread_mutex_destroy(&entry->mutex);
+                free(entry);
+            }
+            break;
+        }
+        pp = &entry->next;
+    }
+    pthread_mutex_unlock(&g_file_mutex_list_lock);
+}
+
+static void normalize_path(char *path) {
+    if (!path) return;
+    char *src = path;
+    char *dst = path;
+    int prev_slash = 0;
+    while (*src) {
+        if (*src == '/') {
+            if (!prev_slash) *dst++ = *src;
+            prev_slash = 1;
+        } else {
+            *dst++ = *src;
+            prev_slash = 0;
+        }
+        src++;
+    }
+    *dst = '\0';
+}
+
+static int mkdir_recursive(const char *path) {
+    if (!path || !*path) return -1;
+    char tmp[PATH_MAX];
+    snprintf(tmp, sizeof(tmp), "%s", path);
+    normalize_path(tmp);
+    size_t len = strlen(tmp);
+    if (len == 0) return -1;
+    if (tmp[len - 1] == '/') tmp[len - 1] = '\0';
+    for (char *p = tmp + 1; *p; p++) {
+        if (*p == '/') {
+            *p = '\0';
+            if (mkdir(tmp, 0777) != 0 && errno != EEXIST) {
+                return -1;
+            }
+            chmod(tmp, 0777);
+            *p = '/';
+        }
+    }
+    if (mkdir(tmp, 0777) != 0 && errno != EEXIST) {
+        return -1;
+    }
+    chmod(tmp, 0777);
+    return 0;
+}
+
+static int send_all_bytes(int sock, const void *data, size_t len) {
+    const uint8_t *p = (const uint8_t *)data;
+    size_t sent = 0;
+    while (sent < len) {
+        ssize_t n = send(sock, p + sent, len - sent, 0);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (n == 0) return -1;
+        sent += (size_t)n;
+    }
+    return 0;
+}
+
+static int read_exact_bytes(int sock, void *buf, size_t len) {
+    uint8_t *p = (uint8_t *)buf;
+    size_t got = 0;
+    while (got < len) {
+        ssize_t n = recv(sock, p + got, len - got, 0);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (n == 0) return -1;
+        got += (size_t)n;
+    }
+    return 0;
+}
+
+static int send_response(int sock, uint8_t code, const void *data, uint32_t len) {
+    uint8_t header[5];
+    header[0] = code;
+    memcpy(header + 1, &len, 4);
+    if (send_all_bytes(sock, header, sizeof(header)) != 0) return -1;
+    if (len > 0 && data) {
+        if (send_all_bytes(sock, data, len) != 0) return -1;
+    }
+    return 0;
+}
 
 static pthread_mutex_t g_log_mutex = PTHREAD_MUTEX_INITIALIZER;
 static char g_last_op[64] = {0};
@@ -524,6 +675,258 @@ static void enqueue_comm_request(const struct CommandRequest *req);
 static void *comm_worker_thread(void *arg);
 static int parse_first_token(const char *src, char *out, size_t out_cap, const char **rest);
 
+typedef struct UploadSession {
+    int sock;
+    int upload_fd;
+    char upload_path[PATH_MAX];
+    uint64_t upload_size;
+    uint64_t upload_received;
+    uint64_t current_offset;
+    pthread_mutex_t *file_mutex;
+    uint8_t *chunk_buf;
+    size_t chunk_cap;
+} UploadSession;
+
+static void send_error_msg(int sock, const char *msg) {
+    uint32_t len = msg ? (uint32_t)strlen(msg) : 0;
+    send_response(sock, RESP_ERROR, msg, len);
+}
+
+static void send_ok_msg(int sock, const char *msg) {
+    uint32_t len = msg ? (uint32_t)strlen(msg) : 0;
+    send_response(sock, RESP_OK, msg, len);
+}
+
+static int handle_start_upload(UploadSession *session, const uint8_t *data, uint32_t data_len) {
+    if (!session || !data || data_len < 1 + 8 + 8) {
+        send_error_msg(session ? session->sock : -1, "Invalid upload request");
+        return -1;
+    }
+
+    const uint8_t *nul = memchr(data, '\0', data_len);
+    if (!nul) {
+        send_error_msg(session->sock, "Invalid upload path");
+        return -1;
+    }
+    size_t path_len = (size_t)(nul - data);
+    if (path_len == 0 || path_len >= PATH_MAX) {
+        send_error_msg(session->sock, "Upload path too long");
+        return -1;
+    }
+    size_t tail_off = path_len + 1;
+    if (tail_off + 16 > data_len) {
+        send_error_msg(session->sock, "Invalid upload metadata");
+        return -1;
+    }
+
+    char norm_path[PATH_MAX];
+    memcpy(norm_path, data, path_len);
+    norm_path[path_len] = '\0';
+    normalize_path(norm_path);
+
+    if (!is_path_safe(norm_path)) {
+        send_error_msg(session->sock, "Invalid path");
+        return -1;
+    }
+
+    uint64_t file_size = 0;
+    uint64_t chunk_offset = 0;
+    memcpy(&file_size, data + tail_off, 8);
+    memcpy(&chunk_offset, data + tail_off + 8, 8);
+    if (chunk_offset > file_size) {
+        send_error_msg(session->sock, "Invalid chunk offset");
+        return -1;
+    }
+
+    if (session->upload_fd >= 0) {
+        close(session->upload_fd);
+        session->upload_fd = -1;
+    }
+    if (session->file_mutex) {
+        release_file_mutex(session->upload_path);
+        session->file_mutex = NULL;
+    }
+
+    char parent[PATH_MAX];
+    strncpy(parent, norm_path, sizeof(parent) - 1);
+    parent[sizeof(parent) - 1] = '\0';
+    char *slash = strrchr(parent, '/');
+    if (slash && slash != parent) {
+        *slash = '\0';
+        if (mkdir_recursive(parent) != 0) {
+            send_error_msg(session->sock, "Failed to create parent directory");
+            return -1;
+        }
+    }
+
+    session->file_mutex = get_file_mutex(norm_path);
+    if (!session->file_mutex) {
+        send_error_msg(session->sock, "Cannot allocate file mutex");
+        return -1;
+    }
+
+    pthread_mutex_lock(session->file_mutex);
+    if (chunk_offset > 0) {
+        session->upload_fd = open(norm_path, O_WRONLY);
+    } else {
+        session->upload_fd = open(norm_path, O_WRONLY | O_CREAT | O_TRUNC, 0777);
+        if (session->upload_fd >= 0 && file_size > (uint64_t)(100 * 1024 * 1024)) {
+            if (lseek(session->upload_fd, (off_t)(file_size - 1), SEEK_SET) < 0 ||
+                write(session->upload_fd, "", 1) != 1) {
+                close(session->upload_fd);
+                session->upload_fd = -1;
+                pthread_mutex_unlock(session->file_mutex);
+                release_file_mutex(norm_path);
+                session->file_mutex = NULL;
+                unlink(norm_path);
+                send_error_msg(session->sock, "Disk full - cannot pre-allocate file");
+                return -1;
+            }
+        }
+    }
+    pthread_mutex_unlock(session->file_mutex);
+
+    if (session->upload_fd < 0) {
+        release_file_mutex(norm_path);
+        session->file_mutex = NULL;
+        send_error_msg(session->sock, "Cannot open file");
+        return -1;
+    }
+
+    strncpy(session->upload_path, norm_path, sizeof(session->upload_path) - 1);
+    session->upload_path[sizeof(session->upload_path) - 1] = '\0';
+    session->upload_size = file_size;
+    session->upload_received = chunk_offset;
+    session->current_offset = chunk_offset;
+
+    int huge_buf = 16 * 1024 * 1024;
+    setsockopt(session->sock, SOL_SOCKET, SO_RCVBUF, &huge_buf, sizeof(huge_buf));
+
+    send_response(session->sock, RESP_READY, NULL, 0);
+    return 0;
+}
+
+static int handle_upload_chunk(UploadSession *session, const uint8_t *data, uint32_t data_len) {
+    if (!session || session->upload_fd < 0 || !session->file_mutex) {
+        send_error_msg(session ? session->sock : -1, "No upload in progress");
+        return -1;
+    }
+    if (data_len == 0) {
+        return 0;
+    }
+    if (session->upload_size > 0 && session->current_offset + data_len > session->upload_size) {
+        send_error_msg(session->sock, "Chunk exceeds declared size");
+        close(session->upload_fd);
+        session->upload_fd = -1;
+        release_file_mutex(session->upload_path);
+        session->file_mutex = NULL;
+        return -1;
+    }
+    ssize_t written = pwrite(session->upload_fd, data, data_len, (off_t)session->current_offset);
+    if (written != (ssize_t)data_len) {
+        send_error_msg(session->sock, "Write failed");
+        close(session->upload_fd);
+        session->upload_fd = -1;
+        release_file_mutex(session->upload_path);
+        session->file_mutex = NULL;
+        return -1;
+    }
+    session->current_offset += (uint64_t)written;
+    session->upload_received += (uint64_t)written;
+    return 0;
+}
+
+static int handle_end_upload(UploadSession *session) {
+    if (!session || session->upload_fd < 0) {
+        send_error_msg(session ? session->sock : -1, "No upload in progress");
+        return -1;
+    }
+    close(session->upload_fd);
+    session->upload_fd = -1;
+    if (session->file_mutex) {
+        release_file_mutex(session->upload_path);
+        session->file_mutex = NULL;
+    }
+    chmod(session->upload_path, 0777);
+    send_ok_msg(session->sock, "Upload complete");
+    return 0;
+}
+
+static int handle_binary_session(int sock) {
+    UploadSession session;
+    memset(&session, 0, sizeof(session));
+    session.sock = sock;
+    session.upload_fd = -1;
+
+    struct timeval tv;
+    tv.tv_sec = 900;
+    tv.tv_usec = 0;
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof(tv));
+
+    while (1) {
+        uint8_t header[5];
+        if (read_exact_bytes(sock, header, sizeof(header)) != 0) {
+            break;
+        }
+        uint8_t cmd = header[0];
+        uint32_t data_len = 0;
+        memcpy(&data_len, header + 1, 4);
+
+        if (data_len > 64 * 1024 * 1024) {
+            send_error_msg(sock, "Chunk too large");
+            break;
+        }
+
+        if (data_len > session.chunk_cap) {
+            uint8_t *next = (uint8_t *)realloc(session.chunk_buf, data_len);
+            if (!next) {
+                send_error_msg(sock, "Out of memory");
+                break;
+            }
+            session.chunk_buf = next;
+            session.chunk_cap = data_len;
+        }
+
+        if (data_len > 0) {
+            if (read_exact_bytes(sock, session.chunk_buf, data_len) != 0) {
+                break;
+            }
+        }
+
+        switch (cmd) {
+            case CMD_START_UPLOAD:
+                if (handle_start_upload(&session, session.chunk_buf, data_len) != 0) {
+                    // Error already sent
+                }
+                break;
+            case CMD_UPLOAD_CHUNK:
+                if (handle_upload_chunk(&session, session.chunk_buf, data_len) != 0) {
+                    // Error already sent
+                }
+                break;
+            case CMD_END_UPLOAD:
+                if (handle_end_upload(&session) != 0) {
+                    // Error already sent
+                }
+                break;
+            default:
+                send_error_msg(sock, "Unknown command");
+                break;
+        }
+    }
+
+    if (session.upload_fd >= 0) {
+        close(session.upload_fd);
+    }
+    if (session.file_mutex) {
+        release_file_mutex(session.upload_path);
+    }
+    if (session.chunk_buf) {
+        free(session.chunk_buf);
+    }
+    return 0;
+}
+
 static void close_connection(struct ClientConnection *conn) {
     if (!conn) {
         return;
@@ -609,6 +1012,18 @@ static void *command_thread(void *arg) {
     tv.tv_sec = 5;
     tv.tv_usec = 0;
     setsockopt(req.sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof(tv));
+
+    uint8_t peek = 0;
+    ssize_t peeked = recv(req.sock, &peek, 1, MSG_PEEK);
+    if (peeked <= 0) {
+        close(req.sock);
+        return NULL;
+    }
+    if (peek == CMD_START_UPLOAD || peek == CMD_UPLOAD_CHUNK || peek == CMD_END_UPLOAD) {
+        handle_binary_session(req.sock);
+        close(req.sock);
+        return NULL;
+    }
 
     if (read_command_line(req.sock, req.buffer, sizeof(req.buffer), &req.len) != 0) {
         payload_log("[CONN] Failed to read command line");
@@ -1097,21 +1512,6 @@ static void process_command(struct ClientConnection *conn) {
     }
     if (strncmp(conn->cmd_buffer, "UPLOAD_RAR ", 11) == 0) {
         handle_upload_rar(conn->sock, conn->cmd_buffer + 11, UNRAR_MODE_FAST);
-        close_connection(conn);
-        return;
-    }
-    if (strncmp(conn->cmd_buffer, "UPLOAD_V4 ", 10) == 0) {
-        handle_upload_v4_wrapper(conn->sock, conn->cmd_buffer + 10);
-        close_connection(conn);
-        return;
-    }
-    if (strncmp(conn->cmd_buffer, "UPLOAD_FAST ", 12) == 0) {
-        handle_upload_fast_wrapper(conn->sock, conn->cmd_buffer + 12);
-        close_connection(conn);
-        return;
-    }
-    if (strncmp(conn->cmd_buffer, "UPLOAD_FAST_OFFSET ", 19) == 0) {
-        handle_upload_fast_offset_wrapper(conn->sock, conn->cmd_buffer + 19);
         close_connection(conn);
         return;
     }
