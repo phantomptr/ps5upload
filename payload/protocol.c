@@ -2589,7 +2589,7 @@ void handle_upload_fast_wrapper(int client_sock, const char *args) {
         return;
     }
 
-    // Pre-allocate large files to reduce fragmentation (like PS5-Upload-Suite for >100MB)
+    // Pre-allocate large files to reduce fragmentation for large uploads
     if (total_size > 100 * 1024 * 1024) {
         if (ftruncate(fd, (off_t)total_size) != 0) {
             close(fd);
@@ -2605,6 +2605,9 @@ void handle_upload_fast_wrapper(int client_sock, const char *args) {
         close(fd);
         return;
     }
+
+    int huge_buf = 16 * 1024 * 1024;
+    setsockopt(client_sock, SOL_SOCKET, SO_RCVBUF, &huge_buf, sizeof(huge_buf));
 
     size_t buf_size = 8 * 1024 * 1024;
     uint8_t *buffer = (uint8_t *)malloc(buf_size);
@@ -2766,6 +2769,9 @@ void handle_upload_fast_offset_wrapper(int client_sock, const char *args) {
         close(fd);
         return;
     }
+
+    int huge_buf = 16 * 1024 * 1024;
+    setsockopt(client_sock, SOL_SOCKET, SO_RCVBUF, &huge_buf, sizeof(huge_buf));
 
     size_t buf_size = 8 * 1024 * 1024;
     uint8_t *buffer = (uint8_t *)malloc(buf_size);

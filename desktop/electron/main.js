@@ -45,14 +45,28 @@ const TINY_FILE_AVG_BYTES = 64 * 1024; // 64KB
 const SMALL_FILE_AVG_BYTES = 256 * 1024; // 256KB
 const RESUME_HASH_LARGE_BYTES = 1024 * 1024 * 1024; // 1GB
 const RESUME_HASH_MED_BYTES = 128 * 1024 * 1024; // 128MB
+const RESUME_COMPAT_MAX_DIRS = 5000;
+const RESUME_COMPAT_MAX_FILES = 100000;
+const PRECREATE_MAX_DIRS = 5000;
+const PRECREATE_DIR_CONCURRENCY = 4;
 const WRITE_CHUNK_SIZE = 512 * 1024; // 512KB
-const MAD_MAX_WORKERS = 8;
-const MAD_MAX_CHUNK_SIZE = 32 * 1024 * 1024;
+const LANE_CONNECTIONS = 4;
+const LANE_HUGE_FILE_BYTES = 20 * 1024 * 1024 * 1024; // 20GB
+const LANE_LARGE_FILE_BYTES = 4 * 1024 * 1024 * 1024; // 4GB
+const LANE_HUGE_CHUNK_BYTES = 1536 * 1024 * 1024; // 1.5GB
+const LANE_LARGE_CHUNK_BYTES = 512 * 1024 * 1024; // 512MB
+const LANE_DEFAULT_CHUNK_BYTES = 256 * 1024 * 1024; // 256MB
+const LANE_MIN_FILE_SIZE = 1536 * 1024 * 1024; // 1.5GB
+
+const MAD_MAX_WORKERS = 12;
+const MAD_MAX_HUGE_CHUNK_BYTES = 2 * 1024 * 1024 * 1024; // 2GB
+const MAD_MAX_LARGE_CHUNK_BYTES = 1024 * 1024 * 1024; // 1GB
+const MAD_MAX_DEFAULT_CHUNK_BYTES = 512 * 1024 * 1024; // 512MB
 const MAD_MAX_MIN_FILE_SIZE = 64 * 1024 * 1024;
 const MAGIC_FTX1 = 0x31585446;
 
 let sleepBlockerId = null;
-const VERSION = '1.4.6';
+const VERSION = '1.4.7';
 const IS_WINDOWS = process.platform === 'win32';
 
 function beginManageOperation(op) {
@@ -2071,7 +2085,10 @@ async function buildRemoteIndex(ip, port, destRoot, files, onProgress, onLog, si
     onLog?.(`Resume scan: failed to list recursively ${destRoot}: ${err.message || err}`);
     onLog?.(`Resume scan: LIST_DIR_RECURSIVE failed, retrying with compatibility listing. Reason: ${err.message || err}`);
     // Compatibility listing for payloads without stable recursive listing.
-    return buildRemoteIndexCompat(ip, port, destRoot, files, onProgress, onLog, signal);
+    return buildRemoteIndexCompat(ip, port, destRoot, files, onProgress, onLog, signal, {
+      maxDirs: RESUME_COMPAT_MAX_DIRS,
+      maxFiles: RESUME_COMPAT_MAX_FILES,
+    });
   }
 
   onLog?.(`Resume scan: recursive listing complete, ${index.size} remote file(s) indexed`);
@@ -2080,7 +2097,7 @@ async function buildRemoteIndex(ip, port, destRoot, files, onProgress, onLog, si
 }
 
 // Compatibility listing mode when recursive listing is unavailable.
-async function buildRemoteIndexCompat(ip, port, destRoot, files, onProgress, onLog, signal) {
+async function buildRemoteIndexCompat(ip, port, destRoot, files, onProgress, onLog, signal, opts = {}) {
   const dirSet = new Set();
   for (const file of files) {
     const rel = file.rel_path || '';
@@ -2089,6 +2106,14 @@ async function buildRemoteIndexCompat(ip, port, destRoot, files, onProgress, onL
     dirSet.add(dir);
   }
   const dirs = Array.from(dirSet);
+  if (opts.maxFiles && Array.isArray(files) && files.length > opts.maxFiles) {
+    onLog?.(`Resume scan: skipping compatibility listing (${files.length} files exceeds limit ${opts.maxFiles}).`);
+    return null;
+  }
+  if (opts.maxDirs && dirs.length > opts.maxDirs) {
+    onLog?.(`Resume scan: skipping compatibility listing (${dirs.length} directories exceeds limit ${opts.maxDirs}).`);
+    return null;
+  }
   const total = dirs.length;
   let done = 0;
   onLog?.(`Resume scan: compatibility listing ${total} director${total === 1 ? 'y' : 'ies'} under ${destRoot}`);
@@ -3989,6 +4014,240 @@ function readLineFromSocket(socket, timeoutMs = READ_TIMEOUT_MS) {
   });
 }
 
+function createSocketLineReader(socket) {
+  let buffer = Buffer.alloc(0);
+  const pending = [];
+  let socketError = null;
+
+  const flush = () => {
+    while (pending.length > 0) {
+      const idx = buffer.indexOf(0x0a);
+      if (idx < 0) return;
+      const line = buffer.subarray(0, idx).toString('utf8').trim();
+      buffer = buffer.subarray(idx + 1);
+      const { resolve } = pending.shift();
+      resolve(line);
+    }
+  };
+
+  const onData = (data) => {
+    buffer = Buffer.concat([buffer, data]);
+    flush();
+  };
+  const onErr = (err) => {
+    socketError = err;
+    while (pending.length > 0) {
+      const { reject } = pending.shift();
+      reject(err);
+    }
+  };
+  const onClose = () => {
+    if (buffer.length > 0 && pending.length > 0) {
+      const line = buffer.toString('utf8').trim();
+      buffer = Buffer.alloc(0);
+      const { resolve } = pending.shift();
+      resolve(line);
+    }
+    while (pending.length > 0) {
+      const { reject } = pending.shift();
+      reject(new Error('Socket closed before response'));
+    }
+  };
+
+  socket.on('data', onData);
+  socket.on('error', onErr);
+  socket.on('close', onClose);
+
+  return {
+    readLine: (timeoutMs = READ_TIMEOUT_MS) => new Promise((resolve, reject) => {
+      if (socketError) return reject(socketError);
+      const idx = buffer.indexOf(0x0a);
+      if (idx >= 0) {
+        const line = buffer.subarray(0, idx).toString('utf8').trim();
+        buffer = buffer.subarray(idx + 1);
+        return resolve(line);
+      }
+      const timer = setTimeout(() => {
+        const i = pending.findIndex((p) => p.resolve === resolve);
+        if (i >= 0) pending.splice(i, 1);
+        reject(new Error('Read timed out'));
+      }, timeoutMs);
+      pending.push({
+        resolve: (line) => {
+          clearTimeout(timer);
+          resolve(line);
+        },
+        reject: (err) => {
+          clearTimeout(timer);
+          reject(err);
+        },
+      });
+    }),
+  };
+}
+
+async function precreateRemoteDirectories(ip, destRoot, files, opts = {}) {
+  if (!Array.isArray(files) || files.length === 0) return { total: 0, created: 0, skipped: 0 };
+  const cancel = opts.cancel || { value: false };
+  const log = opts.log;
+
+  const dirSet = new Set();
+  for (const file of files) {
+    const rel = String(file?.rel_path || '').replace(/\\/g, '/');
+    if (!rel) continue;
+    let dir = path.posix.dirname(rel);
+    if (!dir || dir === '.') continue;
+    dirSet.add(dir);
+  }
+  const dirs = Array.from(dirSet).sort((a, b) => a.length - b.length);
+  if (dirs.length === 0) return { total: 0, created: 0, skipped: 0 };
+
+  if (dirs.length > PRECREATE_MAX_DIRS) {
+    log?.(`Pre-create: skipping ${dirs.length} directories (exceeds limit ${PRECREATE_MAX_DIRS}).`, 'info');
+    return { total: dirs.length, created: 0, skipped: dirs.length };
+  }
+
+  log?.(`Pre-create: creating ${dirs.length} directories...`, 'info');
+  const total = dirs.length;
+  const logInterval = Math.max(1, Math.floor(total / 10));
+  let created = 0;
+  let failed = 0;
+
+  const createOne = async (dir, idx) => {
+    if (cancel.value) throw new Error('Upload cancelled');
+    const remoteDir = joinRemotePath(destRoot, dir);
+    try {
+      await createPath(ip, TRANSFER_PORT, remoteDir);
+      created += 1;
+    } catch (err) {
+      failed += 1;
+      if (failed <= 3 && log) {
+        log(`Pre-create: failed to create ${remoteDir}: ${err.message || err}`, 'warn');
+      }
+    } finally {
+      const done = created + failed;
+      if (done % logInterval === 0 || done === total) {
+        log?.(`Pre-create: ${done}/${total} directories processed.`, 'info');
+      }
+    }
+  };
+
+  await mapWithConcurrency(dirs, PRECREATE_DIR_CONCURRENCY, createOne);
+  log?.(`Pre-create: done (${created} created, ${failed} failed).`, failed > 0 ? 'warn' : 'info');
+  return { total, created, skipped: failed };
+}
+
+function getLaneChunkSize(totalSize) {
+  if (totalSize >= LANE_HUGE_FILE_BYTES) return LANE_HUGE_CHUNK_BYTES;
+  if (totalSize >= LANE_LARGE_FILE_BYTES) return LANE_LARGE_CHUNK_BYTES;
+  return LANE_DEFAULT_CHUNK_BYTES;
+}
+
+function getMadMaxChunkSize(totalSize) {
+  if (totalSize >= LANE_HUGE_FILE_BYTES) return MAD_MAX_HUGE_CHUNK_BYTES;
+  if (totalSize >= LANE_LARGE_FILE_BYTES) return MAD_MAX_LARGE_CHUNK_BYTES;
+  return MAD_MAX_DEFAULT_CHUNK_BYTES;
+}
+
+async function runPayloadUploadLaneSingleFile(file, opts = {}) {
+  const {
+    ip,
+    destPath,
+    connections = LANE_CONNECTIONS,
+    chunkSize = LANE_LARGE_CHUNK_BYTES,
+    cancel = { value: false },
+    chmodAfterUpload = false,
+    onProgress = () => {},
+    log = () => {},
+  } = opts;
+
+  const totalSize = Number(file?.size || 0);
+  if (!ip || !destPath || !file?.abs_path || !file?.rel_path || totalSize < 0) {
+    throw new Error('Lane upload: invalid parameters');
+  }
+  if (totalSize === 0) {
+    onProgress(0, 1, file.rel_path);
+    return;
+  }
+
+  const chunks = [];
+  for (let offset = 0; offset < totalSize; offset += chunkSize) {
+    const len = Math.min(chunkSize, totalSize - offset);
+    chunks.push({ offset, len });
+  }
+
+  const workerQueues = Array.from({ length: connections }, () => []);
+  for (let i = 0; i < chunks.length; i += 1) {
+    workerQueues[i % connections].push(chunks[i]);
+  }
+  const activeQueues = workerQueues.filter((q) => q.length > 0);
+  const workerProgress = new Array(activeQueues.length).fill(0);
+
+  let preallocResolved = false;
+  let preallocResolve = null;
+  const preallocPromise = new Promise((resolve) => { preallocResolve = resolve; });
+
+  const waitForPrealloc = async () => {
+    if (preallocResolved) return;
+    await preallocPromise;
+  };
+
+  const runWorker = async (queue, idx) => {
+    const socket = await createSocketWithTimeout(ip, TRANSFER_PORT);
+    tuneUploadSocket(socket);
+    const lineReader = createSocketLineReader(socket);
+    const fd = await fs.promises.open(file.abs_path, 'r');
+    try {
+      for (const chunk of queue) {
+        if (cancel?.value) throw new Error('Upload cancelled by user');
+        if (chunk.offset !== 0) await waitForPrealloc();
+
+        const chmodToken = chmodAfterUpload ? 'CHMOD_END' : '0';
+        const cmd = `UPLOAD_FAST_OFFSET ${escapeCommandPath(destPath)} ${escapeCommandPath(file.rel_path)} ${chunk.offset} ${totalSize} ${chunk.len} ${chmodToken}\n`;
+        socket.write(cmd);
+
+        const ready = await lineReader.readLine(READ_TIMEOUT_MS);
+        if (!ready.startsWith('READY')) {
+          throw new Error(`Lane offset rejected: ${ready || 'no response'}`);
+        }
+        if (chunk.offset === 0 && !preallocResolved) {
+          preallocResolved = true;
+          preallocResolve();
+        }
+
+        let remaining = chunk.len;
+        let pos = chunk.offset;
+        const ioBuf = Buffer.allocUnsafe(8 * 1024 * 1024);
+        while (remaining > 0) {
+          if (cancel?.value) throw new Error('Upload cancelled by user');
+          const take = Math.min(ioBuf.length, remaining);
+          const { bytesRead } = await fd.read(ioBuf, 0, take, pos);
+          if (bytesRead <= 0) throw new Error('Lane offset read failed');
+          await writeAllRetry(socket, ioBuf.subarray(0, bytesRead), cancel || { value: false }, log);
+          remaining -= bytesRead;
+          pos += bytesRead;
+        }
+
+        const result = await lineReader.readLine(READ_TIMEOUT_MS);
+        if (!result.startsWith('OK')) {
+          throw new Error(`Lane offset failed: ${result || 'unknown response'}`);
+        }
+
+        workerProgress[idx] += chunk.len;
+        const sent = workerProgress.reduce((sum, v) => sum + v, 0);
+        onProgress(sent, 1, file.rel_path);
+      }
+    } finally {
+      await fd.close().catch(() => {});
+      try {
+        socket.destroy();
+      } catch {}
+    }
+  };
+
+  await Promise.all(activeQueues.map((queue, idx) => runWorker(queue, idx)));
+}
+
 async function runPayloadUploadFastMultiFile(files, opts = {}) {
   const {
     ip,
@@ -4101,102 +4360,18 @@ async function runPayloadUploadMadMaxSingleFile(file, opts = {}) {
   if (!ip || !destPath || !file?.abs_path || !file?.rel_path || totalSize < 0) {
     throw new Error('Mad Max upload: invalid parameters');
   }
-
-  // Mad Max uses a fixed max-throughput profile by design.
   const workerCount = MAD_MAX_WORKERS;
-  const chunkSize = MAD_MAX_CHUNK_SIZE;
-  const chunks = [];
-  for (let offset = 0; offset < totalSize; offset += chunkSize) {
-    const len = Math.min(chunkSize, totalSize - offset);
-    chunks.push({ offset, len });
-  }
-
-  const workerQueues = Array.from({ length: workerCount }, () => []);
-  for (let i = 0; i < chunks.length; i += 1) {
-    workerQueues[i % workerCount].push(chunks[i]);
-  }
-  const activeQueues = workerQueues.filter((q) => q.length > 0);
-  const workerProgress = new Array(activeQueues.length).fill(0);
-
-  const sendChunk = async (chunk) => {
-    const socket = await createSocketWithTimeout(ip, TRANSFER_PORT);
-    tuneUploadSocket(socket);
-    let buffer = Buffer.alloc(0);
-
-    const readLine = () => new Promise((resolve, reject) => {
-      const onData = (data) => {
-        buffer = Buffer.concat([buffer, data]);
-        const idx = buffer.indexOf(0x0a);
-        if (idx < 0) return;
-        const line = buffer.subarray(0, idx).toString('utf8').trim();
-        buffer = buffer.subarray(idx + 1);
-        socket.off('data', onData);
-        socket.off('error', onErr);
-        resolve(line);
-      };
-      const onErr = (err) => {
-        socket.off('data', onData);
-        socket.off('error', onErr);
-        reject(err);
-      };
-      socket.on('data', onData);
-      socket.on('error', onErr);
-    });
-
-    try {
-      const chmodToken = chmodAfterUpload ? 'CHMOD_END' : '0';
-      const cmd = `UPLOAD_FAST_OFFSET ${escapeCommandPath(destPath)} ${escapeCommandPath(file.rel_path)} ${chunk.offset} ${totalSize} ${chunk.len} ${chmodToken}\n`;
-      socket.write(cmd);
-
-      const ready = await Promise.race([
-        readLine(),
-        sleepMs(READ_TIMEOUT_MS).then(() => { throw new Error('Mad Max offset handshake timeout'); }),
-      ]);
-      if (!ready.startsWith('READY')) {
-        throw new Error(`Mad Max offset rejected: ${ready || 'no response'}`);
-      }
-
-      const fd = await fs.promises.open(file.abs_path, 'r');
-      try {
-        let remaining = chunk.len;
-        let pos = chunk.offset;
-        const ioBuf = Buffer.allocUnsafe(8 * 1024 * 1024);
-        while (remaining > 0) {
-          if (cancel?.value) throw new Error('Upload cancelled by user');
-          const take = Math.min(ioBuf.length, remaining);
-          const { bytesRead } = await fd.read(ioBuf, 0, take, pos);
-          if (bytesRead <= 0) throw new Error('Mad Max offset read failed');
-          await writeAllRetry(socket, ioBuf.subarray(0, bytesRead), cancel || { value: false }, log);
-          remaining -= bytesRead;
-          pos += bytesRead;
-        }
-      } finally {
-        await fd.close().catch(() => {});
-      }
-
-      const result = await Promise.race([
-        readLine(),
-        sleepMs(READ_TIMEOUT_MS).then(() => { throw new Error('Mad Max offset completion timeout'); }),
-      ]);
-      if (!result.startsWith('OK')) {
-        throw new Error(`Mad Max offset failed: ${result || 'unknown response'}`);
-      }
-    } finally {
-      try {
-        socket.destroy();
-      } catch {}
-    }
-  };
-
-  await Promise.all(activeQueues.map(async (queue, idx) => {
-    for (const chunk of queue) {
-      if (cancel?.value) throw new Error('Upload cancelled by user');
-      await sendChunk(chunk);
-      workerProgress[idx] += chunk.len;
-      const sent = workerProgress.reduce((sum, v) => sum + v, 0);
-      onProgress(sent, 1, file.rel_path);
-    }
-  }));
+  const chunkSize = getMadMaxChunkSize(totalSize);
+  await runPayloadUploadLaneSingleFile(file, {
+    ip,
+    destPath,
+    connections: workerCount,
+    chunkSize,
+    cancel,
+    chmodAfterUpload,
+    onProgress,
+    log,
+  });
 }
 
 function createAdaptiveUploadTuner({ ip, basePackLimit, baseChunkSize, userRateLimitBps, log, runId, allowPayloadTune }) {
@@ -7324,6 +7499,12 @@ const emitLog = (message, level = 'info', force = false) => {
               transferAbort.signal
             );
 
+            if (!remoteIndex) {
+              emitLog('Resume scan skipped (compat listing too large); proceeding without duplicate checks.', 'info');
+              filesToUpload = result.files;
+              state.transferStatus = { ...state.transferStatus, status: 'Scanning', files: filesToUpload.length, total: Number(filesToUpload.length) };
+              state.transferLastUpdate = Date.now();
+            } else {
             let skipped = 0;
             let missing = 0;
             let sizeMatched = 0;
@@ -7390,6 +7571,7 @@ const emitLog = (message, level = 'info', force = false) => {
             emit('manage_log', { message: resumeSummary });
             state.transferStatus = { ...state.transferStatus, status: 'Scanning', files: filesToUpload.length, total: Number(filesToUpload.length) };
             state.transferLastUpdate = Date.now();
+            }
           } else if (resumeMode && resumeMode !== 'none' && uploadMode === 'ftp') {
             emitLog('Resume scan skipped for FTP mode; FTP uses per-file size/resume.', 'info');
           }
@@ -7717,6 +7899,17 @@ const emitLog = (message, level = 'info', force = false) => {
             if (Array.isArray(files) && files.length === 0) return;
             let attemptFiles = files;
             let recoveryAttempted = false;
+            let precreatedDirs = false;
+            const ensurePrecreate = async () => {
+              if (precreatedDirs) return;
+              precreatedDirs = true;
+              if (Array.isArray(attemptFiles) && attemptFiles.length > 1) {
+                await precreateRemoteDirectories(req.ip, req.dest_path, attemptFiles, {
+                  cancel: { get value() { return state.transferCancel; } },
+                  log: emitLog,
+                });
+              }
+            };
             while (true) {
               let adaptiveTuner = null;
               try {
@@ -7724,7 +7917,12 @@ const emitLog = (message, level = 'info', force = false) => {
                   attemptFiles.length === 1 &&
                   Number(attemptFiles[0]?.size || 0) >= MAD_MAX_MIN_FILE_SIZE;
                 if (madMaxEligible) {
-                  emitLog(`Payload Mad Max mode: locked max profile (${MAD_MAX_WORKERS} workers, ${(MAD_MAX_CHUNK_SIZE / (1024 * 1024)).toFixed(0)}MB chunks).`, 'info');
+                  const madMaxChunkSize = getMadMaxChunkSize(Number(attemptFiles[0]?.size || 0));
+                  emitLog(
+                    `Payload Mad Max mode: locked max profile (${MAD_MAX_WORKERS} workers, ${formatBytes(madMaxChunkSize)} chunks). ` +
+                    'This is aggressive and may cause instability.',
+                    'warn'
+                  );
                   state.transferStatus = {
                     ...state.transferStatus,
                     payload_transfer_path: 'mad_max_single',
@@ -7748,6 +7946,35 @@ const emitLog = (message, level = 'info', force = false) => {
 
                 const isParallelCandidate = Array.isArray(attemptFiles) && effectivePayloadConnections > 1;
                 if (isParallelCandidate) {
+                  if (attemptFiles.length === 1 && Number(attemptFiles[0]?.size || 0) >= LANE_MIN_FILE_SIZE) {
+                    const laneChunkSize = getLaneChunkSize(Number(attemptFiles[0]?.size || 0));
+                    emitLog(
+                      `Payload lane mode: ${LANE_CONNECTIONS} lanes, ${formatBytes(laneChunkSize)} chunks.`,
+                      'info'
+                    );
+                    state.transferStatus = {
+                      ...state.transferStatus,
+                      payload_transfer_path: 'lane_fast_offset',
+                      payload_workers: LANE_CONNECTIONS,
+                    };
+                    await runPayloadUploadLaneSingleFile(attemptFiles[0], {
+                      ip: req.ip,
+                      destPath: req.dest_path,
+                      connections: LANE_CONNECTIONS,
+                      chunkSize: laneChunkSize,
+                      cancel: { get value() { return state.transferCancel; } },
+                      chmodAfterUpload: !!req.chmod_after_upload,
+                      log: debugLog,
+                      onProgress: (sent, filesSent, currentFile) => {
+                        payloadSent = BigInt(sent);
+                        payloadFilesSent = filesSent;
+                        updateProgress(currentFile);
+                      },
+                    });
+                    parsed = { files: 1, bytes: Number(payloadSent) };
+                    return;
+                  }
+
                   const uploadInit = async () => uploadPayloadInit(
                     req.ip,
                     TRANSFER_PORT,
@@ -7760,38 +7987,48 @@ const emitLog = (message, level = 'info', force = false) => {
                     transferAbort.signal
                   );
                   try {
-                    if (attemptFiles.length === 1 && Number(attemptFiles[0]?.size || 0) >= 64 * 1024 * 1024) {
-                      emitLog(`Payload parallel V4 chunk mode: ${effectivePayloadConnections} workers.`, 'info');
+                    await ensurePrecreate();
+                    // Prefer fast per-file UPLOAD_FAST path for fastest behavior
+                    try {
+                      emitLog(`Payload fast multi-file mode: ${effectivePayloadConnections} workers.`, 'info');
                       state.transferStatus = {
                         ...state.transferStatus,
-                        payload_transfer_path: 'parallel_v4_chunk',
+                        payload_transfer_path: 'fast_multi_file',
                         payload_workers: effectivePayloadConnections,
                       };
-                      await runPayloadUploadParallelSingleFileV4(attemptFiles[0], {
+                      await runPayloadUploadFastMultiFile(attemptFiles, {
+                        ip: req.ip,
+                        destPath: req.dest_path,
                         connections: effectivePayloadConnections,
-                        uploadInit,
                         cancel: { get value() { return state.transferCancel; } },
+                        chmodAfterUpload: !!req.chmod_after_upload,
+                        onSkipFile: (file) => missingFiles.add(file.rel_path),
+                        log: debugLog,
                         onProgress: (sent, filesSent, currentFile) => {
                           payloadSent = BigInt(sent);
                           payloadFilesSent = filesSent;
                           updateProgress(currentFile);
                         },
                       });
-                    } else {
-                      // Try fast per-file UPLOAD_FAST path first (no pack overhead)
-                      try {
-                        emitLog(`Payload fast multi-file mode: ${effectivePayloadConnections} workers.`, 'info');
+                    } catch (fastErr) {
+                      // Fall back to V4 pack path if UPLOAD_FAST is unsupported
+                      if (fastErr?.message?.includes('PAYLOAD_UNSUPPORTED') ||
+                          fastErr?.message?.includes('Unknown command')) {
+                        emitLog(`Fast multi-file not supported, falling back to V4 parallel mode.`, 'warn');
                         state.transferStatus = {
                           ...state.transferStatus,
-                          payload_transfer_path: 'fast_multi_file',
+                          payload_transfer_path: 'parallel_files',
                           payload_workers: effectivePayloadConnections,
                         };
-                        await runPayloadUploadFastMultiFile(attemptFiles, {
-                          ip: req.ip,
-                          destPath: req.dest_path,
+                        await runPayloadUploadParallelFiles(attemptFiles, {
                           connections: effectivePayloadConnections,
+                          uploadInit,
                           cancel: { get value() { return state.transferCancel; } },
-                          chmodAfterUpload: !!req.chmod_after_upload,
+                          compression: effectiveCompression,
+                          rateLimitBps,
+                          packLimitBytes: basePackLimit,
+                          streamChunkBytes: baseChunkSize,
+                          extraPaceMs,
                           onSkipFile: (file) => missingFiles.add(file.rel_path),
                           log: debugLog,
                           onProgress: (sent, filesSent, currentFile) => {
@@ -7800,36 +8037,8 @@ const emitLog = (message, level = 'info', force = false) => {
                             updateProgress(currentFile);
                           },
                         });
-                      } catch (fastErr) {
-                        // Fall back to V4 pack path if UPLOAD_FAST is unsupported
-                        if (fastErr?.message?.includes('PAYLOAD_UNSUPPORTED') ||
-                            fastErr?.message?.includes('Unknown command')) {
-                          emitLog(`Fast multi-file not supported, falling back to V4 parallel mode.`, 'warn');
-                          state.transferStatus = {
-                            ...state.transferStatus,
-                            payload_transfer_path: 'parallel_files',
-                            payload_workers: effectivePayloadConnections,
-                          };
-                          await runPayloadUploadParallelFiles(attemptFiles, {
-                            connections: effectivePayloadConnections,
-                            uploadInit,
-                            cancel: { get value() { return state.transferCancel; } },
-                            compression: effectiveCompression,
-                            rateLimitBps,
-                            packLimitBytes: basePackLimit,
-                            streamChunkBytes: baseChunkSize,
-                            extraPaceMs,
-                            onSkipFile: (file) => missingFiles.add(file.rel_path),
-                            log: debugLog,
-                            onProgress: (sent, filesSent, currentFile) => {
-                              payloadSent = BigInt(sent);
-                              payloadFilesSent = filesSent;
-                              updateProgress(currentFile);
-                            },
-                          });
-                        } else {
-                          throw fastErr;
-                        }
+                      } else {
+                        throw fastErr;
                       }
                     }
                     parsed = { files: payloadFilesSent || attemptFiles.length, bytes: Number(payloadSent) };

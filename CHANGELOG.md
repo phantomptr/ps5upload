@@ -3,6 +3,17 @@
 All notable changes to this project are documented here.
 This project follows Semantic Versioning.
 
+## [1.4.7] - 2026-02-08
+
+### Added
+- New payload fast paths: parallel `UPLOAD_FAST` multi-file uploads and lane-based single-file uploads via `UPLOAD_FAST_OFFSET`.
+- Pre-create directory phase before payload multi-file uploads (with safety caps to avoid huge stalls).
+- App (web mode) now uses the same payload fast paths as desktop, with FTP fallback on failure.
+
+### Changed
+- Resume compatibility listing now auto-skips for very large trees to avoid long startup scans.
+- Logging for pre-create and resume scanning tuned to reduce noise while keeping progress visibility.
+
 ## [1.4.6] - 2026-02-04
 
 ### Added

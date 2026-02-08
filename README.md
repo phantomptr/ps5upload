@@ -5,7 +5,7 @@
 </p>
 
 PS5 Upload is a fast, reliable way to move apps and homebrew to your PS5 without the pain of slow transfers.
-Current release: **v1.4.6**.
+Current release: **v1.4.7**.
 
 New UI highlights:
 - Cleaner Transfer and Manage layouts with clearer transfer settings.
@@ -15,6 +15,7 @@ New UI highlights:
 - New metrics panels (System, Network, Queue, Transfer, Tuning) with a live bottleneck indicator.
 - Payload tuning suggestions (pack size, pacing, rate) surfaced during transfers.
 - Upload V4 protocol with per-pack ACKs and replay for recovery after payload hiccups.
+- Fast payload paths for large folders and files (parallel `UPLOAD_FAST` + lane-based single-file uploads).
 - Payload-side backpressure and write validation for safer large-folder uploads.
 - Progress UI with ETA, average speed, elapsed time, and last update.
 - Upload queue item info popup with per-item transfer parameters.

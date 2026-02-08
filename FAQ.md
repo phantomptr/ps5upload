@@ -1,7 +1,7 @@
 # PS5 Upload FAQ
 
 Welcome! This FAQ covers setup, features, troubleshooting, and platform‑specific tips.
-Latest release: **v1.4.6**.
+Latest release: **v1.4.7**.
 
 ---
 
@@ -219,6 +219,8 @@ Modes:
 - **Normal** (hash all files, SHA256)
 
 When **Resume** is enabled, **Override** is disabled (resume avoids overwriting).
+For extremely large folders, the client may skip the compatibility listing phase to avoid long startup scans and proceed directly with upload.
+Payload uploads may also pre-create directories up front for speed; this is capped and will be skipped on very large trees.
 
 ---
 
