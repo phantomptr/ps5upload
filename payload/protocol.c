@@ -2589,6 +2589,17 @@ void handle_upload_fast_wrapper(int client_sock, const char *args) {
         return;
     }
 
+    // Pre-allocate large files to reduce fragmentation (like PS5-Upload-Suite for >100MB)
+    if (total_size > 100 * 1024 * 1024) {
+        if (ftruncate(fd, (off_t)total_size) != 0) {
+            close(fd);
+            char error[256];
+            snprintf(error, sizeof(error), "ERROR: ftruncate failed: %s\n", strerror(errno));
+            send(client_sock, error, strlen(error), 0);
+            return;
+        }
+    }
+
     const char *ready = "READY\n";
     if (send_all(client_sock, ready, strlen(ready)) != 0) {
         close(fd);

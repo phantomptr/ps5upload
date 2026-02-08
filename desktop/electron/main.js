@@ -3939,6 +3939,154 @@ async function runPayloadUploadParallelSingleFileV4(file, opts = {}) {
   }));
 }
 
+function readLineFromSocket(socket, timeoutMs = READ_TIMEOUT_MS) {
+  return new Promise((resolve, reject) => {
+    let buffer = Buffer.alloc(0);
+    let settled = false;
+    const cleanup = () => {
+      clearTimeout(timer);
+      socket.off('data', onData);
+      socket.off('error', onErr);
+      socket.off('close', onClose);
+    };
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new Error('Read timed out'));
+    }, timeoutMs);
+
+    const onData = (data) => {
+      if (settled) return;
+      buffer = Buffer.concat([buffer, data]);
+      const idx = buffer.indexOf(0x0a);
+      if (idx >= 0) {
+        settled = true;
+        cleanup();
+        resolve(buffer.subarray(0, idx).toString('utf8').trim());
+      }
+    };
+    const onErr = (err) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(err);
+    };
+    const onClose = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      // If we got partial data, return it; otherwise error
+      if (buffer.length > 0) {
+        resolve(buffer.toString('utf8').trim());
+      } else {
+        reject(new Error('Socket closed before response'));
+      }
+    };
+    socket.on('data', onData);
+    socket.on('error', onErr);
+    socket.on('close', onClose);
+  });
+}
+
+async function runPayloadUploadFastMultiFile(files, opts = {}) {
+  const {
+    ip,
+    destPath,
+    connections = 8,
+    cancel = { value: false },
+    chmodAfterUpload = false,
+    onProgress = () => {},
+    log = () => {},
+    onSkipFile,
+  } = opts;
+
+  // Sort files: large files first for better parallelism
+  const sorted = [...files].sort((a, b) => b.size - a.size);
+
+  // Note: No need to pre-create directories — handle_upload_fast_wrapper on
+  // the payload side calls mkdir_p() for each file's parent directory automatically.
+
+  // Connection pool
+  let fileIndex = 0;
+  let totalSent = 0;
+  let completedFiles = 0;
+
+  const uploadOneFile = async (file, idx) => {
+    const socket = await createSocketWithTimeout(ip, TRANSFER_PORT);
+    tuneUploadSocket(socket);
+
+    try {
+      const chmodToken = chmodAfterUpload ? 'CHMOD_END' : '0';
+      const cmd = `UPLOAD_FAST ${escapeCommandPath(destPath)} ${escapeCommandPath(file.rel_path)} ${file.size} DIRECT ${chmodToken}\n`;
+      socket.write(cmd);
+
+      // Wait for READY
+      const response = await readLineFromSocket(socket, READ_TIMEOUT_MS);
+      if (!response.startsWith('READY')) {
+        throw new Error(`Upload rejected: ${response}`);
+      }
+
+      // Stream file data with 8MB buffer
+      if (file.size > 0) {
+        const fd = await fs.promises.open(file.abs_path, 'r');
+        try {
+          const ioBuf = Buffer.allocUnsafe(8 * 1024 * 1024);
+          let remaining = file.size;
+          let pos = 0;
+          while (remaining > 0) {
+            if (cancel.value) throw new Error('Upload cancelled');
+            const take = Math.min(ioBuf.length, remaining);
+            const { bytesRead } = await fd.read(ioBuf, 0, take, pos);
+            if (bytesRead <= 0) throw new Error('Read failed');
+            await writeAllRetry(socket, ioBuf.subarray(0, bytesRead), cancel, log);
+            remaining -= bytesRead;
+            pos += bytesRead;
+            totalSent += bytesRead;
+            onProgress(totalSent, completedFiles, file.rel_path);
+          }
+        } finally {
+          await fd.close().catch(() => {});
+        }
+      }
+
+      // Wait for OK
+      const result = await readLineFromSocket(socket, READ_TIMEOUT_MS);
+      if (!result.startsWith('OK')) {
+        throw new Error(`Upload failed: ${result}`);
+      }
+      completedFiles++;
+    } finally {
+      try { socket.destroy(); } catch {}
+    }
+  };
+
+  // Run workers - each worker takes next file from queue
+  const workers = [];
+  for (let w = 0; w < Math.min(connections, sorted.length); w++) {
+    workers.push((async () => {
+      while (true) {
+        const idx = fileIndex++;
+        if (idx >= sorted.length) break;
+        if (cancel.value) break;
+        const file = sorted[idx];
+        try {
+          await uploadOneFile(file, idx);
+        } catch (err) {
+          if (err.code === 'ENOENT' || err.code === 'EACCES') {
+            log(`Skipping: ${file.rel_path}`);
+            if (typeof onSkipFile === 'function') onSkipFile(file, err);
+            continue;
+          }
+          throw err;
+        }
+      }
+    })());
+  }
+
+  await Promise.all(workers);
+}
+
 async function runPayloadUploadMadMaxSingleFile(file, opts = {}) {
   const {
     ip,
@@ -7630,29 +7778,59 @@ const emitLog = (message, level = 'info', force = false) => {
                         },
                       });
                     } else {
-                      emitLog(`Payload parallel mode: ${effectivePayloadConnections} workers.`, 'info');
-                      state.transferStatus = {
-                        ...state.transferStatus,
-                        payload_transfer_path: 'parallel_files',
-                        payload_workers: effectivePayloadConnections,
-                      };
-                      await runPayloadUploadParallelFiles(attemptFiles, {
-                        connections: effectivePayloadConnections,
-                        uploadInit,
-                        cancel: { get value() { return state.transferCancel; } },
-                        compression: effectiveCompression,
-                        rateLimitBps,
-                        packLimitBytes: basePackLimit,
-                        streamChunkBytes: baseChunkSize,
-                        extraPaceMs,
-                        onSkipFile: (file) => missingFiles.add(file.rel_path),
-                        log: debugLog,
-                        onProgress: (sent, filesSent, currentFile) => {
-                          payloadSent = BigInt(sent);
-                          payloadFilesSent = filesSent;
-                          updateProgress(currentFile);
-                        },
-                      });
+                      // Try fast per-file UPLOAD_FAST path first (no pack overhead)
+                      try {
+                        emitLog(`Payload fast multi-file mode: ${effectivePayloadConnections} workers.`, 'info');
+                        state.transferStatus = {
+                          ...state.transferStatus,
+                          payload_transfer_path: 'fast_multi_file',
+                          payload_workers: effectivePayloadConnections,
+                        };
+                        await runPayloadUploadFastMultiFile(attemptFiles, {
+                          ip: req.ip,
+                          destPath: req.dest_path,
+                          connections: effectivePayloadConnections,
+                          cancel: { get value() { return state.transferCancel; } },
+                          chmodAfterUpload: !!req.chmod_after_upload,
+                          onSkipFile: (file) => missingFiles.add(file.rel_path),
+                          log: debugLog,
+                          onProgress: (sent, filesSent, currentFile) => {
+                            payloadSent = BigInt(sent);
+                            payloadFilesSent = filesSent;
+                            updateProgress(currentFile);
+                          },
+                        });
+                      } catch (fastErr) {
+                        // Fall back to V4 pack path if UPLOAD_FAST is unsupported
+                        if (fastErr?.message?.includes('PAYLOAD_UNSUPPORTED') ||
+                            fastErr?.message?.includes('Unknown command')) {
+                          emitLog(`Fast multi-file not supported, falling back to V4 parallel mode.`, 'warn');
+                          state.transferStatus = {
+                            ...state.transferStatus,
+                            payload_transfer_path: 'parallel_files',
+                            payload_workers: effectivePayloadConnections,
+                          };
+                          await runPayloadUploadParallelFiles(attemptFiles, {
+                            connections: effectivePayloadConnections,
+                            uploadInit,
+                            cancel: { get value() { return state.transferCancel; } },
+                            compression: effectiveCompression,
+                            rateLimitBps,
+                            packLimitBytes: basePackLimit,
+                            streamChunkBytes: baseChunkSize,
+                            extraPaceMs,
+                            onSkipFile: (file) => missingFiles.add(file.rel_path),
+                            log: debugLog,
+                            onProgress: (sent, filesSent, currentFile) => {
+                              payloadSent = BigInt(sent);
+                              payloadFilesSent = filesSent;
+                              updateProgress(currentFile);
+                            },
+                          });
+                        } else {
+                          throw fastErr;
+                        }
+                      }
                     }
                     parsed = { files: payloadFilesSent || attemptFiles.length, bytes: Number(payloadSent) };
                     return;
