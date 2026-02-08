@@ -58,7 +58,7 @@ const LANE_LARGE_CHUNK_BYTES = 512 * 1024 * 1024; // 512MB
 const LANE_DEFAULT_CHUNK_BYTES = 256 * 1024 * 1024; // 256MB
 const LANE_MIN_FILE_SIZE = 1536 * 1024 * 1024; // 1.5GB
 
-const MAD_MAX_WORKERS = 12;
+const MAD_MAX_WORKERS = 8;
 const MAD_MAX_HUGE_CHUNK_BYTES = 2 * 1024 * 1024 * 1024; // 2GB
 const MAD_MAX_LARGE_CHUNK_BYTES = 1024 * 1024 * 1024; // 1GB
 const MAD_MAX_DEFAULT_CHUNK_BYTES = 512 * 1024 * 1024; // 512MB
@@ -2659,8 +2659,8 @@ async function getSpace(ip, port, path) {
 const defaultConfig = {
   address: '192.168.0.100',
   storage: '/data',
-  connections: 8,
-  ftp_connections: 6,
+  connections: 4,
+  ftp_connections: 10,
   use_temp: false,
   auto_connect: false,
   theme: 'dark',
@@ -2892,8 +2892,8 @@ function loadProfiles() {
           storage: '',
           preset_index: 0,
           custom_preset_path: '',
-          connections: 8,
-          ftp_connections: 6,
+          connections: 4,
+          ftp_connections: 10,
           use_temp: false,
           auto_tune_connections: true,
         };
@@ -2907,7 +2907,7 @@ function loadProfiles() {
           case 'preset_index': currentProfile.preset_index = parseInt(value, 10) || 0; break;
           case 'custom_preset_path': currentProfile.custom_preset_path = value; break;
           case 'connections': currentProfile.connections = parseInt(value, 10) || 8; break;
-          case 'ftp_connections': currentProfile.ftp_connections = parseInt(value, 10) || 6; break;
+        case 'ftp_connections': currentProfile.ftp_connections = parseInt(value, 10) || 10; break;
           case 'use_temp': currentProfile.use_temp = ['1', 'true', 'yes', 'on'].includes(value.toLowerCase()); break;
           case 'auto_tune_connections': currentProfile.auto_tune_connections = ['1', 'true', 'yes', 'on'].includes(value.toLowerCase()); break;
           case 'default': if (value === 'true') defaultProfile = currentProfile.name; break;
@@ -2932,7 +2932,7 @@ function saveProfiles(data) {
     lines.push(`preset_index=${profile.preset_index}`);
     lines.push(`custom_preset_path=${profile.custom_preset_path}`);
     lines.push(`connections=${profile.connections}`);
-    lines.push(`ftp_connections=${profile.ftp_connections ?? 6}`);
+    lines.push(`ftp_connections=${profile.ftp_connections ?? 10}`);
     lines.push(`use_temp=${profile.use_temp}`);
     lines.push(`auto_tune_connections=${profile.auto_tune_connections}`);
     if (data.default_profile === profile.name) {
@@ -4179,41 +4179,60 @@ async function uploadArchiveFastAndExtract(ip, rarPath, destPath, opts = {}) {
     mtime: Math.floor(fileStat.mtimeMs / 1000),
   };
 
-  if (fileSize >= LANE_MIN_FILE_SIZE) {
-    const laneChunk = getLaneChunkSize(fileSize);
-    const totalChunks = Math.ceil(fileSize / laneChunk);
-    onLog(`Archive fast path: lane mode (${LANE_CONNECTIONS} lanes, ${formatBytes(laneChunk)} chunks, ${totalChunks} total).`);
-    await runPayloadUploadLaneSingleFile(file, {
-      ip,
-      destPath: tempDir,
-      connections: LANE_CONNECTIONS,
-      chunkSize: laneChunk,
-      cancel,
-      chmodAfterUpload,
-      log: onLog,
-      onProgress: (sent) => onProgress('Upload', sent, fileSize, rarName),
-    });
-  } else {
-    onLog('Archive fast path: single-stream payload upload.');
-    await runPayloadUploadFastMultiFile([file], {
-      ip,
-      destPath: tempDir,
-      connections: 1,
-      cancel,
-      chmodAfterUpload,
-      log: onLog,
-      onProgress: (sent) => onProgress('Upload', sent, fileSize, rarName),
-    });
-  }
+  let lastProgressAt = Date.now();
+  let stallLogAt = 0;
+  const progressWatch = setInterval(() => {
+    const now = Date.now();
+    if (now - lastProgressAt > 30000 && now - stallLogAt > 30000) {
+      stallLogAt = now;
+      onLog(`Archive upload: no progress for ${Math.round((now - lastProgressAt) / 1000)}s (source read or payload READY delay).`);
+    }
+  }, 5000);
 
-  await extractArchiveWithProgress(
-    ip,
-    rarRemotePath,
-    destPath,
-    cancel,
-    (processed, total, currentFile) => onProgress('Extract', processed, total, currentFile),
-    onLog
-  );
+  const reportProgress = (phase, sent, total, current) => {
+    lastProgressAt = Date.now();
+    onProgress(phase, sent, total, current);
+  };
+
+  try {
+    if (fileSize >= LANE_MIN_FILE_SIZE) {
+      const laneChunk = getLaneChunkSize(fileSize);
+      const totalChunks = Math.ceil(fileSize / laneChunk);
+      onLog(`Archive fast path: connection mode (${LANE_CONNECTIONS} connections, ${formatBytes(laneChunk)} chunks, ${totalChunks} total).`);
+      await runPayloadUploadLaneSingleFile(file, {
+        ip,
+        destPath: tempDir,
+        connections: LANE_CONNECTIONS,
+        chunkSize: laneChunk,
+        cancel,
+        chmodAfterUpload,
+        log: onLog,
+        onProgress: (sent) => reportProgress('Upload', sent, fileSize, rarName),
+      });
+    } else {
+      onLog('Archive fast path: single-stream payload upload.');
+      await runPayloadUploadFastMultiFile([file], {
+        ip,
+        destPath: tempDir,
+        connections: 1,
+        cancel,
+        chmodAfterUpload,
+        log: onLog,
+        onProgress: (sent) => reportProgress('Upload', sent, fileSize, rarName),
+      });
+    }
+
+    await extractArchiveWithProgress(
+      ip,
+      rarRemotePath,
+      destPath,
+      cancel,
+      (processed, total, currentFile) => reportProgress('Extract', processed, total, currentFile),
+      onLog
+    );
+  } finally {
+    clearInterval(progressWatch);
+  }
 
   for (let attempt = 1; attempt <= 3; attempt++) {
     try { await deletePath(ip, TRANSFER_PORT, rarRemotePath); break; } catch (err) {
@@ -4307,7 +4326,7 @@ async function runPayloadUploadLaneSingleFile(file, opts = {}) {
 
   const totalSize = Number(file?.size || 0);
   if (!ip || !destPath || !file?.abs_path || !file?.rel_path || totalSize < 0) {
-    throw new Error('Lane upload: invalid parameters');
+    throw new Error('Connection upload: invalid parameters');
   }
   if (totalSize === 0) {
     onProgress(0, 1, file.rel_path);
@@ -4320,7 +4339,7 @@ async function runPayloadUploadLaneSingleFile(file, opts = {}) {
     chunks.push({ offset, len });
   }
   if (typeof log === 'function') {
-    log(`Lane upload: ${connections} lanes, ${formatBytes(chunkSize)} chunks, ${chunks.length} total for ${file.rel_path}.`);
+    log(`Connection upload: ${connections} connections, ${formatBytes(chunkSize)} chunks, ${chunks.length} total for ${file.rel_path}.`);
   }
 
   const workerQueues = Array.from({ length: connections }, () => []);
@@ -4339,6 +4358,8 @@ async function runPayloadUploadLaneSingleFile(file, opts = {}) {
     await preallocPromise;
   };
 
+  let firstReadyLogged = false;
+  let firstReadLogged = false;
   const runWorker = async (queue, idx) => {
     const socket = await createSocketWithTimeout(ip, TRANSFER_PORT);
     tuneUploadSocket(socket);
@@ -4352,14 +4373,22 @@ async function runPayloadUploadLaneSingleFile(file, opts = {}) {
         const remotePath = joinRemotePath(destPath, file.rel_path);
         const startPayload = buildUploadStartPayload(remotePath, totalSize, chunk.offset);
         if (typeof log === 'function') {
-          log(`Lane ${idx + 1}/${activeQueues.length}: start chunk @ ${formatBytes(chunk.offset)} (${formatBytes(chunk.len)})`);
+          log(`Conn ${idx + 1}/${activeQueues.length}: start chunk @ ${formatBytes(chunk.offset)} (${formatBytes(chunk.len)})`);
         }
         await writeBinaryCommand(socket, UploadCmd.StartUpload, startPayload, cancel, log);
 
+        const readyStart = Date.now();
         const readyResp = await readBinaryResponse(reader, READ_TIMEOUT_MS);
+        const readyMs = Date.now() - readyStart;
         if (readyResp.code !== UploadResp.Ready) {
           const msg = readyResp.data?.length ? readyResp.data.toString('utf8') : 'no response';
-          throw new Error(`Lane offset rejected: ${msg}`);
+          throw new Error(`Connection offset rejected: ${msg}`);
+        }
+        if (!firstReadyLogged) {
+          firstReadyLogged = true;
+          if (typeof log === 'function' && readyMs > 1500) {
+            log(`Connection ${idx + 1}/${activeQueues.length}: READY took ${(readyMs / 1000).toFixed(2)}s`);
+          }
         }
         if (chunk.offset === 0 && !preallocResolved) {
           preallocResolved = true;
@@ -4372,8 +4401,14 @@ async function runPayloadUploadLaneSingleFile(file, opts = {}) {
         while (remaining > 0) {
           if (cancel?.value) throw new Error('Upload cancelled by user');
           const take = Math.min(ioBuf.length - 5, remaining);
+          const readStart = Date.now();
           const { bytesRead } = await fd.read(ioBuf, 5, take, pos);
-          if (bytesRead <= 0) throw new Error('Lane offset read failed');
+          const readMs = Date.now() - readStart;
+          if (bytesRead <= 0) throw new Error('Connection offset read failed');
+          if (!firstReadLogged && typeof log === 'function' && readMs > 1500) {
+            firstReadLogged = true;
+            log(`Connection ${idx + 1}/${activeQueues.length}: first read took ${(readMs / 1000).toFixed(2)}s`);
+          }
           ioBuf[0] = UploadCmd.UploadChunk;
           ioBuf.writeUInt32LE(bytesRead, 1);
           await writeAllRetry(socket, ioBuf.subarray(0, 5 + bytesRead), cancel || { value: false }, log);
@@ -4388,7 +4423,7 @@ async function runPayloadUploadLaneSingleFile(file, opts = {}) {
         const endResp = await readBinaryResponse(reader, READ_TIMEOUT_MS);
         if (endResp.code !== UploadResp.Ok) {
           const msg = endResp.data?.length ? endResp.data.toString('utf8') : 'unknown response';
-          throw new Error(`Lane offset failed: ${msg}`);
+          throw new Error(`Connection offset failed: ${msg}`);
         }
 
         // Chunk complete; progress already updated during streaming
@@ -6973,7 +7008,7 @@ function registerIpcHandlers() {
                 });
               }
               if (batch.files.length === 1 && Number(batch.files[0].size || 0) >= LANE_MIN_FILE_SIZE) {
-                emit('manage_log', { message: `Manage upload: lane mode (${LANE_CONNECTIONS} lanes).` });
+                emit('manage_log', { message: `Manage upload: connection mode (${LANE_CONNECTIONS} connections).` });
                 await runPayloadUploadLaneSingleFile(batch.files[0], {
                   ip,
                   destPath: batch.dest,
@@ -7432,7 +7467,7 @@ const emitLog = (message, level = 'info', force = false) => {
 
         try {
           let uploadMode = normalizeUploadMode(req.upload_mode);
-          const requestedFtpConnections = clamp(Math.floor(req.ftp_connections || 6), 1, 6);
+          const requestedFtpConnections = 10;
           const sourceStat = await fs.promises.stat(req.source_path);
           const isRar = sourceStat.isFile() && path.extname(req.source_path).toLowerCase() === '.rar';
 
@@ -7613,7 +7648,7 @@ const emitLog = (message, level = 'info', force = false) => {
                   });
                   state.transferLastUpdate = Date.now();
                 },
-                onLog: debugLog,
+                onLog: emitLog,
               }
             );
 
@@ -7865,6 +7900,7 @@ const emitLog = (message, level = 'info', force = false) => {
           const avgPayloadSize = payloadFileCount > 0 ? Number(payloadTotalSize) / payloadFileCount : 0;
           const avgFtpSize = ftpFileCount > 0 ? Number(ftpTotalSize) / ftpFileCount : 0;
           let effectiveFtpConnections = requestedFtpConnections;
+          let effectivePayloadConnections = 4;
 
           let effectiveCompression = req.compression;
           let effectiveOptimize = !!req.optimize_upload;
@@ -7918,6 +7954,15 @@ const emitLog = (message, level = 'info', force = false) => {
             } else if (smallFtpBatch) {
               ftpThrottleMs = Math.max(ftpThrottleMs, 2 + ftpThrottleBoost);
             }
+            if (req.auto_tune_connections) {
+              if (avgFtpSize < 256 * kb || ftpFileCount >= 50000) {
+                effectiveFtpConnections = clamp(effectiveFtpConnections, 1, 4);
+              } else if (avgFtpSize < 2 * mb || ftpFileCount >= 20000) {
+                effectiveFtpConnections = clamp(effectiveFtpConnections, 2, 6);
+              } else if (avgFtpSize > 256 * mb && ftpFileCount < 1000) {
+                effectiveFtpConnections = clamp(effectiveFtpConnections, 4, 10);
+              }
+            }
           }
 
           state.transferMeta = {
@@ -7951,10 +7996,30 @@ const emitLog = (message, level = 'info', force = false) => {
           if (ftpThrottleMs > 0 && ftpFileCount > 0) {
             emitLog(`Small-file safeguard: FTP delay ${ftpThrottleMs}ms between small files.`, 'info');
           }
+          if (req.auto_tune_connections && payloadFileCount > 0) {
+            const singlePayloadFile = Array.isArray(payloadFiles) && payloadFileCount === 1;
+            const payloadSizeBytes = Number(payloadTotalSize);
+            if (singlePayloadFile) {
+              if (payloadSizeBytes >= 8 * 1024 * 1024 * 1024) {
+                effectivePayloadConnections = clamp(effectivePayloadConnections, 4, 8);
+              } else if (payloadSizeBytes >= 1024 * 1024 * 1024) {
+                effectivePayloadConnections = clamp(effectivePayloadConnections, 3, 6);
+              } else if (payloadSizeBytes <= 128 * 1024 * 1024) {
+                effectivePayloadConnections = clamp(effectivePayloadConnections, 1, 4);
+              }
+            } else {
+              if (avgPayloadSize < 256 * kb || payloadFileCount >= 100000) {
+                effectivePayloadConnections = clamp(effectivePayloadConnections, 1, 4);
+              } else if (avgPayloadSize < 2 * mb || payloadFileCount >= 20000) {
+                effectivePayloadConnections = clamp(effectivePayloadConnections, 2, 6);
+              } else if (avgPayloadSize > 256 * mb && payloadFileCount < 1000) {
+                effectivePayloadConnections = clamp(effectivePayloadConnections, 3, 8);
+              }
+            }
+          }
           if (uploadMode !== 'payload') {
             state.transferMeta.effective_ftp_connections = effectiveFtpConnections;
           }
-  const effectivePayloadConnections = clamp(Math.floor(Number(req.connections) || 4), 1, 8);
           const connectionSummary = uploadMode === 'payload'
             ? `payload=${effectivePayloadConnections}`
             : uploadMode === 'ftp'
@@ -8139,19 +8204,20 @@ const emitLog = (message, level = 'info', force = false) => {
                 if (isParallelCandidate) {
                   if (attemptFiles.length === 1 && Number(attemptFiles[0]?.size || 0) >= LANE_MIN_FILE_SIZE) {
                     const laneChunkSize = getLaneChunkSize(Number(attemptFiles[0]?.size || 0));
+                    const laneConnections = clamp(effectivePayloadConnections || LANE_CONNECTIONS, 1, 8);
                     emitLog(
-                      `Payload lane mode: ${LANE_CONNECTIONS} lanes, ${formatBytes(laneChunkSize)} chunks.`,
+                      `Payload connection mode: ${laneConnections} connections, ${formatBytes(laneChunkSize)} chunks.`,
                       'info'
                     );
                     state.transferStatus = {
                       ...state.transferStatus,
                       payload_transfer_path: 'lane_fast_offset',
-                      payload_workers: LANE_CONNECTIONS,
+                      payload_workers: laneConnections,
                     };
                     await runPayloadUploadLaneSingleFile(attemptFiles[0], {
                       ip: req.ip,
                       destPath: req.dest_path,
-                      connections: LANE_CONNECTIONS,
+                      connections: laneConnections,
                       chunkSize: laneChunkSize,
                       cancel: { get value() { return state.transferCancel; } },
                       chmodAfterUpload: !!req.chmod_after_upload,
