@@ -956,6 +956,7 @@ export default function App() {
   const [extractionStopping, setExtractionStopping] = useState(false);
   const [extractionActionById, setExtractionActionById] = useState<Record<number, "requeue">>({});
   const uploadQueueRetryTimeoutRef = useRef<number | null>(null);
+  const uploadQueueBusyLogAtRef = useRef<number>(0);
   const [historyData, setHistoryData] = useState<HistoryData>({ records: [] });
   const [logTab, setLogTab] = useState<"client" | "payload" | "history">("client");
   const [queueMetaById, setQueueMetaById] = useState<Record<number, QueueMeta>>({});
@@ -4242,6 +4243,7 @@ export default function App() {
       if (active.length === 0) {
         setClientLogs((prev) => ["Extraction queue stopped", ...prev].slice(0, 100));
         setExtractionStopping(false);
+        handleRefreshPayloadStatus(true);
         return;
       }
       await Promise.allSettled(
@@ -4328,11 +4330,20 @@ export default function App() {
   }, [isConnected, ip]);
 
   useEffect(() => {
-    const enabled = activeTab === "status" && isConnected && ip.trim().length > 0;
+    // Keep payload polling enabled while queues are running, otherwise "busy" can become stale and
+    // upload queue progression can get stuck after extraction/cancel flows.
+    const enabled =
+      isConnected &&
+      ip.trim().length > 0 &&
+      (activeTab === "status" ||
+        activeTab === "queues" ||
+        uploadQueueRunning ||
+        transferActive ||
+        extractionStopping);
     invoke("payload_polling_set", { enabled }).catch(() => {
       // ignore poll toggle failures
     });
-  }, [activeTab, isConnected, ip]);
+  }, [activeTab, isConnected, ip, uploadQueueRunning, transferActive, extractionStopping]);
 
   useEffect(() => {
     if (!isConnected || !ip.trim()) return;
@@ -5319,12 +5330,18 @@ export default function App() {
       return;
     }
     if (payloadUnderLoad) {
-      pushClientLog("Upload queue paused: Payload is busy.", "warn");
+      // Keep queue state fresh while waiting, otherwise we can get stuck on stale "busy" status.
+      handleRefreshPayloadStatus(true);
+      const now = Date.now();
+      if (now - uploadQueueBusyLogAtRef.current >= 10000) {
+        uploadQueueBusyLogAtRef.current = now;
+        pushClientLog("Upload queue paused: Payload is busy.", "warn");
+      }
       if (uploadQueueRetryTimeoutRef.current == null) {
         uploadQueueRetryTimeoutRef.current = window.setTimeout(() => {
           uploadQueueRetryTimeoutRef.current = null;
           processNextQueueItem();
-        }, 10000);
+        }, 5000);
       }
       return;
     }
@@ -6436,6 +6453,17 @@ export default function App() {
     (item) => item.status === "pending" || item.status === "idle"
   );
   const payloadUnderLoad = !!payloadFullStatus?.is_busy || hasExtractionRunning;
+
+  useEffect(() => {
+    if (!uploadQueueRunning) return;
+    if (payloadUnderLoad) return;
+    if (transferActive || currentQueueItemId) return;
+    if (uploadQueueRetryTimeoutRef.current != null) {
+      window.clearTimeout(uploadQueueRetryTimeoutRef.current);
+      uploadQueueRetryTimeoutRef.current = null;
+    }
+    processNextQueueItem();
+  }, [payloadUnderLoad, uploadQueueRunning, transferActive, currentQueueItemId]);
 
   const keepAwakeActivity =
     transferActive ||

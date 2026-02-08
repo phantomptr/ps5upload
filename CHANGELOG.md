@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 This project follows Semantic Versioning.
 
+## [1.5.0] - 2026-02-08
+
+### Changed
+- Payload upload concurrency is capped at 4 for stability on PS5/FreeBSD 11.
+- Desktop Transfer: Mad Max is now opt-in only (no longer auto-triggers at 64MB+).
+- Desktop now keeps payload status polling enabled while Queues are active (prevents stale busy state during queue operations).
+
+### Fixed
+- Upload queue can now recover cleanly after cancelling/stopping extraction: payload status is refreshed and queue retries resume once the payload is idle.
+
 ## [1.4.9] - 2026-02-08
 
 ### Changed
