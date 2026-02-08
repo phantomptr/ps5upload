@@ -520,12 +520,21 @@ function createSocketLineReader(socket) {
 
 function writeAll(socket, buffer) {
   return new Promise((resolve, reject) => {
+    const onError = (err) => {
+      socket.removeListener('drain', onDrain);
+      reject(err);
+    };
+    const onDrain = () => {
+      socket.removeListener('error', onError);
+      resolve();
+    };
     if (!socket.write(buffer)) {
-      socket.once('drain', resolve);
+      socket.once('drain', onDrain);
+      socket.once('error', onError);
     } else {
+      socket.removeListener('error', onError);
       resolve();
     }
-    socket.once('error', reject);
   });
 }
 
@@ -1631,6 +1640,14 @@ async function getPayloadCaps(ip, port) {
   }
 }
 
+function isSafeRemotePath(p) {
+  const value = String(p || '').replace(/\\/g, '/');
+  if (!value.startsWith('/')) return false;
+  if (value.includes('..')) return false;
+  if (value.startsWith('/data') || value.startsWith('/mnt/')) return true;
+  return false;
+}
+
 async function payloadReset(ip, port) {
   const response = await sendSimpleCommand(ip, port, 'RESET\n');
   if (!response.startsWith('OK')) throw new Error(`Payload reset failed: ${response}`);
@@ -2675,32 +2692,7 @@ async function handleInvoke(cmd, args, runtime) {
                 upload_mode: 'payload',
               });
             } catch (payloadErr) {
-              const ftpPort = await findFtpPort(ip, preferredFtpPort);
-              if (!ftpPort) throw payloadErr;
-              runtime.transferStatus.status = 'Payload failed, retrying via FTP';
-              runtime.transferStatus.current_file = '';
-              await uploadFilesViaFtpSimple(ip, ftpPort, destRoot, uploadFiles, {
-                connections: effectiveFtpConnections,
-                shouldCancel: () => runtime.transferCancel,
-                onFileStart: (file) => {
-                  runtime.transferStatus.current_file = file && file.rel_path ? file.rel_path : '';
-                },
-                onProgress: (sent, file) => {
-                  runtime.transferStatus.sent = sent;
-                  runtime.transferStatus.elapsed_secs = (Date.now() - startedAt) / 1000;
-                  runtime.transferStatus.current_file = file && file.rel_path ? file.rel_path : runtime.transferStatus.current_file;
-                },
-              });
-              runtime.transferStatus = createTransferStatus({
-                run_id: runId,
-                status: 'Complete',
-                sent: totalBytes,
-                total: totalBytes,
-                files: totalFiles,
-                elapsed_secs: (Date.now() - startedAt) / 1000,
-                current_file: '',
-                upload_mode: 'ftp',
-              });
+              throw payloadErr;
             }
           } else {
             const ftpPort = await findFtpPort(ip, preferredFtpPort);
@@ -2853,14 +2845,47 @@ async function handleInvoke(cmd, args, runtime) {
       const tempRoot = (args && args.temp_root ? String(args.temp_root) : '').trim();
       if (!ip) throw new Error('Enter a PS5 address first.');
       if (!rarPath || !destPath) throw new Error('RAR source and destination are required.');
+      if (tempRoot && (!isSafeRemotePath(tempRoot) || /\s/.test(tempRoot))) {
+        throw new Error('Temp storage path must be under /data or /mnt/* and must not contain spaces.');
+      }
       const stat = await fs.promises.stat(rarPath);
       if (!stat.isFile()) throw new Error('RAR source must be a file.');
 
-      const ftpPort = await findFtpPort(ip, 'auto');
-      if (!ftpPort) throw new Error('FTP not reachable on ports 1337/2121. Enable ftpsrv or etaHEN FTP service.');
-
+      const uploadMode = args && args.upload_mode ? String(args.upload_mode).toLowerCase() : 'payload';
       const remoteDir = tempRoot || destPath;
       const remoteRarPath = `${remoteDir.replace(/\/+$/, '')}/${path.basename(rarPath)}`;
+
+      if (uploadMode !== 'ftp') {
+        if (Number(stat.size) >= LANE_MIN_FILE_SIZE) {
+          await uploadLaneSingleFile(ip, remoteDir, {
+            rel_path: path.basename(rarPath),
+            abs_path: rarPath,
+            size: stat.size,
+          }, {
+            shouldCancel: () => runtime.manageCancel,
+            onProgress: (sent) => {
+              runtime.manageProgress = { op: 'Extract', processed: sent, total: stat.size, current_file: path.basename(rarPath), active: true, updated_at_ms: Date.now() };
+            },
+          });
+        } else {
+          await uploadFastOneFile(ip, remoteDir, {
+            rel_path: path.basename(rarPath),
+            abs_path: rarPath,
+            size: stat.size,
+          }, {
+            shouldCancel: () => runtime.manageCancel,
+            onProgress: (delta) => {
+              const processed = Number(runtime.manageProgress && runtime.manageProgress.processed) || 0;
+              runtime.manageProgress = { op: 'Extract', processed: processed + delta, total: stat.size, current_file: path.basename(rarPath), active: true, updated_at_ms: Date.now() };
+            },
+          });
+        }
+        const queuedId = await queueExtract(ip, TRANSFER_PORT, remoteRarPath, destPath);
+        return { fileSize: stat.size, bytes: stat.size, files: 1, queuedId };
+      }
+
+      const ftpPort = await findFtpPort(ip, 'auto');
+      if (!ftpPort) throw new Error('FTP not reachable on ports 1337/2121. Enable ftpsrv or etaHEN FTP service.');
       await uploadFilesViaFtpSimple(ip, ftpPort, remoteDir, [{ abs_path: rarPath, rel_path: path.basename(rarPath), size: stat.size }]);
       const queuedId = await queueExtract(ip, TRANSFER_PORT, remoteRarPath, destPath);
       return { fileSize: stat.size, bytes: stat.size, files: 1, queuedId };
