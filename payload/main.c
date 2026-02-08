@@ -1501,7 +1501,7 @@ static void process_command(struct ClientConnection *conn) {
         return;
     }
     if (strncmp(conn->cmd_buffer, "UPLOAD_RAR_SAFE ", 16) == 0) {
-        handle_upload_rar(conn->sock, conn->cmd_buffer + 16, UNRAR_MODE_SAFE);
+        handle_upload_rar(conn->sock, conn->cmd_buffer + 16, UNRAR_MODE_TURBO);
         close_connection(conn);
         return;
     }
@@ -1511,7 +1511,7 @@ static void process_command(struct ClientConnection *conn) {
         return;
     }
     if (strncmp(conn->cmd_buffer, "UPLOAD_RAR ", 11) == 0) {
-        handle_upload_rar(conn->sock, conn->cmd_buffer + 11, UNRAR_MODE_FAST);
+        handle_upload_rar(conn->sock, conn->cmd_buffer + 11, UNRAR_MODE_TURBO);
         close_connection(conn);
         return;
     }

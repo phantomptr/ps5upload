@@ -1046,7 +1046,7 @@ export default function App() {
   const [downloadCompression, setDownloadCompression] =
     useState<DownloadCompressionOption>("auto");
   const [chmodAfterUpload, setChmodAfterUpload] = useState(true);
-  const [rarExtractMode, setRarExtractMode] = useState<RarExtractMode>("normal");
+  const [rarExtractMode, setRarExtractMode] = useState<RarExtractMode>("turbo");
   const [rarTemp, setRarTemp] = useState("");
   const [configDefaults, setConfigDefaults] = useState<AppConfig | null>(null);
   const [configLoaded, setConfigLoaded] = useState(false);
@@ -2368,7 +2368,7 @@ export default function App() {
           (normalizedConfig.download_compression as DownloadCompressionOption) || "auto"
         );
         setChmodAfterUpload(normalizedConfig.chmod_after_upload ?? false);
-        setRarExtractMode((normalizedConfig.rar_extract_mode as RarExtractMode) || "normal");
+        setRarExtractMode("turbo");
         setRarTemp(normalizedConfig.rar_temp || "");
         setIncludePrerelease(normalizedConfig.update_channel === "all");
         setLanguage(normalizedConfig.language || "en");
@@ -2860,7 +2860,7 @@ export default function App() {
       payload_local_path: payloadLocalPath,
       download_compression: downloadCompression,
       chmod_after_upload: chmodAfterUpload,
-      rar_extract_mode: rarExtractMode,
+      rar_extract_mode: "turbo",
       rar_temp: rarTemp
     };
 
@@ -4875,7 +4875,7 @@ export default function App() {
       chmod_after_upload: chmodAfterUpload,
       upload_mode: uploadMode,
       ftp_port: ftpPort,
-      rar_extract_mode: rarExtractMode,
+      rar_extract_mode: "turbo",
       rar_temp_root: rarTemp,
       override_on_conflict: overrideOnConflict
     }
@@ -5228,7 +5228,7 @@ export default function App() {
           auto_tune_connections: autoTune,
           optimize_upload: optimizeActive,
           chmod_after_upload: chmodAfterUpload,
-          rar_extract_mode: rarExtractMode,
+          rar_extract_mode: "turbo",
           rar_temp_root: rarTemp,
           override_on_conflict: overrideOnConflict,
           payload_version: payloadVersion,
@@ -5398,7 +5398,7 @@ export default function App() {
           optimize_upload: settings?.optimize_upload ?? optimizeActive,
           chmod_after_upload: settings?.chmod_after_upload ?? chmodAfterUpload,
           override_on_conflict: settings?.override_on_conflict ?? overrideOnConflict,
-          rar_extract_mode: settings?.rar_extract_mode ?? rarExtractMode,
+          rar_extract_mode: "turbo",
           rar_temp_root: settings?.rar_temp_root ?? rarTemp,
           payload_version: payloadVersion,
           storage_root: base,
@@ -7091,18 +7091,8 @@ export default function App() {
 {isRar && (
   <>
     <div className="form-row">
-      <label htmlFor="rar-mode">{tr("rar_extract")}</label>
-      <select
-        id="rar-mode"
-        value={rarExtractMode}
-        onChange={(e) =>
-          setRarExtractMode(e.target.value as RarExtractMode)
-        }
-      >
-        <option value="normal">{tr("rar_normal")}</option>
-        <option value="safe">{tr("rar_safe")}</option>
-        <option value="turbo">{tr("rar_turbo")}</option>
-      </select>
+      <label>{tr("rar_extract")}</label>
+      <div className="muted">{tr("rar_extract_fixed")}</div>
     </div>
     <div className="form-row">
       <label htmlFor="rar-temp-storage">{tr("rar_temp_storage")}</label>
@@ -9502,7 +9492,7 @@ export default function App() {
                       </div>
                       <div className="info-row">
                         <div className="info-label">{tr("rar_mode")}</div>
-                        <div className="info-value">{settings.rar_extract_mode ?? rarExtractMode}</div>
+                        <div className="info-value">{tr("rar_extract_fixed")}</div>
                       </div>
                       <div className="info-row">
                         <div className="info-label">{tr("rar_temp")}</div>

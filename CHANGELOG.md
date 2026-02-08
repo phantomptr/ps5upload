@@ -15,9 +15,12 @@ This project follows Semantic Versioning.
 - Logging for pre-create and resume scanning tuned to reduce noise while keeping progress visibility.
 - Connection controls are now managed automatically (no manual slider). Defaults: Payload 4, FTP 10; auto-tune adjusts based on file size/count.
 - Archive uploads now emit stall hints when progress pauses early.
+- RAR extraction now uses a single turbo mode (max speed) and the mode selector has been removed.
 
 ### Fixed
 - Archive extraction progress handler is now available across archive workflows.
+- Archive uploads now queue extraction (with temp cleanup) so extraction appears in the Extraction queue after upload finishes.
+- Queued extraction now runs in turbo mode consistently.
 
 ## [1.4.6] - 2026-02-04
 

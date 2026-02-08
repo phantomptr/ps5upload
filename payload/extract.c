@@ -195,7 +195,7 @@ static void* extract_thread_main(void *arg) {
     struct ExtractProgressCtx progress;
     memset(&progress, 0, sizeof(progress));
     progress.sock = sock;
-    progress.min_interval_sec = UNRAR_FAST_PROGRESS_INTERVAL_SEC;
+    progress.min_interval_sec = UNRAR_TURBO_PROGRESS_INTERVAL_SEC;
     progress.last_send = time(NULL);
     progress.notify_interval_sec = 10;
     progress.last_notify = 0;
@@ -207,11 +207,11 @@ static void* extract_thread_main(void *arg) {
     }
 
     unrar_extract_opts opts;
-    opts.keepalive_interval_sec = UNRAR_FAST_KEEPALIVE_SEC;
-    opts.sleep_every_bytes = UNRAR_FAST_SLEEP_EVERY_BYTES;
-    opts.sleep_us = UNRAR_FAST_SLEEP_US;
-    opts.trust_paths = UNRAR_FAST_TRUST_PATHS;
-    opts.progress_file_start = UNRAR_FAST_PROGRESS_FILE_START;
+    opts.keepalive_interval_sec = UNRAR_TURBO_KEEPALIVE_SEC;
+    opts.sleep_every_bytes = UNRAR_TURBO_SLEEP_EVERY_BYTES;
+    opts.sleep_us = UNRAR_TURBO_SLEEP_US;
+    opts.trust_paths = UNRAR_TURBO_TRUST_PATHS;
+    opts.progress_file_start = UNRAR_TURBO_PROGRESS_FILE_START;
 
     int extracted_count = 0;
     unsigned long long total_bytes = 0;

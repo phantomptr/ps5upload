@@ -322,7 +322,8 @@ async function uploadRarForExtraction(ip, rarPath, destPath, mode, opts = {}) {
     onProgress = () => {},
     onLog = () => {},
     overrideOnConflict = true,
-    tempRoot = ''
+    tempRoot = '',
+    queueExtract: queueExtraction = true,
   } = opts;
   const fileSize = (await fs.promises.stat(rarPath)).size;
   if (!Number.isSafeInteger(fileSize)) {
@@ -355,6 +356,7 @@ async function uploadRarForExtraction(ip, rarPath, destPath, mode, opts = {}) {
     onLog,
     overrideOnConflict,
     tempRoot,
+    queueExtract: queueExtraction,
   });
 
   let triedFallback = false;
@@ -512,6 +514,88 @@ async function uploadRarForExtraction(ip, rarPath, destPath, mode, opts = {}) {
   });
 
   return { fileSize, ...extractResult };
+}
+
+async function extractArchiveWithProgress(ip, srcPath, dstPath, cancel, onProgress, onLog) {
+  const socket = await createSocketWithTimeout(ip, TRANSFER_PORT);
+  socket.setTimeout(0);
+  state.manageSocket = socket;
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let lineBuffer = '';
+    let cancelledSent = false;
+    let lastActivity = Date.now();
+
+    const cleanup = (err) => {
+      if (settled) return;
+      settled = true;
+      clearInterval(timer);
+      socket.removeAllListeners();
+      socket.destroy();
+      if (err) {
+        reject(err);
+      } else {
+        resolve(true);
+      }
+    };
+
+    const timer = setInterval(() => {
+      if (cancel?.value && !cancelledSent) {
+        cancelledSent = true;
+        try { socket.write('CANCEL\n'); } catch { /* ignore */ }
+      }
+      if (Date.now() - lastActivity > 600000) {
+        cleanup(new Error('Extraction timed out (no progress for 10m)'));
+      }
+    }, 1000);
+
+    socket.on('data', (chunk) => {
+      lastActivity = Date.now();
+      lineBuffer += chunk.toString('utf8');
+      let newlineIndex;
+      while ((newlineIndex = lineBuffer.indexOf('\n')) !== -1) {
+        const line = lineBuffer.substring(0, newlineIndex).trim();
+        lineBuffer = lineBuffer.substring(newlineIndex + 1);
+
+        if (line.startsWith('OK')) {
+          cleanup();
+          return;
+        }
+        if (line.startsWith('ERROR')) {
+          cleanup(new Error(line));
+          return;
+        }
+        if (line.startsWith('EXTRACT_PROGRESS ')) {
+          const parts = line.split(' ');
+          const processed = parseInt(parts[2], 10) || 0;
+          const total = parseInt(parts[3], 10) || 0;
+          let currentFile = null;
+          if (parts.length > 4) {
+            currentFile = parts.slice(4).join(' ');
+          }
+          onProgress(processed, total, currentFile);
+          continue;
+        }
+        if (line.startsWith('EXTRACTING ')) {
+          onLog(line);
+        }
+      }
+    });
+
+    socket.on('error', (err) => cleanup(err));
+    socket.on('close', () => {
+      if (!settled) {
+        cleanup(new Error('Connection closed unexpectedly during extraction.'));
+      }
+    });
+
+    socket.write(`EXTRACT_ARCHIVE ${srcPath}\t${dstPath}\n`);
+  }).finally(() => {
+    if (state.manageSocket === socket) {
+      state.manageSocket = null;
+    }
+  });
 }
 
 function getTitleFromParam(param) {
@@ -2421,8 +2505,18 @@ async function getPayloadCaps(ip, port) {
 }
 
 
-async function queueExtract(ip, port, src, dst) {
-  const response = await sendSimpleCommand(ip, port, `QUEUE_EXTRACT ${src}\t${dst}\n`);
+async function queueExtract(ip, port, src, dst, opts = {}) {
+  const cleanupPath = typeof opts.cleanupPath === 'string' ? opts.cleanupPath.trim() : '';
+  const deleteSource = opts.deleteSource === true;
+  const tokens = [src, dst];
+  if (cleanupPath || deleteSource) {
+    tokens.push(cleanupPath);
+    if (deleteSource) {
+      tokens.push('DEL');
+    }
+  }
+  const cmd = `QUEUE_EXTRACT ${tokens.join('\t')}\n`;
+  const response = await sendSimpleCommand(ip, port, cmd);
   if (response.startsWith('OK ')) {
     return parseInt(response.substring(3).trim(), 10);
   }
@@ -2731,7 +2825,7 @@ function loadConfig() {
         case 'payload_reload_mode': config.payload_reload_mode = ['local', 'current', 'latest'].includes(value) ? value : 'current'; break;
         case 'payload_local_path': config.payload_local_path = value; break;
         case 'optimize_upload': config.optimize_upload = ['1', 'true', 'yes', 'on'].includes(value.toLowerCase()); break;
-        case 'rar_extract_mode': config.rar_extract_mode = ['normal', 'safe', 'turbo'].includes(value) ? value : 'turbo'; break;
+        case 'rar_extract_mode': config.rar_extract_mode = 'turbo'; break;
         case 'window_width': config.window_width = parseInt(value, 10) || 1440; break;
         case 'window_height': config.window_height = parseInt(value, 10) || 960; break;
         case 'window_x': config.window_x = parseInt(value, 10) || -1; break;
@@ -4153,6 +4247,7 @@ async function uploadArchiveFastAndExtract(ip, rarPath, destPath, opts = {}) {
     onLog = () => {},
     tempRoot = '',
     chmodAfterUpload = false,
+    queueExtract: queueExtraction = true,
   } = opts;
   const fileStat = await fs.promises.stat(rarPath);
   const fileSize = fileStat.size;
@@ -4194,6 +4289,7 @@ async function uploadArchiveFastAndExtract(ip, rarPath, destPath, opts = {}) {
     onProgress(phase, sent, total, current);
   };
 
+  let shouldCleanup = true;
   try {
     if (fileSize >= LANE_MIN_FILE_SIZE) {
       const laneChunk = getLaneChunkSize(fileSize);
@@ -4222,6 +4318,16 @@ async function uploadArchiveFastAndExtract(ip, rarPath, destPath, opts = {}) {
       });
     }
 
+    if (queueExtraction) {
+      const queuedId = await queueExtract(ip, TRANSFER_PORT, rarRemotePath, destPath, {
+        cleanupPath: tempDir,
+        deleteSource: true,
+      });
+      onLog(`Extraction queued (ID ${queuedId}).`);
+      shouldCleanup = false;
+      return { fileSize, bytes: fileSize, files: 1, queuedId };
+    }
+
     await extractArchiveWithProgress(
       ip,
       rarRemotePath,
@@ -4232,18 +4338,19 @@ async function uploadArchiveFastAndExtract(ip, rarPath, destPath, opts = {}) {
     );
   } finally {
     clearInterval(progressWatch);
-  }
-
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try { await deletePath(ip, TRANSFER_PORT, rarRemotePath); break; } catch (err) {
-      if (attempt === 3) onLog(`Cleanup failed for archive: ${err?.message || err}`);
-      else await sleepMs(200 * attempt);
-    }
-  }
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try { await deletePath(ip, TRANSFER_PORT, tempDir); break; } catch (err) {
-      if (attempt === 3) onLog(`Cleanup failed for temp dir: ${err?.message || err}`);
-      else await sleepMs(200 * attempt);
+    if (shouldCleanup) {
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try { await deletePath(ip, TRANSFER_PORT, rarRemotePath); break; } catch (err) {
+          if (attempt === 3) onLog(`Cleanup failed for archive: ${err?.message || err}`);
+          else await sleepMs(200 * attempt);
+        }
+      }
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try { await deletePath(ip, TRANSFER_PORT, tempDir); break; } catch (err) {
+          if (attempt === 3) onLog(`Cleanup failed for temp dir: ${err?.message || err}`);
+          else await sleepMs(200 * attempt);
+        }
+      }
     }
   }
   return { fileSize, bytes: fileSize, files: 1, queuedId: null };
@@ -4296,7 +4403,11 @@ async function precreateRemoteDirectories(ip, destRoot, files, opts = {}) {
   };
 
   await mapWithConcurrency(dirs, PRECREATE_DIR_CONCURRENCY, createOne);
-  log?.(`Pre-create: done (${created} created, ${failed} failed).`, failed > 0 ? 'warn' : 'info');
+  if (failed > 0) {
+    log?.(`Pre-create: done (${created} created, ${failed} failed).`, 'warn');
+  } else {
+    log?.(`Pre-create: done (${created} created).`, 'info');
+  }
   return { total, created, skipped: failed };
 }
 
@@ -6719,88 +6830,6 @@ function registerIpcHandlers() {
     return { bytes: downloadedBytes };
   }
 
-  async function extractArchiveWithProgress(ip, srcPath, dstPath, cancel, onProgress, onLog) {
-    const socket = await createSocketWithTimeout(ip, TRANSFER_PORT);
-    socket.setTimeout(0);
-    state.manageSocket = socket;
-
-    return new Promise((resolve, reject) => {
-      let settled = false;
-      let lineBuffer = '';
-      let cancelledSent = false;
-      let lastActivity = Date.now();
-
-      const cleanup = (err) => {
-        if (settled) return;
-        settled = true;
-        clearInterval(timer);
-        socket.removeAllListeners();
-        socket.destroy();
-        if (err) {
-          reject(err);
-        } else {
-          resolve(true);
-        }
-      };
-
-      const timer = setInterval(() => {
-        if (cancel?.value && !cancelledSent) {
-          cancelledSent = true;
-          try { socket.write('CANCEL\n'); } catch { /* ignore */ }
-        }
-        if (Date.now() - lastActivity > 600000) {
-          cleanup(new Error('Extraction timed out (no progress for 10m)'));
-        }
-      }, 1000);
-
-      socket.on('data', (chunk) => {
-        lastActivity = Date.now();
-        lineBuffer += chunk.toString('utf8');
-        let newlineIndex;
-        while ((newlineIndex = lineBuffer.indexOf('\n')) !== -1) {
-          const line = lineBuffer.substring(0, newlineIndex).trim();
-          lineBuffer = lineBuffer.substring(newlineIndex + 1);
-
-          if (line.startsWith('OK')) {
-            cleanup();
-            return;
-          }
-          if (line.startsWith('ERROR')) {
-            cleanup(new Error(line));
-            return;
-          }
-          if (line.startsWith('EXTRACT_PROGRESS ')) {
-            const parts = line.split(' ');
-            const processed = parseInt(parts[2], 10) || 0;
-            const total = parseInt(parts[3], 10) || 0;
-            let currentFile = null;
-            if (parts.length > 4) {
-              currentFile = parts.slice(4).join(' ');
-            }
-            onProgress(processed, total, currentFile);
-            continue;
-          }
-          if (line.startsWith('EXTRACTING ')) {
-            onLog(line);
-          }
-        }
-      });
-
-      socket.on('error', (err) => cleanup(err));
-      socket.on('close', () => {
-        if (!settled) {
-          cleanup(new Error('Connection closed unexpectedly during extraction.'));
-        }
-      });
-
-      socket.write(`EXTRACT_ARCHIVE ${srcPath}\t${dstPath}\n`);
-    }).finally(() => {
-      if (state.manageSocket === socket) {
-        state.manageSocket = null;
-      }
-    });
-  }
-
   async function copyWithProgress(ip, srcPath, dstPath, cancel, onProgress, onLog) {
     const socket = await createSocketWithTimeout(ip, TRANSFER_PORT);
     socket.setTimeout(0);
@@ -7133,7 +7162,8 @@ function registerIpcHandlers() {
               current_file: currentFile
             });
           },
-          onLog: (message) => emit('manage_log', { message })
+          onLog: (message) => emit('manage_log', { message }),
+          queueExtract: false,
         });
       }
       if (extractResult.queuedId) {
@@ -7444,7 +7474,7 @@ function registerIpcHandlers() {
       auto_tune_connections: !!req.auto_tune_connections,
       effective_optimize: null,
       effective_compression: req.compression || null,
-      requested_ftp_connections: req.ftp_connections ?? null,
+      requested_ftp_connections: 10,
       effective_ftp_connections: null,
     };
     state.transferLastUpdate = Date.now();
@@ -7486,12 +7516,14 @@ const emitLog = (message, level = 'info', force = false) => {
               if (!ftpPort) {
                 throw buildFtpUnavailableError(resolvedFtpPort);
               }
-              await createPath(req.ip, TRANSFER_PORT, req.dest_path);
               const rarSpeed = { lastAt: Date.now(), lastSent: 0, ema: 0 };
               const rarName = path.basename(req.source_path);
               const tempRoot = typeof req.rar_temp_root === 'string' ? req.rar_temp_root.trim() : '';
-              const rarRemoteDir = tempRoot || req.dest_path;
+              const tempRootPath = buildTempRootForArchive(req.dest_path, tempRoot);
+              const tempDir = `${tempRootPath.replace(/\/+$/, '')}/rar_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+              const rarRemoteDir = tempDir;
               const rarRemotePath = joinRemotePath(rarRemoteDir, rarName);
+              await createPath(req.ip, TRANSFER_PORT, tempDir);
               state.transferStatus = createTransferStatus({
                 run_id: runId,
                 status: 'Uploading archive',
@@ -7543,47 +7575,15 @@ const emitLog = (message, level = 'info', force = false) => {
                 onFileDone: () => {},
               });
 
-              emitLog('Archive upload complete. Starting extraction...', 'info');
-              const extractSpeed = { lastAt: Date.now(), lastSent: 0, ema: 0 };
-              await extractArchiveWithProgress(
-                req.ip,
-                rarRemotePath,
-                req.dest_path,
-                { get value() { return state.transferCancel; } },
-                (processed, total, currentFile) => {
-                  const now = Date.now();
-                  const elapsed = (now - extractSpeed.lastAt) / 1000;
-                  if (elapsed > 0) {
-                    const delta = processed - extractSpeed.lastSent;
-                    const inst = delta > 0 ? delta / elapsed : 0;
-                    const alpha = 1 - Math.exp(-elapsed / 3);
-                    extractSpeed.ema = extractSpeed.ema > 0 ? extractSpeed.ema + (inst - extractSpeed.ema) * alpha : inst;
-                    extractSpeed.lastAt = now;
-                    extractSpeed.lastSent = processed;
-                  }
-                  state.transferStatus = createTransferStatus({
-                    run_id: runId,
-                    status: 'Extracting',
-                    sent: processed,
-                    total: total || sourceStat.size,
-                    files: 1,
-                    elapsed_secs: (Date.now() - startTime) / 1000,
-                    current_file: currentFile || rarName,
-                    payload_sent: processed,
-                    payload_speed_bps: extractSpeed.ema,
-                    ftp_speed_bps: 0,
-                    total_speed_bps: extractSpeed.ema,
-                    upload_mode: 'ftp',
-                  });
-                  state.transferLastUpdate = Date.now();
-                },
-                debugLog
-              );
-
+              emitLog('Archive upload complete. Queuing extraction...', 'info');
+              const queuedId = await queueExtract(req.ip, TRANSFER_PORT, rarRemotePath, req.dest_path, {
+                cleanupPath: tempDir,
+                deleteSource: true,
+              });
               const elapsed = (Date.now() - startTime) / 1000;
               state.transferStatus = createTransferStatus({
                 run_id: runId,
-                status: 'Complete',
+                status: 'Queued for extraction',
                 sent: sourceStat.size,
                 total: sourceStat.size,
                 files: 1,
@@ -7592,6 +7592,13 @@ const emitLog = (message, level = 'info', force = false) => {
                 upload_mode: 'ftp',
               });
               state.transferLastUpdate = Date.now();
+              emitLog(`Extraction queued (ID ${queuedId}).`, 'info');
+              emit('queue_hint', {
+                queue_id: queuedId,
+                source_path: req.source_path,
+                dest_path: req.dest_path,
+                size_bytes: sourceStat.size
+              });
               emit('transfer_complete', { run_id: runId, files: 1, bytes: sourceStat.size });
               return;
             }
@@ -7616,11 +7623,12 @@ const emitLog = (message, level = 'info', force = false) => {
               req.ip,
               req.source_path,
               req.dest_path,
-              req.rar_extract_mode || 'normal',
+              'turbo',
               {
                 cancel: { get value() { return state.transferCancel; } },
                 tempRoot: req.rar_temp_root,
                 overrideOnConflict: req.override_on_conflict !== false,
+                queueExtract: true,
                 onProgress: (op, processed, total, currentFile) => {
                   const now = Date.now();
                   const elapsed = (now - rarSpeed.lastAt) / 1000;

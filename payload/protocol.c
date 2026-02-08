@@ -2862,7 +2862,23 @@ void handle_queue_extract(int client_sock, const char *args) {
     }
     *sep = '\0';
     const char *src = buffer;
-    const char *dst = sep + 1;
+    char *dst = sep + 1;
+    char *cleanup = NULL;
+    char *flags = NULL;
+
+    char *sep2 = strchr(dst, '\t');
+    if (sep2) {
+        *sep2 = '\0';
+        cleanup = sep2 + 1;
+        char *sep3 = strchr(cleanup, '\t');
+        if (sep3) {
+            *sep3 = '\0';
+            flags = sep3 + 1;
+        }
+        if (cleanup && cleanup[0] == '\0') {
+            cleanup = NULL;
+        }
+    }
     if (!*src || !*dst) {
         const char *error = "ERROR: Invalid QUEUE_EXTRACT format\n";
         send(client_sock, error, strlen(error), 0);
@@ -2874,8 +2890,26 @@ void handle_queue_extract(int client_sock, const char *args) {
         send(client_sock, error, strlen(error), 0);
         return;
     }
+    if (cleanup && !is_path_safe(cleanup)) {
+        const char *error = "ERROR: Invalid cleanup path\n";
+        send(client_sock, error, strlen(error), 0);
+        return;
+    }
 
-    int id = extract_queue_add(src, dst, 0, NULL, EXTRACT_RAR_FAST);
+    int delete_source = 0;
+    int unrar_mode = EXTRACT_RAR_TURBO;
+    if (flags && flags[0]) {
+        for (char *p = flags; *p; p++) {
+            if (*p >= 'a' && *p <= 'z') {
+                *p = (char)(*p - ('a' - 'A'));
+            }
+        }
+        if (strstr(flags, "DEL") || strstr(flags, "DELETE")) {
+            delete_source = 1;
+        }
+    }
+
+    int id = extract_queue_add(src, dst, delete_source, cleanup, unrar_mode);
     if (id == -2) {
         const char *error = "ERROR: Duplicate extraction request\n";
         send(client_sock, error, strlen(error), 0);

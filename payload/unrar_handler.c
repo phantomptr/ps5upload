@@ -465,6 +465,7 @@ int extract_rar_file(const char *rar_path, const char *dest_dir, int strip_root,
 }
 
 void handle_upload_rar(int sock, const char *args, UnrarMode mode) {
+    mode = UNRAR_MODE_TURBO;
     char dest_path[PATH_MAX];
     unsigned long long file_size = 0;
     int allow_overwrite = 1;
