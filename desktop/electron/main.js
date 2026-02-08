@@ -322,6 +322,27 @@ async function uploadRarForExtraction(ip, rarPath, destPath, mode, opts = {}) {
     throw new Error(`Create destination failed: ${message}`);
   }
 
+  if (!overrideOnConflict) {
+    try {
+      const exists = await checkDir(ip, TRANSFER_PORT, destPath);
+      if (exists) {
+        throw new Error('Destination already exists');
+      }
+    } catch (err) {
+      const message = err && err.message ? err.message : String(err);
+      throw new Error(`Destination check failed: ${message}`);
+    }
+  }
+
+  onLog('Using fast archive upload path.');
+  return await uploadArchiveFastAndExtract(ip, rarPath, destPath, {
+    cancel,
+    onProgress,
+    onLog,
+    overrideOnConflict,
+    tempRoot,
+  });
+
   let triedFallback = false;
   let modeToTry = mode;
   let socket;
@@ -2382,6 +2403,7 @@ async function getPayloadCaps(ip, port) {
   }
 }
 
+
 async function queueExtract(ip, port, src, dst) {
   const response = await sendSimpleCommand(ip, port, `QUEUE_EXTRACT ${src}\t${dst}\n`);
   if (response.startsWith('OK ')) {
@@ -4086,6 +4108,111 @@ function createSocketLineReader(socket) {
   };
 }
 
+function getStorageRootFromPath(destPath) {
+  const normalized = String(destPath || '').replace(/\\/g, '/').trim();
+  if (!normalized.startsWith('/')) return null;
+  if (normalized === '/data' || normalized.startsWith('/data/')) return '/data';
+  if (normalized.startsWith('/mnt/')) {
+    const parts = normalized.split('/').filter(Boolean);
+    if (parts.length >= 2) return `/${parts[0]}/${parts[1]}`;
+  }
+  return null;
+}
+
+function buildTempRootForArchive(destPath, tempRootOverride) {
+  const override = typeof tempRootOverride === 'string' ? tempRootOverride.trim() : '';
+  if (override) {
+    if (override.endsWith('/ps5upload/tmp')) return override;
+    return `${override.replace(/\/+$/, '')}/ps5upload/tmp`;
+  }
+  const root = getStorageRootFromPath(destPath) || '/data';
+  return `${root}/ps5upload/tmp`;
+}
+
+async function uploadArchiveFastAndExtract(ip, rarPath, destPath, opts = {}) {
+  const {
+    cancel = { value: false },
+    onProgress = () => {},
+    onLog = () => {},
+    tempRoot = '',
+    chmodAfterUpload = false,
+  } = opts;
+  const fileStat = await fs.promises.stat(rarPath);
+  const fileSize = fileStat.size;
+  if (!Number.isSafeInteger(fileSize)) {
+    throw new Error(`RAR file too large for safe integer math: ${fileSize}`);
+  }
+  const cleanedTempRoot = typeof tempRoot === 'string' ? tempRoot.trim() : '';
+  if (cleanedTempRoot && /\s/.test(cleanedTempRoot)) {
+    throw new Error('Temp storage path must not contain spaces.');
+  }
+  const tempRootPath = buildTempRootForArchive(destPath, cleanedTempRoot);
+  const tempDir = `${tempRootPath.replace(/\/+$/, '')}/rar_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+  const rarName = path.basename(rarPath);
+  const rarRemotePath = `${tempDir}/${rarName}`;
+
+  onLog(`Archive temp dir: ${tempDir}`);
+  onLog(`Archive remote path: ${rarRemotePath}`);
+  await createPath(ip, TRANSFER_PORT, tempDir);
+
+  const file = {
+    rel_path: rarName,
+    abs_path: rarPath,
+    size: fileSize,
+    mtime: Math.floor(fileStat.mtimeMs / 1000),
+  };
+
+  if (fileSize >= LANE_MIN_FILE_SIZE) {
+    const laneChunk = getLaneChunkSize(fileSize);
+    const totalChunks = Math.ceil(fileSize / laneChunk);
+    onLog(`Archive fast path: lane mode (${LANE_CONNECTIONS} lanes, ${formatBytes(laneChunk)} chunks, ${totalChunks} total).`);
+    await runPayloadUploadLaneSingleFile(file, {
+      ip,
+      destPath: tempDir,
+      connections: LANE_CONNECTIONS,
+      chunkSize: laneChunk,
+      cancel,
+      chmodAfterUpload,
+      log: onLog,
+      onProgress: (sent) => onProgress('Upload', sent, fileSize, rarName),
+    });
+  } else {
+    onLog('Archive fast path: single-stream payload upload.');
+    await runPayloadUploadFastMultiFile([file], {
+      ip,
+      destPath: tempDir,
+      connections: 1,
+      cancel,
+      chmodAfterUpload,
+      log: onLog,
+      onProgress: (sent) => onProgress('Upload', sent, fileSize, rarName),
+    });
+  }
+
+  await extractArchiveWithProgress(
+    ip,
+    rarRemotePath,
+    destPath,
+    cancel,
+    (processed, total, currentFile) => onProgress('Extract', processed, total, currentFile),
+    onLog
+  );
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try { await deletePath(ip, TRANSFER_PORT, rarRemotePath); break; } catch (err) {
+      if (attempt === 3) onLog(`Cleanup failed for archive: ${err?.message || err}`);
+      else await sleepMs(200 * attempt);
+    }
+  }
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try { await deletePath(ip, TRANSFER_PORT, tempDir); break; } catch (err) {
+      if (attempt === 3) onLog(`Cleanup failed for temp dir: ${err?.message || err}`);
+      else await sleepMs(200 * attempt);
+    }
+  }
+  return { fileSize, bytes: fileSize, files: 1, queuedId: null };
+}
+
 async function precreateRemoteDirectories(ip, destRoot, files, opts = {}) {
   if (!Array.isArray(files) || files.length === 0) return { total: 0, created: 0, skipped: 0 };
   const cancel = opts.cancel || { value: false };
@@ -4175,6 +4302,9 @@ async function runPayloadUploadLaneSingleFile(file, opts = {}) {
     const len = Math.min(chunkSize, totalSize - offset);
     chunks.push({ offset, len });
   }
+  if (typeof log === 'function') {
+    log(`Lane upload: ${connections} lanes, ${formatBytes(chunkSize)} chunks, ${chunks.length} total for ${file.rel_path}.`);
+  }
 
   const workerQueues = Array.from({ length: connections }, () => []);
   for (let i = 0; i < chunks.length; i += 1) {
@@ -4204,6 +4334,9 @@ async function runPayloadUploadLaneSingleFile(file, opts = {}) {
 
         const chmodToken = chmodAfterUpload ? 'CHMOD_END' : '0';
         const cmd = `UPLOAD_FAST_OFFSET ${escapeCommandPath(destPath)} ${escapeCommandPath(file.rel_path)} ${chunk.offset} ${totalSize} ${chunk.len} ${chmodToken}\n`;
+        if (typeof log === 'function') {
+          log(`Lane ${idx + 1}/${activeQueues.length}: start chunk @ ${formatBytes(chunk.offset)} (${formatBytes(chunk.len)})`);
+        }
         socket.write(cmd);
 
         const ready = await lineReader.readLine(READ_TIMEOUT_MS);
@@ -4226,6 +4359,9 @@ async function runPayloadUploadLaneSingleFile(file, opts = {}) {
           await writeAllRetry(socket, ioBuf.subarray(0, bytesRead), cancel || { value: false }, log);
           remaining -= bytesRead;
           pos += bytesRead;
+          workerProgress[idx] += bytesRead;
+          const sent = workerProgress.reduce((sum, v) => sum + v, 0);
+          onProgress(sent, 1, file.rel_path);
         }
 
         const result = await lineReader.readLine(READ_TIMEOUT_MS);
@@ -4233,9 +4369,7 @@ async function runPayloadUploadLaneSingleFile(file, opts = {}) {
           throw new Error(`Lane offset failed: ${result || 'unknown response'}`);
         }
 
-        workerProgress[idx] += chunk.len;
-        const sent = workerProgress.reduce((sum, v) => sum + v, 0);
-        onProgress(sent, 1, file.rel_path);
+        // Chunk complete; progress already updated during streaming
       }
     } finally {
       await fd.close().catch(() => {});
@@ -6757,19 +6891,8 @@ function registerIpcHandlers() {
             throw new Error('Upload cancelled by user');
           }
 
-          const tryFtpFallback = async (message) => {
-            emit('manage_log', { message });
-            emit('manage_log', { message: getFtpServiceHint() });
-            const ftpPort = await detectFtpPort(ip, resolvedFtpPort);
-            if (!ftpPort) throw buildFtpUnavailableError(resolvedFtpPort);
-            await uploadFilesViaFtp(ip, ftpPort, batch.dest, batch.files, {
-              cancel: { get value() { return state.manageCancel; } },
-              log: (msg, level) => emit('manage_log', { message: level ? `${level}: ${msg}` : msg }),
-              onProgress: (sent, currentFile) => {
-                emit('manage_progress', { op: 'Upload', processed: processedBase + sent, total: totalBytes, current_file: currentFile });
-              },
-              onFileDone: () => {},
-            });
+          const tryFtpFallback = async () => {
+            throw new Error('FTP fallback disabled in fast-only mode.');
           };
 
           if (uploadMode === 'ftp') {
@@ -6784,35 +6907,46 @@ function registerIpcHandlers() {
               onFileDone: () => {},
             });
           } else {
-            let socket = null;
             try {
-              socket = await uploadPayloadInit(ip, TRANSFER_PORT, batch.dest, false);
-              const socketRef = { current: socket };
-              try {
-                const result = await sendFilesPayloadV4(batch.files, socketRef, {
+              if (batch.files.length > 1) {
+                await precreateRemoteDirectories(ip, batch.dest, batch.files, {
                   cancel: { get value() { return state.manageCancel; } },
-                  deprioritize: true,
-                  progress: (sent) => {
-                    emit('manage_progress', { op: 'Upload', processed: processedBase + sent, total: totalBytes, current_file: null });
-                  },
                   log: (msg) => emit('manage_log', { message: msg }),
-                  reconnect: async () => uploadPayloadInit(ip, TRANSFER_PORT, batch.dest, false),
                 });
-                const response = await readUploadResponse(socketRef.current, { value: false }, result.responseBuffer);
-                parseUploadResponse(response);
-              } catch (v3Err) {
-                const msg = `Payload upload failed; retrying with FTP mode. ${v3Err.message || v3Err}`;
-                await tryFtpFallback(msg);
-                processedBase += batch.batchBytes;
-                emit('manage_progress', { op: 'Upload', processed: processedBase, total: totalBytes, current_file: null });
-                continue;
+              }
+              if (batch.files.length === 1 && Number(batch.files[0].size || 0) >= LANE_MIN_FILE_SIZE) {
+                emit('manage_log', { message: `Manage upload: lane mode (${LANE_CONNECTIONS} lanes).` });
+                await runPayloadUploadLaneSingleFile(batch.files[0], {
+                  ip,
+                  destPath: batch.dest,
+                  connections: LANE_CONNECTIONS,
+                  chunkSize: getLaneChunkSize(Number(batch.files[0].size || 0)),
+                  cancel: { get value() { return state.manageCancel; } },
+                  chmodAfterUpload: false,
+                  log: (msg) => emit('manage_log', { message: msg }),
+                  onProgress: (sent) => {
+                    emit('manage_progress', { op: 'Upload', processed: processedBase + sent, total: totalBytes, current_file: batch.files[0].rel_path });
+                  },
+                });
+              } else {
+                emit('manage_log', { message: `Manage upload: fast mode (${Math.min(8, batch.files.length)} workers).` });
+                await runPayloadUploadFastMultiFile(batch.files, {
+                  ip,
+                  destPath: batch.dest,
+                  connections: Math.min(8, batch.files.length),
+                  cancel: { get value() { return state.manageCancel; } },
+                  chmodAfterUpload: false,
+                  onSkipFile: () => {},
+                  log: (msg) => emit('manage_log', { message: msg }),
+                  onProgress: (sent, filesSent, currentFile) => {
+                    emit('manage_progress', { op: 'Upload', processed: processedBase + sent, total: totalBytes, current_file: currentFile || null });
+                  },
+                });
               }
             } catch (err) {
-              const msg = `Payload V4 session unavailable; retrying with FTP mode. ${err.message || err}`;
-              await tryFtpFallback(msg);
-              processedBase += batch.batchBytes;
-              emit('manage_progress', { op: 'Upload', processed: processedBase, total: totalBytes, current_file: null });
-              continue;
+              const msg = `Payload upload failed in fast-only mode: ${err.message || err}`;
+              emit('manage_log', { message: msg });
+              throw err;
             }
           }
           processedBase += batch.batchBytes;
