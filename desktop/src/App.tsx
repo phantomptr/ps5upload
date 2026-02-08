@@ -3659,8 +3659,34 @@ export default function App() {
   }, []);
 
   const toNumber = (value: number | bigint) => toSafeNumber(value, 0);
-  const transferTotal = toNumber(transferState.total || 0);
-  const transferSent = toNumber(transferState.sent || 0);
+  const transferUiProgressRef = useRef<{ runId: number | null; total: number; sent: number }>({
+    runId: null,
+    total: 0,
+    sent: 0
+  });
+  const transferTotalRaw = toNumber(transferState.total || 0);
+  const transferSentRaw = toNumber(transferState.sent || 0);
+  const transferUiRunId = activeRunId || null;
+  if (transferUiProgressRef.current.runId !== transferUiRunId) {
+    transferUiProgressRef.current = {
+      runId: transferUiRunId,
+      total: transferTotalRaw,
+      sent: transferSentRaw
+    };
+  } else {
+    transferUiProgressRef.current.sent = Math.max(transferUiProgressRef.current.sent, transferSentRaw);
+    if (transferTotalRaw > 0) {
+      transferUiProgressRef.current.total = Math.max(transferUiProgressRef.current.total, transferTotalRaw);
+    }
+    if (transferUiProgressRef.current.total > 0) {
+      transferUiProgressRef.current.total = Math.max(
+        transferUiProgressRef.current.total,
+        transferUiProgressRef.current.sent
+      );
+    }
+  }
+  const transferTotal = transferUiProgressRef.current.total;
+  const transferSent = transferUiProgressRef.current.sent;
   const transferPayloadSent = toNumber(transferState.payloadSent || 0);
   const transferFtpSent = toNumber(transferState.ftpSent || 0);
   const transferPercent =
@@ -5238,6 +5264,7 @@ export default function App() {
           bandwidth_limit_mbps: bandwidthLimit,
           auto_tune_connections: autoTune,
           optimize_upload: optimizeActive,
+          mad_max: optimizeMode === "madmax",
           chmod_after_upload: chmodAfterUpload,
           rar_extract_mode: "turbo",
           rar_temp_root: rarTemp,
@@ -5413,6 +5440,7 @@ export default function App() {
           bandwidth_limit_mbps: settings?.bandwidth_limit_mbps ?? bandwidthLimit,
           auto_tune_connections: settings?.auto_tune_connections ?? autoTune,
           optimize_upload: settings?.optimize_upload ?? optimizeActive,
+          mad_max: optimizeMode === "madmax",
           chmod_after_upload: settings?.chmod_after_upload ?? chmodAfterUpload,
           override_on_conflict: settings?.override_on_conflict ?? overrideOnConflict,
           rar_extract_mode: "turbo",
@@ -7356,6 +7384,39 @@ export default function App() {
                     : tr("select_source")}
                 </p>
               </div>
+
+              {(transferActive || activeRunId) && !uploadQueueRunning && (
+                <div className="card wide">
+                  <header className="card-title">
+                    <span className="card-title-icon">▣</span>
+                    Transfer Progress
+                  </header>
+                  <div className="stack">
+                    <div className="progress">
+                      <div
+                        className={`progress-fill${transferTotal > 0 ? "" : " streaming"}`}
+                        style={{ width: `${transferTotal > 0 ? transferPercent : 100}%` }}
+                      />
+                    </div>
+                    <div className="muted small">
+                      {transferPercentLabel} ·{" "}
+                      {transferTotal > 0
+                        ? `${formatBytes(transferSent)} / ${formatBytes(transferTotal)}`
+                        : `${formatBytes(transferSent)} transferred`}{" "}
+                      · {transferState.files} {tr("files")} · {transferSpeedSummary} ·{" "}
+                      {transferElapsedDisplay > 0
+                        ? `Elapsed ${formatDuration(transferElapsedDisplay)}`
+                        : "Elapsed —"}{" "}
+                      ·{" "}
+                      {transferEtaSeconds != null ? `ETA ${formatDuration(transferEtaSeconds)}` : "ETA —"}{" "}
+                      · {transferState.status}
+                    </div>
+                    {transferState.currentFile && (
+                      <div className="muted small">{transferState.currentFile}</div>
+                    )}
+                  </div>
+                </div>
+              )}
 
             </div>
           )}
