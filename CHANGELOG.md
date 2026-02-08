@@ -3,6 +3,18 @@
 All notable changes to this project are documented here.
 This project follows Semantic Versioning.
 
+## [1.4.9] - 2026-02-08
+
+### Changed
+- Stability-first transfer defaults: payload upload concurrency is now capped at 4 to reduce PS5/FreeBSD 11 overload.
+- Desktop Transfer: **Mad Max** is now opt-in only (no longer auto-triggers based on file size).
+- App (web mode) Manage upload folder behavior now matches desktop: uploading a folder targets `destRoot/<folderName>/...`.
+- Lane (single-file) upload threshold lowered to 512MB for earlier large-file acceleration while staying within the 4-connection cap.
+
+### Fixed
+- App (web mode): transfer/manage uploads now report live speed consistently.
+- Web bridge polling: prevent overlapping poll requests; payload status polling is paused during payload send to reduce log spam while the payload restarts.
+
 ## [1.4.8] - 2026-02-08
 
 ### Added
@@ -16,6 +28,7 @@ This project follows Semantic Versioning.
 - Connection controls are now managed automatically (no manual slider). Defaults: Payload 4, FTP 10; auto-tune adjusts based on file size/count.
 - Archive uploads now emit stall hints when progress pauses early.
 - RAR extraction now uses a single turbo mode (max speed) and the mode selector has been removed.
+- Payload stability tuning for PS5/FreeBSD 11: bounded socket buffers and worker concurrency caps to reduce memory/budget pressure; thread stack sizes are now explicitly set for payload worker threads.
 
 ### Fixed
 - Archive extraction progress handler is now available across archive workflows.

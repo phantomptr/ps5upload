@@ -12,13 +12,15 @@
 #define BUFFER_SIZE (4 * 1024 * 1024)  // 4MB transfer buffer
 #define CMD_BUFFER_SIZE 4096
 
-// Socket buffer tuning - larger buffers for GigE networks
-#define SOCKET_RCVBUF_SIZE (16 * 1024 * 1024)  // 16MB socket receive buffer
-#define SOCKET_SNDBUF_SIZE (16 * 1024 * 1024)  // 16MB socket send buffer
+// Socket buffer tuning
+// PS5/FreeBSD 11 has tighter kernel socket buffer and process budget constraints than a desktop.
+// Keep defaults conservative to avoid kernel memory pressure. Transfer paths can still bump these.
+#define SOCKET_RCVBUF_SIZE (4 * 1024 * 1024)   // 4MB socket receive buffer
+#define SOCKET_SNDBUF_SIZE (4 * 1024 * 1024)   // 4MB socket send buffer
 
 // Upload throughput tuning
-#define UPLOAD_RCVBUF_SIZE (16 * 1024 * 1024)  // 16MB socket receive buffer
-#define UPLOAD_RECV_CHUNK_SIZE (512 * 1024)    // 512KB recv chunks (was 64KB)
+#define UPLOAD_RCVBUF_SIZE (8 * 1024 * 1024)   // 8MB receive buffer for bulk upload sockets
+#define UPLOAD_RECV_CHUNK_SIZE (256 * 1024)    // 256KB recv chunks (keeps latency/pressure reasonable)
 #define MAX_PATH_LEN 4096
 
 // Backpressure tuning - avoid busy spinning
@@ -26,6 +28,18 @@
 
 // Thread stack size - ensure enough stack for worker threads
 #define THREAD_STACK_SIZE (512 * 1024)  // 512KB stack per thread
+
+// Fast transfer (V4) resource tuning
+// These defaults trade a small amount of peak throughput for much higher stability under PS5/FreeBSD 11
+// process/resource budgets (thread + memory + socket buffer pressure).
+#define FTX_PACK_BUFFER_SIZE (48 * 1024 * 1024)     // Keep in sync with desktop max pack size
+#define FTX_PACK_QUEUE_DEPTH 2                      // Caps in-flight packs per writer queue
+#define FTX_WRITER_THREAD_COUNT 3                   // Fewer threads reduces memory + context switching
+#define FTX_POOL_SIZE 4                             // Pack buffer pool (each is FTX_PACK_BUFFER_SIZE)
+#define FTX_FILE_WRITE_QUEUE_DEPTH 2048             // Large static queue costs memory; keep bounded
+#define FTX_FILE_WRITER_BATCH_SIZE 512              // Heap batch size inside writer thread
+#define FTX_SMALL_FILE_POOL_BUF_SIZE (256 * 1024)
+#define FTX_SMALL_FILE_POOL_SIZE 32
 
 // Default paths
 #define DEFAULT_GAMES_PATH "/mnt/usb0/games"

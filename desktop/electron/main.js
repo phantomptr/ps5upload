@@ -56,7 +56,7 @@ const LANE_LARGE_FILE_BYTES = 4 * 1024 * 1024 * 1024; // 4GB
 const LANE_HUGE_CHUNK_BYTES = 1536 * 1024 * 1024; // 1.5GB
 const LANE_LARGE_CHUNK_BYTES = 512 * 1024 * 1024; // 512MB
 const LANE_DEFAULT_CHUNK_BYTES = 256 * 1024 * 1024; // 256MB
-const LANE_MIN_FILE_SIZE = 1536 * 1024 * 1024; // 1.5GB
+const LANE_MIN_FILE_SIZE = 512 * 1024 * 1024; // 512MB
 
 const MAD_MAX_WORKERS = 8;
 const MAD_MAX_HUGE_CHUNK_BYTES = 2 * 1024 * 1024 * 1024; // 2GB
@@ -80,7 +80,7 @@ const UploadResp = {
 };
 
 let sleepBlockerId = null;
-const VERSION = '1.4.8';
+const VERSION = '1.4.9';
 const IS_WINDOWS = process.platform === 'win32';
 
 function beginManageOperation(op) {
@@ -4462,7 +4462,8 @@ async function runPayloadUploadLaneSingleFile(file, opts = {}) {
 
   let preallocResolved = false;
   let preallocResolve = null;
-  const preallocPromise = new Promise((resolve) => { preallocResolve = resolve; });
+  let preallocReject = null;
+  const preallocPromise = new Promise((resolve, reject) => { preallocResolve = resolve; preallocReject = reject; });
 
   const waitForPrealloc = async () => {
     if (preallocResolved) return;
@@ -4539,6 +4540,9 @@ async function runPayloadUploadLaneSingleFile(file, opts = {}) {
 
         // Chunk complete; progress already updated during streaming
       }
+    } catch (err) {
+      if (!preallocResolved) { preallocResolved = true; preallocReject(err); }
+      throw err;
     } finally {
       await fd.close().catch(() => {});
       try {
@@ -4568,6 +4572,28 @@ async function runPayloadUploadFastMultiFile(files, opts = {}) {
 
   // Note: No need to pre-create directories — handle_upload_fast_wrapper on
   // the payload side calls mkdir_p() for each file's parent directory automatically.
+
+  // Lane lock: when one worker enters lane mode (large file), others wait
+  // before picking up their next file to avoid connection explosion.
+  let laneLocked = false;
+  let laneWaiters = [];
+  const acquireLaneLock = async () => {
+    while (laneLocked) {
+      await new Promise((resolve) => laneWaiters.push(resolve));
+    }
+    laneLocked = true;
+  };
+  const releaseLaneLock = () => {
+    laneLocked = false;
+    const waiters = laneWaiters;
+    laneWaiters = [];
+    for (const resolve of waiters) resolve();
+  };
+  const waitIfLaneBusy = async () => {
+    while (laneLocked) {
+      await new Promise((resolve) => laneWaiters.push(resolve));
+    }
+  };
 
   // Connection pool
   let fileIndex = 0;
@@ -4635,12 +4661,38 @@ async function runPayloadUploadFastMultiFile(files, opts = {}) {
   for (let w = 0; w < Math.min(connections, sorted.length); w++) {
     workers.push((async () => {
       while (true) {
+        if (cancel.value) break;
+        await waitIfLaneBusy();
         const idx = fileIndex++;
         if (idx >= sorted.length) break;
-        if (cancel.value) break;
         const file = sorted[idx];
         try {
-          await uploadOneFile(file, idx);
+          if (Number(file.size || 0) >= LANE_MIN_FILE_SIZE) {
+            await acquireLaneLock();
+            try {
+              const laneBaseBytes = totalSent;
+              const laneChunkSize = getLaneChunkSize(Number(file.size));
+              log(`Multi-file lane upload: ${file.rel_path} (${formatBytes(file.size)}, ${connections} connections)`);
+              await runPayloadUploadLaneSingleFile(file, {
+                ip,
+                destPath,
+                connections,
+                chunkSize: laneChunkSize,
+                cancel,
+                chmodAfterUpload,
+                log,
+                onProgress: (sent) => {
+                  totalSent = laneBaseBytes + sent;
+                  onProgress(totalSent, completedFiles, file.rel_path);
+                },
+              });
+              completedFiles++;
+            } finally {
+              releaseLaneLock();
+            }
+          } else {
+            await uploadOneFile(file, idx);
+          }
         } catch (err) {
           if (err.code === 'ENOENT' || err.code === 'EACCES') {
             log(`Skipping: ${file.rel_path}`);
@@ -7051,11 +7103,11 @@ function registerIpcHandlers() {
                   },
                 });
               } else {
-                emit('manage_log', { message: `Manage upload: fast mode (${Math.min(8, batch.files.length)} workers).` });
+                emit('manage_log', { message: `Manage upload: fast mode (${Math.min(4, batch.files.length)} workers).` });
                 await runPayloadUploadFastMultiFile(batch.files, {
                   ip,
                   destPath: batch.dest,
-                  connections: Math.min(8, batch.files.length),
+                  connections: Math.min(4, batch.files.length),
                   cancel: { get value() { return state.manageCancel; } },
                   chmodAfterUpload: false,
                   onSkipFile: () => {},
@@ -8004,27 +8056,29 @@ const emitLog = (message, level = 'info', force = false) => {
           if (ftpThrottleMs > 0 && ftpFileCount > 0) {
             emitLog(`Small-file safeguard: FTP delay ${ftpThrottleMs}ms between small files.`, 'info');
           }
-          if (req.auto_tune_connections && payloadFileCount > 0) {
-            const singlePayloadFile = Array.isArray(payloadFiles) && payloadFileCount === 1;
-            const payloadSizeBytes = Number(payloadTotalSize);
-            if (singlePayloadFile) {
-              if (payloadSizeBytes >= 8 * 1024 * 1024 * 1024) {
-                effectivePayloadConnections = clamp(effectivePayloadConnections, 4, 8);
-              } else if (payloadSizeBytes >= 1024 * 1024 * 1024) {
-                effectivePayloadConnections = clamp(effectivePayloadConnections, 3, 6);
-              } else if (payloadSizeBytes <= 128 * 1024 * 1024) {
-                effectivePayloadConnections = clamp(effectivePayloadConnections, 1, 4);
-              }
-            } else {
-              if (avgPayloadSize < 256 * kb || payloadFileCount >= 100000) {
-                effectivePayloadConnections = clamp(effectivePayloadConnections, 1, 4);
-              } else if (avgPayloadSize < 2 * mb || payloadFileCount >= 20000) {
-                effectivePayloadConnections = clamp(effectivePayloadConnections, 2, 6);
-              } else if (avgPayloadSize > 256 * mb && payloadFileCount < 1000) {
-                effectivePayloadConnections = clamp(effectivePayloadConnections, 3, 8);
-              }
-            }
-          }
+	          if (req.auto_tune_connections && payloadFileCount > 0) {
+	            const singlePayloadFile = Array.isArray(payloadFiles) && payloadFileCount === 1;
+	            const payloadSizeBytes = Number(payloadTotalSize);
+	            if (singlePayloadFile) {
+	              if (payloadSizeBytes >= 8 * 1024 * 1024 * 1024) {
+	                effectivePayloadConnections = clamp(effectivePayloadConnections, 4, 4);
+	              } else if (payloadSizeBytes >= 1024 * 1024 * 1024) {
+	                effectivePayloadConnections = clamp(effectivePayloadConnections, 3, 4);
+	              } else if (payloadSizeBytes <= 128 * 1024 * 1024) {
+	                effectivePayloadConnections = clamp(effectivePayloadConnections, 1, 4);
+	              }
+	            } else {
+	              if (avgPayloadSize < 256 * kb || payloadFileCount >= 100000) {
+	                effectivePayloadConnections = clamp(effectivePayloadConnections, 1, 4);
+	              } else if (avgPayloadSize < 2 * mb || payloadFileCount >= 20000) {
+	                effectivePayloadConnections = clamp(effectivePayloadConnections, 2, 4);
+	              } else if (avgPayloadSize > 256 * mb && payloadFileCount < 1000) {
+	                effectivePayloadConnections = clamp(effectivePayloadConnections, 3, 4);
+	              }
+	            }
+	          }
+	          // Stability first: cap payload concurrency at 4 to avoid overwhelming the PS5 side.
+	          effectivePayloadConnections = clamp(effectivePayloadConnections, 1, 4);
           if (uploadMode !== 'payload') {
             state.transferMeta.effective_ftp_connections = effectiveFtpConnections;
           }
@@ -8177,20 +8231,22 @@ const emitLog = (message, level = 'info', force = false) => {
             };
             while (true) {
               try {
-                const madMaxEligible = Array.isArray(attemptFiles) &&
+                // Mad Max mode is intentionally opt-in because it is aggressive and can destabilize the PS5 side.
+                const madMaxEligible = req?.mad_max === true &&
+                  Array.isArray(attemptFiles) &&
                   attemptFiles.length === 1 &&
                   Number(attemptFiles[0]?.size || 0) >= MAD_MAX_MIN_FILE_SIZE;
                 if (madMaxEligible) {
                   const madMaxChunkSize = getMadMaxChunkSize(Number(attemptFiles[0]?.size || 0));
                   emitLog(
-                    `Payload Mad Max mode: locked max profile (${MAD_MAX_WORKERS} workers, ${formatBytes(madMaxChunkSize)} chunks). ` +
+                    `Payload Mad Max mode: locked max profile (${clamp(MAD_MAX_WORKERS, 1, 4)} workers, ${formatBytes(madMaxChunkSize)} chunks). ` +
                     'This is aggressive and may cause instability.',
                     'warn'
                   );
                   state.transferStatus = {
                     ...state.transferStatus,
                     payload_transfer_path: 'mad_max_single',
-                    payload_workers: MAD_MAX_WORKERS,
+                    payload_workers: clamp(MAD_MAX_WORKERS, 1, 4),
                   };
                   await runPayloadUploadMadMaxSingleFile(attemptFiles[0], {
                     ip: req.ip,
@@ -8212,7 +8268,7 @@ const emitLog = (message, level = 'info', force = false) => {
                 if (isParallelCandidate) {
                   if (attemptFiles.length === 1 && Number(attemptFiles[0]?.size || 0) >= LANE_MIN_FILE_SIZE) {
                     const laneChunkSize = getLaneChunkSize(Number(attemptFiles[0]?.size || 0));
-                    const laneConnections = clamp(effectivePayloadConnections || LANE_CONNECTIONS, 1, 8);
+	                    const laneConnections = clamp(effectivePayloadConnections || LANE_CONNECTIONS, 1, 4);
                     emitLog(
                       `Payload connection mode: ${laneConnections} connections, ${formatBytes(laneChunkSize)} chunks.`,
                       'info'

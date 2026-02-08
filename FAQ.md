@@ -1,7 +1,7 @@
 # PS5 Upload FAQ
 
 Welcome! This FAQ covers setup, features, troubleshooting, and platform‑specific tips.
-Latest release: **v1.4.8**.
+Latest release: **v1.4.9**.
 
 ---
 
@@ -136,6 +136,7 @@ Update to **v1.3.6** or newer. We bundle Noto fonts so Hindi/Bengali/Thai/Korean
 - **Resume Mode:** skips existing files (size-only / thresholded hash / full SHA256)
 - **Compression:** Auto / None / LZ4 / ZSTD
 - **Connections:** managed automatically (defaults: Payload 4, FTP 10; auto‑tune adjusts as needed)
+- Payload connections are capped at 4 for stability on PS5/FreeBSD 11.
 
 ### Upload Modes (Payload / FTP / Mix)
 **Q: What’s the difference between Payload, FTP, and Mix?**  
@@ -159,6 +160,12 @@ It’s a best‑guess of what’s limiting speed right now: network, payload CPU
 
 **Q: What are “Suggested pack / pace / rate”?**  
 These are payload‑side recommendations to keep transfers stable. When auto‑tune is enabled, the client will follow them. When auto‑tune is off, the client still applies safety‑only limits to avoid overload.
+
+**Q: The payload exits or gets killed mid‑transfer. What can I do?**  
+PS5 runs a FreeBSD 11-based OS with tighter process/kernel budget constraints than a desktop. Update to the latest payload/client first: recent versions bound socket buffers, cap worker concurrency, and set explicit thread stack sizes to reduce memory pressure. If you build custom payloads, keep the `FTX_*` values in `payload/config.h` conservative and avoid increasing worker thread counts/queue depths aggressively.
+
+**Q: What is Mad Max mode? Should I use it?**  
+Mad Max is an aggressive single-file upload profile. It can improve throughput on some setups but may destabilize the PS5 payload (crashes/stalls). Use it only when you explicitly need it, and prefer the default (non-Mad Max) transfer settings for stability.
 
 **Q: How do uploads recover from payload hiccups?**  
 The client uses Upload V4, which includes per‑pack ACKs and a replay window. If the payload stalls or restarts, the client waits for it to recover (short window), then resumes by checking which files already exist and re-uploading only what’s missing.

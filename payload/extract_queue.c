@@ -34,6 +34,18 @@ static atomic_int g_requeue_requested = 0;
 static atomic_int g_requeue_id = -1;
 static time_t g_queue_updated_at = 0;
 
+static int pthread_create_detached_with_stack(pthread_t *tid, void *(*fn)(void *), void *arg) {
+    pthread_attr_t attr;
+    if (pthread_attr_init(&attr) != 0) {
+        return pthread_create(tid, NULL, fn, arg);
+    }
+    (void)pthread_attr_setstacksize(&attr, THREAD_STACK_SIZE);
+    (void)pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    int rc = pthread_create(tid, &attr, fn, arg);
+    pthread_attr_destroy(&attr);
+    return rc;
+}
+
 #define EXTRACT_QUEUE_FILE "/data/ps5upload/extract_queue.bin"
 #define EXTRACT_QUEUE_MAGIC 0x31515845 /* 'EXQ1' */
 #define EXTRACT_QUEUE_VERSION 2
@@ -598,15 +610,13 @@ void extract_queue_process(void) {
 
     pthread_mutex_unlock(&g_queue_mutex);
 
-    if (pthread_create(&g_extract_thread, NULL, extract_thread_func, NULL) != 0) {
+    if (pthread_create_detached_with_stack(&g_extract_thread, extract_thread_func, NULL) != 0) {
         pthread_mutex_lock(&g_queue_mutex);
         g_thread_running = 0;
         pthread_mutex_unlock(&g_queue_mutex);
         printf("[EXTRACT_QUEUE] Failed to create extraction thread\n");
         return;
     }
-
-    pthread_detach(g_extract_thread);
 }
 
 int extract_queue_is_busy(void) {

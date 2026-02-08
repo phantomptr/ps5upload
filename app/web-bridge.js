@@ -6,9 +6,14 @@
   var listeners = new Map();
   var transferMonitorTimer = null;
   var transferMonitorRunId = null;
+  var transferMonitorInFlight = false;
   var connectionPollTimer = null;
+  var connectionPollInFlight = false;
   var payloadPollTimer = null;
+  var payloadPollInFlight = false;
+  var payloadPollResumeTimer = null;
   var managePollTimer = null;
+  var managePollInFlight = false;
   var bridgeState = {
     connectionIp: '',
     payloadIp: '',
@@ -129,6 +134,8 @@
     clearTransferMonitor();
     transferMonitorRunId = Number(runId) || null;
     transferMonitorTimer = setInterval(async function () {
+      if (transferMonitorInFlight) return;
+      transferMonitorInFlight = true;
       try {
         var status = await invokeRemote('transfer_status', {});
         if (!status || typeof status !== 'object') return;
@@ -150,6 +157,8 @@
         }
       } catch {
         // Keep polling; transient network/server errors can happen mid-transfer.
+      } finally {
+        transferMonitorInFlight = false;
       }
     }, 500);
   }
@@ -179,11 +188,15 @@
     stopConnectionPoll();
     if (!bridgeState.connectionPollingEnabled || !bridgeState.connectionIp) return;
     connectionPollTimer = setInterval(async function () {
+      if (connectionPollInFlight) return;
+      connectionPollInFlight = true;
       try {
         var snapshot = await invokeRemote('connection_connect', { ip: bridgeState.connectionIp });
         emit('connection_status_update', snapshot);
       } catch {
         // ignore poll failures
+      } finally {
+        connectionPollInFlight = false;
       }
     }, 2000);
   }
@@ -192,11 +205,15 @@
     stopPayloadPoll();
     if (!bridgeState.payloadPollingEnabled || !bridgeState.payloadIp) return;
     payloadPollTimer = setInterval(async function () {
+      if (payloadPollInFlight) return;
+      payloadPollInFlight = true;
       try {
         var snapshot = await invokeRemote('payload_status_refresh', { ip: bridgeState.payloadIp });
         emit('payload_status_update', snapshot);
       } catch {
         // ignore poll failures
+      } finally {
+        payloadPollInFlight = false;
       }
     }, 1200);
   }
@@ -205,6 +222,8 @@
     stopManagePoll();
     if (!bridgeState.managePollingEnabled || !bridgeState.manageIp || !bridgeState.managePath) return;
     managePollTimer = setInterval(async function () {
+      if (managePollInFlight) return;
+      managePollInFlight = true;
       try {
         var snapshot = await invokeRemote('manage_list_refresh', {
           ip: bridgeState.manageIp,
@@ -213,6 +232,8 @@
         emit('manage_list_update', snapshot);
       } catch {
         // ignore poll failures
+      } finally {
+        managePollInFlight = false;
       }
     }, 1800);
   }
@@ -581,14 +602,25 @@
     var sendsPayload = cmd === 'payload_send' || cmd === 'payload_download_and_send';
     var scanProgressTimer = null;
     var manageProgressTimer = null;
+    var scanProgressInFlight = false;
+    var manageProgressInFlight = false;
     var isManageOp = cmd === 'manage_download_file' || cmd === 'manage_download_dir' || cmd === 'manage_upload' || cmd === 'manage_upload_rar' || cmd === 'manage_copy' || cmd === 'manage_extract' || cmd === 'manage_delete' || cmd === 'manage_move' || cmd === 'manage_rename' || cmd === 'manage_create_dir' || cmd === 'manage_chmod';
     var manageOp = mapManageOp(cmd);
     if (sendsPayload) {
       emit('payload_busy', { busy: true });
+      // Avoid spamming status/log updates while the payload is restarting.
+      // We'll resume polling shortly after the send completes.
+      stopPayloadPoll();
+      if (payloadPollResumeTimer) {
+        clearTimeout(payloadPollResumeTimer);
+        payloadPollResumeTimer = null;
+      }
     }
     if (cmd === 'transfer_scan') {
       emit('scan_progress', { files: 0, total: 0 });
       scanProgressTimer = setInterval(function () {
+        if (scanProgressInFlight) return;
+        scanProgressInFlight = true;
         invokeRemote('transfer_scan_status', {}).then(function (state) {
           if (!state || typeof state !== 'object') return;
           emit('scan_progress', {
@@ -597,11 +629,15 @@
           });
         }).catch(function () {
           // ignore scan poll failures
+        }).finally(function () {
+          scanProgressInFlight = false;
         });
       }, 700);
     }
     if (isManageOp) {
       manageProgressTimer = setInterval(function () {
+        if (manageProgressInFlight) return;
+        manageProgressInFlight = true;
         if (cmd === 'manage_upload' || cmd === 'manage_upload_rar') {
           invokeRemote('transfer_status', {}).then(function (status) {
             if (!status || typeof status !== 'object') return;
@@ -614,6 +650,8 @@
             });
           }).catch(function () {
             // ignore
+          }).finally(function () {
+            manageProgressInFlight = false;
           });
           return;
         }
@@ -628,6 +666,8 @@
           });
         }).catch(function () {
           // ignore
+        }).finally(function () {
+          manageProgressInFlight = false;
         });
       }, 500);
     }
@@ -651,6 +691,11 @@
       if (sendsPayload) {
         emit('payload_done', { bytes: null, error: err && err.message ? err.message : String(err) });
         emit('payload_busy', { busy: false });
+        if (payloadPollResumeTimer) clearTimeout(payloadPollResumeTimer);
+        payloadPollResumeTimer = setTimeout(function () {
+          payloadPollResumeTimer = null;
+          startPayloadPoll();
+        }, 1500);
       }
       throw err;
     }
@@ -712,6 +757,11 @@
     if (sendsPayload) {
       emit('payload_done', { bytes: result, error: null });
       emit('payload_busy', { busy: false });
+      if (payloadPollResumeTimer) clearTimeout(payloadPollResumeTimer);
+      payloadPollResumeTimer = setTimeout(function () {
+        payloadPollResumeTimer = null;
+        startPayloadPoll();
+      }, 1500);
     }
 
     return result;
