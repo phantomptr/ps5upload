@@ -1080,8 +1080,10 @@ export default function App() {
   const [resumeMode, setResumeMode] = useState<ResumeOption>("none");
   const [uploadMode, setUploadMode] = useState<UploadMode>("payload");
   const [ftpPort, setFtpPort] = useState<FtpPortOption>("auto");
+  const DEFAULT_PAYLOAD_CONNECTIONS = 4;
+  const DEFAULT_FTP_CONNECTIONS = 10;
   const [connections, setConnections] = useState(4);
-  const [ftpConnections, setFtpConnections] = useState(6);
+  const [ftpConnections, setFtpConnections] = useState(10);
   const [bandwidthLimit, setBandwidthLimit] = useState(0);
   const [optimizeMode, setOptimizeMode] = useState<OptimizeMode>("none");
   const optimizeActive = optimizeMode !== "none";
@@ -1885,8 +1887,6 @@ export default function App() {
   const applyProfile = (profile: Profile) => {
     setIp(profile.address);
     setStorageRoot(profile.storage || "/data");
-    setConnections(profile.connections || 4);
-    setFtpConnections(profile.ftp_connections || 6);
     setUseTemp(profile.use_temp ?? false);
     setAutoTune(profile.auto_tune_connections ?? true);
     const nextPreset = presetOptions[profile.preset_index] ?? presetOptions[0];
@@ -1919,8 +1919,8 @@ export default function App() {
       storage: storageRoot,
       preset_index: presetIndex >= 0 ? presetIndex : 0,
       custom_preset_path: customPreset,
-      connections,
-      ftp_connections: ftpConnections,
+      connections: DEFAULT_PAYLOAD_CONNECTIONS,
+      ftp_connections: DEFAULT_FTP_CONNECTIONS,
       use_temp: useTemp,
       auto_tune_connections: autoTune
     };
@@ -1931,8 +1931,6 @@ export default function App() {
     a.storage === b.storage &&
     a.preset_index === b.preset_index &&
     a.custom_preset_path === b.custom_preset_path &&
-    a.connections === b.connections &&
-    a.ftp_connections === b.ftp_connections &&
     a.use_temp === b.use_temp &&
     a.auto_tune_connections === b.auto_tune_connections;
 
@@ -2085,8 +2083,6 @@ export default function App() {
       }
       if (!optimizeSnapshot.current) {
         optimizeSnapshot.current = {
-          connections,
-          ftpConnections,
           compression,
           bandwidth: bandwidthLimit,
           autoTune
@@ -2112,8 +2108,6 @@ export default function App() {
     }
     if (!optimizeSnapshot.current) {
       optimizeSnapshot.current = {
-        connections,
-        ftpConnections,
         compression,
         bandwidth: bandwidthLimit,
         autoTune
@@ -2163,8 +2157,8 @@ export default function App() {
     const mode = typeof modeOverride === "string" ? modeOverride : optimizeMode;
     if (mode === "madmax") {
       return {
-        connections: 8,
-        ftpConnections: 1,
+        connections: DEFAULT_PAYLOAD_CONNECTIONS,
+        ftpConnections: DEFAULT_FTP_CONNECTIONS,
         compression: "none" as CompressionOption,
         bandwidth: 0,
         autoTune: false
@@ -2172,8 +2166,8 @@ export default function App() {
     }
     if (files <= 0 || total <= 0) {
       return {
-        connections: 2,
-        ftpConnections: 1,
+        connections: DEFAULT_PAYLOAD_CONNECTIONS,
+        ftpConnections: DEFAULT_FTP_CONNECTIONS,
         compression: "lz4" as CompressionOption,
         bandwidth: 0,
         autoTune: false
@@ -2187,49 +2181,28 @@ export default function App() {
     const smallFiles = avgSize < 256 * kb || files >= 100000;
     const mediumSmallFiles = avgSize < 1 * mb;
 
-    let connections = 4;
-    let ftpConnections = 1;
+    let connections = DEFAULT_PAYLOAD_CONNECTIONS;
+    let ftpConnections = DEFAULT_FTP_CONNECTIONS;
     let compression: CompressionOption = "lz4";
     let autoTune = false;
 
     if (tinyFiles) {
-      connections = 8;
       compression = "none";
       autoTune = true;
     } else if (smallFiles) {
-      connections = isDeep ? 8 : 6;
       compression = "none";
       autoTune = true;
     } else if (mediumSmallFiles) {
-      connections = isDeep ? 6 : 4;
       compression = "lz4";
       autoTune = isDeep && files >= 50000;
     } else if (avgSize < 8 * mb) {
-      connections = 4;
       compression = "lz4";
-    } else if (avgSize < 64 * mb) {
-      connections = 6;
-      compression = "none";
     } else {
-      connections = 8;
       compression = "none";
     }
 
     if (uploadMode !== "payload") {
-      if (tinyFiles) {
-        ftpConnections = 1;
-      } else if (smallFiles) {
-        ftpConnections = isDeep ? 2 : 1;
-      } else if (mediumSmallFiles) {
-        ftpConnections = isDeep ? 3 : 2;
-      } else if (avgSize < 32 * mb) {
-        ftpConnections = isDeep ? 3 : 2;
-      } else {
-        ftpConnections = isDeep ? 4 : 3;
-      }
-      if (uploadMode === "mix") {
-        ftpConnections = Math.max(1, Math.min(ftpConnections, Math.ceil(connections / 2)));
-      }
+      ftpConnections = DEFAULT_FTP_CONNECTIONS;
     }
 
     return { connections, ftpConnections, compression, bandwidth: 0, autoTune };
@@ -2242,15 +2215,13 @@ export default function App() {
   ) => {
     const nextSettings = computeOptimizeSettings(filesOverride, totalOverride, modeOverride);
     setAutoTune(!!nextSettings.autoTune);
-    setConnections(nextSettings.connections);
-    setFtpConnections(nextSettings.ftpConnections);
     setCompression(nextSettings.compression);
     setBandwidthLimit(nextSettings.bandwidth);
     const tag = scanPartial ? " (sampled)" : "";
     const mode = (modeOverride ?? optimizeMode);
     const label = mode === "deep" ? "Deep optimize" : mode === "madmax" ? "Mad Max" : "Optimize";
     setClientLogs((prev) => [
-      `${label}${tag}: connections=${nextSettings.connections}, ftp=${nextSettings.ftpConnections}, compression=${nextSettings.compression}, bandwidth=${nextSettings.bandwidth === 0 ? "unlimited" : `${nextSettings.bandwidth} Mbps`}`,
+      `${label}${tag}: connections=default, ftp=default, compression=${nextSettings.compression}, bandwidth=${nextSettings.bandwidth === 0 ? "unlimited" : `${nextSettings.bandwidth} Mbps`}`,
       ...prev
     ].slice(0, 100));
   };
@@ -2360,8 +2331,7 @@ export default function App() {
         }
         setIp(normalizedConfig.address ?? "");
         setStorageRoot(normalizedConfig.storage || "/data");
-        setConnections(normalizedConfig.connections || 4);
-        setFtpConnections(normalizedConfig.ftp_connections || 6);
+        // Connections are fixed defaults now.
         setCompression((normalizedConfig.compression as CompressionOption) || "auto");
         setBandwidthLimit(normalizedConfig.bandwidth_limit_mbps || 0);
         setOverrideOnConflict(normalizedConfig.override_on_conflict ?? false);
@@ -2865,8 +2835,8 @@ export default function App() {
       ...configDefaults,
       address: ip,
       storage: storageRoot,
-      connections,
-      ftp_connections: ftpConnections,
+      connections: DEFAULT_PAYLOAD_CONNECTIONS,
+      ftp_connections: DEFAULT_FTP_CONNECTIONS,
       use_temp: useTemp,
       auto_connect: autoConnect,
       theme,
@@ -3850,9 +3820,6 @@ export default function App() {
       : scanStatus === "error"
       ? tr("scan_error")
       : "";
-  const connectionsDisabled = optimizeActive || autoTune;
-  const payloadConnectionsDisabled = connectionsDisabled || uploadMode === "ftp";
-  const ftpConnectionsDisabled = connectionsDisabled || uploadMode === "payload";
   const isRarSource = /\.rar$/i.test(sourcePath.trim());
   const isArchiveSource = useMemo(
     () => isArchivePath(sourcePath),
@@ -4898,8 +4865,8 @@ export default function App() {
     size_bytes: params.sizeBytes ?? null,
     transfer_settings: {
       use_temp: useTemp,
-      connections,
-      ftp_connections: ftpConnections,
+      connections: DEFAULT_PAYLOAD_CONNECTIONS,
+      ftp_connections: DEFAULT_FTP_CONNECTIONS,
       resume_mode: resumeMode,
       compression,
       bandwidth_limit_mbps: bandwidthLimit,
@@ -5251,8 +5218,8 @@ export default function App() {
           source_path: params.sourcePath,
           dest_path: params.destPath,
           use_temp: useTempForRun,
-          connections,
-          ftp_connections: ftpConnections,
+          connections: DEFAULT_PAYLOAD_CONNECTIONS,
+          ftp_connections: DEFAULT_FTP_CONNECTIONS,
           resume_mode: resumeToUse,
           compression,
           upload_mode: uploadMode,
@@ -5420,8 +5387,8 @@ export default function App() {
           source_path: item.source_path,
           dest_path: dest,
           use_temp: itemUseTemp,
-          connections: settings?.connections ?? connections,
-          ftp_connections: settings?.ftp_connections ?? ftpConnections,
+          connections: DEFAULT_PAYLOAD_CONNECTIONS,
+          ftp_connections: DEFAULT_FTP_CONNECTIONS,
           resume_mode: itemResumeMode,
           compression: settings?.compression ?? compression,
           upload_mode: settings?.upload_mode ?? uploadMode,
@@ -5661,8 +5628,6 @@ export default function App() {
     setUploadMode("payload");
     setFtpPort("auto");
     setFtpMixThreshold(1);
-    setConnections(4);
-    setFtpConnections(6);
     setBandwidthLimit(0);
     setOptimizeMode("none");
     restoreOptimizeSnapshot();
@@ -7251,55 +7216,12 @@ export default function App() {
                     </label>
                     <p className="muted small">{tr("auto_tune_desc")}</p>
                     <p className="muted small">{tr("auto_tune_note")}</p>
-                    <label
-                      className={`field ${payloadConnectionsDisabled ? "is-disabled" : ""}`}
-                    >
-                      <span>{tr("connections")}</span>
-                      <input
-                        type="number"
-                        min={1}
-                        max={10}
-                        value={connections}
-                        disabled={payloadConnectionsDisabled}
-                        onChange={(event) =>
-                          setConnections(
-                            Math.min(10, Math.max(1, Number(event.target.value)))
-                          )
-                        }
-                      />
-                    </label>
-                    <label
-                      className={`field ${ftpConnectionsDisabled ? "is-disabled" : ""}`}
-                    >
-                      <span>{tr("connections_ftp")}</span>
-                      <input
-                        type="number"
-                        min={1}
-                        max={6}
-                        value={ftpConnections}
-                        disabled={ftpConnectionsDisabled}
-                        onChange={(event) =>
-                          setFtpConnections(
-                            Math.min(6, Math.max(1, Number(event.target.value)))
-                          )
-                        }
-                      />
-                    </label>
-                    {autoTune && (
-                      <p className="muted small note-tight">
-                        {tr("connections_auto_note")}
-                      </p>
-                    )}
-                    <p className="muted small">{tr("ftp_connections_hint")}</p>
-                    {uploadMode !== "ftp" && (
-                      <>
-                        <p className="muted small">{tr("connections_note")}</p>
-                        <p className="muted small">{tr("connections_note_extra")}</p>
-                      </>
-                    )}
-                    {uploadMode !== "payload" && (
-                      <p className="muted small">{tr("ftp_connections_note")}</p>
-                    )}
+                    <div className="muted small">
+                      {tr("connections_defaults_note")}
+                    </div>
+                    <div className="muted small">
+                      {tr("connections_auto_note")}
+                    </div>
                   </div>
                   <div className="stack">
                     <div className="section-label">{tr("transfer_options")}</div>
@@ -9493,18 +9415,20 @@ export default function App() {
                   </div>
 
                   <div className="info-section">
-                    <div className="info-section-title">{tr("transfer_settings")}</div>
-                    <div className="info-grid">
-                      <div className="info-row">
-                        <div className="info-label">{tr("connections")}</div>
-                        <div className="info-value">{settings.connections ?? connections}</div>
-                      </div>
-                      {(uploadModeValue === "ftp" || uploadModeValue === "mix") && (
+                      <div className="info-section-title">{tr("transfer_settings")}</div>
+                      <div className="info-grid">
                         <div className="info-row">
-                          <div className="info-label">{tr("connections_ftp")}</div>
-                          <div className="info-value">{settings.ftp_connections ?? ftpConnections}</div>
+                          <div className="info-label">{tr("connections")}</div>
+                          <div className="info-value">
+                            {`${tr("upload_mode_payload")}: ${DEFAULT_PAYLOAD_CONNECTIONS}, ${tr("upload_mode_ftp")}: ${DEFAULT_FTP_CONNECTIONS}`}
+                          </div>
                         </div>
-                      )}
+                        <div className="info-row">
+                          <div className="info-label">{tr("auto_tune")}</div>
+                          <div className="info-value">
+                            {(settings.auto_tune_connections ?? autoTune) ? tr("on") : tr("off")}
+                          </div>
+                        </div>
                       <div className="info-row">
                         <div className="info-label">{tr("temp_short")}</div>
                         <div className="info-value">

@@ -74,8 +74,8 @@ function createTransferStatus(overrides = {}) {
 const defaultConfig = {
   address: '192.168.0.100',
   storage: '/data',
-  connections: 6,
-  ftp_connections: 6,
+  connections: 4,
+  ftp_connections: 10,
   use_temp: false,
   auto_connect: false,
   theme: 'dark',
@@ -1419,6 +1419,7 @@ async function uploadLaneSingleFile(ip, destRoot, file, options = {}) {
   const shouldCancel = typeof options.shouldCancel === 'function' ? options.shouldCancel : null;
   const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
   const chmodAfterUpload = Boolean(options.chmodAfterUpload);
+  const connections = Math.max(1, Math.min(8, Number(options.connections) || LANE_CONNECTIONS));
   const totalSize = Number(file.size || 0);
   if (totalSize <= 0) return;
   const chunkSize = getLaneChunkSize(totalSize);
@@ -1427,9 +1428,9 @@ async function uploadLaneSingleFile(ip, destRoot, file, options = {}) {
     const len = Math.min(chunkSize, totalSize - offset);
     chunks.push({ offset, len });
   }
-  const workerQueues = Array.from({ length: LANE_CONNECTIONS }, () => []);
+  const workerQueues = Array.from({ length: connections }, () => []);
   for (let i = 0; i < chunks.length; i++) {
-    workerQueues[i % LANE_CONNECTIONS].push(chunks[i]);
+    workerQueues[i % connections].push(chunks[i]);
   }
   const activeQueues = workerQueues.filter((q) => q.length > 0);
   const workerProgress = new Array(activeQueues.length).fill(0);
@@ -1459,7 +1460,7 @@ async function uploadLaneSingleFile(ip, destRoot, file, options = {}) {
         const readyResp = await readBinaryResponse(reader, READ_TIMEOUT_MS);
         if (readyResp.code !== UploadResp.Ready) {
           const msg = readyResp.data?.length ? readyResp.data.toString('utf8') : 'no response';
-          throw new Error(`Lane rejected: ${msg}`);
+          throw new Error(`Connection rejected: ${msg}`);
         }
         if (chunk.offset === 0 && !preallocResolved) {
           preallocResolved = true;
@@ -1485,7 +1486,7 @@ async function uploadLaneSingleFile(ip, destRoot, file, options = {}) {
         const endResp = await readBinaryResponse(reader, READ_TIMEOUT_MS);
         if (endResp.code !== UploadResp.Ok) {
           const msg = endResp.data?.length ? endResp.data.toString('utf8') : 'unknown response';
-          throw new Error(`Lane failed: ${msg}`);
+          throw new Error(`Connection failed: ${msg}`);
         }
 
         workerProgress[idx] += chunk.len;
@@ -1507,7 +1508,7 @@ async function uploadFilesViaFtpSimple(ip, ftpPort, destRoot, files, options = {
   const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
   const onFileStart = typeof options.onFileStart === 'function' ? options.onFileStart : null;
   const shouldCancel = typeof options.shouldCancel === 'function' ? options.shouldCancel : null;
-  const connections = Math.max(1, Math.min(6, Number(options.connections) || 1));
+  const connections = Math.max(1, Math.min(10, Number(options.connections) || 1));
   const queue = Array.isArray(files) ? [...files] : [];
   let sent = 0;
   let filesUploaded = 0;
@@ -2720,14 +2721,14 @@ async function handleInvoke(cmd, args, runtime) {
       const runId = Date.now();
       const requestedOptimize = Boolean(req && req.optimize_upload);
       const autoTuneConnections = req && typeof req.auto_tune_connections === 'boolean' ? req.auto_tune_connections : null;
-      const requestedFtpConnections = req && typeof req.ftp_connections === 'number' ? req.ftp_connections : null;
+      const requestedFtpConnections = 10;
       const effectiveFtpConnections = Math.max(
         1,
         Math.min(
-          6,
+          10,
           Number.isFinite(Number(requestedFtpConnections))
             ? Number(requestedFtpConnections)
-            : 6
+            : 10
         )
       );
       const compression = req && req.compression ? String(req.compression) : null;
@@ -2780,6 +2781,34 @@ async function handleInvoke(cmd, args, runtime) {
           }
 
           const mode = uploadMode && uploadMode.toLowerCase() === 'ftp' ? 'ftp' : 'payload';
+          const avgSize = totalFiles > 0 ? totalBytes / totalFiles : 0;
+          let effectivePayloadConnections = 4;
+          if (autoTuneConnections && totalFiles > 0) {
+            if (totalFiles === 1) {
+              if (totalBytes >= 8 * 1024 * 1024 * 1024) {
+                effectivePayloadConnections = Math.max(effectivePayloadConnections, 4);
+              } else if (totalBytes >= 1024 * 1024 * 1024) {
+                effectivePayloadConnections = Math.max(effectivePayloadConnections, 3);
+              } else if (totalBytes <= 128 * 1024 * 1024) {
+                effectivePayloadConnections = Math.min(effectivePayloadConnections, 4);
+              }
+            } else if (avgSize < 256 * 1024 || totalFiles >= 100000) {
+              effectivePayloadConnections = Math.min(effectivePayloadConnections, 4);
+            } else if (avgSize < 2 * 1024 * 1024 || totalFiles >= 20000) {
+              effectivePayloadConnections = Math.min(effectivePayloadConnections, 6);
+            } else if (avgSize > 256 * 1024 * 1024 && totalFiles < 1000) {
+              effectivePayloadConnections = Math.max(effectivePayloadConnections, 3);
+            }
+          }
+          if (autoTuneConnections && totalFiles > 0) {
+            if (avgSize < 256 * 1024 || totalFiles >= 50000) {
+              effectiveFtpConnections = Math.min(effectiveFtpConnections, 4);
+            } else if (avgSize < 2 * 1024 * 1024 || totalFiles >= 20000) {
+              effectiveFtpConnections = Math.min(effectiveFtpConnections, 6);
+            } else if (avgSize > 256 * 1024 * 1024 && totalFiles < 1000) {
+              effectiveFtpConnections = Math.max(effectiveFtpConnections, 4);
+            }
+          }
           if (mode === 'payload') {
             try {
               runtime.transferStatus.status = 'Preparing upload';
@@ -2797,6 +2826,7 @@ async function handleInvoke(cmd, args, runtime) {
 
               if (uploadFiles.length === 1 && Number(uploadFiles[0].size || 0) >= LANE_MIN_FILE_SIZE) {
                 await uploadLaneSingleFile(ip, destRoot, uploadFiles[0], {
+                  connections: effectivePayloadConnections,
                   shouldCancel: () => runtime.transferCancel,
                   onProgress: (sent) => {
                     runtime.transferStatus.sent = sent;
@@ -2806,7 +2836,7 @@ async function handleInvoke(cmd, args, runtime) {
                 });
               } else {
                 await uploadFastMultiFile(ip, destRoot, uploadFiles, {
-                  connections: 8,
+                  connections: effectivePayloadConnections,
                   shouldCancel: () => runtime.transferCancel,
                   onFileStart: (file) => {
                     runtime.transferStatus.current_file = file && file.rel_path ? file.rel_path : '';
