@@ -80,7 +80,7 @@ const UploadResp = {
 };
 
 let sleepBlockerId = null;
-const VERSION = '1.4.7';
+const VERSION = '1.4.8';
 const IS_WINDOWS = process.platform === 'win32';
 
 function beginManageOperation(op) {

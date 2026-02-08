@@ -1,7 +1,7 @@
 # PS5 Upload FAQ
 
 Welcome! This FAQ covers setup, features, troubleshooting, and platform‑specific tips.
-Latest release: **v1.4.7**.
+Latest release: **v1.4.8**.
 
 ---
 
@@ -135,8 +135,7 @@ Update to **v1.3.6** or newer. We bundle Noto fonts so Hindi/Bengali/Thai/Korean
 - **Override if conflict found:** must be ON to overwrite
 - **Resume Mode:** skips existing files (size-only / thresholded hash / full SHA256)
 - **Compression:** Auto / None / LZ4 / ZSTD
-- **Connections (payload):** number of parallel payload streams
-- **Connections (FTP):** number of parallel FTP uploads (only active in FTP/Mix)
+- **Connections:** managed automatically (defaults: Payload 4, FTP 10; auto‑tune adjusts as needed)
 
 ### Upload Modes (Payload / FTP / Mix)
 **Q: What’s the difference between Payload, FTP, and Mix?**  
@@ -149,9 +148,9 @@ If FTP is unavailable, Mix aborts and asks you to enable FTP (ftpsrv/etaHEN). If
 
 ### Scan & Optimize
 - **Scan** estimates size and file count quickly.
-- **Optimize** suggests best compression/connections based on scan.
+- **Optimize** suggests best compression and enables auto‑tune for tougher file mixes.
 - **Scan is required for Optimize.**
-- **Auto-tune** adjusts packing and pacing during upload; it may enable Optimize for small-file batches.
+- **Auto-tune** adjusts connections, packing, and pacing during upload; it may enable Optimize for small-file batches.
 - Archives aren’t scanned.
 
 ### Bottleneck & Tuning
@@ -324,7 +323,7 @@ This can happen with folders containing tens of thousands of small files. As of 
 ## Performance Tips
 
 - Use **Ethernet**
-- Keep connections moderate (4–8)
+- Let auto‑tune manage connections (defaults: Payload 4, FTP 10)
 - Avoid Wi‑Fi for large folder uploads
 - Use **Scan + Optimize** for large folder sets
 

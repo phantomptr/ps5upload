@@ -5,7 +5,7 @@
 </p>
 
 PS5 Upload is a fast, reliable way to move apps and homebrew to your PS5 without the pain of slow transfers.
-Current release: **v1.4.7**.
+Current release: **v1.4.8**.
 
 New UI highlights:
 - Cleaner Transfer and Manage layouts with clearer transfer settings.
@@ -26,7 +26,7 @@ New UI highlights:
 - Automatic maintenance when idle to keep the payload healthy.
 - Extraction Stop retries automatically; progress messaging now shows “Starting extraction…” before bytes appear.
 - History resume workflow with 4 resume tiers (size-only, thresholded hash, full SHA256).
-- Auto-tune adapts pack size/pacing and may enable Optimize for small-file batches.
+- Auto-tune adapts connections, pack size, and pacing; defaults are Payload 4 / FTP 10 and auto-tune adjusts as needed.
 - Uploads and archives now accept folder names with spaces, tabs, and brackets.
 - Log level filtering with color-coded badges in the Logs panel.
 - FAQ tab with an embedded, scrollable help panel.

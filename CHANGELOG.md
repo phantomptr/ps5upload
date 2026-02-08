@@ -3,7 +3,7 @@
 All notable changes to this project are documented here.
 This project follows Semantic Versioning.
 
-## [1.4.7] - 2026-02-08
+## [1.4.8] - 2026-02-08
 
 ### Added
 - New payload fast paths: parallel `UPLOAD_FAST` multi-file uploads and lane-based single-file uploads via `UPLOAD_FAST_OFFSET`.
@@ -13,6 +13,11 @@ This project follows Semantic Versioning.
 ### Changed
 - Resume compatibility listing now auto-skips for very large trees to avoid long startup scans.
 - Logging for pre-create and resume scanning tuned to reduce noise while keeping progress visibility.
+- Connection controls are now managed automatically (no manual slider). Defaults: Payload 4, FTP 10; auto-tune adjusts based on file size/count.
+- Archive uploads now emit stall hints when progress pauses early.
+
+### Fixed
+- Archive extraction progress handler is now available across archive workflows.
 
 ## [1.4.6] - 2026-02-04
 
