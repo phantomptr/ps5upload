@@ -1328,7 +1328,13 @@ async function precreateRemoteDirectories(ip, destRoot, files, options = {}) {
 
   const workers = Array.from({ length: PRECREATE_DIR_CONCURRENCY }, () => runWorker());
   await Promise.all(workers);
-  if (log) log(`Pre-create: done (${created} created, ${failed} failed).`);
+  if (log) {
+    if (failed > 0) {
+      log(`Pre-create: done (${created} created, ${failed} failed).`);
+    } else {
+      log(`Pre-create: done (${created} created).`);
+    }
+  }
   return { total, created, skipped: failed };
 }
 
@@ -1805,8 +1811,18 @@ async function payloadMaintenance(ip, port) {
   return true;
 }
 
-async function queueExtract(ip, port, src, dst) {
-  const response = await sendSimpleCommand(ip, port, `QUEUE_EXTRACT ${src}\t${dst}\n`);
+async function queueExtract(ip, port, src, dst, opts = {}) {
+  const cleanupPath = typeof opts.cleanupPath === 'string' ? opts.cleanupPath.trim() : '';
+  const deleteSource = opts.deleteSource === true;
+  const tokens = [src, dst];
+  if (cleanupPath || deleteSource) {
+    tokens.push(cleanupPath);
+    if (deleteSource) {
+      tokens.push('DEL');
+    }
+  }
+  const cmd = `QUEUE_EXTRACT ${tokens.join('\t')}\n`;
+  const response = await sendSimpleCommand(ip, port, cmd);
   if (!response.startsWith('OK ')) throw new Error(`Queue extract failed: ${response}`);
   return Number.parseInt(response.substring(3).trim(), 10);
 }
@@ -3048,14 +3064,14 @@ async function handleInvoke(cmd, args, runtime) {
             },
           });
         }
-        const queuedId = await queueExtract(ip, TRANSFER_PORT, remoteRarPath, destPath);
+        const queuedId = await queueExtract(ip, TRANSFER_PORT, remoteRarPath, destPath, { deleteSource: true });
         return { fileSize: stat.size, bytes: stat.size, files: 1, queuedId };
       }
 
       const ftpPort = await findFtpPort(ip, 'auto');
       if (!ftpPort) throw new Error('FTP not reachable on ports 1337/2121. Enable ftpsrv or etaHEN FTP service.');
       await uploadFilesViaFtpSimple(ip, ftpPort, remoteDir, [{ abs_path: rarPath, rel_path: path.basename(rarPath), size: stat.size }]);
-      const queuedId = await queueExtract(ip, TRANSFER_PORT, remoteRarPath, destPath);
+      const queuedId = await queueExtract(ip, TRANSFER_PORT, remoteRarPath, destPath, { deleteSource: true });
       return { fileSize: stat.size, bytes: stat.size, files: 1, queuedId };
     }
 

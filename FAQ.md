@@ -247,13 +247,18 @@ Stop retries automatically—no need to click multiple times.
 ## Archives & Extraction
 
 **Q: How does RAR extraction work?**  
-If **RAR Extract Mode** is enabled, the archive is uploaded to a temp folder and extracted on the PS5.  
+RAR extraction runs in a single turbo mode for maximum speed. The archive is uploaded to a temp folder and extracted on the PS5.  
 If **RAR Temp Storage** is set, the temp folder is `<selected storage>/ps5upload/tmp` (e.g. `/mnt/usb0/ps5upload/tmp`); otherwise it uses the destination’s storage root.  
 This requires a payload that supports the TMP override (older payloads will ignore the selection).
 
 **Q: Why keep failed RARs?**  
 Failed extractions keep the archive so you can **Requeue**.  
 Temp files are deleted only on **success** or **Clear tmp**.
+
+**Q: My archive upload looks stuck at the beginning. Is it frozen?**  
+Large archives may pause briefly before progress appears while the payload signals READY and the client primes the read pipeline.  
+If the source file is on a shared/network drive (for example `hgfs`), the first read can be slow.  
+Check the Transfer log for stall hints; they indicate whether the delay is from payload READY or source reads.
 
 ---
 

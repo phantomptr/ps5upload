@@ -143,7 +143,7 @@ Release bundle option:
     *   Pick a preset location (like `homebrew` or `etaHEN/games`).
     *   Give your folder a name.
 4.  **Upload:** Click **Upload** in the bottom right. The bar will track real-time progress.
-5.  **RAR uploads (optional):** If your source is a `.rar`, you can pick a **RAR Extract Mode** and (optionally) a **RAR Temp Storage** in Transfer settings to control where the archive is staged before extraction.
+5.  **RAR uploads (optional):** If your source is a `.rar`, extraction runs in a single turbo mode for maximum speed. You can still pick an optional **RAR Temp Storage** in Transfer settings to control where the archive is staged before extraction.
 
 ### 5. Manage Files (Optional)
 Open the **Manage** tab to browse your PS5's storage. You can rename, move, copy, delete, and `chmod 777` files or folders. You can also download files and folders from your PS5 to your computer (folder downloads run in a safe, sequential mode for stability). If something gets stuck, use **Reset UI** in Manage to recover.
@@ -186,6 +186,11 @@ Open the **FAQ** tab for built‑in help and troubleshooting (offline, bundled w
 
 **Q: "No writable storage found"?**
 *   The tool protects you from trying to write to read-only system partitions. If you want to use a USB drive, make sure it's formatted (exFAT is best) and plugged in *before* you load the payload.
+
+**Q: Archive upload shows 0% or looks stuck at the start?**
+*   Large archives can pause briefly while the payload reports READY and the client primes the read pipeline.
+*   If the source is on a shared/network drive (for example `hgfs`), the first read can be slow.
+*   The Transfer log now emits stall hints so you can see whether the delay is from payload READY or source reads.
 
 **Q: macOS: "App is damaged" or "Unidentified Developer"?**
 *   This is normal for unsigned apps. Right-click the app, select **Open**, and then click **Open** in the dialog.

@@ -112,10 +112,8 @@ int extract_queue_add(const char *source_path, const char *dest_path, int delete
     }
     item->delete_source = delete_source ? 1 : 0;
     strncpy(item->archive_name, get_archive_name(source_path), sizeof(item->archive_name) - 1);
-    if (unrar_mode != EXTRACT_RAR_FAST && unrar_mode != EXTRACT_RAR_SAFE && unrar_mode != EXTRACT_RAR_TURBO) {
-        unrar_mode = EXTRACT_RAR_FAST;
-    }
-    item->unrar_mode = unrar_mode;
+    (void)unrar_mode;
+    item->unrar_mode = EXTRACT_RAR_TURBO;
     item->status = EXTRACT_STATUS_PENDING;
     item->percent = 0;
     item->processed_bytes = 0;
@@ -436,27 +434,13 @@ static void *extract_thread_func(void *arg) {
         pthread_mutex_unlock(&g_queue_mutex);
     }
 
-    /* Extract */
+    /* Extract (single turbo mode) */
     unrar_extract_opts opts;
-    if (item->unrar_mode == EXTRACT_RAR_SAFE) {
-        opts.keepalive_interval_sec = UNRAR_SAFE_KEEPALIVE_SEC;
-        opts.sleep_every_bytes = UNRAR_SAFE_SLEEP_EVERY_BYTES;
-        opts.sleep_us = UNRAR_SAFE_SLEEP_US;
-        opts.trust_paths = UNRAR_SAFE_TRUST_PATHS;
-        opts.progress_file_start = UNRAR_SAFE_PROGRESS_FILE_START;
-    } else if (item->unrar_mode == EXTRACT_RAR_TURBO) {
-        opts.keepalive_interval_sec = UNRAR_TURBO_KEEPALIVE_SEC;
-        opts.sleep_every_bytes = UNRAR_TURBO_SLEEP_EVERY_BYTES;
-        opts.sleep_us = UNRAR_TURBO_SLEEP_US;
-        opts.trust_paths = UNRAR_TURBO_TRUST_PATHS;
-        opts.progress_file_start = UNRAR_TURBO_PROGRESS_FILE_START;
-    } else {
-        opts.keepalive_interval_sec = UNRAR_FAST_KEEPALIVE_SEC;
-        opts.sleep_every_bytes = UNRAR_FAST_SLEEP_EVERY_BYTES;
-        opts.sleep_us = UNRAR_FAST_SLEEP_US;
-        opts.trust_paths = UNRAR_FAST_TRUST_PATHS;
-        opts.progress_file_start = UNRAR_FAST_PROGRESS_FILE_START;
-    }
+    opts.keepalive_interval_sec = UNRAR_TURBO_KEEPALIVE_SEC;
+    opts.sleep_every_bytes = UNRAR_TURBO_SLEEP_EVERY_BYTES;
+    opts.sleep_us = UNRAR_TURBO_SLEEP_US;
+    opts.trust_paths = UNRAR_TURBO_TRUST_PATHS;
+    opts.progress_file_start = UNRAR_TURBO_PROGRESS_FILE_START;
 
     int extracted_count = 0;
     unsigned long long extracted_bytes = 0;
