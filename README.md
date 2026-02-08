@@ -5,7 +5,7 @@
 </p>
 
 PS5 Upload is a fast, reliable way to move apps and homebrew to your PS5 without the pain of slow transfers.
-Current release: **v1.4.8**.
+Current release: **v1.4.9**.
 
 New UI highlights:
 - Cleaner Transfer and Manage layouts with clearer transfer settings.
@@ -27,6 +27,7 @@ New UI highlights:
 - Extraction Stop retries automatically; progress messaging now shows “Starting extraction…” before bytes appear.
 - History resume workflow with 4 resume tiers (size-only, thresholded hash, full SHA256).
 - Auto-tune adapts connections, pack size, and pacing; defaults are Payload 4 / FTP 10 and auto-tune adjusts as needed.
+- Payload connections are capped at 4 for stability on PS5/FreeBSD 11.
 - Uploads and archives now accept folder names with spaces, tabs, and brackets.
 - Log level filtering with color-coded badges in the Logs panel.
 - FAQ tab with an embedded, scrollable help panel.
@@ -35,6 +36,8 @@ New UI highlights:
 - Games tools: storage filters, search, per-game size/file scan, and delete with confirmation.
 
 It is optimized for thousands of small files on a local network, and supports both payload and FTP transfer modes (including a hybrid mix mode). FTP requires ftpsrv or the etaHEN FTP service enabled. Payload uploads auto-recover after a payload restart (within a short window) and resume missing files automatically.
+
+PS5 runs a FreeBSD 11-based OS. The payload defaults are intentionally conservative to stay within kernel/process budget constraints: socket buffer sizes are bounded, worker concurrency is capped, and payload worker threads use an explicit (smaller) stack size to reduce memory pressure. If you build custom payloads, see `payload/config.h` for the `FTX_*` tuning knobs.
 
 <img width="1911" height="1166" alt="Screenshot 2026-01-24 225424" src="https://github.com/user-attachments/assets/2773fd4b-ef2c-4b95-936c-1be3ab34e977" />
 <img width="1913" height="1163" alt="Screenshot 2026-01-24 225409" src="https://github.com/user-attachments/assets/59376d5d-1dc6-484b-917a-3aec349053c7" />

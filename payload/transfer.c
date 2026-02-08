@@ -27,17 +27,18 @@
 #include "system_stats.h"
 #include "protocol.h"
 
-// Optimized for single-process threaded concurrency
-#define PACK_BUFFER_SIZE (48 * 1024 * 1024)
-#define PACK_QUEUE_DEPTH 8
-#define WRITER_THREAD_COUNT 6
-#define FILE_WRITE_QUEUE_DEPTH (16 * 1024)
+// Optimized for single-process threaded concurrency.
+// Keep resource usage bounded to avoid PS5/FreeBSD 11 budget kills (socket buffers, threads, memory).
+#define PACK_BUFFER_SIZE FTX_PACK_BUFFER_SIZE
+#define PACK_QUEUE_DEPTH FTX_PACK_QUEUE_DEPTH
+#define WRITER_THREAD_COUNT FTX_WRITER_THREAD_COUNT
+#define FILE_WRITE_QUEUE_DEPTH FTX_FILE_WRITE_QUEUE_DEPTH
 #define FILE_WRITE_INTERVAL_MS 250
 #define UPLOAD_RECV_BUFFER_SIZE (8 * 1024 * 1024)
 #define TUNE_PACK_MIN (4 * 1024 * 1024)
 
 // Buffer pool for large packs
-#define POOL_SIZE 16
+#define POOL_SIZE FTX_POOL_SIZE
 static uint8_t *g_buffer_pool[POOL_SIZE];
 static int g_pool_count = 0;
 static pthread_mutex_t g_pool_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -45,8 +46,8 @@ static atomic_size_t g_pack_in_use = 0;
 static atomic_int g_active_sessions = 0;
 
 // Small-file buffer pool to reduce malloc/free churn
-#define SMALL_FILE_POOL_BUF_SIZE (256 * 1024)
-#define SMALL_FILE_POOL_SIZE 64
+#define SMALL_FILE_POOL_BUF_SIZE FTX_SMALL_FILE_POOL_BUF_SIZE
+#define SMALL_FILE_POOL_SIZE FTX_SMALL_FILE_POOL_SIZE
 static uint8_t *g_small_file_pool[SMALL_FILE_POOL_SIZE];
 static size_t g_small_file_pool_count = 0;
 static pthread_mutex_t g_small_file_pool_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -145,6 +146,18 @@ static volatile time_t g_abort_at = 0;
 static uint64_t g_last_session_id = 0;
 static uint64_t g_abort_session_id = 0;
 static char g_abort_reason[128] = {0};
+
+static int pthread_create_with_stack(pthread_t *tid, void *(*fn)(void *), void *arg) {
+    pthread_attr_t attr;
+    if (pthread_attr_init(&attr) != 0) {
+        return pthread_create(tid, NULL, fn, arg);
+    }
+    // Bound per-thread virtual memory usage; important on PS5/FreeBSD 11 budgets.
+    (void)pthread_attr_setstacksize(&attr, THREAD_STACK_SIZE);
+    int rc = pthread_create(tid, &attr, fn, arg);
+    pthread_attr_destroy(&attr);
+    return rc;
+}
 
 #define MAX_ACK_SESSIONS 4
 #define MAX_PACK_ACKS 512
@@ -482,7 +495,7 @@ static int is_relative_record_path_safe(const char *rel_path, size_t len) {
 }
 
 // Batch size for file writer - heap allocated to avoid stack overflow
-#define FILE_WRITER_BATCH_SIZE 2048
+#define FILE_WRITER_BATCH_SIZE FTX_FILE_WRITER_BATCH_SIZE
 
 static void *file_writer_thread(void *arg) {
     (void)arg;
@@ -784,7 +797,7 @@ static int init_worker_pool(void) {
         queue_init(&g_queues[i]);
         g_thread_args[i].queue = &g_queues[i];
         g_thread_args[i].index = i;
-        int rc = pthread_create(&g_pack_processor_threads[i], NULL, pack_processor_thread, &g_thread_args[i]);
+        int rc = pthread_create_with_stack(&g_pack_processor_threads[i], pack_processor_thread, &g_thread_args[i]);
         if (rc != 0) {
             printf("[FTX] FATAL: pthread_create for pack processor %d failed: %d\n", i, rc);
             return -1;
@@ -793,7 +806,7 @@ static int init_worker_pool(void) {
     printf("[FTX] Pack processor threads created.\n");
 
     g_file_writer_shutdown = 0;
-    int rc = pthread_create(&g_file_writer_thread, NULL, file_writer_thread, NULL);
+    int rc = pthread_create_with_stack(&g_file_writer_thread, file_writer_thread, NULL);
     if (rc != 0) {
         printf("[FTX] FATAL: pthread_create for file writer failed: %d\n", rc);
         return -1;
@@ -963,7 +976,9 @@ int transfer_get_stats(TransferStats *out) {
     } else if (out->pack_queue_count > 0) {
         pressure += 1;
     }
-    if (out->pack_in_use >= 12) {
+    // With bounded queues, high pack-in-use indicates the worker side is lagging.
+    // Threshold scales with pool size so it stays meaningful if tuned in config.h.
+    if (out->pack_in_use >= (size_t)(POOL_SIZE + WRITER_THREAD_COUNT)) {
         pressure += 1;
     }
     if (delta_bp_events > 0 || delta_bp_wait_ms > 200) {

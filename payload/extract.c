@@ -26,6 +26,19 @@
 #include "protocol_defs.h"
 #include "third_party/unrar/unrar_wrapper.h"
 
+static int pthread_create_detached_with_stack(void *(*fn)(void *), void *arg) {
+    pthread_t tid;
+    pthread_attr_t attr;
+    if (pthread_attr_init(&attr) != 0) {
+        return pthread_create(&tid, NULL, fn, arg);
+    }
+    (void)pthread_attr_setstacksize(&attr, THREAD_STACK_SIZE);
+    (void)pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    int rc = pthread_create(&tid, &attr, fn, arg);
+    pthread_attr_destroy(&attr);
+    return rc;
+}
+
 // Helper to send exact number of bytes
 static int send_all(int sock, const void *buf, size_t len) {
     const uint8_t *p = (const uint8_t *)buf;
@@ -257,15 +270,12 @@ int start_threaded_extraction(int client_sock, const char *src, const char *dst)
     args->dst[sizeof(args->dst) - 1] = '\0';
     args->client_sock = client_sock;
     
-    pthread_t tid;
-    if (pthread_create(&tid, NULL, extract_thread_main, args) != 0) {
+    if (pthread_create_detached_with_stack(extract_thread_main, args) != 0) {
         free(args);
         const char *error = "ERROR: Failed to create extraction thread\n";
         send_all(client_sock, error, strlen(error));
         return -1;
     }
-
-    pthread_detach(tid);
     return 0; // Success, socket ownership transferred
 }
 

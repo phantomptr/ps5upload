@@ -54,6 +54,19 @@ static int write_text_file(const char *path, const char *data, size_t len);
 static char *read_text_file(const char *path, size_t *out_len);
 static int parse_quoted_token(const char *src, char *out, size_t out_cap, const char **rest);
 
+static int pthread_create_detached_with_stack(void *(*fn)(void *), void *arg) {
+    pthread_t tid;
+    pthread_attr_t attr;
+    if (pthread_attr_init(&attr) != 0) {
+        return pthread_create(&tid, NULL, fn, arg);
+    }
+    (void)pthread_attr_setstacksize(&attr, THREAD_STACK_SIZE);
+    (void)pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    int rc = pthread_create(&tid, &attr, fn, arg);
+    pthread_attr_destroy(&attr);
+    return rc;
+}
+
 static long long get_json_rev(const char *path) {
     size_t len = 0;
     char *data = read_text_file(path, &len);
@@ -1654,14 +1667,12 @@ void handle_delete_path_async(int client_sock, const char *path_arg) {
     strncpy(task->path, path, sizeof(task->path) - 1);
     task->path[sizeof(task->path) - 1] = '\0';
 
-    pthread_t tid;
-    if (pthread_create(&tid, NULL, delete_worker, task) != 0) {
+    if (pthread_create_detached_with_stack(delete_worker, task) != 0) {
         free(task);
         const char *error = "ERROR: Delete thread failed\n";
         send(client_sock, error, strlen(error), 0);
         return;
     }
-    pthread_detach(tid);
 
     const char *success = "OK\n";
     send(client_sock, success, strlen(success), 0);
@@ -2606,10 +2617,11 @@ void handle_upload_fast_wrapper(int client_sock, const char *args) {
         return;
     }
 
-    int huge_buf = 16 * 1024 * 1024;
-    setsockopt(client_sock, SOL_SOCKET, SO_RCVBUF, &huge_buf, sizeof(huge_buf));
+    int upload_buf = UPLOAD_RCVBUF_SIZE;
+    setsockopt(client_sock, SOL_SOCKET, SO_RCVBUF, &upload_buf, sizeof(upload_buf));
 
-    size_t buf_size = 8 * 1024 * 1024;
+    // Keep the userspace staging buffer modest to reduce memory pressure.
+    size_t buf_size = (size_t)BUFFER_SIZE;
     uint8_t *buffer = (uint8_t *)malloc(buf_size);
     if (!buffer) {
         close(fd);
@@ -2770,10 +2782,11 @@ void handle_upload_fast_offset_wrapper(int client_sock, const char *args) {
         return;
     }
 
-    int huge_buf = 16 * 1024 * 1024;
-    setsockopt(client_sock, SOL_SOCKET, SO_RCVBUF, &huge_buf, sizeof(huge_buf));
+    int upload_buf = UPLOAD_RCVBUF_SIZE;
+    setsockopt(client_sock, SOL_SOCKET, SO_RCVBUF, &upload_buf, sizeof(upload_buf));
 
-    size_t buf_size = 8 * 1024 * 1024;
+    // Keep the userspace staging buffer modest to reduce memory pressure.
+    size_t buf_size = (size_t)BUFFER_SIZE;
     uint8_t *buffer = (uint8_t *)malloc(buf_size);
     if (!buffer) {
         close(fd);

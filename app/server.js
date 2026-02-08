@@ -53,7 +53,7 @@ const LANE_LARGE_FILE_BYTES = 4 * 1024 * 1024 * 1024;
 const LANE_HUGE_CHUNK_BYTES = 1536 * 1024 * 1024;
 const LANE_LARGE_CHUNK_BYTES = 512 * 1024 * 1024;
 const LANE_DEFAULT_CHUNK_BYTES = 256 * 1024 * 1024;
-const LANE_MIN_FILE_SIZE = 1536 * 1024 * 1024;
+const LANE_MIN_FILE_SIZE = 512 * 1024 * 1024;
 const PRECREATE_MAX_DIRS = 5000;
 const PRECREATE_DIR_CONCURRENCY = 4;
 const VERSION_RE = /^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/;
@@ -67,8 +67,47 @@ function createTransferStatus(overrides = {}) {
     files: 0,
     elapsed_secs: 0,
     current_file: '',
+    payload_speed_bps: 0,
+    ftp_speed_bps: 0,
+    total_speed_bps: 0,
     ...overrides,
   };
+}
+
+function resetTransferSpeed(runtime) {
+  runtime.transferSpeed = {
+    last_at_ms: Date.now(),
+    last_sent: 0,
+    ema_bps: 0,
+  };
+}
+
+function recordTransferSpeed(runtime, sent, channel) {
+  if (!runtime || !runtime.transferStatus) return;
+  if (!runtime.transferSpeed) resetTransferSpeed(runtime);
+  const speed = runtime.transferSpeed;
+  const now = Date.now();
+  const dt = (now - Number(speed.last_at_ms || 0)) / 1000;
+  const lastSent = Number(speed.last_sent || 0);
+  const nextSent = Number(sent || 0);
+  if (dt > 0 && nextSent >= lastSent) {
+    const delta = nextSent - lastSent;
+    const inst = delta > 0 ? delta / dt : 0;
+    const alpha = 1 - Math.exp(-dt / 3);
+    const prev = Number(speed.ema_bps || 0);
+    speed.ema_bps = prev > 0 ? (prev + (inst - prev) * alpha) : inst;
+    speed.last_at_ms = now;
+    speed.last_sent = nextSent;
+  }
+  const ema = Number(speed.ema_bps || 0);
+  runtime.transferStatus.total_speed_bps = ema;
+  if (channel === 'ftp') {
+    runtime.transferStatus.ftp_speed_bps = ema;
+    runtime.transferStatus.payload_speed_bps = 0;
+  } else {
+    runtime.transferStatus.payload_speed_bps = ema;
+    runtime.transferStatus.ftp_speed_bps = 0;
+  }
 }
 
 const defaultConfig = {
@@ -1354,28 +1393,28 @@ async function uploadFastOneFile(ip, destRoot, file, options = {}) {
       const msg = readyResp.data?.length ? readyResp.data.toString('utf8') : 'no response';
       throw new Error(`Upload rejected: ${msg}`);
     }
-    if (Number(file.size) > 0) {
-      const fd = await fs.promises.open(file.abs_path, 'r');
-      try {
-        const buf = Buffer.allocUnsafe(5 + 8 * 1024 * 1024);
-        let remaining = Number(file.size);
-        let pos = 0;
-        while (remaining > 0) {
-          if (shouldCancel && shouldCancel()) throw new Error('Transfer cancelled');
-          const take = Math.min(buf.length - 5, remaining);
-          const { bytesRead } = await fd.read(buf, 5, take, pos);
-          if (bytesRead <= 0) throw new Error('Read failed');
+	    if (Number(file.size) > 0) {
+	      const fd = await fs.promises.open(file.abs_path, 'r');
+	      try {
+	        const buf = Buffer.allocUnsafe(5 + 8 * 1024 * 1024);
+	        let remaining = Number(file.size);
+	        let pos = 0;
+	        while (remaining > 0) {
+	          if (shouldCancel && shouldCancel()) throw new Error('Transfer cancelled');
+	          const take = Math.min(buf.length - 5, remaining);
+	          const { bytesRead } = await fd.read(buf, 5, take, pos);
+	          if (bytesRead <= 0) throw new Error('Read failed');
           buf[0] = UploadCmd.UploadChunk;
-          buf.writeUInt32LE(bytesRead, 1);
-          await writeAll(socket, buf.subarray(0, 5 + bytesRead));
-          remaining -= bytesRead;
-          pos += bytesRead;
-          if (onProgress) onProgress(bytesRead);
-        }
-      } finally {
-        await fd.close().catch(() => {});
-      }
-    }
+	          buf.writeUInt32LE(bytesRead, 1);
+	          await writeAll(socket, buf.subarray(0, 5 + bytesRead));
+	          remaining -= bytesRead;
+	          pos += bytesRead;
+	          if (onProgress) onProgress(bytesRead);
+	        }
+	      } finally {
+	        await fd.close().catch(() => {});
+	      }
+	    }
     await writeBinaryCommand(socket, UploadCmd.EndUpload, Buffer.alloc(0));
     const endResp = await readBinaryResponse(reader, READ_TIMEOUT_MS);
     if (endResp.code !== UploadResp.Ok) {
@@ -1399,20 +1438,60 @@ async function uploadFastMultiFile(ip, destRoot, files, options = {}) {
 
   const queue = Array.isArray(files) ? [...files] : [];
   let totalSent = 0;
+
+  let laneLocked = false;
+  let laneWaiters = [];
+  const acquireLaneLock = async () => {
+    while (laneLocked) {
+      await new Promise((resolve) => laneWaiters.push(resolve));
+    }
+    laneLocked = true;
+  };
+  const releaseLaneLock = () => {
+    laneLocked = false;
+    const waiters = laneWaiters;
+    laneWaiters = [];
+    for (const resolve of waiters) resolve();
+  };
+  const waitIfLaneBusy = async () => {
+    while (laneLocked) {
+      await new Promise((resolve) => laneWaiters.push(resolve));
+    }
+  };
+
   const runWorker = async () => {
     while (queue.length > 0) {
       if (shouldCancel && shouldCancel()) throw new Error('Transfer cancelled');
+      await waitIfLaneBusy();
       const file = queue.shift();
       if (!file) continue;
       if (onFileStart) onFileStart(file);
-      await uploadFastOneFile(ip, destRoot, file, {
-        shouldCancel,
-        chmodAfterUpload,
-        onProgress: (delta) => {
-          totalSent += delta;
-          if (onProgress) onProgress(totalSent, file);
-        },
-      });
+      if (Number(file.size || 0) >= LANE_MIN_FILE_SIZE) {
+        await acquireLaneLock();
+        try {
+          const laneBaseBytes = totalSent;
+          await uploadLaneSingleFile(ip, destRoot, file, {
+            connections,
+            shouldCancel,
+            chmodAfterUpload,
+            onProgress: (sent) => {
+              totalSent = laneBaseBytes + sent;
+              if (onProgress) onProgress(totalSent, file);
+            },
+          });
+        } finally {
+          releaseLaneLock();
+        }
+      } else {
+        await uploadFastOneFile(ip, destRoot, file, {
+          shouldCancel,
+          chmodAfterUpload,
+          onProgress: (delta) => {
+            totalSent += delta;
+            if (onProgress) onProgress(totalSent, file);
+          },
+        });
+      }
       if (onFileDone) onFileDone(file);
     }
   };
@@ -1440,10 +1519,12 @@ async function uploadLaneSingleFile(ip, destRoot, file, options = {}) {
   }
   const activeQueues = workerQueues.filter((q) => q.length > 0);
   const workerProgress = new Array(activeQueues.length).fill(0);
+  let lastProgressAt = 0;
 
   let preallocResolved = false;
   let preallocResolve = null;
-  const preallocPromise = new Promise((resolve) => { preallocResolve = resolve; });
+  let preallocReject = null;
+  const preallocPromise = new Promise((resolve, reject) => { preallocResolve = resolve; preallocReject = reject; });
 
   const waitForPrealloc = async () => {
     if (preallocResolved) return;
@@ -1486,6 +1567,15 @@ async function uploadLaneSingleFile(ip, destRoot, file, options = {}) {
           await writeAll(socket, buf.subarray(0, 5 + bytesRead));
           remaining -= bytesRead;
           pos += bytesRead;
+          workerProgress[idx] += bytesRead;
+          if (onProgress) {
+            const now = Date.now();
+            if (now - lastProgressAt >= 250 || remaining === 0) {
+              lastProgressAt = now;
+              const sent = workerProgress.reduce((sum, v) => sum + v, 0);
+              onProgress(sent);
+            }
+          }
         }
 
         await writeBinaryCommand(socket, UploadCmd.EndUpload, Buffer.alloc(0));
@@ -1494,11 +1584,10 @@ async function uploadLaneSingleFile(ip, destRoot, file, options = {}) {
           const msg = endResp.data?.length ? endResp.data.toString('utf8') : 'unknown response';
           throw new Error(`Connection failed: ${msg}`);
         }
-
-        workerProgress[idx] += chunk.len;
-        const sent = workerProgress.reduce((sum, v) => sum + v, 0);
-        if (onProgress) onProgress(sent);
       }
+    } catch (err) {
+      if (!preallocResolved) { preallocResolved = true; preallocReject(err); }
+      throw err;
     } finally {
       await fd.close().catch(() => {});
       try { reader.close(); } catch {}
@@ -1573,6 +1662,95 @@ async function uploadFilesViaFtpSimple(ip, ftpPort, destRoot, files, options = {
     throw err;
   }
   return { bytes: sent, files: filesUploaded };
+}
+
+async function uploadRarForExtractionViaPayload(ip, rarPath, destPath, opts = {}) {
+  const shouldCancel = typeof opts.shouldCancel === 'function' ? opts.shouldCancel : null;
+  const onProgress = typeof opts.onProgress === 'function' ? opts.onProgress : null;
+  const onLog = typeof opts.onLog === 'function' ? opts.onLog : null;
+  const overrideOnConflict = opts.overrideOnConflict == null ? true : Boolean(opts.overrideOnConflict);
+  const tempRoot = typeof opts.tempRoot === 'string' ? opts.tempRoot.trim() : '';
+
+  const st = await fs.promises.stat(rarPath);
+  if (!st.isFile()) throw new Error('RAR source must be a file');
+  const fileSize = st.size;
+  if (!Number.isSafeInteger(fileSize)) {
+    throw new Error(`RAR file too large for safe integer math: ${fileSize}`);
+  }
+
+  if (!isSafeRemotePath(destPath)) throw new Error('Invalid destination path');
+  if (tempRoot && (!isSafeRemotePath(tempRoot) || /\s/.test(tempRoot))) {
+    throw new Error('Temp storage path must be an absolute /data or /mnt path and must not contain spaces.');
+  }
+
+  if (!overrideOnConflict) {
+    const exists = await sendSimpleCommand(ip, TRANSFER_PORT, `CHECK_DIR ${destPath}\n`);
+    if (exists === 'EXISTS') throw new Error('Destination already exists');
+  } else {
+    // Ensure destination root exists for extraction. (NOOVERWRITE mode relies on the check above instead.)
+    await createPath(ip, TRANSFER_PORT, destPath);
+  }
+
+  const tempRootPath = buildTempRootForArchive(destPath, tempRoot);
+  if (/\s/.test(tempRootPath)) {
+    throw new Error('Temp storage path must not contain spaces.');
+  }
+  const tmpToken = tempRootPath ? ` TMP=${tempRootPath}` : '';
+  const flag = overrideOnConflict ? '' : ' NOOVERWRITE';
+
+  const socket = await createSocketWithTimeout(ip, TRANSFER_PORT);
+  tuneUploadSocket(socket);
+  const reader = createSocketLineReader(socket);
+  try {
+    if (onLog) onLog('Using payload UPLOAD_RAR fast path (single stream).');
+    socket.write(`UPLOAD_RAR_TURBO ${escapeCommandPath(destPath)} ${fileSize}${tmpToken}${flag}\n`);
+
+    const response = await reader.readLine(READ_TIMEOUT_MS);
+    if (response !== 'READY') {
+      throw new Error(`Server rejected RAR upload: ${response || '(no response)'}`);
+    }
+
+    const fd = await fs.promises.open(rarPath, 'r');
+    try {
+      const buf = Buffer.allocUnsafe(8 * 1024 * 1024);
+      let remaining = fileSize;
+      let pos = 0;
+      let sent = 0;
+      let lastProgressAt = 0;
+      while (remaining > 0) {
+        if (shouldCancel && shouldCancel()) throw new Error('Transfer cancelled');
+        const take = Math.min(buf.length, remaining);
+        const { bytesRead } = await fd.read(buf, 0, take, pos);
+        if (bytesRead <= 0) throw new Error('Read failed');
+        await writeAll(socket, buf.subarray(0, bytesRead));
+        remaining -= bytesRead;
+        pos += bytesRead;
+        sent += bytesRead;
+        if (onProgress) {
+          const now = Date.now();
+          if (now - lastProgressAt >= 250 || remaining === 0) {
+            lastProgressAt = now;
+            onProgress(sent);
+          }
+        }
+      }
+    } finally {
+      await fd.close().catch(() => {});
+    }
+
+    const finalLine = await reader.readLine(10 * 60 * 1000);
+    if (finalLine.startsWith('QUEUED ')) {
+      const id = parseInt(finalLine.substring('QUEUED '.length), 10) || 0;
+      if (onLog) onLog(`Extraction queued (ID ${id}).`);
+      return { queuedId: id, fileSize };
+    }
+    if (finalLine.startsWith('ERROR')) {
+      throw new Error(finalLine);
+    }
+    throw new Error(`Unexpected RAR response: ${finalLine || '(no response)'}`);
+  } finally {
+    try { socket.destroy(); } catch {}
+  }
 }
 
 async function uploadLocalPathsViaFtpSimple(ip, ftpPort, destRoot, paths, options = {}) {
@@ -1791,6 +1969,27 @@ function isSafeRemotePath(p) {
   if (value.includes('..')) return false;
   if (value.startsWith('/data') || value.startsWith('/mnt/')) return true;
   return false;
+}
+
+function getStorageRootFromPath(destPath) {
+  const normalized = String(destPath || '').replace(/\\/g, '/').trim();
+  if (!normalized.startsWith('/')) return null;
+  if (normalized === '/data' || normalized.startsWith('/data/')) return '/data';
+  if (normalized.startsWith('/mnt/')) {
+    const parts = normalized.split('/').filter(Boolean);
+    if (parts.length >= 2) return `/${parts[0]}/${parts[1]}`;
+  }
+  return null;
+}
+
+function buildTempRootForArchive(destPath, tempRootOverride) {
+  const override = typeof tempRootOverride === 'string' ? tempRootOverride.trim() : '';
+  if (override) {
+    if (override.endsWith('/ps5upload/tmp')) return override;
+    return `${override.replace(/\/+$/, '')}/ps5upload/tmp`;
+  }
+  const root = getStorageRootFromPath(destPath) || '/data';
+  return `${root}/ps5upload/tmp`;
 }
 
 async function payloadReset(ip, port) {
@@ -2701,6 +2900,7 @@ async function handleInvoke(cmd, args, runtime) {
       runtime.transferCancel = false;
       runtime.transferActive = false;
       runtime.transferStatus = createTransferStatus();
+      resetTransferSpeed(runtime);
       runtime.transferMeta = {
         requested_optimize: null,
         auto_tune_connections: null,
@@ -2738,7 +2938,7 @@ async function handleInvoke(cmd, args, runtime) {
       const requestedOptimize = Boolean(req && req.optimize_upload);
       const autoTuneConnections = req && typeof req.auto_tune_connections === 'boolean' ? req.auto_tune_connections : null;
       const requestedFtpConnections = 10;
-      const effectiveFtpConnections = Math.max(
+      let effectiveFtpConnections = Math.max(
         1,
         Math.min(
           10,
@@ -2747,12 +2947,16 @@ async function handleInvoke(cmd, args, runtime) {
             : 10
         )
       );
+      // App mode shares the transfer engine with desktop. Keep this defined up-front because
+      // archive flows can reference it before file scanning/tuning logic runs.
+      let effectivePayloadConnections = 4;
       const compression = req && req.compression ? String(req.compression) : null;
       const uploadMode = req && req.upload_mode ? String(req.upload_mode) : null;
 
       runtime.transferActive = true;
       runtime.transferCancel = false;
       runtime.manageCancel = false;
+      resetTransferSpeed(runtime);
       runtime.transferMeta = {
         requested_optimize: requestedOptimize,
         auto_tune_connections: autoTuneConnections,
@@ -2779,12 +2983,125 @@ async function handleInvoke(cmd, args, runtime) {
           let totalFiles = 0;
           const uploadFiles = [];
 
+          // Match desktop Transfer behavior: if the selected source is a single .rar file,
+          // use the special upload+queue-extract path.
+          if (cmd === 'transfer_start' && paths.length === 1) {
+            const archiveStat = await fs.promises.stat(sourcePath);
+            const isArchive = archiveStat.isFile() && path.extname(sourcePath).toLowerCase() === '.rar';
+            if (isArchive) {
+              const mode = uploadMode && uploadMode.toLowerCase() === 'ftp' ? 'ftp' : 'payload';
+              const rarName = path.basename(sourcePath);
+
+              runtime.transferStatus = createTransferStatus({
+                run_id: runId,
+                status: 'Uploading archive',
+                sent: 0,
+                total: archiveStat.size,
+                files: 1,
+                elapsed_secs: 0,
+                current_file: rarName,
+                upload_mode: mode,
+              });
+
+                  if (mode === 'ftp') {
+                    const ftpPort = await findFtpPort(ip, preferredFtpPort);
+                    if (!ftpPort) throw new Error('FTP not reachable on ports 1337/2121. Enable ftpsrv or etaHEN FTP service.');
+                const tempRoot = req && typeof req.rar_temp_root === 'string'
+                  ? req.rar_temp_root.trim()
+                  : (req && typeof req.rar_temp === 'string' ? req.rar_temp.trim() : '');
+                const tempRootPath = buildTempRootForArchive(destRoot, tempRoot);
+                const tempDir = `${tempRootPath.replace(/\/+$/, '')}/rar_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+                const rarRemotePath = `${tempDir}/${rarName}`;
+
+                await createPath(ip, TRANSFER_PORT, tempDir);
+                await uploadFilesViaFtpSimple(ip, ftpPort, tempDir, [{
+                  abs_path: sourcePath,
+                  rel_path: rarName,
+                  size: archiveStat.size,
+                }], {
+                  connections: effectiveFtpConnections,
+                  shouldCancel: () => runtime.transferCancel,
+                      onProgress: (sent) => {
+                        runtime.transferStatus.sent = sent;
+                        recordTransferSpeed(runtime, sent, 'ftp');
+                        runtime.transferStatus.elapsed_secs = (Date.now() - startedAt) / 1000;
+                        runtime.transferStatus.current_file = rarName;
+                      },
+                    });
+
+                const queuedId = await queueExtract(ip, TRANSFER_PORT, rarRemotePath, destRoot, {
+                  cleanupPath: tempDir,
+                  deleteSource: true,
+                });
+
+                runtime.transferStatus = createTransferStatus({
+                  run_id: runId,
+                  status: 'Queued for extraction',
+                  sent: archiveStat.size,
+                  total: archiveStat.size,
+                  files: 1,
+                  elapsed_secs: (Date.now() - startedAt) / 1000,
+                  current_file: '',
+                  upload_mode: mode,
+                });
+                runtime.transferMeta = {
+                  ...runtime.transferMeta,
+                  queued_extract_id: queuedId,
+                };
+                return;
+              }
+
+              const overrideOnConflict = req && typeof req.override_on_conflict === 'boolean' ? req.override_on_conflict : true;
+              const tempRoot = req && typeof req.rar_temp_root === 'string'
+                ? req.rar_temp_root.trim()
+                : (req && typeof req.rar_temp === 'string' ? req.rar_temp.trim() : '');
+
+                    const result = await uploadRarForExtractionViaPayload(ip, sourcePath, destRoot, {
+                      overrideOnConflict,
+                      tempRoot,
+                      shouldCancel: () => runtime.transferCancel,
+                      onLog: (message) => { runtime.transferStatus.status = message; },
+                      onProgress: (sent) => {
+                        runtime.transferStatus.sent = sent;
+                        recordTransferSpeed(runtime, sent, 'payload');
+                        runtime.transferStatus.elapsed_secs = (Date.now() - startedAt) / 1000;
+                        runtime.transferStatus.current_file = rarName;
+                      },
+                    });
+
+              runtime.transferStatus = createTransferStatus({
+                run_id: runId,
+                status: 'Queued for extraction',
+                sent: archiveStat.size,
+                total: archiveStat.size,
+                files: 1,
+                elapsed_secs: (Date.now() - startedAt) / 1000,
+                current_file: '',
+                upload_mode: mode,
+              });
+              runtime.transferMeta = {
+                ...runtime.transferMeta,
+                queued_extract_id: result && result.queuedId ? result.queuedId : null,
+              };
+              return;
+            }
+          }
+
           for (const srcPath of paths) {
             if (runtime.transferCancel) throw new Error('Transfer cancelled');
+            // Desktop parity:
+            // - manage_upload: directory selections upload into destRoot/<folderName>/...
+            // - transfer_start: folder selections upload contents into dest_path (no extra folder level)
+            // eslint-disable-next-line no-await-in-loop
+            const st = await fs.promises.stat(srcPath);
+            const prefix = (cmd === 'manage_upload' && st.isDirectory()) ? path.basename(srcPath) : '';
             // eslint-disable-next-line no-await-in-loop
             await walkLocalFiles(srcPath, {
               shouldCancel: () => runtime.transferCancel,
               onFile: (file) => {
+                if (prefix) {
+                  file = { ...file, rel_path: `${prefix}/${String(file.rel_path || '').replace(/^\/+/, '')}` };
+                }
                 uploadFiles.push(file);
                 totalFiles += 1;
                 totalBytes += Number(file && file.size) || 0;
@@ -2798,7 +3115,6 @@ async function handleInvoke(cmd, args, runtime) {
 
           const mode = uploadMode && uploadMode.toLowerCase() === 'ftp' ? 'ftp' : 'payload';
           const avgSize = totalFiles > 0 ? totalBytes / totalFiles : 0;
-          let effectivePayloadConnections = 4;
           if (autoTuneConnections && totalFiles > 0) {
             if (totalFiles === 1) {
               if (totalBytes >= 8 * 1024 * 1024 * 1024) {
@@ -2825,20 +3141,34 @@ async function handleInvoke(cmd, args, runtime) {
               effectiveFtpConnections = Math.max(effectiveFtpConnections, 4);
             }
           }
+
+          // Stability first: cap payload concurrency at 4 to avoid overwhelming the PS5 side.
+          effectivePayloadConnections = Math.max(1, Math.min(4, effectivePayloadConnections));
+
+          // Match desktop Manage Upload defaults (ipcMain.handle('manage_upload')):
+          // - For a big single file: use the lane path with 4 connections.
+          // - Otherwise: use up to 4 workers for payload multi-file uploads.
+          if (cmd === 'manage_upload' && mode === 'payload') {
+            if (uploadFiles.length === 1 && Number(uploadFiles[0].size || 0) >= LANE_MIN_FILE_SIZE) {
+              effectivePayloadConnections = 4;
+            } else {
+              effectivePayloadConnections = Math.max(1, Math.min(4, uploadFiles.length));
+            }
+          }
+
           if (mode === 'payload') {
-            try {
-              runtime.transferStatus.status = 'Preparing upload';
-              runtime.transferStatus.current_file = '';
+            runtime.transferStatus.status = 'Preparing upload';
+            runtime.transferStatus.current_file = '';
 
-              await precreateRemoteDirectories(ip, destRoot, uploadFiles, {
-                shouldCancel: () => runtime.transferCancel,
-                log: (message) => {
-                  runtime.transferStatus.status = message;
-                },
-              });
+            await precreateRemoteDirectories(ip, destRoot, uploadFiles, {
+              shouldCancel: () => runtime.transferCancel,
+              log: (message) => {
+                runtime.transferStatus.status = message;
+              },
+            });
 
-              runtime.transferStatus.status = 'Uploading';
-              runtime.transferStatus.current_file = '';
+            runtime.transferStatus.status = 'Uploading';
+            runtime.transferStatus.current_file = '';
 
               if (uploadFiles.length === 1 && Number(uploadFiles[0].size || 0) >= LANE_MIN_FILE_SIZE) {
                 await uploadLaneSingleFile(ip, destRoot, uploadFiles[0], {
@@ -2846,6 +3176,7 @@ async function handleInvoke(cmd, args, runtime) {
                   shouldCancel: () => runtime.transferCancel,
                   onProgress: (sent) => {
                     runtime.transferStatus.sent = sent;
+                    recordTransferSpeed(runtime, sent, 'payload');
                     runtime.transferStatus.elapsed_secs = (Date.now() - startedAt) / 1000;
                     runtime.transferStatus.current_file = uploadFiles[0].rel_path || '';
                   },
@@ -2859,42 +3190,13 @@ async function handleInvoke(cmd, args, runtime) {
                   },
                   onProgress: (sent, file) => {
                     runtime.transferStatus.sent = sent;
+                    recordTransferSpeed(runtime, sent, 'payload');
                     runtime.transferStatus.elapsed_secs = (Date.now() - startedAt) / 1000;
                     runtime.transferStatus.current_file = file && file.rel_path ? file.rel_path : runtime.transferStatus.current_file;
                   },
                 });
               }
 
-              runtime.transferStatus = createTransferStatus({
-                run_id: runId,
-                status: 'Complete',
-                sent: totalBytes,
-                total: totalBytes,
-                files: totalFiles,
-                elapsed_secs: (Date.now() - startedAt) / 1000,
-                current_file: '',
-                upload_mode: 'payload',
-              });
-            } catch (payloadErr) {
-              throw payloadErr;
-            }
-          } else {
-            const ftpPort = await findFtpPort(ip, preferredFtpPort);
-            if (!ftpPort) throw new Error('FTP not reachable on ports 1337/2121. Enable ftpsrv or etaHEN FTP service.');
-            runtime.transferStatus.status = 'Uploading (FTP)';
-            runtime.transferStatus.current_file = '';
-            await uploadFilesViaFtpSimple(ip, ftpPort, destRoot, uploadFiles, {
-              connections: effectiveFtpConnections,
-              shouldCancel: () => runtime.transferCancel,
-              onFileStart: (file) => {
-                runtime.transferStatus.current_file = file && file.rel_path ? file.rel_path : '';
-              },
-              onProgress: (sent, file) => {
-                runtime.transferStatus.sent = sent;
-                runtime.transferStatus.elapsed_secs = (Date.now() - startedAt) / 1000;
-                runtime.transferStatus.current_file = file && file.rel_path ? file.rel_path : runtime.transferStatus.current_file;
-              },
-            });
             runtime.transferStatus = createTransferStatus({
               run_id: runId,
               status: 'Complete',
@@ -2903,9 +3205,38 @@ async function handleInvoke(cmd, args, runtime) {
               files: totalFiles,
               elapsed_secs: (Date.now() - startedAt) / 1000,
               current_file: '',
-              upload_mode: 'ftp',
+              upload_mode: 'payload',
             });
+            return;
           }
+
+          const ftpPort = await findFtpPort(ip, preferredFtpPort);
+          if (!ftpPort) throw new Error('FTP not reachable on ports 1337/2121. Enable ftpsrv or etaHEN FTP service.');
+          runtime.transferStatus.status = 'Uploading (FTP)';
+          runtime.transferStatus.current_file = '';
+          await uploadFilesViaFtpSimple(ip, ftpPort, destRoot, uploadFiles, {
+            connections: effectiveFtpConnections,
+            shouldCancel: () => runtime.transferCancel,
+            onFileStart: (file) => {
+              runtime.transferStatus.current_file = file && file.rel_path ? file.rel_path : '';
+            },
+            onProgress: (sent, file) => {
+              runtime.transferStatus.sent = sent;
+              recordTransferSpeed(runtime, sent, 'ftp');
+              runtime.transferStatus.elapsed_secs = (Date.now() - startedAt) / 1000;
+              runtime.transferStatus.current_file = file && file.rel_path ? file.rel_path : runtime.transferStatus.current_file;
+            },
+          });
+          runtime.transferStatus = createTransferStatus({
+            run_id: runId,
+            status: 'Complete',
+            sent: totalBytes,
+            total: totalBytes,
+            files: totalFiles,
+            elapsed_secs: (Date.now() - startedAt) / 1000,
+            current_file: '',
+            upload_mode: 'ftp',
+          });
         } catch (err) {
           const msg = err && err.message ? String(err.message) : String(err);
           const isCancelled = /cancel/i.test(msg);
@@ -3035,44 +3366,114 @@ async function handleInvoke(cmd, args, runtime) {
       const stat = await fs.promises.stat(rarPath);
       if (!stat.isFile()) throw new Error('RAR source must be a file.');
 
+      if (runtime.transferActive) {
+        throw new Error('Transfer already running');
+      }
       const uploadMode = args && args.upload_mode ? String(args.upload_mode).toLowerCase() : 'payload';
       const remoteDir = tempRoot || destPath;
       const remoteRarPath = `${remoteDir.replace(/\/+$/, '')}/${path.basename(rarPath)}`;
+      const runId = Date.now();
+      const startedAt = Date.now();
+      runtime.transferActive = true;
+      runtime.transferCancel = false;
+      runtime.manageCancel = false;
+      resetTransferSpeed(runtime);
+      runtime.transferStatus = createTransferStatus({
+        run_id: runId,
+        status: 'Uploading archive',
+        sent: 0,
+        total: stat.size,
+        files: 1,
+        elapsed_secs: 0,
+        current_file: path.basename(rarPath),
+        upload_mode: uploadMode,
+      });
 
-      if (uploadMode !== 'ftp') {
-        if (Number(stat.size) >= LANE_MIN_FILE_SIZE) {
-          await uploadLaneSingleFile(ip, remoteDir, {
-            rel_path: path.basename(rarPath),
+      try {
+        if (uploadMode === 'ftp') {
+          const ftpPort = await findFtpPort(ip, 'auto');
+          if (!ftpPort) throw new Error('FTP not reachable on ports 1337/2121. Enable ftpsrv or etaHEN FTP service.');
+          await uploadFilesViaFtpSimple(ip, ftpPort, remoteDir, [{
             abs_path: rarPath,
+            rel_path: path.basename(rarPath),
             size: stat.size,
-          }, {
+          }], {
+            connections: 4,
             shouldCancel: () => runtime.manageCancel,
             onProgress: (sent) => {
-              runtime.manageProgress = { op: 'Extract', processed: sent, total: stat.size, current_file: path.basename(rarPath), active: true, updated_at_ms: Date.now() };
+              runtime.transferStatus.sent = sent;
+              recordTransferSpeed(runtime, sent, 'ftp');
+              runtime.transferStatus.elapsed_secs = (Date.now() - startedAt) / 1000;
+              runtime.transferStatus.current_file = path.basename(rarPath);
             },
           });
         } else {
-          await uploadFastOneFile(ip, remoteDir, {
-            rel_path: path.basename(rarPath),
-            abs_path: rarPath,
-            size: stat.size,
-          }, {
-            shouldCancel: () => runtime.manageCancel,
-            onProgress: (delta) => {
-              const processed = Number(runtime.manageProgress && runtime.manageProgress.processed) || 0;
-              runtime.manageProgress = { op: 'Extract', processed: processed + delta, total: stat.size, current_file: path.basename(rarPath), active: true, updated_at_ms: Date.now() };
-            },
-          });
+          if (Number(stat.size) >= LANE_MIN_FILE_SIZE) {
+            await uploadLaneSingleFile(ip, remoteDir, {
+              rel_path: path.basename(rarPath),
+              abs_path: rarPath,
+              size: stat.size,
+            }, {
+              shouldCancel: () => runtime.manageCancel,
+              onProgress: (sent) => {
+                runtime.transferStatus.sent = sent;
+                recordTransferSpeed(runtime, sent, 'payload');
+                runtime.transferStatus.elapsed_secs = (Date.now() - startedAt) / 1000;
+                runtime.transferStatus.current_file = path.basename(rarPath);
+              },
+            });
+          } else {
+            let sent = 0;
+            await uploadFastOneFile(ip, remoteDir, {
+              rel_path: path.basename(rarPath),
+              abs_path: rarPath,
+              size: stat.size,
+            }, {
+              shouldCancel: () => runtime.manageCancel,
+              onProgress: (delta) => {
+                sent += Number(delta) || 0;
+                runtime.transferStatus.sent = sent;
+                recordTransferSpeed(runtime, sent, 'payload');
+                runtime.transferStatus.elapsed_secs = (Date.now() - startedAt) / 1000;
+                runtime.transferStatus.current_file = path.basename(rarPath);
+              },
+            });
+          }
         }
-        const queuedId = await queueExtract(ip, TRANSFER_PORT, remoteRarPath, destPath, { deleteSource: true });
-        return { fileSize: stat.size, bytes: stat.size, files: 1, queuedId };
-      }
 
-      const ftpPort = await findFtpPort(ip, 'auto');
-      if (!ftpPort) throw new Error('FTP not reachable on ports 1337/2121. Enable ftpsrv or etaHEN FTP service.');
-      await uploadFilesViaFtpSimple(ip, ftpPort, remoteDir, [{ abs_path: rarPath, rel_path: path.basename(rarPath), size: stat.size }]);
-      const queuedId = await queueExtract(ip, TRANSFER_PORT, remoteRarPath, destPath, { deleteSource: true });
-      return { fileSize: stat.size, bytes: stat.size, files: 1, queuedId };
+        const queuedId = await queueExtract(ip, TRANSFER_PORT, remoteRarPath, destPath, { deleteSource: true });
+        const payloadSpeed = Number(runtime.transferStatus.payload_speed_bps) || 0;
+        const ftpSpeed = Number(runtime.transferStatus.ftp_speed_bps) || 0;
+        const totalSpeed = Number(runtime.transferStatus.total_speed_bps) || 0;
+        runtime.transferStatus = createTransferStatus({
+          run_id: runId,
+          status: 'Queued for extraction',
+          sent: stat.size,
+          total: stat.size,
+          files: 1,
+          elapsed_secs: (Date.now() - startedAt) / 1000,
+          current_file: '',
+          upload_mode: uploadMode,
+          payload_speed_bps: payloadSpeed,
+          ftp_speed_bps: ftpSpeed,
+          total_speed_bps: totalSpeed,
+        });
+        runtime.transferMeta = {
+          ...(runtime.transferMeta || {}),
+          queued_extract_id: queuedId,
+        };
+        return { fileSize: stat.size, bytes: stat.size, files: 1, queuedId };
+      } catch (err) {
+        const msg = err && err.message ? String(err.message) : String(err);
+        runtime.transferStatus = {
+          ...(runtime.transferStatus || createTransferStatus({ run_id: runId })),
+          status: `Error: ${msg}`,
+          elapsed_secs: (Date.now() - startedAt) / 1000,
+        };
+        throw err;
+      } finally {
+        runtime.transferActive = false;
+      }
     }
 
     case 'games_scan': {

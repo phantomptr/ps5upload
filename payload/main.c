@@ -669,6 +669,20 @@ static struct CommQueue g_comm_queue = {
     .cond = PTHREAD_COND_INITIALIZER
 };
 
+static int pthread_create_detached_with_stack(void *(*fn)(void *), void *arg) {
+    pthread_t tid;
+    pthread_attr_t attr;
+    if (pthread_attr_init(&attr) != 0) {
+        return pthread_create(&tid, NULL, fn, arg);
+    }
+    // Bound per-thread virtual memory usage; important on PS5/FreeBSD 11 budgets.
+    (void)pthread_attr_setstacksize(&attr, THREAD_STACK_SIZE);
+    (void)pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    int rc = pthread_create(&tid, &attr, fn, arg);
+    pthread_attr_destroy(&attr);
+    return rc;
+}
+
 static int read_command_line(int sock, char *out, size_t cap, size_t *out_len);
 static int is_comm_command(const char *cmd);
 static void enqueue_comm_request(const struct CommandRequest *req);
@@ -799,8 +813,9 @@ static int handle_start_upload(UploadSession *session, const uint8_t *data, uint
     session->upload_received = chunk_offset;
     session->current_offset = chunk_offset;
 
-    int huge_buf = 16 * 1024 * 1024;
-    setsockopt(session->sock, SOL_SOCKET, SO_RCVBUF, &huge_buf, sizeof(huge_buf));
+    // Bulk upload sockets can benefit from a larger receive buffer, but keep it bounded.
+    int upload_buf = UPLOAD_RCVBUF_SIZE;
+    setsockopt(session->sock, SOL_SOCKET, SO_RCVBUF, &upload_buf, sizeof(upload_buf));
 
     send_response(session->sock, RESP_READY, NULL, 0);
     return 0;
@@ -833,6 +848,10 @@ static int handle_upload_chunk(UploadSession *session, const uint8_t *data, uint
     }
     session->current_offset += (uint64_t)written;
     session->upload_received += (uint64_t)written;
+    // Prevent the idle watchdog from killing long-running binary uploads when the
+    // client isn't polling status (common in app mode). FreeBSD/PS5 payloads can be
+    // killed if they appear "idle" even while data is streaming.
+    payload_touch_activity();
     return 0;
 }
 
@@ -1218,9 +1237,8 @@ static void *comm_thread(void *arg) {
             continue;
         }
         *heap_req = req;
-        pthread_t tid;
-        if (pthread_create(&tid, NULL, comm_worker_thread, heap_req) == 0) {
-            pthread_detach(tid);
+        if (pthread_create_detached_with_stack(comm_worker_thread, heap_req) == 0) {
+            // detached
         } else {
             free(heap_req);
             struct ClientConnection conn;
@@ -1595,15 +1613,13 @@ int main(void) {
     payload_log("[INIT] Payload start v%s", PS5_UPLOAD_VERSION);
     payload_log("[INIT] pid=%d port=%d", (int)pid, SERVER_PORT);
 
-    pthread_t kill_tid;
-    if (pthread_create(&kill_tid, NULL, kill_watch_thread, NULL) == 0) {
-        pthread_detach(kill_tid);
+    if (pthread_create_detached_with_stack(kill_watch_thread, NULL) == 0) {
+        // detached
     } else {
         payload_log("[INIT] Failed to create kill watch thread");
     }
-    pthread_t idle_tid;
-    if (pthread_create(&idle_tid, NULL, idle_watch_thread, NULL) == 0) {
-        pthread_detach(idle_tid);
+    if (pthread_create_detached_with_stack(idle_watch_thread, NULL) == 0) {
+        // detached
     } else {
         payload_log("[INIT] Failed to create idle watch thread");
     }
@@ -1646,9 +1662,8 @@ int main(void) {
         notify_info("PS5 Upload Server (PhantomPtr)", notify_msg);
     }
 
-    pthread_t comm_tid;
-    if (pthread_create(&comm_tid, NULL, comm_thread, NULL) == 0) {
-        pthread_detach(comm_tid);
+    if (pthread_create_detached_with_stack(comm_thread, NULL) == 0) {
+        // detached
     } else {
         printf("[INIT] Failed to create communication thread\n");
     }
@@ -1683,9 +1698,8 @@ int main(void) {
         args->sock = client;
         args->addr = client_addr;
 
-        pthread_t tid;
-        if (pthread_create(&tid, NULL, command_thread, args) == 0) {
-            pthread_detach(tid);
+        if (pthread_create_detached_with_stack(command_thread, args) == 0) {
+            // detached
         } else {
             close(client);
             free(args);
