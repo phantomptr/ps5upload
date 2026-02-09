@@ -5,7 +5,7 @@
 </p>
 
 PS5 Upload is a fast, reliable way to move apps and homebrew to your PS5 without the pain of slow transfers.
-Current release: **v1.5.1**.
+Current release: **v1.5.2**.
 
 New UI highlights:
 - Cleaner Transfer and Manage layouts with clearer transfer settings.
@@ -29,6 +29,7 @@ New UI highlights:
 - Auto-tune adapts connections, pack size, and pacing; defaults are Payload 4 / FTP 10 and auto-tune adjusts as needed.
 - Payload connections are capped at 4 for stability on PS5/FreeBSD 11.
 - Parallel file writer threads on the payload with shared directory caching for faster small-file transfers.
+- Resumed uploads skip directory creation overhead via `stat()` fast path.
 - Client-side 8MB pack floor during small-file runs to keep packs full even under backpressure.
 - Uploads and archives now accept folder names with spaces, tabs, and brackets.
 - Log level filtering with color-coded badges in the Logs panel.

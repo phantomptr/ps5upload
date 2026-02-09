@@ -1,7 +1,7 @@
 {
   "name": "ps5upload-desktop",
   "private": true,
-  "version": "1.5.1",
+  "version": "1.5.2",
   "description": "PS5 Upload Desktop Application",
   "homepage": "https://github.com/phantomptr/ps5upload",
   "author": "PhantomPtr <phantomptr@gmail.com>",
