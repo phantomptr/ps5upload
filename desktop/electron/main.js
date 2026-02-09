@@ -81,7 +81,7 @@ const UploadResp = {
 };
 
 let sleepBlockerId = null;
-const VERSION = '1.5.2';
+const VERSION = '1.5.3';
 const IS_WINDOWS = process.platform === 'win32';
 
 function beginManageOperation(op) {
@@ -3488,6 +3488,24 @@ async function sendFilesPayloadV4(files, socketRef, options = {}) {
     return code === 'ENOENT' || code === 'EACCES' || code === 'EPERM';
   };
 
+  // Read-ahead cache for tiny files: pre-read in parallel batches of 64
+  const READAHEAD_SIZE = 64;
+  const readAheadCache = new Map(); // index -> { data, err }
+
+  const readAhead = async (startIdx) => {
+    const promises = [];
+    for (let j = startIdx; j < Math.min(startIdx + READAHEAD_SIZE, files.length); j++) {
+      if (readAheadCache.has(j) || files[j].size >= TINY_FILE_THRESHOLD) continue;
+      const idx = j;
+      promises.push(
+        fs.promises.readFile(files[j].abs_path)
+          .then(data => readAheadCache.set(idx, { data, err: null }))
+          .catch(err => readAheadCache.set(idx, { data: null, err }))
+      );
+    }
+    if (promises.length > 0) await Promise.all(promises);
+  };
+
   for (let i = 0; i < files.length; i++) {
     const file = files[i];
     if (cancel.value) {
@@ -3502,17 +3520,38 @@ async function sendFilesPayloadV4(files, socketRef, options = {}) {
 
     if (file.size < TINY_FILE_THRESHOLD) {
       consecutiveTinyFiles++;
+
+      // Kick off read-ahead if cache doesn't have this file
+      if (!readAheadCache.has(i)) {
+        await readAhead(i);
+      }
+
+      const cached = readAheadCache.get(i);
+      readAheadCache.delete(i);
       let data;
-      try {
-        data = await fs.promises.readFile(file.abs_path);
-      } catch (err) {
-        if (shouldSkipReadError(err)) {
+      if (cached && cached.err) {
+        if (shouldSkipReadError(cached.err)) {
           log(`Skipping missing/unreadable file: ${file.rel_path}`);
-          if (typeof onSkipFile === 'function') onSkipFile(file, err);
+          if (typeof onSkipFile === 'function') onSkipFile(file, cached.err);
           continue;
         }
-        throw err;
+        throw cached.err;
+      } else if (cached && cached.data) {
+        data = cached.data;
+      } else {
+        // Fallback: direct read
+        try {
+          data = await fs.promises.readFile(file.abs_path);
+        } catch (err) {
+          if (shouldSkipReadError(err)) {
+            log(`Skipping missing/unreadable file: ${file.rel_path}`);
+            if (typeof onSkipFile === 'function') onSkipFile(file, err);
+            continue;
+          }
+          throw err;
+        }
       }
+
       const overhead = 2 + 2 + relPathBytes.length + 8 + 8 + 8;
       const packLimit = effectivePackLimit();
       if (packLimit - pack.length <= overhead + data.length) {
@@ -3526,6 +3565,7 @@ async function sendFilesPayloadV4(files, socketRef, options = {}) {
     }
 
     consecutiveTinyFiles = 0;
+    readAheadCache.clear(); // Non-tiny file breaks the run; clear stale cache
     let sawData = false;
     let stream;
     try {
@@ -3839,8 +3879,20 @@ async function sendFilesPayloadV4Dynamic(getNextFile, socketRef, options = {}) {
     return code === 'ENOENT' || code === 'EACCES' || code === 'EPERM';
   };
 
+  // Lookahead buffer: when we peek a non-tiny file, stash it here for the next iteration
+  let pendingFile = null;
+
+  const nextFile = () => {
+    if (pendingFile) {
+      const f = pendingFile;
+      pendingFile = null;
+      return f;
+    }
+    return getNextFile();
+  };
+
   while (true) {
-    const file = getNextFile();
+    const file = nextFile();
     if (!file) break;
     if (cancel.value) throw new Error('Upload cancelled by user');
     await maybePace();
@@ -3848,27 +3900,53 @@ async function sendFilesPayloadV4Dynamic(getNextFile, socketRef, options = {}) {
     const relPathBytes = Buffer.from(file.rel_path, 'utf8');
 
     if (file.size < TINY_FILE_THRESHOLD) {
-      consecutiveTinyFiles++;
-      let data;
-      try {
-        data = await fs.promises.readFile(file.abs_path);
-      } catch (err) {
-        if (shouldSkipReadError(err)) {
-          log(`Skipping missing/unreadable file: ${file.rel_path}`);
-          if (typeof onSkipFile === 'function') onSkipFile(file, err);
-          continue;
+      // Collect a batch of tiny files for parallel reading
+      const tinyBatch = [{ file, relPathBytes }];
+      while (tinyBatch.length < 64) {
+        const next = getNextFile();
+        if (!next) break;
+        if (next.size >= TINY_FILE_THRESHOLD) {
+          pendingFile = next; // stash non-tiny file for next loop iteration
+          break;
         }
-        throw err;
+        tinyBatch.push({ file: next, relPathBytes: Buffer.from(next.rel_path, 'utf8') });
       }
-      const overhead = 2 + 2 + relPathBytes.length + 8 + 8 + 8;
-      const packLimit = effectivePackLimit();
-      if (packLimit - pack.length <= overhead + data.length) {
-        await flushPack();
+
+      // Read all tiny files in parallel
+      const readResults = await Promise.all(
+        tinyBatch.map(({ file: f }) =>
+          fs.promises.readFile(f.abs_path)
+            .then(data => ({ data, err: null }))
+            .catch(err => ({ data: null, err }))
+        )
+      );
+
+      // Pack them sequentially
+      for (let j = 0; j < tinyBatch.length; j++) {
+        if (cancel.value) throw new Error('Upload cancelled by user');
+        const { file: f, relPathBytes: rpb } = tinyBatch[j];
+        const { data, err } = readResults[j];
+        consecutiveTinyFiles++;
+
+        if (err) {
+          if (shouldSkipReadError(err)) {
+            log(`Skipping missing/unreadable file: ${f.rel_path}`);
+            if (typeof onSkipFile === 'function') onSkipFile(f, err);
+            continue;
+          }
+          throw err;
+        }
+
+        const overhead = 2 + 2 + rpb.length + 8 + 8 + 8;
+        const packLimit = effectivePackLimit();
+        if (packLimit - pack.length <= overhead + data.length) {
+          await flushPack();
+        }
+        pack.addRecord(rpb, data, { offset: 0, totalSize: f.size, truncate: true });
+        pack.markFileDone();
+        const elapsed = (Date.now() - startTime) / 1000;
+        progress(Number(totalSentBytes) + Number(pack.bytesAdded), totalSentFiles + pack.filesAdded, elapsed, f.rel_path);
       }
-      pack.addRecord(relPathBytes, data, { offset: 0, totalSize: file.size, truncate: true });
-      pack.markFileDone();
-      const elapsed = (Date.now() - startTime) / 1000;
-      progress(Number(totalSentBytes) + Number(pack.bytesAdded), totalSentFiles + pack.filesAdded, elapsed, file.rel_path);
       continue;
     }
 

@@ -3,6 +3,17 @@
 All notable changes to this project are documented here.
 This project follows Semantic Versioning.
 
+## [1.5.3] - 2026-02-08
+
+### Changed
+- Payload pack processor now batch-signals writer threads every 64 files and broadcasts at end of pack, cutting context-switch overhead by ~60x compared to per-file signaling.
+- Payload writer thread reaction time reduced from 250ms to 10ms, ensuring the second writer thread no longer starves waiting for work.
+- Payload writer threads now defer `close()` for small unique files (up to 64 fds batched), allowing the filesystem to coalesce metadata updates on FAT/exFAT.
+- Desktop packing now pre-reads up to 64 tiny files in parallel (`Promise.all`) instead of sequential `readFile()`, keeping the payload pipeline fed during small-file runs.
+
+### Fixed
+- Small-file transfer throughput significantly improved by eliminating per-file context switches, writer thread starvation, and sequential client-side reads.
+
 ## [1.5.2] - 2026-02-08
 
 ### Changed

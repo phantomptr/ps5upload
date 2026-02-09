@@ -1,7 +1,7 @@
 # PS5 Upload FAQ
 
 Welcome! This FAQ covers setup, features, troubleshooting, and platform‑specific tips.
-Latest release: **v1.5.2**.
+Latest release: **v1.5.3**.
 
 ---
 
@@ -326,7 +326,7 @@ Restart the desktop app after updating. This means the preload bridge is stale a
 
 **Q: My transfer hangs or my PS5 freezes with a large folder.**
 This can happen with folders containing tens of thousands of small files. As of **v1.3.11**, the payload batches file writes to prevent overwhelming the PS5. As of **v1.4.3**, it also pauses recv under backpressure, verifies full writes, and reuses file descriptors for chunked writes. As of **v1.5.1**, the payload runs 2 parallel file writer threads with a shared directory cache, and the client enforces an 8MB pack floor during small-file runs to keep throughput high. If you still experience issues:
-*   Ensure you are using the payload from v1.5.2 or newer.
+*   Ensure you are using the payload from v1.5.3 or newer.
 *   The transfer may appear to pause momentarily—this is backpressure working to keep the PS5 stable. It will resume automatically.
 
 
@@ -340,6 +340,7 @@ This can happen with folders containing tens of thousands of small files. As of 
 - Use **Scan + Optimize** for large folder sets
 - For folders with many small files (< 64KB each), v1.5.1+ uses parallel writer threads and larger packs automatically — no configuration needed
 - Resumed uploads are faster in v1.5.2+: existing directories are detected via `stat()` instead of re-running full `mkdir` walks
+- v1.5.3+ further reduces per-file overhead with deferred close, batch signaling, and parallel client reads
 
 ---
 
