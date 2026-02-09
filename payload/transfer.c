@@ -32,6 +32,7 @@
 #define PACK_BUFFER_SIZE FTX_PACK_BUFFER_SIZE
 #define PACK_QUEUE_DEPTH FTX_PACK_QUEUE_DEPTH
 #define WRITER_THREAD_COUNT FTX_WRITER_THREAD_COUNT
+#define FILE_WRITER_THREAD_COUNT FTX_FILE_WRITER_THREAD_COUNT
 #define FILE_WRITE_QUEUE_DEPTH FTX_FILE_WRITE_QUEUE_DEPTH
 #define FILE_WRITE_INTERVAL_MS 250
 #define UPLOAD_RECV_BUFFER_SIZE (8 * 1024 * 1024)
@@ -496,7 +497,6 @@ static int is_relative_record_path_safe(const char *rel_path, size_t len) {
 
 // Batch size for file writer - heap allocated to avoid stack overflow
 #define FILE_WRITER_BATCH_SIZE FTX_FILE_WRITER_BATCH_SIZE
-#define FILE_WRITER_THREAD_COUNT FTX_FILE_WRITER_THREAD_COUNT
 
 // Simple open-addressing hash set for caching created directories
 #define DIR_HASH_BUCKETS 1024
