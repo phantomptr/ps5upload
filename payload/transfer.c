@@ -547,13 +547,18 @@ static pthread_mutex_t g_dir_set_mutex = PTHREAD_MUTEX_INITIALIZER;
 // Thread-safe: check hash set, call mkdir_recursive only for new dirs.
 // mkdir_recursive runs OUTSIDE the lock (it's the slow part).
 // Two threads racing on the same dir both call mkdir → EEXIST handles it.
+// For resumed uploads, a quick stat() avoids the full mkdir_recursive walk
+// when the directory tree already exists on disk.
 static void dir_ensure_created(const char *dir_path) {
     pthread_mutex_lock(&g_dir_set_mutex);
     int found = g_dir_set ? dir_hash_contains(g_dir_set, dir_path) : 0;
     pthread_mutex_unlock(&g_dir_set_mutex);
     if (found) return;
 
-    mkdir_recursive(dir_path, NULL);
+    struct stat st;
+    if (stat(dir_path, &st) != 0 || !S_ISDIR(st.st_mode)) {
+        mkdir_recursive(dir_path, NULL);
+    }
 
     pthread_mutex_lock(&g_dir_set_mutex);
     if (g_dir_set) dir_hash_insert(g_dir_set, dir_path);

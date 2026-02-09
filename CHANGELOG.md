@@ -3,6 +3,11 @@
 All notable changes to this project are documented here.
 This project follows Semantic Versioning.
 
+## [1.5.2] - 2026-02-08
+
+### Changed
+- Payload directory pre-creation now uses a `stat()` fast path: if a directory already exists on disk (e.g., during resumed uploads), it skips the full `mkdir_recursive` walk and goes straight into the cache. Reduces per-directory overhead from N `mkdir`+`chmod` syscalls to a single `stat()`.
+
 ## [1.5.1] - 2026-02-08
 
 ### Changed
