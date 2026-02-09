@@ -34,7 +34,7 @@
 #define WRITER_THREAD_COUNT FTX_WRITER_THREAD_COUNT
 #define FILE_WRITER_THREAD_COUNT FTX_FILE_WRITER_THREAD_COUNT
 #define FILE_WRITE_QUEUE_DEPTH FTX_FILE_WRITE_QUEUE_DEPTH
-#define FILE_WRITE_INTERVAL_MS 250
+#define FILE_WRITE_INTERVAL_MS 10
 #define UPLOAD_RECV_BUFFER_SIZE (8 * 1024 * 1024)
 #define TUNE_PACK_MIN (4 * 1024 * 1024)
 
@@ -631,6 +631,12 @@ static void *file_writer_thread(void *arg) {
             }
         }
 
+        // Deferred-close pool: keep small-file fds open and batch the close()
+        // calls so the filesystem can coalesce metadata updates (FAT/exFAT).
+        #define DEFERRED_CLOSE_MAX 64
+        int deferred_fds[DEFERRED_CLOSE_MAX];
+        int deferred_count = 0;
+
         for (size_t i = 0; i < job_count; i++) {
             FileWriteJob *job = &local_batch[i];
 
@@ -641,8 +647,15 @@ static void *file_writer_thread(void *arg) {
                 need_open = 1;
             }
             if (need_open) {
+                // For multi-chunk files (same path), keep fd via current_fd.
+                // For unique small files, defer the close.
                 if (current_fd >= 0) {
-                    close(current_fd);
+                    int is_small_unique = (job->offset == 0 && !(job->flags & RECORD_FLAG_HAS_OFFSET));
+                    if (is_small_unique && deferred_count < DEFERRED_CLOSE_MAX) {
+                        deferred_fds[deferred_count++] = current_fd;
+                    } else {
+                        close(current_fd);
+                    }
                     current_fd = -1;
                 }
                 if (want_trunc && job->offset == 0) {
@@ -716,11 +729,20 @@ static void *file_writer_thread(void *arg) {
                 pack_ack_complete(job->session_id, job->pack_id);
             }
 
+            // Flush deferred closes when pool is full
+            if (deferred_count >= DEFERRED_CLOSE_MAX) {
+                for (int d = 0; d < deferred_count; d++) close(deferred_fds[d]);
+                deferred_count = 0;
+            }
+
             // Update progress periodically during batch
             if ((i & 0xFF) == 0) {
                 g_last_transfer_progress = time(NULL);
             }
         }
+
+        // Flush remaining deferred closes at end of batch
+        for (int d = 0; d < deferred_count; d++) close(deferred_fds[d]);
     }
 
     if (current_fd >= 0) {
@@ -847,9 +869,18 @@ static void *pack_processor_thread(void *arg) {
             g_file_write_queue[g_file_write_queue_tail] = new_job;
             g_file_write_queue_tail = (g_file_write_queue_tail + 1) % FILE_WRITE_QUEUE_DEPTH;
             atomic_fetch_add(&g_file_write_queue_count, 1);
-            pthread_cond_signal(&g_file_write_queue_not_empty_cond);
+            // Batch-signal: wake one writer every 64 files to reduce context-switch churn
+            if ((i & 63) == 63) {
+                pthread_cond_signal(&g_file_write_queue_not_empty_cond);
+            }
             pthread_mutex_unlock(&g_file_write_mutex);
         }
+        // Broadcast at end of pack to wake ALL writer threads
+        pthread_mutex_lock(&g_file_write_mutex);
+        if (atomic_load(&g_file_write_queue_count) > 0) {
+            pthread_cond_broadcast(&g_file_write_queue_not_empty_cond);
+        }
+        pthread_mutex_unlock(&g_file_write_mutex);
         free_pack_buffer(job.data);
     }
     printf("[FTX] Pack processor thread stopped (%d)\n", thread_args->index);
