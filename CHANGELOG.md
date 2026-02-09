@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 This project follows Semantic Versioning.
 
+## [1.5.1] - 2026-02-08
+
+### Changed
+- Payload file writer threads increased to 2 for better small-file I/O overlap (configurable via `FTX_FILE_WRITER_THREAD_COUNT` in `config.h`).
+- Payload directory creation now uses a shared hash set across writer threads: directories are bulk pre-created per batch and cached globally, eliminating redundant `mkdir`+`chmod` syscalls.
+- Desktop packing now enforces an 8MB pack floor during runs of many consecutive small files (< 64KB), preventing adaptive tuning from shrinking packs too aggressively and keeping hundreds of files per pack.
+
+### Fixed
+- Small-file transfer throughput improved significantly by reducing per-file filesystem overhead on the payload side and keeping packs fuller on the client side.
+
 ## [1.5.0] - 2026-02-08
 
 ### Changed

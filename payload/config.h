@@ -37,6 +37,7 @@
 #define FTX_WRITER_THREAD_COUNT 3                   // Fewer threads reduces memory + context switching
 #define FTX_POOL_SIZE 4                             // Pack buffer pool (each is FTX_PACK_BUFFER_SIZE)
 #define FTX_FILE_WRITE_QUEUE_DEPTH 2048             // Large static queue costs memory; keep bounded
+#define FTX_FILE_WRITER_THREAD_COUNT 2               // Parallel file writer threads for small-file I/O overlap
 #define FTX_FILE_WRITER_BATCH_SIZE 512              // Heap batch size inside writer thread
 #define FTX_SMALL_FILE_POOL_BUF_SIZE (256 * 1024)
 #define FTX_SMALL_FILE_POOL_SIZE 32

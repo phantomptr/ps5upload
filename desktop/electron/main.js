@@ -38,6 +38,7 @@ const PAYLOAD_STATUS_CONNECT_TIMEOUT_MS = 5000;
 const PAYLOAD_STATUS_READ_TIMEOUT_MS = 10000;
 const PACK_BUFFER_SIZE = 48 * 1024 * 1024; // 48MB
 const PACK_BUFFER_MIN = 4 * 1024 * 1024; // 4MB
+const SMALL_FILE_PACK_MIN = 8 * 1024 * 1024; // 8MB floor during small-file runs
 const SEND_CHUNK_SIZE = 4 * 1024 * 1024; // 4MB
 const SEND_CHUNK_MIN = 512 * 1024; // 512KB
 const ADAPTIVE_POLL_MS = 2000;
@@ -80,7 +81,7 @@ const UploadResp = {
 };
 
 let sleepBlockerId = null;
-const VERSION = '1.5.0';
+const VERSION = '1.5.1';
 const IS_WINDOWS = process.platform === 'win32';
 
 function beginManageOperation(op) {
@@ -3471,6 +3472,16 @@ async function sendFilesPayloadV4(files, socketRef, options = {}) {
   const logEachFile = files.length <= 10000;
   const logInterval = logEachFile ? 1 : Math.max(250, Math.floor(files.length / 200));
   const TINY_FILE_THRESHOLD = 64 * 1024;
+  const TINY_RUN_THRESHOLD = 10;
+  let consecutiveTinyFiles = 0;
+
+  const effectivePackLimit = () => {
+    const base = clamp(packLimitFn(), PACK_BUFFER_MIN, PACK_BUFFER_SIZE);
+    if (consecutiveTinyFiles >= TINY_RUN_THRESHOLD) {
+      return Math.max(base, SMALL_FILE_PACK_MIN);
+    }
+    return base;
+  };
 
   const shouldSkipReadError = (err) => {
     const code = err?.code;
@@ -3490,6 +3501,7 @@ async function sendFilesPayloadV4(files, socketRef, options = {}) {
     const relPathBytes = Buffer.from(file.rel_path, 'utf8');
 
     if (file.size < TINY_FILE_THRESHOLD) {
+      consecutiveTinyFiles++;
       let data;
       try {
         data = await fs.promises.readFile(file.abs_path);
@@ -3502,7 +3514,7 @@ async function sendFilesPayloadV4(files, socketRef, options = {}) {
         throw err;
       }
       const overhead = 2 + 2 + relPathBytes.length + 8 + 8 + 8;
-      const packLimit = clamp(packLimitFn(), PACK_BUFFER_MIN, PACK_BUFFER_SIZE);
+      const packLimit = effectivePackLimit();
       if (packLimit - pack.length <= overhead + data.length) {
         await flushPack();
       }
@@ -3513,6 +3525,7 @@ async function sendFilesPayloadV4(files, socketRef, options = {}) {
       continue;
     }
 
+    consecutiveTinyFiles = 0;
     let sawData = false;
     let stream;
     try {
@@ -3540,7 +3553,7 @@ async function sendFilesPayloadV4(files, socketRef, options = {}) {
 
         while (offset < chunk.length) {
           const overhead = 2 + 2 + relPathBytes.length + 8 + 8 + 8;
-          const packLimit = clamp(packLimitFn(), PACK_BUFFER_MIN, PACK_BUFFER_SIZE);
+          const packLimit = effectivePackLimit();
           const remaining = packLimit - pack.length;
 
           if (remaining <= overhead) {
@@ -3580,7 +3593,7 @@ async function sendFilesPayloadV4(files, socketRef, options = {}) {
 
     if (!sawData) {
       const overhead = 2 + 2 + relPathBytes.length + 8 + 8 + 8;
-      const packLimit = clamp(packLimitFn(), PACK_BUFFER_MIN, PACK_BUFFER_SIZE);
+      const packLimit = effectivePackLimit();
       if (packLimit - pack.length <= overhead) {
         await flushPack();
       }
@@ -3810,6 +3823,16 @@ async function sendFilesPayloadV4Dynamic(getNextFile, socketRef, options = {}) {
   };
 
   const TINY_FILE_THRESHOLD = 64 * 1024;
+  const TINY_RUN_THRESHOLD = 10;
+  let consecutiveTinyFiles = 0;
+
+  const effectivePackLimit = () => {
+    const base = clamp(packLimitFn(), PACK_BUFFER_MIN, PACK_BUFFER_SIZE);
+    if (consecutiveTinyFiles >= TINY_RUN_THRESHOLD) {
+      return Math.max(base, SMALL_FILE_PACK_MIN);
+    }
+    return base;
+  };
 
   const shouldSkipReadError = (err) => {
     const code = err?.code;
@@ -3825,6 +3848,7 @@ async function sendFilesPayloadV4Dynamic(getNextFile, socketRef, options = {}) {
     const relPathBytes = Buffer.from(file.rel_path, 'utf8');
 
     if (file.size < TINY_FILE_THRESHOLD) {
+      consecutiveTinyFiles++;
       let data;
       try {
         data = await fs.promises.readFile(file.abs_path);
@@ -3837,7 +3861,7 @@ async function sendFilesPayloadV4Dynamic(getNextFile, socketRef, options = {}) {
         throw err;
       }
       const overhead = 2 + 2 + relPathBytes.length + 8 + 8 + 8;
-      const packLimit = clamp(packLimitFn(), PACK_BUFFER_MIN, PACK_BUFFER_SIZE);
+      const packLimit = effectivePackLimit();
       if (packLimit - pack.length <= overhead + data.length) {
         await flushPack();
       }
@@ -3848,6 +3872,7 @@ async function sendFilesPayloadV4Dynamic(getNextFile, socketRef, options = {}) {
       continue;
     }
 
+    consecutiveTinyFiles = 0;
     let stream;
     try {
       stream = fs.createReadStream(file.abs_path, { highWaterMark: streamChunkBytes });
@@ -3873,7 +3898,7 @@ async function sendFilesPayloadV4Dynamic(getNextFile, socketRef, options = {}) {
 
         while (offset < chunk.length) {
           const overhead = 2 + 2 + relPathBytes.length + 8 + 8 + 8;
-          const packLimit = clamp(packLimitFn(), PACK_BUFFER_MIN, PACK_BUFFER_SIZE);
+          const packLimit = effectivePackLimit();
           const remaining = packLimit - pack.length;
 
           if (remaining <= overhead) {

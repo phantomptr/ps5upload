@@ -127,7 +127,7 @@ typedef struct PackQueue {
 
 static PackQueue g_queues[WRITER_THREAD_COUNT];
 static pthread_t g_pack_processor_threads[WRITER_THREAD_COUNT];
-static pthread_t g_file_writer_thread;
+static pthread_t g_file_writer_threads[FILE_WRITER_THREAD_COUNT];
 
 typedef struct { PackQueue *queue; int index; } ThreadArgs;
 static ThreadArgs g_thread_args[WRITER_THREAD_COUNT];
@@ -496,19 +496,81 @@ static int is_relative_record_path_safe(const char *rel_path, size_t len) {
 
 // Batch size for file writer - heap allocated to avoid stack overflow
 #define FILE_WRITER_BATCH_SIZE FTX_FILE_WRITER_BATCH_SIZE
+#define FILE_WRITER_THREAD_COUNT FTX_FILE_WRITER_THREAD_COUNT
+
+// Simple open-addressing hash set for caching created directories
+#define DIR_HASH_BUCKETS 1024
+#define DIR_HASH_KEY_MAX 512
+
+typedef struct {
+    char keys[DIR_HASH_BUCKETS][DIR_HASH_KEY_MAX];
+    int occupied[DIR_HASH_BUCKETS];
+} DirHashSet;
+
+static void dir_hash_init(DirHashSet *hs) {
+    memset(hs->occupied, 0, sizeof(hs->occupied));
+}
+
+static uint32_t dir_hash_fn(const char *s) {
+    uint32_t h = 5381;
+    for (; *s; s++) h = h * 33 + (uint8_t)*s;
+    return h;
+}
+
+static int dir_hash_contains(DirHashSet *hs, const char *key) {
+    uint32_t idx = dir_hash_fn(key) % DIR_HASH_BUCKETS;
+    for (int probe = 0; probe < DIR_HASH_BUCKETS; probe++) {
+        uint32_t i = (idx + probe) % DIR_HASH_BUCKETS;
+        if (!hs->occupied[i]) return 0;
+        if (strcmp(hs->keys[i], key) == 0) return 1;
+    }
+    return 0;
+}
+
+static void dir_hash_insert(DirHashSet *hs, const char *key) {
+    uint32_t idx = dir_hash_fn(key) % DIR_HASH_BUCKETS;
+    for (int probe = 0; probe < DIR_HASH_BUCKETS; probe++) {
+        uint32_t i = (idx + probe) % DIR_HASH_BUCKETS;
+        if (!hs->occupied[i]) {
+            snprintf(hs->keys[i], DIR_HASH_KEY_MAX, "%s", key);
+            hs->occupied[i] = 1;
+            return;
+        }
+        if (strcmp(hs->keys[i], key) == 0) return;
+    }
+}
+
+// Shared directory cache across all writer threads
+static DirHashSet *g_dir_set = NULL;
+static pthread_mutex_t g_dir_set_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+// Thread-safe: check hash set, call mkdir_recursive only for new dirs.
+// mkdir_recursive runs OUTSIDE the lock (it's the slow part).
+// Two threads racing on the same dir both call mkdir → EEXIST handles it.
+static void dir_ensure_created(const char *dir_path) {
+    pthread_mutex_lock(&g_dir_set_mutex);
+    int found = g_dir_set ? dir_hash_contains(g_dir_set, dir_path) : 0;
+    pthread_mutex_unlock(&g_dir_set_mutex);
+    if (found) return;
+
+    mkdir_recursive(dir_path, NULL);
+
+    pthread_mutex_lock(&g_dir_set_mutex);
+    if (g_dir_set) dir_hash_insert(g_dir_set, dir_path);
+    pthread_mutex_unlock(&g_dir_set_mutex);
+}
 
 static void *file_writer_thread(void *arg) {
-    (void)arg;
-    char dir_cache[PATH_MAX] = {0};
+    int thread_idx = (int)(intptr_t)arg;
 
     // Heap-allocate the batch to avoid stack overflow
     FileWriteJob *local_batch = malloc(FILE_WRITER_BATCH_SIZE * sizeof(FileWriteJob));
     if (!local_batch) {
-        printf("[FTX] FATAL: file_writer_thread failed to allocate batch buffer\n");
+        printf("[FTX] FATAL: file_writer_thread[%d] failed to allocate batch buffer\n", thread_idx);
         return NULL;
     }
 
-    printf("[FTX] Batched file writer thread started.\n");
+    printf("[FTX] Batched file writer thread[%d] started.\n", thread_idx);
 
     int current_fd = -1;
     char current_path[PATH_MAX] = {0};
@@ -554,15 +616,18 @@ static void *file_writer_thread(void *arg) {
         // Update progress at start of batch
         g_last_transfer_progress = time(NULL);
 
+        // Bulk pre-create directories for this batch (shared cache across threads)
         for (size_t i = 0; i < job_count; i++) {
-            FileWriteJob *job = &local_batch[i];
-
-            char *last_slash = strrchr(job->path, '/');
+            char *last_slash = strrchr(local_batch[i].path, '/');
             if (last_slash) {
                 *last_slash = '\0';
-                mkdir_recursive(job->path, dir_cache);
+                dir_ensure_created(local_batch[i].path);
                 *last_slash = '/';
             }
+        }
+
+        for (size_t i = 0; i < job_count; i++) {
+            FileWriteJob *job = &local_batch[i];
 
             int open_flags = O_WRONLY | O_CREAT;
             int want_trunc = ((job->flags & RECORD_FLAG_HAS_OFFSET) == 0) || (job->flags & RECORD_FLAG_TRUNCATE);
@@ -657,7 +722,7 @@ static void *file_writer_thread(void *arg) {
         close(current_fd);
     }
     free(local_batch);
-    printf("[FTX] Batched file writer thread stopped.\n");
+    printf("[FTX] Batched file writer thread[%d] stopped.\n", thread_idx);
     return NULL;
 }
 
@@ -805,13 +870,25 @@ static int init_worker_pool(void) {
     }
     printf("[FTX] Pack processor threads created.\n");
 
-    g_file_writer_shutdown = 0;
-    int rc = pthread_create_with_stack(&g_file_writer_thread, file_writer_thread, NULL);
-    if (rc != 0) {
-        printf("[FTX] FATAL: pthread_create for file writer failed: %d\n", rc);
-        return -1;
+    // Allocate shared directory cache
+    if (!g_dir_set) {
+        g_dir_set = malloc(sizeof(DirHashSet));
+        if (!g_dir_set) {
+            printf("[FTX] FATAL: failed to allocate shared dir hash set\n");
+            return -1;
+        }
     }
-    printf("[FTX] File writer thread created.\n");
+    dir_hash_init(g_dir_set);
+
+    g_file_writer_shutdown = 0;
+    for (int i = 0; i < FILE_WRITER_THREAD_COUNT; i++) {
+        int rc = pthread_create_with_stack(&g_file_writer_threads[i], file_writer_thread, (void *)(intptr_t)i);
+        if (rc != 0) {
+            printf("[FTX] FATAL: pthread_create for file writer %d failed: %d\n", i, rc);
+            return -1;
+        }
+    }
+    printf("[FTX] File writer threads created (count=%d).\n", FILE_WRITER_THREAD_COUNT);
 
     g_workers_initialized = 1;
     printf("[FTX] Worker pool initialized successfully.\n");
@@ -840,7 +917,9 @@ static void cleanup_worker_pool(void) {
     for (int i = 0; i < WRITER_THREAD_COUNT; i++) {
         pthread_join(g_pack_processor_threads[i], NULL);
     }
-    pthread_join(g_file_writer_thread, NULL);
+    for (int i = 0; i < FILE_WRITER_THREAD_COUNT; i++) {
+        pthread_join(g_file_writer_threads[i], NULL);
+    }
 
     // Clean up any remaining jobs in file write queue
     for (size_t i = 0; i < atomic_load(&g_file_write_queue_count); ++i) {
@@ -854,6 +933,12 @@ static void cleanup_worker_pool(void) {
     // Destroy queue synchronization primitives so they can be re-initialized
     for (int i = 0; i < WRITER_THREAD_COUNT; i++) {
         queue_destroy(&g_queues[i]);
+    }
+
+    // Free shared directory cache
+    if (g_dir_set) {
+        free(g_dir_set);
+        g_dir_set = NULL;
     }
 
     g_workers_initialized = 0;
