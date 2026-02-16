@@ -80,12 +80,21 @@
     close.textContent = 'x';
     close.setAttribute('aria-label', 'Close web mode notice');
     close.style.border = '1px solid rgba(255,255,255,0.35)';
-    close.style.background = 'rgba(255,255,255,0.12)';
+    close.style.background = 'rgba(255,255,255,0.2)';
     close.style.color = '#fff';
     close.style.borderRadius = '8px';
     close.style.padding = '4px 8px';
     close.style.cursor = 'pointer';
     close.style.font = '700 12px/1 "Noto Sans", "Segoe UI", sans-serif';
+    close.style.transition = 'background-color .15s ease,transform .15s ease';
+    close.addEventListener('mouseenter', function () {
+      close.style.background = 'rgba(255,255,255,0.32)';
+      close.style.transform = 'translateY(-1px)';
+    });
+    close.addEventListener('mouseleave', function () {
+      close.style.background = 'rgba(255,255,255,0.2)';
+      close.style.transform = 'translateY(0)';
+    });
     close.addEventListener('click', function () {
       if (window.localStorage) {
         window.localStorage.setItem('ps5upload.webBannerDismissed', '1');
@@ -308,13 +317,29 @@
   }
 
   function createModalShell(title) {
-    var shellBg = '#ffffff';
-    var textColor = '#111827';
-    var borderColor = '#d1d5db';
-    var surfaceAlt = '#f3f4f6';
-    var accent = '#2563eb';
-    var inputBg = '#ffffff';
-    var rowBg = '#ffffff';
+    var themeAttr = (document.documentElement && document.documentElement.getAttribute('data-theme')) || '';
+    var prefersDark = false;
+    try {
+      prefersDark = !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    } catch {
+      prefersDark = false;
+    }
+    var isDark = themeAttr === 'dark' || (!themeAttr && prefersDark);
+    var shellBg = isDark ? '#0f172a' : '#ffffff';
+    var textColor = isDark ? '#f1f5f9' : '#111827';
+    var borderColor = isDark ? 'rgba(255,255,255,0.12)' : 'rgba(16,24,40,0.12)';
+    var surfaceAlt = isDark ? '#1e293b' : '#f3f4f6';
+    var accent = isDark ? '#60a5fa' : '#2563eb';
+    var inputBg = isDark ? '#0f172a' : '#ffffff';
+    var rowBg = isDark ? '#1f2937' : '#ffffff';
+    var btnNeutralBg = isDark ? '#1f2937' : '#eef2f7';
+    var btnNeutralHover = isDark ? '#273447' : '#e2e8f0';
+    var btnNeutralBorder = isDark ? 'rgba(255,255,255,0.16)' : 'rgba(16,24,40,0.14)';
+    var btnNeutralText = isDark ? '#e2e8f0' : '#111827';
+    var btnPrimaryBg = isDark ? '#3b82f6' : '#2563eb';
+    var btnPrimaryHover = isDark ? '#2563eb' : '#1d4ed8';
+    var btnPrimaryText = isDark ? '#f8fafc' : '#ffffff';
+    var focusRing = isDark ? '0 0 0 3px rgba(96,165,250,0.38)' : '0 0 0 3px rgba(37,99,235,0.28)';
 
     var overlay = document.createElement('div');
     overlay.style.position = 'fixed';
@@ -335,6 +360,7 @@
     modal.style.border = '1px solid ' + borderColor;
     modal.style.overflow = 'hidden';
     modal.style.fontFamily = '"Noto Sans","Segoe UI",sans-serif';
+    modal.style.boxShadow = isDark ? '0 24px 48px rgba(0,0,0,0.42)' : '0 24px 48px rgba(15,23,42,0.2)';
 
     var header = document.createElement('div');
     header.style.padding = '12px 14px';
@@ -371,13 +397,35 @@
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
 
-    return { overlay: overlay, modal: modal, toolbar: toolbar, list: list, footer: footer };
+    return {
+      overlay: overlay,
+      modal: modal,
+      toolbar: toolbar,
+      list: list,
+      footer: footer,
+      colors: {
+        textColor: textColor,
+        borderColor: borderColor,
+        accent: accent,
+        inputBg: inputBg,
+        rowBg: rowBg,
+        btnNeutralBg: btnNeutralBg,
+        btnNeutralHover: btnNeutralHover,
+        btnNeutralBorder: btnNeutralBorder,
+        btnNeutralText: btnNeutralText,
+        btnPrimaryBg: btnPrimaryBg,
+        btnPrimaryHover: btnPrimaryHover,
+        btnPrimaryText: btnPrimaryText,
+        focusRing: focusRing,
+      },
+    };
   }
 
   function openHostPathModal(options, saveMode) {
     return new Promise(async function (resolve) {
       var opts = options || {};
       var shell = createModalShell(saveMode ? 'Select Save Location (Host)' : 'Select Host Path');
+      var colors = shell.colors;
       var currentPath = (opts.defaultPath || '').trim();
       var selected = null;
       var parentPath = null;
@@ -388,16 +436,33 @@
         resolve(value);
       }
 
-      function button(label, onClick) {
+      function button(label, onClick, variant) {
         var btn = document.createElement('button');
         btn.type = 'button';
         btn.textContent = label;
         btn.style.padding = '8px 12px';
-        btn.style.border = '1px solid ' + borderColor;
+        btn.style.border = '1px solid ' + (variant === 'primary' ? 'transparent' : colors.btnNeutralBorder);
         btn.style.borderRadius = '8px';
-        btn.style.background = inputBg;
-        btn.style.color = textColor;
+        btn.style.background = variant === 'primary' ? colors.btnPrimaryBg : colors.btnNeutralBg;
+        btn.style.color = variant === 'primary' ? colors.btnPrimaryText : colors.btnNeutralText;
+        btn.style.fontWeight = '650';
         btn.style.cursor = 'pointer';
+        btn.style.transition = 'background-color .15s ease,border-color .15s ease,transform .15s ease,box-shadow .15s ease';
+        btn.style.boxShadow = variant === 'primary' ? '0 6px 16px rgba(37,99,235,0.28)' : 'none';
+        btn.addEventListener('mouseenter', function () {
+          btn.style.background = variant === 'primary' ? colors.btnPrimaryHover : colors.btnNeutralHover;
+          btn.style.transform = 'translateY(-1px)';
+        });
+        btn.addEventListener('mouseleave', function () {
+          btn.style.background = variant === 'primary' ? colors.btnPrimaryBg : colors.btnNeutralBg;
+          btn.style.transform = 'translateY(0)';
+        });
+        btn.addEventListener('focus', function () {
+          btn.style.boxShadow = colors.focusRing;
+        });
+        btn.addEventListener('blur', function () {
+          btn.style.boxShadow = variant === 'primary' ? '0 6px 16px rgba(37,99,235,0.28)' : 'none';
+        });
         btn.addEventListener('click', onClick);
         return btn;
       }
@@ -406,10 +471,10 @@
       pathInput.type = 'text';
       pathInput.style.flex = '1';
       pathInput.style.padding = '8px 10px';
-      pathInput.style.border = '1px solid ' + borderColor;
+      pathInput.style.border = '1px solid ' + colors.borderColor;
       pathInput.style.borderRadius = '8px';
-      pathInput.style.background = inputBg;
-      pathInput.style.color = textColor;
+      pathInput.style.background = colors.inputBg;
+      pathInput.style.color = colors.textColor;
       pathInput.placeholder = 'Host path';
 
       var upBtn = button('Up', function () {
@@ -441,10 +506,10 @@
         nameInput.placeholder = 'File name';
         nameInput.style.marginLeft = '8px';
         nameInput.style.padding = '8px 10px';
-        nameInput.style.border = '1px solid ' + borderColor;
+        nameInput.style.border = '1px solid ' + colors.borderColor;
         nameInput.style.borderRadius = '8px';
-        nameInput.style.background = inputBg;
-        nameInput.style.color = textColor;
+        nameInput.style.background = colors.inputBg;
+        nameInput.style.color = colors.textColor;
         nameInput.addEventListener('input', function () {
           fileName = nameInput.value.trim();
         });
@@ -476,12 +541,13 @@
             var row = document.createElement('button');
             row.type = 'button';
             row.style.padding = '8px 10px';
-            row.style.border = '1px solid ' + borderColor;
+            row.style.border = '1px solid ' + colors.borderColor;
             row.style.borderRadius = '8px';
-            row.style.background = rowBg;
-            row.style.color = textColor;
+            row.style.background = colors.rowBg;
+            row.style.color = colors.textColor;
             row.style.textAlign = 'left';
             row.style.cursor = 'pointer';
+            row.style.transition = 'background-color .15s ease,border-color .15s ease,transform .15s ease';
             row.textContent = (entry.type === 'dir' ? '[DIR] ' : '') + entry.name;
             row.addEventListener('click', function () {
               if (entry.type === 'dir') {
@@ -491,10 +557,12 @@
               }
             });
             row.addEventListener('mouseenter', function () {
-              row.style.borderColor = accent;
+              row.style.borderColor = colors.accent;
+              row.style.transform = 'translateY(-1px)';
             });
             row.addEventListener('mouseleave', function () {
-              row.style.borderColor = borderColor;
+              row.style.borderColor = colors.borderColor;
+              row.style.transform = 'translateY(0)';
             });
             row.addEventListener('dblclick', function () {
               if (entry.type === 'dir') loadPath(entry.path);
@@ -514,7 +582,7 @@
           shell.list.innerHTML = '';
           var msg = document.createElement('div');
           msg.textContent = 'Failed to open path: ' + (err && err.message ? err.message : String(err));
-          msg.style.color = accent;
+          msg.style.color = colors.accent;
           msg.style.padding = '8px';
           shell.list.appendChild(msg);
           try {
@@ -552,7 +620,7 @@
           return;
         }
         close(opts.multiple ? [selected] : selected);
-      }));
+      }, 'primary'));
 
       if (!currentPath) {
         var roots = await fetchHostFs('/api/hostfs/roots');
@@ -600,6 +668,8 @@
     }
 
     var sendsPayload = cmd === 'payload_send' || cmd === 'payload_download_and_send';
+    var payloadDownloadTimer = null;
+    var payloadDownloadInFlight = false;
     var scanProgressTimer = null;
     var manageProgressTimer = null;
     var scanProgressInFlight = false;
@@ -615,6 +685,20 @@
         clearTimeout(payloadPollResumeTimer);
         payloadPollResumeTimer = null;
       }
+    }
+    if (cmd === 'payload_download_and_send') {
+      payloadDownloadTimer = setInterval(function () {
+        if (payloadDownloadInFlight) return;
+        payloadDownloadInFlight = true;
+        invokeRemote('payload_download_progress_snapshot', {}).then(function (snapshot) {
+          if (!snapshot || typeof snapshot !== 'object') return;
+          emit('payload_download_progress', snapshot);
+        }).catch(function () {
+          // ignore
+        }).finally(function () {
+          payloadDownloadInFlight = false;
+        });
+      }, 250);
     }
     if (cmd === 'transfer_scan') {
       emit('scan_progress', { files: 0, total: 0 });
@@ -681,6 +765,9 @@
       }
       if (manageProgressTimer) {
         clearInterval(manageProgressTimer);
+      }
+      if (payloadDownloadTimer) {
+        clearInterval(payloadDownloadTimer);
       }
       if (cmd === 'transfer_scan') {
         emit('scan_error', { message: err && err.message ? err.message : String(err) });
@@ -762,6 +849,9 @@
         payloadPollResumeTimer = null;
         startPayloadPoll();
       }, 1500);
+    }
+    if (payloadDownloadTimer) {
+      clearInterval(payloadDownloadTimer);
     }
 
     return result;

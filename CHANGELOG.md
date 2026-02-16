@@ -3,6 +3,17 @@
 All notable changes to this project are documented here.
 This project follows Semantic Versioning.
 
+## [1.5.4] - 2026-02-14
+
+### Changed
+- Extraction queue now preserves requested RAR mode (FAST/SAFE/TURBO) instead of forcing turbo.
+- RAR extraction now applies mode-specific unrar options (keepalive/sleep/path trust/progress behavior).
+- Extraction progress updates now use a non-blocking queue lock path to reduce contention and mid-run stalls.
+
+### Fixed
+- Resolved extraction queue race conditions caused by using stale item pointers across queue reorders/removals.
+- Reduced queue API stalls by moving recursive post-extract chmod work outside the queue mutex critical section.
+
 ## [1.5.3] - 2026-02-08
 
 ### Changed

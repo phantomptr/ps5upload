@@ -11,9 +11,7 @@ import shutil
 DEFAULT_PORTS = [2121, 1337]
 REMOTE_CANDIDATES = [
     "/data/ps5upload/debug",
-    "data/ps5upload/debug",
     "/ps5upload/debug",
-    "ps5upload/debug",
 ]
 
 
@@ -44,6 +42,12 @@ def ftp_connect(ip, port, user, password):
 
 
 def find_remote_root(ftp):
+    original_pwd = "/"
+    try:
+        original_pwd = ftp.pwd()
+    except ftplib.all_errors:
+        pass
+
     for candidate in REMOTE_CANDIDATES:
         try:
             ftp.cwd(candidate)
@@ -51,7 +55,34 @@ def find_remote_root(ftp):
         except ftplib.all_errors:
             continue
 
-    # Auto-discovery: look for ps5upload/debug relative to root listing
+    # Auto-discovery (non-recursive): walk a small set of base locations.
+    search_bases = ["/", "/data", "/mnt", "/user", "/system_data"]
+    rel_candidates = [
+        "ps5upload/debug",
+        "data/ps5upload/debug",
+        "debug",
+    ]
+
+    visited = set()
+    for base in search_bases:
+        if base in visited:
+            continue
+        visited.add(base)
+        try:
+            ftp.cwd(base)
+        except ftplib.all_errors:
+            continue
+        for rel in rel_candidates:
+            try:
+                ftp.cwd(rel)
+                return ftp.pwd()
+            except ftplib.all_errors:
+                try:
+                    ftp.cwd(base)
+                except ftplib.all_errors:
+                    break
+
+    # Last-resort probing from current root listing.
     try:
         ftp.cwd("/")
     except ftplib.all_errors:
@@ -59,21 +90,30 @@ def find_remote_root(ftp):
 
     entries = list_dir(ftp)
     names = [name for name, _ in entries]
-    if "data" in names:
+    for top in ("data", "ps5upload"):
+        if top not in names:
+            continue
         try:
-            ftp.cwd("data")
-            return find_remote_root(ftp)
-        except ftplib.all_errors:
-            pass
-
-    if "ps5upload" in names:
-        try:
-            ftp.cwd("ps5upload")
-            if "debug" in [n for n, _ in list_dir(ftp)]:
+            ftp.cwd(f"/{top}")
+            child_names = [n for n, _ in list_dir(ftp)]
+            if "ps5upload" in child_names:
+                ftp.cwd("ps5upload")
+                child_names = [n for n, _ in list_dir(ftp)]
+            if "debug" in child_names:
                 ftp.cwd("debug")
                 return ftp.pwd()
         except ftplib.all_errors:
-            pass
+            continue
+        finally:
+            try:
+                ftp.cwd("/")
+            except ftplib.all_errors:
+                pass
+
+    try:
+        ftp.cwd(original_pwd)
+    except ftplib.all_errors:
+        pass
 
     return None
 

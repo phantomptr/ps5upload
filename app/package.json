@@ -1,7 +1,7 @@
 {
   "name": "ps5upload-app",
   "private": true,
-  "version": "1.5.3",
+  "version": "1.5.4",
   "description": "PS5Upload remote app service (backend + frontend)",
   "scripts": {
     "start": "node server.js",

@@ -16,6 +16,7 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <stdarg.h>
 #include <pthread.h>
 #include <fcntl.h>
@@ -26,6 +27,7 @@
 #include <sys/syscall.h>
 #include <sys/mman.h>
 #include <sched.h>
+#include <stdatomic.h>
 
 #include <ps5/kernel.h>
 
@@ -40,6 +42,20 @@ static int sys_budget_set(long budget) {
  */
 #ifndef ENABLE_AGGRESSIVE_PRIV_ESC
 #define ENABLE_AGGRESSIVE_PRIV_ESC 0
+#endif
+
+/*
+ * Stability defaults:
+ * - Avoid real-time scheduler by default (can starve system services under heavy I/O).
+ * - Avoid mlockall(MCL_FUTURE) by default (can amplify memory pressure during uploads).
+ * Both can be re-enabled explicitly at build time for advanced tuning.
+ */
+#ifndef ENABLE_RT_SCHED
+#define ENABLE_RT_SCHED 0
+#endif
+
+#ifndef ENABLE_MLOCKALL
+#define ENABLE_MLOCKALL 0
 #endif
 
 #if ENABLE_AGGRESSIVE_PRIV_ESC
@@ -73,6 +89,8 @@ static const uint8_t g_full_caps[16] = {
 #define RESP_DATA  0x03
 #define RESP_READY 0x04
 #define RESP_PROGRESS 0x05
+#define BINARY_UPLOAD_CTRL_MAX (64 * 1024)
+#define BINARY_UPLOAD_CHUNK_MAX (64 * 1024 * 1024)
 
 typedef struct FileMutexEntry {
     char path[PATH_MAX];
@@ -189,6 +207,9 @@ static int send_all_bytes(int sock, const void *data, size_t len) {
     return 0;
 }
 
+// Forward declaration used by socket helpers below.
+void payload_touch_activity(void);
+
 static int read_exact_bytes(int sock, void *buf, size_t len) {
     uint8_t *p = (uint8_t *)buf;
     size_t got = 0;
@@ -196,10 +217,42 @@ static int read_exact_bytes(int sock, void *buf, size_t len) {
         ssize_t n = recv(sock, p + got, len - got, 0);
         if (n < 0) {
             if (errno == EINTR) continue;
+            if (errno == 0 || errno == EEXIST) {
+                // On PS5/FreeBSD we occasionally observe recv() failures with an
+                // unrelated stale errno value (for example EEXIST) after peer drops.
+                // Prefer socket-level error and otherwise normalize to ECONNRESET.
+                int soerr = 0;
+                socklen_t slen = sizeof(soerr);
+                if (getsockopt(sock, SOL_SOCKET, SO_ERROR, &soerr, &slen) == 0 && soerr != 0) {
+                    errno = soerr;
+                } else {
+                    errno = ECONNRESET;
+                }
+            }
             return -1;
         }
-        if (n == 0) return -1;
+        if (n == 0) {
+            // Peer performed an orderly shutdown.
+            errno = ECONNRESET;
+            return -1;
+        }
         got += (size_t)n;
+        // Keep idle watchdog from killing long-running binary uploads while
+        // we are actively receiving data.
+        payload_touch_activity();
+    }
+    return 0;
+}
+
+static int discard_exact_bytes(int sock, uint32_t len) {
+    uint8_t scratch[1024];
+    uint32_t remaining = len;
+    while (remaining > 0) {
+        size_t take = remaining > (uint32_t)sizeof(scratch) ? sizeof(scratch) : (size_t)remaining;
+        if (read_exact_bytes(sock, scratch, take) != 0) {
+            return -1;
+        }
+        remaining -= (uint32_t)take;
     }
     return 0;
 }
@@ -221,13 +274,96 @@ static char g_last_path[PATH_MAX] = {0};
 static char g_last_path2[PATH_MAX] = {0};
 static const char *g_pid_file = "/data/ps5upload/payload.pid";
 static const char *g_kill_file = "/data/ps5upload/kill.req";
+static const char *g_run_state_file = "/data/ps5upload/run_state.log";
+static const char *g_heartbeat_file = "/data/ps5upload/heartbeat.log";
 static volatile time_t g_last_activity = 0;
-static const int g_idle_timeout_sec = 120;
+static const int g_idle_timeout_sec = IDLE_TIMEOUT_SEC;
 static const int g_transfer_stall_sec = 60;
 static const int g_extract_stall_sec = 60;
+static atomic_int g_binary_sessions_active = 0;
+static atomic_int g_command_threads_active = 0;
+static pthread_mutex_t g_upload_snapshot_mutex = PTHREAD_MUTEX_INITIALIZER;
+static char g_upload_snapshot_path[PATH_MAX] = {0};
+static uint64_t g_upload_snapshot_received = 0;
+static uint64_t g_upload_snapshot_size = 0;
+static volatile time_t g_upload_snapshot_updated = 0;
 
 void payload_log(const char *fmt, ...);
 void payload_touch_activity(void);
+#if defined(PS5UPLOAD_DEBUGGER_BUILD)
+static void debugger_log_stream_broadcast(const char *line);
+#endif
+
+static void write_state_file_line(const char *path, const char *line) {
+    if (!path || !line) return;
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    if (fd < 0) return;
+    write(fd, line, strlen(line));
+    close(fd);
+}
+
+static void append_state_file_line(const char *path, const char *line) {
+    if (!path || !line) return;
+    int fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0666);
+    if (fd < 0) return;
+    write(fd, line, strlen(line));
+    close(fd);
+}
+
+static void mark_run_state(const char *state, const char *detail) {
+    char line[768];
+    time_t now = time(NULL);
+    snprintf(line, sizeof(line), "ts=%ld pid=%d state=%s detail=%s\n",
+             (long)now, (int)getpid(), state ? state : "unknown", detail ? detail : "");
+    append_state_file_line(g_run_state_file, line);
+}
+
+static void update_upload_snapshot(const char *path, uint64_t received, uint64_t size) {
+    pthread_mutex_lock(&g_upload_snapshot_mutex);
+    if (path) {
+        snprintf(g_upload_snapshot_path, sizeof(g_upload_snapshot_path), "%s", path);
+    } else {
+        g_upload_snapshot_path[0] = '\0';
+    }
+    g_upload_snapshot_received = received;
+    g_upload_snapshot_size = size;
+    g_upload_snapshot_updated = time(NULL);
+    pthread_mutex_unlock(&g_upload_snapshot_mutex);
+}
+
+static void *heartbeat_thread(void *arg) {
+    (void)arg;
+    while (1) {
+        char path[PATH_MAX];
+        uint64_t received = 0;
+        uint64_t size = 0;
+        time_t updated = 0;
+        pthread_mutex_lock(&g_upload_snapshot_mutex);
+        snprintf(path, sizeof(path), "%s", g_upload_snapshot_path);
+        received = g_upload_snapshot_received;
+        size = g_upload_snapshot_size;
+        updated = g_upload_snapshot_updated;
+        pthread_mutex_unlock(&g_upload_snapshot_mutex);
+
+        time_t now = time(NULL);
+        char line[1024];
+        snprintf(line, sizeof(line),
+                 "ts=%ld pid=%d transfer_active=%d bin_sessions=%d cmd_threads=%d last_activity=%ld upload_path=%s upload_received=%llu upload_size=%llu upload_updated=%ld\n",
+                 (long)now,
+                 (int)getpid(),
+                 transfer_is_active(),
+                 atomic_load(&g_binary_sessions_active),
+                 atomic_load(&g_command_threads_active),
+                 (long)g_last_activity,
+                 path[0] ? path : "(none)",
+                 (unsigned long long)received,
+                 (unsigned long long)size,
+                 (long)updated);
+        write_state_file_line(g_heartbeat_file, line);
+        usleep(1000 * 1000);
+    }
+    return NULL;
+}
 
 static void *kill_watch_thread(void *arg) {
     (void)arg;
@@ -340,8 +476,10 @@ static void *idle_watch_thread(void *arg) {
             }
         }
 
-        if (g_last_activity > 0 && (now - g_last_activity) > g_idle_timeout_sec) {
-            if (transfer_is_active() || extract_queue_is_running()) {
+        if (g_idle_timeout_sec > 0 &&
+            g_last_activity > 0 &&
+            (now - g_last_activity) > g_idle_timeout_sec) {
+            if (transfer_is_active() || extract_queue_is_running() || atomic_load(&g_binary_sessions_active) > 0) {
                 payload_log("[WATCHDOG] Idle timeout but active transfer/extract. activity_age=%ld", (long)(now - g_last_activity));
                 g_last_activity = now;
             } else {
@@ -403,6 +541,9 @@ void payload_log(const char *fmt, ...) {
     va_end(args);
     payload_log_write("/data/ps5upload/payload.log", line);
     payload_log_write("/data/ps5upload/logs/payload.log", line);
+#if defined(PS5UPLOAD_DEBUGGER_BUILD)
+    debugger_log_stream_broadcast(line);
+#endif
     pthread_mutex_unlock(&g_log_mutex);
 }
 
@@ -443,6 +584,7 @@ static const char *signal_name(int sig) {
 }
 
 static void crash_handler(int sig) {
+    mark_run_state("crash", signal_name(sig));
     // Minimal, signal-safe logging to avoid deadlocks on mutex.
     int fd = open("/data/ps5upload/payload_crash.log", O_WRONLY | O_CREAT | O_APPEND, 0666);
     if (fd >= 0) {
@@ -485,10 +627,21 @@ static void crash_handler(int sig) {
         fsync(fd2);
         close(fd2);
     }
+    int fd3 = open("/data/ps5upload/logs/payload.log", O_WRONLY | O_CREAT | O_APPEND, 0666);
+    if (fd3 >= 0) {
+        char buf[128];
+        int len = snprintf(buf, sizeof(buf), "[CRASH] signal=%d (%s)\n", sig, signal_name(sig));
+        if (len > 0) {
+            write(fd3, buf, (size_t)len);
+        }
+        fsync(fd3);
+        close(fd3);
+    }
     _exit(1);
 }
 
 static void exit_handler(void) {
+    mark_run_state("exit", "atexit");
     // Log clean exits for debugging
     int fd = open("/data/ps5upload/payload_exit.log", O_WRONLY | O_CREAT | O_APPEND, 0666);
     if (fd >= 0) {
@@ -685,8 +838,9 @@ static int pthread_create_detached_with_stack(void *(*fn)(void *), void *arg) {
 
 static int read_command_line(int sock, char *out, size_t cap, size_t *out_len);
 static int is_comm_command(const char *cmd);
+static int is_noisy_comm_command(const char *cmd);
 static void enqueue_comm_request(const struct CommandRequest *req);
-static void *comm_worker_thread(void *arg);
+__attribute__((unused)) static void *comm_worker_thread(void *arg);
 static int parse_first_token(const char *src, char *out, size_t out_cap, const char **rest);
 
 typedef struct UploadSession {
@@ -699,6 +853,10 @@ typedef struct UploadSession {
     pthread_mutex_t *file_mutex;
     uint8_t *chunk_buf;
     size_t chunk_cap;
+    uint8_t *io_buf;
+    size_t io_cap;
+    uint64_t next_progress_log_at;
+    time_t last_progress_log_at;
 } UploadSession;
 
 static void send_error_msg(int sock, const char *msg) {
@@ -812,6 +970,17 @@ static int handle_start_upload(UploadSession *session, const uint8_t *data, uint
     session->upload_size = file_size;
     session->upload_received = chunk_offset;
     session->current_offset = chunk_offset;
+    {
+        const uint64_t step = 16ULL * 1024ULL * 1024ULL;
+        uint64_t base = (session->upload_received / step) + 1;
+        session->next_progress_log_at = base * step;
+    }
+    session->last_progress_log_at = time(NULL);
+    payload_log("[UPLOAD] start path=%s size=%llu offset=%llu",
+                session->upload_path,
+                (unsigned long long)session->upload_size,
+                (unsigned long long)session->current_offset);
+    update_upload_snapshot(session->upload_path, session->upload_received, session->upload_size);
 
     // Bulk upload sockets can benefit from a larger receive buffer, but keep it bounded.
     int upload_buf = UPLOAD_RCVBUF_SIZE;
@@ -821,7 +990,7 @@ static int handle_start_upload(UploadSession *session, const uint8_t *data, uint
     return 0;
 }
 
-static int handle_upload_chunk(UploadSession *session, const uint8_t *data, uint32_t data_len) {
+static int handle_upload_chunk_stream(UploadSession *session, int sock, uint32_t data_len) {
     if (!session || session->upload_fd < 0 || !session->file_mutex) {
         send_error_msg(session ? session->sock : -1, "No upload in progress");
         return -1;
@@ -830,6 +999,11 @@ static int handle_upload_chunk(UploadSession *session, const uint8_t *data, uint
         return 0;
     }
     if (session->upload_size > 0 && session->current_offset + data_len > session->upload_size) {
+        payload_log("[UPLOAD] chunk exceeds size path=%s off=%llu len=%u size=%llu",
+                    session->upload_path,
+                    (unsigned long long)session->current_offset,
+                    (unsigned int)data_len,
+                    (unsigned long long)session->upload_size);
         send_error_msg(session->sock, "Chunk exceeds declared size");
         close(session->upload_fd);
         session->upload_fd = -1;
@@ -837,20 +1011,117 @@ static int handle_upload_chunk(UploadSession *session, const uint8_t *data, uint
         session->file_mutex = NULL;
         return -1;
     }
-    ssize_t written = pwrite(session->upload_fd, data, data_len, (off_t)session->current_offset);
-    if (written != (ssize_t)data_len) {
-        send_error_msg(session->sock, "Write failed");
-        close(session->upload_fd);
-        session->upload_fd = -1;
-        release_file_mutex(session->upload_path);
-        session->file_mutex = NULL;
-        return -1;
+
+    if (!session->io_buf || session->io_cap < UPLOAD_RECV_CHUNK_SIZE) {
+        uint8_t *next = (uint8_t *)realloc(session->io_buf, UPLOAD_RECV_CHUNK_SIZE);
+        if (!next) {
+            payload_log("[UPLOAD] OOM io_buf path=%s cap=%zu",
+                        session->upload_path,
+                        (size_t)UPLOAD_RECV_CHUNK_SIZE);
+            send_error_msg(session->sock, "Out of memory");
+            close(session->upload_fd);
+            session->upload_fd = -1;
+            release_file_mutex(session->upload_path);
+            session->file_mutex = NULL;
+            return -1;
+        }
+        session->io_buf = next;
+        session->io_cap = UPLOAD_RECV_CHUNK_SIZE;
     }
-    session->current_offset += (uint64_t)written;
-    session->upload_received += (uint64_t)written;
-    // Prevent the idle watchdog from killing long-running binary uploads when the
-    // client isn't polling status (common in app mode). FreeBSD/PS5 payloads can be
-    // killed if they appear "idle" even while data is streaming.
+
+    uint32_t remaining = data_len;
+    uint64_t file_off = session->current_offset;
+
+    pthread_mutex_lock(session->file_mutex);
+    while (remaining > 0) {
+        size_t take = (remaining > (uint32_t)session->io_cap) ? session->io_cap : (size_t)remaining;
+        if (read_exact_bytes(sock, session->io_buf, take) != 0) {
+            payload_log("[UPLOAD] read_exact failed path=%s off=%llu take=%zu errno=%d (%s)",
+                        session->upload_path,
+                        (unsigned long long)file_off,
+                        take,
+                        errno,
+                        strerror(errno));
+            pthread_mutex_unlock(session->file_mutex);
+            send_error_msg(session->sock, "Connection lost");
+            close(session->upload_fd);
+            session->upload_fd = -1;
+            release_file_mutex(session->upload_path);
+            session->file_mutex = NULL;
+            return -1;
+        }
+
+        size_t written_total = 0;
+        while (written_total < take) {
+            ssize_t written = pwrite(
+                session->upload_fd,
+                session->io_buf + written_total,
+                take - written_total,
+                (off_t)(file_off + written_total)
+            );
+            if (written < 0) {
+                if (errno == EINTR) continue;
+                payload_log("[UPLOAD] pwrite failed path=%s off=%llu len=%zu errno=%d (%s)",
+                            session->upload_path,
+                            (unsigned long long)(file_off + written_total),
+                            (size_t)(take - written_total),
+                            errno,
+                            strerror(errno));
+                pthread_mutex_unlock(session->file_mutex);
+                send_error_msg(session->sock, "Write failed");
+                close(session->upload_fd);
+                session->upload_fd = -1;
+                release_file_mutex(session->upload_path);
+                session->file_mutex = NULL;
+                return -1;
+            }
+            if (written == 0) {
+                payload_log("[UPLOAD] pwrite returned 0 path=%s off=%llu len=%zu",
+                            session->upload_path,
+                            (unsigned long long)(file_off + written_total),
+                            (size_t)(take - written_total));
+                pthread_mutex_unlock(session->file_mutex);
+                send_error_msg(session->sock, "Write failed");
+                close(session->upload_fd);
+                session->upload_fd = -1;
+                release_file_mutex(session->upload_path);
+                session->file_mutex = NULL;
+                return -1;
+            }
+            written_total += (size_t)written;
+        }
+
+        file_off += take;
+        remaining -= (uint32_t)take;
+        payload_touch_activity();
+        usleep(100);
+    }
+    pthread_mutex_unlock(session->file_mutex);
+
+    session->current_offset += (uint64_t)data_len;
+    session->upload_received += (uint64_t)data_len;
+    update_upload_snapshot(session->upload_path, session->upload_received, session->upload_size);
+    time_t now = time(NULL);
+    int should_log_progress = 0;
+    if (session->next_progress_log_at > 0 &&
+        session->upload_received >= session->next_progress_log_at) {
+        should_log_progress = 1;
+    } else if (session->last_progress_log_at > 0 && (now - session->last_progress_log_at) >= 2) {
+        should_log_progress = 1;
+    }
+    if (should_log_progress) {
+        payload_log("[UPLOAD] progress path=%s received=%llu/%llu",
+                    session->upload_path,
+                    (unsigned long long)session->upload_received,
+                    (unsigned long long)session->upload_size);
+        if (session->next_progress_log_at > 0 &&
+            session->upload_received >= session->next_progress_log_at) {
+            while (session->upload_received >= session->next_progress_log_at) {
+                session->next_progress_log_at += 16ULL * 1024ULL * 1024ULL;
+            }
+        }
+        session->last_progress_log_at = now;
+    }
     payload_touch_activity();
     return 0;
 }
@@ -867,7 +1138,12 @@ static int handle_end_upload(UploadSession *session) {
         session->file_mutex = NULL;
     }
     chmod(session->upload_path, 0777);
+    payload_log("[UPLOAD] complete path=%s size=%llu",
+                session->upload_path,
+                (unsigned long long)session->upload_received);
+    update_upload_snapshot(NULL, 0, 0);
     send_ok_msg(session->sock, "Upload complete");
+    payload_touch_activity();
     return 0;
 }
 
@@ -877,59 +1153,134 @@ static int handle_binary_session(int sock) {
     session.sock = sock;
     session.upload_fd = -1;
 
-    struct timeval tv;
-    tv.tv_sec = 900;
-    tv.tv_usec = 0;
+    // Match proven behavior from PS5-Upload-Suite: no socket timeout for large uploads.
+    struct timeval tv = {0};
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof(tv));
+    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const char *)&tv, sizeof(tv));
 
-    while (1) {
+    int keepalive = 1;
+    setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, &keepalive, sizeof(keepalive));
+#ifdef TCP_KEEPIDLE
+    int keepidle = 10;
+    setsockopt(sock, IPPROTO_TCP, TCP_KEEPIDLE, &keepidle, sizeof(keepidle));
+#endif
+#ifdef TCP_KEEPINTVL
+    int keepintvl = 5;
+    setsockopt(sock, IPPROTO_TCP, TCP_KEEPINTVL, &keepintvl, sizeof(keepintvl));
+#endif
+#ifdef TCP_KEEPCNT
+    int keepcnt = 3;
+    setsockopt(sock, IPPROTO_TCP, TCP_KEEPCNT, &keepcnt, sizeof(keepcnt));
+#endif
+
+    atomic_fetch_add(&g_binary_sessions_active, 1);
+    int close_session = 0;
+    const char *end_reason = "client_closed";
+    int end_errno = 0;
+    int upload_completed = 0;
+    while (!close_session) {
         uint8_t header[5];
         if (read_exact_bytes(sock, header, sizeof(header)) != 0) {
+            int err = errno;
+            payload_log("[UPLOAD] session header read failed errno=%d (%s)", err, strerror(err));
+            end_reason = "header_read_failed";
+            end_errno = err;
+            if (err == EAGAIN || err == EWOULDBLOCK) {
+                send_error_msg(sock, "Receive timeout");
+            } else {
+                send_error_msg(sock, "Connection lost");
+            }
             break;
         }
         uint8_t cmd = header[0];
         uint32_t data_len = 0;
         memcpy(&data_len, header + 1, 4);
 
-        if (data_len > 64 * 1024 * 1024) {
-            send_error_msg(sock, "Chunk too large");
-            break;
-        }
-
-        if (data_len > session.chunk_cap) {
-            uint8_t *next = (uint8_t *)realloc(session.chunk_buf, data_len);
-            if (!next) {
-                send_error_msg(sock, "Out of memory");
-                break;
-            }
-            session.chunk_buf = next;
-            session.chunk_cap = data_len;
-        }
-
-        if (data_len > 0) {
-            if (read_exact_bytes(sock, session.chunk_buf, data_len) != 0) {
-                break;
-            }
-        }
-
         switch (cmd) {
             case CMD_START_UPLOAD:
+                if (data_len == 0 || data_len > BINARY_UPLOAD_CTRL_MAX) {
+                    if (data_len > 0 && discard_exact_bytes(sock, data_len) != 0) {
+                        close_session = 1;
+                    }
+                    send_error_msg(sock, "Invalid start upload request");
+                    break;
+                }
+                if (data_len > session.chunk_cap) {
+                    uint8_t *next = (uint8_t *)realloc(session.chunk_buf, data_len);
+                    if (!next) {
+                        if (discard_exact_bytes(sock, data_len) != 0) {
+                            close_session = 1;
+                        }
+                        send_error_msg(sock, "Out of memory");
+                        close_session = 1;
+                        break;
+                    }
+                    session.chunk_buf = next;
+                    session.chunk_cap = data_len;
+                }
+                if (read_exact_bytes(sock, session.chunk_buf, data_len) != 0) {
+                    int err = errno;
+                    end_reason = "start_upload_read_failed";
+                    end_errno = err;
+                    if (err == EAGAIN || err == EWOULDBLOCK) {
+                        send_error_msg(sock, "Receive timeout");
+                    } else {
+                        send_error_msg(sock, "Connection lost");
+                    }
+                    close_session = 1;
+                    break;
+                }
                 if (handle_start_upload(&session, session.chunk_buf, data_len) != 0) {
                     // Error already sent
                 }
                 break;
             case CMD_UPLOAD_CHUNK:
-                if (handle_upload_chunk(&session, session.chunk_buf, data_len) != 0) {
+                if (data_len > BINARY_UPLOAD_CHUNK_MAX) {
+                    payload_log("[UPLOAD] chunk too large len=%u max=%u",
+                                (unsigned int)data_len,
+                                (unsigned int)BINARY_UPLOAD_CHUNK_MAX);
+                    if (discard_exact_bytes(sock, data_len) != 0) {
+                        close_session = 1;
+                    }
+                    send_error_msg(sock, "Chunk too large");
+                    end_reason = "chunk_too_large";
+                    close_session = 1;
+                    break;
+                }
+                if (handle_upload_chunk_stream(&session, sock, data_len) != 0) {
                     // Error already sent
+                    end_reason = "chunk_stream_failed";
+                    end_errno = errno;
+                    close_session = 1;
                 }
                 break;
             case CMD_END_UPLOAD:
+                if (data_len != 0) {
+                    if (discard_exact_bytes(sock, data_len) != 0) {
+                        close_session = 1;
+                    }
+                    send_error_msg(sock, "Invalid end upload request");
+                    end_reason = "invalid_end_upload";
+                    close_session = 1;
+                    break;
+                }
                 if (handle_end_upload(&session) != 0) {
                     // Error already sent
+                    end_reason = "end_upload_failed";
+                    end_errno = errno;
+                } else {
+                    upload_completed = 1;
                 }
                 break;
             default:
+                if (data_len > 0) {
+                    if (discard_exact_bytes(sock, data_len) != 0) {
+                        close_session = 1;
+                    }
+                }
                 send_error_msg(sock, "Unknown command");
+                end_reason = "unknown_command";
+                close_session = 1;
                 break;
         }
     }
@@ -942,6 +1293,65 @@ static int handle_binary_session(int sock) {
     }
     if (session.chunk_buf) {
         free(session.chunk_buf);
+    }
+    if (session.io_buf) {
+        free(session.io_buf);
+    }
+
+    const char *err_str = strerror(end_errno);
+    if (upload_completed && strcmp(end_reason, "header_read_failed") == 0 &&
+        (end_errno == ECONNRESET || end_errno == 0)) {
+        end_reason = "upload_complete";
+    }
+    payload_log("[UPLOAD] session end reason=%s errno=%d (%s) path=%s received=%llu/%llu",
+                end_reason,
+                end_errno,
+                err_str,
+                session.upload_path[0] ? session.upload_path : "(none)",
+                (unsigned long long)session.upload_received,
+                (unsigned long long)session.upload_size);
+
+    atomic_fetch_sub(&g_binary_sessions_active, 1);
+    return 0;
+}
+
+static int run_binary_session_in_worker_process(int sock) {
+    if (sock < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        payload_log("[UPLOAD] failed to fork binary worker errno=%d (%s)", errno, strerror(errno));
+        return handle_binary_session(sock);
+    }
+
+    if (pid == 0) {
+        int rc = handle_binary_session(sock);
+        close(sock);
+        _exit(rc == 0 ? 0 : 1);
+    }
+
+    // Parent keeps only supervisor role for this connection.
+    close(sock);
+
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno == EINTR) continue;
+        payload_log("[UPLOAD] waitpid failed for worker=%d errno=%d (%s)",
+                    (int)pid, errno, strerror(errno));
+        return -1;
+    }
+
+    if (WIFSIGNALED(status)) {
+        payload_log("[UPLOAD] worker crashed pid=%d signal=%d", (int)pid, WTERMSIG(status));
+        return -1;
+    }
+    if (WIFEXITED(status) && WEXITSTATUS(status) != 0) {
+        payload_log("[UPLOAD] worker exited non-zero pid=%d code=%d",
+                    (int)pid, WEXITSTATUS(status));
+        return -1;
     }
     return 0;
 }
@@ -1015,7 +1425,7 @@ __attribute__((unused)) static int parse_first_token(const char *src, char *out,
     return 0;
 }
 
-static void *command_thread(void *arg) {
+static void *command_thread_impl(void *arg) {
     struct DispatchArgs *args = (struct DispatchArgs *)arg;
     if (!args) {
         return NULL;
@@ -1039,8 +1449,7 @@ static void *command_thread(void *arg) {
         return NULL;
     }
     if (peek == CMD_START_UPLOAD || peek == CMD_UPLOAD_CHUNK || peek == CMD_END_UPLOAD) {
-        handle_binary_session(req.sock);
-        close(req.sock);
+        run_binary_session_in_worker_process(req.sock);
         return NULL;
     }
 
@@ -1052,7 +1461,9 @@ static void *command_thread(void *arg) {
     g_last_activity = time(NULL);
 
     if (is_comm_command(req.buffer)) {
-        payload_log("[COMM] %s", req.buffer);
+        if (!is_noisy_comm_command(req.buffer)) {
+            payload_log("[COMM] %s", req.buffer);
+        }
         enqueue_comm_request(&req);
         g_last_activity = time(NULL);
         return NULL;
@@ -1077,6 +1488,16 @@ static void *command_thread(void *arg) {
     return NULL;
 }
 
+static void *command_thread(void *arg) {
+    atomic_fetch_add(&g_command_threads_active, 1);
+    void *ret = command_thread_impl(arg);
+    int prev = atomic_fetch_sub(&g_command_threads_active, 1);
+    if (prev <= 0) {
+        atomic_store(&g_command_threads_active, 0);
+    }
+    return ret;
+}
+
 static void set_socket_buffers(int sock) {
     // Large socket buffers for high throughput on GigE networks
     int rcv_buf = SOCKET_RCVBUF_SIZE;
@@ -1085,9 +1506,14 @@ static void set_socket_buffers(int sock) {
     setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &snd_buf, sizeof(snd_buf));
 
     struct timeval snd_to;
-    snd_to.tv_sec = 60;  // Increased timeout for large transfers
+    snd_to.tv_sec = RECV_TIMEOUT_SEC;  // Keep in sync with transfer recv timeout for long-running ops.
     snd_to.tv_usec = 0;
     setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &snd_to, sizeof(snd_to));
+
+    struct timeval rcv_to;
+    rcv_to.tv_sec = RECV_TIMEOUT_SEC;
+    rcv_to.tv_usec = 0;
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &rcv_to, sizeof(rcv_to));
 
     // Enable TCP_NODELAY for lower latency on small packets
     int nodelay = 1;
@@ -1120,6 +1546,101 @@ static void set_socket_buffers(int sock) {
     setsockopt(sock, SOL_SOCKET, SO_NOSIGPIPE, &no_sigpipe, sizeof(no_sigpipe));
 #endif
 }
+
+#if defined(PS5UPLOAD_DEBUGGER_BUILD)
+#define DEBUGGER_LOG_STREAM_PORT (SERVER_PORT + 1)
+#define DEBUGGER_LOG_MAX_CLIENTS 4
+
+static pthread_mutex_t g_debugger_log_clients_mutex = PTHREAD_MUTEX_INITIALIZER;
+static int g_debugger_log_clients[DEBUGGER_LOG_MAX_CLIENTS] = { -1, -1, -1, -1 };
+
+static void debugger_log_client_remove_locked(int idx) {
+    if (idx < 0 || idx >= DEBUGGER_LOG_MAX_CLIENTS) {
+        return;
+    }
+    if (g_debugger_log_clients[idx] >= 0) {
+        close(g_debugger_log_clients[idx]);
+        g_debugger_log_clients[idx] = -1;
+    }
+}
+
+static void debugger_log_stream_broadcast(const char *line) {
+    if (!line || line[0] == '\0') {
+        return;
+    }
+    char out[576];
+    int len = snprintf(out, sizeof(out), "%s\n", line);
+    if (len <= 0) {
+        return;
+    }
+    size_t total = (size_t)len;
+    pthread_mutex_lock(&g_debugger_log_clients_mutex);
+    for (int i = 0; i < DEBUGGER_LOG_MAX_CLIENTS; i++) {
+        int client = g_debugger_log_clients[i];
+        if (client < 0) {
+            continue;
+        }
+        ssize_t sent = send(client, out, total, 0);
+        if (sent < 0 || (size_t)sent != total) {
+            debugger_log_client_remove_locked(i);
+        }
+    }
+    pthread_mutex_unlock(&g_debugger_log_clients_mutex);
+}
+
+static void *debugger_log_stream_thread(void *arg) {
+    (void)arg;
+    int stream_sock = create_server_socket(DEBUGGER_LOG_STREAM_PORT);
+    if (stream_sock < 0) {
+        payload_log("[DEBUGGER] Failed to open log stream port %d", DEBUGGER_LOG_STREAM_PORT);
+        return NULL;
+    }
+    payload_log("[DEBUGGER] Log stream listening on port %d", DEBUGGER_LOG_STREAM_PORT);
+
+    while (1) {
+        struct sockaddr_in client_addr = {0};
+        socklen_t addr_len = sizeof(client_addr);
+        int client = accept(stream_sock, (struct sockaddr *)&client_addr, &addr_len);
+        if (client < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            payload_log("[DEBUGGER] Log stream accept error: %s", strerror(errno));
+            usleep(200000);
+            continue;
+        }
+
+#ifdef SO_NOSIGPIPE
+        int no_sigpipe = 1;
+        setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &no_sigpipe, sizeof(no_sigpipe));
+#endif
+        struct timeval send_to = {0};
+        send_to.tv_sec = 0;
+        send_to.tv_usec = 200000;
+        setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &send_to, sizeof(send_to));
+
+        int slot = -1;
+        pthread_mutex_lock(&g_debugger_log_clients_mutex);
+        for (int i = 0; i < DEBUGGER_LOG_MAX_CLIENTS; i++) {
+            if (g_debugger_log_clients[i] < 0) {
+                slot = i;
+                g_debugger_log_clients[i] = client;
+                break;
+            }
+        }
+        pthread_mutex_unlock(&g_debugger_log_clients_mutex);
+
+        char ipstr[INET_ADDRSTRLEN] = {0};
+        inet_ntop(AF_INET, &client_addr.sin_addr, ipstr, sizeof(ipstr));
+        if (slot < 0) {
+            payload_log("[DEBUGGER] Log stream full, rejecting %s:%d", ipstr, ntohs(client_addr.sin_port));
+            close(client);
+            continue;
+        }
+        payload_log("[DEBUGGER] Log stream client connected %s:%d", ipstr, ntohs(client_addr.sin_port));
+    }
+}
+#endif
 
 static int read_command_line(int sock, char *out, size_t cap, size_t *out_len) {
     if (!out || cap == 0) return -1;
@@ -1160,6 +1681,18 @@ static int is_comm_command(const char *cmd) {
     if (strncmp(cmd, "HISTORY_", 8) == 0) return 1;
     if (strncmp(cmd, "CLEAR_TMP", 9) == 0) return 1;
     if (strncmp(cmd, "QUEUE_CLEAR_FAILED", 18) == 0) return 1;
+    return 0;
+}
+
+static int is_noisy_comm_command(const char *cmd) {
+    if (!cmd) return 0;
+    if (strncmp(cmd, "PAYLOAD_STATUS", 14) == 0) return 1;
+    if (strncmp(cmd, "STATUS", 6) == 0) return 1;
+    if (strncmp(cmd, "SYNC_INFO", 9) == 0) return 1;
+    if (strncmp(cmd, "UPLOAD_QUEUE_SYNC ", 18) == 0) return 1;
+    if (strncmp(cmd, "UPLOAD_QUEUE_GET", 16) == 0) return 1;
+    if (strncmp(cmd, "HISTORY_SYNC ", 13) == 0) return 1;
+    if (strncmp(cmd, "HISTORY_GET", 11) == 0) return 1;
     return 0;
 }
 
@@ -1218,48 +1751,24 @@ static void *comm_thread(void *arg) {
         g_comm_queue.head = (g_comm_queue.head + 1) % (int)(sizeof(g_comm_queue.items) / sizeof(g_comm_queue.items[0]));
         g_comm_queue.count--;
         pthread_mutex_unlock(&g_comm_queue.mutex);
-        struct CommandRequest *heap_req = malloc(sizeof(*heap_req));
-        if (!heap_req) {
-            struct ClientConnection conn;
-            memset(&conn, 0, sizeof(conn));
-            conn.sock = req.sock;
-            conn.addr = req.addr;
-            conn.mode = CONN_CMD;
-            conn.cmd_len = req.len;
-            if (conn.cmd_len >= sizeof(conn.cmd_buffer)) {
-                conn.cmd_len = sizeof(conn.cmd_buffer) - 1;
-            }
-            memcpy(conn.cmd_buffer, req.buffer, conn.cmd_len);
-            conn.cmd_buffer[conn.cmd_len] = '\0';
-
-            process_command(&conn);
-            close_connection(&conn);
-            continue;
+        struct ClientConnection conn;
+        memset(&conn, 0, sizeof(conn));
+        conn.sock = req.sock;
+        conn.addr = req.addr;
+        conn.mode = CONN_CMD;
+        conn.cmd_len = req.len;
+        if (conn.cmd_len >= sizeof(conn.cmd_buffer)) {
+            conn.cmd_len = sizeof(conn.cmd_buffer) - 1;
         }
-        *heap_req = req;
-        if (pthread_create_detached_with_stack(comm_worker_thread, heap_req) == 0) {
-            // detached
-        } else {
-            free(heap_req);
-            struct ClientConnection conn;
-            memset(&conn, 0, sizeof(conn));
-            conn.sock = req.sock;
-            conn.addr = req.addr;
-            conn.mode = CONN_CMD;
-            conn.cmd_len = req.len;
-            if (conn.cmd_len >= sizeof(conn.cmd_buffer)) {
-                conn.cmd_len = sizeof(conn.cmd_buffer) - 1;
-            }
-            memcpy(conn.cmd_buffer, req.buffer, conn.cmd_len);
-            conn.cmd_buffer[conn.cmd_len] = '\0';
-            process_command(&conn);
-            close_connection(&conn);
-        }
+        memcpy(conn.cmd_buffer, req.buffer, conn.cmd_len);
+        conn.cmd_buffer[conn.cmd_len] = '\0';
+        process_command(&conn);
+        close_connection(&conn);
     }
     return NULL;
 }
 
-static void *comm_worker_thread(void *arg) {
+__attribute__((unused)) static void *comm_worker_thread(void *arg) {
     struct CommandRequest *req = (struct CommandRequest *)arg;
     if (!req) return NULL;
     struct ClientConnection conn;
@@ -1292,6 +1801,20 @@ static void process_command(struct ClientConnection *conn) {
             send(conn->sock, error, strlen(error), 0);
             close_connection(conn);
         } else {
+            int force = (strncmp(conn->cmd_buffer, "SHUTDOWN_FORCE", 14) == 0);
+            if (!force &&
+                (transfer_is_active() ||
+                 extract_queue_is_running() ||
+                 atomic_load(&g_binary_sessions_active) > 0)) {
+                const char *busy = "BUSY\n";
+                send(conn->sock, busy, strlen(busy), 0);
+                close_connection(conn);
+                payload_log("[SHUTDOWN] Rejected while busy (transfer=%d extract=%d bin_sessions=%d)",
+                            transfer_is_active(),
+                            extract_queue_is_running(),
+                            atomic_load(&g_binary_sessions_active));
+                return;
+            }
             const char *ok = "OK\n";
             send(conn->sock, ok, strlen(ok), 0);
             close_connection(conn);
@@ -1584,34 +2107,51 @@ int main(void) {
         printf("[INIT] Warning: sys_budget_set failed (may be unsupported)\n");
     }
 
-    // Lock memory pages to prevent swapping (improves stability during heavy I/O)
+    // Optional: lock current/future pages (disabled by default for system stability).
+#if ENABLE_MLOCKALL
 #ifdef MCL_CURRENT
     if (mlockall(MCL_CURRENT | MCL_FUTURE) < 0) {
         printf("[INIT] Warning: mlockall failed (non-critical)\n");
     }
 #endif
+#endif
 
-    // Set high priority scheduling for better responsiveness
+    // Optional: real-time scheduling (disabled by default to avoid system/UI starvation).
+#if ENABLE_RT_SCHED
     struct sched_param sp;
     sp.sched_priority = sched_get_priority_max(SCHED_RR);
     if (sp.sched_priority > 0) {
         if (sched_setscheduler(0, SCHED_RR, &sp) < 0) {
-            // Real-time scheduling unavailable - continue with default priority
             printf("[INIT] Warning: sched_setscheduler failed (non-critical)\n");
         }
     }
+#endif
 
     printf("[INIT] Startup profile applied.\n");
     
     mkdir("/data/ps5upload", 0777);
     mkdir("/data/ps5upload/logs", 0777);
     mkdir("/data/ps5upload/requests", 0777);
+    if (access(g_heartbeat_file, F_OK) == 0) {
+        int fd_prev = open(g_heartbeat_file, O_RDONLY);
+        if (fd_prev >= 0) {
+            char prev[512];
+            ssize_t n = read(fd_prev, prev, sizeof(prev) - 1);
+            close(fd_prev);
+            if (n > 0) {
+                prev[n] = '\0';
+                payload_log("[FORENSICS] Previous heartbeat before restart: %s", prev);
+            }
+        }
+    }
+    mark_run_state("start", "main");
     unlink(g_kill_file);
     payload_log_rotate();
     write_pid_file();
     g_last_activity = time(NULL);
     payload_log("[INIT] Payload start v%s", PS5_UPLOAD_VERSION);
     payload_log("[INIT] pid=%d port=%d", (int)pid, SERVER_PORT);
+    payload_log("[INIT] idle_timeout_sec=%d (0=disabled)", g_idle_timeout_sec);
 
     if (pthread_create_detached_with_stack(kill_watch_thread, NULL) == 0) {
         // detached
@@ -1622,6 +2162,11 @@ int main(void) {
         // detached
     } else {
         payload_log("[INIT] Failed to create idle watch thread");
+    }
+    if (pthread_create_detached_with_stack(heartbeat_thread, NULL) == 0) {
+        // detached
+    } else {
+        payload_log("[INIT] Failed to create heartbeat thread");
     }
     
     // Temp cleanup handled per-upload based on destination root.
@@ -1653,13 +2198,23 @@ int main(void) {
     if (ip_buf[0] != '\0') {
         printf("Server listening on %s:%d\n", ip_buf, SERVER_PORT);
         char notify_msg[128];
+#if defined(PS5UPLOAD_DEBUGGER_BUILD)
+        snprintf(notify_msg, sizeof(notify_msg), "Debug v%s Ready on %s:%d", PS5_UPLOAD_VERSION, ip_buf, SERVER_PORT);
+        notify_info("PS5 Upload Server Debug (PhantomPtr)", notify_msg);
+#else
         snprintf(notify_msg, sizeof(notify_msg), "v%s Ready on %s:%d", PS5_UPLOAD_VERSION, ip_buf, SERVER_PORT);
         notify_info("PS5 Upload Server (PhantomPtr)", notify_msg);
+#endif
     } else {
         printf("Server listening on port %d\n", SERVER_PORT);
         char notify_msg[128];
+#if defined(PS5UPLOAD_DEBUGGER_BUILD)
+        snprintf(notify_msg, sizeof(notify_msg), "Debug v%s Ready on port %s", PS5_UPLOAD_VERSION, SERVER_PORT_STR);
+        notify_info("PS5 Upload Server Debug (PhantomPtr)", notify_msg);
+#else
         snprintf(notify_msg, sizeof(notify_msg), "v%s Ready on port %s", PS5_UPLOAD_VERSION, SERVER_PORT_STR);
         notify_info("PS5 Upload Server (PhantomPtr)", notify_msg);
+#endif
     }
 
     if (pthread_create_detached_with_stack(comm_thread, NULL) == 0) {
@@ -1667,6 +2222,14 @@ int main(void) {
     } else {
         printf("[INIT] Failed to create communication thread\n");
     }
+
+#if defined(PS5UPLOAD_DEBUGGER_BUILD)
+    if (pthread_create_detached_with_stack(debugger_log_stream_thread, NULL) == 0) {
+        // detached
+    } else {
+        payload_log("[INIT] Failed to create debugger log stream thread");
+    }
+#endif
 
     while (1) {
         struct sockaddr_in client_addr = {0};
@@ -1688,7 +2251,17 @@ int main(void) {
         }
         char ipstr[INET_ADDRSTRLEN] = {0};
         inet_ntop(AF_INET, &client_addr.sin_addr, ipstr, sizeof(ipstr));
+#if !defined(PS5UPLOAD_DEBUGGER_BUILD)
         payload_log("[CONN] accept %s:%d", ipstr, ntohs(client_addr.sin_port));
+#endif
+
+        if (atomic_load(&g_command_threads_active) >= MAX_COMMAND_DISPATCH_THREADS) {
+            payload_log("[CONN] busy: dispatch thread cap reached (%d)", MAX_COMMAND_DISPATCH_THREADS);
+            const char *busy = "ERROR: Server busy\n";
+            send(client, busy, strlen(busy), 0);
+            close(client);
+            continue;
+        }
 
         struct DispatchArgs *args = malloc(sizeof(*args));
         if (!args) {

@@ -58,6 +58,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   connectionConnect: (ip) => ipcRenderer.invoke('connection_connect', ip),
 
   // Payload
+  payloadExternalReleases: (owner, repo) => ipcRenderer.invoke('payload_external_releases', owner, repo),
   payloadSend: (ip, filepath) => ipcRenderer.invoke('payload_send', ip, filepath),
   payloadDownloadAndSend: (ip, fetch) => ipcRenderer.invoke('payload_download_and_send', ip, fetch),
   payloadCheck: (ip) => ipcRenderer.invoke('payload_check', ip),
@@ -143,6 +144,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       'scan_progress',
       'scan_complete',
       'scan_error',
+      'payload_download_progress',
       'payload_done',
       'payload_busy',
       'payload_version',
@@ -175,6 +177,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       'scan_progress',
       'scan_complete',
       'scan_error',
+      'payload_download_progress',
       'payload_done',
       'payload_busy',
       'payload_version',

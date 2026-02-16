@@ -22,6 +22,10 @@
 #include <ctype.h>
 #include <strings.h>
 #include <pthread.h>
+#include <stdatomic.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <signal.h>
 
 #include <ps5/kernel.h>
 
@@ -42,8 +46,10 @@ void payload_set_crash_context(const char *op, const char *path, const char *pat
 
 #define DOWNLOAD_PACK_BUFFER_SIZE (4 * 1024 * 1024)
 #define PROBE_RAR_MAX_LINE 128
+#define DOWNLOAD_RAW_MAX_ACTIVE 4
 
 static pthread_mutex_t g_payload_file_mutex = PTHREAD_MUTEX_INITIALIZER;
+static atomic_int g_download_raw_active = 0;
 #define UPLOAD_QUEUE_FILE "/data/ps5upload/upload_queue.json"
 #define HISTORY_FILE "/data/ps5upload/history.json"
 
@@ -53,6 +59,23 @@ static time_t get_file_mtime(const char *path);
 static int write_text_file(const char *path, const char *data, size_t len);
 static char *read_text_file(const char *path, size_t *out_len);
 static int parse_quoted_token(const char *src, char *out, size_t out_cap, const char **rest);
+
+static int begin_download_raw_session(void) {
+    int cur = atomic_load(&g_download_raw_active);
+    while (cur < DOWNLOAD_RAW_MAX_ACTIVE) {
+        if (atomic_compare_exchange_weak(&g_download_raw_active, &cur, cur + 1)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void end_download_raw_session(void) {
+    int prev = atomic_fetch_sub(&g_download_raw_active, 1);
+    if (prev <= 0) {
+        atomic_store(&g_download_raw_active, 0);
+    }
+}
 
 static int pthread_create_detached_with_stack(void *(*fn)(void *), void *arg) {
     pthread_t tid;
@@ -532,6 +555,13 @@ struct CopyNode {
     char dst[PATH_MAX];
 };
 
+typedef struct {
+    int ok;
+    int is_move;
+    unsigned long long total_size;
+    char err[256];
+} FsWorkerResult;
+
 static int copy_recursive(const char *src, const char *dst, char *err, size_t err_len,
                           struct CopyProgressCtx *ctx) {
     size_t cap = 64;
@@ -640,6 +670,114 @@ static int copy_recursive(const char *src, const char *dst, char *err, size_t er
     return 0;
 }
 
+static int run_copy_move_in_worker_process(const char *src,
+                                           const char *dst,
+                                           int is_move,
+                                           unsigned long long *out_total_size,
+                                           char *out_err,
+                                           size_t out_err_len) {
+    int fds[2];
+    if (pipe(fds) != 0) {
+        if (out_err && out_err_len > 0) {
+            snprintf(out_err, out_err_len, "pipe failed: %s", strerror(errno));
+        }
+        return -1;
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(fds[0]);
+        close(fds[1]);
+        if (out_err && out_err_len > 0) {
+            snprintf(out_err, out_err_len, "fork failed: %s", strerror(errno));
+        }
+        return -1;
+    }
+
+    if (pid == 0) {
+        close(fds[0]);
+        FsWorkerResult result;
+        memset(&result, 0, sizeof(result));
+        result.ok = 0;
+        result.is_move = is_move ? 1 : 0;
+        result.total_size = 0;
+        result.err[0] = '\0';
+
+        struct CopyProgressCtx progress;
+        memset(&progress, 0, sizeof(progress));
+        progress.sock = -1; // no socket/log interaction in child process
+        progress.prefix = is_move ? "MOVE_PROGRESS" : "COPY_PROGRESS";
+        progress.last_send = time(NULL);
+        progress.notify_interval_sec = 10;
+        progress.last_notify = 0;
+
+        if (scan_size_recursive(src, &result.total_size, &progress, result.err, sizeof(result.err)) != 0) {
+            (void)write(fds[1], &result, sizeof(result));
+            close(fds[1]);
+            _exit(21);
+        }
+        progress.total = result.total_size;
+
+        if (copy_recursive(src, dst, result.err, sizeof(result.err), &progress) != 0) {
+            (void)write(fds[1], &result, sizeof(result));
+            close(fds[1]);
+            _exit(22);
+        }
+
+        if (is_move) {
+            if (remove_recursive(src, result.err, sizeof(result.err)) != 0) {
+                (void)write(fds[1], &result, sizeof(result));
+                close(fds[1]);
+                _exit(23);
+            }
+        }
+
+        result.ok = 1;
+        (void)write(fds[1], &result, sizeof(result));
+        close(fds[1]);
+        _exit(0);
+    }
+
+    close(fds[1]);
+    int status = 0;
+    if (waitpid(pid, &status, 0) < 0) {
+        close(fds[0]);
+        if (out_err && out_err_len > 0) {
+            snprintf(out_err, out_err_len, "waitpid failed: %s", strerror(errno));
+        }
+        return -1;
+    }
+
+    FsWorkerResult result;
+    memset(&result, 0, sizeof(result));
+    ssize_t got = read(fds[0], &result, sizeof(result));
+    close(fds[0]);
+
+    if (got != (ssize_t)sizeof(result)) {
+        if (out_err && out_err_len > 0) {
+            if (WIFSIGNALED(status)) {
+                snprintf(out_err, out_err_len, "worker crashed by signal %d", WTERMSIG(status));
+            } else if (WIFEXITED(status)) {
+                snprintf(out_err, out_err_len, "worker exited %d without result", WEXITSTATUS(status));
+            } else {
+                snprintf(out_err, out_err_len, "worker exited without result");
+            }
+        }
+        return -1;
+    }
+
+    if (out_total_size) {
+        *out_total_size = result.total_size;
+    }
+    if (result.ok) {
+        return 0;
+    }
+    if (out_err && out_err_len > 0) {
+        snprintf(out_err, out_err_len, "%s", result.err[0] ? result.err : "worker operation failed");
+    }
+    return -1;
+}
+
 static int chmod_recursive(const char *path, mode_t mode, char *err, size_t err_len) {
     struct stat st;
     if (lstat(path, &st) != 0) {
@@ -716,6 +854,17 @@ static int send_all(int sock, const void *buf, size_t len) {
         return -1;
     }
     return 0;
+}
+
+static void send_error_and_close(int *sock, const char *msg) {
+    if (!sock || *sock < 0) {
+        return;
+    }
+    if (msg && *msg) {
+        (void)send_all(*sock, msg, strlen(msg));
+    }
+    close(*sock);
+    *sock = -1;
 }
 
 static int recv_exact(int sock, void *buf, size_t len) {
@@ -1084,6 +1233,11 @@ static int send_file_records(int sock, struct DownloadPack *pack, const char *re
 
 
 static int download_raw_stream(int sock, const char *path, uint64_t start_offset, int include_offset_in_ready) {
+    if (sock < 0 || !path || path[0] == '\0') {
+        send_error_and_close(&sock, "ERROR: Invalid path\n");
+        return -1;
+    }
+
     payload_set_crash_context("DOWNLOAD_RAW_STREAM", path, NULL);
     payload_log("[DOWNLOAD_RAW] Stream start for %s", path);
 
@@ -1097,34 +1251,28 @@ static int download_raw_stream(int sock, const char *path, uint64_t start_offset
     if (fd < 0) {
         char error_msg[320];
         snprintf(error_msg, sizeof(error_msg), "ERROR: open failed: %s\n", strerror(errno));
-        send(sock, error_msg, strlen(error_msg), 0);
-        close(sock);
+        send_error_and_close(&sock, error_msg);
         return -1;
     }
 
     struct stat st;
     if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
-        const char *error = "ERROR: Not a file\n";
-        send(sock, error, strlen(error), 0);
+        send_error_and_close(&sock, "ERROR: Not a file\n");
         close(fd);
-        close(sock);
         return -1;
     }
 
     if (start_offset > (uint64_t)st.st_size) {
-        const char *error = "ERROR: Invalid offset\n";
-        send(sock, error, strlen(error), 0);
+        send_error_and_close(&sock, "ERROR: Invalid offset\n");
         close(fd);
-        close(sock);
         return -1;
     }
     if (start_offset > 0) {
         if (lseek(fd, (off_t)start_offset, SEEK_SET) < 0) {
             char error_msg[320];
             snprintf(error_msg, sizeof(error_msg), "ERROR: seek failed: %s\n", strerror(errno));
-            send(sock, error_msg, strlen(error_msg), 0);
+            send_error_and_close(&sock, error_msg);
             close(fd);
-            close(sock);
             return -1;
         }
     }
@@ -1175,6 +1323,10 @@ static int download_raw_stream(int sock, const char *path, uint64_t start_offset
 }
 
 void handle_download_raw(int client_sock, const char *path_arg) {
+    if (!path_arg) {
+        send_error_and_close(&client_sock, "ERROR: Invalid path\n");
+        return;
+    }
     char path[PATH_MAX];
     strncpy(path, path_arg, PATH_MAX-1);
     path[PATH_MAX-1] = '\0';
@@ -1184,59 +1336,57 @@ void handle_download_raw(int client_sock, const char *path_arg) {
     payload_touch_activity();
 
     if (!is_path_safe(path)) {
-        const char *error = "ERROR: Invalid path\n";
-        send(client_sock, error, strlen(error), 0);
-        close(client_sock);
+        send_error_and_close(&client_sock, "ERROR: Invalid path\n");
         return;
     }
 
     // Quick stat check before spawning thread
     struct stat st;
     if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) {
-        const char *error = "ERROR: Not a file\n";
-        send(client_sock, error, strlen(error), 0);
-        close(client_sock);
+        send_error_and_close(&client_sock, "ERROR: Not a file\n");
+        return;
+    }
+
+    if (!begin_download_raw_session()) {
+        send_error_and_close(&client_sock, "ERROR: Busy (too many DOWNLOAD_RAW sessions)\n");
         return;
     }
 
     // Stream directly on this connection for stability
-    download_raw_stream(client_sock, path, 0, 0);
+    (void)download_raw_stream(client_sock, path, 0, 0);
+    end_download_raw_session();
 }
 
 void handle_download_raw_from(int client_sock, const char *args) {
+    if (client_sock < 0) {
+        return;
+    }
     if (!args) {
-        const char *error = "ERROR: Invalid DOWNLOAD_RAW_FROM format\n";
-        send(client_sock, error, strlen(error), 0);
-        close(client_sock);
+        send_error_and_close(&client_sock, "ERROR: Invalid DOWNLOAD_RAW_FROM format\n");
         return;
     }
 
     // Format: DOWNLOAD_RAW_FROM <offset>\t<path>
     const char *tab = strchr(args, '\t');
     if (!tab) {
-        const char *error = "ERROR: Invalid DOWNLOAD_RAW_FROM format\n";
-        send(client_sock, error, strlen(error), 0);
-        close(client_sock);
+        send_error_and_close(&client_sock, "ERROR: Invalid DOWNLOAD_RAW_FROM format\n");
         return;
     }
 
     char offset_buf[32];
     size_t offset_len = (size_t)(tab - args);
     if (offset_len == 0 || offset_len >= sizeof(offset_buf)) {
-        const char *error = "ERROR: Invalid offset\n";
-        send(client_sock, error, strlen(error), 0);
-        close(client_sock);
+        send_error_and_close(&client_sock, "ERROR: Invalid offset\n");
         return;
     }
     memcpy(offset_buf, args, offset_len);
     offset_buf[offset_len] = '\0';
 
     char *endptr = NULL;
+    errno = 0;
     unsigned long long parsed = strtoull(offset_buf, &endptr, 10);
-    if (endptr == offset_buf || (endptr && *endptr != '\0')) {
-        const char *error = "ERROR: Invalid offset\n";
-        send(client_sock, error, strlen(error), 0);
-        close(client_sock);
+    if (errno == ERANGE || endptr == offset_buf || (endptr && *endptr != '\0')) {
+        send_error_and_close(&client_sock, "ERROR: Invalid offset\n");
         return;
     }
     uint64_t start_offset = (uint64_t)parsed;
@@ -1251,47 +1401,50 @@ void handle_download_raw_from(int client_sock, const char *args) {
     payload_touch_activity();
 
     if (!is_path_safe(path)) {
-        const char *error = "ERROR: Invalid path\n";
-        send(client_sock, error, strlen(error), 0);
-        close(client_sock);
+        send_error_and_close(&client_sock, "ERROR: Invalid path\n");
         return;
     }
 
     struct stat st;
     if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) {
-        const char *error = "ERROR: Not a file\n";
-        send(client_sock, error, strlen(error), 0);
-        close(client_sock);
+        send_error_and_close(&client_sock, "ERROR: Not a file\n");
         return;
     }
 
-    download_raw_stream(client_sock, path, start_offset, 1);
+    if (!begin_download_raw_session()) {
+        send_error_and_close(&client_sock, "ERROR: Busy (too many DOWNLOAD_RAW sessions)\n");
+        return;
+    }
+
+    (void)download_raw_stream(client_sock, path, start_offset, 1);
+    end_download_raw_session();
 }
 
 void handle_download_raw_range(int client_sock, const char *args) {
-    if (!args) {
-        const char *error = "ERROR: Invalid DOWNLOAD_RAW_RANGE format\n";
-        send(client_sock, error, strlen(error), 0);
-        close(client_sock);
+    int fd = -1;
+    uint8_t *buffer = NULL;
+    int started_session = 0;
+
+    if (client_sock < 0) {
         return;
+    }
+    if (!args) {
+        send_error_and_close(&client_sock, "ERROR: Invalid DOWNLOAD_RAW_RANGE format\n");
+        goto cleanup;
     }
 
     // Format: DOWNLOAD_RAW_RANGE <offset> <length>\t<path>
     const char *tab = strchr(args, '\t');
     if (!tab) {
-        const char *error = "ERROR: Invalid DOWNLOAD_RAW_RANGE format\n";
-        send(client_sock, error, strlen(error), 0);
-        close(client_sock);
-        return;
+        send_error_and_close(&client_sock, "ERROR: Invalid DOWNLOAD_RAW_RANGE format\n");
+        goto cleanup;
     }
 
     char meta[96];
     size_t meta_len = (size_t)(tab - args);
     if (meta_len == 0 || meta_len >= sizeof(meta)) {
-        const char *error = "ERROR: Invalid range\n";
-        send(client_sock, error, strlen(error), 0);
-        close(client_sock);
-        return;
+        send_error_and_close(&client_sock, "ERROR: Invalid range\n");
+        goto cleanup;
     }
     memcpy(meta, args, meta_len);
     meta[meta_len] = '\0';
@@ -1299,19 +1452,15 @@ void handle_download_raw_range(int client_sock, const char *args) {
     unsigned long long offset_ull = 0;
     unsigned long long length_ull = 0;
     if (sscanf(meta, "%llu %llu", &offset_ull, &length_ull) != 2) {
-        const char *error = "ERROR: Invalid range\n";
-        send(client_sock, error, strlen(error), 0);
-        close(client_sock);
-        return;
+        send_error_and_close(&client_sock, "ERROR: Invalid range\n");
+        goto cleanup;
     }
 
     uint64_t start_offset = (uint64_t)offset_ull;
     uint64_t req_len = (uint64_t)length_ull;
     if (req_len == 0) {
-        const char *error = "ERROR: Invalid length\n";
-        send(client_sock, error, strlen(error), 0);
-        close(client_sock);
-        return;
+        send_error_and_close(&client_sock, "ERROR: Invalid length\n");
+        goto cleanup;
     }
 
     char path[PATH_MAX];
@@ -1326,45 +1475,40 @@ void handle_download_raw_range(int client_sock, const char *args) {
     payload_touch_activity();
 
     if (!is_path_safe(path)) {
-        const char *error = "ERROR: Invalid path\n";
-        send(client_sock, error, strlen(error), 0);
-        close(client_sock);
-        return;
+        send_error_and_close(&client_sock, "ERROR: Invalid path\n");
+        goto cleanup;
     }
 
-    int fd = open(path, O_RDONLY);
+    if (!begin_download_raw_session()) {
+        send_error_and_close(&client_sock, "ERROR: Busy (too many DOWNLOAD_RAW sessions)\n");
+        goto cleanup;
+    }
+    started_session = 1;
+
+    fd = open(path, O_RDONLY);
     if (fd < 0) {
         char error_msg[320];
         snprintf(error_msg, sizeof(error_msg), "ERROR: open failed: %s\n", strerror(errno));
-        send(client_sock, error_msg, strlen(error_msg), 0);
-        close(client_sock);
-        return;
+        send_error_and_close(&client_sock, error_msg);
+        goto cleanup;
     }
 
     struct stat st;
     if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
-        const char *error = "ERROR: Not a file\n";
-        send(client_sock, error, strlen(error), 0);
-        close(fd);
-        close(client_sock);
-        return;
+        send_error_and_close(&client_sock, "ERROR: Not a file\n");
+        goto cleanup;
     }
 
     uint64_t total_size = (uint64_t)st.st_size;
     if (start_offset > total_size) {
-        const char *error = "ERROR: Invalid offset\n";
-        send(client_sock, error, strlen(error), 0);
-        close(fd);
-        close(client_sock);
-        return;
+        send_error_and_close(&client_sock, "ERROR: Invalid offset\n");
+        goto cleanup;
     }
     if (lseek(fd, (off_t)start_offset, SEEK_SET) < 0) {
         char error_msg[320];
         snprintf(error_msg, sizeof(error_msg), "ERROR: seek failed: %s\n", strerror(errno));
-        send(client_sock, error_msg, strlen(error_msg), 0);
-        close(fd);
-        close(client_sock);
-        return;
+        send_error_and_close(&client_sock, error_msg);
+        goto cleanup;
     }
 
     uint64_t remain = total_size - start_offset;
@@ -1376,20 +1520,15 @@ void handle_download_raw_range(int client_sock, const char *args) {
         (unsigned long long)start_offset,
         (unsigned long long)send_len);
     if (send_all(client_sock, ready, strlen(ready)) != 0) {
-        close(fd);
-        close(client_sock);
-        return;
+        goto cleanup;
     }
     payload_touch_activity();
 
     const size_t bufsize = 256 * 1024;
-    uint8_t *buffer = (uint8_t *)malloc(bufsize);
+    buffer = (uint8_t *)malloc(bufsize);
     if (!buffer) {
-        const char *error = "ERROR: OOM\n";
-        send(client_sock, error, strlen(error), 0);
-        close(fd);
-        close(client_sock);
-        return;
+        send_error_and_close(&client_sock, "ERROR: OOM\n");
+        goto cleanup;
     }
 
     uint64_t sent = 0;
@@ -1397,24 +1536,30 @@ void handle_download_raw_range(int client_sock, const char *args) {
         size_t to_read = (size_t)((send_len - sent) > (uint64_t)bufsize ? bufsize : (send_len - sent));
         ssize_t n = read(fd, buffer, to_read);
         if (n <= 0) {
-            free(buffer);
-            close(fd);
-            close(client_sock);
-            return;
+            goto cleanup;
         }
         if (send_all(client_sock, buffer, (size_t)n) != 0) {
-            free(buffer);
-            close(fd);
-            close(client_sock);
-            return;
+            goto cleanup;
         }
         sent += (uint64_t)n;
         payload_touch_activity();
     }
 
-    free(buffer);
-    close(fd);
-    close(client_sock);
+cleanup:
+    if (buffer) {
+        free(buffer);
+        buffer = NULL;
+    }
+    if (fd >= 0) {
+        close(fd);
+        fd = -1;
+    }
+    if (client_sock >= 0) {
+        close(client_sock);
+    }
+    if (started_session) {
+        end_download_raw_session();
+    }
 }
 
 
@@ -1717,44 +1862,16 @@ void handle_move_path(int client_sock, const char *args) {
     if (errno == EXDEV) {
         payload_set_crash_context("MOVE_CROSS_DEVICE", src, dst);
         payload_log("[MOVE] Cross-device move detected, copying then removing: %s -> %s", src, dst);
-        struct CopyProgressCtx progress;
-        memset(&progress, 0, sizeof(progress));
-        progress.sock = client_sock;
-        progress.prefix = "MOVE_PROGRESS";
-        progress.last_send = time(NULL);
-        progress.notify_interval_sec = 10;
-        progress.last_notify = 0;
-        copy_progress_send(&progress, 1);
-
         unsigned long long total_size = 0;
         char err[256] = {0};
-        if (scan_size_recursive(src, &total_size, &progress, err, sizeof(err)) != 0) {
+        if (run_copy_move_in_worker_process(src, dst, 1, &total_size, err, sizeof(err)) != 0) {
             char error_msg[320];
             snprintf(error_msg, sizeof(error_msg), "ERROR: %s\n", err);
             send(client_sock, error_msg, strlen(error_msg), 0);
-            payload_log("[MOVE] Scan failed: %s (%s)", src, err);
+            payload_log("[MOVE] Worker move failed: %s -> %s (%s)", src, dst, err);
             return;
         }
-        progress.total = total_size;
-        payload_log("[MOVE] Scan complete: %s bytes=%llu", src, total_size);
-        copy_progress_send(&progress, 1);
-        if (copy_recursive(src, dst, err, sizeof(err), &progress) != 0) {
-            char error_msg[320];
-            snprintf(error_msg, sizeof(error_msg), "ERROR: %s\n", err);
-            send(client_sock, error_msg, strlen(error_msg), 0);
-            payload_log("[MOVE] Copy failed: %s -> %s (%s)", src, dst, err);
-            return;
-        }
-        copy_progress_send(&progress, 1);
-        payload_log("[MOVE] Copy complete: %s -> %s", src, dst);
-        if (remove_recursive(src, err, sizeof(err)) != 0) {
-            char error_msg[320];
-            snprintf(error_msg, sizeof(error_msg), "ERROR: %s\n", err);
-            send(client_sock, error_msg, strlen(error_msg), 0);
-            payload_log("[MOVE] Remove failed: %s (%s)", src, err);
-            return;
-        }
-        payload_log("[MOVE] Remove complete: %s", src);
+        payload_log("[MOVE] Worker move complete: %s -> %s bytes=%llu", src, dst, total_size);
         const char *success = "OK\n";
         if (send(client_sock, success, strlen(success), 0) < 0) {
             payload_log("[MOVE] Send OK failed: %s", strerror(errno));
@@ -1800,35 +1917,16 @@ void handle_copy_path(int client_sock, const char *args) {
 
     payload_set_crash_context("COPY_REQUEST", src, dst);
     payload_log("[COPY] Request: %s -> %s", src, dst);
-    struct CopyProgressCtx progress;
-    memset(&progress, 0, sizeof(progress));
-    progress.sock = client_sock;
-    progress.prefix = "COPY_PROGRESS";
-    progress.last_send = time(NULL);
-    progress.notify_interval_sec = 5;
-    progress.last_notify = 0;
-    copy_progress_send(&progress, 1);
-
     unsigned long long total_size = 0;
     char err[256] = {0};
-    if (scan_size_recursive(src, &total_size, &progress, err, sizeof(err)) != 0) {
+    if (run_copy_move_in_worker_process(src, dst, 0, &total_size, err, sizeof(err)) != 0) {
         char error_msg[320];
         snprintf(error_msg, sizeof(error_msg), "ERROR: %s\n", err);
         send(client_sock, error_msg, strlen(error_msg), 0);
-        payload_log("[COPY] Scan failed: %s (%s)", src, err);
+        payload_log("[COPY] Worker copy failed: %s -> %s (%s)", src, dst, err);
         return;
     }
-    progress.total = total_size;
-    payload_log("[COPY] Scan complete: %s bytes=%llu", src, total_size);
-    copy_progress_send(&progress, 1);
-    if (copy_recursive(src, dst, err, sizeof(err), &progress) != 0) {
-        char error_msg[320];
-        snprintf(error_msg, sizeof(error_msg), "ERROR: %s\n", err);
-        send(client_sock, error_msg, strlen(error_msg), 0);
-        payload_log("[COPY] Copy failed: %s -> %s (%s)", src, dst, err);
-        return;
-    }
-    copy_progress_send(&progress, 1);
+    payload_log("[COPY] Worker copy complete: %s -> %s bytes=%llu", src, dst, total_size);
 
     const char *success = "OK\n";
     if (send(client_sock, success, strlen(success), 0) < 0) {

@@ -71,6 +71,8 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
         return api.connectionSnapshot();
       case 'connection_connect':
         return api.connectionConnect(args.ip);
+      case 'payload_external_releases':
+        return api.payloadExternalReleases(args.owner, args.repo);
       case 'payload_send':
         return api.payloadSend(args.ip, args.path);
       case 'payload_download_and_send':

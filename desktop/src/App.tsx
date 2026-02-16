@@ -1,4 +1,4 @@
-import { startTransition, useEffect, useMemo, useRef, useState } from "react";
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { open, save } from "./electron-api/dialog";
 import { listen } from "./electron-api/event";
 import { invoke } from "./electron-api/core";
@@ -33,7 +33,7 @@ const normalizeResumeMode = (value?: string | null): ResumeOption => {
   return "none";
 };
 
-type TabId = "transfer" | "status" | "queues" | "manage" | "games" | "faq";
+type TabId = "transfer" | "status" | "queues" | "manage" | "games" | "payloads" | "faq";
 type UploadMode = "payload" | "ftp" | "mix";
 type FtpPortOption = "auto" | "1337" | "2121";
 
@@ -222,6 +222,32 @@ type ReleaseInfo = {
   prerelease: boolean;
 };
 
+type ExternalPayloadAsset = {
+  name: string;
+  browser_download_url: string;
+  size: number;
+};
+
+type ExternalPayloadRelease = {
+  tag_name: string;
+  html_url: string;
+  prerelease: boolean;
+  published_at?: string | null;
+  assets: ExternalPayloadAsset[];
+};
+
+type ExternalPayloadRepoConfig = {
+  id: string;
+  owner: string;
+  repo: string;
+  name: string;
+  icon_url: string;
+  summary: string;
+  repo_url: string;
+  asset_pattern?: string;
+  built_in?: boolean;
+};
+
 type PlatformInfo = {
   platform: string;
   arch: string;
@@ -261,8 +287,8 @@ type AppConfig = {
 
 type ThemeMode = "dark" | "light";
 
-const presetOptions = ["etaHEN/games", "homebrew", "custom"] as const;
-const defaultGamesScanPaths = ["etaHEN/games", "homebrew"] as const;
+const presetOptions = ["etaHEN/games", "etaHEN/homebrew", "games", "homebrew", "custom"] as const;
+const defaultGamesScanPaths = ["etaHEN/games", "etaHEN/homebrew", "games", "homebrew"] as const;
 
 type CompressionOption = "auto" | "none" | "lz4" | "zstd" | "lzma";
 
@@ -720,8 +746,46 @@ const joinRemote = (...parts: string[]) =>
     })
     .join("/");
 
-const normalizeGamesScanPath = (value: string) =>
-  value.trim().replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, "");
+const dirnameRemote = (value: string) => {
+  const parts = String(value || "").split("/").filter(Boolean);
+  parts.pop();
+  return `/${parts.join("/")}` || "/";
+};
+
+const basenameRemote = (value: string) =>
+  String(value || "").split("/").filter(Boolean).pop() || "";
+
+const deriveStorageSuffix = (fullPath: string, storageRoot: string) => {
+  const p = String(fullPath || "").trim();
+  const root = String(storageRoot || "").trim();
+  if (!p) return "/";
+  if (root && p === root) return "/";
+  if (root && p.startsWith(`${root}/`)) {
+    const suffix = p.slice(root.length);
+    return suffix.startsWith("/") ? suffix : `/${suffix}`;
+  }
+  const parts = p.split("/").filter(Boolean);
+  if (parts.length <= 1) return "/";
+  return `/${parts.slice(1).join("/")}`;
+};
+
+const normalizeRemoteSuffix = (value: string) => {
+  const raw = String(value || "").trim().replace(/\\/g, "/").replace(/\/+$/, "");
+  if (!raw) return "/";
+  if (raw === "/") return "/";
+  return raw.startsWith("/") ? raw : `/${raw}`;
+};
+
+const normalizeGamesScanPath = (value: string) => {
+  const raw = value.trim().replace(/\\/g, "/");
+  if (!raw) return "";
+  const trimmed = raw.replace(/\/+$/, "");
+  if (!trimmed) return "";
+  if (trimmed.startsWith("/")) {
+    return `/${trimmed.replace(/^\/+/, "")}`;
+  }
+  return trimmed.replace(/^\/+/, "");
+};
 
 const FolderIcon = () => (
   <svg className="manage-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -826,6 +890,107 @@ const selectClientAsset = (
     (asset) =>
       asset.name.includes(`-${platformKey}-`) && asset.name.endsWith(ext)
   ) || null;
+};
+
+const DEFAULT_EXTERNAL_PAYLOAD_REPOS: ExternalPayloadRepoConfig[] = [
+  {
+    id: "etahen",
+    owner: "etaHEN",
+    repo: "etaHEN",
+    name: "etaHEN",
+    icon_url: "https://github.com/etaHEN.png",
+    summary:
+      "etaHEN is an open-source PS5 Homebrew ENabler payload with plugin, settings, toolbox, cheats, web menu, and FTP features.",
+    repo_url: "https://github.com/etaHEN/etaHEN",
+    built_in: true
+  },
+  {
+    id: "kstuff",
+    owner: "EchoStretch",
+    repo: "kstuff",
+    name: "kstuff",
+    icon_url: "https://github.com/EchoStretch.png",
+    summary:
+      "kstuff provides kernel-side support payload components used in the etaHEN ecosystem across supported firmware releases.",
+    repo_url: "https://github.com/EchoStretch/kstuff",
+    built_in: true
+  },
+  {
+    id: "ftpsrv",
+    owner: "ps5-payload-dev",
+    repo: "ftpsrv",
+    name: "ftpsrv",
+    icon_url: "https://github.com/ps5-payload-dev.png",
+    summary:
+      "ftpsrv is a PS5 FTP server payload that enables direct file access and transfers over the network.",
+    repo_url: "https://github.com/ps5-payload-dev/ftpsrv",
+    asset_pattern: "ftpsrv-ps5.elf",
+    built_in: true
+  },
+  {
+    id: "websrv",
+    owner: "ps5-payload-dev",
+    repo: "websrv",
+    name: "websrv",
+    icon_url: "https://github.com/ps5-payload-dev.png",
+    summary:
+      "websrv is a lightweight PS5 web server payload for serving files and web content directly from the console.",
+    repo_url: "https://github.com/ps5-payload-dev/websrv",
+    asset_pattern: "websrv-ps5.elf",
+    built_in: true
+  }
+];
+
+const matchGlob = (input: string, pattern: string) => {
+  if (!pattern) return false;
+  const safe = pattern.trim();
+  if (!safe) return false;
+  if (safe === "*") return true;
+  const escaped = safe.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+  const regexSource = `^${escaped.replace(/\\\*/g, ".*").replace(/\\\?/g, ".")}$`;
+  try {
+    const re = new RegExp(regexSource, "i");
+    return re.test(input);
+  } catch {
+    return false;
+  }
+};
+
+const selectExternalPayloadAsset = (
+  release: ExternalPayloadRelease | null,
+  repo?: ExternalPayloadRepoConfig | null
+): ExternalPayloadAsset | null => {
+  if (!release) return null;
+  const assets = Array.isArray(release.assets) ? release.assets : [];
+  const pattern = repo?.asset_pattern ? String(repo.asset_pattern).trim() : "";
+  if (pattern) {
+    const matched = assets.filter((asset) => asset?.name && matchGlob(asset.name, pattern));
+    if (matched.length > 0) return matched[0] || null;
+  }
+
+  const byNameScore = (name: string) => {
+    const lower = name.toLowerCase();
+    let score = 0;
+    if (lower.endsWith(".bin")) score += 5;
+    if (lower.endsWith(".elf")) score += 4;
+    if (lower.includes("payload")) score += 2;
+    if (repo?.name && lower.includes(repo.name.toLowerCase())) score += 1;
+    if (lower.includes("plugin")) score -= 3;
+    if (lower.includes("source")) score -= 4;
+    return score;
+  };
+  const candidates = assets
+    .filter((asset) => asset?.name && /\.(bin|elf)$/i.test(asset.name))
+    .slice()
+    .sort((a, b) => byNameScore(b.name) - byNameScore(a.name));
+  return candidates[0] || null;
+};
+
+const formatReleasePublishedAt = (value?: string | null) => {
+  if (!value) return "Unknown";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Unknown";
+  return date.toLocaleDateString();
 };
 
 const formatDuration = (seconds: number) => {
@@ -986,6 +1151,7 @@ export default function App() {
   const [payloadStatus, setPayloadStatus] = useState("Unknown");
   const [payloadStatusKind, setPayloadStatusKind] = useState<StatusKind>("info");
   const [payloadVersion, setPayloadVersion] = useState<string | null>(null);
+  const [payloadPortOpen, setPayloadPortOpen] = useState<boolean | null>(null);
   const [payloadCaps, setPayloadCaps] = useState<PayloadCapabilities | null>(null);
   const [payloadCapsError, setPayloadCapsError] = useState<string | null>(null);
   const [payloadBusy, setPayloadBusy] = useState(false);
@@ -1189,6 +1355,88 @@ export default function App() {
   const [gameDeleteTarget, setGameDeleteTarget] = useState<{ path: string; title: string } | null>(
     null
   );
+  const [gameMoveTarget, setGameMoveTarget] = useState<GameScanViewItem | null>(null);
+  const [gameMoveDestRoot, setGameMoveDestRoot] = useState("");
+  const [gameMoveOverridePath, setGameMoveOverridePath] = useState(false);
+  const [gameMoveSuffix, setGameMoveSuffix] = useState("");
+  const [externalPayloadRepos, setExternalPayloadRepos] = useState<ExternalPayloadRepoConfig[]>(
+    () => {
+      if (typeof window === "undefined") return DEFAULT_EXTERNAL_PAYLOAD_REPOS;
+      try {
+        const raw = localStorage.getItem("ps5upload.external_payload_repos");
+        if (!raw) return DEFAULT_EXTERNAL_PAYLOAD_REPOS;
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) return DEFAULT_EXTERNAL_PAYLOAD_REPOS;
+        const normalized = parsed
+          .map((item) => {
+            const owner = String(item?.owner || "").trim();
+            const repo = String(item?.repo || "").trim();
+            const name = String(item?.name || `${owner}/${repo}`).trim();
+            const id = String(item?.id || `${owner}/${repo}`).trim() || `${owner}/${repo}`;
+            const summary = String(item?.summary || "").trim();
+            const icon_url = String(item?.icon_url || `https://github.com/${owner}.png`).trim();
+            const repo_url = String(item?.repo_url || `https://github.com/${owner}/${repo}`).trim();
+            const asset_pattern = String(item?.asset_pattern || "").trim();
+            const built_in = Boolean(item?.built_in);
+            if (!owner || !repo) return null;
+            return {
+              id,
+              owner,
+              repo,
+              name,
+              icon_url,
+              summary,
+              repo_url,
+              asset_pattern: asset_pattern || undefined,
+              built_in
+            } satisfies ExternalPayloadRepoConfig;
+          })
+          .filter(Boolean) as ExternalPayloadRepoConfig[];
+        return normalized.length > 0 ? normalized : DEFAULT_EXTERNAL_PAYLOAD_REPOS;
+      } catch {
+        return DEFAULT_EXTERNAL_PAYLOAD_REPOS;
+      }
+    }
+  );
+  const [externalPayloadRepoInput, setExternalPayloadRepoInput] = useState("");
+  const [externalPayloadRepoNameInput, setExternalPayloadRepoNameInput] = useState("");
+  const [externalPayloadRepoPatternInput, setExternalPayloadRepoPatternInput] = useState("*.elf");
+  const [externalPayloadRepoSummaryInput, setExternalPayloadRepoSummaryInput] = useState("");
+  const [externalPayloadRepoError, setExternalPayloadRepoError] = useState<string | null>(null);
+  const [externalPayloadReleases, setExternalPayloadReleases] = useState<
+    Record<string, ExternalPayloadRelease[]>
+  >({});
+  const [externalPayloadErrors, setExternalPayloadErrors] = useState<Record<string, string>>({});
+  const [externalPayloadLoading, setExternalPayloadLoading] = useState<Record<string, boolean>>(
+    {}
+  );
+  const [externalPayloadSelectedTag, setExternalPayloadSelectedTag] = useState<
+    Record<string, string>
+  >({});
+  const [externalPayloadSendingRepoId, setExternalPayloadSendingRepoId] = useState<string | null>(
+    null
+  );
+  const externalPayloadSendingRef = useRef(false);
+  const [externalPayloadSendResult, setExternalPayloadSendResult] = useState<
+    Record<string, { ok: boolean; message: string }>
+  >({});
+  const [externalPayloadDownloadProgress, setExternalPayloadDownloadProgress] = useState<
+    Record<
+      string,
+      {
+        received_bytes: number;
+        total_bytes: number | null;
+        speed_bps: number;
+        done: boolean;
+        error: string | null;
+        label: string | null;
+      }
+    >
+  >({});
+  const [internetAvailable, setInternetAvailable] = useState<boolean>(() => {
+    if (typeof navigator === "undefined") return true;
+    return navigator.onLine;
+  });
   const [faqContent, setFaqContent] = useState("");
   const [faqLoading, setFaqLoading] = useState(true);
   const [faqError, setFaqError] = useState<string | null>(null);
@@ -1220,22 +1468,32 @@ export default function App() {
     () => payloadCapsFeatureEntries.filter(([, supported]) => supported === true).length,
     [payloadCapsFeatureEntries]
   );
-  const tabs = useMemo(
-    () => [
-      { id: "transfer" as TabId, label: tr("transfer"), icon: "↑" },
-      { id: "queues" as TabId, label: tr("queues"), icon: "▣" },
-      { id: "status" as TabId, label: tr("status"), icon: "◎" },
-      { id: "manage" as TabId, label: tr("manage"), icon: "≡" },
-      { id: "games" as TabId, label: "Games", icon: "▦" },
-      { id: "faq" as TabId, label: tr("faq"), icon: "?" }
-    ],
-    [language]
-  );
+	  const tabs = useMemo(
+	    () => [
+	      { id: "transfer" as TabId, label: tr("transfer"), icon: "↑" },
+	      { id: "queues" as TabId, label: tr("queues"), icon: "▣" },
+	      { id: "status" as TabId, label: tr("status"), icon: "◎" },
+	      { id: "manage" as TabId, label: tr("manage"), icon: "≡" },
+	      { id: "games" as TabId, label: tr("games"), icon: "▦" },
+	      { id: "payloads" as TabId, label: tr("payloads_tab"), icon: "⬇" },
+	      { id: "faq" as TabId, label: tr("faq"), icon: "?" }
+	    ],
+	    [language]
+	  );
   const gamesDeletingPathRef = useRef<string | null>(null);
 
   useEffect(() => {
     gamesDeletingPathRef.current = gamesDeletingPath;
   }, [gamesDeletingPath]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      localStorage.setItem("ps5upload.external_payload_repos", JSON.stringify(externalPayloadRepos));
+    } catch {
+      // ignore
+    }
+  }, [externalPayloadRepos]);
 
   useEffect(() => {
     document.documentElement.dir = isRtl ? "rtl" : "ltr";
@@ -1253,6 +1511,165 @@ export default function App() {
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
   }, [langMenuOpen]);
+
+  const refreshExternalPayloadReleases = useCallback(async () => {
+    if (!internetAvailable) return;
+    await Promise.all(
+      externalPayloadRepos.map(async (repo) => {
+        setExternalPayloadLoading((prev) => ({ ...prev, [repo.id]: true }));
+        try {
+          const releases = await invoke<ExternalPayloadRelease[]>(
+            "payload_external_releases",
+            {
+              owner: repo.owner,
+              repo: repo.repo
+            }
+          );
+          setExternalPayloadReleases((prev) => ({ ...prev, [repo.id]: releases || [] }));
+          setExternalPayloadErrors((prev) => {
+            const next = { ...prev };
+            delete next[repo.id];
+            return next;
+          });
+          if (Array.isArray(releases) && releases.length > 0) {
+            setExternalPayloadSelectedTag((prev) => ({
+              ...prev,
+              [repo.id]: prev[repo.id] || releases[0].tag_name
+            }));
+          }
+        } catch (err) {
+          setExternalPayloadErrors((prev) => ({
+            ...prev,
+            [repo.id]: String(err)
+          }));
+        } finally {
+          setExternalPayloadLoading((prev) => ({ ...prev, [repo.id]: false }));
+        }
+      })
+    );
+  }, [internetAvailable, externalPayloadRepos]);
+
+  useEffect(() => {
+    const handleOnline = () => setInternetAvailable(true);
+    const handleOffline = () => setInternetAvailable(false);
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, []);
+
+  useEffect(() => {
+    refreshExternalPayloadReleases();
+  }, [refreshExternalPayloadReleases]);
+
+  const externalPayloadSelectedReleaseByRepo = useMemo(() => {
+    const selected: Record<string, ExternalPayloadRelease | null> = {};
+    for (const repo of externalPayloadRepos) {
+      const releases = externalPayloadReleases[repo.id] || [];
+      const selectedTag = externalPayloadSelectedTag[repo.id];
+      selected[repo.id] =
+        releases.find((release) => release.tag_name === selectedTag) || releases[0] || null;
+    }
+    return selected;
+  }, [externalPayloadReleases, externalPayloadSelectedTag, externalPayloadRepos]);
+
+  const parseOwnerRepo = (value: string) => {
+    const raw = String(value || "").trim();
+    const normalized = raw.replace(/\\/g, "/");
+    const parts = normalized.split("/").filter(Boolean);
+    if (parts.length !== 2) return null;
+    const owner = parts[0].trim();
+    const repo = parts[1].trim();
+    if (!owner || !repo) return null;
+    return { owner, repo };
+  };
+
+  const handleAddExternalPayloadRepo = () => {
+    const parsed = parseOwnerRepo(externalPayloadRepoInput);
+    if (!parsed) {
+      setExternalPayloadRepoError("Enter a repo as owner/repo (example: ps5-payload-dev/ftpsrv).");
+      return;
+    }
+    const owner = parsed.owner;
+    const repo = parsed.repo;
+    const name = (externalPayloadRepoNameInput || `${owner}/${repo}`).trim();
+    const assetPattern = String(externalPayloadRepoPatternInput || "").trim();
+    const summary = String(externalPayloadRepoSummaryInput || "").trim();
+
+    const id = `${owner}/${repo}`.toLowerCase();
+    const icon_url = `https://github.com/${owner}.png`;
+    const repo_url = `https://github.com/${owner}/${repo}`;
+
+    setExternalPayloadRepos((prev) => {
+      const existingIndex = prev.findIndex((item) => String(item.id).toLowerCase() === id);
+      const nextItem: ExternalPayloadRepoConfig = {
+        id,
+        owner,
+        repo,
+        name,
+        icon_url,
+        summary,
+        repo_url,
+        asset_pattern: assetPattern || undefined,
+        built_in: false
+      };
+      if (existingIndex >= 0) {
+        const next = prev.slice();
+        next[existingIndex] = { ...prev[existingIndex], ...nextItem, built_in: prev[existingIndex].built_in };
+        return next;
+      }
+      return [...prev, nextItem];
+    });
+
+    setExternalPayloadRepoError(null);
+    setExternalPayloadRepoInput("");
+    setExternalPayloadRepoNameInput("");
+    setExternalPayloadRepoSummaryInput("");
+  };
+
+  const handleResetExternalPayloadRepos = () => {
+    setExternalPayloadRepos(DEFAULT_EXTERNAL_PAYLOAD_REPOS);
+    setExternalPayloadReleases({});
+    setExternalPayloadErrors({});
+    setExternalPayloadLoading({});
+    setExternalPayloadSelectedTag({});
+    setExternalPayloadSendResult({});
+    setExternalPayloadSendingRepoId(null);
+    externalPayloadSendingRef.current = false;
+    setExternalPayloadRepoError(null);
+  };
+
+  const handleRemoveExternalPayloadRepo = (repoId: string) => {
+    setExternalPayloadRepos((prev) => prev.filter((repo) => repo.id !== repoId));
+    setExternalPayloadReleases((prev) => {
+      const next = { ...prev };
+      delete next[repoId];
+      return next;
+    });
+    setExternalPayloadErrors((prev) => {
+      const next = { ...prev };
+      delete next[repoId];
+      return next;
+    });
+    setExternalPayloadLoading((prev) => {
+      const next = { ...prev };
+      delete next[repoId];
+      return next;
+    });
+    setExternalPayloadSelectedTag((prev) => {
+      const next = { ...prev };
+      delete next[repoId];
+      return next;
+    });
+    setExternalPayloadSendResult((prev) => {
+      const next = { ...prev };
+      delete next[repoId];
+      return next;
+    });
+  };
+
   const [transferState, setTransferState] = useState<TransferState>({
     status: "Idle",
     sent: 0,
@@ -2500,9 +2917,11 @@ export default function App() {
             .map((value) => normalizeGamesScanPath(String(value)))
             .filter((value, index, array) => value.length > 0 && array.indexOf(value) === index);
           setGamesScanCustomPaths(
-            normalized.filter(
-              (value) => !defaultGamesScanPaths.includes(value as (typeof defaultGamesScanPaths)[number])
-            )
+            normalized
+              .filter((value) => value.startsWith("/"))
+              .filter(
+                (value) => !defaultGamesScanPaths.includes(value as (typeof defaultGamesScanPaths)[number])
+              )
           );
         }
       } catch {
@@ -2774,6 +3193,10 @@ export default function App() {
     invoke("connection_set_ip", { ip }).catch(() => {
       // ignore connection ip sync failures
     });
+  }, [ip]);
+
+  useEffect(() => {
+    setPayloadPortOpen(null);
   }, [ip]);
 
   useEffect(() => {
@@ -3252,6 +3675,35 @@ export default function App() {
         }
       );
 
+      const unlistenPayloadDownload = await listen<{
+        label?: string | null;
+        source_id?: string | null;
+        received_bytes?: number;
+        total_bytes?: number | null;
+        speed_bps?: number;
+        elapsed_ms?: number;
+        done?: boolean;
+        error?: string | null;
+      }>("payload_download_progress", (event) => {
+        if (!mounted) return;
+        if (transferActive) return;
+        const payload = event.payload || {};
+        const sourceId = payload.source_id ? String(payload.source_id).trim() : "";
+        if (!sourceId) return;
+        setExternalPayloadDownloadProgress((prev) => ({
+          ...prev,
+          [sourceId]: {
+            received_bytes: Number(payload.received_bytes) || 0,
+            total_bytes:
+              payload.total_bytes == null ? null : Number(payload.total_bytes) || null,
+            speed_bps: Number(payload.speed_bps) || 0,
+            done: Boolean(payload.done),
+            error: payload.error ? String(payload.error) : null,
+            label: payload.label ? String(payload.label) : null
+          }
+        }));
+      });
+
       const unlistenPayloadDone = await listen<{
         bytes?: number | null;
         error?: string | null;
@@ -3633,6 +4085,7 @@ export default function App() {
         unlistenError();
         unlistenLog();
         unlistenPayloadLog();
+        unlistenPayloadDownload();
         unlistenPayloadDone();
         unlistenPayloadVersion();
         unlistenPayloadBusy();
@@ -3687,6 +4140,48 @@ export default function App() {
   }
   const transferTotal = transferUiProgressRef.current.total;
   const transferSent = transferUiProgressRef.current.sent;
+  const [transferUiSpeedBps, setTransferUiSpeedBps] = useState(0);
+  const transferSpeedWindowRef = useRef<{
+    runId: number | null;
+    samples: Array<{ t: number; sent: number }>;
+    speed: number;
+    lastEmitAt: number;
+  }>({ runId: null, samples: [], speed: 0, lastEmitAt: 0 });
+  useEffect(() => {
+    const runId = transferUiRunId;
+    const ref = transferSpeedWindowRef.current;
+    if (!transferActive || !runId) {
+      transferSpeedWindowRef.current = { runId: null, samples: [], speed: 0, lastEmitAt: 0 };
+      setTransferUiSpeedBps(0);
+      return;
+    }
+    if (ref.runId !== runId) {
+      transferSpeedWindowRef.current = { runId, samples: [], speed: 0, lastEmitAt: 0 };
+    }
+    const r = transferSpeedWindowRef.current;
+    const now = Date.now();
+    const lastSample = r.samples.length ? r.samples[r.samples.length - 1] : null;
+    if (!lastSample || now - lastSample.t >= 500) {
+      r.samples.push({ t: now, sent: transferSent });
+    }
+    while (r.samples.length >= 2 && now - r.samples[0].t > 5000) {
+      r.samples.shift();
+    }
+    if (r.samples.length >= 2) {
+      const oldest = r.samples[0];
+      const newest = r.samples[r.samples.length - 1];
+      const dt = (newest.t - oldest.t) / 1000;
+      const ds = newest.sent - oldest.sent;
+      const realtime = dt > 0 && ds > 0 ? ds / dt : 0;
+      r.speed = r.speed > 0 ? r.speed * 0.7 + realtime * 0.3 : realtime;
+    } else {
+      r.speed = 0;
+    }
+    if (now - r.lastEmitAt >= 250) {
+      r.lastEmitAt = now;
+      setTransferUiSpeedBps(r.speed);
+    }
+  }, [transferActive, transferSent, transferUiRunId]);
   const transferPayloadSent = toNumber(transferState.payloadSent || 0);
   const transferFtpSent = toNumber(transferState.ftpSent || 0);
   const transferPercent =
@@ -3704,6 +4199,9 @@ export default function App() {
     transferTotalSpeedRaw > 0
       ? transferTotalSpeedRaw
       : transferPayloadSpeedRaw + transferFtpSpeedRaw;
+  const transferAvgSpeedBps = transferElapsedDisplay > 0 ? transferSent / transferElapsedDisplay : 0;
+  const transferEtaSpeedBps =
+    transferUiSpeedBps > 0 ? transferUiSpeedBps * 0.6 + transferAvgSpeedBps * 0.4 : transferTotalSpeedDisplay;
   const transferSpeedDisplay = transferTotalSpeedDisplay;
   const transferPayloadSpeedDisplay = transferPayloadSpeedRaw;
   const transferFtpSpeedDisplay = transferFtpSpeedRaw;
@@ -3801,8 +4299,8 @@ export default function App() {
     pushClientLog(`Bottleneck: ${label}`, "debug");
   }, [transferBottleneck, transferActive]);
   const transferEtaSeconds =
-    transferTotal > transferSent && transferTotalSpeedDisplay > 0
-      ? Math.ceil((transferTotal - transferSent) / transferTotalSpeedDisplay)
+    transferTotal > transferSent && transferEtaSpeedBps > 0
+      ? Math.ceil((transferTotal - transferSent) / transferEtaSpeedBps)
       : null;
   const transferPercentLabel =
     transferTotal > 0 ? `${Math.floor(transferPercent)}%` : "Streaming";
@@ -4518,11 +5016,8 @@ export default function App() {
       } else {
         await invoke("payload_download_and_send", { ip, fetch: mode });
       }
-      setPayloadStatusDisplay(tr("payload_waiting"), "info");
-      pushPayloadLog("Payload sent. Waiting for status...", "info");
-      setTimeout(() => {
-        handlePayloadCheck();
-      }, 3000);
+      setPayloadStatusDisplay("Payload sent.", "ok");
+      pushPayloadLog("Payload sent.", "info");
     } catch (err) {
       setPayloadStatusDisplay(tr("error_prefix", { error: String(err) }), "error");
       pushPayloadLog(`Payload send error: ${String(err)}`, "error");
@@ -4544,8 +5039,121 @@ export default function App() {
     }
   };
 
+  const handlePayloadPortCheck = async () => {
+    if (!ip.trim()) {
+      setPayloadStatusDisplay(tr("missing_ip"), "warn");
+      setPayloadPortOpen(null);
+      return;
+    }
+    try {
+      const open = await invoke<boolean>("port_check", { ip, port: 9021 });
+      setPayloadPortOpen(open);
+      if (open) {
+        setPayloadStatusDisplay("Payload port 9021 is open. Ready to send.", "ok");
+      } else {
+        setPayloadStatusDisplay(tr("payload_port_closed", { port: 9021 }), "error");
+      }
+    } catch (err) {
+      setPayloadPortOpen(null);
+      setPayloadStatusDisplay(tr("error_prefix", { error: String(err) }), "error");
+    }
+  };
+
   const handlePayloadDownload = async (kind: "current" | "latest") => {
     await runPayloadReload(kind, true);
+  };
+
+  const handleExternalPayloadSend = async (repoId: ExternalPayloadRepoConfig["id"]) => {
+    if (externalPayloadSendingRef.current || externalPayloadSendingRepoId || payloadBusy) return;
+    if (!internetAvailable) {
+      setExternalPayloadSendResult((prev) => ({
+        ...prev,
+        [repoId]: { ok: false, message: tr("payloads_internet_required_to_send") }
+      }));
+      return;
+    }
+    if (!ip.trim()) {
+      setExternalPayloadSendResult((prev) => ({
+        ...prev,
+        [repoId]: { ok: false, message: "Enter a PS5 address first." }
+      }));
+      return;
+    }
+
+    const repoConfig = externalPayloadRepos.find((repo) => repo.id === repoId) || null;
+    const release = externalPayloadSelectedReleaseByRepo[repoId];
+    const asset = selectExternalPayloadAsset(release || null, repoConfig);
+    if (!release || !asset) {
+      setExternalPayloadSendResult((prev) => ({
+        ...prev,
+        [repoId]: { ok: false, message: "No .bin/.elf payload asset found for this version." }
+      }));
+      return;
+    }
+
+    const repoLabel = repoConfig?.name || repoId;
+    const safeRepo = repoLabel.replace(/[^a-zA-Z0-9._-]/g, "_");
+    const safeTag = release.tag_name.replace(/[^a-zA-Z0-9._-]/g, "_");
+    setExternalPayloadSendResult((prev) => ({
+      ...prev,
+      [repoId]: { ok: true, message: `Sending ${release.tag_name}...` }
+    }));
+    if (payloadReloadCooldown) {
+      setExternalPayloadSendResult((prev) => ({
+        ...prev,
+        [repoId]: { ok: false, message: "Please wait a moment before sending again." }
+      }));
+      return;
+    }
+    setPayloadReloadCooldown(true);
+    setTimeout(() => setPayloadReloadCooldown(false), 3000);
+    const portOpen = await invoke<boolean>("port_check", {
+      ip,
+      port: 9021
+    });
+    if (!portOpen) {
+      setExternalPayloadSendResult((prev) => ({
+        ...prev,
+        [repoId]: { ok: false, message: "Port 9021 is closed on the target PS5." }
+      }));
+      setPayloadStatusDisplay(tr("payload_port_closed", { port: 9021 }), "error");
+      return;
+    }
+    setPayloadStatusDisplay(tr("payload_sending"), "info");
+    pushPayloadLog(`Sending external payload (${repoLabel} ${release.tag_name})...`, "info");
+    externalPayloadSendingRef.current = true;
+    setExternalPayloadSendingRepoId(repoId);
+
+    try {
+      await invoke("payload_download_and_send", {
+        ip,
+        fetch: {
+          url: asset.browser_download_url,
+          label: `${repoLabel} ${release.tag_name} (${asset.name})`,
+          temp_name: `${safeRepo}_${safeTag}`,
+          source_id: repoId
+        }
+      });
+      setExternalPayloadSendResult((prev) => ({
+        ...prev,
+        [repoId]: { ok: true, message: `Sent ${release.tag_name} successfully.` }
+      }));
+      setPayloadStatusDisplay("Payload sent.", "ok");
+      pushPayloadLog(`Payload sent (${repoLabel} ${release.tag_name}).`, "info");
+    } catch (err) {
+      setExternalPayloadSendResult((prev) => ({
+        ...prev,
+        [repoId]: {
+          ok: false,
+          message: `Failed to send ${release.tag_name}: ${String(err)}`
+        }
+      }));
+      setPayloadStatusDisplay(tr("error_prefix", { error: String(err) }), "error");
+      pushPayloadLog(`External payload send error: ${String(err)}`, "error");
+    } finally {
+      externalPayloadSendingRef.current = false;
+      setExternalPayloadSendingRepoId(null);
+    }
   };
 
   const handleUpdateCheck = async () => {
@@ -5130,6 +5738,33 @@ export default function App() {
       items: queueData.items.filter((item) => !isUploadFailed(item))
     };
     await saveQueueData(nextQueue);
+  };
+
+  const handleRetryStoppedQueue = async () => {
+    const stopped = queueData.items.filter((item) => isUploadFailed(item));
+    if (stopped.length === 0) return;
+    const nextItems = queueData.items.map((item) => {
+      if (!isUploadFailed(item)) return item;
+      const resumeSupported = !isArchivePath(item.source_path);
+      const nextSettings = {
+        ...(item.transfer_settings || {}),
+        // Avoid immediate "already exists" failures on retries.
+        override_on_conflict: true,
+        resume_mode: resumeSupported ? "size" : "none"
+      };
+      return {
+        ...item,
+        status: "Pending",
+        paused: false,
+        last_run_action: resumeSupported ? "resume" : "requeue",
+        transfer_settings: nextSettings
+      };
+    });
+    await saveQueueData({ ...queueData, items: nextItems });
+    pushClientLog(`Retried ${stopped.length} stopped item(s).`);
+    if (uploadQueueRunning && !transferActive) {
+      processNextQueueItem();
+    }
   };
 
   const handleClearQueue = async () => {
@@ -6205,6 +6840,10 @@ export default function App() {
   const handleAddGamesScanPath = () => {
     const normalized = normalizeGamesScanPath(gamesScanCustomPathInput);
     if (!normalized) return;
+    if (!normalized.startsWith("/")) {
+      setGamesScanError("Custom scan path must be an absolute PS5 path (start with /).");
+      return;
+    }
     if (defaultGamesScanPaths.includes(normalized as (typeof defaultGamesScanPaths)[number])) {
       setGamesScanCustomPathInput("");
       return;
@@ -6342,6 +6981,127 @@ export default function App() {
     if (gamesDeletingPath) return;
     const title = item.meta?.title || item.folder_name || item.path;
     setGameDeleteTarget({ path: item.path, title });
+  };
+
+  const handleOpenGameMove = (item: GameScanViewItem) => {
+    if (manageBusy) return;
+    setGamesScanError(null);
+    const suffix = deriveStorageSuffix(item.path, item.storage_path);
+    const roots = storageLocations.map((loc) => loc.path).filter(Boolean);
+    const preferred =
+      roots.find((root) => root !== item.storage_path) ||
+      roots[0] ||
+      item.storage_path ||
+      "/data";
+    setGameMoveTarget(item);
+    setGameMoveDestRoot(preferred);
+    setGameMoveOverridePath(false);
+    setGameMoveSuffix(suffix);
+  };
+
+  const handleConfirmMoveGame = async () => {
+    if (!gameMoveTarget) return;
+    if (!ip.trim()) {
+      setGamesScanError("Not connected");
+      return;
+    }
+    const destRoot = gameMoveDestRoot.trim();
+    if (!destRoot.startsWith("/")) {
+      setGamesScanError("Select a destination storage path.");
+      return;
+    }
+    const defaultSuffix = deriveStorageSuffix(gameMoveTarget.path, gameMoveTarget.storage_path);
+    const suffix = normalizeRemoteSuffix(gameMoveOverridePath ? gameMoveSuffix : defaultSuffix);
+    const dstPath =
+      suffix === "/" ? destRoot.replace(/\/+$/, "") : joinRemote(destRoot, suffix.replace(/^\/+/, ""));
+    const srcPath = gameMoveTarget.path;
+
+    setGameMoveTarget(null);
+    setManageBusy(true);
+    setManageStatus("Moving game...");
+    setManageModalOpen(true);
+    setManageModalDone(false);
+    setManageModalError(null);
+    setManageModalSummary(null);
+    setManageModalOp("Move");
+    manageModalOpRef.current = "Move";
+    setManageModalStatus(`Moving...`);
+    const startAt = Date.now();
+    setManageModalStartedAt(startAt);
+    manageModalStartedAtRef.current = startAt;
+
+    const shouldFallbackToCopy = (errText: string) => {
+      const lower = (errText || "").toLowerCase();
+      if (lower.includes("exdev")) return true;
+      if (lower.includes("cross-device")) return true;
+      if (lower.includes("cross device")) return true;
+      if (lower.includes("invalid cross")) return true;
+      // If destination is on another storage root, MOVE commonly fails; COPY+DELETE is the safe fallback.
+      return gameMoveTarget.storage_path && destRoot !== gameMoveTarget.storage_path;
+    };
+
+    try {
+      try {
+        await invoke("manage_move", { ip, src_path: srcPath, dst_path: dstPath });
+        setManageModalDone(true);
+        setManageModalError(null);
+        setManageModalStatus("Done");
+      } catch (err) {
+        const message = String(err);
+        if (!shouldFallbackToCopy(message)) {
+          throw err;
+        }
+        setManageModalOp("Copy");
+        manageModalOpRef.current = "Copy";
+        setManageModalStatus("Copying (move fallback)...");
+        await invoke("manage_copy", { ip, src_path: srcPath, dst_path: dstPath });
+        setManageModalOp("Delete");
+        manageModalOpRef.current = "Delete";
+        setManageModalStatus("Cleaning up source...");
+        await invoke("manage_delete", { ip, path: srcPath });
+        setManageModalDone(true);
+        setManageModalError(null);
+        setManageModalStatus("Done");
+      }
+
+      const nextFolderName = basenameRemote(dstPath);
+      const nextGamesPath = dirnameRemote(dstPath);
+      setGamesFound((prev) =>
+        prev.map((entry) => {
+          if (entry.path !== srcPath) return entry;
+          return {
+            ...entry,
+            storage_path: destRoot,
+            games_path: nextGamesPath,
+            path: dstPath,
+            folder_name: nextFolderName
+          };
+        })
+      );
+      setGamesStatsByPath((prev) => {
+        const next = { ...prev };
+        if (srcPath in next) {
+          next[dstPath] = next[srcPath];
+          delete next[srcPath];
+        }
+        return next;
+      });
+      setGamesStatsProgressByPath((prev) => {
+        const next = { ...prev };
+        if (srcPath in next) {
+          next[dstPath] = next[srcPath];
+          delete next[srcPath];
+        }
+        return next;
+      });
+    } catch (err) {
+      setManageStatus(`Error: ${String(err)}`);
+      setManageModalDone(true);
+      setManageModalError(String(err));
+      setManageModalStatus("Failed");
+    } finally {
+      setManageBusy(false);
+    }
   };
 
   const handleConfirmDeleteGame = async () => {
@@ -6712,23 +7472,19 @@ export default function App() {
       </header>
 
       <aside className="panel left shell">
-        <section className="card">
+        <section className="card connect-workflow-card">
           <header className="card-title">
-            <span className="card-title-icon">●</span>
-            {tr("connect")}
+            <span className="card-title-icon">◎</span>
+            Session
           </header>
-          <label className="field inline">
-            <span>{tr("profile")}</span>
-            <div className="inline-field profile-controls">
+          <div className="workflow-lane">
+            <span className="muted small">{tr("profile")}</span>
+            <div className="inline-field profile-controls unified-controls">
               <select
                 value={profileSelectValue || currentProfile || ""}
-                onChange={(event) =>
-                  handleSelectProfile(event.target.value || null)
-                }
+                onChange={(event) => handleSelectProfile(event.target.value || null)}
               >
-                {profilesData.profiles.length === 0 && (
-                  <option value="">{tr("none")}</option>
-                )}
+                {profilesData.profiles.length === 0 && <option value="">{tr("none")}</option>}
                 {profilesData.profiles.map((profile) => (
                   <option key={profile.name} value={profile.name}>
                     {profile.name}
@@ -6736,11 +7492,7 @@ export default function App() {
                 ))}
                 <option value={NEW_PROFILE_OPTION}>{tr("new_profile")}</option>
               </select>
-              <button
-                className="btn"
-                onClick={handleSaveCurrentProfile}
-                disabled={!currentProfile}
-              >
+              <button className="btn" onClick={handleSaveCurrentProfile} disabled={!currentProfile}>
                 {tr("save_current_profile")}
               </button>
               <button
@@ -6751,126 +7503,131 @@ export default function App() {
                 {tr("delete_profile")}
               </button>
             </div>
-          </label>
-          <label className="field">
-            <span>{tr("ps5_address")}</span>
-            <input
-              placeholder="192.168.0.105"
-              value={ip}
-              onChange={(event) => setIp(event.target.value)}
-            />
-          </label>
-          <div className="split">
-            <button
-              className="btn success"
-              onClick={handleConnect}
-              disabled={isConnecting || connectCooldown}
-            >
-              {tr("connect_btn")}
-            </button>
-            <button
-              className="btn ghost"
-              onClick={handleDisconnect}
-              disabled={!isConnected && !isConnecting}
-            >
-              {tr("disconnect")}
-            </button>
           </div>
-          <div className="status-grid">
-            <div>
-              <p>{tr("state")}</p>
-              <strong>{status.connection}</strong>
+          <div className="workflow-lanes">
+            <div className="workflow-lane">
+              <span className="muted small">PS5 Address</span>
+              <input
+                placeholder="192.168.0.105"
+                value={ip}
+                onChange={(event) => setIp(event.target.value)}
+              />
             </div>
-            <div>
-              <p>{tr("storage")}</p>
-              <strong>{status.storage}</strong>
-            </div>
-          </div>
-          <div className="card-divider" />
-          <label className="field inline">
-            <span>{tr("auto_connect")}</span>
-            <input
-              type="checkbox"
-              checked={autoConnect}
-              onChange={(event) => setAutoConnect(event.target.checked)}
-            />
-          </label>
-        </section>
-
-        <section className="card">
-          <header className="card-title">
-            <span className="card-title-icon">▸</span>
-            {tr("payload")}
-          </header>
-          <p className="muted">{tr("payload_required")}</p>
-          <label className="field">
-            <span>{tr("payload_source")}</span>
-            <select
-              value={payloadReloadMode}
-              onChange={(event) =>
-                setPayloadReloadMode(event.target.value as "local" | "current" | "latest")
-              }
-            >
-              <option value="local">{tr("payload_source_local")}</option>
-              <option value="current">{tr("payload_source_current")}</option>
-              <option value="latest">{tr("payload_source_latest")}</option>
-            </select>
-            {payloadAutoReload && (
-              <p className="muted small">{tr("payload_auto_note")}</p>
-            )}
-          </label>
-          {payloadReloadMode === "local" && (
-            <label className="field">
-              <span>{tr("payload_file")}</span>
+            <div className="workflow-lane compact">
+              <span className="muted small">Port Checks</span>
               <div className="inline-field">
-                <input
-                  placeholder={tr("payload_file")}
-                  value={payloadLocalPath}
-                  onChange={(event) => setPayloadLocalPath(event.target.value)}
-                />
-                <button className="btn" onClick={handlePayloadBrowse}>
-                  {tr("browse")}
+                <button className="btn ghost" onClick={handlePayloadPortCheck} disabled={payloadBusy}>
+                  Check 9021
+                </button>
+                <div
+                  className={`pill status-pill ${
+                    payloadPortOpen === false ? "error" : payloadPortOpen ? "ok" : ""
+                  }`}
+                >
+                  {payloadPortOpen == null ? "Unknown" : payloadPortOpen ? "Open" : "Closed"}
+                </div>
+              </div>
+            </div>
+            <div className="workflow-lane">
+              <span className="muted small">Payload Loader</span>
+              <div className="inline-field">
+                <select
+                  value={payloadReloadMode}
+                  onChange={(event) =>
+                    setPayloadReloadMode(event.target.value as "local" | "current" | "latest")
+                  }
+                >
+                  <option value="local">{tr("payload_source_local")}</option>
+                  <option value="current">{tr("payload_source_current")}</option>
+                  <option value="latest">{tr("payload_source_latest")}</option>
+                </select>
+                <button
+                  className="btn warning"
+                  onClick={handlePayloadSend}
+                  disabled={payloadBusy || payloadReloadCooldown}
+                >
+                  {tr("payload_send")}
+                </button>
+                <button className="btn info" onClick={handlePayloadCheck} disabled={payloadBusy}>
+                  Check Payload
                 </button>
               </div>
-              {payloadAutoReload && !payloadLocalPath.trim() && (
+              {payloadReloadMode === "local" && (
+                <div className="inline-field">
+                  <input
+                    placeholder={tr("payload_file")}
+                    value={payloadLocalPath}
+                    onChange={(event) => setPayloadLocalPath(event.target.value)}
+                  />
+                  <button className="btn" onClick={handlePayloadBrowse}>
+                    {tr("browse")}
+                  </button>
+                </div>
+              )}
+              {payloadReloadMode === "local" && payloadAutoReload && !payloadLocalPath.trim() && (
                 <p className="muted small warn">{tr("payload_local_required")}</p>
               )}
-              {payloadProbe && (
+              {payloadReloadMode === "local" && payloadProbe && (
                 <p className={`muted small ${payloadProbe.ok ? "ok" : "warn"}`}>
                   {payloadProbe.message}
                 </p>
               )}
-            </label>
-          )}
-          <div className="split">
-            <button
-              className="btn warning"
-              onClick={handlePayloadSend}
-              disabled={payloadBusy || payloadReloadCooldown}
-            >
-              {tr("payload_send")}
-            </button>
-            <button className="btn info" onClick={handlePayloadCheck} disabled={payloadBusy}>
-              {tr("check")}
-            </button>
-          </div>
-          <label className="field inline spaced">
-            <span>{tr("auto_reload_payload")}</span>
-            <input
-              type="checkbox"
-              checked={payloadAutoReload}
-              onChange={(event) => setPayloadAutoReload(event.target.checked)}
-            />
-          </label>
-          <div className="card-divider" />
-          <div className={`pill status-pill ${payloadStatusClass}`}>
-            {tr("status")}: {payloadStatus}
-          </div>
-          {payloadVersion && (
-            <div className="pill status-pill">
-              {tr("version")}: {payloadVersion}
+              {payloadVersion && (
+                <div className="pill status-pill">
+                  {tr("version")}: {payloadVersion}
+                </div>
+              )}
             </div>
-          )}
+            <div className="workflow-lane">
+              <span className="muted small">Service Connection</span>
+              <div className="inline-field">
+                <button
+                  className="btn success"
+                  onClick={handleConnect}
+                  disabled={isConnecting || connectCooldown}
+                >
+                  {tr("connect_btn")}
+                </button>
+                <button
+                  className="btn ghost"
+                  onClick={handleDisconnect}
+                  disabled={!isConnected && !isConnecting}
+                >
+                  {tr("disconnect")}
+                </button>
+              </div>
+              <div className="status-grid compact">
+                <div>
+                  <p>Connection</p>
+                  <strong>{status.connection}</strong>
+                </div>
+                <div>
+                  <p>{tr("payload")}</p>
+                  <strong>{payloadStatus}</strong>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="card-divider" />
+          <div className="workflow-toggles">
+            <label className="field inline">
+              <span>{tr("auto_reload_payload")}</span>
+              <input
+                type="checkbox"
+                checked={payloadAutoReload}
+                onChange={(event) => setPayloadAutoReload(event.target.checked)}
+              />
+            </label>
+            <label className="field inline">
+              <span>{tr("auto_connect")}</span>
+              <input
+                type="checkbox"
+                checked={autoConnect}
+                onChange={(event) => setAutoConnect(event.target.checked)}
+              />
+            </label>
+          </div>
         </section>
 
         <section className="card">
@@ -7854,6 +8611,13 @@ export default function App() {
                   >
                     {tr("stop")}
                   </button>
+                  <button
+                    className="btn info"
+                    onClick={handleRetryStoppedQueue}
+                    disabled={!hasUploadFailed || transferBusy}
+                  >
+                    {tr("retry_stopped")}
+                  </button>
                   <button className="btn" onClick={handleRefreshUploadQueue}>
                     {tr("refresh")}
                   </button>
@@ -8830,17 +9594,16 @@ export default function App() {
                   ).
                 </p>
                 <p className="muted small">
-                  Default scan paths: <code>etaHEN/games</code>, <code>homebrew</code>
+                  Default scan paths: <code>etaHEN/games</code>, <code>etaHEN/homebrew</code>,{" "}
+                  <code>games</code>, <code>homebrew</code>
                 </p>
                 <p className="muted small">
-                  Each path is relative to every storage root (for example:{" "}
-                  <code>/data</code>, <code>/mnt/ext0</code>, <code>/mnt/ext1</code>,{" "}
-                  <code>/mnt/usb0</code>).
+                  Custom scan paths are absolute PS5 paths (start with <code>/</code>) and are scanned in addition to the default scan paths.
                 </p>
                 <div className="path-row">
                   <input
                     type="text"
-                    placeholder="Custom scan path (example: myfolder/games)"
+                    placeholder="Custom scan path (example: /data/games)"
                     value={gamesScanCustomPathInput}
                     onChange={(event) => setGamesScanCustomPathInput(event.target.value)}
                     onKeyDown={(event) => {
@@ -8935,22 +9698,29 @@ export default function App() {
                               <div className="queue-title">
                                 <strong>{title}</strong>
                               </div>
-                              <div className="games-item-actions">
-                                <button
-                                  className="btn info small"
-                                  onClick={() => handleScanGameStats(item.path)}
-                                  disabled={statsLoading || anotherStatsScanActive || itemDeleting}
-                                >
-                                  {statsLoading ? "Scanning..." : "Scan files/size"}
-                                </button>
-                                <button
-                                  className="btn danger small"
-                                  onClick={() => handleDeleteGame(item)}
-                                  disabled={itemDeleting}
-                                >
-                                  {itemDeleting ? "Deleting..." : "Delete game"}
-                                </button>
-                              </div>
+                            <div className="games-item-actions">
+                              <button
+                                className="btn warning small"
+                                onClick={() => handleOpenGameMove(item)}
+                                disabled={manageBusy || gamesScanning || itemDeleting}
+                              >
+                                Move
+                              </button>
+                              <button
+                                className="btn info small"
+                                onClick={() => handleScanGameStats(item.path)}
+                                disabled={statsLoading || anotherStatsScanActive || itemDeleting}
+                              >
+                                {statsLoading ? "Scanning..." : "Scan files/size"}
+                              </button>
+                              <button
+                                className="btn danger small"
+                                onClick={() => handleDeleteGame(item)}
+                                disabled={itemDeleting}
+                              >
+                                {itemDeleting ? "Deleting..." : "Delete game"}
+                              </button>
+                            </div>
                             </div>
                             <div className="games-path">{item.path}</div>
                             {itemDeleting && (
@@ -9006,6 +9776,227 @@ export default function App() {
                     })}
                   </div>
                 )}
+              </div>
+            </div>
+          )}
+
+	          {activeTab === "payloads" && (
+	            <div className="grid-two">
+	              <div className="card wide faq-card">
+	                <header className="card-title">
+	                  <span className="card-title-icon">⬇</span>
+	                  {tr("payloads_title")}
+	                </header>
+	                <p className="muted small">
+	                  {tr("payloads_desc")}
+	                </p>
+	                <div className="payload-connectivity">
+	                  <span className={`status-dot ${internetAvailable ? "active" : ""}`} />
+	                  <span className={`muted small ${internetAvailable ? "ok" : "warn"}`}>
+	                    {tr("payloads_internet_required")} {tr("payloads_status")}:{" "}
+	                    {internetAvailable ? tr("payloads_online") : tr("payloads_offline")}
+	                  </span>
+	                  <button
+	                    className="btn ghost small"
+	                    onClick={refreshExternalPayloadReleases}
+	                    disabled={!internetAvailable}
+	                  >
+	                    {tr("payloads_refresh_releases")}
+	                  </button>
+	                </div>
+
+                <div className="faq-window">
+                  <p className="muted small">
+                    Add GitHub repos here to fetch releases at runtime. Asset selection supports globs like{" "}
+                    <code>*.elf</code>, <code>Payload.zip</code>, <code>ftpsrv-ps5.elf</code>.
+                  </p>
+	                  <div className="path-row">
+	                    <input
+	                      type="text"
+	                      placeholder={tr("payloads_repo_placeholder")}
+	                      value={externalPayloadRepoInput}
+	                      onChange={(event) => setExternalPayloadRepoInput(event.target.value)}
+	                    />
+	                    <input
+	                      type="text"
+	                      placeholder={tr("payloads_name_placeholder")}
+	                      value={externalPayloadRepoNameInput}
+	                      onChange={(event) => setExternalPayloadRepoNameInput(event.target.value)}
+	                    />
+	                  </div>
+	                  <div className="path-row">
+	                    <input
+	                      type="text"
+	                      placeholder={tr("payloads_asset_pattern_placeholder")}
+	                      value={externalPayloadRepoPatternInput}
+	                      onChange={(event) => setExternalPayloadRepoPatternInput(event.target.value)}
+	                    />
+	                    <button className="btn info" onClick={handleAddExternalPayloadRepo}>
+	                      {tr("payloads_add_repo")}
+	                    </button>
+	                    <button className="btn ghost" onClick={handleResetExternalPayloadRepos}>
+	                      {tr("payloads_restore_defaults")}
+	                    </button>
+	                  </div>
+	                  <div className="path-row">
+	                    <input
+	                      type="text"
+	                      placeholder={tr("payloads_description_placeholder")}
+	                      value={externalPayloadRepoSummaryInput}
+	                      onChange={(event) => setExternalPayloadRepoSummaryInput(event.target.value)}
+	                    />
+	                  </div>
+                  {externalPayloadRepoError && <div className="muted small warn">{externalPayloadRepoError}</div>}
+                </div>
+                <div className="payload-release-grid">
+                  {externalPayloadRepos.map((repo) => {
+                    const loading = !!externalPayloadLoading[repo.id];
+                    const error = externalPayloadErrors[repo.id];
+                    const releases = externalPayloadReleases[repo.id] || [];
+                    const selectedRelease = externalPayloadSelectedReleaseByRepo[repo.id] || null;
+                    const selectedAsset = selectExternalPayloadAsset(selectedRelease, repo);
+                    const sendResult = externalPayloadSendResult[repo.id];
+                    const isSending = externalPayloadSendingRepoId === repo.id;
+                    const sendLocked = !!externalPayloadSendingRepoId || payloadBusy;
+                    const downloadProgress = externalPayloadDownloadProgress[repo.id];
+                    const downloadPercent =
+                      downloadProgress && downloadProgress.total_bytes && downloadProgress.total_bytes > 0
+                        ? Math.min(
+                            100,
+                            Math.round(
+                              (downloadProgress.received_bytes / downloadProgress.total_bytes) * 1000
+                            ) / 10
+                          )
+                        : null;
+                    return (
+                      <div className="payload-release-card" key={repo.id}>
+                        <div className="payload-release-head">
+                          <div className="payload-release-main">
+                            <img
+                              className="payload-release-logo"
+                              src={repo.icon_url}
+                              alt={`${repo.name} logo`}
+                            />
+                            <div className="payload-release-meta">
+                              <div className="payload-release-title">{repo.name}</div>
+                              <p className="muted small payload-release-summary">{repo.summary}</p>
+                            </div>
+                          </div>
+                          <button
+                            className="btn primary payload-send-btn"
+                            disabled={sendLocked || !selectedAsset || !internetAvailable}
+                            onClick={() => handleExternalPayloadSend(repo.id)}
+	                          >
+	                            {isSending ? tr("payloads_sending") : `↑ ${tr("payloads_send_payload")}`}
+	                          </button>
+	                        </div>
+	
+	                        {isSending && downloadProgress && !downloadProgress.done && (
+	                          <div className="muted small payload-release-info">
+	                            <span>
+	                              {tr("payloads_downloading")}
+	                              {downloadPercent != null ? `: ${downloadPercent}%` : ""}{" "}
+	                              {downloadProgress.total_bytes
+	                                ? `(${formatBytes(downloadProgress.received_bytes)} / ${formatBytes(
+	                                    downloadProgress.total_bytes
+	                                  )})`
+	                                : `(${formatBytes(downloadProgress.received_bytes)})`}
+                            </span>
+                            <span>·</span>
+                            <span>
+                              {downloadProgress.speed_bps > 0
+                                ? `${formatBytes(downloadProgress.speed_bps)}/s`
+                                : "—"}
+                            </span>
+                          </div>
+                        )}
+
+	                        {!repo.built_in && (
+	                          <div className="payload-inline-controls">
+	                            <button
+	                              className="btn danger small"
+	                              onClick={() => handleRemoveExternalPayloadRepo(repo.id)}
+	                              disabled={sendLocked}
+	                            >
+	                              {tr("payloads_remove")}
+	                            </button>
+	                          </div>
+	                        )}
+
+                        <div className="payload-inline-controls">
+                          <select
+                            value={selectedRelease?.tag_name || ""}
+                            disabled={!internetAvailable || loading || releases.length === 0}
+                            onChange={(event) =>
+                              setExternalPayloadSelectedTag((prev) => ({
+                                ...prev,
+                                [repo.id]: event.target.value
+                              }))
+                            }
+                          >
+	                            {releases.length === 0 ? (
+	                              <option value="">{loading ? `${tr("loading")}...` : tr("no_releases")}</option>
+	                            ) : (
+	                              releases.map((release) => (
+	                                <option key={release.tag_name} value={release.tag_name}>
+	                                  {release.tag_name}
+	                                  {release.prerelease ? " (pre-release)" : ""}
+                                </option>
+                              ))
+                            )}
+                          </select>
+	                          {selectedRelease && (
+	                            <button
+	                              className="btn ghost small"
+	                              onClick={() => openExternal(selectedRelease.html_url)}
+	                            >
+	                              {tr("release")}
+	                            </button>
+	                          )}
+	                          <button className="btn ghost small" onClick={() => openExternal(repo.repo_url)}>
+	                            {tr("repo")}
+	                          </button>
+	                        </div>
+	
+	                        <div className="muted small payload-release-info">
+	                          <span>
+	                            {selectedRelease
+	                              ? `${tr("published")}: ${formatReleasePublishedAt(selectedRelease.published_at)}`
+	                              : `${tr("published")}: -`}
+	                          </span>
+	                          <span>·</span>
+	                          <span>
+	                            {tr("asset")}:{" "}
+	                            {selectedAsset ? selectedAsset.name : tr("payloads_no_asset_found")}
+	                          </span>
+	                        </div>
+	                        {error && (
+	                          <div className="muted small warn">
+	                            {tr("payloads_failed_load_releases", { error })}
+	                          </div>
+	                        )}
+	                        {sendResult && (
+	                          <div className="stack">
+	                            <div className={`muted small ${sendResult.ok ? "ok" : "warn"}`}>
+	                              {sendResult.message}
+	                            </div>
+	                            {!sendResult.ok && (
+	                              <div className="payload-inline-controls">
+	                                <button
+	                                  className="btn info small"
+	                                  onClick={() => handleExternalPayloadSend(repo.id)}
+	                                  disabled={sendLocked || !internetAvailable}
+	                                >
+	                                  {tr("payloads_retry")}
+	                                </button>
+	                              </div>
+	                            )}
+	                          </div>
+	                        )}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             </div>
           )}
@@ -9869,6 +10860,87 @@ export default function App() {
                 {tr("cancel")}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {gameMoveTarget && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            <header className="modal-title">Move game</header>
+            <p className="muted small">{gameMoveTarget.path}</p>
+            <label className="field">
+              <span>Destination storage</span>
+              <select
+                value={gameMoveDestRoot}
+                onChange={(event) => setGameMoveDestRoot(event.target.value)}
+              >
+                {storageLocations.length === 0 ? (
+                  <option value="">No storage detected</option>
+                ) : (
+                  storageLocations.map((loc) => (
+                    <option key={loc.path} value={loc.path}>
+                      {loc.path}
+                    </option>
+                  ))
+                )}
+              </select>
+            </label>
+            <label className="field inline">
+              <span>Override path</span>
+              <input
+                type="checkbox"
+                checked={gameMoveOverridePath}
+                onChange={(event) => setGameMoveOverridePath(event.target.checked)}
+              />
+            </label>
+            <label className="field">
+              <span>Suffix (path after storage root)</span>
+              <input
+                value={
+                  gameMoveOverridePath
+                    ? gameMoveSuffix
+                    : deriveStorageSuffix(gameMoveTarget.path, gameMoveTarget.storage_path)
+                }
+                onChange={(event) => setGameMoveSuffix(event.target.value)}
+                disabled={!gameMoveOverridePath}
+                placeholder="/homebrew/ABC123"
+              />
+            </label>
+            {(() => {
+              const destRoot = gameMoveDestRoot.trim();
+              const suffix = normalizeRemoteSuffix(
+                gameMoveOverridePath
+                  ? gameMoveSuffix
+                  : deriveStorageSuffix(gameMoveTarget.path, gameMoveTarget.storage_path)
+              );
+              const preview =
+                destRoot && destRoot.startsWith("/")
+                  ? suffix === "/"
+                    ? destRoot.replace(/\/+$/, "")
+                    : joinRemote(destRoot, suffix.replace(/^\/+/, ""))
+                  : "—";
+              return (
+                <p className="muted small">
+                  Destination: <code>{preview}</code>
+                </p>
+              );
+            })()}
+            <div className="split">
+              <button
+                className="btn primary"
+                onClick={handleConfirmMoveGame}
+                disabled={!gameMoveDestRoot || manageBusy}
+              >
+                Move
+              </button>
+              <button className="btn ghost" onClick={() => setGameMoveTarget(null)}>
+                {tr("cancel")}
+              </button>
+            </div>
+            <p className="muted small">
+              Note: Cancel is supported while copying. Pause/resume is not currently supported for moves.
+            </p>
           </div>
         </div>
       )}

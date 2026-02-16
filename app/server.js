@@ -35,6 +35,7 @@ const READ_TIMEOUT_MS = 120000;
 const PAYLOAD_STATUS_CONNECT_TIMEOUT_MS = 5000;
 const PAYLOAD_STATUS_READ_TIMEOUT_MS = 10000;
 const UPLOAD_SOCKET_BUFFER_SIZE = 8 * 1024 * 1024;
+const BINARY_UPLOAD_CHUNK_SIZE = 4 * 1024 * 1024;
 const UploadCmd = {
   StartUpload: 0x10,
   UploadChunk: 0x11,
@@ -1381,11 +1382,101 @@ async function uploadFastOneFile(ip, destRoot, file, options = {}) {
   const shouldCancel = typeof options.shouldCancel === 'function' ? options.shouldCancel : null;
   const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
   const chmodAfterUpload = Boolean(options.chmodAfterUpload);
+
+  // PS5-Upload-Suite core invariant: don't allow parallel writes into the same remote file.
+  // Users can still create weird queue combinations; enforce it here.
+  const remotePath = joinRemotePath(destRoot, file.rel_path);
+  const releaseRemote = await remoteFileMutex.acquire(remotePath);
+  try {
+    return await retryWithBackoff(
+      async () => uploadFastOneFileOnce(ip, remotePath, file, { shouldCancel, onProgress, chmodAfterUpload }),
+      {
+        maxAttempts: Math.max(1, Math.min(4, Number(options.maxAttempts) || 2)),
+        shouldRetry: isRetryableNetworkError,
+        shouldCancel,
+      }
+    );
+  } finally {
+    releaseRemote();
+  }
+}
+
+function createKeyedMutex() {
+  const state = new Map(); // key -> { locked: boolean, waiters: Array<() => void> }
+  const acquire = async (key) => {
+    const k = String(key || '');
+    if (!k) {
+      return () => {};
+    }
+    let slot = state.get(k);
+    if (!slot) {
+      slot = { locked: false, waiters: [] };
+      state.set(k, slot);
+    }
+    while (slot.locked) {
+      await new Promise((resolve) => slot.waiters.push(resolve));
+    }
+    slot.locked = true;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      // Release then wake exactly one waiter. (If we keep locked=true, the waiter
+      // will re-enter the wait loop and deadlock.)
+      slot.locked = false;
+      const next = slot.waiters.shift();
+      if (next) next();
+      else state.delete(k);
+    };
+  };
+  return { acquire };
+}
+
+const remoteFileMutex = createKeyedMutex();
+
+function sleepMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+}
+
+function isRetryableNetworkError(err) {
+  const code = err && err.code ? String(err.code) : '';
+  if (['ECONNRESET', 'EPIPE', 'ETIMEDOUT', 'ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH', 'EAI_AGAIN'].includes(code)) {
+    return true;
+  }
+  const msg = err && err.message ? String(err.message) : String(err || '');
+  return /(ECONNRESET|EPIPE|ETIMEDOUT|EAI_AGAIN|socket hang up|timed out|timeout|Connection closed)/i.test(msg);
+}
+
+async function retryWithBackoff(fn, opts = {}) {
+  const maxAttempts = Math.max(1, Number(opts.maxAttempts) || 1);
+  const shouldRetry = typeof opts.shouldRetry === 'function' ? opts.shouldRetry : null;
+  const shouldCancel = typeof opts.shouldCancel === 'function' ? opts.shouldCancel : null;
+  let attempt = 0;
+  let lastErr = null;
+  while (attempt < maxAttempts) {
+    if (shouldCancel && shouldCancel()) throw new Error('Transfer cancelled');
+    attempt += 1;
+    try {
+      return await fn(attempt);
+    } catch (err) {
+      lastErr = err;
+      if (attempt >= maxAttempts) break;
+      if (shouldCancel && shouldCancel()) throw err;
+      if (shouldRetry && !shouldRetry(err)) throw err;
+      const delay = Math.min(2000, 250 * Math.pow(2, attempt - 1));
+      await sleepMs(delay);
+    }
+  }
+  throw lastErr || new Error('Retry failed');
+}
+
+async function uploadFastOneFileOnce(ip, remotePath, file, options = {}) {
+  const shouldCancel = typeof options.shouldCancel === 'function' ? options.shouldCancel : null;
+  const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
   const socket = await createSocketWithTimeout(ip, TRANSFER_PORT);
   tuneUploadSocket(socket);
   const reader = createSocketReader(socket);
   try {
-    const remotePath = joinRemotePath(destRoot, file.rel_path);
     const startPayload = buildUploadStartPayload(remotePath, file.size, 0);
     await writeBinaryCommand(socket, UploadCmd.StartUpload, startPayload);
     const readyResp = await readBinaryResponse(reader, READ_TIMEOUT_MS);
@@ -1393,28 +1484,28 @@ async function uploadFastOneFile(ip, destRoot, file, options = {}) {
       const msg = readyResp.data?.length ? readyResp.data.toString('utf8') : 'no response';
       throw new Error(`Upload rejected: ${msg}`);
     }
-	    if (Number(file.size) > 0) {
-	      const fd = await fs.promises.open(file.abs_path, 'r');
-	      try {
-	        const buf = Buffer.allocUnsafe(5 + 8 * 1024 * 1024);
-	        let remaining = Number(file.size);
-	        let pos = 0;
-	        while (remaining > 0) {
-	          if (shouldCancel && shouldCancel()) throw new Error('Transfer cancelled');
-	          const take = Math.min(buf.length - 5, remaining);
-	          const { bytesRead } = await fd.read(buf, 5, take, pos);
-	          if (bytesRead <= 0) throw new Error('Read failed');
+    if (Number(file.size) > 0) {
+      const fd = await fs.promises.open(file.abs_path, 'r');
+      try {
+        const buf = Buffer.allocUnsafe(5 + BINARY_UPLOAD_CHUNK_SIZE);
+        let remaining = Number(file.size);
+        let pos = 0;
+        while (remaining > 0) {
+          if (shouldCancel && shouldCancel()) throw new Error('Transfer cancelled');
+          const take = Math.min(buf.length - 5, remaining);
+          const { bytesRead } = await fd.read(buf, 5, take, pos);
+          if (bytesRead <= 0) throw new Error('Read failed');
           buf[0] = UploadCmd.UploadChunk;
-	          buf.writeUInt32LE(bytesRead, 1);
-	          await writeAll(socket, buf.subarray(0, 5 + bytesRead));
-	          remaining -= bytesRead;
-	          pos += bytesRead;
-	          if (onProgress) onProgress(bytesRead);
-	        }
-	      } finally {
-	        await fd.close().catch(() => {});
-	      }
-	    }
+          buf.writeUInt32LE(bytesRead, 1);
+          await writeAll(socket, buf.subarray(0, 5 + bytesRead));
+          remaining -= bytesRead;
+          pos += bytesRead;
+          if (onProgress) onProgress(bytesRead);
+        }
+      } finally {
+        await fd.close().catch(() => {});
+      }
+    }
     await writeBinaryCommand(socket, UploadCmd.EndUpload, Buffer.alloc(0));
     const endResp = await readBinaryResponse(reader, READ_TIMEOUT_MS);
     if (endResp.code !== UploadResp.Ok) {
@@ -1439,59 +1530,21 @@ async function uploadFastMultiFile(ip, destRoot, files, options = {}) {
   const queue = Array.isArray(files) ? [...files] : [];
   let totalSent = 0;
 
-  let laneLocked = false;
-  let laneWaiters = [];
-  const acquireLaneLock = async () => {
-    while (laneLocked) {
-      await new Promise((resolve) => laneWaiters.push(resolve));
-    }
-    laneLocked = true;
-  };
-  const releaseLaneLock = () => {
-    laneLocked = false;
-    const waiters = laneWaiters;
-    laneWaiters = [];
-    for (const resolve of waiters) resolve();
-  };
-  const waitIfLaneBusy = async () => {
-    while (laneLocked) {
-      await new Promise((resolve) => laneWaiters.push(resolve));
-    }
-  };
-
   const runWorker = async () => {
     while (queue.length > 0) {
       if (shouldCancel && shouldCancel()) throw new Error('Transfer cancelled');
-      await waitIfLaneBusy();
       const file = queue.shift();
       if (!file) continue;
       if (onFileStart) onFileStart(file);
-      if (Number(file.size || 0) >= LANE_MIN_FILE_SIZE) {
-        await acquireLaneLock();
-        try {
-          const laneBaseBytes = totalSent;
-          await uploadLaneSingleFile(ip, destRoot, file, {
-            connections,
-            shouldCancel,
-            chmodAfterUpload,
-            onProgress: (sent) => {
-              totalSent = laneBaseBytes + sent;
-              if (onProgress) onProgress(totalSent, file);
-            },
-          });
-        } finally {
-          releaseLaneLock();
-        }
-      } else {
-        await uploadFastOneFile(ip, destRoot, file, {
-          shouldCancel,
-          chmodAfterUpload,
-          onProgress: (delta) => {
-            totalSent += delta;
-            if (onProgress) onProgress(totalSent, file);
-          },
-        });
-      }
+      // Stability default: avoid parallel offset writes into a single remote file.
+      await uploadFastOneFile(ip, destRoot, file, {
+        shouldCancel,
+        chmodAfterUpload,
+        onProgress: (delta) => {
+          totalSent += delta;
+          if (onProgress) onProgress(totalSent, file);
+        },
+      });
       if (onFileDone) onFileDone(file);
     }
   };
@@ -1507,6 +1560,9 @@ async function uploadLaneSingleFile(ip, destRoot, file, options = {}) {
   const connections = Math.max(1, Math.min(8, Number(options.connections) || LANE_CONNECTIONS));
   const totalSize = Number(file.size || 0);
   if (totalSize <= 0) return;
+  const remotePath = joinRemotePath(destRoot, file.rel_path);
+  const releaseRemote = await remoteFileMutex.acquire(remotePath);
+  try {
   const chunkSize = getLaneChunkSize(totalSize);
   const chunks = [];
   for (let offset = 0; offset < totalSize; offset += chunkSize) {
@@ -1541,7 +1597,6 @@ async function uploadLaneSingleFile(ip, destRoot, file, options = {}) {
         if (shouldCancel && shouldCancel()) throw new Error('Transfer cancelled');
         if (chunk.offset !== 0) await waitForPrealloc();
 
-        const remotePath = joinRemotePath(destRoot, file.rel_path);
         const startPayload = buildUploadStartPayload(remotePath, totalSize, chunk.offset);
         await writeBinaryCommand(socket, UploadCmd.StartUpload, startPayload);
         const readyResp = await readBinaryResponse(reader, READ_TIMEOUT_MS);
@@ -1556,7 +1611,7 @@ async function uploadLaneSingleFile(ip, destRoot, file, options = {}) {
 
         let remaining = chunk.len;
         let pos = chunk.offset;
-        const buf = Buffer.allocUnsafe(5 + 8 * 1024 * 1024);
+        const buf = Buffer.allocUnsafe(5 + BINARY_UPLOAD_CHUNK_SIZE);
         while (remaining > 0) {
           if (shouldCancel && shouldCancel()) throw new Error('Transfer cancelled');
           const take = Math.min(buf.length - 5, remaining);
@@ -1596,6 +1651,9 @@ async function uploadLaneSingleFile(ip, destRoot, file, options = {}) {
   };
 
   await Promise.all(activeQueues.map((queue, idx) => runWorker(queue, idx)));
+  } finally {
+    releaseRemote();
+  }
 }
 
 async function uploadFilesViaFtpSimple(ip, ftpPort, destRoot, files, options = {}) {
@@ -1642,10 +1700,15 @@ async function uploadFilesViaFtpSimple(ip, ftpPort, destRoot, files, options = {
         const remotePath = `${destRoot.replace(/\/+$/, '')}/${String(file.rel_path || '').replace(/\\/g, '/')}`;
         const remoteDir = path.posix.dirname(remotePath);
         if (onFileStart) onFileStart(file);
-        // eslint-disable-next-line no-await-in-loop
-        await client.ensureDir(remoteDir);
-        // eslint-disable-next-line no-await-in-loop
-        await client.uploadFrom(file.abs_path, remotePath);
+        const releaseRemote = await remoteFileMutex.acquire(remotePath);
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          await client.ensureDir(remoteDir);
+          // eslint-disable-next-line no-await-in-loop
+          await client.uploadFrom(file.abs_path, remotePath);
+        } finally {
+          releaseRemote();
+        }
         filesUploaded += 1;
         if (onProgress) onProgress(sent, file);
       }
@@ -1712,7 +1775,7 @@ async function uploadRarForExtractionViaPayload(ip, rarPath, destPath, opts = {}
 
     const fd = await fs.promises.open(rarPath, 'r');
     try {
-      const buf = Buffer.allocUnsafe(8 * 1024 * 1024);
+      const buf = Buffer.allocUnsafe(BINARY_UPLOAD_CHUNK_SIZE);
       let remaining = fileSize;
       let pos = 0;
       let sent = 0;
@@ -2243,28 +2306,125 @@ async function fetchReleaseByTag(tag) {
   return httpsJson(`https://api.github.com/repos/phantomptr/ps5upload/releases/tags/${encodeURIComponent(tag)}`);
 }
 
-function downloadAsset(url, outputPath) {
+async function fetchRepoReleases(owner, repo) {
+  const safeOwner = String(owner || '').trim();
+  const safeRepo = String(repo || '').trim();
+  if (!safeOwner || !safeRepo) throw new Error('Invalid repository');
+  const releases = await httpsJson(
+    `https://api.github.com/repos/${encodeURIComponent(safeOwner)}/${encodeURIComponent(safeRepo)}/releases?per_page=100`
+  );
+  if (!Array.isArray(releases)) return [];
+  return releases.map((release) => ({
+    tag_name: release && release.tag_name ? String(release.tag_name) : '',
+    html_url:
+      release && release.html_url
+        ? String(release.html_url)
+        : `https://github.com/${safeOwner}/${safeRepo}/releases`,
+    prerelease: Boolean(release && release.prerelease),
+    published_at: release && release.published_at ? String(release.published_at) : null,
+    assets: Array.isArray(release && release.assets)
+      ? release.assets
+          .map((asset) => ({
+            name: asset && asset.name ? String(asset.name) : '',
+            browser_download_url:
+              asset && asset.browser_download_url ? String(asset.browser_download_url) : '',
+            size: Number(asset && asset.size ? asset.size : 0),
+          }))
+          .filter((asset) => asset.name && asset.browser_download_url)
+      : [],
+  }));
+}
+
+function downloadAsset(url, outputPath, opts) {
   return new Promise((resolve, reject) => {
     const file = fs.createWriteStream(outputPath);
+    const meta =
+      opts && typeof opts === 'object' && !Array.isArray(opts)
+        ? {
+            runtime: opts.runtime,
+            label: typeof opts.label === 'string' ? opts.label : '',
+            source_id: typeof opts.source_id === 'string' ? opts.source_id : null,
+          }
+        : { runtime: null, label: '', source_id: null };
+    const startedAt = Date.now();
+    let received = 0;
+    let total = 0;
+    let lastAt = startedAt;
+    let lastBytes = 0;
+    let ema = 0;
+    let lastEmitAt = 0;
+
+    const updateRuntime = (done, error) => {
+      if (!meta.runtime) return;
+      const now = Date.now();
+      if (!done && now - lastEmitAt < 250) return;
+      lastEmitAt = now;
+      meta.runtime.payloadDownloadProgress = {
+        label: meta.label || null,
+        source_id: meta.source_id,
+        received_bytes: received,
+        total_bytes: total || null,
+        speed_bps: ema || 0,
+        elapsed_ms: now - startedAt,
+        done: Boolean(done),
+        error: error ? String(error) : null,
+        updated_at_ms: now,
+      };
+    };
+
+    if (meta.runtime) {
+      meta.runtime.payloadDownloadProgress = {
+        label: meta.label || null,
+        source_id: meta.source_id,
+        received_bytes: 0,
+        total_bytes: null,
+        speed_bps: 0,
+        elapsed_ms: 0,
+        done: false,
+        error: null,
+        updated_at_ms: Date.now(),
+      };
+    }
+
     const req = https.get(url, { headers: { 'User-Agent': 'ps5upload-app' } }, (res) => {
       if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         file.close();
         fs.unlinkSync(outputPath);
-        downloadAsset(res.headers.location, outputPath).then(resolve).catch(reject);
+        downloadAsset(res.headers.location, outputPath, opts).then(resolve).catch(reject);
         return;
       }
       if (res.statusCode && res.statusCode >= 400) {
         file.close();
-        fs.unlink(outputPath, () => reject(new Error(`Download failed: HTTP ${res.statusCode}`)));
+        const err = new Error(`Download failed: HTTP ${res.statusCode}`);
+        updateRuntime(true, err.message);
+        fs.unlink(outputPath, () => reject(err));
         return;
       }
+      total = Number.parseInt(String(res.headers['content-length'] || '0'), 10) || 0;
+      updateRuntime(false, null);
+      res.on('data', (chunk) => {
+        if (!chunk) return;
+        received += chunk.length || 0;
+        const now = Date.now();
+        const dt = now - lastAt;
+        if (dt >= 250) {
+          const delta = received - lastBytes;
+          const inst = dt > 0 ? (delta * 1000) / dt : 0;
+          ema = ema > 0 ? ema * 0.8 + inst * 0.2 : inst;
+          lastAt = now;
+          lastBytes = received;
+          updateRuntime(false, null);
+        }
+      });
       res.pipe(file);
       file.on('finish', () => {
+        updateRuntime(true, null);
         file.close(() => resolve(outputPath));
       });
     });
     req.on('error', (err) => {
       file.close();
+      updateRuntime(true, err && err.message ? err.message : String(err));
       fs.unlink(outputPath, () => reject(err));
     });
     req.setTimeout(30000, () => {
@@ -2470,59 +2630,107 @@ async function handleInvoke(cmd, args, runtime) {
       }
     }
 
+    case 'payload_external_releases': {
+      return fetchRepoReleases(args && args.owner, args && args.repo);
+    }
+
     case 'payload_send': {
       const ip = (args && args.ip ? String(args.ip) : '').trim();
       const filepath = (args && args.path ? String(args.path) : '').trim();
       if (!ip) throw new Error('Enter a PS5 address first.');
       if (!filepath) throw new Error('Select a payload (.elf/.bin) file first.');
-      const sent = await sendPayloadFile(ip, filepath);
-      const probe = probePayloadFile(filepath);
-      if (probe && probe.is_ps5upload) {
-        const startup = await waitForPayloadStartup(ip, runtime.version, 15000, 500);
-        if (!startup.ok) {
-          throw new Error(`Payload upload completed but startup verification failed: ${startup.error}`);
-        }
+      if (runtime.payloadSendInFlight) throw new Error('Payload send already in progress.');
+      runtime.payloadSendInFlight = true;
+      try {
+        return await sendPayloadFile(ip, filepath);
+      } finally {
+        runtime.payloadSendInFlight = false;
       }
-      return sent;
     }
     case 'payload_download_and_send': {
       const ip = (args && args.ip ? String(args.ip) : '').trim();
-      const fetchMode = (args && args.fetch ? String(args.fetch) : 'latest').trim();
       if (!ip) throw new Error('Enter a PS5 address first.');
-      if (fetchMode === 'current') {
-        const localPayload = findLocalPayloadElf();
-        if (localPayload) {
-          const sent = await sendPayloadFile(ip, localPayload);
-          const startup = await waitForPayloadStartup(ip, runtime.version, 15000, 500);
-          if (!startup.ok) {
-            throw new Error(`Payload upload completed but startup verification failed: ${startup.error}`);
+      if (runtime.payloadSendInFlight) throw new Error('Payload send already in progress.');
+      runtime.payloadSendInFlight = true;
+      runtime.payloadDownloadProgress = null;
+      try {
+        const fetchValue = args ? args.fetch : 'latest';
+        const isCustomFetch =
+          fetchValue && typeof fetchValue === 'object' && !Array.isArray(fetchValue);
+        const customUrl =
+          isCustomFetch && typeof fetchValue.url === 'string' ? fetchValue.url.trim() : '';
+        const customName =
+          isCustomFetch && typeof fetchValue.temp_name === 'string'
+            ? fetchValue.temp_name.trim()
+            : '';
+        const customLabel =
+          isCustomFetch && typeof fetchValue.label === 'string' ? fetchValue.label.trim() : '';
+        const customSourceId =
+          isCustomFetch && typeof fetchValue.source_id === 'string'
+            ? fetchValue.source_id.trim()
+            : '';
+        const customExpectedVersion =
+          isCustomFetch && typeof fetchValue.expected_version === 'string'
+            ? fetchValue.expected_version.trim()
+            : '';
+
+        if (customUrl) {
+          let parsed;
+          try {
+            parsed = new URL(customUrl);
+          } catch {
+            throw new Error('Invalid payload URL');
           }
-          return sent;
+          if (!['http:', 'https:'].includes(parsed.protocol)) {
+            throw new Error('Unsupported payload URL protocol');
+          }
+          const ext = path.extname(parsed.pathname || '').toLowerCase();
+          const safeExt = ext === '.bin' ? '.bin' : '.elf';
+          const safeStem = (customName || 'external_payload').replace(/[^a-zA-Z0-9._-]/g, '_');
+          const tmpPath = path.join(os.tmpdir(), `${safeStem}${safeExt}`);
+          await downloadAsset(customUrl, tmpPath, {
+            runtime,
+            label: customLabel || (customName ? `External payload (${customName})` : 'External payload'),
+            source_id: customSourceId || customName || null,
+          });
+          return await sendPayloadFile(ip, tmpPath);
         }
-      }
-      let release;
-      if (fetchMode === 'current') {
-        try {
-          release = await fetchReleaseByTag(`v${runtime.version}`);
-        } catch {
+
+        const fetchMode = (fetchValue ? String(fetchValue) : 'latest').trim();
+        if (fetchMode === 'current') {
+          const localPayload = findLocalPayloadElf();
+          if (localPayload) {
+            return await sendPayloadFile(ip, localPayload);
+          }
+        }
+        let release;
+        if (fetchMode === 'current') {
+          try {
+            release = await fetchReleaseByTag(`v${runtime.version}`);
+          } catch {
+            release = await fetchLatestRelease(false);
+          }
+        } else {
           release = await fetchLatestRelease(false);
         }
-      } else {
-        release = await fetchLatestRelease(false);
+        const assets = Array.isArray(release && release.assets) ? release.assets : [];
+        let asset = assets.find((a) => a && a.name === 'ps5upload.elf');
+        if (!asset) asset = assets.find((a) => a && typeof a.name === 'string' && a.name.endsWith('.elf'));
+        if (!asset || !asset.browser_download_url) throw new Error('Payload asset not found in release');
+        const tmpPath = path.join(os.tmpdir(), `ps5upload_${fetchMode}.elf`);
+        await downloadAsset(asset.browser_download_url, tmpPath, {
+          runtime,
+          label: fetchMode === 'current' ? `ps5upload v${runtime.version}` : 'ps5upload latest',
+          source_id: 'ps5upload',
+        });
+        return await sendPayloadFile(ip, tmpPath);
+      } finally {
+        runtime.payloadSendInFlight = false;
       }
-      const assets = Array.isArray(release && release.assets) ? release.assets : [];
-      let asset = assets.find((a) => a && a.name === 'ps5upload.elf');
-      if (!asset) asset = assets.find((a) => a && typeof a.name === 'string' && a.name.endsWith('.elf'));
-      if (!asset || !asset.browser_download_url) throw new Error('Payload asset not found in release');
-      const tmpPath = path.join(os.tmpdir(), `ps5upload_${fetchMode}.elf`);
-      await downloadAsset(asset.browser_download_url, tmpPath);
-      const sent = await sendPayloadFile(ip, tmpPath);
-      const expected = fetchMode === 'current' ? runtime.version : null;
-      const startup = await waitForPayloadStartup(ip, expected, 15000, 500);
-      if (!startup.ok) {
-        throw new Error(`Payload upload completed but startup verification failed: ${startup.error}`);
-      }
-      return sent;
+    }
+
+    case 'payload_download_progress_snapshot': {
+      return runtime.payloadDownloadProgress || null;
     }
     case 'payload_check': {
       const ip = (args && args.ip ? String(args.ip) : '').trim();
@@ -3145,15 +3353,11 @@ async function handleInvoke(cmd, args, runtime) {
           // Stability first: cap payload concurrency at 4 to avoid overwhelming the PS5 side.
           effectivePayloadConnections = Math.max(1, Math.min(4, effectivePayloadConnections));
 
-          // Match desktop Manage Upload defaults (ipcMain.handle('manage_upload')):
-          // - For a big single file: use the lane path with 4 connections.
-          // - Otherwise: use up to 4 workers for payload multi-file uploads.
+          // Match desktop Manage Upload defaults:
+          // - Stability default: do not use parallel offset writes for a single remote file.
+          // - Use up to 4 workers for payload multi-file uploads.
           if (cmd === 'manage_upload' && mode === 'payload') {
-            if (uploadFiles.length === 1 && Number(uploadFiles[0].size || 0) >= LANE_MIN_FILE_SIZE) {
-              effectivePayloadConnections = 4;
-            } else {
-              effectivePayloadConnections = Math.max(1, Math.min(4, uploadFiles.length));
-            }
+            effectivePayloadConnections = Math.max(1, Math.min(4, uploadFiles.length));
           }
 
           if (mode === 'payload') {
@@ -3170,15 +3374,19 @@ async function handleInvoke(cmd, args, runtime) {
             runtime.transferStatus.status = 'Uploading';
             runtime.transferStatus.current_file = '';
 
-              if (uploadFiles.length === 1 && Number(uploadFiles[0].size || 0) >= LANE_MIN_FILE_SIZE) {
-                await uploadLaneSingleFile(ip, destRoot, uploadFiles[0], {
-                  connections: effectivePayloadConnections,
+              if (uploadFiles.length === 1) {
+                // Stability default: avoid parallel offset writes into a single remote file.
+                await uploadFastMultiFile(ip, destRoot, uploadFiles, {
+                  connections: 1,
                   shouldCancel: () => runtime.transferCancel,
-                  onProgress: (sent) => {
+                  onFileStart: (file) => {
+                    runtime.transferStatus.current_file = file && file.rel_path ? file.rel_path : '';
+                  },
+                  onProgress: (sent, file) => {
                     runtime.transferStatus.sent = sent;
                     recordTransferSpeed(runtime, sent, 'payload');
                     runtime.transferStatus.elapsed_secs = (Date.now() - startedAt) / 1000;
-                    runtime.transferStatus.current_file = uploadFiles[0].rel_path || '';
+                    runtime.transferStatus.current_file = file && file.rel_path ? file.rel_path : runtime.transferStatus.current_file;
                   },
                 });
               } else {
@@ -3408,37 +3616,22 @@ async function handleInvoke(cmd, args, runtime) {
             },
           });
         } else {
-          if (Number(stat.size) >= LANE_MIN_FILE_SIZE) {
-            await uploadLaneSingleFile(ip, remoteDir, {
-              rel_path: path.basename(rarPath),
-              abs_path: rarPath,
-              size: stat.size,
-            }, {
-              shouldCancel: () => runtime.manageCancel,
-              onProgress: (sent) => {
-                runtime.transferStatus.sent = sent;
-                recordTransferSpeed(runtime, sent, 'payload');
-                runtime.transferStatus.elapsed_secs = (Date.now() - startedAt) / 1000;
-                runtime.transferStatus.current_file = path.basename(rarPath);
-              },
-            });
-          } else {
-            let sent = 0;
-            await uploadFastOneFile(ip, remoteDir, {
-              rel_path: path.basename(rarPath),
-              abs_path: rarPath,
-              size: stat.size,
-            }, {
-              shouldCancel: () => runtime.manageCancel,
-              onProgress: (delta) => {
-                sent += Number(delta) || 0;
-                runtime.transferStatus.sent = sent;
-                recordTransferSpeed(runtime, sent, 'payload');
-                runtime.transferStatus.elapsed_secs = (Date.now() - startedAt) / 1000;
-                runtime.transferStatus.current_file = path.basename(rarPath);
-              },
-            });
-          }
+          // Stability default: archives are single files; always use one stream.
+          let sent = 0;
+          await uploadFastOneFile(ip, remoteDir, {
+            rel_path: path.basename(rarPath),
+            abs_path: rarPath,
+            size: stat.size,
+          }, {
+            shouldCancel: () => runtime.manageCancel,
+            onProgress: (delta) => {
+              sent += Number(delta) || 0;
+              runtime.transferStatus.sent = sent;
+              recordTransferSpeed(runtime, sent, 'payload');
+              runtime.transferStatus.elapsed_secs = (Date.now() - startedAt) / 1000;
+              runtime.transferStatus.current_file = path.basename(rarPath);
+            },
+          });
         }
 
         const queuedId = await queueExtract(ip, TRANSFER_PORT, remoteRarPath, destPath, { deleteSource: true });
@@ -3483,10 +3676,14 @@ async function handleInvoke(cmd, args, runtime) {
         ? args.storage_paths.filter((v) => typeof v === 'string' && v.trim())
         : [];
       const scanPathsRaw = Array.isArray(args && args.scan_paths) ? args.scan_paths : [];
+      const absoluteScanPaths = scanPathsRaw
+        .map((value) => (value == null ? '' : String(value)).trim().replace(/\\/g, '/'))
+        .map((value) => (value.startsWith('/') ? `/${value.replace(/^\/+/, '').replace(/\/+$/, '')}` : ''))
+        .filter((value, index, array) => value && array.indexOf(value) === index);
       const scanPaths = scanPathsRaw
         .map(normalizeRemoteScanSubpath)
         .filter((value, index, array) => value && array.indexOf(value) === index);
-      const effectiveScanPaths = scanPaths.length > 0 ? scanPaths : ['etaHEN/games', 'homebrew'];
+      const effectiveScanPaths = scanPaths.length > 0 ? scanPaths : ['etaHEN/games', 'etaHEN/homebrew', 'games', 'homebrew'];
       const roots = requestedRoots.length > 0
         ? requestedRoots
         : (await listStorage(ip, TRANSFER_PORT)).map((item) => item.path).filter(Boolean);
@@ -3495,6 +3692,87 @@ async function handleInvoke(cmd, args, runtime) {
       const scannedStorage = [];
       const skippedStorage = [];
       const scannedGamesDirs = [];
+      const scannedGamesDirSet = new Set();
+
+      const inferStorageRootForPath = (pathValue) => {
+        const p = String(pathValue || '');
+        for (const root of roots) {
+          if (!root) continue;
+          if (p === root) return root;
+          if (p.startsWith(root + '/')) return root;
+        }
+        return null;
+      };
+
+      const scanGamesDir = async (storageRoot, gamesDir) => {
+        let entries = [];
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          entries = await listDir(ip, TRANSFER_PORT, gamesDir);
+          if (!scannedGamesDirSet.has(gamesDir)) {
+            scannedGamesDirSet.add(gamesDir);
+            scannedGamesDirs.push(gamesDir);
+          }
+        } catch {
+          return;
+        }
+        const gameDirs = entries.filter((entry) => isRemoteDirEntry(entry) && entry.name);
+        for (const entry of gameDirs) {
+          const folderName = String(entry.name);
+          const gamePath = joinRemoteScanPath(gamesDir, folderName);
+          const candidates = [
+            joinRemoteScanPath(gamePath, 'sce_sys', 'param.json'),
+            joinRemoteScanPath(gamePath, 'param.json'),
+          ];
+          let marker = null;
+          let meta = null;
+          for (const candidate of candidates) {
+            try {
+              // eslint-disable-next-line no-await-in-loop
+              const bytes = await downloadRemoteFileToBuffer(ip, candidate, 512 * 1024);
+              const parsed = JSON.parse(bytes.toString('utf8'));
+              meta = parseGameMetaFromParam(parsed);
+              if (meta) {
+                marker = candidate;
+                break;
+              }
+            } catch {
+              // ignore
+            }
+          }
+          if (!meta) continue;
+
+          let cover = null;
+          const coverCandidates = [
+            joinRemoteScanPath(gamePath, 'sce_sys', 'icon0.png'),
+            joinRemoteScanPath(gamePath, 'sce_sys', 'icon0.jpg'),
+            joinRemoteScanPath(gamePath, 'sce_sys', 'icon0.jpeg'),
+          ];
+          for (const coverPath of coverCandidates) {
+            try {
+              // eslint-disable-next-line no-await-in-loop
+              const bytes = await downloadRemoteFileToBuffer(ip, coverPath, 2 * 1024 * 1024);
+              const dataUrl = bufferToDataUrl(bytes, coverPath);
+              if (dataUrl) {
+                cover = { data_url: dataUrl };
+                break;
+              }
+            } catch {
+              // ignore
+            }
+          }
+
+          games.push({
+            storage_path: storageRoot,
+            games_path: gamesDir,
+            path: gamePath,
+            folder_name: folderName,
+            marker_file: marker,
+            meta,
+            cover,
+          });
+        }
+      };
 
       for (const storagePath of roots) {
         let storageOk = true;
@@ -3512,70 +3790,19 @@ async function handleInvoke(cmd, args, runtime) {
 
         for (const subpath of effectiveScanPaths) {
           const gamesDir = joinRemoteScanPath(storagePath, subpath);
-          let entries = [];
-          try {
-            // eslint-disable-next-line no-await-in-loop
-            entries = await listDir(ip, TRANSFER_PORT, gamesDir);
-            scannedGamesDirs.push(gamesDir);
-          } catch {
-            continue;
-          }
-          const gameDirs = entries.filter((entry) => isRemoteDirEntry(entry) && entry.name);
-          for (const entry of gameDirs) {
-            const folderName = String(entry.name);
-            const gamePath = joinRemoteScanPath(gamesDir, folderName);
-            const candidates = [
-              joinRemoteScanPath(gamePath, 'sce_sys', 'param.json'),
-              joinRemoteScanPath(gamePath, 'param.json'),
-            ];
-            let marker = null;
-            let meta = null;
-            for (const candidate of candidates) {
-              try {
-                // eslint-disable-next-line no-await-in-loop
-                const bytes = await downloadRemoteFileToBuffer(ip, candidate, 512 * 1024);
-                const parsed = JSON.parse(bytes.toString('utf8'));
-                meta = parseGameMetaFromParam(parsed);
-                if (meta) {
-                  marker = candidate;
-                  break;
-                }
-              } catch {
-                // ignore
-              }
-            }
-            if (meta) {
-              let cover = null;
-              const coverCandidates = [
-                joinRemoteScanPath(gamePath, 'sce_sys', 'icon0.png'),
-                joinRemoteScanPath(gamePath, 'sce_sys', 'icon0.jpg'),
-                joinRemoteScanPath(gamePath, 'sce_sys', 'icon0.jpeg'),
-              ];
-              for (const coverPath of coverCandidates) {
-                try {
-                  // eslint-disable-next-line no-await-in-loop
-                  const bytes = await downloadRemoteFileToBuffer(ip, coverPath, 2 * 1024 * 1024);
-                  const dataUrl = bufferToDataUrl(bytes, coverPath);
-                  if (dataUrl) {
-                    cover = { data_url: dataUrl };
-                    break;
-                  }
-                } catch {
-                  // ignore
-                }
-              }
-              games.push({
-                storage_path: storagePath,
-                games_path: gamesDir,
-                path: gamePath,
-                folder_name: folderName,
-                marker_file: marker,
-                meta,
-                cover,
-              });
-            }
-          }
+          // eslint-disable-next-line no-await-in-loop
+          await scanGamesDir(storagePath, gamesDir);
         }
+      }
+
+      for (const absDir of absoluteScanPaths) {
+        const inferredRoot = inferStorageRootForPath(absDir);
+        const storageRoot = inferredRoot || absDir;
+        if (!scannedStorage.includes(storageRoot) && storageRoot) {
+          scannedStorage.push(storageRoot);
+        }
+        // eslint-disable-next-line no-await-in-loop
+        await scanGamesDir(storageRoot, absDir);
       }
 
       return {
@@ -3760,6 +3987,7 @@ function buildServer(config) {
     payloadAutoReloadEnabled: false,
     payloadAutoReloadMode: 'current',
     payloadAutoReloadPath: '',
+    payloadSendInFlight: false,
     payloadStatus: { status: null, error: null, updated_at_ms: 0 },
     manageIp: '',
     managePath: '/data',
@@ -3808,34 +4036,55 @@ function buildServer(config) {
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Host File Browser</title>
   <style>
-    :root{--bg:#070d18;--surface:#0f1729;--surface-2:#101d33;--surface-3:#0d1628;--line:#263a5d;--text:#e8f0ff;--muted:#90a8cf;--accent:#5ea1ff;--accent-2:#22d3ee;--ok:#22c55e}
+    :root{
+      --bg:#f4f6f8;--surface:#ffffff;--surface-2:#f8fafc;--surface-3:#ffffff;
+      --line:rgba(16,24,40,.12);--text:#1b1f26;--muted:#546274;--accent:#2563eb;--accent-2:#0ea5e9;--ok:#22c55e;
+      --btn-neutral-bg:#eef2f7;--btn-neutral-hover:#e2e8f0;--btn-neutral-text:#111827;--btn-neutral-border:rgba(16,24,40,.14);
+      --btn-primary-bg:#2563eb;--btn-primary-hover:#1d4ed8;--btn-primary-text:#ffffff;
+      --btn-danger-bg:#dc2626;--btn-danger-hover:#b91c1c;--btn-danger-text:#ffffff;
+      --focus-ring:0 0 0 3px rgba(37,99,235,.28);
+    }
+    @media (prefers-color-scheme: dark){
+      :root{
+        --bg:#070d18;--surface:#0f1729;--surface-2:#101d33;--surface-3:#0d1628;
+        --line:rgba(255,255,255,.14);--text:#e8f0ff;--muted:#90a8cf;--accent:#60a5fa;--accent-2:#22d3ee;--ok:#22c55e;
+        --btn-neutral-bg:#1f2937;--btn-neutral-hover:#273447;--btn-neutral-text:#e2e8f0;--btn-neutral-border:rgba(255,255,255,.16);
+        --btn-primary-bg:#3b82f6;--btn-primary-hover:#2563eb;--btn-primary-text:#f8fafc;
+        --btn-danger-bg:#ef4444;--btn-danger-hover:#dc2626;--btn-danger-text:#ffffff;
+        --focus-ring:0 0 0 3px rgba(96,165,250,.38);
+      }
+    }
     *{box-sizing:border-box}
-    body{margin:0;font-family:"Noto Sans","Segoe UI",Arial,sans-serif;background:radial-gradient(1000px 560px at 12% -8%,#1c3057 0%,#070d18 56%),var(--bg);color:var(--text)}
+    body{margin:0;font-family:"Noto Sans","Segoe UI",Arial,sans-serif;background:radial-gradient(1000px 560px at 12% -8%,color-mix(in srgb,var(--accent) 24%,transparent) 0%,var(--bg) 56%),var(--bg);color:var(--text)}
     .app{display:grid;grid-template-columns:260px 1fr;grid-template-rows:auto auto 1fr auto;height:100vh}
-    .head{grid-column:1/-1;padding:14px 16px;border-bottom:1px solid var(--line);background:linear-gradient(90deg,#111c31,#0d1730);font-weight:700}
+    .head{grid-column:1/-1;padding:14px 16px;border-bottom:1px solid var(--line);background:linear-gradient(90deg,color-mix(in srgb,var(--surface) 86%,var(--surface-2) 14%),var(--surface-2));font-weight:700}
     .sub{display:block;font-weight:400;color:var(--muted);font-size:12px;margin-top:3px}
-    .roots{border-right:1px solid var(--line);overflow:auto;padding:10px 9px;background:linear-gradient(180deg,rgba(16,26,46,.92),rgba(10,17,31,.86))}
+    .roots{border-right:1px solid var(--line);overflow:auto;padding:10px 9px;background:linear-gradient(180deg,color-mix(in srgb,var(--surface-2) 92%,transparent),color-mix(in srgb,var(--surface) 88%,transparent))}
     .roots-title{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.12em;margin:4px 6px 10px}
     .rootbtn,.entry{width:100%;text-align:left;border:1px solid var(--line);background:var(--surface);border-radius:11px;padding:8px 10px;margin-bottom:7px;cursor:pointer;color:var(--text);transition:border-color .12s,transform .12s,background .12s}
     .rootbtn{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-    .rootbtn{background:transparent;border-style:dashed;color:#b6c9e8}
-    .rootbtn:hover,.entry:hover{border-color:var(--accent);transform:translateY(-1px);background:#12213c}
-    .toolbar{grid-column:2/3;display:flex;gap:8px;padding:10px;border-bottom:1px solid var(--line);background:rgba(15,25,44,.95)}
+    .rootbtn{background:transparent;border-style:dashed;color:var(--muted)}
+    .rootbtn:hover,.entry:hover{border-color:var(--accent);transform:translateY(-1px);background:color-mix(in srgb,var(--surface-2) 88%,var(--accent) 12%)}
+    .toolbar{grid-column:2/3;display:flex;gap:8px;padding:10px;border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--surface) 92%,var(--surface-2) 8%)}
     .toolbar input{flex:1;padding:9px 10px;border:1px solid var(--line);border-radius:9px;background:var(--surface-3);color:var(--text)}
+    .toolbar input:focus-visible{outline:none;border-color:var(--accent);box-shadow:var(--focus-ring)}
     .toolbar .small{width:165px;max-width:22vw;min-width:120px}
     .toolbar .toggle{display:flex;align-items:center;gap:6px;padding:0 4px;color:var(--muted);font-size:12px;white-space:nowrap}
     .toolbar .toggle input{accent-color:var(--accent);width:15px;height:15px}
-    .list{grid-column:2/3;overflow:auto;padding:10px;background:rgba(8,14,26,.58)}
+    .list{grid-column:2/3;overflow:auto;padding:10px;background:color-mix(in srgb,var(--surface) 92%,transparent)}
     .entry{display:flex;align-items:center;gap:9px}
     .entry .icon{width:18px;height:18px;min-width:18px;display:flex;align-items:center;justify-content:center;color:#8cb6ff}
     .entry .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
     .entry .meta{margin-left:auto;border:none;background:none;padding:0;color:#7e98c3}
-    .entry.sel{border-color:var(--accent-2);background:#132648}
+    .entry.sel{border-color:var(--accent-2);background:color-mix(in srgb,var(--surface-2) 72%,var(--accent-2) 28%)}
     .empty{padding:18px 10px;color:var(--muted)}
-    .foot{grid-column:1/-1;display:flex;justify-content:space-between;gap:8px;padding:10px;border-top:1px solid var(--line);background:#0e1830}
+    .foot{grid-column:1/-1;display:flex;justify-content:space-between;gap:8px;padding:10px;border-top:1px solid var(--line);background:color-mix(in srgb,var(--surface) 90%,var(--surface-2) 10%)}
     .hint{color:var(--muted);font-size:12px;align-self:center}
-    button{padding:8px 12px;border:1px solid var(--line);background:#111f38;color:var(--text);border-radius:9px;cursor:pointer}
-    .primary{background:linear-gradient(135deg,var(--accent),var(--accent-2));color:white;border-color:transparent}
+    button{padding:8px 12px;border:1px solid var(--btn-neutral-border);background:var(--btn-neutral-bg);color:var(--btn-neutral-text);border-radius:9px;cursor:pointer;font-weight:650;transition:background-color .15s,border-color .15s,transform .15s,box-shadow .15s}
+    button:hover{background:var(--btn-neutral-hover);border-color:var(--accent);transform:translateY(-1px)}
+    button:focus-visible{outline:none;box-shadow:var(--focus-ring)}
+    button.primary{background:var(--btn-primary-bg);color:var(--btn-primary-text);border-color:transparent}
+    button.primary:hover{background:var(--btn-primary-hover)}
     .group{display:flex;gap:8px}
     @media (max-width: 940px){
       .app{grid-template-columns:1fr;grid-template-rows:auto auto 1fr auto}

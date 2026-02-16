@@ -5,12 +5,128 @@
   --ps-blue: #2a6bff;
   --ps-cyan: #0ea5e9;
   --ps-green: #22c55e;
+  --ps-orange: #f59e0b;
+  --ps-red: #ef4444;
   --ps-border: rgba(16, 24, 40, 0.1);
   --ps-shadow: rgba(16, 24, 40, 0.09);
   --ps-muted: #546274;
   --ps-panel: #ffffff;
   --ps-surface-alt: #f1f5f9;
   --ps-gradient: linear-gradient(135deg, #2a6bff 0%, #0ea5e9 100%);
+  --ps-focus-ring: rgba(37, 99, 235, 0.28);
+  --ps-btn-neutral-bg: #eef2f7;
+  --ps-btn-neutral-hover: #e2e8f0;
+  --ps-btn-neutral-border: rgba(16, 24, 40, 0.12);
+  --ps-btn-neutral-text: #111827;
+  --ps-btn-primary-bg: #2563eb;
+  --ps-btn-primary-hover: #1d4ed8;
+  --ps-btn-primary-text: #ffffff;
+  --ps-btn-success-bg: #15803d;
+  --ps-btn-success-hover: #166534;
+  --ps-btn-success-text: #ffffff;
+  --ps-btn-warning-bg: #d97706;
+  --ps-btn-warning-hover: #b45309;
+  --ps-btn-warning-text: #ffffff;
+  --ps-btn-info-bg: #0284c7;
+  --ps-btn-info-hover: #0369a1;
+  --ps-btn-info-text: #ffffff;
+  --ps-btn-danger-bg: #dc2626;
+  --ps-btn-danger-hover: #b91c1c;
+  --ps-btn-danger-text: #ffffff;
+  --ps-btn-ghost-bg: transparent;
+  --ps-btn-ghost-hover: #e2e8f0;
+  --ps-btn-ghost-border: rgba(16, 24, 40, 0.15);
+  --ps-btn-ghost-text: #111827;
+  --ps-btn-disabled-bg: #e5e7eb;
+  --ps-btn-disabled-text: #6b7280;
+}
+
+:root[data-theme="dark"] {
+  --ps-white: #f1f5f9;
+  --ps-shell: #0f172a;
+  --ps-core: #020617;
+  --ps-blue: #3b82f6;
+  --ps-cyan: #22d3ee;
+  --ps-green: #4ade80;
+  --ps-orange: #fbbf24;
+  --ps-red: #f87171;
+  --ps-border: rgba(255, 255, 255, 0.1);
+  --ps-shadow: rgba(0, 0, 0, 0.4);
+  --ps-muted: #9aa6b2;
+  --ps-panel: #0f172a;
+  --ps-surface-alt: #1e293b;
+  --ps-gradient: linear-gradient(135deg, #3b82f6 0%, #22d3ee 100%);
+  --ps-focus-ring: rgba(96, 165, 250, 0.38);
+  --ps-btn-neutral-bg: #1f2937;
+  --ps-btn-neutral-hover: #273447;
+  --ps-btn-neutral-border: rgba(255, 255, 255, 0.14);
+  --ps-btn-neutral-text: #e2e8f0;
+  --ps-btn-primary-bg: #3b82f6;
+  --ps-btn-primary-hover: #2563eb;
+  --ps-btn-primary-text: #f8fafc;
+  --ps-btn-success-bg: #22c55e;
+  --ps-btn-success-hover: #16a34a;
+  --ps-btn-success-text: #052e16;
+  --ps-btn-warning-bg: #f59e0b;
+  --ps-btn-warning-hover: #d97706;
+  --ps-btn-warning-text: #111827;
+  --ps-btn-info-bg: #0ea5e9;
+  --ps-btn-info-hover: #0284c7;
+  --ps-btn-info-text: #082f49;
+  --ps-btn-danger-bg: #ef4444;
+  --ps-btn-danger-hover: #dc2626;
+  --ps-btn-danger-text: #ffffff;
+  --ps-btn-ghost-bg: transparent;
+  --ps-btn-ghost-hover: #1f2b3e;
+  --ps-btn-ghost-border: rgba(255, 255, 255, 0.18);
+  --ps-btn-ghost-text: #e2e8f0;
+  --ps-btn-disabled-bg: #334155;
+  --ps-btn-disabled-text: #94a3b8;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ps-white: #f1f5f9;
+    --ps-shell: #0f172a;
+    --ps-core: #020617;
+    --ps-blue: #3b82f6;
+    --ps-cyan: #22d3ee;
+    --ps-green: #4ade80;
+    --ps-orange: #fbbf24;
+    --ps-red: #f87171;
+    --ps-border: rgba(255, 255, 255, 0.1);
+    --ps-shadow: rgba(0, 0, 0, 0.4);
+    --ps-muted: #9aa6b2;
+    --ps-panel: #0f172a;
+    --ps-surface-alt: #1e293b;
+    --ps-gradient: linear-gradient(135deg, #3b82f6 0%, #22d3ee 100%);
+    --ps-focus-ring: rgba(96, 165, 250, 0.38);
+    --ps-btn-neutral-bg: #1f2937;
+    --ps-btn-neutral-hover: #273447;
+    --ps-btn-neutral-border: rgba(255, 255, 255, 0.14);
+    --ps-btn-neutral-text: #e2e8f0;
+    --ps-btn-primary-bg: #3b82f6;
+    --ps-btn-primary-hover: #2563eb;
+    --ps-btn-primary-text: #f8fafc;
+    --ps-btn-success-bg: #22c55e;
+    --ps-btn-success-hover: #16a34a;
+    --ps-btn-success-text: #052e16;
+    --ps-btn-warning-bg: #f59e0b;
+    --ps-btn-warning-hover: #d97706;
+    --ps-btn-warning-text: #111827;
+    --ps-btn-info-bg: #0ea5e9;
+    --ps-btn-info-hover: #0284c7;
+    --ps-btn-info-text: #082f49;
+    --ps-btn-danger-bg: #ef4444;
+    --ps-btn-danger-hover: #dc2626;
+    --ps-btn-danger-text: #ffffff;
+    --ps-btn-ghost-bg: transparent;
+    --ps-btn-ghost-hover: #1f2b3e;
+    --ps-btn-ghost-border: rgba(255, 255, 255, 0.18);
+    --ps-btn-ghost-text: #e2e8f0;
+    --ps-btn-disabled-bg: #334155;
+    --ps-btn-disabled-text: #94a3b8;
+  }
 }
 
 * {
@@ -22,7 +138,7 @@ body {
   min-height: 100vh;
   font-family: "Noto Sans", "Segoe UI", system-ui, sans-serif;
   color: var(--ps-white);
-  background: radial-gradient(circle at 20% 10%, #e7f0ff 0%, #f3f6fa 35%, #f6f8fb 100%);
+  background: radial-gradient(circle at 20% 10%, color-mix(in srgb, var(--ps-blue) 16%, transparent) 0%, var(--ps-core) 45%, var(--ps-core) 100%);
 }
 
 .bg-orb {
@@ -36,7 +152,7 @@ body {
 .orb-a {
   width: 260px;
   height: 260px;
-  background: rgba(42, 107, 255, 0.19);
+  background: color-mix(in srgb, var(--ps-blue) 24%, transparent);
   top: -70px;
   right: 8%;
 }
@@ -44,7 +160,7 @@ body {
 .orb-b {
   width: 220px;
   height: 220px;
-  background: rgba(14, 165, 233, 0.15);
+  background: color-mix(in srgb, var(--ps-cyan) 20%, transparent);
   bottom: -60px;
   left: 5%;
 }
@@ -76,7 +192,7 @@ body {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  background: linear-gradient(120deg, #f9fcff 0%, #eef6ff 100%);
+  background: color-mix(in srgb, var(--ps-shell) 72%, var(--ps-surface-alt) 28%);
 }
 
 .left {
@@ -126,19 +242,20 @@ h3 {
 }
 
 .pill {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
   border-radius: 999px;
   padding: 6px 10px;
   font-size: 0.82rem;
   font-weight: 700;
   border: 1px solid var(--ps-border);
-  background: #fff;
+  background: color-mix(in srgb, var(--ps-shell) 70%, var(--ps-surface-alt) 30%);
 }
 
 .pill.ok {
-  background: rgba(34, 197, 94, 0.14);
-  color: #0f6a34;
-  border-color: rgba(34, 197, 94, 0.35);
+  background: color-mix(in srgb, var(--ps-green) 18%, transparent);
+  color: color-mix(in srgb, var(--ps-green) 74%, var(--ps-white) 26%);
+  border-color: color-mix(in srgb, var(--ps-green) 42%, transparent);
 }
 
 .stack {
@@ -154,27 +271,135 @@ label {
 }
 
 input,
-button {
+button,
+.btn {
   font: inherit;
   border-radius: 10px;
-  border: 1px solid var(--ps-border);
   padding: 10px 12px;
 }
 
 input {
-  background: #fff;
+  border: 1px solid var(--ps-border);
+  background: var(--ps-shell);
+  color: var(--ps-white);
 }
 
-button {
-  border: 0;
-  background: var(--ps-gradient);
-  color: #fff;
-  font-weight: 700;
+input:focus-visible {
+  outline: none;
+  border-color: var(--ps-blue);
+  box-shadow: 0 0 0 3px var(--ps-focus-ring);
+}
+
+button,
+.btn {
+  border: 1px solid var(--ps-btn-neutral-border);
+  background: var(--ps-btn-neutral-bg);
+  color: var(--ps-btn-neutral-text);
+  font-weight: 600;
   cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
 }
 
-button:hover {
-  filter: brightness(1.05);
+button:hover,
+.btn:hover {
+  background: var(--ps-btn-neutral-hover);
+  border-color: color-mix(in srgb, var(--ps-btn-neutral-border) 60%, var(--ps-blue) 40%);
+  transform: translateY(-1px);
+}
+
+button:active,
+.btn:active {
+  transform: translateY(0);
+}
+
+button:focus-visible,
+.btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--ps-focus-ring);
+}
+
+button:disabled,
+.btn:disabled,
+button[disabled],
+.btn[disabled] {
+  opacity: 1;
+  background: var(--ps-btn-disabled-bg);
+  color: var(--ps-btn-disabled-text);
+  border-color: color-mix(in srgb, var(--ps-btn-disabled-bg) 80%, var(--ps-border) 20%);
+  cursor: not-allowed;
+  transform: none;
+}
+
+.btn.primary,
+button.primary {
+  background: var(--ps-btn-primary-bg);
+  color: var(--ps-btn-primary-text);
+  border-color: transparent;
+}
+
+.btn.primary:hover,
+button.primary:hover {
+  background: var(--ps-btn-primary-hover);
+}
+
+.btn.success,
+button.success {
+  background: var(--ps-btn-success-bg);
+  color: var(--ps-btn-success-text);
+  border-color: transparent;
+}
+
+.btn.success:hover,
+button.success:hover {
+  background: var(--ps-btn-success-hover);
+}
+
+.btn.warning,
+button.warning {
+  background: var(--ps-btn-warning-bg);
+  color: var(--ps-btn-warning-text);
+  border-color: transparent;
+}
+
+.btn.warning:hover,
+button.warning:hover {
+  background: var(--ps-btn-warning-hover);
+}
+
+.btn.info,
+button.info {
+  background: var(--ps-btn-info-bg);
+  color: var(--ps-btn-info-text);
+  border-color: transparent;
+}
+
+.btn.info:hover,
+button.info:hover {
+  background: var(--ps-btn-info-hover);
+}
+
+.btn.danger,
+button.danger {
+  background: var(--ps-btn-danger-bg);
+  color: var(--ps-btn-danger-text);
+  border-color: transparent;
+}
+
+.btn.danger:hover,
+button.danger:hover {
+  background: var(--ps-btn-danger-hover);
+}
+
+.btn.ghost,
+button.ghost {
+  background: var(--ps-btn-ghost-bg);
+  color: var(--ps-btn-ghost-text);
+  border-color: var(--ps-btn-ghost-border);
+}
+
+.btn.ghost:hover,
+button.ghost:hover {
+  background: var(--ps-btn-ghost-hover);
 }
 
 .metric-grid {
@@ -215,7 +440,7 @@ button:hover {
   border: 1px solid var(--ps-border);
   border-radius: 10px;
   padding: 10px;
-  background: #fff;
+  background: var(--ps-shell);
 }
 
 pre {
@@ -227,7 +452,7 @@ pre {
 .code {
   border: 1px solid var(--ps-border);
   border-radius: 10px;
-  background: #f8fafc;
+  background: var(--ps-surface-alt);
   padding: 10px;
   font-size: 0.82rem;
   line-height: 1.5;

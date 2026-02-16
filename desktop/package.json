@@ -1,13 +1,13 @@
 {
   "name": "ps5upload-desktop",
   "private": true,
-  "version": "1.5.3",
+  "version": "1.5.4",
   "description": "PS5 Upload Desktop Application",
   "homepage": "https://github.com/phantomptr/ps5upload",
   "author": "PhantomPtr <phantomptr@gmail.com>",
   "main": "electron/main.js",
   "scripts": {
-    "dev": "concurrently -k \"vite\" \"wait-on http://localhost:1420 && ELECTRON_DISABLE_SANDBOX=1 ELECTRON_DISABLE_GPU=1 electron .\"",
+    "dev": "concurrently -k \"vite\" \"node ./scripts/wait-for-url.mjs http://localhost:1420 && ELECTRON_DISABLE_SANDBOX=1 ELECTRON_DISABLE_GPU=1 electron .\"",
     "build": "vite build && electron-builder",
     "build:vite": "vite build",
     "preview": "vite preview",
@@ -33,8 +33,7 @@
     "electron": "^40.0.0",
     "electron-builder": "^26.5.0",
     "typescript": "^5.4.0",
-    "vite": "^7.3.1",
-    "wait-on": "^7.2.0"
+    "vite": "^7.3.1"
   },
   "overrides": {
     "tar": "7.5.7"

@@ -122,7 +122,7 @@ all: $(TARGET) $(KILLER_TARGET) $(DEBUGGER_TARGET)
 	@echo "✓ Killer built: $(KILLER_TARGET)"
 	@echo "  Load this file to stop ps5upload if it is stuck"
 	@echo "✓ Debugger built: $(DEBUGGER_TARGET)"
-	@echo "  Load this file to capture debug logs alongside ps5upload"
+	@echo "  Load this file to run ps5upload with live log streaming on port 9114"
 
 $(TARGET): $(OBJS)
 	@echo "Linking $(TARGET) with C++..."
@@ -141,17 +141,26 @@ $(KILLER_TARGET): $(KILLER_OBJS)
 debugger: $(DEBUGGER_TARGET)
 	@echo "✓ Debugger built: $(DEBUGGER_TARGET)"
 
-DEBUGGER_SRCS := debugger.c notify.c
-DEBUGGER_OBJS := $(DEBUGGER_SRCS:.c=.o)
+DEBUGGER_C_SRCS := $(C_SRCS)
+DEBUGGER_C_OBJS := $(DEBUGGER_C_SRCS:.c=.debug.o)
+DEBUGGER_UNRAR_OBJS := $(UNRAR_SRCS:.cpp=.debug.o)
+DEBUGGER_OBJS := $(DEBUGGER_C_OBJS) $(DEBUGGER_UNRAR_OBJS)
+DEBUGGER_CFLAGS := $(CFLAGS) -DPS5UPLOAD_DEBUGGER_BUILD=1
+DEBUGGER_CXXFLAGS := $(UNRAR_CXXFLAGS) -DPS5UPLOAD_DEBUGGER_BUILD=1
 
 $(DEBUGGER_TARGET): $(DEBUGGER_OBJS)
-	@echo "Linking $(DEBUGGER_TARGET)..."
-	$(CC) $(CFLAGS) -o $@ $(DEBUGGER_OBJS) -lkernel -lpthread
+	@echo "Linking $(DEBUGGER_TARGET) with C++..."
+	$(CXX) $(DEBUGGER_CXXFLAGS) -o $@ $(DEBUGGER_OBJS) $(LDADD)
 
 # C sources
 %.o: %.c
 	@echo "Compiling C: $<..."
 	$(CC) $(CFLAGS) -c $< -o $@
+
+# Debugger C sources
+%.debug.o: %.c
+	@echo "Compiling C (debugger): $<..."
+	$(CC) $(DEBUGGER_CFLAGS) -c $< -o $@
 
 # C third-party sources
 third_party/zstd/%.o: third_party/zstd/%.c
@@ -166,6 +175,11 @@ third_party/lzma_sdk/%.o: third_party/lzma_sdk/%.c
 $(UNRAR_DIR)/%.o: $(UNRAR_DIR)/%.cpp
 	@echo "Compiling C++: $<..."
 	$(CXX) $(UNRAR_CXXFLAGS) -c $< -o $@
+
+# C++ unrar sources for debugger payload
+$(UNRAR_DIR)/%.debug.o: $(UNRAR_DIR)/%.cpp
+	@echo "Compiling C++ (debugger): $<..."
+	$(CXX) $(DEBUGGER_CXXFLAGS) -c $< -o $@
 
 notify.o: notify.c notify.h config.h
 	$(CC) $(CFLAGS) -c notify.c -o notify.o

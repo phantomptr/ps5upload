@@ -41,6 +41,7 @@ const PACK_BUFFER_MIN = 4 * 1024 * 1024; // 4MB
 const SMALL_FILE_PACK_MIN = 8 * 1024 * 1024; // 8MB floor during small-file runs
 const SEND_CHUNK_SIZE = 4 * 1024 * 1024; // 4MB
 const SEND_CHUNK_MIN = 512 * 1024; // 512KB
+const BINARY_UPLOAD_CHUNK_SIZE = 4 * 1024 * 1024; // 4MB hard cap for binary command chunks
 const ADAPTIVE_POLL_MS = 2000;
 const TINY_FILE_AVG_BYTES = 64 * 1024; // 64KB
 const SMALL_FILE_AVG_BYTES = 256 * 1024; // 256KB
@@ -58,6 +59,7 @@ const LANE_HUGE_CHUNK_BYTES = 1536 * 1024 * 1024; // 1.5GB
 const LANE_LARGE_CHUNK_BYTES = 512 * 1024 * 1024; // 512MB
 const LANE_DEFAULT_CHUNK_BYTES = 256 * 1024 * 1024; // 256MB
 const LANE_MIN_FILE_SIZE = 512 * 1024 * 1024; // 512MB
+const PAYLOAD_HUGE_FILE_BYTES = 1024 * 1024 * 1024; // 1GB
 
 const MAD_MAX_WORKERS = 8;
 const MAD_MAX_HUGE_CHUNK_BYTES = 2 * 1024 * 1024 * 1024; // 2GB
@@ -81,7 +83,7 @@ const UploadResp = {
 };
 
 let sleepBlockerId = null;
-const VERSION = '1.5.3';
+const VERSION = '1.5.4';
 const IS_WINDOWS = process.platform === 'win32';
 
 function beginManageOperation(op) {
@@ -153,7 +155,7 @@ const COVER_CANDIDATES = [
   'cover.jpg',
   'tile0.png',
 ];
-const DEFAULT_GAMES_SCAN_PATHS = ['etaHEN/games', 'homebrew'];
+const DEFAULT_GAMES_SCAN_PATHS = ['etaHEN/games', 'etaHEN/homebrew', 'games', 'homebrew'];
 
 async function tryExecFile(command, args, options = {}) {
   try {
@@ -955,11 +957,62 @@ async function scanRemoteGames(ip, storagePaths = [], scanPaths = []) {
   const roots = Array.isArray(storagePaths)
     ? storagePaths.filter((value) => typeof value === 'string' && value.trim().length > 0)
     : [];
-  const requestedSubpathsRaw = Array.isArray(scanPaths) ? scanPaths : [];
-  const requestedSubpaths = requestedSubpathsRaw
+  const requestedRaw = Array.isArray(scanPaths) ? scanPaths : [];
+  const absoluteScanPaths = requestedRaw
+    .map((value) => (value == null ? '' : String(value)).trim().replace(/\\/g, '/'))
+    .map((value) => (value.startsWith('/') ? `/${value.replace(/^\/+/, '').replace(/\/+$/, '')}` : ''))
+    .filter((value, index, array) => value && array.indexOf(value) === index);
+  const requestedSubpaths = requestedRaw
     .map(normalizeRemoteScanSubpath)
     .filter((value, index, array) => value && array.indexOf(value) === index);
   const scanSubpaths = requestedSubpaths.length > 0 ? requestedSubpaths : DEFAULT_GAMES_SCAN_PATHS;
+  const scannedGamesDirSet = new Set();
+
+  const inferStorageRootForPath = (pathValue) => {
+    const p = String(pathValue || '');
+    for (const root of roots) {
+      if (!root) continue;
+      if (p === root) return root;
+      if (p.startsWith(root + '/')) return root;
+    }
+    return null;
+  };
+
+  const scanGamesDir = async (storageRoot, gamesDir) => {
+    let folderEntries = [];
+    try {
+      folderEntries = await listDir(ip, TRANSFER_PORT, gamesDir);
+      if (!scannedGamesDirSet.has(gamesDir)) {
+        scannedGamesDirSet.add(gamesDir);
+        scannedGamesDirs.push(gamesDir);
+      }
+    } catch {
+      return;
+    }
+    const gameFolders = folderEntries.filter((entry) => isRemoteDirEntry(entry) && entry.name);
+    const found = await mapWithConcurrency(gameFolders, 1, async (entry) => {
+      const folderName = String(entry.name);
+      const gamePath = joinRemoteScanPath(gamesDir, folderName);
+      try {
+        const details = await loadRemoteGameMetaForPath(ip, gamePath);
+        if (!details.marker_file && !details.meta) return null;
+        return {
+          storage_path: storageRoot,
+          games_path: gamesDir,
+          path: gamePath,
+          folder_name: folderName,
+          marker_file: details.marker_file || null,
+          meta: details.meta || null,
+          cover: details.cover || null
+        };
+      } catch {
+        return null;
+      }
+    });
+    for (const item of found) {
+      if (item) games.push(item);
+    }
+  };
 
   for (const storagePath of roots) {
     try {
@@ -971,38 +1024,20 @@ async function scanRemoteGames(ip, storagePaths = [], scanPaths = []) {
     }
 
     for (const subpath of scanSubpaths) {
-      const gamesDir = joinRemoteScanPath(storagePath, subpath);
-      let folderEntries = [];
-      try {
-        folderEntries = await listDir(ip, TRANSFER_PORT, gamesDir);
-        scannedGamesDirs.push(gamesDir);
-      } catch {
-        continue;
-      }
-      const gameFolders = folderEntries.filter((entry) => isRemoteDirEntry(entry) && entry.name);
-      const found = await mapWithConcurrency(gameFolders, 1, async (entry) => {
-        const folderName = String(entry.name);
-        const gamePath = joinRemoteScanPath(gamesDir, folderName);
-        try {
-          const details = await loadRemoteGameMetaForPath(ip, gamePath);
-          if (!details.marker_file && !details.meta) return null;
-          return {
-            storage_path: storagePath,
-            games_path: gamesDir,
-            path: gamePath,
-            folder_name: folderName,
-            marker_file: details.marker_file || null,
-            meta: details.meta || null,
-            cover: details.cover || null
-          };
-        } catch {
-          return null;
-        }
-      });
-      for (const item of found) {
-        if (item) games.push(item);
-      }
+      // eslint-disable-next-line no-await-in-loop
+      await scanGamesDir(storagePath, joinRemoteScanPath(storagePath, subpath));
     }
+  }
+
+  // Scan any additional absolute game roots the user provided (example: /data/games).
+  for (const absDir of absoluteScanPaths) {
+    const inferredRoot = inferStorageRootForPath(absDir);
+    const storageRoot = inferredRoot || absDir;
+    if (!scannedStorage.includes(storageRoot) && storageRoot) {
+      scannedStorage.push(storageRoot);
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await scanGamesDir(storageRoot, absDir);
   }
 
   return {
@@ -1204,19 +1239,24 @@ const uploadFilesViaFtp = async (host, port, destRoot, files, opts = {}) => {
         const rel = String(file.rel_path || '').replace(/\\/g, '/');
         const remotePath = joinRemotePath(destRoot, rel);
         const remoteDir = path.posix.dirname(remotePath);
-        if (remoteDir && remoteDir !== '.' && remoteDir !== '/') {
-          await client.ensureDir(remoteDir);
-        }
+        const releaseRemote = await remoteFileMutex.acquire(remotePath);
         try {
-          await client.uploadFrom(file.abs_path, remotePath);
-        } catch (err) {
-          const code = err?.code;
-          if (code === 'ENOENT' || code === 'EACCES' || code === 'EPERM') {
-            if (log) log(`Skipping missing/unreadable file: ${file.rel_path}`, 'warn');
-            if (typeof onSkipFile === 'function') onSkipFile(file, err);
-            continue;
+          if (remoteDir && remoteDir !== '.' && remoteDir !== '/') {
+            await client.ensureDir(remoteDir);
           }
-          throw err;
+          try {
+            await client.uploadFrom(file.abs_path, remotePath);
+          } catch (err) {
+            const code = err?.code;
+            if (code === 'ENOENT' || code === 'EACCES' || code === 'EPERM') {
+              if (log) log(`Skipping missing/unreadable file: ${file.rel_path}`, 'warn');
+              if (typeof onSkipFile === 'function') onSkipFile(file, err);
+              continue;
+            }
+            throw err;
+          }
+        } finally {
+          releaseRemote();
         }
         totalFiles += 1;
         if (onFileDone) onFileDone(file);
@@ -1309,6 +1349,7 @@ let managePoller = null;
 let payloadAutoReloader = null;
 let payloadAutoReloadInFlight = false;
 let payloadAutoReloadLastAttempt = 0;
+let payloadSendInFlight = false;
 
 // Determine the environment
 const isDev = !app.isPackaged;
@@ -1462,6 +1503,46 @@ class RateLimiter {
 const sleepMs = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+
+function createKeyedMutex() {
+  const state = new Map(); // key -> { locked: boolean, waiters: Array<() => void> }
+  const acquire = async (key) => {
+    const k = String(key || '');
+    if (!k) return () => {};
+    let slot = state.get(k);
+    if (!slot) {
+      slot = { locked: false, waiters: [] };
+      state.set(k, slot);
+    }
+    while (slot.locked) {
+      await new Promise((resolve) => slot.waiters.push(resolve));
+    }
+    slot.locked = true;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      // Release then wake exactly one waiter. (If we keep locked=true, the waiter
+      // will re-enter the wait loop and deadlock.)
+      slot.locked = false;
+      const next = slot.waiters.shift();
+      if (next) next();
+      else state.delete(k);
+    };
+  };
+  return { acquire };
+}
+
+const remoteFileMutex = createKeyedMutex();
+
+function isRetryableNetworkError(err) {
+  const code = err?.code ? String(err.code) : '';
+  if (['ECONNRESET', 'EPIPE', 'ETIMEDOUT', 'ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH', 'EAI_AGAIN'].includes(code)) {
+    return true;
+  }
+  const msg = err?.message ? String(err.message) : String(err || '');
+  return /(ECONNRESET|EPIPE|ETIMEDOUT|EAI_AGAIN|socket hang up|timed out|timeout|Connection closed)/i.test(msg);
+}
 
 const shouldDeprioritizeManage = () => state.transferActive;
 
@@ -3263,10 +3344,10 @@ function createPackAssembler() {
     markFileDone() {
       filesAdded += 1;
     },
-    toBuffer(packId) {
+    toPayload(packId) {
       header.writeBigUInt64LE(BigInt(packId), 0);
       header.writeUInt32LE(recordCount, 8);
-      return Buffer.concat(parts, totalLen);
+      return { header, parts: parts.slice(1), length: totalLen - header.length };
     },
   };
 }
@@ -3371,6 +3452,25 @@ async function sendFilesPayloadV4(files, socketRef, options = {}) {
 
   let detachAckReader = attachAckReader(socketRef.current);
 
+  const watchdog = setInterval(async () => {
+    const now = Date.now();
+    for (const [packId, entry] of inflight.entries()) {
+      if (entry.resending) continue;
+      if (now - entry.timestamp > 30000) {
+        log(`Watchdog: pack ${packId} is stale, resending...`);
+        entry.resending = true;
+        try {
+          await sendPackPayload(socketRef.current, entry.frameType, entry.payload, cancel, log);
+          entry.timestamp = Date.now();
+          entry.resending = false;
+        } catch (err) {
+          log(`Watchdog: error resending pack ${packId}: ${err.message}`);
+          await handleReconnect();
+        }
+      }
+    }
+  }, 5000);
+
   const resendInflight = async () => {
     const entries = Array.from(inflight.entries()).sort((a, b) => a[0] - b[0]);
     for (const [, entry] of entries) {
@@ -3438,7 +3538,7 @@ async function sendFilesPayloadV4(files, socketRef, options = {}) {
     }
 
     const currentPackId = packId;
-    const entry = { payload, frameType, bytes: pack.bytesAdded, files: pack.filesAdded };
+    const entry = { payload, frameType, bytes: pack.bytesAdded, files: pack.filesAdded, timestamp: Date.now() };
     inflight.set(currentPackId, entry);
 
     applyAdaptiveRate();
@@ -3569,7 +3669,7 @@ async function sendFilesPayloadV4(files, socketRef, options = {}) {
     let sawData = false;
     let stream;
     try {
-      stream = fs.createReadStream(file.abs_path, { highWaterMark: streamChunkBytes });
+      stream = fs.createReadStream(file.abs_path, { highWaterMark: 256 * 1024 });
     } catch (err) {
       if (shouldSkipReadError(err)) {
         log(`Skipping missing/unreadable file: ${file.rel_path}`);
@@ -3661,6 +3761,7 @@ async function sendFilesPayloadV4(files, socketRef, options = {}) {
     responseBuffer = Buffer.concat([responseBuffer, ackBuffer]);
     ackBuffer = Buffer.alloc(0);
   }
+  clearInterval(watchdog);
   detachAckReader();
   return { files: totalSentFiles, bytes: Number(totalSentBytes), responseBuffer };
 }
@@ -3765,6 +3866,25 @@ async function sendFilesPayloadV4Dynamic(getNextFile, socketRef, options = {}) {
 
   let detachAckReader = attachAckReader(socketRef.current);
 
+  const watchdog = setInterval(async () => {
+    const now = Date.now();
+    for (const [packId, entry] of inflight.entries()) {
+      if (entry.resending) continue;
+      if (now - entry.timestamp > 30000) {
+        log(`Watchdog: pack ${packId} is stale, resending...`);
+        entry.resending = true;
+        try {
+          await sendPackPayload(socketRef.current, entry.frameType, entry.payload, cancel, log);
+          entry.timestamp = Date.now();
+          entry.resending = false;
+        } catch (err) {
+          log(`Watchdog: error resending pack ${packId}: ${err.message}`);
+          await handleReconnect();
+        }
+      }
+    }
+  }, 5000);
+
   const resendInflight = async () => {
     const entries = Array.from(inflight.entries()).sort((a, b) => a[0] - b[0]);
     for (const [, entry] of entries) {
@@ -3831,7 +3951,7 @@ async function sendFilesPayloadV4Dynamic(getNextFile, socketRef, options = {}) {
     }
 
     const currentPackId = packId;
-    const entry = { payload, frameType, bytes: pack.bytesAdded, files: pack.filesAdded };
+    const entry = { payload, frameType, bytes: pack.bytesAdded, files: pack.filesAdded, timestamp: Date.now() };
     inflight.set(currentPackId, entry);
 
     applyAdaptiveRate();
@@ -3953,7 +4073,7 @@ async function sendFilesPayloadV4Dynamic(getNextFile, socketRef, options = {}) {
     consecutiveTinyFiles = 0;
     let stream;
     try {
-      stream = fs.createReadStream(file.abs_path, { highWaterMark: streamChunkBytes });
+      stream = fs.createReadStream(file.abs_path, { highWaterMark: 256 * 1024 });
     } catch (err) {
       if (shouldSkipReadError(err)) {
         log(`Skipping missing/unreadable file: ${file.rel_path}`);
@@ -4035,6 +4155,7 @@ async function sendFilesPayloadV4Dynamic(getNextFile, socketRef, options = {}) {
     responseBuffer = Buffer.concat([responseBuffer, ackBuffer]);
     ackBuffer = Buffer.alloc(0);
   }
+  clearInterval(watchdog);
   detachAckReader();
   return { files: totalSentFiles, bytes: Number(totalSentBytes), responseBuffer };
 }
@@ -4394,32 +4515,17 @@ async function uploadArchiveFastAndExtract(ip, rarPath, destPath, opts = {}) {
 
   let shouldCleanup = true;
   try {
-    if (fileSize >= LANE_MIN_FILE_SIZE) {
-      const laneChunk = getLaneChunkSize(fileSize);
-      const totalChunks = Math.ceil(fileSize / laneChunk);
-      onLog(`Archive fast path: connection mode (${LANE_CONNECTIONS} connections, ${formatBytes(laneChunk)} chunks, ${totalChunks} total).`);
-      await runPayloadUploadLaneSingleFile(file, {
-        ip,
-        destPath: tempDir,
-        connections: LANE_CONNECTIONS,
-        chunkSize: laneChunk,
-        cancel,
-        chmodAfterUpload,
-        log: onLog,
-        onProgress: (sent) => reportProgress('Upload', sent, fileSize, rarName),
-      });
-    } else {
-      onLog('Archive fast path: single-stream payload upload.');
-      await runPayloadUploadFastMultiFile([file], {
-        ip,
-        destPath: tempDir,
-        connections: 1,
-        cancel,
-        chmodAfterUpload,
-        log: onLog,
-        onProgress: (sent) => reportProgress('Upload', sent, fileSize, rarName),
-      });
-    }
+    // Stability default: archives are single files; avoid parallel offset writes.
+    onLog('Archive fast path: single-stream payload upload.');
+    await runPayloadUploadFastMultiFile([file], {
+      ip,
+      destPath: tempDir,
+      connections: 1,
+      cancel,
+      chmodAfterUpload,
+      log: onLog,
+      onProgress: (sent) => reportProgress('Upload', sent, fileSize, rarName),
+    });
 
     if (queueExtraction) {
       const queuedId = await queueExtract(ip, TRANSFER_PORT, rarRemotePath, destPath, {
@@ -4547,6 +4653,10 @@ async function runPayloadUploadLaneSingleFile(file, opts = {}) {
     return;
   }
 
+  const remotePath = joinRemotePath(destPath, file.rel_path);
+  const releaseRemote = await remoteFileMutex.acquire(remotePath);
+  try {
+
   const chunks = [];
   for (let offset = 0; offset < totalSize; offset += chunkSize) {
     const len = Math.min(chunkSize, totalSize - offset);
@@ -4585,7 +4695,6 @@ async function runPayloadUploadLaneSingleFile(file, opts = {}) {
         if (cancel?.value) throw new Error('Upload cancelled by user');
         if (chunk.offset !== 0) await waitForPrealloc();
 
-        const remotePath = joinRemotePath(destPath, file.rel_path);
         const startPayload = buildUploadStartPayload(remotePath, totalSize, chunk.offset);
         if (typeof log === 'function') {
           log(`Conn ${idx + 1}/${activeQueues.length}: start chunk @ ${formatBytes(chunk.offset)} (${formatBytes(chunk.len)})`);
@@ -4612,7 +4721,7 @@ async function runPayloadUploadLaneSingleFile(file, opts = {}) {
 
         let remaining = chunk.len;
         let pos = chunk.offset;
-        const ioBuf = Buffer.allocUnsafe(5 + 8 * 1024 * 1024);
+        const ioBuf = Buffer.allocUnsafe(5 + BINARY_UPLOAD_CHUNK_SIZE);
         while (remaining > 0) {
           if (cancel?.value) throw new Error('Upload cancelled by user');
           const take = Math.min(ioBuf.length - 5, remaining);
@@ -4656,6 +4765,9 @@ async function runPayloadUploadLaneSingleFile(file, opts = {}) {
   };
 
   await Promise.all(activeQueues.map((queue, idx) => runWorker(queue, idx)));
+  } finally {
+    releaseRemote();
+  }
 }
 
 async function runPayloadUploadFastMultiFile(files, opts = {}) {
@@ -4672,6 +4784,16 @@ async function runPayloadUploadFastMultiFile(files, opts = {}) {
 
   // Sort files: large files first for better parallelism
   const sorted = [...files].sort((a, b) => b.size - a.size);
+  const hugeFiles = sorted.filter((f) => Number(f?.size || 0) >= PAYLOAD_HUGE_FILE_BYTES).length;
+  const largeFiles = sorted.filter((f) => Number(f?.size || 0) >= LANE_MIN_FILE_SIZE).length;
+  let effectiveConnections = Math.min(connections, sorted.length);
+  if (hugeFiles >= 2) {
+    effectiveConnections = 1;
+    log(`Stability governor: ${hugeFiles} huge files detected; forcing single payload worker.`);
+  } else if (largeFiles >= 3 && effectiveConnections > 2) {
+    effectiveConnections = 2;
+    log(`Stability governor: ${largeFiles} large files detected; capping payload workers to 2.`);
+  }
 
   // Note: No need to pre-create directories — handle_upload_fast_wrapper on
   // the payload side calls mkdir_p() for each file's parent directory automatically.
@@ -4700,16 +4822,25 @@ async function runPayloadUploadFastMultiFile(files, opts = {}) {
 
   // Connection pool
   let fileIndex = 0;
-  let totalSent = 0;
+  let totalLogicalSent = 0;
   let completedFiles = 0;
 
-  const uploadOneFile = async (file, idx) => {
-    const socket = await createSocketWithTimeout(ip, TRANSFER_PORT);
-    tuneUploadSocket(socket);
-    const reader = createSocketReader(socket);
-
+  // Track logical (deduplicated) progress so retries don't inflate totals.
+  const fileProgress = new Map(); // progressKey -> bytes
+  const setFileProgress = (progressKey, nextBytes) => {
+    const prev = Number(fileProgress.get(progressKey) || 0);
+    // Logical progress should never go backwards (retries should not decrease
+    // progress nor inflate totals by double-counting retransmits).
+    const next = Math.max(prev, Math.max(0, Number(nextBytes) || 0));
+    if (next === prev) return;
+    fileProgress.set(progressKey, next);
+    totalLogicalSent += (next - prev);
+  };
+  const uploadOneFileOnce = async (socket, reader, file, progressKey) => {
+    const remotePath = joinRemotePath(destPath, file.rel_path);
+    const releaseRemote = await remoteFileMutex.acquire(remotePath);
+    let phase = 'start';
     try {
-      const remotePath = joinRemotePath(destPath, file.rel_path);
       const startPayload = buildUploadStartPayload(remotePath, file.size, 0);
       await writeBinaryCommand(socket, UploadCmd.StartUpload, startPayload, cancel, log);
 
@@ -4722,9 +4853,10 @@ async function runPayloadUploadFastMultiFile(files, opts = {}) {
 
       // Stream file data with 8MB buffer
       if (file.size > 0) {
+        phase = 'stream';
         const fd = await fs.promises.open(file.abs_path, 'r');
         try {
-          const ioBuf = Buffer.allocUnsafe(5 + 8 * 1024 * 1024);
+          const ioBuf = Buffer.allocUnsafe(5 + BINARY_UPLOAD_CHUNK_SIZE);
           let remaining = file.size;
           let pos = 0;
           while (remaining > 0) {
@@ -4737,8 +4869,8 @@ async function runPayloadUploadFastMultiFile(files, opts = {}) {
             await writeAllRetry(socket, ioBuf.subarray(0, 5 + bytesRead), cancel, log);
             remaining -= bytesRead;
             pos += bytesRead;
-            totalSent += bytesRead;
-            onProgress(totalSent, completedFiles, file.rel_path);
+            setFileProgress(progressKey, pos);
+            onProgress(totalLogicalSent, completedFiles, file.rel_path);
           }
         } finally {
           await fd.close().catch(() => {});
@@ -4746,23 +4878,40 @@ async function runPayloadUploadFastMultiFile(files, opts = {}) {
       }
 
       // Wait for OK
+      phase = 'end';
       await writeBinaryCommand(socket, UploadCmd.EndUpload, Buffer.alloc(0), cancel, log);
       const endResp = await readBinaryResponse(reader, READ_TIMEOUT_MS);
       if (endResp.code !== UploadResp.Ok) {
         const msg = endResp.data?.length ? endResp.data.toString('utf8') : 'unknown response';
         throw new Error(`Upload failed: ${msg}`);
       }
+      setFileProgress(progressKey, Number(file.size || 0));
       completedFiles++;
+    } catch (err) {
+      const msg = err?.message || String(err);
+      const wrapped = new Error(`Payload worker ${phase} failed for ${file.rel_path}: ${msg}`);
+      wrapped.code = err?.code;
+      wrapped.cause = err;
+      throw wrapped;
     } finally {
-      try { socket.destroy(); } catch {}
-      try { reader.close(); } catch {}
+      releaseRemote();
     }
   };
 
   // Run workers - each worker takes next file from queue
   const workers = [];
-  for (let w = 0; w < Math.min(connections, sorted.length); w++) {
+  for (let w = 0; w < effectiveConnections; w++) {
     workers.push((async () => {
+      let socket = null;
+      let reader = null;
+      const resetConnection = async () => {
+        try { reader?.close(); } catch {}
+        try { socket?.destroy(); } catch {}
+        socket = await createSocketWithTimeout(ip, TRANSFER_PORT);
+        tuneUploadSocket(socket);
+        reader = createSocketReader(socket);
+      };
+      await resetConnection();
       while (true) {
         if (cancel.value) break;
         await waitIfLaneBusy();
@@ -4771,30 +4920,24 @@ async function runPayloadUploadFastMultiFile(files, opts = {}) {
         const file = sorted[idx];
         try {
           if (Number(file.size || 0) >= LANE_MIN_FILE_SIZE) {
-            await acquireLaneLock();
+            // Stability default: avoid parallel offset writes into a single remote file.
+            log(`Stability mode: uploading large file with single stream: ${file.rel_path} (${formatBytes(file.size)})`);
+          }
+          const maxAttempts = 2; // 1 retry by default; keeps "hangs forever" risk low.
+          let attempt = 0;
+          const progressKey = `${idx}:${joinRemotePath(destPath, file.rel_path)}`;
+          while (true) {
+            attempt += 1;
             try {
-              const laneBaseBytes = totalSent;
-              const laneChunkSize = getLaneChunkSize(Number(file.size));
-              log(`Multi-file lane upload: ${file.rel_path} (${formatBytes(file.size)}, ${connections} connections)`);
-              await runPayloadUploadLaneSingleFile(file, {
-                ip,
-                destPath,
-                connections,
-                chunkSize: laneChunkSize,
-                cancel,
-                chmodAfterUpload,
-                log,
-                onProgress: (sent) => {
-                  totalSent = laneBaseBytes + sent;
-                  onProgress(totalSent, completedFiles, file.rel_path);
-                },
-              });
-              completedFiles++;
-            } finally {
-              releaseLaneLock();
+              await uploadOneFileOnce(socket, reader, file, progressKey);
+              break;
+            } catch (err) {
+              if (cancel.value) throw err;
+              if (!isRetryableNetworkError(err) || attempt >= maxAttempts) throw err;
+              log(`Retrying upload (${attempt}/${maxAttempts}) for ${file.rel_path}: ${err?.message || err}`);
+              await resetConnection();
+              await sleepMs(Math.min(1500, 250 * Math.pow(2, attempt - 1)));
             }
-          } else {
-            await uploadOneFile(file, idx);
           }
         } catch (err) {
           if (err.code === 'ENOENT' || err.code === 'EACCES') {
@@ -4805,6 +4948,8 @@ async function runPayloadUploadFastMultiFile(files, opts = {}) {
           throw err;
         }
       }
+      try { reader?.close(); } catch {}
+      try { socket?.destroy(); } catch {}
     })());
   }
 
@@ -5547,7 +5692,37 @@ async function fetchReleaseByTag(tag) {
   return JSON.parse(data);
 }
 
-async function downloadAsset(url, destPath) {
+async function fetchRepoReleases(owner, repo) {
+  if (typeof owner !== 'string' || typeof repo !== 'string') {
+    throw new Error('Invalid repository');
+  }
+  const safeOwner = owner.trim();
+  const safeRepo = repo.trim();
+  if (!safeOwner || !safeRepo) {
+    throw new Error('Invalid repository');
+  }
+  const apiUrl = `https://api.github.com/repos/${encodeURIComponent(safeOwner)}/${encodeURIComponent(safeRepo)}/releases?per_page=100`;
+  const data = await fetchUrl(apiUrl);
+  const releases = JSON.parse(data);
+  if (!Array.isArray(releases)) return [];
+  return releases.map((release) => ({
+    tag_name: release?.tag_name || '',
+    html_url: release?.html_url || `https://github.com/${safeOwner}/${safeRepo}/releases`,
+    prerelease: !!release?.prerelease,
+    published_at: release?.published_at || null,
+    assets: Array.isArray(release?.assets)
+      ? release.assets
+          .map((asset) => ({
+            name: asset?.name || '',
+            browser_download_url: asset?.browser_download_url || '',
+            size: Number(asset?.size || 0),
+          }))
+          .filter((asset) => asset.name && asset.browser_download_url)
+      : [],
+  }));
+}
+
+async function downloadAsset(url, destPath, opts = null) {
   const MAX_REDIRECTS = 5;
   const DOWNLOAD_TIMEOUT = 300000; // 5 minutes
 
@@ -5556,6 +5731,42 @@ async function downloadAsset(url, destPath) {
     let currentReq = null;
     let redirectCount = 0;
     let resolved = false;
+    let received = 0;
+    let total = 0;
+    let startedAt = Date.now();
+    let lastTickAt = startedAt;
+    let lastTickBytes = 0;
+    let emaSpeed = 0;
+    let lastEmitAt = 0;
+    const meta =
+      opts && typeof opts === 'object' && !Array.isArray(opts)
+        ? {
+            label: typeof opts.label === 'string' ? opts.label : '',
+            source_id: typeof opts.source_id === 'string' ? opts.source_id : null,
+            emit_event: typeof opts.emit_event === 'string' ? opts.emit_event : 'payload_download_progress',
+          }
+        : { label: '', source_id: null, emit_event: 'payload_download_progress' };
+
+    const emitProgress = (extra = null) => {
+      if (!meta.label && !meta.source_id) return;
+      const now = Date.now();
+      if (!extra && now - lastEmitAt < 250) return;
+      lastEmitAt = now;
+      try {
+        emit(meta.emit_event, {
+          label: meta.label || null,
+          source_id: meta.source_id,
+          received_bytes: received,
+          total_bytes: total || null,
+          speed_bps: emaSpeed || 0,
+          elapsed_ms: now - startedAt,
+          done: extra && typeof extra.done === 'boolean' ? extra.done : false,
+          error: extra && extra.error ? String(extra.error) : null,
+        });
+      } catch {
+        // ignore emit failures
+      }
+    };
 
     const cleanup = (deleteFile = false) => {
       if (currentReq) {
@@ -5577,6 +5788,7 @@ async function downloadAsset(url, destPath) {
       if (++redirectCount > MAX_REDIRECTS) {
         resolved = true;
         cleanup(true);
+        emitProgress({ done: true, error: 'Too many redirects' });
         reject(new Error('Too many redirects'));
         return;
       }
@@ -5597,15 +5809,40 @@ async function downloadAsset(url, destPath) {
         if (res.statusCode !== 200) {
           resolved = true;
           cleanup(true);
+          emitProgress({ done: true, error: `HTTP ${res.statusCode}` });
           reject(new Error(`HTTP ${res.statusCode}`));
           return;
         }
+
+        total = Number.parseInt(String(res.headers['content-length'] || '0'), 10) || 0;
+        startedAt = Date.now();
+        lastTickAt = startedAt;
+        lastTickBytes = 0;
+        emaSpeed = 0;
+        received = 0;
+        emitProgress();
+
+        res.on('data', (chunk) => {
+          if (!chunk) return;
+          received += chunk.length || 0;
+          const now = Date.now();
+          const dtMs = now - lastTickAt;
+          if (dtMs >= 250) {
+            const deltaBytes = received - lastTickBytes;
+            const inst = dtMs > 0 ? (deltaBytes * 1000) / dtMs : 0;
+            emaSpeed = emaSpeed > 0 ? emaSpeed * 0.8 + inst * 0.2 : inst;
+            lastTickAt = now;
+            lastTickBytes = received;
+            emitProgress();
+          }
+        });
 
         res.pipe(file);
         file.on('finish', () => {
           if (resolved) return;
           resolved = true;
           cleanup(false);
+          emitProgress({ done: true, error: null });
           resolve();
         });
 
@@ -5613,6 +5850,7 @@ async function downloadAsset(url, destPath) {
           if (resolved) return;
           resolved = true;
           cleanup(true);
+          emitProgress({ done: true, error: err && err.message ? err.message : String(err) });
           reject(err);
         });
       });
@@ -5621,6 +5859,7 @@ async function downloadAsset(url, destPath) {
         if (resolved) return;
         resolved = true;
         cleanup(true);
+        emitProgress({ done: true, error: err && err.message ? err.message : String(err) });
         reject(err);
       });
 
@@ -5628,6 +5867,7 @@ async function downloadAsset(url, destPath) {
         if (resolved) return;
         resolved = true;
         cleanup(true);
+        emitProgress({ done: true, error: 'Download timeout' });
         reject(new Error('Download timeout'));
       });
     };
@@ -5735,6 +5975,11 @@ function probePayloadFile(filepath) {
 let payloadPollerRunning = false;
 let connectionPollerRunning = false;
 let managePollerRunning = false;
+let payloadStatusConsecutiveFailures = 0;
+const PAYLOAD_POLL_IDLE_MS = 1000;
+const PAYLOAD_POLL_TRANSFER_MS = 3000;
+const PAYLOAD_RECOVERY_FAILURE_THRESHOLD = 5;
+let payloadPollLastAtMs = 0;
 
 function startPayloadPoller() {
   if (payloadPoller) return;
@@ -5742,30 +5987,43 @@ function startPayloadPoller() {
   payloadPoller = setInterval(async () => {
     if (payloadPollerRunning) return;
     if (!state.payloadPollEnabled || !state.payloadIp) return;
+    const nowMs = Date.now();
+    const pollIntervalMs = state.transferActive ? PAYLOAD_POLL_TRANSFER_MS : PAYLOAD_POLL_IDLE_MS;
+    if (payloadPollLastAtMs > 0 && (nowMs - payloadPollLastAtMs) < pollIntervalMs) return;
 
     payloadPollerRunning = true;
+    payloadPollLastAtMs = nowMs;
     try {
       const status = await getPayloadStatus(state.payloadIp, TRANSFER_PORT);
+      payloadStatusConsecutiveFailures = 0;
       state.payloadStatus = { status, error: null, updated_at_ms: Date.now() };
       emit('payload_status_update', state.payloadStatus);
     } catch (err) {
+      payloadStatusConsecutiveFailures += 1;
       state.payloadStatus = { status: null, error: err.message, updated_at_ms: Date.now() };
       emit('payload_status_update', state.payloadStatus);
-      tryAutoReloadPayload();
+      if (!state.transferActive && payloadStatusConsecutiveFailures >= PAYLOAD_RECOVERY_FAILURE_THRESHOLD) {
+        tryAutoReloadPayload({
+          reason: `status failures=${payloadStatusConsecutiveFailures}`,
+        });
+      }
     } finally {
       payloadPollerRunning = false;
     }
-  }, 1000);
+  }, state.transferActive ? PAYLOAD_POLL_TRANSFER_MS : PAYLOAD_POLL_IDLE_MS);
 }
 
 async function tryAutoReloadPayload(options = {}) {
   const { force = false, reason = '' } = options || {};
   if (!state.payloadAutoReloadEnabled || !state.payloadIp) return;
+  if (state.transferActive) return;
   if (payloadAutoReloadInFlight) return;
+  if (payloadSendInFlight) return;
   const now = Date.now();
   if (now - payloadAutoReloadLastAttempt < 15000) return;
 
   payloadAutoReloadInFlight = true;
+  payloadSendInFlight = true;
   payloadAutoReloadLastAttempt = now;
   emit('payload_busy', { busy: true });
 
@@ -5817,7 +6075,10 @@ async function tryAutoReloadPayload(options = {}) {
             return;
           }
           const tmpPath = path.join(os.tmpdir(), 'ps5upload_autoreload.elf');
-          await downloadAsset(asset.browser_download_url, tmpPath);
+          await downloadAsset(asset.browser_download_url, tmpPath, {
+            label: `ps5upload v${VERSION}`,
+            source_id: 'ps5upload',
+          });
           await sendPayloadFile(state.payloadIp, tmpPath);
         }
       } else {
@@ -5828,7 +6089,10 @@ async function tryAutoReloadPayload(options = {}) {
           return;
         }
         const tmpPath = path.join(os.tmpdir(), 'ps5upload_autoreload.elf');
-        await downloadAsset(asset.browser_download_url, tmpPath);
+        await downloadAsset(asset.browser_download_url, tmpPath, {
+          label: 'ps5upload latest',
+          source_id: 'ps5upload',
+        });
         await sendPayloadFile(state.payloadIp, tmpPath);
       }
     }
@@ -5845,12 +6109,14 @@ async function tryAutoReloadPayload(options = {}) {
     emit('payload_log', { message: `Auto reload error: ${err.message || String(err)}` });
   } finally {
     emit('payload_busy', { busy: false });
+    payloadSendInFlight = false;
     payloadAutoReloadInFlight = false;
   }
 }
 
 async function triggerPayloadRecovery(reason) {
   if (!state.payloadAutoReloadEnabled || !state.payloadIp) return;
+  if (state.transferActive) return;
   emit('payload_log', { message: `Payload recovery: ${reason}` });
   await tryAutoReloadPayload({ force: true, reason });
 }
@@ -6063,24 +6329,22 @@ function registerIpcHandlers() {
   });
 
   // Payload
+  ipcMain.handle('payload_external_releases', async (_, owner, repo) => {
+    return fetchRepoReleases(owner, repo);
+  });
+
   ipcMain.handle('payload_send', async (_, ip, filepath) => {
     if (!ip || !ip.trim()) throw new Error('Enter a PS5 address first.');
     if (!filepath || !filepath.trim()) throw new Error('Select a payload (.elf/.bin) file first.');
+    if (payloadSendInFlight) throw new Error('Payload send already in progress.');
 
+    payloadSendInFlight = true;
     emit('payload_busy', { busy: true });
     try {
       emit('payload_log', { message: `Sending payload to ${ip}:${PAYLOAD_PORT}...` });
       emit('payload_log', { message: `Payload path: ${filepath}` });
 
       const bytes = await sendPayloadFile(ip, filepath);
-      const probe = probePayloadFile(filepath);
-      if (probe?.is_ps5upload) {
-        const startup = await waitForPayloadStartup(ip, { timeoutMs: 15000, pollMs: 500, expectedVersion: VERSION });
-        if (!startup.ok) {
-          throw new Error(`Payload upload completed but startup verification failed: ${startup.error}`);
-        }
-        emit('payload_log', { message: `Payload started: v${startup.version}` });
-      }
       emit('payload_log', { message: 'Payload sent successfully.' });
       emit('payload_done', { bytes, error: null });
     } catch (err) {
@@ -6088,6 +6352,7 @@ function registerIpcHandlers() {
       emit('payload_done', { bytes: null, error: err.message });
       throw err;
     } finally {
+      payloadSendInFlight = false;
       emit('payload_busy', { busy: false });
     }
     return true;
@@ -6095,20 +6360,52 @@ function registerIpcHandlers() {
 
   ipcMain.handle('payload_download_and_send', async (_, ip, fetch) => {
     if (!ip || !ip.trim()) throw new Error('Enter a PS5 address first.');
+    if (payloadSendInFlight) throw new Error('Payload send already in progress.');
 
+    payloadSendInFlight = true;
     emit('payload_busy', { busy: true });
 
     try {
+      const isCustomFetch = !!fetch && typeof fetch === 'object' && !Array.isArray(fetch);
+      const customUrl = isCustomFetch && typeof fetch.url === 'string' ? fetch.url.trim() : '';
+      const customLabel =
+        isCustomFetch && typeof fetch.label === 'string' ? fetch.label.trim() : '';
+      const customName =
+        isCustomFetch && typeof fetch.temp_name === 'string' ? fetch.temp_name.trim() : '';
+      const customSourceId =
+        isCustomFetch && typeof fetch.source_id === 'string' ? fetch.source_id.trim() : '';
+      const customExpectedVersion =
+        isCustomFetch && typeof fetch.expected_version === 'string'
+          ? fetch.expected_version.trim()
+          : '';
+
+      if (customUrl) {
+        const parsed = new URL(customUrl);
+        if (!['http:', 'https:'].includes(parsed.protocol)) {
+          throw new Error('Unsupported payload URL protocol');
+        }
+        const ext = path.extname(parsed.pathname || '').toLowerCase();
+        const safeExt = ext === '.bin' ? '.bin' : '.elf';
+        const safeStem = (customName || 'external_payload').replace(/[^a-zA-Z0-9._-]/g, '_');
+        const tmpPath = path.join(os.tmpdir(), `${safeStem}${safeExt}`);
+        emit('payload_log', {
+          message: `Downloading external payload${customLabel ? ` (${customLabel})` : ''}...`,
+        });
+        await downloadAsset(customUrl, tmpPath, {
+          label: customLabel || (customName ? `External payload (${customName})` : 'External payload'),
+          source_id: customSourceId || customName || null,
+        });
+        emit('payload_log', { message: `Payload downloaded: ${tmpPath}` });
+        const bytes = await sendPayloadFile(ip, tmpPath);
+        emit('payload_done', { bytes, error: null });
+        return true;
+      }
+
       if (fetch === 'current') {
         const localPayload = findLocalPayloadElf();
         if (localPayload) {
           emit('payload_log', { message: `Using local payload: ${localPayload}` });
           const bytes = await sendPayloadFile(ip, localPayload);
-          const startup = await waitForPayloadStartup(ip, { timeoutMs: 15000, pollMs: 500, expectedVersion: VERSION });
-          if (!startup.ok) {
-            throw new Error(`Payload upload completed but startup verification failed: ${startup.error}`);
-          }
-          emit('payload_log', { message: `Payload started: v${startup.version}` });
           emit('payload_done', { bytes, error: null });
           return true;
         }
@@ -6144,22 +6441,20 @@ function registerIpcHandlers() {
       }
 
       const tmpPath = path.join(os.tmpdir(), `ps5upload_${fetch}.elf`);
-      await downloadAsset(asset.browser_download_url, tmpPath);
+      await downloadAsset(asset.browser_download_url, tmpPath, {
+        label: fetch === 'current' ? `ps5upload v${VERSION}` : 'ps5upload latest',
+        source_id: 'ps5upload',
+      });
 
       emit('payload_log', { message: `Payload downloaded: ${tmpPath}` });
 
       const bytes = await sendPayloadFile(ip, tmpPath);
-      const expectVersion = fetch === 'current' ? VERSION : null;
-      const startup = await waitForPayloadStartup(ip, { timeoutMs: 15000, pollMs: 500, expectedVersion: expectVersion });
-      if (!startup.ok) {
-        throw new Error(`Payload upload completed but startup verification failed: ${startup.error}`);
-      }
-      emit('payload_log', { message: `Payload started: v${startup.version}` });
       emit('payload_done', { bytes, error: null });
     } catch (err) {
       emit('payload_done', { bytes: null, error: err.message });
       throw err;
     } finally {
+      payloadSendInFlight = false;
       emit('payload_busy', { busy: false });
     }
     return true;
@@ -7133,7 +7428,7 @@ function registerIpcHandlers() {
           if (state.manageCancel) {
             throw new Error('Upload cancelled by user');
           }
-          const stat = fs.statSync(srcPath);
+          const stat = await fs.promises.stat(srcPath);
           let files;
           let dest;
           let isArchive = false;
@@ -7192,17 +7487,18 @@ function registerIpcHandlers() {
                 });
               }
               if (batch.files.length === 1 && Number(batch.files[0].size || 0) >= LANE_MIN_FILE_SIZE) {
-                emit('manage_log', { message: `Manage upload: connection mode (${LANE_CONNECTIONS} connections).` });
-                await runPayloadUploadLaneSingleFile(batch.files[0], {
+                // Stability default: avoid parallel offset writes into a single remote file.
+                emit('manage_log', { message: 'Manage upload: single-file stability mode (1 worker).' });
+                await runPayloadUploadFastMultiFile(batch.files, {
                   ip,
                   destPath: batch.dest,
-                  connections: LANE_CONNECTIONS,
-                  chunkSize: getLaneChunkSize(Number(batch.files[0].size || 0)),
+                  connections: 1,
                   cancel: { get value() { return state.manageCancel; } },
                   chmodAfterUpload: false,
+                  onSkipFile: () => {},
                   log: (msg) => emit('manage_log', { message: msg }),
-                  onProgress: (sent) => {
-                    emit('manage_progress', { op: 'Upload', processed: processedBase + sent, total: totalBytes, current_file: batch.files[0].rel_path });
+                  onProgress: (sent, filesSent, currentFile) => {
+                    emit('manage_progress', { op: 'Upload', processed: processedBase + sent, total: totalBytes, current_file: currentFile || null });
                   },
                 });
               } else {
@@ -7644,16 +7940,14 @@ const emitLog = (message, level = 'info', force = false) => {
     setImmediate(() => {
       (async () => {
         const startTime = Date.now();
-        let watchdog = null;
         let filesToUpload = [];
         let totalSize = 0n;
         const prevNoAsar = process.noAsar;
         process.noAsar = true;
 
         try {
-          let uploadMode = normalizeUploadMode(req.upload_mode);
-          const requestedFtpConnections = 10;
-          const sourceStat = await fs.promises.stat(req.source_path);
+                  let uploadMode = 'payload';
+                  const requestedFtpConnections = 10;          const sourceStat = await fs.promises.stat(req.source_path);
           const isRar = sourceStat.isFile() && path.extname(req.source_path).toLowerCase() === '.rar';
 
           if (isRar) {
@@ -8063,7 +8357,7 @@ const emitLog = (message, level = 'info', force = false) => {
           const avgPayloadSize = payloadFileCount > 0 ? Number(payloadTotalSize) / payloadFileCount : 0;
           const avgFtpSize = ftpFileCount > 0 ? Number(ftpTotalSize) / ftpFileCount : 0;
           let effectiveFtpConnections = requestedFtpConnections;
-          let effectivePayloadConnections = 4;
+          let effectivePayloadConnections = 1;
 
           let effectiveCompression = req.compression;
           let effectiveOptimize = !!req.optimize_upload;
@@ -8335,10 +8629,7 @@ const emitLog = (message, level = 'info', force = false) => {
             while (true) {
               try {
                 // Mad Max mode is intentionally opt-in because it is aggressive and can destabilize the PS5 side.
-                const madMaxEligible = req?.mad_max === true &&
-                  Array.isArray(attemptFiles) &&
-                  attemptFiles.length === 1 &&
-                  Number(attemptFiles[0]?.size || 0) >= MAD_MAX_MIN_FILE_SIZE;
+                const madMaxEligible = false;
                 if (madMaxEligible) {
                   const madMaxChunkSize = getMadMaxChunkSize(Number(attemptFiles[0]?.size || 0));
                   emitLog(
@@ -8367,38 +8658,8 @@ const emitLog = (message, level = 'info', force = false) => {
                   return;
                 }
 
-                const isParallelCandidate = Array.isArray(attemptFiles) && effectivePayloadConnections > 1;
+                const isParallelCandidate = Array.isArray(attemptFiles) && effectivePayloadConnections > 1 && attemptFiles.length > 1;
                 if (isParallelCandidate) {
-                  if (attemptFiles.length === 1 && Number(attemptFiles[0]?.size || 0) >= LANE_MIN_FILE_SIZE) {
-                    const laneChunkSize = getLaneChunkSize(Number(attemptFiles[0]?.size || 0));
-	                    const laneConnections = clamp(effectivePayloadConnections || LANE_CONNECTIONS, 1, 4);
-                    emitLog(
-                      `Payload connection mode: ${laneConnections} connections, ${formatBytes(laneChunkSize)} chunks.`,
-                      'info'
-                    );
-                    state.transferStatus = {
-                      ...state.transferStatus,
-                      payload_transfer_path: 'lane_fast_offset',
-                      payload_workers: laneConnections,
-                    };
-                    await runPayloadUploadLaneSingleFile(attemptFiles[0], {
-                      ip: req.ip,
-                      destPath: req.dest_path,
-                      connections: laneConnections,
-                      chunkSize: laneChunkSize,
-                      cancel: { get value() { return state.transferCancel; } },
-                      chmodAfterUpload: !!req.chmod_after_upload,
-                      log: debugLog,
-                      onProgress: (sent, filesSent, currentFile) => {
-                        payloadSent = BigInt(sent);
-                        payloadFilesSent = filesSent;
-                        updateProgress(currentFile);
-                      },
-                    });
-                    parsed = { files: 1, bytes: Number(payloadSent) };
-                    return;
-                  }
-
                   await ensurePrecreate();
                   emitLog(`Payload binary multi-file mode: ${effectivePayloadConnections} workers.`, 'info');
                   state.transferStatus = {
@@ -8446,6 +8707,7 @@ const emitLog = (message, level = 'info', force = false) => {
                 });
                 parsed = { files: payloadFilesSent || (Array.isArray(attemptFiles) ? attemptFiles.length : fileCount), bytes: Number(payloadSent) };
               } catch (err) {
+                debugLog(`[payload-upload] error: ${err?.stack || err?.message || err}`);
                 if (!recoveryAttempted && !state.transferCancel && !transferAbort.signal.aborted) {
                   recoveryAttempted = true;
                   emitLog(`Payload error; attempting auto-recovery. ${err?.message || err}`, 'warn');

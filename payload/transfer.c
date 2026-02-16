@@ -787,32 +787,16 @@ static void *pack_processor_thread(void *arg) {
         }
 
         for (uint32_t i = 0; i < record_count; i++) {
-            pthread_mutex_lock(&g_file_write_mutex);
-            while(atomic_load(&g_file_write_queue_count) >= FILE_WRITE_QUEUE_DEPTH - 1 && !g_file_writer_shutdown) {
-                g_last_transfer_progress = time(NULL);  // Keep watchdog happy during backpressure
-                struct timeval wait_start;
-                gettimeofday(&wait_start, NULL);
-                struct timespec ts;
-                clock_gettime(CLOCK_REALTIME, &ts);
-                ts.tv_sec += 5;
-                pthread_cond_timedwait(&g_file_write_queue_not_full_cond, &g_file_write_mutex, &ts);
-                struct timeval wait_end;
-                gettimeofday(&wait_end, NULL);
-                long long waited_us =
-                    (long long)(wait_end.tv_sec - wait_start.tv_sec) * 1000000LL +
-                    (long long)(wait_end.tv_usec - wait_start.tv_usec);
-                if (waited_us > 0) {
-                    atomic_fetch_add(&g_backpressure_events, 1);
-                    atomic_fetch_add(&g_backpressure_wait_ms, (unsigned long long)(waited_us / 1000LL));
-                }
-            }
-            pthread_mutex_unlock(&g_file_write_mutex);
-
             if (g_file_writer_shutdown || g_abort_transfer) break;
 
             if (job.len - offset < 2) break;
             uint16_t path_len; memcpy(&path_len, job.data + offset, 2); offset += 2;
             uint16_t flags = 0;
+            if (path_len > job.len - offset) {
+                printf("[FTX] Invalid path_len %u > %zu, possible corruption.\n",
+                       (unsigned int)path_len, job.len - offset);
+                break;
+            }
             if (job.len - offset < 2) break;
             memcpy(&flags, job.data + offset, 2);
             offset += 2;
@@ -866,6 +850,31 @@ static void *pack_processor_thread(void *arg) {
             new_job.session_id = job.session_id;
 
             pthread_mutex_lock(&g_file_write_mutex);
+            while (atomic_load(&g_file_write_queue_count) >= FILE_WRITE_QUEUE_DEPTH - 1 &&
+                   !g_file_writer_shutdown &&
+                   !g_abort_transfer) {
+                g_last_transfer_progress = time(NULL);  // Keep watchdog happy during backpressure
+                struct timeval wait_start;
+                gettimeofday(&wait_start, NULL);
+                struct timespec ts;
+                clock_gettime(CLOCK_REALTIME, &ts);
+                ts.tv_sec += 5;
+                pthread_cond_timedwait(&g_file_write_queue_not_full_cond, &g_file_write_mutex, &ts);
+                struct timeval wait_end;
+                gettimeofday(&wait_end, NULL);
+                long long waited_us =
+                    (long long)(wait_end.tv_sec - wait_start.tv_sec) * 1000000LL +
+                    (long long)(wait_end.tv_usec - wait_start.tv_usec);
+                if (waited_us > 0) {
+                    atomic_fetch_add(&g_backpressure_events, 1);
+                    atomic_fetch_add(&g_backpressure_wait_ms, (unsigned long long)(waited_us / 1000LL));
+                }
+            }
+            if (g_file_writer_shutdown || g_abort_transfer) {
+                pthread_mutex_unlock(&g_file_write_mutex);
+                free_small_file_buffer(new_job.data, new_job.from_pool);
+                break;
+            }
             g_file_write_queue[g_file_write_queue_tail] = new_job;
             g_file_write_queue_tail = (g_file_write_queue_tail + 1) % FILE_WRITE_QUEUE_DEPTH;
             atomic_fetch_add(&g_file_write_queue_count, 1);
@@ -1301,6 +1310,7 @@ static int upload_session_finish(UploadSession *session) {
     time_t start = time(NULL);
     size_t last_count = 0;
     time_t last_progress = start;
+    int timed_out = 0;
 
     pthread_mutex_lock(&g_file_write_mutex);
     while (atomic_load(&g_file_write_queue_count) > 0 && !g_abort_transfer) {
@@ -1316,6 +1326,7 @@ static int upload_session_finish(UploadSession *session) {
         // Timeout if no progress for 60 seconds
         if (now - last_progress > 60) {
             printf("[FTX] Finalizing timeout: no progress for 60s, %zu files remaining.\n", current);
+            timed_out = 1;
             break;
         }
 
@@ -1330,6 +1341,13 @@ static int upload_session_finish(UploadSession *session) {
     }
     pthread_mutex_unlock(&g_file_write_mutex);
     if (session->body) { free_pack_buffer(session->body); session->body = NULL; }
+    if (g_abort_transfer || timed_out) {
+        // Fail fast: don't report OK if the writer pipeline is stuck.
+        if (timed_out) {
+            transfer_request_abort_with_reason("finalize_timeout");
+        }
+        return -1;
+    }
     return 0;
 }
 

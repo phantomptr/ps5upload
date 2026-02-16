@@ -23,6 +23,9 @@
 #include <dirent.h>
 #include <stdint.h>
 #include <stdatomic.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <signal.h>
 
 static ExtractQueue g_queue;
 static pthread_mutex_t g_queue_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -32,6 +35,8 @@ static atomic_long g_last_extract_progress = 0; // Atomic for lock-free read
 static atomic_int g_cancel_requested = 0;       // Atomic for lock-free signal
 static atomic_int g_requeue_requested = 0;
 static atomic_int g_requeue_id = -1;
+static atomic_int g_current_item_id = -1;
+static atomic_int g_current_unrar_mode = EXTRACT_RAR_TURBO;
 static time_t g_queue_updated_at = 0;
 
 static int pthread_create_detached_with_stack(pthread_t *tid, void *(*fn)(void *), void *arg) {
@@ -45,6 +50,15 @@ static int pthread_create_detached_with_stack(pthread_t *tid, void *(*fn)(void *
     pthread_attr_destroy(&attr);
     return rc;
 }
+
+typedef struct {
+    int scan_result;
+    int extract_result;
+    int chmod_result;
+    int extracted_count;
+    unsigned long long extracted_bytes;
+    unsigned long long scanned_total_size;
+} ExtractWorkerResult;
 
 #define EXTRACT_QUEUE_FILE "/data/ps5upload/extract_queue.bin"
 #define EXTRACT_QUEUE_MAGIC 0x31515845 /* 'EXQ1' */
@@ -69,6 +83,7 @@ static void *extract_thread_func(void *arg);
 static void extract_queue_touch(void);
 static void extract_queue_save_locked(void);
 static void extract_queue_load(void);
+static ExtractQueueItem *extract_queue_find_item_by_id_locked(int id, int *idx_out);
 
 void extract_queue_init(void) {
     pthread_mutex_lock(&g_queue_mutex);
@@ -124,8 +139,11 @@ int extract_queue_add(const char *source_path, const char *dest_path, int delete
     }
     item->delete_source = delete_source ? 1 : 0;
     strncpy(item->archive_name, get_archive_name(source_path), sizeof(item->archive_name) - 1);
-    (void)unrar_mode;
-    item->unrar_mode = EXTRACT_RAR_TURBO;
+    if (unrar_mode < EXTRACT_RAR_FAST || unrar_mode > EXTRACT_RAR_TURBO) {
+        item->unrar_mode = EXTRACT_RAR_TURBO;
+    } else {
+        item->unrar_mode = unrar_mode;
+    }
     item->status = EXTRACT_STATUS_PENDING;
     item->percent = 0;
     item->processed_bytes = 0;
@@ -206,7 +224,7 @@ char *extract_queue_get_status_json(void) {
         "\"tune_level\":%d,\"recommend_pack_limit\":%llu,\"recommend_pace_ms\":%llu,\"recommend_rate_limit_bps\":%llu,"
         "\"last_progress\":%ld,\"abort_requested\":%s,\"workers_initialized\":%s,"
         "\"abort_at\":%ld,\"abort_session_id\":%llu,\"abort_reason\":\"%s\"},\"items\":[",
-        PS5_UPLOAD_VERSION, uptime, g_queue.count, g_thread_running ? "true" : "false",
+        PS5_UPLOAD_VERSION, uptime, g_queue.count, atomic_load(&g_thread_running) ? "true" : "false",
         (long)g_queue_updated_at, (long)last_extract_progress,
         sys_stats.cpu_percent, sys_stats.proc_cpu_percent, sys_stats.rss_bytes, sys_stats.thread_count,
         sys_stats.mem_total_bytes, sys_stats.mem_free_bytes, sys_stats.page_size,
@@ -319,6 +337,7 @@ char *extract_queue_get_status_json(void) {
     return buf;
 }
 
+__attribute__((unused))
 static int extraction_progress_callback(const char *filename, unsigned long long file_size,
                                         int files_done, unsigned long long total_processed,
                                         unsigned long long total_size, void *user_data) {
@@ -330,29 +349,203 @@ static int extraction_progress_callback(const char *filename, unsigned long long
         return 1; /* Stop extraction */
     }
 
-    pthread_mutex_lock(&g_queue_mutex);
-
-    if (g_queue.current_index >= 0 && g_queue.current_index < g_queue.count) {
-        ExtractQueueItem *item = &g_queue.items[g_queue.current_index];
-        item->processed_bytes = total_processed;
-        item->total_bytes = total_size;
-        item->files_extracted = files_done;
-        item->percent = (total_size > 0) ? (int)((total_processed * 100) / total_size) : 0;
-        atomic_store(&g_last_extract_progress, (long)time(NULL));  // Atomic write
-
-        /* Notifications disabled */
-    }
-
-    int sleep_needed = 1;
-    if (g_queue.current_index >= 0 && g_queue.current_index < g_queue.count) {
-        if (g_queue.items[g_queue.current_index].unrar_mode == EXTRACT_RAR_TURBO) {
-            sleep_needed = 0;
+    int sleep_needed = (atomic_load(&g_current_unrar_mode) != EXTRACT_RAR_TURBO);
+    if (pthread_mutex_trylock(&g_queue_mutex) == 0) {
+        int current_id = atomic_load(&g_current_item_id);
+        ExtractQueueItem *item = extract_queue_find_item_by_id_locked(current_id, NULL);
+        if (item) {
+            item->processed_bytes = total_processed;
+            item->total_bytes = total_size;
+            item->files_extracted = files_done;
+            item->percent = (total_size > 0) ? (int)((total_processed * 100) / total_size) : 0;
+            sleep_needed = (item->unrar_mode != EXTRACT_RAR_TURBO);
+            atomic_store(&g_last_extract_progress, (long)time(NULL));
         }
+        pthread_mutex_unlock(&g_queue_mutex);
     }
-    pthread_mutex_unlock(&g_queue_mutex);
 
     if (sleep_needed) {
         usleep(100); /* Yield CPU - reduced from 1000us for better throughput */
+    }
+    return 0;
+}
+
+static int extraction_progress_callback_child(const char *filename, unsigned long long file_size,
+                                              int files_done, unsigned long long total_processed,
+                                              unsigned long long total_size, void *user_data) {
+    (void)filename;
+    (void)file_size;
+    (void)files_done;
+    (void)total_processed;
+    (void)total_size;
+    (void)user_data;
+    return 0;
+}
+
+static int run_extract_job_in_worker_process(const char *source,
+                                             const char *dest,
+                                             int unrar_mode,
+                                             int *out_was_cancelled,
+                                             int *out_extract_result,
+                                             int *out_chmod_result,
+                                             int *out_extracted_count,
+                                             unsigned long long *out_extracted_bytes,
+                                             unsigned long long *out_scanned_total_size,
+                                             char *out_err,
+                                             size_t out_err_len) {
+    int fds[2];
+    if (pipe(fds) != 0) {
+        if (out_err && out_err_len > 0) {
+            snprintf(out_err, out_err_len, "pipe failed: %s", strerror(errno));
+        }
+        return -1;
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(fds[0]);
+        close(fds[1]);
+        if (out_err && out_err_len > 0) {
+            snprintf(out_err, out_err_len, "fork failed: %s", strerror(errno));
+        }
+        return -1;
+    }
+
+    if (pid == 0) {
+        close(fds[0]);
+        ExtractWorkerResult result;
+        memset(&result, 0, sizeof(result));
+        result.scan_result = UNRAR_OK;
+        result.extract_result = UNRAR_OK;
+        result.chmod_result = 0;
+        result.extracted_count = 0;
+        result.extracted_bytes = 0;
+        result.scanned_total_size = 0;
+
+        int use_scan = (unrar_mode == EXTRACT_RAR_SAFE);
+        if (use_scan) {
+            int file_count = 0;
+            unsigned long long total_size = 0;
+            result.scan_result = unrar_scan(source, &file_count, &total_size, NULL, 0);
+            result.scanned_total_size = total_size;
+            if (result.scan_result != UNRAR_OK) {
+                (void)write(fds[1], &result, sizeof(result));
+                close(fds[1]);
+                _exit(11);
+            }
+        }
+
+        unrar_extract_opts opts;
+        if (unrar_mode == EXTRACT_RAR_SAFE) {
+            opts.keepalive_interval_sec = UNRAR_SAFE_KEEPALIVE_SEC;
+            opts.sleep_every_bytes = UNRAR_SAFE_SLEEP_EVERY_BYTES;
+            opts.sleep_us = UNRAR_SAFE_SLEEP_US;
+            opts.trust_paths = UNRAR_SAFE_TRUST_PATHS;
+            opts.progress_file_start = UNRAR_SAFE_PROGRESS_FILE_START;
+        } else if (unrar_mode == EXTRACT_RAR_FAST) {
+            opts.keepalive_interval_sec = UNRAR_FAST_KEEPALIVE_SEC;
+            opts.sleep_every_bytes = UNRAR_FAST_SLEEP_EVERY_BYTES;
+            opts.sleep_us = UNRAR_FAST_SLEEP_US;
+            opts.trust_paths = UNRAR_FAST_TRUST_PATHS;
+            opts.progress_file_start = UNRAR_FAST_PROGRESS_FILE_START;
+        } else {
+            opts.keepalive_interval_sec = UNRAR_TURBO_KEEPALIVE_SEC;
+            opts.sleep_every_bytes = UNRAR_TURBO_SLEEP_EVERY_BYTES;
+            opts.sleep_us = UNRAR_TURBO_SLEEP_US;
+            opts.trust_paths = UNRAR_TURBO_TRUST_PATHS;
+            opts.progress_file_start = UNRAR_TURBO_PROGRESS_FILE_START;
+        }
+
+        unsigned long long progress_total = use_scan ? result.scanned_total_size : 0;
+        result.extract_result = unrar_extract(source, dest, 0, progress_total, &opts,
+                                              extraction_progress_callback_child, NULL,
+                                              &result.extracted_count, &result.extracted_bytes);
+        if (result.extract_result == UNRAR_OK) {
+            result.chmod_result = chmod_recursive_queue(dest, 0777);
+        }
+
+        (void)write(fds[1], &result, sizeof(result));
+        close(fds[1]);
+        if (result.extract_result != UNRAR_OK) _exit(12);
+        if (result.chmod_result != 0) _exit(13);
+        _exit(0);
+    }
+
+    close(fds[1]);
+    int status = 0;
+    int was_cancelled = 0;
+
+    for (;;) {
+        pid_t rc = waitpid(pid, &status, WNOHANG);
+        if (rc == pid) {
+            break;
+        }
+        if (rc < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            if (out_err && out_err_len > 0) {
+                snprintf(out_err, out_err_len, "waitpid failed: %s", strerror(errno));
+            }
+            close(fds[0]);
+            return -1;
+        }
+
+        if (atomic_load(&g_cancel_requested)) {
+            was_cancelled = 1;
+            kill(pid, SIGTERM);
+            usleep(200000);
+            if (waitpid(pid, &status, WNOHANG) == 0) {
+                kill(pid, SIGKILL);
+            }
+            (void)waitpid(pid, &status, 0);
+            break;
+        }
+
+        atomic_store(&g_last_extract_progress, (long)time(NULL));
+        usleep(100 * 1000);
+    }
+
+    ExtractWorkerResult result;
+    memset(&result, 0, sizeof(result));
+    ssize_t got = read(fds[0], &result, sizeof(result));
+    close(fds[0]);
+
+    if (out_was_cancelled) *out_was_cancelled = was_cancelled;
+    if (out_extract_result) *out_extract_result = result.extract_result;
+    if (out_chmod_result) *out_chmod_result = result.chmod_result;
+    if (out_extracted_count) *out_extracted_count = result.extracted_count;
+    if (out_extracted_bytes) *out_extracted_bytes = result.extracted_bytes;
+    if (out_scanned_total_size) *out_scanned_total_size = result.scanned_total_size;
+
+    if (was_cancelled) {
+        return 0;
+    }
+
+    if (got != (ssize_t)sizeof(result)) {
+        if (out_err && out_err_len > 0) {
+            if (WIFSIGNALED(status)) {
+                snprintf(out_err, out_err_len, "worker crashed by signal %d", WTERMSIG(status));
+            } else if (WIFEXITED(status)) {
+                snprintf(out_err, out_err_len, "worker exited %d without result", WEXITSTATUS(status));
+            } else {
+                snprintf(out_err, out_err_len, "worker exited without result");
+            }
+        }
+        return -1;
+    }
+
+    if (result.scan_result != UNRAR_OK) {
+        if (out_err && out_err_len > 0) {
+            snprintf(out_err, out_err_len, "scan failed: %s", unrar_strerror(result.scan_result));
+        }
+        return -1;
+    }
+    if (result.extract_result != UNRAR_OK) {
+        if (out_err && out_err_len > 0) {
+            snprintf(out_err, out_err_len, "extract failed: %s", unrar_strerror(result.extract_result));
+        }
+        return -1;
     }
     return 0;
 }
@@ -372,30 +565,41 @@ static void *extract_thread_func(void *arg) {
     }
 
     if (index < 0) {
-        g_thread_running = 0;
+        atomic_store(&g_thread_running, 0);
         pthread_mutex_unlock(&g_queue_mutex);
         return NULL;
     }
 
     ExtractQueueItem *item = &g_queue.items[index];
-    item->status = EXTRACT_STATUS_RUNNING;
-    item->started_at = time(NULL);
-    g_last_extract_progress = time(NULL);
-    g_queue.current_index = index;
-    g_cancel_requested = 0;
-    extract_queue_touch();
-
+    int item_id = item->id;
+    int item_unrar_mode = item->unrar_mode;
+    int item_delete_source = item->delete_source;
     char source[EXTRACT_QUEUE_PATH_MAX];
     char dest[EXTRACT_QUEUE_PATH_MAX];
     char archive_name[256];
+    char cleanup_path[EXTRACT_QUEUE_PATH_MAX];
     strncpy(source, item->source_path, sizeof(source) - 1);
+    source[sizeof(source) - 1] = '\0';
     strncpy(dest, item->dest_path, sizeof(dest) - 1);
+    dest[sizeof(dest) - 1] = '\0';
     strncpy(archive_name, item->archive_name, sizeof(archive_name) - 1);
+    archive_name[sizeof(archive_name) - 1] = '\0';
+    strncpy(cleanup_path, item->cleanup_path, sizeof(cleanup_path) - 1);
+    cleanup_path[sizeof(cleanup_path) - 1] = '\0';
+
+    item->status = EXTRACT_STATUS_RUNNING;
+    item->started_at = time(NULL);
+    atomic_store(&g_last_extract_progress, (long)time(NULL));
+    g_queue.current_index = index;
+    atomic_store(&g_cancel_requested, 0);
+    atomic_store(&g_current_item_id, item_id);
+    atomic_store(&g_current_unrar_mode, item_unrar_mode);
+    extract_queue_touch();
 
     pthread_mutex_unlock(&g_queue_mutex);
 
     printf("[EXTRACT_QUEUE] Starting extraction: %s -> %s\n", source, dest);
-    if (item->unrar_mode == EXTRACT_RAR_TURBO) {
+    if (item_unrar_mode == EXTRACT_RAR_TURBO) {
         printf("[EXTRACT_QUEUE] Turbo mode: per-file progress updates disabled; totals may be unavailable\n");
     }
 
@@ -403,11 +607,16 @@ static void *extract_thread_func(void *arg) {
     /* Create destination directory */
     if (mkdir_recursive_queue(dest) != 0) {
         pthread_mutex_lock(&g_queue_mutex);
-        item->status = EXTRACT_STATUS_FAILED;
-        item->completed_at = time(NULL);
-        snprintf(item->error_msg, sizeof(item->error_msg), "Create dest failed: %s", strerror(errno));
+        ExtractQueueItem *locked_item = extract_queue_find_item_by_id_locked(item_id, NULL);
+        if (locked_item) {
+            locked_item->status = EXTRACT_STATUS_FAILED;
+            locked_item->completed_at = time(NULL);
+            snprintf(locked_item->error_msg, sizeof(locked_item->error_msg), "Create dest failed: %s", strerror(errno));
+        }
         g_queue.current_index = -1;
-        g_thread_running = 0;
+        atomic_store(&g_thread_running, 0);
+        atomic_store(&g_current_item_id, -1);
+        atomic_store(&g_current_unrar_mode, EXTRACT_RAR_TURBO);
         extract_queue_touch();
         pthread_mutex_unlock(&g_queue_mutex);
 
@@ -417,100 +626,97 @@ static void *extract_thread_func(void *arg) {
         return NULL;
     }
 
-    int file_count = 0;
-    unsigned long long total_size = 0;
-    int use_scan = (item->unrar_mode == EXTRACT_RAR_SAFE);
-    if (use_scan) {
-        int scan_result = unrar_scan(source, &file_count, &total_size, NULL, 0);
-        if (scan_result != UNRAR_OK) {
-            pthread_mutex_lock(&g_queue_mutex);
-            item->status = EXTRACT_STATUS_FAILED;
-            item->completed_at = time(NULL);
-            snprintf(item->error_msg, sizeof(item->error_msg), "Scan failed: %s", unrar_strerror(scan_result));
-            g_queue.current_index = -1;
-            g_thread_running = 0;
-            g_requeue_requested = 0;
-            g_requeue_id = -1;
-            extract_queue_touch();
-            pthread_mutex_unlock(&g_queue_mutex);
+    int extracted_count = 0;
+    unsigned long long extracted_bytes = 0;
+    unsigned long long scanned_total_size = 0;
+    int extract_result = UNRAR_OK;
+    int chmod_result = 0;
+    int was_cancelled = 0;
+    char worker_err[256];
+    worker_err[0] = '\0';
 
-            /* keep failed/cancelled archives for requeue; cleanup only on success */
+    int worker_rc = run_extract_job_in_worker_process(
+        source,
+        dest,
+        item_unrar_mode,
+        &was_cancelled,
+        &extract_result,
+        &chmod_result,
+        &extracted_count,
+        &extracted_bytes,
+        &scanned_total_size,
+        worker_err,
+        sizeof(worker_err));
 
-            /* Continue with next item */
-            extract_queue_process();
-            return NULL;
-        }
-
+    if (item_unrar_mode == EXTRACT_RAR_SAFE && scanned_total_size > 0) {
         pthread_mutex_lock(&g_queue_mutex);
-        item->total_bytes = total_size;
+        ExtractQueueItem *locked_item = extract_queue_find_item_by_id_locked(item_id, NULL);
+        if (locked_item) {
+            locked_item->total_bytes = scanned_total_size;
+        }
         pthread_mutex_unlock(&g_queue_mutex);
     }
 
-    /* Extract (single turbo mode) */
-    unrar_extract_opts opts;
-    opts.keepalive_interval_sec = UNRAR_TURBO_KEEPALIVE_SEC;
-    opts.sleep_every_bytes = UNRAR_TURBO_SLEEP_EVERY_BYTES;
-    opts.sleep_us = UNRAR_TURBO_SLEEP_US;
-    opts.trust_paths = UNRAR_TURBO_TRUST_PATHS;
-    opts.progress_file_start = UNRAR_TURBO_PROGRESS_FILE_START;
-
-    int extracted_count = 0;
-    unsigned long long extracted_bytes = 0;
-    unsigned long long progress_total = use_scan ? total_size : 0;
-    int extract_result = unrar_extract(source, dest, 0, progress_total, &opts,
-                                       extraction_progress_callback, NULL,
-                                       &extracted_count, &extracted_bytes);
-
     pthread_mutex_lock(&g_queue_mutex);
+    ExtractQueueItem *locked_item = extract_queue_find_item_by_id_locked(item_id, NULL);
+    int should_delete_source = 0;
 
-    if (g_cancel_requested) {
-        if (g_requeue_requested && g_requeue_id == item->id) {
-            item->status = EXTRACT_STATUS_PENDING;
-            item->percent = 0;
-            item->processed_bytes = 0;
-            item->total_bytes = 0;
-            item->files_extracted = 0;
-            item->started_at = 0;
-            item->completed_at = 0;
-            item->error_msg[0] = '\0';
+    if (locked_item) {
+        if (atomic_load(&g_cancel_requested) || was_cancelled) {
+            if (atomic_load(&g_requeue_requested) && atomic_load(&g_requeue_id) == item_id) {
+                locked_item->status = EXTRACT_STATUS_PENDING;
+                locked_item->percent = 0;
+                locked_item->processed_bytes = 0;
+                locked_item->total_bytes = 0;
+                locked_item->files_extracted = 0;
+                locked_item->started_at = 0;
+                locked_item->completed_at = 0;
+                locked_item->error_msg[0] = '\0';
+            } else {
+                locked_item->status = EXTRACT_STATUS_FAILED;
+                snprintf(locked_item->error_msg, sizeof(locked_item->error_msg), "Cancelled");
+            }
+        } else if (worker_rc != 0) {
+            locked_item->status = EXTRACT_STATUS_FAILED;
+            snprintf(locked_item->error_msg, sizeof(locked_item->error_msg), "Worker failed: %s",
+                     worker_err[0] ? worker_err : "unknown");
+        } else if (extract_result != UNRAR_OK) {
+            locked_item->status = EXTRACT_STATUS_FAILED;
+            snprintf(locked_item->error_msg, sizeof(locked_item->error_msg), "Extract failed: %s", unrar_strerror(extract_result));
         } else {
-            item->status = EXTRACT_STATUS_FAILED;
-            snprintf(item->error_msg, sizeof(item->error_msg), "Cancelled");
-        }
-    } else if (extract_result != UNRAR_OK) {
-        item->status = EXTRACT_STATUS_FAILED;
-        snprintf(item->error_msg, sizeof(item->error_msg), "Extract failed: %s", unrar_strerror(extract_result));
-    } else {
-        /* Apply chmod */
-        if (chmod_recursive_queue(dest, 0777) != 0) {
-            printf("[EXTRACT_QUEUE] Warning: chmod failed for %s\n", dest);
+            if (chmod_result != 0) {
+                printf("[EXTRACT_QUEUE] Warning: chmod failed for %s\n", dest);
+            }
+
+            locked_item->status = EXTRACT_STATUS_COMPLETE;
+            locked_item->percent = 100;
+            locked_item->files_extracted = extracted_count;
+            locked_item->processed_bytes = extracted_bytes;
         }
 
-        item->status = EXTRACT_STATUS_COMPLETE;
-        item->percent = 100;
-        item->files_extracted = extracted_count;
-        item->processed_bytes = extracted_bytes;
-
-        /* Notifications disabled */
-    }
-
-    if (item->status != EXTRACT_STATUS_PENDING) {
-        item->completed_at = time(NULL);
+        if (locked_item->status != EXTRACT_STATUS_PENDING) {
+            locked_item->completed_at = time(NULL);
+        }
+        if (item_delete_source && locked_item->status == EXTRACT_STATUS_COMPLETE) {
+            should_delete_source = 1;
+        }
     }
     g_queue.current_index = -1;
-    g_thread_running = 0;
-    g_requeue_requested = 0;
-    g_requeue_id = -1;
+    atomic_store(&g_thread_running, 0);
+    atomic_store(&g_requeue_requested, 0);
+    atomic_store(&g_requeue_id, -1);
+    atomic_store(&g_current_item_id, -1);
+    atomic_store(&g_current_unrar_mode, EXTRACT_RAR_TURBO);
     extract_queue_touch();
 
     pthread_mutex_unlock(&g_queue_mutex);
 
     printf("[EXTRACT_QUEUE] Extraction finished for %s\n", source);
 
-    if (item->delete_source && item->status == EXTRACT_STATUS_COMPLETE) {
+    if (should_delete_source) {
         unlink(source);
-        if (item->cleanup_path[0]) {
-            remove_recursive_queue(item->cleanup_path);
+        if (cleanup_path[0]) {
+            remove_recursive_queue(cleanup_path);
         }
     }
 
@@ -587,7 +793,7 @@ static int remove_recursive_queue(const char *path) {
 void extract_queue_process(void) {
     pthread_mutex_lock(&g_queue_mutex);
 
-    if (g_thread_running) {
+    if (atomic_load(&g_thread_running)) {
         pthread_mutex_unlock(&g_queue_mutex);
         return;
     }
@@ -606,13 +812,13 @@ void extract_queue_process(void) {
         return;
     }
 
-    g_thread_running = 1;
+    atomic_store(&g_thread_running, 1);
 
     pthread_mutex_unlock(&g_queue_mutex);
 
     if (pthread_create_detached_with_stack(&g_extract_thread, extract_thread_func, NULL) != 0) {
         pthread_mutex_lock(&g_queue_mutex);
-        g_thread_running = 0;
+        atomic_store(&g_thread_running, 0);
         pthread_mutex_unlock(&g_queue_mutex);
         printf("[EXTRACT_QUEUE] Failed to create extraction thread\n");
         return;
@@ -620,7 +826,7 @@ void extract_queue_process(void) {
 }
 
 int extract_queue_is_busy(void) {
-    return g_thread_running;
+    return atomic_load(&g_thread_running);
 }
 
 int extract_queue_cancel(int id) {
@@ -638,7 +844,7 @@ int extract_queue_cancel(int id) {
                 return 0;
             } else if (g_queue.items[i].status == EXTRACT_STATUS_RUNNING) {
                 /* Request cancellation of running extraction */
-                g_cancel_requested = 1;
+                atomic_store(&g_cancel_requested, 1);
                 extract_queue_touch();
                 pthread_mutex_unlock(&g_queue_mutex);
                 return 0;
@@ -657,9 +863,9 @@ int extract_queue_pause(int id) {
     for (int i = 0; i < g_queue.count; i++) {
         if (g_queue.items[i].id == id) {
             if (g_queue.items[i].status == EXTRACT_STATUS_RUNNING) {
-                g_requeue_requested = 1;
-                g_requeue_id = id;
-                g_cancel_requested = 1;
+                atomic_store(&g_requeue_requested, 1);
+                atomic_store(&g_requeue_id, id);
+                atomic_store(&g_cancel_requested, 1);
                 extract_queue_touch();
                 pthread_mutex_unlock(&g_queue_mutex);
                 return 0;
@@ -821,7 +1027,7 @@ void extract_queue_reset(void) {
     }
 
     if (running_index >= 0) {
-        g_cancel_requested = 1;
+        atomic_store(&g_cancel_requested, 1);
         ExtractQueueItem running = g_queue.items[running_index];
         g_queue.items[0] = running;
         g_queue.count = 1;
@@ -901,6 +1107,21 @@ time_t extract_queue_get_updated_at(void) {
 static void extract_queue_touch(void) {
     g_queue_updated_at = time(NULL);
     extract_queue_save_locked();
+}
+
+static ExtractQueueItem *extract_queue_find_item_by_id_locked(int id, int *idx_out) {
+    if (id < 0) {
+        return NULL;
+    }
+    for (int i = 0; i < g_queue.count; i++) {
+        if (g_queue.items[i].id == id) {
+            if (idx_out) {
+                *idx_out = i;
+            }
+            return &g_queue.items[i];
+        }
+    }
+    return NULL;
 }
 
 static void extract_queue_save_locked(void) {
