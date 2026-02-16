@@ -44,19 +44,7 @@ static int sys_budget_set(long budget) {
 #define ENABLE_AGGRESSIVE_PRIV_ESC 0
 #endif
 
-/*
- * Stability defaults:
- * - Avoid real-time scheduler by default (can starve system services under heavy I/O).
- * - Avoid mlockall(MCL_FUTURE) by default (can amplify memory pressure during uploads).
- * Both can be re-enabled explicitly at build time for advanced tuning.
- */
-#ifndef ENABLE_RT_SCHED
-#define ENABLE_RT_SCHED 0
-#endif
 
-#ifndef ENABLE_MLOCKALL
-#define ENABLE_MLOCKALL 0
-#endif
 
 #if ENABLE_AGGRESSIVE_PRIV_ESC
 /* Full capability mask - grants all permissions */
@@ -1094,7 +1082,6 @@ static int handle_upload_chunk_stream(UploadSession *session, int sock, uint32_t
         file_off += take;
         remaining -= (uint32_t)take;
         payload_touch_activity();
-        usleep(100);
     }
     pthread_mutex_unlock(session->file_mutex);
 
@@ -2107,25 +2094,22 @@ int main(void) {
         printf("[INIT] Warning: sys_budget_set failed (may be unsupported)\n");
     }
 
-    // Optional: lock current/future pages (disabled by default for system stability).
-#if ENABLE_MLOCKALL
+    // Lock memory pages to prevent swapping (improves stability during heavy I/O)
 #ifdef MCL_CURRENT
     if (mlockall(MCL_CURRENT | MCL_FUTURE) < 0) {
         printf("[INIT] Warning: mlockall failed (non-critical)\n");
     }
 #endif
-#endif
 
-    // Optional: real-time scheduling (disabled by default to avoid system/UI starvation).
-#if ENABLE_RT_SCHED
+    // Set high priority scheduling for better responsiveness
     struct sched_param sp;
     sp.sched_priority = sched_get_priority_max(SCHED_RR);
     if (sp.sched_priority > 0) {
         if (sched_setscheduler(0, SCHED_RR, &sp) < 0) {
+            // Real-time scheduling unavailable - continue with default priority
             printf("[INIT] Warning: sched_setscheduler failed (non-critical)\n");
         }
     }
-#endif
 
     printf("[INIT] Startup profile applied.\n");
     

@@ -17,11 +17,11 @@
 // Socket buffer tuning
 // PS5/FreeBSD 11 has tighter kernel socket buffer and process budget constraints than a desktop.
 // Keep defaults conservative to avoid kernel memory pressure. Transfer paths can still bump these.
-#define SOCKET_RCVBUF_SIZE (1 * 1024 * 1024)   // 1MB socket receive buffer (stability default)
-#define SOCKET_SNDBUF_SIZE (1 * 1024 * 1024)   // 1MB socket send buffer (stability default)
+#define SOCKET_RCVBUF_SIZE (4 * 1024 * 1024)   // 4MB socket receive buffer
+#define SOCKET_SNDBUF_SIZE (4 * 1024 * 1024)   // 4MB socket send buffer
 
 // Upload throughput tuning
-#define UPLOAD_RCVBUF_SIZE (2 * 1024 * 1024)   // 2MB receive buffer for bulk upload sockets
+#define UPLOAD_RCVBUF_SIZE (8 * 1024 * 1024)   // 8MB receive buffer for bulk upload sockets
 #define UPLOAD_RECV_CHUNK_SIZE (256 * 1024)    // 256KB recv chunks (keeps latency/pressure reasonable)
 #define MAX_PATH_LEN 4096
 
