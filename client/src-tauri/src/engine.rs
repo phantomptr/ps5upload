@@ -29,18 +29,19 @@ async fn child_lock() -> &'static tokio::sync::Mutex<Option<Child>> {
     CHILD.get_or_init(|| async { tokio::sync::Mutex::new(None) }).await
 }
 
-/// Locate the engine binary. Search order:
-///
-///   1. `<exe-dir>/resources/engine/<binary>` — Windows portable zip.
-///      The `--no-bundle` build has no Tauri Resources dir, so the
-///      release workflow packs the engine next to the exe.
-///   2. `Resources/engine/<binary>` — clean packaged path.
-///   3. `Resources/_up_/_up_/engine/target/release/<binary>` — current
-///      packaged path on macOS/Linux bundles because
-///      `resources: ["../../engine/..."]` in tauri.conf.json preserves
-///      the `../..` segments as `_up_`.
-///   4. `<repo>/engine/target/release/<binary>` — dev build.
-///   5. `<repo>/engine/target/debug/<binary>` — dev fallback.
+/// Engine binary embedded at compile time via `include_bytes!`. The
+/// build script (`build.rs`) sets `PS5UPLOAD_ENGINE_BYTES` to the
+/// absolute path of the freshly-built engine binary. Embedding means
+/// the desktop exe is self-contained on every platform — no external
+/// Resources dir, no sidecar file to ship.
+const EMBEDDED_ENGINE: &[u8] = include_bytes!(env!("PS5UPLOAD_ENGINE_BYTES"));
+
+/// Extract the embedded engine binary into the app's local-data dir
+/// and return the extracted path. Caches across launches: re-extracts
+/// only when the existing file's size differs from the embedded
+/// bytes' size (cheap shallow check; covers "new version installed,
+/// bytes differ" without the cost of a full hash compare on every
+/// launch).
 fn find_engine_binary(app: &AppHandle) -> Result<PathBuf> {
     let bin_name = if cfg!(target_os = "windows") {
         "ps5upload-engine.exe"
@@ -48,61 +49,37 @@ fn find_engine_binary(app: &AppHandle) -> Result<PathBuf> {
         "ps5upload-engine"
     };
 
-    let mut candidates: Vec<PathBuf> = Vec::new();
+    let cache_root = app
+        .path()
+        .app_local_data_dir()
+        .context("resolving app_local_data_dir")?;
+    let out_dir = cache_root.join("engine");
+    std::fs::create_dir_all(&out_dir)
+        .with_context(|| format!("mkdir {}", out_dir.display()))?;
+    let out_path = out_dir.join(bin_name);
 
-    // Windows portable: engine lives at <exe-dir>/resources/engine/.
-    // `current_exe()` is the path of the running binary; its parent
-    // is the directory it sits in. Check this first so portable-zip
-    // users don't fall through to the (nonexistent) Resources dir.
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(exe_dir) = exe.parent() {
-            candidates.push(exe_dir.join("resources").join("engine").join(bin_name));
+    let needs_extract = match std::fs::metadata(&out_path) {
+        Ok(m) => m.len() as usize != EMBEDDED_ENGINE.len(),
+        Err(_) => true,
+    };
+    if needs_extract {
+        std::fs::write(&out_path, EMBEDDED_ENGINE)
+            .with_context(|| format!("write engine binary to {}", out_path.display()))?;
+        // On Unix, set the executable bit — without it, `spawn`
+        // returns EACCES. Windows inherits .exe execution from the
+        // extension, no chmod needed.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&out_path)
+                .with_context(|| format!("stat {} for chmod", out_path.display()))?
+                .permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&out_path, perms)
+                .with_context(|| format!("chmod {}", out_path.display()))?;
         }
     }
-
-    if let Ok(rd) = app.path().resource_dir() {
-        candidates.push(rd.join("engine").join(bin_name));
-        candidates.push(
-            rd.join("_up_")
-                .join("_up_")
-                .join("engine")
-                .join("target")
-                .join("release")
-                .join(bin_name),
-        );
-    }
-
-    // Dev builds — resolved from CARGO_MANIFEST_DIR at compile time
-    // (`desktop/src-tauri`) then up two levels to the repo root.
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    if let Some(repo_root) = manifest_dir.parent().and_then(|p| p.parent()) {
-        for profile in ["release", "debug"] {
-            candidates.push(
-                repo_root
-                    .join("engine")
-                    .join("target")
-                    .join(profile)
-                    .join(bin_name),
-            );
-        }
-    }
-
-    for p in &candidates {
-        if p.is_file() {
-            return Ok(p.clone());
-        }
-    }
-
-    Err(anyhow!(
-        "ps5upload-engine binary not found. Searched:\n  {}\n\
-        Build it with `make engine` or \
-        `cargo build --release -p ps5upload-engine`.",
-        candidates
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect::<Vec<_>>()
-            .join("\n  ")
-    ))
+    Ok(out_path)
 }
 
 /// Probe the readiness endpoint. Returns true if the engine answers 200.

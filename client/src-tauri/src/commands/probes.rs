@@ -144,95 +144,25 @@ pub async fn payload_send(
     }
 }
 
-/// Locate the bundled `ps5upload.elf` the Connection screen should send.
-/// Mirrors the engine-binary resolution in `engine.rs` so the lookup
-/// works identically in dev (repo `payload/` dir) and packaged builds
-/// (Resources, with the `_up_/_up_` escape for the `../../` prefix in
-/// tauri.conf.json's `resources` list).
-///
-/// The bundled form is `ps5upload.elf.gz` — linuxdeploy (Linux AppImage
-/// bundler) walks every ELF in the AppDir and refuses to proceed when
-/// it can't resolve the PS5 payload's sprx dependencies on Linux. A
-/// gzipped file shows gzip magic instead of ELF magic and is treated
-/// as plain data. We decompress on first use into the app's cache
-/// directory and return the decompressed path so the send path
-/// (ps5upload-core::send_payload) keeps its "read file → stream bytes"
-/// semantics unchanged.
-///
-/// Lookup order:
-///   1. Bundled resource dir / payload / ps5upload.elf.gz
-///   2. Bundled resource dir / _up_ / _up_ / payload / ps5upload.elf.gz
-///   3. Repo-root / payload / ps5upload.elf.gz (dev + local `make payload`)
-///   4. Repo-root / payload / ps5upload.elf (older dev builds, never
-///      bundled but still serviceable)
+/// PS5 payload embedded at compile time via `include_bytes!`. The
+/// build script sets `PS5UPLOAD_PAYLOAD_GZ_BYTES` to the absolute path
+/// of `payload/ps5upload.elf.gz`; embedding makes the desktop exe
+/// self-contained across platforms. We ship the gzipped form (not the
+/// raw ELF) because linuxdeploy walks every ELF in the AppDir and
+/// aborts when it can't resolve the payload's PS5 sprx deps — gzip
+/// magic (`\x1f\x8b`) isn't ELF magic so the bundler skips it. At
+/// runtime we decompress once into the app's local-data dir and reuse
+/// the extracted `.elf` on subsequent sends.
+const EMBEDDED_PAYLOAD_GZ: &[u8] = include_bytes!(env!("PS5UPLOAD_PAYLOAD_GZ_BYTES"));
+
+/// Extract the embedded `.elf.gz` into the app's local-data dir and
+/// return the decompressed-ELF path. Caches across launches; re-
+/// extracts only when the cached `.elf`'s size doesn't match the
+/// decompressed bytes (cheap shallow check — the payload changes only
+/// across app versions).
 fn find_bundled_payload(app: &AppHandle) -> Result<PathBuf, String> {
-    let mut gz_candidates: Vec<PathBuf> = Vec::new();
-
-    // Windows portable: payload lives at
-    // `<exe-dir>/resources/payload/ps5upload.elf.gz` because
-    // `--no-bundle` skips Tauri's Resources wiring and the release
-    // workflow packs it in the zip alongside the exe.
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(exe_dir) = exe.parent() {
-            gz_candidates.push(
-                exe_dir
-                    .join("resources")
-                    .join("payload")
-                    .join("ps5upload.elf.gz"),
-            );
-        }
-    }
-
-    if let Ok(rd) = app.path().resource_dir() {
-        gz_candidates.push(rd.join("payload").join("ps5upload.elf.gz"));
-        gz_candidates.push(
-            rd.join("_up_")
-                .join("_up_")
-                .join("payload")
-                .join("ps5upload.elf.gz"),
-        );
-    }
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let repo_root = manifest_dir
-        .parent()
-        .and_then(|p| p.parent())
-        .map(PathBuf::from);
-    if let Some(ref rr) = repo_root {
-        gz_candidates.push(rr.join("payload").join("ps5upload.elf.gz"));
-    }
-
-    for gz in &gz_candidates {
-        if gz.is_file() {
-            return decompress_to_cache(app, gz);
-        }
-    }
-
-    // Fallback: raw `.elf` in the repo checkout for devs who haven't
-    // run `make payload` since the .elf.gz rule landed.
-    if let Some(rr) = repo_root {
-        let raw = rr.join("payload").join("ps5upload.elf");
-        if raw.is_file() {
-            return Ok(raw);
-        }
-    }
-
-    Err(format!(
-        "ps5upload.elf(.gz) not found. Searched:\n  {}\nBuild it with `make payload`.",
-        gz_candidates
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect::<Vec<_>>()
-            .join("\n  ")
-    ))
-}
-
-/// Decompress `ps5upload.elf.gz` into the app's local-data cache dir
-/// and return the extracted path. Skips the decompress if the cached
-/// copy is already present and matches the gz's mtime — the payload is
-/// rebuilt rarely, so we avoid a ~50 ms gunzip on every Send.
-fn decompress_to_cache(app: &AppHandle, gz_path: &std::path::Path) -> Result<PathBuf, String> {
     use std::fs;
-    use std::io::{Read, Write};
+    use std::io::Read;
 
     let cache_root = app
         .path()
@@ -243,30 +173,15 @@ fn decompress_to_cache(app: &AppHandle, gz_path: &std::path::Path) -> Result<Pat
         .map_err(|e| format!("mkdir {}: {e}", out_dir.display()))?;
     let out_path = out_dir.join("ps5upload.elf");
 
-    // Quick skip: if the extracted .elf is newer than the source .gz,
-    // trust the cache. Mtime comparison handles the "build produced
-    // a new .gz" case; the .elf is regenerated on next send.
-    let should_extract = match (fs::metadata(gz_path), fs::metadata(&out_path)) {
-        (Ok(gz_meta), Ok(elf_meta)) => match (gz_meta.modified(), elf_meta.modified()) {
-            (Ok(gz_m), Ok(elf_m)) => gz_m > elf_m,
-            _ => true,
-        },
-        _ => true,
-    };
-    if !should_extract {
-        return Ok(out_path);
-    }
-
-    let raw = fs::read(gz_path).map_err(|e| format!("read {}: {e}", gz_path.display()))?;
-    let mut decoder = flate2::read::GzDecoder::new(&raw[..]);
-    let mut decompressed = Vec::with_capacity(raw.len() * 3);
+    let mut decoder = flate2::read::GzDecoder::new(EMBEDDED_PAYLOAD_GZ);
+    let mut decompressed = Vec::with_capacity(EMBEDDED_PAYLOAD_GZ.len() * 3);
     decoder
         .read_to_end(&mut decompressed)
-        .map_err(|e| format!("gunzip {}: {e}", gz_path.display()))?;
+        .map_err(|e| format!("gunzip embedded payload: {e}"))?;
 
-    // Sanity: must be ELF after decompression — catches corrupt .gz
-    // or accidentally-bundled non-payload bytes before we send
-    // garbage to the PS5 loader.
+    // Sanity: must be ELF after decompression — catches accidental
+    // corruption of the embedded bytes before we stream garbage into
+    // the PS5 loader.
     if decompressed.len() < 4 || &decompressed[..4] != b"\x7FELF" {
         return Err(format!(
             "decompressed payload is not an ELF (first 4 bytes {:02x?})",
@@ -274,10 +189,14 @@ fn decompress_to_cache(app: &AppHandle, gz_path: &std::path::Path) -> Result<Pat
         ));
     }
 
-    let mut f = fs::File::create(&out_path)
-        .map_err(|e| format!("create {}: {e}", out_path.display()))?;
-    f.write_all(&decompressed)
-        .map_err(|e| format!("write {}: {e}", out_path.display()))?;
+    let needs_write = match fs::metadata(&out_path) {
+        Ok(m) => m.len() as usize != decompressed.len(),
+        Err(_) => true,
+    };
+    if needs_write {
+        fs::write(&out_path, &decompressed)
+            .map_err(|e| format!("write {}: {e}", out_path.display()))?;
+    }
     Ok(out_path)
 }
 

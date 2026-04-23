@@ -49,10 +49,7 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": [
-      "../../engine/target/release/ps5upload-engine*",
-      "../../payload/ps5upload.elf.gz"
-    ],
+    "resources": [],
     "externalBin": [],
     "category": "DeveloperTool",
     "shortDescription": "Fast, reliable uploads from your computer to your PS5.",
