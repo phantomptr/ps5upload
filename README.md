@@ -61,6 +61,21 @@ Pre-built downloads land on the
 | Windows (x64 / ARM64) | `PS5Upload-<ver>-win-{x64,arm64}.zip` | Unzip, double-click `PS5Upload.exe` — portable, no installer |
 | Linux (x64 / ARM64) | `PS5Upload-<ver>-linux-{x64,arm64}.zip` | Unzip, `chmod +x PS5Upload.AppImage`, then `./PS5Upload.AppImage` |
 
+### System requirements
+
+- **macOS** 11 (Big Sur) or newer. No dependencies — ad-hoc signed,
+  right-click → Open on first launch to bypass Gatekeeper.
+- **Windows** 10 (build 19041+) or Windows 11. Ships with the
+  Microsoft Edge WebView2 runtime by default; LTSC / stripped
+  installs may need
+  [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/)
+  installed once.
+- **Linux** needs a few system libraries that the `.AppImage` expects
+  on the host (libfuse2, gtk3, webkit2gtk 4.1, libsoup3,
+  libappindicator, librsvg2). Install commands for
+  Debian/Ubuntu/Fedora/RHEL/Arch are in
+  [the FAQ](FAQ.md#prerequisites).
+
 The app checks GitHub for updates once per launch (Settings → Updates)
 and downloads a fresh archive to your Downloads folder when you click
 Download — replace the old app manually and relaunch.

@@ -75,6 +75,93 @@ on every one.
 
 ---
 
+## Prerequisites
+
+**Q: What do I need installed to run ps5upload?**
+
+### macOS
+
+Nothing. macOS 11 (Big Sur) or newer runs the app as-is. First launch:
+right-click `PS5Upload.app` → **Open** → **Open** again in the
+Gatekeeper dialog (the app is ad-hoc signed, not notarized).
+Subsequent launches don't prompt.
+
+### Windows
+
+Nothing on Windows 10 (20H1 / build 19041 or later) and Windows 11 —
+both ship **Microsoft Edge WebView2** runtime by default.
+
+On stripped installs (LTSC, Windows Server without Desktop
+Experience, some N/KN editions), install WebView2 once from
+<https://developer.microsoft.com/microsoft-edge/webview2/>.
+One-time; runtime is shared across every WebView2 app you'll ever run.
+
+### Linux — Debian, Ubuntu, Mint, Pop!_OS
+
+```sh
+sudo apt-get update
+sudo apt-get install -y \
+  libfuse2 \
+  libgtk-3-0 \
+  libwebkit2gtk-4.1-0 \
+  libsoup-3.0-0 \
+  libjavascriptcoregtk-4.1-0 \
+  libappindicator3-1 \
+  librsvg2-2
+```
+
+- `libfuse2` is needed because `.AppImage` self-mounts via FUSE2 at
+  startup. On Ubuntu 24.04 the package name resolves to
+  `libfuse2t64` — the above still works via apt's virtual-package
+  resolution.
+- WebKit2GTK **4.1** is what Tauri 2 links against. Ubuntu 22.04
+  and earlier only have 4.0 — upgrade to 24.04+ or build Tauri
+  4.0-compatible yourself.
+
+### Linux — Fedora, RHEL, CentOS, Rocky, Alma
+
+```sh
+sudo dnf install -y \
+  fuse \
+  gtk3 \
+  webkit2gtk4.1 \
+  libsoup3 \
+  javascriptcoregtk4.1 \
+  libappindicator-gtk3 \
+  librsvg2
+```
+
+- On RHEL / Rocky / Alma 9: enable EPEL first
+  (`sudo dnf install -y epel-release`).
+- RHEL / CentOS / Rocky / Alma **8** ship webkit2gtk3 (the 4.0
+  series). ps5upload targets 4.1 and won't run on 8.x without a
+  manual webkit2gtk4.1 backport — 9.x is the minimum.
+
+### Linux — Arch, Manjaro, EndeavourOS
+
+```sh
+sudo pacman -S fuse2 gtk3 webkit2gtk-4.1 libsoup3 \
+               libappindicator-gtk3 librsvg
+```
+
+### Linux — why the long list?
+
+`.AppImage` bundles webkit and GTK inside the image, but a few core
+libs (libc, libgcc, X11 / Wayland client libs, FUSE userspace) are
+expected to come from the host so the image stays portable across
+distros. Modern desktop Linux installs have most of these already;
+the explicit list covers stripped / server images and fresh
+container shells.
+
+**Q: The keep-awake toggle says "error" on Linux.**
+
+Keep-awake uses `systemd-inhibit`, which needs `systemd` + `systemd-
+logind`. Present on every mainstream desktop distro. If you're on a
+non-systemd distro (Alpine, Void, Gentoo OpenRC, Devuan) the toggle
+won't work — everything else does.
+
+---
+
 ## Getting started
 
 **Q: Do I need the payload?**
