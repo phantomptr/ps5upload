@@ -107,10 +107,26 @@ pub async fn start(app: &AppHandle) -> Result<&'static str> {
 
     let binary = find_engine_binary(app).context("locating ps5upload-engine binary")?;
 
-    let child = Command::new(&binary)
-        .stdout(std::process::Stdio::piped())
+    let mut cmd = Command::new(&binary);
+    cmd.stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true)
+        .kill_on_drop(true);
+
+    // Windows: belt-and-braces with the engine's own
+    // `windows_subsystem = "windows"` — also pass CREATE_NO_WINDOW so
+    // the spawn API never allocates a console for the child. With only
+    // the subsystem attr set, certain DLL-load paths (e.g. if a
+    // dependency pulls in a subsystem=console initializer) can still
+    // briefly flash a terminal. CREATE_NO_WINDOW on the CreationFlags
+    // covers that corner.
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let child = cmd
         .spawn()
         .with_context(|| format!("spawning engine: {}", binary.display()))?;
 

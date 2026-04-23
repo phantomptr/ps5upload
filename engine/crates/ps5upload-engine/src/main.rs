@@ -1,3 +1,16 @@
+// Release-mode on Windows: no console window. The engine is a daemon
+// spawned as a child of the Tauri desktop exe, which pipes the
+// engine's stdout/stderr back via `pipe_tagged`. Without this
+// attribute Windows allocates a fresh console for the engine every
+// time the desktop app starts it, flashing a terminal window next to
+// the UI. Debug builds keep the default (console) subsystem so
+// `cargo run -p ps5upload-engine` still shows log output in the
+// terminal for local diagnostics.
+#![cfg_attr(
+    all(not(debug_assertions), target_os = "windows"),
+    windows_subsystem = "windows"
+)]
+
 //! ps5upload-engine — local HTTP service that drives FTX2 transfers.
 //!
 //! Listens on 127.0.0.1:19113 by default (set PS5UPLOAD_ENGINE_PORT env var to override).
