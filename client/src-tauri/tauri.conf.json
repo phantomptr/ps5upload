@@ -27,7 +27,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:19113 http://localhost:19113 https://github.com https://objects.githubusercontent.com https://*.githubusercontent.com; img-src 'self' data: asset: http://asset.localhost; style-src 'self' 'unsafe-inline'; font-src 'self' asset: http://asset.localhost",
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:19113 http://localhost:19113 https://github.com https://objects.githubusercontent.com https://*.githubusercontent.com; img-src 'self' data: asset: http://asset.localhost http://127.0.0.1:19113 http://localhost:19113; style-src 'self' 'unsafe-inline'; font-src 'self' asset: http://asset.localhost",
       "assetProtocol": {
         "enable": true,
         "scope": [
