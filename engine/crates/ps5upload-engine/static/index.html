@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ps5upload</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:       #080c14;
+  --surface:  #0f1623;
+  --surface2: #161e2e;
+  --border:   #1e2a3d;
+  --text:     #dde3ef;
+  --muted:    #5a6880;
+  --dim:      #8a98b0;
+  --blue:     #0072ce;
+  --blue-dim: #003c70;
+  --running:  #f59e0b;
+  --done:     #22c55e;
+  --failed:   #ef4444;
+  --mono: 'SF Mono','Fira Code','Cascadia Code','Consolas',monospace;
+}
+
+html { font-size: 13px; }
+body {
+  font-family: system-ui,-apple-system,'Segoe UI',sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  line-height: 1.55;
+}
+
+/* ── Header ─────────────────────────────────────────────────────── */
+header {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 0 20px;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.logo {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: #fff;
+  user-select: none;
+}
+.logo span { color: var(--blue); }
+
+.pill {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 3px 10px;
+  font-size: 11px;
+  color: var(--dim);
+  cursor: default;
+}
+
+.dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+  flex-shrink: 0;
+  transition: background 0.3s;
+}
+.dot.ok   { background: var(--done); }
+.dot.err  { background: var(--failed); }
+.dot.spin { background: var(--running); animation: blink 1s ease-in-out infinite; }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.35} }
+
+.spacer { flex: 1; }
+
+/* ── Layout ─────────────────────────────────────────────────────── */
+main {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 28px 20px 60px;
+}
+
+/* ── PS5 info bar ───────────────────────────────────────────────── */
+#ps5-bar {
+  display: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 24px;
+  gap: 28px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.info-field { display: flex; flex-direction: column; gap: 1px; }
+.info-label { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.info-value { font-family: var(--mono); font-size: 12px; color: var(--dim); }
+
+/* ── Section heading ────────────────────────────────────────────── */
+.sh {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.sh-title {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--muted);
+}
+.sh-count {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1px 7px;
+  font-size: 10px;
+  color: var(--dim);
+}
+
+/* ── Job cards ──────────────────────────────────────────────────── */
+#jobs { display: flex; flex-direction: column; gap: 6px; }
+
+.empty {
+  padding: 48px 0;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 13px 16px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  column-gap: 12px;
+  row-gap: 4px;
+  align-items: start;
+  transition: border-color 0.2s;
+}
+.card.running { border-color: #3a2f0a; }
+.card.done    { border-color: #0d2e1a; }
+.card.failed  { border-color: #2e0d0d; }
+
+.card-left  { grid-column: 1; }
+.card-right { grid-column: 2; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+
+.card-id {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: .04em;
+}
+
+.card-dest {
+  font-size: 12px;
+  color: var(--text);
+  margin-top: 3px;
+  word-break: break-all;
+  font-family: var(--mono);
+}
+
+.card-detail {
+  font-size: 11px;
+  color: var(--dim);
+  margin-top: 2px;
+  font-family: var(--mono);
+}
+
+.card-err {
+  font-size: 11px;
+  color: var(--failed);
+  margin-top: 3px;
+  font-family: var(--mono);
+  word-break: break-all;
+}
+
+.badge {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+.badge.running { background: #3a2000; color: var(--running); }
+.badge.done    { background: #062010; color: var(--done);    }
+.badge.failed  { background: #2a0808; color: var(--failed);  }
+
+/* ── Transfer form ──────────────────────────────────────────────── */
+#form-section { margin-top: 32px; }
+
+form {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+label { font-size: 11px; color: var(--dim); display: block; margin-bottom: 3px; }
+
+input, textarea {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 7px 10px;
+  outline: none;
+  transition: border-color .2s;
+  resize: vertical;
+}
+input:focus, textarea:focus { border-color: var(--blue); }
+
+.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+button {
+  background: var(--blue);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 18px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  align-self: flex-start;
+  transition: opacity .15s;
+}
+button:hover { opacity: .88; }
+button:disabled { opacity: .4; cursor: default; }
+
+.form-error { font-size: 11px; color: var(--failed); font-family: var(--mono); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">ps5<span>upload</span></div>
+
+  <div class="pill" id="sse-pill">
+    <div class="dot spin" id="sse-dot"></div>
+    <span id="sse-label">connecting</span>
+  </div>
+
+  <div class="spacer"></div>
+
+  <div class="pill" id="ps5-pill">
+    <div class="dot" id="ps5-dot"></div>
+    <span id="ps5-label">PS5 —</span>
+  </div>
+</header>
+
+<main>
+  <!-- PS5 runtime info -->
+  <div id="ps5-bar">
+    <div class="info-field">
+      <div class="info-label">Active transactions</div>
+      <div class="info-value" id="ps5-active-tx">—</div>
+    </div>
+    <div class="info-field">
+      <div class="info-label">Engine</div>
+      <div class="info-value">localhost:9114</div>
+    </div>
+  </div>
+
+  <!-- Job list -->
+  <div class="sh">
+    <div class="sh-title">Jobs</div>
+    <div class="sh-count" id="job-count">0</div>
+  </div>
+  <div id="jobs">
+    <div class="empty" id="empty">No jobs yet. Start a transfer below.</div>
+  </div>
+
+  <!-- Quick transfer form -->
+  <div id="form-section">
+    <div class="sh" style="margin-top:32px">
+      <div class="sh-title">Quick Transfer</div>
+    </div>
+    <form id="xfer-form">
+      <div>
+        <label>PS5 address (leave blank for default)</label>
+        <input id="f-addr" type="text" placeholder="192.168.137.2:9113" autocomplete="off" spellcheck="false">
+      </div>
+      <div>
+        <label>Destination root on PS5 <span style="color:var(--failed)">*</span></label>
+        <input id="f-dest" type="text" placeholder="/data/mygame" autocomplete="off" spellcheck="false" required>
+      </div>
+      <div>
+        <label>Local file paths — one per line <span style="color:var(--failed)">*</span></label>
+        <textarea id="f-files" rows="4" placeholder="/home/user/game/file1.bin&#10;/home/user/game/file2.bin" spellcheck="false" required></textarea>
+      </div>
+      <div id="f-error" class="form-error" style="display:none"></div>
+      <button type="submit" id="f-btn">Transfer</button>
+    </form>
+  </div>
+</main>
+
+<script>
+'use strict';
+
+// ── Utilities ────────────────────────────────────────────────────
+
+function fmtBytes(n) {
+  n = Number(n);
+  if (!n) return '0 B';
+  if (n >= 1073741824) return (n / 1073741824).toFixed(2) + ' GB';
+  if (n >= 1048576)    return (n / 1048576).toFixed(1) + ' MB';
+  if (n >= 1024)       return (n / 1024).toFixed(0) + ' KB';
+  return n + ' B';
+}
+
+// ── Job state ────────────────────────────────────────────────────
+
+const jobs = new Map(); // job_id → flat job object
+
+function jobHtml(j) {
+  const status = j.status || 'running';
+  let detail = '';
+  let dest   = '';
+  let err    = '';
+
+  if (status === 'done') {
+    dest   = j.dest ? `<div class="card-dest">${esc(j.dest)}</div>` : '';
+    detail = `${fmtBytes(j.bytes_sent)} &middot; ${j.shards_sent ?? '?'} shard${j.shards_sent !== 1 ? 's' : ''}`;
+  } else if (status === 'failed') {
+    err = j.error || 'unknown error';
+  } else {
+    detail = 'transferring&hellip;';
+  }
+
+  return `<div class="card ${status}" id="job-${j.job_id}">
+    <div class="card-left">
+      <div class="card-id">${esc(j.job_id)}</div>
+      ${dest}
+      ${detail ? `<div class="card-detail">${detail}</div>` : ''}
+      ${err    ? `<div class="card-err">${esc(err)}</div>` : ''}
+    </div>
+    <div class="card-right">
+      <span class="badge ${status}">${status}</span>
+    </div>
+  </div>`;
+}
+
+function esc(s) {
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function upsertJob(j) {
+  jobs.set(j.job_id, j);
+  document.getElementById('job-count').textContent = jobs.size;
+  const existing = document.getElementById('job-' + j.job_id);
+  const html = jobHtml(j);
+  if (existing) {
+    existing.outerHTML = html;
+  } else {
+    const empty = document.getElementById('empty');
+    if (empty) empty.remove();
+    document.getElementById('jobs').insertAdjacentHTML('afterbegin', html);
+  }
+}
+
+// ── Initial load ─────────────────────────────────────────────────
+
+fetch('/api/jobs')
+  .then(r => r.json())
+  .then(list => Promise.all(
+    list.map(j =>
+      fetch('/api/jobs/' + j.job_id)
+        .then(r => r.json())
+        .then(d => upsertJob({ job_id: j.job_id, ...d }))
+    )
+  ))
+  .catch(() => {});
+
+// ── SSE ──────────────────────────────────────────────────────────
+
+let _sseTimer;
+
+function connectSSE() {
+  clearTimeout(_sseTimer);
+  const sse = new EventSource('/api/events');
+  const dot   = document.getElementById('sse-dot');
+  const label = document.getElementById('sse-label');
+
+  sse.onopen = () => {
+    dot.className = 'dot ok';
+    label.textContent = 'live';
+  };
+  sse.onmessage = e => {
+    try {
+      const { job_id, job } = JSON.parse(e.data);
+      upsertJob({ job_id, ...job });
+    } catch (_) {}
+  };
+  sse.onerror = () => {
+    sse.close();
+    dot.className = 'dot err';
+    label.textContent = 'reconnecting';
+    _sseTimer = setTimeout(connectSSE, 3000);
+  };
+}
+connectSSE();
+
+// ── PS5 status polling ────────────────────────────────────────────
+
+function pollPS5() {
+  fetch('/api/ps5/status')
+    .then(r => r.json())
+    .then(d => {
+      document.getElementById('ps5-dot').className = 'dot ok';
+      document.getElementById('ps5-label').textContent = 'PS5 online';
+      document.getElementById('ps5-bar').style.display = 'flex';
+      document.getElementById('ps5-active-tx').textContent = d.active_transactions ?? '—';
+    })
+    .catch(() => {
+      document.getElementById('ps5-dot').className = 'dot err';
+      document.getElementById('ps5-label').textContent = 'PS5 unreachable';
+      document.getElementById('ps5-bar').style.display = 'none';
+    });
+}
+pollPS5();
+setInterval(pollPS5, 10000);
+
+// ── Transfer form ─────────────────────────────────────────────────
+
+document.getElementById('xfer-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const btn   = document.getElementById('f-btn');
+  const errEl = document.getElementById('f-error');
+  errEl.style.display = 'none';
+  btn.disabled = true;
+
+  const addr  = document.getElementById('f-addr').value.trim() || null;
+  const dest  = document.getElementById('f-dest').value.trim();
+  const lines = document.getElementById('f-files').value
+    .split('\n').map(l => l.trim()).filter(Boolean);
+
+  if (!dest || !lines.length) {
+    errEl.textContent = 'Destination and at least one file are required.';
+    errEl.style.display = '';
+    btn.disabled = false;
+    return;
+  }
+
+  const files = lines.map(src => ({
+    src,
+    dest: dest.replace(/\/+$/, '') + '/' + src.split('/').pop(),
+  }));
+
+  try {
+    const r = await fetch('/api/transfer/file-list', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ addr, dest_root: dest, files }),
+    });
+    const j = await r.json();
+    if (!j.job_id) throw new Error(j.error || JSON.stringify(j));
+    document.getElementById('f-files').value = '';
+    document.getElementById('f-dest').value = '';
+  } catch (err) {
+    errEl.textContent = String(err);
+    errEl.style.display = '';
+  }
+  btn.disabled = false;
+});
+</script>
+</body>
+</html>

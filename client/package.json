@@ -1,0 +1,51 @@
+{
+  "name": "ps5upload-client",
+  "private": true,
+  "version": "2.2.0",
+  "description": "PS5 Upload — Tauri 2 desktop client",
+  "homepage": "https://github.com/phantomptr/ps5upload",
+  "author": "PhantomPtr <phantomptr@gmail.com>",
+  "scripts": {
+    "dev": "tauri dev",
+    "dev:vite": "vite",
+    "build:vite": "vite build",
+    "build": "tauri build",
+    "tauri": "tauri",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "dist": "tauri build",
+    "dist:win": "tauri build --target x86_64-pc-windows-msvc",
+    "dist:win-arm": "tauri build --target aarch64-pc-windows-msvc",
+    "dist:mac": "tauri build --target aarch64-apple-darwin",
+    "dist:mac-x64": "tauri build --target x86_64-apple-darwin",
+    "dist:linux": "tauri build --target x86_64-unknown-linux-gnu",
+    "dist:linux-arm": "tauri build --target aarch64-unknown-linux-gnu"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.10.1",
+    "@tauri-apps/plugin-dialog": "^2.7.0",
+    "@tauri-apps/plugin-fs": "^2.5.0",
+    "@tauri-apps/plugin-shell": "^2.3.5",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.475.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.28.0",
+    "zustand": "^5.0.10"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.0.0",
+    "@tauri-apps/cli": "^2.10.1",
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "@vitejs/plugin-react": "^4.2.0",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5.4.0",
+    "vite": "^7.3.1",
+    "vitest": "^4.1.4"
+  },
+  "overrides": {
+    "tar": "7.5.7"
+  }
+}

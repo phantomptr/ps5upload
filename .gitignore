@@ -1,0 +1,124 @@
+# ─── OS / editor ─────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+*.iml
+.cursor/
+.aider*
+
+# ─── Node / pnpm / yarn ──────────────────────────────────────────────────
+node_modules/
+.pnp
+.pnp.*
+.yarn/*
+!.yarn/releases
+!.yarn/plugins
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ─── Rust / Cargo ────────────────────────────────────────────────────────
+target/
+**/*.rs.bk
+Cargo.lock.bak
+
+# ─── Python ──────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ─── Client (Vite / Tauri) ───────────────────────────────────────────────
+client/dist/
+client/.vite/
+client/out/
+client/.cache/
+client/release/
+client/src-tauri/target/
+client/src-tauri/gen/schemas/
+
+# ─── Payload build outputs ───────────────────────────────────────────────
+# The built ELF is embedded as a Tauri resource; we check it in as a
+# release artifact. Object files + build dirs are not.
+payload/build/
+*.o
+*.a
+*.so
+*.dylib
+
+# ─── Bench artefacts (generated on demand) ───────────────────────────────
+bench/fixtures/
+bench/results/
+bench/reports/
+bench/baselines/*.tmp
+
+# ─── Logs / debug dumps ──────────────────────────────────────────────────
+# Anchor `logs/` and `debug/` to the repo root so the patterns don't
+# case-insensitively swallow `client/src/screens/Logs/` on macOS/Windows
+# filesystems — that happened once and left a real source file
+# un-tracked until CI noticed on a clean checkout.
+*.log
+/logs/
+/debug/
+*.dmp
+crash-*.txt
+
+# ─── Secrets + local config ──────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+.envrc
+*.pem
+*.key
+!tests/lab/*.key
+
+# ─── Coverage ────────────────────────────────────────────────────────────
+coverage/
+*.lcov
+.nyc_output/
+
+# ─── Archives / test data ────────────────────────────────────────────────
+test_games/
+fixtures_out/
+*.rar
+*.zip
+*.7z
+*.tar
+*.tar.gz
+*.tgz
+
+# ─── Backup / temp ───────────────────────────────────────────────────────
+*.bak
+*.tmp
+*.orig
+*.rej
+.*.sw?
+temp/
+tmp/
+
+# ─── AI-assistant + agent artefacts ──────────────────────────────────────
+.claude/
+.anthropic/
+AGENTS.md
+CLAUDE.local.md
+
+# ─── Per-platform packaging outputs ──────────────────────────────────────
+# .app / .dmg / .msi / .exe / .deb / .AppImage / .rpm all live under
+# client/src-tauri/target, already covered above. This section
+# catches copies made outside the build tree.
+*.dmg
+*.msi
+*.AppImage
+*.deb
+*.rpm

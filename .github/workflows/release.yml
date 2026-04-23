@@ -1,0 +1,584 @@
+name: release
+
+# Fires on version tags (preferred) or manual dispatch with a tag arg.
+# Required token scope: contents:write so the final job can create
+# the GitHub release and upload assets.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v2.1.0). Must match the VERSION file content prefixed with 'v'."
+        required: true
+        default: "v2.1.0"
+
+permissions:
+  contents: write
+
+# A second push to the same tag (e.g., someone re-tags after fixing a
+# typo in release notes) would otherwise spawn a concurrent workflow
+# and the two would race to create-release, usually producing a
+# half-duplicated release page. Keep one release in flight per tag;
+# cancel-in-progress means the retagged push wins.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Tauri release builds are slow (full Rust release build + webview
+  # bundling). Surface live progress so stuck jobs are obvious.
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────
+  # Build the PS5 ELF once on Linux. The client bundles this file as a
+  # Tauri resource (see `resources` in client/src-tauri/tauri.conf.json),
+  # so every platform-build job downloads it before running tauri build.
+  # Doing it once beats installing the PS5 SDK on every matrix leg.
+  # ─────────────────────────────────────────────────────────────────────
+  build-payload:
+    name: build-payload
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # Sync downstream version files from VERSION before anything
+      # compiles. engine-ci's version-sync job already enforces this on
+      # every PR, but we re-run here as belt-and-braces: if a tag ever
+      # gets pushed against a branch where someone forgot to bump, the
+      # tagged build is still consistent (payload's PS5UPLOAD2_VERSION
+      # macro matches the Tauri bundle's version).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Sync version from VERSION
+        run: node scripts/update-version.js
+
+      - name: Install payload toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang lld unzip
+
+      # Pin to a specific SDK tag rather than `latest` so an upstream
+      # SDK release that bumps offsets (or breaks a symbol) can't
+      # silently take out our release pipeline. v0.38 was the release
+      # that added 11.x + 12.x kernel offsets — we want at least that.
+      # Bump PS5_SDK_TAG when a new firmware needs support.
+      #
+      # `curl --retry` handles the occasional GitHub CDN hiccup so one
+      # flaky network moment doesn't fail an entire release run.
+      - name: Download PS5 Payload SDK
+        env:
+          PS5_SDK_TAG: v0.38
+        run: |
+          curl --retry 3 --retry-delay 5 --retry-connrefused \
+            --fail --location --silent --show-error \
+            -o /tmp/ps5-payload-sdk.zip \
+            "https://github.com/ps5-payload-dev/sdk/releases/download/${PS5_SDK_TAG}/ps5-payload-sdk.zip"
+          sudo unzip -q /tmp/ps5-payload-sdk.zip -d /opt
+
+      - name: Build payload ELF
+        env:
+          PS5_PAYLOAD_SDK: /opt/ps5-payload-sdk
+        run: make payload
+
+      - name: Sanity-check ELF shape
+        run: |
+          file payload/ps5upload.elf
+          test -s payload/ps5upload.elf
+
+      # Gzip the payload before bundling. On Linux, Tauri's AppImage
+      # bundler invokes `linuxdeploy` which walks every ELF in the
+      # AppDir via `patchelf --print-needed`. The PS5 payload is a
+      # FreeBSD ELF depending on PS5 sprx modules (libkernel_web.sprx
+      # etc.) that can never exist on Linux — so linuxdeploy aborts the
+      # whole build. A gzipped file shows `\x1f\x8b` magic instead of
+      # `\x7fELF`, linuxdeploy skips it, and Tauri ships the .gz as a
+      # regular resource. The host decompresses on first use (see
+      # `probes.rs::find_bundled_payload`). We keep the bundle
+      # resource `.elf.gz` cross-platform for consistency — macOS/
+      # Windows bundlers don't walk ELFs but there's no reason to have
+      # platform-specific resource wiring.
+      - name: Gzip payload for bundling
+        run: |
+          gzip -kf payload/ps5upload.elf
+          ls -la payload/ps5upload.elf payload/ps5upload.elf.gz
+
+      - name: Upload payload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ps5upload-payload
+          path: |
+            payload/ps5upload.elf
+            payload/ps5upload.elf.gz
+          if-no-files-found: error
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Build the Tauri desktop client for every supported platform/arch.
+  # Matrix legs are fully independent — one leg failing doesn't take
+  # out the rest, so a partial release (e.g. macOS only) is still
+  # possible while we debug a per-platform issue.
+  # ─────────────────────────────────────────────────────────────────────
+  build-client:
+    name: build-client-${{ matrix.platform }}-${{ matrix.arch }}
+    needs: build-payload
+    runs-on: ${{ matrix.os }}
+    # windows-11-arm is a GitHub-hosted public-preview image and
+    # occasionally reports "no hosted runner available". Don't let
+    # that single leg block the other five platform releases.
+    # `gen-updater-manifest.py` handles missing platforms gracefully
+    # (just omits them from `assets`), and the in-app updater shows
+    # "no download for your platform" cleanly. All legs other than
+    # windows-arm64 stay fail-the-whole-release-on-error; the matrix
+    # keeps fail-fast: false so macOS/Linux don't die on windows-arm64.
+    continue-on-error: ${{ matrix.platform == 'windows' && matrix.arch == 'arm64' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            platform: macos
+            arch: arm64
+            rust_target: aarch64-apple-darwin
+          - os: macos-15-intel
+            platform: macos
+            arch: x64
+            rust_target: x86_64-apple-darwin
+          - os: ubuntu-24.04
+            platform: linux
+            arch: x64
+            rust_target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+            rust_target: aarch64-unknown-linux-gnu
+          - os: windows-2022
+            platform: windows
+            arch: x64
+            rust_target: x86_64-pc-windows-msvc
+          # Windows arm64: GitHub only has native arm64 runners from the
+          # windows-11-arm image family. Tauri supports cross-compilation
+          # too — if that image is ever unavailable we can fall back to
+          # `windows-2022` with `--target aarch64-pc-windows-msvc` and
+          # just install the aarch64 Windows SDK components.
+          - os: windows-11-arm
+            platform: windows
+            arch: arm64
+            rust_target: aarch64-pc-windows-msvc
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      # Must run before `npm ci` (which would lock the client to
+      # whatever version is currently in package-lock.json) and before
+      # cargo/Tauri read their manifests, so every per-matrix leg
+      # builds from the same VERSION-driven view.
+      - name: Sync version from VERSION
+        run: node scripts/update-version.js
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      # Tauri release builds pull in a few hundred crates; without
+      # caching, cold builds take 15+ minutes per leg. Key by the
+      # lockfile so a dep bump invalidates cleanly.
+      - name: Cache cargo target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            client/src-tauri/target
+          key: ${{ runner.os }}-${{ matrix.arch }}-tauri-${{ hashFiles('client/src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.arch }}-tauri-
+
+      # Linux needs the GTK/webkit toolchain for Tauri's webview to
+      # link. The exact package names track Ubuntu releases; these
+      # are the 24.04 set. If we bump to 26.04 revisit this list.
+      - name: Install Linux Tauri prerequisites
+        if: matrix.platform == 'linux'
+        # libfuse2: Tauri's AppImage bundler invokes `linuxdeploy` which
+        # is itself packaged as an AppImage and self-mounts via FUSE2 at
+        # startup. Ubuntu 24.04 dropped libfuse2 from the default runner
+        # image; without it, linuxdeploy dies immediately with a
+        # swallowed "fuse: device not found" and Tauri surfaces the
+        # generic "failed to run linuxdeploy" message (ubuntu-24.04-arm
+        # happens to have it, which is why arm64 passes without this).
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libfuse2 \
+            patchelf \
+            build-essential \
+            curl \
+            wget \
+            file
+
+      - name: Install client deps
+        working-directory: client
+        run: npm ci --no-audit --no-fund
+
+      # The client bundles the payload ELF as a Tauri resource. Without
+      # it, `tauri build` fails with "resource not found" before ever
+      # invoking cargo. Materialise it at the path tauri.conf.json
+      # expects (../../payload/ps5upload.elf relative to src-tauri).
+      - name: Restore payload ELF
+        uses: actions/download-artifact@v4
+        with:
+          name: ps5upload-payload
+          path: payload
+
+      - name: Verify payload resource in place
+        shell: bash
+        run: |
+          test -s payload/ps5upload.elf.gz
+          ls -la payload/ps5upload.elf.gz
+
+      # Build the sidecar engine binary for the host arch (each matrix
+      # leg runs on a runner whose arch matches the Tauri target, so
+      # the default host build lands the right binary). tauri.conf.json
+      # bundles `../../engine/target/release/ps5upload-engine*` as a
+      # resource — the `*` glob picks up both `ps5upload-engine` on
+      # Unix and `ps5upload-engine.exe` on Windows.
+      - name: Build engine sidecar binary
+        working-directory: engine
+        shell: bash
+        run: cargo build --release -p ps5upload-engine
+
+      - name: Verify engine binary in place
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            test -s engine/target/release/ps5upload-engine.exe
+            ls -la engine/target/release/ps5upload-engine.exe
+          else
+            test -s engine/target/release/ps5upload-engine
+            ls -la engine/target/release/ps5upload-engine
+          fi
+
+      # Diagnostic: on Linux, confirm linuxdeploy can actually start
+      # under APPIMAGE_EXTRACT_AND_RUN before handing off to tauri
+      # build. Tauri's bundler swallows linuxdeploy's stderr, so when
+      # something breaks we only see "failed to run linuxdeploy" —
+      # no hint of the real cause. Running it directly here surfaces
+      # the actual error in the CI log (exit code + stderr), which is
+      # the difference between a 5-minute fix and hours of guessing.
+      # Always runs — if linuxdeploy IS fine, `--version` exits 0
+      # with a single line and we continue.
+      - name: Diagnose linuxdeploy (Linux only)
+        if: matrix.platform == 'linux'
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: |
+          set +e
+          cd "$RUNNER_TEMP"
+          url="https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous"
+          case "${{ matrix.arch }}" in
+            x64)   asset=linuxdeploy-x86_64.AppImage ;;
+            arm64) asset=linuxdeploy-aarch64.AppImage ;;
+          esac
+          curl --retry 3 --fail -L -o linuxdeploy "$url/$asset"
+          chmod +x linuxdeploy
+          echo "=== linuxdeploy --version (direct) ==="
+          ./linuxdeploy --version
+          rc=$?
+          echo "=== linuxdeploy exit code: $rc ==="
+          if [ $rc -ne 0 ]; then
+            echo "=== retry with extract-and-run explicit ==="
+            ./linuxdeploy --appimage-extract-and-run --version
+          fi
+          exit 0
+
+      - name: Build Tauri bundle
+        working-directory: client
+        shell: bash
+        # No code-signing configured. The update flow is "download +
+        # user replaces manually", which doesn't need signed bundles —
+        # users trust the GitHub release URL (HTTPS + the repo they
+        # downloaded the app from in the first place) and verify by
+        # filename. On Windows a fresh .exe still trips SmartScreen
+        # until the binary accumulates reputation; on macOS first-run
+        # requires right-click → Open. Both are acceptable.
+        #
+        # Windows builds pass `--no-bundle`: we ship the raw
+        # `target/release/PS5Upload.exe` inside a .zip (see the
+        # "Collect bundle artefacts" step). No NSIS installer step,
+        # which cuts ~1 minute from each Windows leg.
+        env:
+          APPLE_SIGNING_IDENTITY: "-"
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          RUST_TARGET: ${{ matrix.rust_target }}
+          PLATFORM: ${{ matrix.platform }}
+          # GitHub Actions Linux runners don't expose `/dev/fuse`, so
+          # linuxdeploy (an AppImage) can't FUSE-mount itself even with
+          # libfuse2 installed. Setting APPIMAGE_EXTRACT_AND_RUN=1 makes
+          # every AppImage (linuxdeploy + its plugins + the bundle's own
+          # runtime) self-extract to /tmp and exec from there instead.
+          # Harmless on macOS/Windows — the env var is only read by the
+          # AppImage runtime, which doesn't run on those platforms.
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+          # Tauri/linuxdeploy's default strip pass can corrupt Rust-built
+          # binaries on newer toolchains (.note.gnu.property sections).
+          # NO_STRIP preserves them — file size goes up ~2 MB, which is
+          # a rounding error against the webkit runtime anyway.
+          NO_STRIP: "true"
+          # --verbose on linuxdeploy so its stdout/stderr bleed through
+          # Tauri's bundler instead of being swallowed into "failed to
+          # run linuxdeploy". Harmless on other platforms — env var is
+          # only consumed by linuxdeploy.
+          LINUXDEPLOY_VERBOSE: "1"
+        run: |
+          if [ "$PLATFORM" = "windows" ]; then
+            npx tauri build --target "$RUST_TARGET" --ci --no-bundle
+          elif [ "$PLATFORM" = "linux" ]; then
+            # `--verbose` on tauri-cli so the bundler prints the exact
+            # linuxdeploy invocation + any stderr it captured.
+            npx tauri build --target "$RUST_TARGET" --ci --verbose
+          else
+            npx tauri build --target "$RUST_TARGET" --ci
+          fi
+
+      - name: Collect bundle artefacts
+        shell: bash
+        env:
+          RUST_TARGET: ${{ matrix.rust_target }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          dist_abs="$PWD/dist"
+          mkdir -p "$dist_abs"
+          target_root="client/src-tauri/target/${RUST_TARGET}/release"
+          bundle="$target_root/bundle"
+          echo "Scanning $bundle"
+          ls -R "$bundle" || true
+          case "$PLATFORM" in
+            macos)
+              # .dmg ships as-is — macOS users drag-to-Applications.
+              find "$bundle" -type f -name "*.dmg" -exec cp -v {} "$dist_abs/" \;
+              ;;
+            linux)
+              # .AppImage goes inside a .zip so the user downloads one
+              # file (and browsers + mail clients play nicer with zips
+              # than raw executables). Name it `PS5Upload.AppImage`
+              # inside the zip so extraction yields a stable filename
+              # regardless of tauri's full bundle filename.
+              app="$(find "$bundle" -type f -name "*.AppImage" | head -n1)"
+              if [ -z "$app" ]; then
+                echo "::error::no .AppImage produced by tauri"
+                exit 1
+              fi
+              staging="$(mktemp -d)"
+              cp -v "$app" "$staging/PS5Upload.AppImage"
+              chmod +x "$staging/PS5Upload.AppImage"
+              (cd "$staging" && zip -9 "$dist_abs/PS5Upload.zip" PS5Upload.AppImage)
+              rm -rf "$staging"
+              ;;
+            windows)
+              # Portable .exe direct from the unbundled build output —
+              # we don't emit an NSIS installer anymore. Zip it so the
+              # artifact is one file and the download shape matches
+              # Linux. Git Bash ships 7z on the windows runners;
+              # `-tzip` makes the output a standard .zip.
+              #
+              # With `--no-bundle`, cargo produces the binary named
+              # after the Cargo [package] name (ps5upload-desktop.exe),
+              # not the Tauri productName. Rename on copy so the user-
+              # visible filename inside the zip stays `PS5Upload.exe`.
+              raw_exe="$target_root/ps5upload-desktop.exe"
+              if [ ! -f "$raw_exe" ]; then
+                echo "::error::raw .exe not found at $raw_exe"
+                ls -la "$target_root" || true
+                exit 1
+              fi
+              staging="$(mktemp -d)"
+              cp -v "$raw_exe" "$staging/PS5Upload.exe"
+              (cd "$staging" && 7z a -tzip "$dist_abs/PS5Upload.zip" PS5Upload.exe)
+              rm -rf "$staging"
+              ;;
+          esac
+          ls -la "$dist_abs"
+
+      - name: Upload platform bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: ps5upload-${{ matrix.platform }}-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Collect every artifact, normalise filenames to include the version
+  # number, extract release notes from CHANGELOG.md, and publish the
+  # GitHub release. Runs once, after all builds succeed.
+  # ─────────────────────────────────────────────────────────────────────
+  create-release:
+    name: create-release
+    needs:
+      - build-payload
+      - build-client
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # Important: resolve the tag inside a shell block that reads the
+      # user-controlled `inputs.tag` via an env var, not direct
+      # interpolation. Direct `${{ github.event.inputs.tag }}` inside
+      # `run:` is a shell-injection hole — a tag like
+      # `v1.0.0"; rm -rf $HOME; echo "` would execute arbitrary code.
+      # See:
+      # https://securitylab.github.com/research/github-actions-untrusted-input/
+      - name: Resolve tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [ -n "$INPUT_TAG" ]; then
+            raw_tag="$INPUT_TAG"
+          else
+            raw_tag="$REF_NAME"
+          fi
+          # Strictly constrain what we accept: leading 'v' + semver-ish.
+          # Anything else we refuse with a hard failure — this is the
+          # last opportunity to reject malicious tag text before we
+          # start using it in filenames and shell contexts.
+          if ! echo "$raw_tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-+._A-Za-z0-9]*)?$'; then
+            echo "::error::Refusing to proceed: '$raw_tag' does not look like a version tag"
+            exit 1
+          fi
+          version="${raw_tag#v}"
+          echo "tag=$raw_tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Resolved tag=$raw_tag version=$version"
+
+      - name: Sanity-check tag vs VERSION file
+        env:
+          TAG_VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          expected="$(tr -d '[:space:]' < VERSION)"
+          if [ "$expected" != "$TAG_VERSION" ]; then
+            echo "::warning::VERSION file says '$expected' but tag says '$TAG_VERSION'. Proceeding anyway, but update VERSION in a follow-up commit."
+          fi
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Normalise release assets
+        id: assets
+        env:
+          TAG_VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          mkdir -p release
+          # Rename each artifact to include the version + arch so the
+          # release page is self-describing. Three shapes total:
+          #   macOS      : <name>-mac-<arch>.dmg       (native installer)
+          #   Windows    : <name>-win-<arch>.zip       (contains portable .exe)
+          #   Linux      : <name>-linux-<arch>.zip     (contains AppImage)
+          shopt -s nullglob
+          for f in artifacts/ps5upload-macos-*/*.dmg; do
+            arch="$(basename "$(dirname "$f")" | sed 's/^ps5upload-macos-//')"
+            cp -v "$f" "release/PS5Upload-${TAG_VERSION}-mac-${arch}.dmg"
+          done
+          for f in artifacts/ps5upload-windows-*/PS5Upload.zip; do
+            arch="$(basename "$(dirname "$f")" | sed 's/^ps5upload-windows-//')"
+            cp -v "$f" "release/PS5Upload-${TAG_VERSION}-win-${arch}.zip"
+          done
+          for f in artifacts/ps5upload-linux-*/PS5Upload.zip; do
+            arch="$(basename "$(dirname "$f")" | sed 's/^ps5upload-linux-//')"
+            cp -v "$f" "release/PS5Upload-${TAG_VERSION}-linux-${arch}.zip"
+          done
+          # Single payload ELF. Does transfer / mount / browse / hardware
+          # / FS ops — nothing else to ship alongside it.
+          if [ -f artifacts/ps5upload-payload/ps5upload.elf ]; then
+            cp -v artifacts/ps5upload-payload/ps5upload.elf \
+              "release/ps5upload-${TAG_VERSION}.elf"
+          fi
+          echo "---release/ contents---"
+          ls -la release
+          # `find` is robust against filenames containing newlines (SC2012);
+          # `-maxdepth 1` scopes to direct children + `-mindepth 1`
+          # excludes the release dir itself from the count.
+          count="$(find release -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+
+      - name: Extract release notes from CHANGELOG
+        env:
+          TAG_VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          notes="release/RELEASE_NOTES.md"
+          # CHANGELOG uses `## 2.2.0` headings (human-readable — no
+          # Keep-a-Changelog brackets). Copy lines from the matching
+          # version heading up to the next `## ` heading or EOF.
+          awk -v ver="$TAG_VERSION" '
+            $0 == "## " ver { found=1; next }
+            found && $0 ~ "^## " { exit }
+            found && $0 ~ "^---$" { exit }
+            found { print }
+          ' CHANGELOG.md > "$notes"
+          if [ ! -s "$notes" ]; then
+            printf "Release %s.\n\nSee CHANGELOG.md for details.\n" "$TAG_VERSION" > "$notes"
+          fi
+          echo "---RELEASE_NOTES.md---"
+          cat "$notes"
+
+      - name: Generate latest.json updater manifest
+        env:
+          TAG_VERSION: ${{ steps.tag.outputs.version }}
+          TAG_NAME: ${{ steps.tag.outputs.tag }}
+        run: |
+          # Publishes a single `latest.json` asset alongside the
+          # installer files. The in-app updater fetches it from
+          # github.com/.../releases/latest/download/latest.json and
+          # picks the platform-appropriate bundle URL based on the
+          # running OS + arch.
+          #
+          # Platform keys are the canonical ones tauri-plugin-updater
+          # expects: darwin-aarch64, darwin-x86_64, linux-x86_64,
+          # linux-aarch64, windows-x86_64, windows-aarch64. Missing
+          # keys = "no update for this platform in this release" and
+          # the plugin will report "up to date" to that user.
+          python3 scripts/gen-updater-manifest.py \
+            --release-dir release \
+            --version "$TAG_VERSION" \
+            --tag "$TAG_NAME" \
+            --repo phantomptr/ps5upload \
+            --notes release/RELEASE_NOTES.md \
+            --out release/latest.json
+          echo "---latest.json---"
+          cat release/latest.json
+
+      # `RELEASE_NOTES.md` is read by body_path to populate the
+      # release body; it shouldn't also appear in the downloadable
+      # assets. Move it out of release/ before the upload globs pick
+      # it up.
+      - name: Move release notes out of assets dir
+        run: mv release/RELEASE_NOTES.md "$RUNNER_TEMP/RELEASE_NOTES.md"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: ${{ steps.tag.outputs.tag }}
+          body_path: ${{ runner.temp }}/RELEASE_NOTES.md
+          draft: false
+          prerelease: ${{ contains(steps.tag.outputs.tag, '-') }}
+          files: release/*

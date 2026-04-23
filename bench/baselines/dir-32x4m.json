@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "benchmark": "ftx2_upload",
+  "created_at": "2026-04-17T08:24:54.610Z",
+  "engine_url": "http://127.0.0.1:9114",
+  "ps5_addr": "192.168.137.2:9113",
+  "source": {
+    "path": "/tmp/bench-dir-32x4m",
+    "kind": "dir",
+    "bytes": 4096
+  },
+  "destination": {
+    "root": "/data/ps5upload-bench",
+    "final_path": "/data/ps5upload-bench"
+  },
+  "job": {
+    "job_id": "4c95a227-c2b6-4edd-82a8-194918c2bb36",
+    "tx_id_hex": "f2f61953e76b41bba9306ef50967fae5",
+    "shards_sent": 32,
+    "bytes_sent": 134217728,
+    "started_at_ms": 1776414290591,
+    "completed_at_ms": 1776414294259,
+    "elapsed_ms": 3668
+  },
+  "metrics": {
+    "bytes_per_sec": 36591528.89858233,
+    "mib_per_sec": 34.89640130861505
+  }
+}

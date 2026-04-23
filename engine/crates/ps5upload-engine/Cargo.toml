@@ -1,0 +1,21 @@
+[package]
+name = "ps5upload-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "ps5upload-engine"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+ftx2-proto = { path = "../ftx2-proto" }
+ps5upload-core = { path = "../ps5upload-core" }
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tower-http = { version = "0.6", features = ["cors"] }
+uuid.workspace = true

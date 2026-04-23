@@ -1,0 +1,25 @@
+[package]
+name = "ps5upload-bench"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bench]]
+name = "throughput"
+harness = false
+
+[[bench]]
+name = "hash"
+harness = false
+
+[[bench]]
+name = "latency"
+harness = false
+
+[dependencies]
+ftx2-proto      = { path = "../ftx2-proto" }
+ps5upload-core  = { path = "../ps5upload-core" }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+uuid.workspace = true

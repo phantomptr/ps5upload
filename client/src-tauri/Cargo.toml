@@ -1,0 +1,60 @@
+[package]
+name = "ps5upload-desktop"
+version = "2.2.0"
+description = "PS5 Upload — Tauri desktop shell"
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "ps5upload_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# Tauri core + the built-in plugins we rely on for dialogs, fs and OS shell
+tauri = { version = "2", features = ["protocol-asset"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-shell = "2"
+
+# HTTP client for both the localhost engine sidecar (no TLS) and the
+# public GitHub update manifest/asset downloads (needs TLS via
+# rustls-tls). `stream` feature lets `update_download` stream bundles
+# chunk-by-chunk instead of buffering hundreds of MB in RAM.
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"], default-features = false }
+# `StreamExt` is what lets us await chunks out of `reqwest::Response::bytes_stream`.
+futures-util = "0.3"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "process", "time", "macros", "io-util", "sync"] }
+
+# JSON (for both IPC payloads and on-disk persistence)
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Error plumbing
+anyhow = "1"
+
+# Cross-platform browser launcher for the `open_external` command.
+open = "5"
+
+# Gunzip the bundled payload (`ps5upload.elf.gz`) on first use — see
+# `probes.rs::decompress_to_cache`. Pure-Rust miniz backend, no
+# system-lib linkage, so cross-compilation to arm64/Windows stays simple.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+
+# Engine core modules invoked directly in-process by Tauri commands
+# (no HTTP hop). Same workspace, different manifest root.
+ps5upload-core = { path = "../../engine/crates/ps5upload-core" }
+
+[features]
+# Default: build Tauri-native (no custom features yet)
+default = []
+
+[profile.release]
+# Smaller binary + slightly faster; Tauri recommends these.
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
+panic = "abort"

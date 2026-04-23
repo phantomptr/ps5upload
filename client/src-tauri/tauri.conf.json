@@ -1,0 +1,89 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "PS5Upload",
+  "version": "2.2.0",
+  "identifier": "com.phantomptr.ps5upload",
+  "build": {
+    "beforeDevCommand": "npm run dev:vite",
+    "beforeBuildCommand": "npm run build:vite",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "PS5Upload",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 960,
+        "minHeight": 640,
+        "resizable": true,
+        "maximized": true,
+        "fullscreen": false,
+        "center": true,
+        "decorations": true,
+        "transparent": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:19113 http://localhost:19113 https://github.com https://objects.githubusercontent.com https://*.githubusercontent.com; img-src 'self' data: asset: http://asset.localhost; style-src 'self' 'unsafe-inline'; font-src 'self' asset: http://asset.localhost",
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "**"
+        ]
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "dmg",
+      "appimage"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": [
+      "../../engine/target/release/ps5upload-engine*",
+      "../../payload/ps5upload.elf.gz",
+      "../../FAQ.md",
+      "../../CHANGELOG.md"
+    ],
+    "externalBin": [],
+    "category": "DeveloperTool",
+    "shortDescription": "Fast, reliable uploads from your computer to your PS5.",
+    "longDescription": "PS5Upload transfers game folders and disk images from your computer to a jailbroken PS5 over the FTX2 binary protocol, with BLAKE3 shard verification, resume support, native image mounting, and hardware monitoring.",
+    "copyright": "© PhantomPtr, GPL-3.0",
+    "license": "GPL-3.0-only",
+    "publisher": "PhantomPtr",
+    "homepage": "https://github.com/phantomptr/ps5upload",
+    "linux": {
+      "appimage": {
+        "bundleMediaFramework": false
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "11.0",
+      "dmg": {
+        "appPosition": {
+          "x": 180,
+          "y": 170
+        },
+        "applicationFolderPosition": {
+          "x": 480,
+          "y": 170
+        },
+        "windowSize": {
+          "width": 660,
+          "height": 400
+        }
+      }
+    }
+  }
+}

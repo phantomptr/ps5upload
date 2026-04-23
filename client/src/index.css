@@ -1,0 +1,76 @@
+@import "tailwindcss";
+
+/*
+ * Theme tokens are referenced everywhere via `var(--color-*)` through
+ * Tailwind's arbitrary-value syntax (e.g. `bg-[var(--color-surface)]`).
+ * Switching themes only needs to redefine the tokens; no component has
+ * to know which theme is active.
+ *
+ * Default (no data-theme attr) = dark. The theme store rewrites
+ * `document.documentElement.dataset.theme` to "light" when the user
+ * toggles, which overrides the `@theme` tokens via `:root[data-theme="light"]`.
+ */
+
+@theme {
+  --color-surface: oklch(0.18 0.01 250);
+  --color-surface-2: oklch(0.22 0.01 250);
+  --color-surface-3: oklch(0.27 0.01 250);
+  --color-border: oklch(0.32 0.01 250);
+  --color-border-strong: oklch(0.40 0.01 250);
+  --color-muted: oklch(0.62 0.02 250);
+  --color-text: oklch(0.95 0.01 250);
+  --color-accent: oklch(0.72 0.15 250);
+  --color-accent-contrast: oklch(0.12 0.02 250);
+  /* Soft accent for hover/selected chip backgrounds that should read
+   * as "accent-adjacent" without competing with the primary accent. */
+  --color-accent-soft: oklch(0.35 0.08 250);
+  --color-good: oklch(0.72 0.14 150);
+  --color-good-soft: oklch(0.30 0.07 150);
+  --color-warn: oklch(0.78 0.15 75);
+  --color-warn-soft: oklch(0.32 0.08 75);
+  --color-bad: oklch(0.65 0.2 25);
+  --color-bad-soft: oklch(0.32 0.10 25);
+}
+
+:root[data-theme="light"] {
+  --color-surface: oklch(0.99 0.005 250);
+  --color-surface-2: oklch(0.96 0.008 250);
+  --color-surface-3: oklch(0.92 0.01 250);
+  --color-border: oklch(0.86 0.01 250);
+  --color-border-strong: oklch(0.76 0.01 250);
+  --color-muted: oklch(0.50 0.02 250);
+  --color-text: oklch(0.22 0.02 250);
+  --color-accent: oklch(0.55 0.17 250);
+  --color-accent-contrast: oklch(0.99 0.005 250);
+  --color-accent-soft: oklch(0.92 0.05 250);
+  --color-good: oklch(0.52 0.14 150);
+  --color-good-soft: oklch(0.92 0.05 150);
+  --color-warn: oklch(0.62 0.14 75);
+  --color-warn-soft: oklch(0.94 0.05 75);
+  --color-bad: oklch(0.55 0.20 25);
+  --color-bad-soft: oklch(0.94 0.05 25);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  /* 16px = browser default and OS-native baseline. Every Tailwind text
+   * class is rem-based, so this one line scales the whole app
+   * proportionally. */
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+button {
+  font: inherit;
+}

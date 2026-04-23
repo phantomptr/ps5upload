@@ -1,0 +1,12 @@
+{
+  "private": true,
+  "scripts": {
+    "bench:ftx2-upload": "node bench/run-ftx2-upload.mjs",
+    "bench:ftx2-gate": "node bench/check-ftx2-baseline.mjs",
+    "smoke:hardware": "node tests/smoke-hardware.mjs",
+    "release": "./scripts/release.sh"
+  },
+  "devDependencies": {
+    "playwright": "^1.58.2"
+  }
+}

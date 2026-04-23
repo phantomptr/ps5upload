@@ -1,0 +1,259 @@
+name: ci
+
+# Runs on every push to main and every PR. No user-controlled inputs
+# interpolate into shell commands anywhere in this file — all `run:`
+# blocks use static strings only.
+
+on:
+  push:
+    branches: [main]
+    # Explicitly *not* tags — tag pushes are the release workflow's
+    # trigger. Leaving this list out would inherit the "all refs"
+    # default and double-fire on `vX.Y.Z` tags that point at HEAD,
+    # wasting a full CI run on a commit the release workflow is
+    # already validating end-to-end.
+    tags-ignore: ['**']
+  pull_request:
+  workflow_dispatch:
+
+# One concurrency group per ref: if you push twice in a row (e.g.
+# CHANGELOG typo fix on main), the first run cancels instead of
+# keeping two redundant jobs alive.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────
+  # Version sync gate. VERSION (repo root) is the canonical source of
+  # truth; downstream files (payload config.h, Tauri conf, Cargo.toml,
+  # package manifests) must all match it. Runs first because if this
+  # fails there's no point burning cycles on clippy/tests for a release
+  # that would ship with mismatched version strings on the payload
+  # binary vs the desktop bundle.
+  # ─────────────────────────────────────────────────────────────────────
+  version-sync:
+    name: version sync (VERSION is canonical)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify downstream files match VERSION
+        run: node scripts/update-version.js --check
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Rust workspace (engine + core + ftx2-proto). Format, clippy, tests.
+  # Gates PRs that touch any Rust code.
+  # ─────────────────────────────────────────────────────────────────────
+  rust-engine:
+    name: rust (engine workspace)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            engine/target
+          key: ${{ runner.os }}-engine-cargo-${{ hashFiles('engine/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-engine-cargo-
+
+      - name: cargo fmt
+        working-directory: engine
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        working-directory: engine
+        run: cargo clippy --workspace -- -D warnings
+
+      - name: cargo test
+        working-directory: engine
+        env:
+          RUST_BACKTRACE: 1
+        run: cargo test --workspace -- --nocapture
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Rust desktop shell (client/src-tauri). Uses its own workspace so
+  # it doesn't share target/ with the engine. Tauri pulls heavy
+  # system deps on Linux (webkit/gtk), so we cache aggressively.
+  # ─────────────────────────────────────────────────────────────────────
+  rust-desktop:
+    name: rust (desktop shell)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Install Tauri Linux deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            patchelf \
+            build-essential
+
+      - name: Cache cargo target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            client/src-tauri/target
+          key: ${{ runner.os }}-desktop-cargo-${{ hashFiles('client/src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-desktop-cargo-
+
+      # tauri.conf.json bundles two out-of-tree resources: the PS5
+      # payload (ps5upload.elf.gz) and the engine sidecar binary.
+      # cargo check parses those resource paths and errors out if
+      # anything is missing, long before any code compiles. Stub the
+      # payload .gz (we don't need a real ELF for type-checking, just
+      # a file at that path) and build the engine binary for real so
+      # its target path exists. The stub's bytes are a valid empty
+      # gzip stream so any runtime decompression would at least not
+      # fault — but CI only checks, never runs, so the shape is what
+      # matters.
+      - name: Stub payload resource
+        run: |
+          mkdir -p payload
+          printf '\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x03\x03\x00\x00\x00\x00\x00\x00\x00\x00\x00' > payload/ps5upload.elf.gz
+
+      - name: Build engine sidecar (needed as a Tauri resource)
+        working-directory: engine
+        run: cargo build --release -p ps5upload-engine
+
+      - name: cargo check
+        working-directory: client/src-tauri
+        run: cargo check --all-targets
+
+      - name: cargo clippy
+        working-directory: client/src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: cargo test
+        working-directory: client/src-tauri
+        env:
+          RUST_BACKTRACE: 1
+        run: cargo test
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Client frontend — TypeScript typecheck + Vite production build.
+  # No vitest tests wired up yet; when they are, add an npm test step.
+  # ─────────────────────────────────────────────────────────────────────
+  client-frontend:
+    name: client (ts + vite)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - name: Install deps
+        working-directory: client
+        run: npm ci --no-audit --no-fund
+
+      - name: TypeScript typecheck
+        working-directory: client
+        run: npx tsc --noEmit
+
+      - name: Vite production build
+        working-directory: client
+        run: npx vite build
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Payload ELF — compile against the ps5-payload-sdk so we catch any
+  # breakage to the C code. Doesn't upload artifacts; release.yml does
+  # that on tagged runs. Keeps PR feedback loop tight.
+  # ─────────────────────────────────────────────────────────────────────
+  payload:
+    name: payload (ELF)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install payload toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang lld unzip
+
+      # Pin SDK tag — keep in sync with release.yml. v0.38 ships the
+      # 11.x + 12.x kernel offsets we rely on.
+      - name: Download PS5 Payload SDK
+        env:
+          PS5_SDK_TAG: v0.38
+        run: |
+          curl -L -o /tmp/ps5-payload-sdk.zip \
+            "https://github.com/ps5-payload-dev/sdk/releases/download/${PS5_SDK_TAG}/ps5-payload-sdk.zip"
+          sudo unzip -q /tmp/ps5-payload-sdk.zip -d /opt
+
+      - name: Build payload
+        env:
+          PS5_PAYLOAD_SDK: /opt/ps5-payload-sdk
+        run: make payload
+
+      - name: Verify ELF
+        run: |
+          file payload/ps5upload.elf
+          test -s payload/ps5upload.elf
+          # Sanity-check the payload is a real build, not a zero-byte
+          # stub. Current payload is ~600 KB (runtime + takeover +
+          # register + blake3 SIMD backends); drop the floor to 200 KB
+          # so legitimate shrinkage from future refactors doesn't false-
+          # positive while still catching a broken/empty build.
+          size_bytes=$(stat -c '%s' payload/ps5upload.elf)
+          echo "ps5upload.elf: ${size_bytes} bytes"
+          if [ "$size_bytes" -lt 200000 ]; then
+            echo "::error::payload ELF is smaller than expected — build may have failed silently"
+            exit 1
+          fi
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Bench scripts: syntax check only. The scripts themselves need a
+  # running PS5 + engine, so they can't actually run in CI — but a
+  # Node syntax check catches bitrot from JS API changes.
+  # ─────────────────────────────────────────────────────────────────────
+  bench-syntax:
+    name: bench scripts (syntax)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: node --check all bench scripts
+        run: |
+          node --check bench/run-ftx2-upload.mjs
+          node --check bench/run-ftx2-sweep.mjs
+          node --check bench/check-ftx2-baseline.mjs
+          node --check bench/profiles.mjs
+          node --check tests/smoke-hardware.mjs

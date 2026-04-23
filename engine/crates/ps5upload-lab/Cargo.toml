@@ -1,0 +1,10 @@
+[package]
+name = "ps5upload-lab"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+ftx2-proto = { path = "../ftx2-proto" }
+ps5upload-core = { path = "../ps5upload-core" }
