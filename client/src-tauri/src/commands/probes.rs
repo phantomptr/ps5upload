@@ -166,20 +166,37 @@ pub async fn payload_send(
 ///   4. Repo-root / payload / ps5upload.elf (older dev builds, never
 ///      bundled but still serviceable)
 fn find_bundled_payload(app: &AppHandle) -> Result<PathBuf, String> {
-    let resource_dir = app.path().resource_dir().ok();
-
     let mut gz_candidates: Vec<PathBuf> = Vec::new();
-    if let Some(ref rd) = resource_dir {
+
+    // Windows portable: payload lives at
+    // `<exe-dir>/resources/payload/ps5upload.elf.gz` because
+    // `--no-bundle` skips Tauri's Resources wiring and the release
+    // workflow packs it in the zip alongside the exe.
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            gz_candidates.push(
+                exe_dir
+                    .join("resources")
+                    .join("payload")
+                    .join("ps5upload.elf.gz"),
+            );
+        }
+    }
+
+    if let Ok(rd) = app.path().resource_dir() {
         gz_candidates.push(rd.join("payload").join("ps5upload.elf.gz"));
         gz_candidates.push(
             rd.join("_up_")
-              .join("_up_")
-              .join("payload")
-              .join("ps5upload.elf.gz"),
+                .join("_up_")
+                .join("payload")
+                .join("ps5upload.elf.gz"),
         );
     }
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let repo_root = manifest_dir.parent().and_then(|p| p.parent()).map(PathBuf::from);
+    let repo_root = manifest_dir
+        .parent()
+        .and_then(|p| p.parent())
+        .map(PathBuf::from);
     if let Some(ref rr) = repo_root {
         gz_candidates.push(rr.join("payload").join("ps5upload.elf.gz"));
     }

@@ -51,9 +51,7 @@
     ],
     "resources": [
       "../../engine/target/release/ps5upload-engine*",
-      "../../payload/ps5upload.elf.gz",
-      "../../FAQ.md",
-      "../../CHANGELOG.md"
+      "../../payload/ps5upload.elf.gz"
     ],
     "externalBin": [],
     "category": "DeveloperTool",

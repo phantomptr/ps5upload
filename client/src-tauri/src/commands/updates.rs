@@ -335,9 +335,25 @@ pub async fn update_download(
         }
     }
 
-    // Skip if we already have a complete copy from a prior run.
-    if let (Some(expected), Ok(meta)) = (expected_len, std::fs::metadata(&target)) {
-        if meta.len() == expected {
+    // Skip if we already have a complete copy from a prior run. We
+    // stream to `<target>.part` and atomic-rename only after the
+    // stream succeeds (see PartialDownloadGuard below), so `target`
+    // existing at all means a prior invocation finished end-to-end.
+    // Two cases to handle:
+    //   1. Server sent Content-Length → verify byte-exact match
+    //      (catches the rare "same filename, different size release"
+    //      edge case).
+    //   2. Server omitted Content-Length (GitHub CDN redirects to
+    //      release-assets.githubusercontent.com often drop it) → trust
+    //      that the file is complete because only the atomic-rename
+    //      path produces it. Without this branch the user re-downloads
+    //      the same bundle on every click.
+    if let Ok(meta) = std::fs::metadata(&target) {
+        let skip = match expected_len {
+            Some(expected) => meta.len() == expected,
+            None => meta.len() > 0,
+        };
+        if skip {
             reveal(&app, &target).await?;
             return Ok(UpdateDownload {
                 path: target.to_string_lossy().into_owned(),

@@ -402,6 +402,15 @@ jobs:
               # after the Cargo [package] name (ps5upload-desktop.exe),
               # not the Tauri productName. Rename on copy so the user-
               # visible filename inside the zip stays `PS5Upload.exe`.
+              #
+              # --no-bundle also skips Tauri's `resources` handling —
+              # so the engine sidecar and payload .gz have to be packed
+              # into the zip by hand alongside the exe, and the
+              # lookup code (find_engine_binary / find_bundled_payload)
+              # has to know to check the exe-adjacent `resources/`
+              # folder. Without this, the Windows portable exe launches
+              # the UI but every PS5 action fails because the engine
+              # sidecar can't spawn.
               raw_exe="$target_root/ps5upload-desktop.exe"
               if [ ! -f "$raw_exe" ]; then
                 echo "::error::raw .exe not found at $raw_exe"
@@ -410,7 +419,12 @@ jobs:
               fi
               staging="$(mktemp -d)"
               cp -v "$raw_exe" "$staging/PS5Upload.exe"
-              (cd "$staging" && 7z a -tzip "$dist_abs/PS5Upload.zip" PS5Upload.exe)
+              mkdir -p "$staging/resources/engine" "$staging/resources/payload"
+              cp -v engine/target/release/ps5upload-engine.exe \
+                "$staging/resources/engine/ps5upload-engine.exe"
+              cp -v payload/ps5upload.elf.gz \
+                "$staging/resources/payload/ps5upload.elf.gz"
+              (cd "$staging" && 7z a -tzip "$dist_abs/PS5Upload.zip" PS5Upload.exe resources)
               rm -rf "$staging"
               ;;
           esac

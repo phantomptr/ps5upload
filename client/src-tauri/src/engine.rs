@@ -31,13 +31,16 @@ async fn child_lock() -> &'static tokio::sync::Mutex<Option<Child>> {
 
 /// Locate the engine binary. Search order:
 ///
-///   1. `Resources/engine/<binary>` — clean packaged path when we eventually
-///      move to a copy-step that flattens the layout.
-///   2. `Resources/_up_/_up_/engine/target/release/<binary>` — current
-///      packaged path, because `resources: ["../../engine/..."]` in
-///      tauri.conf.json preserves the `../..` segments as `_up_`.
-///   3. `<repo>/engine/target/release/<binary>` — dev build.
-///   4. `<repo>/engine/target/debug/<binary>` — dev fallback.
+///   1. `<exe-dir>/resources/engine/<binary>` — Windows portable zip.
+///      The `--no-bundle` build has no Tauri Resources dir, so the
+///      release workflow packs the engine next to the exe.
+///   2. `Resources/engine/<binary>` — clean packaged path.
+///   3. `Resources/_up_/_up_/engine/target/release/<binary>` — current
+///      packaged path on macOS/Linux bundles because
+///      `resources: ["../../engine/..."]` in tauri.conf.json preserves
+///      the `../..` segments as `_up_`.
+///   4. `<repo>/engine/target/release/<binary>` — dev build.
+///   5. `<repo>/engine/target/debug/<binary>` — dev fallback.
 fn find_engine_binary(app: &AppHandle) -> Result<PathBuf> {
     let bin_name = if cfg!(target_os = "windows") {
         "ps5upload-engine.exe"
@@ -45,18 +48,27 @@ fn find_engine_binary(app: &AppHandle) -> Result<PathBuf> {
         "ps5upload-engine"
     };
 
-    let resource_dir = app.path().resource_dir().ok();
-
     let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Some(ref rd) = resource_dir {
+
+    // Windows portable: engine lives at <exe-dir>/resources/engine/.
+    // `current_exe()` is the path of the running binary; its parent
+    // is the directory it sits in. Check this first so portable-zip
+    // users don't fall through to the (nonexistent) Resources dir.
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            candidates.push(exe_dir.join("resources").join("engine").join(bin_name));
+        }
+    }
+
+    if let Ok(rd) = app.path().resource_dir() {
         candidates.push(rd.join("engine").join(bin_name));
         candidates.push(
             rd.join("_up_")
-              .join("_up_")
-              .join("engine")
-              .join("target")
-              .join("release")
-              .join(bin_name),
+                .join("_up_")
+                .join("engine")
+                .join("target")
+                .join("release")
+                .join(bin_name),
         );
     }
 
@@ -66,7 +78,11 @@ fn find_engine_binary(app: &AppHandle) -> Result<PathBuf> {
     if let Some(repo_root) = manifest_dir.parent().and_then(|p| p.parent()) {
         for profile in ["release", "debug"] {
             candidates.push(
-                repo_root.join("engine").join("target").join(profile).join(bin_name),
+                repo_root
+                    .join("engine")
+                    .join("target")
+                    .join(profile)
+                    .join(bin_name),
             );
         }
     }
@@ -81,7 +97,11 @@ fn find_engine_binary(app: &AppHandle) -> Result<PathBuf> {
         "ps5upload-engine binary not found. Searched:\n  {}\n\
         Build it with `make engine` or \
         `cargo build --release -p ps5upload-engine`.",
-        candidates.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join("\n  ")
+        candidates
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join("\n  ")
     ))
 }
 
