@@ -348,12 +348,15 @@ jobs:
         run: |
           if [ "$PLATFORM" = "windows" ]; then
             npx tauri build --target "$RUST_TARGET" --ci --no-bundle
-          elif [ "$PLATFORM" = "linux" ]; then
-            # `--verbose` on tauri-cli so the bundler prints the exact
-            # linuxdeploy invocation + any stderr it captured.
-            npx tauri build --target "$RUST_TARGET" --ci --verbose
           else
-            npx tauri build --target "$RUST_TARGET" --ci
+            # `--verbose` on Linux + macOS so the bundler prints the
+            # actual linuxdeploy / bundle_dmg.sh invocation + captured
+            # stderr. Without this, every bundler failure collapses
+            # to an opaque "failed to run X" message, and we lose
+            # ~30 min per CI round to retries with no new signal.
+            # Windows --no-bundle doesn't invoke any post-compile
+            # bundler so verbose there is noise-only.
+            npx tauri build --target "$RUST_TARGET" --ci --verbose
           fi
 
       - name: Collect bundle artefacts
