@@ -414,7 +414,12 @@ jobs:
               fi
               staging="$(mktemp -d)"
               cp -v "$raw_exe" "$staging/PS5Upload.exe"
-              (cd "$staging" && 7z a -tzip "$dist_abs/PS5Upload.zip" PS5Upload.exe)
+              # `tar -a -c -f out.zip in` uses tar's "auto-format from
+              # extension" mode (bsdtar flag) to produce a zip. Ships
+              # with Windows 10+ bundled tar and works in Git Bash.
+              # Replaces 7z, which was only "soft-preinstalled" on
+              # windows-2022 and not guaranteed on windows-11-arm.
+              (cd "$staging" && tar -a -c -f "$dist_abs/PS5Upload.zip" PS5Upload.exe)
               rm -rf "$staging"
               ;;
           esac

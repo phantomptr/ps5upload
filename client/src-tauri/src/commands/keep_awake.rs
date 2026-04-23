@@ -38,12 +38,27 @@ fn holder() -> &'static Mutex<Option<Handle>> {
     HOLDER.get_or_init(|| Mutex::new(None))
 }
 
+/// True when this platform has a working keep-awake primitive
+/// *and* any required runtime component is present. macOS and
+/// Windows always support it (caffeinate ships with macOS,
+/// SetThreadExecutionState is a Win32 API). Linux needs
+/// systemd-inhibit — absent on non-systemd distros, where we
+/// report `supported: false` so the UI greys the toggle instead
+/// of letting it bounce on every click.
 fn platform_supported() -> bool {
-    cfg!(any(
-        target_os = "macos",
-        target_os = "linux",
-        target_os = "windows"
-    ))
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        true
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::path::Path::new("/usr/bin/systemd-inhibit").exists()
+            || std::path::Path::new("/bin/systemd-inhibit").exists()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        false
+    }
 }
 
 #[tauri::command]
@@ -123,9 +138,20 @@ fn acquire_inhibitor() -> Result<Option<Handle>, String> {
 #[cfg(target_os = "linux")]
 fn acquire_inhibitor() -> Result<Option<Handle>, String> {
     use tokio::process::Command;
-    // systemd-inhibit is available on any modern desktop Linux (GNOME,
-    // KDE, most distros with systemd-logind). Falls back gracefully if
-    // not installed — we surface the error to the UI.
+    // Presence-check systemd-inhibit before spawning. Without this,
+    // non-systemd distros (Alpine, Void, Gentoo OpenRC, NixOS without
+    // systemd) get a misleading UI: `supported: true` on the state
+    // query, but every enable attempt bounces to `supported: true` +
+    // error. Returning `Ok(None)` here makes `keep_awake_set` report
+    // `supported: false` so the UI can grey out the toggle cleanly,
+    // matching how Windows/macOS surface the same "not available"
+    // case. Checks the two standard systemd install paths; anything
+    // exotic won't have systemd-inhibit anyway.
+    let has_systemd_inhibit = std::path::Path::new("/usr/bin/systemd-inhibit").exists()
+        || std::path::Path::new("/bin/systemd-inhibit").exists();
+    if !has_systemd_inhibit {
+        return Ok(None);
+    }
     let child = Command::new("systemd-inhibit")
         .args([
             "--what=idle:sleep",

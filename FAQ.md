@@ -266,9 +266,9 @@ detail. Click **Copy** or **Download** to grab a plain-text dump
 for a bug report.
 
 **Q: Where are app settings saved?**
-- **macOS**: `~/Library/Application Support/com.ps5upload.desktop/`
-- **Windows**: `%APPDATA%\com.ps5upload.desktop\`
-- **Linux**: `~/.local/share/com.ps5upload.desktop/`
+- **macOS**: `~/Library/Application Support/com.phantomptr.ps5upload/`
+- **Windows**: `%APPDATA%\com.phantomptr.ps5upload\`
+- **Linux**: `~/.local/share/com.phantomptr.ps5upload/`
 
 The path is shown in Settings → Storage.
 

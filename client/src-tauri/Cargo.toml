@@ -56,5 +56,11 @@ default = []
 codegen-units = 1
 lto = true
 opt-level = "s"
-strip = true
+# `strip = true` removed deliberately. Stripping the desktop binary
+# drops the PDB linkage on Windows and the dSYM pointers on macOS,
+# which makes any post-release crash report impossible to
+# symbolicate. The ~2 MB we'd save is negligible against webkit2gtk
+# (~30 MB on Linux) and WebView2 (system-shared on Windows). If a
+# future size crunch ever justifies stripping, scope it to specific
+# packages via [profile.release.package.X] with `strip = true`.
 panic = "abort"
