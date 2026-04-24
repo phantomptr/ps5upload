@@ -436,6 +436,87 @@ const translations = {
     on: "On",
     off: "Off",
     gb_free: "{size} GB free",
+
+    // Navigation + sidebar (added 2.2.x)
+    nav_section_overview: "Overview",
+    nav_section_workflow: "Workflow",
+    nav_section_help: "Help",
+    logged_error_one: "{count} logged error",
+    logged_error_many: "{count} logged errors",
+    update_available_short: "Update available",
+    update_available_tooltip: "Update available — open Settings to install",
+    dark_mode: "Dark mode",
+    light_mode: "Light mode",
+    loading: "Loading…",
+    clear: "Clear",
+    whats_new: "What's new",
+
+    // Connection screen
+    connection_title: "Connect to your PS5",
+    connection_description: "Three quick steps before your first upload. You only need to do this once per PS5 boot — the payload stays loaded until the console reboots or goes into rest mode.",
+    connection_step1_title: "Tell the app where your PS5 is",
+    connection_step2_title: "Send the payload to your PS5",
+    connection_step3_title: "You're ready to upload",
+
+    // Hardware screen
+    hardware_title: "Hardware",
+    hardware_description: "Live system info, temperatures, and uptime for the PS5. Auto-refreshes every 5 seconds while the payload is connected.",
+    hardware_read_error: "Couldn't read hardware info",
+    hardware_temperatures: "Temperatures",
+    hardware_performance: "Performance",
+    hardware_uptime: "Uptime",
+    hardware_system: "System",
+    payload_not_connected: "Payload not connected",
+    payload_not_connected_message: "Head to Connection and Send payload first — hardware info becomes available once the payload is running.",
+
+    // Changelog screen
+    changelog_description: "Release notes for ps5upload. Old versions live on GitHub; the most recent entries are bundled with the app.",
+    changelog_full_history: "Full history",
+    changelog_load_error: "Couldn't load CHANGELOG.md",
+
+    // FAQ screen
+    faq_description: "Everything that falls outside the basic happy path — firmware support, payload recovery, platform quirks, keyboard shortcuts.",
+    faq_search_placeholder: "Search the FAQ…",
+    faq_load_error: "Couldn't load FAQ.md",
+    faq_loading: "Loading FAQ…",
+    faq_no_matches: "No matches",
+    faq_no_matches_message: "Nothing in the FAQ matches \"{query}\". Try a shorter or different phrase.",
+
+    // Library screen
+    library: "Library",
+    library_description: "Games and disk images anywhere on your PS5. Games are folders containing sce_sys/param.json; disk images are .exfat and .ffpkg files.",
+    library_scan_error: "Couldn't scan the PS5",
+    library_waiting: "Waiting for the PS5 payload to become reachable…",
+    library_empty_title: "Nothing in the scan folders yet",
+    library_empty_message: "Upload a game folder or disk image, or register titles with a PS5-side installer — they'll show up here.",
+    library_games: "Games",
+    library_disk_images: "Disk images (.exfat / .ffpkg)",
+
+    // FileSystem screen
+    file_system: "File System",
+
+    // Search screen
+    search: "Search",
+    search_description: "Searches every writable drive on your PS5. Use * and ? as wildcards (e.g. *.pkg, PPSA?????)",
+    search_stop: "Stop",
+    search_stop_tooltip: "Stop the current search",
+    search_failed: "Search failed",
+
+    // Logs screen
+    logs_description: "In-app log of errors, warnings, and notable events. Useful for bug reports — click Copy to grab a plain-text dump.",
+    logs_empty_title: "Nothing logged yet",
+    logs_empty_message: "Errors and warnings will appear here as you use the app.",
+    logs_filter_no_matches: "No entries match the current filter. Try switching filters.",
+
+    // Send payload screen
+    send_payload_description: "Send any PS5 payload file — .elf, .bin, .js, or .lua (GoldHEN, etaHEN, kstuff, custom homebrew loaders, browser-stage exploits, plugin scripts) — to your PS5. Same flow as the Connection tab, just pointed at a file you choose.",
+
+    // Volumes screen
+    volumes: "Volumes",
+    volumes_description: "Storage drives and any disk images currently mounted on your PS5.",
+    volumes_read_error: "Couldn't read volumes",
+    volumes_empty_title: "No volumes visible",
+    volumes_empty_message: "The payload didn't return any writable drives. Make sure it's loaded and your PS5 has storage attached.",
   },
 
   "vi": {

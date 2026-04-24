@@ -7,6 +7,7 @@ import {
   type LogLevel,
 } from "../../state/logs";
 import { PageHeader, EmptyState, Button } from "../../components";
+import { useTr } from "../../state/lang";
 
 const LEVEL_ORDER: LogLevel[] = ["error", "warn", "info", "debug"];
 
@@ -46,6 +47,7 @@ function formatTime(ms: number): string {
 }
 
 export default function LogsScreen() {
+  const tr = useTr();
   const entries = useLogsStore((s) => s.entries);
   const filter = useLogsStore((s) => s.filter);
   const setFilter = useLogsStore((s) => s.setFilter);
@@ -107,9 +109,13 @@ export default function LogsScreen() {
     <div className="p-6">
       <PageHeader
         icon={ScrollText}
-        title="Logs"
+        title={tr("logs", undefined, "Logs")}
         count={entries.length}
-        description="In-app log of errors, warnings, and notable events. Useful for bug reports — click Copy to grab a plain-text dump."
+        description={tr(
+          "logs_description",
+          undefined,
+          "In-app log of errors, warnings, and notable events. Useful for bug reports — click Copy to grab a plain-text dump.",
+        )}
         right={
           <div className="flex items-center gap-1.5">
             <Button
@@ -119,7 +125,7 @@ export default function LogsScreen() {
               onClick={copyAll}
               disabled={visible.length === 0}
             >
-              Copy
+              {tr("copy", undefined, "Copy")}
             </Button>
             <Button
               variant="secondary"
@@ -128,7 +134,7 @@ export default function LogsScreen() {
               onClick={downloadAll}
               disabled={visible.length === 0}
             >
-              Download
+              {tr("download", undefined, "Download")}
             </Button>
             <Button
               variant="danger"
@@ -137,7 +143,7 @@ export default function LogsScreen() {
               onClick={clearLogs}
               disabled={entries.length === 0}
             >
-              Clear
+              {tr("clear", undefined, "Clear")}
             </Button>
           </div>
         }
@@ -169,11 +175,19 @@ export default function LogsScreen() {
         <EmptyState
           icon={ScrollText}
           size="hero"
-          title="Nothing logged yet"
+          title={tr("logs_empty_title", undefined, "Nothing logged yet")}
           message={
             entries.length === 0
-              ? "Errors and warnings will appear here as you use the app."
-              : "No entries match the current filter. Try switching filters."
+              ? tr(
+                  "logs_empty_message",
+                  undefined,
+                  "Errors and warnings will appear here as you use the app.",
+                )
+              : tr(
+                  "logs_filter_no_matches",
+                  undefined,
+                  "No entries match the current filter. Try switching filters.",
+                )
           }
         />
       ) : (

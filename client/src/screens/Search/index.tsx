@@ -10,6 +10,7 @@ import {
 import { useConnectionStore, PS5_PAYLOAD_PORT } from "../../state/connection";
 import { searchPS5, type SearchHit, type SearchProgress } from "../../api/ps5";
 import { PageHeader, ErrorCard, Button } from "../../components";
+import { useTr } from "../../state/lang";
 
 const SIZE_OPTIONS: { label: string; bytes: number }[] = [
   { label: "any size", bytes: 0 },
@@ -31,6 +32,7 @@ function formatBytes(n: number): string {
 }
 
 export default function SearchScreen() {
+  const tr = useTr();
   const host = useConnectionStore((s) => s.host);
   const [pattern, setPattern] = useState("");
   const [minSize, setMinSize] = useState(0);
@@ -100,14 +102,12 @@ export default function SearchScreen() {
     <div className="p-6">
       <PageHeader
         icon={SearchIcon}
-        title="Search"
-        description={
-          <>
-            Searches every writable drive on your PS5. Use <code>*</code>{" "}
-            and <code>?</code> as wildcards (e.g. <code>*.pkg</code>,{" "}
-            <code>PPSA?????</code>).
-          </>
-        }
+        title={tr("search", undefined, "Search")}
+        description={tr(
+          "search_description",
+          undefined,
+          "Searches every writable drive on your PS5. Use * and ? as wildcards (e.g. *.pkg, PPSA?????)",
+        )}
       />
 
       <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
@@ -136,9 +136,9 @@ export default function SearchScreen() {
               size="md"
               leftIcon={<X size={14} />}
               onClick={cancel}
-              title="Stop the current search"
+              title={tr("search_stop_tooltip", undefined, "Stop the current search")}
             >
-              Stop
+              {tr("search_stop", undefined, "Stop")}
             </Button>
           ) : (
             <Button
@@ -148,7 +148,7 @@ export default function SearchScreen() {
               onClick={run}
               disabled={!pattern.trim() || !host?.trim()}
             >
-              Search
+              {tr("search", undefined, "Search")}
             </Button>
           )}
         </div>
@@ -156,7 +156,10 @@ export default function SearchScreen() {
 
       {error && (
         <div className="mb-4">
-          <ErrorCard title="Search failed" detail={error} />
+          <ErrorCard
+            title={tr("search_failed", undefined, "Search failed")}
+            detail={error}
+          />
         </div>
       )}
 

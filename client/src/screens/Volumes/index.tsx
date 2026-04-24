@@ -5,6 +5,7 @@ import { useConnectionStore, PS5_PAYLOAD_PORT } from "../../state/connection";
 import { fetchVolumes, fsUnmount, type Volume } from "../../api/ps5";
 import { PageHeader, EmptyState, ErrorCard, Button } from "../../components";
 import { humanizePs5Error } from "../../lib/humanizeError";
+import { useTr } from "../../state/lang";
 
 /** Path prefix for volumes our FS_MOUNT creates. Showing an Unmount
  *  button only for these keeps us from accidentally offering to
@@ -25,6 +26,7 @@ function formatBytes(n: number): string {
 }
 
 export default function VolumesScreen() {
+  const tr = useTr();
   const host = useConnectionStore((s) => s.host);
   const payloadStatus = useConnectionStore((s) => s.payloadStatus);
   const [volumes, setVolumes] = useState<Volume[] | null>(null);
@@ -93,9 +95,13 @@ export default function VolumesScreen() {
     <div className="p-6">
       <PageHeader
         icon={HardDrive}
-        title="Volumes"
+        title={tr("volumes", undefined, "Volumes")}
         loading={loading}
-        description="Storage drives and any disk images currently mounted on your PS5."
+        description={tr(
+          "volumes_description",
+          undefined,
+          "Storage drives and any disk images currently mounted on your PS5.",
+        )}
         right={
           <Button
             variant="secondary"
@@ -105,27 +111,40 @@ export default function VolumesScreen() {
             disabled={loading || !host?.trim()}
             loading={loading}
           >
-            Refresh
+            {tr("refresh", undefined, "Refresh")}
           </Button>
         }
       />
 
       {error && (
         <div className="mb-4">
-          <ErrorCard title="Couldn't read volumes" detail={error} />
+          <ErrorCard
+            title={tr("volumes_read_error", undefined, "Couldn't read volumes")}
+            detail={error}
+          />
         </div>
       )}
 
       {volumes === null && !loading && !error && (
-        <EmptyState message="Waiting for the PS5 payload to become reachable…" />
+        <EmptyState
+          message={tr(
+            "library_waiting",
+            undefined,
+            "Waiting for the PS5 payload to become reachable…",
+          )}
+        />
       )}
 
       {volumes && volumes.length === 0 && (
         <EmptyState
           icon={HardDrive}
           size="hero"
-          title="No volumes visible"
-          message="The payload didn't return any writable drives. Make sure it's loaded and your PS5 has storage attached."
+          title={tr("volumes_empty_title", undefined, "No volumes visible")}
+          message={tr(
+            "volumes_empty_message",
+            undefined,
+            "The payload didn't return any writable drives. Make sure it's loaded and your PS5 has storage attached.",
+          )}
         />
       )}
 

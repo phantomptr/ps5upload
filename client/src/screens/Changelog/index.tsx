@@ -11,6 +11,7 @@ import {
   Button,
 } from "../../components";
 import { log } from "../../state/logs";
+import { useTr } from "../../state/lang";
 
 const GITHUB_RELEASES_URL =
   "https://github.com/phantomptr/ps5upload/releases";
@@ -22,6 +23,7 @@ const GITHUB_RELEASES_URL =
  * ships bundled.
  */
 export default function ChangelogScreen() {
+  const tr = useTr();
   const [raw, setRaw] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -42,8 +44,12 @@ export default function ChangelogScreen() {
     <div className="p-6">
       <PageHeader
         icon={Sparkles}
-        title="What's new"
-        description="Release notes for ps5upload. Old versions live on GitHub; the most recent entries are bundled with the app."
+        title={tr("whats_new", undefined, "What's new")}
+        description={tr(
+          "changelog_description",
+          undefined,
+          "Release notes for ps5upload. Old versions live on GitHub; the most recent entries are bundled with the app.",
+        )}
         right={
           <Button
             variant="secondary"
@@ -51,7 +57,7 @@ export default function ChangelogScreen() {
             rightIcon={<ExternalLink size={12} />}
             onClick={() => openExternal(GITHUB_RELEASES_URL)}
           >
-            Full history
+            {tr("changelog_full_history", undefined, "Full history")}
           </Button>
         }
       />
@@ -59,11 +65,16 @@ export default function ChangelogScreen() {
       <div className="mx-auto max-w-3xl">
         {error && (
           <div className="mb-4">
-            <ErrorCard title="Couldn't load CHANGELOG.md" detail={error} />
+            <ErrorCard
+              title={tr("changelog_load_error", undefined, "Couldn't load CHANGELOG.md")}
+              detail={error}
+            />
           </div>
         )}
 
-        {raw === null && !error && <EmptyState message="Loading…" />}
+        {raw === null && !error && (
+          <EmptyState message={tr("loading", undefined, "Loading…")} />
+        )}
 
         {raw !== null && <MarkdownView source={raw} />}
       </div>

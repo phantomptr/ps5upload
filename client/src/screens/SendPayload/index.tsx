@@ -22,6 +22,7 @@ import {
 } from "../../state/connection";
 import { sendPayload } from "../../api/ps5";
 import { PageHeader } from "../../components";
+import { useTr } from "../../state/lang";
 
 /**
  * Send a custom ELF to your PS5's payload loader.
@@ -103,6 +104,7 @@ function fileNameFrom(path: string): string {
 }
 
 export default function SendPayloadScreen() {
+  const tr = useTr();
   const host = useConnectionStore((s) => s.host);
   const setHost = useConnectionStore((s) => s.setHost);
   const [elfPath, setElfPath] = useState<string | null>(null);
@@ -254,8 +256,12 @@ export default function SendPayloadScreen() {
     <div className="p-6">
       <PageHeader
         icon={Rocket}
-        title="Send payload"
-        description="Send any PS5 payload file — .elf, .bin, .js, or .lua (GoldHEN, etaHEN, kstuff, custom homebrew loaders, browser-stage exploits, plugin scripts) — to your PS5. Same flow as the Connection tab, just pointed at a file you choose."
+        title={tr("send_payload", undefined, "Send payload")}
+        description={tr(
+          "send_payload_description",
+          undefined,
+          "Send any PS5 payload file — .elf, .bin, .js, or .lua (GoldHEN, etaHEN, kstuff, custom homebrew loaders, browser-stage exploits, plugin scripts) — to your PS5. Same flow as the Connection tab, just pointed at a file you choose.",
+        )}
       />
 
       {/* Two-column layout on wide screens: form on the left, history

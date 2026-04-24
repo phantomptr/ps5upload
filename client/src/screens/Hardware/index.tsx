@@ -13,6 +13,7 @@ import {
 
 import { AlertTriangle } from "lucide-react";
 import { PageHeader, EmptyState, ErrorCard, Button } from "../../components";
+import { useTr } from "../../state/lang";
 
 import { useConnectionStore, PS5_PAYLOAD_PORT } from "../../state/connection";
 import {
@@ -74,6 +75,7 @@ function formatPower(mw: number): string {
 }
 
 export default function HardwareScreen() {
+  const tr = useTr();
   const host = useConnectionStore((s) => s.host);
   const payloadStatus = useConnectionStore((s) => s.payloadStatus);
 
@@ -134,9 +136,13 @@ export default function HardwareScreen() {
     <div className="p-6">
       <PageHeader
         icon={Cpu}
-        title="Hardware"
+        title={tr("hardware_title", undefined, "Hardware")}
         loading={loading}
-        description="Live system info, temperatures, and uptime for the PS5. Auto-refreshes every 5 seconds while the payload is connected."
+        description={tr(
+          "hardware_description",
+          undefined,
+          "Live system info, temperatures, and uptime for the PS5. Auto-refreshes every 5 seconds while the payload is connected.",
+        )}
         right={
           <Button
             variant="secondary"
@@ -145,7 +151,7 @@ export default function HardwareScreen() {
             onClick={refresh}
             disabled={loading || !host?.trim() || payloadStatus !== "up"}
           >
-            Refresh
+            {tr("refresh", undefined, "Refresh")}
           </Button>
         }
       />
@@ -154,8 +160,12 @@ export default function HardwareScreen() {
         <EmptyState
           icon={Cpu}
           size="hero"
-          title="Payload not connected"
-          message="Head to Connection and Send payload first — hardware info becomes available once the payload is running."
+          title={tr("payload_not_connected", undefined, "Payload not connected")}
+          message={tr(
+            "payload_not_connected_message",
+            undefined,
+            "Head to Connection and Send payload first — hardware info becomes available once the payload is running.",
+          )}
         />
       )}
 
@@ -163,7 +173,14 @@ export default function HardwareScreen() {
           the empty state above already explains the state. */}
       {error && payloadStatus === "up" && (
         <div className="mb-4">
-          <ErrorCard title="Couldn't read hardware info" detail={error} />
+          <ErrorCard
+            title={tr(
+              "hardware_read_error",
+              undefined,
+              "Couldn't read hardware info",
+            )}
+            detail={error}
+          />
         </div>
       )}
 
@@ -171,7 +188,7 @@ export default function HardwareScreen() {
         <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
           <SensorCard
             icon={<Thermometer size={14} />}
-            title="Temperatures"
+            title={tr("hardware_temperatures", undefined, "Temperatures")}
           >
             <StatRow
               label="CPU"
@@ -187,7 +204,7 @@ export default function HardwareScreen() {
 
           <SensorCard
             icon={<Activity size={14} />}
-            title="Performance"
+            title={tr("hardware_performance", undefined, "Performance")}
           >
             <StatRow
               label="CPU frequency"
@@ -203,7 +220,7 @@ export default function HardwareScreen() {
 
           <SensorCard
             icon={<Clock size={14} />}
-            title="Uptime"
+            title={tr("hardware_uptime", undefined, "Uptime")}
           >
             <StatRow
               label="Running since boot"
@@ -213,7 +230,7 @@ export default function HardwareScreen() {
 
           <SensorCard
             icon={<Cpu size={14} />}
-            title="System"
+            title={tr("hardware_system", undefined, "System")}
           >
             <StatRow label="Model" value={info?.model ?? "—"} />
             <StatRow label="Serial" value={info?.serial ?? "—"} />

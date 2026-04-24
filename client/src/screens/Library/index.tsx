@@ -29,6 +29,7 @@ import { useLibraryStore } from "../../state/library";
 import { useElapsed } from "../../lib/useElapsed";
 import { createLimiter } from "../../lib/limitConcurrency";
 import { PageHeader, EmptyState, ErrorCard, Button } from "../../components";
+import { useTr } from "../../state/lang";
 
 // Module-level limiter shared across every LibraryRow mounted at once.
 // 4 concurrent FS_READs keeps the metadata fetch snappy (browser
@@ -60,6 +61,7 @@ function formatBytes(n: number): string {
 }
 
 export default function LibraryScreen() {
+  const tr = useTr();
   const host = useConnectionStore((s) => s.host);
   const payloadStatus = useConnectionStore((s) => s.payloadStatus);
   const entries = useLibraryStore((s) => s.entries);
@@ -120,16 +122,14 @@ export default function LibraryScreen() {
     <div className="p-6">
       <PageHeader
         icon={LibraryBig}
-        title="Library"
+        title={tr("library", undefined, "Library")}
         count={entries?.length}
         loading={loading}
-        description={
-          <>
-            Games and disk images anywhere on your PS5. Games are folders
-            containing <code>sce_sys/param.json</code>; disk images are{" "}
-            <code>.exfat</code> and <code>.ffpkg</code> files.
-          </>
-        }
+        description={tr(
+          "library_description",
+          undefined,
+          "Games and disk images anywhere on your PS5. Games are folders containing sce_sys/param.json; disk images are .exfat and .ffpkg files.",
+        )}
         right={
           <Button
             variant="secondary"
@@ -139,27 +139,40 @@ export default function LibraryScreen() {
             disabled={loading || !host?.trim()}
             loading={loading}
           >
-            Refresh
+            {tr("refresh", undefined, "Refresh")}
           </Button>
         }
       />
 
       {error && (
         <div className="mb-4">
-          <ErrorCard title="Couldn't scan the PS5" detail={error} />
+          <ErrorCard
+            title={tr("library_scan_error", undefined, "Couldn't scan the PS5")}
+            detail={error}
+          />
         </div>
       )}
 
       {entries === null && !loading && !error && (
-        <EmptyState message="Waiting for the PS5 payload to become reachable…" />
+        <EmptyState
+          message={tr(
+            "library_waiting",
+            undefined,
+            "Waiting for the PS5 payload to become reachable…",
+          )}
+        />
       )}
 
       {entries && entries.length === 0 && (
         <EmptyState
           icon={LibraryBig}
           size="hero"
-          title="Nothing in the scan folders yet"
-          message="Upload a game folder or disk image, or register titles with a PS5-side installer — they'll show up here."
+          title={tr("library_empty_title", undefined, "Nothing in the scan folders yet")}
+          message={tr(
+            "library_empty_message",
+            undefined,
+            "Upload a game folder or disk image, or register titles with a PS5-side installer — they'll show up here.",
+          )}
         />
       )}
 
@@ -169,7 +182,7 @@ export default function LibraryScreen() {
             <section>
               <SectionHeader
                 icon={<Gamepad2 size={13} />}
-                title="Games"
+                title={tr("library_games", undefined, "Games")}
                 count={split.games.length}
               />
               <div className="grid gap-2">
@@ -189,7 +202,7 @@ export default function LibraryScreen() {
             <section>
               <SectionHeader
                 icon={<FileArchive size={13} />}
-                title="Disk images (.exfat / .ffpkg)"
+                title={tr("library_disk_images", undefined, "Disk images (.exfat / .ffpkg)")}
                 count={split.images.length}
               />
               <div className="grid gap-2">

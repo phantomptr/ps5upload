@@ -29,15 +29,17 @@ interface NavItem {
   key: string;
   fallback: string;
   icon: typeof Cable;
-  /** Optional section label — groups nav items visually. */
-  section?: string;
+  /** Optional section label — groups nav items visually. Stored as a
+   *  {key, fallback} pair so the section label translates alongside
+   *  the nav items. */
+  section?: { key: string; fallback: string };
 }
 
 const items: NavItem[] = [
   // ─ What's new / landing ─
-  { to: "/whats-new", key: "whats_new", fallback: "What's new", icon: Sparkles, section: "Overview" },
+  { to: "/whats-new", key: "whats_new", fallback: "What's new", icon: Sparkles, section: { key: "nav_section_overview", fallback: "Overview" } },
   // ─ Workflow: get set up, send things, browse ─
-  { to: "/connection", key: "connect", fallback: "Connection", icon: Cable, section: "Workflow" },
+  { to: "/connection", key: "connect", fallback: "Connection", icon: Cable, section: { key: "nav_section_workflow", fallback: "Workflow" } },
   { to: "/upload", key: "upload", fallback: "Upload", icon: Upload },
   { to: "/library", key: "library", fallback: "Library", icon: LibraryBig },
   { to: "/search", key: "search", fallback: "Search", icon: Search },
@@ -46,7 +48,7 @@ const items: NavItem[] = [
   { to: "/hardware", key: "hardware", fallback: "Hardware", icon: Cpu },
   { to: "/send-payload", key: "send_payload", fallback: "Send payload", icon: Rocket },
   // ─ Help / about / debug ─
-  { to: "/faq", key: "faq", fallback: "FAQ", icon: HelpCircle, section: "Help" },
+  { to: "/faq", key: "faq", fallback: "FAQ", icon: HelpCircle, section: { key: "nav_section_help", fallback: "Help" } },
   { to: "/logs", key: "logs", fallback: "Logs", icon: ScrollText },
   { to: "/settings", key: "settings", fallback: "Settings", icon: SettingsIcon },
   { to: "/about", key: "about", fallback: "About", icon: Info },
@@ -102,7 +104,7 @@ export default function Sidebar() {
                     idx === 0 ? "mb-1" : "mb-1 mt-3",
                   )}
                 >
-                  {section}
+                  {tr(section.key, undefined, section.fallback)}
                 </div>
               )}
               <NavLink
@@ -123,7 +125,11 @@ export default function Sidebar() {
                 {isLogs && errorCount > 0 && (
                   <span
                     className="rounded-full bg-[var(--color-bad)] px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-white group-[.active]:bg-white group-[.active]:text-[var(--color-bad)]"
-                    title={`${errorCount} logged error${errorCount === 1 ? "" : "s"}`}
+                    title={tr(
+                      errorCount === 1 ? "logged_error_one" : "logged_error_many",
+                      { count: errorCount },
+                      `${errorCount} logged error${errorCount === 1 ? "" : "s"}`,
+                    )}
                   >
                     {errorCount > 99 ? "99+" : errorCount}
                   </span>
@@ -131,8 +137,12 @@ export default function Sidebar() {
                 {isSettings && updateAvailable && (
                   <span
                     className="h-2 w-2 rounded-full bg-[var(--color-accent)] group-[.active]:bg-[var(--color-accent-contrast)]"
-                    aria-label="Update available"
-                    title="Update available — open Settings to install"
+                    aria-label={tr("update_available_short", undefined, "Update available")}
+                    title={tr(
+                      "update_available_tooltip",
+                      undefined,
+                      "Update available — open Settings to install",
+                    )}
                   />
                 )}
               </NavLink>

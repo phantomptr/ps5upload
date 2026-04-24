@@ -19,6 +19,7 @@ import {
   X,
 } from "lucide-react";
 import { PageHeader, Button } from "../../components";
+import { useTr } from "../../state/lang";
 
 import { useConnectionStore, PS5_PAYLOAD_PORT } from "../../state/connection";
 import { fsDelete, fsMove, fsMkdir, fsCopy } from "../../api/ps5";
@@ -104,6 +105,7 @@ function crumbs(p: string): { label: string; path: string }[] {
 }
 
 export default function FileSystemScreen() {
+  const tr = useTr();
   const host = useConnectionStore((s) => s.host);
   const payloadStatus = useConnectionStore((s) => s.payloadStatus);
   const clipboard = useFsClipboardStore();
@@ -397,7 +399,7 @@ export default function FileSystemScreen() {
     <div className="p-6">
       <PageHeader
         icon={FolderTree}
-        title="File System"
+        title={tr("file_system", undefined, "File System")}
         loading={loading}
         right={
           <div className="flex items-center gap-1.5">

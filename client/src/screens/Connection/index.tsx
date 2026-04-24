@@ -27,6 +27,7 @@ import {
   Plug,
 } from "lucide-react";
 import { PageHeader, Button } from "../../components";
+import { useTr } from "../../state/lang";
 
 type StepState = "idle" | "busy" | "ok" | "fail";
 
@@ -123,6 +124,7 @@ function StepCard({
 }
 
 export default function ConnectionScreen() {
+  const tr = useTr();
   const host = useConnectionStore((s) => s.host);
   const setHost = useConnectionStore((s) => s.setHost);
   const payloadStatus = useConnectionStore((s) => s.payloadStatus);
@@ -308,14 +310,18 @@ export default function ConnectionScreen() {
     <div className="p-6">
       <PageHeader
         icon={Plug}
-        title="Connect to your PS5"
-        description="Three quick steps before your first upload. You only need to do this once per PS5 boot — the payload stays loaded until the console reboots or goes into rest mode."
+        title={tr("connection_title", undefined, "Connect to your PS5")}
+        description={tr(
+          "connection_description",
+          undefined,
+          "Three quick steps before your first upload. You only need to do this once per PS5 boot — the payload stays loaded until the console reboots or goes into rest mode.",
+        )}
       />
 
       <div className="mx-auto grid max-w-3xl gap-4">
         <StepCard
           index={1}
-          title="Tell the app where your PS5 is"
+          title={tr("connection_step1_title", undefined, "Tell the app where your PS5 is")}
           state={step1}
           stateText={step1Msg}
         >
@@ -358,7 +364,7 @@ export default function ConnectionScreen() {
         {step1 === "ok" && (
           <StepCard
             index={2}
-            title="Send the payload to your PS5"
+            title={tr("connection_step2_title", undefined, "Send the payload to your PS5")}
             state={step2}
             stateText={step2Msg}
           >
@@ -391,7 +397,7 @@ export default function ConnectionScreen() {
         {step3 === "ok" && (
           <StepCard
             index={3}
-            title="You're ready to upload"
+            title={tr("connection_step3_title", undefined, "You're ready to upload")}
             state={step3}
             stateText="PS5 is ready"
           >

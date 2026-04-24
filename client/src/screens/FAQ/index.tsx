@@ -10,6 +10,7 @@ import {
   Button,
 } from "../../components";
 import { log } from "../../state/logs";
+import { useTr } from "../../state/lang";
 
 /**
  * FAQ screen — renders the bundled FAQ.md. Filter-as-you-type narrows
@@ -53,6 +54,7 @@ function splitByH2(md: string): { prelude: string; sections: Section[] } {
 }
 
 export default function FAQScreen() {
+  const tr = useTr();
   const [raw, setRaw] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -85,8 +87,12 @@ export default function FAQScreen() {
     <div className="p-6">
       <PageHeader
         icon={HelpCircle}
-        title="FAQ"
-        description="Everything that falls outside the basic happy path — firmware support, payload recovery, platform quirks, keyboard shortcuts."
+        title={tr("faq", undefined, "FAQ")}
+        description={tr(
+          "faq_description",
+          undefined,
+          "Everything that falls outside the basic happy path — firmware support, payload recovery, platform quirks, keyboard shortcuts.",
+        )}
       />
 
       <div className="mx-auto max-w-3xl">
@@ -98,7 +104,7 @@ export default function FAQScreen() {
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search the FAQ…"
+            placeholder={tr("faq_search_placeholder", undefined, "Search the FAQ…")}
             className="flex-1 bg-transparent text-sm outline-none placeholder:text-[var(--color-muted)]"
           />
           {query && (
@@ -121,7 +127,7 @@ export default function FAQScreen() {
         {error && (
           <div className="mb-4">
             <ErrorCard
-              title="Couldn't load FAQ.md"
+              title={tr("faq_load_error", undefined, "Couldn't load FAQ.md")}
               detail={error}
               action={
                 <Button
@@ -129,7 +135,7 @@ export default function FAQScreen() {
                   size="sm"
                   onClick={() => window.location.reload()}
                 >
-                  Try again
+                  {tr("try_again", undefined, "Try again")}
                 </Button>
               }
             />
@@ -137,15 +143,19 @@ export default function FAQScreen() {
         )}
 
         {raw === null && !error && (
-          <EmptyState message="Loading FAQ…" />
+          <EmptyState message={tr("faq_loading", undefined, "Loading FAQ…")} />
         )}
 
         {raw !== null && filtered.length === 0 && query && (
           <EmptyState
             icon={Search}
             size="hero"
-            title="No matches"
-            message={`Nothing in the FAQ matches "${query}". Try a shorter or different phrase.`}
+            title={tr("faq_no_matches", undefined, "No matches")}
+            message={tr(
+              "faq_no_matches_message",
+              { query },
+              `Nothing in the FAQ matches "${query}". Try a shorter or different phrase.`,
+            )}
           />
         )}
 
