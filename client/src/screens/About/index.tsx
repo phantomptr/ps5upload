@@ -13,7 +13,7 @@ import {
 import { open as openExternal } from "@tauri-apps/plugin-shell";
 import { getVersion } from "@tauri-apps/api/app";
 
-import { useLangStore } from "../../state/lang";
+import { useTr } from "../../state/lang";
 import { Card } from "../../components";
 
 const AUTHOR_EMAIL = "phantomptr@gmail.com";
@@ -56,7 +56,7 @@ const FEATURES: { icon: typeof Zap; title: string; body: string }[] = [
 ];
 
 export default function AboutScreen() {
-  const tr = useLangStore((s) => s.tr);
+  const tr = useTr();
   const [version, setVersion] = useState<string>("");
 
   useEffect(() => {

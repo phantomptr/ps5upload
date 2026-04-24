@@ -1,3 +1,4 @@
+import { useCallback } from "react";
 import { create } from "zustand";
 import { t as translate, type LanguageCode } from "../i18n";
 
@@ -59,33 +60,14 @@ function applyLang(lang: LanguageCode) {
 interface LangState {
   lang: LanguageCode;
   setLang: (lang: LanguageCode) => void;
-  /** Translate a key under the current lang, with optional `{name}` vars.
-   *  If `fallback` is provided and neither the current lang nor English
-   *  has the key, returns `fallback` instead of the raw key. Useful for
-   *  2.1-era strings that aren't yet in the dictionary — EN users see
-   *  the fallback, other-lang users see the EN fallback (standard i18n
-   *  degradation). */
-  tr: (
-    key: string,
-    vars?: Record<string, string | number>,
-    fallback?: string
-  ) => string;
 }
 
-export const useLangStore = create<LangState>((set, get) => ({
+export const useLangStore = create<LangState>((set) => ({
   lang: initialLang(),
   setLang: (lang) => {
     window.localStorage.setItem(STORAGE_KEY, lang);
     applyLang(lang);
     set({ lang });
-  },
-  tr: (key, vars, fallback) => {
-    const result = translate(get().lang, key, vars);
-    // The underlying `t()` returns the raw key when neither the current
-    // lang nor English has it. That's our "missing" sentinel — swap in
-    // the fallback if provided.
-    if (result === key && fallback !== undefined) return fallback;
-    return result;
   },
 }));
 
@@ -93,4 +75,39 @@ export const useLangStore = create<LangState>((set, get) => ({
 // first paint — avoids LTR-to-RTL flicker for Arabic users.
 if (typeof document !== "undefined") {
   applyLang(initialLang());
+}
+
+/**
+ * Hook-based translator. **Use this from React components**, not
+ * `useLangStore((s) => s.tr)`.
+ *
+ * Why: the `tr` function stored in Zustand is a stable reference
+ * captured over `get()` at store-creation time. A `useLangStore(s =>
+ * s.tr)` selector returns the same function object on every render,
+ * so switching language never triggers a re-render — components
+ * using that pattern keep showing the old language until they
+ * re-render for an unrelated reason (which is why v2.2.0's Settings
+ * *looked* like the only screen respecting language changes: it
+ * destructures the whole store and gets re-rendered every time any
+ * field mutates).
+ *
+ * This hook subscribes to `lang` directly. When `lang` changes, the
+ * memoized translator returns a fresh closure bound to the new lang,
+ * so every component calling `useTr()` re-renders with the new
+ * strings.
+ */
+export function useTr() {
+  const lang = useLangStore((s) => s.lang);
+  return useCallback(
+    (
+      key: string,
+      vars?: Record<string, string | number>,
+      fallback?: string,
+    ) => {
+      const result = translate(lang, key, vars);
+      if (result === key && fallback !== undefined) return fallback;
+      return result;
+    },
+    [lang],
+  );
 }
