@@ -12,14 +12,17 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 PS5_ADDR="${PS5_ADDR:-192.168.137.2:9113}"
-ENGINE_PORT="${ENGINE_PORT:-9114}"
+# Engine listens on 19113 by default; matches the hard-coded URL the
+# desktop client probes when it spawns the engine as a sidecar, and
+# the env var name the engine reads (`PS5UPLOAD_ENGINE_PORT`).
+PS5UPLOAD_ENGINE_PORT="${PS5UPLOAD_ENGINE_PORT:-19113}"
 SERVICE_NAME="ps5upload-engine"
 UNIT_DIR="${HOME}/.config/systemd/user"
 
 for arg in "$@"; do
     case "$arg" in
         --ps5-addr=*) PS5_ADDR="${arg#--ps5-addr=}" ;;
-        --engine-port=*) ENGINE_PORT="${arg#--engine-port=}" ;;
+        --engine-port=*) PS5UPLOAD_ENGINE_PORT="${arg#--engine-port=}" ;;
     esac
 done
 
@@ -41,7 +44,7 @@ ExecStart=${ENGINE_BIN}
 Restart=on-failure
 RestartSec=5s
 Environment=PS5_ADDR=${PS5_ADDR}
-Environment=ENGINE_PORT=${ENGINE_PORT}
+Environment=PS5UPLOAD_ENGINE_PORT=${PS5UPLOAD_ENGINE_PORT}
 
 [Install]
 WantedBy=default.target
@@ -53,7 +56,7 @@ systemctl --user restart "${SERVICE_NAME}"
 
 echo ""
 echo "✓ ${SERVICE_NAME} installed and started"
-echo "  dashboard: http://127.0.0.1:${ENGINE_PORT}"
+echo "  dashboard: http://127.0.0.1:${PS5UPLOAD_ENGINE_PORT}"
 echo ""
 echo "Useful commands:"
 echo "  systemctl --user status  ${SERVICE_NAME}"

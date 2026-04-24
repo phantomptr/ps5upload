@@ -18,7 +18,7 @@ import urllib.request
 from typing import Dict, List, Tuple
 
 REPO_ROOT = os.getcwd()
-I18N_PATH = os.path.join(REPO_ROOT, "desktop", "src", "i18n.ts")
+I18N_PATH = os.path.join(REPO_ROOT, "client", "src", "i18n.ts")
 
 DEFAULT_LANGS = [
     "vi", "hi", "bn", "pt-BR", "ru", "ja", "tr", "id", "th", "ko", "de", "it"

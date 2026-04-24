@@ -10,7 +10,10 @@
 
 param(
     [string]$Ps5Addr    = $env:PS5_ADDR ?? "192.168.137.2:9113",
-    [string]$EnginePort = $env:ENGINE_PORT ?? "9114"
+    # Engine listens on 19113 by default; matches the desktop client's
+    # hard-coded probe URL and the PS5UPLOAD_ENGINE_PORT env var the
+    # engine reads at startup.
+    [string]$EnginePort = $env:PS5UPLOAD_ENGINE_PORT ?? "19113"
 )
 
 $ErrorActionPreference = "Stop"
@@ -39,8 +42,8 @@ $Action = New-ScheduledTaskAction `
     -WorkingDirectory (Split-Path $EngineBin)
 
 $Action.EnvironmentVariables = @(
-    [PSCustomObject]@{ Name = "PS5_ADDR";     Value = $Ps5Addr    }
-    [PSCustomObject]@{ Name = "ENGINE_PORT";  Value = $EnginePort }
+    [PSCustomObject]@{ Name = "PS5_ADDR";                 Value = $Ps5Addr    }
+    [PSCustomObject]@{ Name = "PS5UPLOAD_ENGINE_PORT";    Value = $EnginePort }
 )
 
 $Trigger   = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME

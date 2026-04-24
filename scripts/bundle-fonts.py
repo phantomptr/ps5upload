@@ -1,4 +1,18 @@
 # scripts/bundle-fonts.py
+#
+# Download Noto font subsets from Google Fonts and bundle them into
+# the Tauri desktop client so CJK + Indic scripts render without a
+# network fetch at runtime. Outputs woff2 files into
+# `client/src/assets/fonts/` and a companion `client/src/fonts.css`
+# with @font-face rules that reference them via Vite's import-
+# relative URLs.
+#
+# Run from the repo root:  python3 scripts/bundle-fonts.py
+#
+# The current build doesn't import fonts.css from main.tsx by
+# default — system fonts cover the English UI. Run this script
+# (and accept the injected import) when you're ready to ship the
+# broader i18n font coverage.
 import os
 import re
 import urllib.request
@@ -6,9 +20,9 @@ import urllib.parse
 from urllib.error import URLError, HTTPError
 
 REPO_ROOT = os.getcwd()
-OUT_DIR = os.path.join(REPO_ROOT, "desktop", "src", "assets", "fonts")
-CSS_OUT = os.path.join(REPO_ROOT, "desktop", "src", "styles", "fonts.css")
-MAIN_TSX = os.path.join(REPO_ROOT, "desktop", "src", "main.tsx")
+OUT_DIR = os.path.join(REPO_ROOT, "client", "src", "assets", "fonts")
+CSS_OUT = os.path.join(REPO_ROOT, "client", "src", "fonts.css")
+MAIN_TSX = os.path.join(REPO_ROOT, "client", "src", "main.tsx")
 
 FAMILIES = [
     ("Noto Sans", [400, 500, 600, 700]),
@@ -45,16 +59,21 @@ def slugify(name: str) -> str:
 
 
 def ensure_fonts_import() -> None:
+    """Inject `import "./fonts.css"` into main.tsx right after the
+    existing `./index.css` import. Idempotent — re-running is a
+    no-op if the import is already present. Skips silently when
+    main.tsx isn't at the expected path (dev running from a branch
+    with a different layout)."""
     if not os.path.exists(MAIN_TSX):
         return
     with open(MAIN_TSX, "r", encoding="utf-8") as f:
         text = f.read()
-    if "./styles/fonts.css" in text:
+    if './fonts.css' in text:
         return
-    text = text.replace(
-        'import "./styles/theme.css";',
-        'import "./styles/theme.css";\nimport "./styles/fonts.css";'
-    )
+    anchor = 'import "./index.css";'
+    if anchor not in text:
+        return
+    text = text.replace(anchor, f'{anchor}\nimport "./fonts.css";')
     with open(MAIN_TSX, "w", encoding="utf-8") as f:
         f.write(text)
 

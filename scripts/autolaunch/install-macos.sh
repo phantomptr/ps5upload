@@ -11,7 +11,10 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 PS5_ADDR="${PS5_ADDR:-192.168.137.2:9113}"
-ENGINE_PORT="${ENGINE_PORT:-9114}"
+# Engine listens on 19113 by default; matches the hard-coded URL the
+# desktop client probes when it spawns the engine as a sidecar, and
+# the env var name the engine reads (`PS5UPLOAD_ENGINE_PORT`).
+PS5UPLOAD_ENGINE_PORT="${PS5UPLOAD_ENGINE_PORT:-19113}"
 LABEL="com.phantomptr.ps5upload-engine"
 PLIST_DIR="${HOME}/Library/LaunchAgents"
 PLIST_FILE="${PLIST_DIR}/${LABEL}.plist"
@@ -20,7 +23,7 @@ LOG_DIR="${HOME}/Library/Logs/ps5upload-engine"
 for arg in "$@"; do
     case "$arg" in
         --ps5-addr=*) PS5_ADDR="${arg#--ps5-addr=}" ;;
-        --engine-port=*) ENGINE_PORT="${arg#--engine-port=}" ;;
+        --engine-port=*) PS5UPLOAD_ENGINE_PORT="${arg#--engine-port=}" ;;
     esac
 done
 
@@ -47,8 +50,8 @@ cat > "${PLIST_FILE}" <<EOF
     <dict>
         <key>PS5_ADDR</key>
         <string>${PS5_ADDR}</string>
-        <key>ENGINE_PORT</key>
-        <string>${ENGINE_PORT}</string>
+        <key>PS5UPLOAD_ENGINE_PORT</key>
+        <string>${PS5UPLOAD_ENGINE_PORT}</string>
     </dict>
     <key>RunAtLoad</key>
     <true/>
@@ -69,7 +72,7 @@ launchctl load   "${PLIST_FILE}"
 
 echo ""
 echo "✓ ${LABEL} installed and started"
-echo "  dashboard: http://127.0.0.1:${ENGINE_PORT}"
+echo "  dashboard: http://127.0.0.1:${PS5UPLOAD_ENGINE_PORT}"
 echo "  logs:      ${LOG_DIR}/"
 echo ""
 echo "Useful commands:"

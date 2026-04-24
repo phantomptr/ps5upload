@@ -10,7 +10,16 @@ const releaseUrl = process.argv.includes('--url')
   : `https://github.com/phantomptr/ps5upload/releases/tag/v${version}`;
 
 const changelog = fs.readFileSync(path.join(repoRoot, 'CHANGELOG.md'), 'utf8');
-const sectionRegex = new RegExp(`## \\\[${version}\\\][^\\n]*\\n([\\s\\S]*?)(?=\\n## \\[|$)`);
+// CHANGELOG headings are `## 2.2.0` (plain version, no Keep-a-
+// Changelog brackets). Match from the exact heading line to the next
+// `## ` heading or the `---` horizontal-rule separator that ends each
+// version block.
+// Escape `.` in the version string (e.g. "2.2.0" → "2\\.2\\.0") so
+// regex doesn't match any-char in those positions.
+const vEsc = version.replace(/\./g, '\\.');
+const sectionRegex = new RegExp(
+  `## ${vEsc}[^\\n]*\\n([\\s\\S]*?)(?=\\n## |\\n---|$)`
+);
 const match = changelog.match(sectionRegex);
 if (!match) {
   console.error(`Could not find changelog section for v${version}`);
