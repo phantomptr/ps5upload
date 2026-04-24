@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 import clsx from "clsx";
 import { useThemeStore } from "../state/theme";
-import { useLangStore } from "../state/lang";
+import { useTr } from "../state/lang";
 import { useLogsStore } from "../state/logs";
 import { useUpdateStore } from "../state/update";
 
@@ -54,7 +54,7 @@ const items: NavItem[] = [
 
 export default function Sidebar() {
   const { theme, toggleTheme } = useThemeStore();
-  const tr = useLangStore((s) => s.tr);
+  const tr = useTr();
   const errorCount = useLogsStore(
     (s) => s.entries.filter((e) => e.level === "error").length,
   );

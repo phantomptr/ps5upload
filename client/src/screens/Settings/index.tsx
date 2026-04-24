@@ -15,7 +15,7 @@ import {
 import { PageHeader } from "../../components";
 
 import { useKeepAwakeStore } from "../../state/keepAwake";
-import { useLangStore, LANGUAGES } from "../../state/lang";
+import { useLangStore, useTr, LANGUAGES } from "../../state/lang";
 import { useUploadSettingsStore } from "../../state/uploadSettings";
 import { userConfigPath } from "../../state/userConfig";
 import { useUpdateStore, type UpdatePhase } from "../../state/update";
@@ -51,7 +51,9 @@ function Section({
 export default function SettingsScreen() {
   const { enabled, supported, lastError, setEnabled, syncFromBackend } =
     useKeepAwakeStore();
-  const { lang, setLang, tr } = useLangStore();
+  const lang = useLangStore((s) => s.lang);
+  const setLang = useLangStore((s) => s.setLang);
+  const tr = useTr();
   const {
     alwaysOverwrite,
     showTransferFiles,
@@ -221,7 +223,7 @@ export default function SettingsScreen() {
  *  `useUpdateStore` so the same sidebar badge that indicates
  *  "available" also drives this card's main CTA. */
 function UpdatesPanel() {
-  const tr = useLangStore((s) => s.tr);
+  const tr = useTr();
   const phase = useUpdateStore((s) => s.phase);
   const checkNow = useUpdateStore((s) => s.checkNow);
   const download = useUpdateStore((s) => s.download);
