@@ -4,6 +4,7 @@ import {
   startTransferFile,
   startTransferDir,
   startTransferDirReconcile,
+  fsMount,
   jobStatus,
   resumeTxidLookup,
   resumeTxidRemember,
@@ -67,6 +68,7 @@ export type TransferPhase =
       filesSent: number;
       skippedFiles: number;
       skippedBytes: number;
+      mountedAt?: string;
     }
   | { kind: "failed"; error: string };
 
@@ -81,6 +83,10 @@ interface StartArgs {
   strategy?: UploadStrategy;
   /** When strategy === "resume", which equality check to use. */
   reconcileMode?: ReconcileMode;
+  /** Folder-only exclude patterns. Empty = upload everything. */
+  excludes?: string[];
+  /** Image-only: mount the uploaded disk image after the transfer commits. */
+  mountAfterUpload?: boolean;
 }
 
 interface TransferState {
@@ -120,6 +126,8 @@ export const useTransferStore = create<TransferState>((set) => {
       addr,
       strategy = "overwrite",
       reconcileMode = "fast",
+      excludes = [],
+      mountAfterUpload = false,
     }) {
       const thisRun = ++runId;
       set({ phase: { kind: "starting" } });
@@ -185,9 +193,10 @@ export const useTransferStore = create<TransferState>((set) => {
             addr,
             reconcileMode,
             txId,
+            excludes,
           );
         } else if (isFolder) {
-          jobId = await startTransferDir(srcPath, dest, addr, txId);
+          jobId = await startTransferDir(srcPath, dest, addr, txId, excludes);
         } else {
           jobId = await startTransferFile(srcPath, dest, addr);
         }
@@ -244,6 +253,25 @@ export const useTransferStore = create<TransferState>((set) => {
         }
         if (!isLive()) return;
         if (snap.status === "done") {
+          let mountedAt: string | undefined;
+          const finalDest = snap.dest ?? dest;
+          if (sourceKind === "image" && mountAfterUpload) {
+            try {
+              const mounted = await fsMount(addr, finalDest);
+              mountedAt = mounted.mount_point;
+            } catch (e) {
+              if (!isLive()) return;
+              set({
+                phase: {
+                  kind: "failed",
+                  error: `upload completed, but mount failed: ${
+                    e instanceof Error ? e.message : String(e)
+                  }`,
+                },
+              });
+              return;
+            }
+          }
           // Tx is committed on the payload — the tx_id we persisted at
           // start can be evicted, since there's nothing to resume. A
           // lingering record would make a subsequent upload-of-same-
@@ -259,10 +287,11 @@ export const useTransferStore = create<TransferState>((set) => {
               jobId,
               bytesSent: snap.bytes_sent ?? 0,
               elapsedMs: snap.elapsed_ms ?? 0,
-              dest: snap.dest ?? dest,
+              dest: finalDest,
               filesSent: snap.files_sent ?? 0,
               skippedFiles: snap.skipped_files ?? 0,
               skippedBytes: snap.skipped_bytes ?? 0,
+              mountedAt,
             },
           });
         } else if (snap.status === "failed") {

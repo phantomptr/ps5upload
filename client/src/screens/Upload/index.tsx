@@ -161,6 +161,10 @@ export default function UploadScreen() {
   const resetTransfer = useTransferStore((s) => s.reset);
   const alwaysOverwrite = useUploadSettingsStore((s) => s.alwaysOverwrite);
   const reconcileMode = useUploadSettingsStore((s) => s.reconcileMode);
+  const activeExcludes =
+    excludeMode === "rules"
+      ? excludes.filter((rule) => rule.enabled).map((rule) => rule.pattern)
+      : [];
 
   const [pending, setPending] = useState<null | {
     dest: string;
@@ -215,6 +219,8 @@ export default function UploadScreen() {
       addr: pending.addr,
       strategy,
       reconcileMode,
+      excludes: activeExcludes,
+      mountAfterUpload: source.kind === "image" && mountAfterUpload,
     });
   };
 
@@ -248,6 +254,8 @@ export default function UploadScreen() {
         dest,
         addr,
         strategy: "overwrite",
+        excludes: activeExcludes,
+        mountAfterUpload: source.kind === "image" && mountAfterUpload,
       });
       return;
     }
@@ -815,6 +823,14 @@ function TransferStatus({ phase }: { phase: TransferPhase }) {
           <dd className="font-mono text-[var(--color-text)]">
             {phase.dest}
           </dd>
+          {phase.mountedAt && (
+            <>
+              <dt>Mounted at</dt>
+              <dd className="font-mono text-[var(--color-text)]">
+                {phase.mountedAt}
+              </dd>
+            </>
+          )}
         </dl>
       </div>
     );
@@ -1072,9 +1088,8 @@ function MountAfterUploadCard({
           <div className="font-medium">Mount after upload</div>
           <div className="mt-0.5 text-xs text-[var(--color-muted)]">
             After the image lands on the PS5, the payload mounts it via the
-            kernel's LVD backend and registers the contained title so the
-            game appears on the home screen. Turn off if you only want to
-            stage the image without mounting.
+            kernel's LVD backend. Turn off if you only want to stage the
+            image without mounting.
           </div>
         </div>
       </label>

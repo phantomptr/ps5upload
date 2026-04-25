@@ -89,6 +89,47 @@ jobs:
         run: cargo test --workspace -- --nocapture
 
   # ─────────────────────────────────────────────────────────────────────
+  # Engine/core target portability. This is intentionally separate from
+  # the full release matrix: PRs get a fast compile-only signal that the
+  # host-side engine code still type-checks for the OS/arch combinations
+  # we ship, while release.yml remains the authoritative bundle builder.
+  # ─────────────────────────────────────────────────────────────────────
+  rust-engine-targets:
+    name: rust engine target (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04
+            target: aarch64-unknown-linux-gnu
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: macos-14
+            target: x86_64-apple-darwin
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+          - os: windows-2022
+            target: aarch64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: cargo check core
+        working-directory: engine
+        run: cargo check -p ps5upload-core --target ${{ matrix.target }}
+
+      - name: cargo check engine
+        working-directory: engine
+        run: cargo check -p ps5upload-engine --target ${{ matrix.target }}
+
+  # ─────────────────────────────────────────────────────────────────────
   # Rust desktop shell (client/src-tauri). Uses its own workspace so
   # it doesn't share target/ with the engine. Tauri pulls heavy
   # system deps on Linux (webkit/gtk), so we cache aggressively.

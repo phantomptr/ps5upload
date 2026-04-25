@@ -26,7 +26,7 @@ PS5_ADDR=192.168.1.50:9113 npm run smoke:hardware
 
 | Flag | Default | Description |
 |---|---|---|
-| `--engine-url=URL` | `http://127.0.0.1:9114` | engine HTTP base URL |
+| `--engine-url=URL` | `http://127.0.0.1:19113` | engine HTTP base URL |
 | `--ps5-addr=HOST:PORT` | `192.168.137.2:9113` | PS5 FTX2 address |
 | `--dest-root=PATH` | `/data/ps5upload/tests/smoke` | destination root on PS5 |
 | `--no-spawn-engine` | off | use an already-running engine |

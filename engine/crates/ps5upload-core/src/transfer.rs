@@ -13,7 +13,7 @@ use ftx2_proto::{
     FrameType, ShardAck, ShardHeader, TxMeta, PACKED_RECORD_PREFIX_LEN, SHARD_FLAG_PACKED,
 };
 use std::collections::VecDeque;
-use std::path::Path;
+use std::path::{Component, Path};
 
 pub const DEFAULT_SHARD_SIZE: usize = 32 * 1024 * 1024; // 32 MiB
 pub const DEFAULT_MAX_SHARD_RETRIES: u32 = 3;
@@ -132,6 +132,42 @@ pub struct TransferResult {
 
 fn bytes_to_hex(b: &[u8; 16]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+fn ps5_relative_path(path: &Path) -> String {
+    path.components()
+        .filter_map(|component| match component {
+            Component::Normal(part) => Some(part.to_string_lossy().replace('\\', "/")),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn join_ps5_path(root: &str, rel: &Path) -> String {
+    let rel = ps5_relative_path(rel);
+    if rel.is_empty() {
+        root.trim_end_matches('/').to_string()
+    } else {
+        format!("{}/{}", root.trim_end_matches('/'), rel)
+    }
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+
+    #[test]
+    fn ps5_dest_paths_use_forward_slashes() {
+        assert_eq!(
+            join_ps5_path("/data/game", Path::new(r"sce_sys\param.json")),
+            "/data/game/sce_sys/param.json"
+        );
+        assert_eq!(
+            join_ps5_path("/data/game/", Path::new("sce_sys/icon0.png")),
+            "/data/game/sce_sys/icon0.png"
+        );
+    }
 }
 
 fn tx_meta_buf(tx_id: [u8; 16], kind: u32, extra: &[u8]) -> Vec<u8> {
@@ -454,6 +490,20 @@ pub fn transfer_file(
     transfer_file_with_flags(cfg, tx_id, dest, data, 0)
 }
 
+/// Transfer a file from disk without reading or mapping the whole file.
+///
+/// Peak host RAM is bounded by `cfg.shard_size` plus socket buffers. This is
+/// the production path for large game images; the slice-based `transfer_file`
+/// remains for tests/benchmarks and callers that already own the bytes.
+pub fn transfer_file_path(
+    cfg: &TransferConfig,
+    tx_id: [u8; 16],
+    dest: &str,
+    src: &Path,
+) -> Result<TransferResult> {
+    transfer_file_path_with_flags(cfg, tx_id, dest, src, 0)
+}
+
 /// Transfer a file with explicit BeginTx flags. `flags=TX_FLAG_RESUME`
 /// asks the payload to reuse an existing (interrupted) tx_id. Internal
 /// helper — public consumers should use `transfer_file` (fresh) or
@@ -563,6 +613,106 @@ pub fn transfer_file_resumable(
     // dir/file_list wrappers do.
     resumable_retry(max_retries, "transfer_file", 0, |flags| {
         transfer_file_with_flags(cfg, tx_id, dest, data, flags)
+    })
+}
+
+fn transfer_file_path_with_flags(
+    cfg: &TransferConfig,
+    tx_id: [u8; 16],
+    dest: &str,
+    src: &Path,
+    flags: u32,
+) -> Result<TransferResult> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let tx_id_hex = bytes_to_hex(&tx_id);
+    let meta = std::fs::metadata(src).with_context(|| format!("stat {}", src.display()))?;
+    if !meta.is_file() {
+        bail!("source is not a regular file: {}", src.display());
+    }
+    let total_bytes = meta.len();
+    let total_shards = if total_bytes == 0 {
+        0
+    } else {
+        total_bytes.div_ceil(cfg.shard_size as u64)
+    };
+
+    let manifest_json = serde_json::to_vec(&Manifest {
+        dest_root: dest.to_string(),
+        file_count: 1,
+        total_bytes,
+        total_shards,
+        files: vec![],
+    })?;
+
+    let mut c = Connection::connect(&cfg.addr)?;
+    let begin_ack = send_and_expect(
+        &mut c,
+        FrameType::BeginTx,
+        &tx_meta_buf_flags(tx_id, 1, flags, &manifest_json),
+        FrameType::BeginTxAck,
+    )?;
+    let last_acked_shard = parse_last_acked_shard(&begin_ack, flags & TX_FLAG_RESUME != 0);
+
+    let mut shards_sent = 0u64;
+    {
+        let mut file =
+            std::fs::File::open(src).with_context(|| format!("open {}", src.display()))?;
+        if last_acked_shard > 0 {
+            file.seek(SeekFrom::Start(
+                last_acked_shard.saturating_mul(cfg.shard_size as u64),
+            ))
+            .with_context(|| format!("seek {}", src.display()))?;
+        }
+        let mut sender = PipelinedSender::new(&mut c, cfg, tx_id, total_shards);
+        let mut shard_seq = last_acked_shard + 1;
+        // One shard-sized buffer reused across iterations. `send` writes to
+        // the socket synchronously and the inflight queue stores only
+        // `(shard_seq, len)`, so the buffer is free to reuse on the next
+        // pass. Avoids 3,200 × 32 MiB allocate/free cycles on a 100 GiB
+        // upload.
+        let mut buf = vec![0u8; cfg.shard_size];
+        while shard_seq <= total_shards {
+            let remaining = total_bytes.saturating_sub((shard_seq - 1) * cfg.shard_size as u64);
+            let len = std::cmp::min(cfg.shard_size as u64, remaining) as usize;
+            let chunk = &mut buf[..len];
+            file.read_exact(chunk)
+                .with_context(|| format!("read {} shard {}", src.display(), shard_seq))?;
+            sender.send(shard_seq, chunk)?;
+            shards_sent += 1;
+            if let Some(p) = &cfg.progress_bytes {
+                p.fetch_add(len as u64, std::sync::atomic::Ordering::Relaxed);
+            }
+            shard_seq += 1;
+        }
+        sender.drain()?;
+    }
+
+    let commit_ack = send_and_expect(
+        &mut c,
+        FrameType::CommitTx,
+        &tx_meta_buf(tx_id, 0, b""),
+        FrameType::CommitTxAck,
+    )?;
+
+    Ok(TransferResult {
+        tx_id_hex,
+        shards_sent,
+        bytes_sent: total_bytes,
+        dest: dest.to_string(),
+        commit_ack_body: String::from_utf8_lossy(&commit_ack).into_owned(),
+    })
+}
+
+pub fn transfer_file_path_resumable(
+    cfg: &TransferConfig,
+    tx_id: [u8; 16],
+    dest: &str,
+    src: &Path,
+    max_retries: u32,
+) -> Result<TransferResult> {
+    resumable_retry(max_retries, "transfer_file_path", 0, |flags| {
+        transfer_file_path_with_flags(cfg, tx_id, dest, src, flags)
     })
 }
 
@@ -827,7 +977,7 @@ pub fn transfer_dir_with_flags(
         }
         let size = meta.len();
         let rel = lf.strip_prefix(src_dir).unwrap_or(lf.as_path());
-        let dest_path = format!("{}/{}", dest_root, rel.display());
+        let dest_path = join_ps5_path(dest_root, rel);
         total_bytes += size;
 
         if pack_enabled && (size as usize) < pack_threshold {

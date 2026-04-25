@@ -77,10 +77,7 @@ pub async fn ps5_list_dir(
     limit: Option<u64>,
 ) -> Result<JsonValue, String> {
     let base = engine::url();
-    let mut url = format!(
-        "{base}/api/ps5/list-dir?path={}",
-        urlencoding(&path)
-    );
+    let mut url = format!("{base}/api/ps5/list-dir?path={}", urlencoding(&path));
     if let Some(a) = addr {
         url.push_str(&format!("&addr={}", urlencoding(&a)));
     }
@@ -122,6 +119,8 @@ pub struct TransferDirReq {
     pub dest_root: String,
     pub addr: Option<String>,
     pub tx_id: Option<String>,
+    #[serde(default)]
+    pub excludes: Vec<String>,
 }
 
 #[tauri::command]
@@ -133,6 +132,7 @@ pub async fn transfer_dir(req: TransferDirReq) -> Result<JsonValue, String> {
         "dest_root": req.dest_root,
         "addr": req.addr,
         "tx_id": req.tx_id,
+        "excludes": req.excludes,
     });
     post_json(&url, &body).await
 }
@@ -149,6 +149,8 @@ pub struct TransferDirReconcileReq {
     pub addr: Option<String>,
     pub tx_id: Option<String>,
     pub mode: Option<String>, // "fast" | "safe"
+    #[serde(default)]
+    pub excludes: Vec<String>,
 }
 
 // ── Destructive FS ops ──────────────────────────────────────────────────────
@@ -182,7 +184,11 @@ pub struct FsChmodReq {
 pub async fn ps5_fs_delete(req: FsPathReq) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/ps5/fs/delete");
-    post_json(&url, &serde_json::json!({ "addr": req.addr, "path": req.path })).await
+    post_json(
+        &url,
+        &serde_json::json!({ "addr": req.addr, "path": req.path }),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -270,7 +276,11 @@ pub async fn ps5_fs_chmod(req: FsChmodReq) -> Result<JsonValue, String> {
 pub async fn ps5_fs_mkdir(req: FsPathReq) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/ps5/fs/mkdir");
-    post_json(&url, &serde_json::json!({ "addr": req.addr, "path": req.path })).await
+    post_json(
+        &url,
+        &serde_json::json!({ "addr": req.addr, "path": req.path }),
+    )
+    .await
 }
 
 /* Hardware monitoring ---- */
@@ -327,6 +337,7 @@ pub async fn transfer_dir_reconcile(req: TransferDirReconcileReq) -> Result<Json
         "addr": req.addr,
         "tx_id": req.tx_id,
         "mode": req.mode,
+        "excludes": req.excludes,
     });
     post_json(&url, &body).await
 }

@@ -110,9 +110,16 @@ export async function startTransferDir(
   destRoot: string,
   addr: string,
   txId?: string | null,
+  excludes?: string[],
 ): Promise<string> {
   const res = await invoke<{ job_id: string }>("transfer_dir", {
-    req: { src_dir: srcDir, dest_root: destRoot, addr, tx_id: txId ?? null },
+    req: {
+      src_dir: srcDir,
+      dest_root: destRoot,
+      addr,
+      tx_id: txId ?? null,
+      excludes: excludes ?? [],
+    },
   });
   return res.job_id;
 }
@@ -135,6 +142,7 @@ export async function startTransferDirReconcile(
   addr: string,
   mode: ReconcileMode,
   txId?: string | null,
+  excludes?: string[],
 ): Promise<string> {
   const res = await invoke<{ job_id: string }>("transfer_dir_reconcile", {
     req: {
@@ -143,6 +151,7 @@ export async function startTransferDirReconcile(
       addr,
       mode,
       tx_id: txId ?? null,
+      excludes: excludes ?? [],
     },
   });
   return res.job_id;

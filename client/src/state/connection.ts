@@ -15,19 +15,15 @@ export type ProbeStatus = "up" | "down" | "unknown";
  *
  * These are features of OUR payload, not probes for external tools —
  * ps5upload ships its own ELF loader (port 9021), its own FTX2 transfer
- * runtime (port 9113), its own exFAT image mount path (via the PS5
- * kernel's LVD backend, not an external daemon), and its own title
- * registrar (calls `sceAppInstUtilInstallTitleDir` directly so installed
- * apps appear on the XMB home). Third-party payload managers are
- * not required.
+ * runtime (port 9113), and its own disk-image mount path (via the PS5
+ * kernel's LVD backend, not an external daemon). XMB title registration
+ * remains deliberately out of scope; use a PS5-side installer for that.
  */
 export type PayloadCapability =
   /** FTX2 binary transfer runtime on :9113 */
   | "transfer"
-  /** exFAT disk image mount via /dev/lvdctl */
-  | "mount"
-  /** Registers installed apps with the PS5 app.db so they appear on XMB */
-  | "register";
+  /** Disk image mount via /dev/lvdctl */
+  | "mount";
 
 /** Persisted step-flow state for the Connection screen. Lives in the
  *  store (not component-local useState) so navigating to Upload and back
@@ -40,7 +36,7 @@ export interface ConnectionState {
   host: string;
   /** Our host-side engine sidecar (localhost:19113). */
   engineStatus: ProbeStatus;
-  /** Our PS5-side payload runtime — the transfer+mount+register process. */
+  /** Our PS5-side payload runtime — transfer, mount, FS ops, hardware info. */
   payloadStatus: ProbeStatus;
   /** Version string the payload reports over STATUS. null = payload not
    *  reachable, or running a pre-2.1 build that doesn't report version. */

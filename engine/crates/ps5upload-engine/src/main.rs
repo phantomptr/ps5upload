@@ -60,7 +60,7 @@ use ps5upload_core::{
         ProcList,
     },
     transfer::{
-        transfer_dir_resumable, transfer_file_list_resumable, transfer_file_resumable,
+        transfer_dir_resumable, transfer_file_list_resumable, transfer_file_path_resumable,
         FileListEntry, TransferConfig, TX_FLAG_RESUME,
     },
     volumes::{list_volumes, VolumeList},
@@ -206,11 +206,15 @@ fn mgmt_addr_for(transfer_addr: &str) -> String {
     }
 }
 
+fn mgmt_addr_or_default(addr: Option<String>, default_addr: &str) -> String {
+    mgmt_addr_for(addr.as_deref().unwrap_or(default_addr))
+}
+
 /// Walk a directory and return `(total_bytes, planned_files)` — collects
 /// rel_path + size
 /// for each regular file so the UI can render per-file progress.
 /// Errors silently skipped (matches the permissive walk elsewhere).
-fn walk_plan(root: &std::path::Path) -> (u64, Vec<PlannedFile>) {
+fn walk_plan(root: &std::path::Path, excludes: &[String]) -> (u64, Vec<PlannedFile>) {
     let mut stack = vec![root.to_path_buf()];
     let mut total = 0u64;
     let mut out = Vec::new();
@@ -224,6 +228,9 @@ fn walk_plan(root: &std::path::Path) -> (u64, Vec<PlannedFile>) {
             if ft.is_dir() {
                 stack.push(path);
             } else if ft.is_file() {
+                if ps5upload_core::excludes::is_excluded_strings(&path, excludes) {
+                    continue;
+                }
                 if let Ok(m) = entry.metadata() {
                     let size = m.len();
                     total += size;
@@ -422,6 +429,8 @@ struct TransferDirReq {
     tx_id: Option<String>,
     dest_root: String,
     src_dir: String,
+    #[serde(default)]
+    excludes: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -447,6 +456,8 @@ struct TransferDirReconcileReq {
     /// "fast" = size-only equality (default), "safe" = size + BLAKE3 hash.
     #[serde(default)]
     mode: Option<String>,
+    #[serde(default)]
+    excludes: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -526,7 +537,7 @@ async fn ps5_cleanup(
     State(state): State<AppState>,
     Json(req): Json<CleanupReq>,
 ) -> impl IntoResponse {
-    let addr = req.addr.unwrap_or_else(|| state.default_ps5_addr.clone());
+    let addr = mgmt_addr_or_default(req.addr, &state.default_ps5_addr);
     let path = req.path.clone();
     let result: Result<CleanupResult, anyhow::Error> =
         tokio::task::spawn_blocking(move || cleanup_path(&addr, &path))
@@ -554,7 +565,7 @@ async fn ps5_list_dir(
     State(state): State<AppState>,
     Query(q): Query<ListDirQuery>,
 ) -> impl IntoResponse {
-    let addr = q.addr.unwrap_or_else(|| state.default_ps5_addr.clone());
+    let addr = mgmt_addr_or_default(q.addr, &state.default_ps5_addr);
     let path = q.path.clone();
     let opts = ListDirOptions {
         offset: q.offset.unwrap_or(0),
@@ -604,7 +615,7 @@ async fn ps5_fs_delete(
     State(state): State<AppState>,
     Json(req): Json<FsPathReq>,
 ) -> impl IntoResponse {
-    let addr = req.addr.unwrap_or_else(|| state.default_ps5_addr.clone());
+    let addr = mgmt_addr_or_default(req.addr, &state.default_ps5_addr);
     let path = req.path;
     match tokio::task::spawn_blocking(move || fs_delete(&addr, &path))
         .await
@@ -620,7 +631,7 @@ async fn ps5_fs_move(
     State(state): State<AppState>,
     Json(req): Json<FsMoveReq>,
 ) -> impl IntoResponse {
-    let addr = req.addr.unwrap_or_else(|| state.default_ps5_addr.clone());
+    let addr = mgmt_addr_or_default(req.addr, &state.default_ps5_addr);
     let from = req.from;
     let to = req.to;
     match tokio::task::spawn_blocking(move || fs_move(&addr, &from, &to))
@@ -637,7 +648,7 @@ async fn ps5_fs_copy(
     State(state): State<AppState>,
     Json(req): Json<FsMoveReq>,
 ) -> impl IntoResponse {
-    let addr = req.addr.unwrap_or_else(|| state.default_ps5_addr.clone());
+    let addr = mgmt_addr_or_default(req.addr, &state.default_ps5_addr);
     let from = req.from;
     let to = req.to;
     match tokio::task::spawn_blocking(move || fs_copy(&addr, &from, &to))
@@ -662,7 +673,7 @@ async fn ps5_fs_mount(
     State(state): State<AppState>,
     Json(req): Json<FsMountReq>,
 ) -> impl IntoResponse {
-    let addr = req.addr.unwrap_or_else(|| state.default_ps5_addr.clone());
+    let addr = mgmt_addr_or_default(req.addr, &state.default_ps5_addr);
     let image_path = req.image_path;
     let mount_name = req.mount_name;
     let result: Result<MountResult, anyhow::Error> =
@@ -686,7 +697,7 @@ async fn ps5_fs_unmount(
     State(state): State<AppState>,
     Json(req): Json<FsUnmountReq>,
 ) -> impl IntoResponse {
-    let addr = req.addr.unwrap_or_else(|| state.default_ps5_addr.clone());
+    let addr = mgmt_addr_or_default(req.addr, &state.default_ps5_addr);
     let mount_point = req.mount_point;
     match tokio::task::spawn_blocking(move || fs_unmount(&addr, &mount_point))
         .await
@@ -702,7 +713,7 @@ async fn ps5_fs_chmod(
     State(state): State<AppState>,
     Json(req): Json<FsChmodReq>,
 ) -> impl IntoResponse {
-    let addr = req.addr.unwrap_or_else(|| state.default_ps5_addr.clone());
+    let addr = mgmt_addr_or_default(req.addr, &state.default_ps5_addr);
     let path = req.path;
     let mode = req.mode;
     let recursive = req.recursive;
@@ -720,7 +731,7 @@ async fn ps5_fs_mkdir(
     State(state): State<AppState>,
     Json(req): Json<FsPathReq>,
 ) -> impl IntoResponse {
-    let addr = req.addr.unwrap_or_else(|| state.default_ps5_addr.clone());
+    let addr = mgmt_addr_or_default(req.addr, &state.default_ps5_addr);
     let path = req.path;
     match tokio::task::spawn_blocking(move || fs_mkdir(&addr, &path))
         .await
@@ -738,7 +749,7 @@ async fn ps5_hw_info(
     State(state): State<AppState>,
     Query(q): Query<AddrQuery>,
 ) -> impl IntoResponse {
-    let addr = q.addr.unwrap_or_else(|| state.default_ps5_addr.clone());
+    let addr = mgmt_addr_or_default(q.addr, &state.default_ps5_addr);
     let r: Result<HwInfo, anyhow::Error> = tokio::task::spawn_blocking(move || hw_info(&addr))
         .await
         .map_err(anyhow::Error::from)
@@ -753,7 +764,7 @@ async fn ps5_hw_temps(
     State(state): State<AppState>,
     Query(q): Query<AddrQuery>,
 ) -> impl IntoResponse {
-    let addr = q.addr.unwrap_or_else(|| state.default_ps5_addr.clone());
+    let addr = mgmt_addr_or_default(q.addr, &state.default_ps5_addr);
     let r: Result<HwTemps, anyhow::Error> = tokio::task::spawn_blocking(move || hw_temps(&addr))
         .await
         .map_err(anyhow::Error::from)
@@ -768,7 +779,7 @@ async fn ps5_hw_power(
     State(state): State<AppState>,
     Query(q): Query<AddrQuery>,
 ) -> impl IntoResponse {
-    let addr = q.addr.unwrap_or_else(|| state.default_ps5_addr.clone());
+    let addr = mgmt_addr_or_default(q.addr, &state.default_ps5_addr);
     let r: Result<HwPower, anyhow::Error> = tokio::task::spawn_blocking(move || hw_power(&addr))
         .await
         .map_err(anyhow::Error::from)
@@ -786,7 +797,7 @@ async fn ps5_proc_list(
     State(state): State<AppState>,
     Query(q): Query<AddrQuery>,
 ) -> impl IntoResponse {
-    let addr = q.addr.unwrap_or_else(|| state.default_ps5_addr.clone());
+    let addr = mgmt_addr_or_default(q.addr, &state.default_ps5_addr);
     let r: Result<ProcList, anyhow::Error> = tokio::task::spawn_blocking(move || proc_list(&addr))
         .await
         .map_err(anyhow::Error::from)
@@ -812,7 +823,7 @@ async fn ps5_hw_set_fan_threshold(
     State(state): State<AppState>,
     Json(q): Json<FanThresholdReq>,
 ) -> impl IntoResponse {
-    let addr = q.addr.unwrap_or_else(|| state.default_ps5_addr.clone());
+    let addr = mgmt_addr_or_default(q.addr, &state.default_ps5_addr);
     let threshold = q.threshold_c;
     match tokio::task::spawn_blocking(move || hw_set_fan_threshold(&addr, threshold))
         .await
@@ -895,7 +906,7 @@ async fn ps5_game_meta(
     if let Err((code, msg)) = validate_meta_path(&q.path) {
         return json_err(code, msg).into_response();
     }
-    let addr = q.addr.unwrap_or_else(|| state.default_ps5_addr.clone());
+    let addr = mgmt_addr_or_default(q.addr, &state.default_ps5_addr);
     let path = q.path;
     let result: Result<GameMetaResponse, anyhow::Error> = tokio::task::spawn_blocking(move || {
         // param.json — tiny (~1 KiB for real PS5 titles), just pull the
@@ -954,7 +965,7 @@ async fn ps5_game_icon(
     if let Err((code, msg)) = validate_meta_path(&q.path) {
         return (code, msg).into_response();
     }
-    let addr = q.addr.unwrap_or_else(|| state.default_ps5_addr.clone());
+    let addr = mgmt_addr_or_default(q.addr, &state.default_ps5_addr);
     let path = q.path;
     let icon_path = format!("{}/sce_sys/icon0.png", path.trim_end_matches('/'));
     let result: Result<Vec<u8>, anyhow::Error> =
@@ -984,7 +995,7 @@ async fn ps5_volumes(
     State(state): State<AppState>,
     Query(q): Query<AddrQuery>,
 ) -> impl IntoResponse {
-    let addr = q.addr.unwrap_or_else(|| state.default_ps5_addr.clone());
+    let addr = mgmt_addr_or_default(q.addr, &state.default_ps5_addr);
     let result: Result<VolumeList, anyhow::Error> =
         tokio::task::spawn_blocking(move || list_volumes(&addr))
             .await
@@ -1001,7 +1012,7 @@ async fn ps5_status(
     State(state): State<AppState>,
     Query(q): Query<AddrQuery>,
 ) -> impl IntoResponse {
-    let addr = q.addr.unwrap_or_else(|| state.default_ps5_addr.clone());
+    let addr = mgmt_addr_or_default(q.addr, &state.default_ps5_addr);
     let result = tokio::task::spawn_blocking(move || {
         let mut c = Connection::connect(&addr)?;
         c.send_frame(FrameType::Status, b"")?;
@@ -1036,9 +1047,8 @@ async fn transfer_file_handler(
     let job_id = Uuid::new_v4();
     let started_at_ms = now_ms();
     // Pre-stat the source so Running state has an honest total_bytes from
-    // the first tick (transfer_file loads the whole file into memory on
-    // the blocking task; we'd learn total_bytes there anyway — doing it
-    // here lets progress render immediately instead of after the read).
+    // the first tick. The send path streams shard-sized reads later; this
+    // metadata read is only for progress/UI setup.
     let total_bytes = std::fs::metadata(&req.src).map(|m| m.len()).unwrap_or(0);
     let src_basename = std::path::Path::new(&req.src)
         .file_name()
@@ -1082,51 +1092,17 @@ async fn transfer_file_handler(
     tokio::task::spawn_blocking(move || {
         let mut cfg = make_transfer_config(&addr);
         cfg.progress_bytes = Some(Arc::clone(&progress));
-        // Memory-map the source file instead of `std::fs::read`-ing it
-        // into a Vec<u8>. The previous code allocated total_size bytes
-        // up front before any shard could leave — an 18 GB .exfat
-        // pulled 18 GB of RAM and either OOM'd the engine on Windows
-        // or kept the UI stuck at 0 B/total for minutes while the load
-        // completed. mmap returns immediately and the OS pages the
-        // file in lazily as transfer_file walks shards. RAM stays
-        // bounded by the page-cache budget regardless of file size.
-        //
-        // SAFETY: mmap requires the file not to be mutated while the
-        // mapping is live. The transfer is read-only and ps5upload
-        // doesn't touch the source mid-transfer; if a user externally
-        // modifies/deletes the source file mid-upload, behaviour is
-        // platform-dependent (typically either stale data is sent or
-        // SIGBUS on Unix). That's an existing risk the load-into-RAM
-        // path also had once the bytes were copied — making it explicit
-        // here is acceptable.
-        let mmap = match (|| -> std::io::Result<memmap2::Mmap> {
-            let f = std::fs::File::open(&req.src)?;
-            // SAFETY: see comment above.
-            unsafe { memmap2::Mmap::map(&f) }
-        })() {
-            Ok(m) => m,
-            Err(e) => {
-                stop_ticker.store(true, Ordering::Release);
-                let completed_at_ms = now_ms();
-                set_job(
-                    &jobs,
-                    &events_tx,
-                    job_id,
-                    JobState::Failed {
-                        started_at_ms,
-                        completed_at_ms,
-                        elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
-                        error: format!("open {}: {e}", req.src),
-                    },
-                );
-                return;
-            }
-        };
         // Resume-on-drop for single-file uploads: 1 fresh attempt + 2
         // retries. Without this wrapper a connection hiccup on a multi-
         // GiB single-file upload (e.g. a .pkg / .ffpkg image) would be
         // unrecoverable without a full re-transfer.
-        let result = transfer_file_resumable(&cfg, tx_id, &req.dest, &mmap[..], 2);
+        //
+        // The path-based core reads one shard at a time. It avoids both
+        // whole-file Vec allocation and mmap address-space/page-cache
+        // failure modes that can look like OOM on Windows/Linux with
+        // 50-100 GiB game images.
+        let src_path = std::path::PathBuf::from(&req.src);
+        let result = transfer_file_path_resumable(&cfg, tx_id, &req.dest, &src_path, 2);
         stop_ticker.store(true, Ordering::Release);
         let files_sent_count: u64 = 1;
         let skipped_files_count: u64 = 0;
@@ -1204,7 +1180,7 @@ async fn transfer_dir_handler(
 
     let job_id = Uuid::new_v4();
     let started_at_ms = now_ms();
-    let (total_bytes, files) = walk_plan(std::path::Path::new(&req.src_dir));
+    let (total_bytes, files) = walk_plan(std::path::Path::new(&req.src_dir), &req.excludes);
     let files_sent_count = files.len() as u64;
     let progress = Arc::new(AtomicU64::new(0));
     let ctx = TickerContext {
@@ -1239,6 +1215,7 @@ async fn transfer_dir_handler(
 
     tokio::task::spawn_blocking(move || {
         let mut cfg = make_transfer_config(&addr);
+        cfg.excludes = req.excludes;
         cfg.progress_bytes = Some(Arc::clone(&progress));
         // 3 attempts = 1 fresh + 2 resumes. Matches the reconcile handler.
         // An Override upload used to give up on the first network blip;
@@ -1531,7 +1508,13 @@ async fn transfer_dir_reconcile_handler(
         //    outcome — it would just double the pre-transfer stall
         //    before the fallback kicks in.
         let reconcile_started = std::time::Instant::now();
-        let plan: ReconcilePlan = match reconcile(&mgmt, &src_path, &req.dest_root, mode) {
+        let plan: ReconcilePlan = match reconcile(
+            &mgmt,
+            &src_path,
+            &req.dest_root,
+            mode,
+            &req.excludes,
+        ) {
             Ok(p) => {
                 crate::log_info!(
                     "resume: reconcile OK in {} ms — to_send={} bytes={} already={} already_bytes={}",
@@ -1553,7 +1536,7 @@ async fn transfer_dir_reconcile_handler(
                 // to-send. The upload proceeds on the transfer port;
                 // shard-level TX_FLAG_RESUME below still picks up any
                 // interrupted prior attempt.
-                match walk_local_inventory(&src_path) {
+                match walk_local_inventory(&src_path, &req.excludes) {
                     Ok(local) => {
                         let to_send: Vec<ReconcileFile> = local
                             .into_iter()
@@ -1676,6 +1659,7 @@ async fn transfer_dir_reconcile_handler(
             .collect();
 
         let mut cfg = make_transfer_config(&addr);
+        cfg.excludes = req.excludes;
         cfg.progress_bytes = Some(Arc::clone(&progress));
         // 3 attempts total — 1 fresh + 2 resumes. Covers the realistic
         // case of a single payload hiccup mid-transfer; if the payload

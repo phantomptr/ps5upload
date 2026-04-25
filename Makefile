@@ -49,7 +49,7 @@ CLIENT_DIR  := client
 .PHONY: verify info install-hooks
 .PHONY: run-engine run-client dev start
 .PHONY: install-engine uninstall-engine
-.PHONY: dist dist-win dist-mac dist-linux
+.PHONY: dist dist-win dist-win-arm dist-mac dist-mac-x64 dist-linux dist-linux-arm
 .PHONY: send-payload gen-fixtures sweep validate validate-xl
 .PHONY: sync-version sync-version-check
 
@@ -90,7 +90,9 @@ help:
 	@echo ""
 	@echo "Packaging:"
 	@echo "  make dist             - Tauri bundle for the current OS"
-	@echo "  make dist-win|mac|linux - Specific target platform"
+	@echo "  make dist-win|dist-win-arm"
+	@echo "  make dist-mac|dist-mac-x64"
+	@echo "  make dist-linux|dist-linux-arm"
 	@echo ""
 	@echo "Auto-launch (engine starts at OS login):"
 	@echo "  make install-engine    - Register systemd/launchd/Task Scheduler job"
@@ -191,10 +193,10 @@ payload: setup-payload
 
 send-payload: payload
 	@echo "Sending payload to $(PS5_HOST):$(PS5_LOADER_PORT) ..."
-	@if ! command -v nc >/dev/null 2>&1; then \
-		echo "ERROR: nc (netcat) not found — install netcat"; exit 1; \
+	@if ! command -v python3 >/dev/null 2>&1; then \
+		echo "ERROR: python3 not found — required for bounded payload upload"; exit 1; \
 	fi
-	@nc -w 1 "$(PS5_HOST)" "$(PS5_LOADER_PORT)" < "$(PAYLOAD_ELF)"
+	@python3 -c 'import pathlib, socket, sys; host, port, payload_path = sys.argv[1], int(sys.argv[2]), pathlib.Path(sys.argv[3]); payload = payload_path.read_bytes(); sock = socket.create_connection((host, port), timeout=5); sock.settimeout(5); sock.sendall(payload); sock.shutdown(socket.SHUT_WR); sock.close()' "$(PS5_HOST)" "$(PS5_LOADER_PORT)" "$(PAYLOAD_ELF)"
 	@echo "✓ Payload sent — wait for PS5 notification before testing"
 
 engine: setup-engine
@@ -211,7 +213,11 @@ engine: setup-engine
 # the moment they aren't. (An earlier version guarded with
 # `[ ! -x binary ]`, which stayed stale through code changes; removed.)
 _engine-release: setup-engine
-	@cd $(ENGINE_DIR) && $(CARGO) build --release -p ps5upload-engine
+	@if [ -n "$(ENGINE_TARGET)" ]; then \
+		cd $(ENGINE_DIR) && $(CARGO) build --release -p ps5upload-engine --target "$(ENGINE_TARGET)"; \
+	else \
+		cd $(ENGINE_DIR) && $(CARGO) build --release -p ps5upload-engine; \
+	fi
 
 client: setup-client
 	@echo "Building client UI..."
@@ -280,20 +286,47 @@ dist: payload _engine-release setup-client
 	@cd $(CLIENT_DIR) && npm run dist
 	@echo "✓ Distribution packages built: $(CLIENT_DIR)/src-tauri/target/release/bundle/"
 
-dist-win: payload _engine-release setup-client
+dist-win: ENGINE_TARGET := x86_64-pc-windows-msvc
+dist-win: payload setup-client
+	@$(MAKE) _engine-release ENGINE_TARGET=$(ENGINE_TARGET)
 	@echo "Building Windows distribution (Tauri)..."
 	@cd $(CLIENT_DIR) && npm run dist:win
-	@echo "✓ Windows packages built: $(CLIENT_DIR)/src-tauri/target/release/bundle/"
+	@echo "✓ Windows packages built: $(CLIENT_DIR)/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/"
 
-dist-mac: payload _engine-release setup-client
-	@echo "Building macOS distribution (Tauri)..."
+dist-win-arm: ENGINE_TARGET := aarch64-pc-windows-msvc
+dist-win-arm: payload setup-client
+	@$(MAKE) _engine-release ENGINE_TARGET=$(ENGINE_TARGET)
+	@echo "Building Windows ARM64 distribution (Tauri)..."
+	@cd $(CLIENT_DIR) && npm run dist:win-arm
+	@echo "✓ Windows ARM64 packages built: $(CLIENT_DIR)/src-tauri/target/aarch64-pc-windows-msvc/release/bundle/"
+
+dist-mac: ENGINE_TARGET := aarch64-apple-darwin
+dist-mac: payload setup-client
+	@$(MAKE) _engine-release ENGINE_TARGET=$(ENGINE_TARGET)
+	@echo "Building macOS Apple Silicon distribution (Tauri)..."
 	@cd $(CLIENT_DIR) && npm run dist:mac
-	@echo "✓ macOS packages built: $(CLIENT_DIR)/src-tauri/target/release/bundle/"
+	@echo "✓ macOS Apple Silicon packages built: $(CLIENT_DIR)/src-tauri/target/aarch64-apple-darwin/release/bundle/"
 
-dist-linux: payload _engine-release setup-client
-	@echo "Building Linux distribution (Tauri)..."
+dist-mac-x64: ENGINE_TARGET := x86_64-apple-darwin
+dist-mac-x64: payload setup-client
+	@$(MAKE) _engine-release ENGINE_TARGET=$(ENGINE_TARGET)
+	@echo "Building macOS Intel distribution (Tauri)..."
+	@cd $(CLIENT_DIR) && npm run dist:mac-x64
+	@echo "✓ macOS Intel packages built: $(CLIENT_DIR)/src-tauri/target/x86_64-apple-darwin/release/bundle/"
+
+dist-linux: ENGINE_TARGET := x86_64-unknown-linux-gnu
+dist-linux: payload setup-client
+	@$(MAKE) _engine-release ENGINE_TARGET=$(ENGINE_TARGET)
+	@echo "Building Linux x64 distribution (Tauri)..."
 	@cd $(CLIENT_DIR) && npm run dist:linux
-	@echo "✓ Linux packages built: $(CLIENT_DIR)/src-tauri/target/release/bundle/"
+	@echo "✓ Linux x64 packages built: $(CLIENT_DIR)/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/"
+
+dist-linux-arm: ENGINE_TARGET := aarch64-unknown-linux-gnu
+dist-linux-arm: payload setup-client
+	@$(MAKE) _engine-release ENGINE_TARGET=$(ENGINE_TARGET)
+	@echo "Building Linux ARM64 distribution (Tauri)..."
+	@cd $(CLIENT_DIR) && npm run dist:linux-arm
+	@echo "✓ Linux ARM64 packages built: $(CLIENT_DIR)/src-tauri/target/aarch64-unknown-linux-gnu/release/bundle/"
 
 #──────────────────────────────────────────────────────────────────────────────
 # Testing

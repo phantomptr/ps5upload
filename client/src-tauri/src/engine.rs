@@ -26,7 +26,9 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 static CHILD: OnceCell<tokio::sync::Mutex<Option<Child>>> = OnceCell::const_new();
 
 async fn child_lock() -> &'static tokio::sync::Mutex<Option<Child>> {
-    CHILD.get_or_init(|| async { tokio::sync::Mutex::new(None) }).await
+    CHILD
+        .get_or_init(|| async { tokio::sync::Mutex::new(None) })
+        .await
 }
 
 /// Engine binary embedded at compile time via `include_bytes!`. The
@@ -39,9 +41,9 @@ const EMBEDDED_ENGINE: &[u8] = include_bytes!(env!("PS5UPLOAD_ENGINE_BYTES"));
 /// Extract the embedded engine binary into the app's local-data dir
 /// and return the extracted path. Caches across launches: re-extracts
 /// only when the existing file's size differs from the embedded
-/// bytes' size (cheap shallow check; covers "new version installed,
-/// bytes differ" without the cost of a full hash compare on every
-/// launch).
+/// bytes (covers the important "new version installed, same binary
+/// length" case; this happens once at launch and the sidecar is small
+/// enough that the full byte compare is cheaper than stale-code bugs).
 fn find_engine_binary(app: &AppHandle) -> Result<PathBuf> {
     let bin_name = if cfg!(target_os = "windows") {
         "ps5upload-engine.exe"
@@ -54,12 +56,16 @@ fn find_engine_binary(app: &AppHandle) -> Result<PathBuf> {
         .app_local_data_dir()
         .context("resolving app_local_data_dir")?;
     let out_dir = cache_root.join("engine");
-    std::fs::create_dir_all(&out_dir)
-        .with_context(|| format!("mkdir {}", out_dir.display()))?;
+    std::fs::create_dir_all(&out_dir).with_context(|| format!("mkdir {}", out_dir.display()))?;
     let out_path = out_dir.join(bin_name);
 
     let needs_extract = match std::fs::metadata(&out_path) {
-        Ok(m) => m.len() as usize != EMBEDDED_ENGINE.len(),
+        Ok(m) if m.len() as usize == EMBEDDED_ENGINE.len() => {
+            let current = std::fs::read(&out_path)
+                .with_context(|| format!("read engine binary from {}", out_path.display()))?;
+            current != EMBEDDED_ENGINE
+        }
+        Ok(_) => true,
         Err(_) => true,
     };
     if needs_extract {
@@ -85,7 +91,11 @@ fn find_engine_binary(app: &AppHandle) -> Result<PathBuf> {
 /// Probe the readiness endpoint. Returns true if the engine answers 200.
 async fn probe(url: &str, client: &reqwest::Client) -> bool {
     let u = format!("{url}{READINESS_PROBE}");
-    client.get(&u).timeout(Duration::from_millis(500)).send().await
+    client
+        .get(&u)
+        .timeout(Duration::from_millis(500))
+        .send()
+        .await
         .map(|r| r.status().is_success())
         .unwrap_or(false)
 }
@@ -96,11 +106,18 @@ async fn probe(url: &str, client: &reqwest::Client) -> bool {
 pub async fn start(app: &AppHandle) -> Result<&'static str> {
     // Fast-path: already running.
     {
-        let guard = child_lock().await.lock().await;
-        if let Some(ref child) = *guard {
-            // try_wait returns Ok(None) while the child is still alive.
-            if child.id().is_some() {
+        let mut guard = child_lock().await.lock().await;
+        if guard.is_some() {
+            drop(guard);
+            let client = reqwest::Client::new();
+            if probe(DEFAULT_ENGINE_URL, &client).await {
                 return Ok(DEFAULT_ENGINE_URL);
+            }
+            guard = child_lock().await.lock().await;
+            if let Some(mut child) = guard.take() {
+                drop(guard);
+                let _ = child.kill().await;
+                let _ = child.wait().await;
             }
         }
     }
@@ -178,7 +195,9 @@ pub async fn start(app: &AppHandle) -> Result<&'static str> {
 pub async fn stop() {
     let lock = child_lock().await;
     let mut guard = lock.lock().await;
-    let Some(mut child) = guard.take() else { return };
+    let Some(mut child) = guard.take() else {
+        return;
+    };
 
     // Best-effort graceful shutdown. On UNIX we could SIGTERM; tokio's
     // Child::kill() maps to SIGKILL on unix and TerminateProcess on Windows.

@@ -4,13 +4,13 @@
  *
  * Real-hardware smoke test for the FTX2 engine + PS5 payload.
  * Requires a live PS5 at PS5_ADDR (default 192.168.137.2:9113) and
- * ps5upload-engine running at ENGINE_URL (default http://127.0.0.1:9114).
+ * ps5upload-engine running at ENGINE_URL (default http://127.0.0.1:19113).
  *
  * Usage:
  *   node tests2/smoke-hardware.mjs [options]
  *
  * Options:
- *   --engine-url=URL       engine HTTP base URL  (default: http://127.0.0.1:9114)
+ *   --engine-url=URL       engine HTTP base URL  (default: http://127.0.0.1:19113)
  *   --ps5-addr=HOST:PORT   PS5 FTX2 address      (default: 192.168.137.2:9113)
  *   --dest-root=PATH       destination on PS5    (default: /data/ps5upload-smoke)
  *   --spawn-engine         spawn engine via cargo run if not already up
@@ -32,7 +32,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '..');
 
-const DEFAULT_ENGINE_URL = 'http://127.0.0.1:9114';
+const DEFAULT_ENGINE_URL = 'http://127.0.0.1:19113';
 const DEFAULT_PS5_ADDR = '192.168.137.2:9113';
 // All test uploads live under a single per-drive sandbox so the user can
 // wipe them with one CLEANUP call, e.g. POST /api/ps5/cleanup
@@ -99,6 +99,11 @@ async function postJson(url, body) {
 
 function tryParse(text) {
   try { return JSON.parse(text); } catch { return text; }
+}
+
+function mgmtAddrFor(transferAddr) {
+  const i = transferAddr.lastIndexOf(':');
+  return i < 0 ? `${transferAddr}:9114` : `${transferAddr.slice(0, i)}:9114`;
 }
 
 async function pollJob(engineUrl, jobId, timeoutMs) {
@@ -168,6 +173,8 @@ async function main() {
   const opts = parseArgs(process.argv.slice(2));
   log(`engine: ${opts.engineUrl}`);
   log(`ps5:    ${opts.ps5Addr}`);
+  const ps5MgmtAddr = mgmtAddrFor(opts.ps5Addr);
+  log(`ps5 fs: ${ps5MgmtAddr}`);
   log(`dest:   ${opts.destRoot}`);
 
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ps5upload-smoke-'));
@@ -217,7 +224,7 @@ async function main() {
 
     // ── 2. PS5 status ─────────────────────────────────────────────────────
     try {
-      const status = await getJson(`${opts.engineUrl}/api/ps5/status`);
+      const status = await getJson(`${opts.engineUrl}/api/ps5/status?addr=${encodeURIComponent(ps5MgmtAddr)}`);
       if (status && typeof status === 'object' && !status.error) {
         pass(`ps5 status (version: ${status.version ?? 'unknown'}, uptime: ${status.uptime_secs ?? '?'}s)`);
       } else {
@@ -234,7 +241,7 @@ async function main() {
     // about the "usable" subset for transfer-destination picking, so the
     // smoke output filters to non-placeholder and prints them aligned.
     try {
-      const vols = await getJson(`${opts.engineUrl}/api/ps5/volumes`);
+      const vols = await getJson(`${opts.engineUrl}/api/ps5/volumes?addr=${encodeURIComponent(ps5MgmtAddr)}`);
       const list = Array.isArray(vols?.volumes) ? vols.volumes : [];
       const usable = list.filter((v) => !v.is_placeholder);
       const placeholderCount = list.length - usable.length;
@@ -369,6 +376,15 @@ async function main() {
 
   } finally {
     if (opts.cleanup) {
+      try {
+        const cleaned = await postJson(`${opts.engineUrl}/api/ps5/cleanup`, {
+          addr: ps5MgmtAddr,
+          path: opts.destRoot,
+        });
+        log(`PS5 cleanup removed ${cleaned?.removed_files ?? 0} files / ${cleaned?.removed_dirs ?? 0} dirs`);
+      } catch (e) {
+        log(`PS5 cleanup skipped/failed: ${e.message}`);
+      }
       await fs.rm(tmpDir, { recursive: true, force: true });
     } else {
       log(`tmp dir preserved: ${tmpDir}`);

@@ -15,8 +15,8 @@
 //!
 //! Fails the build with an actionable message if either file is
 //! missing — in CI the release workflow builds the engine first, in
-//! dev you need `make payload` + `cargo build --release -p
-//! ps5upload-engine` before `cargo tauri build`.
+//! dev you need `make payload` plus a release `ps5upload-engine`
+//! built for the same target as the Tauri bundle.
 
 use std::path::{Path, PathBuf};
 
@@ -31,35 +31,60 @@ fn main() {
         .and_then(|p| p.parent())
         .expect("repo-root resolution");
 
-    let engine_name = if cfg!(target_os = "windows") {
+    let target = std::env::var("TARGET").expect("TARGET not set");
+    let host = std::env::var("HOST").expect("HOST not set");
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").expect("CARGO_CFG_TARGET_OS not set");
+
+    let engine_name = if target_os == "windows" {
         "ps5upload-engine.exe"
     } else {
         "ps5upload-engine"
     };
-    let engine_path = repo_root
+    let engine_target_path = repo_root
+        .join("engine")
+        .join("target")
+        .join(&target)
+        .join("release")
+        .join(engine_name);
+    let engine_host_path = repo_root
         .join("engine")
         .join("target")
         .join("release")
         .join(engine_name);
-    let payload_gz = repo_root
-        .join("payload")
-        .join("ps5upload.elf.gz");
+    let engine_path = if engine_target_path.is_file() {
+        engine_target_path
+    } else if target == host && engine_host_path.is_file() {
+        engine_host_path
+    } else {
+        engine_target_path
+    };
+    let payload_gz = repo_root.join("payload").join("ps5upload.elf.gz");
 
-    require_file(&engine_path, "engine binary", "cargo build --release -p ps5upload-engine");
+    let engine_build_hint = format!("cargo build --release -p ps5upload-engine --target {target}");
+    require_file(&engine_path, "engine binary", &engine_build_hint);
     require_file(&payload_gz, "payload gzip", "make -C payload all");
 
     // Absolute paths emitted as env vars so `include_bytes!(env!("…"))`
     // in src/ can pull them in at compile time. Also emit
     // `rerun-if-changed` so touching either file re-triggers the build.
-    println!("cargo:rustc-env=PS5UPLOAD_ENGINE_BYTES={}", engine_path.display());
+    println!(
+        "cargo:rustc-env=PS5UPLOAD_ENGINE_BYTES={}",
+        engine_path.display()
+    );
     println!("cargo:rerun-if-changed={}", engine_path.display());
-    println!("cargo:rustc-env=PS5UPLOAD_PAYLOAD_GZ_BYTES={}", payload_gz.display());
+    println!(
+        "cargo:rustc-env=PS5UPLOAD_PAYLOAD_GZ_BYTES={}",
+        payload_gz.display()
+    );
     println!("cargo:rerun-if-changed={}", payload_gz.display());
 }
 
 fn require_file(path: &Path, label: &str, how_to_build: &str) {
     if !path.is_file() {
-        eprintln!("\n\x1b[1;31merror\x1b[0m: missing {label} at {}", path.display());
+        eprintln!(
+            "\n\x1b[1;31merror\x1b[0m: missing {label} at {}",
+            path.display()
+        );
         eprintln!("  The desktop shell embeds this file via include_bytes! so the");
         eprintln!("  compiled exe is self-contained.");
         eprintln!("  Build it first:  \x1b[1m{how_to_build}\x1b[0m\n");

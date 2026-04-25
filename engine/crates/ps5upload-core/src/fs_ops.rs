@@ -480,7 +480,7 @@ pub type LocalInventory = std::collections::BTreeMap<String, u64>;
 
 /// Walk a local directory and build the flattened `{relpath → size}` map
 /// that reconcile logic compares against the remote inventory.
-pub fn walk_local_inventory(root: &std::path::Path) -> Result<LocalInventory> {
+pub fn walk_local_inventory(root: &std::path::Path, excludes: &[String]) -> Result<LocalInventory> {
     let mut out = LocalInventory::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -492,6 +492,9 @@ pub fn walk_local_inventory(root: &std::path::Path) -> Result<LocalInventory> {
             } else if ft.is_file() {
                 let size = entry.metadata().map_or(0, |m| m.len());
                 let path = entry.path();
+                if crate::excludes::is_excluded_strings(&path, excludes) {
+                    continue;
+                }
                 let rel = path.strip_prefix(root).unwrap_or(&path);
                 // Use forward-slash paths on every OS so relpaths match
                 // what the PS5 returns (PS5 is FreeBSD, always '/').
@@ -720,10 +723,11 @@ pub fn reconcile(
     src: &std::path::Path,
     dest_root: &str,
     mode: ReconcileMode,
+    excludes: &[String],
 ) -> Result<ReconcilePlan> {
     let t_local = std::time::Instant::now();
     crate::core_log!("reconcile: walking local {} …", src.display(),);
-    let local = walk_local_inventory(src)?;
+    let local = walk_local_inventory(src, excludes)?;
     crate::core_log!(
         "reconcile: local walk {} files ({} ms)",
         local.len(),
@@ -830,5 +834,28 @@ mod tests {
         let opts = ListDirOptions::default();
         assert_eq!(opts.offset, 0);
         assert_eq!(opts.limit, 256);
+    }
+
+    #[test]
+    fn walk_local_inventory_respects_excludes() {
+        let root =
+            std::env::temp_dir().join(format!("ps5upload-fs-ops-excludes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::write(root.join("eboot.bin"), b"real").unwrap();
+        std::fs::write(root.join(".DS_Store"), b"junk").unwrap();
+        std::fs::write(root.join(".git").join("HEAD"), b"ref").unwrap();
+
+        let excludes = crate::excludes::DEFAULT_EXCLUDES
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>();
+        let inv = walk_local_inventory(&root, &excludes).unwrap();
+
+        assert!(inv.contains_key("eboot.bin"));
+        assert!(!inv.contains_key(".DS_Store"));
+        assert!(!inv.contains_key(".git/HEAD"));
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

@@ -252,26 +252,27 @@ jobs:
           test -s payload/ps5upload.elf.gz
           ls -la payload/ps5upload.elf.gz
 
-      # Build the sidecar engine binary for the host arch (each matrix
-      # leg runs on a runner whose arch matches the Tauri target, so
-      # the default host build lands the right binary). tauri.conf.json
-      # bundles `../../engine/target/release/ps5upload-engine*` as a
-      # resource — the `*` glob picks up both `ps5upload-engine` on
-      # Unix and `ps5upload-engine.exe` on Windows.
+      # Build the sidecar engine binary for the exact Tauri target.
+      # The desktop build script embeds this target-specific binary
+      # into the final app, which prevents accidentally shipping a
+      # host-arch sidecar in cross-target builds.
       - name: Build engine sidecar binary
         working-directory: engine
         shell: bash
-        run: cargo build --release -p ps5upload-engine
+        run: cargo build --release -p ps5upload-engine --target "${{ matrix.rust_target }}"
 
       - name: Verify engine binary in place
         shell: bash
+        env:
+          RUST_TARGET: ${{ matrix.rust_target }}
         run: |
+          target_root="engine/target/${RUST_TARGET}/release"
           if [ "$RUNNER_OS" = "Windows" ]; then
-            test -s engine/target/release/ps5upload-engine.exe
-            ls -la engine/target/release/ps5upload-engine.exe
+            test -s "$target_root/ps5upload-engine.exe"
+            ls -la "$target_root/ps5upload-engine.exe"
           else
-            test -s engine/target/release/ps5upload-engine
-            ls -la engine/target/release/ps5upload-engine
+            test -s "$target_root/ps5upload-engine"
+            ls -la "$target_root/ps5upload-engine"
           fi
 
       # Diagnostic: on Linux, confirm linuxdeploy can actually start

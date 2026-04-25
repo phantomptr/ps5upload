@@ -86,8 +86,9 @@ cd ps5upload
 make dist          # one-shot: payload + engine + client + bundle
 ```
 
-Platform-specific bundle targets: `make dist-mac`, `make dist-linux`,
-`make dist-win`.
+Platform-specific bundle targets: `make dist-mac`,
+`make dist-mac-x64`, `make dist-linux`, `make dist-linux-arm`,
+`make dist-win`, and `make dist-win-arm`.
 
 ## Quick start
 
@@ -172,7 +173,7 @@ npm run smoke:hardware
 |---|---|---|
 | **macOS**   | ✓ | ✓ |
 | **Linux**   | ✓ | ✓ |
-| **Windows** | ✓ | — |
+| **Windows** | ✓ | ✓ |
 
 **PS5 payload** — every firmware the PS5 Payload SDK supports,
 currently **1.00 through 12.70** on every console model (original

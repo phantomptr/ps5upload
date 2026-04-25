@@ -10,7 +10,7 @@
 mod mock_server;
 use mock_server::MockServer;
 
-use ps5upload_core::transfer::{transfer_dir, transfer_file, TransferConfig};
+use ps5upload_core::transfer::{transfer_dir, transfer_file, transfer_file_path, TransferConfig};
 
 fn random_tx_id() -> [u8; 16] {
     let mut id = [0u8; 16];
@@ -73,6 +73,31 @@ fn transfer_file_multi_shard() {
     let st = srv.state.lock().unwrap();
     let applied = st.applied.get("/data/multi.bin").expect("file applied");
     assert_eq!(*applied, data);
+}
+
+#[test]
+fn transfer_file_path_streams_from_disk() {
+    let tmp = tempdir();
+    let src = tmp.path().join("streamed.bin");
+    let data: Vec<u8> = (0..4096).map(|i| (i % 251) as u8).collect();
+    std::fs::write(&src, &data).unwrap();
+
+    let srv = MockServer::start();
+    let cfg = TransferConfig {
+        shard_size: 1024,
+        ..TransferConfig::new(&srv.addr)
+    };
+    let tx_id = random_tx_id();
+
+    let result = transfer_file_path(&cfg, tx_id, "/data/streamed.bin", &src).unwrap();
+
+    assert_eq!(result.shards_sent, 4);
+    assert_eq!(result.bytes_sent, data.len() as u64);
+    let st = srv.state.lock().unwrap();
+    assert_eq!(
+        st.applied.get("/data/streamed.bin").unwrap().as_slice(),
+        data.as_slice()
+    );
 }
 
 // ─── Directory transfer ───────────────────────────────────────────────────────

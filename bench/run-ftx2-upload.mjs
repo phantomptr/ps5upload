@@ -10,7 +10,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '..');
 
-const DEFAULT_ENGINE_URL = 'http://127.0.0.1:9114';
+const DEFAULT_ENGINE_URL = 'http://127.0.0.1:19113';
 const DEFAULT_PS5_ADDR = '192.168.137.2:9113';
 // Unified test sandbox — matches smoke/sweep. Wipe with a single CLEANUP:
 // POST /api/ps5/cleanup {"path":"/data/ps5upload/tests"}
@@ -37,6 +37,41 @@ function formatBytes(bytes) {
     index += 1;
   }
   return `${scaled.toFixed(index === 0 ? 0 : 2)} ${units[index]}`;
+}
+
+async function sourceStats(sourcePath, stat) {
+  if (stat.isFile()) {
+    return { bytes: stat.size, fileCount: 1 };
+  }
+  if (!stat.isDirectory()) {
+    return { bytes: null, fileCount: 0 };
+  }
+
+  let bytes = 0;
+  let fileCount = 0;
+  const stack = [sourcePath];
+  while (stack.length > 0) {
+    const dir = stack.pop();
+    let entries;
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const p = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(p);
+      } else if (entry.isFile()) {
+        try {
+          const s = await fs.stat(p);
+          bytes += s.size;
+          fileCount += 1;
+        } catch {}
+      }
+    }
+  }
+  return { bytes, fileCount };
 }
 
 function parseArgs(argv) {
@@ -172,6 +207,7 @@ async function main() {
   if (sourceKind === 'other') {
     throw new Error(`source must be a regular file or directory: ${sourcePath}`);
   }
+  const sourceSummary = await sourceStats(sourcePath, stat);
 
   let engineChild = null;
   try {
@@ -234,7 +270,8 @@ async function main() {
       source: {
         path: sourcePath,
         kind: sourceKind,
-        bytes: stat.size || null,
+        bytes: sourceSummary.bytes,
+        file_count: sourceSummary.fileCount,
       },
       destination: {
         root: options.destRoot,

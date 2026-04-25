@@ -33,7 +33,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, '..');
 
-const DEFAULT_ENGINE_URL = 'http://127.0.0.1:9114';
+const DEFAULT_ENGINE_URL = 'http://127.0.0.1:19113';
 const DEFAULT_PS5_ADDR = '192.168.137.2:9113';
 // Unified test sandbox — see tests/smoke-hardware.mjs for the shape.
 // All sweep dest_root entries land under this root so `rm -rf
@@ -105,7 +105,7 @@ function printHelp() {
   process.stdout.write(`ftx2 sweep — run every bench profile against a live PS5
 
 Options:
-  --engine-url=URL       engine HTTP base URL  (default: http://127.0.0.1:9114)
+  --engine-url=URL       engine HTTP base URL  (default: http://127.0.0.1:19113)
   --ps5-addr=HOST:PORT   PS5 FTX2 address      (default: 192.168.137.2:9113)
   --dest-root=PATH       dest root on PS5      (default: /data/ps5upload-sweep)
   --fixtures-dir=PATH    fixture source root   (default: bench/fixtures)
@@ -142,6 +142,11 @@ async function postJson(url, body) {
 }
 
 function tryParse(t) { try { return JSON.parse(t); } catch { return t; } }
+
+function mgmtAddrFor(transferAddr) {
+  const i = transferAddr.lastIndexOf(':');
+  return i < 0 ? `${transferAddr}:9114` : `${transferAddr.slice(0, i)}:9114`;
+}
 
 async function waitForHttpOk(url, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
@@ -223,7 +228,7 @@ async function runProfile(opts, profile) {
   // Pre-run cleanup — drop any leftover from a previous sweep so timings
   // don't get polluted by delete-on-overwrite.
   if (opts.cleanup) {
-    const pre = await psCleanup(opts.engineUrl, opts.ps5Addr, destRoot);
+    const pre = await psCleanup(opts.engineUrl, opts.ps5MgmtAddr, destRoot);
     if (!pre.ok) {
       log(`  ${profile.name}: pre-cleanup failed (${pre.error}) — proceeding anyway`);
     }
@@ -256,7 +261,7 @@ async function runProfile(opts, profile) {
       wall_ms: wallMs,
     };
     if (opts.cleanup) {
-      await psCleanup(opts.engineUrl, opts.ps5Addr, destRoot);
+      await psCleanup(opts.engineUrl, opts.ps5MgmtAddr, destRoot);
     }
     return result;
   }
@@ -285,7 +290,7 @@ async function runProfile(opts, profile) {
   };
 
   if (opts.cleanup) {
-    const post = await psCleanup(opts.engineUrl, opts.ps5Addr, destRoot);
+    const post = await psCleanup(opts.engineUrl, opts.ps5MgmtAddr, destRoot);
     result.cleanup = post;
   }
   return result;
@@ -414,6 +419,8 @@ async function main() {
 
   log(`engine:    ${opts.engineUrl}`);
   log(`ps5:       ${opts.ps5Addr}`);
+  opts.ps5MgmtAddr = mgmtAddrFor(opts.ps5Addr);
+  log(`ps5 fs:    ${opts.ps5MgmtAddr}`);
   log(`dest root: ${opts.destRoot}`);
   log(`profiles:  ${selected.map((p) => p.name).join(', ')}`);
 
@@ -443,7 +450,7 @@ async function main() {
 
     // Verify PS5 is alive before doing anything destructive.
     try {
-      const status = await getJson(`${opts.engineUrl}/api/ps5/status`);
+      const status = await getJson(`${opts.engineUrl}/api/ps5/status?addr=${encodeURIComponent(opts.ps5MgmtAddr)}`);
       log(`ps5 status ok (instance_id=${status?.instance_id ?? '?'})`);
     } catch (e) {
       logErr(`PS5 status check failed: ${e.message}`);
@@ -465,7 +472,7 @@ async function main() {
     // even if a profile failed midway.
     if (opts.cleanup) {
       log('final cleanup');
-      const fin = await psCleanup(opts.engineUrl, opts.ps5Addr, opts.destRoot);
+      const fin = await psCleanup(opts.engineUrl, opts.ps5MgmtAddr, opts.destRoot);
       if (fin.ok) {
         log(`  removed ${fin.removed_files} files / ${fin.removed_dirs} dirs`);
       } else {

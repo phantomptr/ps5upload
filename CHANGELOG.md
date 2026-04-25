@@ -4,6 +4,49 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.2.1
+
+**Fixes**
+
+- **Multi-GiB single-file uploads no longer load the file into RAM.**
+  The 2.2.0 fix used a memory map; this one streams a single shard-
+  sized buffer (~32 MiB) for the entire upload instead. Avoids the
+  Windows page-cache pressure and 32-bit address-space failures that
+  could surface on huge `.exfat` / `.ffpkg` images. Peak RAM is now
+  bounded by the shard size, not the file size.
+- **Management calls now route to the right port.** `addr` overrides
+  passed from the desktop client to handlers like `cleanup`,
+  `list-dir`, `volumes`, `fs/*`, `hw/*` were going to the transfer
+  port `:9113` instead of the management port `:9114`. Routing is
+  now consistent across every endpoint.
+- **Windows folder uploads land at the right PS5 path.** Backslashes
+  in relative paths were being preserved as-is; they're now
+  normalized to forward slashes before joining onto the PS5
+  destination root.
+
+**Quality of life**
+
+- **Folder uploads can exclude files.** The desktop client's
+  exclude-rules UI now feeds an `excludes` list end-to-end through
+  reconcile and walk, with `.DS_Store`, `Thumbs.db`, `desktop.ini`,
+  `.git/**`, and `*.esbak` as the default suggestions.
+- **Image uploads can mount on completion.** After the transfer
+  commits, the desktop UI offers to mount the staged image via the
+  PS5 kernel's LVD backend in one step.
+- **Six platform bundles, not three.** `make dist-mac-x64`,
+  `make dist-win-arm`, and `make dist-linux-arm` now build for the
+  three architectures the 2.2.0 release dropped silently. The
+  Tauri build script picks the right per-target sidecar binary.
+- **Engine sidecar restarts cleanly.** If the desktop app finds a
+  registered child but no listener on `:19113`, it now kills the
+  stale child and respawns instead of failing the readiness probe.
+
+**CI**
+
+- New target-matrix job runs `cargo check` for every shipped OS/arch
+  combination on every PR (compile-only, fast). Cross-arch test
+  execution stays on the host job to keep PR feedback under a minute.
+
 ## 2.2.0
 
 **Highlights**
