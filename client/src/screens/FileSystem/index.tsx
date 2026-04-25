@@ -432,7 +432,7 @@ export default function FileSystemScreen() {
           type="button"
           onClick={() => setPath(parent(path))}
           disabled={path === "/"}
-          title="Parent directory"
+          title={tr("fs_parent_dir", undefined, "Parent directory")}
           className="rounded-md p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)] disabled:opacity-30"
         >
           <ArrowUp size={14} />
@@ -465,12 +465,17 @@ export default function FileSystemScreen() {
           <ClipboardPaste size={14} className="text-[var(--color-accent)]" />
           <span>
             <span className="font-medium">
-              {clipboard.items.length} item
-              {clipboard.items.length === 1 ? "" : "s"}
+              {tr(
+                clipboard.items.length === 1 ? "fs_item_one" : "fs_item_many",
+                { count: clipboard.items.length },
+                `${clipboard.items.length} item${clipboard.items.length === 1 ? "" : "s"}`,
+              )}
             </span>{" "}
-            {clipboard.op === "cut" ? "to move" : "to copy"}
+            {clipboard.op === "cut"
+              ? tr("fs_to_move", undefined, "to move")
+              : tr("fs_to_copy", undefined, "to copy")}
             {clipboard.sourceLabel
-              ? ` from ${clipboard.sourceLabel}`
+              ? ` ${tr("fs_from", undefined, "from")} ${clipboard.sourceLabel}`
               : ""}
           </span>
           <div className="ml-auto flex items-center gap-1">
@@ -480,13 +485,13 @@ export default function FileSystemScreen() {
               disabled={bulkBusy !== null || !host?.trim()}
               className="flex items-center gap-1 rounded-md bg-[var(--color-accent)] px-2 py-1 text-xs font-medium text-[var(--color-accent-contrast)] disabled:opacity-50"
             >
-              Paste here
+              {tr("fs_paste_here", undefined, "Paste here")}
             </button>
             <button
               type="button"
               onClick={() => clipboard.clear()}
               className="rounded-md border border-[var(--color-border)] p-1 hover:bg-[var(--color-surface-3)]"
-              title="Cancel — forget the staged items"
+              title={tr("fs_cancel_clipboard", undefined, "Cancel — forget the staged items")}
             >
               <X size={12} />
             </button>
@@ -498,7 +503,7 @@ export default function FileSystemScreen() {
       {selectionActive && (
         <div className="mb-3 flex items-center gap-2 rounded-md border border-[var(--color-accent)] bg-[var(--color-surface-2)] p-2 text-xs">
           <span className="font-medium">
-            {selected.size} selected
+            {tr("fs_selected_count", { count: selected.size }, `${selected.size} selected`)}
           </span>
           <button
             type="button"
@@ -507,7 +512,7 @@ export default function FileSystemScreen() {
             className="flex items-center gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 hover:bg-[var(--color-surface-3)] disabled:opacity-50"
           >
             <Scissors size={12} />
-            Cut
+            {tr("fs_cut", undefined, "Cut")}
           </button>
           <button
             type="button"
@@ -516,7 +521,7 @@ export default function FileSystemScreen() {
             className="flex items-center gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 hover:bg-[var(--color-surface-3)] disabled:opacity-50"
           >
             <Copy size={12} />
-            Copy
+            {tr("copy", undefined, "Copy")}
           </button>
           <button
             type="button"
@@ -525,13 +530,13 @@ export default function FileSystemScreen() {
             className="flex items-center gap-1 rounded-md border border-[var(--color-bad)] bg-[var(--color-surface)] px-2 py-1 text-[var(--color-bad)] hover:bg-[var(--color-surface-3)] disabled:opacity-50"
           >
             <Trash2 size={12} />
-            Delete
+            {tr("library_delete", undefined, "Delete")}
           </button>
           <button
             type="button"
             onClick={() => setSelected(new Set())}
             className="ml-auto rounded-md border border-[var(--color-border)] p-1 hover:bg-[var(--color-surface-3)]"
-            title="Clear selection"
+            title={tr("fs_clear_selection", undefined, "Clear selection")}
           >
             <X size={12} />
           </button>
@@ -542,12 +547,12 @@ export default function FileSystemScreen() {
         <div className="mb-3 flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-2 text-sm">
           <FolderPlus size={14} className="text-[var(--color-muted)]" />
           <span className="text-xs text-[var(--color-muted)]">
-            Create in <span className="font-mono">{path}</span>
+            {tr("fs_create_in", undefined, "Create in")} <span className="font-mono">{path}</span>
           </span>
           <input
             autoFocus
             value={mkdirDraft}
-            placeholder="folder name"
+            placeholder={tr("fs_folder_name", undefined, "folder name")}
             onChange={(e) => setMkdirDraft(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") runMkdir();
@@ -560,14 +565,14 @@ export default function FileSystemScreen() {
             onClick={runMkdir}
             className="rounded-md bg-[var(--color-accent)] px-3 py-1 text-xs font-medium text-[var(--color-accent-contrast)]"
           >
-            Create
+            {tr("fs_create", undefined, "Create")}
           </button>
           <button
             type="button"
             onClick={() => setMkdirDraft(null)}
             className="rounded-md border border-[var(--color-border)] px-3 py-1 text-xs hover:bg-[var(--color-surface-3)]"
           >
-            Cancel
+            {tr("cancel", undefined, "Cancel")}
           </button>
         </div>
       )}
@@ -577,10 +582,10 @@ export default function FileSystemScreen() {
           <Loader2 size={12} className="animate-spin text-[var(--color-accent)]" />
           <span className="font-medium">
             {bulkBusy.op === "delete"
-              ? "Deleting"
+              ? tr("library_busy_delete", undefined, "Deleting")
               : bulkBusy.op === "paste-move"
-                ? "Moving"
-                : "Copying"}
+                ? tr("fs_busy_moving", undefined, "Moving")
+                : tr("fs_busy_copying", undefined, "Copying")}
           </span>
           <span className="text-[var(--color-muted)]">
             {bulkBusy.done + 1}/{bulkBusy.total}
@@ -594,7 +599,9 @@ export default function FileSystemScreen() {
         <div className="mb-3 flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-2 text-xs">
           <Loader2 size={12} className="animate-spin text-[var(--color-accent)]" />
           <span className="font-medium">
-            {busyEntry.op === "rename" ? "Renaming" : "Creating folder"}
+            {busyEntry.op === "rename"
+              ? tr("fs_busy_renaming", undefined, "Renaming")
+              : tr("fs_busy_creating_folder", undefined, "Creating folder")}
           </span>
           <span className="text-[var(--color-muted)]">
             {busyEntry.name} · {formatDuration(elapsedMs / 1000)}
@@ -632,10 +639,14 @@ export default function FileSystemScreen() {
             }}
             onChange={toggleAll}
             className="h-3.5 w-3.5 rounded border-[var(--color-border)]"
-            title="Select all"
+            title={tr("fs_select_all", undefined, "Select all")}
           />
           <span>
-            {entries.length} item{entries.length === 1 ? "" : "s"}
+            {tr(
+              entries.length === 1 ? "fs_item_one" : "fs_item_many",
+              { count: entries.length },
+              `${entries.length} item${entries.length === 1 ? "" : "s"}`,
+            )}
           </span>
         </div>
       )}
@@ -707,7 +718,7 @@ export default function FileSystemScreen() {
                     setRenaming(e.name);
                     setRenameDraft(e.name);
                   }}
-                  title="Rename"
+                  title={tr("fs_rename", undefined, "Rename")}
                   className="rounded-md border border-[var(--color-border)] p-1 hover:bg-[var(--color-surface-3)]"
                 >
                   <Pencil size={12} />
@@ -715,7 +726,7 @@ export default function FileSystemScreen() {
                 <button
                   type="button"
                   onClick={() => runDelete(e.name)}
-                  title="Delete"
+                  title={tr("library_delete", undefined, "Delete")}
                   className="rounded-md border border-[var(--color-bad)] p-1 text-[var(--color-bad)] hover:bg-[var(--color-surface-3)]"
                 >
                   <Trash2 size={12} />
