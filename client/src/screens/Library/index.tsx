@@ -262,13 +262,14 @@ function LibraryRow({
   mountMap: Map<string, string>;
   onChanged: () => void;
 }) {
+  const tr = useTr();
   const Icon = entry.kind === "game" ? Gamepad2 : FileArchive;
   const kindLabel =
     entry.kind === "game"
-      ? "Game"
+      ? tr("library_row_kind_game", undefined, "Game")
       : entry.imageFormat === "ffpkg"
-        ? ".ffpkg image"
-        : ".exfat image";
+        ? tr("library_row_kind_ffpkg", undefined, ".ffpkg image")
+        : tr("library_row_kind_exfat", undefined, ".exfat image");
   const [confirm, setConfirm] = useState<PendingConfirm | null>(null);
   const [busy, setBusy] = useState<BusyState>(null);
   const [error, setError] = useState<string | null>(null);
@@ -428,7 +429,7 @@ function LibraryRow({
                 loading={busy === "unmount"}
                 title={`Unmount ${currentMount}`}
               >
-                Unmount
+                {tr("library_unmount", undefined, "Unmount")}
               </Button>
             ) : (
               <Button
@@ -438,9 +439,9 @@ function LibraryRow({
                 onClick={runMount}
                 disabled={busy !== null}
                 loading={busy === "mount"}
-                title="Mount this image on your PS5"
+                title={tr("library_mount_tooltip", undefined, "Mount this image on your PS5")}
               >
-                Mount
+                {tr("library_mount", undefined, "Mount")}
               </Button>
             )
           ) : (
@@ -458,9 +459,9 @@ function LibraryRow({
               onClick={() => setConfirm({ kind: "chmod", entry })}
               disabled={busy !== null}
               loading={busy === "chmod"}
-              title="Open read/write/execute to every user on this PS5 (Permission 777)"
+              title={tr("library_chmod_tooltip", undefined, "Open read/write/execute to every user on this PS5 (Permission 777)")}
             >
-              Permission 777
+              {tr("library_permission_777", undefined, "Permission 777")}
             </Button>
           )}
           <Button
@@ -470,9 +471,9 @@ function LibraryRow({
             onClick={() => setConfirm({ kind: "delete", entry })}
             disabled={busy !== null}
             loading={busy === "delete"}
-            title="Delete this path from the PS5"
+            title={tr("library_delete_tooltip", undefined, "Delete this path from the PS5")}
           >
-            Delete
+            {tr("library_delete", undefined, "Delete")}
           </Button>
         </div>
       </div>
@@ -485,12 +486,12 @@ function LibraryRow({
           />
           <span className="font-medium">
             {busy === "delete"
-              ? "Deleting"
+              ? tr("library_busy_delete", undefined, "Deleting")
               : busy === "chmod"
-                ? "Applying Permission 777"
+                ? tr("library_busy_chmod", undefined, "Applying Permission 777")
                 : busy === "unmount"
-                  ? "Unmounting"
-                  : "Mounting"}
+                  ? tr("library_busy_unmount", undefined, "Unmounting")
+                  : tr("library_busy_mount", undefined, "Mounting")}
           </span>
           <span className="text-[var(--color-muted)]">
             {entry.name} · {formatDuration(elapsedMs / 1000)}
@@ -506,7 +507,7 @@ function LibraryRow({
             type="button"
             onClick={() => setMountNote(null)}
             className="rounded px-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)]"
-            aria-label="Dismiss"
+            aria-label={tr("dismiss", undefined, "Dismiss")}
           >
             ×
           </button>
@@ -572,19 +573,30 @@ function ConfirmRow({
   onCancel: () => void;
   onRun: () => void;
 }) {
+  const tr = useTr();
   const { kind, entry } = confirm;
   const message =
     kind === "delete"
-      ? `Delete "${entry.name}"? This removes the path recursively from your PS5 and can't be undone.`
-      : `Apply Permission 777 recursively to "${entry.name}"? Anyone on your PS5 will be able to read/write/execute its contents.`;
+      ? tr(
+          "library_confirm_delete",
+          { name: entry.name },
+          `Delete "${entry.name}"? This removes the path recursively from your PS5 and can't be undone.`,
+        )
+      : tr(
+          "library_confirm_chmod",
+          { name: entry.name },
+          `Apply Permission 777 recursively to "${entry.name}"? Anyone on your PS5 will be able to read/write/execute its contents.`,
+        );
   const runLabel =
-    kind === "delete" ? "Yes, delete" : "Yes, set Permission 777";
+    kind === "delete"
+      ? tr("library_confirm_delete_yes", undefined, "Yes, delete")
+      : tr("library_confirm_chmod_yes", undefined, "Yes, set Permission 777");
   return (
     <div className="flex items-center justify-between gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-xs">
       <span className="flex-1">{message}</span>
       <div className="flex shrink-0 items-center gap-1">
         <Button variant="ghost" size="sm" onClick={onCancel}>
-          Cancel
+          {tr("cancel", undefined, "Cancel")}
         </Button>
         <Button
           variant={kind === "delete" ? "danger" : "primary"}
