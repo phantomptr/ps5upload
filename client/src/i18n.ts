@@ -557,6 +557,26 @@ const translations = {
     status_payload_tooltip: "PS5 payload on :9113",
     status_kernel_ok: "kernel OK",
     status_no_active_transfers: "no active transfers",
+
+    // Sidebar nav items missing from v1.5.4-era dictionary. Without
+    // these the sidebar shows the English fallback even when the
+    // user's lang has every other label translated — that's the
+    // 'Hardware / Send payload / Settings / About' gap visible in
+    // 2.2.0 testing.
+    hardware: "Hardware",
+    send_payload: "Send payload",
+    settings: "Settings",
+    about: "About",
+
+    // Settings screen body — checkbox cards + storage card
+    settings_description: "App preferences — language, keep-awake, upload defaults, and where your settings are stored.",
+    always_overwrite: "Always overwrite without asking",
+    always_overwrite_hint: "Skip the confirmation dialog when a destination already has files. Leave off to see the Override / Resume / Cancel prompt.",
+    show_file_list: "Show file list during transfer",
+    show_file_list_hint: "Display the scrollable list of files being transferred beneath the progress bar. Turn off if the list feels noisy on folders with thousands of files — you'll still see overall progress, speed, and ETA.",
+    settings_file: "Settings file",
+    settings_file_hint: "Your preferences live in this JSON file — safe to back up, copy to another machine, or edit by hand (edits take effect next time you launch the app).",
+    resolving: "resolving…",
   },
 
   "vi": {
@@ -1004,6 +1024,20 @@ const translations = {
     status_payload_tooltip: "PS5 payload trên :9113",
     status_kernel_ok: "kernel OK",
     status_no_active_transfers: "không có truyền dữ liệu nào",
+
+    hardware: "Phần cứng",
+    send_payload: "Gửi payload",
+    settings: "Cài đặt",
+    about: "Giới thiệu",
+
+    settings_description: "Tùy chọn ứng dụng — ngôn ngữ, giữ thức, mặc định tải lên, và nơi lưu cài đặt.",
+    always_overwrite: "Luôn ghi đè mà không hỏi",
+    always_overwrite_hint: "Bỏ qua hộp thoại xác nhận khi đích đến đã có tệp. Tắt để thấy lời nhắc Ghi đè / Tiếp tục / Hủy.",
+    show_file_list: "Hiển thị danh sách tệp khi truyền",
+    show_file_list_hint: "Hiển thị danh sách cuộn các tệp đang được truyền bên dưới thanh tiến trình. Tắt nếu danh sách có vẻ ồn ào với thư mục hàng nghìn tệp — bạn vẫn thấy tổng tiến trình, tốc độ và ETA.",
+    settings_file: "Tệp cài đặt",
+    settings_file_hint: "Tùy chọn của bạn nằm trong tệp JSON này — an toàn để sao lưu, sao chép sang máy khác hoặc chỉnh sửa thủ công (thay đổi có hiệu lực lần khởi động sau).",
+    resolving: "đang giải quyết…",
   },
 
   "hi": {
@@ -2851,6 +2885,20 @@ const translations = {
     status_payload_tooltip: ":9113 の PS5 payload",
     status_kernel_ok: "kernel OK",
     status_no_active_transfers: "アクティブな転送なし",
+
+    hardware: "ハードウェア",
+    send_payload: "Payload 送信",
+    settings: "設定",
+    about: "情報",
+
+    settings_description: "アプリ設定 — 言語、スリープ防止、アップロードのデフォルト、設定の保存場所。",
+    always_overwrite: "常に確認なしで上書き",
+    always_overwrite_hint: "宛先にすでにファイルがある場合に確認ダイアログをスキップします。オフにすると上書き / 再開 / キャンセルプロンプトが表示されます。",
+    show_file_list: "転送中にファイル一覧を表示",
+    show_file_list_hint: "進捗バーの下に転送中のファイルのスクロール可能なリストを表示します。フォルダに何千ものファイルがあってリストがうるさく感じる場合はオフにしてください — 全体の進捗、速度、ETA は引き続き表示されます。",
+    settings_file: "設定ファイル",
+    settings_file_hint: "設定はこの JSON ファイルに保存されます — バックアップ、他のマシンへのコピー、手動編集が安全に可能(編集は次回アプリ起動時に反映)。",
+    resolving: "解決中…",
   },
 
   "tr": {
@@ -4348,6 +4396,20 @@ const translations = {
     status_payload_tooltip: ":9113의 PS5 payload",
     status_kernel_ok: "kernel OK",
     status_no_active_transfers: "활성 전송 없음",
+
+    hardware: "하드웨어",
+    send_payload: "Payload 전송",
+    settings: "설정",
+    about: "정보",
+
+    settings_description: "앱 환경설정 — 언어, 화면 유지, 업로드 기본값, 설정 저장 위치.",
+    always_overwrite: "항상 묻지 않고 덮어쓰기",
+    always_overwrite_hint: "대상에 이미 파일이 있을 때 확인 대화 상자를 건너뜁니다. 끄면 덮어쓰기 / 재개 / 취소 프롬프트가 표시됩니다.",
+    show_file_list: "전송 중 파일 목록 표시",
+    show_file_list_hint: "진행 표시줄 아래에 전송 중인 파일의 스크롤 가능한 목록을 표시합니다. 수천 개의 파일이 있는 폴더에서 목록이 시끄럽게 느껴지면 끄세요 — 전체 진행률, 속도, ETA는 계속 표시됩니다.",
+    settings_file: "설정 파일",
+    settings_file_hint: "설정은 이 JSON 파일에 저장됩니다 — 백업, 다른 시스템으로 복사 또는 수동 편집이 안전합니다 (편집은 다음 앱 시작 시 적용됩니다).",
+    resolving: "확인 중…",
   },
 
   "de": {
@@ -4795,6 +4857,20 @@ const translations = {
     status_payload_tooltip: "PS5-Payload auf :9113",
     status_kernel_ok: "Kernel OK",
     status_no_active_transfers: "keine aktiven Übertragungen",
+
+    hardware: "Hardware",
+    send_payload: "Payload senden",
+    settings: "Einstellungen",
+    about: "Über",
+
+    settings_description: "App-Einstellungen — Sprache, Wachhalten, Upload-Standards, Speicherort.",
+    always_overwrite: "Immer ohne Nachfrage überschreiben",
+    always_overwrite_hint: "Bestätigungsdialog überspringen, wenn ein Ziel bereits Dateien enthält. Aus für die Aufforderung Überschreiben / Fortsetzen / Abbrechen.",
+    show_file_list: "Dateiliste während der Übertragung anzeigen",
+    show_file_list_hint: "Zeigt unter dem Fortschrittsbalken die scrollbare Liste der übertragenen Dateien. Aus, wenn die Liste bei Ordnern mit tausenden Dateien zu unruhig wirkt — Gesamtfortschritt, Geschwindigkeit und ETA bleiben sichtbar.",
+    settings_file: "Einstellungsdatei",
+    settings_file_hint: "Ihre Einstellungen liegen in dieser JSON-Datei — sicher zum Sichern, auf einen anderen Rechner kopieren oder von Hand bearbeiten (Änderungen wirken beim nächsten App-Start).",
+    resolving: "wird aufgelöst…",
   },
 
   "it": {
@@ -5578,6 +5654,20 @@ const translations = {
     status_payload_tooltip: ":9113 上的 PS5 payload",
     status_kernel_ok: "内核正常",
     status_no_active_transfers: "无活动传输",
+
+    hardware: "硬件",
+    send_payload: "发送 payload",
+    settings: "设置",
+    about: "关于",
+
+    settings_description: "应用偏好 — 语言、保持唤醒、上传默认值,以及设置存储位置。",
+    always_overwrite: "始终覆盖,不询问",
+    always_overwrite_hint: "当目标已有文件时跳过确认对话框。关闭以查看覆盖 / 续传 / 取消提示。",
+    show_file_list: "传输时显示文件列表",
+    show_file_list_hint: "在进度条下方显示正在传输的文件滚动列表。如果文件夹包含数千个文件时列表显得嘈杂,可关闭 — 您仍能看到总体进度、速度和 ETA。",
+    settings_file: "设置文件",
+    settings_file_hint: "您的偏好保存在此 JSON 文件中 — 可以安全地备份、复制到其他机器或手动编辑(编辑将在下次启动应用时生效)。",
+    resolving: "解析中…",
   },
 
   "zh-TW": {
@@ -6005,6 +6095,20 @@ const translations = {
     status_payload_tooltip: ":9113 上的 PS5 payload",
     status_kernel_ok: "核心正常",
     status_no_active_transfers: "無活動傳輸",
+
+    hardware: "硬體",
+    send_payload: "傳送 payload",
+    settings: "設定",
+    about: "關於",
+
+    settings_description: "應用程式偏好 — 語言、保持喚醒、上傳預設值,以及設定儲存位置。",
+    always_overwrite: "永遠覆蓋,不詢問",
+    always_overwrite_hint: "當目標已有檔案時跳過確認對話方塊。關閉以查看覆蓋 / 續傳 / 取消提示。",
+    show_file_list: "傳輸時顯示檔案清單",
+    show_file_list_hint: "在進度條下方顯示正在傳輸的檔案捲動清單。如果資料夾包含數千個檔案時清單顯得嘈雜,可關閉 — 您仍能看到整體進度、速度和 ETA。",
+    settings_file: "設定檔",
+    settings_file_hint: "您的偏好儲存在此 JSON 檔案中 — 可以安全地備份、複製到其他電腦或手動編輯(編輯將在下次啟動應用程式時生效)。",
+    resolving: "解析中…",
   },
 
   fr: {

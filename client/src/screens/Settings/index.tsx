@@ -76,7 +76,11 @@ export default function SettingsScreen() {
       <PageHeader
         icon={SettingsIcon}
         title={tr("settings", undefined, "Settings")}
-        description="App preferences — language, keep-awake, upload defaults, and where your settings are stored."
+        description={tr(
+          "settings_description",
+          undefined,
+          "App preferences — language, keep-awake, upload defaults, and where your settings are stored.",
+        )}
       />
 
       {/* Responsive grid — 2 columns at md, 3 at xl. Short/simple
@@ -151,12 +155,14 @@ export default function SettingsScreen() {
               <div>
                 <div className="flex items-center gap-2 font-medium">
                   <UploadIcon size={14} />
-                  Always overwrite without asking
+                  {tr("always_overwrite", undefined, "Always overwrite without asking")}
                 </div>
                 <div className="mt-0.5 text-xs text-[var(--color-muted)]">
-                  Skip the confirmation dialog when a destination
-                  already has files. Leave off to see the Override /
-                  Resume / Cancel prompt.
+                  {tr(
+                    "always_overwrite_hint",
+                    undefined,
+                    "Skip the confirmation dialog when a destination already has files. Leave off to see the Override / Resume / Cancel prompt.",
+                  )}
                 </div>
               </div>
             </label>
@@ -170,13 +176,14 @@ export default function SettingsScreen() {
               />
               <div>
                 <div className="font-medium">
-                  Show file list during transfer
+                  {tr("show_file_list", undefined, "Show file list during transfer")}
                 </div>
                 <div className="mt-0.5 text-xs text-[var(--color-muted)]">
-                  Display the scrollable list of files being
-                  transferred beneath the progress bar. Turn off if the
-                  list feels noisy on folders with thousands of files —
-                  you'll still see overall progress, speed, and ETA.
+                  {tr(
+                    "show_file_list_hint",
+                    undefined,
+                    "Display the scrollable list of files being transferred beneath the progress bar. Turn off if the list feels noisy on folders with thousands of files — you'll still see overall progress, speed, and ETA.",
+                  )}
                 </div>
               </div>
             </label>
@@ -202,14 +209,16 @@ export default function SettingsScreen() {
               className="mt-0.5 shrink-0 text-[var(--color-muted)]"
             />
             <div className="min-w-0 flex-1">
-              <div className="font-medium">Settings file</div>
+              <div className="font-medium">{tr("settings_file", undefined, "Settings file")}</div>
               <div className="mt-0.5 text-xs text-[var(--color-muted)]">
-                Your preferences live in this JSON file — safe to back
-                up, copy to another machine, or edit by hand (edits
-                take effect next time you launch the app).
+                {tr(
+                  "settings_file_hint",
+                  undefined,
+                  "Your preferences live in this JSON file — safe to back up, copy to another machine, or edit by hand (edits take effect next time you launch the app).",
+                )}
               </div>
               <div className="mt-2 truncate rounded-md bg-[var(--color-surface)] px-2 py-1 font-mono text-xs">
-                {cfgPath ?? "resolving…"}
+                {cfgPath ?? tr("resolving", undefined, "resolving…")}
               </div>
             </div>
           </div>
