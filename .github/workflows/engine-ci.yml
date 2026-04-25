@@ -102,7 +102,12 @@ jobs:
         include:
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
-          - os: ubuntu-24.04
+          # Native arm64 runner — cross-compiling to aarch64 from x86_64
+          # ubuntu-24.04 fails because blake3's NEON SIMD path needs
+          # aarch64-linux-gnu-gcc (not preinstalled, and bringing it in
+          # would mean threading TARGET_CC env vars through every step).
+          # Matches release.yml's arm64 build leg.
+          - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
           - os: macos-14
             target: aarch64-apple-darwin
