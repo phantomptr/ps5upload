@@ -12,6 +12,13 @@ path = "src/main.rs"
 anyhow.workspace = true
 axum.workspace = true
 ftx2-proto = { path = "../ftx2-proto" }
+# Memory-mapped reads for the single-file transfer path. Without this
+# the engine `std::fs::read`-loaded whole game images into RAM (we saw
+# an 18 GB exfat consume 18 GB on Windows before the first shard left
+# the disk). mmap lets the OS page the file in/out as the transfer
+# walks shards, so memory stays bounded by the page-cache budget no
+# matter the file size.
+memmap2 = "0.9"
 ps5upload-core = { path = "../ps5upload-core" }
 serde.workspace = true
 serde_json.workspace = true

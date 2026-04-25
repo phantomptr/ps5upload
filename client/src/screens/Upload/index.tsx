@@ -24,9 +24,11 @@ import {
   type SourceKind,
 } from "../../state/upload";
 import {
+  fetchVolumes,
   pathKind,
   probeDestination,
   type PlannedFile,
+  type Volume,
 } from "../../api/ps5";
 import {
   useTransferStore,
@@ -171,6 +173,37 @@ export default function UploadScreen() {
   // the button shouldn't accept a second click.
   const [preflightBusy, setPreflightBusy] = useState(false);
 
+  // Live list of writable PS5 volumes for the destination dropdown.
+  // Refreshed when the host changes; previously the dropdown was a
+  // hardcoded `/data /mnt/ext0 /mnt/usb0` list which hid every other
+  // mount point (e.g. `/mnt/ext1`, `/mnt/usbN` for N>0, and any
+  // ps5upload-mounted images).
+  const [availableVolumes, setAvailableVolumes] = useState<Volume[]>([]);
+  useEffect(() => {
+    if (!host?.trim()) {
+      setAvailableVolumes([]);
+      return;
+    }
+    let cancelled = false;
+    const addr = `${host}:${PS5_PAYLOAD_PORT}`;
+    fetchVolumes(addr)
+      .then((vols) => {
+        if (cancelled) return;
+        // Only writable, non-placeholder volumes are valid upload
+        // targets. Placeholders are mount-points the payload reports
+        // even when nothing is mounted there.
+        setAvailableVolumes(
+          vols.filter((v) => v.writable && !v.is_placeholder),
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setAvailableVolumes([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [host]);
+
   const beginUpload = async (strategy: UploadStrategy) => {
     if (!source) return;
     if (!pending) return;
@@ -278,6 +311,7 @@ export default function UploadScreen() {
           mountAfterUpload={mountAfterUpload}
           destinationVolume={destinationVolume}
           destinationSubpath={destinationSubpath}
+          availableVolumes={availableVolumes}
           excludeMode={excludeMode}
           excludes={excludes}
           transferPhase={transferPhase}
@@ -370,6 +404,7 @@ function Step2Options(props: {
   mountAfterUpload: boolean;
   destinationVolume: string | null;
   destinationSubpath: string;
+  availableVolumes: Volume[];
   excludeMode: ExcludeMode;
   excludes: { pattern: string; enabled: boolean }[];
   transferPhase: TransferPhase;
@@ -391,6 +426,7 @@ function Step2Options(props: {
     mountAfterUpload,
     destinationVolume,
     destinationSubpath,
+    availableVolumes,
     excludeMode,
     excludes,
     transferPhase,
@@ -481,6 +517,7 @@ function Step2Options(props: {
         volume={destinationVolume}
         subpath={destinationSubpath}
         onChange={onSetDestination}
+        availableVolumes={availableVolumes}
         resolvedDest={
           resolveUploadDest(
             destinationVolume,
@@ -1062,6 +1099,7 @@ function DestinationCard({
   subpath,
   onChange,
   resolvedDest,
+  availableVolumes,
 }: {
   volume: string | null;
   subpath: string;
@@ -1070,7 +1108,38 @@ function DestinationCard({
    *  as surfaced to the user so they see exactly where the source will
    *  land — catches preset + typo mistakes before the upload starts. */
   resolvedDest: string;
+  /** Live list of writable volumes from FS_LIST_VOLUMES. Drives the
+   *  dropdown so users see every mount point the PS5 actually exposes
+   *  (e.g. `/mnt/ext1`, multiple USB drives, ps5upload-mounted images)
+   *  rather than a hardcoded short list. Empty when host isn't set or
+   *  the payload isn't reachable yet. */
+  availableVolumes: Volume[];
 }) {
+  // Always include the canonical roots (/data, /mnt/ext0, /mnt/usb0)
+  // so the dropdown still works before the volume probe completes;
+  // the live list adds anything else the PS5 is exposing. De-dup by
+  // path so a probed volume that matches a fallback root only shows
+  // once.
+  const FALLBACK_VOLUMES = ["/data", "/mnt/ext0", "/mnt/usb0"];
+  const dropdownPaths = Array.from(
+    new Set([
+      ...FALLBACK_VOLUMES,
+      ...availableVolumes.map((v) => v.path),
+    ]),
+  ).sort();
+  // Build a {path → free-bytes} map so we can show "/mnt/ext1 (450 GB
+  // free)" inline. Only when we actually got the live list back.
+  const freeBytesByPath = new Map<string, number>();
+  for (const v of availableVolumes) {
+    freeBytesByPath.set(v.path, v.free_bytes);
+  }
+  const formatFree = (bytes: number) => {
+    const gib = bytes / (1024 ** 3);
+    if (gib >= 1024) return `${(gib / 1024).toFixed(1)} TB free`;
+    if (gib >= 10) return `${gib.toFixed(0)} GB free`;
+    return `${gib.toFixed(1)} GB free`;
+  };
+
   return (
     <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5">
       <div className="mb-3 flex items-center gap-2 text-sm font-semibold">
@@ -1085,9 +1154,14 @@ function DestinationCard({
           className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-sm"
         >
           <option value="">(auto — largest free)</option>
-          <option value="/data">/data</option>
-          <option value="/mnt/ext0">/mnt/ext0</option>
-          <option value="/mnt/usb0">/mnt/usb0</option>
+          {dropdownPaths.map((p) => {
+            const free = freeBytesByPath.get(p);
+            return (
+              <option key={p} value={p}>
+                {free !== undefined ? `${p} (${formatFree(free)})` : p}
+              </option>
+            );
+          })}
         </select>
         <span className="text-[var(--color-muted)]">/</span>
         <input

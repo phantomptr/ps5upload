@@ -1082,8 +1082,29 @@ async fn transfer_file_handler(
     tokio::task::spawn_blocking(move || {
         let mut cfg = make_transfer_config(&addr);
         cfg.progress_bytes = Some(Arc::clone(&progress));
-        let data = match std::fs::read(&req.src) {
-            Ok(d) => d,
+        // Memory-map the source file instead of `std::fs::read`-ing it
+        // into a Vec<u8>. The previous code allocated total_size bytes
+        // up front before any shard could leave — an 18 GB .exfat
+        // pulled 18 GB of RAM and either OOM'd the engine on Windows
+        // or kept the UI stuck at 0 B/total for minutes while the load
+        // completed. mmap returns immediately and the OS pages the
+        // file in lazily as transfer_file walks shards. RAM stays
+        // bounded by the page-cache budget regardless of file size.
+        //
+        // SAFETY: mmap requires the file not to be mutated while the
+        // mapping is live. The transfer is read-only and ps5upload
+        // doesn't touch the source mid-transfer; if a user externally
+        // modifies/deletes the source file mid-upload, behaviour is
+        // platform-dependent (typically either stale data is sent or
+        // SIGBUS on Unix). That's an existing risk the load-into-RAM
+        // path also had once the bytes were copied — making it explicit
+        // here is acceptable.
+        let mmap = match (|| -> std::io::Result<memmap2::Mmap> {
+            let f = std::fs::File::open(&req.src)?;
+            // SAFETY: see comment above.
+            unsafe { memmap2::Mmap::map(&f) }
+        })() {
+            Ok(m) => m,
             Err(e) => {
                 stop_ticker.store(true, Ordering::Release);
                 let completed_at_ms = now_ms();
@@ -1095,7 +1116,7 @@ async fn transfer_file_handler(
                         started_at_ms,
                         completed_at_ms,
                         elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
-                        error: e.to_string(),
+                        error: format!("open {}: {e}", req.src),
                     },
                 );
                 return;
@@ -1105,7 +1126,7 @@ async fn transfer_file_handler(
         // retries. Without this wrapper a connection hiccup on a multi-
         // GiB single-file upload (e.g. a .pkg / .ffpkg image) would be
         // unrecoverable without a full re-transfer.
-        let result = transfer_file_resumable(&cfg, tx_id, &req.dest, &data, 2);
+        let result = transfer_file_resumable(&cfg, tx_id, &req.dest, &mmap[..], 2);
         stop_ticker.store(true, Ordering::Release);
         let files_sent_count: u64 = 1;
         let skipped_files_count: u64 = 0;
