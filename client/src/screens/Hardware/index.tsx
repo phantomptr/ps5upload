@@ -193,12 +193,12 @@ export default function HardwareScreen() {
             <StatRow
               label="CPU"
               value={formatTemp(temps?.cpu_temp ?? 0)}
-              hint={temps && temps.cpu_temp === 0 ? "Sensor API disabled on this firmware" : undefined}
+              hint={temps && temps.cpu_temp === 0 ? tr("hw_sensor_disabled", undefined, "Sensor API disabled on this firmware") : undefined}
             />
             <StatRow
               label="SoC"
               value={formatTemp(temps?.soc_temp ?? 0)}
-              hint={temps && temps.soc_temp === 0 ? "Sensor API disabled on this firmware" : undefined}
+              hint={temps && temps.soc_temp === 0 ? tr("hw_sensor_disabled", undefined, "Sensor API disabled on this firmware") : undefined}
             />
           </SensorCard>
 
@@ -207,14 +207,14 @@ export default function HardwareScreen() {
             title={tr("hardware_performance", undefined, "Performance")}
           >
             <StatRow
-              label="CPU frequency"
+              label={tr("hw_cpu_freq", undefined, "CPU frequency")}
               value={formatFreq(temps?.cpu_freq_mhz ?? 0)}
-              hint={temps && temps.cpu_freq_mhz > 0 ? "From kernel TSC" : undefined}
+              hint={temps && temps.cpu_freq_mhz > 0 ? tr("hw_from_kernel_tsc", undefined, "From kernel TSC") : undefined}
             />
             <StatRow
-              label="SoC power draw"
+              label={tr("hw_soc_power", undefined, "SoC power draw")}
               value={formatPower(temps?.soc_power_mw ?? 0)}
-              hint={temps && temps.soc_power_mw === 0 ? "Sensor API disabled on this firmware" : "Sampled at most every 5s"}
+              hint={temps && temps.soc_power_mw === 0 ? tr("hw_sensor_disabled", undefined, "Sensor API disabled on this firmware") : tr("hw_sampled_5s", undefined, "Sampled at most every 5s")}
             />
           </SensorCard>
 
@@ -223,7 +223,7 @@ export default function HardwareScreen() {
             title={tr("hardware_uptime", undefined, "Uptime")}
           >
             <StatRow
-              label="Running since boot"
+              label={tr("hw_running_since_boot", undefined, "Running since boot")}
               value={formatUptime(power?.operating_time_sec ?? 0)}
             />
           </SensorCard>
@@ -232,15 +232,15 @@ export default function HardwareScreen() {
             icon={<Cpu size={14} />}
             title={tr("hardware_system", undefined, "System")}
           >
-            <StatRow label="Model" value={info?.model ?? "—"} />
-            <StatRow label="Serial" value={info?.serial ?? "—"} />
-            <StatRow label="OS" value={info?.os ?? "—"} />
+            <StatRow label={tr("hw_model", undefined, "Model")} value={info?.model ?? "—"} />
+            <StatRow label={tr("hw_serial", undefined, "Serial")} value={info?.serial ?? "—"} />
+            <StatRow label={tr("hw_os", undefined, "OS")} value={info?.os ?? "—"} />
             <StatRow
-              label="RAM"
+              label={tr("hw_ram", undefined, "RAM")}
               value={info ? formatBytes(info.physmem) : "—"}
             />
             <StatRow
-              label="CPU cores"
+              label={tr("hw_cpu_cores", undefined, "CPU cores")}
               value={info?.ncpu ? String(info.ncpu) : "—"}
             />
           </SensorCard>

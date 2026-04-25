@@ -326,7 +326,7 @@ export default function ConnectionScreen() {
           stateText={step1Msg}
         >
           <label className="block text-xs font-medium uppercase tracking-wide text-[var(--color-muted)]">
-            PS5 IP address
+            {tr("ps5_address", undefined, "PS5 IP address")}
           </label>
           <div className="mt-2 flex items-center gap-2">
             <input
@@ -349,15 +349,21 @@ export default function ConnectionScreen() {
               onClick={handleCheck}
               disabled={!host.trim() || step1 === "busy" || step2 === "busy"}
               loading={step1 === "busy"}
-              title={`Probe ${host || "the PS5"}:${PS5_LOADER_PORT} to confirm it's reachable`}
+              title={tr(
+                "connection_check_tooltip",
+                { host: host || "the PS5", port: PS5_LOADER_PORT },
+                `Probe ${host || "the PS5"}:${PS5_LOADER_PORT} to confirm it's reachable`,
+              )}
             >
-              Check
+              {tr("connection_check", undefined, "Check")}
             </Button>
           </div>
           <p className="mt-3 text-xs text-[var(--color-muted)]">
-            Find this in the PS5's network settings, or on your router's
-            device list. A wired Ethernet connection is strongly
-            recommended over Wi-Fi.
+            {tr(
+              "connection_step1_hint",
+              undefined,
+              "Find this in the PS5's network settings, or on your router's device list. A wired Ethernet connection is strongly recommended over Wi-Fi.",
+            )}
           </p>
         </StepCard>
 
@@ -369,9 +375,11 @@ export default function ConnectionScreen() {
             stateText={step2Msg}
           >
             <p className="mb-4 text-sm text-[var(--color-muted)]">
-              The payload is a small program your PS5 runs in memory to
-              accept uploads. Sent over port {PS5_LOADER_PORT}; it takes
-              a few seconds for the PS5 to respond once the bytes arrive.
+              {tr(
+                "connection_step2_hint",
+                { port: PS5_LOADER_PORT },
+                `The payload is a small program your PS5 runs in memory to accept uploads. Sent over port ${PS5_LOADER_PORT}; it takes a few seconds for the PS5 to respond once the bytes arrive.`,
+              )}
             </p>
             <BundledPayloadBanner />
             <Button
@@ -386,9 +394,11 @@ export default function ConnectionScreen() {
             </Button>
             {step2 === "busy" && (
               <p className="mt-3 text-xs text-[var(--color-muted)]">
-                The PS5 typically boots the payload within 3-5 seconds.
-                We keep polling for up to 20 seconds before giving up —
-                if it times out, send it again.
+                {tr(
+                  "connection_step2_busy_hint",
+                  undefined,
+                  "The PS5 typically boots the payload within 3-5 seconds. We keep polling for up to 20 seconds before giving up — if it times out, send it again.",
+                )}
               </p>
             )}
           </StepCard>
@@ -399,21 +409,15 @@ export default function ConnectionScreen() {
             index={3}
             title={tr("connection_step3_title", undefined, "You're ready to upload")}
             state={step3}
-            stateText="PS5 is ready"
+            stateText={tr("connection_step3_ready", undefined, "PS5 is ready")}
           >
             <VersionBlock />
             <p className="mb-4 text-sm leading-relaxed text-[var(--color-muted)]">
-              Go to the Upload tab and drop in a game folder, a{" "}
-              <code className="rounded bg-[var(--color-surface-3)] px-1">
-                .exfat
-              </code>{" "}
-              image, or a{" "}
-              <code className="rounded bg-[var(--color-surface-3)] px-1">
-                .ffpkg
-              </code>{" "}
-              image. For disk images, hit Mount in the Library tab.
-              To register installed apps on your PS5 home screen, use
-              a PS5-side installer (send it via the Send payload tab).
+              {tr(
+                "connection_step3_hint",
+                undefined,
+                "Go to the Upload tab and drop in a game folder, a .exfat image, or a .ffpkg image. For disk images, hit Mount in the Library tab. To register installed apps on your PS5 home screen, use a PS5-side installer (send it via the Send payload tab).",
+              )}
             </p>
             <Button
               variant="primary"
@@ -421,7 +425,7 @@ export default function ConnectionScreen() {
               rightIcon={<ArrowRight size={14} />}
               onClick={() => navigate("/upload")}
             >
-              Go to Upload
+              {tr("connection_go_upload", undefined, "Go to Upload")}
             </Button>
           </StepCard>
         )}

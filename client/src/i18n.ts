@@ -517,6 +517,46 @@ const translations = {
     volumes_read_error: "Couldn't read volumes",
     volumes_empty_title: "No volumes visible",
     volumes_empty_message: "The payload didn't return any writable drives. Make sure it's loaded and your PS5 has storage attached.",
+
+    // Connection screen — body copy
+    connection_check: "Check",
+    connection_check_tooltip: "Probe {host}:{port} to confirm it's reachable",
+    connection_step1_hint: "Find this in the PS5's network settings, or on your router's device list. A wired Ethernet connection is strongly recommended over Wi-Fi.",
+    connection_step2_hint: "The payload is a small program your PS5 runs in memory to accept uploads. Sent over port {port}; it takes a few seconds for the PS5 to respond once the bytes arrive.",
+    connection_step2_busy_hint: "The PS5 typically boots the payload within 3-5 seconds. We keep polling for up to 20 seconds before giving up — if it times out, send it again.",
+    connection_step3_ready: "PS5 is ready",
+    connection_step3_hint: "Go to the Upload tab and drop in a game folder, a .exfat image, or a .ffpkg image. For disk images, hit Mount in the Library tab. To register installed apps on your PS5 home screen, use a PS5-side installer (send it via the Send payload tab).",
+    connection_go_upload: "Go to Upload",
+
+    // Hardware screen — sensor row labels and hints
+    hw_sensor_disabled: "Sensor API disabled on this firmware",
+    hw_cpu_freq: "CPU frequency",
+    hw_from_kernel_tsc: "From kernel TSC",
+    hw_soc_power: "SoC power draw",
+    hw_sampled_5s: "Sampled at most every 5s",
+    hw_running_since_boot: "Running since boot",
+    hw_model: "Model",
+    hw_serial: "Serial",
+    hw_os: "OS",
+    hw_ram: "RAM",
+    hw_cpu_cores: "CPU cores",
+
+    // Search screen — size filter labels
+    search_size_any: "any size",
+    search_size_100mb: "> 100 MB",
+    search_size_1gb: "> 1 GB",
+    search_size_10gb: "> 10 GB",
+
+    // Logs filter pills (the 4 level keys log_level_* already exist)
+    logs_filter_all: "All",
+
+    // Status bar
+    status_engine: "engine",
+    status_engine_tooltip: "ps5upload-engine sidecar on localhost:19113",
+    status_payload: "payload",
+    status_payload_tooltip: "PS5 payload on :9113",
+    status_kernel_ok: "kernel OK",
+    status_no_active_transfers: "no active transfers",
   },
 
   "vi": {

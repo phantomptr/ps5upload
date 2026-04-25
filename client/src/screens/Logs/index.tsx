@@ -154,21 +154,24 @@ export default function LogsScreen() {
           count so you don't need to mentally tally. */}
       <div className="mb-4 flex flex-wrap items-center gap-1.5 text-xs">
         <FilterPill
-          label="All"
+          label={tr("logs_filter_all", undefined, "All")}
           count={entries.length}
           active={filter === "all"}
           onClick={() => setFilter("all")}
         />
-        {LEVEL_ORDER.map((l) => (
-          <FilterPill
-            key={l}
-            label={l[0].toUpperCase() + l.slice(1)}
-            count={counts[l]}
-            active={filter === l}
-            tone={LEVEL_META[l].tone}
-            onClick={() => setFilter(l)}
-          />
-        ))}
+        {LEVEL_ORDER.map((l) => {
+          const fallback = l[0].toUpperCase() + l.slice(1);
+          return (
+            <FilterPill
+              key={l}
+              label={tr(`log_level_${l}`, undefined, fallback)}
+              count={counts[l]}
+              active={filter === l}
+              tone={LEVEL_META[l].tone}
+              onClick={() => setFilter(l)}
+            />
+          );
+        })}
       </div>
 
       {visible.length === 0 ? (

@@ -1,5 +1,6 @@
 import { useConnectionStore } from "../state/connection";
 import { parsePS5Firmware } from "../lib/ps5Firmware";
+import { useTr } from "../state/lang";
 
 /**
  * App-footer status strip: engine + payload liveness, plus the versions
@@ -13,6 +14,7 @@ import { parsePS5Firmware } from "../lib/ps5Firmware";
  * want to see.
  */
 export default function StatusBar() {
+  const tr = useTr();
   const engineStatus = useConnectionStore((s) => s.engineStatus);
   const payloadStatus = useConnectionStore((s) => s.payloadStatus);
   const payloadVersion = useConnectionStore((s) => s.payloadVersion);
@@ -31,11 +33,11 @@ export default function StatusBar() {
 
   return (
     <div className="flex items-center gap-5 border-t border-[var(--color-border)] bg-[var(--color-surface-2)] px-4 py-1.5 text-xs text-[var(--color-muted)]">
-      <div className="flex items-center gap-2" title="ps5upload-engine sidecar on localhost:19113">
-        {dot(engineStatus)} engine
+      <div className="flex items-center gap-2" title={tr("status_engine_tooltip", undefined, "ps5upload-engine sidecar on localhost:19113")}>
+        {dot(engineStatus)} {tr("status_engine", undefined, "engine")}
       </div>
-      <div className="flex items-center gap-2" title="PS5 payload on :9113">
-        {dot(payloadStatus)} payload
+      <div className="flex items-center gap-2" title={tr("status_payload_tooltip", undefined, "PS5 payload on :9113")}>
+        {dot(payloadStatus)} {tr("status_payload", undefined, "payload")}
         {payloadVersion && (
           <span className="rounded bg-[var(--color-surface-3)] px-1 font-mono text-[10px]">
             v{payloadVersion}
@@ -49,11 +51,11 @@ export default function StatusBar() {
         >
           <span>PS5</span>
           <span className="rounded bg-[var(--color-surface-3)] px-1 font-mono text-[10px]">
-            {ps5Firmware ? `FW ${ps5Firmware}` : "kernel OK"}
+            {ps5Firmware ? `FW ${ps5Firmware}` : tr("status_kernel_ok", undefined, "kernel OK")}
           </span>
         </div>
       )}
-      <div className="ml-auto">no active transfers</div>
+      <div className="ml-auto">{tr("status_no_active_transfers", undefined, "no active transfers")}</div>
     </div>
   );
 }

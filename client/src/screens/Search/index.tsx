@@ -12,11 +12,17 @@ import { searchPS5, type SearchHit, type SearchProgress } from "../../api/ps5";
 import { PageHeader, ErrorCard, Button } from "../../components";
 import { useTr } from "../../state/lang";
 
-const SIZE_OPTIONS: { label: string; bytes: number }[] = [
-  { label: "any size", bytes: 0 },
-  { label: "> 100 MB", bytes: 100 * 1024 * 1024 },
-  { label: "> 1 GB", bytes: 1024 * 1024 * 1024 },
-  { label: "> 10 GB", bytes: 10 * 1024 * 1024 * 1024 },
+/** Size filter options. `labelKey` resolves through `tr()` at render
+ *  time; `labelFallback` is the English text used when the lang file
+ *  doesn't have the key yet. Keeping a separate label-and-key form
+ *  here (rather than wrapping in tr at module load) is necessary
+ *  because tr requires React context and module-level constants are
+ *  evaluated outside any component. */
+const SIZE_OPTIONS: { labelKey: string; labelFallback: string; bytes: number }[] = [
+  { labelKey: "search_size_any", labelFallback: "any size", bytes: 0 },
+  { labelKey: "search_size_100mb", labelFallback: "> 100 MB", bytes: 100 * 1024 * 1024 },
+  { labelKey: "search_size_1gb", labelFallback: "> 1 GB", bytes: 1024 * 1024 * 1024 },
+  { labelKey: "search_size_10gb", labelFallback: "> 10 GB", bytes: 10 * 1024 * 1024 * 1024 },
 ];
 
 function formatBytes(n: number): string {
@@ -126,7 +132,7 @@ export default function SearchScreen() {
           >
             {SIZE_OPTIONS.map((o) => (
               <option key={o.bytes} value={o.bytes}>
-                {o.label}
+                {tr(o.labelKey, undefined, o.labelFallback)}
               </option>
             ))}
           </select>
