@@ -287,24 +287,24 @@ function UpdatesPanel() {
       {phase.kind === "downloaded" && (
         <div className="rounded-md border border-[var(--color-good)] bg-[var(--color-surface)] p-3 text-xs">
           <div className="mb-1 font-medium text-[var(--color-good)]">
-            Downloaded. Finish installing:
+            {tr("update_downloaded_title", undefined, "Downloaded. Finish installing:")}
           </div>
           <div className="mb-2 font-mono text-[var(--color-text)]">
             {phase.download.path}
           </div>
           <ol className="list-inside list-decimal space-y-0.5 text-[var(--color-muted)]">
-            <li>Quit PS5Upload.</li>
+            <li>{tr("update_step_quit", undefined, "Quit PS5Upload.")}</li>
             <li>
-              {pickInstallHint(phase.download.path)}
+              {pickInstallHint(phase.download.path, tr)}
             </li>
-            <li>Launch the new version.</li>
+            <li>{tr("update_step_launch", undefined, "Launch the new version.")}</li>
           </ol>
           <button
             type="button"
             onClick={dismissDownload}
             className="mt-2 text-[10px] underline-offset-2 hover:underline"
           >
-            Dismiss
+            {tr("update_dismiss", undefined, "Dismiss")}
           </button>
         </div>
       )}
@@ -349,26 +349,47 @@ function UpdatesPanel() {
 
 /** Per-platform hint about how to install the downloaded file.
  *  Branch on the filename extension — more reliable than reading
- *  `navigator.userAgent` at runtime. */
-function pickInstallHint(downloadPath: string): string {
+ *  `navigator.userAgent` at runtime. Takes a `tr` so it can pull the
+ *  current-language string at call time (the function isn't a React
+ *  component and can't use the hook directly). */
+function pickInstallHint(
+  downloadPath: string,
+  tr: (key: string, vars?: Record<string, string | number>, fallback?: string) => string,
+): string {
   const lower = downloadPath.toLowerCase();
   if (lower.endsWith(".dmg")) {
-    return "Double-click the .dmg, drag PS5Upload into Applications, replace when asked.";
+    return tr(
+      "install_hint_dmg",
+      undefined,
+      "Double-click the .dmg, drag PS5Upload into Applications, replace when asked.",
+    );
   }
   if (lower.endsWith(".zip")) {
-    return "Extract the zip and replace the existing PS5Upload with the new one.";
+    return tr(
+      "install_hint_zip",
+      undefined,
+      "Extract the zip and replace the existing PS5Upload with the new one.",
+    );
   }
-  return "Replace the existing PS5Upload with the newly downloaded file.";
+  return tr(
+    "install_hint_generic",
+    undefined,
+    "Replace the existing PS5Upload with the newly downloaded file.",
+  );
 }
 
 /** One-line summary of the current phase — the line the sidebar badge
  *  corresponds to. Kept minimal so the eye lands on the CTA below it. */
 function StatusRow({ phase }: { phase: UpdatePhase }) {
+  const tr = useTr();
   if (phase.kind === "idle") {
     return (
       <div className="text-xs text-[var(--color-muted)]">
-        Haven't checked yet — the app checks once per launch in the
-        background.
+        {tr(
+          "update_idle",
+          undefined,
+          "Haven't checked yet — the app checks once per launch in the background.",
+        )}
       </div>
     );
   }
@@ -376,7 +397,7 @@ function StatusRow({ phase }: { phase: UpdatePhase }) {
     return (
       <div className="inline-flex items-center gap-2 text-xs text-[var(--color-muted)]">
         <Loader2 size={12} className="animate-spin" />
-        Checking GitHub releases…
+        {tr("update_checking", undefined, "Checking GitHub releases…")}
       </div>
     );
   }
@@ -384,7 +405,7 @@ function StatusRow({ phase }: { phase: UpdatePhase }) {
     return (
       <div className="inline-flex items-start gap-2 text-xs text-[var(--color-bad)]">
         <AlertTriangle size={12} className="mt-0.5 shrink-0" />
-        <span>Couldn't check for updates: {phase.message}</span>
+        <span>{tr("update_check_error", { message: phase.message }, `Couldn't check for updates: ${phase.message}`)}</span>
       </div>
     );
   }
@@ -392,7 +413,11 @@ function StatusRow({ phase }: { phase: UpdatePhase }) {
     return (
       <div className="inline-flex items-center gap-2 text-xs text-[var(--color-good)]">
         <CheckCircle2 size={12} />
-        You're on the latest (v{phase.result.current_version}).
+        {tr(
+          "update_up_to_date",
+          { version: phase.result.current_version },
+          `You're on the latest (v${phase.result.current_version}).`,
+        )}
       </div>
     );
   }
@@ -400,8 +425,11 @@ function StatusRow({ phase }: { phase: UpdatePhase }) {
     return (
       <div className="inline-flex items-center gap-2 text-xs text-[var(--color-accent)]">
         <Download size={12} />
-        v{phase.result.latest_version} is available — you're on v
-        {phase.result.current_version}.
+        {tr(
+          "update_available_msg",
+          { latest: phase.result.latest_version, current: phase.result.current_version },
+          `v${phase.result.latest_version} is available — you're on v${phase.result.current_version}.`,
+        )}
       </div>
     );
   }
@@ -409,7 +437,11 @@ function StatusRow({ phase }: { phase: UpdatePhase }) {
     return (
       <div className="inline-flex items-center gap-2 text-xs text-[var(--color-accent)]">
         <Loader2 size={12} className="animate-spin" />
-        Downloading v{phase.result.latest_version}…
+        {tr(
+          "update_downloading",
+          { version: phase.result.latest_version },
+          `Downloading v${phase.result.latest_version}…`,
+        )}
       </div>
     );
   }
@@ -417,7 +449,11 @@ function StatusRow({ phase }: { phase: UpdatePhase }) {
     return (
       <div className="inline-flex items-center gap-2 text-xs text-[var(--color-good)]">
         <CheckCircle2 size={12} />
-        v{phase.result.latest_version} downloaded — installer opened.
+        {tr(
+          "update_downloaded_status",
+          { version: phase.result.latest_version },
+          `v${phase.result.latest_version} downloaded — installer opened.`,
+        )}
       </div>
     );
   }
@@ -425,7 +461,7 @@ function StatusRow({ phase }: { phase: UpdatePhase }) {
   return (
     <div className="inline-flex items-start gap-2 text-xs text-[var(--color-bad)]">
       <AlertTriangle size={12} className="mt-0.5 shrink-0" />
-      <span>Download failed: {phase.message}</span>
+      <span>{tr("update_download_error", { message: phase.message }, `Download failed: ${phase.message}`)}</span>
     </div>
   );
 }
@@ -439,11 +475,12 @@ function ReleaseNotes({
   notes: string;
   pubDate: string;
 }) {
+  const tr = useTr();
   if (!notes.trim()) return null;
   return (
     <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
       <div className="mb-1 flex items-center justify-between text-[10px] uppercase tracking-wide text-[var(--color-muted)]">
-        <span>What's new in v{version}</span>
+        <span>{tr("whats_new_in", { version }, `What's new in v${version}`)}</span>
         {pubDate && (
           <span className="font-mono">
             {pubDate.slice(0, 10) /* YYYY-MM-DD */}

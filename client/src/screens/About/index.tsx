@@ -32,26 +32,43 @@ const URLS = {
  *  actually does. Helps first-time About-page visitors quickly scan
  *  "is this what I need?". Icons match the feature's sidebar icon so
  *  there's visual continuity if the user jumps over to try it. */
-const FEATURES: { icon: typeof Zap; title: string; body: string }[] = [
+/** Module-level constants can't reach `useTr` (it's a hook). Each
+ *  feature carries a {key, fallback} pair instead; the rendering
+ *  loop calls `tr()` per feature so language changes flow through. */
+const FEATURES: {
+  icon: typeof Zap;
+  titleKey: string;
+  titleFallback: string;
+  bodyKey: string;
+  bodyFallback: string;
+}[] = [
   {
     icon: Zap,
-    title: "Fast transfers",
-    body: "FTX2 binary protocol with BLAKE3 shard verification + pack-small-files optimization. Uses your LAN flat-out.",
+    titleKey: "about_feat_fast_transfers_title",
+    titleFallback: "Fast transfers",
+    bodyKey: "about_feat_fast_transfers_body",
+    bodyFallback: "FTX2 binary protocol with BLAKE3 shard verification + pack-small-files optimization. Uses your LAN flat-out.",
   },
   {
     icon: HardDrive,
-    title: "Native image mount",
-    body: "Attach .exfat and .ffpkg images to /mnt/ps5upload/ via MDIOCATTACH + nmount — no third-party helpers needed.",
+    titleKey: "about_feat_native_mount_title",
+    titleFallback: "Native image mount",
+    bodyKey: "about_feat_native_mount_body",
+    bodyFallback: "Attach .exfat and .ffpkg images to /mnt/ps5upload/ via MDIOCATTACH + nmount — no third-party helpers needed.",
   },
   {
     icon: Radio,
-    title: "Works with everything",
-    body: "Send any PS5 payload ELF — homebrew loaders, kernel patches, custom utilities — over :9021 with a file-picker flow.",
+    titleKey: "about_feat_works_everything_title",
+    titleFallback: "Works with everything",
+    bodyKey: "about_feat_works_everything_body",
+    bodyFallback: "Send any PS5 payload ELF — homebrew loaders, kernel patches, custom utilities — over :9021 with a file-picker flow.",
   },
   {
     icon: Cpu,
-    title: "Live hardware view",
-    body: "Model, serial, uptime, CPU frequency, RAM, and fan-threshold control — all without touching Sony's UI.",
+    titleKey: "about_feat_hardware_title",
+    titleFallback: "Live hardware view",
+    bodyKey: "about_feat_hardware_body",
+    bodyFallback: "Model, serial, uptime, CPU frequency, RAM, and fan-threshold control — all without touching Sony's UI.",
   },
 ];
 
@@ -119,17 +136,22 @@ export default function AboutScreen() {
       {/* Features — 2×2 grid on sm+, 4-wide on lg+. Compact icon
           cards so the page doesn't turn into a wall of words. */}
       <section className="mb-10">
-        <SectionTitle icon={Sparkles}>What it does</SectionTitle>
+        <SectionTitle icon={Sparkles}>{tr("about_what_it_does", undefined, "What it does")}</SectionTitle>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {FEATURES.map((f) => (
-            <FeatureTile key={f.title} {...f} />
+            <FeatureTile
+              key={f.titleKey}
+              icon={f.icon}
+              title={tr(f.titleKey, undefined, f.titleFallback)}
+              body={tr(f.bodyKey, undefined, f.bodyFallback)}
+            />
           ))}
         </div>
       </section>
 
       {/* Author — single row, modest weight. */}
       <section className="mb-8">
-        <SectionTitle>Credits</SectionTitle>
+        <SectionTitle>{tr("about_credits", undefined, "Credits")}</SectionTitle>
         <Card>
           <div className="flex flex-col gap-3 text-sm md:flex-row md:items-center md:justify-between">
             <div>
@@ -144,8 +166,11 @@ export default function AboutScreen() {
                 PhantomPtr
               </button>
               <p className="mt-2 max-w-lg text-xs leading-relaxed text-[var(--color-muted)]">
-                See <code>LICENSE</code> and the project README for
-                credits to the upstream projects ps5upload builds on.
+                {tr(
+                  "about_credits_text",
+                  undefined,
+                  "See LICENSE and the project README for credits to the upstream projects ps5upload builds on.",
+                )}
               </p>
             </div>
             <button
@@ -210,7 +235,11 @@ function FeatureTile({
   icon: Icon,
   title,
   body,
-}: (typeof FEATURES)[number]) {
+}: {
+  icon: typeof Zap;
+  title: string;
+  body: string;
+}) {
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
       <Icon size={18} className="text-[var(--color-accent)]" />
