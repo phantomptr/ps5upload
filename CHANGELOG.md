@@ -4,6 +4,17 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.2.3
+
+**Fixes**
+
+- **Upload destination dropdown no longer shows phantom drives.** When
+  nothing was plugged into the M.2 / USB slots, `/mnt/ext0` and
+  `/mnt/usb0` still appeared as upload targets — the dropdown was
+  union-merging a hardcoded fallback list on top of the live volume
+  probe even after the probe answered. Now matches the Volumes
+  screen: only writable, currently-attached drives.
+
 ## 2.2.2
 
 **Fixes**

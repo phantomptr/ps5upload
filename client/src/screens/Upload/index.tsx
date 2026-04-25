@@ -1130,18 +1130,19 @@ function DestinationCard({
    *  the payload isn't reachable yet. */
   availableVolumes: Volume[];
 }) {
-  // Always include the canonical roots (/data, /mnt/ext0, /mnt/usb0)
-  // so the dropdown still works before the volume probe completes;
-  // the live list adds anything else the PS5 is exposing. De-dup by
-  // path so a probed volume that matches a fallback root only shows
-  // once.
+  // Trust the payload when it answers: it already filters to writable
+  // non-placeholder volumes (see the upstream filter where
+  // availableVolumes is set). Hardcoded roots are only a placeholder
+  // for the brief window before the probe completes — surfacing them
+  // afterwards re-introduces phantom mount points like /mnt/ext0 when
+  // nothing is plugged into that slot, which contradicts the Volumes
+  // screen and lets the user pick a destination the upload will fail
+  // on.
   const FALLBACK_VOLUMES = ["/data", "/mnt/ext0", "/mnt/usb0"];
-  const dropdownPaths = Array.from(
-    new Set([
-      ...FALLBACK_VOLUMES,
-      ...availableVolumes.map((v) => v.path),
-    ]),
-  ).sort();
+  const dropdownPaths =
+    availableVolumes.length > 0
+      ? availableVolumes.map((v) => v.path).sort()
+      : [...FALLBACK_VOLUMES].sort();
   // Build a {path → free-bytes} map so we can show "/mnt/ext1 (450 GB
   // free)" inline. Only when we actually got the live list back.
   const freeBytesByPath = new Map<string, number>();
