@@ -4,6 +4,19 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.2.2
+
+**Fixes**
+
+- **App upgrades now actually replace the bundled PS5 payload.** When
+  upgrading to 2.2.1, the desktop app kept sending the cached 2.2.0
+  payload to the PS5 because the cached-vs-embedded check compared
+  only file length — and a patch-version bump changes the version
+  string inside the ELF without changing its length. The check now
+  compares bytes when lengths match, so any embedded change forces a
+  re-extract on next launch. This also clears any user who got stuck
+  on a 2.2.0 payload after upgrading to 2.2.1.
+
 ## 2.2.1
 
 **Fixes**

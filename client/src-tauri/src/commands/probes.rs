@@ -157,9 +157,11 @@ const EMBEDDED_PAYLOAD_GZ: &[u8] = include_bytes!(env!("PS5UPLOAD_PAYLOAD_GZ_BYT
 
 /// Extract the embedded `.elf.gz` into the app's local-data dir and
 /// return the decompressed-ELF path. Caches across launches; re-
-/// extracts only when the cached `.elf`'s size doesn't match the
-/// decompressed bytes (cheap shallow check — the payload changes only
-/// across app versions).
+/// extracts when the cached `.elf` differs from the decompressed
+/// bytes. Length-only check is not enough — a patch-version bump
+/// like 2.2.0 → 2.2.1 changes the version-string bytes inside the
+/// ELF without changing the file length, and the user would silently
+/// keep sending the old payload after upgrade.
 fn find_bundled_payload(app: &AppHandle) -> Result<PathBuf, String> {
     use std::fs;
     use std::io::Read;
@@ -190,7 +192,13 @@ fn find_bundled_payload(app: &AppHandle) -> Result<PathBuf, String> {
     }
 
     let needs_write = match fs::metadata(&out_path) {
-        Ok(m) => m.len() as usize != decompressed.len(),
+        Ok(m) if m.len() as usize == decompressed.len() => match fs::read(&out_path) {
+            Ok(current) => current != decompressed,
+            // Can't read the cached file (corrupted, perms, racing
+            // antivirus) — overwrite to recover.
+            Err(_) => true,
+        },
+        Ok(_) => true,
         Err(_) => true,
     };
     if needs_write {
