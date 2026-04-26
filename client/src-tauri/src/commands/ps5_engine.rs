@@ -208,6 +208,13 @@ pub struct TransferDirReconcileReq {
 pub struct FsPathReq {
     pub addr: Option<String>,
     pub path: String,
+    /// Optional unique 64-bit id the client generates so it can poll
+    /// progress / cancel the in-flight delete. Forwarded to the engine
+    /// which forwards to the payload as the FS_DELETE frame's
+    /// trace_id. Only used by `ps5_fs_delete`; other handlers that
+    /// share this struct (e.g. `ps5_fs_mkdir`) ignore it.
+    #[serde(default)]
+    pub op_id: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -243,7 +250,11 @@ pub async fn ps5_fs_delete(req: FsPathReq) -> Result<JsonValue, String> {
     let url = format!("{base}/api/ps5/fs/delete");
     post_json(
         &url,
-        &serde_json::json!({ "addr": req.addr, "path": req.path }),
+        &serde_json::json!({
+            "addr": req.addr,
+            "path": req.path,
+            "op_id": req.op_id.unwrap_or(0),
+        }),
     )
     .await
 }

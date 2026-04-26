@@ -14,6 +14,11 @@ import {
   type PlannedFile,
   type ReconcileMode,
 } from "../api/ps5";
+import {
+  computeRate,
+  pushRateSample,
+  type RateSample,
+} from "../lib/rollingRate";
 import type { SourceKind } from "./upload";
 
 /** For folder sources the caller picks one of these strategies at the
@@ -236,13 +241,10 @@ export const useTransferStore = create<TransferState>((set) => {
         },
       });
 
-      // Trailing-window rate smoother: keep the last N samples of
-      // (timestamp, bytesSent); rate = Δbytes / Δtime over the window.
-      // Using a window (not just last-vs-now) damps out bursty shards.
-      const SAMPLE_WINDOW = 4; // 4 × 500 ms = 2 s trailing avg
-      const samples: { ts: number; bytes: number }[] = [
-        { ts: startedAtMs, bytes: 0 },
-      ];
+      // Trailing-window rate smoother. Shared with the queue runner via
+      // lib/rollingRate so the two surfaces never disagree on what
+      // "smoothed bytes/sec" means.
+      const samples: RateSample[] = [{ ts: startedAtMs, bytes: 0 }];
 
       const poll = async () => {
         if (!isLive()) return;
@@ -312,20 +314,8 @@ export const useTransferStore = create<TransferState>((set) => {
         } else {
           const now = Date.now();
           const bytesSent = snap.bytes_sent ?? 0;
-          // Only push a new sample when bytesSent actually advanced.
-          // Pushing flat samples (same bytesSent twice) makes the
-          // window compute bytesPerSec=0 between shard bursts, which
-          // flickers "—" into the UI. Skipping the push keeps the
-          // trailing window anchored to real progress and the readout
-          // stays stable at the last real speed until new bytes land.
-          const last = samples[samples.length - 1];
-          if (bytesSent !== last.bytes) {
-            samples.push({ ts: now, bytes: bytesSent });
-            if (samples.length > SAMPLE_WINDOW) samples.shift();
-          }
-          const oldest = samples[0];
-          const elapsedSec = Math.max((now - oldest.ts) / 1000, 0.001);
-          const bytesPerSec = (bytesSent - oldest.bytes) / elapsedSec;
+          pushRateSample(samples, now, bytesSent);
+          const bytesPerSec = computeRate(samples, now);
           const files = snap.files ?? [];
           // Cumulative-sum the file sizes to find how many have been
           // "completed" — defined as: their cumulative end byte is at
@@ -346,7 +336,7 @@ export const useTransferStore = create<TransferState>((set) => {
               startedAtMs,
               bytesSent,
               totalBytes: snap.total_bytes ?? 0,
-              bytesPerSec: Math.max(0, bytesPerSec),
+              bytesPerSec,
               files,
               filesCompleted,
               skippedFiles: snap.skipped_files ?? 0,

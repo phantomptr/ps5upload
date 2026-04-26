@@ -95,6 +95,8 @@ typedef struct {
     uint64_t pack_ftruncate_us;     /* sum of per-worker ftruncate time */
     uint64_t pack_write_us;         /* sum of per-worker write_full time */
     uint64_t pack_close_us;         /* sum of per-worker close time */
+    uint64_t pack_open_retries;     /* transient open() retries absorbed */
+    uint64_t pack_write_retries;    /* transient write_full() retries absorbed */
 } runtime_tx_entry_t;
 
 typedef struct {

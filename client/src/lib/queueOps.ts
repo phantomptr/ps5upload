@@ -79,3 +79,34 @@ export function resetFailedToPending<T extends { id: string; status: string }>(
   });
   return changed ? next : items;
 }
+
+/** Reset any item that was actively running back to pending and zero
+ *  the live counters. Used by the queue's stop() so a stopped row
+ *  doesn't keep displaying its last mid-flight bytes/sec readout
+ *  against a frozen progress bar. Same shape as resetFailedToPending
+ *  (same-reference short-circuit when nothing was running). */
+export function resetRunningToPending<
+  T extends {
+    id: string;
+    status: string;
+    bytesSent: number;
+    totalBytes: number;
+    bytesPerSec: number;
+  },
+>(items: T[]): T[] {
+  let changed = false;
+  const next = items.map((it) => {
+    if (it.status === "running") {
+      changed = true;
+      return {
+        ...it,
+        status: "pending" as const,
+        bytesSent: 0,
+        totalBytes: 0,
+        bytesPerSec: 0,
+      };
+    }
+    return it;
+  });
+  return changed ? next : items;
+}

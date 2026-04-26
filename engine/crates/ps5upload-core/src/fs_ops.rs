@@ -271,16 +271,71 @@ fn send_empty_ack_op_with_timeout(
 
 /// Delete a file or directory recursively on the PS5. Path must be under
 /// the payload's writable-root allowlist (/data, /user, /mnt/ext*, /mnt/usb*).
+///
+/// Convenience form using the default 30 s socket timeout — appropriate
+/// for single-file unlinks. For large directory trees (game folders with
+/// 200k+ files) callers must use [`fs_delete_with_timeout`] with a
+/// generous deadline; the payload's recursive walk is single-threaded and
+/// can take minutes on PS5 UFS.
 pub fn fs_delete(addr: &str, path: &str) -> Result<()> {
+    fs_delete_with_timeout(addr, path, None)
+}
+
+/// Like [`fs_delete`] but with a caller-supplied per-socket I/O timeout.
+/// Same single-shot RPC as `fs_copy`/`fs_move`: the payload performs the
+/// entire recursive `rm -rf` and only sends FS_DELETE_ACK at the end.
+/// With the default 30 s socket timeout, deleting a small-file-heavy
+/// game folder (≈220k files, 19k dirs — 240k+ unlink/rmdir syscalls)
+/// fires the timeout mid-walk and surfaces to the user as the cryptic
+/// "read frame header: Resource temporarily unavailable" 502, while the
+/// payload happily keeps deleting in the background. The HTTP handler
+/// passes a 1-hour deadline so the operation can complete naturally.
+pub fn fs_delete_with_timeout(
+    addr: &str,
+    path: &str,
+    io_timeout: Option<std::time::Duration>,
+) -> Result<()> {
+    fs_delete_with_op_id(addr, path, 0, io_timeout)
+}
+
+/// Like [`fs_delete_with_timeout`] but stamps a caller-chosen op_id
+/// into the FS_DELETE frame's trace_id. The payload uses that as the
+/// key into its in-flight ops table — pass the same op_id to
+/// [`fs_op_status`] / [`fs_op_cancel`] from a separate connection to
+/// observe progress (bytes-freed / total) or cancel mid-flight. Pass
+/// 0 if you don't need progress/cancel; the payload skips the slot
+/// registration in that case so single-file unlinks don't burn a
+/// MAX_FS_OPS slot.
+pub fn fs_delete_with_op_id(
+    addr: &str,
+    path: &str,
+    op_id: u64,
+    io_timeout: Option<std::time::Duration>,
+) -> Result<()> {
     let body =
         serde_json::to_vec(&serde_json::json!({ "path": path })).context("serialize fs_delete")?;
-    send_empty_ack_op(
-        addr,
-        FrameType::FsDelete,
-        &body,
-        FrameType::FsDeleteAck,
-        "FS_DELETE",
-    )
+    let mut c = Connection::connect(addr)?;
+    if let Some(t) = io_timeout {
+        c.set_io_timeout(t)
+            .context("applying FS_DELETE I/O timeout")?;
+    }
+    c.send_frame_with_trace(FrameType::FsDelete, &body, op_id)?;
+    let (hdr, resp) = c.recv_frame()?;
+    let ft = hdr.frame_type().unwrap_or(FrameType::Error);
+    if ft == FrameType::Error {
+        let msg = String::from_utf8_lossy(&resp).to_string();
+        // Cancellation is a non-error outcome from the user's POV
+        // (they hit Stop) — surface it distinctly so the engine HTTP
+        // layer can return 409 instead of 502, mirroring fs_copy.
+        if msg == "fs_delete_cancelled" {
+            bail!("cancelled");
+        }
+        bail!("payload rejected FS_DELETE: {msg}");
+    }
+    if ft != FrameType::FsDeleteAck {
+        bail!("expected FS_DELETE_ACK, got {:?}", ft);
+    }
+    Ok(())
 }
 
 /// Copy a file or directory recursively on the PS5. Both `from` and `to`

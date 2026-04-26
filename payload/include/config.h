@@ -5,7 +5,7 @@
  * UI tell apart an old payload still running from a build that includes
  * a particular fix, without having to boot the console. Keep in sync
  * with the desktop app's package.json during releases. */
-#define PS5UPLOAD2_VERSION "2.2.21"
+#define PS5UPLOAD2_VERSION "2.2.22"
 /* Author credit — embedded in the startup toast so anyone looking at
  * the console screen knows who wrote the software that just loaded.
  * Kept separate from VERSION so release scripts can bump the version
@@ -82,5 +82,15 @@
  * stack memory or thread-context switches. */
 #define PS5UPLOAD2_PACK_WORKERS 4u
 #define PS5UPLOAD2_PACK_QUEUE_DEPTH 32u
+
+/* Bounded retry budget for transient pack-worker open()/write() failures.
+ * On the small-file-heavy regime (PPSA01342: 223k files / 19k dirs / 75k
+ * shards) a single transient errno (EIO/EMFILE/ENOMEM) used to flip the
+ * pool's sticky worker_error and abort the whole transaction — even a
+ * 99.99% per-syscall success rate yielded ~50% chance of finishing. With 3
+ * retries on transient errnos (backoff 20/50/100 ms) the same per-syscall
+ * rate completes with effectively-1.0 probability. Terminal errnos
+ * (ENOSPC/EROFS/EACCES/ENAMETOOLONG) bypass retry. */
+#define PS5UPLOAD2_PACK_RETRY_MAX 3u
 
 #endif

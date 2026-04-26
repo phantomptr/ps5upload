@@ -240,6 +240,16 @@ mounted disk image, both paths appear — but Library dedupes by
 `title_id` and prefers the mount-backed path. Refresh the tab if
 something still looks off.
 
+**Q: Can I queue several uploads to run back-to-back?**
+Yes — the Upload screen has a queue panel below the single-shot
+controls. Each row shows live progress, current speed, and ETA
+while running; the wall-clock-average MiB/s after it completes.
+The runner processes one item at a time (the PS5 transfer port is
+single-client), and the queue persists across app restarts so a
+queued item interrupted by a crash picks up cleanly when you
+press Start again. Tick **Continue on failure** to keep going
+when one item fails instead of stopping the whole batch.
+
 ---
 
 ## Mount + unmount
@@ -284,6 +294,29 @@ Open the **Logs** tab. Every runtime error, failed API call, and
 console warning ends up there with timestamps and expandable
 detail. Click **Copy** or **Download** to grab a plain-text dump
 for a bug report.
+
+**Q: Deleting a huge game folder used to fail with a "502 Bad
+Gateway" error.**
+Fixed in 2.2.22. The recursive walk on a small-file-heavy folder
+(e.g. PPSA01342 with ~223k files / 19k dirs) takes minutes on PS5
+UFS — long enough that the engine's old 30 s socket timeout fired
+mid-walk while the payload was still deleting in the background.
+Now `fs_delete` uses the same 1-hour deadline `fs_copy` already
+does, **and** the operation reports live progress (bytes freed)
+to the bulk-delete banner with a Stop button that cleanly bails
+between directory entries.
+
+**Q: An upload of a small-file-heavy game failed with
+`pack_worker_io_error` partway through.**
+Fixed in 2.2.22. The payload's pack worker used to flip a sticky
+worker-error flag on the very first transient `open()` or
+`write()` failure, aborting a 75k-shard transaction outright. It
+now retries transient errnos (EIO/EMFILE/ENOMEM/EINTR/EAGAIN)
+up to 3 times with 20/50/100 ms backoff before giving up.
+Unrecoverable errors (ENOSPC/EROFS/EACCES/ENAMETOOLONG) still
+fail fast — there's no point retrying a full disk. The retry
+counts surface in `COMMIT_TX_ACK` so post-mortem logs show
+exactly how many transient hits were absorbed.
 
 **Q: Where are app settings saved?**
 - **macOS**: `~/Library/Application Support/com.phantomptr.ps5upload/`

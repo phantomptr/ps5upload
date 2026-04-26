@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 
 import { Button } from "../../components";
+import { formatBytes, formatDuration } from "../../lib/format";
 import { useTr } from "../../state/lang";
 import {
   useUploadQueueStore,
@@ -178,6 +179,14 @@ function QueueRow({
       ? Math.max(0, Math.min(100, (item.bytesSent / item.totalBytes) * 100))
       : 0;
   const isActive = item.status === "running";
+  // Show ETA only when we have a real total + a real rate; otherwise
+  // the readout would print "ETA Infinity" or "ETA 0s" right at the
+  // start of a transfer where the smoother hasn't seen two samples yet.
+  const remainingBytes = Math.max(0, item.totalBytes - item.bytesSent);
+  const etaSec =
+    item.bytesPerSec > 0 && remainingBytes > 0
+      ? remainingBytes / item.bytesPerSec
+      : null;
   // Lock reorder + remove while the runner is touching this row;
   // mutating the array under the runner's iterator would surprise
   // both the user (item disappears mid-upload) and the engine (jobId
@@ -276,9 +285,29 @@ function QueueRow({
 
       {isActive && (
         <div className="mt-2">
-          <div className="mb-1 flex items-baseline justify-between text-[11px] text-[var(--color-muted)]">
+          <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-3 text-[11px] text-[var(--color-muted)]">
             <span>
               {formatBytes(item.bytesSent)} / {formatBytes(item.totalBytes)}
+              {item.bytesPerSec > 0 && (
+                <>
+                  {" · "}
+                  <span className="tabular-nums">
+                    {formatBytes(item.bytesPerSec)}/s
+                  </span>
+                  {etaSec !== null && (
+                    <>
+                      {" · "}
+                      <span className="tabular-nums">
+                        {tr(
+                          "queue_eta",
+                          { eta: formatDuration(etaSec) },
+                          `ETA ${formatDuration(etaSec)}`,
+                        )}
+                      </span>
+                    </>
+                  )}
+                </>
+              )}
             </span>
             <span className="tabular-nums">{pct.toFixed(0)}%</span>
           </div>
@@ -288,6 +317,20 @@ function QueueRow({
               style={{ width: `${pct}%` }}
             />
           </div>
+        </div>
+      )}
+
+      {item.status === "done" && item.bytesPerSec > 0 && (
+        <div className="mt-2 text-[11px] text-[var(--color-muted)]">
+          {formatBytes(item.bytesSent)}
+          {" · "}
+          <span className="tabular-nums">
+            {tr(
+              "queue_avg_speed",
+              { speed: `${formatBytes(item.bytesPerSec)}/s` },
+              `${formatBytes(item.bytesPerSec)}/s avg`,
+            )}
+          </span>
         </div>
       )}
 
@@ -333,14 +376,3 @@ function StatusIcon({ status }: { status: QueueItemStatus }) {
   }
 }
 
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  const units = ["KiB", "MiB", "GiB", "TiB"];
-  let v = n / 1024;
-  let i = 0;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i += 1;
-  }
-  return `${v.toFixed(v >= 100 ? 0 : v >= 10 ? 1 : 2)} ${units[i]}`;
-}

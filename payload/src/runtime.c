@@ -1583,7 +1583,39 @@ typedef struct pack_worker_pool {
     uint64_t         t_write_us;
     uint64_t         t_close_us;
     uint64_t         records_processed;
+    uint64_t         open_retries;     /* transient open() retries absorbed */
+    uint64_t         write_retries;    /* transient write_full() retries absorbed */
 } pack_worker_pool_t;
+
+/* Errnos we treat as worth retrying on the pack-worker hot path. EIO covers
+ * USB media hiccups; EMFILE/ENFILE cover fd-table pressure under sustained
+ * many-small-file load; ENOMEM/EBUSY are transient resource hits; EAGAIN
+ * shouldn't normally hit a blocking open/write but is cheap to allow. */
+static int pack_errno_is_transient(int e) {
+    switch (e) {
+        case EINTR:
+        case EAGAIN:
+#if defined(EWOULDBLOCK) && EWOULDBLOCK != EAGAIN
+        case EWOULDBLOCK:
+#endif
+        case EIO:
+        case EMFILE:
+        case ENFILE:
+        case ENOMEM:
+        case EBUSY:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+static void pack_retry_backoff(int retry_idx) {
+    static const useconds_t backoff_us[] = { 20000u, 50000u, 100000u };
+    int n = (int)(sizeof(backoff_us) / sizeof(backoff_us[0]));
+    if (retry_idx < 0) retry_idx = 0;
+    if (retry_idx >= n) retry_idx = n - 1;
+    usleep(backoff_us[retry_idx]);
+}
 
 static void *pack_worker_thread(void *arg) {
     pack_worker_pool_t *pool = (pack_worker_pool_t *)arg;
@@ -1619,16 +1651,36 @@ static void *pack_worker_thread(void *arg) {
              * atomicity guarantee is more valuable. */
             int fd = -1;
             uint64_t t0, t_op = 0, t_tr = 0, t_wr = 0, t_cl = 0;
+            int attempt;
+            uint64_t local_open_retries = 0, local_write_retries = 0;
+            int terminal = 0;
 
-            t0 = now_us();
-            fd = open(item.path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
-            t_op = now_us() - t0;
+            /* Bounded-retry open. A single transient open failure on USB or
+             * UFS at file 11k of 75k used to abort the whole transaction;
+             * absorbing it here keeps the small-file-heavy regime alive. */
+            for (attempt = 0; attempt <= (int)PS5UPLOAD2_PACK_RETRY_MAX; attempt++) {
+                t0 = now_us();
+                fd = open(item.path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+                t_op += now_us() - t0;
+                if (fd >= 0) break;
+                if (!pack_errno_is_transient(errno) ||
+                    attempt == (int)PS5UPLOAD2_PACK_RETRY_MAX) {
+                    fprintf(stderr,
+                            "[payload2] pack worker: open %s failed errno=%d after %d retries\n",
+                            item.path, errno, attempt);
+                    pool->worker_error = 1;
+                    terminal = 1;
+                    break;
+                }
+                fprintf(stderr,
+                        "[payload2] pack worker: open %s transient errno=%d, retry %d/%u\n",
+                        item.path, errno, attempt + 1,
+                        (unsigned)PS5UPLOAD2_PACK_RETRY_MAX);
+                local_open_retries += 1;
+                pack_retry_backoff(attempt);
+            }
 
-            if (fd < 0) {
-                fprintf(stderr, "[payload2] pack worker: open %s failed errno=%d\n",
-                        item.path, errno);
-                pool->worker_error = 1;
-            } else {
+            if (!terminal && fd >= 0) {
                 /* Historical note: an earlier experiment called
                  * `posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED)` here to try
                  * to keep the page cache clean between transactions. On the
@@ -1644,17 +1696,53 @@ static void *pack_worker_thread(void *arg) {
                     (void)ftruncate(fd, (off_t)item.data_len);
                     t_tr = now_us() - t0;
 
-                    t0 = now_us();
-                    if (write_full(fd, item.data, item.data_len) != 0) {
-                        fprintf(stderr, "[payload2] pack worker: write %s failed errno=%d\n",
-                                item.path, errno);
-                        pool->worker_error = 1;
+                    /* Bounded-retry write. write_full handles EINTR
+                     * internally, so any -1 here is a non-EINTR error.
+                     * On retry we close+reopen with O_TRUNC so the rewrite
+                     * starts from offset 0 and produces a valid file. */
+                    for (attempt = 0; attempt <= (int)PS5UPLOAD2_PACK_RETRY_MAX; attempt++) {
+                        t0 = now_us();
+                        if (write_full(fd, item.data, item.data_len) == 0) {
+                            t_wr += now_us() - t0;
+                            break;
+                        }
+                        t_wr += now_us() - t0;
+                        if (!pack_errno_is_transient(errno) ||
+                            attempt == (int)PS5UPLOAD2_PACK_RETRY_MAX) {
+                            fprintf(stderr,
+                                    "[payload2] pack worker: write %s failed errno=%d after %d retries\n",
+                                    item.path, errno, attempt);
+                            pool->worker_error = 1;
+                            break;
+                        }
+                        fprintf(stderr,
+                                "[payload2] pack worker: write %s transient errno=%d, retry %d/%u\n",
+                                item.path, errno, attempt + 1,
+                                (unsigned)PS5UPLOAD2_PACK_RETRY_MAX);
+                        local_write_retries += 1;
+                        pack_retry_backoff(attempt);
+
+                        /* Reset the file: close, reopen with O_TRUNC,
+                         * re-pre-allocate. If reopen itself fails, give up. */
+                        (void)close(fd);
+                        t0 = now_us();
+                        fd = open(item.path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+                        t_op += now_us() - t0;
+                        if (fd < 0) {
+                            fprintf(stderr,
+                                    "[payload2] pack worker: re-open %s for write retry failed errno=%d\n",
+                                    item.path, errno);
+                            pool->worker_error = 1;
+                            break;
+                        }
+                        (void)ftruncate(fd, (off_t)item.data_len);
                     }
-                    t_wr = now_us() - t0;
                 }
-                t0 = now_us();
-                (void)close(fd);
-                t_cl = now_us() - t0;
+                if (fd >= 0) {
+                    t0 = now_us();
+                    (void)close(fd);
+                    t_cl = now_us() - t0;
+                }
             }
 
             /* Fold per-item timings into the shared accumulator. */
@@ -1664,6 +1752,8 @@ static void *pack_worker_thread(void *arg) {
             pool->t_write_us      += t_wr;
             pool->t_close_us      += t_cl;
             pool->records_processed += 1;
+            pool->open_retries    += local_open_retries;
+            pool->write_retries   += local_write_retries;
             pthread_mutex_unlock(&pool->lock);
         }
 
@@ -1775,12 +1865,23 @@ static void pack_pool_teardown(runtime_tx_entry_t *entry) {
     }
 
     /* Fold pool timings into the entry so COMMIT_TX_ACK can report them. */
-    entry->pack_records      += pool->records_processed;
-    entry->pack_unlink_us    += pool->t_unlink_us;
-    entry->pack_open_us      += pool->t_open_us;
-    entry->pack_ftruncate_us += pool->t_ftruncate_us;
-    entry->pack_write_us     += pool->t_write_us;
-    entry->pack_close_us     += pool->t_close_us;
+    entry->pack_records       += pool->records_processed;
+    entry->pack_unlink_us     += pool->t_unlink_us;
+    entry->pack_open_us       += pool->t_open_us;
+    entry->pack_ftruncate_us  += pool->t_ftruncate_us;
+    entry->pack_write_us      += pool->t_write_us;
+    entry->pack_close_us      += pool->t_close_us;
+    entry->pack_open_retries  += pool->open_retries;
+    entry->pack_write_retries += pool->write_retries;
+
+    if (pool->open_retries || pool->write_retries) {
+        fprintf(stderr,
+                "[payload2] pack pool teardown: %llu records, "
+                "%llu open retries absorbed, %llu write retries absorbed\n",
+                (unsigned long long)pool->records_processed,
+                (unsigned long long)pool->open_retries,
+                (unsigned long long)pool->write_retries);
+    }
 
     pthread_mutex_destroy(&pool->lock);
     pthread_cond_destroy(&pool->cv_not_full);
@@ -4013,7 +4114,37 @@ static int is_path_allowed(const char *p) {
 /* Recursively remove `path`. Descends directories, unlinks regular files
  * and symlinks, rmdir's empty directories. Depth cap prevents a
  * pathological symlink loop from exhausting the thread stack. */
-static int rm_rf(const char *path, int depth) {
+/* Forward declarations: rm_rf_op below uses fs_op_* helpers + the
+ * recursive_size walker, all of which are defined further down the
+ * file (next to the FS_OP_STATUS handler and cp_rf_op respectively).
+ * Inserting prototypes here keeps the rm_rf cluster in its existing
+ * spot rather than reshuffling 200 lines of unrelated code. */
+static int  fs_op_cancel_pending(int idx);
+static void fs_op_progress(int idx, uint64_t delta);
+
+/* Op-aware recursive remove. Mirrors rm_rf but, when `op_idx >= 0`,
+ * checks the cancel flag periodically (between siblings) and reports
+ * progress (bytes freed) to the in-flight ops table after each unlink.
+ *
+ * Returns:
+ *   0  success
+ *  -1  hard error (continues best-effort like rm_rf does)
+ *  -2  cancelled mid-flight (only when op_idx >= 0 and the engine
+ *      called FS_OP_CANCEL on this op_id)
+ *
+ * Cancel is checked between directory entries — same cadence as
+ * cp_rf_op, which is fine because each unlink/rmdir on PS5 UFS is
+ * sub-millisecond, so the user-visible cancel latency stays in the
+ * "tens of ms" range even on small-file-heavy regimes (PPSA01342:
+ * 223k files).
+ *
+ * Progress unit is bytes-freed: we have st.st_size from the lstat we
+ * already did to decide regular-file vs directory, so adding it to
+ * the op counter is free. Bytes match the unit fs_copy uses, so the
+ * existing engine + UI plumbing renders delete progress without
+ * changes (total_bytes from recursive_size, bytes_copied from this
+ * accumulator). */
+static int rm_rf_op(const char *path, int depth, int op_idx) {
     struct stat st;
     DIR *d;
     struct dirent *e;
@@ -4021,22 +4152,41 @@ static int rm_rf(const char *path, int depth) {
     int rc = 0;
 
     if (depth > 64) return -1;
+    if (op_idx >= 0 && fs_op_cancel_pending(op_idx)) return -2;
     if (lstat(path, &st) != 0) return -1;
     if (!S_ISDIR(st.st_mode)) {
         /* Regular file / symlink / device. unlink() works for all. */
-        return unlink(path);
+        if (unlink(path) != 0) return -1;
+        if (op_idx >= 0 && S_ISREG(st.st_mode)) {
+            fs_op_progress(op_idx, (uint64_t)st.st_size);
+        }
+        return 0;
     }
     d = opendir(path);
     if (!d) return -1;
     while ((e = readdir(d)) != NULL) {
         if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
+        if (op_idx >= 0 && fs_op_cancel_pending(op_idx)) { rc = -2; break; }
         int n = snprintf(sub, sizeof(sub), "%s/%s", path, e->d_name);
         if (n < 0 || (size_t)n >= sizeof(sub)) { rc = -1; break; }
-        if (rm_rf(sub, depth + 1) != 0) { rc = -1; /* keep going; best effort */ }
+        int sub_rc = rm_rf_op(sub, depth + 1, op_idx);
+        if (sub_rc == -2) { rc = -2; break; }   /* propagate cancel */
+        if (sub_rc != 0) { rc = -1; /* keep going; best effort */ }
     }
     closedir(d);
-    if (rmdir(path) != 0) rc = -1;
+    /* Only rmdir if we weren't cancelled — leaving the dir avoids the
+     * surprising case where a user hits Stop and the top-level dir
+     * vanishes anyway because rmdir succeeded on the now-empty subtree
+     * we already cleared. The fs_copy_cancelled cleanup pattern in
+     * handle_fs_delete also relies on this: a partial tree is
+     * acceptable, but the entry the user clicked Stop on stays so
+     * they can see what's left. */
+    if (rc != -2 && rmdir(path) != 0) rc = -1;
     return rc;
+}
+
+static int rm_rf(const char *path, int depth) {
+    return rm_rf_op(path, depth, -1);
 }
 
 /* Recursive chmod on `path`. Descends dirs. Same depth cap as rm_rf. */
@@ -4666,7 +4816,17 @@ static int handle_fs_op_cancel(int client_fd, uint64_t trace_id,
                       trace_id, body, (uint64_t)len);
 }
 
-/* ── FS_DELETE handler ─────────────────────────────────────────────────── */
+/* ── FS_DELETE handler ───────────────────────────────────────────────────
+ *
+ * For small-file-heavy game folders (PPSA01342: 223k files / 19k dirs)
+ * the recursive walk takes minutes on PS5 UFS. To match fs_copy's UX,
+ * we register the op in the in-flight table so the engine's
+ * `/api/ps5/fs/op-status` poll can show "freeing X / Y" and the user's
+ * Stop button can fire FS_OP_CANCEL to abort early.
+ *
+ * trace_id == 0 means "no progress/cancel tracking" (legacy callers,
+ * single-file unlinks) — skip the registration and call the un-tracked
+ * rm_rf so we don't burn a g_fs_ops slot on an instant operation. */
 static int handle_fs_delete(runtime_state_t *state, int client_fd,
                              uint64_t trace_id, const char *request_body, uint64_t body_len) {
     char path[512];
@@ -4678,7 +4838,48 @@ static int handle_fs_delete(runtime_state_t *state, int client_fd,
         return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
                           "fs_delete_path_not_allowed", 26);
     }
-    if (rm_rf(path, 0) != 0) {
+
+    /* Untracked fast path: caller doesn't need progress and the
+     * payload doesn't need to register a slot. Same behavior as
+     * pre-op-id callers. */
+    if (trace_id == 0) {
+        if (rm_rf(path, 0) != 0) {
+            return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
+                              "fs_delete_failed", 16);
+        }
+        pthread_mutex_lock(&state->state_mtx);
+        state->command_count += 1;
+        pthread_mutex_unlock(&state->state_mtx);
+        return send_frame(client_fd, FTX2_FRAME_FS_DELETE_ACK, 0, trace_id, NULL, 0);
+    }
+
+    /* Tracked path. Pre-walk to compute total bytes so the engine's
+     * progress poll can show a percentage; same one-stat-per-file cost
+     * pattern as fs_copy. recursive_size returns -1 on any stat
+     * failure — surface it now rather than letting the rm_rf hit the
+     * same file mid-walk. */
+    uint64_t total_bytes = 0;
+    if (recursive_size(path, &total_bytes) != 0) {
+        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
+                          "fs_delete_walk_failed", 21);
+    }
+
+    int op_idx = fs_op_register(trace_id, "fs_delete", path, "", total_bytes);
+    if (op_idx < 0) {
+        /* All MAX_FS_OPS slots in use. Refuse rather than running
+         * un-tracked — the client expects to be able to poll/cancel
+         * via the op_id it just sent. */
+        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
+                          "fs_delete_too_many_inflight", 27);
+    }
+    int rm_rc = rm_rf_op(path, 0, op_idx);
+    fs_op_release(op_idx);
+
+    if (rm_rc == -2) {
+        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
+                          "fs_delete_cancelled", 19);
+    }
+    if (rm_rc != 0) {
         return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
                           "fs_delete_failed", 16);
     }
@@ -6418,7 +6619,8 @@ static int handle_binary_frame(runtime_state_t *state, int client_fd,
                        "\"hash\":%llu,\"shard_fn\":%llu,"
                        "\"pack_records\":%llu,\"pack_unlink\":%llu,"
                        "\"pack_open\":%llu,\"pack_ftruncate\":%llu,"
-                       "\"pack_write\":%llu,\"pack_close\":%llu},"
+                       "\"pack_write\":%llu,\"pack_close\":%llu,"
+                       "\"pack_open_retries\":%llu,\"pack_write_retries\":%llu},"
                        "\"sock_rcvbuf\":%d,\"listener_rcvbuf_asked\":%d,"
                        "\"listener_rcvbuf_actual\":%d,\"listener_sndbuf_actual\":%d,"
                        "\"max_rcvbuf_probed\":%d}",
@@ -6443,6 +6645,8 @@ static int handle_binary_frame(runtime_state_t *state, int client_fd,
                        (unsigned long long)entry->pack_ftruncate_us,
                        (unsigned long long)entry->pack_write_us,
                        (unsigned long long)entry->pack_close_us,
+                       (unsigned long long)entry->pack_open_retries,
+                       (unsigned long long)entry->pack_write_retries,
                        state->last_client_rcvbuf,
                        state->listener_rcvbuf_asked,
                        state->listener_rcvbuf_actual,

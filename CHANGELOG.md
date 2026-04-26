@@ -4,6 +4,67 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.2.22
+
+**Big-tree deletes work; queue uploads show speed; pack worker survives transient I/O hiccups**
+
+- **Fix: deleting a small-file-heavy game folder no longer 502s.**
+  Symptom on a real PPSA01342 (≈223k files / 19k dirs / 129 GiB):
+  the FileSystem screen would surface `engine HTTP 502 Bad Gateway:
+  read frame header: Resource temporarily unavailable (os error
+  11)`. Root cause: the engine's per-socket I/O timeout is 30 s,
+  but the payload's recursive `rm -rf` is single-threaded and
+  ≈240k metadata syscalls on PS5 UFS take minutes — so the engine
+  gave up on the read while the payload was still happily
+  deleting in the background. `fs_delete` now uses the same
+  1-hour deadline `fs_copy` and `fs_move` already do, so the
+  destructive trio behaves consistently for big trees.
+- **New: live progress + Stop button for big deletes.** Same
+  `op_id`-tracked plumbing the cut/copy/paste flow uses
+  (`FS_OP_STATUS` polling at 500 ms, `FS_OP_CANCEL` watcher at
+  200 ms). The payload pre-walks `recursive_size` to compute
+  total bytes, registers the op in its in-flight table, and
+  reports bytes-freed as it unlinks each regular file. Cancel
+  propagates between directory entries and leaves the partial
+  tree intact (so a stop on a 99% delete doesn't surprise-erase
+  what's left). Single-file unlinks still take the un-tracked
+  fast path and don't burn one of the four in-flight-op slots.
+- **New: per-item transfer speed in the upload queue.** The
+  Upload screen's queue panel was showing a moving progress bar
+  but no rate or ETA — making it impossible to tell whether a
+  multi-hour run was healthy or stalled. Each running row now
+  shows `bytes/total · MiB/s · ETA` using the same trailing-window
+  EWMA the single-shot upload uses (4 samples × 500 ms = 2 s
+  trailing average; flat samples are skipped so the readout
+  stays stable between shard bursts instead of flickering to
+  "—"). Done rows show the wall-clock-average MiB/s for
+  comparison across runs. The smoother now lives in
+  `lib/rollingRate` and is shared by both call sites so they
+  can never visually disagree.
+- **Fix: pack worker no longer aborts a 75k-shard upload on a
+  single transient I/O error.** Symptom on the same PPSA01342
+  workload: an upload would fail at `shard 11278/75667` with
+  `pack_worker_io_error`. Root cause: one transient `open()` or
+  `write()` failure (EIO/EMFILE/ENOMEM under sustained
+  many-small-file pressure on PS5 UFS) flipped the pool's sticky
+  worker-error flag, aborting the entire transaction — even a
+  99.99% per-syscall success rate gave only ~50% chance of
+  finishing. The pack worker now retries transient errnos up to
+  3 times (20/50/100 ms backoff), only flipping the sticky flag
+  on truly unrecoverable errors (ENOSPC/EROFS/EACCES/
+  ENAMETOOLONG) or after retries are exhausted. Retry counts
+  are folded into `COMMIT_TX_ACK` (`pack_open_retries`,
+  `pack_write_retries`) so bench sweeps and post-mortem logs
+  show how many transient hits were absorbed.
+- **Internal: shared `lib/rollingRate` + `queueOps.resetRunningToPending`
+  helpers.** Both pure, both with vitest coverage (14 + 4 new
+  cases). Previously the EWMA logic was inline in
+  `state/transfer.ts` and the stop-reset logic was inline in the
+  queue store; lifting them out lets future surfaces use the
+  same rate math without re-implementing it.
+
+---
+
 ## 2.2.21
 
 **Finish the GHA Node 24 migration**

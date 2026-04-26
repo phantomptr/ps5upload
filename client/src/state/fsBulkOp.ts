@@ -50,22 +50,22 @@ export interface BulkOpState {
    *  for partial failures after the op has moved past the failed
    *  item). Cleared by the screen when surfaced or dismissed. */
   errorBanner: string | null;
-  /** Set by the Stop button. For paste-copy / paste-move the loop
-   *  also forwards the cancel to the payload via fsOpCancel so
-   *  the in-flight cp_rf bails within one 4 MiB buffer; for delete
-   *  the granularity is "between items" because fs_delete is
-   *  single-shot and not interruptible. */
+  /** Set by the Stop button. The bulk loop forwards the cancel to
+   *  the payload via fsOpCancel so the in-flight op (cp_rf for
+   *  paste, rm_rf for delete) bails at its next check — within one
+   *  4 MiB buffer for copy, between directory entries for delete. */
   cancelRequested: boolean;
-  /** Bytes copied for the *current* item, updated by the paste-loop
-   *  poller from FS_OP_STATUS. 0 when the op kind doesn't expose
-   *  byte-level progress (i.e. delete) or the poller hasn't seen a
-   *  reply yet. The banner uses this + `currentSize` to render a
-   *  per-item progress bar and speed indicator. */
+  /** Bytes processed for the *current* item, updated by the bulk-loop
+   *  poller from FS_OP_STATUS. For paste-copy/paste-move it's bytes
+   *  written to the destination; for delete it's bytes freed from
+   *  the source. 0 when the poller hasn't seen a reply yet. The
+   *  banner uses this + `currentSize` to render a per-item progress
+   *  bar. */
   currentBytesCopied: number;
   /** When the current item is being processed via an op_id-tracked
-   *  RPC (paste-copy / paste-move), this is the unique 64-bit id
-   *  the loop generated. Stop button reads it to call fsOpCancel.
-   *  null when no op_id-tracked item is in flight. */
+   *  RPC (paste-copy / paste-move / delete), this is the unique
+   *  64-bit id the loop generated. Stop button reads it to call
+   *  fsOpCancel. null when no op_id-tracked item is in flight. */
   currentOpId: number | null;
 }
 

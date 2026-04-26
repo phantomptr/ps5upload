@@ -334,13 +334,93 @@ export default function FileSystemScreen() {
       const sizeByName = new Map<string, number>(
         (entries ?? []).map((e) => [e.name, e.size]),
       );
+      const addr = `${host}:${PS5_PAYLOAD_PORT}`;
+      // Same op_id-tracked deleter shape as the cut/copy/paste loop:
+      // mint a fresh 64-bit op_id per item, register it with the
+      // bulk-op store, spawn a parallel poller that scrapes
+      // FS_OP_STATUS into currentBytesCopied, and a separate cancel
+      // watcher that fires FS_OP_CANCEL when the Stop button flips
+      // the store's flag. The actual fsDelete call awaits at the
+      // bottom — when it returns (or throws "cancelled" on user
+      // stop), the finally block tears both watchers down. A
+      // small-file-heavy game folder (PPSA01342: 223k files) takes
+      // minutes; without the poller the user would stare at a static
+      // banner for that whole time.
       result = await runBulkDeleteLoop({
         names,
         basePath: path,
         sizeByName,
         joinPath,
-        deleter: (itemPath) =>
-          fsDelete(`${host}:${PS5_PAYLOAD_PORT}`, itemPath),
+        deleter: async (itemPath) => {
+          const opId = Math.floor(Math.random() * Number.MAX_SAFE_INTEGER);
+          useFsBulkOpStore.getState().setCurrentOpId(opId);
+          let pollerStopped = false;
+          const pollerDone = (async () => {
+            await new Promise((r) => setTimeout(r, 250));
+            while (!pollerStopped) {
+              try {
+                const snap = await fsOpStatus(addr, opId);
+                useFsBulkOpStore
+                  .getState()
+                  .setCurrentBytesCopied(snap.bytes_copied);
+                // Directory-tree deletes start with currentSize=null
+                // (list_dir doesn't surface dir sizes); the payload's
+                // recursive_size pre-walk fills total_bytes — sync it
+                // back so the banner can render a percentage.
+                if (
+                  snap.total_bytes > 0 &&
+                  useFsBulkOpStore.getState().currentSize !== snap.total_bytes
+                ) {
+                  useFsBulkOpStore.getState().setProgress({
+                    done: useFsBulkOpStore.getState().done,
+                    currentPath: useFsBulkOpStore.getState().currentPath,
+                    currentName: useFsBulkOpStore.getState().currentName,
+                    currentSize: snap.total_bytes,
+                  });
+                  useFsBulkOpStore
+                    .getState()
+                    .setCurrentBytesCopied(snap.bytes_copied);
+                }
+              } catch {
+                // 404 from the engine = op finished. Other errors
+                // (transient mgmt-port stall) silently retry next tick.
+                break;
+              }
+              await new Promise((r) => setTimeout(r, 500));
+            }
+          })();
+          const cancelWatcher = (async () => {
+            while (!pollerStopped) {
+              if (useFsBulkOpStore.getState().cancelRequested) {
+                try {
+                  await fsOpCancel(addr, opId);
+                } catch {
+                  // Best effort — even if cancel RPC fails, the
+                  // payload's rm_rf_op will exit on the next
+                  // between-entries check and the loop will see
+                  // cancelRequested in shouldCancel.
+                }
+                break;
+              }
+              await new Promise((r) => setTimeout(r, 200));
+            }
+          })();
+          try {
+            await fsDelete(addr, itemPath, opId);
+          } catch (e) {
+            // Engine maps payload's "fs_delete_cancelled" to HTTP 409
+            // → fsDelete throws an Error containing "cancelled". The
+            // user already requested cancel (cancelRequested=true);
+            // swallow so bulkDelete doesn't count this as a failure.
+            // The next iteration's shouldCancel guard breaks the loop.
+            const msg = e instanceof Error ? e.message : String(e);
+            if (!msg.includes("cancelled")) throw e;
+          } finally {
+            pollerStopped = true;
+            await Promise.allSettled([pollerDone, cancelWatcher]);
+            useFsBulkOpStore.getState().setCurrentOpId(null);
+          }
+        },
         onProgress: (p) => useFsBulkOpStore.getState().setProgress(p),
         shouldCancel: () => useFsBulkOpStore.getState().cancelRequested,
       });

@@ -23,13 +23,21 @@
 
 - **Fast transfer** — FTX2 binary protocol with BLAKE3 per-shard
   verification, small-file packing, and resume on disconnect.
-  Uses your LAN flat-out.
+  Uses your LAN flat-out. Pack worker absorbs transient
+  `EIO`/`EMFILE` hiccups so a 200k-file game upload doesn't get
+  killed by one unlucky syscall.
+- **Upload queue** — line up multiple games or images, hit Start,
+  walk away. Every running row shows live MiB/s and ETA; done
+  rows show the wall-clock-average rate so you can spot a slow
+  destination. Queue state survives app restarts.
 - **Native image mount** — attach `.exfat` and `.ffpkg` images on
   the PS5 (MDIOCATTACH + nmount) with no third-party helper. Every
   mount survives payload restarts and auto-reconciles on startup.
 - **Browse everything** — list games anywhere on the PS5 (including
   inside mounted images), disk images, files, and volumes. Run FS
-  ops (chmod, delete, move, copy, mkdir) with a real directory tree.
+  ops (chmod, delete, move, copy, mkdir) with a real directory
+  tree. Bulk delete of a 200k-file folder shows live progress
+  with a working Stop button.
 - **Live hardware view** — model, serial, uptime, CPU frequency,
   RAM; plus a fan-threshold control that rings through to
   `/dev/icc_fan` for quieter operation.

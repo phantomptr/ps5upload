@@ -426,9 +426,15 @@ function patternToRegex(pattern: string): RegExp {
 // (/data/**, /user/**, /mnt/ext*/**, /mnt/usb*/**) — other paths return
 // a `*_path_not_allowed` error surfaced here as an Error thrown to the UI.
 
-export async function fsDelete(transferAddr: string, path: string): Promise<void> {
+export async function fsDelete(
+  transferAddr: string,
+  path: string,
+  opId?: number,
+): Promise<void> {
   const addr = toMgmtAddr(transferAddr);
-  await invoke("ps5_fs_delete", { req: { addr, path } });
+  await invoke("ps5_fs_delete", {
+    req: { addr, path, op_id: opId ?? 0 },
+  });
 }
 
 export async function fsMove(

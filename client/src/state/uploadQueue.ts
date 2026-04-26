@@ -18,8 +18,15 @@ import {
   patchItem,
   removeItem,
   resetFailedToPending,
+  resetRunningToPending,
   shouldContinueAfterFailure,
 } from "../lib/queueOps";
+import {
+  averageRate,
+  computeRate,
+  pushRateSample,
+  type RateSample,
+} from "../lib/rollingRate";
 import type { SourceKind } from "./upload";
 import type { UploadStrategy } from "./transfer";
 
@@ -78,6 +85,12 @@ export interface QueueItem {
   /** Total bytes the engine pre-stat'd for this source. 0 until first
    *  Running tick lands. */
   totalBytes: number;
+  /** Smoothed bytes/sec while running (trailing 2 s window via
+   *  `lib/rollingRate`); set to the wall-clock average bytes/sec on
+   *  done; 0 when pending or failed. Persisted with the queue so the
+   *  done-row average survives an app restart and stays comparable
+   *  across runs. */
+  bytesPerSec: number;
   /** Mount path the runner produced when `mountAfterUpload` is true and
    *  the image upload + mount succeeded. Surfaced to the row so users
    *  see where the image landed without flipping to the Volumes tab. */
@@ -179,7 +192,11 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
   const runOne = async (
     item: QueueItem,
     isLive: () => boolean,
-  ): Promise<{ bytesSent: number; mountedAt: string | null }> => {
+  ): Promise<{
+    bytesSent: number;
+    bytesPerSec: number;
+    mountedAt: string | null;
+  }> => {
     const isFolder =
       item.sourceKind === "folder" || item.sourceKind === "game-folder";
 
@@ -216,6 +233,12 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
       );
     }
 
+    // Trailing-window samples for the live bytes/sec readout. Closure-
+    // scoped so a Stop + restart of the same item resets cleanly: the
+    // next runOne builds a fresh array.
+    const startedAtMs = Date.now();
+    const samples: RateSample[] = [{ ts: startedAtMs, bytes: 0 }];
+
     while (isLive()) {
       const snap = await jobStatus(jobId);
       if (!isLive()) {
@@ -243,17 +266,32 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
             throw wrapped;
           }
         }
-        return { bytesSent: snap.bytes_sent ?? 0, mountedAt };
+        // Final readout = total bytes / total elapsed. Prefer the
+        // engine's elapsed_ms (measured payload-side) over a wall-
+        // clock diff so a slow first poll doesn't skew the average.
+        const finalBytes = snap.bytes_sent ?? 0;
+        const elapsedMs = snap.elapsed_ms ?? Date.now() - startedAtMs;
+        return {
+          bytesSent: finalBytes,
+          bytesPerSec: averageRate(finalBytes, elapsedMs),
+          mountedAt,
+        };
       }
       if (snap.status === "failed") {
         throw new Error(snap.error ?? "upload failed");
       }
-      // Still running — push live progress into the item so the row
-      // shows a moving bar without re-fetching from the runner.
+      // Still running — push live progress + smoothed rate into the
+      // item so the row shows a moving bar + speed without an extra
+      // round-trip from the renderer.
+      const now = Date.now();
+      const bytesSent = snap.bytes_sent ?? 0;
+      pushRateSample(samples, now, bytesSent);
+      const bytesPerSec = computeRate(samples, now);
       set((s) => ({
         items: patchItem(s.items, item.id, {
-          bytesSent: snap.bytes_sent ?? 0,
+          bytesSent,
           totalBytes: snap.total_bytes ?? 0,
+          bytesPerSec,
         }),
       }));
       await sleep(POLL_INTERVAL_MS);
@@ -283,6 +321,11 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
           const next = { ...it };
           if (next.status === "running") next.status = "pending";
           if (!next.txIdHex) next.txIdHex = generateTxIdHex();
+          // Back-fill the bytes/sec field added in 2.2.22 — older
+          // persisted docs don't carry it. Treat unknown as 0 so the
+          // UI doesn't show NaN MiB/s on the first render after
+          // upgrade.
+          if (typeof next.bytesPerSec !== "number") next.bytesPerSec = 0;
           return next;
         });
         set({
@@ -315,6 +358,7 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
         status: "pending",
         bytesSent: 0,
         totalBytes: 0,
+        bytesPerSec: 0,
         mountedAt: null,
         error: null,
         addedAt: Date.now(),
@@ -372,18 +416,28 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
             items: patchItem(s.items, next.id, {
               status: "running",
               startedAt,
+              // Reset live counters so a previously-failed-then-retried
+              // item starts the bar + speed readout from zero instead
+              // of inheriting the stale terminal values.
+              bytesSent: 0,
+              totalBytes: 0,
+              bytesPerSec: 0,
               error: null,
             }),
           }));
           scheduleSave();
 
           try {
-            const { bytesSent, mountedAt } = await runOne(next, isLive);
+            const { bytesSent, bytesPerSec, mountedAt } = await runOne(
+              next,
+              isLive,
+            );
             if (!isLive()) return;
             set((s) => ({
               items: patchItem(s.items, next.id, {
                 status: "done",
                 bytesSent,
+                bytesPerSec,
                 mountedAt,
                 completedAt: Date.now(),
               }),
@@ -395,6 +449,7 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
             set((s) => ({
               items: patchItem(s.items, next.id, {
                 status: "failed",
+                bytesPerSec: 0,
                 error: message,
                 completedAt: Date.now(),
               }),
@@ -420,13 +475,9 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
       // payload because TX_FLAG_RESUME and same-tx_id semantics are
       // independent of queue state).
       runId++;
-      // Reset any item that was actively running back to pending so
-      // the next start() picks it up cleanly.
       set((s) => ({
         running: false,
-        items: s.items.map((it) =>
-          it.status === "running" ? { ...it, status: "pending" as const } : it,
-        ),
+        items: resetRunningToPending(s.items),
       }));
       scheduleSave();
     },

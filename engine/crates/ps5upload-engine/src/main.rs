@@ -51,7 +51,7 @@ use ps5upload_core::{
     connection::Connection,
     download::{download_to_local, enumerate_download_set, DownloadKind},
     fs_ops::{
-        fs_chmod, fs_copy_with_op_id, fs_delete, fs_mkdir, fs_mount, fs_move_with_timeout,
+        fs_chmod, fs_copy_with_op_id, fs_delete_with_op_id, fs_mkdir, fs_mount, fs_move_with_timeout,
         fs_op_cancel, fs_op_status, fs_read, fs_unmount, list_dir, reconcile, walk_local_inventory,
         DirListing, ListDirOptions, MountResult, ReconcileFile, ReconcileMode, ReconcilePlan,
     },
@@ -721,6 +721,16 @@ async fn ps5_list_dir(
 struct FsPathReq {
     addr: Option<String>,
     path: String,
+    /// Optional unique 64-bit identifier the client generates so it
+    /// can poll progress (`/api/ps5/fs/op-status`) and cancel
+    /// (`/api/ps5/fs/op-cancel`) the in-flight delete. Only used by
+    /// `ps5_fs_delete`; other handlers that share this struct (e.g.
+    /// `ps5_fs_mkdir`) ignore it. Pass 0 (or omit) for ops where
+    /// progress/cancel isn't needed; the payload skips its
+    /// in-flight-ops slot registration in that case so single-file
+    /// unlinks don't burn one of MAX_FS_OPS=4 slots.
+    #[serde(default)]
+    op_id: u64,
 }
 
 #[derive(Deserialize)]
@@ -756,13 +766,25 @@ async fn ps5_fs_delete(
 ) -> impl IntoResponse {
     let addr = mgmt_addr_or_default(req.addr, &state.default_ps5_addr);
     let path = req.path;
+    let op_id = req.op_id;
     let started = std::time::Instant::now();
-    crate::log_info!("fs_delete: addr={addr} path={path}");
+    crate::log_info!("fs_delete: addr={addr} path={path} op_id={op_id}");
     let path_for_log = path.clone();
-    match tokio::task::spawn_blocking(move || fs_delete(&addr, &path))
-        .await
-        .map_err(anyhow::Error::from)
-        .and_then(|r| r)
+    // 1-hour deadline: fs_delete is a single-shot RPC; the payload runs
+    // a recursive `rm -rf` and only sends FS_DELETE_ACK at the end. A
+    // small-file-heavy game folder (PPSA01342: 223k files / 19k dirs ≈
+    // 240k metadata syscalls) takes minutes to delete on PS5 UFS; the
+    // default 30 s socket timeout fires mid-walk and the user sees a
+    // "read frame header: Resource temporarily unavailable" 502 while
+    // the payload keeps deleting in the background. Same long bound as
+    // fs_copy / fs_move so behavior across the destructive trio matches.
+    let io_timeout = std::time::Duration::from_secs(60 * 60);
+    match tokio::task::spawn_blocking(move || {
+        fs_delete_with_op_id(&addr, &path, op_id, Some(io_timeout))
+    })
+    .await
+    .map_err(anyhow::Error::from)
+    .and_then(|r| r)
     {
         Ok(()) => {
             crate::log_info!(
@@ -772,6 +794,18 @@ async fn ps5_fs_delete(
             (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
         }
         Err(e) => {
+            // Cancellation surfaces as `Err("cancelled")` from
+            // fs_delete_with_op_id. Mirror fs_copy: 409 Conflict so
+            // the client can tell user-initiated stop apart from a
+            // real delete failure (different banner, different log).
+            let msg = e.to_string();
+            if msg == "cancelled" {
+                crate::log_info!(
+                    "fs_delete cancelled: {path_for_log} in {} ms",
+                    started.elapsed().as_millis()
+                );
+                return json_err(StatusCode::CONFLICT, "cancelled").into_response();
+            }
             crate::log_warn!(
                 "fs_delete failed: {path_for_log} in {} ms: {e}",
                 started.elapsed().as_millis()
