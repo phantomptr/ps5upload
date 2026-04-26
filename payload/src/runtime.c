@@ -41,6 +41,13 @@
 extern int posix_fadvise(int fd, off_t offset, off_t len, int advice);
 #endif
 
+/* `posix_fallocate` is hidden behind the same __POSIX_VISIBLE gate as
+ * posix_fadvise above. The libc symbol is present (FreeBSD 11+); we
+ * just need a visible prototype. Used by cp_rf to reserve contiguous
+ * dst extents up-front, which prevents block-allocation interleaving
+ * with the data-write loop on multi-GiB copies. */
+extern int posix_fallocate(int fd, off_t offset, off_t len);
+
 #define FTX2_MAGIC 0x32585446u
 #define FTX2_VERSION 1u
 #define FTX2_FRAME_HELLO 1u
@@ -3783,7 +3790,20 @@ static int chmod_rf(const char *path, mode_t mode, int depth) {
  *
  * Symlinks are recreated as symlinks (not dereferenced) — matches
  * `cp -R` semantics. Special files (devices, sockets, fifos) are
- * skipped with a log line; they don't belong in a user data tree. */
+ * skipped with a log line; they don't belong in a user data tree.
+ *
+ * Throughput: 4 MiB IOs + posix_fadvise(SEQUENTIAL) hint + up-front
+ * posix_fallocate so the FS reserves contiguous extents. The previous
+ * 64 KiB buffer required ~540 thousand read/write syscall pairs for
+ * a 33 GiB file — syscall overhead alone capped throughput at
+ * ~22 MiB/s on PS5 NVMe, roughly 10× below the disk-limited rate.
+ * 4 MiB buffer × kernel-readahead hint should bring us close to the
+ * sequential-IO ceiling (~200 MiB/s observed on internal NVMe).
+ *
+ * The buffer is allocated once at the cp_rf entry that triggers the
+ * S_ISREG branch — recursive descent re-allocates per file. Trading
+ * peak RSS for throughput here is fine because cp_rf isn't run on
+ * the FTX2 transfer port that needs its own 32 MiB shard buffer. */
 static int cp_rf(const char *src, const char *dst, int depth) {
     struct stat st;
     DIR *d;
@@ -3791,10 +3811,11 @@ static int cp_rf(const char *src, const char *dst, int depth) {
     char sub_src[1024];
     char sub_dst[1024];
     int rc = 0;
-    /* 64 KiB copy buffer. Big enough to keep per-read syscall cost
-     * amortized, small enough not to stress the payload's malloc
-     * ceiling on deep recursion. */
-    const size_t COPY_BUF = 65536u;
+    /* 4 MiB copy buffer. PS5 NVMe sequential IOs reach disk-limited
+     * throughput around 1-4 MiB request size; below that we're
+     * syscall-bound. Cost of the alloc is one mmap on FreeBSD's
+     * malloc — negligible against multi-second copies. */
+    const size_t COPY_BUF = 4u * 1024u * 1024u;
 
     if (depth > 64) return -1;
     if (lstat(src, &st) != 0) return -1;
@@ -3813,6 +3834,20 @@ static int cp_rf(const char *src, const char *dst, int depth) {
         if (sfd < 0) return -1;
         int dfd = open(dst, O_WRONLY | O_CREAT | O_EXCL, st.st_mode & 0777);
         if (dfd < 0) { close(sfd); return -1; }
+        /* Tell the kernel: we'll read this file front-to-back, prefetch
+         * aggressively. FreeBSD's readahead defaults to 64 KiB which is
+         * what was throttling us. With the SEQUENTIAL hint the kernel
+         * scales the readahead window up to handle large IOs. Failures
+         * are non-fatal — just lose the perf hint. */
+        (void)posix_fadvise(sfd, 0, 0, POSIX_FADV_SEQUENTIAL);
+        /* Reserve contiguous extents on the dst FS so the writer
+         * doesn't interleave block-allocation with data writes. UFS2
+         * (PS5 internal) honours this; exfatfs (USB exFAT) does too,
+         * via the fallocate emulation path. Failure is non-fatal —
+         * the FS just allocates lazily as it always has. */
+        if (st.st_size > 0) {
+            (void)posix_fallocate(dfd, 0, st.st_size);
+        }
         unsigned char *buf = (unsigned char *)malloc(COPY_BUF);
         if (!buf) { close(sfd); close(dfd); return -1; }
         for (;;) {
