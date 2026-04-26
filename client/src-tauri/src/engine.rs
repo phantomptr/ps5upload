@@ -342,11 +342,7 @@ pub async fn start(app: &AppHandle) -> Result<&'static str> {
                 tokio::spawn(pipe_tagged(out, "[engine] ", log_writer.clone()));
             }
             if let Some(err) = child.stderr.take() {
-                tokio::spawn(pipe_tagged(
-                    err,
-                    "[engine:err] ",
-                    log_writer.clone(),
-                ));
+                tokio::spawn(pipe_tagged(err, "[engine:err] ", log_writer.clone()));
             }
         }
     }
@@ -419,11 +415,8 @@ pub async fn stop() {
 /// Per-line write so log rotation later can split on newlines without
 /// risking torn lines mid-write. The Mutex is std (not tokio) because
 /// the critical section is a sync `write_all` + flush — no awaits.
-async fn pipe_tagged<R>(
-    mut reader: R,
-    tag: &'static str,
-    log: Option<Arc<Mutex<std::fs::File>>>,
-) where
+async fn pipe_tagged<R>(mut reader: R, tag: &'static str, log: Option<Arc<Mutex<std::fs::File>>>)
+where
     R: tokio::io::AsyncRead + Unpin + Send + 'static,
 {
     use std::io::Write as _;

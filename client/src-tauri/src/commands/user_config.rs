@@ -67,8 +67,7 @@ pub async fn user_config_load(app: AppHandle) -> Result<JsonValue, String> {
             if bytes.is_empty() {
                 return Ok(JsonValue::Null);
             }
-            serde_json::from_slice(&bytes)
-                .map_err(|e| format!("parse {path:?}: {e}"))
+            serde_json::from_slice(&bytes).map_err(|e| format!("parse {path:?}: {e}"))
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(JsonValue::Null),
         Err(e) => Err(format!("read {path:?}: {e}")),
@@ -85,22 +84,19 @@ pub async fn user_config_save(app: AppHandle, config: JsonValue) -> Result<(), S
     ensure_parent(&path)?;
     let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
     let tmp = path.with_extension(format!("json.tmp.{seq}"));
-    let bytes = serde_json::to_vec_pretty(&config)
-        .map_err(|e| format!("serialize: {e}"))?;
+    let bytes = serde_json::to_vec_pretty(&config).map_err(|e| format!("serialize: {e}"))?;
     // Write + fsync before rename: on Linux ext4 the rename can land
     // on disk before the data write, leaving a zero-byte
     // settings.json after a crash. Matches the same pattern in
     // persistence.rs::write_json_atomic.
     {
         use std::io::Write;
-        let mut f =
-            std::fs::File::create(&tmp).map_err(|e| format!("create {tmp:?}: {e}"))?;
+        let mut f = std::fs::File::create(&tmp).map_err(|e| format!("create {tmp:?}: {e}"))?;
         f.write_all(&bytes)
             .map_err(|e| format!("write {tmp:?}: {e}"))?;
-        f.sync_all()
-            .map_err(|e| format!("fsync {tmp:?}: {e}"))?;
+        f.sync_all().map_err(|e| format!("fsync {tmp:?}: {e}"))?;
     }
-    if let Err(e) = std::fs::rename(&tmp, &path) {
+    if let Err(e) = super::replace_file(&tmp, &path) {
         // Best-effort cleanup: if rename failed the tmp is still on
         // disk. Leaving it would accumulate `settings.json.tmp.N` files
         // over time across retries.

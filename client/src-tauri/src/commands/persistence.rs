@@ -170,7 +170,7 @@ fn write_json_atomic(path: &PathBuf, value: &JsonValue) -> Result<(), String> {
         return Err(format!("fsync {tmp:?}: {e}"));
     }
     drop(f);
-    if let Err(e) = std::fs::rename(&tmp, path) {
+    if let Err(e) = super::replace_file(&tmp, path) {
         let _ = std::fs::remove_file(&tmp);
         return Err(format!("rename {tmp:?} -> {path:?}: {e}"));
     }
@@ -440,10 +440,7 @@ pub struct ResumeTxidForgetReq {
 /// it) and on Override (user is explicitly starting over — keeping the
 /// old tx_id would be confusing).
 #[tauri::command]
-pub async fn resume_txid_forget(
-    app: AppHandle,
-    req: ResumeTxidForgetReq,
-) -> Result<bool, String> {
+pub async fn resume_txid_forget(app: AppHandle, req: ResumeTxidForgetReq) -> Result<bool, String> {
     let path = data_file(&app, Store::ResumeTxids.filename())?;
     let _guard = store_mutex(Store::ResumeTxids)
         .lock()

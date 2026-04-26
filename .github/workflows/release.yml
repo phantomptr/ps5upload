@@ -125,15 +125,10 @@ jobs:
     name: build-client-${{ matrix.platform }}-${{ matrix.arch }}
     needs: build-payload
     runs-on: ${{ matrix.os }}
-    # windows-11-arm is a GitHub-hosted public-preview image and
-    # occasionally reports "no hosted runner available". Don't let
-    # that single leg block the other five platform releases.
-    # `gen-updater-manifest.py` handles missing platforms gracefully
-    # (just omits them from `assets`), and the in-app updater shows
-    # "no download for your platform" cleanly. All legs other than
-    # windows-arm64 stay fail-the-whole-release-on-error; the matrix
-    # keeps fail-fast: false so macOS/Linux don't die on windows-arm64.
-    continue-on-error: ${{ matrix.platform == 'windows' && matrix.arch == 'arm64' }}
+    # Every matrix leg is a supported release target. Keep
+    # fail-fast:false so one platform's failure doesn't hide the
+    # others' diagnostics, but do not allow partial releases to
+    # publish silently.
     strategy:
       fail-fast: false
       matrix:

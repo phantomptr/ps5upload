@@ -428,8 +428,7 @@ pub fn fs_op_cancel(addr: &str, op_id: u64) -> Result<bool> {
     struct AckBody {
         found: bool,
     }
-    let parsed: AckBody =
-        serde_json::from_slice(&resp).context("decode FS_OP_CANCEL_ACK body")?;
+    let parsed: AckBody = serde_json::from_slice(&resp).context("decode FS_OP_CANCEL_ACK body")?;
     Ok(parsed.found)
 }
 

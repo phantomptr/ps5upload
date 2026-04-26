@@ -75,11 +75,7 @@ fn main() {
     } else {
         match (engine_target_path.is_file(), engine_host_path.is_file()) {
             (true, true) => {
-                let mtime = |p: &Path| {
-                    std::fs::metadata(p)
-                        .ok()
-                        .and_then(|m| m.modified().ok())
-                };
+                let mtime = |p: &Path| std::fs::metadata(p).ok().and_then(|m| m.modified().ok());
                 if mtime(&engine_target_path) >= mtime(&engine_host_path) {
                     engine_target_path
                 } else {

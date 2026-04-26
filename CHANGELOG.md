@@ -4,6 +4,32 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.2.17
+
+**Cross-platform hardening + lower memory paths**
+
+- **Windows persistence and update downloads now replace existing files
+  correctly.** Tauri-side JSON stores, the user settings mirror,
+  downloaded update archives, and bundled-payload extraction now use a
+  shared replace helper that handles Windows' `rename()` behavior when
+  the destination already exists.
+- **Payload send/probe paths no longer read whole files into memory.**
+  Manual payload sending streams in 64 KiB chunks with a safety cap,
+  and payload probing reads only the first 512 KiB needed for signature
+  detection.
+- **Bundled payload extraction is now streaming and hash-stamped.**
+  The desktop app no longer rereads the cached `.elf` to compare
+  bytes on launch; it streams gunzip output to a temp file, validates
+  ELF magic, caps decompressed size, and records a BLAKE3 stamp.
+- **Updater URL validation is stricter.** Manifest and download URLs
+  are parsed as URLs and only allow HTTPS, except local loopback HTTP
+  for staging.
+- **Release CI treats Windows ARM64 as required.** All six supported
+  desktop release targets must build successfully before a release is
+  published.
+
+---
+
 ## 2.2.16
 
 **Cross-mount move shows progress again**

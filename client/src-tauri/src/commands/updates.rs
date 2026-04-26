@@ -169,7 +169,7 @@ async fn fetch_manifest() -> Result<Manifest, String> {
     // override is still honored because a dev tester pointing at a
     // local staging server is a reasonable use case; gate HTTPS only
     // on the production default.
-    if !url.starts_with("https://") && !url.starts_with("http://127.0.0.1") {
+    if !is_safe_update_url(&url) {
         return Err(format!(
             "refusing to fetch update manifest over insecure URL: {url}"
         ));
@@ -205,8 +205,7 @@ async fn fetch_manifest() -> Result<Manifest, String> {
             body.len()
         ));
     }
-    serde_json::from_slice::<Manifest>(&body)
-        .map_err(|e| format!("parse manifest: {e}"))
+    serde_json::from_slice::<Manifest>(&body).map_err(|e| format!("parse manifest: {e}"))
 }
 
 #[tauri::command]
@@ -217,11 +216,7 @@ pub async fn update_check(app: AppHandle) -> Result<UpdateCheck, String> {
     let available = is_newer(&current_version, &latest_version);
     let key = current_platform_key();
     let download_url = manifest.assets.get(key).cloned().unwrap_or_default();
-    let download_filename = download_url
-        .rsplit('/')
-        .next()
-        .unwrap_or("")
-        .to_string();
+    let download_filename = download_url.rsplit('/').next().unwrap_or("").to_string();
     Ok(UpdateCheck {
         available,
         current_version,
@@ -281,7 +276,7 @@ pub async fn update_download(
     // if a future misconfiguration ever let a plain-http URL slip into
     // `assets`, we'd happily download it over the clear. Refuse up
     // front. (Same 127.0.0.1 escape hatch for local staging tests.)
-    if !url.starts_with("https://") && !url.starts_with("http://127.0.0.1") {
+    if !is_safe_update_url(&url) {
         return Err(format!("refusing to download over insecure URL: {url}"));
     }
     // Tight basename validation. The filename comes from the update
@@ -388,8 +383,7 @@ pub async fn update_download(
         armed: true,
     };
 
-    let mut file = std::fs::File::create(&tmp)
-        .map_err(|e| format!("create {tmp:?}: {e}"))?;
+    let mut file = std::fs::File::create(&tmp).map_err(|e| format!("create {tmp:?}: {e}"))?;
     let mut stream = resp.bytes_stream();
     use futures_util::StreamExt;
     let mut total: u64 = 0;
@@ -405,7 +399,7 @@ pub async fn update_download(
     }
     file.sync_all().map_err(|e| format!("fsync: {e}"))?;
     drop(file);
-    std::fs::rename(&tmp, &target).map_err(|e| format!("rename: {e}"))?;
+    super::replace_file(&tmp, &target).map_err(|e| format!("rename: {e}"))?;
     // Rename succeeded — disarm the guard so it doesn't try to remove
     // the already-moved file. (A Drop-safe `rename_if_exists` is
     // another option, but the guard pattern is simpler here.)
@@ -416,9 +410,7 @@ pub async fn update_download(
     // download itself succeeded — we shouldn't convert that into a
     // download-failed error for the user. Log + continue.
     if let Err(e) = reveal(&app, &target).await {
-        eprintln!(
-            "[updates] download saved to {target:?} but reveal failed: {e}"
-        );
+        eprintln!("[updates] download saved to {target:?} but reveal failed: {e}");
     }
 
     Ok(UpdateDownload {
@@ -438,6 +430,43 @@ async fn reveal(_app: &AppHandle, path: &std::path::Path) -> Result<(), String> 
     let parent = path
         .parent()
         .ok_or_else(|| "downloaded path has no parent dir".to_string())?;
-    open::that_detached(parent)
-        .map_err(|e| format!("open downloads folder: {e}"))
+    open::that_detached(parent).map_err(|e| format!("open downloads folder: {e}"))
+}
+
+fn is_safe_update_url(raw: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(raw) else {
+        return false;
+    };
+    match url.scheme() {
+        "https" => true,
+        "http" => matches!(
+            url.host_str(),
+            Some("127.0.0.1") | Some("localhost") | Some("::1") | Some("[::1]")
+        ),
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_safe_update_url;
+
+    #[test]
+    fn update_urls_require_https_except_loopback_http() {
+        assert!(is_safe_update_url(
+            "https://github.com/phantomptr/ps5upload/latest.json"
+        ));
+        assert!(is_safe_update_url("http://127.0.0.1:8000/latest.json"));
+        assert!(is_safe_update_url("http://localhost:8000/latest.json"));
+        assert!(is_safe_update_url("http://[::1]:8000/latest.json"));
+
+        assert!(!is_safe_update_url(
+            "http://github.com/phantomptr/ps5upload/latest.json"
+        ));
+        assert!(!is_safe_update_url(
+            "http://127.0.0.1.evil.test/latest.json"
+        ));
+        assert!(!is_safe_update_url("ftp://github.com/latest.json"));
+        assert!(!is_safe_update_url("not a url"));
+    }
 }

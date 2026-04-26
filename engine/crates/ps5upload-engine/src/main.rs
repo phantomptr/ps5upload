@@ -52,9 +52,8 @@ use ps5upload_core::{
     download::{download_to_local, enumerate_download_set, DownloadKind},
     fs_ops::{
         fs_chmod, fs_copy_with_op_id, fs_delete, fs_mkdir, fs_mount, fs_move_with_timeout,
-        fs_op_cancel, fs_op_status, fs_read, fs_unmount, list_dir,
-        reconcile, walk_local_inventory, DirListing, ListDirOptions, MountResult, ReconcileFile,
-        ReconcileMode, ReconcilePlan,
+        fs_op_cancel, fs_op_status, fs_read, fs_unmount, list_dir, reconcile, walk_local_inventory,
+        DirListing, ListDirOptions, MountResult, ReconcileFile, ReconcileMode, ReconcilePlan,
     },
     game_meta::parse_param_json_bytes,
     hw::{
@@ -1496,12 +1495,8 @@ async fn transfer_file_handler(
         // panicked transfer doesn't leave the record stuck on
         // Running. Explicitly mark_succeeded() at the end of the
         // closure once we've written our own terminal state.
-        let mut fail_guard = JobFailOnDropGuard::new(
-            Arc::clone(&jobs),
-            events_tx.clone(),
-            job_id,
-            started_at_ms,
-        );
+        let mut fail_guard =
+            JobFailOnDropGuard::new(Arc::clone(&jobs), events_tx.clone(), job_id, started_at_ms);
         let mut cfg = make_transfer_config(&addr);
         cfg.progress_bytes = Some(Arc::clone(&progress));
         // Resume-on-drop for single-file uploads: 1 fresh attempt + 2
@@ -1635,12 +1630,8 @@ async fn transfer_dir_handler(
     tokio::task::spawn_blocking(move || {
         // See ticker stop-guard rationale at the file-upload spawn site.
         let _stop_guard = TickerStopGuard::new(stop_ticker);
-        let mut fail_guard = JobFailOnDropGuard::new(
-            Arc::clone(&jobs),
-            events_tx.clone(),
-            job_id,
-            started_at_ms,
-        );
+        let mut fail_guard =
+            JobFailOnDropGuard::new(Arc::clone(&jobs), events_tx.clone(), job_id, started_at_ms);
         let mut cfg = make_transfer_config(&addr);
         cfg.excludes = req.excludes;
         cfg.progress_bytes = Some(Arc::clone(&progress));
@@ -1788,12 +1779,8 @@ async fn transfer_file_list_handler(
 
     tokio::task::spawn_blocking(move || {
         let _stop_guard = TickerStopGuard::new(stop_ticker);
-        let mut fail_guard = JobFailOnDropGuard::new(
-            Arc::clone(&jobs),
-            events_tx.clone(),
-            job_id,
-            started_at_ms,
-        );
+        let mut fail_guard =
+            JobFailOnDropGuard::new(Arc::clone(&jobs), events_tx.clone(), job_id, started_at_ms);
         let mut cfg = make_transfer_config(&addr);
         cfg.progress_bytes = Some(Arc::clone(&progress));
         // All transfer endpoints share the same 3-attempt resume policy
@@ -2054,12 +2041,8 @@ async fn transfer_download_handler(
 
     tokio::task::spawn_blocking(move || {
         let _stop_guard = TickerStopGuard::new(stop_ticker);
-        let mut fail_guard = JobFailOnDropGuard::new(
-            Arc::clone(&jobs),
-            events_tx.clone(),
-            job_id,
-            started_at_ms,
-        );
+        let mut fail_guard =
+            JobFailOnDropGuard::new(Arc::clone(&jobs), events_tx.clone(), job_id, started_at_ms);
         let result = download_to_local(&mgmt_addr, &dest_root, &manifest, Some(&progress));
         match result {
             Ok(bytes_written) => {
@@ -2340,12 +2323,8 @@ async fn transfer_dir_reconcile_handler(
         );
         // Same panic-survive contract as the other transfer endpoints.
         let _stop_guard = TickerStopGuard::new(stop_ticker);
-        let mut fail_guard = JobFailOnDropGuard::new(
-            Arc::clone(&jobs),
-            events_tx.clone(),
-            job_id,
-            started_at_ms,
-        );
+        let mut fail_guard =
+            JobFailOnDropGuard::new(Arc::clone(&jobs), events_tx.clone(), job_id, started_at_ms);
 
         let entries: Vec<FileListEntry> = plan
             .to_send
@@ -2424,7 +2403,13 @@ async fn get_job(State(state): State<AppState>, Path(id): Path<String>) -> impl 
         Ok(u) => u,
         Err(_) => return json_err(StatusCode::BAD_REQUEST, "invalid job id").into_response(),
     };
-    match state.jobs.lock().unwrap_or_else(|e| e.into_inner()).get(&uuid).cloned() {
+    match state
+        .jobs
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&uuid)
+        .cloned()
+    {
         Some(job) => (StatusCode::OK, Json(job)).into_response(),
         None => json_err(StatusCode::NOT_FOUND, "job not found").into_response(),
     }

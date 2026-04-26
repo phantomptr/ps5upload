@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use tauri::{AppHandle, Manager};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 
@@ -21,6 +21,8 @@ const PS5_LOADER_PORT: u16 = 9021;
 const PS5_MGMT_PORT: u16 = 9114;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const SEND_TIMEOUT: Duration = Duration::from_secs(60);
+const PAYLOAD_SEND_MAX_BYTES: u64 = 128 * 1024 * 1024;
+const EMBEDDED_PAYLOAD_MAX_BYTES: u64 = 128 * 1024 * 1024;
 
 /// Generic TCP reachability probe. Mirrors the Electron `port_check` shape:
 /// returns `{ open, error? }`. Used by the UI to know whether an IP is
@@ -49,31 +51,29 @@ pub async fn port_check(ip: String, port: u16) -> serde_json::Value {
 #[tauri::command]
 pub async fn payload_check(ip: String) -> serde_json::Value {
     let engine_url = crate::engine::url();
-    let url = format!(
-        "{engine_url}/api/ps5/status?addr={ip}:{PS5_MGMT_PORT}"
-    );
+    let url = format!("{engine_url}/api/ps5/status?addr={ip}:{PS5_MGMT_PORT}");
     let client = match reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
         .build()
     {
         Ok(c) => c,
-        Err(e) => return serde_json::json!({ "ok": false, "reachable": false, "error": e.to_string() }),
+        Err(e) => {
+            return serde_json::json!({ "ok": false, "reachable": false, "error": e.to_string() })
+        }
     };
     match client.get(&url).send().await {
-        Ok(r) if r.status().is_success() => {
-            match r.json::<serde_json::Value>().await {
-                Ok(status) => serde_json::json!({
-                    "ok": true,
-                    "reachable": true,
-                    "status": status,
-                }),
-                Err(e) => serde_json::json!({
-                    "ok": false,
-                    "reachable": true,
-                    "error": format!("decode STATUS_ACK: {e}"),
-                }),
-            }
-        }
+        Ok(r) if r.status().is_success() => match r.json::<serde_json::Value>().await {
+            Ok(status) => serde_json::json!({
+                "ok": true,
+                "reachable": true,
+                "status": status,
+            }),
+            Err(e) => serde_json::json!({
+                "ok": false,
+                "reachable": true,
+                "error": format!("decode STATUS_ACK: {e}"),
+            }),
+        },
         // 502 Bad Gateway from the engine means the connect/STATUS frame
         // round-trip itself failed — surface as "not running" rather
         // than as an engine error so the UI can render "Not reachable".
@@ -107,30 +107,58 @@ pub async fn payload_check(ip: String) -> serde_json::Value {
 /// custom builds do). The Connection screen's fast-path send always
 /// uses the default; the Send-payload screen exposes a port field.
 #[tauri::command]
-pub async fn payload_send(
-    ip: String,
-    path: String,
-    port: Option<u16>,
-) -> serde_json::Value {
+pub async fn payload_send(ip: String, path: String, port: Option<u16>) -> serde_json::Value {
     let target_port = port.unwrap_or(PS5_LOADER_PORT);
     let result: Result<u64, String> = (async {
-        let bytes = tokio::fs::read(&path).await
-            .map_err(|e| format!("read {path}: {e}"))?;
+        let mut file = tokio::fs::File::open(&path)
+            .await
+            .map_err(|e| format!("open {path}: {e}"))?;
+        let size = file
+            .metadata()
+            .await
+            .map_err(|e| format!("stat {path}: {e}"))?
+            .len();
+        if size > PAYLOAD_SEND_MAX_BYTES {
+            return Err(format!(
+                "payload is too large ({size} bytes > {PAYLOAD_SEND_MAX_BYTES} cap)"
+            ));
+        }
         let addr = format!("{ip}:{target_port}");
         let mut stream = timeout(CONNECT_TIMEOUT, TcpStream::connect(&addr))
             .await
             .map_err(|_| format!("connect {addr}: timeout"))?
             .map_err(|e| format!("connect {addr}: {e}"))?;
-        timeout(SEND_TIMEOUT, async {
-            stream.write_all(&bytes).await
-                .map_err(|e| format!("write: {e}"))?;
-            stream.shutdown().await
+        let sent = timeout(SEND_TIMEOUT, async {
+            let mut buf = [0u8; 64 * 1024];
+            let mut total = 0u64;
+            loop {
+                let n = file
+                    .read(&mut buf)
+                    .await
+                    .map_err(|e| format!("read {path}: {e}"))?;
+                if n == 0 {
+                    break;
+                }
+                total = total.saturating_add(n as u64);
+                if total > PAYLOAD_SEND_MAX_BYTES {
+                    return Err(format!(
+                        "payload exceeded {PAYLOAD_SEND_MAX_BYTES} bytes while streaming"
+                    ));
+                }
+                stream
+                    .write_all(&buf[..n])
+                    .await
+                    .map_err(|e| format!("write: {e}"))?;
+            }
+            stream
+                .shutdown()
+                .await
                 .map_err(|e| format!("shutdown: {e}"))?;
-            Ok::<(), String>(())
+            Ok::<u64, String>(total)
         })
         .await
         .map_err(|_| "send timed out".to_string())??;
-        Ok(bytes.len() as u64)
+        Ok(sent)
     })
     .await;
 
@@ -156,64 +184,87 @@ pub async fn payload_send(
 const EMBEDDED_PAYLOAD_GZ: &[u8] = include_bytes!(env!("PS5UPLOAD_PAYLOAD_GZ_BYTES"));
 
 /// Extract the embedded `.elf.gz` into the app's local-data dir and
-/// return the decompressed-ELF path. Caches across launches; re-
-/// extracts when the cached `.elf` differs from the decompressed
-/// bytes. Length-only check is not enough — a patch-version bump
-/// like 2.2.0 → 2.2.1 changes the version-string bytes inside the
-/// ELF without changing the file length, and the user would silently
-/// keep sending the old payload after upgrade.
+/// return the decompressed-ELF path. Caches across launches via a
+/// hash stamp of the embedded gzip bytes; a new app build has a new
+/// stamp and re-extracts without reading the existing `.elf` back
+/// into memory.
 fn find_bundled_payload(app: &AppHandle) -> Result<PathBuf, String> {
     use std::fs;
-    use std::io::Read;
+    use std::io::{Read, Write};
 
     let cache_root = app
         .path()
         .app_local_data_dir()
         .map_err(|e| format!("resolving app_local_data_dir: {e}"))?;
     let out_dir = cache_root.join("payload");
-    fs::create_dir_all(&out_dir)
-        .map_err(|e| format!("mkdir {}: {e}", out_dir.display()))?;
+    fs::create_dir_all(&out_dir).map_err(|e| format!("mkdir {}: {e}", out_dir.display()))?;
     let out_path = out_dir.join("ps5upload.elf");
+    let stamp_path = out_dir.join("ps5upload.elf.gz.blake3");
 
-    let mut decoder = flate2::read::GzDecoder::new(EMBEDDED_PAYLOAD_GZ);
-    let mut decompressed = Vec::with_capacity(EMBEDDED_PAYLOAD_GZ.len() * 3);
-    decoder
-        .read_to_end(&mut decompressed)
-        .map_err(|e| format!("gunzip embedded payload: {e}"))?;
-
-    // Sanity: must be ELF after decompression — catches accidental
-    // corruption of the embedded bytes before we stream garbage into
-    // the PS5 loader.
-    if decompressed.len() < 4 || &decompressed[..4] != b"\x7FELF" {
-        return Err(format!(
-            "decompressed payload is not an ELF (first 4 bytes {:02x?})",
-            &decompressed[..decompressed.len().min(4)]
-        ));
-    }
-
-    let needs_write = match fs::metadata(&out_path) {
-        Ok(m) if m.len() as usize == decompressed.len() => match fs::read(&out_path) {
-            Ok(current) => current != decompressed,
-            Err(e) => {
-                // Can't read the cached file (corrupted, perms,
-                // racing antivirus) — overwrite to recover. Log the
-                // error too: if AV is permanently denying read, the
-                // overwrite will keep failing on every launch and
-                // the user needs to know it's an AV issue, not "the
-                // app is broken".
-                eprintln!(
-                    "[bundled-payload] cached file at {} unreadable: {e}; will overwrite",
-                    out_path.display()
-                );
-                true
-            }
-        },
-        Ok(_) => true,
-        Err(_) => true,
+    let embedded_hex = {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(EMBEDDED_PAYLOAD_GZ);
+        hasher.finalize().to_hex().to_string()
     };
+
+    let needs_write = match (fs::read_to_string(&stamp_path), fs::metadata(&out_path)) {
+        (Ok(stored), Ok(meta)) => stored.trim() != embedded_hex || meta.len() == 0,
+        _ => true,
+    };
+
     if needs_write {
-        fs::write(&out_path, &decompressed)
-            .map_err(|e| format!("write {}: {e}", out_path.display()))?;
+        let tmp_path = out_path.with_extension("elf.tmp");
+        let mut decoder = flate2::read::GzDecoder::new(EMBEDDED_PAYLOAD_GZ);
+        let mut tmp = fs::File::create(&tmp_path)
+            .map_err(|e| format!("create {}: {e}", tmp_path.display()))?;
+        let mut magic = Vec::with_capacity(4);
+        let mut buf = [0u8; 64 * 1024];
+        let mut total = 0u64;
+        loop {
+            let n = decoder
+                .read(&mut buf)
+                .map_err(|e| format!("gunzip embedded payload: {e}"))?;
+            if n == 0 {
+                break;
+            }
+            if magic.len() < 4 {
+                let take = (4 - magic.len()).min(n);
+                magic.extend_from_slice(&buf[..take]);
+            }
+            total = total.saturating_add(n as u64);
+            if total > EMBEDDED_PAYLOAD_MAX_BYTES {
+                let _ = fs::remove_file(&tmp_path);
+                return Err(format!(
+                    "decompressed embedded payload exceeded {EMBEDDED_PAYLOAD_MAX_BYTES} bytes"
+                ));
+            }
+            tmp.write_all(&buf[..n])
+                .map_err(|e| format!("write {}: {e}", tmp_path.display()))?;
+        }
+        if magic.as_slice() != b"\x7FELF" {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(format!(
+                "decompressed payload is not an ELF (first bytes {:02x?})",
+                magic
+            ));
+        }
+        tmp.sync_all()
+            .map_err(|e| format!("fsync {}: {e}", tmp_path.display()))?;
+        drop(tmp);
+        super::replace_file(&tmp_path, &out_path).map_err(|e| {
+            let _ = fs::remove_file(&tmp_path);
+            format!(
+                "rename {} -> {}: {e}",
+                tmp_path.display(),
+                out_path.display()
+            )
+        })?;
+        if let Err(e) = fs::write(&stamp_path, &embedded_hex) {
+            eprintln!(
+                "[bundled-payload] could not write stamp {}: {e} (payload still extracted)",
+                stamp_path.display()
+            );
+        }
     }
     Ok(out_path)
 }
@@ -275,7 +326,8 @@ pub async fn payload_bundled_path(app: AppHandle) -> serde_json::Value {
 #[tauri::command]
 pub async fn payload_probe(path: String) -> serde_json::Value {
     let p = PathBuf::from(&path);
-    let ext = p.extension()
+    let ext = p
+        .extension()
         .and_then(|e| e.to_str())
         .map(|s| s.to_ascii_lowercase())
         .unwrap_or_default();
@@ -291,8 +343,8 @@ pub async fn payload_probe(path: String) -> serde_json::Value {
     // Only read the first 512 KiB — plenty to spot the ASCII signature at
     // the ELF's section headers, and keeps us off disk for big files.
     const PROBE_WINDOW: usize = 512 * 1024;
-    let bytes = match tokio::fs::read(&p).await {
-        Ok(b) => b,
+    let mut file = match tokio::fs::File::open(&p).await {
+        Ok(f) => f,
         Err(_) => {
             // Treat unreadable as "not ours" rather than failing; the UI
             // shows the code's localised message either way.
@@ -302,8 +354,18 @@ pub async fn payload_probe(path: String) -> serde_json::Value {
             });
         }
     };
-    let window = &bytes[..bytes.len().min(PROBE_WINDOW)];
-    let sig_match = memmem_ascii(window, b"ps5upload") || memmem_ascii(window, b"PS5UPLOAD");
+    let mut window = vec![0u8; PROBE_WINDOW];
+    let n = match file.read(&mut window).await {
+        Ok(n) => n,
+        Err(_) => {
+            return serde_json::json!({
+                "is_ps5upload": false,
+                "code": "payload_probe_no_signature",
+            });
+        }
+    };
+    window.truncate(n);
+    let sig_match = memmem_ascii(&window, b"ps5upload") || memmem_ascii(&window, b"PS5UPLOAD");
     if name_match || sig_match {
         serde_json::json!({
             "is_ps5upload": true,
@@ -325,4 +387,3 @@ fn memmem_ascii(haystack: &[u8], needle: &[u8]) -> bool {
     }
     haystack.windows(needle.len()).any(|w| w == needle)
 }
-

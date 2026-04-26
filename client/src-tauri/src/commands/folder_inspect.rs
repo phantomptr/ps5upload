@@ -31,11 +31,15 @@ pub async fn path_kind(path: String) -> serde_json::Value {
 #[tauri::command]
 pub async fn inspect_folder(path: String) -> serde_json::Value {
     let p = PathBuf::from(&path);
-    tokio::task::spawn_blocking(move || {
-        match ps5upload_core::game_meta::inspect_folder(&p) {
+    tokio::task::spawn_blocking(
+        move || match ps5upload_core::game_meta::inspect_folder(&p) {
             Ok(r) => {
                 let needs_hint = r.meta_source == "none";
-                let hint = if needs_hint { wrapped_game_hint(&p) } else { None };
+                let hint = if needs_hint {
+                    wrapped_game_hint(&p)
+                } else {
+                    None
+                };
                 serde_json::json!({
                     "ok": true,
                     "result": r,
@@ -43,8 +47,8 @@ pub async fn inspect_folder(path: String) -> serde_json::Value {
                 })
             }
             Err(e) => serde_json::json!({ "ok": false, "error": format!("{e:#}") }),
-        }
-    })
+        },
+    )
     .await
     .unwrap_or_else(|e| serde_json::json!({ "ok": false, "error": format!("join: {e}") }))
 }

@@ -18,8 +18,8 @@
 //! `ps5upload-core` directly and remove the HTTP hop entirely;
 //! nothing in the command contract needs to change for that.
 
-mod engine;
 mod commands;
+mod engine;
 
 use tauri::Manager;
 
@@ -79,17 +79,14 @@ pub fn run() {
             commands::ps5_hw_set_fan_threshold,
             commands::job_status,
             commands::engine_logs_tail,
-
             // ── Scene-tool integration ──────────────────────────────
             // `companion_probe` checks which well-known scene tools
             // are alive on the PS5 host.
             commands::companion_probe,
-
             // ── Persistence (send-payload history) ──────────────────
             commands::send_payload_history_load,
             commands::send_payload_history_add,
             commands::send_payload_history_clear,
-
             // ── Persistence (cross-session resume tx_ids) ───────────
             // The client generates a stable tx_id for each upload and
             // remembers it here; on Resume after a failed run (or even
@@ -98,28 +95,24 @@ pub fn run() {
             commands::resume_txid_lookup,
             commands::resume_txid_remember,
             commands::resume_txid_forget,
-
             // ── Persistence (upload queue + payload playlists) ──────
             // Whole-document JSON stores. Renderer owns the shape.
             commands::upload_queue_load,
             commands::upload_queue_save,
             commands::payload_playlists_load,
             commands::payload_playlists_save,
-
             // ── FAQ + changelog content (bundled markdown) ──────────
             commands::faq_load,
             commands::changelog_load,
-
             // ── Host-local helpers (in-process, no HTTP hop) ────────
-            commands::inspect_folder,            // param.json + disk-footprint walk
-            commands::path_kind,                 // "file" | "folder" for drag-drop routing
-            commands::payload_bundled_path,      // resolve the bundled ps5upload.elf
-            commands::keep_awake_set,            // spawn/kill platform sleep inhibitor
+            commands::inspect_folder, // param.json + disk-footprint walk
+            commands::path_kind,      // "file" | "folder" for drag-drop routing
+            commands::payload_bundled_path, // resolve the bundled ps5upload.elf
+            commands::keep_awake_set, // spawn/kill platform sleep inhibitor
             commands::keep_awake_state,
-            commands::user_config_load,          // ~/.ps5upload/settings.json read
-            commands::user_config_save,          // ~/.ps5upload/settings.json atomic write
+            commands::user_config_load, // ~/.ps5upload/settings.json read
+            commands::user_config_save, // ~/.ps5upload/settings.json atomic write
             commands::user_config_path_resolved, // show-the-path for the Settings UI
-
             // ── Connectivity + payload lifecycle probes ─────────────
             // Used by the Connection + Send payload tabs for
             // reachability checks and payload delivery.
@@ -127,7 +120,6 @@ pub fn run() {
             commands::payload_send,
             commands::payload_check,
             commands::payload_probe,
-
             // ── Self-update ─────────────────────────────────────────
             // Check the GitHub release manifest, download the
             // platform-specific archive, reveal it so the user can
