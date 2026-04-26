@@ -649,7 +649,17 @@ function VersionBlock({ onResend }: { onResend?: () => void }) {
   useEffect(() => {
     getVersion()
       .then(setAppVersion)
-      .catch(() => setAppVersion(null));
+      .catch((e) => {
+        // Without an app version we can't compare against the
+        // payload's reported version, so the outdated-payload
+        // banner stays hidden. Surface why so a degraded Tauri
+        // env doesn't silently disable a feature the user expects.
+        console.warn(
+          "[connection] getVersion failed; outdated-payload banner disabled:",
+          e,
+        );
+        setAppVersion(null);
+      });
   }, []);
 
   if (!payloadVersion && !ps5Kernel) return null;

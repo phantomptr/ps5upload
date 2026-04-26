@@ -45,6 +45,26 @@ pub struct DownloadEntry {
     pub size: u64,
 }
 
+/// One non-file entry the walker skipped. Surfaced so the UI can
+/// tell the user "we didn't pull these N symlinks / special files"
+/// instead of silently producing a structurally-different local copy.
+#[derive(Debug, Clone)]
+pub struct SkippedEntry {
+    pub remote_path: String,
+    pub kind: String,
+}
+
+/// What `enumerate_download_set` returned: the manifest of files to
+/// pull plus the set of entries the walker skipped (symlinks,
+/// special files). The caller decides whether to surface skips as
+/// warnings; the engine handler stitches them into the job's Done
+/// state so the UI can render them.
+#[derive(Debug, Clone)]
+pub struct DownloadPlan {
+    pub manifest: Vec<DownloadEntry>,
+    pub skipped: Vec<SkippedEntry>,
+}
+
 /// What the user picked to download. Folder = walk; file = single
 /// entry. The shape is decided by the caller (Library/FileSystem
 /// already knows whether the row is a file or a directory) so we
@@ -67,9 +87,10 @@ pub fn enumerate_download_set(
     addr: &str,
     src_path: &str,
     kind: DownloadKind,
-) -> Result<Vec<DownloadEntry>> {
+) -> Result<DownloadPlan> {
     let basename = remote_basename(src_path);
-    let mut out = Vec::new();
+    let mut manifest = Vec::new();
+    let mut skipped = Vec::new();
     match kind {
         DownloadKind::File => {
             // For a single file the "rel_path" is just its basename
@@ -97,17 +118,17 @@ pub fn enumerate_download_set(
                     entry.kind
                 );
             }
-            out.push(DownloadEntry {
+            manifest.push(DownloadEntry {
                 remote_path: src_path.to_string(),
                 rel_path: basename,
                 size: entry.size,
             });
         }
         DownloadKind::Folder => {
-            walk_remote_dir(addr, src_path, &basename, &mut out)?;
+            walk_remote_dir(addr, src_path, &basename, &mut manifest, &mut skipped)?;
         }
     }
-    Ok(out)
+    Ok(DownloadPlan { manifest, skipped })
 }
 
 fn walk_remote_dir(
@@ -115,6 +136,7 @@ fn walk_remote_dir(
     remote_dir: &str,
     rel_prefix: &str,
     out: &mut Vec<DownloadEntry>,
+    skipped: &mut Vec<SkippedEntry>,
 ) -> Result<()> {
     let listing = list_dir(
         addr,
@@ -138,16 +160,21 @@ fn walk_remote_dir(
         };
         let child_remote = format!("{}/{}", remote_dir.trim_end_matches('/'), entry.name);
         match entry.kind.as_str() {
-            "dir" => walk_remote_dir(addr, &child_remote, &child_rel, out)?,
+            "dir" => walk_remote_dir(addr, &child_remote, &child_rel, out, skipped)?,
             "file" => out.push(DownloadEntry {
                 remote_path: child_remote,
                 rel_path: child_rel,
                 size: entry.size,
             }),
-            // Symlinks + special files are skipped — we only ship
-            // regular file bytes. A future pass could surface them
-            // as warnings the UI displays alongside the manifest.
-            _ => {}
+            // Symlinks + special files: we only ship regular-file
+            // bytes (no protocol for inode metadata round-trip), so
+            // these get tracked as skipped entries the caller can
+            // surface to the user. Caller decides whether to show a
+            // warning or roll the count into a banner.
+            other => skipped.push(SkippedEntry {
+                remote_path: child_remote,
+                kind: other.to_string(),
+            }),
         }
     }
     Ok(())

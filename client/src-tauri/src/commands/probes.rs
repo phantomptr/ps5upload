@@ -194,9 +194,19 @@ fn find_bundled_payload(app: &AppHandle) -> Result<PathBuf, String> {
     let needs_write = match fs::metadata(&out_path) {
         Ok(m) if m.len() as usize == decompressed.len() => match fs::read(&out_path) {
             Ok(current) => current != decompressed,
-            // Can't read the cached file (corrupted, perms, racing
-            // antivirus) — overwrite to recover.
-            Err(_) => true,
+            Err(e) => {
+                // Can't read the cached file (corrupted, perms,
+                // racing antivirus) — overwrite to recover. Log the
+                // error too: if AV is permanently denying read, the
+                // overwrite will keep failing on every launch and
+                // the user needs to know it's an AV issue, not "the
+                // app is broken".
+                eprintln!(
+                    "[bundled-payload] cached file at {} unreadable: {e}; will overwrite",
+                    out_path.display()
+                );
+                true
+            }
         },
         Ok(_) => true,
         Err(_) => true,

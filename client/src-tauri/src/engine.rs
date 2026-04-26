@@ -101,6 +101,12 @@ async fn probe(url: &str, client: &reqwest::Client) -> bool {
         .unwrap_or(false)
 }
 
+/// Cap on the engine.log file before we rotate it to .old. Without
+/// rotation a long-running install + many app restarts could grow
+/// the log indefinitely; 1 MiB is enough for ~10k tagged lines and
+/// keeps the file readable in any text editor.
+const ENGINE_LOG_MAX_BYTES: u64 = 1024 * 1024;
+
 /// Per-startup log file for the engine sidecar's stdout + stderr.
 ///
 /// On Windows the desktop binary is built with
@@ -112,36 +118,77 @@ async fn probe(url: &str, client: &reqwest::Client) -> bool {
 /// `pipe_tagged` workers append to it as bytes arrive. On readiness
 /// failure we attach the path to the error so users have something
 /// concrete to share in bug reports.
+///
+/// Rotates when the existing file exceeds `ENGINE_LOG_MAX_BYTES` —
+/// previous file moves to `<name>.old` (single rotation generation
+/// is enough; the most recent failure is what users need).
+///
+/// Logs the failure to `eprintln!` if open fails, so a developer
+/// running `cargo tauri dev` from a console at least sees why
+/// log capture didn't engage. Returns None on failure rather than
+/// erroring — a missing log file shouldn't block engine startup.
 fn open_engine_log(path: &Path) -> Option<Arc<Mutex<std::fs::File>>> {
     use std::fs::OpenOptions;
-    OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .ok()
-        .map(|f| Arc::new(Mutex::new(f)))
+    if let Ok(meta) = std::fs::metadata(path) {
+        if meta.len() > ENGINE_LOG_MAX_BYTES {
+            let old = path.with_extension("log.old");
+            // Best-effort rotate: if the rename fails (Windows lock
+            // on the .old file from a previous instance, etc.), fall
+            // through to opening the existing log in append mode and
+            // let it grow a little past the cap. Worst case is a
+            // larger log file, which is recoverable; the alternative
+            // of failing to open at all loses diagnostics entirely.
+            let _ = std::fs::remove_file(&old);
+            if let Err(e) = std::fs::rename(path, &old) {
+                eprintln!(
+                    "[engine-log] rotate {} -> {} failed: {e} (continuing)",
+                    path.display(),
+                    old.display()
+                );
+            }
+        }
+    }
+    match OpenOptions::new().create(true).append(true).open(path) {
+        Ok(f) => Some(Arc::new(Mutex::new(f))),
+        Err(e) => {
+            eprintln!("[engine-log] cannot open {}: {e}", path.display());
+            None
+        }
+    }
 }
 
 /// Start the engine child process and wait for HTTP readiness.
 ///
 /// Idempotent: a second call is a no-op if the engine is already up.
 pub async fn start(app: &AppHandle) -> Result<&'static str> {
-    // Fast-path: already running.
+    // Fast-path: already running. We HOLD the child_lock across the
+    // probe await so a concurrent start() can't both observe the
+    // existing-child state, race past, and end up double-spawning.
+    // tokio::sync::Mutex is async-safe across awaits, and probe()
+    // has its own 500 ms timeout, so worst-case lock hold is short.
+    //
+    // The take()/kill()/respawn branch handles the case where a
+    // child registration exists but the listener is gone (engine
+    // crashed without unregistering). Without dropping the lock at
+    // any point, the kill() + wait() happen with the lock held —
+    // a concurrent start() that wakes during this teardown blocks
+    // until we either succeed or fail, then re-checks the slot.
     {
         let mut guard = child_lock().await.lock().await;
         if guard.is_some() {
-            drop(guard);
             let client = reqwest::Client::new();
             if probe(DEFAULT_ENGINE_URL, &client).await {
                 return Ok(DEFAULT_ENGINE_URL);
             }
-            guard = child_lock().await.lock().await;
+            // Stale child — kill and fall through to spawn a fresh
+            // one. take() empties the slot so the spawn path below
+            // can overwrite it cleanly.
             if let Some(mut child) = guard.take() {
-                drop(guard);
                 let _ = child.kill().await;
                 let _ = child.wait().await;
             }
         }
+        // guard drops here at scope end.
     }
 
     let binary = find_engine_binary(app).context("locating ps5upload-engine binary")?;
@@ -309,7 +356,15 @@ async fn pipe_tagged<R>(
         let n = match reader.read(&mut buf).await {
             Ok(0) => break,
             Ok(n) => n,
-            Err(_) => break,
+            Err(e) => {
+                // Read errors on a child stdio pipe usually mean the
+                // process exited. Surface it so the log makes the
+                // termination obvious instead of just "log went
+                // quiet" — ambiguous between "engine fine, no more
+                // output" and "engine died".
+                emit(&format!("[stream-read-error] {e}"));
+                break;
+            }
         };
         if let Ok(s) = std::str::from_utf8(&buf[..n]) {
             for ch in s.chars() {
