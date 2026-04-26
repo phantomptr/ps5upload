@@ -8,7 +8,8 @@
 //! `?addr=...` on each call, so this default only matters for the few
 //! diagnostic endpoints that don't.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
@@ -100,6 +101,27 @@ async fn probe(url: &str, client: &reqwest::Client) -> bool {
         .unwrap_or(false)
 }
 
+/// Per-startup log file for the engine sidecar's stdout + stderr.
+///
+/// On Windows the desktop binary is built with
+/// `windows_subsystem = "windows"` (no console attached), so the
+/// `eprintln!` writes inside `pipe_tagged` go nowhere visible. Without
+/// a persistent record, "engine never reached readiness" failures
+/// are impossible to diagnose from the user's side. This struct opens
+/// a file alongside the extracted engine binary at startup; the
+/// `pipe_tagged` workers append to it as bytes arrive. On readiness
+/// failure we attach the path to the error so users have something
+/// concrete to share in bug reports.
+fn open_engine_log(path: &Path) -> Option<Arc<Mutex<std::fs::File>>> {
+    use std::fs::OpenOptions;
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .ok()
+        .map(|f| Arc::new(Mutex::new(f)))
+}
+
 /// Start the engine child process and wait for HTTP readiness.
 ///
 /// Idempotent: a second call is a no-op if the engine is already up.
@@ -123,6 +145,28 @@ pub async fn start(app: &AppHandle) -> Result<&'static str> {
     }
 
     let binary = find_engine_binary(app).context("locating ps5upload-engine binary")?;
+    // Log alongside the extracted binary so the user can reach it via
+    // the same path that the engine binary lives at — surfaced in the
+    // readiness-timeout error so support requests can include it.
+    let log_path = binary
+        .parent()
+        .map(|d| d.join("engine.log"))
+        .unwrap_or_else(|| PathBuf::from("engine.log"));
+    let log_writer = open_engine_log(&log_path);
+    if let Some(writer) = &log_writer {
+        // Stamp a separator so successive starts in the same log are
+        // visually distinct; reading the bottom of the file gives the
+        // most recent attempt.
+        if let Ok(mut f) = writer.lock() {
+            use std::io::Write;
+            let _ = writeln!(
+                f,
+                "\n=== engine start @ {} (binary: {}) ===",
+                chrono_like_now(),
+                binary.display()
+            );
+        }
+    }
 
     let mut cmd = Command::new(&binary);
     cmd.stdout(std::process::Stdio::piped())
@@ -154,16 +198,21 @@ pub async fn start(app: &AppHandle) -> Result<&'static str> {
     // readiness never arrives.
     *child_lock().await.lock().await = Some(child);
 
-    // Pipe engine stdout/stderr to our stderr with a tag. `take()` grabs
-    // the handles out of the stored child so the lock drops fast.
+    // Pipe engine stdout/stderr to our stderr with a tag AND tee to
+    // the persistent log file. `take()` grabs the handles out of the
+    // stored child so the lock drops fast.
     {
         let mut guard = child_lock().await.lock().await;
         if let Some(child) = guard.as_mut() {
             if let Some(out) = child.stdout.take() {
-                tokio::spawn(pipe_tagged(out, "[engine] "));
+                tokio::spawn(pipe_tagged(out, "[engine] ", log_writer.clone()));
             }
             if let Some(err) = child.stderr.take() {
-                tokio::spawn(pipe_tagged(err, "[engine:err] "));
+                tokio::spawn(pipe_tagged(
+                    err,
+                    "[engine:err] ",
+                    log_writer.clone(),
+                ));
             }
         }
     }
@@ -181,16 +230,33 @@ pub async fn start(app: &AppHandle) -> Result<&'static str> {
             let mut guard = child_lock().await.lock().await;
             if let Some(child) = guard.as_mut() {
                 if let Ok(Some(status)) = child.try_wait() {
-                    return Err(anyhow!("engine exited during startup: {status}"));
+                    return Err(anyhow!(
+                        "engine exited during startup: {status}\n  log: {}",
+                        log_path.display()
+                    ));
                 }
             }
         }
         sleep(READINESS_POLL).await;
     }
     Err(anyhow!(
-        "engine did not become ready at {DEFAULT_ENGINE_URL}{READINESS_PROBE} within {:?}",
-        READINESS_TIMEOUT
+        "engine did not become ready at {DEFAULT_ENGINE_URL}{READINESS_PROBE} within {:?}.\n  log: {}\n  Common causes on Windows: SmartScreen / antivirus blocked the freshly-extracted .exe; another process is bound to {DEFAULT_ENGINE_URL}; loopback firewall rule.",
+        READINESS_TIMEOUT,
+        log_path.display()
     ))
+}
+
+/// Best-effort wall-clock stamp for the log header. Avoids pulling in
+/// the `chrono` crate just for one timestamp — a SystemTime epoch
+/// integer is good enough as a "which run is this" marker. The user
+/// reading the log knows roughly when they launched the app.
+fn chrono_like_now() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    format!("epoch {secs}")
 }
 
 /// Tear down the engine child. SIGTERM then SIGKILL after a grace period.
@@ -212,14 +278,33 @@ pub async fn stop() {
     .await;
 }
 
-/// Read lines from a child's stdio and forward to our stderr with a tag.
-async fn pipe_tagged<R>(mut reader: R, tag: &'static str)
-where
+/// Read lines from a child's stdio, forward to our stderr with a tag,
+/// AND tee to the engine log file (when one was opened — failure to
+/// open is silent, the stderr path keeps working).
+///
+/// Per-line write so log rotation later can split on newlines without
+/// risking torn lines mid-write. The Mutex is std (not tokio) because
+/// the critical section is a sync `write_all` + flush — no awaits.
+async fn pipe_tagged<R>(
+    mut reader: R,
+    tag: &'static str,
+    log: Option<Arc<Mutex<std::fs::File>>>,
+) where
     R: tokio::io::AsyncRead + Unpin + Send + 'static,
 {
+    use std::io::Write as _;
     use tokio::io::AsyncReadExt;
     let mut buf = [0u8; 4096];
     let mut line = String::new();
+    let emit = |line: &str| {
+        eprintln!("{tag}{line}");
+        if let Some(writer) = &log {
+            if let Ok(mut f) = writer.lock() {
+                let _ = writeln!(f, "{tag}{line}");
+                let _ = f.flush();
+            }
+        }
+    };
     loop {
         let n = match reader.read(&mut buf).await {
             Ok(0) => break,
@@ -229,7 +314,7 @@ where
         if let Ok(s) = std::str::from_utf8(&buf[..n]) {
             for ch in s.chars() {
                 if ch == '\n' {
-                    eprintln!("{tag}{line}");
+                    emit(&line);
                     line.clear();
                 } else {
                     line.push(ch);
@@ -238,7 +323,7 @@ where
         }
     }
     if !line.is_empty() {
-        eprintln!("{tag}{line}");
+        emit(&line);
     }
 }
 

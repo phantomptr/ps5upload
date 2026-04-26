@@ -189,6 +189,26 @@ come online after the bytes finish sending. The elapsed time is
 shown in the button label. If it times out, the payload likely
 crashed on load; send it again.
 
+**Q: Can I use a payload that's already running on the PS5
+(loaded by another tool, or by my previous ps5upload session)?**
+Yes — open the Connection tab while the payload is up and the
+app skips Step 2 automatically. The Connected card shows the
+payload version it detected; if that version is older than what
+this build of ps5upload ships, you'll see a warning with a
+"Replace payload" button. The bundled payload always carries the
+fixes the app expects.
+
+**Q: Can multiple computers connect to the same PS5 payload at the
+same time?**
+Yes. The payload's TCP listeners on ports 9113 and 9114 accept
+concurrent connections, so two laptops both running ps5upload
+against one PS5 is supported. Read-only operations (browse, hardware
+monitor) interleave cleanly. The thing to watch for is *destination
+races*: two simultaneous uploads writing to the same path will
+fight — the payload doesn't lock by destination, it commits the
+shards each transfer ACKs in arrival order. For routine use ("one
+person uploading, another browsing"), no coordination is needed.
+
 ---
 
 ## Transferring

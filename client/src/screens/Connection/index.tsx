@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { getVersion } from "@tauri-apps/api/app";
 import {
   useConnectionStore,
   PS5_LOADER_PORT,
@@ -17,7 +18,9 @@ import {
 import { open as openExternal } from "@tauri-apps/plugin-shell";
 import { pollUntilReady, type PollHandle } from "../../lib/pollUntilReady";
 import { parsePS5Firmware } from "../../lib/ps5Firmware";
+import { compareVersions } from "../../lib/semver";
 import {
+  AlertTriangle,
   CheckCircle2,
   CircleDashed,
   XCircle,
@@ -411,7 +414,7 @@ export default function ConnectionScreen() {
             state={step3}
             stateText={tr("connection_step3_ready", undefined, "PS5 is ready")}
           >
-            <VersionBlock />
+            <VersionBlock onResend={handleSend} />
             <p className="mb-4 text-sm leading-relaxed text-[var(--color-muted)]">
               {tr(
                 "connection_step3_hint",
@@ -625,22 +628,73 @@ function CompanionPill({ row }: { row: CompanionStatus }) {
  * Renders the payload + PS5 firmware/kernel version once the payload is
  * up. Lives inside the "you're ready" card so it's visible when the user
  * is staring at a successful connection.
+ *
+ * Also compares the running payload version against the bundled
+ * payload version. When the running payload is older than what this
+ * app shipped (common after upgrading the desktop while the PS5
+ * payload from a previous session is still loaded), shows an
+ * actionable banner so the user knows to resend.
  */
-function VersionBlock() {
+function VersionBlock({ onResend }: { onResend?: () => void }) {
+  const tr = useTr();
   const payloadVersion = useConnectionStore((s) => s.payloadVersion);
   const ps5Kernel = useConnectionStore((s) => s.ps5Kernel);
   const ps5Firmware = parsePS5Firmware(ps5Kernel);
+
+  // Bundled-app version comes from Tauri at runtime — same value
+  // `update-version.js` writes to package.json + payload's
+  // config.h, so app-version === expected-payload-version by
+  // construction.
+  const [appVersion, setAppVersion] = useState<string | null>(null);
+  useEffect(() => {
+    getVersion()
+      .then(setAppVersion)
+      .catch(() => setAppVersion(null));
+  }, []);
+
   if (!payloadVersion && !ps5Kernel) return null;
+
+  const cmp =
+    payloadVersion && appVersion
+      ? compareVersions(payloadVersion, appVersion)
+      : null;
+  // We only nudge on payload-older-than-app — newer payload (user
+  // testing a future build, or a third-party signed payload that
+  // happens to share our version table) is fine and silent.
+  const payloadIsOlder = cmp === -1;
+
   return (
     <div className="mb-4 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-xs">
       <div className="mb-2 font-medium uppercase tracking-wide text-[var(--color-muted)]">
-        Connected
+        {tr("connection_block_connected", undefined, "Connected")}
       </div>
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 font-mono">
         {payloadVersion && (
           <>
-            <dt className="text-[var(--color-muted)]">Payload</dt>
-            <dd>v{payloadVersion}</dd>
+            <dt className="text-[var(--color-muted)]">
+              {tr("connection_block_payload", undefined, "Payload")}
+            </dt>
+            <dd>
+              v{payloadVersion}
+              {appVersion && cmp === 0 && (
+                <span className="ml-2 text-[10px] font-normal text-[var(--color-good)]">
+                  {tr(
+                    "connection_block_match",
+                    undefined,
+                    "matches this app",
+                  )}
+                </span>
+              )}
+              {appVersion && cmp === 1 && (
+                <span className="ml-2 text-[10px] font-normal text-[var(--color-muted)]">
+                  {tr(
+                    "connection_block_newer",
+                    { app: appVersion },
+                    `newer than this app (v${appVersion})`,
+                  )}
+                </span>
+              )}
+            </dd>
           </>
         )}
         {ps5Firmware && (
@@ -667,6 +721,45 @@ function VersionBlock() {
           </code>{" "}
           from the Send payload tab.
         </p>
+      )}
+
+      {payloadIsOlder && appVersion && payloadVersion && (
+        <div className="mt-3 flex flex-wrap items-start gap-2 rounded-md border border-[var(--color-warn)] bg-[var(--color-surface-2)] p-2 text-[11px]">
+          <AlertTriangle
+            size={12}
+            className="mt-0.5 shrink-0 text-[var(--color-warn)]"
+          />
+          <div className="min-w-0 flex-1">
+            <div className="font-medium text-[var(--color-warn)]">
+              {tr(
+                "connection_payload_outdated_title",
+                undefined,
+                "PS5 has an older payload than this app",
+              )}
+            </div>
+            <p className="mt-0.5 text-[var(--color-muted)]">
+              {tr(
+                "connection_payload_outdated_body",
+                { running: payloadVersion, bundled: appVersion },
+                `Running v${payloadVersion}, this app ships v${appVersion}. The bundled payload includes fixes the older one is missing — replace it for the best results.`,
+              )}
+            </p>
+          </div>
+          {onResend && (
+            <Button
+              variant="secondary"
+              size="sm"
+              leftIcon={<Send size={11} />}
+              onClick={onResend}
+            >
+              {tr(
+                "connection_payload_outdated_action",
+                undefined,
+                "Replace payload",
+              )}
+            </Button>
+          )}
+        </div>
       )}
     </div>
   );
