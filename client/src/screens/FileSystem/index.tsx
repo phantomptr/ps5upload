@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   FolderTree,
@@ -36,6 +36,10 @@ import {
   useFsClipboardStore,
   type ClipboardItem,
 } from "../../state/fsClipboard";
+import {
+  useFsBulkOpStore,
+  useFsDownloadOpStore,
+} from "../../state/fsBulkOp";
 import { useElapsed } from "../../lib/useElapsed";
 
 /**
@@ -126,45 +130,22 @@ export default function FileSystemScreen() {
   const [renameDraft, setRenameDraft] = useState("");
   const [mkdirDraft, setMkdirDraft] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  // One of: null (idle) / {op, current} during bulk actions. `current`
-  // is the name being processed now — shown in the progress banner so
-  // users see which item is in flight.
-  const [bulkBusy, setBulkBusy] = useState<
-    | null
-    | {
-        op: "delete" | "paste-copy" | "paste-move";
-        total: number;
-        done: number;
-        current: string;
-      }
-  >(null);
   const [busyEntry, setBusyEntry] = useState<{
     name: string;
     op: "rename" | "mkdir";
   } | null>(null);
-  /** Entry the user is currently downloading. Single-flight: a second
-   *  Download click while one is in progress is rejected by the
-   *  disabled state on the button. Progress lives here so the in-row
-   *  counter can render bytes/total without the runner looping back
-   *  through the row component. */
-  const [downloadingEntry, setDownloadingEntry] = useState<{
-    name: string;
-    bytesReceived: number;
-    totalBytes: number;
-  } | null>(null);
+  // Lifted into Zustand so the in-flight bulk op survives navigation.
+  // The async runner writes to the store; the screen reads from it.
+  // Re-mount after a tab switch sees the still-running operation.
+  const bulkOp = useFsBulkOpStore();
+  const downloadOp = useFsDownloadOpStore();
   const elapsedMs = useElapsed(
-    busyEntry !== null || bulkBusy !== null || downloadingEntry !== null,
+    busyEntry !== null || bulkOp.op !== null || downloadOp.active,
   );
-  // Cancellation flag for the download poll loop — same rationale as
-  // Library's row: navigate away mid-download shouldn't strand a
-  // setState-on-unmounted-component loop.
-  const mountedRef = useRef(true);
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
+  // Note: no mountedRef needed for the download / bulk-op runners
+  // anymore — both write to global Zustand stores, so an unmount
+  // mid-run is harmless. The runner loops keep going (writing to
+  // the store), the screen re-mount sees the in-flight progress.
 
   const refresh = useCallback(async () => {
     if (!host?.trim()) return;
@@ -294,6 +275,10 @@ export default function FileSystemScreen() {
   // error but continues so a batch where one item fails doesn't abort
   // the rest.
   const runBulkDelete = async () => {
+    // Single-flight: refuse if a bulk op is already running. Without
+    // this, a tab-switch + return + click sequence could double-fire
+    // since the runner is async and outlives the original event.
+    if (useFsBulkOpStore.getState().op !== null) return;
     const names = [...selected];
     if (names.length === 0) return;
     if (
@@ -306,20 +291,39 @@ export default function FileSystemScreen() {
       return;
     }
     setError(null);
-    setBulkBusy({ op: "delete", total: names.length, done: 0, current: "" });
+    useFsBulkOpStore.getState().begin({
+      op: "delete",
+      total: names.length,
+      fromPath: path,
+      toPath: "",
+    });
     let firstError: string | null = null;
+    // Snapshot the per-name sizes from the current entries listing
+    // so the busy banner can show "deleting 1.17 GiB foo.ffpkg" even
+    // for items the user picked from the directory before this op
+    // started — list_dir already gave us sizes; re-stat would be
+    // a wasted round trip.
+    const sizeByName = new Map<string, number>(
+      (entries ?? []).map((e) => [e.name, e.size]),
+    );
     for (let i = 0; i < names.length; i++) {
       const name = names[i];
-      setBulkBusy({ op: "delete", total: names.length, done: i, current: name });
+      const itemPath = joinPath(path, name);
+      useFsBulkOpStore.getState().setProgress({
+        done: i,
+        currentPath: itemPath,
+        currentName: name,
+        currentSize: sizeByName.get(name) ?? null,
+      });
       try {
-        await fsDelete(`${host}:${PS5_PAYLOAD_PORT}`, joinPath(path, name));
+        await fsDelete(`${host}:${PS5_PAYLOAD_PORT}`, itemPath);
       } catch (e) {
         if (!firstError) {
           firstError = `${name}: ${e instanceof Error ? e.message : String(e)}`;
         }
       }
     }
-    setBulkBusy(null);
+    useFsBulkOpStore.getState().end(firstError);
     if (firstError) setError(firstError);
     await refresh();
   };
@@ -352,15 +356,17 @@ export default function FileSystemScreen() {
   // failure keeps the clipboard so the user can retry (maybe after
   // freeing space or fixing permissions).
   const runPaste = async () => {
+    // Single-flight guard: same rationale as runBulkDelete.
+    if (useFsBulkOpStore.getState().op !== null) return;
     if (clipboard.items.length === 0 || !clipboard.op) return;
     const op = clipboard.op;
     const items = clipboard.items;
     setError(null);
-    setBulkBusy({
+    useFsBulkOpStore.getState().begin({
       op: op === "cut" ? "paste-move" : "paste-copy",
       total: items.length,
-      done: 0,
-      current: "",
+      fromPath: clipboard.sourceLabel ?? "",
+      toPath: path,
     });
     const addr = `${host}:${PS5_PAYLOAD_PORT}`;
     const errors: string[] = [];
@@ -368,11 +374,11 @@ export default function FileSystemScreen() {
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
       const target = joinPath(path, item.name);
-      setBulkBusy({
-        op: op === "cut" ? "paste-move" : "paste-copy",
-        total: items.length,
+      useFsBulkOpStore.getState().setProgress({
         done: i,
-        current: item.name,
+        currentPath: item.path,
+        currentName: item.name,
+        currentSize: item.size ?? null,
       });
       try {
         if (op === "cut") {
@@ -410,8 +416,10 @@ export default function FileSystemScreen() {
         );
       }
     }
-    setBulkBusy(null);
     const problemMsgs = [...duplicated, ...errors];
+    useFsBulkOpStore.getState().end(
+      problemMsgs.length > 0 ? problemMsgs.join(" · ") : null,
+    );
     if (problemMsgs.length > 0) {
       setError(problemMsgs.join(" · "));
     }
@@ -428,7 +436,7 @@ export default function FileSystemScreen() {
    *  off `transfer_download`, poll jobStatus to terminal. Single-
    *  flight at the screen level: only one download at a time. */
   const runDownload = async (entry: DirEntry) => {
-    if (downloadingEntry) return;
+    if (useFsDownloadOpStore.getState().active) return;
     const picked = await openDialog({
       multiple: false,
       directory: true,
@@ -442,64 +450,63 @@ export default function FileSystemScreen() {
     const addr = `${host}:${PS5_PAYLOAD_PORT}`;
     const remote = joinPath(path, entry.name);
     const kind: "file" | "folder" = entry.kind === "dir" ? "folder" : "file";
-    setDownloadingEntry({ name: entry.name, bytesReceived: 0, totalBytes: 0 });
     setError(null);
     let jobId: string;
     try {
       jobId = await startTransferDownload(remote, picked, addr, kind);
     } catch (e) {
-      setError(
-        tr(
-          "fs_download_start_failed",
-          { error: e instanceof Error ? e.message : String(e) },
-          `Couldn't start the download: ${
-            e instanceof Error ? e.message : String(e)
-          }`,
-        ),
+      const msg =
+        e instanceof Error ? e.message : String(e);
+      const friendly = tr(
+        "fs_download_start_failed",
+        { error: msg },
+        `Couldn't start the download: ${msg}`,
       );
-      setDownloadingEntry(null);
+      setError(friendly);
+      useFsDownloadOpStore.getState().end(friendly);
       return;
     }
+    useFsDownloadOpStore.getState().begin({
+      jobId,
+      rootName: entry.name,
+      rootSrcPath: remote,
+      destDir: picked,
+    });
+    // Loop runs in async context — not tied to component lifecycle,
+    // and writes go to the global store (no unmount warning to
+    // worry about). Navigating away mid-download keeps the runner
+    // ticking; the store keeps the latest progress; coming back to
+    // FS sees the live banner.
     while (true) {
-      if (!mountedRef.current) return;
       try {
         const snap = await jobStatus(jobId);
-        if (!mountedRef.current) return;
         if (snap.status === "done") {
-          setDownloadingEntry(null);
-          // No noisy success toast here — the spinner row going
-          // away is the signal. Errors do surface (we have a
-          // dedicated error banner higher up).
+          useFsDownloadOpStore.getState().end(null);
           return;
         }
         if (snap.status === "failed") {
-          setError(
-            tr(
-              "fs_download_failed",
-              { error: snap.error ?? "download failed" },
-              `Download failed: ${snap.error ?? "unknown error"}`,
-            ),
+          const friendly = tr(
+            "fs_download_failed",
+            { error: snap.error ?? "download failed" },
+            `Download failed: ${snap.error ?? "unknown error"}`,
           );
-          setDownloadingEntry(null);
+          setError(friendly);
+          useFsDownloadOpStore.getState().end(friendly);
           return;
         }
-        setDownloadingEntry({
-          name: entry.name,
+        useFsDownloadOpStore.getState().setProgress({
           bytesReceived: snap.bytes_sent ?? 0,
           totalBytes: snap.total_bytes ?? 0,
         });
       } catch (e) {
-        if (!mountedRef.current) return;
-        setError(
-          tr(
-            "fs_download_poll_failed",
-            { error: e instanceof Error ? e.message : String(e) },
-            `Lost contact with the engine while downloading: ${
-              e instanceof Error ? e.message : String(e)
-            }`,
-          ),
+        const msg = e instanceof Error ? e.message : String(e);
+        const friendly = tr(
+          "fs_download_poll_failed",
+          { error: msg },
+          `Lost contact with the engine while downloading: ${msg}`,
         );
-        setDownloadingEntry(null);
+        setError(friendly);
+        useFsDownloadOpStore.getState().end(friendly);
         return;
       }
       await new Promise((resolve) => setTimeout(resolve, 500));
@@ -596,7 +603,7 @@ export default function FileSystemScreen() {
             <button
               type="button"
               onClick={runPaste}
-              disabled={bulkBusy !== null || !host?.trim()}
+              disabled={bulkOp.op !== null || !host?.trim()}
               className="flex items-center gap-1 rounded-md bg-[var(--color-accent)] px-2 py-1 text-xs font-medium text-[var(--color-accent-contrast)] disabled:opacity-50"
             >
               {tr("fs_paste_here", undefined, "Paste here")}
@@ -622,7 +629,7 @@ export default function FileSystemScreen() {
           <button
             type="button"
             onClick={() => stageClipboard("cut")}
-            disabled={bulkBusy !== null}
+            disabled={bulkOp.op !== null}
             className="flex items-center gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 hover:bg-[var(--color-surface-3)] disabled:opacity-50"
           >
             <Scissors size={12} />
@@ -631,7 +638,7 @@ export default function FileSystemScreen() {
           <button
             type="button"
             onClick={() => stageClipboard("copy")}
-            disabled={bulkBusy !== null}
+            disabled={bulkOp.op !== null}
             className="flex items-center gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 hover:bg-[var(--color-surface-3)] disabled:opacity-50"
           >
             <Copy size={12} />
@@ -640,7 +647,7 @@ export default function FileSystemScreen() {
           <button
             type="button"
             onClick={runBulkDelete}
-            disabled={bulkBusy !== null}
+            disabled={bulkOp.op !== null}
             className="flex items-center gap-1 rounded-md border border-[var(--color-bad)] bg-[var(--color-surface)] px-2 py-1 text-[var(--color-bad)] hover:bg-[var(--color-surface-3)] disabled:opacity-50"
           >
             <Trash2 size={12} />
@@ -691,25 +698,20 @@ export default function FileSystemScreen() {
         </div>
       )}
 
-      {bulkBusy && (
-        <div className="mb-3 flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-2 text-xs">
-          <Loader2 size={12} className="animate-spin text-[var(--color-accent)]" />
-          <span className="font-medium">
-            {bulkBusy.op === "delete"
-              ? tr("library_busy_delete", undefined, "Deleting")
-              : bulkBusy.op === "paste-move"
-                ? tr("fs_busy_moving", undefined, "Moving")
-                : tr("fs_busy_copying", undefined, "Copying")}
-          </span>
-          <span className="text-[var(--color-muted)]">
-            {bulkBusy.done + 1}/{bulkBusy.total}
-            {bulkBusy.current ? ` · ${bulkBusy.current}` : ""} ·{" "}
-            {formatDuration(elapsedMs / 1000)}
-          </span>
-        </div>
+      {bulkOp.op !== null && (
+        <BulkOpBanner
+          op={bulkOp.op}
+          total={bulkOp.total}
+          done={bulkOp.done}
+          currentName={bulkOp.currentName}
+          currentSize={bulkOp.currentSize}
+          fromPath={bulkOp.fromPath}
+          toPath={bulkOp.toPath}
+          startedAtMs={bulkOp.startedAtMs}
+        />
       )}
 
-      {busyEntry && !bulkBusy && (
+      {busyEntry && bulkOp.op === null && (
         <div className="mb-3 flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-2 text-xs">
           <Loader2 size={12} className="animate-spin text-[var(--color-accent)]" />
           <span className="font-medium">
@@ -723,23 +725,15 @@ export default function FileSystemScreen() {
         </div>
       )}
 
-      {downloadingEntry && (
-        <div className="mb-3 flex items-center gap-2 rounded-md border border-[var(--color-accent)] bg-[var(--color-surface-2)] p-2 text-xs">
-          <Loader2 size={12} className="animate-spin text-[var(--color-accent)]" />
-          <span className="font-medium">
-            {tr("fs_busy_downloading", undefined, "Downloading from PS5")}
-          </span>
-          <span className="text-[var(--color-muted)]">
-            {downloadingEntry.name} · {formatDuration(elapsedMs / 1000)}
-            {downloadingEntry.totalBytes > 0
-              ? ` · ${formatBytes(downloadingEntry.bytesReceived)} / ${formatBytes(downloadingEntry.totalBytes)} (${(
-                  (downloadingEntry.bytesReceived /
-                    downloadingEntry.totalBytes) *
-                  100
-                ).toFixed(0)}%)`
-              : ` · ${formatBytes(downloadingEntry.bytesReceived)}`}
-          </span>
-        </div>
+      {downloadOp.active && (
+        <DownloadOpBanner
+          rootName={downloadOp.rootName}
+          rootSrcPath={downloadOp.rootSrcPath}
+          destDir={downloadOp.destDir}
+          bytesReceived={downloadOp.bytesReceived}
+          totalBytes={downloadOp.totalBytes}
+          startedAtMs={downloadOp.startedAtMs}
+        />
       )}
 
       {error && (
@@ -848,7 +842,7 @@ export default function FileSystemScreen() {
                 <button
                   type="button"
                   onClick={() => runDownload(e)}
-                  disabled={downloadingEntry !== null}
+                  disabled={downloadOp.active}
                   title={tr(
                     "fs_download_tooltip",
                     undefined,
@@ -856,7 +850,7 @@ export default function FileSystemScreen() {
                   )}
                   className="rounded-md border border-[var(--color-border)] p-1 hover:bg-[var(--color-surface-3)] disabled:opacity-30"
                 >
-                  {downloadingEntry?.name === e.name ? (
+                  {downloadOp.active && downloadOp.rootName === e.name ? (
                     <Loader2
                       size={12}
                       className="animate-spin text-[var(--color-accent)]"
@@ -889,6 +883,192 @@ export default function FileSystemScreen() {
           );
         })}
       </ul>
+    </div>
+  );
+}
+
+/**
+ * Rich progress banner for bulk file ops (delete, paste-move, paste-copy).
+ *
+ * Shows the per-file size + source/destination paths so users know
+ * what's actually moving and where it's going. The progress bar is
+ * "determinate by file count" but the per-file copy is still an
+ * opaque payload-side fs_copy — for a single 10 GiB file the bar
+ * sits at 0% for the whole copy. We layer an indeterminate animated
+ * stripe on top so the bar still LOOKS alive during long single-
+ * file copies. Real byte-level progress would need payload-side
+ * incremental fs_copy events; future work.
+ */
+function BulkOpBanner({
+  op,
+  total,
+  done,
+  currentName,
+  currentSize,
+  fromPath,
+  toPath,
+  startedAtMs,
+}: {
+  op: "delete" | "paste-move" | "paste-copy";
+  total: number;
+  done: number;
+  currentName: string;
+  currentSize: number | null;
+  fromPath: string;
+  toPath: string;
+  startedAtMs: number;
+}) {
+  const tr = useTr();
+  const [now, setNow] = useState<number>(() => Date.now());
+  useEffect(() => {
+    setNow(Date.now());
+    const id = window.setInterval(() => setNow(Date.now()), 500);
+    return () => window.clearInterval(id);
+  }, []);
+  const elapsedSec = startedAtMs > 0 ? Math.max(0, (now - startedAtMs) / 1000) : 0;
+  const pctByFiles = total > 0 ? Math.min(100, (done / total) * 100) : 0;
+  const verb =
+    op === "delete"
+      ? tr("library_busy_delete", undefined, "Deleting")
+      : op === "paste-move"
+        ? tr("fs_busy_moving", undefined, "Moving")
+        : tr("fs_busy_copying", undefined, "Copying");
+
+  return (
+    <div className="mb-3 rounded-md border border-[var(--color-accent)] bg-[var(--color-surface-2)] p-3 text-xs">
+      <div className="mb-2 flex items-center gap-2">
+        <Loader2 size={14} className="animate-spin text-[var(--color-accent)]" />
+        <span className="font-semibold">{verb}</span>
+        <span className="text-[var(--color-muted)]">
+          {tr(
+            "fs_bulk_progress",
+            { done: done + 1, total },
+            `${done + 1} of ${total}`,
+          )}
+          {" · "}
+          {formatDuration(elapsedSec)}
+        </span>
+      </div>
+
+      {currentName && (
+        <div className="mb-2 flex flex-wrap items-baseline gap-x-3 gap-y-0.5 font-mono text-[11px]">
+          <span className="text-[var(--color-text)]">{currentName}</span>
+          {currentSize !== null && currentSize > 0 && (
+            <span className="text-[var(--color-muted)]">
+              {formatBytes(currentSize)}
+            </span>
+          )}
+        </div>
+      )}
+
+      {(fromPath || toPath) && (
+        <div className="mb-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[11px] text-[var(--color-muted)]">
+          {fromPath && (
+            <>
+              <span>{tr("fs_bulk_from", undefined, "From")}</span>
+              <span className="break-all font-mono">{fromPath}</span>
+            </>
+          )}
+          {toPath && op !== "delete" && (
+            <>
+              <span>{tr("fs_bulk_to", undefined, "To")}</span>
+              <span className="break-all font-mono">{toPath}</span>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Determinate-by-file-count bar with a subtle pulse so single-
+          file copies (where the bar sits at 0% the whole copy) still
+          LOOK alive. The spinner icon at top is the secondary
+          motion signal. Real byte-level progress would need
+          payload-side incremental fs_copy events; future work. */}
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--color-surface-3)]">
+        <div
+          className={`h-full bg-[var(--color-accent)] transition-[width] duration-300 ${
+            done < total ? "animate-pulse" : ""
+          }`}
+          style={{ width: `${Math.max(pctByFiles, 4)}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Rich progress banner for downloads. Similar shape to BulkOpBanner
+ * but with real bytes/total since download progresses are streamed
+ * (the engine sums fs_read chunks into the shared progress AtomicU64).
+ */
+function DownloadOpBanner({
+  rootName,
+  rootSrcPath,
+  destDir,
+  bytesReceived,
+  totalBytes,
+  startedAtMs,
+}: {
+  rootName: string;
+  rootSrcPath: string;
+  destDir: string;
+  bytesReceived: number;
+  totalBytes: number;
+  startedAtMs: number;
+}) {
+  const tr = useTr();
+  const [now, setNow] = useState<number>(() => Date.now());
+  useEffect(() => {
+    setNow(Date.now());
+    const id = window.setInterval(() => setNow(Date.now()), 500);
+    return () => window.clearInterval(id);
+  }, []);
+  const elapsedSec = startedAtMs > 0 ? Math.max(0, (now - startedAtMs) / 1000) : 0;
+  const pct = totalBytes > 0 ? Math.min(100, (bytesReceived / totalBytes) * 100) : 0;
+  const speed = elapsedSec > 0 ? bytesReceived / elapsedSec : 0;
+
+  return (
+    <div className="mb-3 rounded-md border border-[var(--color-accent)] bg-[var(--color-surface-2)] p-3 text-xs">
+      <div className="mb-2 flex items-center gap-2">
+        <Loader2 size={14} className="animate-spin text-[var(--color-accent)]" />
+        <span className="font-semibold">
+          {tr("fs_busy_downloading", undefined, "Downloading from PS5")}
+        </span>
+        <span className="text-[var(--color-muted)]">
+          {formatDuration(elapsedSec)}
+        </span>
+      </div>
+
+      <div className="mb-2 flex flex-wrap items-baseline gap-x-3 gap-y-0.5 font-mono text-[11px]">
+        <span>{rootName}</span>
+        {totalBytes > 0 ? (
+          <span className="text-[var(--color-muted)]">
+            {formatBytes(bytesReceived)} / {formatBytes(totalBytes)} ({pct.toFixed(0)}%)
+          </span>
+        ) : (
+          <span className="text-[var(--color-muted)]">
+            {formatBytes(bytesReceived)}
+          </span>
+        )}
+        {speed > 0 && (
+          <span className="text-[var(--color-muted)]">
+            {formatBytes(speed)}/s
+          </span>
+        )}
+      </div>
+
+      <div className="mb-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[11px] text-[var(--color-muted)]">
+        <span>{tr("fs_bulk_from", undefined, "From")}</span>
+        <span className="break-all font-mono">{rootSrcPath}</span>
+        <span>{tr("fs_bulk_to", undefined, "To")}</span>
+        <span className="break-all font-mono">{destDir}</span>
+      </div>
+
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--color-surface-3)]">
+        <div
+          className="h-full bg-[var(--color-accent)] transition-[width] duration-300"
+          style={{ width: `${pct}%` }}
+        />
+      </div>
     </div>
   );
 }
