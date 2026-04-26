@@ -176,6 +176,16 @@ npm run scripts:audit
 
 `scripts:check` is a syntax gate. `scripts:audit` lists tracked utility scripts and marks intentionally manual entry points. Do not remove a script just because it is not referenced by another script; lab/debug utilities can be intentionally manual. Remove only generated artifacts or scripts whose replacement path is documented.
 
+## i18n Coverage
+
+```sh
+npm run i18n:check          # gate — fails on any non-allowlisted miss
+npm run i18n:report         # same gate but always prints per-language summary
+npm run i18n:bootstrap      # rewrites allowlist to current state — use sparingly
+```
+
+The 18-language `client/src/i18n.ts` table is parity-checked against English on every `npm run validate`. Per-language allowlists live at `scripts/i18n-known-missing.json`; entries record both keys English has but the language doesn't (`missing`) and keys the language has but English doesn't (`stale`). When you add a new English key, the gate fails with the missing key listed — translate it and add it to the language's table, OR add it to the allowlist if the translation is genuinely deferred. Never run `i18n:bootstrap` casually — it papers over every current gap and silences whatever you were about to forget to translate.
+
 ## Recommended Change Workflow
 
 1. Run focused tests while editing.

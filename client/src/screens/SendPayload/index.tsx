@@ -23,6 +23,7 @@ import {
 import { sendPayload } from "../../api/ps5";
 import { PageHeader } from "../../components";
 import { useTr } from "../../state/lang";
+import { PlaylistsPanel } from "./PlaylistsPanel";
 
 /**
  * Send a custom ELF to your PS5's payload loader.
@@ -443,6 +444,8 @@ export default function SendPayloadScreen() {
         doesn't bundle or verify third-party loaders; you're responsible
         for the files you pick.
       </p>
+
+      <PlaylistsPanel host={host} port={parsedPort ?? PS5_LOADER_PORT} />
 
       <section className="mt-8 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5">
         <h2 className="mb-2 text-sm font-semibold">Where to find payloads</h2>
