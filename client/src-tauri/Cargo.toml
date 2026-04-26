@@ -1,6 +1,6 @@
 [package]
 name = "ps5upload-desktop"
-version = "2.2.22"
+version = "2.2.23"
 description = "PS5 Upload — Tauri desktop shell"
 edition = "2021"
 rust-version = "1.77"
@@ -18,6 +18,15 @@ tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-shell = "2"
+# Single-instance enforcement. Without it, double-clicking the desktop
+# icon (or launching from a second shortcut) starts a second desktop
+# process. Both probe :19113, the second's orphan-reaper kills the
+# first's engine, and the first window is left talking to a dead
+# sidecar. The plugin's callback fires in the *original* instance with
+# the second-launch argv, so we can focus its window and let the
+# duplicate exit cleanly. Desktop-only — mobile targets don't ship
+# this path.
+tauri-plugin-single-instance = "2"
 
 # HTTP client for both the localhost engine sidecar (no TLS) and the
 # public GitHub update manifest/asset downloads (needs TLS via

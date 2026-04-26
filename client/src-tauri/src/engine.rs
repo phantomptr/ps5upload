@@ -122,6 +122,94 @@ fn find_engine_binary(app: &AppHandle) -> Result<PathBuf> {
     Ok(out_path)
 }
 
+/// Recover from a leftover engine that some prior crashed launch left
+/// holding port 19113. The new (2.2.22+) engine has a stdin-EOF parent
+/// watcher that prevents this scenario going forward — but a user
+/// upgrading from an older build still has the orphan from their last
+/// session. Without this helper, every launch after that point fails
+/// with "engine did not become ready" until they manually
+/// `taskkill`/`pkill` the orphan from a terminal.
+///
+/// We shell out to a per-OS port-killer because that's far simpler
+/// than pulling in `sysinfo` / `windows-sys` / `/proc` parsing — the
+/// commands are universally present (PowerShell on Win10+, lsof on
+/// macOS by default, fuser/ss on every Linux distro). Each command is
+/// best-effort; any failure is swallowed because the worst case is
+/// the existing readiness probe times out and the user sees the same
+/// error they would have seen anyway.
+///
+/// Only called when the readiness probe finds *something* on 19113
+/// that isn't a healthy version-matched engine — i.e. when we already
+/// know the port is occupied by a bad citizen.
+async fn reap_orphan_listener_on(port: u16) {
+    use tokio::process::Command as TokioCommand;
+    eprintln!("[engine] attempting to reap orphan listener on :{port}");
+    #[cfg(target_os = "windows")]
+    let attempts: &[(&str, &[&str])] = &[
+        // PowerShell (Win10+ default). Get-NetTCPConnection +
+        // Stop-Process is the cleanest path; the wrapper script
+        // handles "no such connection" without erroring.
+        (
+            "powershell.exe",
+            &[
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                // Inline; the parent shell cmd substitutes {port} below.
+                "$ErrorActionPreference='SilentlyContinue'; \
+                 $c = Get-NetTCPConnection -LocalPort $env:PORT -State Listen -ErrorAction SilentlyContinue; \
+                 if ($c) { Stop-Process -Id $c.OwningProcess -Force }",
+            ],
+        ),
+        // Fallback: classic netstat + taskkill. Works on Server SKUs
+        // that may have PowerShell stripped down.
+        (
+            "cmd.exe",
+            &[
+                "/C",
+                "for /f \"tokens=5\" %a in ('netstat -ano ^| findstr :%PORT% ^| findstr LISTENING') do taskkill /F /PID %a",
+            ],
+        ),
+    ];
+    #[cfg(target_os = "macos")]
+    let attempts: &[(&str, &[&str])] = &[
+        // lsof + xargs kill -9. lsof is preinstalled.
+        ("/bin/sh", &["-c", "lsof -ti tcp:$PORT -sTCP:LISTEN | xargs -r kill -9"]),
+    ];
+    #[cfg(target_os = "linux")]
+    let attempts: &[(&str, &[&str])] = &[
+        // fuser is in psmisc, present on every distro we care about.
+        ("/bin/sh", &["-c", "fuser -k -n tcp $PORT"]),
+        // Fallback if fuser is missing for some reason.
+        ("/bin/sh", &["-c", "ss -ltnp \"sport = :$PORT\" 2>/dev/null | awk -F'pid=' 'NR>1 {split($2,a,\",\"); print a[1]}' | xargs -r kill -9"]),
+    ];
+    for (program, args) in attempts {
+        let mut cmd = TokioCommand::new(program);
+        cmd.args(*args).env("PORT", port.to_string());
+        // 2 s ceiling — the kill should be near-instant; if it hangs
+        // (e.g. a wedged shell host), don't block engine startup.
+        let res = tokio::time::timeout(Duration::from_secs(2), cmd.status()).await;
+        match res {
+            Ok(Ok(status)) if status.success() => {
+                eprintln!("[engine] orphan reaper ({program}) exited {status}");
+                break;
+            }
+            Ok(Ok(status)) => {
+                eprintln!("[engine] orphan reaper ({program}) exited {status} — trying next");
+            }
+            Ok(Err(e)) => {
+                eprintln!("[engine] orphan reaper ({program}) failed to spawn: {e}");
+            }
+            Err(_) => {
+                eprintln!("[engine] orphan reaper ({program}) timed out");
+            }
+        }
+    }
+    // Give the OS a beat to actually release the port — kill returns
+    // before the kernel finishes reaping the dead process's sockets.
+    sleep(Duration::from_millis(300)).await;
+}
+
 /// Probe the readiness endpoint. Returns true if the engine answers 200.
 async fn probe(url: &str, client: &reqwest::Client) -> bool {
     let u = format!("{url}{READINESS_PROBE}");
@@ -240,42 +328,45 @@ pub async fn start(app: &AppHandle) -> Result<&'static str> {
     // until we either succeed or fail, then re-checks the slot.
     {
         let mut guard = child_lock().await.lock().await;
-        if guard.is_some() {
-            let client = reqwest::Client::new();
-            if probe(DEFAULT_ENGINE_URL, &client).await {
-                // The port responds, but it might be a stale-version
-                // engine left behind by a previous app instance (the
-                // process didn't reap on crash, so we inherited it
-                // on next start). Verify the version matches the
-                // shell's expectation; if not, kill it and respawn
-                // from the bundled bytes. Without this, fresh routes
-                // (e.g. the FS_OP frames added in 2.2.7) silently
-                // 404 against an old engine the shell is happily
-                // talking to.
-                if engine_version_matches(DEFAULT_ENGINE_URL, &client).await {
-                    return Ok(DEFAULT_ENGINE_URL);
-                }
-                eprintln!(
-                    "[engine] stale-version sibling engine detected on {DEFAULT_ENGINE_URL} — killing and respawning",
-                );
-                // Fall through to take()+kill below. If our child
-                // handle isn't actually the process bound to the
-                // port (engine was orphaned by a prior crash and we
-                // never re-acquired it), kill() will be a no-op and
-                // bind() will fail in the spawned child — but our
-                // engine binary now exits 0 cleanly in that case
-                // rather than panicking, so the worst outcome is a
-                // single "couldn't bind" log entry.
+        let client = reqwest::Client::new();
+        let port_responds = probe(DEFAULT_ENGINE_URL, &client).await;
+
+        if guard.is_some() && port_responds {
+            // The port responds, but it might be a stale-version
+            // engine left behind by a previous app instance (the
+            // process didn't reap on crash, so we inherited it
+            // on next start). Verify the version matches the
+            // shell's expectation; if not, kill it and respawn
+            // from the bundled bytes.
+            if engine_version_matches(DEFAULT_ENGINE_URL, &client).await {
+                return Ok(DEFAULT_ENGINE_URL);
             }
-            // Stale child (or stale version) — kill and fall through
-            // to spawn a fresh one. take() empties the slot so the
-            // spawn path below can overwrite it cleanly.
-            if let Some(mut child) = guard.take() {
-                let _ = child.kill().await;
-                let _ = child.wait().await;
+            eprintln!(
+                "[engine] stale-version sibling engine detected on {DEFAULT_ENGINE_URL} — killing and respawning",
+            );
+        }
+
+        // Kill our child handle if we have one. take() empties the
+        // slot so the spawn path below can overwrite cleanly.
+        if let Some(mut child) = guard.take() {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+        }
+
+        // Belt-and-braces: even if our child handle was empty (no
+        // record of spawning) or already-killed, the port may still be
+        // held by an orphan from a previous crashed launch — and the
+        // 2.2.22 stdin-EOF watcher only protects against future
+        // crashes, not retroactively. If we still see a listener on
+        // 19113 here, it's not ours; reap it so the bind below
+        // succeeds. No-op when the port is free.
+        if port_responds {
+            // Re-probe to confirm it's still listening (we might have
+            // just killed our own child above, freeing the port).
+            if probe(DEFAULT_ENGINE_URL, &client).await {
+                reap_orphan_listener_on(19113).await;
             }
         }
-        // guard drops here at scope end.
     }
 
     let binary = find_engine_binary(app).context("locating ps5upload-engine binary")?;
@@ -305,6 +396,24 @@ pub async fn start(app: &AppHandle) -> Result<&'static str> {
     let mut cmd = Command::new(&binary);
     cmd.stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
+        // Pipe stdin so the engine's parent-watch thread can detect
+        // our death by EOF on its stdin. We never write to the pipe
+        // — only the OS closing the write end (which it does
+        // unconditionally when the parent process exits, however it
+        // exits) signals the child. Pairs with PS5UPLOAD_PARENT_WATCH
+        // below, which gates the watcher inside the engine.
+        .stdin(std::process::Stdio::piped())
+        // PS5UPLOAD_PARENT_WATCH=1 enables the engine's stdin-EOF
+        // watcher. Without it the engine ignores stdin (so a
+        // standalone `cargo run -p ps5upload-engine` from a terminal
+        // doesn't auto-exit when the dev pipes a file in or
+        // backgrounds it).
+        .env("PS5UPLOAD_PARENT_WATCH", "1")
+        // kill_on_drop is the GRACEFUL teardown path (Drop on the
+        // Child runs when the desktop shell exits cleanly); the
+        // stdin-EOF watcher above is the BACKUP for ungraceful exits
+        // (taskkill /F, segfault, panic, OOM-killer) where Drop never
+        // gets a chance to run.
         .kill_on_drop(true);
 
     // Windows: belt-and-braces with the engine's own

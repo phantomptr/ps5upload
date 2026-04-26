@@ -4,6 +4,56 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.2.23
+
+**Engine lifecycle hardening: orphans, double-launches, and a real body-size cap**
+
+Three small fixes paying down the long tail of "engine got stuck and
+the desktop can't talk to it" failure modes that used to require a
+manual `taskkill` to recover from.
+
+- **Fix: desktop dying ungracefully no longer leaves the engine
+  orphaned holding port 19113.** Symptom: any time the desktop shell
+  exited without running its `Drop` impls — `taskkill /F`, segfault,
+  panic, OOM-killer, power-cycle recovery — the engine kept running
+  in the background. Next launch couldn't bind 19113 and the user
+  saw "engine did not become ready" with no obvious cause until they
+  manually killed the orphan from a terminal. The engine now spawns
+  with a piped stdin handle and runs a watcher thread that exits the
+  process on EOF; the OS unconditionally closes the parent's pipe
+  handles when the parent dies (any way it dies), so the engine
+  notices instantly and releases the port. No FFI, no per-OS code —
+  same behavior on Windows, macOS, Linux.
+- **Fix: existing orphans from prior crashes are auto-reaped at
+  startup.** The stdin-EOF watcher above prevents future orphans, but
+  a user upgrading from an older build still has the orphan from
+  their last session holding 19113. The desktop now shells out to a
+  per-OS port-killer (`Stop-Process` on Windows, `lsof | kill` on
+  macOS, `fuser -k` on Linux) when it detects the port is held by
+  something that isn't a healthy version-matched engine. So the
+  *first* launch after this update auto-cleans whatever's stuck;
+  from then on the watcher prevents new orphans.
+- **Fix: double-clicking the desktop icon no longer breaks the
+  first instance.** Previously a second launch would race on 19113,
+  and (worse, after this release's orphan-reaper) would actively
+  kill the first instance's engine and leave its UI talking to a
+  dead sidecar. Adopted `tauri-plugin-single-instance`: a second
+  launch focuses the existing window and exits cleanly. Standard
+  Tauri pattern; ~10 LOC.
+- **Robustness: explicit 64 MiB body-size cap on the engine HTTP
+  router.** Was relying on axum's implicit 2 MiB default, which is
+  borderline for a 100k-entry `TransferFileListReq` and could
+  silently change with an axum upgrade. Now documented in the code
+  alongside the CORS layer; generous enough for the largest
+  legitimate payload, small enough that a runaway local request
+  can't OOM the engine on a 4 GB box.
+- **Tauri shell shutdown switched from per-window `CloseRequested`
+  to app-level `RunEvent::Exit`.** Same effect for today's
+  single-window app, but a future multi-window scenario won't kill
+  the engine on first-window-close.
+
+---
+
 ## 2.2.22
 
 **Big-tree deletes work; queue uploads show speed; pack worker survives transient I/O hiccups**

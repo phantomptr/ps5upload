@@ -21,11 +21,28 @@
 mod commands;
 mod engine;
 
-use tauri::Manager;
-
 /// Build and run the Tauri application. `main.rs` just calls this.
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
+        // Single-instance MUST be the first plugin so its `init` runs
+        // before any other setup (window creation, engine spawn). When
+        // a second launch hits, the runtime calls our callback in the
+        // ORIGINAL process with the second instance's argv, then exits
+        // the duplicate. This prevents the double-orphan-reap race
+        // where launch #2's `engine::start()` would otherwise kill
+        // launch #1's engine and leave its UI talking to a dead port.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            // Focus the existing main window so the user sees something
+            // happen rather than a silent no-op when they re-launch.
+            // `get_webview_window("main")` matches the window label
+            // declared in tauri.conf.json.
+            use tauri::Manager;
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
@@ -42,16 +59,6 @@ pub fn run() {
                 }
             });
             Ok(())
-        })
-        .on_window_event(|window, event| {
-            // Kill the engine child when any window closes. Mirrors the
-            // `before-quit` hook in the old Electron main.
-            if let tauri::WindowEvent::CloseRequested { .. } = event {
-                let _ = window.app_handle();
-                tauri::async_runtime::block_on(async {
-                    engine::stop().await;
-                });
-            }
         })
         .invoke_handler(tauri::generate_handler![
             // ── Engine proxies ──────────────────────────────────────
@@ -128,6 +135,28 @@ pub fn run() {
             commands::update_check,
             commands::update_download,
         ])
-        .run(tauri::generate_context!())
-        .expect("tauri runtime failed to launch");
+        .build(tauri::generate_context!())
+        .expect("tauri runtime failed to build");
+
+    // App-level run loop. We use `RunEvent::Exit` (fires once when the
+    // Tauri runtime is about to leave its run loop, regardless of how
+    // many windows are open / closed) instead of the previous
+    // per-window `CloseRequested` so multi-window scenarios don't kill
+    // the engine on first-window-close, and so the kill always runs
+    // before the process exits. Combined with the engine's stdin-EOF
+    // parent watcher (which catches the case where this process dies
+    // without running to here at all — segfault, taskkill /F, OOM,
+    // etc.), the engine never gets orphaned holding 19113.
+    app.run(|_handle, event| {
+        if let tauri::RunEvent::Exit = event {
+            // block_on is fine here: we're on the main thread, the
+            // tauri runtime has already finished its event loop, and
+            // the kill is a couple of syscalls + a short wait. The
+            // tokio runtime stays alive until we return from this
+            // closure, so the async kill path completes.
+            tauri::async_runtime::block_on(async {
+                engine::stop().await;
+            });
+        }
+    });
 }
