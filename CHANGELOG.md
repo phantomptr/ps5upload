@@ -4,6 +4,29 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.2.21
+
+**Finish the GHA Node 24 migration**
+
+- **Fix: 2.2.20 only got us part of the way to Node 24.** Bumping all
+  `actions/*` to `@v5` cleared the warning for `checkout`,
+  `setup-node`, and `cache` (whose v5 ships Node 24), but
+  `upload-artifact@v5` and `download-artifact@v5` are still Node 20
+  — the artifact actions chose a different major-version cadence
+  for their runtime switch. `upload-artifact` is now pinned to
+  `@v6` (first major to ship Node 24, pure runtime bump, no
+  behavior change) and `download-artifact` to `@v7`
+  (`download-artifact@v6` is still Node 20; v7 is the first Node 24
+  release, again a pure runtime bump). Stayed off the latest majors
+  (`upload-artifact@v7`, `download-artifact@v8`) on purpose —
+  those add opt-in features (direct uploads, `skip-decompress`)
+  and a behavioral change (hash-mismatch defaults to error) that
+  aren't needed here, and the smaller bump means smaller blast
+  radius. Five references touched across `engine-ci.yml` and
+  `release.yml`.
+
+---
+
 ## 2.2.20
 
 **CI hygiene: workflows on Node 24**

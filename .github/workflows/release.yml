@@ -107,7 +107,7 @@ jobs:
           ls -la payload/ps5upload.elf payload/ps5upload.elf.gz
 
       - name: Upload payload artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: ps5upload-payload
           path: |
@@ -236,7 +236,7 @@ jobs:
       # invoking cargo. Materialise it at the path tauri.conf.json
       # expects (../../payload/ps5upload.elf relative to src-tauri).
       - name: Restore payload ELF
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v7
         with:
           name: ps5upload-payload
           path: payload
@@ -422,7 +422,7 @@ jobs:
           ls -la "$dist_abs"
 
       - name: Upload platform bundle
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: ps5upload-${{ matrix.platform }}-${{ matrix.arch }}
           path: dist/*
@@ -483,7 +483,7 @@ jobs:
           fi
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v7
         with:
           path: artifacts
 
