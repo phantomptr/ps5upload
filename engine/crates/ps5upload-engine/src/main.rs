@@ -49,6 +49,7 @@ use ftx2_proto::FrameType;
 use ps5upload_core::{
     cleanup::{cleanup_path, CleanupResult},
     connection::Connection,
+    download::{download_to_local, enumerate_download_set, DownloadKind},
     fs_ops::{
         fs_chmod, fs_copy, fs_delete, fs_mkdir, fs_mount, fs_move, fs_read, fs_unmount, list_dir,
         reconcile, walk_local_inventory, DirListing, ListDirOptions, MountResult, ReconcileFile,
@@ -1417,6 +1418,177 @@ async fn transfer_file_list_handler(
         .into_response()
 }
 
+// ─── Download (PS5 → host) ───────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct TransferDownloadReq {
+    /// Transfer-port addr (`ip:9113`); we'll route to mgmt via
+    /// `mgmt_addr_for` since downloads use FS_LIST_DIR + FS_READ.
+    addr: Option<String>,
+    /// Path on the PS5 to download. For `kind: "folder"` this is the
+    /// root of the tree; for `kind: "file"` it's the file itself.
+    src_path: String,
+    /// Local directory the download lands inside. The remote
+    /// basename is appended underneath this — so `dest_dir=/tmp/x`
+    /// with `src_path=/data/foo` produces `/tmp/x/foo` (file or
+    /// folder, mirroring the upload "one folder per title" rule).
+    dest_dir: String,
+    /// "file" or "folder". The caller already knows from context
+    /// (Library/FileSystem row) so we trust the hint and skip a
+    /// stat round-trip just to classify.
+    kind: String,
+}
+
+/// POST /api/transfer/download — PS5 → host file/folder pull.
+///
+/// Mirrors the upload job machinery: returns a job_id immediately,
+/// the heavy work runs on a blocking task, progress lands in the
+/// shared bytes counter that the 200 ms ticker republishes through
+/// the SSE stream the same way uploads do.
+async fn transfer_download_handler(
+    State(state): State<AppState>,
+    Json(req): Json<TransferDownloadReq>,
+) -> impl IntoResponse {
+    let mgmt_addr = mgmt_addr_or_default(req.addr, &state.default_ps5_addr);
+    let kind = match req.kind.as_str() {
+        "file" => DownloadKind::File,
+        "folder" => DownloadKind::Folder,
+        other => {
+            return json_err(
+                StatusCode::BAD_REQUEST,
+                format!("kind must be 'file' or 'folder', got '{other}'"),
+            )
+            .into_response();
+        }
+    };
+
+    let job_id = Uuid::new_v4();
+    let started_at_ms = now_ms();
+
+    // Enumerate first so we have an honest total_bytes from tick #1.
+    // Heavy enumeration only happens for huge folders (multi-thousand-
+    // file game dirs); for single files this is one parent list_dir
+    // call. Failing to enumerate at all is fatal — the user picked
+    // something we can't see — so surface as a Failed job rather
+    // than silently returning an empty manifest.
+    let src_path_clone = req.src_path.clone();
+    let mgmt_addr_for_enum = mgmt_addr.clone();
+    let manifest = match tokio::task::spawn_blocking(move || {
+        enumerate_download_set(&mgmt_addr_for_enum, &src_path_clone, kind)
+    })
+    .await
+    {
+        Ok(Ok(m)) => m,
+        Ok(Err(e)) => return json_err(StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
+        Err(e) => {
+            return json_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
+        }
+    };
+    let total_bytes: u64 = manifest.iter().map(|e| e.size).sum();
+    let files: Vec<PlannedFile> = manifest
+        .iter()
+        .map(|e| PlannedFile {
+            rel_path: e.rel_path.clone(),
+            size: e.size,
+        })
+        .collect();
+    let files_count = files.len() as u64;
+
+    let progress = Arc::new(AtomicU64::new(0));
+    let ctx = TickerContext {
+        started_at_ms,
+        total_bytes,
+        skipped_files: 0,
+        skipped_bytes: 0,
+    };
+    set_job(
+        &state.jobs,
+        &state.events_tx,
+        job_id,
+        JobState::Running {
+            started_at_ms,
+            bytes_sent: 0,
+            total_bytes,
+            files,
+            skipped_files: 0,
+            skipped_bytes: 0,
+        },
+    );
+
+    let jobs = Arc::clone(&state.jobs);
+    let events_tx = state.events_tx.clone();
+    let stop_ticker = spawn_progress_ticker(
+        Arc::clone(&jobs),
+        events_tx.clone(),
+        job_id,
+        ctx,
+        Arc::clone(&progress),
+    );
+
+    let dest_dir = std::path::PathBuf::from(req.dest_dir);
+    // Append the remote basename so a single source produces a
+    // single named output even when the user picked a parent dir
+    // ("save to ~/Downloads" → "~/Downloads/MyGame").
+    let basename = req
+        .src_path
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or("download")
+        .to_string();
+    let dest_root = dest_dir.join(&basename);
+
+    tokio::task::spawn_blocking(move || {
+        let result = download_to_local(&mgmt_addr, &dest_root, &manifest, Some(&progress));
+        stop_ticker.store(true, Ordering::Release);
+        match result {
+            Ok(bytes_written) => {
+                let completed_at_ms = now_ms();
+                set_job(
+                    &jobs,
+                    &events_tx,
+                    job_id,
+                    JobState::Done {
+                        started_at_ms,
+                        completed_at_ms,
+                        elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
+                        tx_id_hex: String::new(),
+                        shards_sent: 0,
+                        bytes_sent: bytes_written,
+                        dest: dest_root.to_string_lossy().to_string(),
+                        files_sent: files_count,
+                        skipped_files: 0,
+                        skipped_bytes: 0,
+                        commit_ack: None,
+                    },
+                );
+            }
+            Err(e) => {
+                let completed_at_ms = now_ms();
+                set_job(
+                    &jobs,
+                    &events_tx,
+                    job_id,
+                    JobState::Failed {
+                        started_at_ms,
+                        completed_at_ms,
+                        elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
+                        error: e.to_string(),
+                    },
+                );
+            }
+        }
+    });
+
+    (
+        StatusCode::ACCEPTED,
+        Json(JobCreated {
+            job_id: job_id.to_string(),
+        }),
+    )
+        .into_response()
+}
+
 /// POST /api/transfer/dir-reconcile
 ///
 /// Resume-friendly directory upload: walks the destination tree on the
@@ -1823,6 +1995,7 @@ async fn main() {
         .route("/api/transfer/file", post(transfer_file_handler))
         .route("/api/transfer/dir", post(transfer_dir_handler))
         .route("/api/transfer/file-list", post(transfer_file_list_handler))
+        .route("/api/transfer/download", post(transfer_download_handler))
         .route(
             "/api/transfer/dir-reconcile",
             post(transfer_dir_reconcile_handler),

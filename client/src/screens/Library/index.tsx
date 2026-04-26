@@ -9,9 +9,11 @@ import {
   Shield,
   Play,
   Unplug,
+  Download,
   FolderInput,
   type LucideIcon,
 } from "lucide-react";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 
 import { useConnectionStore, PS5_PAYLOAD_PORT } from "../../state/connection";
 import {
@@ -24,6 +26,8 @@ import {
   fetchVolumes,
   fetchGameMeta,
   gameIconUrl,
+  jobStatus,
+  startTransferDownload,
   type LibraryEntry,
   type GameMeta,
   type Volume,
@@ -275,7 +279,13 @@ type BusyState =
   | "mount"
   | "unmount"
   | "move-copying"
-  | "move-deleting";
+  | "move-deleting"
+  | "download";
+
+interface DownloadProgress {
+  bytesReceived: number;
+  totalBytes: number;
+}
 
 function LibraryRow({
   entry,
@@ -308,6 +318,8 @@ function LibraryRow({
   const [mountNote, setMountNote] = useState<string | null>(null);
   const [meta, setMeta] = useState<GameMeta | null>(null);
   const [moveOpen, setMoveOpen] = useState(false);
+  const [downloadProgress, setDownloadProgress] =
+    useState<DownloadProgress | null>(null);
   const elapsedMs = useElapsed(busy !== null);
 
   /** Current mount point for this entry (null = not mounted). Only
@@ -467,6 +479,104 @@ function LibraryRow({
     onChanged();
   };
 
+  /** Save a copy of this library entry to the host. Games are
+   *  folders (recursive download); disk images are single files.
+   *  The dest folder picker uses Tauri's plugin-dialog; the engine
+   *  appends the remote basename underneath whatever the user
+   *  picks (so picking ~/Downloads with entry "MyGame" lands
+   *  ~/Downloads/MyGame). Polls jobStatus on a 500 ms cadence to
+   *  drive the in-row progress bar; bails on the first failure
+   *  and surfaces the engine's error verbatim. */
+  const runDownload = async () => {
+    const picked = await openDialog({
+      multiple: false,
+      directory: true,
+      title: tr(
+        "library_download_dialog_title",
+        { name: entry.name },
+        `Pick a destination folder for "${entry.name}"`,
+      ),
+    });
+    if (typeof picked !== "string") return;
+    setBusy("download");
+    setError(null);
+    setMountNote(null);
+    setDownloadProgress({ bytesReceived: 0, totalBytes: 0 });
+    const addr = `${host}:${PS5_PAYLOAD_PORT}`;
+    const kind: "file" | "folder" =
+      entry.kind === "image" ? "file" : "folder";
+    let jobId: string;
+    try {
+      jobId = await startTransferDownload(entry.path, picked, addr, kind);
+    } catch (e) {
+      setError(
+        tr(
+          "library_download_start_failed",
+          { error: e instanceof Error ? e.message : String(e) },
+          `Couldn't start the download: ${
+            e instanceof Error ? e.message : String(e)
+          }`,
+        ),
+      );
+      setBusy(null);
+      setDownloadProgress(null);
+      return;
+    }
+    // Poll until terminal. Cancellation isn't wired (yet) — closing
+    // the screen leaves the engine job running and the file lands
+    // anyway; reopening Library will see the completed file.
+    while (true) {
+      try {
+        const snap = await jobStatus(jobId);
+        if (snap.status === "done") {
+          setMountNote(
+            tr(
+              "library_download_succeeded",
+              {
+                dest: snap.dest ?? picked,
+                bytes: snap.bytes_sent ?? 0,
+              },
+              `Downloaded to ${snap.dest ?? picked} (${snap.bytes_sent ?? 0} bytes).`,
+            ),
+          );
+          setBusy(null);
+          setDownloadProgress(null);
+          return;
+        }
+        if (snap.status === "failed") {
+          setError(
+            tr(
+              "library_download_failed",
+              { error: snap.error ?? "download failed" },
+              `Download failed: ${snap.error ?? "unknown error"}`,
+            ),
+          );
+          setBusy(null);
+          setDownloadProgress(null);
+          return;
+        }
+        setDownloadProgress({
+          bytesReceived: snap.bytes_sent ?? 0,
+          totalBytes: snap.total_bytes ?? 0,
+        });
+      } catch (e) {
+        setError(
+          tr(
+            "library_download_poll_failed",
+            { error: e instanceof Error ? e.message : String(e) },
+            `Lost contact with the engine while downloading: ${
+              e instanceof Error ? e.message : String(e)
+            }`,
+          ),
+        );
+        setBusy(null);
+        setDownloadProgress(null);
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  };
+
   /** Unmount: flipped from Mount when the archive is currently
    *  mounted. Runs the same fsUnmount the Volumes screen uses.
    *  onChanged refreshes the volumes list which feeds the mountMap. */
@@ -576,6 +686,21 @@ function LibraryRow({
           <Button
             variant="secondary"
             size="sm"
+            leftIcon={<Download size={12} />}
+            onClick={runDownload}
+            disabled={busy !== null}
+            loading={busy === "download"}
+            title={tr(
+              "library_download_tooltip",
+              undefined,
+              "Save a copy of this entry to a folder on this computer",
+            )}
+          >
+            {tr("library_download", undefined, "Download")}
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
             leftIcon={<FolderInput size={12} />}
             onClick={() => setMoveOpen(true)}
             disabled={busy !== null || volumes.length === 0}
@@ -630,14 +755,30 @@ function LibraryRow({
                           undefined,
                           "Copying to new location",
                         )
-                      : tr(
-                          "library_busy_move_deleting",
-                          undefined,
-                          "Cleaning up source",
-                        )}
+                      : busy === "move-deleting"
+                        ? tr(
+                            "library_busy_move_deleting",
+                            undefined,
+                            "Cleaning up source",
+                          )
+                        : tr(
+                            "library_busy_download",
+                            undefined,
+                            "Downloading from PS5",
+                          )}
           </span>
           <span className="text-[var(--color-muted)]">
             {entry.name} · {formatDuration(elapsedMs / 1000)}
+            {downloadProgress &&
+              downloadProgress.totalBytes > 0 &&
+              ` · ${formatBytes(downloadProgress.bytesReceived)} / ${formatBytes(downloadProgress.totalBytes)} (${(
+                (downloadProgress.bytesReceived /
+                  downloadProgress.totalBytes) *
+                100
+              ).toFixed(0)}%)`}
+            {downloadProgress &&
+              downloadProgress.totalBytes === 0 &&
+              ` · ${formatBytes(downloadProgress.bytesReceived)}`}
           </span>
         </div>
       )}

@@ -16,13 +16,22 @@ import {
   Scissors,
   Copy,
   ClipboardPaste,
+  Download,
   X,
 } from "lucide-react";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { PageHeader, Button } from "../../components";
 import { useTr } from "../../state/lang";
 
 import { useConnectionStore, PS5_PAYLOAD_PORT } from "../../state/connection";
-import { fsDelete, fsMove, fsMkdir, fsCopy } from "../../api/ps5";
+import {
+  fsDelete,
+  fsMove,
+  fsMkdir,
+  fsCopy,
+  jobStatus,
+  startTransferDownload,
+} from "../../api/ps5";
 import {
   useFsClipboardStore,
   type ClipboardItem,
@@ -133,7 +142,19 @@ export default function FileSystemScreen() {
     name: string;
     op: "rename" | "mkdir";
   } | null>(null);
-  const elapsedMs = useElapsed(busyEntry !== null || bulkBusy !== null);
+  /** Entry the user is currently downloading. Single-flight: a second
+   *  Download click while one is in progress is rejected by the
+   *  disabled state on the button. Progress lives here so the in-row
+   *  counter can render bytes/total without the runner looping back
+   *  through the row component. */
+  const [downloadingEntry, setDownloadingEntry] = useState<{
+    name: string;
+    bytesReceived: number;
+    totalBytes: number;
+  } | null>(null);
+  const elapsedMs = useElapsed(
+    busyEntry !== null || bulkBusy !== null || downloadingEntry !== null,
+  );
 
   const refresh = useCallback(async () => {
     if (!host?.trim()) return;
@@ -392,6 +413,86 @@ export default function FileSystemScreen() {
     await refresh();
   };
 
+  /** Save a file or folder under the current dir to the host. Same
+   *  flow as Library's per-row Download — pick a host folder, kick
+   *  off `transfer_download`, poll jobStatus to terminal. Single-
+   *  flight at the screen level: only one download at a time. */
+  const runDownload = async (entry: DirEntry) => {
+    if (downloadingEntry) return;
+    const picked = await openDialog({
+      multiple: false,
+      directory: true,
+      title: tr(
+        "fs_download_dialog_title",
+        { name: entry.name },
+        `Pick a destination folder for "${entry.name}"`,
+      ),
+    });
+    if (typeof picked !== "string") return;
+    const addr = `${host}:${PS5_PAYLOAD_PORT}`;
+    const remote = joinPath(path, entry.name);
+    const kind: "file" | "folder" = entry.kind === "dir" ? "folder" : "file";
+    setDownloadingEntry({ name: entry.name, bytesReceived: 0, totalBytes: 0 });
+    setError(null);
+    let jobId: string;
+    try {
+      jobId = await startTransferDownload(remote, picked, addr, kind);
+    } catch (e) {
+      setError(
+        tr(
+          "fs_download_start_failed",
+          { error: e instanceof Error ? e.message : String(e) },
+          `Couldn't start the download: ${
+            e instanceof Error ? e.message : String(e)
+          }`,
+        ),
+      );
+      setDownloadingEntry(null);
+      return;
+    }
+    while (true) {
+      try {
+        const snap = await jobStatus(jobId);
+        if (snap.status === "done") {
+          setDownloadingEntry(null);
+          // No noisy success toast here — the spinner row going
+          // away is the signal. Errors do surface (we have a
+          // dedicated error banner higher up).
+          return;
+        }
+        if (snap.status === "failed") {
+          setError(
+            tr(
+              "fs_download_failed",
+              { error: snap.error ?? "download failed" },
+              `Download failed: ${snap.error ?? "unknown error"}`,
+            ),
+          );
+          setDownloadingEntry(null);
+          return;
+        }
+        setDownloadingEntry({
+          name: entry.name,
+          bytesReceived: snap.bytes_sent ?? 0,
+          totalBytes: snap.total_bytes ?? 0,
+        });
+      } catch (e) {
+        setError(
+          tr(
+            "fs_download_poll_failed",
+            { error: e instanceof Error ? e.message : String(e) },
+            `Lost contact with the engine while downloading: ${
+              e instanceof Error ? e.message : String(e)
+            }`,
+          ),
+        );
+        setDownloadingEntry(null);
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  };
+
   const selectionActive = selected.size > 0;
   const clipboardActive = clipboard.items.length > 0;
 
@@ -609,6 +710,25 @@ export default function FileSystemScreen() {
         </div>
       )}
 
+      {downloadingEntry && (
+        <div className="mb-3 flex items-center gap-2 rounded-md border border-[var(--color-accent)] bg-[var(--color-surface-2)] p-2 text-xs">
+          <Loader2 size={12} className="animate-spin text-[var(--color-accent)]" />
+          <span className="font-medium">
+            {tr("fs_busy_downloading", undefined, "Downloading from PS5")}
+          </span>
+          <span className="text-[var(--color-muted)]">
+            {downloadingEntry.name} · {formatDuration(elapsedMs / 1000)}
+            {downloadingEntry.totalBytes > 0
+              ? ` · ${formatBytes(downloadingEntry.bytesReceived)} / ${formatBytes(downloadingEntry.totalBytes)} (${(
+                  (downloadingEntry.bytesReceived /
+                    downloadingEntry.totalBytes) *
+                  100
+                ).toFixed(0)}%)`
+              : ` · ${formatBytes(downloadingEntry.bytesReceived)}`}
+          </span>
+        </div>
+      )}
+
       {error && (
         <div className="mb-3 flex items-start gap-2 rounded-md border border-[var(--color-bad)] bg-[var(--color-surface-2)] p-2 text-xs">
           <AlertTriangle size={12} className="mt-0.5 text-[var(--color-bad)]" />
@@ -712,6 +832,26 @@ export default function FileSystemScreen() {
                 {isDir ? "—" : formatBytes(e.size)}
               </span>
               <div className="ml-2 flex shrink-0 items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => runDownload(e)}
+                  disabled={downloadingEntry !== null}
+                  title={tr(
+                    "fs_download_tooltip",
+                    undefined,
+                    "Save a copy of this entry to a folder on this computer",
+                  )}
+                  className="rounded-md border border-[var(--color-border)] p-1 hover:bg-[var(--color-surface-3)] disabled:opacity-30"
+                >
+                  {downloadingEntry?.name === e.name ? (
+                    <Loader2
+                      size={12}
+                      className="animate-spin text-[var(--color-accent)]"
+                    />
+                  ) : (
+                    <Download size={12} />
+                  )}
+                </button>
                 <button
                   type="button"
                   onClick={() => {

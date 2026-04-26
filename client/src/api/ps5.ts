@@ -212,6 +212,28 @@ export async function resumeTxidForget(
  *  Uses Web Crypto's UUIDv4 generator for a CSPRNG source — collisions
  *  across the payload's tx table would corrupt other uploads, so "good
  *  random" actually matters here. */
+/** Start a PS5 → host download job. `kind` is the caller's known
+ *  classification — Library/FileSystem rows already know whether
+ *  they're showing a file or a folder, so we trust the hint and
+ *  skip a remote stat round-trip. Returns the engine job_id; poll
+ *  via `jobStatus` to track progress + terminal state. */
+export async function startTransferDownload(
+  srcPath: string,
+  destDir: string,
+  transferAddr: string,
+  kind: "file" | "folder",
+): Promise<string> {
+  const res = await invoke<{ job_id: string }>("transfer_download", {
+    req: {
+      src_path: srcPath,
+      dest_dir: destDir,
+      addr: transferAddr,
+      kind,
+    },
+  });
+  return res.job_id;
+}
+
 /** Whole-document load for the upload-queue store. The renderer owns
  *  the shape — see state/uploadQueue.ts. Returns `{}` for first-time
  *  use (Tauri returns the empty default from persistence.rs). */

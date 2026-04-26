@@ -1,5 +1,6 @@
 pub mod cleanup;
 pub mod connection;
+pub mod download;
 pub mod excludes;
 pub mod fs_ops;
 pub mod game_meta;

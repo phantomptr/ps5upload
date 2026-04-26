@@ -137,6 +137,32 @@ pub async fn transfer_dir(req: TransferDirReq) -> Result<JsonValue, String> {
     post_json(&url, &body).await
 }
 
+/// PS5 → host download. The engine walks the remote tree (or single
+/// file) and pulls bytes via FS_READ on the management port. Response
+/// is the standard `{ job_id }` shape — poll job_status to see
+/// progress + errors. `kind` is the caller's known classification
+/// ("file" | "folder") — saves a round-trip vs having the engine stat.
+#[derive(Debug, Deserialize)]
+pub struct TransferDownloadReq {
+    pub src_path: String,
+    pub dest_dir: String,
+    pub addr: Option<String>,
+    pub kind: String,
+}
+
+#[tauri::command]
+pub async fn transfer_download(req: TransferDownloadReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/transfer/download");
+    let body = serde_json::json!({
+        "src_path": req.src_path,
+        "dest_dir": req.dest_dir,
+        "addr": req.addr,
+        "kind": req.kind,
+    });
+    post_json(&url, &body).await
+}
+
 /// Resume-friendly folder upload: the engine reconciles local source
 /// against PS5 destination first and only sends the delta. `mode` is
 /// `"fast"` (size-only, default) or `"safe"` (size + BLAKE3). Response
