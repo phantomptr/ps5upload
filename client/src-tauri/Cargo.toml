@@ -47,6 +47,14 @@ flate2 = { version = "1", default-features = false, features = ["rust_backend"] 
 # (no HTTP hop). Same workspace, different manifest root.
 ps5upload-core = { path = "../../engine/crates/ps5upload-core" }
 
+# BLAKE3 for hash-stamping the extracted engine binary + payload.
+# Replaces the previous full-byte compare on every launch — hashing
+# the embedded bytes once (a few ms for ~14 MiB) and comparing
+# against a 64-char hex stamp file is constant-time vs the file's
+# size, and avoids the Windows file-lock issue (re-reading an .exe
+# the OS has open elsewhere).
+blake3 = "1"
+
 [features]
 # Default: build Tauri-native (no custom features yet)
 default = []

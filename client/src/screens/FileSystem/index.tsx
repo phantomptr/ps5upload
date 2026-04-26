@@ -298,32 +298,40 @@ export default function FileSystemScreen() {
       toPath: "",
     });
     let firstError: string | null = null;
-    // Snapshot the per-name sizes from the current entries listing
-    // so the busy banner can show "deleting 1.17 GiB foo.ffpkg" even
-    // for items the user picked from the directory before this op
-    // started — list_dir already gave us sizes; re-stat would be
-    // a wasted round trip.
-    const sizeByName = new Map<string, number>(
-      (entries ?? []).map((e) => [e.name, e.size]),
-    );
-    for (let i = 0; i < names.length; i++) {
-      const name = names[i];
-      const itemPath = joinPath(path, name);
-      useFsBulkOpStore.getState().setProgress({
-        done: i,
-        currentPath: itemPath,
-        currentName: name,
-        currentSize: sizeByName.get(name) ?? null,
-      });
-      try {
-        await fsDelete(`${host}:${PS5_PAYLOAD_PORT}`, itemPath);
-      } catch (e) {
-        if (!firstError) {
-          firstError = `${name}: ${e instanceof Error ? e.message : String(e)}`;
+    try {
+      // Snapshot the per-name sizes from the current entries listing
+      // so the busy banner can show "deleting 1.17 GiB foo.ffpkg"
+      // even for items the user picked from the directory before
+      // this op started — list_dir already gave us sizes; re-stat
+      // would be a wasted round trip.
+      const sizeByName = new Map<string, number>(
+        (entries ?? []).map((e) => [e.name, e.size]),
+      );
+      for (let i = 0; i < names.length; i++) {
+        const name = names[i];
+        const itemPath = joinPath(path, name);
+        useFsBulkOpStore.getState().setProgress({
+          done: i,
+          currentPath: itemPath,
+          currentName: name,
+          currentSize: sizeByName.get(name) ?? null,
+        });
+        try {
+          await fsDelete(`${host}:${PS5_PAYLOAD_PORT}`, itemPath);
+        } catch (e) {
+          if (!firstError) {
+            firstError = `${name}: ${e instanceof Error ? e.message : String(e)}`;
+          }
         }
       }
+    } finally {
+      // Always release the bulk-op store, even if a sync error in
+      // the loop body throws. Without this finally, an exception
+      // would leave op !== null in the store, and the single-flight
+      // guard would permanently block future bulk ops on this
+      // screen until reload.
+      useFsBulkOpStore.getState().end(firstError);
     }
-    useFsBulkOpStore.getState().end(firstError);
     if (firstError) setError(firstError);
     await refresh();
   };
@@ -371,55 +379,62 @@ export default function FileSystemScreen() {
     const addr = `${host}:${PS5_PAYLOAD_PORT}`;
     const errors: string[] = [];
     const duplicated: string[] = [];
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i];
-      const target = joinPath(path, item.name);
-      useFsBulkOpStore.getState().setProgress({
-        done: i,
-        currentPath: item.path,
-        currentName: item.name,
-        currentSize: item.size ?? null,
-      });
-      try {
-        if (op === "cut") {
-          try {
-            await fsMove(addr, item.path, target);
-          } catch (e) {
-            // Cross-filesystem move failure → fall back to copy + delete.
-            // The payload emits "fs_move_cross_mount" for EXDEV; matching
-            // on substring keeps us resilient to minor wording drift.
-            const msg = e instanceof Error ? e.message : String(e);
-            if (msg.includes("cross_mount") || msg.includes("EXDEV")) {
-              await fsCopy(addr, item.path, target);
-              try {
-                await fsDelete(addr, item.path);
-              } catch (delErr) {
-                // Copy succeeded, delete failed. The file exists in
-                // both locations — surface distinctly so the user
-                // knows the move was incomplete, not silently lost.
-                duplicated.push(
-                  `${item.name} (copied to ${target}, couldn't remove original: ${
-                    delErr instanceof Error ? delErr.message : String(delErr)
-                  })`
-                );
+    try {
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        const target = joinPath(path, item.name);
+        useFsBulkOpStore.getState().setProgress({
+          done: i,
+          currentPath: item.path,
+          currentName: item.name,
+          currentSize: item.size ?? null,
+        });
+        try {
+          if (op === "cut") {
+            try {
+              await fsMove(addr, item.path, target);
+            } catch (e) {
+              // Cross-filesystem move failure → fall back to copy + delete.
+              // The payload emits "fs_move_cross_mount" for EXDEV; matching
+              // on substring keeps us resilient to minor wording drift.
+              const msg = e instanceof Error ? e.message : String(e);
+              if (msg.includes("cross_mount") || msg.includes("EXDEV")) {
+                await fsCopy(addr, item.path, target);
+                try {
+                  await fsDelete(addr, item.path);
+                } catch (delErr) {
+                  // Copy succeeded, delete failed. The file exists in
+                  // both locations — surface distinctly so the user
+                  // knows the move was incomplete, not silently lost.
+                  duplicated.push(
+                    `${item.name} (copied to ${target}, couldn't remove original: ${
+                      delErr instanceof Error ? delErr.message : String(delErr)
+                    })`
+                  );
+                }
+              } else {
+                throw e;
               }
-            } else {
-              throw e;
             }
+          } else {
+            await fsCopy(addr, item.path, target);
           }
-        } else {
-          await fsCopy(addr, item.path, target);
+        } catch (e) {
+          errors.push(
+            `${item.name}: ${e instanceof Error ? e.message : String(e)}`
+          );
         }
-      } catch (e) {
-        errors.push(
-          `${item.name}: ${e instanceof Error ? e.message : String(e)}`
-        );
       }
+    } finally {
+      const problemMsgs = [...duplicated, ...errors];
+      // Always release the bulk-op store so the single-flight guard
+      // doesn't strand the screen with op !== null after a sync error
+      // in the loop body.
+      useFsBulkOpStore.getState().end(
+        problemMsgs.length > 0 ? problemMsgs.join(" · ") : null,
+      );
     }
     const problemMsgs = [...duplicated, ...errors];
-    useFsBulkOpStore.getState().end(
-      problemMsgs.length > 0 ? problemMsgs.join(" · ") : null,
-    );
     if (problemMsgs.length > 0) {
       setError(problemMsgs.join(" · "));
     }

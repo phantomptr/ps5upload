@@ -2632,6 +2632,7 @@ name = "ps5upload-desktop"
 version = "2.2.3"
 dependencies = [
  "anyhow",
+ "blake3",
  "flate2",
  "futures-util",
  "open",

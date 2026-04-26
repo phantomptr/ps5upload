@@ -196,11 +196,12 @@ fn walk_remote_dir(
 ///      cap is hit; we ask for exactly the cap so a short read
 ///      reliably means EOF).
 ///
-/// Aborts on the first error — the partial output for the failing
-/// file is retained on disk for inspection rather than silently
-/// cleaned up. The UI can surface the failure with both the source
-/// path and the partial-output path so the user can decide whether
-/// to delete or retry.
+/// Aborts on the first error. Per-file writes go to `<path>.part`
+/// and only get renamed onto the final `<path>` after the size
+/// verification passes — so a failed download leaves a `.part` file
+/// behind for inspection but does NOT clobber whatever the user had
+/// at the final destination from a previous run. Same atomic-rename
+/// pattern persistence.rs uses for its JSON stores.
 pub fn download_to_local(
     addr: &str,
     dest_dir: &Path,
@@ -216,8 +217,22 @@ pub fn download_to_local(
         if let Some(parent) = local_path.parent() {
             fs::create_dir_all(parent).with_context(|| format!("mkdir {}", parent.display()))?;
         }
-        let mut file = fs::File::create(&local_path)
-            .with_context(|| format!("create {}", local_path.display()))?;
+        // Write to a sibling .part path; rename onto the final path
+        // only after the per-file size check below passes. Any prior
+        // file at `local_path` is preserved unless this download
+        // succeeds. We do still overwrite an existing `.part`
+        // (assumed to be a leftover from a prior failed attempt) —
+        // the alternative (refusing to start when .part exists)
+        // would block legitimate retries.
+        let part_path = local_path.with_extension(format!(
+            "{}.part",
+            local_path
+                .extension()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+        ));
+        let mut file = fs::File::create(&part_path)
+            .with_context(|| format!("create {}", part_path.display()))?;
 
         let mut offset: u64 = 0;
         // Authoritative termination is by `entry.size` (pre-stat'd
@@ -247,7 +262,7 @@ pub fn download_to_local(
                 );
             }
             file.write_all(&bytes)
-                .with_context(|| format!("write {}", local_path.display()))?;
+                .with_context(|| format!("write {}", part_path.display()))?;
             let n = bytes.len() as u64;
             offset += n;
             total_written += n;
@@ -260,17 +275,33 @@ pub fn download_to_local(
         // mismatch error; missed, they'd discover the truncation
         // only when trying to use the downloaded file.
         drop(file);
-        let written = std::fs::metadata(&local_path)
-            .with_context(|| format!("stat {} after write", local_path.display()))?
+        let written = std::fs::metadata(&part_path)
+            .with_context(|| format!("stat {} after write", part_path.display()))?
             .len();
         if written != expected {
             anyhow::bail!(
-                "downloaded {} bytes but expected {} for {} — possible truncation",
+                "downloaded {} bytes but expected {} for {} — possible truncation (partial at {})",
                 written,
                 expected,
-                entry.remote_path
+                entry.remote_path,
+                part_path.display()
             );
         }
+        // Atomic-ish promotion: rename .part onto the final path.
+        // On Unix this is atomic. On Windows, fs::rename will fail
+        // if the destination exists; we handle that by removing
+        // first (best-effort — if removal fails, surface the rename
+        // error so the .part stays around for the user to inspect).
+        if local_path.exists() {
+            let _ = fs::remove_file(&local_path);
+        }
+        fs::rename(&part_path, &local_path).with_context(|| {
+            format!(
+                "rename {} -> {} after successful download",
+                part_path.display(),
+                local_path.display()
+            )
+        })?;
     }
     Ok(total_written)
 }

@@ -1744,6 +1744,44 @@ async fn transfer_download_handler(
         .rsplit('/')
         .next()
         .expect("src_path emptiness already validated");
+    // Path-traversal guard. A src_path like `/data/foo/..` produces
+    // basename `..`, and `dest_dir.join("..")` walks one level above
+    // the host folder the user picked — files would land outside the
+    // dialog-selected destination. Same risk for `/data/foo/.` (a
+    // literal `.` segment on the host) and any backslash-bearing
+    // remote name. Reject up-front rather than discover the escape
+    // mid-write.
+    if basename == "." || basename == ".." || basename.contains('/') || basename.contains('\\') {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "src_path produces an invalid destination basename ({basename:?}); refusing to download"
+            ),
+        )
+        .into_response();
+    }
+    // Pre-flight the host destination so the user finds out about
+    // a missing/un-writable directory immediately, not after the
+    // job has been polling for several seconds. We require dest_dir
+    // to exist and be a directory; create_dir_all happens later
+    // per-file under dest_root, so we don't need to mkdir here.
+    match std::fs::metadata(&dest_dir) {
+        Ok(md) if md.is_dir() => {}
+        Ok(_) => {
+            return json_err(
+                StatusCode::BAD_REQUEST,
+                format!("dest_dir is not a directory: {}", dest_dir.display()),
+            )
+            .into_response();
+        }
+        Err(e) => {
+            return json_err(
+                StatusCode::BAD_REQUEST,
+                format!("cannot access dest_dir {}: {e}", dest_dir.display()),
+            )
+            .into_response();
+        }
+    }
     let dest_root = dest_dir.join(basename);
 
     tokio::task::spawn_blocking(move || {

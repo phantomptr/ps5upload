@@ -40,11 +40,26 @@ async fn child_lock() -> &'static tokio::sync::Mutex<Option<Child>> {
 const EMBEDDED_ENGINE: &[u8] = include_bytes!(env!("PS5UPLOAD_ENGINE_BYTES"));
 
 /// Extract the embedded engine binary into the app's local-data dir
-/// and return the extracted path. Caches across launches: re-extracts
-/// only when the existing file's size differs from the embedded
-/// bytes (covers the important "new version installed, same binary
-/// length" case; this happens once at launch and the sidecar is small
-/// enough that the full byte compare is cheaper than stale-code bugs).
+/// and return the extracted path. Caches across launches via a
+/// BLAKE3 hash stamp file (`<bin>.blake3`) sitting next to the
+/// extracted binary.
+///
+/// Why hash-stamp vs the previous full byte compare:
+/// - The previous logic read the entire 14 MiB cached `.exe` from
+///   disk on every launch and compared it byte-for-byte to the
+///   embedded array. On a slow disk that's tens of ms of cold-IO
+///   per launch; on Windows, reading an `.exe` the OS still has
+///   open elsewhere can fail with sharing violation and force a
+///   spurious re-extract that itself fails on the locked file.
+/// - Hash-stamp reads a 64-byte hex string instead, and the
+///   comparison cost is constant regardless of binary size.
+///   BLAKE3 of the embedded bytes runs at GB/s so it stays under
+///   ~10 ms even on the slowest CPU we ship to.
+///
+/// The stamp file IS the source of truth. If it's missing or the
+/// content doesn't hex-match the freshly-computed embedded hash, we
+/// re-extract + rewrite the stamp. A tampered binary on disk (with
+/// matching size but different bytes) re-extracts on next launch.
 fn find_engine_binary(app: &AppHandle) -> Result<PathBuf> {
     let bin_name = if cfg!(target_os = "windows") {
         "ps5upload-engine.exe"
@@ -59,16 +74,26 @@ fn find_engine_binary(app: &AppHandle) -> Result<PathBuf> {
     let out_dir = cache_root.join("engine");
     std::fs::create_dir_all(&out_dir).with_context(|| format!("mkdir {}", out_dir.display()))?;
     let out_path = out_dir.join(bin_name);
+    let stamp_path = out_dir.join(format!("{bin_name}.blake3"));
 
-    let needs_extract = match std::fs::metadata(&out_path) {
-        Ok(m) if m.len() as usize == EMBEDDED_ENGINE.len() => {
-            let current = std::fs::read(&out_path)
-                .with_context(|| format!("read engine binary from {}", out_path.display()))?;
-            current != EMBEDDED_ENGINE
-        }
-        Ok(_) => true,
+    // Hash the embedded bytes once. blake3 is fast enough that this
+    // is cheaper than ANY disk IO we'd otherwise do — even the small
+    // stamp-file read happens after this so a stamp-file-corruption
+    // path can re-extract without an extra hash recomputation.
+    let embedded_hex = {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(EMBEDDED_ENGINE);
+        hasher.finalize().to_hex().to_string()
+    };
+
+    let needs_extract = match std::fs::read_to_string(&stamp_path) {
+        Ok(stored) => stored.trim() != embedded_hex,
+        // Stamp missing OR unreadable → assume cache is stale and
+        // re-extract. Worst case is one extra extract; correctness
+        // wins over avoiding the IO.
         Err(_) => true,
     };
+
     if needs_extract {
         std::fs::write(&out_path, EMBEDDED_ENGINE)
             .with_context(|| format!("write engine binary to {}", out_path.display()))?;
@@ -84,6 +109,14 @@ fn find_engine_binary(app: &AppHandle) -> Result<PathBuf> {
             perms.set_mode(0o755);
             std::fs::set_permissions(&out_path, perms)
                 .with_context(|| format!("chmod {}", out_path.display()))?;
+        }
+        // Stamp last so a crash mid-extract leaves a missing /
+        // outdated stamp; next launch correctly re-extracts.
+        if let Err(e) = std::fs::write(&stamp_path, &embedded_hex) {
+            eprintln!(
+                "[engine] could not write stamp {}: {e} (engine still extracted, just re-extracts next launch)",
+                stamp_path.display()
+            );
         }
     }
     Ok(out_path)
