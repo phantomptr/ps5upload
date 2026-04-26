@@ -4,6 +4,104 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.2.20
+
+**CI hygiene: workflows on Node 24**
+
+- **All GitHub Actions usages bumped from `@v4` → `@v5`.** Every job
+  was emitting "Node.js 20 actions are deprecated" warnings on
+  `actions/checkout`, `actions/setup-node`, `actions/upload-artifact`,
+  `actions/download-artifact`, and `actions/cache`. v5 of each runs
+  on Node 24 and is a drop-in replacement for the upload/download
+  patterns this repo uses (single-named uploads, no-name "download
+  all to subdirs"); 25 references updated across `engine-ci.yml`
+  and `release.yml`. No workflow logic changes — purely a runtime
+  bump to clear the deprecation and stay ahead of the June 2 2026
+  forced switch.
+
+---
+
+## 2.2.19
+
+**Coverage CI green again on ubuntu-24.04**
+
+- **Fix: coverage job failed every run with `error: no profile can
+  be merged`.** GitHub's `ubuntu-24.04` runner image preinstalls
+  `/usr/lib/llvm-18/bin` on `PATH`, so `cargo-llvm-cov` resolved
+  `llvm-profdata` to system LLVM 18 — but current-stable `rustc`
+  emits profraw v10 (LLVM 19+ internally), and llvm-18 rejected
+  every file with `raw profile version mismatch: expected version
+  = 9`. `scripts/coverage.mjs` now resolves `llvm-cov` /
+  `llvm-profdata` from the active rustup sysroot first
+  (`$(rustc --print sysroot)/lib/rustlib/<host>/bin/`), so the
+  toolchain that emits the profraw is the same one that reads it.
+  Caller-provided `LLVM_COV` / `LLVM_PROFDATA` env vars still win;
+  PATH and well-known LLVM prefixes remain as fallbacks for hosts
+  without `llvm-tools-preview`.
+
+---
+
+## 2.2.18
+
+**DoS-safe payload, robust fs_op slots, move pre-flight, activity unstuck**
+
+- **Payload now caps `BEGIN_TX` manifest bodies at 256 MiB.** Crafted
+  or buggy `body_len` values used to either OOM the payload at
+  `malloc` time or tie up a worker thread draining bytes from a LAN
+  client until `recv_exact` timed out. Oversize manifests are now
+  refused with `begin_tx_body_too_large` and the connection is
+  closed (a misaligned drain after that point isn't safe). 256 MiB
+  leaves an order-of-magnitude headroom over the largest small-file
+  workload we validate against (PPSA01342 at 223k files ≈ 33 MiB
+  manifest).
+- **Recursive size walks now fail fast instead of undershooting
+  `total_bytes`.** Previously, a truncated child path or a sub-walk
+  failure was swallowed and `recursive_size` returned 0 anyway —
+  the progress bar would then drift past 100% mid-copy. Errors now
+  propagate so copies bail with `fs_copy_walk_failed` before any
+  bytes move.
+- **`fs_op` slot allocation is strict first-fit, no eviction.** When
+  all `MAX_FS_OPS` slots are busy, new ops are now refused with
+  `fs_copy_too_many_inflight` instead of evicting an in-flight op.
+  Eviction silently blinded the displaced op's progress poll and
+  surfaced as a confusing "404 op_id not found" mid-copy in the
+  client; refusing the new op lets the client retry once a slot
+  frees, with a clear reason.
+- **Engine error responses now carry the full anyhow chain.** All
+  `ps5_*` handlers format errors with `{e:#}` instead of `e.to_string()`,
+  so the root cause (e.g. `connection refused (os error 111)`) reaches
+  the client log instead of just the outermost wrapper.
+- **Library Move modal pre-flights the destination.** A debounced
+  `FS_LIST_DIR` probe fires as the destination resolves and warns
+  inline if the path already exists — catching both name clashes
+  against an unrelated folder and stale partials left behind by a
+  cancelled move on exfat USB. The payload's own
+  `fs_copy_dest_exists` check is still the real backstop.
+- **Activity tab gains a "Clear running" button.** Drops orphaned
+  running rows whose underlying op already died (engine restart,
+  payload disconnect, app killed mid-op) without firing any cancel.
+  Per-row Stop is still there for actually-cancellable in-flight ops.
+- **Friendlier handling of pre-2.2.16 payloads.** When the client
+  sees `decode FS_OP_STATUS_ACK body` (the truncated-JSON bug fixed
+  in 2.2.16), it now stops polling at 2 Hz, surfaces a
+  payload-refresh hint in the activity row, and tells the user to
+  hit "Replace payload" or run `make send-payload`.
+- **`make run-client` fails fast on missing GTK/WebKit dev libs.**
+  A new pre-flight (`_check-tauri-system-deps`) runs before
+  `tauri dev` on Linux and prints a copy-pasteable
+  apt/dnf/pacman command if any of the system libraries Tauri's
+  native crates link against are missing. Saves ~30s of cargo
+  compile time before the inevitable pkg-config wall of errors.
+- **Cross-platform stale-process sweep.** New
+  `scripts/kill-stale-client.mjs` is a `make run-client` dependency:
+  on Linux/macOS it `pkill`s leftover `ps5upload-desktop` /
+  `ps5upload-engine` and frees `:1420`; on Windows it does the same
+  via `taskkill` + `netstat` + `Get-CimInstance`. The POSIX branch
+  uses the `[p]` regex bracket trick so `pkill` doesn't SIGTERM the
+  calling `make` recipe.
+
+---
+
 ## 2.2.17
 
 **Cross-platform hardening + lower memory paths**
