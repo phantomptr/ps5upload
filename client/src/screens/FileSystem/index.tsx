@@ -481,20 +481,29 @@ export default function FileSystemScreen() {
       useFsDownloadOpStore.getState().end(friendly);
       return;
     }
-    useFsDownloadOpStore.getState().begin({
+    const myRunId = useFsDownloadOpStore.getState().begin({
       jobId,
       rootName: entry.name,
       rootSrcPath: remote,
       destDir: picked,
     });
-    // Loop runs in async context — not tied to component lifecycle,
-    // and writes go to the global store (no unmount warning to
-    // worry about). Navigating away mid-download keeps the runner
-    // ticking; the store keeps the latest progress; coming back to
-    // FS sees the live banner.
+    // Generation-counted abort: the runner captures myRunId and
+    // bails when the store's runId moves on (begin() of a new
+    // download OR explicit requestStop() from the UI). Without the
+    // check, a navigation-away + back + new-download sequence
+    // would leave the old runner still polling against the old
+    // job and the new runner's setProgress writes would race with
+    // it. Bonus: gives the user a way to abort an in-flight pull
+    // by clicking Stop in the banner — store.requestStop() flips
+    // runId; this loop exits at its next check; the engine job
+    // continues server-side and the .part promotion eventually
+    // happens (no engine cancel API today).
+    const isLive = () => useFsDownloadOpStore.getState().runId === myRunId;
     while (true) {
+      if (!isLive()) return;
       try {
         const snap = await jobStatus(jobId);
+        if (!isLive()) return;
         if (snap.status === "done") {
           useFsDownloadOpStore.getState().end(null);
           return;
@@ -514,6 +523,7 @@ export default function FileSystemScreen() {
           totalBytes: snap.total_bytes ?? 0,
         });
       } catch (e) {
+        if (!isLive()) return;
         const msg = e instanceof Error ? e.message : String(e);
         const friendly = tr(
           "fs_download_poll_failed",

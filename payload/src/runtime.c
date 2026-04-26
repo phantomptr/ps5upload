@@ -3843,10 +3843,34 @@ static int cp_rf(const char *src, const char *dst, int depth) {
         /* Reserve contiguous extents on the dst FS so the writer
          * doesn't interleave block-allocation with data writes. UFS2
          * (PS5 internal) honours this; exfatfs (USB exFAT) does too,
-         * via the fallocate emulation path. Failure is non-fatal —
-         * the FS just allocates lazily as it always has. */
+         * via the fallocate emulation path.
+         *
+         * Most failures are non-fatal (FS doesn't support the hint —
+         * EINVAL/EOPNOTSUPP on tmpfs etc.) — fall through to the
+         * lazy-allocation path. But ENOSPC and EFBIG are early
+         * disk-full / file-too-big signals worth surfacing now
+         * instead of after we've written half the file: the kernel
+         * already proved it can't take the whole thing. Fail fast so
+         * the caller sees a specific "destination is full" error
+         * rather than a generic mid-copy write failure at some
+         * random offset. */
         if (st.st_size > 0) {
-            (void)posix_fallocate(dfd, 0, st.st_size);
+            int falloc_rc = posix_fallocate(dfd, 0, st.st_size);
+            if (falloc_rc == ENOSPC || falloc_rc == EFBIG) {
+                fprintf(stderr,
+                        "[payload2] fs_copy: posix_fallocate(%lld bytes) returned %d for %s — bailing early\n",
+                        (long long)st.st_size, falloc_rc, dst);
+                close(sfd);
+                close(dfd);
+                /* Best-effort cleanup of the empty/zero-extent dst
+                 * the open(O_CREAT) just produced — don't leave a
+                 * 0-byte ghost file. */
+                (void)unlink(dst);
+                return -1;
+            }
+            /* Other return values (0 success, EINVAL/EOPNOTSUPP,
+             * etc.) all fall through and let the read/write loop
+             * proceed with lazy allocation. */
         }
         unsigned char *buf = (unsigned char *)malloc(COPY_BUF);
         if (!buf) { close(sfd); close(dfd); return -1; }

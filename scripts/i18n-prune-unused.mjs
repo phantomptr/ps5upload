@@ -42,6 +42,13 @@ const apply = process.argv.includes("--apply");
 // kept regardless of the static scan, because it's used via dynamic
 // templating somewhere. Add to this list when a new dynamic-key
 // pattern lands; over-keeping is safer than over-deleting.
+//
+// Dynamic-key audit history:
+// - `tr(section.key, ...)` in Sidebar (NAV_ITEMS array) → nav_section_*
+// - `tr(f.titleKey, ...)` / `tr(f.bodyKey, ...)` in About → about_feat_*
+// - `tr(o.labelKey, ...)` in Search → search_size_*
+// Run the script without --apply to see live tr(IDENT,…) sites; if a
+// new pattern appears, find its resolved key prefix and add it here.
 const DYNAMIC_PREFIXES = [
   "queue_strategy_",
   "playlist_status_",
@@ -50,6 +57,17 @@ const DYNAMIC_PREFIXES = [
   // Reconcile + transfer phase enum values get rendered via
   // `tr(\`reconcile_mode_${mode}\`)` in some screens.
   "reconcile_mode_",
+  // Sidebar section headers: rendered via `tr(section.key, ...)` in
+  // a constant array of `{ section: { key: "nav_section_X" } }`
+  // entries. The static extractor can't follow object property
+  // accesses, so the keys themselves must be allowlisted here.
+  "nav_section_",
+  // About-screen feature tiles: rendered via `tr(f.titleKey, ...)`
+  // and `tr(f.bodyKey, ...)` over a feature-list constant.
+  "about_feat_",
+  // Search-screen size filter: rendered via `tr(o.labelKey, ...)`
+  // over an options array.
+  "search_size_",
 ];
 
 function walkSrc(dir) {
@@ -88,6 +106,28 @@ function extractKeysFrom(content) {
   return keys;
 }
 
+/** Detect `tr(IDENTIFIER, …)` / `tr(expr.foo, …)` / `tr(condition ? a : b, …)`
+ *  patterns where the first argument resolves to a runtime value
+ *  the static extractor can't see — they could delete a live key.
+ *
+ *  Tightened regex: requires the first arg to start with an
+ *  identifier-legal char (letter / underscore / dollar). This
+ *  rejects multi-line static calls (`tr(\n  "string"`) where the
+ *  next non-whitespace is a quote, and only flags actual identifier
+ *  references. Function definitions (`function t(lang:`) get the
+ *  word-boundary `\b` match too — caller filters by the i18n.ts
+ *  exclusion implicit in walkSrc not visiting that file's tests. */
+function extractIdentifierCalls(content) {
+  const out = [];
+  const re = /\btr\s*\(\s*([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*[,?)]/g;
+  let m;
+  while ((m = re.exec(content)) !== null) {
+    const line = content.slice(0, m.index).split("\n").length;
+    out.push({ line, snippet: m[0].slice(0, 60).trim() });
+  }
+  return out;
+}
+
 function loadEnKeys() {
   const src = fs.readFileSync(I18N_PATH, "utf8");
   const start = src.indexOf("\n  en: {");
@@ -114,9 +154,13 @@ function loadEnKeys() {
 }
 
 const usedKeys = new Set();
+const identifierCalls = []; // [{file, line, snippet}] of tr(IDENT, …) sites
 for (const f of walkSrc(SRC_ROOT)) {
   const content = fs.readFileSync(f, "utf8");
   for (const k of extractKeysFrom(content)) usedKeys.add(k);
+  for (const site of extractIdentifierCalls(content)) {
+    identifierCalls.push({ file: path.relative(repoRoot, f), ...site });
+  }
 }
 
 const enKeys = loadEnKeys();
@@ -133,8 +177,33 @@ const phantomKeys = [...usedKeys].filter((k) => !enKeys.has(k));
 phantomKeys.sort();
 
 process.stdout.write(
-  `[i18n-prune] used=${usedKeys.size} en=${enKeys.size} dead=${dead.length} phantom=${phantomKeys.length}\n`,
+  `[i18n-prune] used=${usedKeys.size} en=${enKeys.size} dead=${dead.length} phantom=${phantomKeys.length} dynamic=${identifierCalls.length}\n`,
 );
+
+// Surface dynamic key call sites — `tr(SOME_IDENT, …)` patterns
+// the static extractor can't resolve. The pruner CAN'T know what
+// runtime value those identifiers hold; without listing them, an
+// operator running --apply could silently nuke a key referenced
+// only via an identifier or ternary. Print up to 20 sites, then
+// require the operator to either:
+//   - convert the dynamic call to a static literal
+//   - add the resolved key prefix to DYNAMIC_PREFIXES
+// before the prune is safe.
+if (identifierCalls.length > 0) {
+  process.stdout.write(`[i18n-prune] tr(IDENTIFIER, …) sites detected (first 20):\n`);
+  for (const site of identifierCalls.slice(0, 20)) {
+    process.stdout.write(`  ${site.file}:${site.line} → ${site.snippet}\n`);
+  }
+  if (identifierCalls.length > 20) {
+    process.stdout.write(`  … and ${identifierCalls.length - 20} more\n`);
+  }
+  if (apply) {
+    process.stderr.write(
+      `\n[i18n-prune] refusing --apply: ${identifierCalls.length} dynamic-key call site(s) above could resolve to keys that the prune would delete. Either convert them to static literals or add the resolved prefix to DYNAMIC_PREFIXES, then re-run.\n`,
+    );
+    process.exit(1);
+  }
+}
 
 if (phantomKeys.length > 0) {
   process.stdout.write(`[i18n-prune] keys used in code but missing from en (first 20):\n`);

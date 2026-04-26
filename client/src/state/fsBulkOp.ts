@@ -113,7 +113,17 @@ export const useFsBulkOpStore = create<BulkOpState & BulkOpActions>((set) => ({
  *  downloads can run concurrently with bulk ops and we want both
  *  visible at once. The download path picks individual files (or a
  *  single tree) so `total` here is "files in the manifest"; current*
- *  fields track which file is being pulled right now. */
+ *  fields track which file is being pulled right now.
+ *
+ *  Generation counter (`runId`) gives the runner an abort handle:
+ *  every begin() bumps it, the runner captures its own value, and
+ *  every poll-loop iteration re-checks. `requestStop()` bumps the
+ *  counter without resetting other fields, so the runner's next
+ *  await boundary observes the abort and tears down cleanly. The
+ *  engine job continues on the engine side (no engine cancel API
+ *  today); the UI just stops polling and the download eventually
+ *  finishes invisibly with the .part promotion happening server-
+ *  side. */
 export interface DownloadOpState {
   active: boolean;
   jobId: string | null;
@@ -124,6 +134,10 @@ export interface DownloadOpState {
   totalBytes: number;
   startedAtMs: number;
   errorBanner: string | null;
+  /** Bumped by begin() and requestStop(). Runner closures should
+   *  capture the value at begin time and bail when getState().runId
+   *  no longer matches. */
+  runId: number;
 }
 
 interface DownloadOpActions {
@@ -132,13 +146,17 @@ interface DownloadOpActions {
     rootName: string;
     rootSrcPath: string;
     destDir: string;
-  }) => void;
+  }) => number;
   setProgress: (params: { bytesReceived: number; totalBytes: number }) => void;
   end: (errorBanner?: string | null) => void;
   clearError: () => void;
+  /** Tear-down request from the UI. Bumps runId so the active
+   *  runner (if any) stops polling at the next await; resets other
+   *  fields. */
+  requestStop: () => void;
 }
 
-const downloadIdle: DownloadOpState = {
+const downloadIdle: Omit<DownloadOpState, "runId"> = {
   active: false,
   jobId: null,
   rootName: "",
@@ -151,9 +169,11 @@ const downloadIdle: DownloadOpState = {
 };
 
 export const useFsDownloadOpStore = create<DownloadOpState & DownloadOpActions>(
-  (set) => ({
+  (set, get) => ({
     ...downloadIdle,
+    runId: 0,
     begin({ jobId, rootName, rootSrcPath, destDir }) {
+      const nextRunId = get().runId + 1;
       set({
         active: true,
         jobId,
@@ -164,16 +184,23 @@ export const useFsDownloadOpStore = create<DownloadOpState & DownloadOpActions>(
         totalBytes: 0,
         startedAtMs: Date.now(),
         errorBanner: null,
+        runId: nextRunId,
       });
+      return nextRunId;
     },
     setProgress({ bytesReceived, totalBytes }) {
       set({ bytesReceived, totalBytes });
     },
     end(errorBanner = null) {
-      set({ ...downloadIdle, errorBanner });
+      set((s) => ({ ...downloadIdle, runId: s.runId, errorBanner }));
     },
     clearError() {
       set({ errorBanner: null });
+    },
+    requestStop() {
+      // Bump runId so the runner's isLive() returns false at its
+      // next check; reset everything else so the UI banner clears.
+      set((s) => ({ ...downloadIdle, runId: s.runId + 1 }));
     },
   }),
 );

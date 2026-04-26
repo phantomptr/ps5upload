@@ -217,20 +217,28 @@ pub fn download_to_local(
         if let Some(parent) = local_path.parent() {
             fs::create_dir_all(parent).with_context(|| format!("mkdir {}", parent.display()))?;
         }
-        // Write to a sibling .part path; rename onto the final path
-        // only after the per-file size check below passes. Any prior
-        // file at `local_path` is preserved unless this download
-        // succeeds. We do still overwrite an existing `.part`
-        // (assumed to be a leftover from a prior failed attempt) —
-        // the alternative (refusing to start when .part exists)
-        // would block legitimate retries.
-        let part_path = local_path.with_extension(format!(
-            "{}.part",
-            local_path
-                .extension()
-                .and_then(|s| s.to_str())
-                .unwrap_or("")
-        ));
+        // Write to a sibling `.part` file; rename onto the final
+        // path only after the per-file size check below passes. Any
+        // prior file at `local_path` is preserved unless this
+        // download succeeds.
+        //
+        // Use `with_file_name` not `with_extension` — the latter
+        // mishandles edge cases:
+        //   foo            → with_extension(".part") = foo.part   ok
+        //   foo.bin        → with_extension(".part") = foo.part   *bug:
+        //                    overwrites the original suffix
+        //   .gitignore     → with_extension(".part") = .part      *bug:
+        //                    treats the dot as the extension boundary
+        //   archive.tar.gz → with_extension(".part") = archive.tar.part
+        //                    (truncates the multi-dot name)
+        //
+        // Appending `.part` to the full file_name keeps the name
+        // identifiable in the user's file manager + means cleanup
+        // tools that grep for `*.part` find every leftover.
+        let part_path = match local_path.file_name().and_then(|n| n.to_str()) {
+            Some(name) => local_path.with_file_name(format!("{name}.part")),
+            None => local_path.with_extension("part"),
+        };
         let mut file = fs::File::create(&part_path)
             .with_context(|| format!("create {}", part_path.display()))?;
 
@@ -288,20 +296,55 @@ pub fn download_to_local(
             );
         }
         // Atomic-ish promotion: rename .part onto the final path.
-        // On Unix this is atomic. On Windows, fs::rename will fail
-        // if the destination exists; we handle that by removing
-        // first (best-effort — if removal fails, surface the rename
-        // error so the .part stays around for the user to inspect).
+        // On Unix this is atomic across the same filesystem. On
+        // Windows, fs::rename fails when the destination exists,
+        // so we remove first — but a Windows file-lock (media
+        // player, indexer, antivirus quarantine) makes the remove
+        // itself fail, and the subsequent rename then surfaces a
+        // generic "rename failed" that hides the real cause.
+        // Handle the cases distinctly:
+        //   - remove fails → bail with the remove error so the
+        //     user sees "couldn't replace existing file (locked
+        //     by another process)" instead of a misleading
+        //     post-hoc "rename failed".
+        //   - rename fails with EXDEV → the .part lives on a
+        //     different filesystem than local_path (Windows
+        //     reparse point, mac bind-mount). Surface a distinct
+        //     message explaining that the bytes ARE on disk at
+        //     the .part path so the user knows the download
+        //     itself succeeded.
         if local_path.exists() {
-            let _ = fs::remove_file(&local_path);
+            if let Err(e) = fs::remove_file(&local_path) {
+                anyhow::bail!(
+                    "downloaded {} bytes successfully to {}, but couldn't replace the existing file at {}: {e} (file may be open in another program)",
+                    expected,
+                    part_path.display(),
+                    local_path.display()
+                );
+            }
         }
-        fs::rename(&part_path, &local_path).with_context(|| {
-            format!(
-                "rename {} -> {} after successful download",
+        if let Err(e) = fs::rename(&part_path, &local_path) {
+            // EXDEV / cross-device — bytes ARE on disk, just at
+            // the wrong path. Tell the user where they landed.
+            let cross_device = matches!(
+                e.raw_os_error(),
+                Some(n) if n == 18 /* EXDEV on Linux+macOS */
+            );
+            if cross_device {
+                anyhow::bail!(
+                    "downloaded {} bytes to {}, but couldn't promote to {} (cross-filesystem rename refused) — the file IS on disk at the .part path; rename it manually",
+                    expected,
+                    part_path.display(),
+                    local_path.display()
+                );
+            }
+            return Err(anyhow::anyhow!(
+                "downloaded {} bytes to {}, but couldn't promote to {}: {e}",
+                expected,
                 part_path.display(),
                 local_path.display()
-            )
-        })?;
+            ));
+        }
     }
     Ok(total_written)
 }

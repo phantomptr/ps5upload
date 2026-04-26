@@ -1,108 +1,30 @@
 {
   "ar": {
-    "missing": [
-      "faq",
-      "log_level_debug",
-      "log_level_error",
-      "log_level_info",
-      "log_level_warn"
-    ],
+    "missing": [],
     "stale": [
       "files"
     ]
   },
-  "bn": {
-    "missing": [],
-    "stale": []
-  },
-  "de": {
-    "missing": [],
-    "stale": []
-  },
   "es": {
-    "missing": [
-      "faq",
-      "log_level_debug",
-      "log_level_error",
-      "log_level_info",
-      "log_level_warn"
-    ],
+    "missing": [],
     "stale": [
       "files"
     ]
   },
   "fr": {
-    "missing": [
-      "faq",
-      "log_level_debug",
-      "log_level_error",
-      "log_level_info",
-      "log_level_warn"
-    ],
+    "missing": [],
     "stale": [
       "files"
     ]
   },
-  "hi": {
-    "missing": [],
-    "stale": []
-  },
-  "id": {
-    "missing": [],
-    "stale": []
-  },
-  "it": {
-    "missing": [],
-    "stale": []
-  },
-  "ja": {
-    "missing": [],
-    "stale": []
-  },
-  "ko": {
-    "missing": [],
-    "stale": []
-  },
-  "pt-BR": {
-    "missing": [],
-    "stale": []
-  },
-  "ru": {
-    "missing": [],
-    "stale": []
-  },
-  "th": {
-    "missing": [],
-    "stale": []
-  },
-  "tr": {
-    "missing": [],
-    "stale": []
-  },
-  "vi": {
-    "missing": [],
-    "stale": []
-  },
   "zh-CN": {
-    "missing": [
-      "faq",
-      "log_level_debug",
-      "log_level_error",
-      "log_level_info",
-      "log_level_warn"
-    ],
+    "missing": [],
     "stale": [
       "files"
     ]
   },
   "zh-TW": {
-    "missing": [
-      "faq",
-      "log_level_debug",
-      "log_level_error",
-      "log_level_info",
-      "log_level_warn"
-    ],
+    "missing": [],
     "stale": [
       "files"
     ]
