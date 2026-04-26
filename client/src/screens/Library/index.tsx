@@ -9,6 +9,7 @@ import {
   Shield,
   Play,
   Unplug,
+  FolderInput,
   type LucideIcon,
 } from "lucide-react";
 
@@ -17,6 +18,7 @@ import {
   scanLibrary,
   fsDelete,
   fsChmod,
+  fsCopy,
   fsMount,
   fsUnmount,
   fetchVolumes,
@@ -24,7 +26,14 @@ import {
   gameIconUrl,
   type LibraryEntry,
   type GameMeta,
+  type Volume,
 } from "../../api/ps5";
+import {
+  defaultMoveSubpath,
+  detectSourceVolume,
+  isMoveNoop,
+  resolveMoveDestination,
+} from "../../lib/moveTarget";
 import { useLibraryStore } from "../../state/library";
 import { useElapsed } from "../../lib/useElapsed";
 import { createLimiter } from "../../lib/limitConcurrency";
@@ -66,6 +75,7 @@ export default function LibraryScreen() {
   const payloadStatus = useConnectionStore((s) => s.payloadStatus);
   const entries = useLibraryStore((s) => s.entries);
   const mountMap = useLibraryStore((s) => s.mountMap);
+  const volumes = useLibraryStore((s) => s.volumes);
   const loading = useLibraryStore((s) => s.loading);
   const error = useLibraryStore((s) => s.error);
   const lastRefreshedAt = useLibraryStore((s) => s.lastRefreshedAt);
@@ -89,7 +99,10 @@ export default function LibraryScreen() {
           next.set(v.source_image, v.path);
         }
       }
-      setData(result, next);
+      // Move-modal destinations only make sense for real attached
+      // drives, so filter out placeholder/read-only volumes here.
+      const writable = volumes.filter((v) => v.writable && !v.is_placeholder);
+      setData(result, next, writable);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -192,6 +205,7 @@ export default function LibraryScreen() {
                     entry={e}
                     host={host}
                     mountMap={mountMap}
+                    volumes={volumes}
                     onChanged={refresh}
                   />
                 ))}
@@ -212,6 +226,7 @@ export default function LibraryScreen() {
                     entry={e}
                     host={host}
                     mountMap={mountMap}
+                    volumes={volumes}
                     onChanged={refresh}
                   />
                 ))}
@@ -247,12 +262,24 @@ interface PendingConfirm {
   entry: LibraryEntry;
 }
 
-type BusyState = null | "delete" | "chmod" | "mount" | "unmount";
+/** Two-phase Move busy state. We split the spinner messages so the
+ *  user knows whether the destructive `fsDelete` of the source has
+ *  started — once "Cleaning up source…" shows, the new copy is
+ *  already on disk and the source is being torn down. */
+type BusyState =
+  | null
+  | "delete"
+  | "chmod"
+  | "mount"
+  | "unmount"
+  | "move-copying"
+  | "move-deleting";
 
 function LibraryRow({
   entry,
   host,
   mountMap,
+  volumes,
   onChanged,
 }: {
   entry: LibraryEntry;
@@ -260,6 +287,9 @@ function LibraryRow({
   /** image_path → mount_point. Lets image rows render MOUNTED state
    *  + offer the right action (Mount vs Unmount). */
   mountMap: Map<string, string>;
+  /** Writable PS5 volumes — surfaced to the Move modal as the
+   *  destination dropdown. */
+  volumes: Volume[];
   onChanged: () => void;
 }) {
   const tr = useTr();
@@ -275,6 +305,7 @@ function LibraryRow({
   const [error, setError] = useState<string | null>(null);
   const [mountNote, setMountNote] = useState<string | null>(null);
   const [meta, setMeta] = useState<GameMeta | null>(null);
+  const [moveOpen, setMoveOpen] = useState(false);
   const elapsedMs = useElapsed(busy !== null);
 
   /** Current mount point for this entry (null = not mounted). Only
@@ -356,6 +387,82 @@ function LibraryRow({
     } finally {
       setBusy(null);
     }
+  };
+
+  /** Move: copy → verify-by-success → delete-with-retry. The payload's
+   *  fs_copy is a sync command — it doesn't return until the recursive
+   *  copy is complete and refuses to overwrite an existing destination,
+   *  so a successful return means the destination has the bytes and we
+   *  can safely tear down the source. fs_delete gets up to 3 attempts
+   *  with linear backoff because a transient busy state (something on
+   *  the PS5 side holding the source dir open) shouldn't strand a copy
+   *  that already succeeded; persistent failure surfaces both paths so
+   *  the user can clean up manually instead of guessing what happened. */
+  const runMove = async (destPath: string) => {
+    setMoveOpen(false);
+    setBusy("move-copying");
+    setError(null);
+    setMountNote(null);
+    const addr = `${host}:${PS5_PAYLOAD_PORT}`;
+    try {
+      await fsCopy(addr, entry.path, destPath);
+    } catch (e) {
+      setError(
+        tr(
+          "library_move_copy_failed",
+          { error: e instanceof Error ? e.message : String(e) },
+          `Couldn't copy to the new location: ${
+            e instanceof Error ? e.message : String(e)
+          }. Source is unchanged.`,
+        ),
+      );
+      setBusy(null);
+      return;
+    }
+    setBusy("move-deleting");
+    let lastErr: unknown = null;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        await fsDelete(addr, entry.path);
+        lastErr = null;
+        break;
+      } catch (e) {
+        lastErr = e;
+        if (attempt < 3) {
+          // Linear backoff — 500 ms, 1 s. Short enough that the user
+          // doesn't notice unless we're persistently losing the race.
+          await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+        }
+      }
+    }
+    if (lastErr !== null) {
+      setError(
+        tr(
+          "library_move_delete_failed",
+          {
+            dest: destPath,
+            src: entry.path,
+            error:
+              lastErr instanceof Error ? lastErr.message : String(lastErr),
+          },
+          `Copied to ${destPath}, but couldn't remove the source ${entry.path} after 3 attempts: ${
+            lastErr instanceof Error ? lastErr.message : String(lastErr)
+          }. Both copies now exist — delete the original yourself when ready.`,
+        ),
+      );
+      setBusy(null);
+      onChanged();
+      return;
+    }
+    setMountNote(
+      tr(
+        "library_move_succeeded",
+        { dest: destPath },
+        `Moved to ${destPath}.`,
+      ),
+    );
+    setBusy(null);
+    onChanged();
   };
 
   /** Unmount: flipped from Mount when the archive is currently
@@ -465,6 +572,28 @@ function LibraryRow({
             </Button>
           )}
           <Button
+            variant="secondary"
+            size="sm"
+            leftIcon={<FolderInput size={12} />}
+            onClick={() => setMoveOpen(true)}
+            disabled={busy !== null || volumes.length === 0}
+            title={
+              volumes.length === 0
+                ? tr(
+                    "library_move_no_volumes_tooltip",
+                    undefined,
+                    "Move needs at least one writable PS5 drive — none are attached right now.",
+                  )
+                : tr(
+                    "library_move_tooltip",
+                    undefined,
+                    "Copy this to another PS5 location, then delete the original",
+                  )
+            }
+          >
+            {tr("library_move", undefined, "Move")}
+          </Button>
+          <Button
             variant="danger"
             size="sm"
             leftIcon={<Trash2 size={12} />}
@@ -491,7 +620,19 @@ function LibraryRow({
                 ? tr("library_busy_chmod", undefined, "Applying Permission 777")
                 : busy === "unmount"
                   ? tr("library_busy_unmount", undefined, "Unmounting")
-                  : tr("library_busy_mount", undefined, "Mounting")}
+                  : busy === "mount"
+                    ? tr("library_busy_mount", undefined, "Mounting")
+                    : busy === "move-copying"
+                      ? tr(
+                          "library_busy_move_copying",
+                          undefined,
+                          "Copying to new location",
+                        )
+                      : tr(
+                          "library_busy_move_deleting",
+                          undefined,
+                          "Cleaning up source",
+                        )}
           </span>
           <span className="text-[var(--color-muted)]">
             {entry.name} · {formatDuration(elapsedMs / 1000)}
@@ -527,7 +668,143 @@ function LibraryRow({
           onRun={confirm.kind === "delete" ? runDelete : runChmod}
         />
       )}
+
+      {moveOpen && (
+        <MoveModal
+          entry={entry}
+          volumes={volumes}
+          onCancel={() => setMoveOpen(false)}
+          onConfirm={runMove}
+        />
+      )}
     </article>
+  );
+}
+
+/** Move-target picker. Source path is read-only; user picks the
+ *  destination volume + subpath, sees the resolved final path before
+ *  committing. Pre-fills with the entry's current volume + parent dir
+ *  so a "move within the same drive" stays one click away. */
+function MoveModal({
+  entry,
+  volumes,
+  onCancel,
+  onConfirm,
+}: {
+  entry: LibraryEntry;
+  volumes: Volume[];
+  onCancel: () => void;
+  onConfirm: (destination: string) => void;
+}) {
+  const tr = useTr();
+  const volumePaths = useMemo(() => volumes.map((v) => v.path), [volumes]);
+  const initialVolume = useMemo(
+    () => detectSourceVolume(entry.path, volumePaths) ?? volumePaths[0] ?? "",
+    [entry.path, volumePaths],
+  );
+  const [volume, setVolume] = useState<string>(initialVolume);
+  const [subpath, setSubpath] = useState<string>(() =>
+    defaultMoveSubpath(entry.path, initialVolume),
+  );
+  const resolved = resolveMoveDestination(volume, subpath, entry.path);
+  const noop = isMoveNoop(entry.path, resolved);
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      onClick={onCancel}
+    >
+      <div
+        className="w-full max-w-lg rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className="mb-3 flex items-center gap-2 text-sm font-semibold">
+          <FolderInput size={14} />
+          {tr(
+            "library_move_modal_title",
+            { name: entry.name },
+            `Move "${entry.name}"`,
+          )}
+        </header>
+
+        <dl className="mb-4 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+          <dt className="text-[var(--color-muted)]">
+            {tr("library_move_modal_source", undefined, "From")}
+          </dt>
+          <dd className="font-mono text-[var(--color-text)]">{entry.path}</dd>
+        </dl>
+
+        <label className="mb-2 block text-[10px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+          {tr("library_move_modal_destination", undefined, "To")}
+        </label>
+        <div className="mb-3 flex items-center gap-2 text-sm">
+          <select
+            value={volume}
+            onChange={(e) => setVolume(e.target.value)}
+            className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-sm"
+          >
+            {volumePaths.map((p) => (
+              <option key={p} value={p}>
+                {p}
+              </option>
+            ))}
+          </select>
+          <span className="text-[var(--color-muted)]">/</span>
+          <input
+            value={subpath}
+            onChange={(e) => setSubpath(e.target.value)}
+            placeholder={tr(
+              "library_move_modal_subpath_placeholder",
+              undefined,
+              "subpath (e.g. games)",
+            )}
+            className="flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-sm"
+          />
+        </div>
+
+        <div className="mb-4 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-xs">
+          <div className="text-[10px] uppercase tracking-wide text-[var(--color-muted)]">
+            {tr(
+              "library_move_modal_resolved",
+              undefined,
+              "Will move to",
+            )}
+          </div>
+          <div className="mt-0.5 break-all font-mono">{resolved}</div>
+        </div>
+
+        {noop && (
+          <div className="mb-3 rounded-md border border-[var(--color-warn)] bg-[var(--color-surface)] p-2 text-xs text-[var(--color-warn)]">
+            {tr(
+              "library_move_modal_noop",
+              undefined,
+              "Source and destination are the same — pick a different folder.",
+            )}
+          </div>
+        )}
+
+        <div className="flex items-center justify-end gap-2">
+          <Button variant="ghost" size="sm" onClick={onCancel}>
+            {tr("cancel", undefined, "Cancel")}
+          </Button>
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={() => onConfirm(resolved)}
+            disabled={noop || volume === ""}
+          >
+            {tr("library_move_modal_run", undefined, "Move")}
+          </Button>
+        </div>
+
+        <p className="mt-3 text-[11px] text-[var(--color-muted)]">
+          {tr(
+            "library_move_modal_explainer",
+            undefined,
+            "Copies to the new location first, then removes the original once the copy succeeds. If anything goes wrong mid-copy, the original stays put.",
+          )}
+        </p>
+      </div>
+    </div>
   );
 }
 

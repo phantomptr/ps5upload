@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { LibraryEntry } from "../api/ps5";
+import type { LibraryEntry, Volume } from "../api/ps5";
 
 /**
  * Library state lives in a zustand store (not `useState` in the
@@ -16,6 +16,11 @@ export interface LibraryState {
   entries: LibraryEntry[] | null;
   /** image_path → mount_point, empty until first refresh completes. */
   mountMap: Map<string, string>;
+  /** Writable, non-placeholder volumes the PS5 reports — used by the
+   *  Move modal so the user picks a destination from real attached
+   *  drives. Same probe that feeds `mountMap`, kept here so move's
+   *  destination dropdown doesn't have to re-fetch on every modal open. */
+  volumes: Volume[];
   /** When the data was last refreshed (unix ms). null = never loaded. */
   lastRefreshedAt: number | null;
   /** True while a refresh is in flight. Used for the header spinner
@@ -26,6 +31,7 @@ export interface LibraryState {
   setData: (
     entries: LibraryEntry[],
     mountMap: Map<string, string>,
+    volumes: Volume[],
   ) => void;
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
@@ -35,13 +41,15 @@ export interface LibraryState {
 export const useLibraryStore = create<LibraryState>((set) => ({
   entries: null,
   mountMap: new Map(),
+  volumes: [],
   lastRefreshedAt: null,
   loading: false,
   error: null,
-  setData: (entries, mountMap) =>
+  setData: (entries, mountMap, volumes) =>
     set({
       entries,
       mountMap,
+      volumes,
       lastRefreshedAt: Date.now(),
       error: null,
     }),
@@ -51,6 +59,7 @@ export const useLibraryStore = create<LibraryState>((set) => ({
     set({
       entries: null,
       mountMap: new Map(),
+      volumes: [],
       lastRefreshedAt: null,
       loading: false,
       error: null,
