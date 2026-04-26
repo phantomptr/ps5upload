@@ -39,7 +39,9 @@ import { useConnectionStore, PS5_PAYLOAD_PORT } from "../../state/connection";
 import { useNavigate } from "react-router-dom";
 import { PageHeader, WarningCard, Button } from "../../components";
 import { useUploadSettingsStore } from "../../state/uploadSettings";
+import { useUploadQueueStore } from "../../state/uploadQueue";
 import { resolveUploadDest } from "../../lib/uploadDest";
+import { QueuePanel } from "./QueuePanel";
 import { humanizePs5Error } from "../../lib/humanizeError";
 
 function formatBytes(n: number): string {
@@ -161,10 +163,37 @@ export default function UploadScreen() {
   const resetTransfer = useTransferStore((s) => s.reset);
   const alwaysOverwrite = useUploadSettingsStore((s) => s.alwaysOverwrite);
   const reconcileMode = useUploadSettingsStore((s) => s.reconcileMode);
+  const queueAdd = useUploadQueueStore((s) => s.add);
   const activeExcludes =
     excludeMode === "rules"
       ? excludes.filter((rule) => rule.enabled).map((rule) => rule.pattern)
       : [];
+
+  /** Snapshot the current source + destination + options into a queue
+   *  item. Captured at click time, so subsequent edits to the form
+   *  don't bleed into the queued item. */
+  const handleAddToQueue = (strategy: "overwrite" | "resume") => {
+    if (!source || !host?.trim()) return;
+    const { dest } = resolveUploadDest(
+      destinationVolume,
+      destinationSubpath,
+      source.path,
+    );
+    const addr = `${host}:${PS5_PAYLOAD_PORT}`;
+    const displayName =
+      source.path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? source.path;
+    queueAdd({
+      sourceKind: source.kind,
+      sourcePath: source.path,
+      displayName,
+      resolvedDest: dest,
+      addr,
+      strategy,
+      reconcileMode,
+      excludes: activeExcludes,
+      mountAfterUpload: source.kind === "image" && mountAfterUpload,
+    });
+  };
 
   const [pending, setPending] = useState<null | {
     dest: string;
@@ -341,8 +370,11 @@ export default function UploadScreen() {
           onAddExclude={addExclude}
           onRemoveExclude={removeExclude}
           onUpload={handleUpload}
+          onAddToQueue={handleAddToQueue}
         />
       )}
+
+      <QueuePanel />
     </div>
   );
 }
@@ -426,6 +458,7 @@ function Step2Options(props: {
   onAddExclude: (p: string) => void;
   onRemoveExclude: (p: string) => void;
   onUpload: () => void;
+  onAddToQueue: (strategy: "overwrite" | "resume") => void;
 }) {
   const {
     source,
@@ -448,6 +481,7 @@ function Step2Options(props: {
     onAddExclude,
     onRemoveExclude,
     onUpload,
+    onAddToQueue,
   } = props;
 
   const { icon: KindIcon, label: kindLabel } = detectedLabel(source);
@@ -548,13 +582,26 @@ function Step2Options(props: {
 
       <TransferStatus phase={transferPhase} />
 
-      <div className="flex items-center justify-end gap-2">
+      <div className="flex flex-wrap items-center justify-end gap-2">
         <button
           type="button"
           onClick={onClear}
           className="rounded-md border border-[var(--color-border)] px-4 py-2 text-sm hover:bg-[var(--color-surface-3)]"
         >
           Cancel
+        </button>
+        {/* Add-to-queue: capture the current source + options into the
+            persisted upload queue without starting the transfer. The
+            Resume variant only makes sense for folders (single files
+            don't reconcile), so it's hidden for image/file sources. */}
+        <button
+          type="button"
+          onClick={() => onAddToQueue("overwrite")}
+          disabled={detecting || preflightBusy}
+          className="rounded-md border border-[var(--color-border)] px-4 py-2 text-sm hover:bg-[var(--color-surface-3)] disabled:opacity-50"
+          title="Add this upload to the queue without starting it"
+        >
+          Add to queue
         </button>
         <button
           type="button"
@@ -568,7 +615,7 @@ function Step2Options(props: {
               ? transferPhase.kind === "starting"
                 ? "Starting…"
                 : "Uploading…"
-              : "Upload"}
+              : "Upload now"}
         </button>
       </div>
     </>

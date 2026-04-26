@@ -1,0 +1,400 @@
+import { create } from "zustand";
+
+import {
+  fsMount,
+  jobStatus,
+  startTransferDir,
+  startTransferDirReconcile,
+  startTransferFile,
+  uploadQueueLoad,
+  uploadQueueSave,
+  type ReconcileMode,
+} from "../api/ps5";
+import {
+  moveItemDown,
+  moveItemUp,
+  nextPending,
+  patchItem,
+  removeItem,
+  resetFailedToPending,
+  shouldContinueAfterFailure,
+} from "../lib/queueOps";
+import type { SourceKind } from "./upload";
+import type { UploadStrategy } from "./transfer";
+
+/**
+ * Sequential upload queue. Lives in its own Zustand store separate
+ * from `useTransferStore` so a queued run doesn't fight with the
+ * single-shot manual upload state on the same screen — the user can
+ * keep eyeing the live transfer panel while the queue runs the next
+ * item in the background.
+ *
+ * Persisted to a single Tauri JSON document (`upload_queue.json` in
+ * app-data). Saves are debounced — a 300 ms idle window after the
+ * last mutation collapses bursty reorders into one disk write.
+ *
+ * The runner is generation-counted: every `start()` bumps `runId`,
+ * and the loop checks the live runId between every async await so
+ * `stop()` (which just bumps runId) tears the loop down at the next
+ * await boundary. Without that, a clicking-stop-mid-poll would still
+ * mark the next pending item as running before noticing the cancel.
+ */
+
+export type QueueItemStatus = "pending" | "running" | "done" | "failed";
+
+/** One queued upload. The shape is whatever the Upload screen
+ *  captures at "Add to queue" time — source path, destination,
+ *  strategy, exclude rules — plus runtime status that the runner
+ *  updates as it processes the item. */
+export interface QueueItem {
+  id: string;
+  sourceKind: SourceKind;
+  sourcePath: string;
+  /** Display-only basename so the list row doesn't re-derive it on
+   *  every render. */
+  displayName: string;
+  /** Resolved final on-PS5 path (volume + subpath + basename). The
+   *  user picked these on the Upload screen at queue-add time; the
+   *  runner sends the file to this exact path. */
+  resolvedDest: string;
+  /** Transfer-port addr (e.g. `192.168.1.2:9113`). */
+  addr: string;
+  strategy: UploadStrategy;
+  reconcileMode: ReconcileMode;
+  excludes: string[];
+  /** Image-only: mount the uploaded image after the transfer commits. */
+  mountAfterUpload: boolean;
+  status: QueueItemStatus;
+  /** Live progress while running, final count when done, 0 otherwise. */
+  bytesSent: number;
+  /** Total bytes the engine pre-stat'd for this source. 0 until first
+   *  Running tick lands. */
+  totalBytes: number;
+  /** Mount path the runner produced when `mountAfterUpload` is true and
+   *  the image upload + mount succeeded. Surfaced to the row so users
+   *  see where the image landed without flipping to the Volumes tab. */
+  mountedAt: string | null;
+  error: string | null;
+  addedAt: number;
+  startedAt: number | null;
+  completedAt: number | null;
+}
+
+/** Subset of `QueueItem` that the caller supplies; the store fills in
+ *  id + addedAt + status + counters. */
+export type AddQueueItem = Pick<
+  QueueItem,
+  | "sourceKind"
+  | "sourcePath"
+  | "displayName"
+  | "resolvedDest"
+  | "addr"
+  | "strategy"
+  | "reconcileMode"
+  | "excludes"
+  | "mountAfterUpload"
+>;
+
+interface QueueState {
+  items: QueueItem[];
+  /** When false, runner stops at the first failure. When true, it
+   *  marks the failed item and moves to the next pending. */
+  continueOnFailure: boolean;
+  /** True while the runner loop is active (between start() and the
+   *  loop exiting either by completion or stop()). */
+  running: boolean;
+  /** True after the first hydrate() completes. Lets the UI distinguish
+   *  "no items yet" from "still loading from disk." */
+  loaded: boolean;
+
+  hydrate: () => Promise<void>;
+  add: (item: AddQueueItem) => void;
+  remove: (id: string) => void;
+  moveUp: (id: string) => void;
+  moveDown: (id: string) => void;
+  clear: () => void;
+  retryFailed: () => void;
+  setContinueOnFailure: (b: boolean) => void;
+  start: () => Promise<void>;
+  stop: () => void;
+}
+
+interface QueueDocument {
+  items: QueueItem[];
+  continueOnFailure: boolean;
+}
+
+const POLL_INTERVAL_MS = 500;
+const SAVE_DEBOUNCE_MS = 300;
+
+function newId(): string {
+  // 32-char hex from crypto UUID (same trick as generateTxIdHex).
+  return crypto.randomUUID().replace(/-/g, "");
+}
+
+export const useUploadQueueStore = create<QueueState>((set, get) => {
+  // Generation counter: every start() bumps it. The runner loop
+  // captures its own generation and bails between awaits when the
+  // global runId moves on. Stop() just bumps the counter; running:false
+  // is set by the loop when it notices.
+  let runId = 0;
+  let saveTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** Schedule a debounced whole-document save. Idempotent — multiple
+   *  calls within 300 ms collapse into one fsync. The runner can
+   *  legitimately fire a half-dozen patches per second (bytes_sent
+   *  updates), and we don't want to round-trip Tauri/disk on each. */
+  const scheduleSave = () => {
+    if (saveTimer !== null) clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      saveTimer = null;
+      const { items, continueOnFailure } = get();
+      const doc: QueueDocument = { items, continueOnFailure };
+      void uploadQueueSave(doc).catch(() => {
+        // Persistence failure is degraded UX (queue won't survive
+        // restart) but doesn't break the run. Surfacing to the UI
+        // would require a new error channel; for now, the user just
+        // sees the queue empty on next launch.
+      });
+    }, SAVE_DEBOUNCE_MS);
+  };
+
+  /** Run a single queued item to terminal state. Returns when the
+   *  engine job hits done; throws on failure (caller decides whether
+   *  to continue or stop). The poll loop re-checks `isLive()` after
+   *  every await — `stop()` mid-poll exits cleanly without writing
+   *  stale state. */
+  const runOne = async (
+    item: QueueItem,
+    isLive: () => boolean,
+  ): Promise<{ bytesSent: number; mountedAt: string | null }> => {
+    const isFolder =
+      item.sourceKind === "folder" || item.sourceKind === "game-folder";
+
+    let jobId: string;
+    if (isFolder && item.strategy === "resume") {
+      jobId = await startTransferDirReconcile(
+        item.sourcePath,
+        item.resolvedDest,
+        item.addr,
+        item.reconcileMode,
+        null,
+        item.excludes,
+      );
+    } else if (isFolder) {
+      jobId = await startTransferDir(
+        item.sourcePath,
+        item.resolvedDest,
+        item.addr,
+        null,
+        item.excludes,
+      );
+    } else {
+      jobId = await startTransferFile(
+        item.sourcePath,
+        item.resolvedDest,
+        item.addr,
+      );
+    }
+
+    while (isLive()) {
+      const snap = await jobStatus(jobId);
+      if (!isLive()) {
+        throw new Error("queue stopped");
+      }
+      if (snap.status === "done") {
+        let mountedAt: string | null = null;
+        if (item.sourceKind === "image" && item.mountAfterUpload) {
+          try {
+            const mounted = await fsMount(
+              item.addr,
+              snap.dest ?? item.resolvedDest,
+            );
+            mountedAt = mounted.mount_point;
+          } catch (e) {
+            const wrapped = new Error(
+              `upload completed, but mount failed: ${
+                e instanceof Error ? e.message : String(e)
+              }`,
+            );
+            // Preserve the original error so downstream consumers can
+            // inspect the underlying mount failure (eslint's
+            // preserve-caught-error rule enforces this).
+            (wrapped as Error & { cause?: unknown }).cause = e;
+            throw wrapped;
+          }
+        }
+        return { bytesSent: snap.bytes_sent ?? 0, mountedAt };
+      }
+      if (snap.status === "failed") {
+        throw new Error(snap.error ?? "upload failed");
+      }
+      // Still running — push live progress into the item so the row
+      // shows a moving bar without re-fetching from the runner.
+      set((s) => ({
+        items: patchItem(s.items, item.id, {
+          bytesSent: snap.bytes_sent ?? 0,
+          totalBytes: snap.total_bytes ?? 0,
+        }),
+      }));
+      await sleep(POLL_INTERVAL_MS);
+    }
+    throw new Error("queue stopped");
+  };
+
+  return {
+    items: [],
+    continueOnFailure: false,
+    running: false,
+    loaded: false,
+
+    async hydrate() {
+      try {
+        const doc = await uploadQueueLoad<Partial<QueueDocument>>();
+        // Sanitise on load: any item that was "running" when the app
+        // closed is now stranded — the engine restarted with no
+        // memory of that job. Reset to pending so the user can
+        // re-Start the queue.
+        const items = (doc.items ?? []).map((it) =>
+          it.status === "running" ? { ...it, status: "pending" as const } : it,
+        );
+        set({
+          items,
+          continueOnFailure: doc.continueOnFailure ?? false,
+          loaded: true,
+        });
+      } catch {
+        // First-time load with no file: just mark loaded so the UI
+        // shows the empty-queue state instead of a perpetual spinner.
+        set({ loaded: true });
+      }
+    },
+
+    add(input) {
+      const item: QueueItem = {
+        id: newId(),
+        ...input,
+        status: "pending",
+        bytesSent: 0,
+        totalBytes: 0,
+        mountedAt: null,
+        error: null,
+        addedAt: Date.now(),
+        startedAt: null,
+        completedAt: null,
+      };
+      set((s) => ({ items: s.items.concat(item) }));
+      scheduleSave();
+    },
+
+    remove(id) {
+      set((s) => ({ items: removeItem(s.items, id) }));
+      scheduleSave();
+    },
+
+    moveUp(id) {
+      set((s) => ({ items: moveItemUp(s.items, id) }));
+      scheduleSave();
+    },
+
+    moveDown(id) {
+      set((s) => ({ items: moveItemDown(s.items, id) }));
+      scheduleSave();
+    },
+
+    clear() {
+      // Bumps runId so any in-flight run exits at the next await.
+      runId++;
+      set({ items: [], running: false });
+      scheduleSave();
+    },
+
+    retryFailed() {
+      set((s) => ({ items: resetFailedToPending(s.items) }));
+      scheduleSave();
+    },
+
+    setContinueOnFailure(b) {
+      set({ continueOnFailure: b });
+      scheduleSave();
+    },
+
+    async start() {
+      if (get().running) return;
+      const myRun = ++runId;
+      const isLive = () => runId === myRun;
+      set({ running: true });
+      try {
+        while (isLive()) {
+          const next = nextPending(get().items);
+          if (!next) break;
+
+          const startedAt = Date.now();
+          set((s) => ({
+            items: patchItem(s.items, next.id, {
+              status: "running",
+              startedAt,
+              error: null,
+            }),
+          }));
+          scheduleSave();
+
+          try {
+            const { bytesSent, mountedAt } = await runOne(next, isLive);
+            if (!isLive()) return;
+            set((s) => ({
+              items: patchItem(s.items, next.id, {
+                status: "done",
+                bytesSent,
+                mountedAt,
+                completedAt: Date.now(),
+              }),
+            }));
+            scheduleSave();
+          } catch (e) {
+            if (!isLive()) return;
+            const message = e instanceof Error ? e.message : String(e);
+            set((s) => ({
+              items: patchItem(s.items, next.id, {
+                status: "failed",
+                error: message,
+                completedAt: Date.now(),
+              }),
+            }));
+            scheduleSave();
+            if (!shouldContinueAfterFailure(get().continueOnFailure)) {
+              break;
+            }
+          }
+        }
+      } finally {
+        if (isLive()) {
+          set({ running: false });
+        }
+      }
+    },
+
+    stop() {
+      // Bump generation; runner exits at the next await. Items left
+      // in "running" state get reset to pending on the next hydrate
+      // (or by a fresh start, which moves them to running again
+      // before re-issuing the engine call — idempotent for the
+      // payload because TX_FLAG_RESUME and same-tx_id semantics are
+      // independent of queue state).
+      runId++;
+      // Reset any item that was actively running back to pending so
+      // the next start() picks it up cleanly.
+      set((s) => ({
+        running: false,
+        items: s.items.map((it) =>
+          it.status === "running" ? { ...it, status: "pending" as const } : it,
+        ),
+      }));
+      scheduleSave();
+    },
+  };
+});
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}

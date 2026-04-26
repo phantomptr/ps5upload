@@ -96,6 +96,13 @@ pub fn run() {
             commands::resume_txid_remember,
             commands::resume_txid_forget,
 
+            // ── Persistence (upload queue + payload playlists) ──────
+            // Whole-document JSON stores. Renderer owns the shape.
+            commands::upload_queue_load,
+            commands::upload_queue_save,
+            commands::payload_playlists_load,
+            commands::payload_playlists_save,
+
             // ── FAQ + changelog content (bundled markdown) ──────────
             commands::faq_load,
             commands::changelog_load,

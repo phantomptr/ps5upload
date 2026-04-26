@@ -29,6 +29,8 @@ use tauri::{AppHandle, Manager};
 enum Store {
     SendPayloadHistory,
     ResumeTxids,
+    UploadQueue,
+    PayloadPlaylists,
 }
 
 impl Store {
@@ -36,6 +38,8 @@ impl Store {
         match self {
             Store::SendPayloadHistory => "send_payload_history.json",
             Store::ResumeTxids => "resume_txids.json",
+            Store::UploadQueue => "upload_queue.json",
+            Store::PayloadPlaylists => "payload_playlists.json",
         }
     }
 }
@@ -52,9 +56,13 @@ impl Store {
 fn store_mutex(s: Store) -> &'static Mutex<()> {
     static HISTORY: OnceLock<Mutex<()>> = OnceLock::new();
     static TXIDS: OnceLock<Mutex<()>> = OnceLock::new();
+    static QUEUE: OnceLock<Mutex<()>> = OnceLock::new();
+    static PLAYLISTS: OnceLock<Mutex<()>> = OnceLock::new();
     match s {
         Store::SendPayloadHistory => HISTORY.get_or_init(|| Mutex::new(())),
         Store::ResumeTxids => TXIDS.get_or_init(|| Mutex::new(())),
+        Store::UploadQueue => QUEUE.get_or_init(|| Mutex::new(())),
+        Store::PayloadPlaylists => PLAYLISTS.get_or_init(|| Mutex::new(())),
     }
 }
 
@@ -403,6 +411,54 @@ pub async fn resume_txid_forget(
         }
         write_json_atomic(&path, &store)?;
     }
+    Ok(true)
+}
+
+// ── Upload queue (whole-document store) ─────────────────────────────────────
+//
+// The renderer owns the queue shape (see client/src/state/uploadQueue.ts).
+// We persist the entire queue as one JSON document on every mutation —
+// queues are tiny (≤ a few hundred items, each item < 1 KiB) so partial
+// updates aren't worth the complexity of per-record indexing here.
+//
+// Per-store mutex serialises rapid mutations (e.g. user reorders 3
+// items in a row) against concurrent saves.
+
+#[tauri::command]
+pub async fn upload_queue_load(app: AppHandle) -> Result<JsonValue, String> {
+    let path = data_file(&app, Store::UploadQueue.filename())?;
+    load_json_or_default(&path, serde_json::json!({}))
+}
+
+#[tauri::command]
+pub async fn upload_queue_save(app: AppHandle, doc: JsonValue) -> Result<bool, String> {
+    let path = data_file(&app, Store::UploadQueue.filename())?;
+    let _guard = store_mutex(Store::UploadQueue)
+        .lock()
+        .map_err(|e| format!("upload-queue store mutex poisoned: {e}"))?;
+    write_json_atomic(&path, &doc)?;
+    Ok(true)
+}
+
+// ── Payload playlists (whole-document store) ────────────────────────────────
+//
+// Same shape rationale as upload_queue. Renderer maintains a list of
+// named playlists (each = ordered (payload_path, sleep_ms) steps); we
+// just round-trip the JSON.
+
+#[tauri::command]
+pub async fn payload_playlists_load(app: AppHandle) -> Result<JsonValue, String> {
+    let path = data_file(&app, Store::PayloadPlaylists.filename())?;
+    load_json_or_default(&path, serde_json::json!({}))
+}
+
+#[tauri::command]
+pub async fn payload_playlists_save(app: AppHandle, doc: JsonValue) -> Result<bool, String> {
+    let path = data_file(&app, Store::PayloadPlaylists.filename())?;
+    let _guard = store_mutex(Store::PayloadPlaylists)
+        .lock()
+        .map_err(|e| format!("payload-playlists store mutex poisoned: {e}"))?;
+    write_json_atomic(&path, &doc)?;
     Ok(true)
 }
 

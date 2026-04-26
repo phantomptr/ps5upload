@@ -212,6 +212,30 @@ export async function resumeTxidForget(
  *  Uses Web Crypto's UUIDv4 generator for a CSPRNG source — collisions
  *  across the payload's tx table would corrupt other uploads, so "good
  *  random" actually matters here. */
+/** Whole-document load for the upload-queue store. The renderer owns
+ *  the shape — see state/uploadQueue.ts. Returns `{}` for first-time
+ *  use (Tauri returns the empty default from persistence.rs). */
+export async function uploadQueueLoad<T = unknown>(): Promise<T> {
+  return invoke<T>("upload_queue_load");
+}
+
+/** Whole-document save for the upload-queue store. Caller is
+ *  responsible for serializing concurrent saves; the Tauri side has a
+ *  per-store mutex so worst case is ordering, not corruption. */
+export async function uploadQueueSave(doc: unknown): Promise<void> {
+  await invoke("upload_queue_save", { doc });
+}
+
+/** Whole-document load for the payload-playlist store. */
+export async function payloadPlaylistsLoad<T = unknown>(): Promise<T> {
+  return invoke<T>("payload_playlists_load");
+}
+
+/** Whole-document save for the payload-playlist store. */
+export async function payloadPlaylistsSave(doc: unknown): Promise<void> {
+  await invoke("payload_playlists_save", { doc });
+}
+
 export function generateTxIdHex(): string {
   // crypto.randomUUID() returns "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx"
   // (36 chars with dashes). Stripping the 4 dashes yields exactly 32
