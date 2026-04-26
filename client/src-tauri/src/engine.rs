@@ -138,7 +138,10 @@ pub async fn start(app: &AppHandle) -> Result<&'static str> {
     // covers that corner.
     #[cfg(target_os = "windows")]
     {
-        use std::os::windows::process::CommandExt;
+        // tokio::process::Command exposes `creation_flags` directly on
+        // Windows — no `use std::os::windows::process::CommandExt`
+        // needed (and importing it triggers an unused-import lint
+        // because tokio's method shadows the trait method).
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }

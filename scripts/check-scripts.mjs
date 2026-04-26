@@ -76,11 +76,15 @@ const pwsh = spawnSync("pwsh", ["-NoProfile", "-Command", "$PSVersionTable.PSVer
 });
 if (pwsh.status === 0) {
   for (const f of psFiles) {
-    ok = run(path.relative(repoRoot, f), "pwsh", [
-      "-NoProfile",
-      "-Command",
-      `[System.Management.Automation.Language.Parser]::ParseFile('${f.replaceAll("'", "''")}', [ref]$null, [ref]$errors) > $null; if ($errors.Count) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }`,
-    ]) && ok;
+    // PowerShell's `[ref]` requires the variable to exist before being
+    // passed by reference — calling `[ref]$errors` against an
+    // undeclared `$errors` produces "[ref] cannot be applied to a
+    // variable that does not exist" at runtime even before the parser
+    // executes. Declare both `$tokens` and `$errors` up front so the
+    // ParseFile output parameters land in real variables.
+    const escaped = f.replaceAll("'", "''");
+    const cmd = `$tokens = $null; $errors = $null; [System.Management.Automation.Language.Parser]::ParseFile('${escaped}', [ref]$tokens, [ref]$errors) > $null; if ($errors.Count) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }`;
+    ok = run(path.relative(repoRoot, f), "pwsh", ["-NoProfile", "-Command", cmd]) && ok;
   }
 } else if (psFiles.length > 0) {
   process.stdout.write("[check-scripts] pwsh not found; skipped PowerShell parser checks\n");

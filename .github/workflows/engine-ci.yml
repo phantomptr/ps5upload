@@ -278,6 +278,13 @@ jobs:
   coverage:
     name: coverage reports
     runs-on: ubuntu-24.04
+    # Reporting job — not a gate. cargo-llvm-cov occasionally trails
+    # rustc's profraw format version (we hit "raw profile version
+    # mismatch: ... expected version = 9" when rustc bumped to v10),
+    # and we don't want a coverage tool's release cadence to block
+    # PRs on unrelated correctness work. The artifact is for trend
+    # inspection, not enforcement.
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
@@ -293,6 +300,8 @@ jobs:
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
