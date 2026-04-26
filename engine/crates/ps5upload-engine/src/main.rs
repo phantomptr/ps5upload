@@ -51,7 +51,8 @@ use ps5upload_core::{
     connection::Connection,
     download::{download_to_local, enumerate_download_set, DownloadKind},
     fs_ops::{
-        fs_chmod, fs_copy, fs_delete, fs_mkdir, fs_mount, fs_move, fs_read, fs_unmount, list_dir,
+        fs_chmod, fs_copy_with_op_id, fs_delete, fs_mkdir, fs_mount, fs_move_with_timeout,
+        fs_op_cancel, fs_op_status, fs_read, fs_unmount, list_dir,
         reconcile, walk_local_inventory, DirListing, ListDirOptions, MountResult, ReconcileFile,
         ReconcileMode, ReconcilePlan,
     },
@@ -292,16 +293,18 @@ fn spawn_progress_ticker(
         let mut last_bytes = u64::MAX; // forces a broadcast on the first real tick
         loop {
             interval.tick().await;
-            // `Acquire` pairs with the `Release` stop_ticker.store in each
-            // handler's post-transfer block. On ARM (Apple Silicon dev,
-            // AArch64 Linux CI), a plain `Relaxed` store isn't guaranteed
-            // to be observed by this load before the handler's subsequent
-            // `set_job(Done/Failed)` completes. Without the pair, the
-            // ticker could wake after the store but read stop=false from
-            // its own cache and race past the guard into a Running write
-            // that clobbers Done. On x86 TSO this never manifests; on
-            // Apple Silicon single-file uploads completing in < 200 ms
-            // can trip it.
+            // `Acquire` pairs with the `Release` store in
+            // `TickerStopGuard::drop` (which fires when the
+            // spawn_blocking closure ends, success or panic). On ARM
+            // (Apple Silicon dev, AArch64 Linux CI), a plain `Relaxed`
+            // store isn't guaranteed to be observed by this load
+            // before the handler's subsequent `set_job(Done/Failed)`
+            // completes. Without the pair, the ticker could wake
+            // after the store but read stop=false from its own cache
+            // and race past the guard into a Running write that
+            // clobbers Done. On x86 TSO this never manifests; on
+            // Apple Silicon single-file uploads completing in < 200
+            // ms can trip it.
             if stop_for_tick.load(Ordering::Acquire) {
                 break;
             }
@@ -318,7 +321,12 @@ fn spawn_progress_ticker(
             // Mutate in place so the handler's initial `files` list is
             // preserved across ticks — we no longer carry it in the ctx.
             let maybe_snapshot = {
-                let mut g = jobs.lock().unwrap();
+                // Poison-safe: a panic in any other lock holder must not
+                // cascade through every subsequent ticker spawn. Same
+                // pattern as engine_log.rs::record — the contained
+                // HashMap is safe to read/mutate even after a partial
+                // mutation.
+                let mut g = jobs.lock().unwrap_or_else(|e| e.into_inner());
                 match g.get_mut(&job_id) {
                     Some(JobState::Running {
                         bytes_sent: b,
@@ -352,6 +360,112 @@ fn spawn_progress_ticker(
         }
     });
     stop
+}
+
+/// RAII guard that flips the ticker's stop flag when dropped, so a
+/// panic between `spawn_progress_ticker` and the handler's manual
+/// `stop_ticker.store(true)` doesn't leak the spawned tokio task
+/// forever (the ticker would otherwise loop every 200 ms forever,
+/// dirtying job state for a job that's gone).
+///
+/// Usage:
+///   let stop = spawn_progress_ticker(...);
+///   let _stop_guard = TickerStopGuard::new(stop);
+///   // ... transfer work that may panic ...
+///   // _stop_guard's Drop fires regardless of success/panic path.
+struct TickerStopGuard(Arc<AtomicBool>);
+
+impl TickerStopGuard {
+    fn new(stop: Arc<AtomicBool>) -> Self {
+        TickerStopGuard(stop)
+    }
+}
+
+impl Drop for TickerStopGuard {
+    fn drop(&mut self) {
+        // Release ordering matches the Acquire in the ticker's stop
+        // check (see comment at the load site). On Apple Silicon
+        // a Relaxed store here would not be guaranteed to be
+        // observed before the panic-unwind unmounts subsequent
+        // shared state.
+        self.0.store(true, Ordering::Release);
+    }
+}
+
+/// RAII guard that transitions a job to Failed on Drop unless the
+/// caller explicitly calls `mark_succeeded()` first.
+///
+/// Without this, a panic inside a `spawn_blocking` transfer closure
+/// (e.g. an unwrap on a None deep inside the path-resumable core)
+/// would leave the job map record stuck on `Running` forever — the
+/// Tauri client would poll the job status and see Running with a
+/// frozen `bytes_sent` counter, with no terminal transition to give
+/// the UI a clear failure to surface. The TickerStopGuard handles
+/// the *ticker* leak; this guard handles the *job state* leak.
+///
+/// Lock acquisition uses the same poison-safe pattern as elsewhere
+/// (set_job → jobs.lock().unwrap_or_else(...)) so a Drop running
+/// during panic-unwind doesn't double-panic on a poisoned mutex.
+///
+/// Usage:
+///   let mut fail_guard = JobFailOnDropGuard::new(...);
+///   let _stop_guard = TickerStopGuard::new(stop_ticker);
+///   // ... work that may panic ...
+///   match result { ... set_job(Done|Failed) ... };
+///   fail_guard.mark_succeeded();   // <-- only after explicit set_job
+struct JobFailOnDropGuard {
+    jobs: Arc<Mutex<HashMap<Uuid, JobState>>>,
+    events_tx: broadcast::Sender<String>,
+    job_id: Uuid,
+    started_at_ms: u64,
+    succeeded: bool,
+}
+
+impl JobFailOnDropGuard {
+    fn new(
+        jobs: Arc<Mutex<HashMap<Uuid, JobState>>>,
+        events_tx: broadcast::Sender<String>,
+        job_id: Uuid,
+        started_at_ms: u64,
+    ) -> Self {
+        JobFailOnDropGuard {
+            jobs,
+            events_tx,
+            job_id,
+            started_at_ms,
+            succeeded: false,
+        }
+    }
+
+    fn mark_succeeded(&mut self) {
+        self.succeeded = true;
+    }
+}
+
+impl Drop for JobFailOnDropGuard {
+    fn drop(&mut self) {
+        if self.succeeded {
+            return;
+        }
+        let completed_at_ms = now_ms();
+        set_job(
+            &self.jobs,
+            &self.events_tx,
+            self.job_id,
+            JobState::Failed {
+                started_at_ms: self.started_at_ms,
+                completed_at_ms,
+                elapsed_ms: completed_at_ms.saturating_sub(self.started_at_ms),
+                // Generic message — the actual panic payload is
+                // already on stderr via Tokio's default panic
+                // handler. Surfacing the full panic message here
+                // would require std::panic::catch_unwind around the
+                // whole closure, which adds complexity for marginal
+                // user-facing benefit.
+                error: "engine task panicked (see engine logs)".to_string(),
+            },
+        );
+    }
 }
 
 #[derive(Clone)]
@@ -397,7 +511,7 @@ fn set_job(
     state: JobState,
 ) {
     {
-        let mut g = jobs.lock().unwrap();
+        let mut g = jobs.lock().unwrap_or_else(|e| e.into_inner());
         if !g.contains_key(&job_id) && g.len() >= JOBS_MAP_CAP {
             evict_oldest_terminal(&mut g);
         }
@@ -615,6 +729,15 @@ struct FsMoveReq {
     addr: Option<String>,
     from: String,
     to: String,
+    /// Optional unique 64-bit identifier the client generates so it
+    /// can poll progress (`/api/ps5/fs/op-status`) and cancel
+    /// (`/api/ps5/fs/op-cancel`) the in-flight copy. The engine
+    /// stamps this into the FS_COPY frame's trace_id so the payload's
+    /// in-flight ops table is keyed on it. Pass 0 (or omit) when no
+    /// progress/cancel is needed; the operation runs the same way
+    /// the old endpoint did.
+    #[serde(default)]
+    op_id: u64,
 }
 
 #[derive(Deserialize)]
@@ -670,10 +793,19 @@ async fn ps5_fs_move(
     crate::log_info!("fs_move: addr={addr} from={from} to={to}");
     let from_for_log = from.clone();
     let to_for_log = to.clone();
-    match tokio::task::spawn_blocking(move || fs_move(&addr, &from, &to))
-        .await
-        .map_err(anyhow::Error::from)
-        .and_then(|r| r)
+    // 1-hour deadline: most fs_move calls return in milliseconds
+    // (rename(2) is metadata-only), but cross-volume moves that the
+    // payload retries via copy-then-delete inherit the same long
+    // bound as fs_copy. The default 30 s socket timeout would fire
+    // mid-copy of any multi-GiB file and surface as the cryptic "read
+    // frame header" 502.
+    let io_timeout = std::time::Duration::from_secs(60 * 60);
+    match tokio::task::spawn_blocking(move || {
+        fs_move_with_timeout(&addr, &from, &to, Some(io_timeout))
+    })
+    .await
+    .map_err(anyhow::Error::from)
+    .and_then(|r| r)
     {
         Ok(()) => {
             crate::log_info!(
@@ -703,10 +835,22 @@ async fn ps5_fs_copy(
     crate::log_info!("fs_copy: addr={addr} from={from} to={to}");
     let from_for_log = from.clone();
     let to_for_log = to.clone();
-    match tokio::task::spawn_blocking(move || fs_copy(&addr, &from, &to))
-        .await
-        .map_err(anyhow::Error::from)
-        .and_then(|r| r)
+    // 1-hour deadline: fs_copy is a single-shot RPC where the payload
+    // performs the entire recursive copy and only sends FS_COPY_ACK
+    // at the end. A 35 GiB game image on PS5 UFS takes minutes to
+    // copy; the previous 30 s socket timeout fired mid-copy and
+    // surfaced as "read frame header" 502 with no progress visible.
+    // Real progress reporting would require a payload protocol
+    // change (per-shard progress events); for now the long deadline
+    // at least lets the operation complete.
+    let io_timeout = std::time::Duration::from_secs(60 * 60);
+    let op_id = req.op_id;
+    match tokio::task::spawn_blocking(move || {
+        fs_copy_with_op_id(&addr, &from, &to, op_id, Some(io_timeout))
+    })
+    .await
+    .map_err(anyhow::Error::from)
+    .and_then(|r| r)
     {
         Ok(()) => {
             crate::log_info!(
@@ -716,11 +860,23 @@ async fn ps5_fs_copy(
             (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
         }
         Err(e) => {
+            // Cancellation surfaces as `Err("cancelled")` from
+            // fs_copy_with_op_id. Translate to a distinct 499-style
+            // response so the client can tell it apart from a real
+            // FS_COPY failure (different banner, different log).
+            let msg = e.to_string();
+            if msg == "cancelled" {
+                crate::log_info!(
+                    "fs_copy cancelled: {from_for_log} -> {to_for_log} in {} ms",
+                    started.elapsed().as_millis()
+                );
+                return json_err(StatusCode::CONFLICT, "cancelled").into_response();
+            }
             crate::log_warn!(
                 "fs_copy failed: {from_for_log} -> {to_for_log} in {} ms: {e}",
                 started.elapsed().as_millis()
             );
-            json_err(StatusCode::BAD_GATEWAY, e.to_string()).into_response()
+            json_err(StatusCode::BAD_GATEWAY, msg).into_response()
         }
     }
 }
@@ -839,6 +995,88 @@ async fn ps5_fs_chmod(
             );
             json_err(StatusCode::BAD_GATEWAY, e.to_string()).into_response()
         }
+    }
+}
+
+/// GET /api/ps5/fs/op-status?op_id=N&addr=...
+///
+/// Snapshot the in-flight FS op identified by `op_id` (a 64-bit
+/// value the client generated and passed to fs/copy). Used by the
+/// client to drive a per-byte progress bar + speed indicator while
+/// the FS_COPY HTTP call is still blocked. Returns 404 if the op
+/// isn't currently registered (already finished or never started).
+#[derive(Deserialize)]
+struct FsOpStatusQuery {
+    op_id: u64,
+    addr: Option<String>,
+}
+
+async fn ps5_fs_op_status(
+    State(state): State<AppState>,
+    Query(q): Query<FsOpStatusQuery>,
+) -> impl IntoResponse {
+    let addr = mgmt_addr_or_default(q.addr, &state.default_ps5_addr);
+    let op_id = q.op_id;
+    match tokio::task::spawn_blocking(move || fs_op_status(&addr, op_id))
+        .await
+        .map_err(anyhow::Error::from)
+        .and_then(|r| r)
+    {
+        Ok(snap) => {
+            if !snap.found {
+                return json_err(StatusCode::NOT_FOUND, "op_id not in flight").into_response();
+            }
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "op_id": snap.op_id,
+                    "kind": snap.kind,
+                    "from": snap.from,
+                    "to": snap.to,
+                    "total_bytes": snap.total_bytes,
+                    "bytes_copied": snap.bytes_copied,
+                    "cancel_requested": snap.cancel_requested,
+                })),
+            )
+                .into_response()
+        }
+        Err(e) => json_err(StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
+    }
+}
+
+/// POST /api/ps5/fs/op-cancel — body `{"op_id": N, "addr": "..."}`.
+///
+/// Asks the payload to set the cancel flag on op N. The actual
+/// cp_rf loop checks the flag every 4 MiB, so a multi-GiB copy
+/// stops within ~one disk-IO worth of bytes (sub-second on PS5
+/// NVMe). Returns `{"cancelled": true}` on success, `{"cancelled":
+/// false}` if the op_id wasn't recognized (already finished or
+/// never registered — both treated as success from the client's
+/// perspective: "the op you wanted to cancel isn't running").
+#[derive(Deserialize)]
+struct FsOpCancelReq {
+    op_id: u64,
+    addr: Option<String>,
+}
+
+async fn ps5_fs_op_cancel(
+    State(state): State<AppState>,
+    Json(req): Json<FsOpCancelReq>,
+) -> impl IntoResponse {
+    let addr = mgmt_addr_or_default(req.addr, &state.default_ps5_addr);
+    let op_id = req.op_id;
+    crate::log_info!("fs_op_cancel: op_id={op_id}");
+    match tokio::task::spawn_blocking(move || fs_op_cancel(&addr, op_id))
+        .await
+        .map_err(anyhow::Error::from)
+        .and_then(|r| r)
+    {
+        Ok(found) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "cancelled": found })),
+        )
+            .into_response(),
+        Err(e) => json_err(StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
     }
 }
 
@@ -1249,6 +1487,21 @@ async fn transfer_file_handler(
     );
 
     tokio::task::spawn_blocking(move || {
+        // Drops at closure end (success OR panic), stopping the
+        // progress ticker. Without this, a panic in
+        // transfer_file_path_resumable would leak the ticker task
+        // forever, dirtying state for a finished job.
+        let _stop_guard = TickerStopGuard::new(stop_ticker);
+        // Drops on panic-unwind and writes Failed to the job map so a
+        // panicked transfer doesn't leave the record stuck on
+        // Running. Explicitly mark_succeeded() at the end of the
+        // closure once we've written our own terminal state.
+        let mut fail_guard = JobFailOnDropGuard::new(
+            Arc::clone(&jobs),
+            events_tx.clone(),
+            job_id,
+            started_at_ms,
+        );
         let mut cfg = make_transfer_config(&addr);
         cfg.progress_bytes = Some(Arc::clone(&progress));
         // Resume-on-drop for single-file uploads: 1 fresh attempt + 2
@@ -1262,7 +1515,6 @@ async fn transfer_file_handler(
         // 50-100 GiB game images.
         let src_path = std::path::PathBuf::from(&req.src);
         let result = transfer_file_path_resumable(&cfg, tx_id, &req.dest, &src_path, 2);
-        stop_ticker.store(true, Ordering::Release);
         let files_sent_count: u64 = 1;
         let skipped_files_count: u64 = 0;
         let skipped_bytes_count: u64 = 0;
@@ -1303,6 +1555,7 @@ async fn transfer_file_handler(
                 )
             }
         }
+        fail_guard.mark_succeeded();
     });
 
     (
@@ -1380,6 +1633,14 @@ async fn transfer_dir_handler(
     );
 
     tokio::task::spawn_blocking(move || {
+        // See ticker stop-guard rationale at the file-upload spawn site.
+        let _stop_guard = TickerStopGuard::new(stop_ticker);
+        let mut fail_guard = JobFailOnDropGuard::new(
+            Arc::clone(&jobs),
+            events_tx.clone(),
+            job_id,
+            started_at_ms,
+        );
         let mut cfg = make_transfer_config(&addr);
         cfg.excludes = req.excludes;
         cfg.progress_bytes = Some(Arc::clone(&progress));
@@ -1394,7 +1655,6 @@ async fn transfer_dir_handler(
             2,
             initial_flags,
         );
-        stop_ticker.store(true, Ordering::Release);
         let skipped_files_count: u64 = 0;
         let skipped_bytes_count: u64 = 0;
         match result {
@@ -1434,6 +1694,7 @@ async fn transfer_dir_handler(
                 )
             }
         }
+        fail_guard.mark_succeeded();
     });
 
     (
@@ -1526,13 +1787,19 @@ async fn transfer_file_list_handler(
     );
 
     tokio::task::spawn_blocking(move || {
+        let _stop_guard = TickerStopGuard::new(stop_ticker);
+        let mut fail_guard = JobFailOnDropGuard::new(
+            Arc::clone(&jobs),
+            events_tx.clone(),
+            job_id,
+            started_at_ms,
+        );
         let mut cfg = make_transfer_config(&addr);
         cfg.progress_bytes = Some(Arc::clone(&progress));
         // All transfer endpoints share the same 3-attempt resume policy
         // (1 fresh + 2 resumes). See `transfer_dir_handler` for rationale.
         let result =
             transfer_file_list_resumable(&cfg, tx_id, &req.dest_root, &entries, 2, initial_flags);
-        stop_ticker.store(true, Ordering::Release);
         let skipped_files_count: u64 = 0;
         let skipped_bytes_count: u64 = 0;
         match result {
@@ -1572,6 +1839,7 @@ async fn transfer_file_list_handler(
                 )
             }
         }
+        fail_guard.mark_succeeded();
     });
 
     (
@@ -1785,8 +2053,14 @@ async fn transfer_download_handler(
     let dest_root = dest_dir.join(basename);
 
     tokio::task::spawn_blocking(move || {
+        let _stop_guard = TickerStopGuard::new(stop_ticker);
+        let mut fail_guard = JobFailOnDropGuard::new(
+            Arc::clone(&jobs),
+            events_tx.clone(),
+            job_id,
+            started_at_ms,
+        );
         let result = download_to_local(&mgmt_addr, &dest_root, &manifest, Some(&progress));
-        stop_ticker.store(true, Ordering::Release);
         match result {
             Ok(bytes_written) => {
                 let completed_at_ms = now_ms();
@@ -1824,6 +2098,7 @@ async fn transfer_download_handler(
                 );
             }
         }
+        fail_guard.mark_succeeded();
     });
 
     (
@@ -2063,6 +2338,14 @@ async fn transfer_dir_reconcile_handler(
             ctx,
             Arc::clone(&progress),
         );
+        // Same panic-survive contract as the other transfer endpoints.
+        let _stop_guard = TickerStopGuard::new(stop_ticker);
+        let mut fail_guard = JobFailOnDropGuard::new(
+            Arc::clone(&jobs),
+            events_tx.clone(),
+            job_id,
+            started_at_ms,
+        );
 
         let entries: Vec<FileListEntry> = plan
             .to_send
@@ -2086,7 +2369,6 @@ async fn transfer_dir_reconcile_handler(
         // max_attempts), so 2 here means "up to 2 RESUME retries".
         let result =
             transfer_file_list_resumable(&cfg, tx_id, &req.dest_root, &entries, 2, initial_flags);
-        stop_ticker.store(true, Ordering::Release);
         match result {
             Ok(r) => {
                 let completed_at_ms = now_ms();
@@ -2124,6 +2406,7 @@ async fn transfer_dir_reconcile_handler(
                 )
             }
         }
+        fail_guard.mark_succeeded();
     });
 
     (
@@ -2141,7 +2424,7 @@ async fn get_job(State(state): State<AppState>, Path(id): Path<String>) -> impl 
         Ok(u) => u,
         Err(_) => return json_err(StatusCode::BAD_REQUEST, "invalid job id").into_response(),
     };
-    match state.jobs.lock().unwrap().get(&uuid).cloned() {
+    match state.jobs.lock().unwrap_or_else(|e| e.into_inner()).get(&uuid).cloned() {
         Some(job) => (StatusCode::OK, Json(job)).into_response(),
         None => json_err(StatusCode::NOT_FOUND, "job not found").into_response(),
     }
@@ -2170,9 +2453,28 @@ async fn engine_logs_tail(Query(q): Query<EngineLogsQuery>) -> impl IntoResponse
     )
 }
 
+/// GET /api/version — engine self-identification.
+///
+/// Returned shape: `{"version": "x.y.z"}`. Used by the Tauri shell
+/// to detect a version-mismatched sibling engine on the bound port:
+/// if /api/version disagrees with the version the shell was built
+/// against, the shell kills the old engine + respawns its own.
+/// Without this, an upgrade-and-relaunch cycle could leave the shell
+/// talking to the prior version's engine indefinitely (silently
+/// missing any newly-added routes — e.g. the FS_OP frames added in
+/// 2.2.7).
+async fn engine_version() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "version": env!("CARGO_PKG_VERSION"),
+        })),
+    )
+}
+
 /// GET /api/jobs
 async fn list_jobs(State(state): State<AppState>) -> impl IntoResponse {
-    let jobs = state.jobs.lock().unwrap();
+    let jobs = state.jobs.lock().unwrap_or_else(|e| e.into_inner());
     let summary: Vec<serde_json::Value> = jobs
         .iter()
         .map(|(id, s)| {
@@ -2227,6 +2529,8 @@ async fn main() {
         .route("/api/ps5/fs/delete", post(ps5_fs_delete))
         .route("/api/ps5/fs/move", post(ps5_fs_move))
         .route("/api/ps5/fs/copy", post(ps5_fs_copy))
+        .route("/api/ps5/fs/op-status", get(ps5_fs_op_status))
+        .route("/api/ps5/fs/op-cancel", post(ps5_fs_op_cancel))
         .route("/api/ps5/fs/mount", post(ps5_fs_mount))
         .route("/api/ps5/fs/unmount", post(ps5_fs_unmount))
         .route("/api/ps5/hw/info", get(ps5_hw_info))
@@ -2246,6 +2550,7 @@ async fn main() {
             "/api/transfer/dir-reconcile",
             post(transfer_dir_reconcile_handler),
         )
+        .route("/api/version", get(engine_version))
         .route("/api/jobs", get(list_jobs))
         .route("/api/jobs/{id}", get(get_job))
         .route("/api/events", get(events_stream))
@@ -2260,14 +2565,45 @@ async fn main() {
 
     let bind = format!("127.0.0.1:{port}");
     println!("[ps5upload-engine] listening on http://{bind}  (ps5={ps5_addr})");
-    let listener = tokio::net::TcpListener::bind(&bind)
-        .await
-        .unwrap_or_else(|e| {
-            panic!(
-                "failed to bind {bind} — another process may be using the port (override with PS5UPLOAD_ENGINE_PORT): {e}"
+    let listener = match tokio::net::TcpListener::bind(&bind).await {
+        Ok(l) => l,
+        Err(e) => {
+            // Port already bound. Don't panic — that's both noisy in
+            // the user's engine.log and surfaces to the renderer as
+            // "engine request failed" with no useful diagnostic.
+            // Probe whether the port answers a TCP connect at all
+            // (cheap, no extra HTTP-client dep). If it does, an
+            // engine — ours or otherwise — is up and the Tauri
+            // shell's probe-then-spawn flow on the next start() will
+            // pick the right action (use it / surface an error).
+            // Exit 0 in that case. If even the connect fails, the
+            // port's in some half-bound state (e.g. TIME_WAIT or
+            // permissions) — exit non-zero with a clear log.
+            let connectable = tokio::time::timeout(
+                std::time::Duration::from_millis(500),
+                tokio::net::TcpStream::connect(&bind),
             )
-        });
-    axum::serve(listener, app)
-        .await
-        .unwrap_or_else(|e| panic!("axum server terminated with error: {e}"));
+            .await
+            .ok()
+            .and_then(|r| r.ok())
+            .is_some();
+            if connectable {
+                eprintln!(
+                    "[ps5upload-engine] {bind} already bound by another \
+                     process (likely a sibling engine); exiting 0",
+                );
+                return;
+            }
+            eprintln!(
+                "[ps5upload-engine] failed to bind {bind}: {e} \
+                 (port held by an unresponsive process — kill it or \
+                 override with PS5UPLOAD_ENGINE_PORT)",
+            );
+            std::process::exit(2);
+        }
+    };
+    if let Err(e) = axum::serve(listener, app).await {
+        eprintln!("[ps5upload-engine] axum serve terminated: {e}");
+        std::process::exit(3);
+    }
 }

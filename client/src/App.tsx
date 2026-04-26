@@ -13,6 +13,7 @@ import AboutScreen from "./screens/About";
 import ChangelogScreen from "./screens/Changelog";
 import FAQScreen from "./screens/FAQ";
 import LogsScreen from "./screens/Logs";
+import ActivityScreen from "./screens/Activity";
 
 export default function App() {
   return (
@@ -33,6 +34,7 @@ export default function App() {
         <Route path="/send-payload" element={<SendPayloadScreen />} />
         <Route path="/faq" element={<FAQScreen />} />
         <Route path="/logs" element={<LogsScreen />} />
+        <Route path="/activity" element={<ActivityScreen />} />
         <Route path="/settings" element={<SettingsScreen />} />
         <Route path="/about" element={<AboutScreen />} />
         <Route path="*" element={<Navigate to="/whats-new" replace />} />

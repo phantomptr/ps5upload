@@ -3,7 +3,13 @@ import { HardDrive, FileArchive, Unplug, RefreshCw } from "lucide-react";
 
 import { useConnectionStore, PS5_PAYLOAD_PORT } from "../../state/connection";
 import { fetchVolumes, fsUnmount, type Volume } from "../../api/ps5";
-import { PageHeader, EmptyState, ErrorCard, Button } from "../../components";
+import {
+  PageHeader,
+  EmptyState,
+  ErrorCard,
+  Button,
+  useConfirm,
+} from "../../components";
 import { humanizePs5Error } from "../../lib/humanizeError";
 import { useTr } from "../../state/lang";
 
@@ -33,6 +39,9 @@ export default function VolumesScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [unmountingPath, setUnmountingPath] = useState<string | null>(null);
+  // Native window.confirm() is a no-op in Tauri's webview; use the
+  // in-tree modal instead (see ConfirmDialog.tsx).
+  const { confirm: confirmDialog, dialog: confirmDialogNode } = useConfirm();
 
   const refresh = useCallback(async () => {
     if (!host?.trim()) return;
@@ -55,13 +64,21 @@ export default function VolumesScreen() {
 
   const handleUnmount = async (mountPoint: string) => {
     if (!host?.trim()) return;
-    if (
-      !confirm(
-        `Unmount ${mountPoint}? Anything referencing files inside will break until you re-mount.`,
-      )
-    ) {
-      return;
-    }
+    const ok = await confirmDialog({
+      title: tr(
+        "volumes_unmount_confirm_title",
+        { path: mountPoint },
+        `Unmount ${mountPoint}?`,
+      ),
+      message: tr(
+        "volumes_unmount_confirm_body",
+        undefined,
+        "Anything reading files from this mount will break until you remount the image.",
+      ),
+      confirmLabel: tr("unmount", undefined, "Unmount"),
+      destructive: true,
+    });
+    if (!ok) return;
     setUnmountingPath(mountPoint);
     setError(null);
     try {
@@ -93,6 +110,7 @@ export default function VolumesScreen() {
 
   return (
     <div className="p-6">
+      {confirmDialogNode}
       <PageHeader
         icon={HardDrive}
         title={tr("volumes", undefined, "Volumes")}

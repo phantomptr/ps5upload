@@ -57,6 +57,16 @@ int main(void) {
     signal(SIGBUS,  handle_fatal);
     signal(SIGTERM, handle_fatal);
     signal(SIGHUP,  handle_fatal);
+    /* CRITICAL: ignore SIGPIPE. Without this, every client disconnect
+     * mid-write (TCP RST during a SHARD, control client closing while
+     * we're sending an ACK, browser tab reload mid-FS_LIST_DIR
+     * response) delivers SIGPIPE whose default disposition is
+     * terminate. The payload would then die mid-transfer, leaving
+     * the user wondering why "the payload crashes during uploads."
+     * With this ignore in place, write() returns -1/EPIPE, and the
+     * handler closes the socket and the next iteration of the accept
+     * loop continues normally. */
+    signal(SIGPIPE, SIG_IGN);
 
     /* NOTE on toasts: sceKernelSendNotificationRequest is only called
      * AFTER runtime_init completes below. An earlier attempt to fire a

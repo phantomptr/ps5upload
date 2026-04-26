@@ -51,7 +51,9 @@ export default function StatusBar() {
         >
           <span>PS5</span>
           <span className="rounded bg-[var(--color-surface-3)] px-1 font-mono text-[10px]">
-            {ps5Firmware ? `FW ${ps5Firmware}` : tr("status_kernel_ok", undefined, "kernel OK")}
+            {ps5Firmware
+              ? tr("status_fw", { ver: ps5Firmware }, `FW ${ps5Firmware}`)
+              : tr("status_kernel_ok", undefined, "kernel OK")}
           </span>
         </div>
       )}

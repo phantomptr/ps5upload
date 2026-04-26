@@ -23,10 +23,30 @@ export interface Volume {
   source_image?: string;
 }
 
+/**
+ * Per-request timeout in milliseconds. Picked to be larger than the
+ * engine's own internal PS5-side RPC timeouts (30s default) so the
+ * server gets a chance to time out and surface a structured error
+ * before the client gives up. Without this cap, a hung PS5 + engine
+ * mid-call could leave the client polling forever — the status bar
+ * dot would stay grey, refresh/poll loops would pile up unfinished
+ * fetches, and the user has no signal that something is wrong.
+ */
+const REQUEST_TIMEOUT_MS = 35_000;
+
 async function json<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, init);
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-  return res.json() as Promise<T>;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${BASE}${path}`, {
+      ...init,
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    return (await res.json()) as T;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export const engineApi = {

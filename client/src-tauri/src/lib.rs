@@ -67,6 +67,8 @@ pub fn run() {
             commands::ps5_fs_delete,
             commands::ps5_fs_move,
             commands::ps5_fs_copy,
+            commands::ps5_fs_op_status,
+            commands::ps5_fs_op_cancel,
             commands::ps5_fs_mount,
             commands::ps5_fs_unmount,
             commands::ps5_fs_chmod,

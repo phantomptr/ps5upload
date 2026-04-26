@@ -134,6 +134,38 @@ async fn probe(url: &str, client: &reqwest::Client) -> bool {
         .unwrap_or(false)
 }
 
+/// Check that the engine answering the port reports the same version
+/// the desktop shell was built against. Returns true on match (use
+/// the existing engine), false otherwise (kill + respawn).
+///
+/// Mismatch is the common-after-upgrade scenario: previous app
+/// instance left an orphaned engine bound to 19113 and the new
+/// shell's probe finds it. Without this check, the new shell talks
+/// to the old engine indefinitely — and any newly-added route
+/// surfaces as 404 to the user with no obvious explanation.
+///
+/// Robust against the engine not implementing /api/version yet
+/// (returns false → respawn, which is correct behavior).
+async fn engine_version_matches(url: &str, client: &reqwest::Client) -> bool {
+    let expected = env!("CARGO_PKG_VERSION");
+    let u = format!("{url}/api/version");
+    let resp = match client
+        .get(&u)
+        .timeout(Duration::from_millis(500))
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => r,
+        _ => return false,
+    };
+    let body: serde_json::Value = match resp.json().await {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    let actual = body.get("version").and_then(|v| v.as_str()).unwrap_or("");
+    actual == expected
+}
+
 /// Cap on the engine.log file before we rotate it to .old. Without
 /// rotation a long-running install + many app restarts could grow
 /// the log indefinitely; 1 MiB is enough for ~10k tagged lines and
@@ -211,11 +243,33 @@ pub async fn start(app: &AppHandle) -> Result<&'static str> {
         if guard.is_some() {
             let client = reqwest::Client::new();
             if probe(DEFAULT_ENGINE_URL, &client).await {
-                return Ok(DEFAULT_ENGINE_URL);
+                // The port responds, but it might be a stale-version
+                // engine left behind by a previous app instance (the
+                // process didn't reap on crash, so we inherited it
+                // on next start). Verify the version matches the
+                // shell's expectation; if not, kill it and respawn
+                // from the bundled bytes. Without this, fresh routes
+                // (e.g. the FS_OP frames added in 2.2.7) silently
+                // 404 against an old engine the shell is happily
+                // talking to.
+                if engine_version_matches(DEFAULT_ENGINE_URL, &client).await {
+                    return Ok(DEFAULT_ENGINE_URL);
+                }
+                eprintln!(
+                    "[engine] stale-version sibling engine detected on {DEFAULT_ENGINE_URL} — killing and respawning",
+                );
+                // Fall through to take()+kill below. If our child
+                // handle isn't actually the process bound to the
+                // port (engine was orphaned by a prior crash and we
+                // never re-acquired it), kill() will be a no-op and
+                // bind() will fail in the spawned child — but our
+                // engine binary now exits 0 cleanly in that case
+                // rather than panicking, so the worst outcome is a
+                // single "couldn't bind" log entry.
             }
-            // Stale child — kill and fall through to spawn a fresh
-            // one. take() empties the slot so the spawn path below
-            // can overwrite it cleanly.
+            // Stale child (or stale version) — kill and fall through
+            // to spawn a fresh one. take() empties the slot so the
+            // spawn path below can overwrite it cleanly.
             if let Some(mut child) = guard.take() {
                 let _ = child.kill().await;
                 let _ = child.wait().await;

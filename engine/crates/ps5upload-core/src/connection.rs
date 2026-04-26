@@ -177,7 +177,22 @@ impl Connection {
     /// segments — vectored writes let the kernel coalesce both parts into
     /// one packet when the body is small enough.
     pub fn send_frame(&mut self, ft: FrameType, body: &[u8]) -> Result<()> {
-        let hdr = FrameHeader::new(ft, 0, body.len() as u64, 0);
+        self.send_frame_with_trace(ft, body, 0)
+    }
+
+    /// Like `send_frame` but stamps a caller-chosen trace_id into the
+    /// header. Used by the FS_COPY / FS_MOVE job machinery: the
+    /// engine generates a unique op_id at job-create time, sends the
+    /// originating frame with that as trace_id, and reuses the same
+    /// id when later calling FS_OP_STATUS / FS_OP_CANCEL — the
+    /// payload's per-op table is keyed off this value.
+    pub fn send_frame_with_trace(
+        &mut self,
+        ft: FrameType,
+        body: &[u8],
+        trace_id: u64,
+    ) -> Result<()> {
+        let hdr = FrameHeader::new(ft, 0, body.len() as u64, trace_id);
         let hdr_bytes = hdr.encode();
         if body.is_empty() {
             self.stream

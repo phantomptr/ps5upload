@@ -203,10 +203,16 @@ export const usePayloadPlaylistsStore = create<PlaylistState>((set, get) => {
       for (let i = 0; i < playlist.steps.length; i++) {
         if (!isLive()) return;
         const step = playlist.steps[i];
+        // Per-step overrides take precedence over the playlist-wide
+        // host/port supplied to run(). Empty string / 0 / undefined
+        // all fall back to the playlist defaults.
+        const stepHost = step.ip && step.ip.trim() ? step.ip.trim() : host;
+        const stepPort =
+          typeof step.port === "number" && step.port > 0 ? step.port : port;
         set({ runStatus: { kind: "running", playlistId: id, stepIndex: i } });
 
         try {
-          await sendPayload(host, step.path, port);
+          await sendPayload(stepHost, step.path, stepPort);
           successCount++;
         } catch (e) {
           const errMsg = e instanceof Error ? e.message : String(e);

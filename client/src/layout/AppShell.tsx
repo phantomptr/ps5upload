@@ -2,10 +2,12 @@ import { Outlet } from "react-router-dom";
 import { useEffect } from "react";
 import Sidebar from "./Sidebar";
 import StatusBar from "./StatusBar";
+import OperationBar from "./OperationBar";
 import { useConnectionStore } from "../state/connection";
 import { useUpdateStore } from "../state/update";
 import { engineApi } from "../api/engine";
 import { payloadCheck } from "../api/ps5";
+import { installActivityWiring } from "../state/activityWiring";
 
 /** Background status polling for the engine + payload dots in the
  *  status bar. Runs for the lifetime of the app so the indicators
@@ -37,18 +39,25 @@ function useStatusPolling() {
     if (!host || !host.trim()) {
       setStatus({
         payloadStatus: "unknown",
+        payloadStatusHost: null,
         payloadVersion: null,
         ps5Kernel: null,
       });
       return;
     }
+    // Capture the host this probe is running against — write it
+    // alongside payloadStatus so consumers (e.g. Connection screen's
+    // auto-heal effect) can check that the result hasn't been
+    // superseded by a host change between probe-fire and store-write.
+    const probedHost = host;
     let cancelled = false;
     const tick = async () => {
       try {
-        const s = await payloadCheck(host);
+        const s = await payloadCheck(probedHost);
         if (!cancelled) {
           setStatus({
             payloadStatus: s.reachable ? "up" : "down",
+            payloadStatusHost: probedHost,
             // Keep the last-known version while payload is briefly
             // unreachable (e.g. a single failed poll) so the UI doesn't
             // flicker; only clear when we never had a value.
@@ -57,7 +66,12 @@ function useStatusPolling() {
           });
         }
       } catch {
-        if (!cancelled) setStatus({ payloadStatus: "down" });
+        if (!cancelled) {
+          setStatus({
+            payloadStatus: "down",
+            payloadStatusHost: probedHost,
+          });
+        }
       }
     };
     tick();
@@ -88,6 +102,12 @@ function useUpdateCheckOnMount() {
 export default function AppShell() {
   useStatusPolling();
   useUpdateCheckOnMount();
+  // Subscribe-once: wires the per-feature stores (transfer, FS bulk
+  // op, FS download) into the cross-screen activity history. Safe to
+  // call on every render because installActivityWiring is idempotent.
+  useEffect(() => {
+    installActivityWiring();
+  }, []);
   return (
     <div className="flex h-full flex-col bg-[var(--color-surface)] text-[var(--color-text)]">
       <div className="flex min-h-0 flex-1">
@@ -98,6 +118,7 @@ export default function AppShell() {
           </div>
         </main>
       </div>
+      <OperationBar />
       <StatusBar />
     </div>
   );

@@ -17,6 +17,7 @@ import {
   Sparkles,
   HelpCircle,
   ScrollText,
+  Activity as ActivityIcon,
 } from "lucide-react";
 import clsx from "clsx";
 import { useThemeStore } from "../state/theme";
@@ -49,6 +50,7 @@ const items: NavItem[] = [
   { to: "/send-payload", key: "send_payload", fallback: "Send payload", icon: Rocket },
   // ─ Help / about / debug ─
   { to: "/faq", key: "faq", fallback: "FAQ", icon: HelpCircle, section: { key: "nav_section_help", fallback: "Help" } },
+  { to: "/activity", key: "activity", fallback: "Activity", icon: ActivityIcon },
   { to: "/logs", key: "logs", fallback: "Logs", icon: ScrollText },
   { to: "/settings", key: "settings", fallback: "Settings", icon: SettingsIcon },
   { to: "/about", key: "about", fallback: "About", icon: Info },

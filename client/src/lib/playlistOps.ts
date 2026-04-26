@@ -13,6 +13,18 @@ export interface PlaylistStep {
    *  this as a fixed delay; "wait for ready" is a separate future
    *  feature. */
   sleepMs: number;
+  /** Optional per-step IP override. When non-empty, the runner uses
+   *  this address for THIS step's send instead of the playlist-wide
+   *  IP supplied at run time. Useful for sequences that target
+   *  multiple PS5s in one go (e.g. push GoldHEN to dev kit, then
+   *  push the harness to the test kit). Empty / undefined means
+   *  "use the IP the user typed when they hit Run." */
+  ip?: string;
+  /** Optional per-step loader port override. Same rationale as `ip`.
+   *  Most scene payloads bind 9021; a few custom builds use other
+   *  ports. Empty / undefined / 0 means "use the playlist-wide
+   *  port supplied at run time" (default 9021). */
+  port?: number;
 }
 
 export interface Playlist {

@@ -18,7 +18,6 @@
     "dialog:allow-save",
     "dialog:allow-message",
     "fs:default",
-    "shell:default",
     "shell:allow-open"
   ]
 }

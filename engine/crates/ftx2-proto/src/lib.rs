@@ -173,6 +173,18 @@ pub enum FrameType {
     /// a context that doesn't supply kernel R/W.
     ProcList = 74,
     ProcListAck = 75,
+    /// Long-running fs-op progress + cancel. Body: `{"op_id":<u64>}`
+    /// where op_id is the trace_id the engine sent on the originating
+    /// FS_COPY (or future FS_MOVE-via-copy) frame. The payload looks
+    /// up the in-flight op in its g_fs_ops table and replies with
+    /// either a status snapshot or a cancel-ack. Both run on a
+    /// separate mgmt-port worker than the FS_COPY itself so the engine
+    /// can interleave status polls with the FS_COPY's blocking wait
+    /// for FS_COPY_ACK.
+    FsOpStatus = 76,
+    FsOpStatusAck = 77,
+    FsOpCancel = 78,
+    FsOpCancelAck = 79,
 }
 
 impl FrameType {
@@ -241,6 +253,10 @@ impl FrameType {
             73 => Ok(Self::HwSetFanThresholdAck),
             74 => Ok(Self::ProcList),
             75 => Ok(Self::ProcListAck),
+            76 => Ok(Self::FsOpStatus),
+            77 => Ok(Self::FsOpStatusAck),
+            78 => Ok(Self::FsOpCancel),
+            79 => Ok(Self::FsOpCancelAck),
             _ => Err(DecodeError::UnknownFrameType(v)),
         }
     }

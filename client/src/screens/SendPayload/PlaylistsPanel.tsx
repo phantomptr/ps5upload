@@ -518,6 +518,55 @@ function PlaylistCard({
               <div className="min-w-0 flex-1 truncate font-mono text-[11px]">
                 {step.path}
               </div>
+              {/* Per-step IP override. Empty = use the playlist-wide
+                  IP entered above. Useful for sequences targeting
+                  multiple PS5s (push GoldHEN to dev kit, push
+                  harness to test kit). */}
+              <label className="flex shrink-0 items-center gap-1 text-[10px] text-[var(--color-muted)]">
+                {tr("playlist_step_ip", undefined, "ip")}
+                <input
+                  type="text"
+                  value={step.ip ?? ""}
+                  placeholder={tr(
+                    "playlist_step_ip_placeholder",
+                    undefined,
+                    "default",
+                  )}
+                  onChange={(e) =>
+                    updateStep(playlist.id, i, {
+                      ip: e.target.value.trim(),
+                    })
+                  }
+                  disabled={anyRunning}
+                  className="w-28 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-1 py-0.5 text-[11px]"
+                />
+              </label>
+              {/* Per-step port override. Empty / 0 = use the
+                  playlist-wide port (default 9021). */}
+              <label className="flex shrink-0 items-center gap-1 text-[10px] text-[var(--color-muted)]">
+                {tr("playlist_step_port", undefined, "port")}
+                <input
+                  type="number"
+                  min={0}
+                  max={65535}
+                  step={1}
+                  value={step.port ?? ""}
+                  placeholder={tr(
+                    "playlist_step_port_placeholder",
+                    undefined,
+                    "default",
+                  )}
+                  onChange={(e) => {
+                    const raw = e.target.value.trim();
+                    const n = raw === "" ? 0 : Math.max(0, Math.floor(Number(raw)));
+                    updateStep(playlist.id, i, {
+                      port: Number.isFinite(n) && n > 0 ? n : undefined,
+                    });
+                  }}
+                  disabled={anyRunning}
+                  className="w-16 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-1 py-0.5 text-right text-[11px] tabular-nums"
+                />
+              </label>
               <label className="flex shrink-0 items-center gap-1 text-[10px] text-[var(--color-muted)]">
                 {tr("playlist_step_sleep", undefined, "sleep")}
                 <input

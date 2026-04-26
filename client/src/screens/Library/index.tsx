@@ -23,6 +23,8 @@ import {
   fsCopy,
   fsMount,
   fsUnmount,
+  fsOpStatus,
+  fsOpCancel,
   fetchVolumes,
   fetchGameMeta,
   gameIconUrl,
@@ -43,6 +45,8 @@ import {
 import { useLibraryStore } from "../../state/library";
 import { useElapsed } from "../../lib/useElapsed";
 import { createLimiter } from "../../lib/limitConcurrency";
+import { deleteWithRetry } from "../../lib/deleteWithRetry";
+import { useActivityHistoryStore } from "../../state/activityHistory";
 import { PageHeader, EmptyState, ErrorCard, Button } from "../../components";
 import { useTr } from "../../state/lang";
 
@@ -345,6 +349,27 @@ function LibraryRow({
       mountedRef.current = false;
     };
   }, []);
+  // User-requested abort for the download poll loop. The Stop button
+  // sets this to true; the loop's next iteration sees it and exits
+  // cleanly (the engine job continues server-side — no engine-side
+  // cancel API today, so the .part file may still finish landing).
+  const downloadStopRef = useRef(false);
+  // Per-row Move progress (bytes copied from the in-flight PS5 fs_copy)
+  // — fed by the FS_OP_STATUS poller spawned in runMove. null when no
+  // move is in flight or the poller hasn't seen a reply yet.
+  const [moveProgress, setMoveProgress] =
+    useState<{ bytesCopied: number; totalBytes: number } | null>(null);
+  // Set true if the FS_OP_STATUS poller hits "unsupported_frame" —
+  // means the running PS5 payload predates 2.2.7's status-frame
+  // handler. The banner shows a hint so the user knows to "Replace
+  // payload" on the Connection screen instead of assuming the
+  // progress UI is broken.
+  const [moveProgressUnsupported, setMoveProgressUnsupported] = useState(false);
+  // User-requested abort for the move's in-flight fs_copy. Set by the
+  // Stop button; the side-watcher fires fsOpCancel as soon as it
+  // observes this flip, and the payload's cp_rf bails within ~one
+  // 16 MiB buffer.
+  const moveStopRef = useRef(false);
   const elapsedMs = useElapsed(busy !== null);
 
   /** Current mount point for this entry (null = not mounted). Only
@@ -454,60 +479,168 @@ function LibraryRow({
     setBusy("move-copying");
     setError(null);
     setMountNote(null);
+    setMoveProgress({ bytesCopied: 0, totalBytes: 0 });
+    setMoveProgressUnsupported(false);
+    moveStopRef.current = false;
     const addr = `${host}:${PS5_PAYLOAD_PORT}`;
+    // Generate a unique op_id so the payload can stamp the in-flight
+    // fs_copy with it; we can then poll FS_OP_STATUS for live byte
+    // progress and fire FS_OP_CANCEL on Stop.
+    const opId = Math.floor(Math.random() * Number.MAX_SAFE_INTEGER);
+    // Record into the cross-screen Activity log so the OperationBar
+    // and Activity tab can show this op alongside FS bulk + transfer
+    // ops. Library has its own component-local state, so without
+    // this entry the move would never appear in the global view.
+    // Storing op_id + addr lets the Activity tab's Stop button call
+    // fsOpCancel directly without needing a reference back to this
+    // component.
+    const activityId = useActivityHistoryStore
+      .getState()
+      .start("library-move", `Moving ${entry.name}`, {
+        fromPath: entry.path,
+        toPath: destPath,
+        opId,
+        addr,
+      });
+    let pollerStopped = false;
+    const pollerDone = (async () => {
+      // Small initial delay so the payload has time to register the
+      // op (and to recursively walk total_bytes) before we ask for a
+      // snapshot — saves a wasted 404 round-trip.
+      await new Promise((r) => setTimeout(r, 250));
+      while (!pollerStopped) {
+        try {
+          const snap = await fsOpStatus(addr, opId);
+          if (mountedRef.current) {
+            setMoveProgress({
+              bytesCopied: snap.bytes_copied,
+              totalBytes: snap.total_bytes,
+            });
+          }
+          // Mirror to Activity so the OperationBar / Activity tab
+          // tick in lockstep with the local row.
+          useActivityHistoryStore.getState().update(activityId, {
+            bytes: snap.bytes_copied,
+            totalBytes: snap.total_bytes,
+          });
+        } catch (e) {
+          // 404 (op not yet registered or already finished) and
+          // transient errors keep the poller alive. Surface
+          // non-404 errors to console so a payload version
+          // mismatch (older payload that doesn't know
+          // FS_OP_STATUS) is visible during debug.
+          const msg = e instanceof Error ? e.message : String(e);
+          if (msg.includes("unsupported_frame")) {
+            // Older payload — won't ever produce progress. Stop
+            // polling and surface the hint in both the row and the
+            // Activity tab (the activity entry's `error` field
+            // doubles as a "note" while `outcome === running`,
+            // which the Activity row knows how to render in a
+            // less-alarming style than for terminal failures).
+            if (mountedRef.current) setMoveProgressUnsupported(true);
+            useActivityHistoryStore.getState().update(activityId, {
+              error:
+                "Live progress unavailable — payload predates 2.2.7 FS_OP_STATUS. Click Replace payload on the Connection screen.",
+            });
+            break;
+          }
+          if (!msg.includes("404") && !msg.includes("not in flight")) {
+            console.warn("[library] FS_OP_STATUS poll failed:", msg);
+          }
+        }
+        await new Promise((r) => setTimeout(r, 500));
+      }
+    })();
+    const cancelWatcher = (async () => {
+      while (!pollerStopped) {
+        if (moveStopRef.current) {
+          try {
+            await fsOpCancel(addr, opId);
+          } catch {
+            // Best effort — the payload's cp_rf will still bail at
+            // its next cancel check via the in-band flag set by
+            // the engine's RPC; even if our cancel call lost the
+            // race or hit a transient error, the user-visible
+            // "Stop" goal is met by the between-iterations check.
+          }
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 200));
+      }
+    })();
+    let copyOk = true;
+    let copyErr: unknown = null;
     try {
-      await fsCopy(addr, entry.path, destPath);
+      await fsCopy(addr, entry.path, destPath, opId);
     } catch (e) {
-      setError(
-        tr(
-          "library_move_copy_failed",
-          { error: e instanceof Error ? e.message : String(e) },
-          `Couldn't copy to the new location: ${
-            e instanceof Error ? e.message : String(e)
-          }. Source is unchanged.`,
-        ),
-      );
+      copyOk = false;
+      copyErr = e;
+    } finally {
+      pollerStopped = true;
+      await Promise.allSettled([pollerDone, cancelWatcher]);
+      if (mountedRef.current) setMoveProgress(null);
+    }
+    if (!copyOk) {
+      const msg = copyErr instanceof Error ? copyErr.message : String(copyErr);
+      // The payload returns "fs_copy_cancelled" → engine maps to
+      // 409 with body "cancelled". Surface that as a user-facing
+      // "you stopped this" rather than a generic copy failure.
+      if (msg.includes("cancelled")) {
+        setError(
+          tr(
+            "library_move_cancelled",
+            undefined,
+            "Move cancelled. The source is unchanged.",
+          ),
+        );
+        useActivityHistoryStore.getState().finish(activityId, "stopped", {
+          error: "cancelled by user",
+        });
+      } else {
+        setError(
+          tr(
+            "library_move_copy_failed",
+            { error: msg },
+            `Couldn't copy to the new location: ${msg}. Source is unchanged.`,
+          ),
+        );
+        useActivityHistoryStore.getState().finish(activityId, "failed", {
+          error: msg,
+        });
+      }
       setBusy(null);
       return;
     }
     setBusy("move-deleting");
-    let lastErr: unknown = null;
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      try {
-        await fsDelete(addr, entry.path);
-        lastErr = null;
-        break;
-      } catch (e) {
-        lastErr = e;
-        // Log every attempt, not just the last one — different
-        // failures across retries (e.g. EBUSY then ENOENT) tell us
-        // something the surfaced lastErr alone hides.
+    const delResult = await deleteWithRetry({
+      deleter: () => fsDelete(addr, entry.path),
+      onAttemptFail: (attempt, e) =>
         console.warn(
           `[library] move delete attempt ${attempt}/3 for ${entry.path} failed:`,
           e,
-        );
-        if (attempt < 3) {
-          // Linear backoff — 500 ms, 1 s. Short enough that the user
-          // doesn't notice unless we're persistently losing the race.
-          await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
-        }
-      }
-    }
-    if (lastErr !== null) {
+        ),
+    });
+    if (!delResult.ok) {
+      const lastErr = delResult.lastError;
+      const lastErrMsg =
+        lastErr instanceof Error ? lastErr.message : String(lastErr);
       setError(
         tr(
           "library_move_delete_failed",
           {
             dest: destPath,
             src: entry.path,
-            error:
-              lastErr instanceof Error ? lastErr.message : String(lastErr),
+            error: lastErrMsg,
           },
-          `Copied to ${destPath}, but couldn't remove the source ${entry.path} after 3 attempts: ${
-            lastErr instanceof Error ? lastErr.message : String(lastErr)
-          }. Both copies now exist — delete the original yourself when ready.`,
+          `Copied to ${destPath}, but couldn't remove the source ${entry.path} after 3 attempts: ${lastErrMsg}. Both copies now exist — delete the original yourself when ready.`,
         ),
       );
+      // Treat a "copied but couldn't delete source" as a partial
+      // failure so the Activity tab makes the duplicate-files
+      // situation visible.
+      useActivityHistoryStore.getState().finish(activityId, "failed", {
+        error: `copy ok, source delete failed: ${lastErrMsg}`,
+      });
       setBusy(null);
       onChanged();
       return;
@@ -519,6 +652,7 @@ function LibraryRow({
         `Moved to ${destPath}.`,
       ),
     );
+    useActivityHistoryStore.getState().finish(activityId, "done");
     setBusy(null);
     onChanged();
   };
@@ -546,6 +680,7 @@ function LibraryRow({
     setError(null);
     setMountNote(null);
     setDownloadProgress({ bytesReceived: 0, totalBytes: 0 });
+    downloadStopRef.current = false;
     const addr = `${host}:${PS5_PAYLOAD_PORT}`;
     const kind: "file" | "folder" =
       entry.kind === "image" ? "file" : "folder";
@@ -574,6 +709,22 @@ function LibraryRow({
     // the in-row "Done" note.
     while (true) {
       if (!mountedRef.current) return;
+      if (downloadStopRef.current) {
+        // User clicked Stop. Engine job continues server-side; we
+        // just stop polling. Surface a note so the row clears the
+        // spinner with a clear "you stopped this" instead of going
+        // back to idle silently.
+        setMountNote(
+          tr(
+            "library_download_stopped",
+            undefined,
+            "Download stopped. The engine may still finish writing the file in the background.",
+          ),
+        );
+        setBusy(null);
+        setDownloadProgress(null);
+        return;
+      }
       try {
         const snap = await jobStatus(jobId);
         if (!mountedRef.current) return;
@@ -829,7 +980,82 @@ function LibraryRow({
             {downloadProgress &&
               downloadProgress.totalBytes === 0 &&
               ` · ${formatBytes(downloadProgress.bytesReceived)}`}
+            {/* Live throughput. Driven off `elapsedMs` (which the
+                useElapsed hook ticks every 500 ms) so the value
+                refreshes naturally; computing it inline avoids a
+                separate state field for what's a derived value. */}
+            {busy === "download" &&
+              downloadProgress &&
+              downloadProgress.bytesReceived > 0 &&
+              elapsedMs > 0 &&
+              ` · ${formatBytes(
+                (downloadProgress.bytesReceived * 1000) / elapsedMs,
+              )}/s`}
+            {/* Same shape for the move's in-flight fs_copy: the
+                FS_OP_STATUS poller writes bytesCopied/totalBytes
+                into moveProgress on a 500 ms cadence. */}
+            {busy === "move-copying" &&
+              moveProgress &&
+              moveProgress.totalBytes > 0 &&
+              ` · ${formatBytes(moveProgress.bytesCopied)} / ${formatBytes(moveProgress.totalBytes)} (${(
+                (moveProgress.bytesCopied /
+                  moveProgress.totalBytes) *
+                100
+              ).toFixed(0)}%)`}
+            {busy === "move-copying" &&
+              moveProgress &&
+              moveProgress.bytesCopied > 0 &&
+              elapsedMs > 0 &&
+              ` · ${formatBytes(
+                (moveProgress.bytesCopied * 1000) / elapsedMs,
+              )}/s`}
           </span>
+          {busy === "download" && (
+            <button
+              type="button"
+              onClick={() => {
+                downloadStopRef.current = true;
+              }}
+              className="ml-auto rounded-md border border-[var(--color-border)] px-2 py-0.5 text-[10px] hover:bg-[var(--color-surface-3)]"
+              title={tr(
+                "library_download_stop_tooltip",
+                undefined,
+                "Stop watching this download (engine job continues server-side)",
+              )}
+            >
+              {tr("fs_download_stop", undefined, "Stop")}
+            </button>
+          )}
+          {busy === "move-copying" && (
+            <button
+              type="button"
+              onClick={() => {
+                moveStopRef.current = true;
+              }}
+              className="ml-auto rounded-md border border-[var(--color-border)] px-2 py-0.5 text-[10px] hover:bg-[var(--color-surface-3)]"
+              title={tr(
+                "library_move_stop_tooltip",
+                undefined,
+                "Cancel the in-flight copy. Source is unchanged; partial destination is removed.",
+              )}
+            >
+              {tr("fs_download_stop", undefined, "Stop")}
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Hint for the case where the user's PS5 is running an older
+          payload that doesn't speak FS_OP_STATUS. Without this it
+          looks like the progress UI is broken; in fact the protocol
+          frame just isn't recognized on the other side. */}
+      {busy === "move-copying" && moveProgressUnsupported && (
+        <div className="rounded-md border border-[var(--color-warn)] bg-[var(--color-warn-soft)] p-2 text-[11px] text-[var(--color-warn)]">
+          {tr(
+            "library_move_progress_unsupported",
+            undefined,
+            "Live progress unavailable — your PS5 payload is older than this app. Click \"Replace payload\" on the Connection screen to enable per-byte progress + cancel.",
+          )}
         </div>
       )}
 

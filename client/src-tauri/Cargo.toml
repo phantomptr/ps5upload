@@ -1,6 +1,6 @@
 [package]
 name = "ps5upload-desktop"
-version = "2.2.3"
+version = "2.2.15"
 description = "PS5 Upload — Tauri desktop shell"
 edition = "2021"
 rust-version = "1.77"

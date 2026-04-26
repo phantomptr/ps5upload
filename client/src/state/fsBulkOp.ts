@@ -50,6 +50,23 @@ export interface BulkOpState {
    *  for partial failures after the op has moved past the failed
    *  item). Cleared by the screen when surfaced or dismissed. */
   errorBanner: string | null;
+  /** Set by the Stop button. For paste-copy / paste-move the loop
+   *  also forwards the cancel to the payload via fsOpCancel so
+   *  the in-flight cp_rf bails within one 4 MiB buffer; for delete
+   *  the granularity is "between items" because fs_delete is
+   *  single-shot and not interruptible. */
+  cancelRequested: boolean;
+  /** Bytes copied for the *current* item, updated by the paste-loop
+   *  poller from FS_OP_STATUS. 0 when the op kind doesn't expose
+   *  byte-level progress (i.e. delete) or the poller hasn't seen a
+   *  reply yet. The banner uses this + `currentSize` to render a
+   *  per-item progress bar and speed indicator. */
+  currentBytesCopied: number;
+  /** When the current item is being processed via an op_id-tracked
+   *  RPC (paste-copy / paste-move), this is the unique 64-bit id
+   *  the loop generated. Stop button reads it to call fsOpCancel.
+   *  null when no op_id-tracked item is in flight. */
+  currentOpId: number | null;
 }
 
 interface BulkOpActions {
@@ -65,8 +82,19 @@ interface BulkOpActions {
     currentName: string;
     currentSize: number | null;
   }) => void;
+  /** Called by the paste-loop poller as it sees FS_OP_STATUS replies.
+   *  Stamps the byte counter for the current item without disturbing
+   *  the rest of the progress fields. */
+  setCurrentBytesCopied: (bytes: number) => void;
+  /** Caller registers/clears the op_id of the currently-in-flight
+   *  copy so the Stop button knows which payload op to cancel. */
+  setCurrentOpId: (opId: number | null) => void;
   end: (errorBanner?: string | null) => void;
   clearError: () => void;
+  /** Flip the cancel flag. The next iteration of the bulk loop
+   *  in the screen breaks out and falls through to the finally
+   *  block which calls end(). */
+  requestCancel: () => void;
 }
 
 const idle: BulkOpState = {
@@ -80,6 +108,9 @@ const idle: BulkOpState = {
   toPath: "",
   startedAtMs: 0,
   errorBanner: null,
+  cancelRequested: false,
+  currentBytesCopied: 0,
+  currentOpId: null,
 };
 
 export const useFsBulkOpStore = create<BulkOpState & BulkOpActions>((set) => ({
@@ -96,16 +127,38 @@ export const useFsBulkOpStore = create<BulkOpState & BulkOpActions>((set) => ({
       toPath,
       startedAtMs: Date.now(),
       errorBanner: null,
+      cancelRequested: false,
+      currentBytesCopied: 0,
+      currentOpId: null,
     });
   },
   setProgress({ done, currentPath, currentName, currentSize }) {
-    set({ done, currentPath, currentName, currentSize });
+    // Reset per-item byte counter when we move to a new item; the
+    // paste-loop poller will re-stamp it from the next FS_OP_STATUS
+    // reply. Without the reset, the banner would briefly show the
+    // previous item's bytes as the current one's progress.
+    set({
+      done,
+      currentPath,
+      currentName,
+      currentSize,
+      currentBytesCopied: 0,
+    });
+  },
+  setCurrentBytesCopied(bytes) {
+    set({ currentBytesCopied: bytes });
+  },
+  setCurrentOpId(opId) {
+    set({ currentOpId: opId });
   },
   end(errorBanner = null) {
     set({ ...idle, errorBanner });
   },
   clearError() {
     set({ errorBanner: null });
+  },
+  requestCancel() {
+    set({ cancelRequested: true });
   },
 }));
 

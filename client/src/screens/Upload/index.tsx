@@ -43,6 +43,7 @@ import { useUploadQueueStore } from "../../state/uploadQueue";
 import { resolveUploadDest } from "../../lib/uploadDest";
 import { QueuePanel } from "./QueuePanel";
 import { humanizePs5Error } from "../../lib/humanizeError";
+import { useTr } from "../../state/lang";
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -78,6 +79,7 @@ function detectedLabel(source: PickedSource): { icon: LucideIcon; label: string 
 }
 
 export default function UploadScreen() {
+  const tr = useTr();
   const store = useUploadStore();
   const {
     source,
@@ -321,14 +323,12 @@ export default function UploadScreen() {
       )}
       <PageHeader
         icon={UploadIcon}
-        title="Upload"
-        description={
-          <>
-            Drag a game folder, an <code>.exfat</code> image, or any file
-            onto this window — or use the buttons below. ps5upload
-            figures out what to do based on what you drop.
-          </>
-        }
+        title={tr("upload", undefined, "Upload")}
+        description={tr(
+          "upload_description",
+          undefined,
+          "Drag a game folder, an .exfat image, or any file onto this window — or use the buttons below. ps5upload figures out what to do based on what you drop.",
+        )}
       />
 
       <PayloadReadinessBanner />
@@ -392,6 +392,7 @@ function Step1Picker({
   onFile: () => void;
   onFolder: () => void;
 }) {
+  const tr = useTr();
   return (
     <section
       className={clsx(
@@ -404,11 +405,11 @@ function Step1Picker({
     >
       <div className="mb-3 flex items-center justify-center gap-3 text-[var(--color-muted)]">
         <FileIcon size={22} />
-        <span className="text-xs">or</span>
+        <span className="text-xs">{tr("upload_or", undefined, "or")}</span>
         <FolderOpen size={22} />
       </div>
       <div className="text-sm">
-        Drop a file or folder here
+        {tr("upload_drop_here", undefined, "Drop a file or folder here")}
       </div>
       <div className="mt-4 flex items-center justify-center gap-2">
         <button
@@ -416,20 +417,22 @@ function Step1Picker({
           onClick={onFile}
           className="rounded-md border border-[var(--color-border)] px-3 py-1.5 text-xs hover:bg-[var(--color-surface-3)]"
         >
-          Choose file
+          {tr("upload_choose_file", undefined, "Choose file")}
         </button>
         <button
           type="button"
           onClick={onFolder}
           className="rounded-md border border-[var(--color-border)] px-3 py-1.5 text-xs hover:bg-[var(--color-surface-3)]"
         >
-          Choose folder
+          {tr("upload_choose_folder", undefined, "Choose folder")}
         </button>
       </div>
       <p className="mx-auto mt-3 max-w-md text-xs text-[var(--color-muted)]">
-        Files: any file — <code>.exfat</code> images unlock a mount-after-upload
-        option. Folders: game folders are auto-detected from{" "}
-        <code>sce_sys/param.sfo</code>.
+        {tr(
+          "upload_picker_hint",
+          undefined,
+          "Files: any file — .exfat images unlock a mount-after-upload option. Folders: game folders are auto-detected from sce_sys/param.sfo.",
+        )}
       </p>
     </section>
   );
@@ -734,6 +737,12 @@ function TransferStatus({ phase }: { phase: TransferPhase }) {
   // Read settings directly — threading through Step2Options just to get
   // here would add props for something that's a rendering decision.
   const showFiles = useUploadSettingsStore((s) => s.showTransferFiles);
+  // For the Stop button in the running phase. Bumps the transfer
+  // runId so the in-flight poll loop's next state-write is a no-op
+  // and the UI returns to idle. Engine job continues server-side
+  // until completion or the next reconnect — the payload's single-
+  // client transfer port serializes the next BEGIN_TX behind it.
+  const resetTransfer = useTransferStore((s) => s.reset);
   if (phase.kind === "idle") return null;
 
   if (phase.kind === "starting") {
@@ -797,11 +806,21 @@ function TransferStatus({ phase }: { phase: TransferPhase }) {
               )}
             </span>
           </div>
-          <div className="text-xs text-[var(--color-muted)]">
-            {bytesPerSec > 0 ? `${formatBytes(bytesPerSec)}/s` : "—"}
-            {etaSec !== null && bytesPerSec > 0 && (
-              <> · ETA {formatDuration(etaSec)}</>
-            )}
+          <div className="flex items-center gap-2 text-xs text-[var(--color-muted)]">
+            <span>
+              {bytesPerSec > 0 ? `${formatBytes(bytesPerSec)}/s` : "—"}
+              {etaSec !== null && bytesPerSec > 0 && (
+                <> · ETA {formatDuration(etaSec)}</>
+              )}
+            </span>
+            <button
+              type="button"
+              onClick={() => resetTransfer()}
+              className="rounded-md border border-[var(--color-border)] px-2 py-0.5 text-[10px] text-[var(--color-text)] hover:bg-[var(--color-surface-3)]"
+              title="Stop watching this upload (engine job continues server-side until next BEGIN_TX preempts it)"
+            >
+              Stop
+            </button>
           </div>
         </div>
         {totalBytes > 0 && (

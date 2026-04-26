@@ -51,12 +51,47 @@ fn main() {
         .join("target")
         .join("release")
         .join(engine_name);
-    let engine_path = if engine_target_path.is_file() {
+    // Engine binary selection. Two paths exist:
+    //   engine/target/<TARGET>/release/ps5upload-engine     (target-specific)
+    //   engine/target/release/ps5upload-engine               (host default)
+    //
+    // Cross-compile builds (TARGET != HOST) MUST use the target-specific
+    // path — the host binary is the wrong architecture.
+    //
+    // Native builds (TARGET == HOST) commonly write to the host default
+    // path. The previous logic preferred the target-specific path
+    // unconditionally, which was a foot-gun: if the user ran an explicit
+    // `cargo build --target ...` once and then later ran plain `cargo
+    // build`, the target-specific path would be stale relative to the
+    // host path, and the Tauri shell would embed the stale engine —
+    // missing newly-added routes (/api/transfer/download was a real
+    // example of this) and surfacing as 404 to the user.
+    //
+    // For native builds, pick whichever file is newer so a recent
+    // `cargo build` is always preferred over a stale explicit-target
+    // build, and vice-versa.
+    let engine_path = if target != host {
         engine_target_path
-    } else if target == host && engine_host_path.is_file() {
-        engine_host_path
     } else {
-        engine_target_path
+        match (engine_target_path.is_file(), engine_host_path.is_file()) {
+            (true, true) => {
+                let mtime = |p: &Path| {
+                    std::fs::metadata(p)
+                        .ok()
+                        .and_then(|m| m.modified().ok())
+                };
+                if mtime(&engine_target_path) >= mtime(&engine_host_path) {
+                    engine_target_path
+                } else {
+                    engine_host_path
+                }
+            }
+            (true, false) => engine_target_path,
+            (false, true) => engine_host_path,
+            // Neither exists — let require_file below produce the
+            // actionable error pointing at the canonical target path.
+            (false, false) => engine_target_path,
+        }
     };
     let payload_gz = repo_root.join("payload").join("ps5upload.elf.gz");
 

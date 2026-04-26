@@ -246,7 +246,18 @@ pub fn download_to_local(
         // part_path we're about to write, so unrelated `.part`
         // files in the same dir aren't touched.
         if part_path.exists() {
-            let _ = fs::remove_file(&part_path);
+            // Don't silently swallow — if the existing entry is a dir
+            // (e.g. a symlink-attack edge case) or locked by another
+            // process (Windows file lock from a previous attempt that
+            // hasn't released yet), the caller needs a clear error
+            // rather than a cryptic "create failed" further down.
+            if let Err(e) = fs::remove_file(&part_path) {
+                eprintln!(
+                    "[download] WARN: failed to clean up orphan {}: {}",
+                    part_path.display(),
+                    e
+                );
+            }
         }
         let mut file = fs::File::create(&part_path)
             .with_context(|| format!("create {}", part_path.display()))?;

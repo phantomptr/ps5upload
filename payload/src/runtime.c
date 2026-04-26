@@ -142,6 +142,19 @@ extern int posix_fallocate(int fd, off_t offset, off_t len);
  * than a line-based format. */
 #define FTX2_FRAME_PROC_LIST      74u
 #define FTX2_FRAME_PROC_LIST_ACK  75u
+/* Long-running fs op progress + cancel. The engine sends FS_OP_STATUS
+ * (or FS_OP_CANCEL) with a body of `{"op_id":<u64>}` where op_id is
+ * the trace_id of the originating FS_COPY/FS_MOVE frame. The payload
+ * looks up the matching in-flight op in g_fs_ops[] and replies with
+ * its current bytes_copied/total_bytes (status) or sets the cancel
+ * flag (cancel). Both work over the same mgmt-port socket pool as
+ * other FS_* frames; the engine opens a separate connection so the
+ * status poll runs concurrently with the FS_COPY's own connection
+ * waiting for FS_COPY_ACK. */
+#define FTX2_FRAME_FS_OP_STATUS       76u
+#define FTX2_FRAME_FS_OP_STATUS_ACK   77u
+#define FTX2_FRAME_FS_OP_CANCEL       78u
+#define FTX2_FRAME_FS_OP_CANCEL_ACK   79u
 /* Where we place mount points. Scoped under /mnt/ps5upload/ so it
  * never collides with mount paths owned by other utilities. */
 #define FS_MOUNT_BASE "/mnt/ps5upload"
@@ -284,6 +297,10 @@ static void runtime_release_tx_resources(runtime_tx_entry_t *entry);
  * shutdown) — NOT for terminal transitions (commit/abort), which use
  * the full-cleanup variant above. */
 static void runtime_release_tx_resources_ephemeral(runtime_tx_entry_t *entry);
+/* Wall-clock microseconds since the Unix epoch. Defined later in the
+ * file; forward-declared here so the takeover/shutdown teardown
+ * watchdog in runtime_mark_active_transactions can call it. */
+static uint64_t now_us(void);
 
 /* Per-connection tracking for the transfer port: records the tx_id of
  * the currently-open transaction on this connection so the accept loop
@@ -407,7 +424,19 @@ static void extract_json_string_field(const char *json, const char *field,
     pos = strstr(json, needle);
     if (!pos) return;
     start = pos + strlen(needle);
-    while (start[len] && start[len] != '"') len += 1;
+    /* Walk to the closing quote, treating `\"` as an escaped quote
+     * inside the value rather than a string terminator. The engine
+     * never emits backslash-escapes for path content (paths can't
+     * contain `"` on PS5 filesystems anyway), but a malformed or
+     * crafted body shouldn't truncate to a wrong path that downstream
+     * code then operates on. */
+    while (start[len] && start[len] != '"') {
+        if (start[len] == '\\' && start[len + 1] != '\0') {
+            len += 2; /* skip escape sequence */
+            continue;
+        }
+        len += 1;
+    }
     if (len == 0 || len + 1 > out_len) return;
     memcpy(out, start, len);
     out[len] = '\0';
@@ -462,6 +491,43 @@ static int tx_id_hex_to_bytes(const char *hex, unsigned char *out) {
 
 /* ── TX table helpers ─────────────────────────────────────────────────────────── */
 
+/* Per-slot mutex array, parallel to runtime_state_t::tx_entries[]. Held
+ * by handlers (SHARD, COMMIT_TX, ABORT_TX) for the duration of any
+ * mutation/dereference of the entry, so two handlers can never race on
+ * the same slot — most importantly, COMMIT_TX cannot free
+ * entry->manifest_index/direct_writer while a STREAM_SHARD on the
+ * transfer thread is dereferencing them.
+ *
+ * Kept in a parallel array (not embedded in runtime_tx_entry_t) so
+ * the memset(entry, 0, …) at slot eviction time doesn't clobber the
+ * mutex memory. Indexed by `entry - state->tx_entries`. Initialized
+ * once from runtime_init via runtime_init_entry_mutexes(); guarded
+ * by the singleton init flag because there is only ever one
+ * runtime_state_t per process. */
+static pthread_mutex_t g_entry_mtx[PS5UPLOAD2_MAX_TX];
+static int g_entry_mtx_initialized = 0;
+
+static int runtime_init_entry_mutexes(void) {
+    int i;
+    if (g_entry_mtx_initialized) return 0;
+    for (i = 0; i < PS5UPLOAD2_MAX_TX; i++) {
+        if (pthread_mutex_init(&g_entry_mtx[i], NULL) != 0) {
+            return -1;
+        }
+    }
+    g_entry_mtx_initialized = 1;
+    return 0;
+}
+
+static int entry_slot_index(const runtime_state_t *state,
+                            const runtime_tx_entry_t *entry) {
+    return (int)(entry - state->tx_entries);
+}
+
+/* Caller must hold state_mtx. Plain table walk — no synchronization
+ * of its own. Use runtime_acquire_tx_entry from handler code instead
+ * unless you specifically need the unlocked variant (e.g. inside an
+ * already-locked critical section). */
 static runtime_tx_entry_t *runtime_find_tx_entry(runtime_state_t *state,
                                                    const unsigned char *tx_id) {
     int i = 0;
@@ -475,6 +541,64 @@ static runtime_tx_entry_t *runtime_find_tx_entry(runtime_state_t *state,
     return NULL;
 }
 
+/* Acquire a tx entry for exclusive access by the calling handler.
+ *
+ * Returns the entry pointer with the per-slot mutex held, or NULL if
+ * no such tx exists (or if the slot was evicted before we could
+ * acquire it). Caller must pair with runtime_release_tx_entry.
+ *
+ * Lock discipline: takes state_mtx briefly twice (lookup + revalidate)
+ * but never holds state_mtx while waiting for the per-slot mutex —
+ * that ordering avoids deadlock against handler code that takes
+ * state_mtx for short critical sections (e.g. command_count++) while
+ * holding the per-slot mutex.
+ *
+ * The revalidation step exists because between releasing state_mtx
+ * after the initial find and acquiring the per-slot mutex, an
+ * eviction running under state_mtx could have repurposed the slot for
+ * a different tx_id. Re-finding under state_mtx confirms our pointer
+ * still names the requested tx. */
+static runtime_tx_entry_t *runtime_acquire_tx_entry(runtime_state_t *state,
+                                                      const unsigned char *tx_id) {
+    runtime_tx_entry_t *entry = NULL;
+    int idx = -1;
+    if (!state || !tx_id) return NULL;
+
+    pthread_mutex_lock(&state->state_mtx);
+    entry = runtime_find_tx_entry(state, tx_id);
+    if (!entry) {
+        pthread_mutex_unlock(&state->state_mtx);
+        return NULL;
+    }
+    idx = entry_slot_index(state, entry);
+    pthread_mutex_unlock(&state->state_mtx);
+
+    pthread_mutex_lock(&g_entry_mtx[idx]);
+
+    /* Revalidate: another thread may have evicted this slot while we
+     * were blocked on the per-slot mutex. */
+    pthread_mutex_lock(&state->state_mtx);
+    {
+        runtime_tx_entry_t *re = runtime_find_tx_entry(state, tx_id);
+        if (re != entry) {
+            pthread_mutex_unlock(&state->state_mtx);
+            pthread_mutex_unlock(&g_entry_mtx[idx]);
+            return NULL;
+        }
+    }
+    pthread_mutex_unlock(&state->state_mtx);
+    return entry;
+}
+
+static void runtime_release_tx_entry(runtime_state_t *state,
+                                     runtime_tx_entry_t *entry) {
+    int idx;
+    if (!state || !entry) return;
+    idx = entry_slot_index(state, entry);
+    if (idx < 0 || idx >= PS5UPLOAD2_MAX_TX) return;
+    pthread_mutex_unlock(&g_entry_mtx[idx]);
+}
+
 /* True if `entry` is in a terminal state and its slot can be recycled. */
 static int runtime_tx_state_is_terminal(const runtime_tx_entry_t *entry) {
     if (!entry || !entry->in_use) return 1;
@@ -483,33 +607,53 @@ static int runtime_tx_state_is_terminal(const runtime_tx_entry_t *entry) {
            strcmp(entry->state, "interrupted") == 0;
 }
 
+/* Caller must hold state_mtx. Returns an entry slot for `tx_id`,
+ * either the existing one (no mutation) or a freshly recycled slot
+ * (terminal, no other thread currently using it). Eviction requires
+ * pthread_mutex_trylock on the per-slot mutex to succeed — if a
+ * handler thread still holds the slot for I/O on a finished tx
+ * (e.g. building the COMMIT_TX_ACK body after release_tx_resources),
+ * we must not evict it underneath that handler. */
 static runtime_tx_entry_t *runtime_alloc_tx_entry(runtime_state_t *state,
                                                     const unsigned char *tx_id,
                                                     uint64_t tx_seq) {
     int i = 0;
     int evict_idx = -1;
+    int candidate_idx = -1;
     uint64_t oldest_seq = UINT64_MAX;
     runtime_tx_entry_t *entry = NULL;
     if (!state || !tx_id) return NULL;
     entry = runtime_find_tx_entry(state, tx_id);
     if (entry) return entry;
-    /* First pass: any free slot wins. */
+    /* First pass: any free slot wins. Trylock to confirm the slot is
+     * not in the middle of being released by another handler — even
+     * with in_use==0 the per-slot mutex may still be held briefly. */
     for (i = 0; i < PS5UPLOAD2_MAX_TX; i++) {
         if (!state->tx_entries[i].in_use) {
-            evict_idx = i;
-            break;
+            if (pthread_mutex_trylock(&g_entry_mtx[i]) == 0) {
+                evict_idx = i;
+                break;
+            }
         }
     }
     /* Second pass: evict the oldest terminal tx (committed/aborted/interrupted)
-     * so the table never wedges after many completed transfers. */
+     * whose per-slot mutex we can take. trylock failure means a handler is
+     * still using the slot (e.g. emitting an ACK from post-release fields);
+     * leave it alone and try a different one. */
     if (evict_idx < 0) {
         for (i = 0; i < PS5UPLOAD2_MAX_TX; i++) {
-            if (runtime_tx_state_is_terminal(&state->tx_entries[i]) &&
-                state->tx_entries[i].tx_seq < oldest_seq) {
-                oldest_seq = state->tx_entries[i].tx_seq;
-                evict_idx = i;
+            if (!runtime_tx_state_is_terminal(&state->tx_entries[i])) continue;
+            if (state->tx_entries[i].tx_seq >= oldest_seq) continue;
+            if (pthread_mutex_trylock(&g_entry_mtx[i]) != 0) continue;
+            if (candidate_idx >= 0) {
+                /* Found a strictly older candidate — release the previous
+                 * one so we don't leak the trylock. */
+                pthread_mutex_unlock(&g_entry_mtx[candidate_idx]);
             }
+            oldest_seq = state->tx_entries[i].tx_seq;
+            candidate_idx = i;
         }
+        evict_idx = candidate_idx;
     }
     if (evict_idx < 0) return NULL;
     entry = &state->tx_entries[evict_idx];
@@ -522,6 +666,10 @@ static runtime_tx_entry_t *runtime_alloc_tx_entry(runtime_state_t *state,
     tx_id_bytes_to_hex(tx_id, entry->tx_id_hex, sizeof(entry->tx_id_hex));
     entry->tx_seq = tx_seq;
     snprintf(entry->state, sizeof(entry->state), "active");
+    /* Release the per-slot mutex now that the slot is initialized. The
+     * caller (BEGIN_TX) still holds state_mtx, so no other thread can
+     * find this slot until BEGIN_TX completes its setup and unlocks. */
+    pthread_mutex_unlock(&g_entry_mtx[evict_idx]);
     return entry;
 }
 
@@ -571,19 +719,6 @@ static int runtime_read_tx_record(const runtime_tx_entry_t *entry,
     buf[got] = '\0';
     fclose(fp);
     return 0;
-}
-
-/*
- * Update in-memory state string and flush the record.
- * Used by ABORT_TX, COMMIT_TX, and the interrupted-on-takeover path.
- */
-static int runtime_set_tx_state(runtime_state_t *state,
-                                  const unsigned char *tx_id,
-                                  const char *new_state) {
-    runtime_tx_entry_t *entry = runtime_find_tx_entry(state, tx_id);
-    if (!entry) return -1;
-    snprintf(entry->state, sizeof(entry->state), "%s", new_state);
-    return runtime_flush_tx_record(state, entry);
 }
 
 /* ── TX table bulk operations ────────────────────────────────────────────────── */
@@ -653,57 +788,153 @@ static void runtime_reconcile_tx_state(runtime_state_t *state) {
     if (last_seq > state->last_tx_seq) state->last_tx_seq = last_seq;
 }
 
+/* Tear down every active transaction. Called from TAKEOVER_REQUEST and
+ * SHUTDOWN handlers when a fresh payload instance (or stop) wants to
+ * leave the table in a clean state.
+ *
+ * Two-phase to keep the per-slot mutex acquisition deadlock-free:
+ *   1. Snapshot which slot indices are active, under state_mtx.
+ *   2. For each, lock the per-slot mutex, re-validate the slot still
+ *      names an active tx, then mutate + flush. Acquiring per-slot
+ *      mutexes outside state_mtx matches the discipline established
+ *      by runtime_acquire_tx_entry (state_mtx → per-slot, never the
+ *      reverse) so handler threads holding a per-slot mutex aren't
+ *      blocked waiting for state_mtx that we don't hold during the
+ *      release. */
 static void runtime_mark_active_transactions(runtime_state_t *state, const char *new_state) {
+    int active_idx[PS5UPLOAD2_MAX_TX];
+    int active_count = 0;
     int i = 0;
     int is_interrupt = 0;
     if (!state || !new_state) return;
     is_interrupt = (strcmp(new_state, "interrupted") == 0);
+
+    pthread_mutex_lock(&state->state_mtx);
     for (i = 0; i < PS5UPLOAD2_MAX_TX; i++) {
         if (!state->tx_entries[i].in_use) continue;
         if (strcmp(state->tx_entries[i].state, "active") != 0) continue;
-        (void)runtime_set_tx_state(state, state->tx_entries[i].tx_id, new_state);
+        active_idx[active_count++] = i;
+    }
+    pthread_mutex_unlock(&state->state_mtx);
+
+    for (i = 0; i < active_count; i++) {
+        int slot = active_idx[i];
+        runtime_tx_entry_t *entry = &state->tx_entries[slot];
+        uint64_t teardown_start_us;
+        uint64_t teardown_elapsed_us;
+        /* Block until any in-flight SHARD/COMMIT/ABORT on this slot
+         * finishes — we cannot free direct_writer / manifest_index
+         * while another thread is dereferencing them. We also keep
+         * the mutex held across the eventual release_tx_resources*
+         * teardown below: dropping it before the teardown's
+         * pthread_join would re-open the SHARD/teardown race the
+         * per-slot mutex exists to prevent. The cost is that a stuck
+         * pack-worker (kernel write blocked on dead storage) stalls
+         * shutdown until the syscall returns; the watchdog log below
+         * surfaces that case so operators can see the stall instead
+         * of guessing why takeover hung. */
+        pthread_mutex_lock(&g_entry_mtx[slot]);
+        /* Revalidate: state may have flipped to non-active (e.g. a
+         * concurrent COMMIT_TX completed) between the snapshot and
+         * acquiring this mutex. Skip in that case. */
+        if (!entry->in_use || strcmp(entry->state, "active") != 0) {
+            pthread_mutex_unlock(&g_entry_mtx[slot]);
+            continue;
+        }
+        snprintf(entry->state, sizeof(entry->state), "%s", new_state);
+        (void)runtime_flush_tx_record(state, entry);
+        teardown_start_us = now_us();
         /* "interrupted" is a pauseable state — the client may reconnect with
          * TX_FLAG_RESUME and pick up from last_acked_shard. Preserve the
          * tmp file(s) and manifest so that works. For any other transition
          * (currently unused, but keep the behavior defensive), fall through
          * to the full release which unlinks the tmp. */
         if (is_interrupt) {
-            runtime_release_tx_resources_ephemeral(&state->tx_entries[i]);
+            runtime_release_tx_resources_ephemeral(entry);
         } else {
-            runtime_release_tx_resources(&state->tx_entries[i]);
+            runtime_release_tx_resources(entry);
         }
+        teardown_elapsed_us = now_us() - teardown_start_us;
+        /* 5-second watchdog: pthread_join inside pack_pool_teardown
+         * normally returns in microseconds (workers ack `shutdown=1`
+         * on the next queue pop). A multi-second teardown means a
+         * worker is stuck in a syscall — likely UFS write blocked on
+         * detached storage. Log the slot + elapsed time so the next
+         * operator triaging "shutdown took 30s" has the breadcrumb
+         * to tell them which tx wedged. */
+        if (teardown_elapsed_us > 5ULL * 1000ULL * 1000ULL) {
+            fprintf(stderr,
+                    "[payload2] WARN: mark_active_transactions teardown of tx %s "
+                    "took %llu ms (likely stuck pack-worker syscall)\n",
+                    entry->tx_id_hex,
+                    (unsigned long long)(teardown_elapsed_us / 1000ULL));
+        }
+        pthread_mutex_unlock(&g_entry_mtx[slot]);
     }
+    pthread_mutex_lock(&state->state_mtx);
     runtime_reconcile_tx_state(state);
+    pthread_mutex_unlock(&state->state_mtx);
     (void)runtime_save_tx_state(state);
 }
 
 static void runtime_mark_tx_interrupted_by_id(runtime_state_t *state,
                                                 const unsigned char *tx_id) {
-    /* Snapshot of the entry we need to flush after unlocking. We don't
-     * keep a pointer to the slot across the unlock because
-     * `runtime_alloc_tx_entry` can evict + memset terminal slots at
-     * any time from another thread — holding a raw pointer would
-     * TOCTOU into reading a zeroed entry and writing a garbled
-     * tx_<hex>.json record. Copy-by-value while we hold the lock. */
+    /* Three-phase teardown so a stuck pack-worker pthread_join inside
+     * `runtime_release_tx_resources_ephemeral` cannot stall the mgmt
+     * port:
+     *
+     *   1. Under state_mtx: find the entry, transition state to
+     *      "interrupted", decrement active_transactions, snapshot the
+     *      fields we need for the flush, and capture the slot index.
+     *      Don't touch heap/thread state under state_mtx — that would
+     *      hold the global lock across pthread_join.
+     *   2. Under g_entry_mtx[slot] only: drain + tear down the
+     *      thread-bound resources (writer thread, pack-worker pool).
+     *      Other handlers waiting on the same per-slot mutex (e.g. a
+     *      late SHARD on a resumed tx using the same id) will block,
+     *      which is the correct behavior — they shouldn't read
+     *      manifest_index while we're freeing it.
+     *   3. Lock-free: persist the snapshot to the on-disk tx record so
+     *      the next BEGIN_TX with TX_FLAG_RESUME finds "interrupted"
+     *      and adopts the partial data. */
     runtime_tx_entry_t snapshot;
     int should_flush = 0;
+    int slot = -1;
     if (!state || !tx_id) return;
+
     pthread_mutex_lock(&state->state_mtx);
     {
         runtime_tx_entry_t *entry = runtime_find_tx_entry(state, tx_id);
         if (entry && strcmp(entry->state, "active") == 0) {
             snprintf(entry->state, sizeof(entry->state), "interrupted");
-            runtime_release_tx_resources_ephemeral(entry);
             /* `active_transactions` was bumped at BEGIN_TX and not
              * decremented by commit/abort (which never ran here).
              * Decrement now so the counter reflects reality; the entry
              * survives for resume lookup. */
             if (state->active_transactions > 0) state->active_transactions -= 1;
+            slot = entry_slot_index(state, entry);
             snapshot = *entry;  /* copy fields used by the flush below */
             should_flush = 1;
         }
     }
     pthread_mutex_unlock(&state->state_mtx);
+
+    if (slot >= 0) {
+        pthread_mutex_lock(&g_entry_mtx[slot]);
+        /* Re-validate: between unlocking state_mtx and acquiring the
+         * per-slot mutex, runtime_alloc_tx_entry may have evicted this
+         * slot (we just transitioned to "interrupted" which is
+         * terminal — eligible for eviction). The eviction path already
+         * called runtime_release_tx_resources during reuse, so re-doing
+         * it here would be safe-but-wasted; tx_id mismatch tells us
+         * to skip. */
+        runtime_tx_entry_t *entry = &state->tx_entries[slot];
+        if (entry->in_use && tx_id_bytes_equal(entry->tx_id, tx_id)) {
+            runtime_release_tx_resources_ephemeral(entry);
+        }
+        pthread_mutex_unlock(&g_entry_mtx[slot]);
+    }
+
     if (should_flush) {
         (void)runtime_flush_tx_record(state, &snapshot);
         (void)runtime_save_tx_state(state);
@@ -882,6 +1113,13 @@ int runtime_init(runtime_state_t *state) {
      * the mgmt thread need synchronization. */
     if (pthread_mutex_init(&state->state_mtx, NULL) != 0) {
         fprintf(stderr, "[payload2] pthread_mutex_init failed\n");
+        return -1;
+    }
+    /* Per-slot mutexes for the tx table — guard each entry against
+     * concurrent SHARD/COMMIT/ABORT racing on the same slot, and let
+     * eviction skip slots a handler is still touching. */
+    if (runtime_init_entry_mutexes() != 0) {
+        fprintf(stderr, "[payload2] entry-mutex pool init failed\n");
         return -1;
     }
     snprintf(state->ownership_path, sizeof(state->ownership_path),
@@ -2151,6 +2389,12 @@ static int build_manifest_index(const char *blob, size_t blob_len,
             if (s_count == 0) s_count = 1;
         }
         if (s_start == 0) { free(idx); return -1; }
+        /* Reject ranges that would overflow at the lookup site
+         * (`shard_seq - s >= ec` is overflow-safe, but a sane manifest
+         * never has shard_start anywhere near UINT64_MAX so a high
+         * value indicates a malformed/malicious manifest — reject
+         * outright). The sender's own engine cap is well below 2^32. */
+        if (s_start > UINT64_MAX - s_count) { free(idx); return -1; }
 
         /* Locate "path":"..." inside this object. We find the opening quote
          * after the key, then the closing quote. The path must not contain
@@ -2201,10 +2445,17 @@ static int build_manifest_index(const char *blob, size_t blob_len,
  * Binary-search the sorted index for the file entry that owns `shard_seq`.
  * Returns 0 and fills `out` (including copying the path out of `blob` into
  * `out->path`) on success; -1 if no entry covers the shard.
+ *
+ * Both arithmetic comparisons are written so they cannot overflow even
+ * against a maliciously crafted manifest where shard_start is near
+ * UINT64_MAX. `shard_seq - s` is only computed under `shard_seq >= s`,
+ * and the matched range is bounded with a path-offset/length check
+ * against `blob_len` to prevent an out-of-bounds memcpy.
  */
 static int lookup_manifest_index(const manifest_index_entry_t *idx,
                                  uint64_t count,
                                  const char *blob,
+                                 size_t blob_len,
                                  uint64_t shard_seq,
                                  manifest_file_entry_t *out) {
     uint64_t lo = 0;
@@ -2217,13 +2468,28 @@ static int lookup_manifest_index(const manifest_index_entry_t *idx,
         uint64_t ec = idx[mid].shard_count > 0 ? idx[mid].shard_count : 1;
         if (shard_seq < s) {
             hi = mid;
-        } else if (shard_seq >= s + ec) {
+        } else if (shard_seq - s >= ec) {
+            /* shard_seq >= s ensures the subtraction is safe; this
+             * replaces the old `shard_seq >= s + ec` which could wrap
+             * if a malicious manifest set shard_start near UINT64_MAX. */
             lo = mid + 1;
         } else {
             size_t plen = idx[mid].path_len;
+            uint32_t poff = idx[mid].path_offset;
             if (plen >= sizeof(out->path)) return -1;
+            /* Bounds-check path_offset + plen against the manifest
+             * blob length so a crafted index can't cause an
+             * out-of-bounds read. The build_manifest_index parser
+             * keeps these inside the blob in normal operation, but
+             * defence-in-depth guards against a future bug or an
+             * already-corrupted manifest_index allocation. */
+            if (blob_len > 0 &&
+                ((uint64_t)poff > blob_len ||
+                 (uint64_t)poff + (uint64_t)plen > blob_len)) {
+                return -1;
+            }
             memset(out, 0, sizeof(*out));
-            memcpy(out->path, blob + idx[mid].path_offset, plen);
+            memcpy(out->path, blob + poff, plen);
             out->path[plen] = '\0';
             out->shard_start = s;
             out->shard_count = ec;
@@ -2811,6 +3077,7 @@ static int handle_stream_shard(runtime_state_t *state, int client_fd,
     uint64_t data_len = 0;
     unsigned char tx_id[16];
     runtime_tx_entry_t *entry = NULL;
+    int rc = -1;
 
     if (!state) return -1;
     if (body_len < FTX2_SHARD_HEADER_LEN) {
@@ -2821,12 +3088,18 @@ static int handle_stream_shard(runtime_state_t *state, int client_fd,
 
     memcpy(tx_id, shard_hdr_bytes, 16);
     shard_seq = read_le64(shard_hdr_bytes + 16);
+
+    /* Acquire the slot exclusively so a concurrent COMMIT/ABORT cannot
+     * release entry->manifest_index / entry->direct_writer underneath
+     * us mid-shard. NULL is fine — we still drain the body and emit a
+     * not-found-shaped ACK like before, just without dereferencing
+     * anything. Released via the `out:` cleanup. */
+    entry = runtime_acquire_tx_entry(state, tx_id);
+
     /* shard_digest[24..56], record_count[56], flags[60] */
     {
         uint32_t record_count_hdr = read_le32(shard_hdr_bytes + 56);
         uint32_t flags_hdr        = read_le32(shard_hdr_bytes + 60);
-        /* Look up the transaction before consuming data so we can route. */
-        entry = runtime_find_tx_entry(state, tx_id);
         data_len = body_len - FTX2_SHARD_HEADER_LEN;
 
         if (flags_hdr & FTX2_SHARD_FLAG_PACKED) {
@@ -2841,13 +3114,15 @@ static int handle_stream_shard(runtime_state_t *state, int client_fd,
                  * direct-mode tx with ≥1 records. Reject cleanly. */
                 (void)drain_shard_data(client_fd, data_len);
                 if (entry) runtime_abort_tx_fatal(state, entry);
-                return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                                  "packed_unsupported", 18);
+                rc = send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
+                                "packed_unsupported", 18);
+                goto out;
             }
-            return handle_packed_shard(state, client_fd, trace_id,
-                                       entry, tx_id, shard_seq,
-                                       data_len, record_count_hdr,
-                                       shard_hdr_bytes + 24, want_verify);
+            rc = handle_packed_shard(state, client_fd, trace_id,
+                                     entry, tx_id, shard_seq,
+                                     data_len, record_count_hdr,
+                                     shard_hdr_bytes + 24, want_verify);
+            goto out;
         }
     }
     {
@@ -2888,13 +3163,15 @@ static int handle_stream_shard(runtime_state_t *state, int client_fd,
                         (const manifest_index_entry_t *)entry->manifest_index,
                         entry->manifest_index_count,
                         entry->manifest_blob,
+                        entry->manifest_blob_len,
                         shard_seq, &mf) != 0) {
                     fprintf(stderr, "[payload2] direct multi: no manifest file owns shard %llu\n",
                             (unsigned long long)shard_seq);
                     (void)drain_shard_data(client_fd, data_len);
                     runtime_abort_tx_fatal(state, entry);
-                    return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                                      "manifest_shard_not_owned", 24);
+                    rc = send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
+                                    "manifest_shard_not_owned", 24);
+                    goto out;
                 }
                 snprintf(tmp_path, sizeof(tmp_path), "%s.ps5up2-tmp", mf.path);
                 if (shard_seq == mf.shard_start) {
@@ -2925,7 +3202,7 @@ static int handle_stream_shard(runtime_state_t *state, int client_fd,
             } else {
                 write_ok = drain_shard_data(client_fd, data_len);
             }
-            if (write_ok != 0) return -1;
+            if (write_ok != 0) { rc = -1; goto out; }
         } else if (want_verify) {
             /* Zero-length shard: digest is BLAKE3 of empty input. */
             blake3_hasher h;
@@ -2943,8 +3220,9 @@ static int handle_stream_shard(runtime_state_t *state, int client_fd,
                  * treats this as a hard failure (not a per-shard retry). */
                 (void)unlink(entry->tmp_path);
                 runtime_abort_tx_fatal(state, entry);
-                return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                                  "direct_tx_corrupt", 17);
+                rc = send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
+                                "direct_tx_corrupt", 17);
+                goto out;
             }
             {
                 char bad_path[512];
@@ -2953,8 +3231,9 @@ static int handle_stream_shard(runtime_state_t *state, int client_fd,
                          (unsigned long long)shard_seq);
                 (void)unlink(bad_path);
             }
-            return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                              "shard_digest_mismatch", 21);
+            rc = send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
+                            "shard_digest_mismatch", 21);
+            goto out;
         }
     }
 
@@ -2982,8 +3261,11 @@ static int handle_stream_shard(runtime_state_t *state, int client_fd,
                      FTX2_ACK_STATE_SPOOLED,
                      entry ? entry->bytes_received : 0,
                      0);
-    return send_frame(client_fd, FTX2_FRAME_SHARD_ACK, 0, trace_id,
-                      ack_bytes, FTX2_SHARD_ACK_LEN);
+    rc = send_frame(client_fd, FTX2_FRAME_SHARD_ACK, 0, trace_id,
+                    ack_bytes, FTX2_SHARD_ACK_LEN);
+out:
+    if (entry) runtime_release_tx_entry(state, entry);
+    return rc;
 }
 
 /* ── CLEANUP handler ──────────────────────────────────────────────────────────
@@ -3804,20 +4086,383 @@ static int chmod_rf(const char *path, mode_t mode, int depth) {
  * S_ISREG branch — recursive descent re-allocates per file. Trading
  * peak RSS for throughput here is fine because cp_rf isn't run on
  * the FTX2 transfer port that needs its own 32 MiB shard buffer. */
-static int cp_rf(const char *src, const char *dst, int depth) {
+/* ── In-flight fs op tracking (progress + cancel) ─────────────────────────────
+ *
+ * Long-running fs ops (cp_rf and the copy fallback inside the EXDEV
+ * move path) update bytes_copied as they go, and check cancel_requested
+ * between buffer flushes. The engine polls FS_OP_STATUS on a separate
+ * mgmt-port connection to surface progress to the user, and sends
+ * FS_OP_CANCEL when the Stop button fires.
+ *
+ * Indexed by op_id, which is the trace_id of the originating FS_COPY
+ * frame. Bounded at MAX_FS_OPS so a wedged op can't hold a slot
+ * forever (alloc finds the oldest non-active slot to evict if all
+ * busy — same evict-terminal pattern as the tx table).
+ *
+ * Single mutex protects the table; per-op fields are read/written
+ * under the same lock. The lock is taken briefly inside cp_rf's
+ * per-buffer loop (every 4 MiB write) — negligible overhead vs disk
+ * I/O, and cleaner than a per-slot mutex for state this small. */
+#define MAX_FS_OPS 4
+
+typedef struct {
+    int in_use;
+    uint64_t op_id;
+    char kind[16];          /* "fs_copy", "fs_move", … */
+    char from[512];
+    char to[512];
+    uint64_t total_bytes;   /* 0 if unknown (caller failed to walk) */
+    uint64_t bytes_copied;
+    int cancel_requested;
+    uint64_t started_at_us;
+} fs_op_state_t;
+
+static fs_op_state_t g_fs_ops[MAX_FS_OPS];
+static pthread_mutex_t g_fs_ops_mtx = PTHREAD_MUTEX_INITIALIZER;
+
+/* Claim a slot for a new op. Returns the slot index on success or
+ * -1 if all slots are full (caller should fail the FS_COPY frame
+ * rather than block — a pathological 4-concurrent-fs_copy state
+ * shouldn't happen in normal use; the cap prevents resource leaks
+ * if it does). Caller must call fs_op_release when done. */
+static int fs_op_register(uint64_t op_id, const char *kind,
+                          const char *from, const char *to,
+                          uint64_t total_bytes) {
+    int i;
+    int idx = -1;
+    pthread_mutex_lock(&g_fs_ops_mtx);
+    for (i = 0; i < MAX_FS_OPS; i++) {
+        if (!g_fs_ops[i].in_use) {
+            idx = i;
+            break;
+        }
+    }
+    if (idx >= 0) {
+        memset(&g_fs_ops[idx], 0, sizeof(g_fs_ops[idx]));
+        g_fs_ops[idx].in_use = 1;
+        g_fs_ops[idx].op_id = op_id;
+        snprintf(g_fs_ops[idx].kind, sizeof(g_fs_ops[idx].kind), "%s", kind);
+        snprintf(g_fs_ops[idx].from, sizeof(g_fs_ops[idx].from), "%s", from ? from : "");
+        snprintf(g_fs_ops[idx].to,   sizeof(g_fs_ops[idx].to),   "%s", to   ? to   : "");
+        g_fs_ops[idx].total_bytes = total_bytes;
+        g_fs_ops[idx].started_at_us = now_us();
+    }
+    pthread_mutex_unlock(&g_fs_ops_mtx);
+    return idx;
+}
+
+static void fs_op_release(int idx) {
+    if (idx < 0 || idx >= MAX_FS_OPS) return;
+    pthread_mutex_lock(&g_fs_ops_mtx);
+    memset(&g_fs_ops[idx], 0, sizeof(g_fs_ops[idx]));
+    pthread_mutex_unlock(&g_fs_ops_mtx);
+}
+
+/* Bump the bytes counter by `delta`. Hot path — called once per
+ * COPY_BUF (4 MiB) write inside cp_rf. */
+static void fs_op_progress(int idx, uint64_t delta) {
+    if (idx < 0 || idx >= MAX_FS_OPS) return;
+    pthread_mutex_lock(&g_fs_ops_mtx);
+    if (g_fs_ops[idx].in_use) {
+        g_fs_ops[idx].bytes_copied += delta;
+    }
+    pthread_mutex_unlock(&g_fs_ops_mtx);
+}
+
+/* Atomic-ish read of the cancel flag. Called from cp_rf's inner loop
+ * before each read() so an inflight 28 GiB copy notices the cancel
+ * within one COPY_BUF (4 MiB) of progress. */
+static int fs_op_cancel_pending(int idx) {
+    int c;
+    if (idx < 0 || idx >= MAX_FS_OPS) return 0;
+    pthread_mutex_lock(&g_fs_ops_mtx);
+    c = g_fs_ops[idx].in_use ? g_fs_ops[idx].cancel_requested : 0;
+    pthread_mutex_unlock(&g_fs_ops_mtx);
+    return c;
+}
+
+/* Snapshot for FS_OP_STATUS. Returns 0 on found, -1 on no-such-op. */
+static int fs_op_snapshot(uint64_t op_id, fs_op_state_t *out) {
+    int i;
+    int found = -1;
+    pthread_mutex_lock(&g_fs_ops_mtx);
+    for (i = 0; i < MAX_FS_OPS; i++) {
+        if (g_fs_ops[i].in_use && g_fs_ops[i].op_id == op_id) {
+            *out = g_fs_ops[i];
+            found = 0;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_fs_ops_mtx);
+    return found;
+}
+
+/* Set the cancel flag on the matching op. Returns 0 on found, -1 on
+ * no-such-op. The op handler picks this up at its next loop check. */
+static int fs_op_set_cancel(uint64_t op_id) {
+    int i;
+    int found = -1;
+    pthread_mutex_lock(&g_fs_ops_mtx);
+    for (i = 0; i < MAX_FS_OPS; i++) {
+        if (g_fs_ops[i].in_use && g_fs_ops[i].op_id == op_id) {
+            g_fs_ops[i].cancel_requested = 1;
+            found = 0;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_fs_ops_mtx);
+    return found;
+}
+
+/* Recursive byte-count of a path. Used by handle_fs_copy /
+ * handle_fs_move's copy-fallback to populate total_bytes before
+ * starting the work, so the engine's progress poll can show a
+ * percentage. Cheap relative to the copy itself (one stat per file).
+ * Returns 0 and writes total to *out on success; -1 on any stat
+ * failure (path missing, permission, etc.). */
+static int recursive_size(const char *path, uint64_t *out) {
+    struct stat st;
+    DIR *d;
+    struct dirent *e;
+    if (lstat(path, &st) != 0) return -1;
+    if (S_ISREG(st.st_mode)) {
+        *out += (uint64_t)st.st_size;
+        return 0;
+    }
+    if (!S_ISDIR(st.st_mode)) {
+        /* symlinks/specials don't contribute bytes. */
+        return 0;
+    }
+    d = opendir(path);
+    if (!d) return -1;
+    while ((e = readdir(d)) != NULL) {
+        char sub[1024];
+        if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
+        if (snprintf(sub, sizeof(sub), "%s/%s", path, e->d_name) >= (int)sizeof(sub)) {
+            continue;
+        }
+        (void)recursive_size(sub, out);
+    }
+    closedir(d);
+    return 0;
+}
+
+/* ── Async-write file copier (parallel read + write) ──────────────────────────
+ *
+ * The original cp_rf body did a sequential `read(sfd) → write(dfd)`
+ * loop. For an internal copy from /data (NVMe ~800 MiB/s) to
+ * /mnt/usb0 (USB exFAT ~30 MiB/s) the read-then-write per-buffer
+ * latency adds: throughput is bounded by SUM of the two side rates,
+ * not the slower one alone. Concretely a 4 MiB buffer with a 5 ms
+ * read + 130 ms write spends ~96% of its time waiting for the write
+ * — but the next read is also serialized behind it.
+ *
+ * This helper runs the write on a worker thread fed by a 2-slot
+ * ring buffer. While the worker is writing buf[A] the reader fills
+ * buf[B], and they swap. End-to-end throughput becomes
+ * `max(read_rate, write_rate)` ≈ the slower side (USB), which is
+ * the absolute ceiling — already up from 21 MiB/s observed on the
+ * old serial path to whatever the destination's true sustained
+ * write speed is.
+ *
+ * Buffer size bumped to 16 MiB (vs old 4 MiB): reduces per-iteration
+ * overhead, gives exFAT/USB a bigger contiguous block to write,
+ * and leaves the kernel more flexibility to coalesce. Two of these
+ * + the read buffer === ~32 MiB peak per concurrent copy, well
+ * under PS5 user-mode RAM budget.
+ *
+ * Returns: 0 success, -1 error, -2 cancel. */
+#define ASYNC_COPY_BUF_BYTES (16u * 1024u * 1024u)
+
+typedef struct {
+    pthread_mutex_t mtx;
+    pthread_cond_t  cv_filled;   /* reader → writer: slot has data */
+    pthread_cond_t  cv_emptied;  /* writer → reader: slot consumed */
+    int             dfd;
+    const char     *dst_path;    /* for error logging only */
+    unsigned char  *bufs[2];
+    size_t          slot_len[2]; /* 0 = empty, >0 = bytes to write */
+    int             eof[2];      /* 1 = no more data after this slot */
+    int             writer_errno; /* sticky; reader bails if non-zero */
+    int             shutdown;    /* set on cancel/error to wake the writer */
+    pthread_t       tid;
+    int             tid_started;
+} async_copy_t;
+
+static void *async_copy_writer_thread(void *arg) {
+    async_copy_t *w = (async_copy_t *)arg;
+    int slot = 0;
+    for (;;) {
+        size_t len;
+        int eof;
+        pthread_mutex_lock(&w->mtx);
+        while (w->slot_len[slot] == 0 && !w->eof[slot] && !w->shutdown) {
+            pthread_cond_wait(&w->cv_filled, &w->mtx);
+        }
+        if (w->shutdown) {
+            pthread_mutex_unlock(&w->mtx);
+            return NULL;
+        }
+        len = w->slot_len[slot];
+        eof = w->eof[slot];
+        pthread_mutex_unlock(&w->mtx);
+
+        if (len > 0) {
+            ssize_t written = 0;
+            while ((size_t)written < len) {
+                ssize_t wr = write(w->dfd, w->bufs[slot] + written, len - (size_t)written);
+                if (wr < 0) {
+                    if (errno == EINTR) continue;
+                    pthread_mutex_lock(&w->mtx);
+                    w->writer_errno = errno;
+                    pthread_cond_broadcast(&w->cv_emptied);
+                    pthread_mutex_unlock(&w->mtx);
+                    fprintf(stderr,
+                            "[payload2] async_copy: write(%s) failed errno=%d\n",
+                            w->dst_path, errno);
+                    return NULL;
+                }
+                written += wr;
+            }
+        }
+
+        pthread_mutex_lock(&w->mtx);
+        w->slot_len[slot] = 0;
+        pthread_cond_signal(&w->cv_emptied);
+        pthread_mutex_unlock(&w->mtx);
+
+        if (eof) return NULL;
+        slot = 1 - slot;
+    }
+}
+
+/* Run an async-write copy of all bytes from `sfd` to `dfd`. Updates
+ * the op slot's bytes_copied counter on each completed read so the
+ * engine's progress poll sees the value advance in real time. */
+static int async_copy_fd(int sfd, int dfd, const char *src_path,
+                         const char *dst_path, int op_idx) {
+    async_copy_t w;
+    memset(&w, 0, sizeof(w));
+    w.dfd = dfd;
+    w.dst_path = dst_path;
+    if (pthread_mutex_init(&w.mtx, NULL) != 0) return -1;
+    if (pthread_cond_init(&w.cv_filled, NULL) != 0) {
+        pthread_mutex_destroy(&w.mtx);
+        return -1;
+    }
+    if (pthread_cond_init(&w.cv_emptied, NULL) != 0) {
+        pthread_cond_destroy(&w.cv_filled);
+        pthread_mutex_destroy(&w.mtx);
+        return -1;
+    }
+    w.bufs[0] = (unsigned char *)malloc(ASYNC_COPY_BUF_BYTES);
+    w.bufs[1] = (unsigned char *)malloc(ASYNC_COPY_BUF_BYTES);
+    if (!w.bufs[0] || !w.bufs[1]) {
+        free(w.bufs[0]);
+        free(w.bufs[1]);
+        pthread_cond_destroy(&w.cv_emptied);
+        pthread_cond_destroy(&w.cv_filled);
+        pthread_mutex_destroy(&w.mtx);
+        return -1;
+    }
+    if (pthread_create(&w.tid, NULL, async_copy_writer_thread, &w) != 0) {
+        free(w.bufs[0]);
+        free(w.bufs[1]);
+        pthread_cond_destroy(&w.cv_emptied);
+        pthread_cond_destroy(&w.cv_filled);
+        pthread_mutex_destroy(&w.mtx);
+        return -1;
+    }
+    w.tid_started = 1;
+
+    int rc = 0;
+    int slot = 0;
+    off_t total_read = 0;
+    for (;;) {
+        /* Cancel check between each read — same granularity as
+         * before (one buffer = 16 MiB now). */
+        if (op_idx >= 0 && fs_op_cancel_pending(op_idx)) {
+            rc = -2;
+            break;
+        }
+        /* Wait for our slot to be empty. The writer signals
+         * cv_emptied when it finishes a slot; we also wake on a
+         * writer error so we don't deadlock against a dead writer. */
+        pthread_mutex_lock(&w.mtx);
+        while (w.slot_len[slot] != 0 && w.writer_errno == 0) {
+            pthread_cond_wait(&w.cv_emptied, &w.mtx);
+        }
+        if (w.writer_errno != 0) {
+            pthread_mutex_unlock(&w.mtx);
+            rc = -1;
+            break;
+        }
+        pthread_mutex_unlock(&w.mtx);
+
+        ssize_t r = read(sfd, w.bufs[slot], ASYNC_COPY_BUF_BYTES);
+        if (r < 0) {
+            if (errno == EINTR) continue;
+            fprintf(stderr,
+                    "[payload2] async_copy: read(%s) failed at offset %lld errno=%d\n",
+                    src_path, (long long)total_read, errno);
+            rc = -1;
+            break;
+        }
+        if (r == 0) {
+            /* Hand an EOF marker to the writer so it exits cleanly
+             * instead of waiting forever on the next slot. */
+            pthread_mutex_lock(&w.mtx);
+            w.eof[slot] = 1;
+            pthread_cond_signal(&w.cv_filled);
+            pthread_mutex_unlock(&w.mtx);
+            break;
+        }
+        total_read += r;
+        if (op_idx >= 0) fs_op_progress(op_idx, (uint64_t)r);
+
+        pthread_mutex_lock(&w.mtx);
+        w.slot_len[slot] = (size_t)r;
+        pthread_cond_signal(&w.cv_filled);
+        pthread_mutex_unlock(&w.mtx);
+
+        slot = 1 - slot;
+    }
+
+    if (rc != 0) {
+        /* Tell the writer to give up on whatever's queued. */
+        pthread_mutex_lock(&w.mtx);
+        w.shutdown = 1;
+        pthread_cond_broadcast(&w.cv_filled);
+        pthread_mutex_unlock(&w.mtx);
+    }
+    pthread_join(w.tid, NULL);
+    if (rc == 0 && w.writer_errno != 0) rc = -1;
+
+    free(w.bufs[0]);
+    free(w.bufs[1]);
+    pthread_cond_destroy(&w.cv_emptied);
+    pthread_cond_destroy(&w.cv_filled);
+    pthread_mutex_destroy(&w.mtx);
+    return rc;
+}
+
+/* Recursive copy with progress + cancel hooks. `op_idx` is a slot
+ * into g_fs_ops (or -1 to disable the hooks for callers that don't
+ * need cancellation/progress visibility). Returns:
+ *   0   = success
+ *  -1   = generic error (open, read, write, mkdir, etc.)
+ *  -2   = cancel requested (distinguishable from -1 so the caller
+ *         can return FS_OP_CANCEL_ACK instead of FS_COPY_ERROR). */
+static int cp_rf_op(const char *src, const char *dst, int depth, int op_idx) {
     struct stat st;
     DIR *d;
     struct dirent *e;
     char sub_src[1024];
     char sub_dst[1024];
     int rc = 0;
-    /* 4 MiB copy buffer. PS5 NVMe sequential IOs reach disk-limited
-     * throughput around 1-4 MiB request size; below that we're
-     * syscall-bound. Cost of the alloc is one mmap on FreeBSD's
-     * malloc — negligible against multi-second copies. */
-    const size_t COPY_BUF = 4u * 1024u * 1024u;
 
     if (depth > 64) return -1;
+    if (op_idx >= 0 && fs_op_cancel_pending(op_idx)) return -2;
     if (lstat(src, &st) != 0) return -1;
 
     if (S_ISLNK(st.st_mode)) {
@@ -3872,45 +4517,23 @@ static int cp_rf(const char *src, const char *dst, int depth) {
              * etc.) all fall through and let the read/write loop
              * proceed with lazy allocation. */
         }
-        unsigned char *buf = (unsigned char *)malloc(COPY_BUF);
-        if (!buf) { close(sfd); close(dfd); return -1; }
-        off_t total_written = 0;
-        for (;;) {
-            ssize_t r = read(sfd, buf, COPY_BUF);
-            if (r < 0) {
-                if (errno == EINTR) continue;
-                /* Log the errno + offset so the engine.log line
-                 * "fs_copy failed" has root-cause context. The 4 MiB
-                 * buffer + posix_fadvise made each remaining
-                 * failure represent 64× more lost progress vs the
-                 * pre-perf-fix path, so getting the actual reason
-                 * surfaced here matters more now than it did. */
-                fprintf(stderr,
-                        "[payload2] fs_copy: read(%s) failed at offset %lld errno=%d\n",
-                        src, (long long)total_written, errno);
-                rc = -1;
-                break;
-            }
-            if (r == 0) break;
-            ssize_t written = 0;
-            while (written < r) {
-                ssize_t w = write(dfd, buf + written, (size_t)(r - written));
-                if (w < 0) {
-                    if (errno == EINTR) continue;
-                    fprintf(stderr,
-                            "[payload2] fs_copy: write(%s) failed at offset %lld errno=%d\n",
-                            dst, (long long)(total_written + written), errno);
-                    rc = -1;
-                    break;
-                }
-                written += w;
-            }
-            if (rc != 0) break;
-            total_written += r;
-        }
-        free(buf);
+        /* Hand the actual byte movement to the async-write helper:
+         * one writer thread + double-buffered 16 MiB slots so read
+         * and write run in parallel, capping throughput at the
+         * slower side instead of read+write summed. */
+        rc = async_copy_fd(sfd, dfd, src, dst, op_idx);
         close(sfd);
         close(dfd);
+        if (rc == -2) {
+            /* Cancelled mid-file — drop the partial dst so a retry
+             * doesn't get blocked by the dest-exists check. */
+            (void)unlink(dst);
+        } else if (rc != 0) {
+            /* Hard error — also drop the partial dst rather than
+             * leaving a 0-byte (or partially-written) ghost that
+             * would confuse the user. */
+            (void)unlink(dst);
+        }
         return rc;
     }
 
@@ -3930,14 +4553,104 @@ static int cp_rf(const char *src, const char *dst, int depth) {
     if (!d) return -1;
     while ((e = readdir(d)) != NULL) {
         if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
+        if (op_idx >= 0 && fs_op_cancel_pending(op_idx)) { rc = -2; break; }
         int n1 = snprintf(sub_src, sizeof(sub_src), "%s/%s", src, e->d_name);
         int n2 = snprintf(sub_dst, sizeof(sub_dst), "%s/%s", dst, e->d_name);
         if (n1 < 0 || (size_t)n1 >= sizeof(sub_src) ||
             n2 < 0 || (size_t)n2 >= sizeof(sub_dst)) { rc = -1; break; }
-        if (cp_rf(sub_src, sub_dst, depth + 1) != 0) { rc = -1; /* keep going */ }
+        int sub_rc = cp_rf_op(sub_src, sub_dst, depth + 1, op_idx);
+        if (sub_rc == -2) { rc = -2; break; }   /* propagate cancel */
+        if (sub_rc != 0) { rc = -1; /* per-file failure: keep going */ }
     }
     closedir(d);
     return rc;
+}
+
+/* ── FS_OP_STATUS / FS_OP_CANCEL handlers ──────────────────────────────────
+ *
+ * Both take `{"op_id":<u64>}` in the body where op_id is the trace_id
+ * of the originating FS_COPY frame. Status returns a JSON snapshot;
+ * cancel flips the atomic flag the cp_rf loop checks every 4 MiB.
+ *
+ * These run on the mgmt-port worker pool (different connection from
+ * the FS_COPY handler itself), so the engine can interleave them with
+ * the FS_COPY handler's wait for FS_COPY_ACK without serialization. */
+static int handle_fs_op_status(int client_fd, uint64_t trace_id,
+                                const char *request_body) {
+    fs_op_state_t snap;
+    /* Buffer must hold the JSON skeleton plus two fully escaped path
+     * strings. Each escaped path is up to 1024 bytes (json_escape_into's
+     * dst_cap below), so 2*1024 + ~512 for the rest is safe. Previously
+     * this was 768 bytes and silently truncated whenever a cross-mount
+     * move's two paths summed to more than ~600 bytes — the engine then
+     * 502'd with "decode FS_OP_STATUS_ACK body" and the UI lost progress. */
+    char body[2560];
+    int len;
+    uint64_t op_id = request_body
+        ? extract_json_uint64_field(request_body, "op_id")
+        : 0;
+    if (op_id == 0) {
+        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
+                          "fs_op_status_missing_op_id", 26);
+    }
+    if (fs_op_snapshot(op_id, &snap) != 0) {
+        /* No matching op — either it finished (engine should stop
+         * polling) or never existed. Distinct empty-body ACK with
+         * `found:false` lets the engine decide. */
+        len = snprintf(body, sizeof(body), "{\"found\":false}");
+        if (len < 0) return -1;
+        return send_frame(client_fd, FTX2_FRAME_FS_OP_STATUS_ACK, 0,
+                          trace_id, body, (uint64_t)len);
+    }
+    /* Path strings escaped so embedded backslashes/quotes don't
+     * corrupt the JSON. The shared json_escape_into helper used
+     * elsewhere in this file does the right thing. */
+    char from_esc[1024];
+    char to_esc[1024];
+    json_escape_into(snap.from, from_esc, sizeof(from_esc));
+    json_escape_into(snap.to,   to_esc,   sizeof(to_esc));
+    len = snprintf(body, sizeof(body),
+                   "{\"found\":true,\"op_id\":%llu,\"kind\":\"%s\","
+                   "\"from\":\"%s\",\"to\":\"%s\","
+                   "\"total_bytes\":%llu,\"bytes_copied\":%llu,"
+                   "\"cancel_requested\":%d}",
+                   (unsigned long long)snap.op_id,
+                   snap.kind,
+                   from_esc, to_esc,
+                   (unsigned long long)snap.total_bytes,
+                   (unsigned long long)snap.bytes_copied,
+                   snap.cancel_requested);
+    if (len < 0) return -1;
+    /* Truncation here would emit malformed JSON (snprintf returns the
+     * would-have-been length, not the written length, when clipped).
+     * Fail loud with an error frame instead — the engine's bail() path
+     * for ERROR is much more informative than "decode … body". */
+    if ((size_t)len >= sizeof(body)) {
+        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
+                          "fs_op_status_body_overflow", 26);
+    }
+    return send_frame(client_fd, FTX2_FRAME_FS_OP_STATUS_ACK, 0,
+                      trace_id, body, (uint64_t)len);
+}
+
+static int handle_fs_op_cancel(int client_fd, uint64_t trace_id,
+                                const char *request_body) {
+    char body[64];
+    int len;
+    uint64_t op_id = request_body
+        ? extract_json_uint64_field(request_body, "op_id")
+        : 0;
+    if (op_id == 0) {
+        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
+                          "fs_op_cancel_missing_op_id", 26);
+    }
+    int rc = fs_op_set_cancel(op_id);
+    len = snprintf(body, sizeof(body),
+                   "{\"found\":%s}",
+                   rc == 0 ? "true" : "false");
+    if (len < 0) return -1;
+    return send_frame(client_fd, FTX2_FRAME_FS_OP_CANCEL_ACK, 0,
+                      trace_id, body, (uint64_t)len);
 }
 
 /* ── FS_DELETE handler ─────────────────────────────────────────────────── */
@@ -4207,7 +4920,44 @@ static int handle_fs_copy(runtime_state_t *state, int client_fd,
         return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
                           "fs_copy_dest_exists", 19);
     }
-    if (cp_rf(from, to, 0) != 0) {
+    /* Pre-walk total bytes so the engine's progress poll can show a
+     * percentage. Cheap (one stat per file) relative to the copy
+     * itself, and a stat error means the copy will fail at the same
+     * file shortly anyway — surface the issue early. */
+    uint64_t total_bytes = 0;
+    if (recursive_size(from, &total_bytes) != 0) {
+        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
+                          "fs_copy_walk_failed", 19);
+    }
+    /* Register an in-flight op slot so concurrent FS_OP_STATUS /
+     * FS_OP_CANCEL frames (sent on a separate mgmt connection by the
+     * engine) can find this op via its trace_id. Slot is bounded
+     * (MAX_FS_OPS=4) — if all are full, fail this FS_COPY rather
+     * than losing the ability to track or cancel it. */
+    int op_idx = fs_op_register(trace_id, "fs_copy", from, to, total_bytes);
+    if (op_idx < 0) {
+        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
+                          "fs_copy_too_many_inflight", 25);
+    }
+    int copy_rc = cp_rf_op(from, to, 0, op_idx);
+    fs_op_release(op_idx);
+    if (copy_rc == -2) {
+        /* Cancelled mid-flight. Recursively wipe whatever was
+         * already copied so the next FS_COPY of the same source
+         * isn't blocked by `fs_copy_dest_exists`. cp_rf_op already
+         * unlinked the in-flight file; for the directory case we
+         * also need to remove the partial tree we mkdir'd. Failure
+         * here is non-fatal — the user can clean up manually if
+         * the rm_rf doesn't catch everything (e.g. permissions). */
+        (void)rm_rf(to, 0);
+        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
+                          "fs_copy_cancelled", 17);
+    }
+    if (copy_rc != 0) {
+        /* Hard error — same partial-state cleanup, same rationale.
+         * The user shouldn't have to manually rm a half-copied
+         * folder before retrying. */
+        (void)rm_rf(to, 0);
         return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
                           "fs_copy_failed", 14);
     }
@@ -5504,36 +6254,45 @@ static int handle_binary_frame(runtime_state_t *state, int client_fd,
     /* ── COMMIT_TX ── */
     if (hdr.frame_type == FTX2_FRAME_COMMIT_TX) {
         int len;
+        int rc;
         runtime_tx_entry_t *entry = NULL;
         if (parse_tx_meta(request_body, hdr.body_len, &meta, &extra, &extra_len) != 0) {
             return send_frame(client_fd, FTX2_FRAME_ERROR, 0, hdr.trace_id,
                               "invalid_tx_meta", 15);
         }
-        entry = runtime_find_tx_entry(state, meta.tx_id);
+        /* Acquire exclusive: a concurrent SHARD on the transfer port
+         * must finish before we tear down the manifest/writer state.
+         * Released via the `commit_done:` cleanup. */
+        entry = runtime_acquire_tx_entry(state, meta.tx_id);
         if (!entry) {
             return send_frame(client_fd, FTX2_FRAME_ERROR, 0, hdr.trace_id,
                               "tx_not_found", 12);
         }
         if (strcmp(entry->state, "active") != 0) {
-            return send_frame(client_fd, FTX2_FRAME_ERROR, 0, hdr.trace_id,
-                              "tx_not_active", 13);
+            rc = send_frame(client_fd, FTX2_FRAME_ERROR, 0, hdr.trace_id,
+                            "tx_not_active", 13);
+            goto commit_done;
         }
         /* Verify all expected shards arrived (skip check if total_shards unknown). */
         if (entry->total_shards > 0 &&
             entry->shards_received < entry->total_shards) {
-            int len = snprintf(body, sizeof(body),
-                               "{\"error\":\"shards_incomplete\","
-                               "\"shards_received\":%llu,\"total_shards\":%llu}",
-                               (unsigned long long)entry->shards_received,
-                               (unsigned long long)entry->total_shards);
-            if (len < 0) return -1;
-            return send_frame(client_fd, FTX2_FRAME_ERROR, 0, hdr.trace_id,
-                              body, (uint64_t)len);
+            len = snprintf(body, sizeof(body),
+                           "{\"error\":\"shards_incomplete\","
+                           "\"shards_received\":%llu,\"total_shards\":%llu}",
+                           (unsigned long long)entry->shards_received,
+                           (unsigned long long)entry->total_shards);
+            if (len < 0) { rc = -1; goto commit_done; }
+            rc = send_frame(client_fd, FTX2_FRAME_ERROR, 0, hdr.trace_id,
+                            body, (uint64_t)len);
+            goto commit_done;
         }
         pthread_mutex_lock(&state->state_mtx);
         if (state->active_transactions > 0) state->active_transactions -= 1;
         pthread_mutex_unlock(&state->state_mtx);
-        (void)runtime_set_tx_state(state, entry->tx_id, "committed");
+        /* We hold the per-slot mutex, so we can mutate entry->state
+         * directly. */
+        snprintf(entry->state, sizeof(entry->state), "%s", "committed");
+        (void)runtime_flush_tx_record(state, entry);
         (void)runtime_save_tx_state(state);
         (void)runtime_append_tx_event(state, "commit_tx");
         /* Apply: direct-write tx just renames its tmp file(s); spool tx copies
@@ -5658,7 +6417,7 @@ static int handle_binary_frame(runtime_state_t *state, int client_fd,
                        state->listener_rcvbuf_actual,
                        state->listener_sndbuf_actual,
                        state->max_rcvbuf_probed);
-        if (len < 0) return -1;
+        if (len < 0) { rc = -1; goto commit_done; }
         /* Commit took the tx to a terminal state; clear the connection's
          * "has open tx" marker so a subsequent socket close doesn't
          * mis-mark it as interrupted. */
@@ -5666,16 +6425,23 @@ static int handle_binary_frame(runtime_state_t *state, int client_fd,
             memcmp(tx_ctx->tx_id, meta.tx_id, 16) == 0) {
             tx_ctx->has_tx = 0;
         }
-        return send_frame(client_fd, FTX2_FRAME_COMMIT_TX_ACK, 0, hdr.trace_id,
-                          body, (uint64_t)len);
+        rc = send_frame(client_fd, FTX2_FRAME_COMMIT_TX_ACK, 0, hdr.trace_id,
+                        body, (uint64_t)len);
+commit_done:
+        runtime_release_tx_entry(state, entry);
+        return rc;
     }
 
     /* ── ABORT_TX ── */
     if (hdr.frame_type == FTX2_FRAME_ABORT_TX) {
         int len;
+        int rc;
         runtime_tx_entry_t *entry = NULL;
         if (parse_tx_meta(request_body, hdr.body_len, &meta, &extra, &extra_len) == 0) {
-            entry = runtime_find_tx_entry(state, meta.tx_id);
+            /* Acquire exclusive: same rationale as COMMIT_TX. A
+             * concurrent SHARD must finish before we tear the entry
+             * down. Released via the `abort_done:` cleanup. */
+            entry = runtime_acquire_tx_entry(state, meta.tx_id);
         }
         if (!entry) {
             return send_frame(client_fd, FTX2_FRAME_ERROR, 0, hdr.trace_id,
@@ -5684,7 +6450,8 @@ static int handle_binary_frame(runtime_state_t *state, int client_fd,
         pthread_mutex_lock(&state->state_mtx);
         if (state->active_transactions > 0) state->active_transactions -= 1;
         pthread_mutex_unlock(&state->state_mtx);
-        (void)runtime_set_tx_state(state, entry->tx_id, "aborted");
+        snprintf(entry->state, sizeof(entry->state), "%s", "aborted");
+        (void)runtime_flush_tx_record(state, entry);
         (void)runtime_save_tx_state(state);
         (void)runtime_append_tx_event(state, "abort_tx");
         runtime_release_tx_resources(entry);
@@ -5693,15 +6460,18 @@ static int handle_binary_frame(runtime_state_t *state, int client_fd,
                        "\"active_transactions\":%llu}",
                        entry->tx_id_hex,
                        (unsigned long long)state->active_transactions);
-        if (len < 0) return -1;
+        if (len < 0) { rc = -1; goto abort_done; }
         /* Abort took the tx terminal — see the matching clear in COMMIT_TX
          * for why we do this. */
         if (tx_ctx && tx_ctx->has_tx &&
             memcmp(tx_ctx->tx_id, meta.tx_id, 16) == 0) {
             tx_ctx->has_tx = 0;
         }
-        return send_frame(client_fd, FTX2_FRAME_ABORT_TX_ACK, 0, hdr.trace_id,
-                          body, (uint64_t)len);
+        rc = send_frame(client_fd, FTX2_FRAME_ABORT_TX_ACK, 0, hdr.trace_id,
+                        body, (uint64_t)len);
+abort_done:
+        runtime_release_tx_entry(state, entry);
+        return rc;
     }
 
     /* ── TAKEOVER_REQUEST ── */
@@ -5768,6 +6538,12 @@ static int handle_binary_frame(runtime_state_t *state, int client_fd,
     if (hdr.frame_type == FTX2_FRAME_FS_COPY) {
         return handle_fs_copy(state, client_fd, hdr.trace_id,
                                request_body, hdr.body_len);
+    }
+    if (hdr.frame_type == FTX2_FRAME_FS_OP_STATUS) {
+        return handle_fs_op_status(client_fd, hdr.trace_id, request_body);
+    }
+    if (hdr.frame_type == FTX2_FRAME_FS_OP_CANCEL) {
+        return handle_fs_op_cancel(client_fd, hdr.trace_id, request_body);
     }
     if (hdr.frame_type == FTX2_FRAME_FS_MOUNT) {
         return handle_fs_mount(state, client_fd, hdr.trace_id,

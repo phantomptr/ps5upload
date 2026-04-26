@@ -133,7 +133,24 @@ pub struct HashResult {
 /// size equality alone isn't enough guarantee. Streams in 64 KiB chunks
 /// on the payload side — ~2-3 s per GiB on PS5 UFS, so judicious use only.
 pub fn fs_hash(addr: &str, path: &str) -> Result<HashResult> {
+    fs_hash_with_timeout(addr, path, None)
+}
+
+/// Like [`fs_hash`] but with a caller-supplied per-socket I/O timeout.
+/// Reconcile loops over many files; without an explicit override each
+/// call inherits the 30 s default and a single hung PS5 stalls the
+/// whole reconcile linearly. Pass a few-second deadline so a stuck
+/// FS_HASH fails fast and the loop continues.
+pub fn fs_hash_with_timeout(
+    addr: &str,
+    path: &str,
+    io_timeout: Option<std::time::Duration>,
+) -> Result<HashResult> {
     let mut c = Connection::connect(addr)?;
+    if let Some(t) = io_timeout {
+        c.set_io_timeout(t)
+            .context("applying fs_hash I/O timeout")?;
+    }
     let body = serde_json::to_vec(&serde_json::json!({ "path": path }))
         .context("serialize fs_hash body")?;
     c.send_frame(FrameType::FsHash, &body)?;
@@ -163,7 +180,25 @@ pub fn fs_hash(addr: &str, path: &str) -> Result<HashResult> {
 /// requests are silently truncated — callers that need exact-size reads
 /// should chunk with updated `offset` values.
 pub fn fs_read(addr: &str, path: &str, offset: u64, limit: u64) -> Result<Vec<u8>> {
+    fs_read_with_timeout(addr, path, offset, limit, None)
+}
+
+/// Like [`fs_read`] but with a caller-supplied per-socket I/O timeout.
+/// Same rationale as `fs_hash_with_timeout` — read loops over many
+/// metadata blobs need to fail fast on a stuck PS5 instead of inheriting
+/// the 30 s default.
+pub fn fs_read_with_timeout(
+    addr: &str,
+    path: &str,
+    offset: u64,
+    limit: u64,
+    io_timeout: Option<std::time::Duration>,
+) -> Result<Vec<u8>> {
     let mut c = Connection::connect(addr)?;
+    if let Some(t) = io_timeout {
+        c.set_io_timeout(t)
+            .context("applying fs_read I/O timeout")?;
+    }
     let body = serde_json::to_vec(&serde_json::json!({
         "path": path,
         "offset": offset,
@@ -198,7 +233,27 @@ fn send_empty_ack_op(
     expected: FrameType,
     what: &str,
 ) -> Result<()> {
+    send_empty_ack_op_with_timeout(addr, frame, body, expected, what, None)
+}
+
+/// Same as [`send_empty_ack_op`] but with a caller-supplied per-socket
+/// I/O timeout. Used for long-running ops (fs_copy of multi-GiB files,
+/// fs_move that cross-volume falls through to copy) where the default
+/// 30 s read timeout would fire long before the payload finishes the
+/// internal disk-to-disk copy.
+fn send_empty_ack_op_with_timeout(
+    addr: &str,
+    frame: FrameType,
+    body: &[u8],
+    expected: FrameType,
+    what: &str,
+    io_timeout: Option<std::time::Duration>,
+) -> Result<()> {
     let mut c = Connection::connect(addr)?;
+    if let Some(t) = io_timeout {
+        c.set_io_timeout(t)
+            .with_context(|| format!("applying {what} I/O timeout"))?;
+    }
     c.send_frame(frame, body)?;
     let (hdr, resp) = c.recv_frame()?;
     let ft = hdr.frame_type().unwrap_or(FrameType::Error);
@@ -234,15 +289,148 @@ pub fn fs_delete(addr: &str, path: &str) -> Result<()> {
 /// mounts), FS_COPY works cross-volume — the payload reads and writes
 /// bytes explicitly.
 pub fn fs_copy(addr: &str, from: &str, to: &str) -> Result<()> {
+    fs_copy_with_timeout(addr, from, to, None)
+}
+
+/// Like [`fs_copy`] but with a caller-supplied per-socket I/O timeout.
+/// fs_copy is a single-shot RPC: the payload performs the entire copy
+/// (recursive, multi-GiB capable) and sends a single FS_COPY_ACK at
+/// the end. With the default 30 s socket timeout, copying anything
+/// larger than ~3 GiB on PS5 UFS times out mid-copy and the engine
+/// surfaces as "read frame header" 502. Callers handling user-visible
+/// copies of game-sized images should pass a generous deadline (an
+/// hour or more) so the operation completes naturally.
+pub fn fs_copy_with_timeout(
+    addr: &str,
+    from: &str,
+    to: &str,
+    io_timeout: Option<std::time::Duration>,
+) -> Result<()> {
+    fs_copy_with_op_id(addr, from, to, 0, io_timeout)
+}
+
+/// Like [`fs_copy_with_timeout`] but stamps a caller-chosen op_id
+/// into the FS_COPY frame's trace_id. The payload uses that as the
+/// key into its in-flight ops table — pass the same op_id to
+/// [`fs_op_status`] / [`fs_op_cancel`] from a separate connection to
+/// observe progress or cancel mid-flight. Pass 0 if you don't need
+/// progress/cancel (matches the old behavior).
+pub fn fs_copy_with_op_id(
+    addr: &str,
+    from: &str,
+    to: &str,
+    op_id: u64,
+    io_timeout: Option<std::time::Duration>,
+) -> Result<()> {
     let body = serde_json::to_vec(&serde_json::json!({ "from": from, "to": to }))
         .context("serialize fs_copy")?;
-    send_empty_ack_op(
-        addr,
-        FrameType::FsCopy,
-        &body,
-        FrameType::FsCopyAck,
-        "FS_COPY",
-    )
+    let mut c = Connection::connect(addr)?;
+    if let Some(t) = io_timeout {
+        c.set_io_timeout(t)
+            .context("applying FS_COPY I/O timeout")?;
+    }
+    c.send_frame_with_trace(FrameType::FsCopy, &body, op_id)?;
+    let (hdr, resp) = c.recv_frame()?;
+    let ft = hdr.frame_type().unwrap_or(FrameType::Error);
+    if ft == FrameType::Error {
+        let msg = String::from_utf8_lossy(&resp).to_string();
+        // The cancel path is a non-error outcome from the user's
+        // POV; surface it distinctly so the engine job state goes
+        // to "Failed{error: 'cancelled'}" rather than collapsing
+        // into a generic FS_COPY failure.
+        if msg == "fs_copy_cancelled" {
+            bail!("cancelled");
+        }
+        bail!("payload rejected FS_COPY: {msg}");
+    }
+    if ft != FrameType::FsCopyAck {
+        bail!("expected FS_COPY_ACK, got {:?}", ft);
+    }
+    Ok(())
+}
+
+/// Snapshot returned by FS_OP_STATUS. `found = false` means the
+/// op_id is not currently registered (either finished or never
+/// started). Caller should stop polling on `found = false`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct FsOpSnapshot {
+    pub found: bool,
+    #[serde(default)]
+    pub op_id: u64,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub from: String,
+    #[serde(default)]
+    pub to: String,
+    #[serde(default)]
+    pub total_bytes: u64,
+    #[serde(default)]
+    pub bytes_copied: u64,
+    #[serde(default)]
+    pub cancel_requested: bool,
+}
+
+/// Poll the payload for the current state of an in-flight FS op.
+/// Used by the engine's progress-tracker task while the FS_COPY
+/// connection is blocked waiting for FS_COPY_ACK; this opens a
+/// second mgmt-port connection so the two requests don't serialize
+/// behind each other on the payload's worker pool.
+pub fn fs_op_status(addr: &str, op_id: u64) -> Result<FsOpSnapshot> {
+    let mut c = Connection::connect(addr)?;
+    // Short timeout — status calls should return in milliseconds. A
+    // hung payload here would otherwise stall the poller every
+    // iteration; bailing fast lets the next tick try a fresh
+    // connection.
+    c.set_io_timeout(std::time::Duration::from_secs(5))
+        .context("applying FS_OP_STATUS I/O timeout")?;
+    let body = serde_json::to_vec(&serde_json::json!({ "op_id": op_id }))
+        .context("serialize fs_op_status body")?;
+    c.send_frame(FrameType::FsOpStatus, &body)?;
+    let (hdr, resp) = c.recv_frame()?;
+    let ft = hdr.frame_type().unwrap_or(FrameType::Error);
+    if ft == FrameType::Error {
+        bail!(
+            "payload rejected FS_OP_STATUS({op_id}): {}",
+            String::from_utf8_lossy(&resp)
+        );
+    }
+    if ft != FrameType::FsOpStatusAck {
+        bail!("expected FS_OP_STATUS_ACK, got {:?}", ft);
+    }
+    let parsed: FsOpSnapshot =
+        serde_json::from_slice(&resp).context("decode FS_OP_STATUS_ACK body")?;
+    Ok(parsed)
+}
+
+/// Send FS_OP_CANCEL to the payload. Returns true if the op was
+/// found and the cancel flag was set; false if the op_id wasn't
+/// recognized (already finished or never registered).
+pub fn fs_op_cancel(addr: &str, op_id: u64) -> Result<bool> {
+    let mut c = Connection::connect(addr)?;
+    c.set_io_timeout(std::time::Duration::from_secs(5))
+        .context("applying FS_OP_CANCEL I/O timeout")?;
+    let body = serde_json::to_vec(&serde_json::json!({ "op_id": op_id }))
+        .context("serialize fs_op_cancel body")?;
+    c.send_frame(FrameType::FsOpCancel, &body)?;
+    let (hdr, resp) = c.recv_frame()?;
+    let ft = hdr.frame_type().unwrap_or(FrameType::Error);
+    if ft == FrameType::Error {
+        bail!(
+            "payload rejected FS_OP_CANCEL({op_id}): {}",
+            String::from_utf8_lossy(&resp)
+        );
+    }
+    if ft != FrameType::FsOpCancelAck {
+        bail!("expected FS_OP_CANCEL_ACK, got {:?}", ft);
+    }
+    #[derive(Deserialize)]
+    struct AckBody {
+        found: bool,
+    }
+    let parsed: AckBody =
+        serde_json::from_slice(&resp).context("decode FS_OP_CANCEL_ACK body")?;
+    Ok(parsed.found)
 }
 
 // ─── FS_MOUNT / FS_UNMOUNT ─────────────────────────────────────────────────
@@ -304,14 +492,28 @@ pub fn fs_unmount(addr: &str, mount_point: &str) -> Result<()> {
 /// surface as `fs_move_cross_mount` error — payload uses `rename(2)` which
 /// returns EXDEV across mount points.
 pub fn fs_move(addr: &str, from: &str, to: &str) -> Result<()> {
+    fs_move_with_timeout(addr, from, to, None)
+}
+
+/// Like [`fs_move`] but with a caller-supplied per-socket I/O timeout.
+/// Most fs_move calls return in milliseconds (rename(2) is a metadata
+/// op), but cross-volume moves where the engine retries via
+/// copy-then-delete inherit the same long-deadline need as fs_copy.
+pub fn fs_move_with_timeout(
+    addr: &str,
+    from: &str,
+    to: &str,
+    io_timeout: Option<std::time::Duration>,
+) -> Result<()> {
     let body = serde_json::to_vec(&serde_json::json!({ "from": from, "to": to }))
         .context("serialize fs_move")?;
-    send_empty_ack_op(
+    send_empty_ack_op_with_timeout(
         addr,
         FrameType::FsMove,
         &body,
         FrameType::FsMoveAck,
         "FS_MOVE",
+        io_timeout,
     )
 }
 
@@ -754,7 +956,17 @@ pub fn reconcile(
                 let local_hash =
                     blake3_file(&src.join(rel.replace('/', std::path::MAIN_SEPARATOR_STR)))?;
                 let remote_path = format!("{dest_root}/{rel}");
-                let remote_hash = fs_hash(addr, &remote_path)?.hash;
+                // 10 s per-file deadline so a single hung PS5 doesn't
+                // stall the whole reconcile linearly. The default 30 s
+                // socket timeout would multiply N files × 30 s on a
+                // crashed payload — at hundreds of files the user
+                // would think the app is dead.
+                let remote_hash = fs_hash_with_timeout(
+                    addr,
+                    &remote_path,
+                    Some(std::time::Duration::from_secs(10)),
+                )?
+                .hash;
                 local_hash != remote_hash
             }
             Some(_) => false,

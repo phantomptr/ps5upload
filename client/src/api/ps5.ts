@@ -434,10 +434,13 @@ export async function fsDelete(transferAddr: string, path: string): Promise<void
 export async function fsMove(
   transferAddr: string,
   from: string,
-  to: string
+  to: string,
+  opId?: number,
 ): Promise<void> {
   const addr = toMgmtAddr(transferAddr);
-  await invoke("ps5_fs_move", { req: { addr, from, to } });
+  await invoke("ps5_fs_move", {
+    req: { addr, from, to, op_id: opId ?? 0 },
+  });
 }
 
 export async function fsChmod(
@@ -462,10 +465,55 @@ export async function fsMkdir(transferAddr: string, path: string): Promise<void>
 export async function fsCopy(
   transferAddr: string,
   from: string,
-  to: string
+  to: string,
+  opId?: number,
 ): Promise<void> {
   const addr = toMgmtAddr(transferAddr);
-  await invoke("ps5_fs_copy", { req: { addr, from, to } });
+  await invoke("ps5_fs_copy", {
+    req: { addr, from, to, op_id: opId ?? 0 },
+  });
+}
+
+/** Snapshot the in-flight FS op identified by `opId`. Returns the
+ *  payload's bytes_copied/total_bytes/cancel_requested. Used by the
+ *  paste loop to drive a per-byte progress bar while fsCopy is
+ *  blocked on FS_COPY_ACK. Throws if the op_id is no longer
+ *  registered (op finished or never started) — caller should treat
+ *  that as "stop polling, the op is done". */
+export interface FsOpStatusSnapshot {
+  op_id: number;
+  kind: string;
+  from: string;
+  to: string;
+  total_bytes: number;
+  bytes_copied: number;
+  cancel_requested: boolean;
+}
+
+export async function fsOpStatus(
+  transferAddr: string,
+  opId: number,
+): Promise<FsOpStatusSnapshot> {
+  const addr = toMgmtAddr(transferAddr);
+  return invoke<FsOpStatusSnapshot>("ps5_fs_op_status", {
+    req: { addr, op_id: opId },
+  });
+}
+
+/** Ask the payload to set the cancel flag on op `opId`. The payload's
+ *  cp_rf loop checks the flag every 4 MiB, so a multi-GiB copy stops
+ *  within ~one disk-IO of the cancel call. Returns true if the op
+ *  was running, false if it had already finished — both are fine
+ *  outcomes from the caller's POV. */
+export async function fsOpCancel(
+  transferAddr: string,
+  opId: number,
+): Promise<boolean> {
+  const addr = toMgmtAddr(transferAddr);
+  const res = await invoke<{ cancelled: boolean }>("ps5_fs_op_cancel", {
+    req: { addr, op_id: opId },
+  });
+  return res.cancelled;
 }
 
 /** Result of a successful FS_MOUNT — the payload echoes where it mounted
@@ -940,13 +988,21 @@ export async function fetchGameMeta(
     application_category_type: null,
     has_icon: false,
   };
+  // 10s is generous for a meta lookup — the engine reads `param.json`
+  // (small, hundreds of bytes) and returns. Without the cap, a hung
+  // PS5 mid-FS_READ would leave Library's per-row meta-fetch promises
+  // pending forever; the row spinner spins until navigation.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10_000);
   try {
-    const res = await fetch(url);
+    const res = await fetch(url, { signal: controller.signal });
     if (!res.ok) return empty;
     const body = (await res.json()) as Partial<GameMeta>;
     return { ...empty, ...body };
   } catch {
     return empty;
+  } finally {
+    clearTimeout(timer);
   }
 }
 

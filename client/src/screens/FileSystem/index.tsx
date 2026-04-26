@@ -20,7 +20,7 @@ import {
   X,
 } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { PageHeader, Button } from "../../components";
+import { PageHeader, Button, useConfirm } from "../../components";
 import { useTr } from "../../state/lang";
 
 import { useConnectionStore, PS5_PAYLOAD_PORT } from "../../state/connection";
@@ -29,6 +29,8 @@ import {
   fsMove,
   fsMkdir,
   fsCopy,
+  fsOpStatus,
+  fsOpCancel,
   jobStatus,
   startTransferDownload,
 } from "../../api/ps5";
@@ -41,6 +43,7 @@ import {
   useFsDownloadOpStore,
 } from "../../state/fsBulkOp";
 import { useElapsed } from "../../lib/useElapsed";
+import { runBulkDelete as runBulkDeleteLoop } from "../../lib/bulkDelete";
 
 /**
  * PS5 file explorer with multi-select + cut/copy/paste.
@@ -139,6 +142,10 @@ export default function FileSystemScreen() {
   // Re-mount after a tab switch sees the still-running operation.
   const bulkOp = useFsBulkOpStore();
   const downloadOp = useFsDownloadOpStore();
+  // Custom confirm modal — replaces window.confirm() which is a
+  // no-op in Tauri webview and falls through to plugin-dialog's
+  // ACL-gated confirm command.
+  const { confirm: confirmDialog, dialog: confirmDialogNode } = useConfirm();
   const elapsedMs = useElapsed(
     busyEntry !== null || bulkOp.op !== null || downloadOp.active,
   );
@@ -216,7 +223,21 @@ export default function FileSystemScreen() {
   );
 
   const runDelete = async (name: string) => {
-    if (!confirm(`Delete "${name}"? This removes the path recursively.`)) return;
+    const ok = await confirmDialog({
+      title: tr(
+        "fs_delete_confirm_title",
+        { name },
+        `Delete "${name}"?`,
+      ),
+      message: tr(
+        "fs_delete_confirm_body",
+        undefined,
+        "This removes the path recursively from your PS5. Can't be undone.",
+      ),
+      confirmLabel: tr("delete", undefined, "Delete"),
+      destructive: true,
+    });
+    if (!ok) return;
     setBusyEntry({ name, op: "rename" }); // cheap reuse of spinner
     setError(null);
     try {
@@ -281,15 +302,21 @@ export default function FileSystemScreen() {
     if (useFsBulkOpStore.getState().op !== null) return;
     const names = [...selected];
     if (names.length === 0) return;
-    if (
-      !confirm(
-        `Delete ${names.length} item${
-          names.length === 1 ? "" : "s"
-        } from ${path}?`
-      )
-    ) {
-      return;
-    }
+    const ok = await confirmDialog({
+      title: tr(
+        "fs_bulk_delete_confirm_title",
+        { count: names.length },
+        `Delete ${names.length} item${names.length === 1 ? "" : "s"}?`,
+      ),
+      message: tr(
+        "fs_bulk_delete_confirm_body",
+        { path },
+        `Removes from ${path}. This can't be undone.`,
+      ),
+      confirmLabel: tr("delete", undefined, "Delete"),
+      destructive: true,
+    });
+    if (!ok) return;
     setError(null);
     useFsBulkOpStore.getState().begin({
       op: "delete",
@@ -297,7 +324,7 @@ export default function FileSystemScreen() {
       fromPath: path,
       toPath: "",
     });
-    let firstError: string | null = null;
+    let result: { firstError: string | null } = { firstError: null };
     try {
       // Snapshot the per-name sizes from the current entries listing
       // so the busy banner can show "deleting 1.17 GiB foo.ffpkg"
@@ -307,32 +334,25 @@ export default function FileSystemScreen() {
       const sizeByName = new Map<string, number>(
         (entries ?? []).map((e) => [e.name, e.size]),
       );
-      for (let i = 0; i < names.length; i++) {
-        const name = names[i];
-        const itemPath = joinPath(path, name);
-        useFsBulkOpStore.getState().setProgress({
-          done: i,
-          currentPath: itemPath,
-          currentName: name,
-          currentSize: sizeByName.get(name) ?? null,
-        });
-        try {
-          await fsDelete(`${host}:${PS5_PAYLOAD_PORT}`, itemPath);
-        } catch (e) {
-          if (!firstError) {
-            firstError = `${name}: ${e instanceof Error ? e.message : String(e)}`;
-          }
-        }
-      }
+      result = await runBulkDeleteLoop({
+        names,
+        basePath: path,
+        sizeByName,
+        joinPath,
+        deleter: (itemPath) =>
+          fsDelete(`${host}:${PS5_PAYLOAD_PORT}`, itemPath),
+        onProgress: (p) => useFsBulkOpStore.getState().setProgress(p),
+        shouldCancel: () => useFsBulkOpStore.getState().cancelRequested,
+      });
     } finally {
       // Always release the bulk-op store, even if a sync error in
       // the loop body throws. Without this finally, an exception
       // would leave op !== null in the store, and the single-flight
       // guard would permanently block future bulk ops on this
       // screen until reload.
-      useFsBulkOpStore.getState().end(firstError);
+      useFsBulkOpStore.getState().end(result.firstError);
     }
-    if (firstError) setError(firstError);
+    if (result.firstError) setError(result.firstError);
     await refresh();
   };
 
@@ -381,6 +401,10 @@ export default function FileSystemScreen() {
     const duplicated: string[] = [];
     try {
       for (let i = 0; i < items.length; i++) {
+        // Between-items cancel check. We *also* drive in-flight
+        // cancellation for the current item via FS_OP_CANCEL below
+        // — that's what gives a 28 GiB copy a sub-second Stop.
+        if (useFsBulkOpStore.getState().cancelRequested) break;
         const item = items[i];
         const target = joinPath(path, item.name);
         useFsBulkOpStore.getState().setProgress({
@@ -389,17 +413,84 @@ export default function FileSystemScreen() {
           currentName: item.name,
           currentSize: item.size ?? null,
         });
+        // Generate a unique 64-bit op_id per item. Math.random() ×
+        // 2^53 is plenty of entropy for a session — the payload only
+        // needs uniqueness across the at-most-MAX_FS_OPS in-flight
+        // copies, not collision-resistance.
+        const opId = Math.floor(Math.random() * Number.MAX_SAFE_INTEGER);
+        useFsBulkOpStore.getState().setCurrentOpId(opId);
+        // Spawn a parallel poller that updates byte-progress in the
+        // store every 500 ms. The fsCopy/fsMove call below blocks
+        // for the full duration of the copy; without this the user
+        // would see no progress until the operation completes.
+        let pollerStopped = false;
+        const pollerDone = (async () => {
+          // Initial delay matches the engine's status-call cost so
+          // we don't spam an empty payload immediately.
+          await new Promise((r) => setTimeout(r, 250));
+          while (!pollerStopped) {
+            try {
+              const snap = await fsOpStatus(addr, opId);
+              useFsBulkOpStore
+                .getState()
+                .setCurrentBytesCopied(snap.bytes_copied);
+              // Also keep currentSize in sync with the payload's
+              // measured total — the directory case starts with
+              // size=null but the recursive walk knows the total.
+              if (
+                snap.total_bytes > 0 &&
+                useFsBulkOpStore.getState().currentSize !== snap.total_bytes
+              ) {
+                useFsBulkOpStore.getState().setProgress({
+                  done: useFsBulkOpStore.getState().done,
+                  currentPath: useFsBulkOpStore.getState().currentPath,
+                  currentName: useFsBulkOpStore.getState().currentName,
+                  currentSize: snap.total_bytes,
+                });
+                useFsBulkOpStore
+                  .getState()
+                  .setCurrentBytesCopied(snap.bytes_copied);
+              }
+            } catch {
+              // 404 from the engine means the op finished — break
+              // out so we don't keep polling. Other errors (network
+              // blip, transient mgmt-port stall) silently retry on
+              // the next tick.
+              break;
+            }
+            await new Promise((r) => setTimeout(r, 500));
+          }
+        })();
+        // Hook the Stop button: a separate watcher fires
+        // fsOpCancel as soon as the store's flag flips. Distinct
+        // from the between-items cancel check — this lets the
+        // current 28 GiB copy abort within ~one disk IO.
+        const cancelWatcher = (async () => {
+          while (!pollerStopped) {
+            if (useFsBulkOpStore.getState().cancelRequested) {
+              try {
+                await fsOpCancel(addr, opId);
+              } catch {
+                // Best effort — even if the cancel RPC fails, the
+                // payload's cp_rf will still complete the current
+                // file and the loop will exit between items.
+              }
+              break;
+            }
+            await new Promise((r) => setTimeout(r, 200));
+          }
+        })();
         try {
           if (op === "cut") {
             try {
-              await fsMove(addr, item.path, target);
+              await fsMove(addr, item.path, target, opId);
             } catch (e) {
               // Cross-filesystem move failure → fall back to copy + delete.
               // The payload emits "fs_move_cross_mount" for EXDEV; matching
               // on substring keeps us resilient to minor wording drift.
               const msg = e instanceof Error ? e.message : String(e);
               if (msg.includes("cross_mount") || msg.includes("EXDEV")) {
-                await fsCopy(addr, item.path, target);
+                await fsCopy(addr, item.path, target, opId);
                 try {
                   await fsDelete(addr, item.path);
                 } catch (delErr) {
@@ -409,7 +500,7 @@ export default function FileSystemScreen() {
                   duplicated.push(
                     `${item.name} (copied to ${target}, couldn't remove original: ${
                       delErr instanceof Error ? delErr.message : String(delErr)
-                    })`
+                    })`,
                   );
                 }
               } else {
@@ -417,12 +508,22 @@ export default function FileSystemScreen() {
               }
             }
           } else {
-            await fsCopy(addr, item.path, target);
+            await fsCopy(addr, item.path, target, opId);
           }
         } catch (e) {
-          errors.push(
-            `${item.name}: ${e instanceof Error ? e.message : String(e)}`
-          );
+          const msg = e instanceof Error ? e.message : String(e);
+          // The engine maps the payload's "fs_copy_cancelled" error
+          // to a `cancelled` message via HTTP 409. Don't push it
+          // into the errors list — the user already knows they
+          // cancelled, and a "cancelled" entry would look like a
+          // failure in the post-op summary.
+          if (!msg.includes("cancelled")) {
+            errors.push(`${item.name}: ${msg}`);
+          }
+        } finally {
+          pollerStopped = true;
+          await Promise.allSettled([pollerDone, cancelWatcher]);
+          useFsBulkOpStore.getState().setCurrentOpId(null);
         }
       }
     } finally {
@@ -543,6 +644,7 @@ export default function FileSystemScreen() {
 
   return (
     <div className="p-6">
+      {confirmDialogNode}
       <PageHeader
         icon={FolderTree}
         title={tr("file_system", undefined, "File System")}
@@ -997,6 +1099,25 @@ function BulkOpBanner({
         ? tr("fs_busy_moving", undefined, "Moving")
         : tr("fs_busy_copying", undefined, "Copying");
 
+  const cancelRequested = useFsBulkOpStore((s) => s.cancelRequested);
+  // Per-item byte progress fed by the paste-loop poller via
+  // FS_OP_STATUS. 0 for delete (no per-byte concept) and during
+  // the brief window between item-start and the first poll reply.
+  const currentBytesCopied = useFsBulkOpStore((s) => s.currentBytesCopied);
+  const itemPct =
+    currentSize !== null && currentSize > 0 && currentBytesCopied > 0
+      ? Math.min(100, (currentBytesCopied / currentSize) * 100)
+      : null;
+  // Item-level speed: bytes since this item started divided by
+  // elapsed time on this item. Approximation — uses the bulk-op
+  // started_at as the item's start, which is fine for a single-item
+  // paste (the user's PPSA09519.exfat case) and gives a low-side
+  // number for multi-item pastes (sums prior items into the elapsed).
+  const itemSpeed =
+    elapsedSec > 0 && currentBytesCopied > 0
+      ? currentBytesCopied / elapsedSec
+      : 0;
+
   return (
     <div className="mb-3 rounded-md border border-[var(--color-accent)] bg-[var(--color-surface-2)] p-3 text-xs">
       <div className="mb-2 flex items-center gap-2">
@@ -1010,16 +1131,70 @@ function BulkOpBanner({
           )}
           {" · "}
           {formatDuration(elapsedSec)}
+          {itemSpeed > 0 && ` · ${formatBytes(itemSpeed)}/s`}
         </span>
+        {/* Stop button now drives a real cancel: the loop fires
+            FS_OP_CANCEL via a side-watcher so the payload's cp_rf
+            bails within ~one 4 MiB buffer (sub-second on PS5
+            NVMe). The between-items check still applies for
+            delete (no per-byte cancel concept). */}
+        <button
+          type="button"
+          onClick={() => useFsBulkOpStore.getState().requestCancel()}
+          disabled={cancelRequested}
+          className="ml-auto rounded-md border border-[var(--color-border)] px-2 py-0.5 text-[10px] hover:bg-[var(--color-surface-3)] disabled:opacity-50"
+          title={tr(
+            "fs_bulk_stop_tooltip",
+            undefined,
+            op === "delete"
+              ? "Stop after the current item finishes"
+              : "Cancel the current copy and skip the rest",
+          )}
+        >
+          {cancelRequested
+            ? tr("fs_bulk_stopping", undefined, "Stopping…")
+            : tr("fs_bulk_stop", undefined, "Stop")}
+        </button>
       </div>
 
       {currentName && (
         <div className="mb-2 flex flex-wrap items-baseline gap-x-3 gap-y-0.5 font-mono text-[11px]">
           <span className="text-[var(--color-text)]">{currentName}</span>
-          {currentSize !== null && currentSize > 0 && (
+          {currentBytesCopied > 0 && currentSize !== null && currentSize > 0 ? (
+            <span className="text-[var(--color-muted)]">
+              {formatBytes(currentBytesCopied)} / {formatBytes(currentSize)}
+              {itemPct !== null && ` (${itemPct.toFixed(0)}%)`}
+            </span>
+          ) : currentSize !== null && currentSize > 0 ? (
             <span className="text-[var(--color-muted)]">
               {formatBytes(currentSize)}
             </span>
+          ) : null}
+        </div>
+      )}
+
+      {/* Per-item progress bar. Only renders when we have both bytes
+          and a total — avoids a misleading 0% bar while the first
+          FS_OP_STATUS reply is in flight. */}
+      {currentBytesCopied > 0 &&
+        currentSize !== null &&
+        currentSize > 0 &&
+        itemPct !== null && (
+          <div className="mb-2 h-1 overflow-hidden rounded-full bg-[var(--color-surface-3)]">
+            <div
+              className="h-full bg-[var(--color-accent)] transition-[width] duration-300"
+              style={{ width: `${itemPct}%` }}
+            />
+          </div>
+        )}
+
+      {cancelRequested && op === "delete" && (
+        // Delete has no per-byte cancel; explain why it's slower.
+        <div className="mb-2 rounded-md border border-[var(--color-warn)] bg-[var(--color-warn-soft)] p-2 text-[11px] text-[var(--color-warn)]">
+          {tr(
+            "fs_bulk_stop_explainer_delete",
+            { name: currentName },
+            `Waiting for the current item (${currentName}) to finish on the PS5 — fs_delete can't be interrupted mid-file. The next items in this batch will be skipped.`,
           )}
         </div>
       )}

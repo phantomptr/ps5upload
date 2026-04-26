@@ -19,10 +19,18 @@ export function ErrorCard({
   action?: React.ReactNode;
 }) {
   return (
-    <div className="flex items-start gap-2.5 rounded-lg border border-[var(--color-bad)] bg-[var(--color-bad-soft)] p-3 text-sm">
+    // role="alert" + aria-live="assertive" so screen readers announce
+    // the failure as soon as it appears — without it the user could
+    // sit on the screen with no signal that an action failed.
+    <div
+      role="alert"
+      aria-live="assertive"
+      className="flex items-start gap-2.5 rounded-lg border border-[var(--color-bad)] bg-[var(--color-bad-soft)] p-3 text-sm"
+    >
       <AlertTriangle
         size={14}
         className="mt-0.5 shrink-0 text-[var(--color-bad)]"
+        aria-hidden
       />
       <div className="min-w-0 flex-1">
         <div className="font-medium text-[var(--color-bad)]">{title}</div>
@@ -52,7 +60,13 @@ export function SuccessCard({
   action?: React.ReactNode;
 }) {
   return (
-    <div className="flex items-start gap-2.5 rounded-lg border border-[var(--color-good)] bg-[var(--color-good-soft)] p-3 text-sm">
+    // status + aria-live="polite": success messages are informative,
+    // not interruptions — they shouldn't cut off in-progress speech.
+    <div
+      role="status"
+      aria-live="polite"
+      className="flex items-start gap-2.5 rounded-lg border border-[var(--color-good)] bg-[var(--color-good-soft)] p-3 text-sm"
+    >
       <svg
         width={14}
         height={14}
@@ -92,10 +106,17 @@ export function WarningCard({
   action?: React.ReactNode;
 }) {
   return (
-    <div className="flex items-start gap-2.5 rounded-lg border border-[var(--color-warn)] bg-[var(--color-warn-soft)] p-3 text-sm">
+    // Warning is "heads up" rather than "this failed" — polite live
+    // region matches that intent.
+    <div
+      role="status"
+      aria-live="polite"
+      className="flex items-start gap-2.5 rounded-lg border border-[var(--color-warn)] bg-[var(--color-warn-soft)] p-3 text-sm"
+    >
       <AlertTriangle
         size={14}
         className="mt-0.5 shrink-0 text-[var(--color-warn)]"
+        aria-hidden
       />
       <div className="min-w-0 flex-1">
         <div className="font-medium text-[var(--color-warn)]">{title}</div>

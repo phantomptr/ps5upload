@@ -49,14 +49,33 @@ async fn post_json(url: &str, body: &JsonValue) -> Result<JsonValue, String> {
         .await
         .map_err(|e| format!("engine request failed: {e}"))?;
     let status = resp.status();
-    let parsed = resp
-        .json::<JsonValue>()
+    // Read the body first so error responses can include the engine's
+    // own diagnostic, and so a 4xx/5xx with an empty or non-JSON body
+    // doesn't collapse into "engine returned invalid JSON" — that
+    // message hides the real HTTP status the user needs to debug. Same
+    // pattern as get_json above.
+    let body_text = resp
+        .text()
         .await
-        .map_err(|e| format!("engine returned invalid JSON: {e}"))?;
+        .map_err(|e| format!("engine response body read failed: {e}"))?;
     if !status.is_success() {
-        return Err(format!("engine HTTP {status}: {}", parsed));
+        // Try to extract the engine's `{"error":"..."}` field for a
+        // cleaner message; fall back to the raw body text if it's not
+        // JSON-shaped.
+        let detail = serde_json::from_str::<JsonValue>(&body_text)
+            .ok()
+            .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(String::from))
+            .unwrap_or_else(|| {
+                if body_text.is_empty() {
+                    "(empty body)".to_string()
+                } else {
+                    body_text.clone()
+                }
+            });
+        return Err(format!("engine HTTP {status}: {detail}"));
     }
-    Ok(parsed)
+    serde_json::from_str::<JsonValue>(&body_text)
+        .map_err(|e| format!("engine returned invalid JSON: {e}"))
 }
 
 #[tauri::command]
@@ -196,6 +215,18 @@ pub struct FsMoveReq {
     pub addr: Option<String>,
     pub from: String,
     pub to: String,
+    /// Optional unique 64-bit id the client generates so it can poll
+    /// progress / cancel the in-flight copy. Forwarded to the engine
+    /// which forwards to the payload as the FS_COPY frame's trace_id.
+    /// Omit (or 0) for ops where progress/cancel isn't needed.
+    #[serde(default)]
+    pub op_id: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FsOpRefReq {
+    pub addr: Option<String>,
+    pub op_id: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -223,7 +254,12 @@ pub async fn ps5_fs_move(req: FsMoveReq) -> Result<JsonValue, String> {
     let url = format!("{base}/api/ps5/fs/move");
     post_json(
         &url,
-        &serde_json::json!({ "addr": req.addr, "from": req.from, "to": req.to }),
+        &serde_json::json!({
+            "addr": req.addr,
+            "from": req.from,
+            "to": req.to,
+            "op_id": req.op_id.unwrap_or(0),
+        }),
     )
     .await
 }
@@ -234,7 +270,43 @@ pub async fn ps5_fs_copy(req: FsMoveReq) -> Result<JsonValue, String> {
     let url = format!("{base}/api/ps5/fs/copy");
     post_json(
         &url,
-        &serde_json::json!({ "addr": req.addr, "from": req.from, "to": req.to }),
+        &serde_json::json!({
+            "addr": req.addr,
+            "from": req.from,
+            "to": req.to,
+            "op_id": req.op_id.unwrap_or(0),
+        }),
+    )
+    .await
+}
+
+/// Snapshot the in-flight FS op identified by `op_id`. Returns the
+/// payload's bytes_copied / total_bytes / cancel_requested so the
+/// client can drive a per-byte progress + speed indicator while the
+/// fs/copy call is still blocked. 404 from the engine surfaces as
+/// an error string here so callers can stop polling.
+#[tauri::command]
+pub async fn ps5_fs_op_status(req: FsOpRefReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let mut url = format!("{base}/api/ps5/fs/op-status?op_id={}", req.op_id);
+    if let Some(a) = req.addr {
+        url.push_str(&format!("&addr={}", urlencoding(&a)));
+    }
+    get_json(&url).await
+}
+
+/// Ask the payload to cancel the in-flight FS op identified by
+/// `op_id`. Returns `{ cancelled: bool }` — `false` means the op
+/// already finished (or was never running), which is fine from the
+/// client's perspective: the goal of "stop that copy" is met either
+/// way.
+#[tauri::command]
+pub async fn ps5_fs_op_cancel(req: FsOpRefReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/ps5/fs/op-cancel");
+    post_json(
+        &url,
+        &serde_json::json!({ "addr": req.addr, "op_id": req.op_id }),
     )
     .await
 }

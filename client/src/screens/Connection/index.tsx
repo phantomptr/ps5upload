@@ -53,19 +53,37 @@ type StepState = "idle" | "busy" | "ok" | "fail";
  */
 
 /** Pick a button label that matches the current send phase so the user
- *  sees explicit progress in the thing they just clicked. */
+ *  sees explicit progress in the thing they just clicked. Takes the
+ *  active `tr` translator so the labels render in the user's locale —
+ *  this is a pure helper but its outputs are user-facing. */
 function sendButtonLabel(
   state: StepState,
   msg: string,
   elapsedMs: number,
+  tr: (
+    key: string,
+    vars?: Record<string, string | number>,
+    fallback?: string,
+  ) => string,
 ): string {
-  if (state !== "busy") return state === "ok" ? "Resend payload" : "Send payload";
+  if (state !== "busy") {
+    return state === "ok"
+      ? tr("connection_send_resend", undefined, "Resend payload")
+      : tr("connection_send_send", undefined, "Send payload");
+  }
   const sec = Math.max(1, Math.round(elapsedMs / 1000));
   const m = (msg || "").toLowerCase();
-  if (m.includes("locating")) return `Locating ELF… (${sec}s)`;
-  if (m.includes("sending")) return `Sending to PS5… (${sec}s)`;
-  if (m.includes("waiting")) return `Waiting for payload… (${sec}s)`;
-  return `Working… (${sec}s)`;
+  if (m.includes("locating"))
+    return tr("connection_send_locating", { sec }, `Locating ELF… (${sec}s)`);
+  if (m.includes("sending"))
+    return tr("connection_send_sending", { sec }, `Sending to PS5… (${sec}s)`);
+  if (m.includes("waiting"))
+    return tr(
+      "connection_send_waiting",
+      { sec },
+      `Waiting for payload… (${sec}s)`,
+    );
+  return tr("connection_send_working", { sec }, `Working… (${sec}s)`);
 }
 
 function StepIcon({ state }: { state: StepState }) {
@@ -131,6 +149,7 @@ export default function ConnectionScreen() {
   const host = useConnectionStore((s) => s.host);
   const setHost = useConnectionStore((s) => s.setHost);
   const payloadStatus = useConnectionStore((s) => s.payloadStatus);
+  const payloadStatusHost = useConnectionStore((s) => s.payloadStatusHost);
   const storedStep1 = useConnectionStore((s) => s.step1);
   const storedStep1Msg = useConnectionStore((s) => s.step1Msg);
   const storedStep2 = useConnectionStore((s) => s.step2);
@@ -203,18 +222,28 @@ export default function ConnectionScreen() {
   // "ok" — user sees spinner forever while Send Payload from another
   // tab works just fine. Explicit settleStep2 handles both sides.
   useEffect(() => {
+    // Skip if the recorded payloadStatus is for a different host than
+    // the user is currently looking at — between the AppShell probe
+    // firing and store-write, the user may have typed a new IP. We
+    // don't want to label the new host with an "up" verdict that came
+    // from the previous one.
+    if (payloadStatusHost !== host) return;
     if (payloadStatus === "up") {
       if ((transientStep1 ?? storedStep1) !== "ok") {
-        settleStep1("ok", `Port ${PS5_LOADER_PORT} is open on ${host}`);
+        settleStep1("ok", tr(
+          "connection_port_open",
+          { port: PS5_LOADER_PORT, host },
+          `Port ${PS5_LOADER_PORT} is open on ${host}`,
+        ));
       }
       if ((transientStep2 ?? storedStep2) !== "ok") {
-        settleStep2("ok", `Payload is running on ${host}`);
+        settleStep2("ok", tr("connection_payload_running", { host }, `Payload is running on ${host}`));
       }
     } else if (payloadStatus === "down" && storedStep2 === "ok") {
-      setStoredStep2("idle", "Payload not loaded yet");
+      setStoredStep2("idle", tr("connection_payload_not_loaded", undefined, "Payload not loaded yet"));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [payloadStatus, host]);
+  }, [payloadStatus, payloadStatusHost, host]);
 
   const flashStep1 = (s: StepState, msg: string) => {
     setTransientStep1(s);
@@ -241,7 +270,7 @@ export default function ConnectionScreen() {
       setTransientStep2(null);
       setTransientStep2Msg(null);
     } else {
-      setStoredStep2("idle", "Payload not loaded yet");
+      setStoredStep2("idle", tr("connection_payload_not_loaded", undefined, "Payload not loaded yet"));
       setTransientStep2(s);
       setTransientStep2Msg(msg);
     }
@@ -253,12 +282,16 @@ export default function ConnectionScreen() {
       return;
     }
     flashStep1("busy", `Checking ${host}:${PS5_LOADER_PORT}…`);
-    settleStep2("idle", "Payload not loaded yet");
+    settleStep2("idle", tr("connection_payload_not_loaded", undefined, "Payload not loaded yet"));
     setTransientStep2(null);
     setTransientStep2Msg(null);
     const ok = await portCheck(host, PS5_LOADER_PORT);
     if (ok) {
-      settleStep1("ok", `Port ${PS5_LOADER_PORT} is open on ${host}`);
+      settleStep1("ok", tr(
+          "connection_port_open",
+          { port: PS5_LOADER_PORT, host },
+          `Port ${PS5_LOADER_PORT} is open on ${host}`,
+        ));
     } else {
       settleStep1(
         "fail",
@@ -298,7 +331,7 @@ export default function ConnectionScreen() {
       onResolved: (result) => {
         pollHandle.current = null;
         if (result === "ok") {
-          settleStep2("ok", `Payload is running on ${host}`);
+          settleStep2("ok", tr("connection_payload_running", { host }, `Payload is running on ${host}`));
         } else {
           settleStep2(
             "fail",
@@ -337,7 +370,7 @@ export default function ConnectionScreen() {
               onChange={(e) => {
                 setHost(e.target.value);
                 settleStep1("idle", "Enter your PS5's address and check");
-                settleStep2("idle", "Payload not loaded yet");
+                settleStep2("idle", tr("connection_payload_not_loaded", undefined, "Payload not loaded yet"));
               }}
               onKeyDown={(e) => {
                 if (e.key === "Enter") handleCheck();
@@ -393,7 +426,7 @@ export default function ConnectionScreen() {
               disabled={step2 === "busy"}
               loading={step2 === "busy"}
             >
-              {sendButtonLabel(step2, step2Msg, elapsedMs)}
+              {sendButtonLabel(step2, step2Msg, elapsedMs, tr)}
             </Button>
             {step2 === "busy" && (
               <p className="mt-3 text-xs text-[var(--color-muted)]">
@@ -452,6 +485,7 @@ export default function ConnectionScreen() {
  * where the build-time copy lives.
  */
 function BundledPayloadBanner() {
+  const tr = useTr();
   const [info, setInfo] = useState<BundledPayloadInfo | null>(null);
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => {
@@ -483,7 +517,7 @@ function BundledPayloadBanner() {
         <span className="font-semibold text-[var(--color-text)]">{basename}</span>{" "}
         · {kb} KB
       </span>
-      <span>built: {built}</span>
+      <span>{tr("connection_built", { date: built }, `built: ${built}`)}</span>
     </div>
   );
 }
@@ -503,6 +537,7 @@ function BundledPayloadBanner() {
  * one-line surface keeps the signal and drops the surface area.
  */
 function CompanionStrip({ host }: { host: string }) {
+  const tr = useTr();
   const [rows, setRows] = useState<CompanionStatus[] | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -552,7 +587,9 @@ function CompanionStrip({ host }: { host: string }) {
   if (!rows) {
     return (
       <div className="rounded-md border border-dashed border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-xs text-[var(--color-muted)]">
-        {loading ? "Probing scene tools…" : "Scene tools: —"}
+        {loading
+          ? tr("connection_scene_probing", undefined, "Probing scene tools…")
+          : tr("connection_scene_idle", undefined, "Scene tools: —")}
       </div>
     );
   }
@@ -560,18 +597,27 @@ function CompanionStrip({ host }: { host: string }) {
   return (
     <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2">
       <div className="mb-1.5 flex items-center justify-between text-[10px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
-        <span>Scene tools on {host}</span>
+        <span>
+          {tr(
+            "connection_scene_header",
+            { host },
+            `Scene tools on ${host}`,
+          )}
+        </span>
         {loading && (
           <span className="inline-flex items-center gap-1">
             <Loader2 size={10} className="animate-spin" />
-            refreshing
+            {tr("connection_scene_refreshing", undefined, "refreshing")}
           </span>
         )}
       </div>
       {liveRows.length === 0 ? (
         <div className="text-xs text-[var(--color-muted)]">
-          None detected. Companion tools (etaHEN, ftpsrv) will appear
-          here once they're loaded.
+          {tr(
+            "connection_scene_none",
+            undefined,
+            "None detected. Companion tools (etaHEN, ftpsrv) will appear here once they're loaded.",
+          )}
         </div>
       ) : (
         <div className="flex flex-wrap items-center gap-3 text-xs">
@@ -709,13 +755,17 @@ function VersionBlock({ onResend }: { onResend?: () => void }) {
         )}
         {ps5Firmware && (
           <>
-            <dt className="text-[var(--color-muted)]">PS5 firmware</dt>
+            <dt className="text-[var(--color-muted)]">
+              {tr("connection_ps5_firmware", undefined, "PS5 firmware")}
+            </dt>
             <dd>{ps5Firmware}</dd>
           </>
         )}
         {ps5Kernel && (
           <>
-            <dt className="text-[var(--color-muted)]">Kernel</dt>
+            <dt className="text-[var(--color-muted)]">
+              {tr("connection_kernel", undefined, "Kernel")}
+            </dt>
             <dd className="break-all text-[var(--color-muted)]">
               {ps5Kernel}
             </dd>

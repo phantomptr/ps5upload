@@ -38,6 +38,12 @@ export interface ConnectionState {
   engineStatus: ProbeStatus;
   /** Our PS5-side payload runtime — transfer, mount, FS ops, hardware info. */
   payloadStatus: ProbeStatus;
+  /** The host the most recent payload probe ran against. Allows
+   *  consumers to ignore a stale `payloadStatus` from a previous host
+   *  when the user has just typed a new IP — the AppShell probe
+   *  re-fires on host change but there is a brief window where the
+   *  prior probe's "up" result coexists with the new host string. */
+  payloadStatusHost: string | null;
   /** Version string the payload reports over STATUS. null = payload not
    *  reachable, or running a pre-2.1 build that doesn't report version. */
   payloadVersion: string | null;
@@ -56,7 +62,11 @@ export interface ConnectionState {
     patch: Partial<
       Pick<
         ConnectionState,
-        "payloadStatus" | "engineStatus" | "payloadVersion" | "ps5Kernel"
+        | "payloadStatus"
+        | "payloadStatusHost"
+        | "engineStatus"
+        | "payloadVersion"
+        | "ps5Kernel"
       >
     >
   ) => void;
@@ -68,6 +78,7 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   host: "192.168.137.2",
   engineStatus: "unknown",
   payloadStatus: "unknown",
+  payloadStatusHost: null,
   payloadVersion: null,
   ps5Kernel: null,
   step1: "idle",

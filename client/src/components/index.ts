@@ -9,3 +9,4 @@ export { Card } from "./Card";
 export { Button } from "./Button";
 export type { ButtonProps } from "./Button";
 export { MarkdownView } from "./MarkdownView";
+export { useConfirm, type ConfirmOptions } from "./ConfirmDialog";
