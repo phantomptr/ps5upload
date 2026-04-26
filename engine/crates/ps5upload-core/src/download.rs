@@ -1,0 +1,287 @@
+//! PS5 → host download helpers.
+//!
+//! Mirror image of the FTX2 upload path: walk a remote file or
+//! directory, pull each file via chunked FS_READ on the management
+//! port, write to a local destination directory. Built on top of the
+//! existing `fs_ops::list_dir` + `fs_ops::fs_read` helpers — no new
+//! payload-side protocol needed.
+//!
+//! Limitations vs upload:
+//! - Single management port, single connection per FS_READ → no
+//!   pipelining. Throughput is RTT × chunk-size / second; on LAN with
+//!   2 MiB chunks, that's ~250-500 MiB/s realistic, much slower than
+//!   the FTX2 upload path's pipelined 32 MiB shards.
+//! - No resume / no per-shard digest. If the connection drops mid-
+//!   download, the partial local file is retained but the next attempt
+//!   starts over from offset 0.
+//!
+//! These limitations are acceptable for the Library + FileSystem
+//! "save a copy locally" use case. A streaming/pipelined download
+//! protocol is future work if multi-GB game-image downloads become a
+//! routine workflow.
+
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+
+use anyhow::{Context, Result};
+
+use crate::fs_ops::{fs_read, list_dir, DirEntry, ListDirOptions};
+
+/// Largest chunk we ask the payload for in one FS_READ. Matches the
+/// payload's compile-time `FS_READ_MAX_BYTES` (2 MiB) — asking for
+/// more is silently truncated, asking for less just makes more round
+/// trips. Tracks the payload constant; bump together if the payload's
+/// cap ever changes.
+pub const DOWNLOAD_CHUNK_SIZE: u64 = 2 * 1024 * 1024;
+
+/// One file the host needs to pull. `rel_path` is relative to the
+/// download root (the source path the user picked). Built by
+/// `enumerate_download_set` and consumed by the per-file copier.
+#[derive(Debug, Clone)]
+pub struct DownloadEntry {
+    pub remote_path: String,
+    pub rel_path: String,
+    pub size: u64,
+}
+
+/// What the user picked to download. Folder = walk; file = single
+/// entry. The shape is decided by the caller (Library/FileSystem
+/// already knows whether the row is a file or a directory) so we
+/// avoid a redundant remote stat round-trip just to classify.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DownloadKind {
+    File,
+    Folder,
+}
+
+/// Build the download manifest. For a file this is a single entry;
+/// for a folder this walks the remote tree (depth-first) and returns
+/// every regular file under it.
+///
+/// Errors propagate from the underlying `list_dir` calls — a single
+/// permission denied surfaces here rather than in the middle of the
+/// per-file loop, so the UI can render "couldn't enumerate
+/// `<subdir>`" before any bytes have moved.
+pub fn enumerate_download_set(
+    addr: &str,
+    src_path: &str,
+    kind: DownloadKind,
+) -> Result<Vec<DownloadEntry>> {
+    let basename = remote_basename(src_path);
+    let mut out = Vec::new();
+    match kind {
+        DownloadKind::File => {
+            // For a single file the "rel_path" is just its basename
+            // — that becomes `<dest_dir>/<basename>` on the host. We
+            // need the size, which the parent's list_dir hands us
+            // for free.
+            let parent = remote_parent(src_path);
+            let listing = list_dir(
+                addr,
+                &parent,
+                ListDirOptions {
+                    offset: 0,
+                    limit: u64::MAX,
+                },
+            )
+            .with_context(|| format!("list_dir {parent} (parent of {src_path})"))?;
+            let entry = listing
+                .entries
+                .into_iter()
+                .find(|e| e.name == basename)
+                .ok_or_else(|| anyhow::anyhow!("source file not found: {src_path}"))?;
+            if entry.kind != "file" {
+                anyhow::bail!(
+                    "source is not a regular file (kind={}): {src_path}",
+                    entry.kind
+                );
+            }
+            out.push(DownloadEntry {
+                remote_path: src_path.to_string(),
+                rel_path: basename,
+                size: entry.size,
+            });
+        }
+        DownloadKind::Folder => {
+            walk_remote_dir(addr, src_path, &basename, &mut out)?;
+        }
+    }
+    Ok(out)
+}
+
+fn walk_remote_dir(
+    addr: &str,
+    remote_dir: &str,
+    rel_prefix: &str,
+    out: &mut Vec<DownloadEntry>,
+) -> Result<()> {
+    let listing = list_dir(
+        addr,
+        remote_dir,
+        ListDirOptions {
+            offset: 0,
+            limit: u64::MAX,
+        },
+    )
+    .with_context(|| format!("list_dir {remote_dir}"))?;
+    // Sort for stable, predictable order — matches the engine's
+    // upload `walk_plan` so users see the same ordering on both
+    // directions of transfer.
+    let mut entries: Vec<DirEntry> = listing.entries;
+    entries.sort_by(|a, b| a.name.cmp(&b.name));
+    for entry in entries {
+        let child_rel = if rel_prefix.is_empty() {
+            entry.name.clone()
+        } else {
+            format!("{rel_prefix}/{}", entry.name)
+        };
+        let child_remote = format!("{}/{}", remote_dir.trim_end_matches('/'), entry.name);
+        match entry.kind.as_str() {
+            "dir" => walk_remote_dir(addr, &child_remote, &child_rel, out)?,
+            "file" => out.push(DownloadEntry {
+                remote_path: child_remote,
+                rel_path: child_rel,
+                size: entry.size,
+            }),
+            // Symlinks + special files are skipped — we only ship
+            // regular file bytes. A future pass could surface them
+            // as warnings the UI displays alongside the manifest.
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Pull every entry in `manifest` into `dest_dir`. Creates intermediate
+/// directories as needed. The progress counter (when supplied) is
+/// `fetch_add`-ed by the caller's preferred unit (we add exact
+/// byte-counts of each chunk just received, so the host-side UI can
+/// drive a real-time speed/ETA readout).
+///
+/// Per-file flow:
+///   1. Open `<dest_dir>/<rel_path>` for writing (truncating any
+///      existing file — same overwrite semantics as upload).
+///   2. Loop: fs_read(remote_path, offset, CHUNK) → write to file →
+///      offset += received_bytes.
+///   3. Stop when received_bytes < CHUNK (EOF, since the payload's
+///      FS_READ returns short reads only at end-of-file or when the
+///      cap is hit; we ask for exactly the cap so a short read
+///      reliably means EOF).
+///
+/// Aborts on the first error — the partial output for the failing
+/// file is retained on disk for inspection rather than silently
+/// cleaned up. The UI can surface the failure with both the source
+/// path and the partial-output path so the user can decide whether
+/// to delete or retry.
+pub fn download_to_local(
+    addr: &str,
+    dest_dir: &Path,
+    manifest: &[DownloadEntry],
+    progress_bytes: Option<&Arc<AtomicU64>>,
+) -> Result<u64> {
+    use std::fs;
+    use std::io::Write;
+
+    let mut total_written = 0u64;
+    for entry in manifest {
+        let local_path = local_dest_for(dest_dir, &entry.rel_path);
+        if let Some(parent) = local_path.parent() {
+            fs::create_dir_all(parent).with_context(|| format!("mkdir {}", parent.display()))?;
+        }
+        let mut file = fs::File::create(&local_path)
+            .with_context(|| format!("create {}", local_path.display()))?;
+
+        let mut offset: u64 = 0;
+        loop {
+            let bytes = fs_read(addr, &entry.remote_path, offset, DOWNLOAD_CHUNK_SIZE)
+                .with_context(|| format!("fs_read {} @ {offset}", entry.remote_path))?;
+            if bytes.is_empty() {
+                break;
+            }
+            file.write_all(&bytes)
+                .with_context(|| format!("write {}", local_path.display()))?;
+            let n = bytes.len() as u64;
+            offset += n;
+            total_written += n;
+            if let Some(counter) = progress_bytes {
+                counter.fetch_add(n, Ordering::Relaxed);
+            }
+            // Short read → EOF. The payload's FS_READ caps at
+            // FS_READ_MAX_BYTES; asking for exactly that cap means
+            // any reply smaller than the cap can only mean we hit
+            // end-of-file.
+            if (bytes.len() as u64) < DOWNLOAD_CHUNK_SIZE {
+                break;
+            }
+        }
+    }
+    Ok(total_written)
+}
+
+fn remote_basename(path: &str) -> String {
+    path.trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or(path)
+        .to_string()
+}
+
+fn remote_parent(path: &str) -> String {
+    let trimmed = path.trim_end_matches('/');
+    match trimmed.rsplit_once('/') {
+        Some((parent, _)) if !parent.is_empty() => parent.to_string(),
+        // Root file (`/foo`) → parent is "/"; the payload accepts
+        // FS_LIST_DIR("/") so this is fine.
+        _ => "/".to_string(),
+    }
+}
+
+fn local_dest_for(dest_dir: &Path, rel_path: &str) -> PathBuf {
+    let mut out = PathBuf::from(dest_dir);
+    // Forward-slash relpaths from PS5; convert to host separators
+    // when pushing components so Windows produces `\` paths.
+    for part in rel_path.split('/') {
+        if !part.is_empty() {
+            out.push(part);
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remote_basename_handles_trailing_slash() {
+        assert_eq!(remote_basename("/data/foo/bar"), "bar");
+        assert_eq!(remote_basename("/data/foo/bar/"), "bar");
+        assert_eq!(remote_basename("standalone"), "standalone");
+    }
+
+    #[test]
+    fn remote_parent_walks_up_one() {
+        assert_eq!(remote_parent("/data/foo/bar"), "/data/foo");
+        assert_eq!(remote_parent("/data/foo/bar/"), "/data/foo");
+        assert_eq!(remote_parent("/foo"), "/");
+    }
+
+    #[test]
+    fn local_dest_uses_host_separators() {
+        let base = PathBuf::from("/host/dest");
+        let resolved = local_dest_for(&base, "sub/dir/file.bin");
+        // Use components rather than string compare so this passes
+        // identically on Windows + Unix.
+        let parts: Vec<_> = resolved
+            .components()
+            .filter_map(|c| match c {
+                std::path::Component::Normal(s) => Some(s.to_string_lossy().to_string()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(parts.last().unwrap(), "file.bin");
+        assert!(parts.contains(&"sub".to_string()));
+        assert!(parts.contains(&"dir".to_string()));
+    }
+}

@@ -63,6 +63,7 @@ pub fn run() {
             commands::transfer_file,
             commands::transfer_dir,
             commands::transfer_dir_reconcile,
+            commands::transfer_download,
             commands::ps5_fs_delete,
             commands::ps5_fs_move,
             commands::ps5_fs_copy,
