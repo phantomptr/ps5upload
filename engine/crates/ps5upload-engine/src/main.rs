@@ -2513,8 +2513,65 @@ async fn list_jobs(State(state): State<AppState>) -> impl IntoResponse {
 
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
+/// Spawn the parent-watch thread when running under the desktop shell.
+///
+/// **Why:** the engine binds 19113. If the parent (Tauri shell) dies
+/// abruptly — taskkill /F, segfault, panic, OOM, kernel kill, power
+/// loss recovery — `kill_on_drop(true)` on the parent side never
+/// fires (no `Drop` runs on a crashed process), and the engine is
+/// orphaned holding the port. Next launch can't bind 19113 and the
+/// user is stuck until they manually kill the orphan.
+///
+/// **How:** the parent spawns us with `Stdio::piped()` for stdin and
+/// holds the write end; the OS guarantees that handle is closed when
+/// the parent process dies, however it dies. We park a thread on a
+/// blocking `stdin().read()`. When read returns Ok(0) (EOF), the
+/// parent is gone — exit immediately. No FFI, no per-OS code, no env
+/// crates needed. Works the same on Linux, macOS, Windows.
+///
+/// **Gating:** opt-in via `PS5UPLOAD_PARENT_WATCH=1` so a developer
+/// running the engine standalone (`cargo run -p ps5upload-engine`)
+/// doesn't get auto-killed when their stdin closes (e.g. piping a
+/// file in, or running headless under nohup).
+fn spawn_parent_watcher() {
+    if std::env::var("PS5UPLOAD_PARENT_WATCH").as_deref() != Ok("1") {
+        return;
+    }
+    std::thread::spawn(|| {
+        use std::io::Read;
+        // Single-byte read in a loop: any data the parent sends is
+        // ignored, but a 0-byte return means EOF (parent's pipe write
+        // end was closed → parent died, however that happened).
+        let mut buf = [0u8; 64];
+        let mut stdin = std::io::stdin().lock();
+        loop {
+            match stdin.read(&mut buf) {
+                Ok(0) => {
+                    eprintln!(
+                        "[engine] parent process died (stdin EOF); exiting to release :19113",
+                    );
+                    std::process::exit(0);
+                }
+                Ok(_) => continue,
+                Err(e) => {
+                    // A read error on a piped stdin (broken pipe,
+                    // bad file descriptor) is essentially the same
+                    // signal — the parent's end of the pipe is gone.
+                    // Don't loop on the error; exit so we release the
+                    // port instead of becoming a zombie process.
+                    eprintln!(
+                        "[engine] parent-watch stdin read error: {e}; exiting to release :19113",
+                    );
+                    std::process::exit(0);
+                }
+            }
+        }
+    });
+}
+
 #[tokio::main]
 async fn main() {
+    spawn_parent_watcher();
     // Route ps5upload-core's log stream into the same ring the engine's
     // own logs land in, so the renderer's Log tab sees *both* sources
     // (reconcile per-parent progress, transfer retries, etc.) without
@@ -2580,7 +2637,17 @@ async fn main() {
         // tauri://localhost) or any local script (`curl`, tests,
         // smoke-hardware.mjs). Permissive CORS is fine here; there's no
         // real XSRF surface to protect on a localhost-bound service.
-        .layer(tower_http::cors::CorsLayer::permissive());
+        .layer(tower_http::cors::CorsLayer::permissive())
+        // Explicit body-size cap. Axum's default DefaultBodyLimit is
+        // 2 MiB, which is borderline for a TransferFileListReq carrying
+        // tens of thousands of file paths and could silently change
+        // with an axum upgrade. Setting it explicitly here documents
+        // intent and protects against pathological local input from
+        // OOMing the engine. 64 MiB is generous enough for our largest
+        // legitimate payload (a 100k-entry file list with mid-length
+        // paths is well under 30 MiB encoded JSON) and small enough
+        // that a runaway request can't blow up RAM on a 4 GB box.
+        .layer(axum::extract::DefaultBodyLimit::max(64 * 1024 * 1024));
 
     let bind = format!("127.0.0.1:{port}");
     println!("[ps5upload-engine] listening on http://{bind}  (ps5={ps5_addr})");
