@@ -38,19 +38,35 @@ export function defaultMoveSubpath(entryPath: string, volume: string): string {
   return i === -1 ? "" : rest.slice(0, i);
 }
 
+/** The trailing basename of `sourcePath` — the default "name" the
+ *  Move modal proposes for the destination. Exported so the modal
+ *  can prefill its rename input with exactly the same rule the
+ *  resolver applies when no override is supplied. */
+export function sourceBasename(sourcePath: string): string {
+  return sourcePath.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "";
+}
+
 /** Compose the final destination path the move will produce.
- *  Always appends the source basename so the entry keeps its name in
- *  the new location — same rule the upload screen uses for "one
- *  subfolder per title." */
+ *
+ *  By default appends the source basename so the entry keeps its
+ *  name in the new location (same "one subfolder per title" rule
+ *  the upload screen uses). When `customName` is a non-empty string,
+ *  it replaces the basename — letting the user rename during the
+ *  move (`/data/foo` → `/mnt/ext1/games/Foo Renamed`). The override
+ *  is normalised: leading/trailing slashes stripped, embedded `/`
+ *  rejected at the modal level so a single-level rename can't
+ *  accidentally jump dirs. */
 export function resolveMoveDestination(
   volume: string,
   subpath: string,
   sourcePath: string,
+  customName?: string,
 ): string {
   const v = volume.replace(/\/+$/, "");
   const sub = subpath.replace(/^\/+|\/+$/g, "");
   const root = sub ? `${v}/${sub}` : v;
-  const name = sourcePath.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "";
+  const overridden = (customName ?? "").trim().replace(/^\/+|\/+$/g, "");
+  const name = overridden.length > 0 ? overridden : sourceBasename(sourcePath);
   return name ? `${root}/${name}` : root;
 }
 
@@ -59,4 +75,15 @@ export function resolveMoveDestination(
 export function isMoveNoop(sourcePath: string, destination: string): boolean {
   const norm = (p: string) => p.replace(/\/+$/, "");
   return norm(sourcePath) === norm(destination);
+}
+
+/** True when a user-typed name is invalid for use as a single
+ *  destination folder/file segment. Surface as a modal warning so
+ *  users don't accidentally try to embed a slash and end up with
+ *  weird paths or a payload-side rejection. */
+export function isInvalidName(name: string): boolean {
+  if (name.length === 0) return false; // empty is OK; falls back to source basename
+  if (/[\\/]/.test(name)) return true;
+  if (name === "." || name === "..") return true;
+  return false;
 }

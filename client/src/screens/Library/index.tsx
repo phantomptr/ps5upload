@@ -31,8 +31,10 @@ import {
 import {
   defaultMoveSubpath,
   detectSourceVolume,
+  isInvalidName,
   isMoveNoop,
   resolveMoveDestination,
+  sourceBasename,
 } from "../../lib/moveTarget";
 import { useLibraryStore } from "../../state/library";
 import { useElapsed } from "../../lib/useElapsed";
@@ -706,8 +708,17 @@ function MoveModal({
   const [subpath, setSubpath] = useState<string>(() =>
     defaultMoveSubpath(entry.path, initialVolume),
   );
-  const resolved = resolveMoveDestination(volume, subpath, entry.path);
+  const [customName, setCustomName] = useState<string>(() =>
+    sourceBasename(entry.path),
+  );
+  const resolved = resolveMoveDestination(
+    volume,
+    subpath,
+    entry.path,
+    customName,
+  );
   const noop = isMoveNoop(entry.path, resolved);
+  const nameInvalid = isInvalidName(customName);
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
@@ -761,6 +772,38 @@ function MoveModal({
           />
         </div>
 
+        {/* Optional rename — defaults to the source basename so a
+            plain "move to a different folder" is still one click.
+            Editing this is a destination-side rename: useful for
+            de-duplicating titles already present in the destination,
+            or for normalising long auto-generated dump folder names
+            into something readable. Embedded slashes are rejected
+            below to keep this a single-segment rename — if a user
+            really wants to inject a deeper subpath, they can put it
+            in the subpath field above. */}
+        <label className="mb-2 block text-[10px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+          {tr("library_move_modal_name", undefined, "Name (optional rename)")}
+        </label>
+        <div className="mb-3">
+          <input
+            value={customName}
+            onChange={(e) => setCustomName(e.target.value)}
+            placeholder={sourceBasename(entry.path)}
+            className={`w-full rounded-md border bg-[var(--color-surface)] px-3 py-1.5 text-sm ${
+              nameInvalid
+                ? "border-[var(--color-bad)]"
+                : "border-[var(--color-border)]"
+            }`}
+          />
+          <p className="mt-1 text-[10px] text-[var(--color-muted)]">
+            {tr(
+              "library_move_modal_name_hint",
+              { default: sourceBasename(entry.path) },
+              `Leave blank or matching "${sourceBasename(entry.path)}" to keep the original name. No slashes.`,
+            )}
+          </p>
+        </div>
+
         <div className="mb-4 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-xs">
           <div className="text-[10px] uppercase tracking-wide text-[var(--color-muted)]">
             {tr(
@@ -772,12 +815,22 @@ function MoveModal({
           <div className="mt-0.5 break-all font-mono">{resolved}</div>
         </div>
 
-        {noop && (
+        {nameInvalid && (
+          <div className="mb-3 rounded-md border border-[var(--color-bad)] bg-[var(--color-surface)] p-2 text-xs text-[var(--color-bad)]">
+            {tr(
+              "library_move_modal_name_invalid",
+              undefined,
+              "Name can't contain / or \\ and can't be \".\" or \"..\". Use the subpath field above to nest into a folder.",
+            )}
+          </div>
+        )}
+
+        {noop && !nameInvalid && (
           <div className="mb-3 rounded-md border border-[var(--color-warn)] bg-[var(--color-surface)] p-2 text-xs text-[var(--color-warn)]">
             {tr(
               "library_move_modal_noop",
               undefined,
-              "Source and destination are the same — pick a different folder.",
+              "Source and destination are the same — pick a different folder or change the name.",
             )}
           </div>
         )}
@@ -790,7 +843,7 @@ function MoveModal({
             variant="primary"
             size="sm"
             onClick={() => onConfirm(resolved)}
-            disabled={noop || volume === ""}
+            disabled={noop || nameInvalid || volume === ""}
           >
             {tr("library_move_modal_run", undefined, "Move")}
           </Button>
