@@ -1047,10 +1047,29 @@ async fn transfer_file_handler(
 
     let job_id = Uuid::new_v4();
     let started_at_ms = now_ms();
-    // Pre-stat the source so Running state has an honest total_bytes from
-    // the first tick. The send path streams shard-sized reads later; this
-    // metadata read is only for progress/UI setup.
-    let total_bytes = std::fs::metadata(&req.src).map(|m| m.len()).unwrap_or(0);
+    // Pre-stat the source — used both for the progress-bar denominator
+    // and as a fail-fast check before we accept the job. Previously the
+    // metadata error was silently swallowed (`unwrap_or(0)`), so a
+    // missing source produced "Running, 0 bytes total" for several
+    // seconds before the actual transfer attempt failed. Returning
+    // 400 here surfaces the user error immediately at the API level.
+    let total_bytes = match std::fs::metadata(&req.src) {
+        Ok(m) if m.is_file() => m.len(),
+        Ok(_) => {
+            return json_err(
+                StatusCode::BAD_REQUEST,
+                format!("source is not a regular file: {}", req.src),
+            )
+            .into_response();
+        }
+        Err(e) => {
+            return json_err(
+                StatusCode::BAD_REQUEST,
+                format!("cannot read source {}: {e}", req.src),
+            )
+            .into_response();
+        }
+    };
     let src_basename = std::path::Path::new(&req.src)
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -1461,6 +1480,19 @@ async fn transfer_download_handler(
             .into_response();
         }
     };
+    // Reject malformed src_paths up-front. Without this check, a "/"
+    // or empty source produced "<dest>/download" with the dest
+    // basename derivation falling through to the unwrap_or default.
+    // Better to surface the user's bad input now than silently
+    // produce a confusingly-named output.
+    let trimmed_src = req.src_path.trim_end_matches('/');
+    if trimmed_src.is_empty() {
+        return json_err(StatusCode::BAD_REQUEST, "src_path cannot be empty or '/'")
+            .into_response();
+    }
+    if req.dest_dir.trim().is_empty() {
+        return json_err(StatusCode::BAD_REQUEST, "dest_dir cannot be empty").into_response();
+    }
 
     let job_id = Uuid::new_v4();
     let started_at_ms = now_ms();
@@ -1473,7 +1505,7 @@ async fn transfer_download_handler(
     // than silently returning an empty manifest.
     let src_path_clone = req.src_path.clone();
     let mgmt_addr_for_enum = mgmt_addr.clone();
-    let manifest = match tokio::task::spawn_blocking(move || {
+    let plan = match tokio::task::spawn_blocking(move || {
         enumerate_download_set(&mgmt_addr_for_enum, &src_path_clone, kind)
     })
     .await
@@ -1484,6 +1516,31 @@ async fn transfer_download_handler(
             return json_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
         }
     };
+    let manifest = plan.manifest;
+    let skipped_count = plan.skipped.len() as u64;
+    if skipped_count > 0 {
+        // Log skipped non-regular entries so users grepping engine.log
+        // can see exactly which symlinks/special files weren't pulled.
+        // Cap the log spam — millions of skips on a pathological tree
+        // shouldn't fill the log file.
+        let preview: Vec<_> = plan
+            .skipped
+            .iter()
+            .take(20)
+            .map(|s| format!("  {} ({})", s.remote_path, s.kind))
+            .collect();
+        crate::log_warn!(
+            "download: skipped {} non-regular entries (only regular files are pulled). First {}:\n{}{}",
+            skipped_count,
+            preview.len(),
+            preview.join("\n"),
+            if plan.skipped.len() > preview.len() {
+                format!("\n  … and {} more", plan.skipped.len() - preview.len())
+            } else {
+                String::new()
+            },
+        );
+    }
     let total_bytes: u64 = manifest.iter().map(|e| e.size).sum();
     let files: Vec<PlannedFile> = manifest
         .iter()
@@ -1528,15 +1585,14 @@ async fn transfer_download_handler(
     let dest_dir = std::path::PathBuf::from(req.dest_dir);
     // Append the remote basename so a single source produces a
     // single named output even when the user picked a parent dir
-    // ("save to ~/Downloads" → "~/Downloads/MyGame").
-    let basename = req
-        .src_path
-        .trim_end_matches('/')
+    // ("save to ~/Downloads" → "~/Downloads/MyGame"). The empty/
+    // root-only check above guarantees `trimmed_src` and the rsplit
+    // are non-empty, so the unwrap is safe.
+    let basename = trimmed_src
         .rsplit('/')
         .next()
-        .unwrap_or("download")
-        .to_string();
-    let dest_root = dest_dir.join(&basename);
+        .expect("src_path emptiness already validated");
+    let dest_root = dest_dir.join(basename);
 
     tokio::task::spawn_blocking(move || {
         let result = download_to_local(&mgmt_addr, &dest_root, &manifest, Some(&progress));

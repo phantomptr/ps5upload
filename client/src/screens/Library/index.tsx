@@ -95,9 +95,21 @@ export default function LibraryScreen() {
     setError(null);
     try {
       const addr = `${host}:${PS5_PAYLOAD_PORT}`;
+      // Volume probe failure is non-fatal for the library scan
+      // itself (the Move modal degrades to "no destinations
+      // available" instead of blocking the whole screen), but we
+      // still log so diagnosis is possible. Without the log, a
+      // transient mgmt-port timeout looked indistinguishable from
+      // "no drives attached" — same empty UI, no breadcrumb.
       const [result, volumes] = await Promise.all([
         scanLibrary(addr),
-        fetchVolumes(addr).catch(() => []),
+        fetchVolumes(addr).catch((e) => {
+          console.warn(
+            "[library] volume probe failed; Move modal will offer no destinations:",
+            e,
+          );
+          return [];
+        }),
       ]);
       const next = new Map<string, string>();
       for (const v of volumes) {
@@ -345,17 +357,29 @@ function LibraryRow({
   // Metadata fetch: skipped for disk images (single file, no sce_sys
   // inside) and for generic "folder" kind under non-game scopes.
   // Cancellation guard prevents a late response from overwriting state
-  // after the row unmounts or the host changes. Errors swallowed —
-  // fetchGameMeta already returns a blank GameMeta on failure.
+  // after the row unmounts or the host changes. Errors are
+  // expected-degraded (fetchGameMeta returns a blank GameMeta when
+  // the parse fails) — but a thrown promise (Tauri invoke threw,
+  // network drop) needs an explicit catch or it'd surface as an
+  // unhandled rejection in the dev console.
   useEffect(() => {
     if (entry.kind === "image") return;
     if (!host?.trim()) return;
     let cancelled = false;
     metaLimit(() =>
-      fetchGameMeta(`${host}:${PS5_PAYLOAD_PORT}`, entry.path)
-    ).then((m) => {
-      if (!cancelled) setMeta(m);
-    });
+      fetchGameMeta(`${host}:${PS5_PAYLOAD_PORT}`, entry.path),
+    )
+      .then((m) => {
+        if (!cancelled) setMeta(m);
+      })
+      .catch((e) => {
+        // Don't surface to the row UI — the meta block degrades
+        // gracefully to "show entry.name" without it. Just log so
+        // the rejection doesn't hit the unhandled-promise channel.
+        if (!cancelled) {
+          console.warn(`[library] meta fetch failed for ${entry.path}:`, e);
+        }
+      });
     return () => {
       cancelled = true;
     };
@@ -455,6 +479,13 @@ function LibraryRow({
         break;
       } catch (e) {
         lastErr = e;
+        // Log every attempt, not just the last one — different
+        // failures across retries (e.g. EBUSY then ENOENT) tell us
+        // something the surfaced lastErr alone hides.
+        console.warn(
+          `[library] move delete attempt ${attempt}/3 for ${entry.path} failed:`,
+          e,
+        );
         if (attempt < 3) {
           // Linear backoff — 500 ms, 1 s. Short enough that the user
           // doesn't notice unless we're persistently losing the race.

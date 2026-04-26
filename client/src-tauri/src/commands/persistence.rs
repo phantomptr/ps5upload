@@ -87,6 +87,37 @@ fn data_file(app: &AppHandle, name: &str) -> Result<PathBuf, String> {
     Ok(dir.join(name))
 }
 
+/// Best-effort sweep of `<basename>.json.tmp.*` orphans next to a
+/// store file. A previous launch that crashed mid-write may have
+/// left these behind; they're never the live store (we only rename
+/// onto `path`, never read from `tmp`), so deleting any we find is
+/// safe. Failures are logged but don't block the calling save.
+fn sweep_tmp_orphans(dir: &std::path::Path, target: &std::path::Path) {
+    let Some(target_name) = target.file_name().and_then(|n| n.to_str()) else {
+        return;
+    };
+    // Match `<target_name without .json>.json.tmp.*`. Strip the
+    // .json suffix to get the base; e.g. `upload_queue.json` →
+    // `upload_queue`. Then we want files starting with
+    // `upload_queue.json.tmp.`.
+    let prefix = format!("{target_name}.tmp.");
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in rd.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if name.starts_with(&prefix) {
+            if let Err(e) = std::fs::remove_file(entry.path()) {
+                eprintln!(
+                    "[persistence] could not sweep tmp orphan {}: {e}",
+                    entry.path().display()
+                );
+            }
+        }
+    }
+}
+
 /// Load a JSON file; return the given default if it doesn't exist yet.
 fn load_json_or_default(path: &PathBuf, default: JsonValue) -> Result<JsonValue, String> {
     match std::fs::read(path) {
@@ -114,14 +145,30 @@ fn load_json_or_default(path: &PathBuf, default: JsonValue) -> Result<JsonValue,
 fn write_json_atomic(path: &PathBuf, value: &JsonValue) -> Result<(), String> {
     use std::io::Write;
 
+    // Best-effort sweep of any leftover tmp files in the same dir
+    // before we add another. Without this, a crash sequence
+    // (write succeeds → fsync fails → process killed) accumulates
+    // `<name>.json.tmp.<seq>` orphans that nobody ever cleans up.
+    // Cheap because it only scans the parent dir on each save.
+    if let Some(parent) = path.parent() {
+        sweep_tmp_orphans(parent, path);
+    }
+
     let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
     let tmp = path.with_extension(format!("json.tmp.{seq}"));
     let bytes = serde_json::to_vec_pretty(value).map_err(|e| format!("serialize: {e}"))?;
     let mut f = std::fs::File::create(&tmp).map_err(|e| format!("create {tmp:?}: {e}"))?;
-    f.write_all(&bytes)
-        .map_err(|e| format!("write {tmp:?}: {e}"))?;
-    f.sync_all()
-        .map_err(|e| format!("fsync {tmp:?}: {e}"))?;
+    if let Err(e) = f.write_all(&bytes) {
+        // Tmp write failed; clean it up so we don't leak a partial
+        // file. Best-effort — if cleanup itself fails the orphan
+        // sweep on the next save will pick it up.
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("write {tmp:?}: {e}"));
+    }
+    if let Err(e) = f.sync_all() {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("fsync {tmp:?}: {e}"));
+    }
     drop(f);
     if let Err(e) = std::fs::rename(&tmp, path) {
         let _ = std::fs::remove_file(&tmp);
@@ -307,7 +354,13 @@ pub async fn resume_txid_lookup(
             })
         });
     if pruned {
-        let _ = write_json_atomic(&path, &store);
+        // Pruning failure is non-fatal for the lookup itself — the
+        // user still gets back the live tx_id — but the next launch
+        // will repeat the prune work and silently fail again. Log
+        // so the pattern surfaces in support requests.
+        if let Err(e) = write_json_atomic(&path, &store) {
+            eprintln!("[resume-txid] post-prune save failed: {e} (will retry next time)");
+        }
     }
     Ok(match tx_id_hex {
         Some(hex) => serde_json::json!({ "tx_id_hex": hex }),
