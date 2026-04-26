@@ -4,6 +4,30 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.2.16
+
+**Cross-mount move shows progress again**
+
+- **Fix: cross-mount moves (e.g. `/data/games/CUSAxxxxx` → a USB
+  stick) lost their speed/byte counter halfway through.** The engine
+  was 502'ing every status poll with `decode FS_OP_STATUS_ACK body`,
+  so the row's "0 / 0 — paused" never advanced. Root cause was on
+  the payload side: `handle_fs_op_status` assembled the JSON
+  snapshot in a 768-byte buffer, but the two paths it has to embed
+  can each be up to 1024 bytes after JSON-escaping. Any move whose
+  source + destination paths summed past ~600 bytes silently
+  truncated the response mid-string, producing invalid JSON the
+  engine couldn't parse — and `setMoveProgress` only fires on
+  successful polls, so the UI just froze. Buffer is now 2560 bytes
+  (room for both maxed-out paths plus the skeleton), and on the
+  off-chance we ever overflow again the payload now fails loud with
+  an `fs_op_status_body_overflow` error frame instead of clipping
+  silently.
+- Same-mount moves were unaffected — `rename(2)` finishes in
+  microseconds and never polls.
+
+---
+
 ## 2.2.15
 
 **i18n — Activity tab + Settings keep-awake hint + OperationBar**
