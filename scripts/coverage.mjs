@@ -35,7 +35,37 @@ function firstExisting(paths) {
 }
 
 function llvmToolEnv() {
+  // Caller-provided override always wins.
   if (process.env.LLVM_COV && process.env.LLVM_PROFDATA) return {};
+
+  // Prefer the llvm-tools that ship with the active rustup toolchain
+  // over anything on PATH. cargo-llvm-cov otherwise resolves
+  // llvm-profdata via PATH, which on GitHub's ubuntu-24.04 image
+  // picks up /usr/lib/llvm-18/bin/llvm-profdata — older than rustc's
+  // bundled LLVM and rejects current-rustc profraw with
+  // "raw profile version mismatch: Profile uses raw profile format
+  // version = 10; expected version = 9", failing the whole merge.
+  // The toolchain-shipped tools are guaranteed to match rustc's
+  // profraw output, so pin to them whenever they're present.
+  const sysrootRes = spawnSync("rustc", ["--print", "sysroot"], { encoding: "utf8" });
+  const hostRes = spawnSync("rustc", ["-vV"], { encoding: "utf8" });
+  if (sysrootRes.status === 0 && hostRes.status === 0) {
+    const sysroot = sysrootRes.stdout.trim();
+    const hostMatch = hostRes.stdout.match(/^host:\s*(.+)$/m);
+    if (sysroot && hostMatch) {
+      const exe = os.platform() === "win32" ? ".exe" : "";
+      const toolBin = path.join(sysroot, "lib", "rustlib", hostMatch[1].trim(), "bin");
+      const toolchainCov = path.join(toolBin, "llvm-cov" + exe);
+      const toolchainProfdata = path.join(toolBin, "llvm-profdata" + exe);
+      if (fs.existsSync(toolchainCov) && fs.existsSync(toolchainProfdata)) {
+        return { LLVM_COV: toolchainCov, LLVM_PROFDATA: toolchainProfdata };
+      }
+    }
+  }
+
+  // Fallback: llvm-tools-preview isn't installed. Try PATH, then
+  // well-known LLVM prefixes. Version-mismatch risk is on the user
+  // here — but at least the script runs instead of failing outright.
   if (existsOnPath("llvm-cov") && existsOnPath("llvm-profdata")) return {};
 
   const prefixes = os.platform() === "darwin"
