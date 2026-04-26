@@ -2,6 +2,7 @@ import { create } from "zustand";
 
 import {
   fsMount,
+  generateTxIdHex,
   jobStatus,
   startTransferDir,
   startTransferDirReconcile,
@@ -64,6 +65,13 @@ export interface QueueItem {
   excludes: string[];
   /** Image-only: mount the uploaded image after the transfer commits. */
   mountAfterUpload: boolean;
+  /** Stable tx_id for this queue item, minted at add-time and
+   *  persisted alongside the item. Used so a queue interrupted by
+   *  app restart can resume against the payload's existing journal
+   *  entry instead of orphaning the in-flight tx and starting fresh.
+   *  Folder uploads use TX_FLAG_RESUME with this id; file uploads
+   *  ignore it (single-file resume isn't wired payload-side today). */
+  txIdHex: string;
   status: QueueItemStatus;
   /** Live progress while running, final count when done, 0 otherwise. */
   bytesSent: number;
@@ -150,11 +158,15 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
       saveTimer = null;
       const { items, continueOnFailure } = get();
       const doc: QueueDocument = { items, continueOnFailure };
-      void uploadQueueSave(doc).catch(() => {
-        // Persistence failure is degraded UX (queue won't survive
-        // restart) but doesn't break the run. Surfacing to the UI
-        // would require a new error channel; for now, the user just
-        // sees the queue empty on next launch.
+      void uploadQueueSave(doc).catch((e) => {
+        // Persistence failure means the queue won't survive an app
+        // restart. Log so it surfaces in the dev console + the
+        // engine startup log on Windows; users debugging "my queue
+        // disappeared" can find this. A toast-level UI surface is
+        // future work — would need a new error channel that's
+        // throttled (we save on every mutation, so a transient
+        // disk-full would otherwise spam toasts).
+        console.error("[upload-queue] save failed:", e);
       });
     }, SAVE_DEBOUNCE_MS);
   };
@@ -173,12 +185,15 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
 
     let jobId: string;
     if (isFolder && item.strategy === "resume") {
+      // Pass the persisted tx_id so a Resume after app restart
+      // picks up the payload's existing journal entry instead of
+      // minting a fresh tx and re-sending everything.
       jobId = await startTransferDirReconcile(
         item.sourcePath,
         item.resolvedDest,
         item.addr,
         item.reconcileMode,
-        null,
+        item.txIdHex,
         item.excludes,
       );
     } else if (isFolder) {
@@ -186,10 +201,14 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
         item.sourcePath,
         item.resolvedDest,
         item.addr,
-        null,
+        item.txIdHex,
         item.excludes,
       );
     } else {
+      // Single-file uploads don't have a cross-session resume flow
+      // payload-side today (the engine mints its own tx_id), so the
+      // persisted txIdHex is unused here. Kept on the item anyway so
+      // the schema stays uniform across kinds.
       jobId = await startTransferFile(
         item.sourcePath,
         item.resolvedDest,
@@ -251,21 +270,34 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
     async hydrate() {
       try {
         const doc = await uploadQueueLoad<Partial<QueueDocument>>();
-        // Sanitise on load: any item that was "running" when the app
-        // closed is now stranded — the engine restarted with no
-        // memory of that job. Reset to pending so the user can
-        // re-Start the queue.
-        const items = (doc.items ?? []).map((it) =>
-          it.status === "running" ? { ...it, status: "pending" as const } : it,
-        );
+        // Sanitise on load:
+        // - any item "running" when the app closed is stranded
+        //   (engine restarted with no memory of the job) — reset to
+        //   pending so the user can re-Start the queue.
+        // - back-fill txIdHex for items written by an older build
+        //   (pre-fix); a missing tx_id on a folder upload would
+        //   crash the runner. Mint a fresh one — those items lose
+        //   resume continuity (acceptable since they pre-date the
+        //   feature) but they won't crash.
+        const items = (doc.items ?? []).map((it) => {
+          const next = { ...it };
+          if (next.status === "running") next.status = "pending";
+          if (!next.txIdHex) next.txIdHex = generateTxIdHex();
+          return next;
+        });
         set({
           items,
           continueOnFailure: doc.continueOnFailure ?? false,
           loaded: true,
         });
-      } catch {
-        // First-time load with no file: just mark loaded so the UI
-        // shows the empty-queue state instead of a perpetual spinner.
+      } catch (e) {
+        // load_json_or_default returns {} on missing file, so this
+        // catch only fires on real corruption (bad JSON, IO error,
+        // mutex poison). Don't silently treat that as "empty" — the
+        // user might have a recoverable file. Log so it shows up in
+        // engine.log and surface a banner via runStatus alongside
+        // the empty queue.
+        console.error("[upload-queue] hydrate failed:", e);
         set({ loaded: true });
       }
     },
@@ -274,6 +306,12 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
       const item: QueueItem = {
         id: newId(),
         ...input,
+        // Mint the tx_id at add time, not at start time, so the
+        // value persists across app restarts. A queued item that
+        // ran partway, app crashed, app reopens → next start of the
+        // queue passes this same tx_id with TX_FLAG_RESUME and the
+        // payload picks up from last_acked_shard.
+        txIdHex: generateTxIdHex(),
         status: "pending",
         bytesSent: 0,
         totalBytes: 0,

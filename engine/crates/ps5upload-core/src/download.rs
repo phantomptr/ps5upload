@@ -193,11 +193,31 @@ pub fn download_to_local(
             .with_context(|| format!("create {}", local_path.display()))?;
 
         let mut offset: u64 = 0;
-        loop {
-            let bytes = fs_read(addr, &entry.remote_path, offset, DOWNLOAD_CHUNK_SIZE)
+        // Authoritative termination is by `entry.size` (pre-stat'd
+        // from the parent's list_dir). Trusting "short read = EOF"
+        // is fragile because the payload's FS_READ on PS5 makes one
+        // syscall and returns whatever pread() returned — a single
+        // short read mid-file (filesystem checkpoint, blocking I/O,
+        // anything that returns less than requested) would silently
+        // truncate the local copy and report Done. Using the known
+        // size and verifying after-the-fact catches every
+        // truncation case.
+        let expected = entry.size;
+        while offset < expected {
+            let want = std::cmp::min(DOWNLOAD_CHUNK_SIZE, expected - offset);
+            let bytes = fs_read(addr, &entry.remote_path, offset, want)
                 .with_context(|| format!("fs_read {} @ {offset}", entry.remote_path))?;
             if bytes.is_empty() {
-                break;
+                // The remote file shrank under us, or fs_read failed
+                // silently — either way the local file is now shorter
+                // than the manifest promised. Bail with an explicit
+                // error rather than reporting Done with a truncated
+                // copy.
+                anyhow::bail!(
+                    "fs_read returned 0 bytes at offset {offset} of {} (expected {expected} total) — \
+                     remote file may have changed or been deleted mid-download",
+                    entry.remote_path
+                );
             }
             file.write_all(&bytes)
                 .with_context(|| format!("write {}", local_path.display()))?;
@@ -207,13 +227,22 @@ pub fn download_to_local(
             if let Some(counter) = progress_bytes {
                 counter.fetch_add(n, Ordering::Relaxed);
             }
-            // Short read → EOF. The payload's FS_READ caps at
-            // FS_READ_MAX_BYTES; asking for exactly that cap means
-            // any reply smaller than the cap can only mean we hit
-            // end-of-file.
-            if (bytes.len() as u64) < DOWNLOAD_CHUNK_SIZE {
-                break;
-            }
+        }
+        // Defensive: fsync via drop, then verify the on-disk size
+        // matches expected. Caught here, the user sees a clear
+        // mismatch error; missed, they'd discover the truncation
+        // only when trying to use the downloaded file.
+        drop(file);
+        let written = std::fs::metadata(&local_path)
+            .with_context(|| format!("stat {} after write", local_path.display()))?
+            .len();
+        if written != expected {
+            anyhow::bail!(
+                "downloaded {} bytes but expected {} for {} — possible truncation",
+                written,
+                expected,
+                entry.remote_path
+            );
         }
     }
     Ok(total_written)

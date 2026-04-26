@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   LibraryBig,
   RefreshCw,
@@ -320,6 +320,19 @@ function LibraryRow({
   const [moveOpen, setMoveOpen] = useState(false);
   const [downloadProgress, setDownloadProgress] =
     useState<DownloadProgress | null>(null);
+  // Cancellation flag for the download poll loop. The loop runs for
+  // the entire duration of the engine job (potentially minutes for a
+  // multi-GiB game folder). Without this, navigating away from the
+  // Library mid-download leaves an orphan loop calling setError /
+  // setBusy on an unmounted component — React 18 warns and the next
+  // mount of the same row inherits no state context.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
   const elapsedMs = useElapsed(busy !== null);
 
   /** Current mount point for this entry (null = not mounted). Only
@@ -522,12 +535,17 @@ function LibraryRow({
       setDownloadProgress(null);
       return;
     }
-    // Poll until terminal. Cancellation isn't wired (yet) — closing
-    // the screen leaves the engine job running and the file lands
-    // anyway; reopening Library will see the completed file.
+    // Poll until terminal. The mountedRef gate makes a navigate-away
+    // mid-download silently exit the loop instead of writing state
+    // on an unmounted component. The engine job keeps running on the
+    // engine side (no engine cancel API today); the file still lands
+    // on disk and the user finds it where they picked, just without
+    // the in-row "Done" note.
     while (true) {
+      if (!mountedRef.current) return;
       try {
         const snap = await jobStatus(jobId);
+        if (!mountedRef.current) return;
         if (snap.status === "done") {
           setMountNote(
             tr(
@@ -560,6 +578,7 @@ function LibraryRow({
           totalBytes: snap.total_bytes ?? 0,
         });
       } catch (e) {
+        if (!mountedRef.current) return;
         setError(
           tr(
             "library_download_poll_failed",

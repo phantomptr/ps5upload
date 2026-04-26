@@ -197,17 +197,46 @@ function RunStatusBanner() {
   }
 
   if (runStatus.kind === "done") {
+    const hasFailures = runStatus.failureCount > 0;
     return (
-      <div className="mb-3 flex items-center gap-2 rounded-md border border-[var(--color-good)] bg-[var(--color-surface)] p-2 text-xs">
-        <CheckCircle2 size={14} className="text-[var(--color-good)]" />
-        <span className="font-medium">{name}</span>
-        <span className="text-[var(--color-muted)]">
-          {tr(
-            "playlist_status_done",
-            { ok: runStatus.successCount, fail: runStatus.failureCount },
-            `Done — ${runStatus.successCount} sent, ${runStatus.failureCount} failed`,
+      <div
+        className={`mb-3 rounded-md border p-2 text-xs ${
+          hasFailures
+            ? "border-[var(--color-warn)] bg-[var(--color-surface)]"
+            : "border-[var(--color-good)] bg-[var(--color-surface)]"
+        }`}
+      >
+        <div className="flex items-center gap-2">
+          {hasFailures ? (
+            <XCircle size={14} className="text-[var(--color-warn)]" />
+          ) : (
+            <CheckCircle2 size={14} className="text-[var(--color-good)]" />
           )}
-        </span>
+          <span className="font-medium">{name}</span>
+          <span className="text-[var(--color-muted)]">
+            {tr(
+              "playlist_status_done",
+              { ok: runStatus.successCount, fail: runStatus.failureCount },
+              `Done — ${runStatus.successCount} sent, ${runStatus.failureCount} failed`,
+            )}
+          </span>
+        </div>
+        {/* Per-step failures: surfaced when continueOnFailure=true and
+            anything broke. Without this, users only see "N failed"
+            and have to dig through logs to figure out which step. */}
+        {hasFailures && runStatus.failures.length > 0 && (
+          <ul className="mt-1.5 space-y-0.5 pl-6 font-mono text-[10px] text-[var(--color-warn)]">
+            {runStatus.failures.map((f) => (
+              <li key={f.stepIndex} className="break-all">
+                {tr(
+                  "playlist_failed_step_line",
+                  { step: f.stepIndex + 1, error: f.error },
+                  `Step ${f.stepIndex + 1}: ${f.error}`,
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
     );
   }

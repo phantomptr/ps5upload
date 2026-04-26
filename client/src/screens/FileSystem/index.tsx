@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   FolderTree,
@@ -155,6 +155,16 @@ export default function FileSystemScreen() {
   const elapsedMs = useElapsed(
     busyEntry !== null || bulkBusy !== null || downloadingEntry !== null,
   );
+  // Cancellation flag for the download poll loop — same rationale as
+  // Library's row: navigate away mid-download shouldn't strand a
+  // setState-on-unmounted-component loop.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const refresh = useCallback(async () => {
     if (!host?.trim()) return;
@@ -451,8 +461,10 @@ export default function FileSystemScreen() {
       return;
     }
     while (true) {
+      if (!mountedRef.current) return;
       try {
         const snap = await jobStatus(jobId);
+        if (!mountedRef.current) return;
         if (snap.status === "done") {
           setDownloadingEntry(null);
           // No noisy success toast here — the spinner row going
@@ -477,6 +489,7 @@ export default function FileSystemScreen() {
           totalBytes: snap.total_bytes ?? 0,
         });
       } catch (e) {
+        if (!mountedRef.current) return;
         setError(
           tr(
             "fs_download_poll_failed",

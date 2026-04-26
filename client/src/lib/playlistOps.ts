@@ -50,6 +50,10 @@ export type PlaylistRunStatus =
       /** Number of steps that failed. Non-zero only when the playlist
        *  had `continueOnFailure: true`. */
       failureCount: number;
+      /** Per-step failures captured when continue-on-failure is set,
+       *  so the user can see WHICH step broke (and why) without
+       *  inspecting logs. Empty when failureCount is 0. */
+      failures: { stepIndex: number; error: string }[];
     }
   | {
       kind: "failed";

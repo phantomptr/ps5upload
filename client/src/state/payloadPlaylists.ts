@@ -72,6 +72,12 @@ function newId(): string {
 
 export const usePayloadPlaylistsStore = create<PlaylistState>((set, get) => {
   let runId = 0;
+  // Active abort controller for the runner's sleep step. Bumped on
+  // every `run()` so a stale stop() can't cancel a fresh run; cleared
+  // when the runner exits the sleep cleanly. `stop()` aborts it so
+  // `cancellableSleep` resolves immediately and the runner notices
+  // the runId change at its next isLive() check.
+  let runAbort: AbortController | null = null;
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
 
   const scheduleSave = () => {
@@ -80,9 +86,11 @@ export const usePayloadPlaylistsStore = create<PlaylistState>((set, get) => {
       saveTimer = null;
       const { playlists } = get();
       const doc: PlaylistDocument = { playlists };
-      void payloadPlaylistsSave(doc).catch(() => {
-        // Persistence failure is degraded UX (playlists won't survive
-        // restart) but doesn't break the in-session experience.
+      void payloadPlaylistsSave(doc).catch((e) => {
+        // Same rationale as upload-queue: log so it lands in the
+        // dev console + Windows engine.log; a UI toast is future
+        // work but would need throttling.
+        console.error("[payload-playlists] save failed:", e);
       });
     }, SAVE_DEBOUNCE_MS);
   };
@@ -96,7 +104,13 @@ export const usePayloadPlaylistsStore = create<PlaylistState>((set, get) => {
       try {
         const doc = await payloadPlaylistsLoad<Partial<PlaylistDocument>>();
         set({ playlists: doc.playlists ?? [], loaded: true });
-      } catch {
+      } catch (e) {
+        // load_json_or_default returns {} for missing file, so a
+        // throw here means real corruption. Log + fall through to
+        // empty state so the user can rebuild — the alternative
+        // (blocking the screen with an error) hides every other
+        // payload feature behind a recoverable issue.
+        console.error("[payload-playlists] hydrate failed:", e);
         set({ loaded: true });
       }
     },
@@ -175,10 +189,16 @@ export const usePayloadPlaylistsStore = create<PlaylistState>((set, get) => {
         return;
       }
       const myRun = ++runId;
+      // Fresh abort signal for this run. stop() will fire it; the
+      // sleep races against it so a Stop click during a long sleep
+      // doesn't wait out the timer.
+      runAbort = new AbortController();
+      const myAbort = runAbort.signal;
       const isLive = () => runId === myRun;
 
       let successCount = 0;
       let failureCount = 0;
+      const failures: { stepIndex: number; error: string }[] = [];
 
       for (let i = 0; i < playlist.steps.length; i++) {
         if (!isLive()) return;
@@ -189,7 +209,9 @@ export const usePayloadPlaylistsStore = create<PlaylistState>((set, get) => {
           await sendPayload(host, step.path, port);
           successCount++;
         } catch (e) {
+          const errMsg = e instanceof Error ? e.message : String(e);
           failureCount++;
+          failures.push({ stepIndex: i, error: errMsg });
           if (!playlist.continueOnFailure) {
             if (isLive()) {
               set({
@@ -197,7 +219,7 @@ export const usePayloadPlaylistsStore = create<PlaylistState>((set, get) => {
                   kind: "failed",
                   playlistId: id,
                   stepIndex: i,
-                  error: e instanceof Error ? e.message : String(e),
+                  error: errMsg,
                 },
               });
             }
@@ -216,7 +238,11 @@ export const usePayloadPlaylistsStore = create<PlaylistState>((set, get) => {
               sleepDurationMs: step.sleepMs,
             },
           });
-          await sleep(step.sleepMs);
+          await cancellableSleep(step.sleepMs, myAbort);
+          // After the sleep returns (whether timed out or cancelled),
+          // re-check liveness so a Stop during sleep doesn't push
+          // through to "running" on the next step.
+          if (!isLive()) return;
         }
       }
 
@@ -227,6 +253,7 @@ export const usePayloadPlaylistsStore = create<PlaylistState>((set, get) => {
             playlistId: id,
             successCount,
             failureCount,
+            failures,
           },
         });
       }
@@ -234,11 +261,30 @@ export const usePayloadPlaylistsStore = create<PlaylistState>((set, get) => {
 
     stop() {
       runId++;
+      // Abort any in-flight sleep so the runner's await resolves now
+      // instead of when the timer would have fired.
+      runAbort?.abort();
+      runAbort = null;
       set({ runStatus: { kind: "idle" } });
     },
   };
 });
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+/** Sleep that resolves early if `signal` aborts. AbortError is
+ *  swallowed — caller treats both timer-fire and abort the same way
+ *  (it re-checks isLive() after this returns). */
+function cancellableSleep(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
 }
