@@ -49,7 +49,7 @@ CLIENT_DIR  := client
 .PHONY: quality quality-full quality-hardware ci ci-full
 .PHONY: clean clean-payload clean-engine clean-client
 .PHONY: verify info install-hooks
-.PHONY: run-engine run-client dev start
+.PHONY: run-engine run-client dev start _check-tauri-system-deps
 .PHONY: install-engine uninstall-engine
 .PHONY: dist dist-win dist-win-arm dist-mac dist-mac-x64 dist-linux dist-linux-arm
 .PHONY: send-payload gen-fixtures sweep validate validate-xl
@@ -472,7 +472,7 @@ run-engine: setup-engine
 # to `tauri dev`, which starts Vite + the Rust main process. The Rust setup
 # hook in client/src-tauri/src/engine.rs spawns ps5upload-engine as a child
 # of the window process; killing the window tears the engine down cleanly.
-run-client: setup-client _engine-release _kill-stale-client
+run-client: setup-client _check-tauri-system-deps _engine-release _kill-stale-client
 	@echo "Starting PS5 Upload client (Tauri + Rust + Vite)..."
 	@if [ -z "$$DISPLAY" ] && [ -z "$$WAYLAND_DISPLAY" ] && [ "$$(uname -s)" = "Linux" ]; then \
 		if command -v xvfb-run >/dev/null 2>&1; then \
@@ -487,22 +487,82 @@ run-client: setup-client _engine-release _kill-stale-client
 		cd $(CLIENT_DIR) && npm run dev; \
 	fi
 
+# Pre-flight system-library check for `tauri dev`. Tauri's Rust crates
+# (gdk-sys, gio-sys, javascriptcore-rs-sys, soup3-sys, ...) link against
+# native GTK/WebKit on Linux, system WebKit on macOS, and MSVC + WebView2
+# on Windows. Without them, cargo gets ~30s into compilation before
+# emitting a wall of pkg-config errors. This target fails fast with a
+# copy-pasteable install command for the host OS.
+_check-tauri-system-deps:
+	@os="$$(uname -s)"; \
+	case "$$os" in \
+	  Linux) \
+	    missing=""; \
+	    command -v pkg-config >/dev/null 2>&1 || missing="$$missing pkg-config"; \
+	    if command -v pkg-config >/dev/null 2>&1; then \
+	      pkg-config --exists webkit2gtk-4.1 2>/dev/null || missing="$$missing libwebkit2gtk-4.1-dev"; \
+	      pkg-config --exists gtk+-3.0    2>/dev/null || missing="$$missing libgtk-3-dev"; \
+	      pkg-config --exists librsvg-2.0 2>/dev/null || missing="$$missing librsvg2-dev"; \
+	      pkg-config --exists ayatana-appindicator3-0.1 2>/dev/null || missing="$$missing libayatana-appindicator3-dev"; \
+	    fi; \
+	    if [ -n "$$missing" ]; then \
+	      echo "ERROR: Tauri requires Linux system libraries that are not installed."; \
+	      echo "  Missing:$$missing"; \
+	      echo ""; \
+	      if command -v apt-get >/dev/null 2>&1; then \
+	        echo "  Install (Debian / Ubuntu / WSL Ubuntu):"; \
+	        echo "    sudo apt update && sudo apt install -y \\"; \
+	        echo "      libwebkit2gtk-4.1-dev build-essential curl wget file \\"; \
+	        echo "      libxdo-dev libssl-dev libayatana-appindicator3-dev \\"; \
+	        echo "      librsvg2-dev pkg-config"; \
+	      elif command -v dnf >/dev/null 2>&1; then \
+	        echo "  Install (Fedora / RHEL):"; \
+	        echo "    sudo dnf install -y webkit2gtk4.1-devel openssl-devel \\"; \
+	        echo "      curl wget file libappindicator-gtk3-devel librsvg2-devel \\"; \
+	        echo "      pkgconf-pkg-config @development-tools"; \
+	      elif command -v pacman >/dev/null 2>&1; then \
+	        echo "  Install (Arch / Manjaro):"; \
+	        echo "    sudo pacman -S --needed webkit2gtk-4.1 base-devel curl wget \\"; \
+	        echo "      file openssl libappindicator-gtk3 librsvg pkgconf"; \
+	      else \
+	        echo "  See https://tauri.app/start/prerequisites/ for your distro."; \
+	      fi; \
+	      exit 1; \
+	    fi; \
+	    ;; \
+	  Darwin) \
+	    if ! xcode-select -p >/dev/null 2>&1; then \
+	      echo "ERROR: Xcode Command Line Tools are not installed (Tauri needs the system WebKit framework)."; \
+	      echo "  Install with: xcode-select --install"; \
+	      exit 1; \
+	    fi; \
+	    ;; \
+	  MINGW*|MSYS*|CYGWIN*) \
+	    if ! command -v cl >/dev/null 2>&1 && ! command -v link >/dev/null 2>&1; then \
+	      echo "ERROR: MSVC build tools (cl.exe / link.exe) not on PATH."; \
+	      echo "  Install 'Visual Studio Build Tools 2022' with the C++ workload:"; \
+	      echo "    https://visualstudio.microsoft.com/visual-cpp-build-tools/"; \
+	      echo "  Then run this from a 'Developer Command Prompt' or 'x64 Native Tools' shell."; \
+	      echo "  WebView2 is pre-installed on Windows 11; on Windows 10 install via:"; \
+	      echo "    https://developer.microsoft.com/microsoft-edge/webview2/"; \
+	      exit 1; \
+	    fi; \
+	    ;; \
+	esac
+
 # Kill any stale ps5upload processes + Vite on :1420 that belongs to us.
 # Narrow enough not to touch unrelated node servers. Invoked as a dep of
 # run-client so repeated launches after a mis-terminated session don't
 # fail with "Port 1420 already in use".
+#
+# Implementation lives in scripts/kill-stale-client.mjs because the native
+# tooling differs across the three supported host OSes (pkill/lsof/ps on
+# Linux+macOS vs. taskkill/netstat/PowerShell on Windows), and a pure-shell
+# recipe doing both branches becomes unreadable. Node is already a hard
+# dependency for run-client (via setup-client), so this adds no new tools.
 .PHONY: _kill-stale-client
 _kill-stale-client:
-	@pkill -f ps5upload-desktop 2>/dev/null || true
-	@pkill -f ps5upload-engine 2>/dev/null || true
-	@pid=$$(lsof -ti :1420 2>/dev/null); \
-	if [ -n "$$pid" ]; then \
-		if ps -o command= -p $$pid 2>/dev/null | grep -q 'ps5upload.*node_modules.*vite'; then \
-			kill -9 $$pid 2>/dev/null; \
-			echo "✓ killed stale Vite on :1420 (pid $$pid)"; \
-		fi; \
-	fi
-	@sleep 1
+	@node scripts/kill-stale-client.mjs
 
 #──────────────────────────────────────────────────────────────────────────────
 # Clean

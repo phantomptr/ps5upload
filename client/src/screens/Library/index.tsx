@@ -21,6 +21,7 @@ import {
   fsDelete,
   fsChmod,
   fsCopy,
+  fsPathExists,
   fsMount,
   fsUnmount,
   fsOpStatus,
@@ -541,6 +542,21 @@ function LibraryRow({
             useActivityHistoryStore.getState().update(activityId, {
               error:
                 "Live progress unavailable — payload predates 2.2.7 FS_OP_STATUS. Click Replace payload on the Connection screen.",
+            });
+            break;
+          }
+          if (msg.includes("decode FS_OP_STATUS_ACK body")) {
+            // Pre-2.2.16 payloads truncated the FS_OP_STATUS_ACK
+            // JSON body when both paths were long, so every poll
+            // produced unparseable bytes. The fix is on the payload
+            // side; until it's redeployed there's no point hammering
+            // the engine 2×/sec with the same parse failure. Treat
+            // it the same as `unsupported_frame`: stop polling, hint
+            // the user to push a fresh payload.
+            if (mountedRef.current) setMoveProgressUnsupported(true);
+            useActivityHistoryStore.getState().update(activityId, {
+              error:
+                "Live progress unavailable — payload predates 2.2.16 FS_OP_STATUS_ACK fix. Click Replace payload on the Connection screen, or run `make send-payload`.",
             });
             break;
           }
@@ -1092,6 +1108,7 @@ function LibraryRow({
         <MoveModal
           entry={entry}
           volumes={volumes}
+          addr={`${host}:${PS5_PAYLOAD_PORT}`}
           onCancel={() => setMoveOpen(false)}
           onConfirm={runMove}
         />
@@ -1107,11 +1124,13 @@ function LibraryRow({
 function MoveModal({
   entry,
   volumes,
+  addr,
   onCancel,
   onConfirm,
 }: {
   entry: LibraryEntry;
   volumes: Volume[];
+  addr: string;
   onCancel: () => void;
   onConfirm: (destination: string) => void;
 }) {
@@ -1136,6 +1155,38 @@ function MoveModal({
   );
   const noop = isMoveNoop(entry.path, resolved);
   const nameInvalid = isInvalidName(customName);
+
+  // Pre-flight: probe whether the resolved destination already exists
+  // and warn the user inline. Catches both name clashes against an
+  // unrelated folder and stale partials left behind by a previously
+  // cancelled / failed move whose rm_rf cleanup didn't fully drain
+  // (exfat USB quirks). Debounced 300ms so each keystroke in the
+  // rename field doesn't spam FS_LIST_DIR; cancellation flag prevents
+  // a stale resolution from clobbering a fresher one.
+  const [destExists, setDestExists] = useState<"unknown" | "yes" | "no">(
+    "unknown",
+  );
+  useEffect(() => {
+    if (noop || nameInvalid || !resolved) {
+      setDestExists("unknown");
+      return;
+    }
+    let cancelled = false;
+    setDestExists("unknown");
+    const timer = setTimeout(() => {
+      fsPathExists(addr, resolved)
+        .then((exists) => {
+          if (!cancelled) setDestExists(exists ? "yes" : "no");
+        })
+        .catch(() => {
+          if (!cancelled) setDestExists("unknown");
+        });
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [addr, resolved, noop, nameInvalid]);
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
@@ -1252,6 +1303,16 @@ function MoveModal({
           </div>
         )}
 
+        {destExists === "yes" && !noop && !nameInvalid && (
+          <div className="mb-3 rounded-md border border-[var(--color-bad)] bg-[var(--color-surface)] p-2 text-xs text-[var(--color-bad)]">
+            {tr(
+              "library_move_modal_dest_exists",
+              { path: resolved },
+              `Destination already exists: ${resolved}. Rename above or pick a different folder. The PS5 won't overwrite an existing folder — if it's a leftover from a cancelled move, delete it from the File System screen first.`,
+            )}
+          </div>
+        )}
+
         <div className="flex items-center justify-end gap-2">
           <Button variant="ghost" size="sm" onClick={onCancel}>
             {tr("cancel", undefined, "Cancel")}
@@ -1260,7 +1321,9 @@ function MoveModal({
             variant="primary"
             size="sm"
             onClick={() => onConfirm(resolved)}
-            disabled={noop || nameInvalid || volume === ""}
+            disabled={
+              noop || nameInvalid || volume === "" || destExists === "yes"
+            }
           >
             {tr("library_move_modal_run", undefined, "Move")}
           </Button>

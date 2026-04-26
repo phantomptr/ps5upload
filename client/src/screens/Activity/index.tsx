@@ -34,6 +34,7 @@ export default function ActivityScreen() {
   const tr = useTr();
   const entries = useActivityHistoryStore((s) => s.entries);
   const clear = useActivityHistoryStore((s) => s.clear);
+  const clearRunning = useActivityHistoryStore((s) => s.clearRunning);
   const [confirmClear, setConfirmClear] = useState(false);
 
   const running = entries.filter((e) => e.outcome === "running");
@@ -82,6 +83,24 @@ export default function ActivityScreen() {
             <Loader2 size={13} className="animate-spin" />
             {tr("activity_running", undefined, "Running now")}
             <span className="text-[10px]">· {running.length}</span>
+            {/* Bulk clear of running rows. Same effect as the per-row
+                Stop button, but for orphans whose underlying op is
+                already gone (engine restart, payload disconnect, app
+                process killed mid-op): no live cancel to fire, just
+                drop the ghost UI state. Per-row Stop stays for
+                actually-cancellable in-flight ops. */}
+            <button
+              type="button"
+              onClick={clearRunning}
+              className="ml-auto rounded-md border border-[var(--color-border)] px-2 py-0.5 text-[10px] normal-case tracking-normal hover:bg-[var(--color-surface-3)]"
+              title={tr(
+                "activity_clear_running_tooltip",
+                undefined,
+                "Mark stuck running entries as stopped without cancelling. Use when the underlying op is already gone (engine restart, app crash) and the row is just stuck in the UI.",
+              )}
+            >
+              {tr("activity_clear_running", undefined, "Clear running")}
+            </button>
           </header>
           <ul className="space-y-2">
             {running.map((e) => (
@@ -123,7 +142,7 @@ export default function ActivityScreen() {
               {tr(
                 "activity_clear_confirm_body",
                 undefined,
-                "Removes the saved history of past operations. In-flight operations are not affected.",
+                "Removes every entry — past AND running. The underlying ops aren't cancelled (use per-row Stop for that), but their UI rows disappear. To dismiss only stuck running rows, use \"Clear running\" instead.",
               )}
             </p>
             <div className="flex items-center justify-end gap-2">

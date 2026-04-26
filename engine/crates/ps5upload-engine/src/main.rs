@@ -675,7 +675,7 @@ async fn ps5_cleanup(
                 "cleanup failed in {} ms: {e}",
                 started.elapsed().as_millis()
             );
-            json_err(StatusCode::BAD_GATEWAY, e.to_string()).into_response()
+            json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response()
         }
     }
 }
@@ -708,7 +708,7 @@ async fn ps5_list_dir(
             .and_then(|inner| inner);
     match result {
         Ok(v) => (StatusCode::OK, Json(v)).into_response(),
-        Err(e) => json_err(StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
+        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
     }
 }
 
@@ -776,7 +776,7 @@ async fn ps5_fs_delete(
                 "fs_delete failed: {path_for_log} in {} ms: {e}",
                 started.elapsed().as_millis()
             );
-            json_err(StatusCode::BAD_GATEWAY, e.to_string()).into_response()
+            json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response()
         }
     }
 }
@@ -818,7 +818,7 @@ async fn ps5_fs_move(
                 "fs_move failed: {from_for_log} -> {to_for_log} in {} ms: {e}",
                 started.elapsed().as_millis()
             );
-            json_err(StatusCode::BAD_GATEWAY, e.to_string()).into_response()
+            json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response()
         }
     }
 }
@@ -922,7 +922,7 @@ async fn ps5_fs_mount(
                 "fs_mount failed: {image_for_log} in {} ms: {e}",
                 started.elapsed().as_millis()
             );
-            json_err(StatusCode::BAD_GATEWAY, e.to_string()).into_response()
+            json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response()
         }
     }
 }
@@ -959,7 +959,7 @@ async fn ps5_fs_unmount(
                 "fs_unmount failed: {mp_for_log} in {} ms: {e}",
                 started.elapsed().as_millis()
             );
-            json_err(StatusCode::BAD_GATEWAY, e.to_string()).into_response()
+            json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response()
         }
     }
 }
@@ -992,7 +992,7 @@ async fn ps5_fs_chmod(
                 "fs_chmod failed: {path_for_log} in {} ms: {e}",
                 started.elapsed().as_millis()
             );
-            json_err(StatusCode::BAD_GATEWAY, e.to_string()).into_response()
+            json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response()
         }
     }
 }
@@ -1039,7 +1039,7 @@ async fn ps5_fs_op_status(
             )
                 .into_response()
         }
-        Err(e) => json_err(StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
+        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
     }
 }
 
@@ -1075,7 +1075,7 @@ async fn ps5_fs_op_cancel(
             Json(serde_json::json!({ "cancelled": found })),
         )
             .into_response(),
-        Err(e) => json_err(StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
+        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
     }
 }
 
@@ -1105,7 +1105,7 @@ async fn ps5_fs_mkdir(
                 "fs_mkdir failed: {path_for_log} in {} ms: {e}",
                 started.elapsed().as_millis()
             );
-            json_err(StatusCode::BAD_GATEWAY, e.to_string()).into_response()
+            json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response()
         }
     }
 }
@@ -1123,7 +1123,7 @@ async fn ps5_hw_info(
         .and_then(|r| r);
     match r {
         Ok(v) => (StatusCode::OK, Json(v)).into_response(),
-        Err(e) => json_err(StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
+        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
     }
 }
 
@@ -1138,7 +1138,7 @@ async fn ps5_hw_temps(
         .and_then(|r| r);
     match r {
         Ok(v) => (StatusCode::OK, Json(v)).into_response(),
-        Err(e) => json_err(StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
+        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
     }
 }
 
@@ -1153,7 +1153,7 @@ async fn ps5_hw_power(
         .and_then(|r| r);
     match r {
         Ok(v) => (StatusCode::OK, Json(v)).into_response(),
-        Err(e) => json_err(StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
+        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
     }
 }
 
@@ -1171,7 +1171,7 @@ async fn ps5_proc_list(
         .and_then(|r| r);
     match r {
         Ok(v) => (StatusCode::OK, Json(v)).into_response(),
-        Err(e) => json_err(StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
+        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
     }
 }
 
@@ -1320,7 +1320,7 @@ async fn ps5_game_meta(
     .and_then(|inner| inner);
     match result {
         Ok(r) => (StatusCode::OK, Json(r)).into_response(),
-        Err(e) => json_err(StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
+        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
     }
 }
 
@@ -1375,7 +1375,7 @@ async fn ps5_volumes(
             .and_then(|inner| inner);
     match result {
         Ok(v) => (StatusCode::OK, Json(v)).into_response(),
-        Err(e) => json_err(StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
+        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
     }
 }
 
@@ -1400,8 +1400,8 @@ async fn ps5_status(
 
     match result {
         Ok(Ok(json)) => (StatusCode::OK, Json(json)).into_response(),
-        Ok(Err(e)) => json_err(StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
-        Err(e) => json_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Ok(Err(e)) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
+        Err(e) => json_err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
     }
 }
 
@@ -1918,9 +1918,9 @@ async fn transfer_download_handler(
     .await
     {
         Ok(Ok(m)) => m,
-        Ok(Err(e)) => return json_err(StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
+        Ok(Err(e)) => return json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
         Err(e) => {
-            return json_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
+            return json_err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response()
         }
     };
     let manifest = plan.manifest;

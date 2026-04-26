@@ -458,6 +458,49 @@ export async function fsMkdir(transferAddr: string, path: string): Promise<void>
   await invoke("ps5_fs_mkdir", { req: { addr, path } });
 }
 
+/** Best-effort "does this path exist on the PS5?" probe. Lists the
+ *  parent directory and looks for the basename. There is no FS_STAT
+ *  frame in the protocol, so this is the cheapest existence check
+ *  we have without inventing a new frame type.
+ *
+ *  Caveats:
+ *  - Returns `false` on listing errors (parent missing, permission
+ *    denied, allowlist rejection). Callers must treat `false` as
+ *    "best-effort no" rather than a hard guarantee — the payload's
+ *    own `fs_copy_dest_exists` check is the real backstop.
+ *  - Listing is paginated (limit 1024). For directories with more
+ *    entries the basename might be missed; pre-flight callers should
+ *    accept that risk and let the payload reject if a race fires.
+ *  - Comparison is case-sensitive because the PS5 filesystems we
+ *    target (UFS internal, exfat external) are mixed: UFS is
+ *    case-sensitive, exfat is case-preserving but case-insensitive.
+ *    We err on the side of false-negative (look for an exact match)
+ *    so we don't block legitimate moves that differ only in case. */
+export async function fsPathExists(
+  transferAddr: string,
+  path: string,
+): Promise<boolean> {
+  const norm = path.replace(/\/+$/, "");
+  if (norm === "") return true; // root always exists
+  const slash = norm.lastIndexOf("/");
+  // No slash at all (e.g. "foo" — relative path) shouldn't reach this
+  // helper since callers pass PS5 absolute paths, but bail out so we
+  // don't accidentally list the wrong directory if it does.
+  if (slash < 0) return false;
+  const parent = slash === 0 ? "/" : norm.slice(0, slash);
+  const basename = norm.slice(slash + 1);
+  if (!basename) return false;
+  const addr = toMgmtAddr(transferAddr);
+  try {
+    const res = await invoke<{
+      entries?: Array<{ name?: string }>;
+    }>("ps5_list_dir", { addr, path: parent, offset: 0, limit: 1024 });
+    return (res.entries ?? []).some((e) => e.name === basename);
+  } catch {
+    return false;
+  }
+}
+
 /** Recursive copy on the PS5. Works across mount points (unlike fsMove,
  *  which is rename()-backed and fails with EXDEV across volumes). The
  *  payload refuses to overwrite an existing `to` — callers should

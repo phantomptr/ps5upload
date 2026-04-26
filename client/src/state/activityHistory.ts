@@ -97,6 +97,15 @@ interface ActivityHistoryState {
   ) => void;
   /** Drop everything. The Activity tab's "Clear" button calls this. */
   clear: () => void;
+  /** Force every still-`running` entry into a terminal `stopped`
+   *  state with a synthetic note. Use case: rows that got orphaned
+   *  because their underlying op died without firing `finish()` —
+   *  the desktop process was killed, the engine restarted, the
+   *  payload disconnected mid-poll, etc. Without this the OperationBar
+   *  shows a forever-running ghost until the user restarts the app
+   *  (which `loadInitial` then converts via the same logic). Past
+   *  entries are left alone — only running rows get touched. */
+  clearRunning: () => void;
   /** All entries currently in `running` state — the OperationBar
    *  reads this to show the global in-flight indicator. Computed
    *  in-place so callers don't need a selector. */
@@ -212,6 +221,26 @@ export const useActivityHistoryStore = create<ActivityHistoryState>(
     clear() {
       persist([]);
       set({ entries: [] });
+    },
+
+    clearRunning() {
+      set((s) => {
+        const now = Date.now();
+        let changed = false;
+        const next = s.entries.map((e) => {
+          if (e.outcome !== "running") return e;
+          changed = true;
+          return {
+            ...e,
+            outcome: "stopped" as ActivityOutcome,
+            endedAtMs: e.endedAtMs ?? now,
+            error: e.error ?? "cleared manually (orphaned running entry)",
+          };
+        });
+        if (!changed) return s;
+        persist(next);
+        return { entries: next };
+      });
     },
 
     runningEntries() {

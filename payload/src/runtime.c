@@ -4095,9 +4095,12 @@ static int chmod_rf(const char *path, mode_t mode, int depth) {
  * FS_OP_CANCEL when the Stop button fires.
  *
  * Indexed by op_id, which is the trace_id of the originating FS_COPY
- * frame. Bounded at MAX_FS_OPS so a wedged op can't hold a slot
- * forever (alloc finds the oldest non-active slot to evict if all
- * busy — same evict-terminal pattern as the tx table).
+ * frame. Bounded at MAX_FS_OPS; allocation is strict first-fit and
+ * fails (returns -1 → fs_copy_too_many_inflight) when all slots are
+ * busy, rather than evicting an in-flight op. Eviction would silently
+ * blind the client's progress poll on whichever op got displaced and
+ * surface as a confusing "404 op_id not found" mid-copy, so we'd
+ * rather refuse the new op and let the client retry once a slot frees.
  *
  * Single mutex protects the table; per-op fields are read/written
  * under the same lock. The lock is taken briefly inside cp_rf's
@@ -4235,16 +4238,26 @@ static int recursive_size(const char *path, uint64_t *out) {
     }
     d = opendir(path);
     if (!d) return -1;
+    int rc = 0;
     while ((e = readdir(d)) != NULL) {
         char sub[1024];
         if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
         if (snprintf(sub, sizeof(sub), "%s/%s", path, e->d_name) >= (int)sizeof(sub)) {
-            continue;
+            /* A truncated child path means the copy will hit the same
+             * limit and bail; reporting success here would lie about
+             * total_bytes and make the progress bar drift past 100%.
+             * Surface the failure now so the caller fails fast with
+             * fs_copy_walk_failed rather than mid-copy. */
+            rc = -1;
+            break;
         }
-        (void)recursive_size(sub, out);
+        if (recursive_size(sub, out) != 0) {
+            rc = -1;
+            break;
+        }
     }
     closedir(d);
-    return 0;
+    return rc;
 }
 
 /* ── Async-write file copier (parallel read + write) ──────────────────────────
@@ -5835,6 +5848,18 @@ static int handle_binary_frame(runtime_state_t *state, int client_fd,
      * Heap-allocate the body so large directories don't hit the stack guard.
      */
     if (hdr.frame_type == FTX2_FRAME_BEGIN_TX) {
+        /* Hard cap on the BEGIN_TX manifest size. PPSA01342 (the
+         * largest small-file workload we validate against) has 223k
+         * files at ~150 bytes per manifest entry → ~33 MB; the cap
+         * leaves an order-of-magnitude headroom for any real upload
+         * while refusing absurd values (e.g., crafted body_len of
+         * several GB) that would otherwise either succeed at malloc
+         * and OOM the payload, or fail malloc and tie up a worker
+         * thread draining bytes from a malicious LAN client until
+         * recv_exact times out. Above this cap we close the connection
+         * (via -1 return) since accepting further frames after a
+         * misaligned drain isn't safe. */
+        #define BEGIN_TX_BODY_MAX ((uint64_t)256 * 1024 * 1024)
         char resp[2048];
         char *begin_body = NULL;
         uint64_t begin_body_len = hdr.body_len;
@@ -5844,6 +5869,12 @@ static int handle_binary_frame(runtime_state_t *state, int client_fd,
         runtime_tx_entry_t *entry = NULL;
         int ret;
         int len;
+
+        if (begin_body_len > BEGIN_TX_BODY_MAX) {
+            (void)send_frame(client_fd, FTX2_FRAME_ERROR, 0, hdr.trace_id,
+                             "begin_tx_body_too_large", 23);
+            return -1;
+        }
 
         if (begin_body_len > 0) {
             begin_body = (char *)malloc((size_t)begin_body_len + 1);
