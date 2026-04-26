@@ -540,14 +540,30 @@ async fn ps5_cleanup(
 ) -> impl IntoResponse {
     let addr = mgmt_addr_or_default(req.addr, &state.default_ps5_addr);
     let path = req.path.clone();
+    let started = std::time::Instant::now();
+    crate::log_info!("cleanup: addr={addr} path={path}");
     let result: Result<CleanupResult, anyhow::Error> =
         tokio::task::spawn_blocking(move || cleanup_path(&addr, &path))
             .await
             .map_err(anyhow::Error::from)
             .and_then(|inner| inner);
     match result {
-        Ok(r) => (StatusCode::OK, Json(r)).into_response(),
-        Err(e) => json_err(StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
+        Ok(r) => {
+            crate::log_info!(
+                "cleanup ok: removed {} files / {} dirs in {} ms",
+                r.removed_files,
+                r.removed_dirs,
+                started.elapsed().as_millis()
+            );
+            (StatusCode::OK, Json(r)).into_response()
+        }
+        Err(e) => {
+            crate::log_warn!(
+                "cleanup failed in {} ms: {e}",
+                started.elapsed().as_millis()
+            );
+            json_err(StatusCode::BAD_GATEWAY, e.to_string()).into_response()
+        }
     }
 }
 
@@ -618,13 +634,28 @@ async fn ps5_fs_delete(
 ) -> impl IntoResponse {
     let addr = mgmt_addr_or_default(req.addr, &state.default_ps5_addr);
     let path = req.path;
+    let started = std::time::Instant::now();
+    crate::log_info!("fs_delete: addr={addr} path={path}");
+    let path_for_log = path.clone();
     match tokio::task::spawn_blocking(move || fs_delete(&addr, &path))
         .await
         .map_err(anyhow::Error::from)
         .and_then(|r| r)
     {
-        Ok(()) => (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response(),
-        Err(e) => json_err(StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
+        Ok(()) => {
+            crate::log_info!(
+                "fs_delete ok: {path_for_log} in {} ms",
+                started.elapsed().as_millis()
+            );
+            (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
+        }
+        Err(e) => {
+            crate::log_warn!(
+                "fs_delete failed: {path_for_log} in {} ms: {e}",
+                started.elapsed().as_millis()
+            );
+            json_err(StatusCode::BAD_GATEWAY, e.to_string()).into_response()
+        }
     }
 }
 
@@ -635,13 +666,29 @@ async fn ps5_fs_move(
     let addr = mgmt_addr_or_default(req.addr, &state.default_ps5_addr);
     let from = req.from;
     let to = req.to;
+    let started = std::time::Instant::now();
+    crate::log_info!("fs_move: addr={addr} from={from} to={to}");
+    let from_for_log = from.clone();
+    let to_for_log = to.clone();
     match tokio::task::spawn_blocking(move || fs_move(&addr, &from, &to))
         .await
         .map_err(anyhow::Error::from)
         .and_then(|r| r)
     {
-        Ok(()) => (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response(),
-        Err(e) => json_err(StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
+        Ok(()) => {
+            crate::log_info!(
+                "fs_move ok: {from_for_log} -> {to_for_log} in {} ms",
+                started.elapsed().as_millis()
+            );
+            (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
+        }
+        Err(e) => {
+            crate::log_warn!(
+                "fs_move failed: {from_for_log} -> {to_for_log} in {} ms: {e}",
+                started.elapsed().as_millis()
+            );
+            json_err(StatusCode::BAD_GATEWAY, e.to_string()).into_response()
+        }
     }
 }
 
@@ -652,13 +699,29 @@ async fn ps5_fs_copy(
     let addr = mgmt_addr_or_default(req.addr, &state.default_ps5_addr);
     let from = req.from;
     let to = req.to;
+    let started = std::time::Instant::now();
+    crate::log_info!("fs_copy: addr={addr} from={from} to={to}");
+    let from_for_log = from.clone();
+    let to_for_log = to.clone();
     match tokio::task::spawn_blocking(move || fs_copy(&addr, &from, &to))
         .await
         .map_err(anyhow::Error::from)
         .and_then(|r| r)
     {
-        Ok(()) => (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response(),
-        Err(e) => json_err(StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
+        Ok(()) => {
+            crate::log_info!(
+                "fs_copy ok: {from_for_log} -> {to_for_log} in {} ms",
+                started.elapsed().as_millis()
+            );
+            (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
+        }
+        Err(e) => {
+            crate::log_warn!(
+                "fs_copy failed: {from_for_log} -> {to_for_log} in {} ms: {e}",
+                started.elapsed().as_millis()
+            );
+            json_err(StatusCode::BAD_GATEWAY, e.to_string()).into_response()
+        }
     }
 }
 
@@ -677,14 +740,35 @@ async fn ps5_fs_mount(
     let addr = mgmt_addr_or_default(req.addr, &state.default_ps5_addr);
     let image_path = req.image_path;
     let mount_name = req.mount_name;
+    let started = std::time::Instant::now();
+    crate::log_info!(
+        "fs_mount: addr={addr} image_path={image_path} mount_name={:?}",
+        mount_name
+    );
+    let image_for_log = image_path.clone();
     let result: Result<MountResult, anyhow::Error> =
         tokio::task::spawn_blocking(move || fs_mount(&addr, &image_path, mount_name.as_deref()))
             .await
             .map_err(anyhow::Error::from)
             .and_then(|r| r);
     match result {
-        Ok(r) => (StatusCode::OK, Json(r)).into_response(),
-        Err(e) => json_err(StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
+        Ok(r) => {
+            crate::log_info!(
+                "fs_mount ok: {image_for_log} -> {} ({}, {}) in {} ms",
+                r.mount_point,
+                r.dev_node,
+                r.fstype,
+                started.elapsed().as_millis()
+            );
+            (StatusCode::OK, Json(r)).into_response()
+        }
+        Err(e) => {
+            crate::log_warn!(
+                "fs_mount failed: {image_for_log} in {} ms: {e}",
+                started.elapsed().as_millis()
+            );
+            json_err(StatusCode::BAD_GATEWAY, e.to_string()).into_response()
+        }
     }
 }
 
@@ -700,13 +784,28 @@ async fn ps5_fs_unmount(
 ) -> impl IntoResponse {
     let addr = mgmt_addr_or_default(req.addr, &state.default_ps5_addr);
     let mount_point = req.mount_point;
+    let started = std::time::Instant::now();
+    crate::log_info!("fs_unmount: addr={addr} mount_point={mount_point}");
+    let mp_for_log = mount_point.clone();
     match tokio::task::spawn_blocking(move || fs_unmount(&addr, &mount_point))
         .await
         .map_err(anyhow::Error::from)
         .and_then(|r| r)
     {
-        Ok(()) => (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response(),
-        Err(e) => json_err(StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
+        Ok(()) => {
+            crate::log_info!(
+                "fs_unmount ok: {mp_for_log} in {} ms",
+                started.elapsed().as_millis()
+            );
+            (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
+        }
+        Err(e) => {
+            crate::log_warn!(
+                "fs_unmount failed: {mp_for_log} in {} ms: {e}",
+                started.elapsed().as_millis()
+            );
+            json_err(StatusCode::BAD_GATEWAY, e.to_string()).into_response()
+        }
     }
 }
 
@@ -718,13 +817,28 @@ async fn ps5_fs_chmod(
     let path = req.path;
     let mode = req.mode;
     let recursive = req.recursive;
+    let started = std::time::Instant::now();
+    crate::log_info!("fs_chmod: addr={addr} path={path} mode={mode} recursive={recursive}");
+    let path_for_log = path.clone();
     match tokio::task::spawn_blocking(move || fs_chmod(&addr, &path, &mode, recursive))
         .await
         .map_err(anyhow::Error::from)
         .and_then(|r| r)
     {
-        Ok(()) => (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response(),
-        Err(e) => json_err(StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
+        Ok(()) => {
+            crate::log_info!(
+                "fs_chmod ok: {path_for_log} in {} ms",
+                started.elapsed().as_millis()
+            );
+            (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
+        }
+        Err(e) => {
+            crate::log_warn!(
+                "fs_chmod failed: {path_for_log} in {} ms: {e}",
+                started.elapsed().as_millis()
+            );
+            json_err(StatusCode::BAD_GATEWAY, e.to_string()).into_response()
+        }
     }
 }
 
@@ -734,13 +848,28 @@ async fn ps5_fs_mkdir(
 ) -> impl IntoResponse {
     let addr = mgmt_addr_or_default(req.addr, &state.default_ps5_addr);
     let path = req.path;
+    let started = std::time::Instant::now();
+    crate::log_info!("fs_mkdir: addr={addr} path={path}");
+    let path_for_log = path.clone();
     match tokio::task::spawn_blocking(move || fs_mkdir(&addr, &path))
         .await
         .map_err(anyhow::Error::from)
         .and_then(|r| r)
     {
-        Ok(()) => (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response(),
-        Err(e) => json_err(StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
+        Ok(()) => {
+            crate::log_info!(
+                "fs_mkdir ok: {path_for_log} in {} ms",
+                started.elapsed().as_millis()
+            );
+            (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
+        }
+        Err(e) => {
+            crate::log_warn!(
+                "fs_mkdir failed: {path_for_log} in {} ms: {e}",
+                started.elapsed().as_millis()
+            );
+            json_err(StatusCode::BAD_GATEWAY, e.to_string()).into_response()
+        }
     }
 }
 
@@ -826,18 +955,23 @@ async fn ps5_hw_set_fan_threshold(
 ) -> impl IntoResponse {
     let addr = mgmt_addr_or_default(q.addr, &state.default_ps5_addr);
     let threshold = q.threshold_c;
+    crate::log_info!("hw_set_fan_threshold: addr={addr} threshold_c={threshold}");
     match tokio::task::spawn_blocking(move || hw_set_fan_threshold(&addr, threshold))
         .await
         .map_err(anyhow::Error::from)
         .and_then(|r| r)
     {
-        Ok(()) => (
-            StatusCode::OK,
-            Json(serde_json::json!({ "ok": true, "threshold_c": threshold })),
-        )
-            .into_response(),
+        Ok(()) => {
+            crate::log_info!("hw_set_fan_threshold ok: threshold_c={threshold}");
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({ "ok": true, "threshold_c": threshold })),
+            )
+                .into_response()
+        }
         Err(e) => {
             let msg = e.to_string();
+            crate::log_warn!("hw_set_fan_threshold failed (threshold_c={threshold}): {msg}");
             // Client-side validation failures (range check) → 400 so
             // the UI can distinguish them from true payload/network errors.
             let code = if msg.contains("safe range") {
@@ -1047,6 +1181,11 @@ async fn transfer_file_handler(
 
     let job_id = Uuid::new_v4();
     let started_at_ms = now_ms();
+    crate::log_info!(
+        "transfer_file: job={job_id} addr={addr} src={} dest={}",
+        req.src,
+        req.dest
+    );
     // Pre-stat the source — used both for the progress-bar denominator
     // and as a fail-fast check before we accept the job. Previously the
     // metadata error was silently swallowed (`unwrap_or(0)`), so a
@@ -1200,6 +1339,13 @@ async fn transfer_dir_handler(
 
     let job_id = Uuid::new_v4();
     let started_at_ms = now_ms();
+    crate::log_info!(
+        "transfer_dir: job={job_id} addr={addr} src_dir={} dest_root={} resume={} excludes={}",
+        req.src_dir,
+        req.dest_root,
+        caller_supplied_tx_id,
+        req.excludes.len()
+    );
     let (total_bytes, files) = walk_plan(std::path::Path::new(&req.src_dir), &req.excludes);
     let files_sent_count = files.len() as u64;
     let progress = Arc::new(AtomicU64::new(0));
@@ -1469,6 +1615,12 @@ async fn transfer_download_handler(
     Json(req): Json<TransferDownloadReq>,
 ) -> impl IntoResponse {
     let mgmt_addr = mgmt_addr_or_default(req.addr, &state.default_ps5_addr);
+    crate::log_info!(
+        "transfer_download: addr={mgmt_addr} src_path={} dest_dir={} kind={}",
+        req.src_path,
+        req.dest_dir,
+        req.kind
+    );
     let kind = match req.kind.as_str() {
         "file" => DownloadKind::File,
         "folder" => DownloadKind::Folder,
