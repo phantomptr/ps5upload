@@ -1,0 +1,507 @@
+import { useEffect, useState } from "react";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import {
+  ArrowDown,
+  ArrowUp,
+  CheckCircle2,
+  CircleDashed,
+  Clock,
+  FolderOpen,
+  Loader2,
+  ListPlus,
+  Play,
+  Plus,
+  Square,
+  Trash2,
+  X,
+  XCircle,
+} from "lucide-react";
+
+import { Button } from "../../components";
+import { useTr } from "../../state/lang";
+import { usePayloadPlaylistsStore } from "../../state/payloadPlaylists";
+import { sanitiseSleepMs, type Playlist } from "../../lib/playlistOps";
+
+/**
+ * Playlist editor + runner panel for the SendPayload screen.
+ *
+ * Each playlist is an ordered list of (payload_path, sleep_ms_after)
+ * steps. Users create playlists, add steps via the same file picker
+ * the main form uses, and click Run to send each payload in sequence
+ * with the configured sleep between steps. The store handles
+ * persistence + cancellation; this component is purely the UI.
+ */
+export function PlaylistsPanel({
+  host,
+  port,
+}: {
+  host: string;
+  port: number;
+}) {
+  const tr = useTr();
+  const playlists = usePayloadPlaylistsStore((s) => s.playlists);
+  const loaded = usePayloadPlaylistsStore((s) => s.loaded);
+  const runStatus = usePayloadPlaylistsStore((s) => s.runStatus);
+  const hydrate = usePayloadPlaylistsStore((s) => s.hydrate);
+  const createPlaylist = usePayloadPlaylistsStore((s) => s.createPlaylist);
+  const stop = usePayloadPlaylistsStore((s) => s.stop);
+
+  useEffect(() => {
+    if (!loaded) void hydrate();
+  }, [loaded, hydrate]);
+
+  const handleNew = () => {
+    const name = window.prompt(
+      tr(
+        "playlist_new_prompt",
+        undefined,
+        "Name for the new playlist",
+      ),
+      tr("playlist_default_name", undefined, "New playlist"),
+    );
+    if (name === null) return;
+    createPlaylist(name.trim() || tr("playlist_default_name", undefined, "New playlist"));
+  };
+
+  const isBusy = runStatus.kind === "running" || runStatus.kind === "sleeping";
+
+  return (
+    <section className="mt-8 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5">
+      <header className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="flex items-center gap-2 text-sm font-semibold">
+            <ListPlus size={14} />
+            {tr("playlists_title", undefined, "Playlists")}
+          </h2>
+          <p className="mt-0.5 text-xs text-[var(--color-muted)]">
+            {tr(
+              "playlists_description",
+              undefined,
+              "Send a sequence of payloads with sleeps between each — useful for scripted boot orders (loader → patches → launcher).",
+            )}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {isBusy && (
+            <Button
+              variant="secondary"
+              size="sm"
+              leftIcon={<Square size={12} />}
+              onClick={stop}
+            >
+              {tr("playlist_stop", undefined, "Stop run")}
+            </Button>
+          )}
+          <Button
+            variant="primary"
+            size="sm"
+            leftIcon={<Plus size={12} />}
+            onClick={handleNew}
+            disabled={isBusy}
+          >
+            {tr("playlist_new", undefined, "New playlist")}
+          </Button>
+        </div>
+      </header>
+
+      <RunStatusBanner />
+
+      {playlists.length === 0 && (
+        <div className="rounded-md border border-dashed border-[var(--color-border)] bg-[var(--color-surface)] p-4 text-center text-xs text-[var(--color-muted)]">
+          {tr(
+            "playlists_empty",
+            undefined,
+            "No playlists yet. Create one to script a boot sequence.",
+          )}
+        </div>
+      )}
+
+      <div className="grid gap-3">
+        {playlists.map((p) => (
+          <PlaylistCard
+            key={p.id}
+            playlist={p}
+            host={host}
+            port={port}
+            anyRunning={isBusy}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function RunStatusBanner() {
+  const tr = useTr();
+  const runStatus = usePayloadPlaylistsStore((s) => s.runStatus);
+  const playlists = usePayloadPlaylistsStore((s) => s.playlists);
+  // Pull `now` out of state so the 250 ms tick re-renders the banner
+  // without calling `Date.now()` during render (lint forbids — render
+  // must be a pure function of props/state). The tick effect updates
+  // state with the current wall-clock; everything below is then a
+  // pure function of that snapshot.
+  const [now, setNow] = useState<number>(() => Date.now());
+  useEffect(() => {
+    if (runStatus.kind !== "sleeping") return;
+    setNow(Date.now());
+    const id = window.setInterval(() => setNow(Date.now()), 250);
+    return () => window.clearInterval(id);
+  }, [runStatus.kind]);
+
+  if (runStatus.kind === "idle") return null;
+  const playlist = playlists.find(
+    (p) =>
+      "playlistId" in runStatus && p.id === runStatus.playlistId,
+  );
+  const name = playlist?.name ?? "playlist";
+
+  if (runStatus.kind === "running") {
+    const step = playlist?.steps[runStatus.stepIndex];
+    return (
+      <div className="mb-3 flex items-center gap-2 rounded-md border border-[var(--color-accent)] bg-[var(--color-surface)] p-2 text-xs">
+        <Loader2 size={14} className="animate-spin text-[var(--color-accent)]" />
+        <span className="font-medium">{name}</span>
+        <span className="text-[var(--color-muted)]">
+          {tr(
+            "playlist_status_running",
+            { index: runStatus.stepIndex + 1, total: playlist?.steps.length ?? 0 },
+            `Sending step ${runStatus.stepIndex + 1} of ${playlist?.steps.length ?? 0}`,
+          )}
+          {step ? `: ${basename(step.path)}` : ""}
+        </span>
+      </div>
+    );
+  }
+
+  if (runStatus.kind === "sleeping") {
+    const elapsed = now - runStatus.sleepStartedAtMs;
+    const remaining = Math.max(0, runStatus.sleepDurationMs - elapsed);
+    return (
+      <div className="mb-3 flex items-center gap-2 rounded-md border border-[var(--color-accent)] bg-[var(--color-surface)] p-2 text-xs">
+        <Clock size={14} className="text-[var(--color-accent)]" />
+        <span className="font-medium">{name}</span>
+        <span className="text-[var(--color-muted)]">
+          {tr(
+            "playlist_status_sleeping",
+            { remaining: Math.ceil(remaining / 1000) },
+            `Sleeping ${Math.ceil(remaining / 1000)}s before next step…`,
+          )}
+        </span>
+      </div>
+    );
+  }
+
+  if (runStatus.kind === "done") {
+    return (
+      <div className="mb-3 flex items-center gap-2 rounded-md border border-[var(--color-good)] bg-[var(--color-surface)] p-2 text-xs">
+        <CheckCircle2 size={14} className="text-[var(--color-good)]" />
+        <span className="font-medium">{name}</span>
+        <span className="text-[var(--color-muted)]">
+          {tr(
+            "playlist_status_done",
+            { ok: runStatus.successCount, fail: runStatus.failureCount },
+            `Done — ${runStatus.successCount} sent, ${runStatus.failureCount} failed`,
+          )}
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mb-3 flex items-start gap-2 rounded-md border border-[var(--color-bad)] bg-[var(--color-surface)] p-2 text-xs text-[var(--color-bad)]">
+      <XCircle size={14} className="mt-0.5 shrink-0" />
+      <div className="min-w-0 flex-1">
+        <div className="font-medium">{name}</div>
+        <div className="mt-0.5">
+          {tr(
+            "playlist_status_failed",
+            { step: runStatus.stepIndex + 1, error: runStatus.error },
+            `Step ${runStatus.stepIndex + 1} failed: ${runStatus.error}`,
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PlaylistCard({
+  playlist,
+  host,
+  port,
+  anyRunning,
+}: {
+  playlist: Playlist;
+  host: string;
+  port: number;
+  anyRunning: boolean;
+}) {
+  const tr = useTr();
+  const renamePlaylist = usePayloadPlaylistsStore((s) => s.renamePlaylist);
+  const deletePlaylist = usePayloadPlaylistsStore((s) => s.deletePlaylist);
+  const setContinueOnFailure = usePayloadPlaylistsStore(
+    (s) => s.setContinueOnFailure,
+  );
+  const addStep = usePayloadPlaylistsStore((s) => s.addStep);
+  const removeStep = usePayloadPlaylistsStore((s) => s.removeStep);
+  const moveStepUp = usePayloadPlaylistsStore((s) => s.moveStepUp);
+  const moveStepDown = usePayloadPlaylistsStore((s) => s.moveStepDown);
+  const updateStep = usePayloadPlaylistsStore((s) => s.updateStep);
+  const run = usePayloadPlaylistsStore((s) => s.run);
+  const runStatus = usePayloadPlaylistsStore((s) => s.runStatus);
+
+  const isThisRunning =
+    (runStatus.kind === "running" || runStatus.kind === "sleeping") &&
+    "playlistId" in runStatus &&
+    runStatus.playlistId === playlist.id;
+  const activeStepIndex =
+    isThisRunning && "stepIndex" in runStatus ? runStatus.stepIndex : -1;
+
+  const handleAddStep = async () => {
+    const picked = await openDialog({
+      multiple: false,
+      directory: false,
+      filters: [
+        { name: "Payload", extensions: ["elf", "bin", "js", "lua"] },
+        { name: "All files", extensions: ["*"] },
+      ],
+    });
+    if (typeof picked !== "string") return;
+    addStep(playlist.id, { path: picked, sleepMs: 0 });
+  };
+
+  const handleRename = () => {
+    const name = window.prompt(
+      tr("playlist_rename_prompt", undefined, "New playlist name"),
+      playlist.name,
+    );
+    if (name === null) return;
+    renamePlaylist(playlist.id, name.trim());
+  };
+
+  const handleDelete = () => {
+    if (
+      !window.confirm(
+        tr(
+          "playlist_delete_confirm",
+          { name: playlist.name },
+          `Delete playlist "${playlist.name}"? This can't be undone.`,
+        ),
+      )
+    ) {
+      return;
+    }
+    deletePlaylist(playlist.id);
+  };
+
+  const canRun =
+    playlist.steps.length > 0 && !!host?.trim() && !anyRunning;
+
+  return (
+    <article className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
+      <header className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={handleRename}
+            className="text-sm font-semibold hover:underline"
+            title={tr(
+              "playlist_rename_tooltip",
+              undefined,
+              "Click to rename",
+            )}
+          >
+            {playlist.name}
+          </button>
+          <span className="text-[11px] text-[var(--color-muted)]">
+            ·{" "}
+            {tr(
+              "playlist_step_count",
+              { count: playlist.steps.length },
+              `${playlist.steps.length} step${playlist.steps.length === 1 ? "" : "s"}`,
+            )}
+          </span>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="flex items-center gap-1.5 text-[11px] text-[var(--color-muted)]">
+            <input
+              type="checkbox"
+              checked={playlist.continueOnFailure}
+              onChange={(e) =>
+                setContinueOnFailure(playlist.id, e.target.checked)
+              }
+              disabled={anyRunning}
+              className="h-3 w-3"
+            />
+            {tr(
+              "playlist_continue_on_failure",
+              undefined,
+              "Continue on failure",
+            )}
+          </label>
+          <Button
+            variant="primary"
+            size="sm"
+            leftIcon={<Play size={12} />}
+            onClick={() => void run(playlist.id, host.trim(), port)}
+            disabled={!canRun}
+            title={
+              !host?.trim()
+                ? tr(
+                    "playlist_need_host",
+                    undefined,
+                    "Set a PS5 IP at the top of the screen first",
+                  )
+                : playlist.steps.length === 0
+                  ? tr("playlist_need_steps", undefined, "Add at least one step")
+                  : tr(
+                      "playlist_run_tooltip",
+                      { name: playlist.name },
+                      `Run "${playlist.name}"`,
+                    )
+            }
+          >
+            {tr("playlist_run", undefined, "Run")}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            leftIcon={<Trash2 size={12} />}
+            onClick={handleDelete}
+            disabled={anyRunning}
+            title={tr(
+              "playlist_delete_tooltip",
+              undefined,
+              "Delete this playlist",
+            )}
+          >
+            {tr("delete", undefined, "Delete")}
+          </Button>
+        </div>
+      </header>
+
+      {playlist.steps.length === 0 ? (
+        <div className="rounded border border-dashed border-[var(--color-border)] p-3 text-center text-[11px] text-[var(--color-muted)]">
+          {tr(
+            "playlist_no_steps",
+            undefined,
+            "No steps yet. Add a payload below.",
+          )}
+        </div>
+      ) : (
+        <ol className="grid gap-1.5">
+          {playlist.steps.map((step, i) => (
+            <li
+              key={`${step.path}-${i}`}
+              className={`flex items-center gap-2 rounded border p-2 text-xs ${
+                i === activeStepIndex
+                  ? "border-[var(--color-accent)] bg-[var(--color-surface-2)]"
+                  : "border-[var(--color-border)] bg-[var(--color-surface-2)]"
+              }`}
+            >
+              <StepStatusIcon
+                index={i}
+                activeIndex={activeStepIndex}
+                isRunning={isThisRunning}
+              />
+              <span className="font-mono text-[11px] text-[var(--color-muted)] tabular-nums">
+                {String(i + 1).padStart(2, "0")}
+              </span>
+              <div className="min-w-0 flex-1 truncate font-mono text-[11px]">
+                {step.path}
+              </div>
+              <label className="flex shrink-0 items-center gap-1 text-[10px] text-[var(--color-muted)]">
+                {tr("playlist_step_sleep", undefined, "sleep")}
+                <input
+                  type="number"
+                  min={0}
+                  step={100}
+                  value={step.sleepMs}
+                  onChange={(e) =>
+                    updateStep(playlist.id, i, {
+                      sleepMs: sanitiseSleepMs(e.target.value),
+                    })
+                  }
+                  disabled={anyRunning}
+                  className="w-16 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-1 py-0.5 text-right text-[11px] tabular-nums"
+                />
+                <span>ms</span>
+              </label>
+              <div className="flex shrink-0 items-center gap-0.5">
+                <button
+                  type="button"
+                  onClick={() => moveStepUp(playlist.id, i)}
+                  disabled={anyRunning || i === 0}
+                  className="rounded p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] disabled:opacity-30"
+                  title={tr("playlist_step_up", undefined, "Move up")}
+                >
+                  <ArrowUp size={12} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => moveStepDown(playlist.id, i)}
+                  disabled={anyRunning || i === playlist.steps.length - 1}
+                  className="rounded p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] disabled:opacity-30"
+                  title={tr("playlist_step_down", undefined, "Move down")}
+                >
+                  <ArrowDown size={12} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => removeStep(playlist.id, i)}
+                  disabled={anyRunning}
+                  className="rounded p-1 text-[var(--color-muted)] hover:bg-[var(--color-bad)] hover:text-[var(--color-accent-contrast)] disabled:opacity-30"
+                  title={tr("playlist_step_remove", undefined, "Remove step")}
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            </li>
+          ))}
+        </ol>
+      )}
+
+      <div className="mt-2 flex justify-end">
+        <Button
+          variant="ghost"
+          size="sm"
+          leftIcon={<FolderOpen size={12} />}
+          onClick={handleAddStep}
+          disabled={anyRunning}
+        >
+          {tr("playlist_add_step", undefined, "Add step")}
+        </Button>
+      </div>
+    </article>
+  );
+}
+
+function StepStatusIcon({
+  index,
+  activeIndex,
+  isRunning,
+}: {
+  index: number;
+  activeIndex: number;
+  isRunning: boolean;
+}) {
+  if (!isRunning || activeIndex < 0) {
+    return (
+      <CircleDashed size={14} className="shrink-0 text-[var(--color-muted)]" />
+    );
+  }
+  if (index < activeIndex) {
+    return (
+      <CheckCircle2 size={14} className="shrink-0 text-[var(--color-good)]" />
+    );
+  }
+  if (index === activeIndex) {
+    return (
+      <Loader2 size={14} className="shrink-0 animate-spin text-[var(--color-accent)]" />
+    );
+  }
+  return <CircleDashed size={14} className="shrink-0 text-[var(--color-muted)]" />;
+}
+
+function basename(path: string): string {
+  return path.split(/[\\/]/).pop() ?? path;
+}
