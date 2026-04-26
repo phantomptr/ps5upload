@@ -44,7 +44,9 @@ CLIENT_DIR  := client
 .PHONY: all help
 .PHONY: setup setup-engine setup-payload setup-client
 .PHONY: build payload engine client _engine-release
-.PHONY: test test-root test-engine test-payload test-client
+.PHONY: test test-root test-engine test-engine-coverage test-desktop test-payload test-client test-client-coverage
+.PHONY: lint lint-scripts lint-client audit-scripts coverage coverage-engine coverage-client
+.PHONY: quality quality-full quality-hardware ci ci-full
 .PHONY: clean clean-payload clean-engine clean-client
 .PHONY: verify info install-hooks
 .PHONY: run-engine run-client dev start
@@ -80,9 +82,19 @@ help:
 	@echo "  make client           - Build the Tauri/React UI"
 	@echo ""
 	@echo "Testing:"
+	@echo "  make lint             - script syntax + frontend ESLint"
+	@echo "  make lint-scripts     - Node/Bash/Python/PowerShell syntax checks"
+	@echo "  make audit-scripts    - Inventory script/test utilities"
+	@echo "  make quality          - Full non-hardware validation gate"
+	@echo "  make quality-full     - quality + payload validation"
+	@echo "  make quality-hardware - quality + live PS5 validate"
+	@echo "  make coverage         - Rust + frontend coverage reports"
+	@echo "  make coverage-engine  - Rust coverage report only"
+	@echo "  make coverage-client  - Frontend coverage report only"
 	@echo "  make test-engine      - cargo test --workspace"
+	@echo "  make test-desktop     - Tauri Rust cargo check/clippy/test"
 	@echo "  make test-payload     - Validate $(PAYLOAD_ELF)"
-	@echo "  make test-client      - Type-check + build client UI"
+	@echo "  make test-client      - Type-check + lint + unit tests + build client UI"
 	@echo ""
 	@echo "Version:"
 	@echo "  make sync-version       - Sync downstream files from VERSION (canonical source)"
@@ -337,6 +349,39 @@ test: test-root test-engine test-payload test-client
 	@echo "✓ All tests passed"
 	@echo ""
 
+lint: lint-scripts lint-client
+
+lint-scripts:
+	@npm run scripts:check
+
+lint-client:
+	@cd $(CLIENT_DIR) && npm run lint
+
+audit-scripts:
+	@npm run scripts:audit
+
+coverage:
+	@npm run coverage
+
+coverage-engine:
+	@npm run coverage -- --engine-only
+
+coverage-client:
+	@npm run coverage -- --client-only
+
+quality:
+	@npm run validate
+
+quality-full:
+	@npm run validate:full
+
+quality-hardware:
+	@npm run validate:hardware
+
+ci: quality
+
+ci-full: quality-full
+
 # Root-level tests: syntax-check the node scripts that back the bench + smoke
 # harnesses. Hardware smoke coverage lives in `make sweep` / `make validate`.
 test-root:
@@ -353,6 +398,16 @@ test-engine: setup-engine
 	@cd $(ENGINE_DIR) && $(CARGO) test --workspace
 	@echo "✓ Engine tests passed"
 
+test-engine-coverage:
+	@$(MAKE) coverage-engine
+
+test-desktop: setup-engine
+	@echo "Checking Tauri Rust shell..."
+	@cd $(CLIENT_DIR)/src-tauri && $(CARGO) check --all-targets
+	@cd $(CLIENT_DIR)/src-tauri && $(CARGO) clippy --all-targets -- -D warnings
+	@cd $(CLIENT_DIR)/src-tauri && $(CARGO) test
+	@echo "✓ Desktop Rust checks passed"
+
 test-payload: payload
 	@echo "Validating payload binary..."
 	@if [ ! -f "$(PAYLOAD_ELF)" ]; then \
@@ -367,12 +422,18 @@ test-payload: payload
 
 test-client: setup-client
 	@echo "Testing client build..."
+	@cd $(CLIENT_DIR) && npm run typecheck
+	@cd $(CLIENT_DIR) && npm run lint
+	@cd $(CLIENT_DIR) && npm test
 	@cd $(CLIENT_DIR) && npm run build:vite
 	@if [ ! -d "$(CLIENT_DIR)/dist" ]; then \
 		echo "ERROR: client build failed - dist directory not found."; \
 		exit 1; \
 	fi
 	@echo "✓ Client checks passed"
+
+test-client-coverage:
+	@$(MAKE) coverage-client
 
 verify: test
 	@echo "Running client packaging validation (Tauri)..."

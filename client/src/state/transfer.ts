@@ -148,8 +148,8 @@ export const useTransferStore = create<TransferState>((set) => {
       // a tx_id would just create surprise skip-behavior on re-upload.
       const host = hostFromAddr(addr);
       let txId: string | null = null;
-      let persistedMode: "reconcile" | "dir" | null = null;
       if (isFolder) {
+        const persistedMode = strategy === "resume" ? "reconcile" : "dir";
         if (strategy === "overwrite") {
           // Override means "start from scratch" — drop any prior tx_id
           // so the next Resume click doesn't accidentally skip shards
@@ -162,7 +162,6 @@ export const useTransferStore = create<TransferState>((set) => {
             // by TTL within 24 h.
           }
           txId = generateTxIdHex();
-          persistedMode = "dir";
         } else {
           // strategy === "resume": look up a prior tx_id for this
           // (host, src, dest). Missing or expired → fresh id.
@@ -172,7 +171,6 @@ export const useTransferStore = create<TransferState>((set) => {
             txId = null;
           }
           if (!txId) txId = generateTxIdHex();
-          persistedMode = "reconcile";
         }
         try {
           await resumeTxidRemember(host, srcPath, dest, txId, persistedMode);

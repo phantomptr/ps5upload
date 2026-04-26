@@ -27,10 +27,10 @@
 
 If yes, which files:
 - [ ] README.md
-- [ ] QUICKSTART.md
-- [ ] PROTOCOL.md
-- [ ] BUILDING.md
-- [ ] IMPLEMENTATION_STATUS.md
+- [ ] TESTING.md
+- [ ] FAQ.md
+- [ ] bench/README.md
+- [ ] tests/README.md
 - [ ] Other: _______________
 
 **If no documentation updates:** Explain why documentation changes were not needed.
@@ -38,7 +38,10 @@ If yes, which files:
 ## Testing
 <!-- Describe the tests you ran -->
 
+- [ ] `npm run validate`
+- [ ] `npm run coverage`
 - [ ] Built PS5 payload successfully
+- [ ] Cross-platform CI target checks passed
 - [ ] Tested on real PS5 hardware
 - [ ] Tested desktop app
 - [ ] Verified all example commands in docs work

@@ -1,6 +1,13 @@
 {
   "private": true,
   "scripts": {
+    "validate": "node scripts/validate-repo.mjs",
+    "validate:full": "node scripts/validate-repo.mjs --full",
+    "validate:hardware": "node scripts/validate-repo.mjs --hardware",
+    "lint": "node scripts/check-scripts.mjs && npm --prefix client run lint",
+    "coverage": "node scripts/coverage.mjs",
+    "scripts:check": "node scripts/check-scripts.mjs",
+    "scripts:audit": "node scripts/audit-scripts.mjs",
     "bench:ftx2-upload": "node bench/run-ftx2-upload.mjs",
     "bench:ftx2-gate": "node bench/check-ftx2-baseline.mjs",
     "smoke:hardware": "node tests/smoke-hardware.mjs",

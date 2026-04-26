@@ -21,10 +21,10 @@ Use this checklist when reviewing pull requests or your own code changes.
 
 ### Check if these files need updates:
 - [ ] **README.md** - Main docs (features, usage, examples)
-- [ ] **QUICKSTART.md** - Quick start guide
-- [ ] **docs/PROTOCOL.md** - If protocol changed
-- [ ] **docs/BUILDING.md** - If build process changed
-- [ ] **IMPLEMENTATION_STATUS.md** - If features added/completed
+- [ ] **TESTING.md** - If validation, CI, coverage, or hardware test flow changed
+- [ ] **FAQ.md** - If user-facing behavior changed
+- [ ] **bench/README.md** - If benchmark or perf-gate behavior changed
+- [ ] **tests/README.md** - If hardware smoke behavior changed
 - [ ] **Code comments** - Updated for clarity
 
 ### Verify Documentation Accuracy:
@@ -35,8 +35,11 @@ Use this checklist when reviewing pull requests or your own code changes.
 - [ ] No broken links
 
 ## Testing
-- [ ] Unit tests pass (if applicable)
-- [ ] Integration tests pass
+- [ ] `npm run validate` passes locally or CI equivalent passed
+- [ ] `npm run coverage` was reviewed for logic-heavy changes
+- [ ] Unit tests pass
+- [ ] Integration/mock tests pass
+- [ ] Cross-platform target checks pass in CI
 - [ ] Tested on real PS5 hardware (or equivalent)
 - [ ] Tested edge cases
 - [ ] Performance tested with large files

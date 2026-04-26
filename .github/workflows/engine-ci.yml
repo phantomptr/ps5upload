@@ -140,8 +140,12 @@ jobs:
   # system deps on Linux (webkit/gtk), so we cache aggressively.
   # ─────────────────────────────────────────────────────────────────────
   rust-desktop:
-    name: rust (desktop shell)
-    runs-on: ubuntu-24.04
+    name: rust desktop (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14, windows-2022]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -151,6 +155,7 @@ jobs:
           components: clippy
 
       - name: Install Tauri Linux deps
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -170,8 +175,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             client/src-tauri/target
-          key: ${{ runner.os }}-desktop-cargo-${{ hashFiles('client/src-tauri/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-desktop-cargo-
+          key: ${{ matrix.os }}-desktop-cargo-${{ hashFiles('client/src-tauri/Cargo.lock') }}
+          restore-keys: ${{ matrix.os }}-desktop-cargo-
 
       # tauri.conf.json bundles two out-of-tree resources: the PS5
       # payload (ps5upload.elf.gz) and the engine sidecar binary.
@@ -184,6 +189,7 @@ jobs:
       # fault — but CI only checks, never runs, so the shape is what
       # matters.
       - name: Stub payload resource
+        shell: bash
         run: |
           mkdir -p payload
           printf '\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x03\x03\x00\x00\x00\x00\x00\x00\x00\x00\x00' > payload/ps5upload.elf.gz
@@ -207,8 +213,7 @@ jobs:
         run: cargo test
 
   # ─────────────────────────────────────────────────────────────────────
-  # Client frontend — TypeScript typecheck + Vite production build.
-  # No vitest tests wired up yet; when they are, add an npm test step.
+  # Client frontend — TypeScript typecheck, ESLint, Vitest, Vite build.
   # ─────────────────────────────────────────────────────────────────────
   client-frontend:
     name: client (ts + vite)
@@ -228,11 +233,80 @@ jobs:
 
       - name: TypeScript typecheck
         working-directory: client
-        run: npx tsc --noEmit
+        run: npm run typecheck
+
+      - name: ESLint
+        working-directory: client
+        run: npm run lint
+
+      - name: Vitest
+        working-directory: client
+        run: npm test
 
       - name: Vite production build
         working-directory: client
-        run: npx vite build
+        run: npm run build:vite
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Repo scripts and hygiene. Runs the same parser/audit layer exposed by
+  # `make lint-scripts` / `npm run scripts:check`.
+  # ─────────────────────────────────────────────────────────────────────
+  repo-scripts:
+    name: repo scripts
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Check script syntax
+        run: npm run scripts:check
+
+      - name: Audit scripts
+        run: npm run scripts:audit
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Coverage reports. This is a reporting job, not the primary gate:
+  # rust-engine and client-frontend above fail fast on correctness.
+  # Artifacts contain HTML + lcov for trend tracking and local inspection.
+  # ─────────────────────────────────────────────────────────────────────
+  coverage:
+    name: coverage reports
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - name: Install client deps
+        working-directory: client
+        run: npm ci --no-audit --no-fund
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Generate coverage
+        run: npm run coverage
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-reports
+          path: |
+            coverage/
+            client/coverage/
 
   # ─────────────────────────────────────────────────────────────────────
   # Payload ELF — compile against the ps5-payload-sdk so we catch any
@@ -282,24 +356,3 @@ jobs:
           fi
 
   # ─────────────────────────────────────────────────────────────────────
-  # Bench scripts: syntax check only. The scripts themselves need a
-  # running PS5 + engine, so they can't actually run in CI — but a
-  # Node syntax check catches bitrot from JS API changes.
-  # ─────────────────────────────────────────────────────────────────────
-  bench-syntax:
-    name: bench scripts (syntax)
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: node --check all bench scripts
-        run: |
-          node --check bench/run-ftx2-upload.mjs
-          node --check bench/run-ftx2-sweep.mjs
-          node --check bench/check-ftx2-baseline.mjs
-          node --check bench/profiles.mjs
-          node --check tests/smoke-hardware.mjs

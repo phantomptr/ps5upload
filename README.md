@@ -136,7 +136,11 @@ All workflows go through the root `Makefile` (see `make help`).
 | `make client` | `vite build` in `client/` |
 | `make run-client` | Tauri dev (vite + Rust main process) |
 | `make run-engine` | `ps5upload-engine` on `localhost:19113` |
-| `make send-payload` | `nc` the built ELF to `PS5_HOST:PS5_LOADER_PORT` |
+| `make send-payload` | Send the built ELF to `PS5_HOST:PS5_LOADER_PORT` |
+| `npm run validate` | Full non-hardware quality gate |
+| `make quality` | Same full non-hardware quality gate via Make |
+| `npm run coverage` | Generate frontend + Rust coverage reports |
+| `make coverage` | Same coverage reports via Make |
 | `make test` | Script syntax + engine tests + payload validation + client build |
 | `make test-engine` | `cargo test --workspace` (no hardware needed) |
 | `make dist` | Tauri bundle under `client/src-tauri/target/release/bundle/` |
@@ -150,11 +154,21 @@ FTX2 server — no PS5 needed:
 make test-engine
 ```
 
+Full local quality gate and coverage reports:
+
+```bash
+npm run validate
+npm run coverage
+```
+
 Real-hardware smoke test (requires payload already loaded):
 
 ```bash
 npm run smoke:hardware
 ```
+
+See [`TESTING.md`](TESTING.md) for the complete mock-test, coverage,
+cross-platform, and live-PS5 validation workflow.
 
 ## Tech stack
 

@@ -38,6 +38,7 @@ venv/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+scripts/.translate-cache.json
 
 # ─── Client (Vite / Tauri) ───────────────────────────────────────────────
 client/dist/
@@ -56,6 +57,7 @@ payload/build/
 *.a
 *.so
 *.dylib
+tests/lab/elev_probe/*.elf
 
 # ─── Bench artefacts (generated on demand) ───────────────────────────────
 bench/fixtures/
