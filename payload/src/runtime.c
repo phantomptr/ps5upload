@@ -3874,17 +3874,39 @@ static int cp_rf(const char *src, const char *dst, int depth) {
         }
         unsigned char *buf = (unsigned char *)malloc(COPY_BUF);
         if (!buf) { close(sfd); close(dfd); return -1; }
+        off_t total_written = 0;
         for (;;) {
             ssize_t r = read(sfd, buf, COPY_BUF);
-            if (r < 0) { if (errno == EINTR) continue; rc = -1; break; }
+            if (r < 0) {
+                if (errno == EINTR) continue;
+                /* Log the errno + offset so the engine.log line
+                 * "fs_copy failed" has root-cause context. The 4 MiB
+                 * buffer + posix_fadvise made each remaining
+                 * failure represent 64× more lost progress vs the
+                 * pre-perf-fix path, so getting the actual reason
+                 * surfaced here matters more now than it did. */
+                fprintf(stderr,
+                        "[payload2] fs_copy: read(%s) failed at offset %lld errno=%d\n",
+                        src, (long long)total_written, errno);
+                rc = -1;
+                break;
+            }
             if (r == 0) break;
             ssize_t written = 0;
             while (written < r) {
                 ssize_t w = write(dfd, buf + written, (size_t)(r - written));
-                if (w < 0) { if (errno == EINTR) continue; rc = -1; break; }
+                if (w < 0) {
+                    if (errno == EINTR) continue;
+                    fprintf(stderr,
+                            "[payload2] fs_copy: write(%s) failed at offset %lld errno=%d\n",
+                            dst, (long long)(total_written + written), errno);
+                    rc = -1;
+                    break;
+                }
                 written += w;
             }
             if (rc != 0) break;
+            total_written += r;
         }
         free(buf);
         close(sfd);

@@ -239,6 +239,15 @@ pub fn download_to_local(
             Some(name) => local_path.with_file_name(format!("{name}.part")),
             None => local_path.with_extension("part"),
         };
+        // Best-effort sweep of any leftover `.part` orphan from a
+        // prior failed attempt. Without this, a user retrying a
+        // failed download accumulates one orphan per attempt next
+        // to the real file. The sweep targets only the exact
+        // part_path we're about to write, so unrelated `.part`
+        // files in the same dir aren't touched.
+        if part_path.exists() {
+            let _ = fs::remove_file(&part_path);
+        }
         let mut file = fs::File::create(&part_path)
             .with_context(|| format!("create {}", part_path.display()))?;
 

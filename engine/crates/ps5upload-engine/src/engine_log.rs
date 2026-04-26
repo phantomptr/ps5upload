@@ -82,7 +82,16 @@ pub(crate) fn record(level: &'static str, mut msg: String) {
         level,
         msg,
     };
-    let mut g = ring().lock().unwrap();
+    // Poison-safe: if a panic in another `record()` call left the
+    // mutex poisoned, recover the inner data instead of panicking.
+    // Every `log_info!`/`log_warn!` call goes through here, and the
+    // logging sweep added ~30 such call sites — a single panic
+    // anywhere in the engine (e.g. an unwrap on a None) used to
+    // cascade through every subsequent log call and bring the
+    // whole engine down. The ring buffer's only state is the
+    // contained entries; a half-mutated ring is still safe to read
+    // from and append to.
+    let mut g = ring().lock().unwrap_or_else(|e| e.into_inner());
     if g.len() >= RING_CAP {
         g.pop_front();
     }
@@ -92,7 +101,7 @@ pub(crate) fn record(level: &'static str, mut msg: String) {
 /// Return every entry whose `seq` is strictly greater than `since`.
 /// Callers poll with `since = last-seen-seq` to receive only new lines.
 pub(crate) fn tail_since(since: u64) -> Vec<LogEntry> {
-    let g = ring().lock().unwrap();
+    let g = ring().lock().unwrap_or_else(|e| e.into_inner());
     g.iter().filter(|e| e.seq > since).cloned().collect()
 }
 

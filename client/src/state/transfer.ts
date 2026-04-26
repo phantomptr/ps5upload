@@ -156,10 +156,14 @@ export const useTransferStore = create<TransferState>((set) => {
           // from this fresh run's manifest.
           try {
             await resumeTxidForget(host, srcPath, dest);
-          } catch {
-            // forget() failure is not worth failing the upload over.
-            // Worst case: an orphan record with a stale tx_id, pruned
-            // by TTL within 24 h.
+          } catch (e) {
+            // forget() failure is not worth failing the upload over
+            // (worst case: an orphan record with a stale tx_id,
+            // pruned by TTL within 24 h). But a persistent failure
+            // here means cross-session Resume silently breaks
+            // forever — log so a user grepping the dev console
+            // can find it.
+            console.warn("[transfer] resumeTxidForget failed:", e);
           }
           txId = generateTxIdHex();
         } else {
@@ -167,18 +171,24 @@ export const useTransferStore = create<TransferState>((set) => {
           // (host, src, dest). Missing or expired → fresh id.
           try {
             txId = await resumeTxidLookup(host, srcPath, dest);
-          } catch {
+          } catch (e) {
+            console.warn(
+              "[transfer] resumeTxidLookup failed; treating as fresh upload:",
+              e,
+            );
             txId = null;
           }
           if (!txId) txId = generateTxIdHex();
         }
         try {
           await resumeTxidRemember(host, srcPath, dest, txId, persistedMode);
-        } catch {
-          // Persistence failure degrades UX (no cross-session resume)
-          // but doesn't break the upload itself — still pass the tx_id
-          // in-memory so within-session resume via the engine's retry
-          // loop still fires.
+        } catch (e) {
+          // Persistence failure degrades UX (no cross-session
+          // resume) but doesn't break the upload itself — still
+          // pass the tx_id in-memory so within-session resume via
+          // the engine's retry loop still fires. Log so a
+          // permanent failure (corrupt store, perms) surfaces.
+          console.warn("[transfer] resumeTxidRemember failed:", e);
         }
       }
 

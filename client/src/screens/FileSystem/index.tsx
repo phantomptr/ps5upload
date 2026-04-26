@@ -768,6 +768,44 @@ export default function FileSystemScreen() {
         </div>
       )}
 
+      {/* Errors written to the bulk-op or download stores are
+          surfaced here too — local `error` state is lost on screen
+          unmount, but the store survives navigation. Without this
+          banner, a paste/delete/download that fails while the user
+          is on another tab silently drops the error and the user
+          gets no signal that the op finished badly. Each banner is
+          dismissible (clearError) so it doesn't block subsequent
+          operations. */}
+      {bulkOp.errorBanner && (
+        <div className="mb-3 flex items-start gap-2 rounded-md border border-[var(--color-bad)] bg-[var(--color-surface-2)] p-2 text-xs">
+          <AlertTriangle size={12} className="mt-0.5 text-[var(--color-bad)]" />
+          <span className="flex-1">{bulkOp.errorBanner}</span>
+          <button
+            type="button"
+            onClick={() => useFsBulkOpStore.getState().clearError()}
+            className="rounded px-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)]"
+            aria-label={tr("dismiss", undefined, "Dismiss")}
+          >
+            ×
+          </button>
+        </div>
+      )}
+
+      {downloadOp.errorBanner && !downloadOp.active && (
+        <div className="mb-3 flex items-start gap-2 rounded-md border border-[var(--color-bad)] bg-[var(--color-surface-2)] p-2 text-xs">
+          <AlertTriangle size={12} className="mt-0.5 text-[var(--color-bad)]" />
+          <span className="flex-1">{downloadOp.errorBanner}</span>
+          <button
+            type="button"
+            onClick={() => useFsDownloadOpStore.getState().clearError()}
+            className="rounded px-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)]"
+            aria-label={tr("dismiss", undefined, "Dismiss")}
+          >
+            ×
+          </button>
+        </div>
+      )}
+
       {entries === null && !loading && !error && (
         <div className="rounded-md border border-dashed border-[var(--color-border)] p-4 text-center text-xs text-[var(--color-muted)]">
           Connect to your PS5 first — use the Connection tab.
@@ -1061,6 +1099,23 @@ function DownloadOpBanner({
         <span className="text-[var(--color-muted)]">
           {formatDuration(elapsedSec)}
         </span>
+        {/* Stop button: bumps the store's runId so the runner exits
+            at its next poll iteration. The engine job continues
+            server-side (no engine-side cancel API yet); the .part
+            file lands but the UI stops observing. Wires up the
+            previously-dead requestStop() action. */}
+        <button
+          type="button"
+          onClick={() => useFsDownloadOpStore.getState().requestStop()}
+          className="ml-auto rounded-md border border-[var(--color-border)] px-2 py-0.5 text-[10px] hover:bg-[var(--color-surface-3)]"
+          title={tr(
+            "fs_download_stop_tooltip",
+            undefined,
+            "Stop watching this download (engine job continues server-side)",
+          )}
+        >
+          {tr("fs_download_stop", undefined, "Stop")}
+        </button>
       </div>
 
       <div className="mb-2 flex flex-wrap items-baseline gap-x-3 gap-y-0.5 font-mono text-[11px]">
