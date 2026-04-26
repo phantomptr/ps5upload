@@ -42,7 +42,7 @@ jobs:
     name: build-payload
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Sync downstream version files from VERSION before anything
       # compiles. engine-ci's version-sync job already enforces this on
@@ -50,7 +50,7 @@ jobs:
       # gets pushed against a branch where someone forgot to bump, the
       # tagged build is still consistent (payload's PS5UPLOAD2_VERSION
       # macro matches the Tauri bundle's version).
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
       - name: Sync version from VERSION
@@ -107,7 +107,7 @@ jobs:
           ls -la payload/ps5upload.elf payload/ps5upload.elf.gz
 
       - name: Upload payload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: ps5upload-payload
           path: |
@@ -164,10 +164,10 @@ jobs:
             rust_target: aarch64-pc-windows-msvc
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -189,7 +189,7 @@ jobs:
       # caching, cold builds take 15+ minutes per leg. Key by the
       # lockfile so a dep bump invalidates cleanly.
       - name: Cache cargo target
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -236,7 +236,7 @@ jobs:
       # invoking cargo. Materialise it at the path tauri.conf.json
       # expects (../../payload/ps5upload.elf relative to src-tauri).
       - name: Restore payload ELF
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: ps5upload-payload
           path: payload
@@ -422,7 +422,7 @@ jobs:
           ls -la "$dist_abs"
 
       - name: Upload platform bundle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: ps5upload-${{ matrix.platform }}-${{ matrix.arch }}
           path: dist/*
@@ -440,7 +440,7 @@ jobs:
       - build-client
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Important: resolve the tag inside a shell block that reads the
       # user-controlled `inputs.tag` via an env var, not direct
@@ -483,7 +483,7 @@ jobs:
           fi
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           path: artifacts
 
