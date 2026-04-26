@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   ArrowDown,
@@ -9,6 +9,7 @@ import {
   FolderOpen,
   Loader2,
   ListPlus,
+  Pencil,
   Play,
   Plus,
   Square,
@@ -51,16 +52,20 @@ export function PlaylistsPanel({
   }, [loaded, hydrate]);
 
   const handleNew = () => {
-    const name = window.prompt(
-      tr(
-        "playlist_new_prompt",
-        undefined,
-        "Name for the new playlist",
-      ),
-      tr("playlist_default_name", undefined, "New playlist"),
-    );
-    if (name === null) return;
-    createPlaylist(name.trim() || tr("playlist_default_name", undefined, "New playlist"));
+    // window.prompt doesn't work in Tauri webview by default — clicking
+    // it returns null silently. Skip the modal entirely: create with
+    // an auto-numbered default name and let users rename inline by
+    // clicking the title in the card header. Quicker UX too — common
+    // case is "make a playlist, drop steps in", renaming is rare.
+    const baseName = tr("playlist_default_name", undefined, "New playlist");
+    const existing = new Set(playlists.map((p) => p.name));
+    let n = playlists.length + 1;
+    let candidate = `${baseName} ${n}`;
+    while (existing.has(candidate)) {
+      n += 1;
+      candidate = `${baseName} ${n}`;
+    }
+    createPlaylist(candidate);
   };
 
   const isBusy = runStatus.kind === "running" || runStatus.kind === "sleeping";
@@ -256,6 +261,35 @@ function PlaylistCard({
   const activeStepIndex =
     isThisRunning && "stepIndex" in runStatus ? runStatus.stepIndex : -1;
 
+  // Inline rename: click the name to swap into an editable input,
+  // commit on blur or Enter, cancel on Escape. Avoids window.prompt
+  // (broken in Tauri webview) and keeps the rename gesture in-place.
+  const [renaming, setRenaming] = useState(false);
+  const [draftName, setDraftName] = useState(playlist.name);
+  const renameRef = useRef<HTMLInputElement | null>(null);
+  // Custom delete-confirm modal — Tauri webview also no-ops
+  // window.confirm, so we render an in-tree confirmation dialog.
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+
+  useEffect(() => {
+    if (renaming) {
+      setDraftName(playlist.name);
+      // Defer focus until after the input renders.
+      requestAnimationFrame(() => {
+        renameRef.current?.focus();
+        renameRef.current?.select();
+      });
+    }
+  }, [renaming, playlist.name]);
+
+  const commitRename = () => {
+    const trimmed = draftName.trim();
+    if (trimmed.length > 0 && trimmed !== playlist.name) {
+      renamePlaylist(playlist.id, trimmed);
+    }
+    setRenaming(false);
+  };
+
   const handleAddStep = async () => {
     const picked = await openDialog({
       multiple: false,
@@ -269,49 +303,49 @@ function PlaylistCard({
     addStep(playlist.id, { path: picked, sleepMs: 0 });
   };
 
-  const handleRename = () => {
-    const name = window.prompt(
-      tr("playlist_rename_prompt", undefined, "New playlist name"),
-      playlist.name,
-    );
-    if (name === null) return;
-    renamePlaylist(playlist.id, name.trim());
-  };
-
-  const handleDelete = () => {
-    if (
-      !window.confirm(
-        tr(
-          "playlist_delete_confirm",
-          { name: playlist.name },
-          `Delete playlist "${playlist.name}"? This can't be undone.`,
-        ),
-      )
-    ) {
-      return;
-    }
-    deletePlaylist(playlist.id);
-  };
-
   const canRun =
     playlist.steps.length > 0 && !!host?.trim() && !anyRunning;
 
   return (
     <article className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
       <header className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={handleRename}
-            className="text-sm font-semibold hover:underline"
-            title={tr(
-              "playlist_rename_tooltip",
-              undefined,
-              "Click to rename",
-            )}
-          >
-            {playlist.name}
-          </button>
+        <div className="flex min-w-0 items-center gap-2">
+          {renaming ? (
+            <input
+              ref={renameRef}
+              value={draftName}
+              onChange={(e) => setDraftName(e.target.value)}
+              onBlur={commitRename}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  commitRename();
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  setRenaming(false);
+                }
+              }}
+              className="rounded-md border border-[var(--color-accent)] bg-[var(--color-surface)] px-2 py-0.5 text-sm font-semibold outline-none"
+            />
+          ) : (
+            <button
+              type="button"
+              onClick={() => setRenaming(true)}
+              disabled={anyRunning}
+              className="flex items-center gap-1 text-sm font-semibold hover:text-[var(--color-accent)] disabled:opacity-60"
+              title={tr(
+                "playlist_rename_tooltip",
+                undefined,
+                "Click to rename",
+              )}
+            >
+              <span className="truncate">{playlist.name}</span>
+              <Pencil
+                size={11}
+                className="opacity-0 transition-opacity group-hover:opacity-60"
+              />
+            </button>
+          )}
           <span className="text-[11px] text-[var(--color-muted)]">
             ·{" "}
             {tr(
@@ -366,7 +400,7 @@ function PlaylistCard({
             variant="ghost"
             size="sm"
             leftIcon={<Trash2 size={12} />}
-            onClick={handleDelete}
+            onClick={() => setConfirmingDelete(true)}
             disabled={anyRunning}
             title={tr(
               "playlist_delete_tooltip",
@@ -378,6 +412,52 @@ function PlaylistCard({
           </Button>
         </div>
       </header>
+
+      {confirmingDelete && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={() => setConfirmingDelete(false)}
+        >
+          <div
+            className="w-full max-w-md rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="mb-2 text-sm font-semibold">
+              {tr(
+                "playlist_delete_title",
+                { name: playlist.name },
+                `Delete "${playlist.name}"?`,
+              )}
+            </h3>
+            <p className="mb-4 text-xs text-[var(--color-muted)]">
+              {tr(
+                "playlist_delete_body",
+                undefined,
+                "This removes the playlist and all its steps. The payload files on disk are not touched.",
+              )}
+            </p>
+            <div className="flex items-center justify-end gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setConfirmingDelete(false)}
+              >
+                {tr("cancel", undefined, "Cancel")}
+              </Button>
+              <Button
+                variant="danger"
+                size="sm"
+                onClick={() => {
+                  setConfirmingDelete(false);
+                  deletePlaylist(playlist.id);
+                }}
+              >
+                {tr("delete", undefined, "Delete")}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {playlist.steps.length === 0 ? (
         <div className="rounded border border-dashed border-[var(--color-border)] p-3 text-center text-[11px] text-[var(--color-muted)]">
