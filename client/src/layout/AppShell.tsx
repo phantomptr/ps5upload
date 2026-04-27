@@ -63,6 +63,13 @@ function useStatusPolling() {
             // flicker; only clear when we never had a value.
             payloadVersion: s.payloadVersion,
             ps5Kernel: s.ps5Kernel,
+            // Clear the "rechecking…" indicator any time a tick lands
+            // a real result. Connection's handleSend sets probing=true
+            // on Replace payload click; this is the safety-net path
+            // that clears it if handleSend's own probe never got a
+            // chance to (e.g. user navigated away from Connection
+            // mid-flight, leaving the flag latched).
+            payloadProbing: false,
           });
         }
       } catch {
@@ -70,6 +77,10 @@ function useStatusPolling() {
           setStatus({
             payloadStatus: "down",
             payloadStatusHost: probedHost,
+            // Probe failed — also clear the probing flag so we don't
+            // dangle a "rechecking…" badge forever on a host that's
+            // gone offline mid-replace.
+            payloadProbing: false,
           });
         }
       }

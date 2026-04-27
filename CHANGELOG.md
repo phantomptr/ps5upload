@@ -4,6 +4,251 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.2.24
+
+**Move-progress accuracy + FileSystem volume picker + global activity coverage**
+
+A grab-bag release driven by user reports about the FileSystem and
+Library screens: a misleading move-progress banner, a clunky way to
+jump between volumes, preferences that didn't survive a reload, and
+in-flight operations the OperationBar didn't surface.
+
+### Library Move stops gaslighting users on the latest payload
+
+A user reported that moving Dead Space (PPSA03845) from `/mnt/ext1` to
+`/mnt/usb0` showed *"Live progress unavailable — your PS5 payload is
+older than this app"* even though the Connection card confirmed
+`Payload v2.2.23 matches this app`. Two independent bugs combined to
+produce that:
+
+- **Fix (payload): the FS_OP slot was registered *after* the
+  recursive_size pre-walk.** On small-file-heavy trees (PPSA01342:
+  223k files / 19k dirs), the walk could outrun the client poller's
+  250 ms initial delay. The first `FS_OP_STATUS` poll then landed on
+  a not-yet-registered op — the engine surfaced that as a transient
+  error which the client mis-attributed to an old payload, latching
+  the warning banner permanently for the rest of the move. The
+  payload now registers the slot up front with `total_bytes=0` and
+  patches the total in via a new `fs_op_set_total` once the walk
+  completes, so the poller sees `found:true` from the very first
+  call. Same fix applied to `handle_fs_delete` (the delete-progress
+  path added in 2.2.22 had the identical race shape).
+
+- **Fix (client): replaced brittle error-string matching with a
+  version-aware decision.** The Library Move poller used to set the
+  unsupported-payload flag whenever the engine error contained
+  `"unsupported_frame"` or `"decode FS_OP_STATUS_ACK body"`. Both
+  substrings can appear in transient errors on a *current* payload
+  (race-window parses, mid-flight reconnects), so a single bad poll
+  would gaslight users on the latest build into thinking they
+  needed to replace the payload. The poller now consults the
+  Connection screen's STATUS-probed `payloadVersion`: if it's known
+  to be `< 2.2.7` or `< 2.2.16`, latch immediately with the
+  matching threshold-specific banner (honest); if it's current,
+  swallow up to 5 consecutive transient failures then stop polling
+  silently with no banner. The version-string fallback (no probe
+  data + repeated old-payload-shaped errors) still works for very
+  old builds that don't report version. New helper
+  `lib/movePollerPolicy.ts` (+16 unit tests) keeps the policy
+  pure-functional so we can test it without mocking React state.
+
+- **Fix (client): the warning banner now names the specific
+  threshold the running payload is missing** (`predates the 2.2.16
+  FS_OP_STATUS_ACK body fix` or `predates 2.2.7 FS_OP_STATUS`)
+  rather than the generic `"older than this app"` string. When it
+  *does* fire, the user can see exactly which fix they need.
+
+Net effect: on a current payload (2.2.16+), Move shows live
+byte-progress reliably and never falsely accuses the payload of
+being old. On a genuinely old payload, the banner is more
+specific about what's missing. The actual copy and cancel paths
+are untouched — same 16 MiB inner loop, same atomic counters,
+same `FS_OP_CANCEL` semantics.
+
+### New: FileSystem volume picker
+
+The FileSystem screen used to start every session at hardcoded
+`/data` and only let users navigate via breadcrumbs + parent-up.
+Jumping between volumes (`/data` → `/mnt/ext1` → `/mnt/usb0`) meant
+walking up to `/`, then back down — tedious for any move-from-internal
+workflow. Added a dropdown above the breadcrumb that lists every
+writable, non-placeholder volume with its free-space readout
+(`/mnt/ext1 · 412 GiB free`). Selecting a volume jumps to its
+root. Same `fetchVolumes()` data Library's Move modal already uses,
+filtered identically. The picker hides itself entirely when the
+PS5 has no writable volumes, so it doesn't add noise on a stock
+or partially-mounted machine.
+
+### Preferences now actually persist
+
+Two settings users expected to survive a reload silently didn't:
+
+- **PS5 host**. `connection.host` was hardcoded to `192.168.137.2`
+  on every fresh launch. Most users have one PS5 IP they reuse;
+  retyping it every session is friction with no upside. The store
+  now reads the last-typed value from localStorage on init and
+  writes back through `setHost`.
+- **Last-browsed FileSystem path**. Persisted per-host so a user
+  with two PS5s remembers each console's last directory
+  independently. Trims whitespace on the host key so typoed-then-
+  fixed inputs don't fragment storage. Defaults safely to `/data`
+  when no entry exists or localStorage is corrupted (malformed
+  JSON, schema bump, partially-truncated map).
+
+For confirmation, the prefs that *were* already persisted (language
+and theme via localStorage, activity history with 100-entry cap,
+upload queue via Tauri storage) all continue to work as before —
+the audit found no other expected-to-persist setting that's
+silently lost.
+
+### Connection screen no longer shows stale version data after Replace payload
+
+A user reported that after sending a fresh payload from the
+Connection screen, the version block kept showing the *old* version
+number for a few seconds before flipping to the new one. The
+ambiguity ("did the Replace not take?") was made worse by the fact
+that there's no visible "we're checking" cue — the numbers just sat
+there until the next 10 s background poll happened to land.
+
+Two coupled fixes:
+
+- **In-flight version flush.** `handleSend`'s probe loop already
+  calls `payloadCheck`, which returns the freshly-booted payload's
+  `payloadVersion` + `ps5Kernel` along with the reachability flag.
+  The original code consumed only `reachable` and discarded the
+  rest, leaving the store with the old values until the next
+  AppShell poll. Now the moment the payload answers, the probe
+  writes the new version + kernel into the store — the version
+  block flips to the new numbers in lock-step with step2 going
+  "ok," not 10 s later.
+
+- **"Rechecking…" indicator.** Added a `payloadProbing` flag to the
+  connection store. `handleSend` flips it on at the start (and
+  clears `payloadVersion` / `ps5Kernel` so users don't squint at
+  numbers known to be stale); `handleSend`'s in-line probe and
+  AppShell's tick both clear it the moment they land a result.
+  While set, the VersionBlock renders with a small spinner +
+  "rechecking…" badge, value rows are dimmed in italics, and the
+  outdated-payload nudge is suppressed (the version we'd be
+  comparing against is mid-flight). When there's no current value
+  yet, the row reads "Probing…" — same effect for the very-first
+  send when there was nothing to dim.
+
+Result: clicking Replace payload now produces immediate, honest
+feedback. Either you see the new numbers fast, or you see a clear
+"we're checking" cue. No more ambiguous "is this stale?" reads.
+
+### OperationBar now shows every in-flight operation
+
+The global activity strip surfaces an op while it's running so the
+user has a global signal that "something is still happening" even
+after navigating away from the screen that started it. Coverage was
+patchy: uploads, downloads (FileSystem), bulk delete, paste-copy,
+paste-move, and Library Move were tracked; Library Download,
+Library Delete, Library Chmod, Library Mount, Library Unmount, and
+single-item FileSystem Delete went silent. A 100 GB Library
+Download or a recursive chmod on a 100k-file game folder is the
+exact case where users expect a global "still running" indicator,
+and exactly the case where they didn't get one.
+
+Each of those handlers now opens an activity entry on entry and
+closes it (`done` / `failed` / `stopped`) on every exit path. The
+download poller mirrors live byte-progress into the entry so the
+OperationBar shows the same `bytes / total · MiB/s` it shows for
+uploads. No new activity-store changes; the entries pre-existed in
+the `ActivityKind` enum (`library-chmod`, `library-mount`,
+`library-unmount`) but were unused.
+
+### Activity log + state-leak hygiene (second-pass audit)
+
+A second-pass review surfaced three lifecycle bugs in the new code
+that the first audit missed. All three are about state that gets
+set but never cleared on the un-happy path:
+
+- **Library Move's "done" finish leaked the poller's progress
+  note.** While a Move was running, the FS_OP_STATUS poller could
+  write a "Live progress unavailable — payload predates 2.2.16…"
+  string into the activity entry's `error` field (the field
+  doubles as a "note" while `outcome === running`). When the move
+  ultimately succeeded, the success-finish call passed no extras,
+  so `finish()`'s spread carried the running-state note into the
+  terminal record — Activity tab rendered a green checkmark next
+  to a red-looking "predates 2.2.16" line. `finish()` for the
+  success path now explicitly clears `error: undefined`.
+- **`payloadProbing` flag leaked on Connection unmount.** The
+  cleanup effect cancels the poll handle but didn't reset the
+  probing flag. A user clicking Replace and then immediately
+  navigating away would leave the "rechecking…" badge latched in
+  the store, only clearing on the next AppShell tick (up to 10 s
+  later). Cleanup now sets `payloadProbing: false` unconditionally;
+  no-op when the flag was already false, fixes the leak when it
+  wasn't.
+- **`handleSend`'s probe could pollute the store after a
+  mid-flight host change.** If the user clicked Replace, then
+  retyped the IP into the host field while `sendPayload` was still
+  running, the probe loop was closed-over the OLD host and would
+  eventually write that host's `payloadVersion` + `payloadStatusHost`
+  into the store — overwriting the newly-typed host's state. The
+  probe now compares its captured `host` to
+  `useConnectionStore.getState().host` before writing. If they've
+  diverged, it returns "ok" (the probe loop exits cleanly) but
+  skips the write — AppShell's host-change effect handles the new
+  host instead.
+- **Library Download orphaned activity entries on
+  navigate-away.** The download poller's three `mountedRef` short-
+  circuits exited the loop without closing the activity entry —
+  the engine job continues server-side, but the entry stayed
+  `running` until app restart. Worse, hitting Download again after
+  navigating back created a *second* "running" entry for the same
+  file. The exits now share a `bailOnUnmount()` helper that
+  finishes the entry as `stopped` with the same "engine job may
+  continue" wording the user-Stop path uses.
+
+### Other
+
+- **Volume picker edge cases.** Fixed two cases the longest-prefix
+  match got wrong: a path with a trailing slash (`/data/`) now
+  matches volume `/data` correctly, and the root path `/` no
+  longer arbitrarily picks the longest-named volume — it falls
+  through to "(custom path)" since `/` isn't really under any
+  volume root.
+- **i18n.** Added the new English keys for the volume picker, the
+  Connection rechecking badge, and the threshold-specific move-
+  progress banners to `i18n.ts`. Updated
+  `scripts/i18n-known-missing.json` to allowlist them in the 17
+  non-English locales (translation deferred); the i18n coverage
+  CI is green.
+- **CI: bumped `softprops/action-gh-release` from v2 → v3** (Node
+  20 → Node 24). v2 still works but emits the GHA Node 20
+  deprecation warning. v3.0.0 was published 2026-04-12; bumping
+  ahead of GitHub's June forced-Node-24 cutoff so the release
+  workflow's run page is warning-free.
+- **CI: cleared pre-existing red on `engine-ci`.** The
+  `rust (engine workspace)` job had been failing on every
+  release commit since at least v2.2.23 because of latent
+  `cargo fmt --check` drift in the engine's import block, and
+  the `version sync` job was newly red on this tag because
+  `client/package-lock.json` carried a stale `2.2.23` reference.
+  Both fixed (cargo fmt + `node scripts/update-version.js`); the
+  v2.2.24 tag now sits on a commit with full green CI.
+- **FAQ.** Added entries for the volume picker, the per-host
+  last-browsed path persistence, OperationBar coverage, the
+  "Live progress unavailable on the latest payload" false-
+  positive (and how 2.2.24 resolves it), and the Connection
+  screen's new "rechecking…" indicator.
+
+### Verification
+
+- `vitest` 164 passed (was 155 + 9 new for `fsLastPath`).
+- `tsc --noEmit` clean.
+- `eslint` clean.
+- `node scripts/i18n-coverage.mjs` clean (18 languages).
+- Engine `cargo test` 77 passed.
+- Tauri shell `cargo check` + `cargo clippy -D warnings` clean.
+- Payload built clean with `-Wall -Wextra -Werror`.
+
+---
+
 ## 2.2.23
 
 **Engine lifecycle hardening: orphans, double-launches, and a real body-size cap**

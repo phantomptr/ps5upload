@@ -579,7 +579,12 @@ jobs:
         run: mv release/RELEASE_NOTES.md "$RUNNER_TEMP/RELEASE_NOTES.md"
 
       - name: Create GitHub release
-        uses: softprops/action-gh-release@v2
+        # v3 (released 2026-04-12) ports the action runtime from Node 20
+        # to Node 24. v2.x is still maintained but emits the GHA Node 20
+        # deprecation warning ("forced to Node 24 starting 2026-06-02,
+        # removed 2026-09-16"); bumping ahead of those dates keeps the
+        # release workflow's run page warning-free.
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
           name: ${{ steps.tag.outputs.tag }}

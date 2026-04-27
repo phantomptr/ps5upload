@@ -4322,6 +4322,24 @@ static void fs_op_progress(int idx, uint64_t delta) {
     pthread_mutex_unlock(&g_fs_ops_mtx);
 }
 
+/* Patch in the recursive_size pre-walk total once it completes. We
+ * register the slot *before* walking now (so the engine's status
+ * poller can find the op while the walk runs); this fills in the
+ * total_bytes field afterward without re-acquiring the slot. The
+ * client renders bytes_copied/total_bytes; total_bytes==0 means
+ * "still scanning" and the UI suppresses the percentage until the
+ * walk completes — far better than the old behavior where the
+ * 250 ms poll-start delay routinely beat a slow recursive walk and
+ * latched a "your payload is broken" banner on the very first poll. */
+static void fs_op_set_total(int idx, uint64_t total) {
+    if (idx < 0 || idx >= MAX_FS_OPS) return;
+    pthread_mutex_lock(&g_fs_ops_mtx);
+    if (g_fs_ops[idx].in_use) {
+        g_fs_ops[idx].total_bytes = total;
+    }
+    pthread_mutex_unlock(&g_fs_ops_mtx);
+}
+
 /* Atomic-ish read of the cancel flag. Called from cp_rf's inner loop
  * before each read() so an inflight 28 GiB copy notices the cancel
  * within one COPY_BUF (4 MiB) of progress. */
@@ -4853,25 +4871,32 @@ static int handle_fs_delete(runtime_state_t *state, int client_fd,
         return send_frame(client_fd, FTX2_FRAME_FS_DELETE_ACK, 0, trace_id, NULL, 0);
     }
 
-    /* Tracked path. Pre-walk to compute total bytes so the engine's
-     * progress poll can show a percentage; same one-stat-per-file cost
-     * pattern as fs_copy. recursive_size returns -1 on any stat
-     * failure — surface it now rather than letting the rm_rf hit the
-     * same file mid-walk. */
-    uint64_t total_bytes = 0;
-    if (recursive_size(path, &total_bytes) != 0) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_delete_walk_failed", 21);
-    }
-
-    int op_idx = fs_op_register(trace_id, "fs_delete", path, "", total_bytes);
+    /* Tracked path. Register the slot *before* walking so the engine's
+     * status poller can find the op the moment it asks (same race fix
+     * applied to FS_COPY above — small-file-heavy trees walk slower
+     * than the poller's 250 ms initial delay, and the old order
+     * surfaced the race as a transient parse error that the client
+     * mis-attributed to an old payload). All MAX_FS_OPS slots in use
+     * → refuse rather than running un-tracked, since the client
+     * expects to be able to poll/cancel via the op_id it sent. */
+    int op_idx = fs_op_register(trace_id, "fs_delete", path, "", 0);
     if (op_idx < 0) {
-        /* All MAX_FS_OPS slots in use. Refuse rather than running
-         * un-tracked — the client expects to be able to poll/cancel
-         * via the op_id it just sent. */
         return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
                           "fs_delete_too_many_inflight", 27);
     }
+    /* Pre-walk to compute total bytes so the engine's progress poll
+     * can show a percentage; same one-stat-per-file cost pattern as
+     * fs_copy. recursive_size returns -1 on any stat failure —
+     * surface it now rather than letting the rm_rf hit the same file
+     * mid-walk. Release the slot on walk failure so a recoverable
+     * error doesn't burn one of the MAX_FS_OPS=4 slots. */
+    uint64_t total_bytes = 0;
+    if (recursive_size(path, &total_bytes) != 0) {
+        fs_op_release(op_idx);
+        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
+                          "fs_delete_walk_failed", 21);
+    }
+    fs_op_set_total(op_idx, total_bytes);
     int rm_rc = rm_rf_op(path, 0, op_idx);
     fs_op_release(op_idx);
 
@@ -5134,25 +5159,38 @@ static int handle_fs_copy(runtime_state_t *state, int client_fd,
         return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
                           "fs_copy_dest_exists", 19);
     }
-    /* Pre-walk total bytes so the engine's progress poll can show a
-     * percentage. Cheap (one stat per file) relative to the copy
-     * itself, and a stat error means the copy will fail at the same
-     * file shortly anyway — surface the issue early. */
-    uint64_t total_bytes = 0;
-    if (recursive_size(from, &total_bytes) != 0) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_copy_walk_failed", 19);
-    }
-    /* Register an in-flight op slot so concurrent FS_OP_STATUS /
-     * FS_OP_CANCEL frames (sent on a separate mgmt connection by the
-     * engine) can find this op via its trace_id. Slot is bounded
-     * (MAX_FS_OPS=4) — if all are full, fail this FS_COPY rather
-     * than losing the ability to track or cancel it. */
-    int op_idx = fs_op_register(trace_id, "fs_copy", from, to, total_bytes);
+    /* Register the in-flight op slot *before* walking so the engine's
+     * 500 ms-cadence FS_OP_STATUS poller has somewhere to land its
+     * first call. The walk is fast for few-large-file regimes
+     * (PPSA01576/PPSA03977) but on small-file-heavy trees (PPSA01342:
+     * 223k files / 19k dirs) it can outrun the poller's 250 ms initial
+     * delay — and the old "walk then register" order let that race
+     * surface as a parse error in the engine, which the client
+     * mistook for "old payload" and showed a misleading banner. By
+     * registering up front with total_bytes=0 and patching the total
+     * in via fs_op_set_total once the walk finishes, the poller sees
+     * a found:true op the moment it asks, with bytes_copied=0 and
+     * total_bytes=0 ("scanning…") until the walk completes. Slot is
+     * bounded (MAX_FS_OPS=4) — if all are full, fail this FS_COPY
+     * rather than losing the ability to track or cancel it. */
+    int op_idx = fs_op_register(trace_id, "fs_copy", from, to, 0);
     if (op_idx < 0) {
         return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
                           "fs_copy_too_many_inflight", 25);
     }
+    /* Pre-walk total bytes so the engine's progress poll can show a
+     * percentage. Cheap (one stat per file) relative to the copy
+     * itself, and a stat error means the copy will fail at the same
+     * file shortly anyway — surface the issue early. Release the slot
+     * on walk failure so a recoverable error doesn't burn one of the
+     * MAX_FS_OPS=4 slots until process exit. */
+    uint64_t total_bytes = 0;
+    if (recursive_size(from, &total_bytes) != 0) {
+        fs_op_release(op_idx);
+        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
+                          "fs_copy_walk_failed", 19);
+    }
+    fs_op_set_total(op_idx, total_bytes);
     int copy_rc = cp_rf_op(from, to, 0, op_idx);
     fs_op_release(op_idx);
     if (copy_rc == -2) {

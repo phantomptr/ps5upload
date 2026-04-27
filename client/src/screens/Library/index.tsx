@@ -47,6 +47,10 @@ import { useLibraryStore } from "../../state/library";
 import { useElapsed } from "../../lib/useElapsed";
 import { createLimiter } from "../../lib/limitConcurrency";
 import { deleteWithRetry } from "../../lib/deleteWithRetry";
+import {
+  classifyMovePollError,
+  isExpectedNotInFlight,
+} from "../../lib/movePollerPolicy";
 import { useActivityHistoryStore } from "../../state/activityHistory";
 import { PageHeader, EmptyState, ErrorCard, Button } from "../../components";
 import { useTr } from "../../state/lang";
@@ -360,12 +364,23 @@ function LibraryRow({
   // move is in flight or the poller hasn't seen a reply yet.
   const [moveProgress, setMoveProgress] =
     useState<{ bytesCopied: number; totalBytes: number } | null>(null);
-  // Set true if the FS_OP_STATUS poller hits "unsupported_frame" —
-  // means the running PS5 payload predates 2.2.7's status-frame
-  // handler. The banner shows a hint so the user knows to "Replace
-  // payload" on the Connection screen instead of assuming the
-  // progress UI is broken.
-  const [moveProgressUnsupported, setMoveProgressUnsupported] = useState(false);
+  // Set when classifyMovePollError decides the running payload is
+  // too old to drive byte-progress (predates the FS_OP_STATUS handler
+  // in 2.2.7, or the FS_OP_STATUS_ACK body buffer fix in 2.2.16). The
+  // banner uses `moveProgressUnsupportedThreshold` to render the
+  // matching version in its hint so the user knows which fix they're
+  // missing. Stays null on transient errors / current payloads —
+  // we'd rather show no banner than gaslight a user on the latest
+  // payload (the original bug this rework addresses).
+  const [moveProgressUnsupportedThreshold, setMoveProgressUnsupportedThreshold] =
+    useState<"2.2.7" | "2.2.16" | null>(null);
+  // Read the running-payload version from the Connection store so the
+  // poller can decide whether a poll error reflects a real old-payload
+  // (latch the banner) or just a transient hiccup on a current build
+  // (retry / give up silently). Set by the Connection screen's STATUS
+  // probe; null until the probe completes or on a payload too old to
+  // report a version.
+  const payloadVersion = useConnectionStore((s) => s.payloadVersion);
   // User-requested abort for the move's in-flight fs_copy. Set by the
   // Stop button; the side-watcher fires fsOpCancel as soon as it
   // observes this flip, and the payload's cp_rf bails within ~one
@@ -414,12 +429,31 @@ function LibraryRow({
   const runDelete = async () => {
     setBusy("delete");
     setError(null);
+    // Library row Delete shows up in the global OperationBar so the
+    // user can see "Deleting Dead Space" while navigating away mid-
+    // delete. fs-delete is the same kind FileSystem bulk + single
+    // delete use; the label disambiguates by name.
+    const activityId = useActivityHistoryStore
+      .getState()
+      .start("library-delete", `Deleting ${entry.name}`, {
+        fromPath: entry.path,
+        files: 1,
+      });
+    let okOutcome = true;
+    let errMsg: string | null = null;
     try {
       await fsDelete(`${host}:${PS5_PAYLOAD_PORT}`, entry.path);
       onChanged();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      okOutcome = false;
+      errMsg = e instanceof Error ? e.message : String(e);
+      setError(errMsg);
     } finally {
+      useActivityHistoryStore
+        .getState()
+        .finish(activityId, okOutcome ? "done" : "failed", {
+          error: errMsg ?? undefined,
+        });
       setBusy(null);
       setConfirm(null);
     }
@@ -427,6 +461,16 @@ function LibraryRow({
   const runChmod = async () => {
     setBusy("chmod");
     setError(null);
+    // Recursive chmod on a 100k-file game folder takes seconds-to-
+    // minutes on PS5 UFS — long enough that the user needs to know
+    // the op is still running if they tab away.
+    const activityId = useActivityHistoryStore
+      .getState()
+      .start("library-chmod", `Setting permissions on ${entry.name}`, {
+        fromPath: entry.path,
+      });
+    let okOutcome = true;
+    let errMsg: string | null = null;
     try {
       await fsChmod(
         `${host}:${PS5_PAYLOAD_PORT}`,
@@ -436,8 +480,15 @@ function LibraryRow({
       );
       onChanged();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      okOutcome = false;
+      errMsg = e instanceof Error ? e.message : String(e);
+      setError(errMsg);
     } finally {
+      useActivityHistoryStore
+        .getState()
+        .finish(activityId, okOutcome ? "done" : "failed", {
+          error: errMsg ?? undefined,
+        });
       setBusy(null);
       setConfirm(null);
     }
@@ -453,6 +504,17 @@ function LibraryRow({
     setError(null);
     setMountNote(null);
     const addr = `${host}:${PS5_PAYLOAD_PORT}`;
+    // Mount is usually fast (~1-2s for the lvd attach + nmount) but
+    // a misbehaving image can hang for the FS_MOUNT timeout (30 s).
+    // Tracking it gives the user a global "still running" signal
+    // for the slow case.
+    const activityId = useActivityHistoryStore
+      .getState()
+      .start("library-mount", `Mounting ${entry.name}`, {
+        fromPath: entry.path,
+      });
+    let okOutcome = true;
+    let errMsg: string | null = null;
     try {
       const res = await fsMount(addr, entry.path);
       setMountNote(
@@ -460,8 +522,15 @@ function LibraryRow({
       );
       onChanged();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      okOutcome = false;
+      errMsg = e instanceof Error ? e.message : String(e);
+      setError(errMsg);
     } finally {
+      useActivityHistoryStore
+        .getState()
+        .finish(activityId, okOutcome ? "done" : "failed", {
+          error: errMsg ?? undefined,
+        });
       setBusy(null);
     }
   };
@@ -481,7 +550,7 @@ function LibraryRow({
     setError(null);
     setMountNote(null);
     setMoveProgress({ bytesCopied: 0, totalBytes: 0 });
-    setMoveProgressUnsupported(false);
+    setMoveProgressUnsupportedThreshold(null);
     moveStopRef.current = false;
     const addr = `${host}:${PS5_PAYLOAD_PORT}`;
     // Generate a unique op_id so the payload can stamp the in-flight
@@ -505,13 +574,21 @@ function LibraryRow({
       });
     let pollerStopped = false;
     const pollerDone = (async () => {
-      // Small initial delay so the payload has time to register the
-      // op (and to recursively walk total_bytes) before we ask for a
-      // snapshot — saves a wasted 404 round-trip.
+      // Small initial delay before the first poll. The payload now
+      // registers the op slot *before* the recursive_size walk
+      // (runtime.c handle_fs_copy), so this delay is no longer
+      // load-bearing for the register race — it just amortizes the
+      // engine connect cost so we don't pay it twice (once for poll,
+      // once for the FS_COPY frame the engine sends in parallel).
       await new Promise((r) => setTimeout(r, 250));
+      // Tracks back-to-back poll failures (non-404). Reset on every
+      // successful snapshot. The threshold lives in
+      // movePollerPolicy.ts so it can be shared with tests.
+      let consecutiveFailures = 0;
       while (!pollerStopped) {
         try {
           const snap = await fsOpStatus(addr, opId);
+          consecutiveFailures = 0;
           if (mountedRef.current) {
             setMoveProgress({
               bytesCopied: snap.bytes_copied,
@@ -525,43 +602,57 @@ function LibraryRow({
             totalBytes: snap.total_bytes,
           });
         } catch (e) {
-          // 404 (op not yet registered or already finished) and
-          // transient errors keep the poller alive. Surface
-          // non-404 errors to console so a payload version
-          // mismatch (older payload that doesn't know
-          // FS_OP_STATUS) is visible during debug.
           const msg = e instanceof Error ? e.message : String(e);
-          if (msg.includes("unsupported_frame")) {
-            // Older payload — won't ever produce progress. Stop
-            // polling and surface the hint in both the row and the
-            // Activity tab (the activity entry's `error` field
-            // doubles as a "note" while `outcome === running`,
-            // which the Activity row knows how to render in a
-            // less-alarming style than for terminal failures).
-            if (mountedRef.current) setMoveProgressUnsupported(true);
+          // 404 / "not in flight" is the engine's surface for the
+          // payload's `{found:false}` ACK. That happens twice in a
+          // healthy op: briefly at the start (frame in flight before
+          // fs_op_register; rare now that the payload registers
+          // before walking) and once at the end (slot released as
+          // the FS_COPY handler returns). Don't count either toward
+          // the consecutive-failure budget.
+          if (isExpectedNotInFlight(msg)) {
+            await new Promise((r) => setTimeout(r, 500));
+            continue;
+          }
+          consecutiveFailures += 1;
+          const outcome = classifyMovePollError(
+            payloadVersion,
+            msg,
+            consecutiveFailures,
+          );
+          if (outcome.kind === "stop-old-payload") {
+            // The version probe (or the error-string fallback) says
+            // the running payload is too old to drive progress.
+            // Latch the banner with the matching threshold so the
+            // user can see exactly which fix they're missing.
+            if (mountedRef.current) {
+              setMoveProgressUnsupportedThreshold(outcome.threshold);
+            }
             useActivityHistoryStore.getState().update(activityId, {
               error:
-                "Live progress unavailable — payload predates 2.2.7 FS_OP_STATUS. Click Replace payload on the Connection screen.",
+                outcome.threshold === "2.2.16"
+                  ? "Live progress unavailable — payload predates 2.2.16 FS_OP_STATUS_ACK fix. Click Replace payload on the Connection screen, or run `make send-payload`."
+                  : "Live progress unavailable — payload predates 2.2.7 FS_OP_STATUS. Click Replace payload on the Connection screen.",
             });
             break;
           }
-          if (msg.includes("decode FS_OP_STATUS_ACK body")) {
-            // Pre-2.2.16 payloads truncated the FS_OP_STATUS_ACK
-            // JSON body when both paths were long, so every poll
-            // produced unparseable bytes. The fix is on the payload
-            // side; until it's redeployed there's no point hammering
-            // the engine 2×/sec with the same parse failure. Treat
-            // it the same as `unsupported_frame`: stop polling, hint
-            // the user to push a fresh payload.
-            if (mountedRef.current) setMoveProgressUnsupported(true);
-            useActivityHistoryStore.getState().update(activityId, {
-              error:
-                "Live progress unavailable — payload predates 2.2.16 FS_OP_STATUS_ACK fix. Click Replace payload on the Connection screen, or run `make send-payload`.",
-            });
+          if (outcome.kind === "stop-silent") {
+            // Healthy or unknown payload, repeated transient
+            // failures. Stop polling but don't show a banner — the
+            // move continues on its own connection regardless of
+            // whether we can render progress. Console-warn so the
+            // failure is visible during debug instead of swallowed.
+            console.warn(
+              `[library] FS_OP_STATUS poll gave up after ${consecutiveFailures} consecutive failures:`,
+              msg,
+            );
             break;
           }
-          if (!msg.includes("404") && !msg.includes("not in flight")) {
-            console.warn("[library] FS_OP_STATUS poll failed:", msg);
+          // outcome.kind === "retry" — log only the first one in a
+          // run so we don't spam the console at 2 Hz on a sustained
+          // outage.
+          if (consecutiveFailures === 1) {
+            console.warn("[library] FS_OP_STATUS poll failed (will retry):", msg);
           }
         }
         await new Promise((r) => setTimeout(r, 500));
@@ -668,7 +759,18 @@ function LibraryRow({
         `Moved to ${destPath}.`,
       ),
     );
-    useActivityHistoryStore.getState().finish(activityId, "done");
+    // Explicitly clear `error` on the success finish. The poller may
+    // have written a "Live progress unavailable — payload predates
+    // 2.2.16…" *note* into the entry's error field while the move
+    // was running (see lines ~631; the field doubles as a "note"
+    // during running per the design comment). finish() spreads its
+    // extras over the entry, so without this the successful "done"
+    // entry would persist that stale note as its terminal error
+    // message — the Activity tab would render a green checkmark
+    // next to a red-looking error string, which is confusing.
+    useActivityHistoryStore
+      .getState()
+      .finish(activityId, "done", { error: undefined });
     setBusy(null);
     onChanged();
   };
@@ -700,36 +802,74 @@ function LibraryRow({
     const addr = `${host}:${PS5_PAYLOAD_PORT}`;
     const kind: "file" | "folder" =
       entry.kind === "image" ? "file" : "folder";
+    // Track the download in the global activity log so the
+    // OperationBar shows live progress + "still running" while the
+    // user is on another tab. Library Download has its own polling
+    // loop (it doesn't go through useFsDownloadOpStore that
+    // FileSystem uses, since the row holds component-local state),
+    // so without an explicit activity entry these multi-GiB game
+    // downloads were invisible globally.
+    const activityId = useActivityHistoryStore
+      .getState()
+      .start("library-download", `Downloading ${entry.name}`, {
+        fromPath: entry.path,
+        toPath: picked,
+      });
     let jobId: string;
     try {
       jobId = await startTransferDownload(entry.path, picked, addr, kind);
     } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
       setError(
         tr(
           "library_download_start_failed",
-          { error: e instanceof Error ? e.message : String(e) },
-          `Couldn't start the download: ${
-            e instanceof Error ? e.message : String(e)
-          }`,
+          { error: msg },
+          `Couldn't start the download: ${msg}`,
         ),
       );
+      useActivityHistoryStore
+        .getState()
+        .finish(activityId, "failed", { error: msg });
       setBusy(null);
       setDownloadProgress(null);
       return;
     }
     // Poll until terminal. The mountedRef gate makes a navigate-away
-    // mid-download silently exit the loop instead of writing state
-    // on an unmounted component. The engine job keeps running on the
-    // engine side (no engine cancel API today); the file still lands
-    // on disk and the user finds it where they picked, just without
-    // the in-row "Done" note.
+    // mid-download exit the loop instead of writing state on an
+    // unmounted component. The engine job keeps running on the
+    // engine side (no engine cancel API today); the file still
+    // lands on disk and the user finds it where they picked, just
+    // without the in-row "Done" note.
+    //
+    // Closing the activity entry on unmount: an orphan-running
+    // entry would be confusing (Activity tab shows "Downloading X"
+    // forever; if the user starts the download again from a re-
+    // mount, they get TWO running rows for the same file). The
+    // previous behavior relied on `loadInitial` to convert orphans
+    // to "stopped" on the next app launch — fine for a crash, not
+    // fine for a tab switch. So we close the entry on every
+    // unmounted-bail with a "stopped watching" note that mirrors
+    // the user-Stop wording: the engine job may still finish, the
+    // entry just reflects that we stopped observing it.
+    const bailOnUnmount = () => {
+      useActivityHistoryStore.getState().finish(activityId, "stopped", {
+        error: "stopped watching (engine job may continue)",
+      });
+    };
     while (true) {
-      if (!mountedRef.current) return;
+      if (!mountedRef.current) {
+        bailOnUnmount();
+        return;
+      }
       if (downloadStopRef.current) {
         // User clicked Stop. Engine job continues server-side; we
         // just stop polling. Surface a note so the row clears the
         // spinner with a clear "you stopped this" instead of going
-        // back to idle silently.
+        // back to idle silently. The activity entry transitions to
+        // "stopped" with the same wording.
+        useActivityHistoryStore.getState().finish(activityId, "stopped", {
+          error: "stopped by user (engine job may continue)",
+        });
         setMountNote(
           tr(
             "library_download_stopped",
@@ -743,8 +883,15 @@ function LibraryRow({
       }
       try {
         const snap = await jobStatus(jobId);
-        if (!mountedRef.current) return;
+        if (!mountedRef.current) {
+          bailOnUnmount();
+          return;
+        }
         if (snap.status === "done") {
+          useActivityHistoryStore.getState().finish(activityId, "done", {
+            bytes: snap.bytes_sent ?? 0,
+            totalBytes: snap.total_bytes ?? 0,
+          });
           setMountNote(
             tr(
               "library_download_succeeded",
@@ -760,11 +907,15 @@ function LibraryRow({
           return;
         }
         if (snap.status === "failed") {
+          const errMsg = snap.error ?? "download failed";
+          useActivityHistoryStore
+            .getState()
+            .finish(activityId, "failed", { error: errMsg });
           setError(
             tr(
               "library_download_failed",
-              { error: snap.error ?? "download failed" },
-              `Download failed: ${snap.error ?? "unknown error"}`,
+              { error: errMsg },
+              `Download failed: ${errMsg}`,
             ),
           );
           setBusy(null);
@@ -775,15 +926,26 @@ function LibraryRow({
           bytesReceived: snap.bytes_sent ?? 0,
           totalBytes: snap.total_bytes ?? 0,
         });
+        // Mirror live progress to the activity entry so the
+        // OperationBar speedometer ticks.
+        useActivityHistoryStore.getState().update(activityId, {
+          bytes: snap.bytes_sent ?? 0,
+          totalBytes: snap.total_bytes ?? 0,
+        });
       } catch (e) {
-        if (!mountedRef.current) return;
+        if (!mountedRef.current) {
+          bailOnUnmount();
+          return;
+        }
+        const msg = e instanceof Error ? e.message : String(e);
+        useActivityHistoryStore
+          .getState()
+          .finish(activityId, "failed", { error: msg });
         setError(
           tr(
             "library_download_poll_failed",
-            { error: e instanceof Error ? e.message : String(e) },
-            `Lost contact with the engine while downloading: ${
-              e instanceof Error ? e.message : String(e)
-            }`,
+            { error: msg },
+            `Lost contact with the engine while downloading: ${msg}`,
           ),
         );
         setBusy(null);
@@ -802,13 +964,27 @@ function LibraryRow({
     setBusy("unmount");
     setError(null);
     setMountNote(null);
+    const activityId = useActivityHistoryStore
+      .getState()
+      .start("library-unmount", `Unmounting ${entry.name}`, {
+        fromPath: currentMount,
+      });
+    let okOutcome = true;
+    let errMsg: string | null = null;
     try {
       await fsUnmount(`${host}:${PS5_PAYLOAD_PORT}`, currentMount);
       setMountNote(`Unmounted ${currentMount}.`);
       onChanged();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      okOutcome = false;
+      errMsg = e instanceof Error ? e.message : String(e);
+      setError(errMsg);
     } finally {
+      useActivityHistoryStore
+        .getState()
+        .finish(activityId, okOutcome ? "done" : "failed", {
+          error: errMsg ?? undefined,
+        });
       setBusy(null);
     }
   };
@@ -1062,18 +1238,32 @@ function LibraryRow({
       )}
 
       {/* Hint for the case where the user's PS5 is running an older
-          payload that doesn't speak FS_OP_STATUS. Without this it
-          looks like the progress UI is broken; in fact the protocol
-          frame just isn't recognized on the other side. */}
-      {busy === "move-copying" && moveProgressUnsupported && (
-        <div className="rounded-md border border-[var(--color-warn)] bg-[var(--color-warn-soft)] p-2 text-[11px] text-[var(--color-warn)]">
-          {tr(
-            "library_move_progress_unsupported",
-            undefined,
-            "Live progress unavailable — your PS5 payload is older than this app. Click \"Replace payload\" on the Connection screen to enable per-byte progress + cancel.",
-          )}
-        </div>
-      )}
+          payload that doesn't speak FS_OP_STATUS. Names the specific
+          threshold (2.2.7 introduced the frame, 2.2.16 fixed the ACK
+          body buffer) so the user knows which fix they're missing.
+          Only renders when classifyMovePollError has actually
+          identified an old payload — a healthy 2.2.16+ payload that
+          hits transient errors will see no banner. */}
+      {busy === "move-copying" &&
+        moveProgressUnsupportedThreshold === "2.2.16" && (
+          <div className="rounded-md border border-[var(--color-warn)] bg-[var(--color-warn-soft)] p-2 text-[11px] text-[var(--color-warn)]">
+            {tr(
+              "library_move_progress_unsupported_2_2_16",
+              undefined,
+              "Live progress unavailable — running payload predates the 2.2.16 FS_OP_STATUS_ACK body fix. Click \"Replace payload\" on the Connection screen to enable per-byte progress + cancel.",
+            )}
+          </div>
+        )}
+      {busy === "move-copying" &&
+        moveProgressUnsupportedThreshold === "2.2.7" && (
+          <div className="rounded-md border border-[var(--color-warn)] bg-[var(--color-warn-soft)] p-2 text-[11px] text-[var(--color-warn)]">
+            {tr(
+              "library_move_progress_unsupported_2_2_7",
+              undefined,
+              "Live progress unavailable — running payload predates 2.2.7 FS_OP_STATUS. Click \"Replace payload\" on the Connection screen to enable per-byte progress + cancel.",
+            )}
+          </div>
+        )}
 
       {mountNote && (
         <div className="flex items-start gap-2 rounded-md border border-[var(--color-accent)] bg-[var(--color-surface)] p-2 text-xs">

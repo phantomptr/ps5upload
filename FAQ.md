@@ -250,6 +250,29 @@ queued item interrupted by a crash picks up cleanly when you
 press Start again. Tick **Continue on failure** to keep going
 when one item fails instead of stopping the whole batch.
 
+**Q: How do I jump between PS5 volumes in the File System tab?**
+The toolbar has a **Volume** dropdown above the breadcrumb
+(2.2.24+) that lists every writable, non-placeholder volume on
+the PS5 with its free-space readout (e.g. `/mnt/ext1 · 412 GiB
+free`). Pick one and the screen jumps to that volume's root —
+no more walking up to `/` and back down. The picker hides on
+machines with no writable volumes.
+
+**Q: Does the File System tab remember where I was last?**
+Yes (2.2.24+). The last-browsed path is persisted to
+localStorage **per host**, so two PS5s on the same desktop each
+remember their own location independently. The PS5 IP itself is
+also persisted now — no more retyping it on every launch.
+
+**Q: Where can I see what's currently running across screens?**
+The OperationBar (the strip at the bottom of the window) shows
+every in-flight operation as long as one is running, with the
+elapsed time, bytes/total, and live MiB/s. As of 2.2.24 it
+covers uploads, downloads, FileSystem cut/copy/paste, FileSystem
+delete, and Library actions (Move, Delete, Chmod, Mount,
+Unmount, Download). Click it for the full Activity tab with
+historical outcomes.
+
 ---
 
 ## Mount + unmount
@@ -317,6 +340,50 @@ Unrecoverable errors (ENOSPC/EROFS/EACCES/ENAMETOOLONG) still
 fail fast — there's no point retrying a full disk. The retry
 counts surface in `COMMIT_TX_ACK` so post-mortem logs show
 exactly how many transient hits were absorbed.
+
+**Q: Library Move shows "Live progress unavailable — your PS5
+payload is older than this app" but I'm on the latest payload.**
+Fixed in 2.2.24. Two coupled bugs produced the false positive:
+
+- The payload registered the in-flight FS_OP slot *after* the
+  recursive_size pre-walk. On small-file-heavy trees the walk
+  outran the client's 250 ms initial poll delay, so the first
+  `FS_OP_STATUS` poll landed on a not-yet-registered op — the
+  engine surfaced that as a transient parse error, which the
+  client mis-attributed to an old payload. The payload now
+  registers up front with `total_bytes=0` and patches the total
+  in via `fs_op_set_total` once the walk completes.
+- The client used brittle substring matching on error text
+  (`"unsupported_frame"` / `"decode FS_OP_STATUS_ACK body"`),
+  which can appear in transient errors even on a current
+  payload. It now consults the running payload's reported
+  version: known-old payloads latch a threshold-specific banner
+  (`predates 2.2.16` or `predates 2.2.7`); current payloads
+  tolerate up to 5 consecutive transient failures and stop
+  silently with no banner — never the misleading "older than
+  this app" string.
+
+If you saw this on 2.2.23 or earlier, click **Replace payload**
+on the Connection screen once you're on 2.2.24+ and the move
+runs cleanly thereafter.
+
+**Q: After clicking Replace payload, the version number on the
+Connection screen still shows the old one for a few seconds.**
+Fixed in 2.2.24. The probe loop already had the new version +
+kernel from `payloadCheck` but was discarding both, leaving the
+store with the old values until the next 10-second background
+tick. Two fixes:
+
+- The probe now writes the freshly-booted payload's version +
+  kernel into the store the moment it answers — the version
+  block flips to the new numbers in lock-step with step 2 going
+  "ok," not 10 s later.
+- A new "rechecking…" badge with a spinner renders in the
+  VersionBlock while a probe is in flight. Stale numbers are
+  dimmed in italics (or the row reads "Probing…" if there's no
+  prior value), and the outdated-payload nudge is suppressed
+  during the recheck since the comparison would be against
+  in-flight data.
 
 **Q: Where are app settings saved?**
 - **macOS**: `~/Library/Application Support/com.phantomptr.ps5upload/`

@@ -79,6 +79,8 @@ const translations = {
     connection_payload_outdated_title: "PS5 has an older payload than this app",
     connection_payload_outdated_body: "Running v{running}, this app ships v{bundled}. The bundled payload includes fixes the older one is missing — replace it for the best results.",
     connection_payload_outdated_action: "Replace payload",
+    connection_block_rechecking: "rechecking…",
+    connection_block_probing: "Probing…",
     status_fw: "FW {ver}",
     // Chat
     // Logs
@@ -318,6 +320,13 @@ const translations = {
     changelog: "Changelog on GitHub",
     connection_block_connected: "Connected",
     connection_block_payload: "Payload",
+    fs_volume_picker_label: "Volume",
+    fs_volume_picker_aria: "Jump to a volume",
+    fs_volume_picker_custom: "(custom path)",
+    library_move_progress_unsupported_2_2_16:
+      "Live progress unavailable — running payload predates the 2.2.16 FS_OP_STATUS_ACK body fix. Click \"Replace payload\" on the Connection screen to enable per-byte progress + cancel.",
+    library_move_progress_unsupported_2_2_7:
+      "Live progress unavailable — running payload predates 2.2.7 FS_OP_STATUS. Click \"Replace payload\" on the Connection screen to enable per-byte progress + cancel.",
     fs_bulk_from: "From",
     fs_bulk_to: "To",
     fs_busy_downloading: "Downloading from PS5",

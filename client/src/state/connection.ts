@@ -5,6 +5,37 @@ import { create } from "zustand";
  *  setting. Kept at module scope so the Connection
  *  UI can show it in copy without round-tripping through store state. */
 export const PS5_LOADER_PORT = 9021;
+
+/** localStorage key for the last-typed PS5 host. Persisted so a
+ *  reload doesn't drop the user back to the hardcoded 192.168.137.2
+ *  default — the typical user has a single PS5 IP they reuse across
+ *  sessions. Only the host is persisted; everything downstream of
+ *  it (probe results, version, kernel) is re-derived on next probe
+ *  rather than restored as stale data. */
+const HOST_STORAGE_KEY = "ps5upload.host";
+const DEFAULT_HOST = "192.168.137.2";
+
+function loadStoredHost(): string {
+  if (typeof window === "undefined") return DEFAULT_HOST;
+  try {
+    const stored = window.localStorage.getItem(HOST_STORAGE_KEY);
+    return stored && stored.trim() ? stored : DEFAULT_HOST;
+  } catch {
+    // localStorage unavailable (private mode, sandboxed iframe).
+    // Fall through to the default — UX continues to work, the
+    // user just retypes the IP each session.
+    return DEFAULT_HOST;
+  }
+}
+
+function persistHost(host: string) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(HOST_STORAGE_KEY, host);
+  } catch {
+    // Best-effort — host persistence is nice-to-have.
+  }
+}
 /** TCP port our payload listens on for FTX2 transfers. Also constant. */
 export const PS5_PAYLOAD_PORT = 9113;
 
@@ -51,6 +82,17 @@ export interface ConnectionState {
    *  cross-referencing against psdevwiki firmware build tables. null if
    *  payload hasn't replied yet or is running an older build. */
   ps5Kernel: string | null;
+  /** True when a fresh payload-info probe is in flight and the
+   *  currently-displayed payloadVersion / ps5Kernel may be stale.
+   *  Set by Connection's handleSend on entry (the user just kicked
+   *  off a Replace payload — anything we show is from BEFORE the new
+   *  ELF booted, so flag it as stale until the next probe lands).
+   *  Cleared by AppShell's polling tick after it writes a fresh
+   *  version, AND by handleSend's own in-line probe so the wait time
+   *  isn't gated on the next 10s tick. UI uses this to render a
+   *  "rechecking…" badge so the user doesn't squint at numbers that
+   *  may have been replaced under their feet. */
+  payloadProbing: boolean;
   /** Step 1: loader-port reachability confirmed. */
   step1: ConnStep;
   step1Msg: string;
@@ -67,6 +109,7 @@ export interface ConnectionState {
         | "engineStatus"
         | "payloadVersion"
         | "ps5Kernel"
+        | "payloadProbing"
       >
     >
   ) => void;
@@ -75,17 +118,21 @@ export interface ConnectionState {
 }
 
 export const useConnectionStore = create<ConnectionState>((set) => ({
-  host: "192.168.137.2",
+  host: loadStoredHost(),
   engineStatus: "unknown",
   payloadStatus: "unknown",
   payloadStatusHost: null,
   payloadVersion: null,
   ps5Kernel: null,
+  payloadProbing: false,
   step1: "idle",
   step1Msg: "Enter your PS5's address and check",
   step2: "idle",
   step2Msg: "Payload not loaded yet",
-  setHost: (host) => set({ host }),
+  setHost: (host) => {
+    persistHost(host);
+    set({ host });
+  },
   setStatus: (patch) => set(patch),
   setStep1: (step1, step1Msg) => set({ step1, step1Msg }),
   setStep2: (step2, step2Msg) => set({ step2, step2Msg }),

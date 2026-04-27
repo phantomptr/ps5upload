@@ -33,7 +33,14 @@ import {
   fsOpCancel,
   jobStatus,
   startTransferDownload,
+  fetchVolumes,
+  type Volume,
 } from "../../api/ps5";
+import {
+  loadFsLastPath,
+  saveFsLastPath,
+} from "../../lib/fsLastPath";
+import { useActivityHistoryStore } from "../../state/activityHistory";
 import {
   useFsClipboardStore,
   type ClipboardItem,
@@ -125,7 +132,20 @@ export default function FileSystemScreen() {
   const host = useConnectionStore((s) => s.host);
   const payloadStatus = useConnectionStore((s) => s.payloadStatus);
   const clipboard = useFsClipboardStore();
-  const [path, setPath] = useState("/data");
+  // Restore the user's last-browsed path for THIS host. The lazy
+  // initializer reads from localStorage once on mount; later host
+  // changes (the user typing a new IP into the Connection screen)
+  // are handled by the effect below.
+  const [path, setPath] = useState<string>(() => loadFsLastPath(host));
+  // Refetched whenever host or payloadStatus changes. Drives the
+  // volume picker dropdown — same shape Library's Move modal uses.
+  // null while loading or before the first probe completes; an empty
+  // array means the probe ran but the PS5 has no writable volumes
+  // (rare on stock PS5, but possible after a user mounts and then
+  // unmounts everything). Errors are swallowed silently — the picker
+  // just hides itself, which is less noisy than yet another red
+  // banner for what's a degraded-but-functional state.
+  const [volumes, setVolumes] = useState<Volume[] | null>(null);
   const [entries, setEntries] = useState<DirEntry[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -194,6 +214,54 @@ export default function FileSystemScreen() {
     if (payloadStatus === "up") refresh();
   }, [payloadStatus, refresh]);
 
+  // Fetch writable volumes whenever the connection becomes healthy or
+  // the host changes. Same data the Library Move modal uses — listing
+  // volumes on the FileSystem screen lets users jump between mounts
+  // (/data → /mnt/ext1 → /mnt/usb0) with one click instead of
+  // navigating up to / and clicking down. Errors swallow silently;
+  // the picker just won't render.
+  useEffect(() => {
+    if (payloadStatus !== "up" || !host?.trim()) {
+      setVolumes(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const vols = await fetchVolumes(`${host}:${PS5_PAYLOAD_PORT}`);
+        if (!cancelled) {
+          // Only show writable, non-placeholder volumes — the picker
+          // is for navigation, and a placeholder ("disk not yet
+          // mounted") would jump to a nonexistent path.
+          setVolumes(
+            vols.filter((v) => v.writable && !v.is_placeholder),
+          );
+        }
+      } catch {
+        if (!cancelled) setVolumes([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [host, payloadStatus]);
+
+  // When the host changes (user typed a new IP), restore the
+  // last-browsed path for THAT host. Without this, switching consoles
+  // would leave you in the prior console's directory — a real
+  // surprise if /mnt/ext1 doesn't exist on the new one and the dir
+  // listing 502s.
+  useEffect(() => {
+    setPath(loadFsLastPath(host));
+  }, [host]);
+
+  // Persist `path` whenever it changes (and we have a real host).
+  // Saved per-host so multiple PS5s remember their own last
+  // location independently.
+  useEffect(() => {
+    saveFsLastPath(host, path);
+  }, [host, path]);
+
   // Changing directories clears the selection — carrying selections
   // across directories would be confusing (what does "delete" act on?).
   useEffect(() => {
@@ -240,12 +308,35 @@ export default function FileSystemScreen() {
     if (!ok) return;
     setBusyEntry({ name, op: "rename" }); // cheap reuse of spinner
     setError(null);
+    // Track in the global activity log so the OperationBar shows
+    // "Deleting <name>" while it's in flight. Single-item deletes on
+    // a directory tree (a 100 GB game folder) can take minutes — the
+    // user needs a global signal that the work is still happening
+    // even if they navigate away. Bulk-delete already tracks via
+    // useFsBulkOpStore + activityWiring; this single-item path
+    // never went through that store, so it goes silent today.
+    const itemPath = joinPath(path, name);
+    const activityId = useActivityHistoryStore
+      .getState()
+      .start("fs-delete", `Deleting ${name}`, {
+        fromPath: itemPath,
+        files: 1,
+      });
+    let okOutcome = true;
+    let errMsg: string | null = null;
     try {
-      await fsDelete(`${host}:${PS5_PAYLOAD_PORT}`, joinPath(path, name));
+      await fsDelete(`${host}:${PS5_PAYLOAD_PORT}`, itemPath);
       await refresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      okOutcome = false;
+      errMsg = e instanceof Error ? e.message : String(e);
+      setError(errMsg);
     } finally {
+      useActivityHistoryStore
+        .getState()
+        .finish(activityId, okOutcome ? "done" : "failed", {
+          error: errMsg ?? undefined,
+        });
       setBusyEntry(null);
     }
   };
@@ -722,6 +813,37 @@ export default function FileSystemScreen() {
   const selectionActive = selected.size > 0;
   const clipboardActive = clipboard.items.length > 0;
 
+  // Which volume root contains the current path? Used to highlight
+  // the corresponding option in the picker. Longest-prefix match
+  // because volume mount points can nest (e.g. /mnt/ps5upload sits
+  // under /mnt).
+  //
+  // Two normalizations matter:
+  //   - The current path may carry a trailing slash from a stale
+  //     URL or a careless setPath. Strip it before comparing so
+  //     "/data/" still matches volume "/data".
+  //   - The path "/" is technically a prefix of every volume, but
+  //     it's not a meaningful match — it just means "outside any
+  //     known volume root." Treat it as null so the picker shows
+  //     "(custom path)" instead of arbitrarily picking the
+  //     longest-named volume.
+  const currentVolumePath = useMemo(() => {
+    if (!volumes || volumes.length === 0) return null;
+    if (path === "/" || path === "") return null;
+    const norm = path.length > 1 && path.endsWith("/")
+      ? path.slice(0, -1)
+      : path;
+    let best: string | null = null;
+    for (const v of volumes) {
+      if (norm === v.path || norm.startsWith(v.path + "/")) {
+        if (best === null || v.path.length > best.length) {
+          best = v.path;
+        }
+      }
+    }
+    return best;
+  }, [volumes, path]);
+
   return (
     <div className="p-6">
       {confirmDialogNode}
@@ -753,6 +875,53 @@ export default function FileSystemScreen() {
           </div>
         }
       />
+
+      {/* Volume picker. Renders only when we have at least one
+          writable volume — otherwise it's clutter. Selecting a
+          volume jumps to its root, mirroring how Library's Move
+          modal lets users pick a destination volume. The picker
+          shows path + free-space so users can spot which mount has
+          headroom for an upload at a glance. */}
+      {volumes && volumes.length > 0 && (
+        <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
+          <label className="text-[var(--color-muted)]">
+            {tr("fs_volume_picker_label", undefined, "Volume")}
+          </label>
+          <select
+            value={currentVolumePath ?? ""}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v) setPath(v);
+            }}
+            className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1 font-mono text-xs focus:border-[var(--color-accent)] focus:outline-none"
+            aria-label={tr(
+              "fs_volume_picker_aria",
+              undefined,
+              "Jump to a volume",
+            )}
+          >
+            {/* Empty option only when the current path doesn't sit
+                under any known volume — otherwise the controlled
+                value would mismatch the option list and React would
+                warn. The user sees "(custom path)" in that case so
+                they understand why no volume is highlighted. */}
+            {currentVolumePath === null && (
+              <option value="" disabled>
+                {tr(
+                  "fs_volume_picker_custom",
+                  undefined,
+                  "(custom path)",
+                )}
+              </option>
+            )}
+            {volumes.map((v) => (
+              <option key={v.path} value={v.path}>
+                {v.path} · {formatBytes(v.free_bytes)} free
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
 
       {/* Breadcrumbs + up-button */}
       <div className="mb-3 flex items-center gap-1 overflow-x-auto rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-2 text-xs">

@@ -150,6 +150,7 @@ export default function ConnectionScreen() {
   const setHost = useConnectionStore((s) => s.setHost);
   const payloadStatus = useConnectionStore((s) => s.payloadStatus);
   const payloadStatusHost = useConnectionStore((s) => s.payloadStatusHost);
+  const setStatus = useConnectionStore((s) => s.setStatus);
   const storedStep1 = useConnectionStore((s) => s.step1);
   const storedStep1Msg = useConnectionStore((s) => s.step1Msg);
   const storedStep2 = useConnectionStore((s) => s.step2);
@@ -184,6 +185,15 @@ export default function ConnectionScreen() {
     return () => {
       pollHandle.current?.cancel();
       pollHandle.current = null;
+      // Cancelling the poll above stops any further writes from
+      // handleSend's probe loop, but it doesn't undo the
+      // payloadProbing=true that handleSend set when the user
+      // clicked Replace. Without an explicit clear here, navigating
+      // away mid-probe leaves the "rechecking…" badge latched in
+      // the store until the next AppShell tick (up to 10 s).
+      // Self-heals eventually but feels broken in the meantime —
+      // unmount cleanup is the right place to reset.
+      useConnectionStore.getState().setStatus({ payloadProbing: false });
     };
   }, []);
 
@@ -303,6 +313,21 @@ export default function ConnectionScreen() {
   async function handleSend() {
     if (step1 !== "ok") return;
     if (step2 === "busy") return;
+    // Mark version + kernel as stale the moment the user clicks Send.
+    // Two effects:
+    //   1. The VersionBlock immediately renders with a "rechecking…"
+    //      badge instead of letting the user squint at numbers from
+    //      the *old* payload while the new one is still uploading.
+    //   2. AppShell's 10 s-cadence poller doesn't owe us a fresh
+    //      version anymore — handleSend's own probe loop (below) will
+    //      flush both fields the moment payloadCheck succeeds, so the
+    //      banner clears in lock-step with step2 going "ok" rather
+    //      than waiting for the next AppShell tick.
+    setStatus({
+      payloadProbing: true,
+      payloadVersion: null,
+      ps5Kernel: null,
+    });
     flashStep2("busy", "Locating bundled payload ELF…");
     try {
       const elf = await bundledPayloadPath();
@@ -312,6 +337,10 @@ export default function ConnectionScreen() {
       );
       await sendPayload(host, elf);
     } catch (e) {
+      // Send itself failed (loader-port unreachable, ELF missing,
+      // etc.) — no new payload to probe; clear the probing flag so
+      // VersionBlock stops showing the rechecking badge.
+      setStatus({ payloadProbing: false });
       settleStep2("fail", e instanceof Error ? e.message : String(e));
       return;
     }
@@ -322,7 +351,32 @@ export default function ConnectionScreen() {
     pollHandle.current?.cancel();
     pollHandle.current = pollUntilReady({
       probe: async () => {
+        // payloadCheck returns reachability AND the new version /
+        // kernel (from STATUS_ACK). The original code only consumed
+        // `reachable` and discarded the rest, leaving the store with
+        // the *old* version until the next AppShell 10 s tick — that's
+        // the "old data was the latest" feel the user reported. By
+        // writing version + kernel into the store the moment the new
+        // payload answers, the VersionBlock flips to the new numbers
+        // in lock-step with step2 going "ok".
         const status = await payloadCheck(host);
+        if (status.reachable) {
+          // Guard against a host change mid-flight. handleSend
+          // captured `host` in its closure when the user clicked
+          // Replace; if they typed a new IP into the input before
+          // this probe resolved, the result we're holding is for
+          // the OLD host. Don't pollute the store with it — let
+          // AppShell's host-change effect handle the NEW host.
+          if (useConnectionStore.getState().host === host) {
+            setStatus({
+              payloadStatus: "up",
+              payloadStatusHost: host,
+              payloadVersion: status.payloadVersion,
+              ps5Kernel: status.ps5Kernel,
+              payloadProbing: false,
+            });
+          }
+        }
         return status.reachable ? "ok" : "fail";
       },
       initialDelayMs: 1500,
@@ -333,6 +387,10 @@ export default function ConnectionScreen() {
         if (result === "ok") {
           settleStep2("ok", tr("connection_payload_running", { host }, `Payload is running on ${host}`));
         } else {
+          // Probe loop exhausted without a reachable payload. Clear
+          // the rechecking flag so the banner doesn't dangle —
+          // there's nothing further coming for it.
+          setStatus({ payloadProbing: false });
           settleStep2(
             "fail",
             "Payload didn't come up within 20s. If your PS5 is on, the ELF may have crashed — try sending again.",
@@ -685,6 +743,7 @@ function VersionBlock({ onResend }: { onResend?: () => void }) {
   const tr = useTr();
   const payloadVersion = useConnectionStore((s) => s.payloadVersion);
   const ps5Kernel = useConnectionStore((s) => s.ps5Kernel);
+  const payloadProbing = useConnectionStore((s) => s.payloadProbing);
   const ps5Firmware = parsePS5Firmware(ps5Kernel);
 
   // Bundled-app version comes from Tauri at runtime — same value
@@ -708,7 +767,11 @@ function VersionBlock({ onResend }: { onResend?: () => void }) {
       });
   }, []);
 
-  if (!payloadVersion && !ps5Kernel) return null;
+  // Render the block during a probe even with no values yet — the
+  // user just clicked Replace payload and seeing the section
+  // disappear ("did the click do anything?") is more confusing than
+  // seeing it with a "Probing…" placeholder.
+  if (!payloadVersion && !ps5Kernel && !payloadProbing) return null;
 
   const cmp =
     payloadVersion && appVersion
@@ -719,20 +782,52 @@ function VersionBlock({ onResend }: { onResend?: () => void }) {
   // happens to share our version table) is fine and silent.
   const payloadIsOlder = cmp === -1;
 
+  // Dim numbers while a fresh probe is in flight so the user has a
+  // clear "these may be stale" signal. Pairs with the Loader2 badge
+  // in the header below — together they say "we know what's on
+  // screen might be from before the new payload booted; we're
+  // checking." Without this the user could read the OLD version
+  // number and conclude the Replace didn't take.
+  const valueClass = payloadProbing
+    ? "text-[var(--color-muted)] italic"
+    : "";
+
   return (
     <div className="mb-4 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-xs">
-      <div className="mb-2 font-medium uppercase tracking-wide text-[var(--color-muted)]">
-        {tr("connection_block_connected", undefined, "Connected")}
+      <div className="mb-2 flex items-center gap-2 font-medium uppercase tracking-wide text-[var(--color-muted)]">
+        <span>
+          {tr("connection_block_connected", undefined, "Connected")}
+        </span>
+        {payloadProbing && (
+          <span className="flex items-center gap-1 normal-case tracking-normal text-[10px] font-normal text-[var(--color-accent)]">
+            <Loader2 size={10} className="animate-spin" />
+            {tr(
+              "connection_block_rechecking",
+              undefined,
+              "rechecking…",
+            )}
+          </span>
+        )}
       </div>
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 font-mono">
+        {payloadProbing && !payloadVersion && (
+          <>
+            <dt className="text-[var(--color-muted)]">
+              {tr("connection_block_payload", undefined, "Payload")}
+            </dt>
+            <dd className="text-[var(--color-muted)] italic">
+              {tr("connection_block_probing", undefined, "Probing…")}
+            </dd>
+          </>
+        )}
         {payloadVersion && (
           <>
             <dt className="text-[var(--color-muted)]">
               {tr("connection_block_payload", undefined, "Payload")}
             </dt>
-            <dd>
+            <dd className={valueClass}>
               v{payloadVersion}
-              {appVersion && cmp === 0 && (
+              {!payloadProbing && appVersion && cmp === 0 && (
                 <span className="ml-2 text-[10px] font-normal text-[var(--color-good)]">
                   {tr(
                     "connection_block_match",
@@ -741,7 +836,7 @@ function VersionBlock({ onResend }: { onResend?: () => void }) {
                   )}
                 </span>
               )}
-              {appVersion && cmp === 1 && (
+              {!payloadProbing && appVersion && cmp === 1 && (
                 <span className="ml-2 text-[10px] font-normal text-[var(--color-muted)]">
                   {tr(
                     "connection_block_newer",
@@ -783,7 +878,7 @@ function VersionBlock({ onResend }: { onResend?: () => void }) {
         </p>
       )}
 
-      {payloadIsOlder && appVersion && payloadVersion && (
+      {payloadIsOlder && appVersion && payloadVersion && !payloadProbing && (
         <div className="mt-3 flex flex-wrap items-start gap-2 rounded-md border border-[var(--color-warn)] bg-[var(--color-surface-2)] p-2 text-[11px]">
           <AlertTriangle
             size={12}
