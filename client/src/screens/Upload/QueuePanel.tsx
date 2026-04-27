@@ -74,7 +74,7 @@ export function QueuePanel() {
                 pending: pendingCount,
                 failed: failedCount,
               },
-              `${items.length} total · ${doneCount} done · ${pendingCount} pending · ${failedCount} failed`,
+              "{total} total · {done} done · {pending} pending · {failed} failed",
             )}
           </span>
         </div>
@@ -245,7 +245,7 @@ function QueueRow({
                 {tr(
                   "queue_mounted_at",
                   { mount: item.mountedAt },
-                  `mounted at ${item.mountedAt}`,
+                  "mounted at {mount}",
                 )}
               </span>
             )}
@@ -301,7 +301,7 @@ function QueueRow({
                         {tr(
                           "queue_eta",
                           { eta: formatDuration(etaSec) },
-                          `ETA ${formatDuration(etaSec)}`,
+                          "ETA {eta}",
                         )}
                       </span>
                     </>
@@ -328,7 +328,7 @@ function QueueRow({
             {tr(
               "queue_avg_speed",
               { speed: `${formatBytes(item.bytesPerSec)}/s` },
-              `${formatBytes(item.bytesPerSec)}/s avg`,
+              "{speed}/s avg",
             )}
           </span>
         </div>

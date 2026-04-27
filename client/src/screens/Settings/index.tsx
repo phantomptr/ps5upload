@@ -329,7 +329,7 @@ function UpdatesPanel() {
             {tr(
               "update_download_button",
               { version: resultForNotes?.latest_version ?? "" },
-              `Download v${resultForNotes?.latest_version ?? ""}`,
+              "Download v{version}",
             )}
           </button>
         )}

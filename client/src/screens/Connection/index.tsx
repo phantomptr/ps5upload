@@ -841,7 +841,7 @@ function VersionBlock({ onResend }: { onResend?: () => void }) {
                   {tr(
                     "connection_block_newer",
                     { app: appVersion },
-                    `newer than this app (v${appVersion})`,
+                    "newer than this app (v{app})",
                   )}
                 </span>
               )}

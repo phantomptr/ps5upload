@@ -178,7 +178,28 @@ export const useActivityHistoryStore = create<ActivityHistoryState>(
         ...(extras ?? {}),
       };
       set((s) => {
-        const next = [entry, ...s.entries].slice(0, MAX_ENTRIES);
+        // Bound history to MAX_ENTRIES, but prefer evicting
+        // terminal entries over running ones. The naive
+        // `slice(0, MAX_ENTRIES)` would silently drop the *oldest*
+        // entry — which can be a still-running operation, leaving
+        // its work in flight but invisible to the OperationBar
+        // and Activity tab. Walk from oldest backwards looking for
+        // a terminal entry to drop; only fall back to dropping a
+        // running one if every existing entry is still running
+        // (would imply 100+ concurrent in-flight ops, which is
+        // not a real workload but we don't want to crash either).
+        const next: ActivityEntry[] = [entry, ...s.entries];
+        while (next.length > MAX_ENTRIES) {
+          let evictAt = -1;
+          for (let i = next.length - 1; i >= 0; i--) {
+            if (next[i].outcome !== "running") {
+              evictAt = i;
+              break;
+            }
+          }
+          if (evictAt < 0) evictAt = next.length - 1;
+          next.splice(evictAt, 1);
+        }
         persist(next);
         return { entries: next };
       });

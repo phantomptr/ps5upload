@@ -4,6 +4,222 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.2.25
+
+**Library mount picker + Library search bar**
+
+### Library search bar
+
+The Library used to render every game and disk image as a flat
+list with no way to narrow it down — a 60-row library on a
+loaded PS5 meant a lot of scrolling to find one title. Added a
+live search input above the games + images sections that filters
+as you type:
+
+- Matches against `name` (folder/file name), `titleId` (the
+  PPSA01342-style ID from `sce_sys/param.json`), absolute `path`,
+  scan `scope` (`etaHEN/games`, `homebrew`, …), and `volume`
+  (`/data`, `/mnt/ext1`, …). Case-insensitive.
+- Multi-word queries AND-match across those fields, so
+  `dead ext1` finds Dead Space on `/mnt/ext1` but not the copy
+  on `/data`. Whitespace is collapsed so `dead   space` works.
+- Clear button + "matched / total" count appear once a query is
+  active. Empty queries return the input array reference
+  unchanged (cheap memo path), so typing into the box doesn't
+  re-render every row.
+- Section headers (Games / Disk images) hide when their section
+  has no matches; a "No matches" empty-state card appears when
+  the whole library filters to zero.
+
+The filter logic lives in `lib/libraryFilter.ts` (+11 unit
+tests). Search query is transient — closes with the screen, so
+no stale-filter surprises on the next visit.
+
+### Library mount: pick where the image goes (volume + subpath + presets)
+
+Mounting a `.exfat` or `.ffpkg` image used to drop it under a fixed
+`/mnt/ps5upload/<derived-name>/` location with no user input. A few
+users wanted to land mounts elsewhere — typically under
+`/mnt/ext1/etaHEN/games/` so etaHEN's scanner picks them up
+automatically, or under `/data/<name>/` to keep everything on internal
+storage. This release wires up that choice using the same UX as the
+Upload screen's destination picker.
+
+### What changed in the UI
+
+The Library Mount button now opens a modal with three inputs:
+
+- **Volume** — dropdown of every writable volume the PS5 reports
+  (`/data`, `/mnt/ext1`, `/mnt/usb0`, …) with a free-space readout
+  next to each path.
+- **Subpath** — free-form text with four preset chips matching the
+  Upload screen: `etaHEN/games`, `homebrew`, `exfat`, `ps5upload`
+  (the legacy default).
+- **Name** — auto-derived from the image filename (`Dead
+  Space.exfat` → `Dead Space`), editable for renames or
+  normalization. No slashes.
+
+The resolved path appears under the inputs in real time, plus a
+soft warning when the chosen path is outside `/mnt/ps5upload/` —
+scene tools (etaHEN, GoldHen) typically only scan that root, so a
+mount under `/mnt/ext1/foo/` will work for the payload but may not
+show up in third-party game scanners.
+
+The volume + subpath the user picks is persisted per-host (same
+shape as the FileSystem last-path persistence shipped in 2.2.24),
+so the next Mount on this PS5 opens the modal with the same
+selection. Fresh installs default to the first available volume +
+the `ps5upload` subpath, replicating the pre-2.2.25 behavior so
+nobody's existing workflow breaks.
+
+### Payload changes (`runtime.c`)
+
+- `handle_fs_mount` accepts a new optional `mount_point` JSON field
+  (full absolute path). When provided, the payload mounts at exactly
+  that path instead of the legacy `/mnt/ps5upload/<name>/` root.
+  Validated against the same `is_path_allowed` allowlist every other
+  FS-mutation frame uses (`/data`, `/mnt/ext*`, `/mnt/usb*`,
+  `/mnt/ps5upload/*`); paths outside that allowlist (or the
+  `/mnt/ps5upload` namespace root itself) are rejected with the
+  same `fs_mount_path_not_allowed` / `fs_mount_bad_mount_point`
+  errors. Backward-compatible: omitting `mount_point` keeps the
+  legacy `mount_name`-based path, so older clients still work.
+
+- New `fs_mount_mkdir_p` helper handles deep mount paths
+  (`/mnt/ext1/etaHEN/games/foo`) by creating each intermediate
+  directory if missing. Existing dirs are tolerated (EEXIST
+  ignored at every segment).
+
+- `handle_fs_unmount` relaxed: was hardcoded to require the
+  `/mnt/ps5upload/` prefix; now also accepts any path that has a
+  matching tracker file (proof we mounted it). Still rejects
+  arbitrary paths the user wasn't authorized to ask about, so a
+  malicious request can't unmount Sony-managed mounts or `/data`.
+
+- The `mount_tracker_*` family migrated from name-keyed
+  (`<name>.src` only) to mount-point-keyed via a new
+  `mount_tracker_key()` helper. Legacy `/mnt/ps5upload/<name>`
+  trackers keep their existing keys (no migration / file rename
+  needed); new user-chosen paths hex-escape every non-alphanumeric
+  byte (`_HH` per byte) so `/mnt/ext1/games/foo` writes to
+  `mnt_2fext1_2fgames_2ffoo.src`. The hex form is collision-proof
+  — a flat `/`→`_` substitution would have made
+  `/mnt/ext1/foo_bar` and `/mnt/ext1/foo/bar` map to the same
+  tracker file. Reconciliation on payload startup now scans
+  **all** mounts whose tracker exists (not just `/mnt/ps5upload/`)
+  so user-chosen mounts also get the dev-node-gone cleanup pass
+  after a reboot.
+
+- `FS_LIST_VOLUMES` "is this our mount?" detection now checks both
+  the legacy `/mnt/ps5upload/` prefix AND tracker presence, so a
+  user-mounted `/mnt/ext1/games/foo` shows the source-image
+  string and bypasses the placeholder-volume filters the same way
+  legacy mounts do.
+
+### Engine + Tauri shell
+
+`fs_mount(addr, image_path, mount_name, mount_point)` — the new
+`mount_point` parameter is plumbed end-to-end through the Rust
+engine, the Tauri command, and the TS API
+(`fsMount(addr, imagePath, { mountName, mountPoint })`). All three
+existing callers (Library, transfer, uploadQueue) keep working
+unchanged because the new param is optional.
+
+### Compatibility
+
+A 2.2.25 client talking to a pre-2.2.25 payload detects the version
+mismatch via the existing `payloadVersion` probe and **hides the
+volume + subpath rows in the modal**, falling back to a
+name-only form (the 2.2.24 behavior). A small banner in the modal
+explains the limitation and points at "Replace payload" on the
+Connection screen. No silent failure; no protocol version errors.
+
+### Audit hardening (4 review passes)
+
+Four cross-layer audit passes after the initial implementation
+caught 12 issues, all fixed in this release:
+
+- **Payload race fix (already in the design):** `mount_tracker_key`
+  uses hex-escape encoding instead of a flat `/`→`_` substitution
+  so paths can't collide; `mount_tracker_read` zero-inits its
+  out-buffer before the read syscall and rejects buffers smaller
+  than 2 bytes (so a corrupted zero-byte tracker file can't return
+  uninitialized stack memory).
+- **Mount UX:** the picker's `volume` state now stays in sync with
+  the live `dropdownPaths` — if the user's saved volume isn't in
+  the current dropdown (drive ejected mid-session, or saved on a
+  different PS5 with a different layout), the modal snaps to the
+  first available rather than rendering a blank `<select>`.
+  `MountModal.onConfirm` passes the modal's own `(volume,
+  subpath)` state to `runMount` directly so the persistence write
+  can't silently skip when `volumes` is mid-load.
+- **Activity log:** the legacy mount path now patches the activity
+  entry's `toPath` with the actual `res.mount_point` once
+  FS_MOUNT_ACK lands; previously the row showed "From: …" with no
+  destination. The `useActivityHistoryStore.start()` capping at
+  100 entries now prefers evicting *terminal* entries over running
+  ones — running ops can't fall off the OperationBar's tail.
+- **Library row UX:** Mount button is pre-disabled when
+  `entry.imageFormat` is null (no point letting the click round-
+  trip an `fs_mount_unsupported_format` error). Search bar
+  Escape clears the query; both Move and Mount modals close on
+  Escape.
+- **Stale state on Connection screen unmount:** the
+  `payloadProbing` flag is cleared explicitly in the cleanup
+  effect so a "rechecking…" banner doesn't latch in the store
+  after navigation. (Carried over from late 2.2.24 work.)
+- **Hardcoded volume bugs:** `/mnt/ps5upload` removed from the
+  mount picker's `FALLBACK_VOLUMES` list because the payload
+  rejects mounting at the namespace root itself.
+
+### i18n sweep
+
+Phantom keys (referenced in code with inline-fallback strings
+but missing from the `en` dict) had grown to 73 over the v2.2.x
+cycle — the existing `i18n-prune-unused.mjs` regex couldn't catch
+template-literal fallbacks or multi-line `tr()` calls. This
+release does the cleanup:
+
+- **Wrote a custom auto-converter** that handles 2.2.x's three
+  shapes: single-line plain-string fallbacks (existing tooling),
+  multi-line plain-string fallbacks, and template-literal
+  fallbacks with `${expr}` interpolation. The template-literal
+  cases also rewrote 30+ `tr()` call sites in place to use the
+  standard `{var}` substitution form — the en dict needs the
+  static-template form to round-trip translations.
+- **70 of the 73 phantoms** are now in the en dict. The
+  remaining 3 are dynamic-plural / runtime-conditional cases
+  (`fs_bulk_stop_tooltip` ternary, `playlist_step_count` /
+  `queue_excludes` "1 step" vs "2 steps" cases) that would need
+  ICU plural rules — out of scope for this pass, kept on the
+  i18n-coverage allowlist.
+- **Vietnamese (vi) translations** — all 94 newly-added EN
+  keys translated via the existing `i18n-fill-missing.mjs`
+  MyMemory-API integration. **Hindi (hi)** got ~40 of the 94
+  before MyMemory's free-tier daily quota throttled the rest.
+  The other 15 locales are still allowlisted for the new keys;
+  re-running the script after the quota resets (or with a
+  different translation backend via `TRANSLATE_URLS`) will fill
+  them in. Idempotent — already-translated keys are skipped on
+  the next run.
+- **One TypeScript dup-key bug** caught immediately by `tsc`
+  (both my converters independently wrote `connection_block_newer`
+  to en); deduplicated.
+
+### Verification
+
+- `vitest`: **192 / 192** passed (164 from 2.2.24 + 17 new for
+  `mountDest` + 11 new for `libraryFilter`).
+- `tsc --noEmit`: clean.
+- `eslint`: clean.
+- `i18n-coverage` (18 languages): clean.
+- Engine `cargo fmt --check`, `cargo clippy -D warnings`, and
+  `cargo test --workspace`: 77 tests pass, no warnings.
+- Tauri shell `cargo clippy -D warnings`: clean.
+- Payload built clean with `prospero-clang -Wall -Wextra -Werror`.
+
+---
+
 ## 2.2.24
 
 **Move-progress accuracy + FileSystem volume picker + global activity coverage**

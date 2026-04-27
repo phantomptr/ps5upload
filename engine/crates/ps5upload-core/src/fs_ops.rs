@@ -499,14 +499,28 @@ pub struct MountResult {
 
 /// Mount a disk image on the PS5. `image_path` must be an absolute path
 /// under the payload's writable-root allowlist and have a `.exfat` or
-/// `.ffpkg` extension. `mount_name` is optional — when None the payload
-/// derives a filesystem-safe name from the image basename. Mount points
-/// always live under `/mnt/ps5upload/`.
-pub fn fs_mount(addr: &str, image_path: &str, mount_name: Option<&str>) -> Result<MountResult> {
+/// `.ffpkg` extension.
+///
+/// Mount-location resolution, in priority:
+/// - `mount_point: Some(path)` — full path. Must be allowlisted on the
+///   payload (`/data`, `/mnt/ext*`, `/mnt/usb*`, `/mnt/ps5upload/*`).
+///   Added in 2.2.25.
+/// - `mount_name: Some(name)` (no slashes) — mounts at
+///   `/mnt/ps5upload/<name>/`. Backward-compat with 2.2.24-and-earlier
+///   callers.
+/// - both `None` — payload derives a filesystem-safe name from the
+///   image basename and mounts at `/mnt/ps5upload/<derived>/`.
+pub fn fs_mount(
+    addr: &str,
+    image_path: &str,
+    mount_name: Option<&str>,
+    mount_point: Option<&str>,
+) -> Result<MountResult> {
     let mut c = Connection::connect(addr)?;
     let body = serde_json::to_vec(&serde_json::json!({
         "image_path": image_path,
         "mount_name": mount_name,
+        "mount_point": mount_point,
     }))
     .context("serialize fs_mount body")?;
     c.send_frame(FrameType::FsMount, &body)?;

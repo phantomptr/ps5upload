@@ -11,6 +11,8 @@ import {
   Unplug,
   Download,
   FolderInput,
+  Search,
+  X,
   type LucideIcon,
 } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -51,6 +53,16 @@ import {
   classifyMovePollError,
   isExpectedNotInFlight,
 } from "../../lib/movePollerPolicy";
+import { filterLibraryEntries } from "../../lib/libraryFilter";
+import {
+  MOUNT_DEFAULT_SUBPATH,
+  MOUNT_PRESETS,
+  fallbackMountVolumes,
+  loadMountDest,
+  payloadSupportsMountPoint,
+  resolveMountPath,
+  saveMountDest,
+} from "../../lib/mountDest";
 import { useActivityHistoryStore } from "../../state/activityHistory";
 import { PageHeader, EmptyState, ErrorCard, Button } from "../../components";
 import { useTr } from "../../state/lang";
@@ -150,13 +162,26 @@ export default function LibraryScreen() {
     if (stale) refresh();
   }, [payloadStatus, lastRefreshedAt, refresh]);
 
-  // Split by kind so games/folders render separately from disk
-  // images. Memoized so the filter isn't re-run every render.
+  // Live search filter. Matches `query` against name / titleId /
+  // path / scope / volume so users can find a title by any of the
+  // identifiers they happen to remember (the folder name they
+  // uploaded, the PPSA id from psprices, the drive it lives on, …).
+  // Kept transient — closing + reopening the screen clears the
+  // query, so a stale filter doesn't surprise the user later.
+  const [query, setQuery] = useState("");
+
+  // Filter, then split by kind so games and disk images render in
+  // their own sections. Memoization keys on the entries array
+  // identity (set by setData on refresh) and the query string —
+  // both cheap, neither flips on every render.
   const split = useMemo(() => {
-    const games = (entries ?? []).filter((e) => e.kind === "game");
-    const images = (entries ?? []).filter((e) => e.kind === "image");
-    return { games, images };
-  }, [entries]);
+    const filtered = filterLibraryEntries(entries ?? [], query);
+    const games = filtered.filter((e) => e.kind === "game");
+    const images = filtered.filter((e) => e.kind === "image");
+    return { games, images, total: filtered.length };
+  }, [entries, query]);
+  const totalUnfiltered = entries?.length ?? 0;
+  const querying = query.trim() !== "";
 
   return (
     <div className="p-6">
@@ -217,50 +242,122 @@ export default function LibraryScreen() {
       )}
 
       {entries && entries.length > 0 && (
-        <div className="flex flex-col gap-6">
-          {split.games.length > 0 && (
-            <section>
-              <SectionHeader
-                icon={<Gamepad2 size={13} />}
-                title={tr("library_games", undefined, "Games")}
-                count={split.games.length}
-              />
-              <div className="grid gap-2">
-                {split.games.map((e, i) => (
-                  <LibraryRow
-                    key={`${e.path}-${i}`}
-                    entry={e}
-                    host={host}
-                    mountMap={mountMap}
-                    volumes={volumes}
-                    onChanged={refresh}
-                  />
-                ))}
-              </div>
-            </section>
+        <>
+          {/* Search bar. Matches name / titleId / path / scope /
+              volume so a query like "dead", "PPSA03845", or "ext1"
+              all narrow the list. Empty query renders the full list
+              unchanged (filterLibraryEntries returns the same
+              reference, so memoization downstream stays warm). */}
+          <div className="mb-4 flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2">
+            <Search size={14} className="shrink-0 text-[var(--color-muted)]" />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                // Standard search-input convention: Escape clears
+                // the query. Match what the X button does so the
+                // keyboard path mirrors the mouse path.
+                if (e.key === "Escape" && query !== "") {
+                  setQuery("");
+                  e.stopPropagation();
+                }
+              }}
+              placeholder={tr(
+                "library_search_placeholder",
+                undefined,
+                "Search by name, title ID, or path…",
+              )}
+              className="flex-1 bg-transparent text-sm outline-none placeholder:text-[var(--color-muted)]"
+              aria-label={tr(
+                "library_search_aria",
+                undefined,
+                "Filter library entries",
+              )}
+            />
+            {querying && (
+              <button
+                type="button"
+                onClick={() => setQuery("")}
+                className="rounded p-0.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)]"
+                aria-label={tr(
+                  "library_search_clear",
+                  undefined,
+                  "Clear search",
+                )}
+              >
+                <X size={12} />
+              </button>
+            )}
+            {querying && (
+              <span className="shrink-0 text-xs text-[var(--color-muted)]">
+                {split.total} / {totalUnfiltered}
+              </span>
+            )}
+          </div>
+
+          {querying && split.total === 0 && (
+            <EmptyState
+              icon={Search}
+              title={tr(
+                "library_search_no_matches_title",
+                undefined,
+                "No matches",
+              )}
+              message={tr(
+                "library_search_no_matches_message",
+                { query },
+                `Nothing in your library matches "${query}". Try a shorter phrase, the title ID (e.g. PPSA01342), or a fragment of the path.`,
+              )}
+            />
           )}
-          {split.images.length > 0 && (
-            <section>
-              <SectionHeader
-                icon={<FileArchive size={13} />}
-                title={tr("library_disk_images", undefined, "Disk images (.exfat / .ffpkg)")}
-                count={split.images.length}
-              />
-              <div className="grid gap-2">
-                {split.images.map((e, i) => (
-                  <LibraryRow
-                    key={`${e.path}-${i}`}
-                    entry={e}
-                    host={host}
-                    mountMap={mountMap}
-                    volumes={volumes}
-                    onChanged={refresh}
+
+          {split.total > 0 && (
+            <div className="flex flex-col gap-6">
+              {split.games.length > 0 && (
+                <section>
+                  <SectionHeader
+                    icon={<Gamepad2 size={13} />}
+                    title={tr("library_games", undefined, "Games")}
+                    count={split.games.length}
                   />
-                ))}
-              </div>
-            </section>
+                  <div className="grid gap-2">
+                    {split.games.map((e, i) => (
+                      <LibraryRow
+                        key={`${e.path}-${i}`}
+                        entry={e}
+                        host={host}
+                        mountMap={mountMap}
+                        volumes={volumes}
+                        onChanged={refresh}
+                      />
+                    ))}
+                  </div>
+                </section>
+              )}
+              {split.images.length > 0 && (
+                <section>
+                  <SectionHeader
+                    icon={<FileArchive size={13} />}
+                    title={tr("library_disk_images", undefined, "Disk images (.exfat / .ffpkg)")}
+                    count={split.images.length}
+                  />
+                  <div className="grid gap-2">
+                    {split.images.map((e, i) => (
+                      <LibraryRow
+                        key={`${e.path}-${i}`}
+                        entry={e}
+                        host={host}
+                        mountMap={mountMap}
+                        volumes={volumes}
+                        onChanged={refresh}
+                      />
+                    ))}
+                  </div>
+                </section>
+              )}
+            </div>
           )}
-        </div>
+        </>
       )}
     </div>
   );
@@ -339,6 +436,7 @@ function LibraryRow({
   const [mountNote, setMountNote] = useState<string | null>(null);
   const [meta, setMeta] = useState<GameMeta | null>(null);
   const [moveOpen, setMoveOpen] = useState(false);
+  const [mountOpen, setMountOpen] = useState(false);
   const [downloadProgress, setDownloadProgress] =
     useState<DownloadProgress | null>(null);
   // Cancellation flag for the download poll loop. The loop runs for
@@ -496,10 +594,34 @@ function LibraryRow({
 
   // Mount: the payload does this itself — attaches /dev/md<N> over the
   // image file, nmount's with exfatfs (.exfat) or ufs (.ffpkg), puts the
-  // result under /mnt/ps5upload/<name>/. No external scene tool involved.
-  // We surface the returned mount_point so the user knows where to find it.
-  const runMount = async () => {
+  // result under the chosen mount path (or /mnt/ps5upload/<name>/ if
+  // the user accepts the default / runs an old payload). External
+  // scene tools (etaHEN, GoldHen) are NOT involved — the payload's
+  // own MD/LVD attach + nmount pipeline does the whole thing.
+  // We surface the returned mount_point so the user knows where to
+  // find it.
+  //
+  // Resolution rules (mirror fsMount's contract):
+  //   - opts.mountPoint set → mount at that exact path (2.2.25+).
+  //   - opts.mountName set → mount under /mnt/ps5upload/<name>/.
+  //   - both null → payload derives a name from the image basename
+  //     and mounts at /mnt/ps5upload/<derived>/.
+  //
+  // `opts.persistDest` (when set) is what the modal hands us so we
+  // can save the user's preset choice without re-deriving it from
+  // the resolved path. The reverse-derive path was fragile against
+  // a stale/incomplete `volumes` list (a probe that hadn't completed
+  // yet meant the longest-prefix match returned undefined and the
+  // save was silently skipped). Modal state is the source of truth.
+  const runMount = async (
+    opts: {
+      mountName?: string;
+      mountPoint?: string;
+      persistDest?: { volume: string; subpath: string };
+    } = {},
+  ) => {
     if (entry.kind !== "image") return;
+    setMountOpen(false);
     setBusy("mount");
     setError(null);
     setMountNote(null);
@@ -512,11 +634,30 @@ function LibraryRow({
       .getState()
       .start("library-mount", `Mounting ${entry.name}`, {
         fromPath: entry.path,
+        toPath: opts.mountPoint,
       });
     let okOutcome = true;
     let errMsg: string | null = null;
     try {
-      const res = await fsMount(addr, entry.path);
+      const res = await fsMount(addr, entry.path, opts);
+      // The activity entry started with toPath = opts.mountPoint
+      // which is undefined on the legacy fall-through (no
+      // user-chosen path — the payload picks
+      // /mnt/ps5upload/<derived>). Patch toPath to the actually-
+      // resolved mount point so the Activity tab shows "From: …\n
+      // To: …" instead of dangling "From:" alone.
+      useActivityHistoryStore
+        .getState()
+        .update(activityId, { toPath: res.mount_point });
+      // Persist the (volume, subpath) the modal handed us so the
+      // next Mount on this host opens with the same selection.
+      // Source of truth is the modal's own state — `volumes` may
+      // still be loading at this point and reverse-deriving from
+      // the resolved path would silently skip the save when the
+      // longest-prefix match found nothing.
+      if (opts.persistDest) {
+        saveMountDest(host, opts.persistDest);
+      }
       setMountNote(
         `Mounted at ${res.mount_point}. Refresh to see the games inside — register + launch them from a PS5-side installer.`,
       );
@@ -708,7 +849,7 @@ function LibraryRow({
           tr(
             "library_move_copy_failed",
             { error: msg },
-            `Couldn't copy to the new location: ${msg}. Source is unchanged.`,
+            "Couldn't copy to the new location: {error}. Source is unchanged.",
           ),
         );
         useActivityHistoryStore.getState().finish(activityId, "failed", {
@@ -739,7 +880,7 @@ function LibraryRow({
             src: entry.path,
             error: lastErrMsg,
           },
-          `Copied to ${destPath}, but couldn't remove the source ${entry.path} after 3 attempts: ${lastErrMsg}. Both copies now exist — delete the original yourself when ready.`,
+          "Copied to {dest}, but couldn't remove the source {src} after 3 attempts: {error}. Both copies now exist — delete the original yourself when ready.",
         ),
       );
       // Treat a "copied but couldn't delete source" as a partial
@@ -756,7 +897,7 @@ function LibraryRow({
       tr(
         "library_move_succeeded",
         { dest: destPath },
-        `Moved to ${destPath}.`,
+        "Moved to {dest}.",
       ),
     );
     // Explicitly clear `error` on the success finish. The poller may
@@ -790,7 +931,7 @@ function LibraryRow({
       title: tr(
         "library_download_dialog_title",
         { name: entry.name },
-        `Pick a destination folder for "${entry.name}"`,
+        "Pick a destination folder for \"{name}\"",
       ),
     });
     if (typeof picked !== "string") return;
@@ -824,7 +965,7 @@ function LibraryRow({
         tr(
           "library_download_start_failed",
           { error: msg },
-          `Couldn't start the download: ${msg}`,
+          "Couldn't start the download: {error}",
         ),
       );
       useActivityHistoryStore
@@ -899,7 +1040,7 @@ function LibraryRow({
                 dest: snap.dest ?? picked,
                 bytes: snap.bytes_sent ?? 0,
               },
-              `Downloaded to ${snap.dest ?? picked} (${snap.bytes_sent ?? 0} bytes).`,
+              "Downloaded to {dest} ({bytes} bytes).",
             ),
           );
           setBusy(null);
@@ -915,7 +1056,7 @@ function LibraryRow({
             tr(
               "library_download_failed",
               { error: errMsg },
-              `Download failed: ${errMsg}`,
+              "Download failed: {error}",
             ),
           );
           setBusy(null);
@@ -945,7 +1086,7 @@ function LibraryRow({
           tr(
             "library_download_poll_failed",
             { error: msg },
-            `Lost contact with the engine while downloading: ${msg}`,
+            "Lost contact with the engine while downloading: {error}",
           ),
         );
         setBusy(null);
@@ -1048,10 +1189,32 @@ function LibraryRow({
                 variant="primary"
                 size="sm"
                 leftIcon={<Play size={12} />}
-                onClick={runMount}
-                disabled={busy !== null}
+                onClick={() => setMountOpen(true)}
+                /* Pre-disable on entries with no recognized image
+                 * format (imageFormat null/undefined) — the payload
+                 * would respond with `fs_mount_unsupported_format`
+                 * after the user clicks, which produces a back-end
+                 * error string the user has to read in the row
+                 * banner. Disabling the button up front avoids the
+                 * detour. Real cause is usually a renamed file
+                 * with a non-.exfat / non-.ffpkg extension that
+                 * still got into the library scan via the size /
+                 * existence checks. */
+                disabled={busy !== null || !entry.imageFormat}
                 loading={busy === "mount"}
-                title={tr("library_mount_tooltip", undefined, "Mount this image on your PS5")}
+                title={
+                  entry.imageFormat
+                    ? tr(
+                        "library_mount_tooltip",
+                        undefined,
+                        "Mount this image on your PS5",
+                      )
+                    : tr(
+                        "library_mount_unsupported_tooltip",
+                        undefined,
+                        "Unsupported image format — only .exfat and .ffpkg can be mounted",
+                      )
+                }
               >
                 {tr("library_mount", undefined, "Mount")}
               </Button>
@@ -1303,6 +1466,19 @@ function LibraryRow({
           onConfirm={runMove}
         />
       )}
+
+      {mountOpen && entry.kind === "image" && (
+        <MountModal
+          entry={entry}
+          host={host}
+          volumes={volumes}
+          payloadVersion={payloadVersion}
+          onCancel={() => setMountOpen(false)}
+          onConfirm={(opts) => {
+            void runMount(opts);
+          }}
+        />
+      )}
     </article>
   );
 }
@@ -1345,6 +1521,18 @@ function MoveModal({
   );
   const noop = isMoveNoop(entry.path, resolved);
   const nameInvalid = isInvalidName(customName);
+
+  // Escape closes the modal — standard dialog UX. Click-outside is
+  // already wired to onCancel via the backdrop, but keyboards
+  // shouldn't have to reach for the mouse to dismiss. Window-level
+  // listener so it works regardless of focus inside the modal.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onCancel();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onCancel]);
 
   // Pre-flight: probe whether the resolved destination already exists
   // and warn the user inline. Catches both name clashes against an
@@ -1391,7 +1579,7 @@ function MoveModal({
           {tr(
             "library_move_modal_title",
             { name: entry.name },
-            `Move "${entry.name}"`,
+            "Move \"{name}\"",
           )}
         </header>
 
@@ -1457,7 +1645,7 @@ function MoveModal({
             {tr(
               "library_move_modal_name_hint",
               { default: sourceBasename(entry.path) },
-              `Leave blank or matching "${sourceBasename(entry.path)}" to keep the original name. No slashes.`,
+              "Leave blank or matching \"{default}\" to keep the original name. No slashes.",
             )}
           </p>
         </div>
@@ -1498,7 +1686,7 @@ function MoveModal({
             {tr(
               "library_move_modal_dest_exists",
               { path: resolved },
-              `Destination already exists: ${resolved}. Rename above or pick a different folder. The PS5 won't overwrite an existing folder — if it's a leftover from a cancelled move, delete it from the File System screen first.`,
+              "Destination already exists: {path}. Rename above or pick a different folder. The PS5 won't overwrite an existing folder — if it's a leftover from a cancelled move, delete it from the File System screen first.",
             )}
           </div>
         )}
@@ -1526,6 +1714,334 @@ function MoveModal({
             "Copies to the new location first, then removes the original once the copy succeeds. If anything goes wrong mid-copy, the original stays put.",
           )}
         </p>
+      </div>
+    </div>
+  );
+}
+
+/** Mount-target picker for `.ffpkg` / `.exfat` images. Mirrors the
+ *  Upload screen's DestinationCard and the MoveModal above: volume
+ *  dropdown + subpath input + preset chips + leaf-name input + a
+ *  resolved-path preview. The resolved path is what the payload's
+ *  FS_MOUNT will receive as `mount_point`.
+ *
+ *  Pre-2.2.25 payloads ignore `mount_point` and only honor
+ *  `mount_name`. Detected via `payloadSupportsMountPoint`; when
+ *  false the volume + subpath rows are hidden and the modal collapses
+ *  to a name-only form (the legacy 2.2.24 behavior). The user gets
+ *  a small banner explaining why and how to enable the picker. */
+function MountModal({
+  entry,
+  host,
+  volumes,
+  payloadVersion,
+  onCancel,
+  onConfirm,
+}: {
+  entry: LibraryEntry;
+  host: string;
+  /** Live writable-volumes list from `fetchVolumes`. Falls back to a
+   *  hardcoded list when empty (cold start or probe in flight). */
+  volumes: Volume[];
+  /** Reported by STATUS_ACK. Drives the
+   *  `payloadSupportsMountPoint` check that gates the volume picker. */
+  payloadVersion: string | null;
+  onCancel: () => void;
+  /** Caller decides which payload knob to set. We pass `mountPoint`
+   *  when the user is using the picker (2.2.25+) and `mountName`
+   *  alone when falling back. `persistDest` carries the modal's own
+   *  (volume, subpath) state to runMount so it can remember the
+   *  preset directly without reverse-deriving from the resolved
+   *  path. */
+  onConfirm: (opts: {
+    mountName?: string;
+    mountPoint?: string;
+    persistDest?: { volume: string; subpath: string };
+  }) => void;
+}) {
+  const tr = useTr();
+
+  const supportsMountPoint = payloadSupportsMountPoint(payloadVersion);
+  const liveVolumePaths = useMemo(() => volumes.map((v) => v.path), [volumes]);
+  const dropdownPaths = useMemo(
+    () =>
+      liveVolumePaths.length > 0
+        ? [...liveVolumePaths].sort()
+        : fallbackMountVolumes(),
+    [liveVolumePaths],
+  );
+  const freeBytesByPath = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const v of volumes) m.set(v.path, v.free_bytes);
+    return m;
+  }, [volumes]);
+
+  // Auto-derive a leaf name from the image basename. Strip the
+  // extension so a `dead-space.exfat` image lands at
+  // `…/dead-space/`, not `…/dead-space.exfat/`. The user can override.
+  const derivedName = useMemo(() => {
+    const base = entry.name.replace(/\\/g, "/").split("/").pop() ?? entry.name;
+    return base.replace(/\.(exfat|ffpkg)$/i, "");
+  }, [entry.name]);
+
+  // Initial volume + subpath: prefer last-used persisted dest;
+  // fall back to first available volume + the conventional subpath.
+  const initialDest = useMemo(() => {
+    const saved = loadMountDest(host);
+    if (saved) return saved;
+    return {
+      volume: dropdownPaths[0] ?? "/data",
+      subpath: MOUNT_DEFAULT_SUBPATH,
+    };
+    // dropdownPaths is computed once on first render and we don't
+    // need to recompute when it changes — the user's saved dest is
+    // the source of truth. Linting `volumes` here would force a
+    // re-init each volume probe, which would clobber a mid-edit
+    // subpath input.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [host]);
+  const [volume, setVolume] = useState<string>(initialDest.volume);
+  const [subpath, setSubpath] = useState<string>(initialDest.subpath);
+  const [name, setName] = useState<string>(derivedName);
+
+  // Escape closes the modal — same standard-dialog UX as MoveModal.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onCancel();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onCancel]);
+
+  // Keep `volume` in sync with `dropdownPaths`. Two cases this
+  // covers — both produce a controlled-`<select>` value with no
+  // matching option, which React warns about and renders as a
+  // blank dropdown:
+  //
+  //   - User's saved dest references a volume that isn't in the
+  //     current dropdown (e.g., last session was on PS5 with
+  //     /mnt/ext1 attached; today the drive is unplugged so
+  //     dropdownPaths is just /data + the FALLBACK_VOLUMES).
+  //   - The drive is yanked WHILE the modal is open. liveVolumePaths
+  //     re-derives without that volume; the saved `volume` state
+  //     suddenly points at a non-option.
+  //
+  // Snap to the first available volume so the dropdown always
+  // reflects what's actually selectable.
+  useEffect(() => {
+    if (dropdownPaths.length === 0) return;
+    if (!dropdownPaths.includes(volume)) {
+      setVolume(dropdownPaths[0]);
+    }
+  }, [dropdownPaths, volume]);
+
+  // Resolved final mount path. The picker is hidden on pre-2.2.25
+  // payloads, so falling back to a "/mnt/ps5upload/<name>" preview
+  // matches what the payload would actually do.
+  const resolvedPath = supportsMountPoint
+    ? resolveMountPath(volume, subpath, name)
+    : `/mnt/ps5upload/${name}`;
+
+  // Validation. Reject names with slashes / "." / ".." since the
+  // payload would refuse them, and surface that inline rather than
+  // letting the user click Mount and read a back-end error.
+  const nameInvalid =
+    name.trim() === "" ||
+    name.includes("/") ||
+    name.includes("\\") ||
+    name === "." ||
+    name === "..";
+
+  const formatFree = (bytes: number) => {
+    const gib = bytes / 1024 ** 3;
+    if (gib >= 1024) return `${(gib / 1024).toFixed(1)} TB free`;
+    if (gib >= 10) return `${gib.toFixed(0)} GB free`;
+    return `${gib.toFixed(1)} GB free`;
+  };
+
+  // Soft warning: mounting outside /mnt/ps5upload/ is allowed but
+  // some scene tools (etaHEN/GoldHen game scanners) only look at
+  // /mnt/ps5upload/. Show the note when the user picks a non-default
+  // location so they know what they're trading off.
+  const isLegacyRoot =
+    !supportsMountPoint || resolvedPath.startsWith("/mnt/ps5upload/");
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      onClick={onCancel}
+    >
+      <div
+        className="w-full max-w-lg rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className="mb-3 flex items-center gap-2 text-sm font-semibold">
+          <Play size={14} />
+          {tr(
+            "library_mount_modal_title",
+            { name: entry.name },
+            `Mount "${entry.name}"`,
+          )}
+        </header>
+
+        <dl className="mb-4 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+          <dt className="text-[var(--color-muted)]">
+            {tr("library_mount_modal_source", undefined, "From")}
+          </dt>
+          <dd className="font-mono break-all text-[var(--color-text)]">
+            {entry.path}
+          </dd>
+        </dl>
+
+        {!supportsMountPoint && (
+          <div className="mb-3 rounded-md border border-[var(--color-warn)] bg-[var(--color-surface)] p-2 text-[11px] text-[var(--color-warn)]">
+            {tr(
+              "library_mount_modal_old_payload",
+              undefined,
+              "Volume picker requires payload 2.2.25+. The running payload only supports naming the mount under /mnt/ps5upload/. Click \"Replace payload\" on the Connection screen to enable picking a different volume.",
+            )}
+          </div>
+        )}
+
+        {supportsMountPoint && (
+          <>
+            <label className="mb-2 block text-[10px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+              {tr("library_mount_modal_destination", undefined, "Mount under")}
+            </label>
+            <div className="mb-3 flex items-center gap-2 text-sm">
+              <select
+                value={volume}
+                onChange={(e) => setVolume(e.target.value)}
+                className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-sm"
+              >
+                {dropdownPaths.map((p) => {
+                  const free = freeBytesByPath.get(p);
+                  return (
+                    <option key={p} value={p}>
+                      {free !== undefined ? `${p} (${formatFree(free)})` : p}
+                    </option>
+                  );
+                })}
+              </select>
+              <span className="text-[var(--color-muted)]">/</span>
+              <input
+                value={subpath}
+                onChange={(e) => setSubpath(e.target.value)}
+                placeholder={tr(
+                  "library_mount_modal_subpath_placeholder",
+                  undefined,
+                  "subpath (e.g. ps5upload)",
+                )}
+                className="flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-sm"
+              />
+            </div>
+
+            <div className="mb-3 flex flex-wrap items-center gap-1.5">
+              <span className="text-xs text-[var(--color-muted)]">
+                {tr("library_mount_modal_presets", undefined, "Presets:")}
+              </span>
+              {MOUNT_PRESETS.map((p) => {
+                const active = subpath === p.subpath;
+                return (
+                  <button
+                    key={p.subpath}
+                    type="button"
+                    onClick={() => setSubpath(p.subpath)}
+                    title={p.hint}
+                    className={`rounded-full border px-2.5 py-0.5 text-xs transition-colors ${
+                      active
+                        ? "border-[var(--color-accent)] bg-[var(--color-accent)] text-[var(--color-accent-contrast)]"
+                        : "border-[var(--color-border)] hover:bg-[var(--color-surface-3)]"
+                    }`}
+                  >
+                    {p.label}
+                  </button>
+                );
+              })}
+            </div>
+          </>
+        )}
+
+        <label className="mb-2 block text-[10px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+          {tr("library_mount_modal_name", undefined, "Name")}
+        </label>
+        <div className="mb-3">
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder={derivedName}
+            className={`w-full rounded-md border bg-[var(--color-surface)] px-3 py-1.5 text-sm ${
+              nameInvalid
+                ? "border-[var(--color-bad)]"
+                : "border-[var(--color-border)]"
+            }`}
+          />
+          <p className="mt-1 text-[10px] text-[var(--color-muted)]">
+            {tr(
+              "library_mount_modal_name_hint",
+              { default: derivedName },
+              `Folder name under the chosen path. Defaults to "${derivedName}". No slashes.`,
+            )}
+          </p>
+        </div>
+
+        <div className="mb-4 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-xs">
+          <div className="text-[10px] uppercase tracking-wide text-[var(--color-muted)]">
+            {tr(
+              "library_mount_modal_resolved",
+              undefined,
+              "Will mount at",
+            )}
+          </div>
+          <div className="mt-0.5 break-all font-mono">{resolvedPath}</div>
+        </div>
+
+        {nameInvalid && (
+          <div className="mb-3 rounded-md border border-[var(--color-bad)] bg-[var(--color-surface)] p-2 text-xs text-[var(--color-bad)]">
+            {tr(
+              "library_mount_modal_name_invalid",
+              undefined,
+              "Name can't be empty, contain / or \\, or be \".\" / \"..\".",
+            )}
+          </div>
+        )}
+
+        {!isLegacyRoot && !nameInvalid && (
+          <div className="mb-3 rounded-md border border-[var(--color-warn)] bg-[var(--color-surface)] p-2 text-[11px] text-[var(--color-warn)]">
+            {tr(
+              "library_mount_modal_outside_default",
+              undefined,
+              "Heads-up: scene tools (etaHEN, GoldHen) typically scan /mnt/ps5upload/ for installed games. Mounting outside that root works for the payload, but third-party game scanners may not see this title.",
+            )}
+          </div>
+        )}
+
+        <div className="flex items-center justify-end gap-2">
+          <Button variant="ghost" size="sm" onClick={onCancel}>
+            {tr("cancel", undefined, "Cancel")}
+          </Button>
+          <Button
+            variant="primary"
+            size="sm"
+            disabled={nameInvalid}
+            onClick={() => {
+              if (supportsMountPoint) {
+                onConfirm({
+                  mountPoint: resolvedPath,
+                  persistDest: { volume, subpath },
+                });
+              } else {
+                // Pre-2.2.25 payload — only mount_name is supported,
+                // and the payload anchors it under /mnt/ps5upload/.
+                // No `persistDest`: we don't have a real volume
+                // choice to remember in this branch.
+                onConfirm({ mountName: name });
+              }
+            }}
+          >
+            {tr("library_mount_modal_run", undefined, "Mount")}
+          </Button>
+        </div>
       </div>
     </div>
   );

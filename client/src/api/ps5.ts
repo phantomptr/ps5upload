@@ -574,17 +574,32 @@ export interface MountResult {
 }
 
 /** Mount a disk image (.exfat or .ffpkg) on the PS5 via the payload's
- *  built-in MD-attach + nmount pipeline. `mountName` is optional — the
- *  payload derives a filesystem-safe name from the image basename when
- *  omitted. Images always land under `/mnt/ps5upload/<name>/`. */
+ *  built-in MD-attach + nmount pipeline.
+ *
+ *  Mount-location resolution, in priority:
+ *    - `mountPoint` (full path) — new in 2.2.25. Mounts at exactly this
+ *      path. Must be under a writable root the payload's
+ *      `is_path_allowed` accepts (`/data`, `/mnt/ext*`, `/mnt/usb*`,
+ *      `/mnt/ps5upload/*`).
+ *    - `mountName` (no slashes) — backward-compat. Mounts at
+ *      `/mnt/ps5upload/<mountName>/`.
+ *    - both omitted — payload derives a filesystem-safe name from
+ *      the image basename and mounts at `/mnt/ps5upload/<derived>/`.
+ *
+ *  Pre-2.2.25 payloads ignore `mountPoint` and only honor `mountName`. */
 export async function fsMount(
   transferAddr: string,
   imagePath: string,
-  mountName?: string
+  opts?: { mountName?: string; mountPoint?: string },
 ): Promise<MountResult> {
   const addr = toMgmtAddr(transferAddr);
   return invoke<MountResult>("ps5_fs_mount", {
-    req: { addr, image_path: imagePath, mount_name: mountName ?? null },
+    req: {
+      addr,
+      image_path: imagePath,
+      mount_name: opts?.mountName ?? null,
+      mount_point: opts?.mountPoint ?? null,
+    },
   });
 }
 

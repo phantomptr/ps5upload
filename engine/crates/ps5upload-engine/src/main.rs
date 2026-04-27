@@ -921,6 +921,12 @@ struct FsMountReq {
     image_path: String,
     #[serde(default)]
     mount_name: Option<String>,
+    /// Optional full mount path. New in 2.2.25 — when provided, the
+    /// payload mounts at this exact path instead of the legacy
+    /// `/mnt/ps5upload/<name>/` location. Mutually exclusive with
+    /// `mount_name`; payload prefers `mount_point` if both arrive.
+    #[serde(default)]
+    mount_point: Option<String>,
 }
 
 async fn ps5_fs_mount(
@@ -930,17 +936,25 @@ async fn ps5_fs_mount(
     let addr = mgmt_addr_or_default(req.addr, &state.default_ps5_addr);
     let image_path = req.image_path;
     let mount_name = req.mount_name;
+    let mount_point = req.mount_point;
     let started = std::time::Instant::now();
     crate::log_info!(
-        "fs_mount: addr={addr} image_path={image_path} mount_name={:?}",
-        mount_name
+        "fs_mount: addr={addr} image_path={image_path} mount_name={:?} mount_point={:?}",
+        mount_name,
+        mount_point
     );
     let image_for_log = image_path.clone();
-    let result: Result<MountResult, anyhow::Error> =
-        tokio::task::spawn_blocking(move || fs_mount(&addr, &image_path, mount_name.as_deref()))
-            .await
-            .map_err(anyhow::Error::from)
-            .and_then(|r| r);
+    let result: Result<MountResult, anyhow::Error> = tokio::task::spawn_blocking(move || {
+        fs_mount(
+            &addr,
+            &image_path,
+            mount_name.as_deref(),
+            mount_point.as_deref(),
+        )
+    })
+    .await
+    .map_err(anyhow::Error::from)
+    .and_then(|r| r);
     match result {
         Ok(r) => {
             crate::log_info!(

@@ -277,6 +277,42 @@ historical outcomes.
 
 ## Mount + unmount
 
+**Q: How do I find one game in a long library?**
+The Library tab has a search bar above the games + images
+sections (2.2.25+). Type a name fragment ("dead"), a title ID
+("PPSA01342"), or a path fragment ("ext1") — matching is live,
+case-insensitive, and runs across all of `name`, `titleId`,
+absolute `path`, scan `scope`, and `volume`. Multi-word queries
+AND-match across fields, so `dead ext1` finds Dead Space on
+`/mnt/ext1` specifically.
+
+**Q: Can I pick where a `.exfat` / `.ffpkg` mounts?**
+Yes (2.2.25+). The Library Mount button opens a modal with the
+same UX as the Upload screen's destination picker:
+
+- **Volume** — pick any writable PS5 volume from the dropdown
+  (`/data`, `/mnt/ext1`, `/mnt/usb0`, …). Free-space readout
+  appears next to each.
+- **Subpath** — free-form, with the same four preset chips as
+  Upload (`etaHEN/games`, `homebrew`, `exfat`, `ps5upload`).
+- **Name** — auto-derived from the image filename (`Dead
+  Space.exfat` → `Dead Space`), editable.
+
+The resolved final path appears under the inputs in real time.
+Your last-used volume + subpath is persisted per host so the
+next Mount on the same console opens with the same selection.
+
+Heads-up: scene tools (etaHEN, GoldHen) typically only scan
+`/mnt/ps5upload/` for installed games, so mounting outside that
+root works for the payload but the game may not show up in
+third-party scanners. The modal shows a soft warning when the
+resolved path is outside `/mnt/ps5upload/`.
+
+Pre-2.2.25 payloads only honor a `mount_name` (no volume picker)
+and always anchor mounts under `/mnt/ps5upload/`. The modal
+detects the older payload, hides the volume + subpath rows, and
+shows a "Replace payload to enable" banner.
+
 **Q: A mount from a previous session is still showing after I
 re-sent the payload.**
 That's expected — `/mnt/ps5upload/*` mounts are held by the PS5

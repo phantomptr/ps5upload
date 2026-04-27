@@ -730,7 +730,7 @@ export default function FileSystemScreen() {
       title: tr(
         "fs_download_dialog_title",
         { name: entry.name },
-        `Pick a destination folder for "${entry.name}"`,
+        "Pick a destination folder for \"{name}\"",
       ),
     });
     if (typeof picked !== "string") return;
@@ -747,7 +747,7 @@ export default function FileSystemScreen() {
       const friendly = tr(
         "fs_download_start_failed",
         { error: msg },
-        `Couldn't start the download: ${msg}`,
+        "Couldn't start the download: {error}",
       );
       setError(friendly);
       useFsDownloadOpStore.getState().end(friendly);
@@ -784,7 +784,7 @@ export default function FileSystemScreen() {
           const friendly = tr(
             "fs_download_failed",
             { error: snap.error ?? "download failed" },
-            `Download failed: ${snap.error ?? "unknown error"}`,
+            "Download failed: {error}",
           );
           setError(friendly);
           useFsDownloadOpStore.getState().end(friendly);
@@ -800,7 +800,7 @@ export default function FileSystemScreen() {
         const friendly = tr(
           "fs_download_poll_failed",
           { error: msg },
-          `Lost contact with the engine while downloading: ${msg}`,
+          "Lost contact with the engine while downloading: {error}",
         );
         setError(friendly);
         useFsDownloadOpStore.getState().end(friendly);
@@ -1376,7 +1376,7 @@ function BulkOpBanner({
           {tr(
             "fs_bulk_progress",
             { done: done + 1, total },
-            `${done + 1} of ${total}`,
+            "{done} of {total}",
           )}
           {" · "}
           {formatDuration(elapsedSec)}
@@ -1443,7 +1443,7 @@ function BulkOpBanner({
           {tr(
             "fs_bulk_stop_explainer_delete",
             { name: currentName },
-            `Waiting for the current item (${currentName}) to finish on the PS5 — fs_delete can't be interrupted mid-file. The next items in this batch will be skipped.`,
+            "Waiting for the current item ({name}) to finish on the PS5 — fs_delete can't be interrupted mid-file. The next items in this batch will be skipped.",
           )}
         </div>
       )}

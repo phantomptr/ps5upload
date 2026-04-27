@@ -279,9 +279,10 @@ static uint32_t read_le32(const unsigned char *p);
 static int fs_mount_try_unmount(const char *mount_point);
 static int fs_mount_detach_md(int unit_id);
 static int fs_mount_detach_lvd(int unit_id);
-static int  mount_tracker_read(const char *mount_name, char *out, size_t out_cap);
-static void mount_tracker_write(const char *mount_name, const char *src_path);
-static void mount_tracker_remove(const char *mount_name);
+static int  mount_tracker_read(const char *mount_point, char *out, size_t out_cap);
+static void mount_tracker_write(const char *mount_point, const char *src_path);
+static void mount_tracker_remove(const char *mount_point);
+static int  mount_tracker_exists(const char *mount_point);
 static int handle_stream_shard(runtime_state_t *state, int client_fd,
                                 uint64_t trace_id, uint64_t body_len);
 static int runtime_write_manifest(const runtime_tx_entry_t *entry,
@@ -986,10 +987,19 @@ void runtime_reconcile_mounts(void) {
     for (int i = 0; i < nmnts; i++) {
         const char *mnt_on   = mnts[i].f_mntonname;
         const char *mnt_from = mnts[i].f_mntfromname;
-        if (strncmp(mnt_on, "/mnt/ps5upload/", 15) != 0) continue;
-        if (mnt_on[15] == '\0') continue;  /* skip the parent dir */
+        /* Reconcile our own mounts only. Two cases:
+         *   - Legacy: anything under /mnt/ps5upload/<name>. We always
+         *     own these (the namespace is reserved by handle_fs_mount).
+         *   - User-chosen mount paths: identified by tracker presence.
+         *     A user-mounted /mnt/ext1/games/foo has a tracker at
+         *     /data/ps5upload/mounts/mnt_ext1_games_foo.src; system
+         *     mounts at /mnt/ext1 itself do not.
+         * Skip everything else so we never accidentally unmount a
+         * Sony-managed mount or the user's own filesystem. */
+        const int legacy_ours =
+            strncmp(mnt_on, "/mnt/ps5upload/", 15) == 0 && mnt_on[15] != '\0';
+        if (!legacy_ours && !mount_tracker_exists(mnt_on)) continue;
 
-        const char *name = mnt_on + 15;
         int orphaned = 0;
         const char *reason = "unknown";
 
@@ -1007,7 +1017,7 @@ void runtime_reconcile_mounts(void) {
          * intentionally moved the file and we don't own cleanup of
          * that. Log only; don't clean up. */
         char src[256];
-        int have_src = mount_tracker_read(name, src, sizeof(src));
+        int have_src = mount_tracker_read(mnt_on, src, sizeof(src));
         if (have_src) {
             struct stat src_st;
             if (stat(src, &src_st) != 0) {
@@ -1039,7 +1049,7 @@ void runtime_reconcile_mounts(void) {
             if (lvd_unit >= 0) (void)fs_mount_detach_lvd(lvd_unit);
             if (md_unit  >= 0) (void)fs_mount_detach_md(md_unit);
             (void)rmdir(mnt_on);
-            mount_tracker_remove(name);
+            mount_tracker_remove(mnt_on);
             cleaned += 1;
         } else {
             kept += 1;
@@ -1052,33 +1062,133 @@ void runtime_reconcile_mounts(void) {
     }
 }
 
+/* Encode a mount_point to a filesystem-safe tracker filename (no
+ * extension). Two formats coexist for backward compatibility:
+ *
+ *   - Legacy /mnt/ps5upload/<name> mounts use the leaf <name> as the
+ *     key (matches files written by every payload up through 2.2.24).
+ *   - User-chosen mount paths (anywhere `is_path_allowed` accepts —
+ *     /mnt/ext1/games/foo, /data/mounts/bar, etc.) hex-escape every
+ *     non-alphanumeric byte. So `/mnt/ext1/games/foo` becomes
+ *     `mnt_2fext1_2fgames_2ffoo` (the `_2f` triplet is the hex of
+ *     '/'; `_5f` would be the hex of a literal underscore).
+ *
+ * Why hex-escape rather than a flat `/` → `_` substitution: paths
+ * `/mnt/ext1/foo_bar` and `/mnt/ext1/foo/bar` would both encode to
+ * `mnt_ext1_foo_bar` under a flat substitution — silently
+ * colliding. With per-byte hex escaping every distinct mount_point
+ * has a distinct key, no matter how many underscores its segments
+ * contain. The triplet form (`_HH`) is one byte longer per escaped
+ * char but stays well within the 256-byte key buffer for any
+ * realistic PS5 path.
+ *
+ * The legacy format is stable across upgrades — existing PS5s with
+ * trackers from earlier versions keep showing source-image strings
+ * in the Volumes tab without re-mount. */
+static void mount_tracker_key(const char *mount_point, char *out, size_t out_cap) {
+    if (!out || out_cap == 0) return;
+    out[0] = '\0';
+    if (!mount_point) return;
+    const size_t base_len = strlen(FS_MOUNT_BASE);
+    /* Legacy: /mnt/ps5upload/<name> with non-empty leaf. Use the leaf
+     * as the key so trackers written by 2.2.24 and earlier still
+     * resolve. The leaf is constrained by handle_fs_mount to contain
+     * no slashes / dots, so it's safe to use verbatim. */
+    if (strncmp(mount_point, FS_MOUNT_BASE "/", base_len + 1) == 0 &&
+        mount_point[base_len + 1] != '\0') {
+        snprintf(out, out_cap, "%s", mount_point + base_len + 1);
+        return;
+    }
+    /* New: hex-escape every non-alphanumeric byte, skipping a single
+     * leading slash. Each escaped byte takes 3 chars (`_` + 2 hex
+     * digits), so we need 3 bytes of headroom per escaped char plus
+     * 1 for the NUL. Stop early if the buffer would overflow rather
+     * than truncate mid-escape (a partial `_5` would be ambiguous). */
+    static const char HEX[] = "0123456789abcdef";
+    size_t i = (mount_point[0] == '/') ? 1u : 0u;
+    size_t j = 0;
+    while (mount_point[i] != '\0') {
+        unsigned char c = (unsigned char)mount_point[i++];
+        const int needs_escape =
+            !((c >= 'a' && c <= 'z') ||
+              (c >= 'A' && c <= 'Z') ||
+              (c >= '0' && c <= '9') ||
+              c == '-' || c == '.');
+        if (needs_escape) {
+            if (j + 4 > out_cap) break; /* room for "_HH\0" */
+            out[j++] = '_';
+            out[j++] = HEX[(c >> 4) & 0xF];
+            out[j++] = HEX[c & 0xF];
+        } else {
+            if (j + 2 > out_cap) break; /* room for "X\0" */
+            out[j++] = (char)c;
+        }
+    }
+    out[j] = '\0';
+}
+
 /* Read the .src tracker written at mount time. Returns 1 on success
  * with out filled; 0 if no tracker exists (unknown source — likely a
  * mount from before this tracking was added, or a hand-crafted one).
  * Silent failure: the Volumes screen tolerates a missing source. */
-static int mount_tracker_read(const char *mount_name, char *out, size_t out_cap) {
+static int mount_tracker_read(const char *mount_point, char *out, size_t out_cap) {
+    char key[256];
     char tracker[512];
+    /* Defensive cap check: callers pass meaningfully-sized buffers
+     * (256+ bytes in every current site), but require at least 2
+     * bytes so we have room for a single byte read plus its NUL.
+     * out_cap == 1 would mean read(fd, out, 0) — a no-op returning
+     * 0 — and the buffer would be left without a terminator, which
+     * a caller that bypasses the return code and reads `out`
+     * directly would mishandle. Pre-zero too: the "0 bytes read
+     * from a real tracker file" branch must never return
+     * uninitialized stack memory. */
+    if (!out || out_cap < 2) return 0;
+    out[0] = '\0';
+    mount_tracker_key(mount_point, key, sizeof(key));
+    if (key[0] == '\0') return 0;
     int n = snprintf(tracker, sizeof(tracker), "%s/%s.src",
-                     PS5UPLOAD2_MOUNTS_DIR, mount_name);
+                     PS5UPLOAD2_MOUNTS_DIR, key);
     if (n < 0 || (size_t)n >= sizeof(tracker)) return 0;
     int fd = open(tracker, O_RDONLY);
     if (fd < 0) return 0;
     ssize_t got = read(fd, out, out_cap - 1);
     close(fd);
-    if (got <= 0) { out[0] = '\0'; return 0; }
+    if (got <= 0) return 0; /* out[0] already '\0' from pre-zero above */
     out[got] = '\0';
     /* Strip trailing newline if present (hand-edited files might have one). */
     if (out[got - 1] == '\n') out[got - 1] = '\0';
     return 1;
 }
 
+/* Cheap "does a tracker file exist for this mount_point?" check.
+ * Used by FS_LIST_VOLUMES to decide whether a mount belongs to us
+ * (so it bypasses the writable / total>0 placeholder filters that
+ * would otherwise hide our zero-free-space images). Distinct from
+ * mount_tracker_read() which reads the contents — the existence
+ * check costs one stat() instead of an open/read/close cycle. */
+static int mount_tracker_exists(const char *mount_point) {
+    char key[256];
+    char tracker[512];
+    mount_tracker_key(mount_point, key, sizeof(key));
+    if (key[0] == '\0') return 0;
+    int n = snprintf(tracker, sizeof(tracker), "%s/%s.src",
+                     PS5UPLOAD2_MOUNTS_DIR, key);
+    if (n < 0 || (size_t)n >= sizeof(tracker)) return 0;
+    struct stat st;
+    return stat(tracker, &st) == 0 && S_ISREG(st.st_mode);
+}
+
 /* Write the source-path tracker for a mount. Failure is non-fatal —
  * the mount itself has already succeeded; losing the tracker just
  * means the Volumes screen won't know which file backs the mount. */
-static void mount_tracker_write(const char *mount_name, const char *src_path) {
+static void mount_tracker_write(const char *mount_point, const char *src_path) {
+    char key[256];
     char tracker[512];
+    mount_tracker_key(mount_point, key, sizeof(key));
+    if (key[0] == '\0') return;
     int n = snprintf(tracker, sizeof(tracker), "%s/%s.src",
-                     PS5UPLOAD2_MOUNTS_DIR, mount_name);
+                     PS5UPLOAD2_MOUNTS_DIR, key);
     if (n < 0 || (size_t)n >= sizeof(tracker)) return;
     int fd = open(tracker, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) return;
@@ -1090,10 +1200,13 @@ static void mount_tracker_write(const char *mount_name, const char *src_path) {
 
 /* Remove the tracker when a mount goes away. Tolerant of already-gone
  * trackers because reconciliation may have cleaned up orphans first. */
-static void mount_tracker_remove(const char *mount_name) {
+static void mount_tracker_remove(const char *mount_point) {
+    char key[256];
     char tracker[512];
+    mount_tracker_key(mount_point, key, sizeof(key));
+    if (key[0] == '\0') return;
     int n = snprintf(tracker, sizeof(tracker), "%s/%s.src",
-                     PS5UPLOAD2_MOUNTS_DIR, mount_name);
+                     PS5UPLOAD2_MOUNTS_DIR, key);
     if (n < 0 || (size_t)n >= sizeof(tracker)) return;
     (void)unlink(tracker);
 }
@@ -3703,7 +3816,17 @@ static int handle_fs_list_volumes(runtime_state_t *state, int client_fd,
          * report f_blocks==0 for other tools. For our own mounts, those
          * filters incorrectly hide the volume from the Volumes screen,
          * which in turn hides the Unmount button. */
-        const int is_ours = (strncmp(mnt_on, "/mnt/ps5upload/", 15) == 0);
+        /* "ours" was historically just the /mnt/ps5upload/ prefix.
+         * 2.2.25 lets the user mount an image at any allowed path
+         * (/mnt/ext1/games/foo, /data/mounts/bar, …) so we identify
+         * those by tracker presence too. The legacy prefix check
+         * stays for mounts written by older payloads — even though
+         * the new mount_tracker_exists() also recognizes them, the
+         * prefix is cheaper and avoids a stat() per non-our mount in
+         * the FS_LIST_VOLUMES hot path. */
+        const int is_ours =
+            (strncmp(mnt_on, "/mnt/ps5upload/", 15) == 0) ||
+            mount_tracker_exists(mnt_on);
         if (!is_ours) {
             /* Real-device gate for the /mnt/ext* and /mnt/usb* slots:
              * their paths are hot-plug placeholders, so we require a
@@ -3730,13 +3853,12 @@ static int handle_fs_list_volumes(runtime_state_t *state, int client_fd,
         json_escape_into(mnt_from, from_esc, sizeof(from_esc));
 
         /* For our own mounts, look up the .src tracker to surface the
-         * backing image path. Non-ours mounts leave source_image empty. */
+         * backing image path. Non-ours mounts leave source_image empty.
+         * mount_tracker_read accepts the full mount_point and handles
+         * both legacy /mnt/ps5upload/<name> and user-chosen paths. */
         if (is_ours) {
-            /* mount_name is the basename after /mnt/ps5upload/ — skip
-             * the 15-byte prefix to isolate it. */
-            const char *mount_name = mnt_on + 15;
             char src_raw[256];
-            if (mount_tracker_read(mount_name, src_raw, sizeof(src_raw))) {
+            if (mount_tracker_read(mnt_on, src_raw, sizeof(src_raw))) {
                 json_escape_into(src_raw, source_esc, sizeof(source_esc));
             }
         }
@@ -5440,16 +5562,50 @@ static int fs_mount_attach_md(const char *image_path, off_t size, int is_exfat) 
     return (int)req.md_unit;
 }
 
+/* mkdir -p equivalent: creates each parent directory if missing,
+ * then the target itself. Stops at the first segment that fails for
+ * a reason other than EEXIST. Used by FS_MOUNT when the caller
+ * picks a deep mount path like /mnt/ext1/games/foo and the
+ * intermediate directory might not exist yet. mode 0777 matches
+ * the existing single-mkdir call; PS5 uses no umask of consequence
+ * for our case (the kernel sandbox limits visibility long before
+ * permissions matter). */
+static int fs_mount_mkdir_p(const char *path) {
+    if (!path || path[0] != '/') return -1;
+    char buf[256];
+    size_t len = strlen(path);
+    if (len + 1 > sizeof(buf)) return -1;
+    memcpy(buf, path, len + 1);
+    /* Walk the path, terminating at each '/' to mkdir intermediates. */
+    for (size_t i = 1; i < len; i++) {
+        if (buf[i] != '/') continue;
+        buf[i] = '\0';
+        if (mkdir(buf, 0777) != 0 && errno != EEXIST) {
+            buf[i] = '/';
+            return -1;
+        }
+        buf[i] = '/';
+    }
+    if (mkdir(buf, 0777) != 0 && errno != EEXIST) return -1;
+    return 0;
+}
+
 /* ── FS_MOUNT handler ───────────────────────────────────────────────────
  *
  * Pipeline:
- *   1. Parse {image_path, mount_name?} from JSON body.
+ *   1. Parse {image_path, mount_name?, mount_point?} from JSON body.
  *   2. Verify image_path passes is_path_allowed and names a regular
  *      file. Detect fstype by extension (.exfat → exfatfs, .ffpkg → ufs).
- *   3. Derive or accept a mount_name; mount point = /mnt/ps5upload/<name>/.
+ *   3. Resolve mount_point. Three cases, in priority:
+ *        - Caller-supplied `mount_point`: full absolute path. Must
+ *          pass is_path_allowed; rejected otherwise.
+ *        - Caller-supplied `mount_name` (no slashes): mounts under
+ *          /mnt/ps5upload/<name>/ (the legacy 2.2.24 path).
+ *        - Neither: derive a safe name from image_path basename and
+ *          mount under /mnt/ps5upload/.
  *   4. open(/dev/mdctl); issue MDIOCATTACH with MD_VNODE; wait for
  *      /dev/md<N> to materialize.
- *   5. mkdir mount point; nmount with the appropriate fstype + standard
+ *   5. mkdir -p mount point; nmount with the appropriate fstype + standard
  *      PS5 mount knobs (async, noatime, budgetid=game, automounted).
  *   6. On nmount failure, detach the MD unit so we don't leak it.
  *   7. Reply with ACK carrying {mount_point, dev_node, fstype}.
@@ -5473,6 +5629,7 @@ static int handle_fs_mount(runtime_state_t *state, int client_fd,
     if (request_body) {
         extract_json_string_field(request_body, "image_path", image_path, sizeof(image_path));
         extract_json_string_field(request_body, "mount_name", mount_name, sizeof(mount_name));
+        extract_json_string_field(request_body, "mount_point", mount_point, sizeof(mount_point));
     }
     if (!is_path_allowed(image_path)) {
         return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
@@ -5486,20 +5643,47 @@ static int handle_fs_mount(runtime_state_t *state, int client_fd,
         return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
                           "fs_mount_unsupported_format", 27);
     }
-    /* Derive name if caller didn't supply one. Reject caller-supplied
-     * names containing path separators — they'd escape /mnt/ps5upload/. */
-    if (mount_name[0] == '\0') {
-        fs_mount_derive_name(image_path, mount_name, sizeof(mount_name));
-    } else if (strchr(mount_name, '/') != NULL || strstr(mount_name, "..") != NULL) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_mount_bad_name", 17);
-    }
 
-    n = snprintf(mount_point, sizeof(mount_point), "%s/%s",
-                 FS_MOUNT_BASE, mount_name);
-    if (n < 0 || (size_t)n >= sizeof(mount_point)) {
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_mount_name_too_long", 22);
+    /* Resolve mount_point. Caller-supplied path takes precedence — if
+     * provided, the leaf name and base dir are determined by the
+     * caller, and is_path_allowed enforces the same writable-roots
+     * allowlist used by every other FS-mutation frame. Reject the
+     * /mnt/ps5upload base itself (the existing namespace would leak
+     * into a "mount point at the namespace root" footgun) and reject
+     * paths with a trailing slash so unmount's exact-string match
+     * stays well-defined. */
+    if (mount_point[0] != '\0') {
+        if (!is_path_allowed(mount_point)) {
+            return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
+                              "fs_mount_path_not_allowed", 25);
+        }
+        size_t mp_len = strlen(mount_point);
+        if (mp_len > 1 && mount_point[mp_len - 1] == '/') {
+            return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
+                              "fs_mount_bad_mount_point", 24);
+        }
+        if (strcmp(mount_point, FS_MOUNT_BASE) == 0) {
+            return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
+                              "fs_mount_bad_mount_point", 24);
+        }
+    } else {
+        /* No mount_point supplied — fall back to legacy
+         * /mnt/ps5upload/<name> behavior. mount_name is either
+         * caller-supplied (validated against slashes/..) or derived
+         * from the image filename. */
+        if (mount_name[0] == '\0') {
+            fs_mount_derive_name(image_path, mount_name, sizeof(mount_name));
+        } else if (strchr(mount_name, '/') != NULL ||
+                   strstr(mount_name, "..") != NULL) {
+            return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
+                              "fs_mount_bad_name", 17);
+        }
+        n = snprintf(mount_point, sizeof(mount_point), "%s/%s",
+                     FS_MOUNT_BASE, mount_name);
+        if (n < 0 || (size_t)n >= sizeof(mount_point)) {
+            return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
+                              "fs_mount_name_too_long", 22);
+        }
     }
 
     /* Attach pipeline: try LVD first (PS5-native, works on more
@@ -5544,10 +5728,13 @@ static int handle_fs_mount(runtime_state_t *state, int client_fd,
                           "fs_mount_dev_node_missing", 25);
     }
 
-    /* Ensure /mnt/ps5upload/ and /mnt/ps5upload/<name>/ exist. Both
-     * EEXIST are fine — we'll nmount over whatever's there. */
-    (void)mkdir(FS_MOUNT_BASE, 0777);
-    if (mkdir(mount_point, 0777) != 0 && errno != EEXIST) {
+    /* Ensure every directory along the mount_point exists. The
+     * legacy /mnt/ps5upload/<name> path needs at most two mkdirs
+     * (the base + the leaf); a user-chosen path like
+     * /mnt/ext1/games/foo needs three or more. mkdir -p handles
+     * both. EEXIST at any segment is fine — we'll nmount over
+     * whatever's there. */
+    if (fs_mount_mkdir_p(mount_point) != 0) {
         if (used_lvd) fs_mount_detach_lvd(unit_id);
         else fs_mount_detach_md(unit_id);
         return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
@@ -5610,9 +5797,12 @@ static int handle_fs_mount(runtime_state_t *state, int client_fd,
     }
 
     /* Record the source image path so Volumes can surface it and
-     * reconciliation can validate on next boot. Best-effort — a
-     * failed tracker write doesn't undo the successful mount. */
-    mount_tracker_write(mount_name, image_path);
+     * reconciliation can validate on next boot. Keyed by the
+     * resolved mount_point (works for both legacy
+     * /mnt/ps5upload/<name> and user-chosen paths via
+     * mount_tracker_key). Best-effort — a failed tracker write
+     * doesn't undo the successful mount. */
+    mount_tracker_write(mount_point, image_path);
 
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
@@ -5645,9 +5835,21 @@ static int handle_fs_unmount(runtime_state_t *state, int client_fd,
         extract_json_string_field(request_body, "mount_point",
                                   mount_point, sizeof(mount_point));
     }
+    /* Two ways to confirm a mount is ours, ordered cheap-first:
+     *   1. /mnt/ps5upload/<leaf> prefix — the legacy namespace,
+     *      always exclusively ours.
+     *   2. A tracker file exists for this exact mount_point — proves
+     *      handle_fs_mount registered this mount on this PS5.
+     * Either is sufficient. We deliberately don't accept "lives on
+     * an is_path_allowed root" alone, because that would let a user
+     * unmount a real /mnt/ext1 they never asked us to manage. The
+     * tracker is our consent record. */
     const size_t base_len = strlen(FS_MOUNT_BASE);
-    if (strncmp(mount_point, FS_MOUNT_BASE "/", base_len + 1) != 0 ||
-        strstr(mount_point, "..") != NULL) {
+    const int legacy_match =
+        strncmp(mount_point, FS_MOUNT_BASE "/", base_len + 1) == 0 &&
+        mount_point[base_len + 1] != '\0';
+    if (strstr(mount_point, "..") != NULL ||
+        (!legacy_match && !mount_tracker_exists(mount_point))) {
         return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
                           "fs_unmount_not_our_mount", 24);
     }
@@ -5682,15 +5884,16 @@ static int handle_fs_unmount(runtime_state_t *state, int client_fd,
      * request on detach alone. */
     if (detach_lvd_unit >= 0) (void)fs_mount_detach_lvd(detach_lvd_unit);
     if (detach_md_unit  >= 0) (void)fs_mount_detach_md(detach_md_unit);
-    /* Clean up the (now-empty) mount-point directory. */
+    /* Clean up the (now-empty) mount-point directory. We rmdir only
+     * the leaf — for user-chosen deep paths (/mnt/ext1/games/foo) we
+     * deliberately leave parent dirs alone since they may have been
+     * pre-existing or hold other content. */
     rmdir(mount_point);
-    /* Remove the per-mount source tracker. The mount_point is
-     * /mnt/ps5upload/<name> so the trailing basename is the name
-     * we used when writing the tracker. */
-    {
-        const char *name = mount_point + base_len + 1;  /* skip "/mnt/ps5upload/" */
-        mount_tracker_remove(name);
-    }
+    /* Remove the per-mount source tracker. mount_tracker_remove
+     * accepts the full mount_point and computes the right tracker
+     * key for both legacy /mnt/ps5upload/<name> and user-chosen
+     * paths. */
+    mount_tracker_remove(mount_point);
 
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;

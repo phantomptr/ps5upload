@@ -326,8 +326,19 @@ pub async fn ps5_fs_op_cancel(req: FsOpRefReq) -> Result<JsonValue, String> {
 pub struct FsMountReq {
     pub addr: Option<String>,
     pub image_path: String,
+    /// Optional leaf name under `/mnt/ps5upload/`. Mutually exclusive
+    /// with `mount_point` — if both are provided, the engine prefers
+    /// `mount_point` (full path wins over leaf). Kept for backward
+    /// compatibility with 2.2.24 and earlier callers.
     #[serde(default)]
     pub mount_name: Option<String>,
+    /// Optional full mount path. New in 2.2.25. When provided, the
+    /// payload mounts at this exact path instead of the legacy
+    /// `/mnt/ps5upload/<derived-name>/` location. Path must be under
+    /// a writable root the payload's `is_path_allowed` accepts
+    /// (`/data`, `/mnt/ext*`, `/mnt/usb*`, `/mnt/ps5upload/*`).
+    #[serde(default)]
+    pub mount_point: Option<String>,
 }
 
 #[tauri::command]
@@ -340,6 +351,7 @@ pub async fn ps5_fs_mount(req: FsMountReq) -> Result<JsonValue, String> {
             "addr": req.addr,
             "image_path": req.image_path,
             "mount_name": req.mount_name,
+            "mount_point": req.mount_point,
         }),
     )
     .await

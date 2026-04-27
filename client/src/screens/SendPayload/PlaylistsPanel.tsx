@@ -170,7 +170,7 @@ function RunStatusBanner() {
           {tr(
             "playlist_status_running",
             { index: runStatus.stepIndex + 1, total: playlist?.steps.length ?? 0 },
-            `Sending step ${runStatus.stepIndex + 1} of ${playlist?.steps.length ?? 0}`,
+            "Sending step {index} of {total}",
           )}
           {step ? `: ${basename(step.path)}` : ""}
         </span>
@@ -189,7 +189,7 @@ function RunStatusBanner() {
           {tr(
             "playlist_status_sleeping",
             { remaining: Math.ceil(remaining / 1000) },
-            `Sleeping ${Math.ceil(remaining / 1000)}s before next step…`,
+            "Sleeping {remaining}s before next step…",
           )}
         </span>
       </div>
@@ -217,7 +217,7 @@ function RunStatusBanner() {
             {tr(
               "playlist_status_done",
               { ok: runStatus.successCount, fail: runStatus.failureCount },
-              `Done — ${runStatus.successCount} sent, ${runStatus.failureCount} failed`,
+              "Done — {ok} sent, {fail} failed",
             )}
           </span>
         </div>
@@ -231,7 +231,7 @@ function RunStatusBanner() {
                 {tr(
                   "playlist_failed_step_line",
                   { step: f.stepIndex + 1, error: f.error },
-                  `Step ${f.stepIndex + 1}: ${f.error}`,
+                  "Step {step}: {error}",
                 )}
               </li>
             ))}
@@ -250,7 +250,7 @@ function RunStatusBanner() {
           {tr(
             "playlist_status_failed",
             { step: runStatus.stepIndex + 1, error: runStatus.error },
-            `Step ${runStatus.stepIndex + 1} failed: ${runStatus.error}`,
+            "Step {step} failed: {error}",
           )}
         </div>
       </div>
@@ -419,7 +419,7 @@ function PlaylistCard({
                   : tr(
                       "playlist_run_tooltip",
                       { name: playlist.name },
-                      `Run "${playlist.name}"`,
+                      "Run \"{name}\"",
                     )
             }
           >
@@ -455,7 +455,7 @@ function PlaylistCard({
               {tr(
                 "playlist_delete_title",
                 { name: playlist.name },
-                `Delete "${playlist.name}"?`,
+                "Delete \"{name}\"?",
               )}
             </h3>
             <p className="mb-4 text-xs text-[var(--color-muted)]">
