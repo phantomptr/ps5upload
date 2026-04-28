@@ -151,6 +151,51 @@ pub fn hw_power(addr: &str) -> Result<HwPower> {
     })
 }
 
+/// "Console Storage" aggregate that matches what PS5 Settings shows.
+/// Sums the three partitions Sony's UI counts (`/user effective +
+/// /system_data + /system_ex`) and accounts for the reserved-pool slice
+/// the FS keeps for root. Per-partition fields are also surfaced for
+/// the diagnostics card. Distinct from `fs_list_volumes`: that returns
+/// per-volume detail; this is the single-line summary.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HwStorage {
+    pub total_bytes: u64,
+    pub free_bytes: u64,
+    pub used_bytes: u64,
+    pub reserved_bytes: u64,
+    pub user_total_bytes: u64,
+    pub user_free_bytes: u64,
+    pub user_reserved_bytes: u64,
+    pub system_data_total_bytes: u64,
+    pub system_data_free_bytes: u64,
+    pub system_ex_total_bytes: u64,
+    pub system_ex_free_bytes: u64,
+}
+
+pub fn hw_storage(addr: &str) -> Result<HwStorage> {
+    let body = round_trip(
+        addr,
+        FrameType::HwStorage,
+        FrameType::HwStorageAck,
+        "HW_STORAGE",
+    )?;
+    let get = parse_kv(&body);
+    let n = |k: &str| get(k).and_then(|v| v.parse().ok()).unwrap_or(0u64);
+    Ok(HwStorage {
+        total_bytes: n("total_bytes"),
+        free_bytes: n("free_bytes"),
+        used_bytes: n("used_bytes"),
+        reserved_bytes: n("reserved_bytes"),
+        user_total_bytes: n("user_total_bytes"),
+        user_free_bytes: n("user_free_bytes"),
+        user_reserved_bytes: n("user_reserved_bytes"),
+        system_data_total_bytes: n("system_data_total_bytes"),
+        system_data_free_bytes: n("system_data_free_bytes"),
+        system_ex_total_bytes: n("system_ex_total_bytes"),
+        system_ex_free_bytes: n("system_ex_free_bytes"),
+    })
+}
+
 /// Safe bounds for fan-turbo threshold. Mirrored in the payload
 /// (payload/include/hw_info.h) — the payload clamps identically, so
 /// callers that bypass this function still get a safe outcome. We
@@ -328,6 +373,106 @@ mod tests {
         let get = parse_kv(body);
         assert_eq!(get("cpu_temp"), Some("50"));
         assert_eq!(get("unknown_key"), None);
+    }
+
+    /// Parse the post-2.2.26 sysctl-based proc_list shape into the
+    /// engine struct. Mirrors the live-decoder body used by
+    /// `proc_list()` so a payload-shape regression here lights up
+    /// the engine immediately.
+    fn parse_proc_list_body(body: &[u8]) -> ProcList {
+        let v: serde_json::Value = serde_json::from_slice(body).expect("valid JSON");
+        let ok = v.get("ok").and_then(|x| x.as_bool()).unwrap_or(false);
+        let mut truncated = false;
+        let mut procs = Vec::new();
+        if let Some(arr) = v.get("procs").and_then(|x| x.as_array()) {
+            for item in arr {
+                if item
+                    .get("truncated")
+                    .and_then(|x| x.as_bool())
+                    .unwrap_or(false)
+                {
+                    truncated = true;
+                    continue;
+                }
+                let pid = item.get("pid").and_then(|x| x.as_i64()).unwrap_or(0) as i32;
+                let name = item
+                    .get("name")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if !name.is_empty() {
+                    procs.push(ProcEntry { pid, name });
+                }
+            }
+        }
+        let error = v
+            .get("error")
+            .and_then(|x| x.as_str())
+            .map(|s| s.to_string());
+        ProcList {
+            ok,
+            procs,
+            truncated,
+            error,
+        }
+    }
+
+    #[test]
+    fn parse_proc_list_normal() {
+        let body = br#"{"ok":true,"procs":[{"pid":97,"name":"SceShellUI"},{"pid":113,"name":"payload.elf"}]}"#;
+        let pl = parse_proc_list_body(body);
+        assert!(pl.ok);
+        assert!(!pl.truncated);
+        assert_eq!(pl.procs.len(), 2);
+        assert_eq!(pl.procs[0].pid, 97);
+        assert_eq!(pl.procs[0].name, "SceShellUI");
+        assert_eq!(pl.procs[1].name, "payload.elf");
+        assert!(pl.error.is_none());
+    }
+
+    #[test]
+    fn parse_proc_list_truncated() {
+        // Payload emits a sentinel object with truncated:true when the
+        // walk hit the buffer cap.
+        let body = br#"{"ok":true,"procs":[{"pid":1,"name":"init"},{"truncated":true}]}"#;
+        let pl = parse_proc_list_body(body);
+        assert!(pl.ok);
+        assert!(pl.truncated);
+        // The sentinel object isn't counted as a process — only real
+        // {pid,name} entries should land in `procs`.
+        assert_eq!(pl.procs.len(), 1);
+    }
+
+    #[test]
+    fn parse_proc_list_empty_list() {
+        // Edge case: payload emits ok:true but no entries.
+        let body = br#"{"ok":true,"procs":[]}"#;
+        let pl = parse_proc_list_body(body);
+        assert!(pl.ok);
+        assert!(!pl.truncated);
+        assert!(pl.procs.is_empty());
+    }
+
+    #[test]
+    fn parse_proc_list_error_shape() {
+        // sysctl probe failed shape; engine surfaces the error code so
+        // UI can map "proc_list_sysctl_size_failed" → human string.
+        let body = br#"{"ok":false,"error":"proc_list_sysctl_read_failed"}"#;
+        let pl = parse_proc_list_body(body);
+        assert!(!pl.ok);
+        assert!(pl.procs.is_empty());
+        assert_eq!(pl.error.as_deref(), Some("proc_list_sysctl_read_failed"),);
+    }
+
+    #[test]
+    fn parse_proc_list_skips_unnamed_entry() {
+        // A kinfo_proc with a NUL-only tdname json-escapes to "".
+        // Defensive: we shouldn't surface those as zero-name rows.
+        let body = br#"{"ok":true,"procs":[{"pid":42,"name":""},{"pid":43,"name":"valid"}]}"#;
+        let pl = parse_proc_list_body(body);
+        assert!(pl.ok);
+        assert_eq!(pl.procs.len(), 1);
+        assert_eq!(pl.procs[0].pid, 43);
     }
 
     #[test]

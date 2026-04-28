@@ -24,21 +24,32 @@ BLAKE3_SRCS := $(BLAKE3_DIR)/blake3.c \
 INCLUDES := -Iinclude -I$(BLAKE3_DIR)
 CFLAGS := -Wall -Wextra -Werror -g $(INCLUDES)
 
-# NOTE on Sony sprx linkage: we do NOT pass -lSceAppInstUtil /
-# -lSceSystemService / -lSceUserService / -lSceIpmi at link time.
-# Doing so adds DT_NEEDED entries that force the PS5's rtld to
-# load those sprxes BEFORE main() runs — and on some firmware /
-# loader combinations that load path hangs, leaving the payload
-# unable to come up at all.
+# Sony sprx linkage. ShadowMountPlus and PS5-Upload-Suite both
+# compile-time link these libraries (see ShadowMountPlus/Makefile,
+# PS5-Upload-Suite/payload/Makefile). Their payloads call
+# sceLncUtilLaunchApp + sceKernelGetCpuTemperature without wedging
+# on the same firmware range we target.
 #
-# Instead, register.c resolves these symbols lazily via dlopen +
-# dlsym (RTLD_DEFAULT) on the first install/launch/uninstall
-# request. If the sprxes take a moment to load on that first call,
-# the user pays ~100ms of latency — a far better UX than
-# "payload never boots." See register_module_init_impl.
+# Original 2.2.x note here said compile-time linkage caused the
+# payload to hang at boot on "some firmware/loader combinations"
+# — hardware testing on FW 9.60 + the prospero-clang 2026 SDK on
+# 2026-04-27 found the wedge actually came from *runtime* dlopen
+# resolving symbols whose internal init had never run, not from
+# the DT_NEEDED entries themselves. Switching to compile-time
+# linkage matches the proven-working pattern in the two reference
+# payloads and lets the rtld run sprx init in the right order
+# before main() (and before any of our handlers can call into
+# the APIs).
+#
+# register.c keeps its dlsym-via-RTLD_DEFAULT resolution as a
+# backstop: on a firmware where one of these libraries fails to
+# load, dlsym returns NULL for the missing symbols and the
+# affected handler returns a clear "service_unavailable" error
+# instead of crashing. Belt-and-braces.
+LIBS := -lSceSystemService -lSceUserService -lSceAppInstUtil -lSceNotification
 
 SRCS := src/main.c src/runtime.c src/takeover.c src/register.c src/hw_info.c \
-        src/proc_list.c \
+        src/proc_list.c src/ptrace_remote.c src/shellui_rpc.c \
         $(BLAKE3_SRCS)
 
 # Headers as Make prerequisites so editing a .h triggers a rebuild. This
@@ -50,7 +61,7 @@ HEADERS := $(wildcard include/*.h) $(wildcard $(BLAKE3_DIR)/*.h)
 all: $(ELF) $(ELF).gz
 
 $(ELF): $(SRCS) $(HEADERS)
-	$(CC) $(CFLAGS) -o $@ $(SRCS)
+	$(CC) $(CFLAGS) -o $@ $(SRCS) $(LIBS)
 
 # Gzipped copy for the Tauri bundle resource. linuxdeploy (Linux
 # AppImage bundler) walks every ELF in the AppDir and tries to

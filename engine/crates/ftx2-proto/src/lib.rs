@@ -185,6 +185,15 @@ pub enum FrameType {
     FsOpStatusAck = 77,
     FsOpCancel = 78,
     FsOpCancelAck = 79,
+    /// "Console Storage" aggregate matching what PS5 Settings shows.
+    /// Sums `/user effective + /system_data + /system_ex` from
+    /// `statfs(2)`. ACK body is `key=value\n…` with total_bytes,
+    /// free_bytes, used_bytes, reserved_bytes, plus the per-partition
+    /// breakdown. Read-only. Distinct from FS_LIST_VOLUMES, which
+    /// lists per-volume detail; HW_STORAGE is the single-line summary
+    /// the Hardware tab surfaces.
+    HwStorage = 80,
+    HwStorageAck = 81,
 }
 
 impl FrameType {
@@ -257,6 +266,8 @@ impl FrameType {
             77 => Ok(Self::FsOpStatusAck),
             78 => Ok(Self::FsOpCancel),
             79 => Ok(Self::FsOpCancelAck),
+            80 => Ok(Self::HwStorage),
+            81 => Ok(Self::HwStorageAck),
             _ => Err(DecodeError::UnknownFrameType(v)),
         }
     }

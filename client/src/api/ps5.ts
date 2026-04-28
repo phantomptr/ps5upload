@@ -565,16 +565,23 @@ export async function fsOpCancel(
   return res.cancelled;
 }
 
-/** Result of a successful FS_MOUNT — the payload echoes where it mounted
- *  the image, which dev node it used, and the filesystem it chose. */
+/** Result of a successful FS_MOUNT — the payload echoes where it
+ *  mounted the image, which dev node it used, and the filesystem it
+ *  chose. `read_only` reflects the mode the payload actually applied
+ *  (defaults to false for older payloads that don't echo it).
+ *  `reused=true` indicates the payload found this image already
+ *  mounted and short-circuited; the rest of the result describes the
+ *  pre-existing mount. */
 export interface MountResult {
   mount_point: string;
   dev_node: string;
   fstype: string;
+  read_only?: boolean;
+  reused?: boolean;
 }
 
-/** Mount a disk image (.exfat or .ffpkg) on the PS5 via the payload's
- *  built-in MD-attach + nmount pipeline.
+/** Mount a disk image (.exfat / .ffpkg / .ffpfs) on the PS5 via the
+ *  payload's built-in LVD-or-MD attach + nmount pipeline.
  *
  *  Mount-location resolution, in priority:
  *    - `mountPoint` (full path) — new in 2.2.25. Mounts at exactly this
@@ -586,11 +593,17 @@ export interface MountResult {
  *    - both omitted — payload derives a filesystem-safe name from
  *      the image basename and mounts at `/mnt/ps5upload/<derived>/`.
  *
- *  Pre-2.2.25 payloads ignore `mountPoint` and only honor `mountName`. */
+ *  `readOnly=true` mounts the image read-only (added in 2.2.26). The
+ *  payload selects the matching LVD attach flag and the matching
+ *  nmount third-arg flag (UFS magic 0x10000001 for .ffpkg,
+ *  MNT_RDONLY for exfatfs and pfs).
+ *
+ *  Pre-2.2.25 payloads ignore `mountPoint` and only honor `mountName`.
+ *  Pre-2.2.26 payloads ignore `readOnly` and always mount RW. */
 export async function fsMount(
   transferAddr: string,
   imagePath: string,
-  opts?: { mountName?: string; mountPoint?: string },
+  opts?: { mountName?: string; mountPoint?: string; readOnly?: boolean },
 ): Promise<MountResult> {
   const addr = toMgmtAddr(transferAddr);
   return invoke<MountResult>("ps5_fs_mount", {
@@ -599,6 +612,7 @@ export async function fsMount(
       image_path: imagePath,
       mount_name: opts?.mountName ?? null,
       mount_point: opts?.mountPoint ?? null,
+      read_only: opts?.readOnly ?? null,
     },
   });
 }
@@ -612,6 +626,77 @@ export async function fsUnmount(
 ): Promise<void> {
   const addr = toMgmtAddr(transferAddr);
   await invoke("ps5_fs_unmount", { req: { addr, mount_point: mountPoint } });
+}
+
+/** Launch a registered title via `sceLncUtilLaunchApp` (re-exposed in
+ *  2.2.26). The payload runs a triple-strategy chain — LncUtil with
+ *  zeroed param → LncUtil with NULL → SystemServiceLaunchApp fallback —
+ *  and surfaces an error containing each return code on failure so a
+ *  Library Run-button click that fails has actionable diagnostics
+ *  instead of just "didn't launch". The title must already be
+ *  registered in the PS5's `app.db`; an unmounted image's title
+ *  won't appear there. */
+export async function appLaunch(
+  transferAddr: string,
+  titleId: string,
+): Promise<void> {
+  const addr = toMgmtAddr(transferAddr);
+  await invoke("ps5_app_launch", { req: { addr, title_id: titleId } });
+}
+
+/** What `appRegister` returns after staging + nullfs-binding a game
+ *  folder into `/system_ex/app/<title_id>` and calling Sony's
+ *  installer. `used_nullfs` is always true today (reserved for
+ *  future variants where staging happens without a bind). */
+export interface RegisterResult {
+  title_id: string;
+  title_name: string;
+  used_nullfs: boolean;
+}
+
+/** Stage + register a game folder so the PS5 XMB picks it up
+ *  (re-exposed in 2.2.26). `srcPath` must be a directory containing
+ *  `sce_sys/param.json` or `sce_sys/param.sfo`. Works for folders
+ *  on `/data`, `/mnt/ext*`, `/mnt/usb*`, AND content inside a mounted
+ *  `/mnt/ps5upload/<name>/`. Idempotent — calling twice on the same
+ *  source path is a no-op.
+ *
+ *  `opts.patchDrmType=true` (added in 2.2.26) rewrites the source
+ *  `sce_sys/param.json`'s `applicationDrmType` to `"standard"`
+ *  before staging — needed when a PSN-extracted dump ships with
+ *  `"PSN"` or `"disc"` and the PS5 launcher rejects it with a DRM
+ *  error. **Modifies the user's source file in place** (no temp
+ *  + rename — most PS5 mounted-image filesystems reject cross-FS
+ *  rename), so it's opt-in. The patch is no-op when the existing
+ *  value is already `"standard"`. */
+export async function appRegister(
+  transferAddr: string,
+  srcPath: string,
+  opts?: { patchDrmType?: boolean },
+): Promise<RegisterResult> {
+  const addr = toMgmtAddr(transferAddr);
+  return invoke<RegisterResult>("ps5_app_register", {
+    req: {
+      addr,
+      src_path: srcPath,
+      patch_drm_type: opts?.patchDrmType ?? null,
+    },
+  });
+}
+
+/** Reverse of `appRegister`: tears down the nullfs at
+ *  `/system_ex/app/<titleId>`, removes tracking, calls Sony's
+ *  AppUninstall when available. Best-effort — succeeds even when
+ *  Sony's API isn't available on the running firmware as long as
+ *  the unmount went through. */
+export async function appUnregister(
+  transferAddr: string,
+  titleId: string,
+): Promise<void> {
+  const addr = toMgmtAddr(transferAddr);
+  await invoke("ps5_app_unregister", {
+    req: { addr, title_id: titleId },
+  });
 }
 
 // ─── Hardware monitoring ──────────────────────────────────────────────
@@ -664,6 +749,29 @@ export async function fetchHwTemps(transferAddr: string): Promise<HwTemps> {
 export async function fetchHwPower(transferAddr: string): Promise<HwPower> {
   const addr = toMgmtAddr(transferAddr);
   return invoke<HwPower>("ps5_hw_power", { addr });
+}
+
+/** "Console Storage" aggregate matching what PS5 Settings shows
+ *  (added in 2.2.26). Sums `/user effective + /system_data + /system_ex`
+ *  with reserved-space accounting. Distinct from `fsListVolumes` —
+ *  that returns per-volume detail; this is the single-line summary. */
+export interface HwStorage {
+  total_bytes: number;
+  free_bytes: number;
+  used_bytes: number;
+  reserved_bytes: number;
+  user_total_bytes: number;
+  user_free_bytes: number;
+  user_reserved_bytes: number;
+  system_data_total_bytes: number;
+  system_data_free_bytes: number;
+  system_ex_total_bytes: number;
+  system_ex_free_bytes: number;
+}
+
+export async function fetchHwStorage(transferAddr: string): Promise<HwStorage> {
+  const addr = toMgmtAddr(transferAddr);
+  return invoke<HwStorage>("ps5_hw_storage", { addr });
 }
 
 // ─── Scene-tool companion probe ───────────────────────────────────────
@@ -726,9 +834,10 @@ export interface LibraryEntry {
   size: number;
   /** For `image` kind only: the disk image type derived from the file
    *  extension. `exfat` = .exfat (exFAT volume), `ffpkg` = .ffpkg
-   *  (UFS2 volume). Null for game entries. Drives the label + mount
+   *  (UFS2 volume), `ffpfs` = .ffpfs (PFS save-data volume,
+   *  experimental). Null for game entries. Drives the label + mount
    *  behavior in the Library row. */
-  imageFormat?: "exfat" | "ffpkg" | null;
+  imageFormat?: "exfat" | "ffpkg" | "ffpfs" | null;
   /** For `game` kind: PS5 title id (e.g. "PPSA00000") read from the
    *  game's sce_sys/param.json during scan. Used to dedup rows when
    *  the same game appears at multiple paths -- typically when a
@@ -853,13 +962,15 @@ export async function scanLibrary(transferAddr: string): Promise<LibraryEntry[]>
         if (!e.name) continue;
         if (e.kind === "file") {
           const lower = e.name.toLowerCase();
-          const imageFormat: "exfat" | "ffpkg" | null = lower.endsWith(
+          const imageFormat: "exfat" | "ffpkg" | "ffpfs" | null = lower.endsWith(
             ".exfat"
           )
             ? "exfat"
             : lower.endsWith(".ffpkg")
               ? "ffpkg"
-              : null;
+              : lower.endsWith(".ffpfs")
+                ? "ffpfs"
+                : null;
           if (imageFormat) {
             const full = path === "/" ? `/${e.name}` : `${path}/${e.name}`;
             byPath.set(full, {

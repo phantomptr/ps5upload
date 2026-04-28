@@ -289,7 +289,10 @@ fn usage() -> ! {
 }
 
 fn do_register(addr: &str, src_path: &str) -> Result<()> {
-    let res = app_register(addr, src_path)?;
+    /* lab CLI defaults to NOT patching DRM-type — for ad-hoc
+     * registration of well-formed dumps. The desktop client UI
+     * exposes the toggle. */
+    let res = app_register(addr, src_path, false)?;
     println!(
         "registered: title_id={} title_name={} used_nullfs={}",
         res.title_id, res.title_name, res.used_nullfs

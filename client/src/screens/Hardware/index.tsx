@@ -9,6 +9,7 @@ import {
   Zap,
   Fan,
   Check,
+  HardDrive,
 } from "lucide-react";
 
 import { AlertTriangle } from "lucide-react";
@@ -19,12 +20,14 @@ import { useConnectionStore, PS5_PAYLOAD_PORT } from "../../state/connection";
 import {
   fetchHwInfo,
   fetchHwPower,
+  fetchHwStorage,
   fetchHwTemps,
   setFanThreshold,
   FAN_THRESHOLD_MIN_C,
   FAN_THRESHOLD_MAX_C,
   type HwInfo,
   type HwPower,
+  type HwStorage,
   type HwTemps,
 } from "../../api/ps5";
 
@@ -48,6 +51,17 @@ function formatBytes(n: number): string {
   if (gib >= 1) return `${gib.toFixed(2)} GiB`;
   const mib = n / (1024 ** 2);
   return `${mib.toFixed(0)} MiB`;
+}
+
+/** Friendlier "Console Storage" formatter that mirrors the GB units PS5
+ *  Settings shows. Uses GB (decimal 10^9) deliberately — Sony's UI uses
+ *  GB even though the underlying counts are GiB-sized; keep parity so
+ *  users can compare to what their PS5 reports. */
+function formatStorageGB(n: number): string {
+  if (n <= 0) return "—";
+  const gb = n / 1_000_000_000;
+  if (gb >= 1000) return `${(gb / 1000).toFixed(2)} TB`;
+  return `${gb.toFixed(0)} GB`;
 }
 
 function formatUptime(sec: number): string {
@@ -82,6 +96,7 @@ export default function HardwareScreen() {
   const [info, setInfo] = useState<HwInfo | null>(null);
   const [temps, setTemps] = useState<HwTemps | null>(null);
   const [power, setPower] = useState<HwPower | null>(null);
+  const [storage, setStorage] = useState<HwStorage | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -98,12 +113,20 @@ export default function HardwareScreen() {
     setError(null);
     try {
       const addr = `${host}:${PS5_PAYLOAD_PORT}`;
-      const [nextTemps, nextPower] = await Promise.all([
+      const [nextTemps, nextPower, nextStorage] = await Promise.all([
         fetchHwTemps(addr),
         fetchHwPower(addr),
+        // Storage is essentially static at the per-second polling rate
+        // (a 100 GB game install changes free-space slowly), but
+        // refreshing it alongside temps keeps the card live without
+        // a separate slow timer. Pre-2.2.26 payloads fail this with
+        // unsupported_frame; treat that as "no data" and let the rest
+        // of the tab keep working.
+        fetchHwStorage(addr).catch(() => null),
       ]);
       setTemps(nextTemps);
       setPower(nextPower);
+      setStorage(nextStorage);
       // info is static; fetch once if we don't have it yet.
       if (info === null) {
         const nextInfo = await fetchHwInfo(addr).catch(() => null);
@@ -193,12 +216,28 @@ export default function HardwareScreen() {
             <StatRow
               label="CPU"
               value={formatTemp(temps?.cpu_temp ?? 0)}
-              hint={temps && temps.cpu_temp === 0 ? tr("hw_sensor_disabled", undefined, "Sensor API disabled on this firmware") : undefined}
+              hint={
+                temps && temps.cpu_temp === 0
+                  ? tr(
+                      "hw_sensor_unavailable",
+                      undefined,
+                      "Sensor reading unavailable right now",
+                    )
+                  : undefined
+              }
             />
             <StatRow
               label="SoC"
               value={formatTemp(temps?.soc_temp ?? 0)}
-              hint={temps && temps.soc_temp === 0 ? tr("hw_sensor_disabled", undefined, "Sensor API disabled on this firmware") : undefined}
+              hint={
+                temps && temps.soc_temp === 0
+                  ? tr(
+                      "hw_sensor_unavailable",
+                      undefined,
+                      "Sensor reading unavailable right now",
+                    )
+                  : undefined
+              }
             />
           </SensorCard>
 
@@ -209,12 +248,32 @@ export default function HardwareScreen() {
             <StatRow
               label={tr("hw_cpu_freq", undefined, "CPU frequency")}
               value={formatFreq(temps?.cpu_freq_mhz ?? 0)}
-              hint={temps && temps.cpu_freq_mhz > 0 ? tr("hw_from_kernel_tsc", undefined, "From kernel TSC") : undefined}
+              hint={
+                temps && temps.cpu_freq_mhz > 0
+                  ? tr(
+                      "hw_from_kernel_tsc",
+                      undefined,
+                      "From kernel TSC",
+                    )
+                  : undefined
+              }
             />
             <StatRow
               label={tr("hw_soc_power", undefined, "SoC power draw")}
               value={formatPower(temps?.soc_power_mw ?? 0)}
-              hint={temps && temps.soc_power_mw === 0 ? tr("hw_sensor_disabled", undefined, "Sensor API disabled on this firmware") : tr("hw_sampled_5s", undefined, "Sampled at most every 5s")}
+              hint={
+                temps && temps.soc_power_mw === 0
+                  ? tr(
+                      "hw_sensor_unavailable",
+                      undefined,
+                      "Sensor reading unavailable right now",
+                    )
+                  : tr(
+                      "hw_sampled_5s",
+                      undefined,
+                      "Sampled at most every 5s",
+                    )
+              }
             />
           </SensorCard>
 
@@ -245,6 +304,37 @@ export default function HardwareScreen() {
             />
           </SensorCard>
 
+          {storage && (
+            <SensorCard
+              icon={<HardDrive size={14} />}
+              title={tr("hardware_storage", undefined, "Console Storage")}
+            >
+              <StatRow
+                label={tr("hw_storage_total", undefined, "Total")}
+                value={formatStorageGB(storage.total_bytes)}
+              />
+              <StatRow
+                label={tr("hw_storage_free", undefined, "Free")}
+                value={formatStorageGB(storage.free_bytes)}
+              />
+              <StatRow
+                label={tr("hw_storage_used", undefined, "Used")}
+                value={formatStorageGB(storage.used_bytes)}
+              />
+              {storage.reserved_bytes > 0 && (
+                <StatRow
+                  label={tr("hw_storage_reserved", undefined, "Reserved")}
+                  value={formatStorageGB(storage.reserved_bytes)}
+                  hint={tr(
+                    "hw_storage_reserved_hint",
+                    undefined,
+                    "FS-kept slice not counted as free",
+                  )}
+                />
+              )}
+            </SensorCard>
+          )}
+
           <FanThresholdCard
             host={host ?? ""}
             payloadUp={payloadStatus === "up"}
@@ -253,19 +343,16 @@ export default function HardwareScreen() {
           <div className="mt-2 flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 text-xs text-[var(--color-muted)]">
             <Zap size={12} className="mt-0.5" />
             <div>
-              CPU/SoC temperature readings aren't available from this
-              payload. The <code>sceKernelGet*</code> sensor APIs only
-              behave safely when called from inside Sony's own ShellUI
-              process — a standalone userland payload like ours hits a
-              different code path in the kernel stubs and the handler
-              thread wedges. This is independent of PS5 firmware
-              version (observed the same on 9.x and 11.x; likely the
-              same on 12.x) and not fixable from our side without
-              turning ps5upload into a ShellUI hook, which is out of
-              scope. Uptime comes from <code>kern.boottime</code>, CPU
-              frequency from <code>machdep.tsc_freq</code>, and static
-              info (model / serial / RAM / CPU count) from the kernel
-              APIs that DO work from any process.
+              CPU/SoC temperature and SoC power readings come from
+              Sony's <code>sceKernelGet*Temperature</code> /{" "}
+              <code>sceKernelGetSocPowerConsumption</code> stubs,
+              which only respond when the caller is{" "}
+              <code>SceShellUI</code>. The payload routes each read
+              through a ptrace RPC into ShellUI to satisfy that check
+              (hardware-validated on FW 9.60 / CFI-7019). A reading
+              that briefly shows <code>—</code> means the most recent
+              RPC didn't complete in time; it'll refresh on the next
+              5s tick.
             </div>
           </div>
         </div>

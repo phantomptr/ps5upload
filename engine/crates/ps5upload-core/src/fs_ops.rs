@@ -498,8 +498,8 @@ pub struct MountResult {
 }
 
 /// Mount a disk image on the PS5. `image_path` must be an absolute path
-/// under the payload's writable-root allowlist and have a `.exfat` or
-/// `.ffpkg` extension.
+/// under the payload's writable-root allowlist and have a `.exfat`,
+/// `.ffpkg`, or `.ffpfs` extension.
 ///
 /// Mount-location resolution, in priority:
 /// - `mount_point: Some(path)` — full path. Must be allowlisted on the
@@ -510,17 +510,23 @@ pub struct MountResult {
 ///   callers.
 /// - both `None` — payload derives a filesystem-safe name from the
 ///   image basename and mounts at `/mnt/ps5upload/<derived>/`.
+///
+/// `read_only=true` selects the read-only LVD attach flag and the
+/// matching read-only nmount flag (UFS magic `0x10000001` for
+/// `.ffpkg`, `MNT_RDONLY` for exfatfs and pfs). Added in 2.2.26.
 pub fn fs_mount(
     addr: &str,
     image_path: &str,
     mount_name: Option<&str>,
     mount_point: Option<&str>,
+    read_only: bool,
 ) -> Result<MountResult> {
     let mut c = Connection::connect(addr)?;
     let body = serde_json::to_vec(&serde_json::json!({
         "image_path": image_path,
         "mount_name": mount_name,
         "mount_point": mount_point,
+        "read_only": if read_only { 1 } else { 0 },
     }))
     .context("serialize fs_mount body")?;
     c.send_frame(FrameType::FsMount, &body)?;
@@ -639,10 +645,19 @@ pub struct RegisterResult {
 /// `/mnt/usb*`, AND content inside a mounted `/mnt/ps5upload/<name>/`.
 /// Idempotent — calling twice with the same src_path is safe (Sony's
 /// installer returns `0x80990002` which the payload normalises to OK).
-pub fn app_register(addr: &str, src_path: &str) -> Result<RegisterResult> {
+///
+/// `patch_drm_type=true` (added in 2.2.26) rewrites the source
+/// `sce_sys/param.json`'s `applicationDrmType` to `"standard"`
+/// before staging — needed when a PSN-extracted dump ships with
+/// `"PSN"` or `"disc"` and the launcher rejects it. Invasive:
+/// modifies the user's source file in place, so it's opt-in.
+pub fn app_register(addr: &str, src_path: &str, patch_drm_type: bool) -> Result<RegisterResult> {
     let mut c = Connection::connect(addr)?;
-    let body = serde_json::to_vec(&serde_json::json!({ "src_path": src_path }))
-        .context("serialize app_register body")?;
+    let body = serde_json::to_vec(&serde_json::json!({
+        "src_path": src_path,
+        "patch_drm_type": if patch_drm_type { 1 } else { 0 },
+    }))
+    .context("serialize app_register body")?;
     c.send_frame(FrameType::AppRegister, &body)?;
     let (hdr, resp) = c.recv_frame()?;
     let ft = hdr.frame_type().unwrap_or(FrameType::Error);

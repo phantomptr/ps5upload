@@ -42,6 +42,22 @@ int hw_temps_get_text(char *out, size_t out_cap, size_t *out_written,
 int hw_power_get_text(char *out, size_t out_cap, size_t *out_written,
                       const char **err_reason_out);
 
+/* HW_STORAGE — "Console Storage" aggregate matching what PS5 Settings
+ * shows. Sums /user effective + /system_data + /system_ex from
+ * statfs(2). Distinct from FS_LIST_VOLUMES, which lists per-volume
+ * detail; HW_STORAGE is the single-line summary the System tab
+ * surfaces.
+ *
+ * Output keys: total_bytes, free_bytes, used_bytes, reserved_bytes,
+ * user_total_bytes, user_free_bytes, user_reserved_bytes,
+ * system_data_total_bytes, system_data_free_bytes,
+ * system_ex_total_bytes, system_ex_free_bytes.
+ *
+ * Always succeeds — missing partitions just contribute zero to the
+ * total (e.g., /system_ex isn't always mounted on every firmware). */
+int hw_storage_get_text(char *out, size_t out_cap, size_t *out_written,
+                         const char **err_reason_out);
+
 /* Set the fan-turbo temperature threshold in °C.
  *
  * Mechanism: `open("/dev/icc_fan") → ioctl(0xC01C8F07, &buf) → close`.

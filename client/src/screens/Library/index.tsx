@@ -13,6 +13,10 @@ import {
   FolderInput,
   Search,
   X,
+  Info,
+  ExternalLink,
+  Boxes,
+  PackageOpen,
   type LucideIcon,
 } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -26,6 +30,9 @@ import {
   fsPathExists,
   fsMount,
   fsUnmount,
+  appLaunch,
+  appRegister,
+  appUnregister,
   fsOpStatus,
   fsOpCancel,
   fetchVolumes,
@@ -54,6 +61,11 @@ import {
   isExpectedNotInFlight,
 } from "../../lib/movePollerPolicy";
 import { filterLibraryEntries } from "../../lib/libraryFilter";
+import {
+  fetchPsnGameInfo,
+  psnStoreSearchUrl,
+  type PsnGameInfo,
+} from "../../lib/psnDetails";
 import {
   MOUNT_DEFAULT_SUBPATH,
   MOUNT_PRESETS,
@@ -193,7 +205,7 @@ export default function LibraryScreen() {
         description={tr(
           "library_description",
           undefined,
-          "Games and disk images anywhere on your PS5. Games are folders containing sce_sys/param.json; disk images are .exfat and .ffpkg files.",
+          "Games and disk images anywhere on your PS5. Games are folders containing sce_sys/param.json; disk images are .exfat, .ffpkg, and .ffpfs files.",
         )}
         right={
           <Button
@@ -338,7 +350,7 @@ export default function LibraryScreen() {
                 <section>
                   <SectionHeader
                     icon={<FileArchive size={13} />}
-                    title={tr("library_disk_images", undefined, "Disk images (.exfat / .ffpkg)")}
+                    title={tr("library_disk_images", undefined, "Disk images (.exfat / .ffpkg / .ffpfs)")}
                     count={split.images.length}
                   />
                   <div className="grid gap-2">
@@ -398,7 +410,10 @@ type BusyState =
   | "unmount"
   | "move-copying"
   | "move-deleting"
-  | "download";
+  | "download"
+  | "launch"
+  | "register"
+  | "unregister";
 
 interface DownloadProgress {
   bytesReceived: number;
@@ -429,7 +444,9 @@ function LibraryRow({
       ? tr("library_row_kind_game", undefined, "Game")
       : entry.imageFormat === "ffpkg"
         ? tr("library_row_kind_ffpkg", undefined, ".ffpkg image")
-        : tr("library_row_kind_exfat", undefined, ".exfat image");
+        : entry.imageFormat === "ffpfs"
+          ? tr("library_row_kind_ffpfs", undefined, ".ffpfs image")
+          : tr("library_row_kind_exfat", undefined, ".exfat image");
   const [confirm, setConfirm] = useState<PendingConfirm | null>(null);
   const [busy, setBusy] = useState<BusyState>(null);
   const [error, setError] = useState<string | null>(null);
@@ -437,6 +454,7 @@ function LibraryRow({
   const [meta, setMeta] = useState<GameMeta | null>(null);
   const [moveOpen, setMoveOpen] = useState(false);
   const [mountOpen, setMountOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const [downloadProgress, setDownloadProgress] =
     useState<DownloadProgress | null>(null);
   // Cancellation flag for the download poll loop. The loop runs for
@@ -617,6 +635,7 @@ function LibraryRow({
     opts: {
       mountName?: string;
       mountPoint?: string;
+      readOnly?: boolean;
       persistDest?: { volume: string; subpath: string };
     } = {},
   ) => {
@@ -658,8 +677,16 @@ function LibraryRow({
       if (opts.persistDest) {
         saveMountDest(host, opts.persistDest);
       }
+      // The payload echoes `reused: true` when it short-circuited a
+      // re-mount of the same image_path. Surface that distinctly so
+      // the user understands "Mount" was a no-op (the image was
+      // already mounted), not a new mount they should expect to see
+      // appear in Volumes for the first time.
+      const roSuffix = res.read_only ? " (read-only)" : "";
       setMountNote(
-        `Mounted at ${res.mount_point}. Refresh to see the games inside — register + launch them from a PS5-side installer.`,
+        res.reused
+          ? `Already mounted at ${res.mount_point}${roSuffix} — reused the existing mount.`
+          : `Mounted at ${res.mount_point}${roSuffix}. Refresh to see the games inside — register + launch them from a PS5-side installer.`,
       );
       onChanged();
     } catch (e) {
@@ -1130,6 +1157,123 @@ function LibraryRow({
     }
   };
 
+  // Launch is a re-exposure of the existing payload + engine
+  // app_launch wiring. Re-enabled in 2.2.26 — the payload's
+  // launch_title runs the triple-strategy chain (LncUtil zeroed-param
+  // → LncUtil NULL → SystemServiceLaunchApp) and surfaces a
+  // composite error string on failure. Only valid when entry is a
+  // game with a known title_id (image rows don't have one until
+  // they're mounted and re-scanned). The button is gated on
+  // entry.titleId so a row with no title_id can't trigger an
+  // unhelpful "Invalid title ID format" error from the payload.
+  const runLaunch = async () => {
+    if (entry.kind !== "game" || !entry.titleId) return;
+    setBusy("launch");
+    setError(null);
+    setMountNote(null);
+    const activityId = useActivityHistoryStore
+      .getState()
+      .start("library-launch", `Launching ${entry.name}`, {
+        fromPath: entry.path,
+      });
+    let okOutcome = true;
+    let errMsg: string | null = null;
+    try {
+      await appLaunch(`${host}:${PS5_PAYLOAD_PORT}`, entry.titleId);
+      setMountNote(
+        `Launching ${entry.titleId}. Check the PS5 — the title should appear in the foreground in a few seconds.`,
+      );
+    } catch (e) {
+      okOutcome = false;
+      errMsg = e instanceof Error ? e.message : String(e);
+      setError(errMsg);
+    } finally {
+      useActivityHistoryStore
+        .getState()
+        .finish(activityId, okOutcome ? "done" : "failed", {
+          error: errMsg ?? undefined,
+        });
+      setBusy(null);
+    }
+  };
+
+  // Register stages sce_sys into /user/app/<title_id>/ + nullfs-binds
+  // the source over /system_ex/app/<title_id>/ + calls Sony's
+  // installer. Re-exposed in 2.2.26 alongside Launch — the payload
+  // and engine were already wired (we use it from the lab CLI and
+  // tests); the Library row was the only missing piece.
+  //
+  // Idempotent: re-registering the same path is a no-op (Sony's
+  // installer returns 0x80990002 which the payload normalises to
+  // success). Show the resulting tile name + title id in the
+  // mountNote so the user sees what landed in app.db.
+  const runRegister = async (opts: { patchDrmType?: boolean } = {}) => {
+    if (entry.kind !== "game") return;
+    setBusy("register");
+    setError(null);
+    setMountNote(null);
+    const activityId = useActivityHistoryStore
+      .getState()
+      .start("library-register", `Registering ${entry.name}`, {
+        fromPath: entry.path,
+      });
+    let okOutcome = true;
+    let errMsg: string | null = null;
+    try {
+      const res = await appRegister(`${host}:${PS5_PAYLOAD_PORT}`, entry.path, {
+        patchDrmType: opts.patchDrmType,
+      });
+      const drmSuffix = opts.patchDrmType ? " (DRM type patched to standard)" : "";
+      setMountNote(
+        `Registered ${res.title_name || res.title_id} (${res.title_id})${drmSuffix}. Launch should now succeed; tile appears in the PS5 home screen.`,
+      );
+      onChanged();
+    } catch (e) {
+      okOutcome = false;
+      errMsg = e instanceof Error ? e.message : String(e);
+      setError(errMsg);
+    } finally {
+      useActivityHistoryStore
+        .getState()
+        .finish(activityId, okOutcome ? "done" : "failed", {
+          error: errMsg ?? undefined,
+        });
+      setBusy(null);
+    }
+  };
+
+  const runUnregister = async () => {
+    if (entry.kind !== "game" || !entry.titleId) return;
+    setBusy("unregister");
+    setError(null);
+    setMountNote(null);
+    const activityId = useActivityHistoryStore
+      .getState()
+      .start("library-unregister", `Unregistering ${entry.name}`, {
+        fromPath: entry.path,
+      });
+    let okOutcome = true;
+    let errMsg: string | null = null;
+    try {
+      await appUnregister(`${host}:${PS5_PAYLOAD_PORT}`, entry.titleId);
+      setMountNote(
+        `Unregistered ${entry.titleId}. The XMB tile is removed; the source files on disk were not touched.`,
+      );
+      onChanged();
+    } catch (e) {
+      okOutcome = false;
+      errMsg = e instanceof Error ? e.message : String(e);
+      setError(errMsg);
+    } finally {
+      useActivityHistoryStore
+        .getState()
+        .finish(activityId, okOutcome ? "done" : "failed", {
+          error: errMsg ?? undefined,
+        });
+      setBusy(null);
+    }
+  };
+
   return (
     <article className="flex flex-col gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3">
       <div className="flex items-center gap-3">
@@ -1197,9 +1341,9 @@ function LibraryRow({
                  * error string the user has to read in the row
                  * banner. Disabling the button up front avoids the
                  * detour. Real cause is usually a renamed file
-                 * with a non-.exfat / non-.ffpkg extension that
-                 * still got into the library scan via the size /
-                 * existence checks. */
+                 * with a non-.exfat / non-.ffpkg / non-.ffpfs
+                 * extension that still got into the library scan via
+                 * the size / existence checks. */
                 disabled={busy !== null || !entry.imageFormat}
                 loading={busy === "mount"}
                 title={
@@ -1212,7 +1356,7 @@ function LibraryRow({
                     : tr(
                         "library_mount_unsupported_tooltip",
                         undefined,
-                        "Unsupported image format — only .exfat and .ffpkg can be mounted",
+                        "Unsupported image format — only .exfat, .ffpkg and .ffpfs can be mounted",
                       )
                 }
               >
@@ -1220,24 +1364,133 @@ function LibraryRow({
               </Button>
             )
           ) : (
-            /* Game rows: Permission 777 + Delete only. Install / Run /
-             * Uninstall are intentionally absent — Sony's install and
-             * launch APIs wedge our standalone userland payload on
-             * firmware 9.60 (hardware-verified 2026-04-19). Those
-             * actions are delegated to PS5-side tools (etaHEN,
-             * ShadowMountPlus, Itemzflow) which inject into SceShellUI
-             * where the APIs behave normally. */
-            <Button
-              variant="secondary"
-              size="sm"
-              leftIcon={<Shield size={12} />}
-              onClick={() => setConfirm({ kind: "chmod", entry })}
-              disabled={busy !== null}
-              loading={busy === "chmod"}
-              title={tr("library_chmod_tooltip", undefined, "Open read/write/execute to every user on this PS5 (Permission 777)")}
-            >
-              {tr("library_permission_777", undefined, "Permission 777")}
-            </Button>
+            /* Game rows: Launch + Permission 777 + Delete. Launch is
+             * gated on `entry.titleId` (rows scanned from disk that
+             * couldn't read sce_sys/param.json have a null titleId
+             * and can't be launched). The payload-side launch_title
+             * runs the triple-strategy chain — LncUtil zeroed-param,
+             * LncUtil NULL-param, SystemServiceLaunchApp — and
+             * surfaces a composite error if all three fail. The
+             * title must already be registered in app.db; mounting
+             * an image then refreshing the Library should make its
+             * games appear with valid title_ids ready to launch. */
+            <>
+              <Button
+                variant="primary"
+                size="sm"
+                leftIcon={<Play size={12} />}
+                onClick={runLaunch}
+                disabled={busy !== null || !entry.titleId}
+                loading={busy === "launch"}
+                title={
+                  entry.titleId
+                    ? tr(
+                        "library_launch_tooltip",
+                        undefined,
+                        "Launch this game on the PS5 (sceLncUtilLaunchApp)",
+                      )
+                    : tr(
+                        "library_launch_no_titleid_tooltip",
+                        undefined,
+                        "No title id detected — Launch needs sce_sys/param.json to read",
+                      )
+                }
+              >
+                {tr("library_launch", undefined, "Launch")}
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                leftIcon={<Info size={12} />}
+                onClick={() => setDetailsOpen(true)}
+                disabled={busy !== null || !entry.titleId}
+                title={
+                  entry.titleId
+                    ? tr(
+                        "library_details_tooltip",
+                        undefined,
+                        "Game details — fetches cover art and metadata from PSN",
+                      )
+                    : tr(
+                        "library_details_no_titleid_tooltip",
+                        undefined,
+                        "Need a title id from sce_sys/param.json to look up details",
+                      )
+                }
+              >
+                {tr("library_details", undefined, "Details")}
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                leftIcon={<Boxes size={12} />}
+                onClick={() => runRegister()}
+                disabled={busy !== null}
+                loading={busy === "register"}
+                title={tr(
+                  "library_register_tooltip",
+                  undefined,
+                  "Stage sce_sys + nullfs-bind the source + register with Sony's installer so the title appears in the PS5 XMB",
+                )}
+              >
+                {tr("library_register", undefined, "Register")}
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                leftIcon={<Boxes size={12} />}
+                onClick={() => runRegister({ patchDrmType: true })}
+                disabled={busy !== null}
+                loading={busy === "register"}
+                /* DRM patch variant — same Register flow, but the
+                 * payload first rewrites the source param.json's
+                 * applicationDrmType to "standard". Useful for
+                 * PSN-extracted dumps that ship with "PSN" or
+                 * "disc" and the launcher rejects with a DRM
+                 * error. **Modifies the user's source file in
+                 * place** — make the destructive nature explicit
+                 * in the tooltip. */
+                title={tr(
+                  "library_register_drm_tooltip",
+                  undefined,
+                  "Same as Register, but first patch sce_sys/param.json's applicationDrmType to \"standard\" — modifies the source file. Use only when a normal Register fails with a DRM error.",
+                )}
+              >
+                {tr(
+                  "library_register_drm",
+                  undefined,
+                  "Register (patch DRM)",
+                )}
+              </Button>
+              {entry.titleId && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  leftIcon={<PackageOpen size={12} />}
+                  onClick={runUnregister}
+                  disabled={busy !== null}
+                  loading={busy === "unregister"}
+                  title={tr(
+                    "library_unregister_tooltip",
+                    undefined,
+                    "Remove the XMB tile + tear down the nullfs bind. The source files on disk are not touched.",
+                  )}
+                >
+                  {tr("library_unregister", undefined, "Unregister")}
+                </Button>
+              )}
+              <Button
+                variant="secondary"
+                size="sm"
+                leftIcon={<Shield size={12} />}
+                onClick={() => setConfirm({ kind: "chmod", entry })}
+                disabled={busy !== null}
+                loading={busy === "chmod"}
+                title={tr("library_chmod_tooltip", undefined, "Open read/write/execute to every user on this PS5 (Permission 777)")}
+              >
+                {tr("library_permission_777", undefined, "Permission 777")}
+              </Button>
+            </>
           )}
           <Button
             variant="secondary"
@@ -1479,7 +1732,213 @@ function LibraryRow({
           }}
         />
       )}
+
+      {detailsOpen && entry.kind === "game" && entry.titleId && (
+        <GameDetailsModal
+          entry={entry}
+          meta={meta}
+          onCancel={() => setDetailsOpen(false)}
+        />
+      )}
     </article>
+  );
+}
+
+/** Game details modal — local sce_sys/param.json fields plus best-
+ *  effort PSN store metadata (cover art, description, genre,
+ *  publisher, age rating). Pure client-side: PSN fetch via plain
+ *  `fetch()` against the public valkyrie + chihiro endpoints, cached
+ *  for 7 days in localStorage. Falls back to a "Search PSN store"
+ *  link in the user's browser when the API gives nothing back. */
+function GameDetailsModal({
+  entry,
+  meta,
+  onCancel,
+}: {
+  entry: LibraryEntry;
+  meta: GameMeta | null;
+  onCancel: () => void;
+}) {
+  const tr = useTr();
+  const [info, setInfo] = useState<PsnGameInfo | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+
+  // Escape closes the modal — same standard-dialog UX as Mount/Move.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onCancel();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onCancel]);
+
+  // Kick off the PSN fetch on mount. AbortController so closing the
+  // modal mid-fetch doesn't write into a torn-down component (React
+  // would warn about state-update-after-unmount; the abort makes the
+  // promise resolve in a no-op path before setInfo).
+  useEffect(() => {
+    if (!entry.titleId) return;
+    const controller = new AbortController();
+    setLoading(true);
+    setFetchError(null);
+    fetchPsnGameInfo(entry.titleId, controller.signal)
+      .then((result) => {
+        if (controller.signal.aborted) return;
+        setInfo(result);
+      })
+      .catch((e: unknown) => {
+        if (controller.signal.aborted) return;
+        setFetchError(e instanceof Error ? e.message : String(e));
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [entry.titleId]);
+
+  const displayTitle = info?.title ?? meta?.title ?? entry.name;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      onClick={onCancel}
+    >
+      <div
+        className="w-full max-w-2xl rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className="mb-3 flex items-center gap-2 text-sm font-semibold">
+          <Info size={14} />
+          {tr("library_details_modal_title", undefined, "Game details")}
+        </header>
+
+        <div className="grid gap-4 md:grid-cols-[200px_1fr]">
+          <div className="flex flex-col gap-2">
+            {info?.coverImageUrl ? (
+              <img
+                src={info.coverImageUrl}
+                alt={displayTitle}
+                className="w-full rounded-md border border-[var(--color-border)]"
+                /* PSN cover-art URLs sometimes 404 for region-mismatched
+                 * titles. Hide the broken-image placeholder rather than
+                 * leaving a raw cracked-icon. */
+                onError={(e) => {
+                  e.currentTarget.style.display = "none";
+                }}
+              />
+            ) : (
+              <div className="flex aspect-[3/4] w-full items-center justify-center rounded-md border border-dashed border-[var(--color-border)] text-xs text-[var(--color-muted)]">
+                {loading
+                  ? tr(
+                      "library_details_modal_loading_cover",
+                      undefined,
+                      "Loading cover art…",
+                    )
+                  : tr(
+                      "library_details_modal_no_cover",
+                      undefined,
+                      "No cover art available",
+                    )}
+              </div>
+            )}
+            {entry.titleId && (
+              <a
+                href={psnStoreSearchUrl(entry.titleId)}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center justify-center gap-1 rounded-md border border-[var(--color-border)] px-2 py-1 text-xs hover:bg-[var(--color-surface-3)]"
+              >
+                <ExternalLink size={11} />
+                {tr(
+                  "library_details_modal_psn_search",
+                  undefined,
+                  "Search PSN Store",
+                )}
+              </a>
+            )}
+          </div>
+
+          <div className="flex min-w-0 flex-col gap-3 text-sm">
+            <div>
+              <div className="break-words text-base font-semibold">
+                {displayTitle}
+              </div>
+              <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-[var(--color-muted)]">
+                {entry.titleId && (
+                  <span className="font-mono">{entry.titleId}</span>
+                )}
+                {info?.publisher && <span>{info.publisher}</span>}
+                {info?.contentType && <span>{info.contentType}</span>}
+                {info?.ageRating && <span>{info.ageRating}</span>}
+              </div>
+              {info?.genres && info.genres.length > 0 && (
+                <div className="mt-1 flex flex-wrap gap-1">
+                  {info.genres.map((g) => (
+                    <span
+                      key={g}
+                      className="rounded-full border border-[var(--color-border)] px-2 py-0.5 text-[10px] text-[var(--color-muted)]"
+                    >
+                      {g}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {info?.description && (
+              <p className="max-h-48 overflow-y-auto text-xs leading-relaxed text-[var(--color-text)]">
+                {info.description}
+              </p>
+            )}
+
+            {!loading && !info && !fetchError && (
+              <p className="text-xs text-[var(--color-muted)]">
+                {tr(
+                  "library_details_modal_no_psn",
+                  undefined,
+                  "PSN didn't return metadata for this title id. The local sce_sys/param.json info below is what we have on disk.",
+                )}
+              </p>
+            )}
+            {fetchError && (
+              <p className="text-xs text-[var(--color-warn)]">
+                {tr(
+                  "library_details_modal_fetch_error",
+                  { error: fetchError },
+                  `PSN fetch failed: ${fetchError}`,
+                )}
+              </p>
+            )}
+
+            <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+              <dt className="text-[var(--color-muted)]">
+                {tr("library_details_modal_path", undefined, "Path")}
+              </dt>
+              <dd className="break-all font-mono">{entry.path}</dd>
+              {meta?.title && (
+                <>
+                  <dt className="text-[var(--color-muted)]">
+                    {tr(
+                      "library_details_modal_local_title",
+                      undefined,
+                      "Local title",
+                    )}
+                  </dt>
+                  <dd>{meta.title}</dd>
+                </>
+              )}
+            </dl>
+          </div>
+        </div>
+
+        <div className="mt-4 flex items-center justify-end gap-2">
+          <Button variant="ghost" size="sm" onClick={onCancel}>
+            {tr("close", undefined, "Close")}
+          </Button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1756,6 +2215,7 @@ function MountModal({
   onConfirm: (opts: {
     mountName?: string;
     mountPoint?: string;
+    readOnly?: boolean;
     persistDest?: { volume: string; subpath: string };
   }) => void;
 }) {
@@ -1781,7 +2241,7 @@ function MountModal({
   // `…/dead-space/`, not `…/dead-space.exfat/`. The user can override.
   const derivedName = useMemo(() => {
     const base = entry.name.replace(/\\/g, "/").split("/").pop() ?? entry.name;
-    return base.replace(/\.(exfat|ffpkg)$/i, "");
+    return base.replace(/\.(exfat|ffpkg|ffpfs)$/i, "");
   }, [entry.name]);
 
   // Initial volume + subpath: prefer last-used persisted dest;
@@ -1803,6 +2263,27 @@ function MountModal({
   const [volume, setVolume] = useState<string>(initialDest.volume);
   const [subpath, setSubpath] = useState<string>(initialDest.subpath);
   const [name, setName] = useState<string>(derivedName);
+  // Read-only mount toggle. Default false (RW) — matches the behavior
+  // of every prior payload version. PFS images are typically save
+  // data and benefit from RO; .ffpkg / .exfat depend on the user's
+  // intent. SMP supports per-image overrides; we keep it as a single
+  // checkbox per mount click for now. Pre-2.2.26 payloads silently
+  // ignore the field and always mount RW; we don't surface a banner
+  // for that since the user always sees the result in the resolved
+  // mount and can re-mount with the right toggle.
+  const [readOnly, setReadOnly] = useState<boolean>(false);
+  const supportsReadOnly = useMemo(
+    () => {
+      // Reuse semver compare via the existing payloadSupportsMountPoint
+      // pattern — if the payload supports 2.2.25's mount_point it
+      // probably hasn't been upgraded to 2.2.26 yet either, but we
+      // surface the toggle anyway and let the payload silently ignore
+      // it on older builds. Effect: a checkbox the user can tick that
+      // becomes effective the moment they upgrade. No false-promise.
+      return payloadVersion ? true : false;
+    },
+    [payloadVersion],
+  );
 
   // Escape closes the modal — same standard-dialog UX as MoveModal.
   useEffect(() => {
@@ -1996,6 +2477,33 @@ function MountModal({
           <div className="mt-0.5 break-all font-mono">{resolvedPath}</div>
         </div>
 
+        {supportsReadOnly && (
+          <label className="mb-3 flex cursor-pointer items-start gap-2 text-xs">
+            <input
+              type="checkbox"
+              className="mt-[3px]"
+              checked={readOnly}
+              onChange={(e) => setReadOnly(e.target.checked)}
+            />
+            <span>
+              <span className="font-medium">
+                {tr(
+                  "library_mount_modal_read_only",
+                  undefined,
+                  "Mount read-only",
+                )}
+              </span>
+              <span className="ml-1 text-[var(--color-muted)]">
+                {tr(
+                  "library_mount_modal_read_only_hint",
+                  undefined,
+                  "— prevents writes through the mount. Useful for shared dumps and save-data PFS images. Requires payload 2.2.26+.",
+                )}
+              </span>
+            </span>
+          </label>
+        )}
+
         {nameInvalid && (
           <div className="mb-3 rounded-md border border-[var(--color-bad)] bg-[var(--color-surface)] p-2 text-xs text-[var(--color-bad)]">
             {tr(
@@ -2028,6 +2536,7 @@ function MountModal({
               if (supportsMountPoint) {
                 onConfirm({
                   mountPoint: resolvedPath,
+                  readOnly: readOnly || undefined,
                   persistDest: { volume, subpath },
                 });
               } else {
@@ -2035,7 +2544,7 @@ function MountModal({
                 // and the payload anchors it under /mnt/ps5upload/.
                 // No `persistDest`: we don't have a real volume
                 // choice to remember in this branch.
-                onConfirm({ mountName: name });
+                onConfirm({ mountName: name, readOnly: readOnly || undefined });
               }
             }}
           >

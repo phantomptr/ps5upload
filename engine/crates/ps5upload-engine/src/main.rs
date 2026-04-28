@@ -51,15 +51,15 @@ use ps5upload_core::{
     connection::Connection,
     download::{download_to_local, enumerate_download_set, DownloadKind},
     fs_ops::{
-        fs_chmod, fs_copy_with_op_id, fs_delete_with_op_id, fs_mkdir, fs_mount,
-        fs_move_with_timeout, fs_op_cancel, fs_op_status, fs_read, fs_unmount, list_dir, reconcile,
-        walk_local_inventory, DirListing, ListDirOptions, MountResult, ReconcileFile,
-        ReconcileMode, ReconcilePlan,
+        app_launch, app_register, app_unregister, fs_chmod, fs_copy_with_op_id,
+        fs_delete_with_op_id, fs_mkdir, fs_mount, fs_move_with_timeout, fs_op_cancel, fs_op_status,
+        fs_read, fs_unmount, list_dir, reconcile, walk_local_inventory, DirListing, ListDirOptions,
+        MountResult, ReconcileFile, ReconcileMode, ReconcilePlan, RegisterResult,
     },
     game_meta::parse_param_json_bytes,
     hw::{
-        hw_info, hw_power, hw_set_fan_threshold, hw_temps, proc_list, HwInfo, HwPower, HwTemps,
-        ProcList,
+        hw_info, hw_power, hw_set_fan_threshold, hw_storage, hw_temps, proc_list, HwInfo, HwPower,
+        HwStorage, HwTemps, ProcList,
     },
     transfer::{
         transfer_dir_resumable, transfer_file_list_resumable, transfer_file_path_resumable,
@@ -927,6 +927,9 @@ struct FsMountReq {
     /// `mount_name`; payload prefers `mount_point` if both arrive.
     #[serde(default)]
     mount_point: Option<String>,
+    /// Mount the image read-only. New in 2.2.26. Default false (RW).
+    #[serde(default)]
+    read_only: Option<bool>,
 }
 
 async fn ps5_fs_mount(
@@ -937,11 +940,12 @@ async fn ps5_fs_mount(
     let image_path = req.image_path;
     let mount_name = req.mount_name;
     let mount_point = req.mount_point;
+    let read_only = req.read_only.unwrap_or(false);
     let started = std::time::Instant::now();
     crate::log_info!(
-        "fs_mount: addr={addr} image_path={image_path} mount_name={:?} mount_point={:?}",
+        "fs_mount: addr={addr} image_path={image_path} mount_name={:?} mount_point={:?} read_only={read_only}",
         mount_name,
-        mount_point
+        mount_point,
     );
     let image_for_log = image_path.clone();
     let result: Result<MountResult, anyhow::Error> = tokio::task::spawn_blocking(move || {
@@ -950,6 +954,7 @@ async fn ps5_fs_mount(
             &image_path,
             mount_name.as_deref(),
             mount_point.as_deref(),
+            read_only,
         )
     })
     .await
@@ -980,6 +985,142 @@ async fn ps5_fs_mount(
 struct FsUnmountReq {
     addr: Option<String>,
     mount_point: String,
+}
+
+/// Launch a registered title via the payload's triple-strategy
+/// `sceLncUtilLaunchApp` → `sceSystemServiceLaunchApp` flow. Title
+/// must already be registered in app.db (we surface the existing
+/// `register_title_*` flow elsewhere). Re-exposed in 2.2.26 after
+/// previously being gated out of the UI.
+#[derive(Debug, serde::Deserialize)]
+struct AppLaunchReq {
+    addr: Option<String>,
+    title_id: String,
+}
+
+async fn ps5_app_launch(
+    State(state): State<AppState>,
+    Json(req): Json<AppLaunchReq>,
+) -> impl IntoResponse {
+    let addr = mgmt_addr_or_default(req.addr, &state.default_ps5_addr);
+    let title_id = req.title_id;
+    let started = std::time::Instant::now();
+    crate::log_info!("app_launch: addr={addr} title_id={title_id}");
+    let title_for_log = title_id.clone();
+    match tokio::task::spawn_blocking(move || app_launch(&addr, &title_id))
+        .await
+        .map_err(anyhow::Error::from)
+        .and_then(|r| r)
+    {
+        Ok(()) => {
+            crate::log_info!(
+                "app_launch ok: {title_for_log} in {} ms",
+                started.elapsed().as_millis()
+            );
+            (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
+        }
+        Err(e) => {
+            crate::log_warn!(
+                "app_launch failed: {title_for_log} in {} ms: {e}",
+                started.elapsed().as_millis()
+            );
+            json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response()
+        }
+    }
+}
+
+/// Stage + register a PS5 game folder so Sony's launcher picks it up
+/// in the XMB. `src_path` may live on /data, /mnt/ext*, /mnt/usb*, or
+/// inside a mounted /mnt/ps5upload/ image. Idempotent: re-registering
+/// the same path is a no-op (Sony's installer returns 0x80990002,
+/// which the payload normalises). Re-exposed in 2.2.26 — engine core
+/// and payload were already wired but the HTTP/Tauri layer hadn't
+/// been opened up.
+#[derive(Debug, serde::Deserialize)]
+struct AppRegisterReq {
+    addr: Option<String>,
+    src_path: String,
+    /// 2.2.26 opt-in: rewrite `<src>/sce_sys/param.json`'s
+    /// `applicationDrmType` to `"standard"` before staging. Default
+    /// false (don't touch the user's source).
+    #[serde(default)]
+    patch_drm_type: Option<bool>,
+}
+
+async fn ps5_app_register(
+    State(state): State<AppState>,
+    Json(req): Json<AppRegisterReq>,
+) -> impl IntoResponse {
+    let addr = mgmt_addr_or_default(req.addr, &state.default_ps5_addr);
+    let src_path = req.src_path;
+    let patch_drm_type = req.patch_drm_type.unwrap_or(false);
+    let started = std::time::Instant::now();
+    crate::log_info!(
+        "app_register: addr={addr} src_path={src_path} patch_drm_type={patch_drm_type}"
+    );
+    let path_for_log = src_path.clone();
+    match tokio::task::spawn_blocking(move || app_register(&addr, &src_path, patch_drm_type))
+        .await
+        .map_err(anyhow::Error::from)
+        .and_then(|r| r)
+    {
+        Ok(result) => {
+            crate::log_info!(
+                "app_register ok: {path_for_log} -> {} ({}) in {} ms",
+                result.title_id,
+                result.title_name,
+                started.elapsed().as_millis()
+            );
+            (StatusCode::OK, Json::<RegisterResult>(result)).into_response()
+        }
+        Err(e) => {
+            crate::log_warn!(
+                "app_register failed: {path_for_log} in {} ms: {e}",
+                started.elapsed().as_millis()
+            );
+            json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response()
+        }
+    }
+}
+
+/// Reverse of `app_register`. Best-effort — succeeds even when the
+/// Sony AppUninstall API isn't available, as long as the nullfs
+/// teardown succeeded.
+#[derive(Debug, serde::Deserialize)]
+struct AppUnregisterReq {
+    addr: Option<String>,
+    title_id: String,
+}
+
+async fn ps5_app_unregister(
+    State(state): State<AppState>,
+    Json(req): Json<AppUnregisterReq>,
+) -> impl IntoResponse {
+    let addr = mgmt_addr_or_default(req.addr, &state.default_ps5_addr);
+    let title_id = req.title_id;
+    let started = std::time::Instant::now();
+    crate::log_info!("app_unregister: addr={addr} title_id={title_id}");
+    let title_for_log = title_id.clone();
+    match tokio::task::spawn_blocking(move || app_unregister(&addr, &title_id))
+        .await
+        .map_err(anyhow::Error::from)
+        .and_then(|r| r)
+    {
+        Ok(()) => {
+            crate::log_info!(
+                "app_unregister ok: {title_for_log} in {} ms",
+                started.elapsed().as_millis()
+            );
+            (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
+        }
+        Err(e) => {
+            crate::log_warn!(
+                "app_unregister failed: {title_for_log} in {} ms: {e}",
+                started.elapsed().as_millis()
+            );
+            json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response()
+        }
+    }
 }
 
 async fn ps5_fs_unmount(
@@ -1200,6 +1341,25 @@ async fn ps5_hw_power(
         .await
         .map_err(anyhow::Error::from)
         .and_then(|r| r);
+    match r {
+        Ok(v) => (StatusCode::OK, Json(v)).into_response(),
+        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
+    }
+}
+
+/// "Console Storage" aggregate. Same shape PS5 Settings shows: total
+/// across `/user effective + /system_data + /system_ex`, free across
+/// the same set, plus the per-partition breakdown for diagnostics.
+async fn ps5_hw_storage(
+    State(state): State<AppState>,
+    Query(q): Query<AddrQuery>,
+) -> impl IntoResponse {
+    let addr = mgmt_addr_or_default(q.addr, &state.default_ps5_addr);
+    let r: Result<HwStorage, anyhow::Error> =
+        tokio::task::spawn_blocking(move || hw_storage(&addr))
+            .await
+            .map_err(anyhow::Error::from)
+            .and_then(|r| r);
     match r {
         Ok(v) => (StatusCode::OK, Json(v)).into_response(),
         Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
@@ -2624,9 +2784,13 @@ async fn main() {
         .route("/api/ps5/fs/op-cancel", post(ps5_fs_op_cancel))
         .route("/api/ps5/fs/mount", post(ps5_fs_mount))
         .route("/api/ps5/fs/unmount", post(ps5_fs_unmount))
+        .route("/api/ps5/app/launch", post(ps5_app_launch))
+        .route("/api/ps5/app/register", post(ps5_app_register))
+        .route("/api/ps5/app/unregister", post(ps5_app_unregister))
         .route("/api/ps5/hw/info", get(ps5_hw_info))
         .route("/api/ps5/hw/temps", get(ps5_hw_temps))
         .route("/api/ps5/hw/power", get(ps5_hw_power))
+        .route("/api/ps5/hw/storage", get(ps5_hw_storage))
         .route("/api/ps5/proc/list", get(ps5_proc_list))
         .route("/api/ps5/hw/fan-threshold", post(ps5_hw_set_fan_threshold))
         .route("/api/ps5/fs/chmod", post(ps5_fs_chmod))

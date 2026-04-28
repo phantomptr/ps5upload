@@ -136,6 +136,8 @@ extern int posix_fallocate(int fd, off_t offset, off_t len);
  * clamps to the safe range defined in hw_info.h regardless of input. */
 #define FTX2_FRAME_HW_SET_FAN_THRESHOLD     72u
 #define FTX2_FRAME_HW_SET_FAN_THRESHOLD_ACK 73u
+#define FTX2_FRAME_HW_STORAGE               80u
+#define FTX2_FRAME_HW_STORAGE_ACK           81u
 /* Walk kernel allproc and return {"ok":bool,"procs":[{"pid":N,"name":"..."},...]}.
  * Body is JSON (unlike the hw_* text bodies above) because the UI wants
  * to render a table of entries, which is nicer with structured parsing
@@ -179,12 +181,56 @@ extern int posix_fallocate(int fd, off_t offset, off_t len);
 #define FS_MOUNT_LVD_IOC_ATTACH_V0 0xC0286D00ull
 #define FS_MOUNT_LVD_IOC_DETACH    0xC0286D01ull
 
-/* LVD attach raw flags → normalized flags (precomputed) for the four
- * cases we support. We hardcode the outputs since we only ever mount
- * RW as user. */
-#define FS_MOUNT_LVD_FLAGS_EXFAT_RW 0x14u  /* raw 0x8 (single-image RW) */
-#define FS_MOUNT_LVD_FLAGS_UFS_RW   0x16u  /* raw 0xC (dd/lwfs RW)       */
+/* LVD attach raw flags → normalized flags (precomputed). Sony's
+ * sceFsLvdAttachCommon normalizes a wrapper-side raw bitmask into the
+ * value the validator checks; we hardcode the outputs since we only
+ * support a fixed set of (fstype, ro) combinations. The rules are:
+ *
+ *   exfat / pfs (single-image family):  raw 0x8 → 0x14 RW, 0x9 → 0x1C RO
+ *   ufs (dd/lwfs family):                raw 0xC → 0x16 RW, 0xD → 0x1E RO */
+#define FS_MOUNT_LVD_FLAGS_EXFAT_RW 0x14u
+#define FS_MOUNT_LVD_FLAGS_EXFAT_RO 0x1Cu
+#define FS_MOUNT_LVD_FLAGS_UFS_RW   0x16u
+#define FS_MOUNT_LVD_FLAGS_UFS_RO   0x1Eu
+#define FS_MOUNT_LVD_FLAGS_PFS_RW   0x14u  /* PFS uses single-image family */
+#define FS_MOUNT_LVD_FLAGS_PFS_RO   0x1Cu
 #define FS_MOUNT_LVD_SECONDARY_SINGLE 0x10000u
+
+/* LVD image_type values accepted by the validator (0..0xC). The three
+ * we care about: SINGLE for exfat, UFS_DOWNLOAD_DATA for ffpkg, and
+ * PFS_SAVE_DATA for ffpfs. */
+#define FS_MOUNT_LVD_IMAGE_SINGLE      0u
+#define FS_MOUNT_LVD_IMAGE_PFS_SAVE    5u
+#define FS_MOUNT_LVD_IMAGE_UFS_DD      7u
+
+/* nmount(2) third-arg flags. PS5's UFS mount path (DD/LWFS images
+ * attached via /dev/lvdN) requires the magic 0x10000000 bit set in
+ * the flags arg — without it nmount returns EINVAL on every PS5
+ * firmware we've tested. exfatfs and pfs take plain MNT_RDONLY/0. */
+#define FS_MOUNT_UFS_NMOUNT_FLAG_RW 0x10000000u
+#define FS_MOUNT_UFS_NMOUNT_FLAG_RO 0x10000001u
+
+/* PFS option payload defaults. We only ever mount fake-signed PFS
+ * images (the kernel's signature/key checks are bypassed by the
+ * loader running before this payload), so sigverify=playgo=disc=0
+ * and the EKPFS key is the 64-hex-char zero key (PFS images that
+ * accept these defaults are the fake-signed family we target).
+ * mkeymode=SD selects the SD-card key derivation path. */
+#define FS_MOUNT_PFS_SIGVERIFY "0"
+#define FS_MOUNT_PFS_PLAYGO    "0"
+#define FS_MOUNT_PFS_DISC      "0"
+#define FS_MOUNT_PFS_MKEYMODE  "SD"
+#define FS_MOUNT_PFS_EKPFS_HEX \
+    "0000000000000000000000000000000000000000000000000000000000000000"
+
+/* Source-stability gate. Refuse to mount an image whose mtime is
+ * newer than this many seconds — prevents mounting an in-progress
+ * upload (the file size keeps growing while we attach, the kernel
+ * reads garbage past the snapshot size, mount fails or succeeds with
+ * a corrupt fs view). 3s is enough for FTX2 uploads since the
+ * engine fsync's + closes before the user clicks Mount, but small
+ * enough not to feel laggy during legitimate use. */
+#define FS_MOUNT_STABILITY_SECONDS 3
 
 typedef struct {
     uint16_t source_type;      /* +0x00: 1 = file, 2 = block/char device */
@@ -1181,21 +1227,45 @@ static int mount_tracker_exists(const char *mount_point) {
 
 /* Write the source-path tracker for a mount. Failure is non-fatal —
  * the mount itself has already succeeded; losing the tracker just
- * means the Volumes screen won't know which file backs the mount. */
+ * means the Volumes screen won't know which file backs the mount.
+ *
+ * Atomic via temp + rename: a payload that crashes between
+ * `open` and `close` of the destination would otherwise leave a
+ * partial/empty tracker that mount_tracker_read would surface as a
+ * truncated source path on next boot. The temp file lives next to
+ * the destination so the rename is intra-directory (rename(2) is
+ * atomic on the same filesystem). PID is appended to the temp name
+ * so two parallel writes for the same mount_point can't clobber
+ * each other's temp file mid-rename. */
 static void mount_tracker_write(const char *mount_point, const char *src_path) {
     char key[256];
     char tracker[512];
+    char tracker_tmp[576];
     mount_tracker_key(mount_point, key, sizeof(key));
     if (key[0] == '\0') return;
     int n = snprintf(tracker, sizeof(tracker), "%s/%s.src",
                      PS5UPLOAD2_MOUNTS_DIR, key);
     if (n < 0 || (size_t)n >= sizeof(tracker)) return;
-    int fd = open(tracker, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    n = snprintf(tracker_tmp, sizeof(tracker_tmp), "%s.tmp.%d",
+                 tracker, (int)getpid());
+    if (n < 0 || (size_t)n >= sizeof(tracker_tmp)) return;
+    int fd = open(tracker_tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) return;
     size_t len = strlen(src_path);
-    ssize_t w = write(fd, src_path, len);
-    (void)w;
+    ssize_t w = (len > 0) ? write(fd, src_path, len) : 0;
+    int write_err = (w < 0 || (size_t)w != len) ? errno : 0;
+    /* fsync isn't required on PS5 for tracker durability — the
+     * Volumes screen tolerates a missing tracker by design — but
+     * close(2) flushing the page cache before the rename is needed
+     * so a reader on a different fd sees the bytes. */
     close(fd);
+    if (write_err != 0) {
+        (void)unlink(tracker_tmp);
+        return;
+    }
+    if (rename(tracker_tmp, tracker) != 0) {
+        (void)unlink(tracker_tmp);
+    }
 }
 
 /* Remove the tracker when a mount goes away. Tolerant of already-gone
@@ -5378,7 +5448,8 @@ static int fs_mount_wait_node(const char *devname, int exist) {
     return -1;
 }
 
-/* Filename test: lowercase extension match for .exfat or .ffpkg. */
+/* Filename test: lowercase extension match for .exfat / .ffpkg /
+ * .ffpfs. Returns the FreeBSD fstype name nmount expects. */
 static int fs_mount_detect_fstype(const char *image_path, char *fstype_out, size_t cap) {
     size_t len = strlen(image_path);
     if (len < 6) return -1;
@@ -5400,6 +5471,10 @@ static int fs_mount_detect_fstype(const char *image_path, char *fstype_out, size
     }
     if (strcmp(buf, "ffpkg") == 0) {
         snprintf(fstype_out, cap, "ufs");
+        return 0;
+    }
+    if (strcmp(buf, "ffpfs") == 0) {
+        snprintf(fstype_out, cap, "pfs");
         return 0;
     }
     return -1;
@@ -5442,19 +5517,64 @@ static void fs_mount_derive_name(const char *image_path, char *out, size_t cap) 
     if (len == 0) snprintf(out, cap, "image");
 }
 
-/* Try ordinary unmount; if busy, force. Used by both FS_UNMOUNT and
- * the error-cleanup path of FS_MOUNT. Returns 0 on success, -1 on
+/* Multi-pass unmount. PS5 mount stacks can have a layer (e.g. a
+ * nullfs over a UFS image) where unmounting the top exposes a
+ * second mount of the same fspath that needs another unmount call.
+ * The single try-then-force form would leave that residual layer
+ * attached and the next FS_LIST_VOLUMES would still report the
+ * fspath as mounted. Loop up to FS_MOUNT_UNMOUNT_PASSES, exiting
+ * early when the path is no longer a mount point or no progress
+ * was made.
+ *
+ * "No progress" means: this iteration neither succeeded at
+ * unmounting nor saw the path go non-mounted via statfs. Without
+ * the progress check, a stuck-busy mount would burn the full pass
+ * budget on every call. Used by both FS_UNMOUNT and the
+ * error-cleanup path of FS_MOUNT. Returns 0 on success, -1 on
  * failure (errno preserved). */
+#define FS_MOUNT_UNMOUNT_PASSES 4
 static int fs_mount_try_unmount(const char *mount_point) {
-    if (unmount(mount_point, 0) == 0) return 0;
-    if (errno == EINVAL || errno == ENOENT) return 0;
-    if (unmount(mount_point, MNT_FORCE) == 0) return 0;
+    int last_errno = 0;
+    for (int pass = 0; pass < FS_MOUNT_UNMOUNT_PASSES; pass++) {
+        /* Plain unmount first. EINVAL / ENOENT ⇒ "already gone" —
+         * treat as success on the first pass; on later passes it
+         * means a previous pass cleared the last layer. */
+        if (unmount(mount_point, 0) == 0) continue;
+        last_errno = errno;
+        if (errno == EINVAL || errno == ENOENT) {
+            errno = 0;
+            return 0;
+        }
+        /* Busy → escalate to MNT_FORCE for this pass. If the
+         * forced unmount also fails, bail — one more pass with the
+         * same input would just repeat the failure. */
+        if (unmount(mount_point, MNT_FORCE) == 0) continue;
+        last_errno = errno;
+        if (errno == EINVAL || errno == ENOENT) {
+            errno = 0;
+            return 0;
+        }
+        errno = last_errno;
+        return -1;
+    }
+    /* All passes consumed and the path is still busy. The most
+     * common cause is a process holding an open fd or cwd inside
+     * the mount. Surface the last errno so the caller can include
+     * it in the user-visible error frame. */
+    errno = last_errno;
     return -1;
 }
 
 /* Detach an MD unit. Tries plain detach, then MD_FORCE if that fails
  * with EBUSY — leaving an attached unit orphans a kernel resource
- * until reboot, so we lean on force after a polite attempt. */
+ * until reboot, so we lean on force after a polite attempt.
+ *
+ * After a successful detach we wait for `/dev/md<N>` to disappear so
+ * the next attach round won't race the kernel teardown and reuse a
+ * unit number whose vnode hasn't actually been released yet.
+ * Without this, a fast remount cycle can fail with EBUSY on the
+ * new attach because the old node is still in `getmntinfo`'s
+ * view. */
 static int fs_mount_detach_md(int unit_id) {
     if (unit_id < 0) return 0;
     int fd = open(FS_MOUNT_MD_CTL, O_RDWR);
@@ -5469,10 +5589,23 @@ static int fs_mount_detach_md(int unit_id) {
         rc = ioctl(fd, MDIOCDETACH, &req);
     }
     close(fd);
-    return (rc == 0) ? 0 : -1;
+    if (rc != 0) return -1;
+    char devname[32];
+    snprintf(devname, sizeof(devname), "/dev/md%d", unit_id);
+    /* Best-effort: a node still present after the wait window doesn't
+     * make this detach call "fail" — the ioctl returned 0 and the
+     * kernel will eventually finish teardown — but a caller that
+     * immediately reattaches at the same unit may still hit a stale
+     * node. Surface that as "detach succeeded but watch out" by
+     * returning 0; the rare case where it actually matters is the
+     * fs_mount retry path, which uses auto-assign and won't pick the
+     * same unit. */
+    (void)fs_mount_wait_node(devname, 0);
+    return 0;
 }
 
-/* Detach an LVD unit. No force variant on LVD — best effort. */
+/* Detach an LVD unit. No force variant on LVD — best effort. Same
+ * post-detach node-wait rationale as fs_mount_detach_md. */
 static int fs_mount_detach_lvd(int unit_id) {
     if (unit_id < 0) return 0;
     int fd = open(FS_MOUNT_LVD_CTL, O_RDWR);
@@ -5482,20 +5615,51 @@ static int fs_mount_detach_lvd(int unit_id) {
     req.device_id = unit_id;
     int rc = ioctl(fd, FS_MOUNT_LVD_IOC_DETACH, &req);
     close(fd);
-    return (rc == 0) ? 0 : -1;
+    if (rc != 0) return -1;
+    char devname[32];
+    snprintf(devname, sizeof(devname), "/dev/lvd%d", unit_id);
+    (void)fs_mount_wait_node(devname, 0);
+    return 0;
+}
+
+/* fs_mount_kind_t — local enum capturing which (fstype, secondary_unit,
+ * image_type) triple we want for an attach. Cheap to pass around and
+ * makes the call sites readable without hauling around bare strings. */
+typedef enum {
+    FS_MOUNT_KIND_EXFAT = 0,
+    FS_MOUNT_KIND_UFS   = 1,
+    FS_MOUNT_KIND_PFS   = 2,
+} fs_mount_kind_t;
+
+static fs_mount_kind_t fs_mount_kind_from_fstype(const char *fstype) {
+    if (strcmp(fstype, "exfatfs") == 0) return FS_MOUNT_KIND_EXFAT;
+    if (strcmp(fstype, "pfs")     == 0) return FS_MOUNT_KIND_PFS;
+    return FS_MOUNT_KIND_UFS;  /* "ufs" */
+}
+
+/* Default device sector sizes per fstype. exfat lives happily on
+ * 512 because exFAT metadata is sector-granular; UFS-DD and PFS
+ * use 4096-byte blocks. The "default" qualifier matters because
+ * some images on small-cluster host filesystems may need a
+ * smaller value — see post-mount sector validation. */
+static uint32_t fs_mount_default_sector(fs_mount_kind_t kind) {
+    if (kind == FS_MOUNT_KIND_EXFAT) return 512u;
+    return 4096u;  /* UFS / PFS */
 }
 
 /* Attach a disk image via the Sony LVD driver. Returns assigned unit
- * id on success, or -1 with errno set on failure. `is_exfat` chooses
- * the sector/flags/image_type triple. On PS5, this is the primary
- * path: MDIOCATTACH often returns EPERM or EINVAL on PS5 where LVD
- * succeeds, because PS5 routes file-backed block devices through
- * its own virtualized layer.
+ * id on success, or -1 with errno set on failure. `kind` selects the
+ * sector/flags/image_type triple, `read_only` swaps RW for RO LVD
+ * flag presets. On PS5, this is the primary path: MDIOCATTACH often
+ * returns EPERM or EINVAL on PS5 where LVD succeeds, because PS5
+ * routes file-backed block devices through its own virtualized
+ * layer.
  *
  * The V0 attach ioctl takes a single layer descriptor pointing at
  * the user-space path. The kernel opens the file itself inside the
  * ioctl handler, so we don't need to keep an open fd around. */
-static int fs_mount_attach_lvd(const char *image_path, off_t size, int is_exfat) {
+static int fs_mount_attach_lvd(const char *image_path, off_t size,
+                                fs_mount_kind_t kind, int read_only) {
     int fd = open(FS_MOUNT_LVD_CTL, O_RDWR);
     if (fd < 0) return -1;
 
@@ -5507,15 +5671,44 @@ static int fs_mount_attach_lvd(const char *image_path, off_t size, int is_exfat)
     layer.offset      = 0;
     layer.size        = (uint64_t)size;
 
+    uint32_t sector_size = fs_mount_default_sector(kind);
+    uint32_t secondary_unit;
+    uint16_t flags;
+    uint16_t image_type;
+    switch (kind) {
+        case FS_MOUNT_KIND_EXFAT:
+            secondary_unit = FS_MOUNT_LVD_SECONDARY_SINGLE;
+            flags          = read_only ? FS_MOUNT_LVD_FLAGS_EXFAT_RO
+                                       : FS_MOUNT_LVD_FLAGS_EXFAT_RW;
+            image_type     = FS_MOUNT_LVD_IMAGE_SINGLE;
+            break;
+        case FS_MOUNT_KIND_PFS:
+            /* PFS uses the SINGLE family for layer geometry but a
+             * different image_type so the kernel routes the mount
+             * through devpfs. RW raw 0x8 normalizes to 0x14 for
+             * PFS as it does for exfat. */
+            secondary_unit = sector_size;
+            flags          = read_only ? FS_MOUNT_LVD_FLAGS_PFS_RO
+                                       : FS_MOUNT_LVD_FLAGS_PFS_RW;
+            image_type     = FS_MOUNT_LVD_IMAGE_PFS_SAVE;
+            break;
+        case FS_MOUNT_KIND_UFS:
+        default:
+            secondary_unit = sector_size;
+            flags          = read_only ? FS_MOUNT_LVD_FLAGS_UFS_RO
+                                       : FS_MOUNT_LVD_FLAGS_UFS_RW;
+            image_type     = FS_MOUNT_LVD_IMAGE_UFS_DD;
+            break;
+    }
+
     fs_mount_lvd_attach_t req;
     memset(&req, 0, sizeof(req));
     req.io_version     = 0;                          /* V0 */
     req.device_id      = -1;                         /* auto-assign */
-    req.sector_size    = is_exfat ? 512u : 4096u;
-    req.secondary_unit = is_exfat ? FS_MOUNT_LVD_SECONDARY_SINGLE : 4096u;
-    req.flags          = is_exfat ? FS_MOUNT_LVD_FLAGS_EXFAT_RW
-                                  : FS_MOUNT_LVD_FLAGS_UFS_RW;
-    req.image_type     = is_exfat ? 0u /* SINGLE */ : 7u /* UFS_DD */;
+    req.sector_size    = sector_size;
+    req.secondary_unit = secondary_unit;
+    req.flags          = flags;
+    req.image_type     = image_type;
     req.layer_count    = 1;
     req.device_size    = (uint64_t)size;
     req.layers_ptr     = &layer;
@@ -5527,17 +5720,29 @@ static int fs_mount_attach_lvd(const char *image_path, off_t size, int is_exfat)
         errno = saved_errno;
         return -1;
     }
+    /* Defensive: the validator can return rc=0 with device_id=-1 on
+     * some firmware. Treat that as an attach failure so we don't
+     * try to wait for /dev/lvd-1. */
+    if (req.device_id < 0) {
+        errno = EINVAL;
+        return -1;
+    }
     return req.device_id;
 }
 
 /* Attach via the plain FreeBSD memory-disk driver. Fallback path used
  * when LVD is unavailable or refuses the attach. Returns assigned
  * unit id on success, or -1 with errno set on failure. */
-static int fs_mount_attach_md(const char *image_path, off_t size, int is_exfat) {
-    /* `is_exfat` retained for parity with the LVD attach signature;
-     * MD uses the same 512-byte sector size for both exfat and ufs on
-     * PS5, so the parameter is informational only today. */
-    (void)is_exfat;
+static int fs_mount_attach_md(const char *image_path, off_t size,
+                               fs_mount_kind_t kind, int read_only) {
+    /* MD uses the same 512-byte sector size for every fstype on PS5,
+     * so `kind` is informational only today. PFS via MD is not
+     * supported by Sony's devpfs — gate it out. */
+    (void)kind;
+    if (kind == FS_MOUNT_KIND_PFS) {
+        errno = ENOTSUP;
+        return -1;
+    }
     int fd = open(FS_MOUNT_MD_CTL, O_RDWR);
     if (fd < 0) return -1;
 
@@ -5551,6 +5756,7 @@ static int fs_mount_attach_md(const char *image_path, off_t size, int is_exfat) 
      * fails MDIOCATTACH with EINVAL on most firmware. */
     req.md_sectorsize = 512;
     req.md_options    = MD_AUTOUNIT | MD_ASYNC;
+    if (read_only) req.md_options |= MD_READONLY;
 
     int rc = ioctl(fd, MDIOCATTACH, &req);
     int saved_errno = errno;
@@ -5590,25 +5796,124 @@ static int fs_mount_mkdir_p(const char *path) {
     return 0;
 }
 
+/* Find an existing mount whose source-tracker file points at the same
+ * image_path the caller is asking about. Returns 1 with `out_mp`
+ * filled (NUL-terminated, capped at out_cap) if found, 0 otherwise.
+ *
+ * Used by handle_fs_mount to short-circuit a re-mount: a user
+ * double-clicking Mount, an upload-then-mount flow racing the
+ * Library refresh, or a post-takeover client that doesn't know
+ * the previous payload session already mounted the image — all of
+ * these used to allocate a new LVD slot per click and either
+ * pile up failed attaches or mask the existing mount with a new
+ * overlay at the same target. Returning the existing mount_point
+ * is harmless. */
+static int fs_mount_find_existing(const char *image_path,
+                                   char *out_mp, size_t out_cap) {
+    if (!image_path || !*image_path || !out_mp || out_cap == 0) return 0;
+    out_mp[0] = '\0';
+    struct statfs *mnts = NULL;
+    int nmnts = getmntinfo(&mnts, MNT_NOWAIT);
+    if (nmnts <= 0 || !mnts) return 0;
+    for (int i = 0; i < nmnts; i++) {
+        const char *mnt_on   = mnts[i].f_mntonname;
+        const char *mnt_from = mnts[i].f_mntfromname;
+        /* Only consider mounts backed by a virtual block device the
+         * payload would have created (or could have inherited from a
+         * previous payload session). System nullfs mounts and
+         * Sony-managed mounts have different prefixes. */
+        const int is_lvd = (strncmp(mnt_from, "/dev/lvd", 8) == 0);
+        const int is_md  = (strncmp(mnt_from, "/dev/md",  7) == 0);
+        if (!is_lvd && !is_md) continue;
+        char src[512];
+        if (!mount_tracker_read(mnt_on, src, sizeof(src))) continue;
+        if (strcmp(src, image_path) != 0) continue;
+        /* Found one. Surface it to the caller. */
+        size_t len = strlen(mnt_on);
+        if (len + 1 > out_cap) return 0;
+        memcpy(out_mp, mnt_on, len + 1);
+        return 1;
+    }
+    return 0;
+}
+
+/* Post-mount sanity check. After nmount succeeds, the mount actually
+ * needs to be readable for the user — and the kernel will happily
+ * mount a UFS image whose cluster size is smaller than the sector
+ * size we attached at, which produces a half-broken mount point that
+ * EIOs on every read.
+ *
+ * Returns 0 on ok, -1 on failure with errbuf populated.
+ *
+ * We deliberately don't try to autotune (write a per-image override
+ * file, retry with smaller sector). Autotuning would require an
+ * asynchronous retry path that doesn't translate to a synchronous
+ * user-driven Mount click. Surfacing the error with the f_bsize
+ * value lets the user pick a proper image_sector hint or remake
+ * the image with a larger cluster. */
+static int fs_mount_validate_post_mount(const char *mp,
+                                         fs_mount_kind_t kind,
+                                         char *errbuf, size_t errbuf_cap) {
+    if (!mp || !errbuf || errbuf_cap == 0) {
+        if (errbuf && errbuf_cap > 0) errbuf[0] = '\0';
+        return -1;
+    }
+    errbuf[0] = '\0';
+    struct statfs sfs;
+    if (statfs(mp, &sfs) != 0) {
+        snprintf(errbuf, errbuf_cap,
+                 "fs_mount_post_statfs_failed: %s", strerror(errno));
+        return -1;
+    }
+    uint32_t min_sector = fs_mount_default_sector(kind);
+    uint64_t bsize = (uint64_t)sfs.f_bsize;
+    if (bsize == 0) bsize = (uint64_t)sfs.f_iosize;
+    if (bsize == 0) {
+        /* Can't validate without a block size. Prefer "succeed" over
+         * "reject a working mount on a kernel quirk" — the alternative
+         * is a Mount that always fails on devices statfs reports
+         * zeros for. */
+        return 0;
+    }
+    if (bsize < (uint64_t)min_sector) {
+        snprintf(errbuf, errbuf_cap,
+                 "fs_mount_cluster_too_small: f_bsize=%llu < sector=%u "
+                 "— remake the image with a larger cluster",
+                 (unsigned long long)bsize, (unsigned)min_sector);
+        return -1;
+    }
+    return 0;
+}
+
 /* ── FS_MOUNT handler ───────────────────────────────────────────────────
  *
  * Pipeline:
- *   1. Parse {image_path, mount_name?, mount_point?} from JSON body.
+ *   1. Parse {image_path, mount_name?, mount_point?, read_only?} from
+ *      JSON body.
  *   2. Verify image_path passes is_path_allowed and names a regular
- *      file. Detect fstype by extension (.exfat → exfatfs, .ffpkg → ufs).
- *   3. Resolve mount_point. Three cases, in priority:
+ *      file. Detect fstype by extension (.exfat → exfatfs,
+ *      .ffpkg → ufs, .ffpfs → pfs).
+ *   3. Source-stability gate: refuse if mtime is too fresh (avoid
+ *      mounting an in-progress upload).
+ *   4. Reuse-existing-mount: if the same image_path is already
+ *      mounted, ACK with that mount_point unchanged.
+ *   5. Resolve mount_point. Three cases, in priority:
  *        - Caller-supplied `mount_point`: full absolute path. Must
  *          pass is_path_allowed; rejected otherwise.
  *        - Caller-supplied `mount_name` (no slashes): mounts under
  *          /mnt/ps5upload/<name>/ (the legacy 2.2.24 path).
  *        - Neither: derive a safe name from image_path basename and
  *          mount under /mnt/ps5upload/.
- *   4. open(/dev/mdctl); issue MDIOCATTACH with MD_VNODE; wait for
- *      /dev/md<N> to materialize.
- *   5. mkdir -p mount point; nmount with the appropriate fstype + standard
- *      PS5 mount knobs (async, noatime, budgetid=game, automounted).
- *   6. On nmount failure, detach the MD unit so we don't leak it.
- *   7. Reply with ACK carrying {mount_point, dev_node, fstype}.
+ *   6. LVD attach (PS5-native); MD fallback. Wait for the device
+ *      node to materialize.
+ *   7. mkdir -p mount point; nmount with the per-fstype iovec set
+ *      and the per-fstype third-arg flag (UFS magic for .ffpkg).
+ *   8. Post-mount validate: f_bsize must be at least the device
+ *      sector size, otherwise the mount is silently broken.
+ *   9. On any failure after attach, detach the LVD/MD unit so we
+ *      don't leak slots.
+ *  10. Reply with ACK carrying {mount_point, dev_node, fstype,
+ *      source_image, read_only}.
  */
 static int handle_fs_mount(runtime_state_t *state, int client_fd,
                             uint64_t trace_id, const char *request_body,
@@ -5618,10 +5923,11 @@ static int handle_fs_mount(runtime_state_t *state, int client_fd,
     char fstype[16] = {0};
     char mount_point[256] = {0};
     char devname[32] = {0};
-    char resp[512];
+    char resp[768];
     char mount_errmsg[256] = {0};
     struct stat st;
     int unit_id = -1;
+    int read_only = 0;
     int n;
     (void)body_len;
     if (!state) return -1;
@@ -5630,6 +5936,11 @@ static int handle_fs_mount(runtime_state_t *state, int client_fd,
         extract_json_string_field(request_body, "image_path", image_path, sizeof(image_path));
         extract_json_string_field(request_body, "mount_name", mount_name, sizeof(mount_name));
         extract_json_string_field(request_body, "mount_point", mount_point, sizeof(mount_point));
+        /* read_only is a JSON number (0 or 1). 1, 2, … all mean "RO";
+         * 0 or absent means "RW" (current default). Using a number
+         * instead of a JSON true/false keeps extract_json_uint64_field
+         * happy and avoids adding a bool parser. */
+        read_only = (extract_json_uint64_field(request_body, "read_only") != 0) ? 1 : 0;
     }
     if (!is_path_allowed(image_path)) {
         return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
@@ -5642,6 +5953,61 @@ static int handle_fs_mount(runtime_state_t *state, int client_fd,
     if (fs_mount_detect_fstype(image_path, fstype, sizeof(fstype)) != 0) {
         return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
                           "fs_mount_unsupported_format", 27);
+    }
+
+    /* Source-stability gate. mtime in the future or in a kernel that
+     * reports st_mtime=0 (rare) shouldn't block — only reject when we
+     * can prove the file is actively being written to. Using time(NULL)
+     * matches FreeBSD wallclock; the few seconds of skew that NTP
+     * could introduce don't matter for a 3-second guard. */
+    {
+        time_t now = time(NULL);
+        if (st.st_mtime > 0 && now > st.st_mtime &&
+            (now - st.st_mtime) < FS_MOUNT_STABILITY_SECONDS) {
+            char errbuf[160];
+            int el = snprintf(errbuf, sizeof(errbuf),
+                              "fs_mount_source_unstable: image modified %lld s ago "
+                              "(<%d s); wait for the upload to settle",
+                              (long long)(now - st.st_mtime),
+                              FS_MOUNT_STABILITY_SECONDS);
+            if (el < 0) el = 0;
+            if ((size_t)el >= sizeof(errbuf)) el = (int)sizeof(errbuf) - 1;
+            return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
+                              errbuf, (uint64_t)el);
+        }
+    }
+
+    /* Reuse-existing-mount short-circuit. If this exact image_path is
+     * already mounted from an earlier FS_MOUNT call (or inherited
+     * from a prior payload session), return that mount_point as
+     * ACK without touching LVD. Saves a slot and avoids the silent
+     * overlay-mount footgun (mounting on top of an existing mount
+     * leaves the original behind, invisible). */
+    {
+        char existing[256];
+        if (fs_mount_find_existing(image_path, existing, sizeof(existing))) {
+            /* Synthesize a dev_node string by looking up the
+             * f_mntfromname for that mount. Best-effort — if we can't
+             * find it the ACK still carries the mount_point. */
+            char existing_dev[32] = "";
+            struct statfs *mnts = NULL;
+            int nmnts = getmntinfo(&mnts, MNT_NOWAIT);
+            for (int i = 0; i < nmnts && mnts; i++) {
+                if (strcmp(mnts[i].f_mntonname, existing) != 0) continue;
+                snprintf(existing_dev, sizeof(existing_dev), "%s",
+                         mnts[i].f_mntfromname);
+                break;
+            }
+            n = snprintf(resp, sizeof(resp),
+                         "{\"mount_point\":\"%s\",\"dev_node\":\"%s\","
+                         "\"fstype\":\"%s\",\"source_image\":\"%s\","
+                         "\"read_only\":%d,\"reused\":true}",
+                         existing, existing_dev, fstype, image_path,
+                         read_only ? 1 : 0);
+            if (n < 0 || (size_t)n >= sizeof(resp)) n = 0;
+            return send_frame(client_fd, FTX2_FRAME_FS_MOUNT_ACK, 0,
+                              trace_id, resp, (uint64_t)n);
+        }
     }
 
     /* Resolve mount_point. Caller-supplied path takes precedence — if
@@ -5690,12 +6056,9 @@ static int handle_fs_mount(runtime_state_t *state, int client_fd,
      * firmware), fall back to MD if LVD returns an error. Each
      * failure records errno verbatim so clients can surface the
      * actual reason — "fs_mount_attach_failed" alone is useless for
-     * diagnosis. The composite error names every attempt.
-     *
-     * `is_exfat` chooses sector/flags/image_type inside the attach
-     * helpers so the call site stays readable. */
-    const int is_exfat = (strcmp(fstype, "exfatfs") == 0);
-    int lvd_unit = fs_mount_attach_lvd(image_path, st.st_size, is_exfat);
+     * diagnosis. The composite error names every attempt. */
+    const fs_mount_kind_t kind = fs_mount_kind_from_fstype(fstype);
+    int lvd_unit = fs_mount_attach_lvd(image_path, st.st_size, kind, read_only);
     int lvd_errno = errno;
     int used_lvd = 0;
     if (lvd_unit >= 0) {
@@ -5703,7 +6066,7 @@ static int handle_fs_mount(runtime_state_t *state, int client_fd,
         unit_id = lvd_unit;
         snprintf(devname, sizeof(devname), "/dev/lvd%d", unit_id);
     } else {
-        int md_unit = fs_mount_attach_md(image_path, st.st_size, is_exfat);
+        int md_unit = fs_mount_attach_md(image_path, st.st_size, kind, read_only);
         int md_errno = errno;
         if (md_unit < 0) {
             /* Both backends failed — surface both errnos so the user
@@ -5746,14 +6109,18 @@ static int handle_fs_mount(runtime_state_t *state, int client_fd,
      * with these on hardware tends to break mounts. "budgetid=game"
      * is the PS5-specific resource class for user-installed titles.
      *
-     * Slot budget for the exfatfs branch (worst case):
+     * PFS adds a fistful of crypto/playgo/disc options; the
+     * zero-EKPFS key + sigverify=0 path works for fake-signed
+     * images on the firmwares we target.
+     *
+     * Slot budget (worst case is the PFS branch):
      *   fstype/from/fspath/budgetid          = 8
+     *   sigverify/mkeymode/playgo/disc/ekpfs = 10 (pfs only)
      *   large/timezone/ignoreacl             = 6 (exfat only)
      *   async/noatime/automounted            = 6
      *   errmsg                               = 2
-     * = 22 slots. Array sized to 32 for headroom in case we add another
-     * pair (e.g. "ro", "force") without needing to revisit this count. */
-    struct iovec iov[32];
+     * = 32 slots. Array sized to 40 for headroom. */
+    struct iovec iov[40];
     int iovlen = 0;
     #define FS_MOUNT_PUSH(k, v) do { \
         fs_mount_iov(&iov[iovlen++], (k)); \
@@ -5763,10 +6130,16 @@ static int handle_fs_mount(runtime_state_t *state, int client_fd,
     FS_MOUNT_PUSH("from", devname);
     FS_MOUNT_PUSH("fspath", mount_point);
     FS_MOUNT_PUSH("budgetid", "game");
-    if (strcmp(fstype, "exfatfs") == 0) {
+    if (kind == FS_MOUNT_KIND_EXFAT) {
         FS_MOUNT_PUSH("large", "yes");
         FS_MOUNT_PUSH("timezone", "static");
         FS_MOUNT_PUSH("ignoreacl", NULL);
+    } else if (kind == FS_MOUNT_KIND_PFS) {
+        FS_MOUNT_PUSH("sigverify", FS_MOUNT_PFS_SIGVERIFY);
+        FS_MOUNT_PUSH("mkeymode",  FS_MOUNT_PFS_MKEYMODE);
+        FS_MOUNT_PUSH("playgo",    FS_MOUNT_PFS_PLAYGO);
+        FS_MOUNT_PUSH("disc",      FS_MOUNT_PFS_DISC);
+        FS_MOUNT_PUSH("ekpfs",     FS_MOUNT_PFS_EKPFS_HEX);
     }
     FS_MOUNT_PUSH("async", NULL);
     FS_MOUNT_PUSH("noatime", NULL);
@@ -5780,7 +6153,17 @@ static int handle_fs_mount(runtime_state_t *state, int client_fd,
     iovlen++;
     #undef FS_MOUNT_PUSH
 
-    if (nmount(iov, (unsigned)iovlen, 0) != 0) {
+    /* Per-fstype nmount flags. UFS images need the 0x10000000 magic
+     * (RW) or 0x10000001 (RO); exfatfs and pfs take MNT_RDONLY for RO
+     * and 0 for RW. */
+    unsigned int nmount_flags;
+    if (kind == FS_MOUNT_KIND_UFS) {
+        nmount_flags = read_only ? FS_MOUNT_UFS_NMOUNT_FLAG_RO
+                                 : FS_MOUNT_UFS_NMOUNT_FLAG_RW;
+    } else {
+        nmount_flags = read_only ? (unsigned int)MNT_RDONLY : 0u;
+    }
+    if (nmount(iov, (unsigned)iovlen, (int)nmount_flags) != 0) {
         char errbuf[320];
         int len = snprintf(errbuf, sizeof(errbuf),
                            "fs_mount_nmount_failed: %s",
@@ -5796,6 +6179,25 @@ static int handle_fs_mount(runtime_state_t *state, int client_fd,
                           errbuf, (uint64_t)len);
     }
 
+    /* Post-mount sanity check. nmount succeeding doesn't guarantee
+     * the mount is actually usable — a UFS image whose cluster size
+     * is smaller than the LVD sector size mounts but EIOs on every
+     * read. Reject + tear down so the user gets a clear actionable
+     * error instead of a silent half-broken mount. */
+    {
+        char post_err[224];
+        if (fs_mount_validate_post_mount(mount_point, kind,
+                                          post_err, sizeof(post_err)) != 0) {
+            (void)fs_mount_try_unmount(mount_point);
+            if (used_lvd) fs_mount_detach_lvd(unit_id);
+            else fs_mount_detach_md(unit_id);
+            rmdir(mount_point);
+            size_t el = strlen(post_err);
+            return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
+                              post_err, (uint64_t)el);
+        }
+    }
+
     /* Record the source image path so Volumes can surface it and
      * reconciliation can validate on next boot. Keyed by the
      * resolved mount_point (works for both legacy
@@ -5808,10 +6210,24 @@ static int handle_fs_mount(runtime_state_t *state, int client_fd,
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);
 
+    /* User-facing PS5 toast. The desktop client surfaces the same
+     * info inline in the Library row, but firing a toast here gives
+     * users still on the PS5 (e.g. running ps5upload-engine in
+     * headless mode) a visible confirmation. Truncates to fit the
+     * 128-byte stack buffer for the snprintf — pop_notification
+     * itself caps at ~3 KiB. */
+    {
+        char toast[160];
+        snprintf(toast, sizeof(toast), "Mounted %s at %s%s",
+                 fstype, mount_point, read_only ? " (read-only)" : "");
+        pop_notification(toast);
+    }
+
     n = snprintf(resp, sizeof(resp),
                  "{\"mount_point\":\"%s\",\"dev_node\":\"%s\",\"fstype\":\"%s\","
-                 "\"source_image\":\"%s\"}",
-                 mount_point, devname, fstype, image_path);
+                 "\"source_image\":\"%s\",\"read_only\":%d}",
+                 mount_point, devname, fstype, image_path,
+                 read_only ? 1 : 0);
     if (n < 0 || (size_t)n >= sizeof(resp)) n = 0;
     return send_frame(client_fd, FTX2_FRAME_FS_MOUNT_ACK, 0, trace_id,
                       resp, (uint64_t)n);
@@ -5898,6 +6314,13 @@ static int handle_fs_unmount(runtime_state_t *state, int client_fd,
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);
+
+    {
+        char toast[160];
+        snprintf(toast, sizeof(toast), "Unmounted %s", mount_point);
+        pop_notification(toast);
+    }
+
     return send_frame(client_fd, FTX2_FRAME_FS_UNMOUNT_ACK, 0, trace_id,
                       NULL, 0);
 }
@@ -5921,26 +6344,27 @@ static int handle_app_register(runtime_state_t *state, int client_fd,
     int used_nullfs = 0;
     const char *err = NULL;
     (void)body_len;
-    (void)src_path; (void)title_id; (void)title_name; (void)title_name_esc;
-    (void)resp; (void)used_nullfs; (void)err; (void)request_body;
     if (!state) return -1;
-    /* Gated off — Sony's sceAppInstUtilAppInstallTitleDir wedges the
-     * payload from a standalone userland context on firmware 9.60.
-     * Confirmed by hardware testing 2026-04-19: the thread enters
-     * Sony's kernel stub and never returns, regardless of how we
-     * resolve the symbol (link-time, dlopen + dlsym, or authid-
-     * elevated). The caller-identity check is process-based, not
-     * credential-based. Users install titles via PS5-side tools
-     * (ShadowMountPlus, Itemzflow, etaHEN) which inject into
-     * SceShellUI where those APIs behave normally. */
-    {
-        static const char e[] = "install_disabled_use_external_tool";
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          e, (uint64_t)(sizeof(e) - 1));
-    }
+    /* APP_REGISTER goes through register.c::register_title_from_path,
+     * which mutexes every Sony install/launch/uninstall call via
+     * g_register_lock. Compile-time linkage of the Sony sprxes (see
+     * Makefile) ensures rtld initialises sprx state via DT_NEEDED
+     * before main runs — earlier dlopen-at-runtime paths wedged on
+     * FW 9.60 because the sprx init order was wrong.
+     *
+     * If a single call still hangs on a future firmware, the mutex
+     * keeps the blast radius to this code path; the rest of the
+     * payload (FS, HW, transfer, takeover) keeps serving. */
+    int patch_drm_type = 0;
     if (request_body) {
         extract_json_string_field(request_body, "src_path",
                                   src_path, sizeof(src_path));
+        /* Numeric 1 means "yes, patch param.json's
+         * applicationDrmType to standard before staging". 0 or
+         * absent leaves the source untouched. Same JSON-uint
+         * helper as fs_mount's read_only flag. */
+        patch_drm_type =
+            (extract_json_uint64_field(request_body, "patch_drm_type") != 0) ? 1 : 0;
     }
     if (src_path[0] == '\0') {
         return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
@@ -5950,8 +6374,8 @@ static int handle_app_register(runtime_state_t *state, int client_fd,
         return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
                           "register_src_path_not_allowed", 29);
     }
-    if (register_title_from_path(src_path, title_id, title_name,
-                                  &used_nullfs, &err) != 0) {
+    if (register_title_from_path(src_path, patch_drm_type, title_id,
+                                  title_name, &used_nullfs, &err) != 0) {
         const char *reason = err ? err : "register_failed";
         return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
                           reason, (uint64_t)strlen(reason));
@@ -5969,6 +6393,14 @@ static int handle_app_register(runtime_state_t *state, int client_fd,
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);
+
+    {
+        char toast[160];
+        snprintf(toast, sizeof(toast), "Registered %s (%s)",
+                 title_name[0] ? title_name : title_id, title_id);
+        pop_notification(toast);
+    }
+
     return send_frame(client_fd, FTX2_FRAME_APP_REGISTER_ACK, 0, trace_id,
                       resp, (uint64_t)n);
 }
@@ -5979,14 +6411,13 @@ static int handle_app_unregister(runtime_state_t *state, int client_fd,
     char title_id[REGISTER_MAX_TITLE_ID] = {0};
     const char *err = NULL;
     (void)body_len;
-    (void)title_id; (void)err; (void)request_body;
     if (!state) return -1;
-    /* Gated off — same Sony kernel-stub wedge as APP_REGISTER. */
-    {
-        static const char e[] = "uninstall_disabled_use_external_tool";
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          e, (uint64_t)(sizeof(e) - 1));
-    }
+    /* Same gate-lifted rationale as APP_REGISTER above — relies on the
+     * compile-time Sony-sprx linkage in the Makefile for proper sprx
+     * init before main(). The underlying register.c::unregister_title
+     * runs under g_register_lock and degrades cleanly when Sony's
+     * sceAppInstUtilAppUnInstall is missing on a firmware (the nullfs
+     * teardown alone is enough to remove the XMB tile). */
     if (request_body) {
         extract_json_string_field(request_body, "title_id",
                                   title_id, sizeof(title_id));
@@ -6003,6 +6434,13 @@ static int handle_app_unregister(runtime_state_t *state, int client_fd,
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);
+
+    {
+        char toast[160];
+        snprintf(toast, sizeof(toast), "Unregistered %s", title_id);
+        pop_notification(toast);
+    }
+
     return send_frame(client_fd, FTX2_FRAME_APP_UNREGISTER_ACK, 0,
                       trace_id, NULL, 0);
 }
@@ -6013,17 +6451,16 @@ static int handle_app_launch(runtime_state_t *state, int client_fd,
     char title_id[REGISTER_MAX_TITLE_ID] = {0};
     const char *err = NULL;
     (void)body_len;
-    (void)title_id; (void)err; (void)request_body;
     if (!state) return -1;
-    /* Gated off — sceLncUtilLaunchApp AND sceSystemServiceLaunchApp
-     * both wedge from our process on firmware 9.60 (hardware-verified
-     * 2026-04-19). Users launch titles from XMB directly, or via a
-     * PS5-side launcher (etaHEN, Itemzflow, ShadowMountPlus). */
-    {
-        static const char e[] = "launch_disabled_use_xmb_directly";
-        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          e, (uint64_t)(sizeof(e) - 1));
-    }
+    /* APP_LAUNCH calls register.c::launch_title which runs the
+     * triple-strategy chain (sceLncUtilLaunchApp with populated
+     * 24-byte LncAppParam, then NULL param, then
+     * sceSystemServiceLaunchApp) under g_register_lock. Relies on
+     * compile-time Sony-sprx linkage in the Makefile for proper
+     * sprx init before main. The primary path actually used on
+     * FW 9.60 is the ShellUI ptrace RPC inside launch_title — this
+     * direct-call chain is the fallback for firmwares where the
+     * caller-pid check is looser. */
     if (request_body) {
         extract_json_string_field(request_body, "title_id",
                                   title_id, sizeof(title_id));
@@ -6040,6 +6477,13 @@ static int handle_app_launch(runtime_state_t *state, int client_fd,
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);
+
+    {
+        char toast[160];
+        snprintf(toast, sizeof(toast), "Launching %s", title_id);
+        pop_notification(toast);
+    }
+
     return send_frame(client_fd, FTX2_FRAME_APP_LAUNCH_ACK, 0,
                       trace_id, NULL, 0);
 }
@@ -6117,6 +6561,11 @@ static int handle_hw_temps(runtime_state_t *state, int client_fd, uint64_t trace
 static int handle_hw_power(runtime_state_t *state, int client_fd, uint64_t trace_id) {
     return handle_hw_text_op(state, client_fd, trace_id, hw_power_get_text,
                               FTX2_FRAME_HW_POWER_ACK, "hw_power_failed");
+}
+
+static int handle_hw_storage(runtime_state_t *state, int client_fd, uint64_t trace_id) {
+    return handle_hw_text_op(state, client_fd, trace_id, hw_storage_get_text,
+                              FTX2_FRAME_HW_STORAGE_ACK, "hw_storage_failed");
 }
 
 /* Parse body as "NN" (ASCII decimal). Accepts an empty-body shortcut
@@ -6613,6 +7062,14 @@ static int handle_binary_frame(runtime_state_t *state, int client_fd,
         snap_last_seq       = state->last_tx_seq;
         snap_recovered      = state->recovered_transactions;
         pthread_mutex_unlock(&state->state_mtx);
+        /* Surface ucred elevation result so the client UI can warn
+         * "load kstuff first" when elevation == false without
+         * having to call a Sony API that might wedge. The pid -1
+         * value used in main()'s call means "current process";
+         * 0 from the kernel = elevation succeeded.
+         * `g_ucred_elevation_rc` is defined in main.c. */
+        extern int g_ucred_elevation_rc;
+        const int ucred_elevated = (g_ucred_elevation_rc == 0) ? 1 : 0;
         len = snprintf(body, sizeof(body),
                        "{\"version\":\"%s\","
                        "\"ps5_kernel\":\"%s\","
@@ -6620,7 +7077,8 @@ static int handle_binary_frame(runtime_state_t *state, int client_fd,
                        "\"shutdown\":%d,\"startup_reason\":%d,"
                        "\"takeover_requested\":%d,\"started_at_unix\":%llu,"
                        "\"command_count\":%llu,\"active_transactions\":%llu,"
-                       "\"last_tx_seq\":%llu,\"recovered_transactions\":%llu}",
+                       "\"last_tx_seq\":%llu,\"recovered_transactions\":%llu,"
+                       "\"ucred_elevated\":%s}",
                        PS5UPLOAD2_VERSION,
                        kernel_version_esc,
                        (unsigned long long)snap_instance_id,
@@ -6632,7 +7090,8 @@ static int handle_binary_frame(runtime_state_t *state, int client_fd,
                        (unsigned long long)snap_command_count,
                        (unsigned long long)snap_active_tx,
                        (unsigned long long)snap_last_seq,
-                       (unsigned long long)snap_recovered);
+                       (unsigned long long)snap_recovered,
+                       ucred_elevated ? "true" : "false");
         /* Truncation-safe: if the fields ever grow past `body`, clamp
          * rather than emit a body_len that drives send_frame to read
          * past the stack buffer. The JSON is still valid-on-arrival
@@ -7060,6 +7519,9 @@ abort_done:
     }
     if (hdr.frame_type == FTX2_FRAME_HW_POWER) {
         return handle_hw_power(state, client_fd, hdr.trace_id);
+    }
+    if (hdr.frame_type == FTX2_FRAME_HW_STORAGE) {
+        return handle_hw_storage(state, client_fd, hdr.trace_id);
     }
     if (hdr.frame_type == FTX2_FRAME_HW_SET_FAN_THRESHOLD) {
         return handle_hw_set_fan_threshold(state, client_fd, hdr.trace_id,

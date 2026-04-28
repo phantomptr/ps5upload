@@ -5,7 +5,7 @@
  * UI tell apart an old payload still running from a build that includes
  * a particular fix, without having to boot the console. Keep in sync
  * with the desktop app's package.json during releases. */
-#define PS5UPLOAD2_VERSION "2.2.25"
+#define PS5UPLOAD2_VERSION "2.2.26-dev"
 /* Author credit — embedded in the startup toast so anyone looking at
  * the console screen knows who wrote the software that just loaded.
  * Kept separate from VERSION so release scripts can bump the version

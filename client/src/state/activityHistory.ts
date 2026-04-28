@@ -36,6 +36,9 @@ export type ActivityKind =
   | "library-chmod"
   | "library-mount"
   | "library-unmount"
+  | "library-launch"
+  | "library-register"
+  | "library-unregister"
   | "library-download";
 
 export type ActivityOutcome = "running" | "done" | "failed" | "stopped";

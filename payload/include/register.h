@@ -58,10 +58,24 @@
  * *out_used_nullfs is set to 1 (always 1 today; reserved for future
  * alternate pipelines).
  *
+ * `patch_drm_type` (added in 2.2.26) optionally rewrites the
+ * source's `sce_sys/param.json` so `applicationDrmType` is set to
+ * `"standard"`. Some PSN-extracted dumps ship with the field set to
+ * `"PSN"` or `"disc"`, which Sony's launcher rejects on a userland
+ * dump. INVASIVE — modifies the user's source file in place — so
+ * it's opt-in. Pass 0 to leave `param.json` alone, 1 to patch when
+ * needed. The patch only writes when the existing value differs
+ * from `"standard"`; if the param.json is already correct, no I/O
+ * is done. Mounted images must be RW; on a read-only mount the
+ * write fails and the function returns the
+ * `register_drm_patch_failed` error, leaving the rest of the
+ * registration aborted before any state is created.
+ *
  * Idempotent: calling twice with the same src_path is safe. Sony's
  * installer returns 0x80990002 ("restored") which we normalise to
  * success. */
 int register_title_from_path(const char *src_path,
+                             int patch_drm_type,
                              char *out_title_id,
                              char *out_title_name,
                              int *out_used_nullfs,

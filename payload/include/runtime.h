@@ -153,4 +153,12 @@ int runtime_server_loop(runtime_state_t *state);
 void *runtime_mgmt_server_loop(void *state_ptr);
 void runtime_cleanup_listener(runtime_state_t *state);
 
+/* Pop a system toast on the PS5 UI (top-right corner). Defined in
+ * main.c. Used by mount/unmount/register/launch handlers in
+ * runtime.c so users see status on the PS5 even when the desktop
+ * client is closed. Empty/NULL message is a no-op. The kernel API
+ * caps message length at ~3 KiB internally, but in practice we
+ * format ~100-character strings. */
+void pop_notification(const char *message);
+
 #endif

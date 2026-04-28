@@ -8,6 +8,14 @@ const skipParts = new Set([
   ".git",
   "node_modules",
   "client/node_modules",
+  // desktop/ is a stale node_modules-only stub that predates the
+  // client/src-tauri layout. Walking it adds ~40k file syntax-checks
+  // for nothing — every file there is third-party. Drop it from
+  // the walk so check-scripts finishes in seconds instead of
+  // minutes. Leave the directory itself for the user to clean up
+  // separately if they want.
+  "desktop",
+  "desktop/node_modules",
   "target",
   "engine/target",
   "client/src-tauri/target",

@@ -102,7 +102,8 @@ fn concurrent_hw_requests_dont_race() {
 #[test]
 fn register_then_launch_round_trip() {
     let srv = MockServer::start();
-    let reg = app_register(&srv.addr, "/data/homebrew/test-game").expect("register should succeed");
+    let reg = app_register(&srv.addr, "/data/homebrew/test-game", false)
+        .expect("register should succeed");
     // Mock derives title_id from basename: first 5 alphanumeric chars.
     assert!(reg.title_id.starts_with("PPSA"));
     assert!(reg.used_nullfs);
@@ -114,7 +115,7 @@ fn register_then_launch_round_trip() {
 #[test]
 fn register_rejects_empty_path() {
     let srv = MockServer::start();
-    let err = app_register(&srv.addr, "").expect_err("empty path must fail");
+    let err = app_register(&srv.addr, "", false).expect_err("empty path must fail");
     assert!(
         err.to_string().contains("register_src_path_missing"),
         "error should surface payload-side reason: {err}"

@@ -578,6 +578,145 @@ static int json_extract_string(const char *json, const char *key,
     return (i > 0) ? 0 : -1;
 }
 
+/* DRM-type patcher. Reads `<src>/sce_sys/param.json`, finds
+ * `"applicationDrmType":"<value>"`, and rewrites it to `"standard"`
+ * if it isn't already. Some PSN-extracted dumps land with
+ * `applicationDrmType` set to `"PSN"` or `"disc"`, and Sony's
+ * launcher refuses to run them with a DRM error. Setting the
+ * field to `"standard"` is the minimum-invasive adjustment that
+ * makes the dump bootable.
+ *
+ * Returns:
+ *   0   — file already had `"standard"` (no I/O), or patch applied.
+ *   -1  — read/parse/write failure. *err_out is populated with a
+ *         short reason string callers can forward.
+ *
+ * Bounds: rejects param.json larger than 1 MiB (no real game
+ * exceeds this — observed largest is ~30 KiB). Operates on a
+ * single in-memory buffer to keep the patch atomic-ish; the write
+ * is a single fopen + fwrite + fclose cycle, so a crash mid-write
+ * could truncate the file. We accept that risk because (a) this
+ * is opt-in, (b) param.json is small and re-extracted from the
+ * source dump, and (c) the alternative — temp file + rename —
+ * doesn't work on most PS5 mounted-image filesystems where rename
+ * across the mount boundary fails with EXDEV.
+ *
+ * The JSON edit is naive: find the key string, then the colon,
+ * then the two surrounding quotes. No real JSON parser —
+ * param.json's shape is stable enough that this works on every
+ * dump we've seen. */
+static int patch_drm_type_to_standard(const char *src_path,
+                                       const char **err_out) {
+    if (!src_path) {
+        if (err_out) *err_out = "register_drm_patch_invalid_args";
+        return -1;
+    }
+    char param_json_path[REG_MAX_PATH];
+    int n = snprintf(param_json_path, sizeof(param_json_path),
+                     "%s/sce_sys/param.json", src_path);
+    if (n < 0 || (size_t)n >= sizeof(param_json_path)) {
+        if (err_out) *err_out = "register_drm_patch_path_too_long";
+        return -1;
+    }
+    FILE *f = fopen(param_json_path, "rb");
+    if (!f) {
+        /* Some dumps use param.sfo only (binary, not JSON). Treat
+         * as a no-op rather than an error — if the launcher can
+         * read sfo at all it doesn't need the json patch. */
+        if (err_out) *err_out = NULL;
+        return 0;
+    }
+    if (fseek(f, 0, SEEK_END) != 0) {
+        fclose(f);
+        if (err_out) *err_out = "register_drm_patch_seek_failed";
+        return -1;
+    }
+    long len = ftell(f);
+    if (len <= 0 || len > 1024 * 1024) {
+        fclose(f);
+        if (err_out) *err_out = "register_drm_patch_size_unreasonable";
+        return -1;
+    }
+    rewind(f);
+    char *buf = (char *)malloc((size_t)len + 1);
+    if (!buf) {
+        fclose(f);
+        if (err_out) *err_out = "register_drm_patch_oom";
+        return -1;
+    }
+    size_t got = fread(buf, 1, (size_t)len, f);
+    fclose(f);
+    if (got != (size_t)len) {
+        free(buf);
+        if (err_out) *err_out = "register_drm_patch_read_short";
+        return -1;
+    }
+    buf[len] = '\0';
+
+    static const char KEY[] = "\"applicationDrmType\"";
+    char *key_pos = strstr(buf, KEY);
+    if (!key_pos) {
+        /* No applicationDrmType field at all — nothing to patch.
+         * Some homebrew dumps omit it entirely; the launcher
+         * defaults to "standard" in that case. */
+        free(buf);
+        if (err_out) *err_out = NULL;
+        return 0;
+    }
+    char *colon = strchr(key_pos + sizeof(KEY) - 1, ':');
+    char *q1 = colon ? strchr(colon, '"') : NULL;
+    char *q2 = q1 ? strchr(q1 + 1, '"') : NULL;
+    if (!q1 || !q2) {
+        free(buf);
+        if (err_out) *err_out = "register_drm_patch_value_malformed";
+        return -1;
+    }
+    /* Already "standard" — exit clean without writing. */
+    static const char STANDARD[] = "standard";
+    if ((size_t)(q2 - q1 - 1) == strlen(STANDARD) &&
+        strncmp(q1 + 1, STANDARD, strlen(STANDARD)) == 0) {
+        free(buf);
+        if (err_out) *err_out = NULL;
+        return 0;
+    }
+    /* Rewrite. Total new size = bytes-up-to-and-including-q1 +
+     * "standard" + bytes-from-q2-onward (including the closing
+     * quote and the trailing NUL). */
+    size_t prefix_len = (size_t)(q1 - buf) + 1; /* through opening quote */
+    size_t suffix_len = strlen(q2);             /* from closing quote inclusive */
+    size_t new_len = prefix_len + strlen(STANDARD) + suffix_len;
+    char *out = (char *)malloc(new_len + 1);
+    if (!out) {
+        free(buf);
+        if (err_out) *err_out = "register_drm_patch_oom";
+        return -1;
+    }
+    memcpy(out, buf, prefix_len);
+    memcpy(out + prefix_len, STANDARD, strlen(STANDARD));
+    memcpy(out + prefix_len + strlen(STANDARD), q2, suffix_len);
+    out[new_len] = '\0';
+    free(buf);
+
+    f = fopen(param_json_path, "wb");
+    if (!f) {
+        free(out);
+        /* Likely a read-only mount (RO image, system partition).
+         * Surface this distinctly so the UI can suggest remounting
+         * RW or unsetting the patch flag. */
+        if (err_out) *err_out = "register_drm_patch_write_open_failed";
+        return -1;
+    }
+    size_t written = fwrite(out, 1, new_len, f);
+    int close_rc = fclose(f);
+    free(out);
+    if (written != new_len || close_rc != 0) {
+        if (err_out) *err_out = "register_drm_patch_write_failed";
+        return -1;
+    }
+    if (err_out) *err_out = NULL;
+    return 0;
+}
+
 static int parse_title_from_param_json(const char *path,
                                         char *out_id, size_t id_cap,
                                         char *out_name, size_t name_cap) {
@@ -976,6 +1115,7 @@ int list_registered_titles_json(char *out_json,
 /* -- Public register / unregister / launch ----------------------------- */
 
 int register_title_from_path(const char *src_path,
+                             int patch_drm_type,
                              char *out_title_id,
                              char *out_title_name,
                              int *out_used_nullfs,
@@ -1023,6 +1163,24 @@ int register_title_from_path(const char *src_path,
         snprintf(probe, sizeof(probe), "%s/eboot.bin", src_path);
         if (!path_exists(probe)) {
             if (err_reason_out) *err_reason_out = "register_src_missing_eboot";
+            return -1;
+        }
+    }
+
+    /* 0c -- optional DRM-type patch. Runs AFTER pre-validation (so
+     * we don't write to a half-extracted source) but BEFORE the
+     * staging copies (so the COPY of param.json that lands in
+     * /user/app/<id>/sce_sys/ is the patched one). The launcher
+     * reads from the nullfs-bound source via /system_ex, so the
+     * source's param.json is what actually matters at launch time
+     * — but keeping the staged copy in sync prevents confusion if
+     * a future codepath reads from /user/app instead. */
+    if (patch_drm_type) {
+        const char *drm_err = NULL;
+        if (patch_drm_type_to_standard(src_path, &drm_err) != 0) {
+            if (err_reason_out) {
+                *err_reason_out = drm_err ? drm_err : "register_drm_patch_failed";
+            }
             return -1;
         }
     }
@@ -1196,10 +1354,9 @@ int unregister_title(const char *title_id, const char **err_reason_out) {
      * stub shares implementation internals with install (they touch
      * the same app.db row), so the same kernel-lock concerns apply. */
     if (g_reg.app_uninstall) {
-        /* Signature is (title_id, p1, p2). Sony's documentation on
-         * the trailing out-params is sparse; both NULL is consistent
-         * with what other scene tools (ShadowMountPlus, itemzflow)
-         * pass and returns successfully when the title exists. */
+        /* Signature is (title_id, p1, p2). The trailing out-params
+         * accept NULL — the call only needs the title_id and
+         * returns successfully when the title exists. */
         pthread_mutex_lock(&g_sony_api_mtx);
         (void)g_reg.app_uninstall(title_id, NULL, NULL);
         usleep(SONY_API_POST_SLEEP_US);
@@ -1217,12 +1374,55 @@ int register_browser_launch(void) {
     return (rc == 0) ? 0 : -1;
 }
 
+/* Forward declaration of the SceShellUI RPC layer. Defined in
+ * shellui_rpc.c; uses the ptrace remote-call mechanism in
+ * ptrace_remote.c. We call into ShellUI for launch because
+ * Sony's launcher does a caller-pid check that only ShellUI
+ * satisfies. */
+extern int shellui_rpc_init(void);
+extern int shellui_rpc_ready(void);
+extern int shellui_rpc_launch_app(const char *title_id);
+
 int launch_title(const char *title_id, const char **err_reason_out) {
     register_module_init();
     if (!title_id || !is_safe_component(title_id)) {
         if (err_reason_out) *err_reason_out = "launch_title_id_invalid";
         return -1;
     }
+
+    /* Primary path: route the call through SceShellUI via ptrace.
+     * Sony's launcher accepts the call when getpid() inside the
+     * stub matches ShellUI, which our ptrace remote-call provides
+     * by running the call on ShellUI's stack. Init is idempotent:
+     * the first call latches the resolved addresses, subsequent
+     * calls become no-ops.
+     *
+     * shellui_rpc_launch_app returns:
+     *   0   — Sony's launcher accepted the call (success).
+     *   >0  — Sony's launcher returned a real error code (title
+     *         not registered, no foreground user, etc.). We
+     *         report it directly rather than falling through to
+     *         the in-process call which would just produce a
+     *         less informative error.
+     *   -1  — the RPC machinery itself failed (couldn't attach
+     *         to ShellUI, symbol missing). Fall through to the
+     *         in-process direct calls below — those won't work
+     *         on firmwares enforcing the caller-pid check, but
+     *         they're the only fallback we have. */
+    (void)shellui_rpc_init();
+    if (shellui_rpc_ready()) {
+        int rc = shellui_rpc_launch_app(title_id);
+        if (rc == 0) return 0;
+        if (rc > 0) {
+            static __thread char reason_buf[64];
+            snprintf(reason_buf, sizeof(reason_buf),
+                     "launch_sony_error_0x%08x", (unsigned int)rc);
+            if (err_reason_out) *err_reason_out = reason_buf;
+            return -1;
+        }
+        /* rc == -1: machinery failed, fall through. */
+    }
+
     if (!g_reg.launch_app && !g_reg.launch_app_sys) {
         if (err_reason_out) *err_reason_out = "launch_service_unavailable";
         return -1;
@@ -1242,7 +1442,9 @@ int launch_title(const char *title_id, const char **err_reason_out) {
     if (g_reg.user_service_get_foreground_user) {
         (void)g_reg.user_service_get_foreground_user(&fg_user);
     }
-    (void)fg_user;  /* for future diagnostic surfacing */
+    /* fg_user is used by the launchApp param block below.
+     * LncAppParam.user_id needs to be the active console user, not
+     * 0. */
 
     int rc = -1;
     int tried_param = 0, tried_null = 0, tried_sys = 0;
@@ -1252,21 +1454,48 @@ int launch_title(const char *title_id, const char **err_reason_out) {
      * kernel stubs share locks and concurrent callers deadlock. */
     pthread_mutex_lock(&g_sony_api_mtx);
 
-    /* TEMP 2026-04-19: sceLncUtilLaunchApp has been observed to
-     * wedge in-kernel when called from our standalone payload on
-     * PS5 firmware 9.60 — the thread enters Sony's Lnc stub and
-     * never returns. Skip Lnc entirely and go straight to
-     * sceSystemServiceLaunchApp (different internal path). If the
-     * SystemService variant also wedges, neither approach works
-     * from our process context and we'll need SceShellUI injection
-     * instead. */
+    /* Triple-strategy launch chain. The "param" attempt uses the
+     * canonical 24-byte LncAppParam (size, user_id, app_opt,
+     * crash_report, check_flag), with user_id populated from the
+     * foreground user. Sony's launcher rejects user_id=0 with
+     * "no foreground user".
+     *
+     *   1. sceLncUtilLaunchApp(title_id, NULL, &param)
+     *      — populated 24-byte struct.
+     *   2. sceLncUtilLaunchApp(title_id, NULL, NULL)
+     *      — NULL-param fallback for firmwares where the
+     *        launcher rejects any param block.
+     *   3. sceSystemServiceLaunchApp(title_id, NULL, NULL)
+     *      — different internal path; works on some firmwares
+     *        where Lnc returns SCE_LNC_UTIL_ERROR_NOT_FOUND. */
+    if (!launched && g_reg.launch_app) {
+        tried_param = 1;
+        struct lnc_app_param {
+            uint32_t sz;
+            int32_t  user_id;
+            uint32_t app_opt;
+            uint64_t crash_report;
+            uint64_t check_flag;
+        } __attribute__((packed)) param;
+        memset(&param, 0, sizeof(param));
+        param.sz = (uint32_t)sizeof(param);
+        param.user_id = fg_user;
+        rc = g_reg.launch_app(title_id, NULL, (void *)&param);
+        usleep(SONY_API_POST_SLEEP_US);
+        if (rc == 0) launched = 1;
+    }
+    if (!launched && g_reg.launch_app) {
+        tried_null = 1;
+        rc = g_reg.launch_app(title_id, NULL, NULL);
+        usleep(SONY_API_POST_SLEEP_US);
+        if (rc == 0) launched = 1;
+    }
     if (!launched && g_reg.launch_app_sys) {
         tried_sys = 1;
         rc = g_reg.launch_app_sys(title_id, NULL, NULL);
         usleep(SONY_API_POST_SLEEP_US);
         if (rc == 0) launched = 1;
     }
-    (void)tried_param; (void)tried_null;
 
     pthread_mutex_unlock(&g_sony_api_mtx);
 

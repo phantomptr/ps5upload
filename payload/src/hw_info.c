@@ -28,6 +28,7 @@
 #include <dlfcn.h>
 
 #include "hw_info.h"
+#include "shellui_rpc.h"
 
 /* ── Fan control (/dev/icc_fan) ──────────────────────────────────
  *
@@ -257,39 +258,66 @@ int hw_temps_get_text(char *out, size_t out_cap, size_t *out_written,
         cpu_freq_mhz = g_temps_cache.cpu_freq_mhz;
         power_mw     = g_temps_cache.power_mw;
     } else {
-        /* Sony sensor APIs stay DISABLED.
+        /* Sony sensor APIs are now routed through the SceShellUI
+         * RPC layer — see payload/src/shellui_rpc.c. The direct
+         * calls (g_hw.cpu_temp etc.) wedge from a userland payload
+         * on FW 9.60 because Sony's stubs check the caller pid
+         * against SceShellUI; the RPC layer attaches via ptrace,
+         * runs the same call on ShellUI's stack, returns the
+         * result. ShellUI's pid IS what Sony wants, so the call
+         * returns normally.
          *
-         * On firmware 9.60, calling `sceKernelGetCpuTemperature`,
-         * `sceKernelGetSocSensorTemperature`, `sceKernelGetCpuFrequency`,
-         * or `sceKernelGetSocPowerConsumption` from a standard userland
-         * payload wedges the calling thread indefinitely and then
-         * crashes the whole payload. Every one of them resolves to a
-         * non-NULL address via RTLD_DEFAULT, so the symbols exist --
-         * but the calls themselves hang or fault on the credential
-         * check in Sony's kernel stubs.
-         *
-         * Self-elevation via kernel_set_ucred_authid was attempted and
-         * didn't land cleanly on this loader chain, so we fall back to
-         * sysctl-only reads and leave the Sony APIs unused. Users see
-         * a partial Hardware tab (model / serial / uptime / CPU freq
-         * from sysctl) rather than a full crash.
-         *
-         * These (void) casts keep the resolved-but-unused symbols from
-         * drawing -Wunused warnings. */
+         * Init is idempotent — the first call latches the resolved
+         * addresses, subsequent calls become no-ops. The
+         * field-marked addresses on a firmware that doesn't export
+         * a particular symbol stay 0; the RPC returns -1 and the
+         * field reads as 0 in the UI. */
+        (void)shellui_rpc_init();
+        if (shellui_rpc_ready()) {
+            int t = 0;
+            if (shellui_rpc_get_cpu_temp(&t) == 0 && t > 0 && t < 200) {
+                cpu_temp = t;
+            }
+            t = 0;
+            if (shellui_rpc_get_soc_temp(&t) == 0 && t > 0 && t < 200) {
+                soc_temp = t;
+            }
+            long hz = 0;
+            if (shellui_rpc_get_cpu_freq_hz(&hz) == 0 && hz > 0) {
+                cpu_freq_mhz = hz / (1000L * 1000L);
+            }
+        }
+        /* Suppress unused-symbol warnings — these dlsym pointers
+         * remain resolved as a fallback for firmwares where direct
+         * calls would have worked. */
         (void)g_hw.cpu_temp;
         (void)g_hw.soc_temp;
         (void)g_hw.cpu_freq;
         (void)g_hw.soc_power;
-        (void)g_last_power_read;
-        (void)g_last_power_mw;
 
-        /* CPU frequency via kernel TSC — no Sony API needed. */
+        /* CPU frequency via kernel TSC — fallback when neither RPC
+         * nor direct call returned. */
         if (cpu_freq_mhz <= 0) {
             uint64_t tsc = 0;
             if (sysctl_uint64("machdep.tsc_freq", &tsc) == 0 && tsc > 0) {
                 cpu_freq_mhz = (long)(tsc / 1000000ULL);
             }
         }
+
+        /* SoC power — routed through the same RPC. 5-second
+         * file-scope throttle on top of the 1-second sensor cache
+         * because each RPC call is a full ptrace attach/detach
+         * round-trip (~tens of ms) which is heavier than the temp
+         * reads. */
+        if (shellui_rpc_ready() && (now - g_last_power_read) >= 5) {
+            uint32_t pw = 0;
+            if (shellui_rpc_get_soc_power_mw(&pw) == 0 && pw < 500000u) {
+                g_last_power_mw = pw;
+            }
+            g_last_power_read = now;
+        }
+        power_mw = g_last_power_mw;
+        (void)g_hw.soc_power;
 
         /* Sysctl-based temperature fallbacks. None of these are
          * documented to work on PS5 specifically; if any returns
@@ -369,6 +397,96 @@ int hw_power_get_text(char *out, size_t out_cap, size_t *out_written,
         (unsigned long long)minutes);
     if (n < 0 || (size_t)n >= out_cap) {
         if (err_reason_out) *err_reason_out = "hw_power_format_failed";
+        return -1;
+    }
+    if (out_written) *out_written = (size_t)n;
+    return 0;
+}
+
+/* ── HW_STORAGE: "Console Storage" aggregate ─────────────────────
+ *
+ * Matches PS5 Settings → Storage → Console Storage:
+ *   Total = (/user total - /user reserved) + /system_data total + /system_ex total
+ *   Free  = /user bavail + /system_data bavail + /system_ex bavail
+ *
+ * `bavail` is what the kernel reports as "available to non-root"
+ * users; `bfree` is the raw free count. The difference is the
+ * "reserved" pool the filesystem keeps so root can still write
+ * even when bavail hits zero. Counting reserved as displayable
+ * total but not as free matches what Settings shows.
+ *
+ * Each statfs failure is non-fatal — the missing partition just
+ * contributes zero. /system_ex may not be mounted on some firmware
+ * variants and that's fine; the user still gets a /user-only
+ * total which is the bulk of the storage anyway. */
+#include <sys/mount.h>
+
+static void storage_read_part(const char *path,
+                               uint64_t *total_out, uint64_t *bfree_out,
+                               uint64_t *bavail_out) {
+    *total_out = *bfree_out = *bavail_out = 0;
+    struct statfs sf;
+    if (statfs(path, &sf) != 0) return;
+    uint64_t bs = (uint64_t)sf.f_bsize;
+    *total_out  = (uint64_t)sf.f_blocks * bs;
+    *bfree_out  = (uint64_t)sf.f_bfree  * bs;
+    /* f_bavail can underflow on a near-full filesystem (FreeBSD
+     * reports bavail as a signed 64; bfree - bavail = reserved).
+     * Treat any value <= 0 as "use bfree" so we don't surface a
+     * negative free count. */
+    *bavail_out = (sf.f_bavail > 0) ? (uint64_t)sf.f_bavail * bs : *bfree_out;
+}
+
+int hw_storage_get_text(char *out, size_t out_cap, size_t *out_written,
+                         const char **err_reason_out) {
+    if (!out || out_cap < 256) {
+        if (err_reason_out) *err_reason_out = "hw_storage_buffer_too_small";
+        return -1;
+    }
+
+    uint64_t u_total = 0, u_bfree = 0, u_bavail = 0;
+    storage_read_part("/user", &u_total, &u_bfree, &u_bavail);
+    /* Reserved = bfree - bavail (the slice the FS keeps for root).
+     * Used for display: total - reserved is what Settings calls
+     * "available capacity". */
+    uint64_t u_reserved = (u_bfree > u_bavail) ? (u_bfree - u_bavail) : 0;
+    uint64_t u_displayable_total = (u_total > u_reserved) ? (u_total - u_reserved) : u_total;
+
+    uint64_t sd_total = 0, sd_bfree = 0, sd_bavail = 0;
+    storage_read_part("/system_data", &sd_total, &sd_bfree, &sd_bavail);
+
+    uint64_t sx_total = 0, sx_bfree = 0, sx_bavail = 0;
+    storage_read_part("/system_ex", &sx_total, &sx_bfree, &sx_bavail);
+
+    uint64_t total_bytes = u_displayable_total + sd_total + sx_total;
+    uint64_t free_bytes  = u_bavail + sd_bavail + sx_bavail;
+    uint64_t used_bytes  = (total_bytes > free_bytes) ? (total_bytes - free_bytes) : 0;
+
+    int n = snprintf(out, out_cap,
+        "total_bytes=%llu\n"
+        "free_bytes=%llu\n"
+        "used_bytes=%llu\n"
+        "reserved_bytes=%llu\n"
+        "user_total_bytes=%llu\n"
+        "user_free_bytes=%llu\n"
+        "user_reserved_bytes=%llu\n"
+        "system_data_total_bytes=%llu\n"
+        "system_data_free_bytes=%llu\n"
+        "system_ex_total_bytes=%llu\n"
+        "system_ex_free_bytes=%llu\n",
+        (unsigned long long)total_bytes,
+        (unsigned long long)free_bytes,
+        (unsigned long long)used_bytes,
+        (unsigned long long)u_reserved,
+        (unsigned long long)u_total,
+        (unsigned long long)u_bavail,
+        (unsigned long long)u_reserved,
+        (unsigned long long)sd_total,
+        (unsigned long long)sd_bavail,
+        (unsigned long long)sx_total,
+        (unsigned long long)sx_bavail);
+    if (n < 0 || (size_t)n >= out_cap) {
+        if (err_reason_out) *err_reason_out = "hw_storage_format_failed";
         return -1;
     }
     if (out_written) *out_written = (size_t)n;

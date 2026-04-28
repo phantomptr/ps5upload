@@ -339,6 +339,12 @@ pub struct FsMountReq {
     /// (`/data`, `/mnt/ext*`, `/mnt/usb*`, `/mnt/ps5upload/*`).
     #[serde(default)]
     pub mount_point: Option<String>,
+    /// Mount the image read-only. New in 2.2.26. Default false (RW).
+    /// When true, payload selects the RO LVD attach flag and the RO
+    /// nmount third-arg flag (UFS magic 0x10000001 / MNT_RDONLY for
+    /// exfatfs and pfs).
+    #[serde(default)]
+    pub read_only: Option<bool>,
 }
 
 #[tauri::command]
@@ -352,6 +358,7 @@ pub async fn ps5_fs_mount(req: FsMountReq) -> Result<JsonValue, String> {
             "image_path": req.image_path,
             "mount_name": req.mount_name,
             "mount_point": req.mount_point,
+            "read_only": req.read_only,
         }),
     )
     .await
@@ -361,6 +368,83 @@ pub async fn ps5_fs_mount(req: FsMountReq) -> Result<JsonValue, String> {
 pub struct FsUnmountReq {
     pub addr: Option<String>,
     pub mount_point: String,
+}
+
+/// Launch a registered title (re-exposed in 2.2.26). Payload-side
+/// `launch_title` runs the triple-strategy chain
+/// (`sceLncUtilLaunchApp` zeroed-param → NULL-param →
+/// `sceSystemServiceLaunchApp`); errors here surface the composite
+/// reason from that chain so the user can tell whether it was a
+/// title-not-found or a kernel-side wedge.
+#[derive(serde::Deserialize)]
+pub struct AppLaunchReq {
+    pub addr: Option<String>,
+    pub title_id: String,
+}
+
+#[tauri::command]
+pub async fn ps5_app_launch(req: AppLaunchReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/ps5/app/launch");
+    post_json(
+        &url,
+        &serde_json::json!({
+            "addr": req.addr,
+            "title_id": req.title_id,
+        }),
+    )
+    .await
+}
+
+/// Stage + register a game folder so it appears in the PS5 XMB
+/// (re-exposed in 2.2.26). `src_path` is the directory that contains
+/// `sce_sys/param.json` or `param.sfo` — works for direct folders
+/// AND content under a mounted `/mnt/ps5upload/<name>/`. The payload
+/// reports `{title_id, title_name, used_nullfs}` on the way back.
+#[derive(serde::Deserialize)]
+pub struct AppRegisterReq {
+    pub addr: Option<String>,
+    pub src_path: String,
+    /// 2.2.26 opt-in DRM-type patcher.
+    pub patch_drm_type: Option<bool>,
+}
+
+#[tauri::command]
+pub async fn ps5_app_register(req: AppRegisterReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/ps5/app/register");
+    post_json(
+        &url,
+        &serde_json::json!({
+            "addr": req.addr,
+            "src_path": req.src_path,
+            "patch_drm_type": req.patch_drm_type,
+        }),
+    )
+    .await
+}
+
+/// Reverse of `app_register`. Succeeds when the nullfs at
+/// `/system_ex/app/<title_id>` is fully torn down, even if the Sony
+/// AppUninstall API isn't available on the firmware.
+#[derive(serde::Deserialize)]
+pub struct AppUnregisterReq {
+    pub addr: Option<String>,
+    pub title_id: String,
+}
+
+#[tauri::command]
+pub async fn ps5_app_unregister(req: AppUnregisterReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/ps5/app/unregister");
+    post_json(
+        &url,
+        &serde_json::json!({
+            "addr": req.addr,
+            "title_id": req.title_id,
+        }),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -428,6 +512,15 @@ pub async fn ps5_hw_temps(addr: Option<String>) -> Result<JsonValue, String> {
 #[tauri::command]
 pub async fn ps5_hw_power(addr: Option<String>) -> Result<JsonValue, String> {
     get_json(&addr_url("/api/ps5/hw/power", addr.as_deref())).await
+}
+
+/// "Console Storage" aggregate matching what PS5 Settings shows
+/// (added in 2.2.26). Returns total/free/used/reserved across
+/// `/user effective + /system_data + /system_ex` plus per-partition
+/// breakdown.
+#[tauri::command]
+pub async fn ps5_hw_storage(addr: Option<String>) -> Result<JsonValue, String> {
+    get_json(&addr_url("/api/ps5/hw/storage", addr.as_deref())).await
 }
 
 /// Write the PS5 fan-turbo threshold. `threshold_c` is clamped on the

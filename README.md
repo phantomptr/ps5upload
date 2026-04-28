@@ -256,14 +256,44 @@ obscure and above 12.70 is future work.
   not for authentication — we don't recommend exposing an
   exploited PS5 to the open Internet.
 
-**Q: The Library tab doesn't have Install / Run buttons anymore —
-where'd they go?**
-* Sony's `sceAppInstUtil*` and `sceLncUtilLaunchApp` APIs wedge
-  in-kernel when called from a standalone userland payload on
-  firmware 9.60. Install / Run / Uninstall have been re-gated out
-  of the UI on purpose. Install PKGs with a dedicated PS5-side
-  installer (send it via **Connection → Send payload**) and launch
-  game dumps straight from the PS5's XMB.
+**Q: How do I install / launch a game from the Library tab?**
+* The 2.2.26 Library row exposes **Mount** for `.exfat` / `.ffpkg` /
+  `.ffpfs` images plus **Register** / **Register (patch DRM)** /
+  **Launch** / **Unregister** buttons on the games inside.
+* **Mount** is hardware-validated on FW 9.60 — a 76 GiB UFS
+  `.ffpkg` mounts on `/dev/lvd1`, appears in Volumes with the
+  correct `source_image`, and unmounts cleanly. The new round's
+  payload uses compile-time `-lSce*` linkage so the rtld
+  initialises the Sony sprx state via `DT_NEEDED` before main()
+  runs.
+* **Register** is hardware-validated: pointing it at a folder
+  game with `eboot.bin` + `sce_sys/param.json` succeeds end to
+  end — `sceAppInstUtilAppInstallTitleDir` returns 0, the title
+  appears in `app.db` with the correct title name, and a nullfs
+  bind is installed at `/system_ex/app/<title_id>`. Idempotent —
+  re-registering the same path returns the same result.
+* **Register (patch DRM)** rewrites the source's
+  `sce_sys/param.json`'s `applicationDrmType` to `"standard"`
+  before staging — needed for PSN-extracted dumps that ship with
+  `"PSN"` or `"disc"`. Modifies the source file in place; only
+  use when a normal Register fails with a DRM error.
+* **Launch** routes `sceLncUtilLaunchApp` through a ptrace RPC
+  into `SceShellUI` so Sony's `getpid() == SceShellUI.pid`
+  caller-context check passes natively. Hardware-validated on
+  FW 9.60: hitting Launch on a registered title actually starts
+  the game (SoC power draw confirms the title comes up). Falls
+  back to a direct call when ShellUI RPC isn't available.
+* **Listing inside an active mount** (`/mnt/ps5upload/<name>/...`)
+  is gated by the PS5 sandbox / LVD mount permission set rather
+  than payload privilege. We re-check after every credential
+  elevation; treat "ENOTDIR descending into a mount" as
+  expected for now. Other PS5-side tools see the mount via
+  `/mnt/ps5upload/`, and the source path is recorded in our
+  tracker so reconcile-on-next-boot keeps state consistent.
+* CPU/SoC temperature and SoC power readings come back live on
+  FW 9.60 via the same ShellUI RPC path. The Hardware tab
+  refreshes every 5 s; a brief `—` means the most recent RPC
+  didn't complete in time and the next tick will refresh.
 
 **Q: "No writable storage found"?**
 * The tool blocks writes to read-only system partitions. If you

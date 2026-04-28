@@ -83,7 +83,11 @@ pub fn run() {
             commands::ps5_hw_info,
             commands::ps5_hw_temps,
             commands::ps5_hw_power,
+            commands::ps5_hw_storage,
             commands::ps5_hw_set_fan_threshold,
+            commands::ps5_app_launch,
+            commands::ps5_app_register,
+            commands::ps5_app_unregister,
             commands::job_status,
             commands::engine_logs_tail,
             // ── Scene-tool integration ──────────────────────────────

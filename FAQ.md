@@ -339,14 +339,32 @@ The payload may have wedged on a Sony API call. Recovery:
 
 **Q: Why don't I see CPU/SoC temperatures in the Hardware tab?**
 Sony's sensor APIs (`sceKernelGetCpuTemperature`,
-`sceKernelGetSocSensorTemperature`) only behave safely when called
-from inside the PS5's own ShellUI process. A standalone userland
-payload like ours hits a different code path in the kernel stubs
-and the handler thread wedges — not fixable from our side without
-turning ps5upload into a ShellUI hook, which is out of scope for
-this release. Everything else on the Hardware tab (model, serial,
-RAM, CPU count, uptime, CPU frequency, fan threshold) comes from
-APIs that work from any process and is unaffected.
+`sceKernelGetSocSensorTemperature`,
+`sceKernelGetSocPowerConsumption`) only respond when the caller
+process is `SceShellUI`. Earlier 2.2.x payloads called them
+from our own process and got nothing back regardless of how we
+linked or what credentials we elevated to. Since 2.2.26 the
+payload routes each sensor read through a ptrace RPC into
+`SceShellUI` (PT_ATTACH → write registers → drop an `int3`
+return-trap → PT_CONTINUE → read RAX → PT_DETACH), satisfying
+the caller-context check natively. Hardware-validated on FW
+9.60 / CFI-7019 — readings come back live (CPU 35°C, SoC
+33°C, SoC power 32 mW idle). A reading that briefly shows
+`—` means the most recent RPC didn't finish in time; the
+next 5 s tick refreshes it.
+
+**Q: Why doesn't Launch from the Library tab actually start the game?**
+It does, on every firmware we've validated. Register
+(`sceAppInstUtilAppInstallTitleDir`) runs from our own process
+because the full credential jailbreak we apply at startup
+satisfies its caller-context check. Launch
+(`sceLncUtilLaunchApp`) checks `getpid() == SceShellUI.pid`
+specifically, so the payload routes Launch through the same
+ptrace RPC mechanism it uses for sensors — the call runs from
+inside SceShellUI's address space where the check passes.
+Hardware-validated on FW 9.60: hitting Launch starts the game
+(SoC power draw jumps from idle ~30 mW to ~170 mW within a
+few seconds of the title coming up).
 
 **Q: I see errors in the status bar but don't know what happened.**
 Open the **Logs** tab. Every runtime error, failed API call, and

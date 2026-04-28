@@ -2,7 +2,7 @@
 set -euo pipefail
 
 PS5_IP="${PS5_IP:-192.168.137.2}"
-RUNTIME_PORT="${RUNTIME_PORT:-9113}"
+RUNTIME_PORT="${RUNTIME_PORT:-9114}"
 
 if ! command -v python3 >/dev/null 2>&1; then
   echo "python3 is required" >&2
