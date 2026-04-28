@@ -161,4 +161,18 @@ void runtime_cleanup_listener(runtime_state_t *state);
  * format ~100-character strings. */
 void pop_notification(const char *message);
 
+/* (Re-)apply the full ucred jailbreak: uid/ruid/svuid=0, all-FF
+ * sceCaps, sceAttr=0x80000000, debugger authid, root vnode for
+ * rootdir + jaildir. Idempotent and safe to call multiple times.
+ * Sets `g_ucred_elevation_rc` to the aggregate result (0 = full
+ * elevation succeeded, non-zero = at least one kernel write
+ * failed — typically because kernel R/W isn't available yet).
+ * Called once at startup from main.c, and again lazily from
+ * shellui_rpc_init() if the prior elevation attempt failed —
+ * lets users load kstuff after the payload was already running
+ * and have sensors/launch start working without a reboot. */
+void runtime_apply_ucred_jailbreak(void);
+
+extern int g_ucred_elevation_rc;
+
 #endif

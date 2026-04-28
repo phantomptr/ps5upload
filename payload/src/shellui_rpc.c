@@ -35,6 +35,7 @@
 #include <ps5/kernel.h>
 
 #include "ptrace_remote.h"
+#include "runtime.h"
 #include "shellui_rpc.h"
 
 /* kinfo_proc layout from sysctl(KERN_PROC_PROC). Same as FreeBSD 11
@@ -186,10 +187,22 @@ static int shellui_rpc_resolve_locked(void) {
 
 int shellui_rpc_init(void) {
     pthread_mutex_lock(&g_rpc_mtx);
-    if (g_inited) {
+    /* Short-circuit only when a previous init *succeeded*. If a
+     * previous init failed (typically because kstuff hadn't been
+     * loaded yet and the symbol resolves all returned 0), we
+     * retry — this is the path that lets the payload "wake up"
+     * once the user loads kstuff after we'd already booted. */
+    if (g_inited && g_init_rc == 0) {
         pthread_mutex_unlock(&g_rpc_mtx);
-        return g_init_rc;
+        return 0;
     }
+    /* (Re-)apply the ucred jailbreak. If kernel R/W is now
+     * available where it wasn't at process start, this transitions
+     * us from "userland authid" to the debugger authid — without
+     * which the ptrace authid swap inside pt_attach can't elevate
+     * to PS5_PTRACE_ALLOWED_AUTHID and every PT_ATTACH would
+     * EPERM. Idempotent and cheap. */
+    runtime_apply_ucred_jailbreak();
     g_inited = 1;
     int rc = shellui_rpc_resolve_locked();
     pthread_mutex_unlock(&g_rpc_mtx);

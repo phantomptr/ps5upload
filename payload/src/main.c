@@ -78,75 +78,76 @@ static void handle_fatal(int sig) {
     raise(sig);
 }
 
+/* Full ucred jailbreak — Sony's caller-context check rejects
+ * userland payloads with "wrong credentials" even when authid
+ * alone is set. The kernel checks several ucred fields, so we
+ * elevate all of them:
+ *
+ *   uid + ruid + svuid = 0      (root)
+ *   rgid + svgid = 0
+ *   sceCaps[0..15] = 0xFF       (every Sony capability bit set)
+ *   sceAttr = 0x80000000        (system-process attribute byte)
+ *   sceAuthID = 0x4800000000000006   (debugger authid)
+ *
+ * Plus a sandbox escape: re-root the process at the kernel's root
+ * vnode + jaildir.
+ *
+ * Idempotent + cheap when already elevated: the early-out short-
+ * circuits the entire body. Safe to call from any hot path;
+ * runtime.c's frame dispatcher invokes it on every incoming
+ * frame so users who load kstuff *after* our payload was already
+ * running pick up kernel R/W on the next request — Launch,
+ * Register, sensors, all of them — without needing to reboot the
+ * PS5 or re-send the payload.
+ *
+ * Each kernel write is best-effort; if any returns non-zero we
+ * record it but keep going — partial elevation is better than
+ * none. Result aggregated in `g_ucred_elevation_rc`
+ * (0 = full success). */
+void runtime_apply_ucred_jailbreak(void) {
+    /* Already elevated — nothing to do. This is the steady-state
+     * branch once kernel R/W is available, so it has to be cheap. */
+    if (g_ucred_elevation_rc == 0) return;
+
+    int rc = 0;
+    rc |= kernel_set_ucred_uid(-1, 0);
+    rc |= kernel_set_ucred_ruid(-1, 0);
+    rc |= kernel_set_ucred_svuid(-1, 0);
+    rc |= kernel_set_ucred_rgid(-1, 0);
+    rc |= kernel_set_ucred_svgid(-1, 0);
+    /* Sce caps — 16 bytes of 0xFF == every capability bit. */
+    static const uint8_t k_full_caps[16] = {
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    };
+    rc |= kernel_set_ucred_caps(-1, k_full_caps);
+    /* sceAttr: byte 3 = 0x80 of the 8-byte attrs field. */
+    rc |= kernel_set_ucred_attrs(-1, 0x80000000ull);
+    /* sceAuthID — last so if earlier writes fail we at least
+     * leave authid in a known state. */
+    rc |= kernel_set_ucred_authid(-1, PS5_SYSTEM_PROCESS_AUTHID);
+
+    intptr_t root_vnode = kernel_get_root_vnode();
+    if (root_vnode != 0) {
+        rc |= kernel_set_proc_rootdir(-1, root_vnode);
+        rc |= kernel_set_proc_jaildir(-1, root_vnode);
+    } else {
+        /* No root vnode means kernel R/W isn't available at all. */
+        rc |= -1;
+    }
+    g_ucred_elevation_rc = rc;
+}
+
 int main(void) {
     int rc = 0;
     runtime_state_t state = {0};
     g_state = &state;
 
-    /* Full ucred jailbreak — Sony's caller-context check rejects
-     * userland payloads with "wrong credentials" even when authid
-     * alone is set. The kernel checks several ucred fields, so
-     * we elevate all of them:
-     *
-     *   uid + ruid + svuid = 0      (root)
-     *   rgid + svgid = 0
-     *   sceCaps[0..15] = 0xFF       (every Sony capability bit set)
-     *   sceAttr = 0x80000000        (system-process attribute byte)
-     *   sceAuthID = 0x4800000000000006   (debugger authid)
-     *
-     * The PS5 SDK exposes per-field helpers (kernel_set_ucred_uid,
-     * kernel_set_ucred_caps, etc.) which wrap the kernel R/W
-     * primitives so the per-firmware ucred-offset constants can
-     * update without us tracking them by hand.
-     *
-     * pid -1 = current process; the helpers translate to getpid().
-     * Each call is best-effort; if any returns non-zero we record
-     * it but keep going — partial elevation is better than none.
-     *
-     * Done at the very top of main, BEFORE any sprx init, so every
-     * subsequent service init + Sony API call runs with full
-     * jailbreak in place. Result aggregated in
-     * `g_ucred_elevation_rc` (0 = full elevation success) for
-     * STATUS_ACK to surface. */
-    {
-        int rc = 0;
-        rc |= kernel_set_ucred_uid(-1, 0);
-        rc |= kernel_set_ucred_ruid(-1, 0);
-        rc |= kernel_set_ucred_svuid(-1, 0);
-        rc |= kernel_set_ucred_rgid(-1, 0);
-        rc |= kernel_set_ucred_svgid(-1, 0);
-        /* Sce caps — 16 bytes of 0xFF == every capability bit. */
-        static const uint8_t k_full_caps[16] = {
-            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-        };
-        rc |= kernel_set_ucred_caps(-1, k_full_caps);
-        /* sceAttr: byte 3 = 0x80 of the 8-byte attrs field. In
-         * little-endian that's the low 32-bit half having
-         * 0x80000000 in its high byte → full uint64 = 0x80000000.
-         * This is the system-process attribute Sony's caller checks
-         * inspect alongside authid. */
-        rc |= kernel_set_ucred_attrs(-1, 0x80000000ull);
-        /* sceAuthID — last because if anything earlier failed we
-         * still want at least authid set. */
-        rc |= kernel_set_ucred_authid(-1, PS5_SYSTEM_PROCESS_AUTHID);
-
-        /* Sandbox escape: re-root the process at the kernel's root
-         * vnode + jaildir. This differentiates "running in jail"
-         * (Sony APIs see us as a sandboxed process and refuse)
-         * from "running with system access" (they accept). The
-         * SDK exposes both helpers in `<ps5/kernel.h>`. With full
-         * ucred elevation + sandbox escape, the only remaining
-         * caller-context check Sony enforces for sensors / launch
-         * is the getpid()==SceShellUI test — which the ShellUI
-         * ptrace RPC layer (shellui_rpc.c) handles. */
-        intptr_t root_vnode = kernel_get_root_vnode();
-        if (root_vnode != 0) {
-            rc |= kernel_set_proc_rootdir(-1, root_vnode);
-            rc |= kernel_set_proc_jaildir(-1, root_vnode);
-        }
-        g_ucred_elevation_rc = rc;
-    }
+    /* Run the elevation once at startup. May fail silently if
+     * kernel R/W isn't yet available (kstuff not loaded). In
+     * that case shellui_rpc_init() will retry on first sensor
+     * read so users who load kstuff later are still served. */
+    runtime_apply_ucred_jailbreak();
 
     /* Release port on crash or external kill. */
     signal(SIGSEGV, handle_fatal);
