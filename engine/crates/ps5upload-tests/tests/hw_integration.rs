@@ -15,7 +15,9 @@ mod mock_server;
 use mock_server::MockServer;
 
 use ps5upload_core::fs_ops::{app_launch, app_list_registered, app_register};
-use ps5upload_core::hw::{app_launch_browser, hw_info, hw_power, hw_set_fan_threshold, hw_temps};
+use ps5upload_core::hw::{
+    app_launch_browser, hw_info, hw_power, hw_set_fan_threshold, hw_temps, proc_list,
+};
 
 // ─── HW_INFO: static fixtures round-trip cleanly ─────────────────────
 
@@ -161,4 +163,34 @@ fn fan_threshold_rejects_above_ceiling() {
     let err =
         hw_set_fan_threshold(&srv.addr, 95).expect_err("above-ceiling threshold must be rejected");
     assert!(err.to_string().contains("safe range"));
+}
+
+// ─── PROC_LIST: round-trip via the FTX2 layer ─────────────────────────
+//
+// Validates that the full request → ack → parse path stays intact for
+// the sysctl-shaped body emitted by the post-2.2.26 payload. A
+// regression in either the FrameType encoding or the JSON parser
+// surfaces here as a missing entry, swapped pid, or a parse panic.
+
+#[test]
+fn proc_list_round_trip() {
+    let srv = MockServer::start();
+    let list = proc_list(&srv.addr).expect("proc_list");
+    assert!(list.ok, "ok flag should propagate from sysctl shape");
+    assert!(!list.truncated);
+    // Mock returns SceShellUI@97 + payload.elf@113. SceShellUI is the
+    // pid the ShellUI RPC layer keys on, so an integration regression
+    // that drops it would also break sensor reads on real hardware.
+    let names: Vec<&str> = list.procs.iter().map(|p| p.name.as_str()).collect();
+    assert!(
+        names.contains(&"SceShellUI"),
+        "SceShellUI missing from proc_list: {names:?}"
+    );
+    let shell = list
+        .procs
+        .iter()
+        .find(|p| p.name == "SceShellUI")
+        .expect("SceShellUI entry");
+    assert_eq!(shell.pid, 97);
+    assert!(list.error.is_none());
 }
