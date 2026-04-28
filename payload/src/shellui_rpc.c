@@ -157,6 +157,33 @@ static intptr_t resolve_in_target(pid_t pid, const char *sym_name) {
     return 0;
 }
 
+/* Re-resolve SceShellUI's pid + symbol addresses. Called both for the
+ * first init and any time pt_attach to the cached pid fails — which
+ * happens whenever ShellUI restarts (e.g., after exiting a launched
+ * game it sometimes respawns with a fresh pid). Caller must hold
+ * g_rpc_mtx. */
+static int shellui_rpc_resolve_locked(void) {
+    int pid = find_pid_by_name("SceShellUI");
+    if (pid <= 0) {
+        g_init_rc = -1;
+        return -1;
+    }
+    g_shellui_pid = pid;
+    /* Resolve every Sony API address inside SceShellUI. We don't
+     * fail the whole init if a single sensor symbol is missing —
+     * the corresponding RPC just returns -1. Only sceLncUtilLaunchApp
+     * is required for the init-success contract; without launch we
+     * can't justify the cost of attaching to ShellUI at all. */
+    g_addr_user_get_fg   = resolve_in_target(pid, "sceUserServiceGetForegroundUser");
+    g_addr_lnc_launch    = resolve_in_target(pid, "sceLncUtilLaunchApp");
+    g_addr_get_cpu_temp  = resolve_in_target(pid, "sceKernelGetCpuTemperature");
+    g_addr_get_soc_temp  = resolve_in_target(pid, "sceKernelGetSocSensorTemperature");
+    g_addr_get_cpu_freq  = resolve_in_target(pid, "sceKernelGetCpuFrequency");
+    g_addr_get_soc_power = resolve_in_target(pid, "sceKernelGetSocPowerConsumption");
+    g_init_rc = (g_addr_lnc_launch == 0) ? -2 : 0;
+    return g_init_rc;
+}
+
 int shellui_rpc_init(void) {
     pthread_mutex_lock(&g_rpc_mtx);
     if (g_inited) {
@@ -164,33 +191,9 @@ int shellui_rpc_init(void) {
         return g_init_rc;
     }
     g_inited = 1;
-
-    g_shellui_pid = find_pid_by_name("SceShellUI");
-    if (g_shellui_pid <= 0) {
-        g_init_rc = -1;
-        pthread_mutex_unlock(&g_rpc_mtx);
-        return -1;
-    }
-
-    /* Resolve every Sony API address inside SceShellUI. We don't
-     * fail the whole init if a single sensor symbol is missing —
-     * the corresponding RPC just returns -1. Only sceLncUtilLaunchApp
-     * is required for the init-success contract; without launch we
-     * can't justify the cost of attaching to ShellUI at all. */
-    g_addr_user_get_fg = resolve_in_target(g_shellui_pid, "sceUserServiceGetForegroundUser");
-    g_addr_lnc_launch  = resolve_in_target(g_shellui_pid, "sceLncUtilLaunchApp");
-    g_addr_get_cpu_temp  = resolve_in_target(g_shellui_pid, "sceKernelGetCpuTemperature");
-    g_addr_get_soc_temp  = resolve_in_target(g_shellui_pid, "sceKernelGetSocSensorTemperature");
-    g_addr_get_cpu_freq  = resolve_in_target(g_shellui_pid, "sceKernelGetCpuFrequency");
-    g_addr_get_soc_power = resolve_in_target(g_shellui_pid, "sceKernelGetSocPowerConsumption");
-
-    if (g_addr_lnc_launch == 0) {
-        g_init_rc = -2;
-    } else {
-        g_init_rc = 0;
-    }
+    int rc = shellui_rpc_resolve_locked();
     pthread_mutex_unlock(&g_rpc_mtx);
-    return g_init_rc;
+    return rc;
 }
 
 int shellui_rpc_ready(void) {
@@ -292,15 +295,13 @@ static int rpc_call_with_int_scratch(intptr_t fn_addr,
  * via a scratch buffer in ShellUI's address space. */
 static int remote_get_foreground_user(int *out_user) {
     if (g_addr_user_get_fg == 0 || g_shellui_pid <= 0) return -1;
-    /* Allocate a 4-byte scratch buffer in ShellUI for the int*
-     * out param. Round to a page since pt_mmap takes page-sized
-     * inputs. */
     pthread_mutex_lock(&g_rpc_mtx);
     int err_attach = pt_attach_tracked(g_shellui_pid);
     if (err_attach != 0) {
         pthread_mutex_unlock(&g_rpc_mtx);
         return -1;
     }
+    intptr_t fn_addr = g_addr_user_get_fg;
     intptr_t scratch = pt_mmap(g_shellui_pid, 0, 0x1000,
                                 PROT_READ | PROT_WRITE,
                                 MAP_ANON | MAP_PRIVATE, -1, 0);
@@ -309,7 +310,7 @@ static int remote_get_foreground_user(int *out_user) {
         pthread_mutex_unlock(&g_rpc_mtx);
         return -1;
     }
-    long rc = pt_call(g_shellui_pid, g_addr_user_get_fg,
+    long rc = pt_call(g_shellui_pid, fn_addr,
                        (uint64_t)scratch, 0, 0, 0, 0, 0);
     int user_id = 0;
     if (rc == 0) {
@@ -394,10 +395,7 @@ int shellui_rpc_get_soc_temp(int *out_celsius) {
 
 int shellui_rpc_get_cpu_freq_hz(long *out_hz) {
     /* sceKernelGetCpuFrequency() returns the frequency directly in
-     * rax (no out-param). do_remote_call's `ok` flag distinguishes
-     * "RPC failed" (ok=0, rc=-1) from "function legitimately
-     * returned -1" — for this API any non-positive return is
-     * treated as failure since CPU frequency is always positive. */
+     * rax (no out-param). */
     if (g_addr_get_cpu_freq == 0 || !shellui_rpc_ready() || !out_hz) return -1;
     int ok = 0;
     long rc = do_remote_call(g_addr_get_cpu_freq, 0, 0, 0, 0, 0, 0, &ok);

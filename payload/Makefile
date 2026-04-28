@@ -24,22 +24,14 @@ BLAKE3_SRCS := $(BLAKE3_DIR)/blake3.c \
 INCLUDES := -Iinclude -I$(BLAKE3_DIR)
 CFLAGS := -Wall -Wextra -Werror -g $(INCLUDES)
 
-# Sony sprx linkage. ShadowMountPlus and PS5-Upload-Suite both
-# compile-time link these libraries (see ShadowMountPlus/Makefile,
-# PS5-Upload-Suite/payload/Makefile). Their payloads call
-# sceLncUtilLaunchApp + sceKernelGetCpuTemperature without wedging
-# on the same firmware range we target.
-#
-# Original 2.2.x note here said compile-time linkage caused the
-# payload to hang at boot on "some firmware/loader combinations"
-# — hardware testing on FW 9.60 + the prospero-clang 2026 SDK on
-# 2026-04-27 found the wedge actually came from *runtime* dlopen
-# resolving symbols whose internal init had never run, not from
-# the DT_NEEDED entries themselves. Switching to compile-time
-# linkage matches the proven-working pattern in the two reference
-# payloads and lets the rtld run sprx init in the right order
-# before main() (and before any of our handlers can call into
-# the APIs).
+# Sony sprx linkage. The payload calls sceLncUtilLaunchApp +
+# sceKernelGetCpuTemperature etc., and rtld must run those
+# libraries' init functions before main() invokes them. With
+# compile-time linkage (DT_NEEDED entries here), the rtld walks
+# init order correctly. An earlier dlopen-at-runtime path wedged
+# on FW 9.60 because some Sony APIs reach into per-library
+# internal state that gets initialised lazily — by the time we
+# called the API, the state hadn't been built yet.
 #
 # register.c keeps its dlsym-via-RTLD_DEFAULT resolution as a
 # backstop: on a firmware where one of these libraries fails to

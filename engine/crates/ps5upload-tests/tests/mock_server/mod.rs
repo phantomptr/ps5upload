@@ -615,6 +615,16 @@ fn handle_connection_inner(mut stream: TcpStream, state: Arc<Mutex<MockState>>) 
                 send_frame(&mut stream, FrameType::HwSetFanThresholdAck, b"");
             }
 
+            FrameType::ProcList => {
+                // Sysctl-shaped response matching what the real payload
+                // emits (post-2.2.26: ok:true with {pid,name} entries
+                // and an optional truncation sentinel). Pid 97 / name
+                // "SceShellUI" is the real PS5 layout that the rest
+                // of the codebase keys on.
+                let body = br#"{"ok":true,"procs":[{"pid":97,"name":"SceShellUI"},{"pid":113,"name":"payload.elf"}]}"#;
+                send_frame(&mut stream, FrameType::ProcListAck, body);
+            }
+
             _ => {
                 let mut discard = vec![0u8; hdr.body_len as usize];
                 read_exact(&mut stream, &mut discard);
