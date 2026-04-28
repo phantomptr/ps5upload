@@ -4,6 +4,50 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.2.26
+
+**Live sensors and working Launch on FW 9.60**
+
+The Hardware tab now shows real CPU/SoC temperature and SoC power
+readings on FW 9.60, and the Library tab's **Launch** button
+actually starts the game. Both used to come back blank because
+Sony's launcher and sensor APIs reject any caller that isn't
+`SceShellUI`. The payload now routes those calls through a
+ptrace-based RPC into ShellUI itself, so they pass the
+caller-context check natively.
+
+- **Fix: live sensor readings on FW 9.60.** CPU temperature, SoC
+  temperature, CPU frequency, and SoC power draw all return real
+  values now. The Hardware tab's auto-refresh tick (every 5s)
+  picks up changes as the workload varies.
+- **Fix: Library → Launch starts games on FW 9.60.** Hitting
+  Launch on a registered title actually boots the game (SoC power
+  jumps from idle to in-game as the title comes up). Previously
+  every Launch returned a generic "all strategies failed".
+- **Fix: process list shows real names.** PROC_LIST switched from
+  a kernel-walk-with-per-firmware-offsets approach to
+  `sysctl(KERN_PROC_PROC)`. Names like `SceShellUI`, `kstuff.elf`,
+  `payload.elf` now show up correctly instead of `?` placeholders.
+- **Hardening.** Full ucred jailbreak (uid=0, all capabilities,
+  debugger authid) plus sandbox escape (rootdir + jaildir set to
+  the kernel root vnode) applied at startup. Crash-time signal
+  handler now best-effort-detaches any active ptrace attach so a
+  payload SIGSEGV mid-RPC won't freeze SceShellUI.
+- **Audit and cleanup pass.** Every FS / HW / app handler reviewed
+  for malloc/free symmetry and bounds checks. Per-firmware
+  `p_comm` offset table removed (sysctl path replaces it). User
+  now gets the actual Sony error code on Launch failures
+  (`launch_sony_error_0x<code>`) instead of a generic
+  "all strategies failed".
+
+Hardware-validated on FW 9.60 / CFI-7019. New unit + integration
+tests added for the proc_list parser shapes and the FRAME_PROC_LIST
+round-trip; the hardware-side smoke script now exercises HW_TEMPS
+and PROC_LIST so a regression in the ShellUI RPC path lights up
+immediately.
+
+---
+
 ## 2.2.25
 
 **Library mount picker + Library search bar**
