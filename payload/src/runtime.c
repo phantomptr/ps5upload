@@ -6715,6 +6715,14 @@ static int handle_binary_frame(runtime_state_t *state, int client_fd,
         return send_frame(client_fd, FTX2_FRAME_ERROR, 0, hdr.trace_id, "bad_version", 11);
     }
 
+    /* Per-frame elevation retry. If the startup ucred jailbreak
+     * failed (kernel R/W wasn't available — typically the user
+     * loaded our payload before kstuff), this is the path that
+     * picks up R/W as soon as kstuff lands. The function early-
+     * outs in the steady-state already-elevated case, so the
+     * cost is one branch on the hot path. */
+    runtime_apply_ucred_jailbreak();
+
     /* Reject wrong-port frames. We can't safely process them: a misrouted
      * STREAM_SHARD would carry up to 32 MiB we'd otherwise drain, and
      * processing a BEGIN_TX on the mgmt port would corrupt the transfer

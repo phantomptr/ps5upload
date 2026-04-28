@@ -4,6 +4,27 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.2.27
+
+**Load order doesn't matter anymore — kstuff after ps5upload still works**
+
+The 2.2.26 release got the ShellUI RPC working but only when
+kstuff was already loaded *before* our payload booted. If you
+sent ps5upload first and kstuff afterwards, the ucred jailbreak
+silently no-op'd at startup and the only fix was a PS5 reboot.
+
+- **Fix: per-request ucred elevation retry.** The payload now
+  re-applies the full ucred jailbreak on every incoming frame
+  until elevation succeeds. Send kstuff at any time during the
+  session and the next Hardware-tab refresh, Launch click,
+  Register, or any FS op picks it up — no reboot, no re-send of
+  ps5upload needed.
+- **No behavior change for the working case.** When kstuff is
+  loaded before the payload, elevation succeeds at startup and
+  the retry path is a single branch (early-out) per request.
+
+---
+
 ## 2.2.26
 
 **Live sensors and working Launch on FW 9.60**
