@@ -46,9 +46,21 @@ int shellui_rpc_pid(void);
  * 24-byte LncAppParam (size, user_id, app_opt, crash_report,
  * check_flag) with `user_id` populated from
  * `sceUserServiceGetForegroundUser` (also called remotely).
- * Returns Sony's return code (0 = launched, 0x8094* = various
- * launcher errors). -1 if the RPC machinery itself failed
- * (couldn't attach, symbol missing, etc.). */
+ *
+ * Return codes:
+ *    0  — Sony's launcher accepted the call. Game launched.
+ *   >0  — Sony returned an error code (0x8094* family for various
+ *         launcher errors).
+ *   -1  — Pre-dispatch RPC machinery failure: couldn't attach to
+ *         ShellUI, scratch mmap failed, symbol unresolved. The
+ *         remote function never ran; caller may retry or fall back.
+ *   -2  — Soft success: the call WAS dispatched into ShellUI
+ *         (pt_continue returned cleanly) but post-call cleanup hit
+ *         a race because the launcher signalled ShellUI in a way
+ *         that broke our waitpid. The launch most likely
+ *         succeeded — caller should treat as success and NOT fall
+ *         back to in-process strategies (they would race the
+ *         running launch and produce a misleading error). */
 int shellui_rpc_launch_app(const char *title_id);
 
 /* Sensor reads. Each returns 0 on success, -1 on RPC failure or
