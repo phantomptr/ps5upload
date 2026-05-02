@@ -157,6 +157,16 @@ extern int posix_fallocate(int fd, off_t offset, off_t len);
 #define FTX2_FRAME_FS_OP_STATUS_ACK   77u
 #define FTX2_FRAME_FS_OP_CANCEL       78u
 #define FTX2_FRAME_FS_OP_CANCEL_ACK   79u
+/* Install a `.pkg` file via Sony's BGFT service. Body is JSON
+ * `{"url":"http://...","content_id":"...","size":N,"title":"...",
+ *   "package_type":"PS4GD"}`. Payload calls into bgft.c which loads
+ * libSceBgft.sprx, registers the task, kicks off the download, and
+ * returns the BGFT task_id. The host then polls PKG_INSTALL_STATUS
+ * for progress + final outcome. ACK body is JSON. */
+#define FTX2_FRAME_PKG_INSTALL              82u
+#define FTX2_FRAME_PKG_INSTALL_ACK          83u
+#define FTX2_FRAME_PKG_INSTALL_STATUS       84u
+#define FTX2_FRAME_PKG_INSTALL_STATUS_ACK   85u
 /* Where we place mount points. Scoped under /mnt/ps5upload/ so it
  * never collides with mount paths owned by other utilities. */
 #define FS_MOUNT_BASE "/mnt/ps5upload"
@@ -6540,24 +6550,60 @@ static int handle_fs_mount(runtime_state_t *state, int client_fd,
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);
 
+    /* Image layout pre-flight: verify <mount_point>/sce_sys/param.json
+     * exists. If the user built the image with an extra top-level
+     * folder (so files live at `<mount>/MyGame/sce_sys/...` instead
+     * of `<mount>/sce_sys/...`), the mount succeeds but Register +
+     * Launch will fail with a confusing error. Surface a `layout_valid`
+     * flag to the host so the UI can warn the user before they try
+     * to register.
+     *
+     * This is a stat() of the most predictable path. We don't walk
+     * the directory looking for nested layouts because:
+     *   1. The convention is documented (param.json at root) — any
+     *      other layout is the user's bug, not ours to auto-recover.
+     *   2. A walk on a freshly-mounted UFS image cold-reads the
+     *      first directory block; we want to keep mount fast. */
+    int layout_valid = 0;
+    {
+        char check[600];
+        int cn = snprintf(check, sizeof(check), "%s/sce_sys/param.json",
+                          mount_point);
+        if (cn > 0 && (size_t)cn < sizeof(check)) {
+            struct stat sbuf;
+            if (stat(check, &sbuf) == 0 && S_ISREG(sbuf.st_mode)) {
+                layout_valid = 1;
+            }
+        }
+    }
+
     /* User-facing PS5 toast. The desktop client surfaces the same
      * info inline in the Library row, but firing a toast here gives
      * users still on the PS5 (e.g. running ps5upload-engine in
      * headless mode) a visible confirmation. Truncates to fit the
      * 128-byte stack buffer for the snprintf — pop_notification
-     * itself caps at ~3 KiB. */
+     * itself caps at ~3 KiB. The layout-warning suffix on the toast
+     * gives the on-couch user the same hint the desktop UI surfaces. */
     {
-        char toast[160];
-        snprintf(toast, sizeof(toast), "Mounted %s at %s%s",
-                 fstype, mount_point, read_only ? " (read-only)" : "");
+        char toast[200];
+        if (layout_valid) {
+            snprintf(toast, sizeof(toast), "Mounted %s at %s%s",
+                     fstype, mount_point, read_only ? " (read-only)" : "");
+        } else {
+            snprintf(toast, sizeof(toast),
+                     "Mounted %s at %s%s — but no sce_sys/param.json at "
+                     "image root, Register/Launch will fail",
+                     fstype, mount_point, read_only ? " (read-only)" : "");
+        }
         pop_notification(toast);
     }
 
     n = snprintf(resp, sizeof(resp),
                  "{\"mount_point\":\"%s\",\"dev_node\":\"%s\",\"fstype\":\"%s\","
-                 "\"source_image\":\"%s\",\"read_only\":%d}",
+                 "\"source_image\":\"%s\",\"read_only\":%d,"
+                 "\"layout_valid\":%d}",
                  mount_point, devname, fstype, image_path,
-                 read_only ? 1 : 0);
+                 read_only ? 1 : 0, layout_valid);
     if (n < 0 || (size_t)n >= sizeof(resp)) n = 0;
     return send_frame(client_fd, FTX2_FRAME_FS_MOUNT_ACK, 0, trace_id,
                       resp, (uint64_t)n);
@@ -7005,6 +7051,196 @@ static int handle_proc_list(runtime_state_t *state, int client_fd,
                     buf, (uint64_t)written);
     free(buf);
     return rc;
+}
+
+/* ── PKG_INSTALL handlers ─────────────────────────────────────────────────────
+ *
+ * The host sends PKG_INSTALL with a JSON body carrying the `.pkg` URL it
+ * wants Sony's BGFT service to fetch + install. We extract the fields,
+ * call into bgft.c which loads libSceBgft.sprx and registers/starts a
+ * BGFT task, and respond with the task_id.
+ *
+ * Sony's installer runs asynchronously inside PS5 firmware; status is
+ * polled via PKG_INSTALL_STATUS which calls bgft_install_status() to
+ * read BGFT's progress struct.
+ */
+
+#include "bgft.h"
+
+static int handle_pkg_install(runtime_state_t *state, int client_fd,
+                               uint64_t trace_id,
+                               const char *body, uint64_t body_len) {
+    char url[1024];
+    char content_id[64];
+    char title[256];
+    char package_type[16];
+    uint64_t size = 0;
+    int32_t task_id = -1;
+    uint32_t err_code = 0;
+    char ack[256];
+    int n;
+    if (!state || !body) {
+        const char *e = "pkg_install_invalid";
+        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
+                          e, (uint64_t)strlen(e));
+    }
+    /* Hard cap on body length — defensive against malformed input. */
+    if (body_len > 16384) {
+        const char *e = "pkg_install_body_too_large";
+        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
+                          e, (uint64_t)strlen(e));
+    }
+    /* The body is JSON but extract_json_string_field expects a
+     * NUL-terminated buffer — we copy into a local buffer and
+     * NUL-terminate. */
+    char json_buf[16384];
+    memcpy(json_buf, body, (size_t)body_len);
+    json_buf[body_len] = '\0';
+
+    extract_json_string_field(json_buf, "url", url, sizeof(url));
+    extract_json_string_field(json_buf, "content_id", content_id, sizeof(content_id));
+    extract_json_string_field(json_buf, "title", title, sizeof(title));
+    extract_json_string_field(json_buf, "package_type", package_type, sizeof(package_type));
+    size = extract_json_uint64_field(json_buf, "size");
+
+    if (url[0] == '\0') {
+        const char *e = "pkg_install_url_missing";
+        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
+                          e, (uint64_t)strlen(e));
+    }
+    if (content_id[0] == '\0') {
+        /* Some non-standard PKGs have no content_id; pass an empty
+         * string and let BGFT decide whether to accept. */
+    }
+    if (package_type[0] == '\0') {
+        snprintf(package_type, sizeof(package_type), "PS4GD");
+    }
+
+    int rc = bgft_install_start(url, content_id, size, title, package_type,
+                                 &task_id, &err_code);
+    /* Always reply with PKG_INSTALL_ACK carrying the err_code (even on
+     * failure) so the host can map it to a user-facing message. We
+     * only emit ERROR for true protocol-level violations (bad body). */
+    const char *detail = "";
+    if (rc != 0) {
+        const char *r = bgft_install_unavailable_reason();
+        if (r) detail = r;
+    }
+    /* Manual JSON encode — small + deterministic, no need for a JSON
+     * library on the payload side. */
+    n = snprintf(ack, sizeof(ack),
+                 "{\"task_id\":%d,\"err_code\":%u,\"detail\":\"%s\"}",
+                 task_id, (unsigned)err_code, detail);
+    if (n < 0 || n >= (int)sizeof(ack)) {
+        n = snprintf(ack, sizeof(ack),
+                     "{\"task_id\":%d,\"err_code\":%u,\"detail\":\"\"}",
+                     task_id, (unsigned)err_code);
+    }
+    pthread_mutex_lock(&state->state_mtx);
+    state->command_count += 1;
+    pthread_mutex_unlock(&state->state_mtx);
+    return send_frame(client_fd, FTX2_FRAME_PKG_INSTALL_ACK, 0, trace_id,
+                      ack, (uint64_t)n);
+}
+
+static int handle_pkg_install_status(runtime_state_t *state, int client_fd,
+                                      uint64_t trace_id,
+                                      const char *body, uint64_t body_len) {
+    bgft_phase_t phase = BGFT_PHASE_QUEUED;
+    uint64_t downloaded = 0;
+    uint64_t total = 0;
+    uint32_t err_code = 0;
+    char ack[256];
+    int n;
+    if (!state || !body) {
+        const char *e = "pkg_install_status_invalid";
+        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
+                          e, (uint64_t)strlen(e));
+    }
+    if (body_len > 256) {
+        const char *e = "pkg_install_status_body_too_large";
+        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
+                          e, (uint64_t)strlen(e));
+    }
+    char json_buf[256];
+    memcpy(json_buf, body, (size_t)body_len);
+    json_buf[body_len] = '\0';
+    int task_id = (int)extract_json_uint64_field(json_buf, "task_id");
+    int rc = bgft_install_status(task_id, &phase, &downloaded, &total,
+                                  &err_code);
+    const char *phase_str = "queued";
+    switch (phase) {
+        case BGFT_PHASE_QUEUED:   phase_str = "queued"; break;
+        case BGFT_PHASE_DOWNLOAD: phase_str = "download"; break;
+        case BGFT_PHASE_INSTALL:  phase_str = "install"; break;
+        case BGFT_PHASE_DONE:     phase_str = "done"; break;
+        case BGFT_PHASE_ERROR:    phase_str = "error"; break;
+    }
+    /* Even on rc != 0 we still surface what we can — err_code carries
+     * the BGFT error code or our sentinel and the host maps it to a
+     * message. */
+    (void)rc;
+
+    /* Console-toast on the first done/error transition for this
+     * task_id. The host polls status at 1 Hz, so without
+     * deduplication we'd send a toast every second after BGFT
+     * finishes — annoying. A small ring of recently-toasted task_ids
+     * (16 slots) covers any realistic install-queue depth without
+     * tracking forever. Per-state toast (one for done, one for
+     * error) is fine because we check both states on insert. */
+    if (phase == BGFT_PHASE_DONE || phase == BGFT_PHASE_ERROR) {
+        static pthread_mutex_t toasted_mtx = PTHREAD_MUTEX_INITIALIZER;
+        static int toasted_task_ids[16] = {0};
+        static int toasted_phase[16] = {0};
+        static int toasted_next = 0;
+        int target_phase = (int)phase;
+        int already = 0;
+        pthread_mutex_lock(&toasted_mtx);
+        for (int i = 0; i < 16; i++) {
+            if (toasted_task_ids[i] == task_id &&
+                toasted_phase[i] == target_phase) {
+                already = 1;
+                break;
+            }
+        }
+        if (!already) {
+            toasted_task_ids[toasted_next] = task_id;
+            toasted_phase[toasted_next] = target_phase;
+            toasted_next = (toasted_next + 1) % 16;
+        }
+        pthread_mutex_unlock(&toasted_mtx);
+        if (!already) {
+            char toast[160];
+            if (phase == BGFT_PHASE_DONE) {
+                snprintf(toast, sizeof(toast),
+                         "ps5upload: install complete (task %d)", task_id);
+            } else {
+                snprintf(toast, sizeof(toast),
+                         "ps5upload: install failed (task %d, code 0x%08x)",
+                         task_id, (unsigned)err_code);
+            }
+            pop_notification(toast);
+        }
+    }
+
+    n = snprintf(ack, sizeof(ack),
+                 "{\"phase\":\"%s\",\"downloaded\":%llu,\"total\":%llu,"
+                 "\"err_code\":%u,\"detail\":\"\"}",
+                 phase_str,
+                 (unsigned long long)downloaded,
+                 (unsigned long long)total,
+                 (unsigned)err_code);
+    if (n < 0 || n >= (int)sizeof(ack)) {
+        n = snprintf(ack, sizeof(ack),
+                     "{\"phase\":\"%s\",\"downloaded\":0,\"total\":0,"
+                     "\"err_code\":%u,\"detail\":\"\"}",
+                     phase_str, (unsigned)err_code);
+    }
+    pthread_mutex_lock(&state->state_mtx);
+    state->command_count += 1;
+    pthread_mutex_unlock(&state->state_mtx);
+    return send_frame(client_fd, FTX2_FRAME_PKG_INSTALL_STATUS_ACK, 0,
+                      trace_id, ack, (uint64_t)n);
 }
 
 /* ── Binary frame dispatcher ─────────────────────────────────────────────────── */
@@ -8019,6 +8255,14 @@ abort_done:
     if (hdr.frame_type == FTX2_FRAME_PROC_LIST) {
         return handle_proc_list(state, client_fd, hdr.trace_id,
                                 request_body, hdr.body_len);
+    }
+    if (hdr.frame_type == FTX2_FRAME_PKG_INSTALL) {
+        return handle_pkg_install(state, client_fd, hdr.trace_id,
+                                  request_body, hdr.body_len);
+    }
+    if (hdr.frame_type == FTX2_FRAME_PKG_INSTALL_STATUS) {
+        return handle_pkg_install_status(state, client_fd, hdr.trace_id,
+                                         request_body, hdr.body_len);
     }
 
     return send_frame(client_fd, FTX2_FRAME_ERROR, 0, hdr.trace_id,

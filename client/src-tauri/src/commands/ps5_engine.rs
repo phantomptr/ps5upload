@@ -574,6 +574,67 @@ pub async fn engine_logs_tail(since: u64) -> Result<JsonValue, String> {
     get_json(&url).await
 }
 
+// ── PKG install ─────────────────────────────────────────────────────────────
+
+/// Parse a single `.pkg` file's header. Returns metadata: content_id,
+/// title (from PARAM.SFO), category, ICON0.PNG (base64), warnings.
+/// Files with non-stock magic surface as `kind:"unknown"` with a warning
+/// rather than a hard error so the user can still attempt install.
+#[tauri::command]
+pub async fn pkg_metadata(path: String) -> Result<JsonValue, String> {
+    let url = format!("{}/api/pkg/parse", engine::url());
+    post_json(&url, &serde_json::json!({ "path": path })).await
+}
+
+/// Same as `pkg_metadata` but auto-detects sibling split parts
+/// (`<root>.0`, `<root>.1`, ...) in the same directory and returns
+/// the assembled total size + per-part list.
+#[tauri::command]
+pub async fn pkg_metadata_split(path: String) -> Result<JsonValue, String> {
+    let url = format!("{}/api/pkg/parse-split", engine::url());
+    post_json(&url, &serde_json::json!({ "path": path })).await
+}
+
+/// Kick off an install. Returns the session_id, the HTTP URL the PS5
+/// will fetch from, and the BGFT task_id. Caller polls `pkg_install_status`
+/// until phase=done|error.
+#[tauri::command]
+pub async fn pkg_install_start(
+    ps5_addr: String,
+    path: Option<String>,
+    split_root: Option<String>,
+    package_type_override: Option<String>,
+) -> Result<JsonValue, String> {
+    let url = format!("{}/api/pkg/install/start", engine::url());
+    let body = serde_json::json!({
+        "ps5_addr": ps5_addr,
+        "path": path,
+        "split_root": split_root,
+        "package_type_override": package_type_override,
+    });
+    post_json(&url, &body).await
+}
+
+/// Poll an in-flight install for status. Cheap; called every 1-2s.
+#[tauri::command]
+pub async fn pkg_install_status(session: String) -> Result<JsonValue, String> {
+    let url = format!(
+        "{}/api/pkg/install/status?session={}",
+        engine::url(),
+        urlencoding(&session)
+    );
+    get_json(&url).await
+}
+
+/// Cancel an in-flight install. Stops the host-side HTTP listener
+/// for this session; BGFT on the PS5 will surface a download error
+/// in its notifications when it sees the stream drop.
+#[tauri::command]
+pub async fn pkg_install_cancel(session: String) -> Result<JsonValue, String> {
+    let url = format!("{}/api/pkg/install/cancel", engine::url());
+    post_json(&url, &serde_json::json!({ "session": session })).await
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 /// Tiny URL-encode that handles the characters we feed into query strings

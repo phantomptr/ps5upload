@@ -220,10 +220,9 @@ check unrelated to firmware), and FS ops work identically across
 all supported firmwares.
 
 **What actually gates users in practice is the ELF loader** on
-port 9021 (BD-JB, GoldHen, etaHEN, kstuff-lite, etc.) — a
-scene-provided component, not part of ps5upload. That ecosystem's
-real-world coverage is roughly **4.x through 12.x**; below 4.x is
-obscure and above 12.70 is future work.
+port 9021 — a third-party component, not part of ps5upload. The
+ecosystem's real-world coverage is roughly **4.x through 12.x**;
+below 4.x is obscure and above 12.70 is future work.
 
 ## FAQ
 

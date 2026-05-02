@@ -90,6 +90,15 @@ pub fn run() {
             commands::ps5_app_unregister,
             commands::job_status,
             commands::engine_logs_tail,
+            // ── PKG install (parse + host + install via BGFT) ─────────
+            // Engine proxies for the new Install Package tab. Single
+            // path: parse local .pkg → host over HTTP → tell payload to
+            // call sceBgftService* → poll status.
+            commands::pkg_metadata,
+            commands::pkg_metadata_split,
+            commands::pkg_install_start,
+            commands::pkg_install_status,
+            commands::pkg_install_cancel,
             // ── Scene-tool integration ──────────────────────────────
             // `companion_probe` checks which well-known scene tools
             // are alive on the PS5 host.

@@ -45,28 +45,28 @@ describe("mountDest persistence", () => {
   });
 
   it("returns null for empty / whitespace host", () => {
-    saveMountDest("192.168.1.50", { volume: "/mnt/ext1", subpath: "etaHEN/games" });
+    saveMountDest("192.168.1.50", { volume: "/mnt/ext1", subpath: "homebrew/games" });
     expect(loadMountDest("")).toBeNull();
     expect(loadMountDest("   ")).toBeNull();
   });
 
   it("round-trips a saved destination", () => {
-    saveMountDest("192.168.1.50", { volume: "/mnt/ext1", subpath: "etaHEN/games" });
+    saveMountDest("192.168.1.50", { volume: "/mnt/ext1", subpath: "homebrew/games" });
     expect(loadMountDest("192.168.1.50")).toEqual({
       volume: "/mnt/ext1",
-      subpath: "etaHEN/games",
+      subpath: "homebrew/games",
     });
   });
 
   it("keeps separate destinations per host", () => {
-    saveMountDest("192.168.1.50", { volume: "/mnt/ext1", subpath: "etaHEN/games" });
+    saveMountDest("192.168.1.50", { volume: "/mnt/ext1", subpath: "homebrew/games" });
     saveMountDest("192.168.137.2", { volume: "/data", subpath: "ps5upload" });
     expect(loadMountDest("192.168.1.50")?.volume).toBe("/mnt/ext1");
     expect(loadMountDest("192.168.137.2")?.volume).toBe("/data");
   });
 
   it("ignores empty-volume saves so a mid-edit blank doesn't wipe state", () => {
-    saveMountDest("192.168.1.50", { volume: "/mnt/ext1", subpath: "etaHEN/games" });
+    saveMountDest("192.168.1.50", { volume: "/mnt/ext1", subpath: "homebrew/games" });
     saveMountDest("192.168.1.50", { volume: "", subpath: "anything" });
     expect(loadMountDest("192.168.1.50")?.volume).toBe("/mnt/ext1");
   });
@@ -116,8 +116,8 @@ describe("payloadSupportsMountPoint", () => {
 
 describe("resolveMountPath", () => {
   it("composes /<volume>/<subpath>/<name>", () => {
-    expect(resolveMountPath("/mnt/ext1", "etaHEN/games", "dead-space")).toBe(
-      "/mnt/ext1/etaHEN/games/dead-space",
+    expect(resolveMountPath("/mnt/ext1", "homebrew/games", "dead-space")).toBe(
+      "/mnt/ext1/homebrew/games/dead-space",
     );
   });
   it("handles empty subpath as direct-under-volume", () => {
@@ -127,18 +127,21 @@ describe("resolveMountPath", () => {
   });
   it("trims accidental leading / trailing slashes", () => {
     expect(
-      resolveMountPath("/mnt/ext1/", "/etaHEN/games/", "/dead-space/"),
-    ).toBe("/mnt/ext1/etaHEN/games/dead-space");
+      resolveMountPath("/mnt/ext1/", "/homebrew/games/", "/dead-space/"),
+    ).toBe("/mnt/ext1/homebrew/games/dead-space");
   });
 });
 
 describe("MOUNT_PRESETS + defaults", () => {
-  it("includes the four upload-style presets", () => {
+  it("includes the upload-style presets, homebrew first", () => {
+    // homebrew is first because it's the recommended default — matches
+    // the conventional PS5-manager scan paths so source + mount end up
+    // in a folder every PS5 manager already watches.
     const labels = MOUNT_PRESETS.map((p) => p.label);
-    expect(labels).toEqual(["etaHEN/games", "homebrew", "exfat", "ps5upload"]);
+    expect(labels).toEqual(["homebrew", "exfat", "ps5upload"]);
   });
-  it("default subpath is the legacy-equivalent", () => {
-    expect(MOUNT_DEFAULT_SUBPATH).toBe("ps5upload");
+  it("default subpath matches Upload's homebrew default", () => {
+    expect(MOUNT_DEFAULT_SUBPATH).toBe("homebrew");
   });
   it("fallback volumes are non-empty even when the live probe hasn't run", () => {
     expect(fallbackMountVolumes().length).toBeGreaterThan(0);

@@ -319,7 +319,7 @@ pub async fn payload_bundled_path(app: AppHandle) -> serde_json::Value {
 ///   - .elf     : native PS5 payload, loaded by :9021 elfldr
 ///   - .bin     : raw blobs (some kernel patches ship as .bin)
 ///   - .js      : browser-stage JS exploits
-///   - .lua     : etaHEN / scripting-runtime plugins
+///   - .lua     : scripting-runtime plugins
 /// The probe doesn't gate — it just labels. The UI tells the user
 /// what kind of file they picked; the actual loader on the PS5 side
 /// is responsible for accepting or rejecting it.

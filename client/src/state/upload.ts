@@ -46,6 +46,12 @@ export interface UploadState {
   detectError: string | null;
 
   mountAfterUpload: boolean;
+  /** Mount the image read-only when mount-after-upload runs. Default
+   *  true — the safer choice: the PS5 can't accidentally write
+   *  save-data into the image and corrupt it on next mount. Users
+   *  who want save-data to persist back into the image (rare; mostly
+   *  for editable homebrew scratchpads) flip this off explicitly. */
+  mountReadOnly: boolean;
 
   destinationVolume: string | null;
   destinationSubpath: string;
@@ -58,6 +64,7 @@ export interface UploadState {
   reset(): void;
 
   setMountAfterUpload(on: boolean): void;
+  setMountReadOnly(on: boolean): void;
   setDestination(volume: string | null, subpath?: string): void;
   setExcludeMode(mode: ExcludeMode): void;
   toggleExclude(pattern: string): void;
@@ -85,8 +92,16 @@ export const useUploadStore = create<UploadState>((set, get) => ({
   detecting: false,
   detectError: null,
   mountAfterUpload: false,
+  mountReadOnly: true,
   destinationVolume: null,
-  destinationSubpath: "ps5upload",
+  // Default to /data/homebrew/ — the community-standard scan path
+  // that third-party PS5 game scanners typically walk. Files landed
+  // here are auto-discoverable by other PS5 tools the user might also
+  // be running. Pre-2.2.32 we defaulted to "ps5upload", which forced
+  // users into a tool-specific subfolder and broke interop. Users with
+  // a different preference can still edit the field; the change only
+  // affects the first-launch default.
+  destinationSubpath: "homebrew",
   excludeMode: "all",
   excludes: defaultExcludes,
 
@@ -96,11 +111,14 @@ export const useUploadStore = create<UploadState>((set, get) => ({
       source: { kind, path, meta: null, wrappedHint: null },
       detecting: false,
       detectError: null,
-      // Default mount-after-upload ON when the user picks a disk
-      // image — routing it through the auto-mount flow is the whole
-      // reason they picked an .exfat/.ffpkg over a plain folder
-      // upload.
-      mountAfterUpload: kind === "image" ? true : get().mountAfterUpload,
+      // mount-after-upload defaults OFF — even for disk images. The
+      // mount call attaches the image to /dev/lvdN (or /dev/mdN) +
+      // nmount(2)s it onto /mnt/ps5upload/<name>, which alters
+      // kernel-visible state and is harder to undo than a plain
+      // upload. Users opt in by ticking the checkbox; the alternative
+      // pre-2.2.31 behavior auto-flipped it on for .exfat/.ffpkg and
+      // surprised users who only wanted to land the file on disk.
+      mountAfterUpload: get().mountAfterUpload,
     });
   },
 
@@ -141,6 +159,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
     }),
 
   setMountAfterUpload: (mountAfterUpload) => set({ mountAfterUpload }),
+  setMountReadOnly: (mountReadOnly) => set({ mountReadOnly }),
 
   setDestination: (destinationVolume, destinationSubpath) =>
     set((s) => ({

@@ -92,6 +92,11 @@ interface StartArgs {
   excludes?: string[];
   /** Image-only: mount the uploaded disk image after the transfer commits. */
   mountAfterUpload?: boolean;
+  /** Image-only: when mounting, mount read-only (default true). The PS5
+   *  can't write save-data into the image (which would silently corrupt
+   *  the source file on disk and ruin re-mount on next boot). Set false
+   *  only when the user explicitly wants RW for editable scratch images. */
+  mountReadOnly?: boolean;
 }
 
 interface TransferState {
@@ -133,6 +138,7 @@ export const useTransferStore = create<TransferState>((set) => {
       reconcileMode = "fast",
       excludes = [],
       mountAfterUpload = false,
+      mountReadOnly = true,
     }) {
       const thisRun = ++runId;
       set({ phase: { kind: "starting" } });
@@ -272,7 +278,21 @@ export const useTransferStore = create<TransferState>((set) => {
           // user-visible state honest.
           if (isLive() && sourceKind === "image" && mountAfterUpload) {
             try {
-              const mounted = await fsMount(addr, finalDest);
+              // Mount point lives next to the source file: strip the
+              // image extension from finalDest. So an upload to
+              // `/data/homebrew/MyGame.ffpkg` mounts at
+              // `/data/homebrew/MyGame/`. Source + mount in the same
+              // conventional folder — both discoverable by third-party
+              // PS5 game scanners that walk /data/homebrew/.
+              // The payload auto-derives the same name when mountPoint
+              // is omitted but lands it under /mnt/ps5upload/<name>;
+              // setting mountPoint explicitly keeps it where the user
+              // dropped the file.
+              const mountPoint = finalDest.replace(/\.(exfat|ffpkg|ffpfs)$/i, "");
+              const mounted = await fsMount(addr, finalDest, {
+                mountPoint,
+                readOnly: mountReadOnly,
+              });
               mountedAt = mounted.mount_point;
             } catch (e) {
               if (!isLive()) return;

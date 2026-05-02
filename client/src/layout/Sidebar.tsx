@@ -4,6 +4,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import {
   Cable,
   Upload,
+  PackageOpen,
   LibraryBig,
   Search,
   HardDrive,
@@ -42,6 +43,7 @@ const items: NavItem[] = [
   // ─ Workflow: get set up, send things, browse ─
   { to: "/connection", key: "connect", fallback: "Connection", icon: Cable, section: { key: "nav_section_workflow", fallback: "Workflow" } },
   { to: "/upload", key: "upload", fallback: "Upload", icon: Upload },
+  { to: "/install-package", key: "install_package", fallback: "Install Package", icon: PackageOpen },
   { to: "/library", key: "library", fallback: "Library", icon: LibraryBig },
   { to: "/search", key: "search", fallback: "Search", icon: Search },
   { to: "/volumes", key: "volumes", fallback: "Volumes", icon: HardDrive },

@@ -34,6 +34,7 @@
 //!   GET  /api/ps5/list-dir?path=...   → list immediate children of a directory on PS5
 
 mod engine_log;
+mod pkg_install;
 
 use axum::{
     extract::{Path, Query, State},
@@ -2708,6 +2709,27 @@ async fn list_jobs(State(state): State<AppState>) -> impl IntoResponse {
 /// running the engine standalone (`cargo run -p ps5upload-engine`)
 /// doesn't get auto-killed when their stdin closes (e.g. piping a
 /// file in, or running headless under nohup).
+/// Cooperative shutdown signal. Set by the parent-watcher thread when
+/// it sees stdin EOF (parent died). `axum::serve(...).with_graceful_shutdown`
+/// awaits this future, drains in-flight requests up to the cap, then
+/// returns. Replaces a `process::exit(0)` torn-down hard exit that left
+/// in-flight transfers / pkg-host streams dropped abruptly.
+static SHUTDOWN: tokio::sync::OnceCell<tokio::sync::Notify> =
+    tokio::sync::OnceCell::const_new();
+
+async fn shutdown_signal() {
+    let notify = SHUTDOWN
+        .get_or_init(|| async { tokio::sync::Notify::new() })
+        .await;
+    notify.notified().await;
+}
+
+fn trigger_shutdown() {
+    if let Some(notify) = SHUTDOWN.get() {
+        notify.notify_waiters();
+    }
+}
+
 fn spawn_parent_watcher() {
     if std::env::var("PS5UPLOAD_PARENT_WATCH").as_deref() != Ok("1") {
         return;
@@ -2723,20 +2745,26 @@ fn spawn_parent_watcher() {
             match stdin.read(&mut buf) {
                 Ok(0) => {
                     eprintln!(
-                        "[engine] parent process died (stdin EOF); exiting to release :19113",
+                        "[engine] parent process died (stdin EOF); draining in-flight requests then exiting",
                     );
+                    trigger_shutdown();
+                    // Belt-and-braces watchdog: if axum's
+                    // graceful-shutdown drain takes longer than
+                    // 10 seconds (e.g. a stuck pkg-host range read),
+                    // hard-exit so we don't keep the port held by a
+                    // zombie engine after the parent is gone.
+                    std::thread::sleep(std::time::Duration::from_secs(10));
+                    eprintln!("[engine] graceful shutdown timed out; hard exit");
                     std::process::exit(0);
                 }
                 Ok(_) => continue,
                 Err(e) => {
-                    // A read error on a piped stdin (broken pipe,
-                    // bad file descriptor) is essentially the same
-                    // signal — the parent's end of the pipe is gone.
-                    // Don't loop on the error; exit so we release the
-                    // port instead of becoming a zombie process.
                     eprintln!(
-                        "[engine] parent-watch stdin read error: {e}; exiting to release :19113",
+                        "[engine] parent-watch stdin read error: {e}; draining in-flight requests then exiting",
                     );
+                    trigger_shutdown();
+                    std::thread::sleep(std::time::Duration::from_secs(10));
+                    eprintln!("[engine] graceful shutdown timed out; hard exit");
                     std::process::exit(0);
                 }
             }
@@ -2811,6 +2839,13 @@ async fn main() {
         .route("/api/events", get(events_stream))
         .route("/api/engine-logs", get(engine_logs_tail))
         .with_state(state)
+        // .pkg install — sessions live in their own state because the
+        // HTTP-host serving handler needs Mutex-guarded session lookup
+        // independent of the main engine state. Merged at this point
+        // so the pkg routes share the same listener + CORS + body limit.
+        .merge(pkg_install::router(std::sync::Arc::new(
+            pkg_install::PkgInstallState::default(),
+        )))
         // The engine binds 127.0.0.1 only, so cross-origin fetches come
         // from the local Tauri webview (dev: http://localhost:1420, prod:
         // tauri://localhost) or any local script (`curl`, tests,
@@ -2867,7 +2902,16 @@ async fn main() {
             std::process::exit(2);
         }
     };
-    if let Err(e) = axum::serve(listener, app).await {
+    // Graceful shutdown: when the parent-watcher fires (stdin EOF), the
+    // SHUTDOWN OnceCell-guarded Notify wakes this future, axum stops
+    // accepting new connections, drains in-flight ones, then returns.
+    // The 10-second watchdog in spawn_parent_watcher is the hard ceiling
+    // — if a stuck request blocks the drain (rare; only for pkg-host
+    // range reads on a dying PS5), we fall through to process::exit(0).
+    if let Err(e) = axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+    {
         eprintln!("[ps5upload-engine] axum serve terminated: {e}");
         std::process::exit(3);
     }

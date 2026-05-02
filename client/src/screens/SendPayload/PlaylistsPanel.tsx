@@ -520,7 +520,7 @@ function PlaylistCard({
               </div>
               {/* Per-step IP override. Empty = use the playlist-wide
                   IP entered above. Useful for sequences targeting
-                  multiple PS5s (push GoldHEN to dev kit, push
+                  multiple PS5s (push a loader to dev kit, push
                   harness to test kit). */}
               <label className="flex shrink-0 items-center gap-1 text-[10px] text-[var(--color-muted)]">
                 {tr("playlist_step_ip", undefined, "ip")}

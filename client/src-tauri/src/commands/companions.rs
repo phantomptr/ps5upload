@@ -1,15 +1,15 @@
-//! Probe a PS5 for known scene-tool ports.
+//! Probe a PS5 for known third-party tool ports.
 //!
-//! A jailbroken PS5 typically hosts a few compositional tools —
-//! etaHEN for homebrew launch, ftpsrv for file transfer — each
-//! listening on a well-known TCP port. A cheap "what's currently
-//! alive?" surface is just to connect-probe each port.
+//! A jailbroken PS5 typically hosts a few compositional tools — a
+//! homebrew enabler / launcher, an FTP server, etc. — each listening
+//! on a well-known TCP port. A cheap "what's currently alive?" surface
+//! is just to connect-probe each port.
 //!
 //! This command is deliberately dumb: TCP connect with a short timeout,
-//! report up/down. We don't attempt a handshake or version check — the
-//! scene tools each have their own protocols we don't want to speak
-//! from here. The probe is purely informational; features that actually
-//! need injection go through ps5upload's own built-in path, not this.
+//! report up/down. We don't attempt a handshake or version check — each
+//! third-party tool has its own protocol we don't want to speak from
+//! here. The probe is purely informational; features that actually need
+//! injection go through ps5upload's own built-in path, not this.
 //!
 //! The UI filters for `reachable == true` before rendering, so the
 //! strip shows **only the tools the user currently has loaded**, not a
@@ -49,20 +49,18 @@ struct Companion {
 /// management port, so it isn't surfaced as a separate companion —
 /// if the payload is alive, injection is available.
 ///
-/// NOTE: we dropped NineS and kldload. NineS is superseded by the
-/// payload's built-in injector; kldload only applies to ≤6.x firmware
-/// which isn't a target anymore. If a user still runs them, they know
-/// those ports and don't need us to probe them. The UI hides
-/// unreachable rows so keeping a long list here would just clutter the
-/// code without affecting the user's strip.
+/// NOTE: we trimmed the probe list to what's still relevant on
+/// 7.xx+ firmware; the payload's built-in injector replaces older
+/// helpers. The UI hides unreachable rows so keeping a long list here
+/// would just clutter the code without affecting the user's strip.
 const COMPANIONS: &[Companion] = &[
     Companion {
-        name: "etaHEN",
+        name: "Homebrew enabler",
         role: "Homebrew enabler + launcher",
         port: 2323,
     },
     Companion {
-        name: "ftpsrv",
+        name: "FTP",
         role: "FTP server payload",
         port: 2121,
     },
@@ -72,7 +70,7 @@ const COMPANIONS: &[Companion] = &[
 /// we couldn't even try (e.g. DNS failure for the host); `false` means
 /// TCP refused or timed out; `true` means the port accepted a
 /// connection. Errors are surfaced with a short message so the UI can
-/// render "NineS · not reachable · connection refused" when helpful.
+/// render "FTP · not reachable · connection refused" when helpful.
 #[derive(Serialize)]
 pub struct CompanionStatus {
     name: &'static str,

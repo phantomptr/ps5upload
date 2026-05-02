@@ -9,12 +9,10 @@ import {
   XCircle,
   AlertTriangle,
   FolderOpen,
-  ExternalLink,
   History,
   Trash2,
   RotateCcw,
 } from "lucide-react";
-import { open as openExternal } from "@tauri-apps/plugin-shell";
 
 import {
   useConnectionStore,
@@ -261,7 +259,7 @@ export default function SendPayloadScreen() {
         description={tr(
           "send_payload_description",
           undefined,
-          "Send any PS5 payload file — .elf, .bin, .js, or .lua (GoldHEN, etaHEN, kstuff, custom homebrew loaders, browser-stage exploits, plugin scripts) — to your PS5. Same flow as the Connection tab, just pointed at a file you choose.",
+          "Send any PS5 payload file — .elf, .bin, .js, or .lua (kstuff, custom homebrew loaders, browser-stage exploits, plugin scripts) — to your PS5. Same flow as the Connection tab, just pointed at a file you choose.",
         )}
       />
 
@@ -447,89 +445,6 @@ export default function SendPayloadScreen() {
 
       <PlaylistsPanel host={host} port={parsedPort ?? PS5_LOADER_PORT} />
 
-      <section className="mt-8 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5">
-        <h2 className="mb-2 text-sm font-semibold">Where to find payloads</h2>
-        <p className="mb-3 text-xs text-[var(--color-muted)]">
-          These scene collections ship precompiled ELFs that work with
-          this loader flow. Download the files, then choose them above.
-        </p>
-        {/* Responsive grid — 2 columns at md, 3 at xl, 4 at 2xl —
-            so the source list doesn't stretch into a tall single
-            stripe below the form. */}
-        <ul className="grid gap-2 text-xs md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-          <PayloadSource
-            name="etaHEN"
-            url="https://github.com/etaHEN/etaHEN/releases"
-            note="AIO homebrew enabler — kernel patches, debug menu, app store UI, and a built-in loader. Tagged by firmware range."
-          />
-          <PayloadSource
-            name="kstuff-lite"
-            url="https://github.com/EchoStretch/kstuff-lite/releases"
-            note="Slim kernel-patch variant — smaller footprint than full kstuff. Use when you want self-decryption and signing but not the extra debug knobs."
-          />
-          <PayloadSource
-            name="VoidShell"
-            url="https://www.mediafire.com/file/fcqrr0"
-            note="Lightweight payload shell from scene drops. Hosted on MediaFire — verify the file hash against a trusted source before loading."
-          />
-          <PayloadSource
-            name="ShadowMountPlus"
-            url="https://github.com/drakmor/ShadowMountPlus/releases"
-            note="Auto-mounts .exfat / .ffpkg / .ffpfs images dropped into /data/shadowmount/. Optional — ps5upload already mounts .exfat and .ffpkg natively via Library → Mount."
-          />
-          <PayloadSource
-            name="BD-UN-JB"
-            url="https://github.com/Gezine/BD-UN-JB/releases"
-            note="Re-runs the BD-JB exploit on an already-jailbroken PS5 — restores a clean jailbreak state after a suspend-crash or userland crash without a full reboot."
-          />
-          <PayloadSource
-            name="ftpsrv"
-            url="https://github.com/ps5-payload-dev/ftpsrv/releases"
-            note="Small FTP server payload — browse and transfer files with any FTP client once it's running. Complements ps5upload for quick one-off pulls."
-          />
-          <PayloadSource
-            name="ChronicLoader"
-            url="https://github.com/ItsDeidara/ChronicLoader-PS5-Payload/releases"
-            note="Payload updater + autoload.txt manager — chain-loads your curated list of payloads on boot from a single ELF."
-          />
-          <PayloadSource
-            name="garlic-savemgr"
-            url="https://github.com/earthonion/garlic-savemgr/releases"
-            note="Local PS5 save manager — decrypt, import, export, and resign save data without cloud round-trips."
-          />
-          <PayloadSource
-            name="nanoDNS"
-            url="https://github.com/drakmor/nanoDNS/releases"
-            note="DNS proxy server for PS5 (and PS4). Useful for redirecting platform traffic during scene-tool testing."
-          />
-          <PayloadSource
-            name="np-fake-signin"
-            url="https://github.com/earthonion/np-fake-signin/releases"
-            note="Sets the PSN state to “signed in” without a real account — unblocks features gated on sign-in state for offline testing."
-          />
-          <PayloadSource
-            name="ps5-app-dumper"
-            url="https://github.com/EchoStretch/ps5-app-dumper/releases"
-            note="Dumps installed PS5 titles from pfsmnt to USB as a portable folder — for archival or cross-console transfer."
-          />
-          <PayloadSource
-            name="websrv"
-            url="https://github.com/ps5-payload-dev/websrv/releases"
-            note="Simple HTTP server on port 8080. Handy for quick file drops or triggering payloads from a browser on another device."
-          />
-          <PayloadSource
-            name="ps5debug"
-            url="https://github.com/someguythatmods/ps5debug/releases"
-            note="PS5 port of ps4debug — remote debugger API for memory read/write and process control from a host tool."
-          />
-        </ul>
-        <p className="mt-3 text-[11px] text-[var(--color-muted)]">
-          Firmware compatibility matters: most exploits target a
-          specific PS5 firmware range. Cross-check the payload's
-          README against your console's firmware (shown on the
-          Connection tab when the payload is running).
-        </p>
-      </section>
     </div>
   );
 }
@@ -611,30 +526,6 @@ function StatusDot({ ok }: { ok: boolean }) {
       }`}
       aria-label={ok ? "success" : "failed"}
     />
-  );
-}
-
-function PayloadSource({
-  name,
-  url,
-  note,
-}: {
-  name: string;
-  url: string;
-  note: string;
-}) {
-  return (
-    <li className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
-      <button
-        type="button"
-        onClick={() => openExternal(url)}
-        className="flex items-center gap-1.5 text-sm font-medium hover:text-[var(--color-accent)]"
-      >
-        {name}
-        <ExternalLink size={12} />
-      </button>
-      <div className="mt-1 text-[var(--color-muted)]">{note}</div>
-    </li>
   );
 }
 

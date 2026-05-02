@@ -18,7 +18,7 @@ import {
  *
  * A playlist is a named ordered list of (payload_path, sleep_after_ms)
  * steps the user can replay against any reachable PS5. Useful for
- * scripted boot sequences — e.g. send GoldHEN, sleep 5s for it to
+ * scripted boot sequences — e.g. send a loader, sleep 5s for it to
  * settle, send a debug payload, sleep 2s, send the launcher.
  *
  * Whole-document persistence: the entire playlist set is saved to

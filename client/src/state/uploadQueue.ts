@@ -72,6 +72,10 @@ export interface QueueItem {
   excludes: string[];
   /** Image-only: mount the uploaded image after the transfer commits. */
   mountAfterUpload: boolean;
+  /** Image-only: when mounting, mount read-only (default true — RO
+   *  prevents the PS5 from silently writing save-data into the image
+   *  and corrupting it on next mount). */
+  mountReadOnly: boolean;
   /** Stable tx_id for this queue item, minted at add-time and
    *  persisted alongside the item. Used so a queue interrupted by
    *  app restart can resume against the payload's existing journal
@@ -114,6 +118,7 @@ export type AddQueueItem = Pick<
   | "reconcileMode"
   | "excludes"
   | "mountAfterUpload"
+  | "mountReadOnly"
 >;
 
 interface QueueState {
@@ -259,9 +264,17 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
           item.mountAfterUpload
         ) {
           try {
+            // Mount point lives next to the source file (same logic as
+            // transfer.ts): strip the image extension from the resolved
+            // destination so /data/homebrew/MyGame.ffpkg mounts at
+            // /data/homebrew/MyGame/. Source + mount discoverable by
+            // every PS5 manager that scans /data/homebrew/.
+            const finalDest = snap.dest ?? item.resolvedDest;
+            const mountPoint = finalDest.replace(/\.(exfat|ffpkg|ffpfs)$/i, "");
             const mounted = await fsMount(
               item.addr,
-              snap.dest ?? item.resolvedDest,
+              finalDest,
+              { mountPoint, readOnly: item.mountReadOnly },
             );
             mountedAt = mounted.mount_point;
           } catch (e) {

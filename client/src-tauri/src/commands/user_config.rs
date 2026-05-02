@@ -118,5 +118,19 @@ pub async fn user_config_save(app: AppHandle, config: JsonValue) -> Result<(), S
         let _ = std::fs::remove_file(&tmp);
         return Err(format!("rename {tmp:?} -> {path:?}: {e}"));
     }
+    // Sync the parent directory after the rename so the directory
+    // entry update is persisted alongside the file contents. Without
+    // this, on macOS APFS / Linux ext4-without-journal-data, a power
+    // loss between the rename(2) and the next directory sync can lose
+    // the rename (and revert to the previous settings.json). Sony's
+    // BGFT install spool / payload's manifest spool use the same
+    // pattern. fsync on a directory fd is a noop on Windows but the
+    // tauri build target supports it on every Unix host the user runs.
+    #[cfg(unix)]
+    if let Some(parent) = path.parent() {
+        if let Ok(dir) = std::fs::File::open(parent) {
+            let _ = dir.sync_all();
+        }
+    }
     Ok(())
 }

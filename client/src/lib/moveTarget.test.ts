@@ -39,8 +39,8 @@ describe("defaultMoveSubpath", () => {
       "games",
     );
     expect(
-      defaultMoveSubpath("/data/homebrew/etaHEN/games/foo", "/data"),
-    ).toBe("homebrew/etaHEN/games");
+      defaultMoveSubpath("/data/homebrew/games/foo", "/data"),
+    ).toBe("homebrew/games");
   });
 
   it("returns empty string when entry is directly under volume root", () => {

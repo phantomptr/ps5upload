@@ -86,6 +86,7 @@ export default function UploadScreen() {
     detecting,
     detectError,
     mountAfterUpload,
+    mountReadOnly,
     destinationVolume,
     destinationSubpath,
     excludeMode,
@@ -94,6 +95,7 @@ export default function UploadScreen() {
     pickFolder,
     reset,
     setMountAfterUpload,
+    setMountReadOnly,
     setDestination,
     setExcludeMode,
     toggleExclude,
@@ -194,6 +196,7 @@ export default function UploadScreen() {
       reconcileMode,
       excludes: activeExcludes,
       mountAfterUpload: source.kind === "image" && mountAfterUpload,
+      mountReadOnly,
     });
   };
 
@@ -252,6 +255,7 @@ export default function UploadScreen() {
       reconcileMode,
       excludes: activeExcludes,
       mountAfterUpload: source.kind === "image" && mountAfterUpload,
+      mountReadOnly,
     });
   };
 
@@ -287,6 +291,7 @@ export default function UploadScreen() {
         strategy: "overwrite",
         excludes: activeExcludes,
         mountAfterUpload: source.kind === "image" && mountAfterUpload,
+      mountReadOnly,
       });
       return;
     }
@@ -346,6 +351,7 @@ export default function UploadScreen() {
           detecting={detecting}
           detectError={detectError}
           mountAfterUpload={mountAfterUpload}
+          mountReadOnly={mountReadOnly}
           destinationVolume={destinationVolume}
           destinationSubpath={destinationSubpath}
           availableVolumes={availableVolumes}
@@ -364,6 +370,7 @@ export default function UploadScreen() {
           }}
           onUseWrappedHint={(p) => pickFolder(p)}
           onSetMountAfterUpload={setMountAfterUpload}
+          onSetMountReadOnly={setMountReadOnly}
           onSetDestination={setDestination}
           onSetExcludeMode={setExcludeMode}
           onToggleExclude={toggleExclude}
@@ -445,6 +452,7 @@ function Step2Options(props: {
   detecting: boolean;
   detectError: string | null;
   mountAfterUpload: boolean;
+  mountReadOnly: boolean;
   destinationVolume: string | null;
   destinationSubpath: string;
   availableVolumes: Volume[];
@@ -455,6 +463,7 @@ function Step2Options(props: {
   onClear: () => void;
   onUseWrappedHint: (path: string) => void;
   onSetMountAfterUpload: (on: boolean) => void;
+  onSetMountReadOnly: (on: boolean) => void;
   onSetDestination: (v: string | null, s?: string) => void;
   onSetExcludeMode: (m: ExcludeMode) => void;
   onToggleExclude: (p: string) => void;
@@ -468,6 +477,7 @@ function Step2Options(props: {
     detecting,
     detectError,
     mountAfterUpload,
+    mountReadOnly,
     destinationVolume,
     destinationSubpath,
     availableVolumes,
@@ -478,6 +488,7 @@ function Step2Options(props: {
     onClear,
     onUseWrappedHint,
     onSetMountAfterUpload,
+    onSetMountReadOnly,
     onSetDestination,
     onSetExcludeMode,
     onToggleExclude,
@@ -555,6 +566,8 @@ function Step2Options(props: {
         <MountAfterUploadCard
           checked={mountAfterUpload}
           onChange={onSetMountAfterUpload}
+          readOnly={mountReadOnly}
+          onChangeReadOnly={onSetMountReadOnly}
         />
       )}
 
@@ -1137,9 +1150,13 @@ function FolderStatsCard({
 function MountAfterUploadCard({
   checked,
   onChange,
+  readOnly,
+  onChangeReadOnly,
 }: {
   checked: boolean;
   onChange: (on: boolean) => void;
+  readOnly: boolean;
+  onChangeReadOnly: (on: boolean) => void;
 }) {
   return (
     <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5">
@@ -1154,8 +1171,35 @@ function MountAfterUploadCard({
           <div className="font-medium">Mount after upload</div>
           <div className="mt-0.5 text-xs text-[var(--color-muted)]">
             After the image lands on the PS5, the payload mounts it via the
-            kernel's LVD backend. Turn off if you only want to stage the
-            image without mounting.
+            kernel's LVD backend. Off by default — turn on if you also want
+            the image attached so the title shows up in the launcher
+            immediately.
+          </div>
+        </div>
+      </label>
+
+      {/* Sub-toggle: read-only mode. Visible (greyed when mount-after-upload
+          is off) so users can see the option exists. Default on — keeps the
+          PS5 from silently writing save-data back into the image and
+          corrupting it on next mount. */}
+      <label
+        className={`mt-3 ml-6 flex items-start gap-3 text-sm ${
+          checked ? "" : "opacity-50"
+        }`}
+      >
+        <input
+          type="checkbox"
+          checked={readOnly}
+          onChange={(e) => onChangeReadOnly(e.target.checked)}
+          disabled={!checked}
+          className="mt-0.5 accent-[var(--color-accent)]"
+        />
+        <div>
+          <div className="font-medium">Mount read-only</div>
+          <div className="mt-0.5 text-xs text-[var(--color-muted)]">
+            Recommended. Prevents the PS5 from writing save data into the
+            image (which would silently corrupt the file on disk and break
+            re-mount). Turn off only for editable scratch images.
           </div>
         </div>
       </label>
@@ -1169,10 +1213,12 @@ function MountAfterUploadCard({
  *  but hint copy stays neutral and describes the destination in plain
  *  "what goes here" terms rather than naming specific managers. */
 const DESTINATION_PRESETS: { label: string; subpath: string; hint: string }[] = [
-  { label: "etaHEN/games", subpath: "etaHEN/games", hint: "Installed games" },
-  { label: "homebrew", subpath: "homebrew", hint: "Homebrew apps" },
+  // homebrew is first because it's the community-standard scan path
+  // (third-party PS5 game scanners typically read from <volume>/homebrew).
+  // Files landed here are auto-discoverable by other PS5 tools.
+  { label: "homebrew", subpath: "homebrew", hint: "Homebrew apps & games (recommended)" },
   { label: "exfat", subpath: "exfat", hint: "Disk images" },
-  { label: "ps5upload", subpath: "ps5upload", hint: "Generic folder" },
+  { label: "ps5upload", subpath: "ps5upload", hint: "Tool-specific generic folder" },
 ];
 
 function DestinationCard({

@@ -495,6 +495,22 @@ pub struct MountResult {
     pub mount_point: String,
     pub dev_node: String,
     pub fstype: String,
+    /// True if `<mount_point>/sce_sys/param.json` exists immediately
+    /// after the mount. False when the user built an image with an
+    /// extra top-level folder (game files at
+    /// `<mount>/MyGame/sce_sys/...` instead of `<mount>/sce_sys/...`)
+    /// or when the image isn't a game (e.g. an arbitrary disk image).
+    /// The mount itself succeeds either way; this flag lets the UI
+    /// warn that Register/Launch will fail without re-building the
+    /// image. Added in 2.2.32. Older payloads omit the field — serde
+    /// defaults to `true` so a missing field doesn't trigger a false
+    /// warning on pre-2.2.32 payloads.
+    #[serde(default = "default_layout_valid")]
+    pub layout_valid: bool,
+}
+
+fn default_layout_valid() -> bool {
+    true
 }
 
 /// Mount a disk image on the PS5. `image_path` must be an absolute path

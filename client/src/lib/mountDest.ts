@@ -13,23 +13,27 @@ import { compareVersions } from "./semver";
 
 const STORAGE_KEY = "ps5upload.mount.lastDest";
 
-/** Default subpath. Matches today's mount root (`/mnt/ps5upload/`)
- *  conceptually — the legacy mount path is `/mnt/ps5upload/<name>`,
- *  i.e. an empty subpath under that volume. For user-chosen volumes
- *  (`/data`, `/mnt/ext1`) the `ps5upload` subpath replicates that
- *  layout: `/mnt/ext1/ps5upload/<name>`. Keeping it as the default
- *  preserves the principle of least surprise — fresh installs match
- *  prior payload versions. */
-export const MOUNT_DEFAULT_SUBPATH = "ps5upload";
+/** Default subpath: `homebrew`. Matches the Upload screen's destination
+ *  default (also `homebrew`) so source file + mount point land in the
+ *  same conventional folder — `/data/homebrew/MyGame.ffpkg` next to
+ *  `/data/homebrew/MyGame/`. Discoverable by every PS5 manager that
+ *  scans the conventional `homebrew` paths.
+ *
+ *  Pre-2.2.32 we defaulted to "ps5upload" which matched the legacy
+ *  mount root but forced a tool-specific subfolder that no other PS5
+ *  manager scanned. Switching to homebrew aligns with the rest of the
+ *  ecosystem's conventions. Existing users who picked a custom subpath
+ *  keep it via the per-host localStorage cache. */
+export const MOUNT_DEFAULT_SUBPATH = "homebrew";
 
 /** Same four labels Upload's `DestinationCard` uses, with mount-
  *  appropriate hints. Surfaced as preset chips in the Mount modal so
- *  users can one-click-pick the conventional layout for their flow. */
+ *  users can one-click-pick the conventional layout for their flow.
+ *  homebrew is first because it's the recommended default. */
 export const MOUNT_PRESETS: { label: string; subpath: string; hint: string }[] = [
-  { label: "etaHEN/games", subpath: "etaHEN/games", hint: "Discoverable by etaHEN/GoldHen game scanners" },
-  { label: "homebrew", subpath: "homebrew", hint: "Homebrew-app convention" },
+  { label: "homebrew", subpath: "homebrew", hint: "Homebrew apps & games (recommended) — discoverable by every PS5 manager" },
   { label: "exfat", subpath: "exfat", hint: "Conventional disk-image holder" },
-  { label: "ps5upload", subpath: "ps5upload", hint: "Legacy / generic — matches the pre-2.2.25 mount root" },
+  { label: "ps5upload", subpath: "ps5upload", hint: "Tool-specific generic folder (legacy)" },
 ];
 
 /** Volume roots where mounting is honored by 2.2.25+ payloads. The

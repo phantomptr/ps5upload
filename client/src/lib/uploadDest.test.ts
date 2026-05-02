@@ -63,10 +63,10 @@ describe("resolveUploadDest", () => {
   it("normalizes subpaths — leading/trailing slashes don't leak", () => {
     const { dest } = resolveUploadDest(
       "/data",
-      "/etaHEN/games/",
+      "/homebrew/games/",
       "/Users/me/FOO",
     );
-    expect(dest).toBe("/data/etaHEN/games/FOO");
+    expect(dest).toBe("/data/homebrew/games/FOO");
   });
 
   it("falls back to /data when volume is null (preset 'auto')", () => {
