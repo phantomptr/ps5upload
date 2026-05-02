@@ -16,7 +16,7 @@ export interface PlaylistStep {
   /** Optional per-step IP override. When non-empty, the runner uses
    *  this address for THIS step's send instead of the playlist-wide
    *  IP supplied at run time. Useful for sequences that target
-   *  multiple PS5s in one go (e.g. push GoldHEN to dev kit, then
+   *  multiple PS5s in one go (e.g. push a loader to dev kit, then
    *  push the harness to the test kit). Empty / undefined means
    *  "use the IP the user typed when they hit Run." */
   ip?: string;

@@ -4,6 +4,80 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.2.31
+
+**New: Install Package tab — install `.pkg` files via BGFT, no third-party loaders required**
+
+A new sidebar tab between Upload and Library. Drag-drop or browse
+for `.pkg` files (single or split-pkg `<base>.pkg` + `<base>.pkg.0`,
+`<base>.pkg.1`, ...). Each picked file is parsed for metadata
+(content_id, title from PARAM.SFO, category, icon) and added to a
+queue. The queue runs sequentially — one BGFT install at a time on
+the PS5 — and persists across app restarts via localStorage.
+
+**How it works**: ps5upload's host app spins up an HTTP listener on
+the same port as the engine (default 19113), hands the PS5 a
+`http://<pc-ip>:<port>/pkg-host/<session>/file.pkg` URL, and tells
+the payload to call `sceBgftServiceDownloadRegisterTask` +
+`sceBgftServiceIntDownloadStartTask`. Sony's BGFT service in PS5
+firmware fetches the bytes from our HTTP server with Range
+requests, decrypts with the device's own keys, and installs to
+`/user/app/<title-id>`. Progress is polled from BGFT every second
+and surfaced in the queue UI.
+
+**Prerequisites — exactly these and nothing else**:
+- kstuff loaded (kernel R/W, same as everything else ps5upload does)
+- ps5upload payload running on `:9114` mgmt port
+
+No third-party loader required. The payload calls Sony's BGFT
+directly using the debugger authid that kstuff already grants us.
+
+**Split-pkg support**: pick the lead `<base>.pkg` and the engine
+auto-detects siblings, then serves them as a single virtual file
+to BGFT via HTTP-Range mapping that crosses part boundaries on
+the fly. No on-disk concatenation; no double-write.
+
+**Error handling**: BGFT's well-known error codes are mapped to
+user-facing messages in the queue rows:
+
+| Code | Message |
+|---|---|
+| `0x80990088` | This title is already installed |
+| `0x80990085` | Need defragmented free space — Settings → Storage → Free up space |
+| `0x80990039` / `0x80A30026` | Out of free space |
+| `0x80990086` | Leftover download in notifications — clear it from PS5 first |
+| `0x80990036` | DRM mismatch — this PKG isn't valid for this console |
+
+Plus engine-side sentinels (`0xE0000001..`) for "BGFT unavailable
+on this firmware" diagnostics.
+
+**Non-standard PKG handling**: if the magic bytes aren't the stock
+`\x7FCNT`, the queue still accepts the file and surfaces a yellow
+caution row showing the actual magic. BGFT decides whether to
+accept it; the host doesn't pre-reject. Keeps community FPKG
+variants working without manual overrides.
+
+**Hardware validation**: the install-end-to-end path needs
+hardware testing on FW 9.60 + a real `.pkg`. Parser, HTTP serving,
+queue UI, frame protocol, and `-Werror` payload build all clean
+host-side. The first user with a working `.pkg` to test will tell
+us whether `libSceBgft.sprx` exports + authid expectations match
+what we implemented; if not, the engine surfaces a structured
+diagnostic via `bgft_install_unavailable_reason()`.
+
+**Code paths added**:
+- `engine/crates/ps5upload-pkg` — new crate, PKG header parser
+- `engine/crates/ps5upload-engine/src/pkg_install.rs` — sessions, HTTP Range, route handlers
+- `engine/crates/ps5upload-core/src/pkg_install.rs` — payload client + err_code mapping
+- `payload/src/bgft.c` + `payload/include/bgft.h` — sceBgft* bindings
+- `payload/src/runtime.c` — PKG_INSTALL + PKG_INSTALL_STATUS handlers
+- `engine/crates/ftx2-proto/src/lib.rs` — opcodes 82-85
+- `client/src/screens/InstallPackage` — UI
+- `client/src/state/installQueue.ts` — Zustand store + worker loop
+- `client/src/layout/Sidebar.tsx` + `App.tsx` — nav
+
+---
+
 ## 2.2.30
 
 **Misleading "all strategies failed" error after a successful launch**
@@ -340,7 +414,7 @@ as you type:
 
 - Matches against `name` (folder/file name), `titleId` (the
   PPSA01342-style ID from `sce_sys/param.json`), absolute `path`,
-  scan `scope` (`etaHEN/games`, `homebrew`, …), and `volume`
+  scan `scope` (`homebrew`, `games`, …), and `volume`
   (`/data`, `/mnt/ext1`, …). Case-insensitive.
 - Multi-word queries AND-match across those fields, so
   `dead ext1` finds Dead Space on `/mnt/ext1` but not the copy
@@ -361,8 +435,8 @@ no stale-filter surprises on the next visit.
 
 Mounting a `.exfat` or `.ffpkg` image used to drop it under a fixed
 `/mnt/ps5upload/<derived-name>/` location with no user input. A few
-users wanted to land mounts elsewhere — typically under
-`/mnt/ext1/etaHEN/games/` so etaHEN's scanner picks them up
+users wanted to land mounts elsewhere — typically under a community
+scan-path on an external drive so PS5 game scanners pick them up
 automatically, or under `/data/<name>/` to keep everything on internal
 storage. This release wires up that choice using the same UX as the
 Upload screen's destination picker.
@@ -374,18 +448,18 @@ The Library Mount button now opens a modal with three inputs:
 - **Volume** — dropdown of every writable volume the PS5 reports
   (`/data`, `/mnt/ext1`, `/mnt/usb0`, …) with a free-space readout
   next to each path.
-- **Subpath** — free-form text with four preset chips matching the
-  Upload screen: `etaHEN/games`, `homebrew`, `exfat`, `ps5upload`
-  (the legacy default).
+- **Subpath** — free-form text with preset chips matching the
+  Upload screen, including `homebrew` (the recommended default) and
+  `ps5upload` (the legacy default).
 - **Name** — auto-derived from the image filename (`Dead
   Space.exfat` → `Dead Space`), editable for renames or
   normalization. No slashes.
 
 The resolved path appears under the inputs in real time, plus a
 soft warning when the chosen path is outside `/mnt/ps5upload/` —
-scene tools (etaHEN, GoldHen) typically only scan that root, so a
+third-party PS5 game scanners typically only scan that root, so a
 mount under `/mnt/ext1/foo/` will work for the payload but may not
-show up in third-party game scanners.
+show up in those scanners.
 
 The volume + subpath the user picks is persisted per-host (same
 shape as the FileSystem last-path persistence shipped in 2.2.24),
@@ -408,7 +482,7 @@ nobody's existing workflow breaks.
   legacy `mount_name`-based path, so older clients still work.
 
 - New `fs_mount_mkdir_p` helper handles deep mount paths
-  (`/mnt/ext1/etaHEN/games/foo`) by creating each intermediate
+  (`/mnt/ext1/games/<title>/foo`) by creating each intermediate
   directory if missing. Existing dirs are tolerated (EEXIST
   ignored at every segment).
 
@@ -1184,8 +1258,8 @@ reviewable instead of one massive translation PR.
   optional `ip` and `port` inputs alongside `sleep`. Empty falls
   back to the playlist-wide IP / port entered at Run time.
   Useful for sequences that target multiple PS5s in one go (push
-  GoldHEN to dev kit, then push the harness to the test kit) or
-  for scene payloads bound to non-default loader ports.
+  a loader to dev kit, then push the harness to the test kit) or
+  for payloads bound to non-default loader ports.
 
 ## 2.2.10
 
@@ -1220,7 +1294,7 @@ reviewable instead of one massive translation PR.
 
 - **From / To paths shown on their own lines** instead of crammed
   into a single right-arrow detail string. Long PS5 paths
-  (`/data/etaHEN/games/PPSA09519.exfat`) wrap cleanly now.
+  (`/data/homebrew/games/PPSA09519.exfat`) wrap cleanly now.
 - **Stop button on running rows.** Each in-flight Activity entry
   has a Stop button that dispatches to the appropriate cancel
   mechanism: `fsOpCancel` for ops with a stored op_id (Library
@@ -1546,4 +1620,4 @@ reviewable instead of one massive translation PR.
   wedges a userland payload; register games from a PS5-side tool
   instead.
 - **Scene-tools strip.** Only shows payloads that are actually
-  supported. NineS and kldload are no longer probed.
+  supported on current firmware; legacy probe targets were dropped.

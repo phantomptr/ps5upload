@@ -5,7 +5,7 @@
 //   - `titleId` — PPSA01342-style ID from sce_sys/param.json (games)
 //   - `path`    — absolute PS5 path (so "ext1" finds everything on
 //                 /mnt/ext1, etc.)
-//   - `scope`   — the scan suffix (e.g. "etaHEN/games", "homebrew")
+//   - `scope`   — the scan suffix (e.g. "homebrew/games", "homebrew")
 //
 // We deliberately do NOT search the per-row `meta.title` (the
 // pretty title from param.json) here — meta is fetched

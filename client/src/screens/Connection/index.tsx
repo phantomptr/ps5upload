@@ -15,7 +15,6 @@ import {
   type BundledPayloadInfo,
   type CompanionStatus,
 } from "../../api/ps5";
-import { open as openExternal } from "@tauri-apps/plugin-shell";
 import { pollUntilReady, type PollHandle } from "../../lib/pollUntilReady";
 import { parsePS5Firmware } from "../../lib/ps5Firmware";
 import { compareVersions } from "../../lib/semver";
@@ -624,7 +623,7 @@ function CompanionStrip({ host }: { host: string }) {
     };
     run();
     // Re-probe every 30s while mounted. Connection-tab visits are
-    // short, so a longer interval would miss "I just sent etaHEN, does
+    // short, so a longer interval would miss "I just sent a loader, does
     // it show up?" — 30s is fast enough to feel responsive and slow
     // enough to not spam the LAN.
     const id = window.setInterval(run, 30_000);
@@ -674,7 +673,7 @@ function CompanionStrip({ host }: { host: string }) {
           {tr(
             "connection_scene_none",
             undefined,
-            "None detected. Companion tools (etaHEN, ftpsrv) will appear here once they're loaded.",
+            "None detected. Companion tools will appear here once they're loaded.",
           )}
         </div>
       ) : (
@@ -688,30 +687,18 @@ function CompanionStrip({ host }: { host: string }) {
   );
 }
 
-const COMPANION_URLS: Record<string, string> = {
-  etaHEN: "https://github.com/etaHEN/etaHEN/releases",
-  ftpsrv: "https://github.com/ps5-payload-dev/ftpsrv/releases",
-};
-
 function CompanionPill({ row }: { row: CompanionStatus }) {
-  const href = COMPANION_URLS[row.name];
   const tooltip = row.reachable
-    ? `${row.role} — click to open ${row.name} on GitHub`
+    ? `${row.role} — listening on port ${row.port}`
     : row.error ?? "not reachable";
-  const onClick = () => {
-    if (href) openExternal(href);
-  };
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={!href}
+    <span
       title={tooltip}
       className={
-        "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 transition-colors " +
+        "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 " +
         (row.reachable
-          ? "bg-[var(--color-good-soft)] text-[var(--color-good)] hover:bg-[var(--color-good)]/20"
-          : "text-[var(--color-muted)] hover:bg-[var(--color-surface-3)]")
+          ? "bg-[var(--color-good-soft)] text-[var(--color-good)]"
+          : "text-[var(--color-muted)]")
       }
     >
       <span
@@ -724,7 +711,7 @@ function CompanionPill({ row }: { row: CompanionStatus }) {
       />
       <span className="font-medium">{row.name}</span>
       <span className="font-mono text-[10px] opacity-70">:{row.port}</span>
-    </button>
+    </span>
   );
 }
 

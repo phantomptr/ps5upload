@@ -1456,9 +1456,8 @@ int register_browser_launch(void) {
  * ptrace_remote.c. We call into ShellUI for launch because
  * Sony's launcher does a caller-pid check that only ShellUI
  * satisfies. */
-extern int shellui_rpc_init(void);
-extern int shellui_rpc_ready(void);
-extern int shellui_rpc_launch_app(const char *title_id);
+/* shellui_rpc API — declarations come from shellui_rpc.h. */
+#include "shellui_rpc.h"
 
 int launch_title(const char *title_id, const char **err_reason_out) {
     register_module_init();
@@ -1466,6 +1465,46 @@ int launch_title(const char *title_id, const char **err_reason_out) {
         if (err_reason_out) *err_reason_out = "launch_title_id_invalid";
         return -1;
     }
+
+    /* Eager service init + foreground-user fetch BEFORE either path.
+     *
+     * Pre-2.2.32 these calls only ran in the in-process fallback —
+     * which meant the first launch attempt after a fresh register
+     * went through the ShellUI RPC path with possibly-uninitialized
+     * UserService/LncUtil state on our side, and the launch param
+     * block was built with a transient `user_id=0` returned by
+     * remote_get_foreground_user. Sony's launcher rejected with
+     * 0x8094000F ("no foreground user set") and the user had to
+     * click Launch a second time, by which point either:
+     *   (a) Sony's launcher internal state had finished settling
+     *       after the register-driven app.db update, or
+     *   (b) the in-process fallback had since run init explicitly.
+     * That's the "first time fails, second time works" pattern that
+     * users reported on FW 9.60.
+     *
+     * Moving the init + fg_user fetch up here ensures:
+     *   - sceUserServiceInitialize + sceLncUtilInitialize are warm
+     *     before the first ShellUI RPC fires, regardless of which
+     *     path we end up taking.
+     *   - We have a known-good fg_user to pass to the ShellUI RPC,
+     *     bypassing the unreliable remote query on first launch.
+     *
+     * Init functions are documented as idempotent — calling them on
+     * every launch is a few microseconds of overhead. */
+    if (g_reg.user_service_initialize) {
+        (void)g_reg.user_service_initialize(NULL);
+    }
+    if (g_reg.lnc_util_initialize) {
+        (void)g_reg.lnc_util_initialize();
+    }
+    int fg_user = 0;
+    if (g_reg.user_service_get_foreground_user) {
+        (void)g_reg.user_service_get_foreground_user(&fg_user);
+    }
+    /* fg_user may still be 0 if no profile is currently selected on
+     * the console. Sony's launcher would reject; but that's a real
+     * "user must pick a profile" case, not a transient race — let
+     * the launch attempt produce a clean error instead of looping. */
 
     /* Primary path: route the call through SceShellUI via ptrace.
      * Sony's launcher accepts the call when getpid() inside the
@@ -1494,10 +1533,19 @@ int launch_title(const char *title_id, const char **err_reason_out) {
      *         ShellUI, mmap scratch failed). Function never ran.
      *         Fall through to the in-process direct calls — those
      *         won't work on firmwares enforcing the caller-pid
-     *         check, but they're the only fallback we have. */
+     *         check, but they're the only fallback we have.
+     *
+     * Auto-retry on rc>0: certain Sony error codes are transient
+     * (the launcher's title cache hasn't picked up our register
+     * yet, or the foreground user state was momentarily stale). One
+     * 250ms-delay retry catches those without the user having to
+     * click Launch a second time. We retry on any positive code,
+     * not a specific one, because Sony's launcher reuses error
+     * code values across firmware revisions and a tighter filter
+     * would silently break on next FW. */
     (void)shellui_rpc_init();
     if (shellui_rpc_ready()) {
-        int rc = shellui_rpc_launch_app(title_id);
+        int rc = shellui_rpc_launch_app(title_id, fg_user);
         if (rc == 0) return 0;
         if (rc == -2) {
             /* Soft-success: launch was dispatched, result uncertain
@@ -1506,11 +1554,24 @@ int launch_title(const char *title_id, const char **err_reason_out) {
             return 0;
         }
         if (rc > 0) {
-            static __thread char reason_buf[64];
-            snprintf(reason_buf, sizeof(reason_buf),
-                     "launch_sony_error_0x%08x", (unsigned int)rc);
-            if (err_reason_out) *err_reason_out = reason_buf;
-            return -1;
+            /* One auto-retry after a brief delay — heals the
+             * transient "title not yet indexed" / "fg user not yet
+             * settled" races that produce the first-launch-fails
+             * pattern. The user-visible delay is ~250ms; if the
+             * second attempt also returns rc>0 it's a real error
+             * and we surface it. */
+            usleep(250000);
+            int rc2 = shellui_rpc_launch_app(title_id, fg_user);
+            if (rc2 == 0 || rc2 == -2) return 0;
+            if (rc2 > 0) {
+                static __thread char reason_buf[80];
+                snprintf(reason_buf, sizeof(reason_buf),
+                         "launch_sony_error_0x%08x", (unsigned int)rc2);
+                if (err_reason_out) *err_reason_out = reason_buf;
+                return -1;
+            }
+            /* rc2 == -1: pre-dispatch failure on retry. Fall through
+             * to the in-process path. */
         }
         /* rc == -1: pre-dispatch machinery failure; fall through. */
     }
@@ -1520,20 +1581,9 @@ int launch_title(const char *title_id, const char **err_reason_out) {
         return -1;
     }
 
-    /* Initialize services (idempotent -- safe if already init). Without
-     * these, sceLncUtilLaunchApp can return 0x8094000F ("no foreground
-     * user set") on firmware where the launcher expects explicit
-     * UserService init before a launch can succeed. */
-    if (g_reg.user_service_initialize) {
-        (void)g_reg.user_service_initialize(NULL);
-    }
-    if (g_reg.lnc_util_initialize) {
-        (void)g_reg.lnc_util_initialize();
-    }
-    int fg_user = 0;
-    if (g_reg.user_service_get_foreground_user) {
-        (void)g_reg.user_service_get_foreground_user(&fg_user);
-    }
+    /* In-process fallback: services + fg_user already fetched at the
+     * top of the function. The triple-strategy chain below uses them
+     * directly. */
     /* fg_user is used by the launchApp param block below.
      * LncAppParam.user_id needs to be the active console user, not
      * 0. */

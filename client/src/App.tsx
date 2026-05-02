@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import AppShell from "./layout/AppShell";
 import ConnectionScreen from "./screens/Connection";
 import UploadScreen from "./screens/Upload";
+import InstallPackageScreen from "./screens/InstallPackage";
 import LibraryScreen from "./screens/Library";
 import SearchScreen from "./screens/Search";
 import VolumesScreen from "./screens/Volumes";
@@ -26,6 +27,7 @@ export default function App() {
         <Route path="/whats-new" element={<ChangelogScreen />} />
         <Route path="/connection" element={<ConnectionScreen />} />
         <Route path="/upload" element={<UploadScreen />} />
+        <Route path="/install-package" element={<InstallPackageScreen />} />
         <Route path="/library" element={<LibraryScreen />} />
         <Route path="/search" element={<SearchScreen />} />
         <Route path="/volumes" element={<VolumesScreen />} />

@@ -45,7 +45,15 @@ export function humanizePs5Error(raw: string): string {
   // match unrelated Tauri / OS dialogs (e.g., "IPC permission denied"
   // during updater probes) and turned their error copy into a
   // destination-write hint. Anchor on the payload-side error shapes.
-  if (/EACCES|permission[ _]?denied|\bfs_\w*_permission/i.test(raw)) {
+  //
+  // Mount-specific errors are checked FIRST below so a payload
+  // `fs_mount_attach_failed: lvd=Permission denied md=...` doesn't
+  // get caught by this generic EACCES branch — the mount copy is
+  // strictly more useful for that frame.
+  if (
+    !/fs_mount_/i.test(raw) &&
+    /EACCES|permission[ _]?denied|\bfs_\w*_permission/i.test(raw)
+  ) {
     return "The PS5 refused to write to this destination. Try a different storage volume or destination folder.";
   }
   if (/ENOSPC|no space left|disk.*full/i.test(raw)) {
@@ -70,6 +78,68 @@ export function humanizePs5Error(raw: string): string {
   }
   if (/launch_service_unavailable|service_unavailable/i.test(raw)) {
     return "This action needs a Sony service that isn't exported on your firmware. Everything else still works.";
+  }
+
+  // ─── Sony launcher error codes (after 2.2.32 auto-retry) ──────────
+  // launch_title surfaces sceLncUtilLaunchApp's return value as
+  // `launch_sony_error_0xNNNNNNNN`. The codes below are the ones we
+  // can map to actionable user copy. Anything we don't recognize
+  // falls through to the generic "PS5 rejected the request" path.
+  const lncMatch = raw.match(/launch_sony_error_0x([0-9a-fA-F]{8})/);
+  if (lncMatch) {
+    const code = lncMatch[1].toUpperCase();
+    if (code === "8094000F") {
+      return "PS5 has no profile selected. Pick a user profile on the PS5 home screen, then try Launch again.";
+    }
+    if (code === "8094000C" || code === "8094000D") {
+      return "PS5 says the title isn't registered. Click Register first, or unregister + re-register if it was already added.";
+    }
+    if (code === "80940020" || code === "80940021") {
+      return "PS5 launcher is busy with another title. Close any running game on the PS5 and try Launch again.";
+    }
+    if (code === "8094001F") {
+      return "PS5 says this title's data is corrupted. The eboot.bin or sce_sys folder may be incomplete — re-upload the game.";
+    }
+    return `PS5 launcher returned 0x${code}. The title may have been removed, or the install isn't complete — try Re-register from the Library tab.`;
+  }
+
+  if (/launch_title_id_invalid/i.test(raw)) {
+    return "Title ID doesn't look valid. Make sure the game's PARAM.SFO has a title_id like CUSA12345 or PPSA01234.";
+  }
+
+  // ─── Mount error mapping ────────────────────────────────────────
+  // Payload errors from handle_fs_mount. These are user-fixable in
+  // most cases (re-upload, pick a different image, wait for the
+  // upload to settle).
+  if (/fs_mount_image_not_a_file/i.test(raw)) {
+    return "PS5 can't find that file at the destination. The upload may not have completed — wait a moment and retry.";
+  }
+  if (/fs_mount_unsupported_format/i.test(raw)) {
+    return "PS5 doesn't recognize this file as a mountable disk image. Only .ffpkg (UFS), .exfat, and .ffpfs are supported.";
+  }
+  if (/fs_mount_source_unstable/i.test(raw)) {
+    return "PS5 sees the file is still being written. Wait 5 seconds for the upload to finish, then click Mount again.";
+  }
+  if (/fs_mount_path_not_allowed/i.test(raw)) {
+    return "PS5 doesn't allow mounts at that path. Use /data, /user, /mnt/ext*, /mnt/usb*, or /mnt/ps5upload.";
+  }
+  if (/fs_mount_attach_failed/i.test(raw)) {
+    return "PS5 couldn't attach the image to a block device (LVD or md). Image may be corrupt — try re-uploading or rebuild it.";
+  }
+  if (/fs_mount_dev_node_missing/i.test(raw)) {
+    return "PS5 attached the image but the device node didn't appear. Reboot the PS5 and re-load the payload, then try again.";
+  }
+
+  // ─── BGFT / Install Package error codes ─────────────────────────
+  // err_code_message in ps5upload-core covers the user-facing copy for
+  // the common 0x80990xxx codes; the queue surfaces these directly.
+  // This block catches the rare cases where a code comes through raw
+  // (e.g. from a nested error wrap).
+  if (/0x80990088|already.installed/i.test(raw)) {
+    return "This title is already installed. Uninstall it first if you want to re-install.";
+  }
+  if (/0x80990085|defrag/i.test(raw)) {
+    return "Your PS5 needs defragmented free space. Settings → Storage → Free up space, then retry.";
   }
 
   // ─── Generic payload rejection — extract the reason verbatim ───────

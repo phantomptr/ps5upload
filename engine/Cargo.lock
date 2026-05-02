@@ -715,6 +715,7 @@ dependencies = [
  "axum",
  "ftx2-proto",
  "ps5upload-core",
+ "ps5upload-pkg",
  "serde",
  "serde_json",
  "tokio",
@@ -730,6 +731,16 @@ dependencies = [
  "anyhow",
  "ftx2-proto",
  "ps5upload-core",
+]
+
+[[package]]
+name = "ps5upload-pkg"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]

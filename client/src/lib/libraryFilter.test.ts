@@ -6,9 +6,9 @@ import { filterLibraryEntries } from "./libraryFilter";
 const make = (over: Partial<LibraryEntry> = {}): LibraryEntry => ({
   kind: "game",
   name: "Sample",
-  path: "/data/etaHEN/games/Sample",
+  path: "/data/homebrew/games/Sample",
   volume: "/data",
-  scope: "etaHEN/games",
+  scope: "homebrew/games",
   size: 0,
   ...over,
 });
@@ -16,7 +16,7 @@ const make = (over: Partial<LibraryEntry> = {}): LibraryEntry => ({
 const ENTRIES: LibraryEntry[] = [
   make({
     name: "Dead Space",
-    path: "/mnt/ext1/etaHEN/games/Dead Space",
+    path: "/mnt/ext1/homebrew/games/Dead Space",
     volume: "/mnt/ext1",
     titleId: "PPSA03845",
   }),
@@ -70,9 +70,13 @@ describe("filterLibraryEntries", () => {
   });
 
   it("matches by scope", () => {
+    // Both Dead Space (scope homebrew/games) and Astro (scope homebrew)
+    // share the "homebrew" prefix in scope/path.
     const r = filterLibraryEntries(ENTRIES, "homebrew");
-    expect(r).toHaveLength(1);
-    expect(r[0].name).toBe("Astro's Playroom");
+    expect(r.map((e) => e.name).sort()).toEqual([
+      "Astro's Playroom",
+      "Dead Space",
+    ]);
   });
 
   it("AND-matches multi-word queries against combined fields", () => {

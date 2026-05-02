@@ -61,7 +61,15 @@ int shellui_rpc_pid(void);
  *         succeeded — caller should treat as success and NOT fall
  *         back to in-process strategies (they would race the
  *         running launch and produce a misleading error). */
-int shellui_rpc_launch_app(const char *title_id);
+/* `user_id_hint`: foreground user id from
+ * sceUserServiceGetForegroundUser in the caller's process. If the
+ * caller has one already (e.g. `launch_title` eagerly fetches it
+ * before either path), pass it here so the launch param block
+ * uses a guaranteed-non-zero value. Pass <= 0 to fall back to
+ * fetching it via a remote sceUserServiceGetForegroundUser RPC into
+ * ShellUI — slightly slower and historically unreliable on the very
+ * first launch after a fresh register. */
+int shellui_rpc_launch_app(const char *title_id, int user_id_hint);
 
 /* Sensor reads. Each returns 0 on success, -1 on RPC failure or
  * when the underlying Sony stub returned non-zero. The output is

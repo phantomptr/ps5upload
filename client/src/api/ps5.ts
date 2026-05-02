@@ -578,6 +578,15 @@ export interface MountResult {
   fstype: string;
   read_only?: boolean;
   reused?: boolean;
+  /** Image-layout pre-flight result (added 2.2.32). True when
+   *  `<mount_point>/sce_sys/param.json` exists immediately after the
+   *  mount — meaning Register/Launch will work. False when the image
+   *  was built with an extra top-level folder, or when it isn't a
+   *  game image. The mount itself succeeds either way; the UI uses
+   *  this to surface a warning before the user clicks Register. Older
+   *  payloads (<2.2.32) omit the field; engine defaults to true so
+   *  pre-2.2.32 mounts don't trigger false warnings. */
+  layout_valid?: boolean;
 }
 
 /** Mount a disk image (.exfat / .ffpkg / .ffpfs) on the PS5 via the

@@ -107,4 +107,87 @@ describe("humanizePs5Error", () => {
       );
     });
   });
+
+  describe("Sony launcher error codes (added 2.2.32)", () => {
+    it("8094000F → no profile selected", () => {
+      expect(humanizePs5Error("launch_sony_error_0x8094000f")).toMatch(
+        /no profile selected/i,
+      );
+    });
+    it("8094000C → not registered", () => {
+      expect(humanizePs5Error("launch_sony_error_0x8094000c")).toMatch(
+        /title isn't registered/i,
+      );
+    });
+    it("80940020 → busy", () => {
+      expect(humanizePs5Error("launch_sony_error_0x80940020")).toMatch(
+        /launcher is busy/i,
+      );
+    });
+    it("8094001F → corrupted data", () => {
+      expect(humanizePs5Error("launch_sony_error_0x8094001f")).toMatch(
+        /corrupted/i,
+      );
+    });
+    it("unknown launcher code falls back to generic 'returned 0xN' copy", () => {
+      const out = humanizePs5Error("launch_sony_error_0x80940099");
+      expect(out).toMatch(/launcher returned/i);
+      expect(out).toMatch(/0x80940099/);
+    });
+    it("invalid title-id error", () => {
+      expect(humanizePs5Error("launch_title_id_invalid")).toMatch(
+        /title id doesn't look valid/i,
+      );
+    });
+  });
+
+  describe("Mount errors (added 2.2.32)", () => {
+    it("missing image file", () => {
+      expect(humanizePs5Error("fs_mount_image_not_a_file")).toMatch(
+        /can't find that file/i,
+      );
+    });
+    it("unsupported format", () => {
+      expect(humanizePs5Error("fs_mount_unsupported_format")).toMatch(
+        /\.ffpkg.*\.exfat/i,
+      );
+    });
+    it("source unstable (still being written)", () => {
+      expect(
+        humanizePs5Error(
+          "fs_mount_source_unstable: image modified 1 s ago (<3 s); wait for the upload to settle",
+        ),
+      ).toMatch(/wait.*upload/i);
+    });
+    it("path not allowed", () => {
+      expect(humanizePs5Error("fs_mount_path_not_allowed")).toMatch(
+        /doesn't allow mounts/i,
+      );
+    });
+    it("attach failed", () => {
+      expect(
+        humanizePs5Error(
+          "fs_mount_attach_failed: lvd=Permission denied md=Operation not permitted",
+        ),
+      ).toMatch(/couldn't attach.*re-uploading/i);
+    });
+    it("dev node missing", () => {
+      expect(humanizePs5Error("fs_mount_dev_node_missing")).toMatch(
+        /Reboot the PS5/i,
+      );
+    });
+  });
+
+  describe("BGFT install error codes (added 2.2.32)", () => {
+    it("0x80990088 → already installed", () => {
+      expect(humanizePs5Error("BGFT err 0x80990088 already installed")).toMatch(
+        /already installed/i,
+      );
+    });
+    it("0x80990085 → defrag space", () => {
+      expect(humanizePs5Error("BGFT err 0x80990085 needs defrag")).toMatch(
+        /defragmented free space/i,
+      );
+    });
+  });
 });

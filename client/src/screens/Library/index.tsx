@@ -174,6 +174,25 @@ export default function LibraryScreen() {
     if (stale) refresh();
   }, [payloadStatus, lastRefreshedAt, refresh]);
 
+  // Listen for Install Package completion events. The install queue
+  // dispatches `ps5upload:library:invalidate` when a BGFT install
+  // reports phase=done — and a fresh title appears in /user/app/.
+  // We force a refresh on the next render even if the 30-s stale
+  // window hasn't elapsed, so the just-installed title shows up
+  // without the user having to click Refresh.
+  useEffect(() => {
+    function onInvalidate() {
+      if (payloadStatus === "up") refresh();
+    }
+    window.addEventListener("ps5upload:library:invalidate", onInvalidate);
+    return () => {
+      window.removeEventListener(
+        "ps5upload:library:invalidate",
+        onInvalidate,
+      );
+    };
+  }, [payloadStatus, refresh]);
+
   // Live search filter. Matches `query` against name / titleId /
   // path / scope / volume so users can find a title by any of the
   // identifiers they happen to remember (the folder name they
@@ -614,8 +633,8 @@ function LibraryRow({
   // image file, nmount's with exfatfs (.exfat) or ufs (.ffpkg), puts the
   // result under the chosen mount path (or /mnt/ps5upload/<name>/ if
   // the user accepts the default / runs an old payload). External
-  // scene tools (etaHEN, GoldHen) are NOT involved — the payload's
-  // own MD/LVD attach + nmount pipeline does the whole thing.
+  // third-party scene tools are NOT involved — the payload's own
+  // MD/LVD attach + nmount pipeline does the whole thing.
   // We surface the returned mount_point so the user knows where to
   // find it.
   //
@@ -683,10 +702,21 @@ function LibraryRow({
       // already mounted), not a new mount they should expect to see
       // appear in Volumes for the first time.
       const roSuffix = res.read_only ? " (read-only)" : "";
+      // Image-layout pre-flight (added 2.2.32 payload). When the
+      // payload reports `layout_valid: false`, the image was built
+      // with an extra top-level folder so Register + Launch will
+      // fail. Surface the warning prominently so the user fixes the
+      // image instead of registering + retrying. Older payloads omit
+      // the field; engine defaults it to `true` so a missing value
+      // doesn't false-warn on pre-2.2.32 mounts.
+      const layoutWarning =
+        res.layout_valid === false
+          ? " ⚠ Image is missing sce_sys/param.json at root — Register/Launch will fail. Re-build the image with files at root (no extra folder)."
+          : "";
       setMountNote(
         res.reused
-          ? `Already mounted at ${res.mount_point}${roSuffix} — reused the existing mount.`
-          : `Mounted at ${res.mount_point}${roSuffix}. Refresh to see the games inside — register + launch them from a PS5-side installer.`,
+          ? `Already mounted at ${res.mount_point}${roSuffix} — reused the existing mount.${layoutWarning}`
+          : `Mounted at ${res.mount_point}${roSuffix}. Refresh to see the games inside — register + launch them from the Library tab.${layoutWarning}`,
       );
       onChanged();
     } catch (e) {
@@ -2266,8 +2296,8 @@ function MountModal({
   // Read-only mount toggle. Default false (RW) — matches the behavior
   // of every prior payload version. PFS images are typically save
   // data and benefit from RO; .ffpkg / .exfat depend on the user's
-  // intent. SMP supports per-image overrides; we keep it as a single
-  // checkbox per mount click for now. Pre-2.2.26 payloads silently
+  // intent. Other PS5 mount tools support per-image overrides; we keep
+  // it as a single checkbox per mount click for now. Pre-2.2.26 payloads silently
   // ignore the field and always mount RW; we don't surface a banner
   // for that since the user always sees the result in the resolved
   // mount and can re-mount with the right toggle.
@@ -2341,9 +2371,9 @@ function MountModal({
   };
 
   // Soft warning: mounting outside /mnt/ps5upload/ is allowed but
-  // some scene tools (etaHEN/GoldHen game scanners) only look at
-  // /mnt/ps5upload/. Show the note when the user picks a non-default
-  // location so they know what they're trading off.
+  // some third-party PS5 game scanners only look at /mnt/ps5upload/.
+  // Show the note when the user picks a non-default location so they
+  // know what they're trading off.
   const isLegacyRoot =
     !supportsMountPoint || resolvedPath.startsWith("/mnt/ps5upload/");
 
@@ -2519,7 +2549,7 @@ function MountModal({
             {tr(
               "library_mount_modal_outside_default",
               undefined,
-              "Heads-up: scene tools (etaHEN, GoldHen) typically scan /mnt/ps5upload/ for installed games. Mounting outside that root works for the payload, but third-party game scanners may not see this title.",
+              "Heads-up: third-party PS5 game scanners typically scan /mnt/ps5upload/ for installed games. Mounting outside that root works for the payload, but those scanners may not see this title.",
             )}
           </div>
         )}

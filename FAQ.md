@@ -64,9 +64,8 @@ same binary runs on the full range **1.00 – 12.70**.
   ops, volumes, and everything else look identical.
 
 What actually gates users in practice is the PS5-side **ELF loader**
-on port 9021 (BD-JB, GoldHen, etaHEN, kstuff-lite, etc.) — a
-scene-provided component, not part of ps5upload. Loader coverage is
-roughly 4.x–12.x today.
+on port 9021 — a third-party component, not part of ps5upload. Loader
+coverage is roughly 4.x–12.x today.
 
 **Q: Which PS5 models are supported?**
 All models: original CFI-1xxx, Digital, Slim (CFI-2xxx), and Pro
@@ -174,8 +173,8 @@ Open ps5upload → **Connection** tab → enter your PS5's IP → click
 **Check**, then **Send payload**. The app waits up to 20 seconds
 for the payload to come up, then unlocks the rest of the tabs.
 
-**Q: How do I send a different payload (GoldHEN, kstuff, etaHEN,
-kernel patches, plugin scripts, etc)?**
+**Q: How do I send a different payload (kstuff, kernel patches,
+plugin scripts, etc)?**
 Open the **Send payload** tab, click **Choose**, pick any `.elf`,
 `.bin`, `.js`, or `.lua` file, and click **Send**. The app probes
 the file, shows you whether it looks like a ps5upload payload or
@@ -214,8 +213,8 @@ person uploading, another browsing"), no coordination is needed.
 ## Transferring
 
 **Q: Where do uploads go by default?**
-Under `/data/` unless you pick a different drive in the Upload
-screen. Common presets are offered: `homebrew`, `etaHEN/games`,
+Under `/data/homebrew/` unless you pick a different drive in the Upload
+screen. Common presets are offered: `homebrew` (recommended),
 `exfat`, `ps5upload`.
 
 **Q: What happens when the destination already has files?**
@@ -293,8 +292,8 @@ same UX as the Upload screen's destination picker:
 - **Volume** — pick any writable PS5 volume from the dropdown
   (`/data`, `/mnt/ext1`, `/mnt/usb0`, …). Free-space readout
   appears next to each.
-- **Subpath** — free-form, with the same four preset chips as
-  Upload (`etaHEN/games`, `homebrew`, `exfat`, `ps5upload`).
+- **Subpath** — free-form, with the same preset chips as
+  Upload (`homebrew`, `exfat`, `ps5upload`).
 - **Name** — auto-derived from the image filename (`Dead
   Space.exfat` → `Dead Space`), editable.
 
@@ -302,10 +301,10 @@ The resolved final path appears under the inputs in real time.
 Your last-used volume + subpath is persisted per host so the
 next Mount on the same console opens with the same selection.
 
-Heads-up: scene tools (etaHEN, GoldHen) typically only scan
+Heads-up: third-party PS5 game scanners typically only scan
 `/mnt/ps5upload/` for installed games, so mounting outside that
 root works for the payload but the game may not show up in
-third-party scanners. The modal shows a soft warning when the
+those scanners. The modal shows a soft warning when the
 resolved path is outside `/mnt/ps5upload/`.
 
 Pre-2.2.25 payloads only honor a `mount_name` (no volume picker)
@@ -336,22 +335,6 @@ The payload may have wedged on a Sony API call. Recovery:
 1. PS5 Settings → Network → disable / re-enable Wi-Fi or Ethernet.
 2. If that doesn't clear it, reboot the PS5.
 3. Re-send the payload.
-
-**Q: Why don't I see CPU/SoC temperatures in the Hardware tab?**
-Sony's sensor APIs (`sceKernelGetCpuTemperature`,
-`sceKernelGetSocSensorTemperature`,
-`sceKernelGetSocPowerConsumption`) only respond when the caller
-process is `SceShellUI`. Earlier 2.2.x payloads called them
-from our own process and got nothing back regardless of how we
-linked or what credentials we elevated to. Since 2.2.26 the
-payload routes each sensor read through a ptrace RPC into
-`SceShellUI` (PT_ATTACH → write registers → drop an `int3`
-return-trap → PT_CONTINUE → read RAX → PT_DETACH), satisfying
-the caller-context check natively. Hardware-validated on FW
-9.60 / CFI-7019 — readings come back live (CPU 35°C, SoC
-33°C, SoC power 32 mW idle). A reading that briefly shows
-`—` means the most recent RPC didn't finish in time; the
-next 5 s tick refreshes it.
 
 **Q: Why doesn't Launch from the Library tab actually start the game?**
 It does, on every firmware we've validated. Register

@@ -194,6 +194,28 @@ pub enum FrameType {
     /// the Hardware tab surfaces.
     HwStorage = 80,
     HwStorageAck = 81,
+    /// Install a `.pkg` file via Sony's BGFT service. Body is a JSON
+    /// object: `{"url":"http://<pc-ip>:<port>/pkg-host/<sess>/file.pkg",
+    /// "content_id":"EP0006-CUSA12345_00-...","size":<u64>,
+    /// "title":"...","package_type":"PS4GD"}`. The payload calls
+    /// `sceBgftServiceDownloadRegisterTask` then
+    /// `sceBgftServiceIntDownloadStartTask` and returns the assigned
+    /// task_id. ACK body: `{"task_id":<i32>,"err_code":<u32>}` where
+    /// err_code is non-zero only if BGFT itself rejected the call
+    /// (already installed, no space, etc.). The actual download +
+    /// install happens asynchronously inside the PS5 firmware; status
+    /// is polled via PKG_INSTALL_STATUS.
+    PkgInstall = 82,
+    PkgInstallAck = 83,
+    /// Poll a BGFT install in progress. Body: `{"task_id":<i32>}`.
+    /// ACK body: `{"phase":"download|install|done|error",
+    /// "downloaded":<u64>,"total":<u64>,"err_code":<u32>}`.
+    /// `phase=done` with `err_code=0` means BGFT reported success;
+    /// at this point the title should appear in the PS5 library.
+    /// `err_code != 0` carries Sony's BGFT status code (0x80990xxx
+    /// family) — caller maps to a user-facing message.
+    PkgInstallStatus = 84,
+    PkgInstallStatusAck = 85,
 }
 
 impl FrameType {
@@ -268,6 +290,10 @@ impl FrameType {
             79 => Ok(Self::FsOpCancelAck),
             80 => Ok(Self::HwStorage),
             81 => Ok(Self::HwStorageAck),
+            82 => Ok(Self::PkgInstall),
+            83 => Ok(Self::PkgInstallAck),
+            84 => Ok(Self::PkgInstallStatus),
+            85 => Ok(Self::PkgInstallStatusAck),
             _ => Err(DecodeError::UnknownFrameType(v)),
         }
     }
@@ -635,6 +661,10 @@ mod tests {
             FrameType::FsListDirAck,
             FrameType::HwSetFanThreshold,
             FrameType::HwSetFanThresholdAck,
+            FrameType::PkgInstall,
+            FrameType::PkgInstallAck,
+            FrameType::PkgInstallStatus,
+            FrameType::PkgInstallStatusAck,
         ];
         for ft in variants {
             assert_eq!(FrameType::try_from_u16(ft as u16).unwrap(), ft);

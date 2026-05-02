@@ -223,6 +223,30 @@ int shellui_rpc_pid(void) {
     return r;
 }
 
+/* Attach to ShellUI with a single re-resolve retry on failure. ShellUI
+ * occasionally restarts (after exiting a game, after some menu
+ * transitions, after a register-driven app.db update, etc.) and our
+ * cached pid then refers to a dead process. Without this retry, the
+ * first launch attempt after a respawn would always fail and the user
+ * would have to click again — exactly the "first time fails, second
+ * time works" pattern reported on FW 9.60.
+ *
+ * Caller must hold g_rpc_mtx. Returns 0 on attach success, -1 if both
+ * the original attach and the re-resolved attach failed. */
+static int attach_with_refresh_locked(void) {
+    if (g_shellui_pid > 0 && pt_attach_tracked(g_shellui_pid) == 0) {
+        return 0;
+    }
+    /* First attach failed. Re-resolve and try once more. The promise
+     * in the resolve_locked comment was unfulfilled before this
+     * helper existed: pt_attach failures returned -1 immediately and
+     * left the caller to (maybe) re-init manually. */
+    if (shellui_rpc_resolve_locked() != 0 || g_shellui_pid <= 0) {
+        return -1;
+    }
+    return pt_attach_tracked(g_shellui_pid) == 0 ? 0 : -1;
+}
+
 /* Attach + run a single function call inside SceShellUI + detach.
  * Acquires g_rpc_mtx for the duration so concurrent callers from
  * different mgmt threads don't both try to ptrace. The mutex
@@ -238,7 +262,7 @@ static long do_remote_call(intptr_t addr, uint64_t a0, uint64_t a1,
     if (ok_out) *ok_out = 0;
     if (addr == 0 || g_shellui_pid <= 0) return -1;
     pthread_mutex_lock(&g_rpc_mtx);
-    if (pt_attach_tracked(g_shellui_pid) != 0) {
+    if (attach_with_refresh_locked() != 0) {
         pthread_mutex_unlock(&g_rpc_mtx);
         return -1;
     }
@@ -272,7 +296,7 @@ static int rpc_call_with_int_scratch(intptr_t fn_addr,
     }
     if (out_len > sizeof(uint64_t)) return -1;
     pthread_mutex_lock(&g_rpc_mtx);
-    if (pt_attach_tracked(g_shellui_pid) != 0) {
+    if (attach_with_refresh_locked() != 0) {
         pthread_mutex_unlock(&g_rpc_mtx);
         return -1;
     }
@@ -337,20 +361,29 @@ static int remote_get_foreground_user(int *out_user) {
     return 0;
 }
 
-int shellui_rpc_launch_app(const char *title_id) {
+int shellui_rpc_launch_app(const char *title_id, int user_id_hint) {
     if (!title_id || !shellui_rpc_ready()) return -1;
 
-    /* Get foreground user via a separate RPC (ShellUI is the
-     * authoritative owner of foreground-user state too). Fall
-     * back to user 0 if that fails — some firmwares accept it. */
-    int user_id = 0;
-    (void)remote_get_foreground_user(&user_id);
+    /* Foreground user resolution. The caller may pass a known-good
+     * user_id from sceUserServiceGetForegroundUser in our own process
+     * (which `register.c::launch_title` does eagerly before either
+     * launch path). If that's non-zero, trust it. Falling back to
+     * remote_get_foreground_user covers callers that don't have one
+     * already, but on first-launch-after-register this remote query
+     * has been seen to return 0 transiently (ShellUI's foreground
+     * tracker was being updated mid-register), causing Sony's
+     * launcher to reject with 0x8094000F until the second click —
+     * the "first launch fails, second launch works" symptom. */
+    int user_id = user_id_hint;
+    if (user_id <= 0) {
+        (void)remote_get_foreground_user(&user_id);
+    }
 
     /* Allocate scratch buffers inside ShellUI for:
      *   - title_id string  (10 bytes + NUL)
      *   - LncAppParam      (24-byte struct, layout below) */
     pthread_mutex_lock(&g_rpc_mtx);
-    if (pt_attach_tracked(g_shellui_pid) != 0) {
+    if (attach_with_refresh_locked() != 0) {
         pthread_mutex_unlock(&g_rpc_mtx);
         return -1;
     }

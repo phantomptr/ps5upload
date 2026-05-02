@@ -6,7 +6,6 @@ import {
   Clock,
   RefreshCw,
   Loader2,
-  Zap,
   Fan,
   Check,
   HardDrive,
@@ -339,22 +338,6 @@ export default function HardwareScreen() {
             host={host ?? ""}
             payloadUp={payloadStatus === "up"}
           />
-
-          <div className="mt-2 flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 text-xs text-[var(--color-muted)]">
-            <Zap size={12} className="mt-0.5" />
-            <div>
-              CPU/SoC temperature and SoC power readings come from
-              Sony's <code>sceKernelGet*Temperature</code> /{" "}
-              <code>sceKernelGetSocPowerConsumption</code> stubs,
-              which only respond when the caller is{" "}
-              <code>SceShellUI</code>. The payload routes each read
-              through a ptrace RPC into ShellUI to satisfy that check
-              (hardware-validated on FW 9.60 / CFI-7019). A reading
-              that briefly shows <code>—</code> means the most recent
-              RPC didn't complete in time; it'll refresh on the next
-              5s tick.
-            </div>
-          </div>
         </div>
       )}
     </div>
