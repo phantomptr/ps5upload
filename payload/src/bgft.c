@@ -124,44 +124,107 @@ static unsigned char g_bgft_heap[BGFT_HEAP_BYTES] __attribute__((aligned(16)));
 
 /* ─── Init (one-shot) ─────────────────────────────────────────────── */
 
-static void *resolve_or_log(const char *sym, void *lib, const char **err_slot) {
-    /* Clear any pending dlerror state from a prior dlsym so that if
-     * we want to fetch the message later (currently we just record
-     * "symbol missing"), it's fresh. Recommended by the dlsym(3)
-     * man page even when we treat NULL return as the error signal. */
-    (void)dlerror();
-    void *p = dlsym(lib, sym);
-    if (!p && *err_slot == NULL) {
-        static char buf[160];
-        snprintf(buf, sizeof(buf), "BGFT symbol missing: %s", sym);
+/** Try a list of candidate symbol names against `lib`, returning the
+ *  first one that resolves. Different firmwares occasionally expose
+ *  the same Sony function under slightly-different decorations
+ *  (e.g. `sceBgftInitialize` vs `sceBgftServiceInitialize`); a
+ *  multi-name probe lets the payload boot on any of them. Records
+ *  the *last* attempted name in `*err_slot` when nothing resolved,
+ *  so the surfaced error names a real symbol the user can search
+ *  rather than the contents of an array. */
+static void *resolve_any(
+    const char *const *syms,
+    size_t syms_count,
+    void *lib,
+    const char **err_slot
+) {
+    for (size_t i = 0; i < syms_count; i++) {
+        (void)dlerror();
+        void *p = dlsym(lib, syms[i]);
+        if (p) return p;
+    }
+    if (*err_slot == NULL) {
+        static char buf[200];
+        /* Build a comma-separated list so the user can see all the
+         * variants we tried — searching any one of them locates
+         * the right symbol on psdevwiki / community references. */
+        size_t off = 0;
+        off += (size_t)snprintf(buf + off, sizeof(buf) - off,
+                                "BGFT symbol missing (tried: ");
+        for (size_t i = 0; i < syms_count && off + 2 < sizeof(buf); i++) {
+            off += (size_t)snprintf(buf + off, sizeof(buf) - off,
+                                    "%s%s", i == 0 ? "" : ", ", syms[i]);
+        }
+        if (off + 1 < sizeof(buf)) buf[off++] = ')';
+        if (off < sizeof(buf)) buf[off] = '\0';
+        else buf[sizeof(buf) - 1] = '\0';
         *err_slot = buf;
     }
-    return p;
+    return NULL;
 }
 
+/** Candidate library paths. The canonical one is in /system/common/
+ *  but some firmwares ship it via /system_ex/. We try them in order
+ *  and stop at the first dlopen success. */
+static const char *const BGFT_LIB_PATHS[] = {
+    "/system/common/lib/libSceBgft.sprx",
+    "/system_ex/common/lib/libSceBgft.sprx",
+    "/system/priv/lib/libSceBgft.sprx",
+};
+
 static void bgft_init_locked(void) {
-    /* Step 1: load libSceBgft.sprx. RTLD_NOW so we fail fast if the
-     * library can't be linked (vs hitting an undefined symbol later). */
-    g_lib_bgft = dlopen("/system/common/lib/libSceBgft.sprx",
-                        RTLD_NOW | RTLD_GLOBAL);
+    /* Step 1: load libSceBgft.sprx. Try each candidate path; the
+     * canonical /system/common/ first, but on firmwares that moved
+     * it to /system_ex/ or /system/priv/ we fall through. RTLD_NOW
+     * so we fail fast if the library can't be linked (vs hitting
+     * an undefined symbol later). */
+    static char dlerr_buf[256];
+    dlerr_buf[0] = '\0';
+    for (size_t i = 0; i < sizeof(BGFT_LIB_PATHS) / sizeof(BGFT_LIB_PATHS[0]); i++) {
+        g_lib_bgft = dlopen(BGFT_LIB_PATHS[i], RTLD_NOW | RTLD_GLOBAL);
+        if (g_lib_bgft) break;
+        const char *e = dlerror();
+        size_t off = strlen(dlerr_buf);
+        snprintf(dlerr_buf + off, sizeof(dlerr_buf) - off,
+                 "%s%s: %s", off == 0 ? "" : " | ",
+                 BGFT_LIB_PATHS[i], e ? e : "(no error)");
+    }
     if (!g_lib_bgft) {
-        static char buf[160];
+        static char buf[320];
         snprintf(buf, sizeof(buf), "dlopen libSceBgft.sprx failed: %s",
-                 dlerror());
+                 dlerr_buf);
         g_unavailable_reason = buf;
         return;
     }
 
-    /* Step 2: resolve every BGFT symbol we need. Any missing one
-     * means BGFT is not usable on this firmware. */
+    /* Step 2: resolve every BGFT symbol we need, trying known
+     * name variants per-symbol. Different firmwares expose the
+     * same call under slightly different decorations; a missing
+     * symbol after all variants means BGFT-via-this-API is not
+     * usable on this firmware. */
+    static const char *const SYM_INIT[]     = { "sceBgftInitialize",
+                                                 "sceBgftServiceInitialize" };
+    static const char *const SYM_REGISTER[] = { "sceBgftServiceDownloadRegisterTask",
+                                                 "sceBgftServiceIntDownloadRegisterTask",
+                                                 "sceBgftDownloadRegisterTask" };
+    static const char *const SYM_START[]    = { "sceBgftServiceIntDownloadStartTask",
+                                                 "sceBgftServiceDownloadStartTask",
+                                                 "sceBgftDownloadStartTask" };
+    static const char *const SYM_PROGRESS[] = { "sceBgftServiceDownloadGetProgress",
+                                                 "sceBgftServiceIntDownloadGetProgress",
+                                                 "sceBgftDownloadGetProgress" };
     g_bgft_init     = (sce_bgft_initialize_fn)
-        resolve_or_log("sceBgftInitialize", g_lib_bgft, &g_unavailable_reason);
+        resolve_any(SYM_INIT,     sizeof(SYM_INIT)/sizeof(SYM_INIT[0]),
+                    g_lib_bgft, &g_unavailable_reason);
     g_bgft_register = (sce_bgft_register_task_fn)
-        resolve_or_log("sceBgftServiceDownloadRegisterTask", g_lib_bgft, &g_unavailable_reason);
+        resolve_any(SYM_REGISTER, sizeof(SYM_REGISTER)/sizeof(SYM_REGISTER[0]),
+                    g_lib_bgft, &g_unavailable_reason);
     g_bgft_start    = (sce_bgft_start_task_fn)
-        resolve_or_log("sceBgftServiceIntDownloadStartTask", g_lib_bgft, &g_unavailable_reason);
+        resolve_any(SYM_START,    sizeof(SYM_START)/sizeof(SYM_START[0]),
+                    g_lib_bgft, &g_unavailable_reason);
     g_bgft_progress = (sce_bgft_get_progress_fn)
-        resolve_or_log("sceBgftServiceDownloadGetProgress", g_lib_bgft, &g_unavailable_reason);
+        resolve_any(SYM_PROGRESS, sizeof(SYM_PROGRESS)/sizeof(SYM_PROGRESS[0]),
+                    g_lib_bgft, &g_unavailable_reason);
 
     if (!g_bgft_init || !g_bgft_register || !g_bgft_start || !g_bgft_progress) {
         return;

@@ -154,6 +154,24 @@ export function humanizePs5Error(raw: string): string {
     return `PS5 kernel rejected the mount: ${tail ? tail[1] : "unknown reason"}. Try a different mount point (e.g. under /data or /mnt/ps5upload) — the image itself is fine.`;
   }
 
+  // ─── BGFT init failure (0xE0000001 = BGFT_ERR_LIB_NOT_LOADABLE) ──
+  // The payload couldn't dlopen libSceBgft.sprx or couldn't resolve
+  // one of its export symbols on the user's firmware. The 2.2.43
+  // payload tries multiple library paths and symbol-name variants
+  // before giving up; reaching this means none of them worked. The
+  // user's options are limited: either upload the bundled payload
+  // again (Connection → Send payload — newer payload may know more
+  // variants) or fall back to non-BGFT install (FTP + manual
+  // register, or the Library's Mount → Register flow for image
+  // games).
+  if (
+    /BGFT symbol missing/i.test(raw) ||
+    /dlopen libSceBgft\.sprx failed/i.test(raw) ||
+    /0xE0000001|BGFT_ERR_LIB_NOT_LOADABLE/i.test(raw)
+  ) {
+    return "Your PS5 firmware doesn't expose Sony's BGFT installer in a way ps5upload can use. Push the latest bundled payload (Connection → Send payload) — it tries more library paths and symbol variants. If it still fails, install via FTP + Library → Register instead; .pkg-via-BGFT isn't available on this firmware.";
+  }
+
   // ─── BGFT / Install Package error codes ─────────────────────────
   // err_code_message in ps5upload-core covers the user-facing copy for
   // the common 0x80990xxx codes; the queue surfaces these directly.

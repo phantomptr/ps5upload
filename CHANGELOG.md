@@ -4,6 +4,53 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.2.43
+
+**BGFT install: try multiple library paths + symbol-name variants
+before giving up; humanize the error**
+
+User report:
+
+  BGFT symbol missing: sceBgftInitialize
+  0xe0000001
+
+The payload's BGFT init was hard-coded to one library path
+(`/system/common/lib/libSceBgft.sprx`) and one symbol name per
+function. PS5 firmwares ship the BGFT library under several known
+paths and decorate symbols slightly differently across revisions —
+a single-path/single-name probe is the most fragile possible
+shape, and the user reaching a `BGFT symbol missing` error meant
+*any* of those probes failed.
+
+Payload fix (`payload/src/bgft.c`):
+
+  - **Path probe**: tries `/system/common/lib/`,
+    `/system_ex/common/lib/`, and `/system/priv/lib/` in order;
+    the first dlopen that succeeds wins. Records the per-path
+    error trail so a never-found case surfaces all three errnos.
+  - **Symbol probe**: each of the four functions we need
+    (`sceBgftInitialize`, `…RegisterTask`, `…StartTask`,
+    `…GetProgress`) is now resolved against a list of known name
+    variants — including `sceBgftServiceInitialize`,
+    `sceBgftServiceIntDownloadRegisterTask`,
+    `sceBgftDownloadStartTask`, etc. The first variant that
+    resolves wins. The "missing" error reports all variants
+    tried so the user can search any one of them on psdevwiki.
+
+Client humanization:
+
+  - Added a specific copy block in `humanizeError.ts` for
+    `BGFT symbol missing` / `dlopen libSceBgft.sprx failed` /
+    `0xE0000001`: explains the firmware doesn't expose Sony's
+    BGFT installer in a form ps5upload can use, suggests
+    pushing the latest bundled payload, and points users at the
+    FTP + Library → Register fallback for `.pkg`-via-BGFT
+    install when BGFT itself isn't available.
+  - Wired `humanizePs5Error` into the InstallPackage row's
+    error display (previously rendered raw payload errors).
+
+---
+
 ## 2.2.42
 
 **Library: humanize mount/unmount errors, especially nmount EPERM**
