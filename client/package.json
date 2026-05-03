@@ -1,7 +1,7 @@
 {
   "name": "ps5upload-client",
   "private": true,
-  "version": "2.2.45",
+  "version": "2.2.46",
   "description": "The all-in-one PS5 companion app.",
   "homepage": "https://github.com/phantomptr/ps5upload",
   "author": "PhantomPtr <phantomptr@gmail.com>",

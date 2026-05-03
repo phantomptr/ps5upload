@@ -108,11 +108,32 @@ typedef struct {
     int      is_copy_only;
 } AppInstStatus;
 
+extern int sceAppInstUtilInitialize(void);
 extern int sceAppInstUtilInstallByPackage(AppInstMetaInfo *meta,
                                           AppInstPkgInfo *pkg_info,
                                           AppInstPlayGoInfo *playgo);
 extern int sceAppInstUtilGetInstallStatus(const char *content_id,
                                           AppInstStatus *out);
+
+/** One-shot initializer for the AppInstUtil subsystem. Without
+ *  this, sceAppInstUtilInstallByPackage typically returns
+ *  SCE_APP_INST_UTIL_ERROR_NOT_INITIALIZED (-2136797184). etaHEN
+ *  initializes this implicitly via daemon startup; we don't have
+ *  a daemon-level startup hook so we lazy-init at first install
+ *  attempt. Idempotent return values from Sony's installer (e.g.
+ *  "already initialized") are absorbed silently — what we care
+ *  about is "the next call to InstallByPackage will work." */
+static pthread_once_t g_appinst_init_once = PTHREAD_ONCE_INIT;
+static int g_appinst_init_rc = 0;
+static void appinst_init_locked(void) {
+    g_appinst_init_rc = sceAppInstUtilInitialize();
+    if (g_appinst_init_rc != 0) {
+        fprintf(stderr,
+                "[bgft] sceAppInstUtilInitialize returned 0x%08X "
+                "(non-fatal — common 'already initialised' codes are absorbed)\n",
+                (unsigned)g_appinst_init_rc);
+    }
+}
 
 /* Backend tag for in-flight install tracking. The bgft.h interface
  * returns a `task_id` that callers poll later via
@@ -178,6 +199,14 @@ static int appinst_install_start(const char *url,
                                   const char *title,
                                   int32_t *out_task_id,
                                   uint32_t *out_err_code) {
+    /* Make sure Sony's installer subsystem is initialized before we
+     * call InstallByPackage. Without this the install fails with
+     * SCE_APP_INST_UTIL_ERROR_NOT_INITIALIZED on a fresh boot. The
+     * pthread_once guard makes this idempotent across concurrent
+     * installs, and Sony's "already initialised" return code is
+     * harmless. */
+    pthread_once(&g_appinst_init_once, appinst_init_locked);
+
     AppInstMetaInfo meta;
     memset(&meta, 0, sizeof(meta));
     meta.uri          = url;

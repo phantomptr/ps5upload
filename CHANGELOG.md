@@ -4,6 +4,67 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.2.46
+
+**AppInstUtil init + same-volume mount default (cross-referenced
+ShadowMountPlus)**
+
+User reports:
+  - 0xE0000001 BGFT_ERR_LIB_NOT_LOADABLE keeps appearing — meaning
+    the AppInstUtil path also failed.
+  - Mount default volume should match where the .exfat/.ffpkg
+    actually lives (currently it picks the last-saved volume,
+    even if that's a different drive).
+  - .ffpkg mounts not working — please cross-reference SMP.
+
+### AppInstUtil now properly initialised before InstallByPackage
+
+The 2.2.44 dispatch tried `sceAppInstUtilInstallByPackage` first,
+but never called `sceAppInstUtilInitialize()`. On a fresh boot
+that returns `SCE_APP_INST_UTIL_ERROR_NOT_INITIALIZED`
+(-2136797184) and the AppInstUtil path falls through to the
+legacy BGFT path — which is exactly what we were trying to
+avoid. Added a `pthread_once` lazy-init in `bgft.c` so the
+first install attempt initialises the subsystem and the call
+actually goes through.
+
+### Mount default volume = the image's own volume
+
+Pre-2.2.46 the mount modal preferred the last-used persisted
+destination across all images. So a user mounting
+`/data/homebrew/foo.exfat` whose previous mount was at
+`/mnt/usb0` defaulted to /mnt/usb0 — and the kernel rejected
+the cross-volume nmount with EPERM (the same kernel-policy
+gate the 2.2.42 humanizer warns about). The intuitive default
+is also the kernel-friendliest one: mount **into the same
+volume the image lives on**. Persisted dest is still honored
+when its volume matches the image's volume, so the user's
+chosen subpath is preserved across mounts of images that live
+on the same drive.
+
+### Cross-referenced SMP for .ffpkg specifics — match confirmed
+
+Read drakmor/ShadowMountPlus's `src/sm_image.c` to compare
+attach-backend + nmount params for .ffpkg (UFS) and .exfat:
+
+  - `fstype` mapping: `.ffpkg` → "ufs", `.exfat` → "exfatfs",
+    `.ffpfs` → "pfs". **Match.**
+  - `UFS_NMOUNT_FLAG_RW` = 0x10000000, `UFS_NMOUNT_FLAG_RO` =
+    0x10000001. **Match.**
+  - LVD `image_type` for UFS: 7 (UFS_DD). **Match.**
+  - LVD flags 0x14/0x16/0x1C/0x1E for exfat/ufs. **Match.**
+  - nmount iov keys (fstype/from/fspath/budgetid="game"/async/
+    noatime/automounted/errmsg + per-fstype large/timezone/
+    ignoreacl). **Match.**
+
+The SMP comparison gives confidence that any .ffpkg failures
+the user is hitting are environmental (the image bytes
+themselves, an unfortunate mount-point choice, or the kernel
+mount-policy gate) rather than a payload-side bug. The new
+"default to image's own volume" should sidestep most of those.
+
+---
+
 ## 2.2.45
 
 **Soften the unrecognized-PKG-magic warning (jailbroken-PS5 reality)**

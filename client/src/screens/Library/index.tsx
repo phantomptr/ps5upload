@@ -2595,22 +2595,35 @@ function MountModal({
     return base.replace(/\.(exfat|ffpkg|ffpfs)$/i, "");
   }, [entry.name]);
 
-  // Initial volume + subpath: prefer last-used persisted dest;
-  // fall back to first available volume + the conventional subpath.
+  // Initial volume + subpath. Pre-2.2.46 we preferred the user's
+  // last-used `loadMountDest` for *every* image, which produced a
+  // bad surprise: a user mounting `/data/homebrew/foo.exfat` whose
+  // last save was `/mnt/usb0` would default to /mnt/usb0 — and on
+  // many firmwares the kernel rejects the cross-volume nmount with
+  // EPERM (see 2.2.42 humanizer note). The intuitive default is to
+  // mount **into the same volume the image lives on**, which is
+  // also the kernel-friendliest path. The persisted dest still
+  // wins when its volume matches the image's volume — the user's
+  // chosen subpath is preserved across mounts of images that live
+  // on the same drive.
   const initialDest = useMemo(() => {
+    const imageVolume =
+      entry.kind === "image" && entry.volume ? entry.volume : null;
     const saved = loadMountDest(host);
-    if (saved) return saved;
+    if (saved && (!imageVolume || saved.volume === imageVolume)) {
+      return saved;
+    }
     return {
-      volume: dropdownPaths[0] ?? "/data",
-      subpath: MOUNT_DEFAULT_SUBPATH,
+      volume: imageVolume ?? dropdownPaths[0] ?? "/data",
+      subpath: saved?.subpath ?? MOUNT_DEFAULT_SUBPATH,
     };
     // dropdownPaths is computed once on first render and we don't
-    // need to recompute when it changes — the user's saved dest is
-    // the source of truth. Linting `volumes` here would force a
-    // re-init each volume probe, which would clobber a mid-edit
-    // subpath input.
+    // need to recompute when it changes — the user's saved dest +
+    // image-volume is the source of truth. Linting `volumes` /
+    // `dropdownPaths` here would force a re-init each volume probe,
+    // which would clobber a mid-edit subpath input.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [host]);
+  }, [host, entry.kind, entry.volume]);
   const [volume, setVolume] = useState<string>(initialDest.volume);
   const [subpath, setSubpath] = useState<string>(initialDest.subpath);
   const [name, setName] = useState<string>(derivedName);
