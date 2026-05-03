@@ -63,10 +63,10 @@ import {
 } from "../../lib/movePollerPolicy";
 import { filterLibraryEntries } from "../../lib/libraryFilter";
 import {
-  fetchPsnGameInfo,
-  psnStoreSearchUrl,
-  type PsnGameInfo,
-} from "../../lib/psnDetails";
+  fetchTitleInfo,
+  prosperoPatchesUrl,
+  type TitleInfo,
+} from "../../lib/titleDetails";
 import {
   MOUNT_DEFAULT_SUBPATH,
   MOUNT_PRESETS,
@@ -1440,7 +1440,7 @@ function LibraryRow({
                     ? tr(
                         "library_details_tooltip",
                         undefined,
-                        "Game details — fetches cover art and metadata from PSN",
+                        "Game details — fetches cover art and metadata from PROSPEROPatches",
                       )
                     : tr(
                         "library_details_no_titleid_tooltip",
@@ -1791,7 +1791,7 @@ function GameDetailsModal({
   onCancel: () => void;
 }) {
   const tr = useTr();
-  const [info, setInfo] = useState<PsnGameInfo | null>(null);
+  const [info, setInfo] = useState<TitleInfo | null>(null);
   const [loading, setLoading] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
 
@@ -1813,7 +1813,7 @@ function GameDetailsModal({
     const controller = new AbortController();
     setLoading(true);
     setFetchError(null);
-    fetchPsnGameInfo(entry.titleId, controller.signal)
+    fetchTitleInfo(entry.titleId, controller.signal)
       .then((result) => {
         if (controller.signal.aborted) return;
         setInfo(result);
@@ -1877,15 +1877,15 @@ function GameDetailsModal({
               <button
                 type="button"
                 onClick={() => {
-                  void openExternal(psnStoreSearchUrl(entry.titleId!));
+                  void openExternal(prosperoPatchesUrl(entry.titleId!));
                 }}
                 className="inline-flex items-center justify-center gap-1 rounded-md border border-[var(--color-border)] px-2 py-1 text-xs hover:bg-[var(--color-surface-3)]"
               >
                 <ExternalLink size={11} />
                 {tr(
-                  "library_details_modal_psn_search",
+                  "library_details_modal_open_prosperopatches",
                   undefined,
-                  "Search PSN Store",
+                  "View on PROSPEROPatches",
                 )}
               </button>
             )}
@@ -1900,36 +1900,15 @@ function GameDetailsModal({
                 {entry.titleId && (
                   <span className="font-mono">{entry.titleId}</span>
                 )}
-                {info?.publisher && <span>{info.publisher}</span>}
-                {info?.contentType && <span>{info.contentType}</span>}
-                {info?.ageRating && <span>{info.ageRating}</span>}
               </div>
-              {info?.genres && info.genres.length > 0 && (
-                <div className="mt-1 flex flex-wrap gap-1">
-                  {info.genres.map((g) => (
-                    <span
-                      key={g}
-                      className="rounded-full border border-[var(--color-border)] px-2 py-0.5 text-[10px] text-[var(--color-muted)]"
-                    >
-                      {g}
-                    </span>
-                  ))}
-                </div>
-              )}
             </div>
-
-            {info?.description && (
-              <p className="max-h-48 overflow-y-auto text-xs leading-relaxed text-[var(--color-text)]">
-                {info.description}
-              </p>
-            )}
 
             {!loading && !info && !fetchError && (
               <p className="text-xs text-[var(--color-muted)]">
                 {tr(
-                  "library_details_modal_no_psn",
+                  "library_details_modal_no_remote_meta",
                   undefined,
-                  "PSN didn't return metadata for this title id. The local sce_sys/param.json info below is what we have on disk.",
+                  "No remote metadata for this title id. The local sce_sys/param.json info below is what we have on disk.",
                 )}
               </p>
             )}
@@ -1938,7 +1917,7 @@ function GameDetailsModal({
                 {tr(
                   "library_details_modal_fetch_error",
                   { error: fetchError },
-                  `PSN fetch failed: ${fetchError}`,
+                  `Title metadata fetch failed: ${fetchError}`,
                 )}
               </p>
             )}
