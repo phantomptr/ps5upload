@@ -143,9 +143,25 @@ pub fn parse_pkg(path: &Path) -> Result<PkgMetadata, PkgError> {
         meta.kind = PkgKind::Unknown {
             magic_hex: format!("{magic:08X}"),
         };
+        // Soften the warning. On a jailbroken PS5 with kstuff loaded
+        // (the only environment ps5upload runs in), Sony's
+        // signature/DRM checks are bypassed at the kernel level —
+        // fake-signed retail-format PKGs install fine, and that's
+        // the common case. The pre-2.2.45 wording blamed BGFT
+        // ("Sony BGFT will reject this") which was misleading on
+        // two counts: (1) we now use AppInstUtil as the primary
+        // install backend (2.2.44, etaHEN-style), not BGFT
+        // directly; (2) most fake PKGs preserve the canonical
+        // \x7FCNT magic anyway — a non-canonical magic typically
+        // means a renamed non-PKG file or a tool-specific format
+        // (FakePKG variants, .fpkg dumps, etc.) that Sony's
+        // installer won't know how to parse. Tell the user that
+        // honestly and let them proceed if they want to try.
         meta.warnings.push(format!(
-            "unrecognized PKG magic 0x{magic:08X} — Sony BGFT will reject this if not a supported format. \
-             You can still attempt install at your own risk."
+            "Unrecognized PKG header magic 0x{magic:08X} (canonical retail PKG is 0x7F434E54 = \\x7FCNT). \
+             Most fake-signed PKGs keep the canonical magic, so this is more likely a renamed non-PKG \
+             file or a tool-specific format Sony's installer won't recognize. The install will proceed \
+             if you confirm — Sony's own installer is the source of truth for whether the bytes are valid."
         ));
         // Don't try to parse the rest — layout is unknown.
         return Ok(meta);

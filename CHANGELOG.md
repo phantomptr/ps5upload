@@ -4,6 +4,51 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.2.45
+
+**Soften the unrecognized-PKG-magic warning (jailbroken-PS5 reality)**
+
+User report:
+
+  unrecognized PKG magic 0x7F464948 — Sony BGFT will reject this if
+  not a supported format. You can still attempt install at your own
+  risk.
+
+User's question (paraphrased): "isn't the whole point of jailbreak
+that fake-signed PKGs install fine?"
+
+The user's right — the wording was misleading on a jailbroken PS5,
+which is the only environment ps5upload runs in:
+
+  1. **It blamed BGFT.** Since 2.2.44 we use Sony's higher-level
+     `sceAppInstUtilInstallByPackage` (etaHEN-style) as the primary
+     install backend, not BGFT directly. The pre-2.2.45 wording
+     pointed users at the wrong layer.
+  2. **It implied fake-signed PKGs would be rejected.** On a
+     jailbroken PS5 with kstuff loaded, Sony's signature/DRM checks
+     are bypassed at the kernel level. Fake-signed PKGs install
+     fine — that's literally the point of jailbreaking.
+  3. **What the magic check actually catches** is renamed non-PKG
+     files or tool-specific formats (FakePKG variants, .fpkg dumps
+     with non-canonical headers) that Sony's installer wouldn't
+     know how to parse. Most fake-signed retail-format PKGs
+     preserve the canonical `\x7FCNT` magic.
+
+New copy:
+
+  Unrecognized PKG header magic 0xXXXXXXXX (canonical retail PKG is
+  0x7F434E54 = \\x7FCNT). Most fake-signed PKGs keep the canonical
+  magic, so this is more likely a renamed non-PKG file or a
+  tool-specific format Sony's installer won't recognize. The install
+  will proceed if you confirm — Sony's own installer is the source
+  of truth for whether the bytes are valid.
+
+The install path itself is unchanged: kind=Unknown still returns
+Ok and lets the user proceed to AppInstUtil, which decides
+authoritatively whether the bytes parse.
+
+---
+
 ## 2.2.44
 
 **`.pkg` install: switch primary backend from BGFT to AppInstUtil
