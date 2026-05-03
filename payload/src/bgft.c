@@ -48,6 +48,216 @@
 
 #include "bgft.h"
 
+/* ─── AppInstUtil install path (etaHEN/DPI style) ─────────────────────
+ *
+ * sceAppInstUtilInstallByPackage is Sony's high-level "fetch this URL,
+ * decrypt, install" entry point — the same API etaHEN's DirectPKGInstaller
+ * uses. It's compile-time linked via -lSceAppInstUtil so there's no
+ * dlopen/dlsym dance and no per-firmware symbol-name drift. We try this
+ * path first; if it fails (rare — would mean libSceAppInstUtil itself
+ * isn't loaded), we fall back to the BGFT path below for legacy
+ * firmwares where BGFT works but AppInstUtil doesn't.
+ *
+ * Layouts taken verbatim from etaHEN's util/include/common_utils.h. */
+
+#define APPINST_PLAYGO_SCENARIOID_SIZE 3
+#define APPINST_LANGUAGE_SIZE          8
+#define APPINST_CONTENTID_SIZE         0x30
+#define APPINST_NUM_LANGUAGES          30
+#define APPINST_NUM_IDS                64
+
+typedef struct {
+    char    content_id[APPINST_CONTENTID_SIZE];
+    int32_t content_type;
+    int32_t content_platform;
+} AppInstPkgInfo;
+
+typedef struct {
+    const char *uri;
+    const char *ex_uri;
+    const char *playgo_scenario_id;
+    const char *content_id;
+    const char *content_name;
+    const char *icon_url;
+} AppInstMetaInfo;
+
+typedef struct {
+    char  languages[APPINST_NUM_LANGUAGES][APPINST_LANGUAGE_SIZE];
+    char  playgo_scenario_ids[APPINST_NUM_IDS][APPINST_PLAYGO_SCENARIOID_SIZE];
+    char  content_ids[APPINST_NUM_IDS][APPINST_CONTENTID_SIZE];
+    long  unknown[810];
+} AppInstPlayGoInfo;
+
+typedef struct {
+    int32_t error_code;
+    int32_t version;
+    char    description[512];
+    char    type[9];
+} AppInstStatusErrorInfo;
+
+typedef struct {
+    char     status[16];
+    char     src_type[8];
+    uint32_t remain_time;
+    uint64_t downloaded_size;
+    uint64_t initial_chunk_size;
+    uint64_t total_size;
+    uint32_t promote_progress;
+    AppInstStatusErrorInfo error_info;
+    int32_t  local_copy_percent;
+    int      is_copy_only;
+} AppInstStatus;
+
+extern int sceAppInstUtilInstallByPackage(AppInstMetaInfo *meta,
+                                          AppInstPkgInfo *pkg_info,
+                                          AppInstPlayGoInfo *playgo);
+extern int sceAppInstUtilGetInstallStatus(const char *content_id,
+                                          AppInstStatus *out);
+
+/* Backend tag for in-flight install tracking. The bgft.h interface
+ * returns a `task_id` that callers poll later via
+ * `bgft_install_status`; we use a synthetic 32-bit id space (high
+ * bit = appinst, lower bits = index into our task table) so a
+ * single status call can route to the right backend without the
+ * caller having to know which one was used. */
+#define APPINST_TASK_ID_FLAG  0x40000000
+#define APPINST_TASK_TABLE    16
+
+typedef struct {
+    int      in_use;
+    char     content_id[APPINST_CONTENTID_SIZE];
+} appinst_task_slot_t;
+
+static appinst_task_slot_t g_appinst_tasks[APPINST_TASK_TABLE];
+static pthread_mutex_t g_appinst_mtx = PTHREAD_MUTEX_INITIALIZER;
+
+/** Allocate a slot, store the content_id we got back from
+ *  sceAppInstUtilInstallByPackage. Returns the synthetic task_id
+ *  (with APPINST_TASK_ID_FLAG set so bgft_install_status can route)
+ *  or -1 on a full table. */
+static int32_t appinst_task_register(const char *content_id) {
+    pthread_mutex_lock(&g_appinst_mtx);
+    for (int i = 0; i < APPINST_TASK_TABLE; i++) {
+        if (!g_appinst_tasks[i].in_use) {
+            g_appinst_tasks[i].in_use = 1;
+            strncpy(g_appinst_tasks[i].content_id, content_id,
+                    sizeof(g_appinst_tasks[i].content_id) - 1);
+            g_appinst_tasks[i].content_id[sizeof(g_appinst_tasks[i].content_id) - 1] = '\0';
+            pthread_mutex_unlock(&g_appinst_mtx);
+            return (int32_t)(APPINST_TASK_ID_FLAG | (uint32_t)i);
+        }
+    }
+    pthread_mutex_unlock(&g_appinst_mtx);
+    return -1;
+}
+
+/** Look up the content_id for an appinst-tagged task_id. Returns
+ *  0 + populates `out_content_id` on hit; -1 on miss / wrong tag. */
+static int appinst_task_lookup(int32_t task_id, char *out, size_t out_cap) {
+    if ((task_id & APPINST_TASK_ID_FLAG) == 0) return -1;
+    int idx = task_id & ~APPINST_TASK_ID_FLAG;
+    if (idx < 0 || idx >= APPINST_TASK_TABLE) return -1;
+    pthread_mutex_lock(&g_appinst_mtx);
+    if (!g_appinst_tasks[idx].in_use) {
+        pthread_mutex_unlock(&g_appinst_mtx);
+        return -1;
+    }
+    strncpy(out, g_appinst_tasks[idx].content_id, out_cap - 1);
+    out[out_cap - 1] = '\0';
+    pthread_mutex_unlock(&g_appinst_mtx);
+    return 0;
+}
+
+/** Try the AppInstUtil install path. Returns 0 + sets *out_task_id
+ *  on success; -1 + sets *out_err_code on failure (caller may then
+ *  fall back to the BGFT path). The "success" return only means
+ *  Sony accepted the install request — actual download completion
+ *  is observed via appinst_install_status polling. */
+static int appinst_install_start(const char *url,
+                                  const char *content_id,
+                                  const char *title,
+                                  int32_t *out_task_id,
+                                  uint32_t *out_err_code) {
+    AppInstMetaInfo meta;
+    memset(&meta, 0, sizeof(meta));
+    meta.uri          = url;
+    meta.ex_uri       = "";
+    meta.playgo_scenario_id = "";
+    meta.content_id   = "";
+    meta.content_name = title ? title : "ps5upload";
+    meta.icon_url     = "";
+
+    AppInstPkgInfo pkg_info;
+    memset(&pkg_info, 0, sizeof(pkg_info));
+    /* Seed pkg_info.content_id with what we already know from the
+     * caller's PKG header — Sony's installer overwrites this on
+     * return, but seeding helps when the URL doesn't carry the id
+     * itself. Truncate-safe. */
+    strncpy(pkg_info.content_id, content_id, sizeof(pkg_info.content_id) - 1);
+
+    AppInstPlayGoInfo playgo;
+    memset(&playgo, 0, sizeof(playgo));
+
+    int rc = sceAppInstUtilInstallByPackage(&meta, &pkg_info, &playgo);
+    if (rc != 0) {
+        *out_err_code = (uint32_t)rc;
+        fprintf(stderr,
+                "[bgft] appinst path failed: rc=%d (content_id=%s, url=%s)\n",
+                rc, content_id, url);
+        return -1;
+    }
+
+    int32_t tid = appinst_task_register(pkg_info.content_id);
+    if (tid < 0) {
+        *out_err_code = BGFT_ERR_TASK_TABLE_FULL;
+        return -1;
+    }
+    *out_task_id  = tid;
+    *out_err_code = 0;
+    return 0;
+}
+
+/** Poll an in-flight AppInstUtil install. Maps Sony's status string
+ *  ("downloading"/"installing"/"playable") to our phase enum. */
+static int appinst_install_status(int32_t task_id,
+                                   bgft_phase_t *out_phase,
+                                   uint64_t *out_downloaded,
+                                   uint64_t *out_total,
+                                   uint32_t *out_err_code) {
+    char content_id[APPINST_CONTENTID_SIZE];
+    if (appinst_task_lookup(task_id, content_id, sizeof(content_id)) != 0) {
+        *out_err_code = BGFT_ERR_REGISTER_FAILED;
+        return -1;
+    }
+    AppInstStatus st;
+    memset(&st, 0, sizeof(st));
+    int rc = sceAppInstUtilGetInstallStatus(content_id, &st);
+    if (rc != 0) {
+        *out_err_code = (uint32_t)rc;
+        *out_phase = BGFT_PHASE_ERROR;
+        return 0;
+    }
+    *out_downloaded = st.downloaded_size;
+    *out_total      = st.total_size;
+    *out_err_code   = (uint32_t)st.error_info.error_code;
+    if (st.error_info.error_code != 0) {
+        *out_phase = BGFT_PHASE_ERROR;
+    } else if (strncmp(st.status, "playable", 8) == 0
+            || strncmp(st.status, "completed", 9) == 0) {
+        *out_phase = BGFT_PHASE_DONE;
+    } else if (strncmp(st.status, "installing", 10) == 0) {
+        *out_phase = BGFT_PHASE_INSTALL;
+    } else if (strncmp(st.status, "downloading", 11) == 0) {
+        *out_phase = BGFT_PHASE_DOWNLOAD;
+    } else {
+        /* "queued", "checking", anything else — treat as queued so
+         * the UI keeps polling vs erroring out on a state we just
+         * don't have a name for. */
+        *out_phase = BGFT_PHASE_QUEUED;
+    }
+    return 0;
+}
+
 /* ─── Sony API: BGFT struct + bindings ───────────────────────────── */
 
 /* Sony BGFT struct layout. ABI verified against the public PSDevWiki
@@ -302,6 +512,32 @@ int bgft_install_start(const char *url,
     *out_task_id = -1;
     *out_err_code = 0;
 
+    /* AppInstUtil-first dispatch (added 2.2.44, etaHEN-style). The
+     * AppInstUtil path is compile-time linked via -lSceAppInstUtil
+     * so it doesn't suffer the dlopen/dlsym fragility that bites
+     * BGFT on firmwares where libSceBgft.sprx is at a different
+     * path or exports symbols under a different decoration. We try
+     * AppInstUtil first and only fall through to the legacy BGFT
+     * path if the AppInstUtil call itself returns nonzero — which
+     * would be a Sony-side error, not a missing-binding error.
+     *
+     * The synthetic task_id we return has APPINST_TASK_ID_FLAG set
+     * so bgft_install_status routes the poll back to the
+     * AppInstUtil path; BGFT-issued task_ids stay in the natural
+     * 0-N range and route through the BGFT poll. Single mutex
+     * isn't shared between the two backends — they don't touch
+     * each other's state. */
+    int32_t app_tid = -1;
+    uint32_t app_err = 0;
+    if (appinst_install_start(url, content_id, title, &app_tid, &app_err) == 0) {
+        *out_task_id = app_tid;
+        *out_err_code = 0;
+        return 0;
+    }
+    fprintf(stderr,
+            "[bgft] appinst path failed (rc=0x%08X), falling back to BGFT\n",
+            (unsigned)app_err);
+
     pthread_once(&g_init_once, bgft_init_once);
     if (!g_init_ok) {
         *out_err_code = BGFT_ERR_LIB_NOT_LOADABLE;
@@ -389,6 +625,13 @@ int bgft_install_status(int32_t task_id,
     *out_downloaded = 0;
     *out_total = 0;
     *out_err_code = 0;
+
+    /* Route to whichever backend issued this task_id. AppInstUtil
+     * task ids carry the high-bit flag; BGFT ids do not. */
+    if ((task_id & APPINST_TASK_ID_FLAG) != 0) {
+        return appinst_install_status(task_id, out_phase, out_downloaded,
+                                       out_total, out_err_code);
+    }
 
     pthread_once(&g_init_once, bgft_init_once);
     if (!g_init_ok) {

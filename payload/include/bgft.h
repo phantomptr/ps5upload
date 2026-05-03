@@ -60,6 +60,9 @@ typedef enum {
 #define BGFT_ERR_REGISTER_FAILED   0xE0000004u
 #define BGFT_ERR_START_FAILED      0xE0000005u
 #define BGFT_ERR_UCRED_ELEVATE     0xE0000006u
+/* Synthetic task table is full — too many in-flight installs. Reset
+ * the tx table or wait for current installs to drain. */
+#define BGFT_ERR_TASK_TABLE_FULL   0xE0000007u
 
 /* Register + start a BGFT install task.
  *

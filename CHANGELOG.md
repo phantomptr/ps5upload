@@ -4,6 +4,58 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.2.44
+
+**`.pkg` install: switch primary backend from BGFT to AppInstUtil
+(etaHEN-style)**
+
+User report: BGFT install fails with `BGFT symbol missing:
+sceBgftInitialize` / `0xe0000001`. The 2.2.43 BGFT-side fix added
+multiple library paths and symbol-name variants to harden the
+dlopen+dlsym dance, but BGFT's symbol decoration drifts across
+firmwares enough that *some* path/name combination is bound to
+fail eventually.
+
+Studied [etaHEN](https://github.com/etaHEN/etaHEN)'s pkg-install
+implementation (`util/source/DirectPKGInstaller.cpp`) — they don't
+use BGFT at all. They use Sony's higher-level
+`sceAppInstUtilInstallByPackage`, which:
+
+  - Lives in `libSceAppInstUtil`, **already compile-time linked** in
+    our payload via `-lSceAppInstUtil` (no dlopen/dlsym needed).
+  - Takes a URL + meta info and handles the full download +
+    decrypt + install chain end-to-end.
+  - Returns the content_id we use for status polling via
+    `sceAppInstUtilGetInstallStatus`.
+
+Reorganised `payload/src/bgft.c` so the public install API
+(`bgft_install_start` / `bgft_install_status`) tries this path
+first and only falls back to the legacy BGFT machinery if the
+AppInstUtil call itself returns a Sony-side error:
+
+  - **AppInstUtil path** (primary, now the path 99% of users hit):
+    no firmware-symbol-drift fragility; same call etaHEN /
+    DirectPKGInstaller use, with years of field testing across
+    9.6x firmwares.
+  - **BGFT path** (fallback): unchanged from 2.2.43, kept so
+    obscure firmwares where AppInstUtil refuses still have a
+    chance to install.
+
+Synthetic 32-bit task IDs route status polls back to the right
+backend: `task_id & 0x40000000` → AppInstUtil, otherwise BGFT.
+Sony's status string ("downloading"/"installing"/"playable") maps
+to our existing phase enum so the UI doesn't change.
+
+Files touched:
+  - `payload/include/bgft.h` — added `BGFT_ERR_TASK_TABLE_FULL`
+    sentinel for the new task-table backpressure case.
+  - `payload/src/bgft.c` — added AppInstUtil structs (verbatim
+    from etaHEN's `common_utils.h`), task-tracking ring,
+    `appinst_install_start` / `appinst_install_status` helpers,
+    and the dispatch in the public entry points.
+
+---
+
 ## 2.2.43
 
 **BGFT install: try multiple library paths + symbol-name variants
