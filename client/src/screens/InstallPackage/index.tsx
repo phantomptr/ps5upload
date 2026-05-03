@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -823,19 +823,22 @@ function StatusIcon({ status }: { status: InstallStatus }) {
 /* ─── Helpers ─────────────────────────────────────────────────────── */
 
 function useRollingRate(bytes: number, live: boolean): number {
-  const samplesRef = useRef<{ t: number; b: number }[]>([]);
+  // State-based (not ref-based) so the displayed rate updates in the
+  // same render cycle that mutates the sample window. Reading ref
+  // values during render trips react-hooks/refs in CI; using state
+  // also avoids the one-frame-stale rate that the ref version had.
+  const [samples, setSamples] = useState<{ t: number; b: number }[]>([]);
   useEffect(() => {
     if (!live) {
-      samplesRef.current = [];
+      setSamples([]);
       return;
     }
     const now = Date.now();
-    samplesRef.current.push({ t: now, b: bytes });
-    samplesRef.current = samplesRef.current.filter((s) => now - s.t < 2500);
+    setSamples((prev) =>
+      [...prev, { t: now, b: bytes }].filter((s) => now - s.t < 2500),
+    );
   }, [bytes, live]);
-  if (!live) return 0;
-  const samples = samplesRef.current;
-  if (samples.length < 2) return 0;
+  if (!live || samples.length < 2) return 0;
   const first = samples[0];
   const last = samples[samples.length - 1];
   const dt = (last.t - first.t) / 1000;
