@@ -4,6 +4,47 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.2.33
+
+**Library → Game Details: switch metadata source to PROSPEROPatches**
+
+The PSN Store endpoints we hit in 2.2.32 are gated and rate-limited
+in ways that made cover art unreliable in practice. Replaced the
+backing source with [PROSPEROPatches](https://prosperopatches.com),
+a public PS5 title-info site, and rebuilt the modal around what it
+exposes:
+
+- **Cover art** scraped from the page's `<meta name="twitter:image">`
+  tag, served by `cdn.prosperopatches.com`. Whitelisted only this
+  CDN host in the renderer CSP `img-src`; the previous PSN
+  whitelist was removed.
+- **Display title** scraped from the `<title>TITLEID: Name</title>`
+  tag.
+- **"Search PSN Store" button** → **"View on PROSPEROPatches"**.
+  Clicking opens `https://prosperopatches.com/<titleId>` in the
+  user's browser via `openExternal`, where the full patch list and
+  publisher info are visible.
+
+The fetch still goes through a Rust-side Tauri command (renamed
+`psn_fetch` → `title_meta_fetch`) with a hostname allowlist
+(`prosperopatches.com` only) acting as SSRF defense, a polite
+User-Agent identifying the app + version, an 8 s timeout, and a
+1 MiB body cap.
+
+Modal fields that PROSPEROPatches doesn't expose (description,
+genres, age rating, publisher chip) were removed from the modal —
+the local `param.json` info row already covers what's needed for
+on-disk identification, and removing the dead JSX keeps the modal
+honest about what it can actually show.
+
+Files renamed for accuracy: `client/src/lib/psnDetails.ts` →
+`titleDetails.ts`, `client/src-tauri/src/commands/psn.rs` →
+`title_meta.rs`. Cache localStorage key migrated from
+`ps5upload.psn.cache` → `ps5upload.titleinfo.cache` so stale PSN
+entries don't shadow the new shape.
+
+---
+
 ## 2.2.32
 
 **Fixed: Library → Game Details modal — cover art and "Search PSN

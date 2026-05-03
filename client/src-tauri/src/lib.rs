@@ -147,11 +147,11 @@ pub fn run() {
             // commands/updates.rs for the full flow.
             commands::update_check,
             commands::update_download,
-            // ── PSN Store metadata fetch ────────────────────────────
-            // Server-side fetch (Rust/reqwest) for store.playstation.com
-            // — bypasses renderer CSP/CORS. Hostname allowlist enforced
-            // in commands/psn.rs.
-            commands::psn_fetch,
+            // ── Title metadata fetch (cover art + display title) ────
+            // Server-side fetch (Rust/reqwest) of the public PS5
+            // title-info site, bypassing renderer CSP/CORS. Hostname
+            // allowlist enforced in commands/title_meta.rs.
+            commands::title_meta_fetch,
         ])
         .build(tauri::generate_context!())
         .expect("tauri runtime failed to build");
