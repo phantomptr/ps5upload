@@ -966,12 +966,18 @@ function LibraryRow({
           ? `Already mounted at ${res.mount_point}${roSuffix} — reused the existing mount.${layoutWarning}${mismatch}`
           : `Mounted at ${res.mount_point}${roSuffix}. Games inside the image will appear in the Library shortly.${layoutWarning}${mismatch}`,
       );
-      // Delay the rescan briefly so the new mount has time to
-      // populate getmntinfo + the new directory entries become
-      // visible. Without the delay, scanLibrary occasionally races
-      // and produces an empty result (the user-reported "library
-      // goes blank, click refresh" symptom).
-      setTimeout(() => onChanged(), 400);
+      // Delay the rescan + retry once. The freshly-mounted volume
+      // can take 1-2 seconds to surface in getmntinfo on some
+      // firmwares, and the games inside aren't readable until the
+      // ufs/exfatfs cache warms. The first refresh at ~1s gives
+      // most cases a chance; the second at ~3s is a safety net so
+      // the user sees the game appear without manually clicking
+      // Refresh. Pre-2.2.48 a single 400 ms delay sometimes ran
+      // before the volume was even visible, producing the
+      // user-reported "I can see no game folder at the mount,
+      // refresh doesn't help" symptom.
+      setTimeout(() => onChanged(), 1000);
+      setTimeout(() => onChanged(), 3000);
     } catch (e) {
       okOutcome = false;
       errMsg = e instanceof Error ? e.message : String(e);

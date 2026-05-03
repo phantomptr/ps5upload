@@ -6246,6 +6246,7 @@ static int fs_mount_find_existing(const char *image_path,
  * the image with a larger cluster. */
 static int fs_mount_validate_post_mount(const char *mp,
                                          fs_mount_kind_t kind,
+                                         const char *expected_dev,
                                          char *errbuf, size_t errbuf_cap) {
     if (!mp || !errbuf || errbuf_cap == 0) {
         if (errbuf && errbuf_cap > 0) errbuf[0] = '\0';
@@ -6258,6 +6259,30 @@ static int fs_mount_validate_post_mount(const char *mp,
                  "fs_mount_post_statfs_failed: %s", strerror(errno));
         return -1;
     }
+
+    /* nmount(2) returning 0 doesn't always mean the kernel actually
+     * attached the filesystem at this path — on some firmware quirks
+     * + cross-volume mount-policy refusals it returns success but
+     * the mount table still shows the *parent* fs at the path. The
+     * symptom users hit: "mount succeeded but I see nothing at the
+     * mount point, and Library refresh shows no games inside."
+     * Verify by reading f_mntfromname and confirming it matches our
+     * just-attached /dev/lvdN or /dev/mdN. If it doesn't, the mount
+     * silently fell through and we should surface that as an error
+     * rather than write a tracker that pretends it worked. */
+    if (expected_dev && expected_dev[0]) {
+        if (strncmp(sfs.f_mntfromname, expected_dev, sizeof(sfs.f_mntfromname)) != 0) {
+            snprintf(errbuf, errbuf_cap,
+                     "fs_mount_silent_failure: nmount returned 0 but the kernel "
+                     "mount table at %s still shows %s — expected %s. The .ffpkg "
+                     "wasn't actually attached. Try a different mount point under "
+                     "/data/ or /mnt/ps5upload/ — kernel mount-policy may be "
+                     "refusing this path.",
+                     mp, sfs.f_mntfromname, expected_dev);
+            return -1;
+        }
+    }
+
     uint32_t min_sector = fs_mount_default_sector(kind);
     uint64_t bsize = (uint64_t)sfs.f_bsize;
     if (bsize == 0) bsize = (uint64_t)sfs.f_iosize;
@@ -6579,7 +6604,7 @@ static int handle_fs_mount(runtime_state_t *state, int client_fd,
      * error instead of a silent half-broken mount. */
     {
         char post_err[224];
-        if (fs_mount_validate_post_mount(mount_point, kind,
+        if (fs_mount_validate_post_mount(mount_point, kind, devname,
                                           post_err, sizeof(post_err)) != 0) {
             (void)fs_mount_try_unmount(mount_point);
             if (used_lvd) fs_mount_detach_lvd(unit_id);

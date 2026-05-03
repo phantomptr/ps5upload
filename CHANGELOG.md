@@ -4,6 +4,58 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.2.48
+
+**.ffpkg mount: detect silent kernel-side mount failures + retry
+the post-mount Library scan**
+
+User report: ".ffpkg mount appears to succeed but the game folder
+isn't visible at the mount point, and Library refresh shows no
+game inside." Test image:
+`/Volumes/Storage/PS5/games/EP7579-PPSA17599_00-EXP33DLC10000PS5.pkg`.
+
+Two distinct fixes for the two layers of this bug.
+
+### Payload: detect silent nmount-success-but-not-actually-mounted
+
+`nmount(2)` returning 0 doesn't always mean the kernel attached
+the filesystem at the requested path. On some firmware quirks +
+cross-volume mount-policy refusals, it returns success but the
+mount table at the path still shows the *parent* fs's
+`f_mntfromname`. ps5upload trusted the return code, wrote the
+tracker file, surfaced "Mount succeeded at /data/homebrew/Mafia"
+to the user — and the user saw an empty directory.
+
+`fs_mount_validate_post_mount` now reads `statfs(mp)` and verifies
+`f_mntfromname` matches the `/dev/lvd<N>` (or `/dev/md<N>`) we
+just attached. If it doesn't, we tear down (unmount + LVD detach
++ rmdir + remove tracker) and surface a structured error:
+
+    fs_mount_silent_failure: nmount returned 0 but the kernel
+    mount table at <mp> still shows <wrong_dev> — expected
+    <our_dev>. The .ffpkg wasn't actually attached. Try a
+    different mount point under /data/ or /mnt/ps5upload/ —
+    kernel mount-policy may be refusing this path.
+
+The user gets an actionable failure instead of a misleading
+success.
+
+### Client: retry the post-mount Library scan once
+
+The freshly-mounted volume can take 1-2 seconds to surface in
+`getmntinfo` on some firmwares, and the directory entries inside
+aren't readable until the ufs/exfatfs cache warms. Pre-2.2.48 a
+single 400 ms delay sometimes ran before the volume was even
+visible, producing the user-reported "I see no game folder at the
+mount" symptom. Now we fire two refreshes — first at 1 s (catches
+the common case), then a safety-net at 3 s — so the game appears
+without the user having to click Refresh manually.
+
+### Memory: stop adding `Co-Authored-By: Claude …` to commits in
+this repo per user preference (separate feedback memory).
+
+---
+
 ## 2.2.47
 
 **Surface the real install error + Sony AppInstUtil error humanization**

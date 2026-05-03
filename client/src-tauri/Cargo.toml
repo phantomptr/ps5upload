@@ -1,6 +1,6 @@
 [package]
 name = "ps5upload-desktop"
-version = "2.2.47"
+version = "2.2.48"
 description = "The all-in-one PS5 companion app."
 edition = "2021"
 rust-version = "1.77"
