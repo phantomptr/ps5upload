@@ -121,6 +121,22 @@ pub struct InstallStartRequest {
     /// or fall back to "PS4GD". Useful for unknown-magic PKGs where
     /// the user picks the type manually in the UI.
     pub package_type_override: Option<String>,
+    /// Optional PS5-side absolute path to a pre-uploaded `.pkg`. When
+    /// set, the install URL becomes `file:///<path>` and the
+    /// HTTP-host setup is skipped — Sony's installer reads the
+    /// bytes from the PS5's local filesystem. This is the path
+    /// etaHEN / GoldHEN-style installers use; it's substantially
+    /// more reliable than HTTP-pull because:
+    ///
+    /// - No desktop-IP / firewall / process-context dependency.
+    /// - Sony's installer accepts file:// URIs from any caller
+    ///   context that can call sceAppInstUtilInstallByPackage.
+    /// - The PS5 needs disk space for the .pkg first, but the
+    ///   existing FTX2 single-file upload (Upload tab) puts it
+    ///   wherever the user wants.
+    ///
+    /// When unset, falls back to the legacy HTTP-host flow.
+    pub local_ps5_path: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -148,26 +164,52 @@ async fn install_start_handler(
         .or_else(|| head_meta.package_type.clone())
         .unwrap_or_else(|| "PS4GD".to_string());
 
-    // Pick the LAN IP this host presents to the PS5. Multi-NIC safe:
-    // bind a UDP socket "connected" to the PS5's mgmt addr and read
-    // the local addr — that's the IP the OS picked for outbound.
-    let ps5_host_only = req.ps5_addr.split(':').next().unwrap_or("").to_string();
-    let local_ip = match lan_ip_for_ps5(&ps5_host_only) {
-        Ok(ip) => ip,
-        Err(e) => {
-            return json_err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("could not determine local LAN IP for PS5 {ps5_host_only}: {e}"),
-            )
-        }
-    };
-    let host_port = std::env::var("PS5UPLOAD_ENGINE_PORT")
-        .ok()
-        .and_then(|s| s.parse::<u16>().ok())
-        .unwrap_or(19113);
-
+    // Two URL strategies:
+    //   1. file:// — preferred when the caller has uploaded the
+    //      .pkg to the PS5's local disk first (via Upload tab or
+    //      similar) and passes its absolute path. Sony's installer
+    //      reads from disk, no network round-trip, no desktop-IP /
+    //      firewall / process-context dependency. Matches what
+    //      etaHEN's DirectPKGInstaller and GoldHEN's RPI use.
+    //   2. http:// — legacy fallback. The desktop hosts the .pkg
+    //      bytes on PS5UPLOAD_ENGINE_PORT and the PS5 pulls them.
+    //      Works when LAN routing is straightforward and the
+    //      desktop's firewall lets the PS5 connect inbound, but
+    //      community installers gave this up because of repeated
+    //      cross-firmware reliability issues.
     let session_id = Uuid::new_v4().to_string();
-    let url = format!("http://{local_ip}:{host_port}/pkg-host/{session_id}/file.pkg");
+    let url = if let Some(local_path) = req.local_ps5_path.as_deref().filter(|s| !s.is_empty()) {
+        // Reject paths that aren't absolute on the PS5 — file:// URIs
+        // need an absolute path or Sony's installer rejects with a
+        // parse error.
+        if !local_path.starts_with('/') {
+            return json_err(
+                StatusCode::BAD_REQUEST,
+                &format!("local_ps5_path must be absolute (start with /), got: {local_path}"),
+            );
+        }
+        format!("file://{local_path}")
+    } else {
+        // Pick the LAN IP this host presents to the PS5. Multi-NIC
+        // safe: bind a UDP socket "connected" to the PS5's mgmt
+        // addr and read the local addr — that's the IP the OS
+        // picked for outbound.
+        let ps5_host_only = req.ps5_addr.split(':').next().unwrap_or("").to_string();
+        let local_ip = match lan_ip_for_ps5(&ps5_host_only) {
+            Ok(ip) => ip,
+            Err(e) => {
+                return json_err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("could not determine local LAN IP for PS5 {ps5_host_only}: {e}"),
+                )
+            }
+        };
+        let host_port = std::env::var("PS5UPLOAD_ENGINE_PORT")
+            .ok()
+            .and_then(|s| s.parse::<u16>().ok())
+            .unwrap_or(19113);
+        format!("http://{local_ip}:{host_port}/pkg-host/{session_id}/file.pkg")
+    };
 
     let session = InstallSession {
         id: session_id.clone(),

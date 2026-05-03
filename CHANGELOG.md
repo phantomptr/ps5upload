@@ -4,6 +4,27 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.2.50
+
+**Install Package: optional `file://` flow for upload-then-install**
+
+The HTTP-pull install flow has multiple failure modes — desktop-IP
+detection, firewall on `:19113`, Sony's installer rejecting HTTP
+URIs in some process contexts. Community installers (etaHEN,
+GoldHEN's RPI) all do upload-then-install for the same reason.
+
+- Engine `pkg_install_start` accepts an optional `local_ps5_path`.
+  When set, builds `file:///<path>` URL and skips HTTP-host setup.
+  Sony's installer reads bytes from the PS5's local disk.
+- Tauri command + install queue thread the field through.
+- Install Package row UI: text input "PS5-side path (file://
+  install, recommended)" — empty falls back to legacy HTTP flow.
+- Workflow: upload `.pkg` via the Upload tab to e.g.
+  `/data/pkg/foo.pkg`, paste that path here, click Install.
+- Persistent across reloads (localStorage).
+
+---
+
 ## 2.2.49
 
 **Audit-pass: 4 bugs in the recent install/mount changes**

@@ -67,6 +67,12 @@ export interface InstallQueueItem {
   /** Warnings from the parse step (e.g. unknown magic). Surfaced as
    *  a yellow caution row before install starts. */
   warnings: string[];
+  /** Optional absolute path on the PS5 where the `.pkg` already
+   *  lives. When set, the engine builds a `file://` URL instead of
+   *  spinning up the HTTP host. The user typically populates this
+   *  after first uploading the `.pkg` via the Upload tab; see
+   *  the Install Package screen for the picker. */
+  localPs5Path: string | null;
 }
 
 interface InstallQueueState {
@@ -76,7 +82,10 @@ interface InstallQueueState {
 
   add(item: Omit<InstallQueueItem, "id" | "addedAt" | "status" | "phase" |
     "bytesDownloaded" | "errCode" | "errMessage" | "sessionId" | "taskId" |
-    "startedAt" | "finishedAt">): void;
+    "startedAt" | "finishedAt" | "localPs5Path">): void;
+  /** Set the PS5-side path for an existing queue item (the
+   *  upload-then-install flow). Persists across reloads. */
+  setLocalPs5Path(id: string, path: string | null): void;
   remove(id: string): void;
   clearFinished(): void;
   retry(id: string): void;
@@ -153,14 +162,21 @@ function load(): InstallQueueItem[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return [];
-    const parsed = JSON.parse(raw) as InstallQueueItem[];
-    // Defensive: drop anything that's missing required fields.
-    return parsed.filter(
-      (it) =>
-        typeof it.id === "string" &&
-        typeof it.pkgPath === "string" &&
-        typeof it.addr === "string",
-    );
+    const parsed = JSON.parse(raw) as Partial<InstallQueueItem>[];
+    // Defensive: drop anything that's missing required fields,
+    // and back-fill new optional fields for items persisted by
+    // older app versions (so an upgrade doesn't break hydration).
+    return parsed
+      .filter(
+        (it): it is InstallQueueItem =>
+          typeof it.id === "string" &&
+          typeof it.pkgPath === "string" &&
+          typeof it.addr === "string",
+      )
+      .map((it) => ({
+        ...it,
+        localPs5Path: it.localPs5Path ?? null,
+      }));
   } catch {
     return [];
   }
@@ -195,6 +211,7 @@ export const useInstallQueue = create<InstallQueueState>((set, get) => ({
       addedAt: Date.now(),
       startedAt: null,
       finishedAt: null,
+      localPs5Path: null,
     };
     const items = [...get().items, item];
     set({ items });
@@ -203,6 +220,17 @@ export const useInstallQueue = create<InstallQueueState>((set, get) => ({
 
   remove(id) {
     const items = get().items.filter((it) => it.id !== id);
+    set({ items });
+    persist(items);
+  },
+
+  setLocalPs5Path(id, path) {
+    // Normalise: empty string → null so the engine sees a clean
+    // optional and falls back to the HTTP-host flow as expected.
+    const normalised = path && path.trim() !== "" ? path.trim() : null;
+    const items = get().items.map((it) =>
+      it.id === id ? { ...it, localPs5Path: normalised } : it,
+    );
     set({ items });
     persist(items);
   },
@@ -314,6 +342,13 @@ export const useInstallQueue = create<InstallQueueState>((set, get) => ({
           path: next.isSplit ? null : next.pkgPath,
           splitRoot: next.isSplit ? next.pkgPath : null,
           packageTypeOverride: next.packageType || null,
+          // When set, the engine builds a `file://` URL and skips
+          // the HTTP-host setup. Used for the upload-then-install
+          // flow: user uploads the .pkg via the Upload tab to a
+          // PS5 path, then pastes that path here. Sony's installer
+          // reads from local disk — much more reliable than the
+          // HTTP-pull on most firmware/network combos.
+          localPs5Path: next.localPs5Path || null,
         })) as typeof startResp;
       } catch (e) {
         markFailed(get, set, next.id, 0, `${e}`);

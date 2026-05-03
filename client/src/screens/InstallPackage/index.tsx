@@ -98,6 +98,7 @@ export default function InstallPackageScreen() {
   const cancel = useInstallQueue((s) => s.cancel);
   const retry = useInstallQueue((s) => s.retry);
   const clearFinished = useInstallQueue((s) => s.clearFinished);
+  const setLocalPs5Path = useInstallQueue((s) => s.setLocalPs5Path);
   const add = useInstallQueue((s) => s.add);
 
   const [pickError, setPickError] = useState<string | null>(null);
@@ -403,6 +404,7 @@ export default function InstallPackageScreen() {
                 onRemove={() => remove(it.id)}
                 onCancel={() => cancel(it.id)}
                 onRetry={() => retry(it.id)}
+                setLocalPs5Path={setLocalPs5Path}
               />
             ))}
           </ul>
@@ -523,12 +525,14 @@ function InstallRow({
   onRemove,
   onCancel,
   onRetry,
+  setLocalPs5Path,
 }: {
   item: InstallQueueItem;
   t: (k: string, fb: string) => string;
   onRemove: () => void;
   onCancel: () => void;
   onRetry: () => void;
+  setLocalPs5Path: (id: string, path: string | null) => void;
 }) {
   const isActive = item.status === "running";
   const pct =
@@ -660,6 +664,36 @@ function InstallRow({
               className="h-full bg-[var(--color-accent)] transition-[width] duration-300"
               style={{ width: `${pct}%` }}
             />
+          </div>
+        </div>
+      )}
+
+      {/* Upload-then-install path picker. The PS5 reads the .pkg
+          from its local disk via a `file://` URL — substantially
+          more reliable than the HTTP-pull default on most
+          firmware/network combos. The user uploads the .pkg via
+          the Upload tab first (or via FTP), then pastes the PS5
+          path here. Empty value falls back to the legacy HTTP-host
+          flow. Only editable while the row is pending. */}
+      {item.status === "pending" && (
+        <div className="mt-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-2 text-[11px]">
+          <label className="flex items-center gap-2 font-medium">
+            <span>PS5-side path (file:// install, recommended)</span>
+            <span className="text-[var(--color-muted)]">— optional</span>
+          </label>
+          <input
+            type="text"
+            placeholder="/data/pkg/foo.pkg  (upload via the Upload tab first)"
+            value={item.localPs5Path ?? ""}
+            onChange={(e) => setLocalPs5Path(item.id, e.target.value)}
+            className="mt-1 w-full rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 font-mono text-[11px] outline-none focus:border-[var(--color-accent)]"
+            spellCheck={false}
+          />
+          <div className="mt-1 text-[10px] text-[var(--color-muted)]">
+            When set, install reads from the PS5's local disk instead
+            of fetching over HTTP. Skip the desktop-IP / firewall /
+            process-context dependencies that bite the HTTP-pull flow.
+            Leave empty to use the legacy HTTP-host install.
           </div>
         </div>
       )}
