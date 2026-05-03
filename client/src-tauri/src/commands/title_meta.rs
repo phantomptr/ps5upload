@@ -24,11 +24,13 @@
 
 use std::time::Duration;
 
-/// Public PS5 title-info hosts we will fetch on behalf of the
-/// renderer. Image URLs from `cdn.prosperopatches.com` are loaded
-/// directly via `<img src>` (whitelisted in the renderer CSP), so
-/// the CDN host doesn't need to come through this command.
-const ALLOWED_HOSTS: &[&str] = &["prosperopatches.com"];
+/// Public title-info hosts we will fetch on behalf of the renderer.
+/// PROSPEROPatches covers PS5 (PPSA#####); ORBISPatches covers PS4
+/// (CUSA#####, runnable on PS5 via backwards compatibility). Image
+/// URLs from `cdn.prosperopatches.com` / `cdn.orbispatches.com` are
+/// loaded directly via `<img src>` (whitelisted in the renderer
+/// CSP), so the CDN hosts don't need to come through this command.
+const ALLOWED_HOSTS: &[&str] = &["prosperopatches.com", "orbispatches.com"];
 
 /// 1 MiB ceiling. The title pages are ~30 KB; anything close to
 /// this is anomalous.

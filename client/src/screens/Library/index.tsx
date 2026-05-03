@@ -64,7 +64,8 @@ import {
 import { filterLibraryEntries } from "../../lib/libraryFilter";
 import {
   fetchTitleInfo,
-  prosperoPatchesUrl,
+  patchesSiteName,
+  patchesSiteUrl,
   type TitleInfo,
 } from "../../lib/titleDetails";
 import {
@@ -1440,7 +1441,7 @@ function LibraryRow({
                     ? tr(
                         "library_details_tooltip",
                         undefined,
-                        "Game details — fetches cover art and metadata from PROSPEROPatches",
+                        "Game details — fetches cover art from PROSPEROPatches (PS5) or ORBISPatches (PS4)",
                       )
                     : tr(
                         "library_details_no_titleid_tooltip",
@@ -1873,22 +1874,28 @@ function GameDetailsModal({
                     )}
               </div>
             )}
-            {entry.titleId && (
-              <button
-                type="button"
-                onClick={() => {
-                  void openExternal(prosperoPatchesUrl(entry.titleId!));
-                }}
-                className="inline-flex items-center justify-center gap-1 rounded-md border border-[var(--color-border)] px-2 py-1 text-xs hover:bg-[var(--color-surface-3)]"
-              >
-                <ExternalLink size={11} />
-                {tr(
-                  "library_details_modal_open_prosperopatches",
-                  undefined,
-                  "View on PROSPEROPatches",
-                )}
-              </button>
-            )}
+            {entry.titleId &&
+              (() => {
+                const url = patchesSiteUrl(entry.titleId);
+                const siteName = patchesSiteName(entry.titleId);
+                if (!url || !siteName) return null;
+                return (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void openExternal(url);
+                    }}
+                    className="inline-flex items-center justify-center gap-1 rounded-md border border-[var(--color-border)] px-2 py-1 text-xs hover:bg-[var(--color-surface-3)]"
+                  >
+                    <ExternalLink size={11} />
+                    {tr(
+                      "library_details_modal_open_patches_site",
+                      { site: siteName },
+                      `View on ${siteName}`,
+                    )}
+                  </button>
+                );
+              })()}
           </div>
 
           <div className="flex min-w-0 flex-col gap-3 text-sm">

@@ -2,8 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   fetchTitleInfo,
-  parseProsperoPatchesHtml,
-  prosperoPatchesUrl,
+  metaSourceForTitleId,
+  parsePatchesHtml,
+  patchesSiteName,
+  patchesSiteUrl,
   readTitleCache,
   writeTitleCache,
 } from "./titleDetails";
@@ -44,19 +46,41 @@ function installLocalStorageStub() {
   return store;
 }
 
-/** Skeleton of what prosperopatches returns for a known title — only
- *  the two pieces we actually parse (title tag + twitter:image meta). */
+/** Skeleton of what the patches sites return for a known title —
+ *  only the two pieces we actually parse. PS5 (prosperopatches) has
+ *  a bare `<title>`, PS4 (orbispatches) appends a " | sitename"
+ *  suffix; the parser handles both. */
 function makeProsperoHtml(titleId: string, displayName: string): string {
-  return `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>${titleId}: ${displayName}</title>
-  <meta name="twitter:image" content="https://cdn.prosperopatches.com/titles/${titleId}_abc123/icon0.webp">
-</head>
-<body><h1>${displayName}</h1></body>
-</html>`;
+  return `<!doctype html><html><head>
+    <title>${titleId}: ${displayName}</title>
+    <meta name="twitter:image" content="https://cdn.prosperopatches.com/titles/${titleId}_abc/icon0.webp">
+  </head><body></body></html>`;
 }
+function makeOrbisHtml(titleId: string, displayName: string): string {
+  return `<!doctype html><html><head>
+    <title>${titleId}: ${displayName} | ORBISPatches.com</title>
+    <meta name="twitter:image" content="https://cdn.orbispatches.com/titles/${titleId}_xyz/icon0.webp">
+  </head><body></body></html>`;
+}
+
+describe("metaSourceForTitleId", () => {
+  it("routes PPSA##### to prosperopatches (PS5)", () => {
+    const src = metaSourceForTitleId("PPSA01285");
+    expect(src?.url).toBe("https://prosperopatches.com/PPSA01285");
+    expect(src?.siteName).toBe("PROSPEROPatches");
+  });
+
+  it("routes CUSA##### to orbispatches (PS4)", () => {
+    const src = metaSourceForTitleId("CUSA57609");
+    expect(src?.url).toBe("https://orbispatches.com/CUSA57609");
+    expect(src?.siteName).toBe("ORBISPatches");
+  });
+
+  it("returns null for prefixes that don't run on PS5 (PCSA/NPXS/etc.)", () => {
+    expect(metaSourceForTitleId("PCSE00001")).toBeNull();
+    expect(metaSourceForTitleId("NPXS40000")).toBeNull();
+  });
+});
 
 describe("title cache", () => {
   beforeEach(() => {
@@ -81,49 +105,73 @@ describe("title cache", () => {
   });
 });
 
-describe("prosperoPatchesUrl", () => {
-  it("builds the canonical title page url", () => {
-    expect(prosperoPatchesUrl("PPSA01285")).toBe(
+describe("patchesSiteUrl / patchesSiteName", () => {
+  it("returns the canonical PS5 url + site name for PPSA ids", () => {
+    expect(patchesSiteUrl("PPSA01285")).toBe(
       "https://prosperopatches.com/PPSA01285",
     );
+    expect(patchesSiteName("PPSA01285")).toBe("PROSPEROPatches");
   });
-  it("URL-encodes pathologically-shaped ids defensively", () => {
-    // We validate format earlier, but the URL builder should not
-    // produce something the upstream rejects on weird input.
-    expect(prosperoPatchesUrl("a/b")).toBe(
-      "https://prosperopatches.com/a%2Fb",
+
+  it("returns the canonical PS4 url + site name for CUSA ids", () => {
+    expect(patchesSiteUrl("CUSA57609")).toBe(
+      "https://orbispatches.com/CUSA57609",
     );
+    expect(patchesSiteName("CUSA57609")).toBe("ORBISPatches");
+  });
+
+  it("returns null when there's no upstream we'd query", () => {
+    expect(patchesSiteUrl("PCSE12345")).toBeNull();
+    expect(patchesSiteName("PCSE12345")).toBeNull();
   });
 });
 
-describe("parseProsperoPatchesHtml", () => {
-  it("extracts title and cover image from a known-shape page", () => {
+describe("parsePatchesHtml", () => {
+  const PROSPERO_RE = /^https:\/\/cdn\.prosperopatches\.com\//;
+  const ORBIS_RE = /^https:\/\/cdn\.orbispatches\.com\//;
+
+  it("extracts title and cover image from a PS5 (prosperopatches) page", () => {
     const html = makeProsperoHtml("PPSA01285", "Returnal");
-    const info = parseProsperoPatchesHtml(html);
+    const info = parsePatchesHtml(html, PROSPERO_RE);
     expect(info?.title).toBe("Returnal");
     expect(info?.coverImageUrl).toBe(
-      "https://cdn.prosperopatches.com/titles/PPSA01285_abc123/icon0.webp",
+      "https://cdn.prosperopatches.com/titles/PPSA01285_abc/icon0.webp",
     );
   });
 
-  it("ignores cover-image meta values that don't point at the cdn", () => {
+  it("strips the ' | ORBISPatches.com' suffix from PS4 page titles", () => {
+    const html = makeOrbisHtml("CUSA57609", "Car Dealer Simulator");
+    const info = parsePatchesHtml(html, ORBIS_RE);
+    expect(info?.title).toBe("Car Dealer Simulator");
+    expect(info?.coverImageUrl).toContain("cdn.orbispatches.com");
+  });
+
+  it("rejects cover URLs that don't match the platform's CDN", () => {
+    // A prosperopatches page that somehow points at the orbis CDN
+    // would be tampering — drop the cover URL, keep the title.
+    const html = `<html><head>
+      <title>PPSA00001: Wrong CDN</title>
+      <meta name="twitter:image" content="https://cdn.orbispatches.com/sneaky.webp">
+    </head></html>`;
+    const info = parsePatchesHtml(html, PROSPERO_RE);
+    expect(info?.title).toBe("Wrong CDN");
+    expect(info?.coverImageUrl).toBeUndefined();
+  });
+
+  it("ignores cover-image meta values from totally unrelated hosts", () => {
     const html = `<html><head>
       <title>PPSA00099: Spoofy</title>
       <meta name="twitter:image" content="https://evil.example.com/sneaky.webp">
     </head></html>`;
-    const info = parseProsperoPatchesHtml(html);
+    const info = parsePatchesHtml(html, PROSPERO_RE);
     expect(info?.title).toBe("Spoofy");
     expect(info?.coverImageUrl).toBeUndefined();
   });
 
   it("returns null when neither title nor cover are present", () => {
-    expect(parseProsperoPatchesHtml("<html><head></head></html>")).toBeNull();
-  });
-
-  it("strips the TITLEID prefix in `<title>` even when title id has different shape", () => {
-    const html = "<html><head><title>CUSA12345: Some Old Game</title></head></html>";
-    const info = parseProsperoPatchesHtml(html);
-    expect(info?.title).toBe("Some Old Game");
+    expect(
+      parsePatchesHtml("<html><head></head></html>", PROSPERO_RE),
+    ).toBeNull();
   });
 
   it("falls back to og:image when twitter:image is absent", () => {
@@ -131,7 +179,7 @@ describe("parseProsperoPatchesHtml", () => {
       <title>PPSA00100: Fallback</title>
       <meta property="og:image" content="https://cdn.prosperopatches.com/titles/PPSA00100_x/icon0.webp">
     </head></html>`;
-    const info = parseProsperoPatchesHtml(html);
+    const info = parsePatchesHtml(html, PROSPERO_RE);
     expect(info?.coverImageUrl).toContain("PPSA00100");
   });
 });
@@ -158,22 +206,38 @@ describe("fetchTitleInfo", () => {
     expect(calls).toBe(0);
   });
 
-  it("returns parsed info for a known title and caches it", async () => {
-    const html = makeProsperoHtml("PPSA00099", "Test Title");
+  it("skips the network for prefixes we don't resolve (PCSE/NPXS/etc.)", async () => {
     let calls = 0;
     installInvokeStub(async () => {
       calls += 1;
-      return html;
+      return "";
+    });
+    expect(await fetchTitleInfo("PCSE00123")).toBeNull();
+    expect(calls).toBe(0);
+  });
+
+  it("hits prosperopatches for a PS5 title and caches the parsed result", async () => {
+    let seenUrl = "";
+    installInvokeStub(async (_cmd, args) => {
+      seenUrl = (args as { url: string }).url;
+      return makeProsperoHtml("PPSA00099", "Test PS5 Title");
     });
     const info = await fetchTitleInfo("PPSA00099");
-    expect(info?.title).toBe("Test Title");
+    expect(info?.title).toBe("Test PS5 Title");
     expect(info?.coverImageUrl).toContain("cdn.prosperopatches.com");
-    expect(calls).toBe(1);
+    expect(seenUrl).toBe("https://prosperopatches.com/PPSA00099");
+  });
 
-    // Second call hits the cache, not the network.
-    const cached = await fetchTitleInfo("PPSA00099");
-    expect(cached?.title).toBe("Test Title");
-    expect(calls).toBe(1);
+  it("hits orbispatches for a PS4 title and strips the site suffix from the title", async () => {
+    let seenUrl = "";
+    installInvokeStub(async (_cmd, args) => {
+      seenUrl = (args as { url: string }).url;
+      return makeOrbisHtml("CUSA57609", "Car Dealer Simulator");
+    });
+    const info = await fetchTitleInfo("CUSA57609");
+    expect(info?.title).toBe("Car Dealer Simulator");
+    expect(info?.coverImageUrl).toContain("cdn.orbispatches.com");
+    expect(seenUrl).toBe("https://orbispatches.com/CUSA57609");
   });
 
   it("caches a 404 / parse-failure as null so the modal doesn't re-fetch every open", async () => {
@@ -186,15 +250,5 @@ describe("fetchTitleInfo", () => {
     const earlierCalls = calls;
     expect(await fetchTitleInfo("PPSA99999")).toBeNull();
     expect(calls).toBe(earlierCalls);
-  });
-
-  it("hits the canonical prosperopatches url path", async () => {
-    let seenUrl = "";
-    installInvokeStub(async (_cmd, args) => {
-      seenUrl = (args as { url: string }).url;
-      return makeProsperoHtml("PPSA12345", "Whatever");
-    });
-    await fetchTitleInfo("PPSA12345");
-    expect(seenUrl).toBe("https://prosperopatches.com/PPSA12345");
   });
 });

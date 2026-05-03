@@ -4,6 +4,42 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.2.34
+
+**Library → Game Details: PS4 (BC) titles now show cover art too**
+
+The PS5 plays PS4 games via backwards compatibility, so the Library
+can contain CUSA##### entries alongside PPSA##### ones. 2.2.33's
+PROSPEROPatches integration only resolved PS5 titles; PS4 titles
+silently fell through to "no remote metadata."
+
+Title-id prefix routing (per
+[psdevwiki Title ID](https://www.psdevwiki.com/ps5/Title_ID) /
+[PS4 Title ID](https://www.psdevwiki.com/ps4/Title_ID)):
+
+- **PPSA#####** → PS5 → `prosperopatches.com` (PROSPEROPatches)
+- **CUSA#####** → PS4 → `orbispatches.com` (ORBISPatches)
+- Any other prefix (PCSA, NPXS, etc.) — no upstream queried; the
+  modal shows the local `param.json` row only.
+
+The `<title>` parser now strips both the `TITLEID:` prefix and the
+optional ` | sitename` suffix the upstream pages add (PROSPEROPatches
+omits it, ORBISPatches appends ` | ORBISPatches.com`). The cover-host
+allowlist regex is per-platform — even if the page's `<meta>` tag
+were tampered with, we still won't accept an image URL that doesn't
+match the platform's own CDN (`cdn.prosperopatches.com` for PS5,
+`cdn.orbispatches.com` for PS4).
+
+The "View on …" button label is now dynamic so PS4 titles read
+"View on ORBISPatches" and PS5 titles read "View on PROSPEROPatches"
+— both open the title's full patch page in the user's browser.
+
+CSP `img-src` whitelisted `cdn.orbispatches.com` alongside the
+existing `cdn.prosperopatches.com`. The Rust-side `title_meta_fetch`
+allowlist now contains both upstream hosts.
+
+---
+
 ## 2.2.33
 
 **Library → Game Details: switch metadata source to PROSPEROPatches**

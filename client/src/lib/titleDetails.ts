@@ -1,10 +1,17 @@
 // Best-effort title metadata fetch for a PS5 title id. Scrapes
-// public title pages on prosperopatches.com — they fill `<title>`
-// and a `<meta name="twitter:image">` cover URL for known titles
-// (PPSAxxxxx and CUSAxxxxx), and serve images off
-// cdn.prosperopatches.com. The Library's Game Details modal renders
-// the cover thumbnail + display title alongside whatever local
+// public title pages — PROSPEROPatches for PS5 (PPSA#####) and
+// ORBISPatches for PS4 (CUSA#####, runnable on PS5 via BC). Both
+// sites use the same shape: `<title>TITLEID: Name [| sitename]</title>`
+// plus a `<meta name="twitter:image">` cover URL pointing at their
+// respective CDN. The Library's Game Details modal renders the
+// cover thumbnail + display title alongside whatever local
 // sce_sys/param.json we have.
+//
+// **Prefix routing** (per https://www.psdevwiki.com/ps5/Title_ID
+// and https://www.psdevwiki.com/ps4/Title_ID):
+//   - PPSA##### → PS5 → prosperopatches.com
+//   - CUSA##### → PS4 → orbispatches.com
+//   - Anything else → null (PSP/Vita/system apps don't run on PS5)
 //
 // **Why these calls go through Tauri**: the renderer's CSP
 // `connect-src` does not whitelist external hosts, and a cross-origin
@@ -25,13 +32,44 @@ import { invoke } from "@tauri-apps/api/core";
 const CACHE_KEY = "ps5upload.titleinfo.cache";
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
+/** Per-platform metadata source. The cover-host regex strictly
+ *  whitelists URLs we'll accept from the page's `<meta>` tag, so
+ *  even if the upstream got tampered with we won't render an
+ *  attacker-supplied URL into our `<img src>`. */
+interface MetaSource {
+  /** Title page URL on the upstream. */
+  url: string;
+  /** User-facing site name for the "View on …" button label. */
+  siteName: "PROSPEROPatches" | "ORBISPatches";
+  /** Restrict accepted cover-image URLs to this CDN. */
+  coverHostRe: RegExp;
+}
+
+/** Decide which upstream site to query for a given title id. */
+export function metaSourceForTitleId(titleId: string): MetaSource | null {
+  if (titleId.startsWith("PPSA")) {
+    return {
+      url: `https://prosperopatches.com/${titleId}`,
+      siteName: "PROSPEROPatches",
+      coverHostRe: /^https:\/\/cdn\.prosperopatches\.com\//,
+    };
+  }
+  if (titleId.startsWith("CUSA")) {
+    return {
+      url: `https://orbispatches.com/${titleId}`,
+      siteName: "ORBISPatches",
+      coverHostRe: /^https:\/\/cdn\.orbispatches\.com\//,
+    };
+  }
+  return null;
+}
+
 export interface TitleInfo {
   /** Display title scraped from the page's `<title>` tag (after
-   *  stripping the "TITLEID: " prefix). Often more user-friendly
-   *  than what param.json says. */
+   *  stripping the "TITLEID: " prefix and " | sitename" suffix). */
   title?: string;
-  /** Highest-quality cover-art URL we found. Served from
-   *  cdn.prosperopatches.com with no auth. */
+  /** Highest-quality cover-art URL we found. Served from a
+   *  whitelisted CDN with no auth. */
   coverImageUrl?: string;
 }
 
@@ -117,15 +155,22 @@ async function titleMetaFetchText(
   });
 }
 
-/** Parse a prosperopatches title page. The two pieces we care about
- *  are stable in the static HTML (no JS execution required):
+/** Parse a {prospero,orbis}patches title page. The two pieces we
+ *  care about are stable in the static HTML (no JS execution
+ *  required):
  *
  *    <title>PPSA01285: Returnal</title>
- *    <meta name="twitter:image" content="https://cdn.prosperopatches.com/...">
+ *    <title>CUSA57609: Car Dealer Simulator | ORBISPatches.com</title>
+ *    <meta name="twitter:image" content="https://cdn.<site>.com/...">
  *
- *  Returns null when neither was extractable — typically a stub
- *  page for an unknown title id, or markup we don't recognise. */
-export function parseProsperoPatchesHtml(html: string): TitleInfo | null {
+ *  The cover URL is checked against `coverHostRe` — even if the
+ *  page were tampered with, we won't accept an `<img src>` that
+ *  doesn't point at the platform's own CDN. Returns null when
+ *  neither title nor cover were extractable. */
+export function parsePatchesHtml(
+  html: string,
+  coverHostRe: RegExp,
+): TitleInfo | null {
   // Use DOMParser when available (renderer); fall back to regex when
   // not (tests sometimes run without a DOM polyfill).
   let title: string | undefined;
@@ -139,7 +184,7 @@ export function parseProsperoPatchesHtml(html: string): TitleInfo | null {
       doc.querySelector('meta[name="twitter:image"]') ??
       doc.querySelector('meta[property="og:image"]');
     const content = meta?.getAttribute("content") ?? "";
-    if (content && /^https:\/\/cdn\.prosperopatches\.com\//.test(content)) {
+    if (content && coverHostRe.test(content)) {
       coverImageUrl = content;
     }
   } else {
@@ -148,7 +193,7 @@ export function parseProsperoPatchesHtml(html: string): TitleInfo | null {
     const imgMatch = html.match(
       /<meta[^>]+(?:name="twitter:image"|property="og:image")[^>]+content="([^"]+)"/i,
     );
-    if (imgMatch && /^https:\/\/cdn\.prosperopatches\.com\//.test(imgMatch[1])) {
+    if (imgMatch && coverHostRe.test(imgMatch[1])) {
       coverImageUrl = imgMatch[1];
     }
   }
@@ -157,37 +202,46 @@ export function parseProsperoPatchesHtml(html: string): TitleInfo | null {
   return { title, coverImageUrl };
 }
 
-/** "PPSA01285: Returnal" → "Returnal".
- *  "CUSA12345: Foo Bar" → "Foo Bar".
+/** Strip the "TITLEID: " prefix and any trailing " | sitename"
+ *  suffix the upstream pages add. Examples:
+ *
+ *    "PPSA01285: Returnal" → "Returnal"
+ *    "CUSA57609: Car Dealer Simulator | ORBISPatches.com" → "Car Dealer Simulator"
+ *
  *  Anything not matching the prefix is returned trimmed as-is. */
 function stripTitleIdPrefix(raw: string): string | undefined {
   const trimmed = raw.trim();
   if (!trimmed) return undefined;
-  const m = trimmed.match(/^[A-Z]{4}\d{5}:\s*(.+?)\s*$/);
-  return m ? m[1] : trimmed;
+  // Drop trailing " | <site>" suffix if present.
+  const noSuffix = trimmed.replace(/\s*\|\s*[^|]+$/, "").trim();
+  const m = noSuffix.match(/^[A-Z]{4}\d{5}:\s*(.+?)\s*$/);
+  return m ? m[1] : noSuffix;
 }
 
 /** Fetch title metadata for a title id. Hits the cache first, then
- *  scrapes prosperopatches.com. Returns null on miss (and the result
- *  is cached so subsequent calls don't re-fetch). */
+ *  scrapes the platform-appropriate upstream. Returns null on miss
+ *  (and the result is cached so subsequent calls don't re-fetch). */
 export async function fetchTitleInfo(
   titleId: string,
   signal?: AbortSignal,
 ): Promise<TitleInfo | null> {
   if (!titleId || typeof titleId !== "string") return null;
   const trimmed = titleId.trim();
-  // Title id format check — PS5 ids are 4 letters + 5 digits
-  // (CUSAxxxxx, PPSAxxxxx, NPXSxxxxx). Reject obviously malformed
-  // values so we don't waste a network round-trip.
+  // Title id format check — PS4/PS5 ids are 4 letters + 5 digits.
   if (!/^[A-Z]{4}\d{5}$/.test(trimmed)) return null;
+
+  const source = metaSourceForTitleId(trimmed);
+  // Unknown platform prefix — no upstream to query, don't waste a
+  // network round-trip and don't pollute the cache with negatives
+  // for ids we'd never resolve anyway.
+  if (!source) return null;
 
   const cached = readTitleCache(trimmed);
   if (cached !== undefined) return cached;
 
   try {
-    const url = `https://prosperopatches.com/${trimmed}`;
-    const html = await titleMetaFetchText(url, signal);
-    const parsed = parseProsperoPatchesHtml(html);
+    const html = await titleMetaFetchText(source.url, signal);
+    const parsed = parsePatchesHtml(html, source.coverHostRe);
     writeTitleCache(trimmed, parsed);
     return parsed;
   } catch (e) {
@@ -199,8 +253,17 @@ export async function fetchTitleInfo(
   }
 }
 
-/** Build the URL the user can click through to to view the full
- *  title page (patch list, content IDs, etc.) on the upstream site. */
-export function prosperoPatchesUrl(titleId: string): string {
-  return `https://prosperopatches.com/${encodeURIComponent(titleId)}`;
+/** Build the URL the user can click through to view the full title
+ *  page (patch list, content IDs, etc.) on the upstream site. */
+export function patchesSiteUrl(titleId: string): string | null {
+  const source = metaSourceForTitleId(titleId);
+  return source?.url ?? null;
+}
+
+/** User-facing label for the "View on …" button — site name varies
+ *  by platform. Returns null when we don't know which upstream to
+ *  link, so the caller can hide the button entirely. */
+export function patchesSiteName(titleId: string): string | null {
+  const source = metaSourceForTitleId(titleId);
+  return source?.siteName ?? null;
 }
