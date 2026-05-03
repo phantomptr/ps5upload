@@ -4,12 +4,13 @@
 // this to render the official cover art + description alongside
 // whatever local sce_sys/param.json we have.
 //
-// **Why we keep this separate from api/ps5.ts**: those calls go
-// through Tauri IPC into the engine; this is plain `fetch()` against
-// public PSN endpoints, has no auth, and degrades gracefully on
-// failure (network down, region mismatch, title not in store) — the
-// modal still shows local data when the fetch fails, and we cache
-// per-title so we don't re-fetch on every modal open.
+// **Why these calls go through Tauri**: the renderer's CSP
+// `connect-src` does not whitelist store.playstation.com, and even
+// if it did the cross-origin response would not satisfy the webview's
+// CORS policy. We invoke a Rust-side `psn_fetch` command instead —
+// the request is issued from the desktop process (no CSP, no CORS),
+// and a hostname allowlist there acts as SSRF defense in case a
+// compromised renderer tries to pivot through this command.
 //
 // PSN store layout:
 //   - Resolve URL:
@@ -30,10 +31,40 @@
 // fetch on every modal open, short enough that a corrected title
 // shows up within a week.
 
+import { invoke } from "@tauri-apps/api/core";
+
 const CACHE_KEY = "ps5upload.psn.cache";
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 const RESOLVE_REGIONS = ["en/US", "en/GB", "en/DE", "en/JP"] as const;
+
+/** Fetch a PSN URL through the Rust-side `psn_fetch` command, which
+ *  enforces a hostname allowlist and bypasses renderer CSP/CORS. The
+ *  AbortSignal short-circuits the await; the in-flight Rust request
+ *  cannot be cancelled, but the caller never observes the result. */
+async function psnFetchText(url: string, signal?: AbortSignal): Promise<string> {
+  if (signal?.aborted) {
+    throw new DOMException("aborted", "AbortError");
+  }
+  const fetchPromise = invoke<string>("psn_fetch", { url });
+  if (!signal) return fetchPromise;
+  return await new Promise<string>((resolve, reject) => {
+    const onAbort = () => {
+      reject(new DOMException("aborted", "AbortError"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    fetchPromise.then(
+      (v) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(v);
+      },
+      (e) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(e);
+      },
+    );
+  });
+}
 
 export interface PsnGameInfo {
   /** Display title from the store (often slightly different from
@@ -182,16 +213,17 @@ function parseTitleContainer(payload: TitleContainerResponse): PsnGameInfo | nul
  *  regions. Returns the first match. */
 async function fetchValkyrie(titleId: string, signal?: AbortSignal): Promise<PsnGameInfo | null> {
   for (const region of RESOLVE_REGIONS) {
+    if (signal?.aborted) return null;
     try {
       const url = `https://store.playstation.com/valkyrie-api/${region}/19/resolve/${titleId}_00`;
-      const res = await fetch(url, { signal });
-      if (!res.ok) continue;
-      const json = (await res.json()) as ResolveResponse;
+      const text = await psnFetchText(url, signal);
+      const json = JSON.parse(text) as ResolveResponse;
       const parsed = parseResolve(json);
       if (parsed?.title || parsed?.description || parsed?.coverImageUrl) {
         return parsed;
       }
-    } catch {
+    } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") return null;
       // network or parse failure → try the next region
     }
   }
@@ -204,15 +236,16 @@ async function fetchValkyrie(titleId: string, signal?: AbortSignal): Promise<Psn
 async function fetchTitleContainer(titleId: string, signal?: AbortSignal): Promise<PsnGameInfo | null> {
   const langs = ["en/US", "en/GB"] as const;
   for (const lang of langs) {
+    if (signal?.aborted) return null;
     try {
       const [l, c] = lang.split("/");
       const url = `https://store.playstation.com/store/api/chihiro/00_09_000/titlecontainer/${l}/${c}/999/${titleId}`;
-      const res = await fetch(url, { signal });
-      if (!res.ok) continue;
-      const json = (await res.json()) as TitleContainerResponse;
+      const text = await psnFetchText(url, signal);
+      const json = JSON.parse(text) as TitleContainerResponse;
       const parsed = parseTitleContainer(json);
       if (parsed) return parsed;
-    } catch {
+    } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") return null;
       // try next lang
     }
   }

@@ -20,6 +20,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { open as openExternal } from "@tauri-apps/plugin-shell";
 
 import { useConnectionStore, PS5_PAYLOAD_PORT } from "../../state/connection";
 import {
@@ -1873,10 +1874,11 @@ function GameDetailsModal({
               </div>
             )}
             {entry.titleId && (
-              <a
-                href={psnStoreSearchUrl(entry.titleId)}
-                target="_blank"
-                rel="noreferrer"
+              <button
+                type="button"
+                onClick={() => {
+                  void openExternal(psnStoreSearchUrl(entry.titleId!));
+                }}
                 className="inline-flex items-center justify-center gap-1 rounded-md border border-[var(--color-border)] px-2 py-1 text-xs hover:bg-[var(--color-surface-3)]"
               >
                 <ExternalLink size={11} />
@@ -1885,7 +1887,7 @@ function GameDetailsModal({
                   undefined,
                   "Search PSN Store",
                 )}
-              </a>
+              </button>
             )}
           </div>
 

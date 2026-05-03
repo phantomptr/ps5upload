@@ -19,6 +19,7 @@ pub mod keep_awake;
 pub mod persistence;
 pub mod probes;
 pub mod ps5_engine;
+pub mod psn;
 pub mod updates;
 pub mod user_config;
 
@@ -57,5 +58,6 @@ pub use keep_awake::*;
 pub use persistence::*;
 pub use probes::*;
 pub use ps5_engine::*;
+pub use psn::*;
 pub use updates::*;
 pub use user_config::*;

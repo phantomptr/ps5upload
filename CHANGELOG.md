@@ -4,6 +4,35 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.2.32
+
+**Fixed: Library → Game Details modal — cover art and "Search PSN
+Store" button**
+
+Two adjacent bugs in the same modal:
+
+- **No cover art available.** The renderer's `fetch()` to PSN's
+  `valkyrie-api` and `chihiro/titlecontainer` endpoints was being
+  blocked by the webview CSP `connect-src` whitelist (PSN domains
+  weren't listed), and even if widened the cross-origin response
+  wouldn't have satisfied the webview's CORS policy. The fetch is
+  now routed through a Rust-side `psn_fetch` Tauri command — the
+  request is issued from the desktop process, so neither CSP nor
+  CORS apply. A hostname allowlist (`store.playstation.com` only)
+  is enforced server-side as SSRF defense, and the response body is
+  capped at 1 MiB.
+- **Search PSN Store button did nothing.** The `<a target="_blank">`
+  pattern doesn't open externally in Tauri 2's webview; the click
+  was a silent no-op. Replaced with a `<button onClick>` that calls
+  `openExternal()` from `@tauri-apps/plugin-shell`, matching every
+  other external-link affordance in the app.
+
+CSP `img-src` widened to whitelist `image.api.playstation.com` and
+`*.playstation.{com,net}` so the cover-art `<img>` tag can render
+the URLs once the API fetch returns them.
+
+---
+
 ## 2.2.31
 
 **New: Install Package tab — install `.pkg` files via BGFT, no third-party loaders required**

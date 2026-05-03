@@ -7,6 +7,21 @@ import {
   writePsnCache,
 } from "./psnDetails";
 
+// Reasoned-through stub for the Tauri `invoke` channel. The PSN code
+// path goes: psnDetails.ts -> invoke("psn_fetch", ...) -> Rust. The
+// Rust side returns the response body as a string; our stub mimics
+// that contract by holding a function the individual tests install.
+let invokeImpl: (cmd: string, args?: unknown) => Promise<unknown> = async () => {
+  throw new Error("invoke stub not installed");
+};
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: (cmd: string, args?: unknown) => invokeImpl(cmd, args),
+}));
+
+function installInvokeStub(impl: typeof invokeImpl) {
+  invokeImpl = impl;
+}
+
 function installLocalStorageStub() {
   const store = new globalThis.Map<string, string>();
   vi.stubGlobal("window", {
@@ -26,10 +41,6 @@ function installLocalStorageStub() {
     },
   });
   return store;
-}
-
-function installFetchStub(impl: typeof fetch) {
-  vi.stubGlobal("fetch", impl);
 }
 
 describe("psn cache", () => {
@@ -70,14 +81,17 @@ describe("fetchPsnGameInfo", () => {
   });
   afterEach(() => {
     vi.unstubAllGlobals();
+    invokeImpl = async () => {
+      throw new Error("invoke stub not installed");
+    };
   });
 
   it("rejects malformed title ids without hitting the network", async () => {
     let calls = 0;
-    installFetchStub((async () => {
+    installInvokeStub(async () => {
       calls += 1;
-      return new Response("{}", { status: 200 });
-    }) as typeof fetch);
+      return "{}";
+    });
     expect(await fetchPsnGameInfo("not-an-id")).toBeNull();
     expect(await fetchPsnGameInfo("PPSA1")).toBeNull();
     expect(calls).toBe(0);
@@ -105,8 +119,7 @@ describe("fetchPsnGameInfo", () => {
         },
       ],
     };
-    installFetchStub((async () =>
-      new Response(JSON.stringify(body), { status: 200 })) as typeof fetch);
+    installInvokeStub(async () => JSON.stringify(body));
     const info = await fetchPsnGameInfo("PPSA00099");
     expect(info?.title).toBe("Test Title");
     expect(info?.description).toBe("Long description with whitespace.");
@@ -114,10 +127,10 @@ describe("fetchPsnGameInfo", () => {
     expect(info?.publisher).toBe("Acme");
     // Second call should hit the cache, not re-fetch.
     let secondCalls = 0;
-    installFetchStub((async () => {
+    installInvokeStub(async () => {
       secondCalls += 1;
-      return new Response("{}", { status: 200 });
-    }) as typeof fetch);
+      return "{}";
+    });
     const cached = await fetchPsnGameInfo("PPSA00099");
     expect(cached?.title).toBe("Test Title");
     expect(secondCalls).toBe(0);
@@ -131,15 +144,15 @@ describe("fetchPsnGameInfo", () => {
       publisher_name: "RetroCo",
     };
     const urlsSeen: string[] = [];
-    installFetchStub((async (input: RequestInfo | URL) => {
-      const url = String(input);
+    installInvokeStub(async (_cmd, args) => {
+      const url = (args as { url: string }).url;
       urlsSeen.push(url);
       if (url.includes("/valkyrie-api/")) {
         // valkyrie returns empty-included
-        return new Response(JSON.stringify({ included: [] }), { status: 200 });
+        return JSON.stringify({ included: [] });
       }
-      return new Response(JSON.stringify(containerBody), { status: 200 });
-    }) as typeof fetch);
+      return JSON.stringify(containerBody);
+    });
     const info = await fetchPsnGameInfo("PPSA12345");
     expect(info?.title).toBe("Old Game");
     expect(info?.coverImageUrl).toBe("https://psn.example.com/cover.jpg");
@@ -148,10 +161,10 @@ describe("fetchPsnGameInfo", () => {
 
   it("caches a definitive 'no data' result so we don't re-fetch on every modal open", async () => {
     let calls = 0;
-    installFetchStub((async () => {
+    installInvokeStub(async () => {
       calls += 1;
-      return new Response("{}", { status: 404 });
-    }) as typeof fetch);
+      throw new Error("psn http 404");
+    });
     const info = await fetchPsnGameInfo("PPSA99999");
     expect(info).toBeNull();
     const earlierCalls = calls;
