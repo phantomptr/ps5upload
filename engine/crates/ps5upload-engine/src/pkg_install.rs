@@ -137,11 +137,10 @@ async fn install_start_handler(
     State(state): State<PkgInstallStateHandle>,
     Json(req): Json<InstallStartRequest>,
 ) -> Response<Body> {
-    let (parts, part_sizes, total_size, head_meta) =
-        match resolve_parts_and_meta(&req).await {
-            Ok(t) => t,
-            Err(e) => return json_err(StatusCode::BAD_REQUEST, &e),
-        };
+    let (parts, part_sizes, total_size, head_meta) = match resolve_parts_and_meta(&req).await {
+        Ok(t) => t,
+        Err(e) => return json_err(StatusCode::BAD_REQUEST, &e),
+    };
 
     let package_type = req
         .package_type_override
@@ -152,12 +151,7 @@ async fn install_start_handler(
     // Pick the LAN IP this host presents to the PS5. Multi-NIC safe:
     // bind a UDP socket "connected" to the PS5's mgmt addr and read
     // the local addr — that's the IP the OS picked for outbound.
-    let ps5_host_only = req
-        .ps5_addr
-        .split(':')
-        .next()
-        .unwrap_or("")
-        .to_string();
+    let ps5_host_only = req.ps5_addr.split(':').next().unwrap_or("").to_string();
     let local_ip = match lan_ip_for_ps5(&ps5_host_only) {
         Ok(ip) => ip,
         Err(e) => {
@@ -337,9 +331,7 @@ async fn install_status_handler(
     };
     let task_id = match task_id {
         Some(t) => t,
-        None => {
-            return json_err(StatusCode::CONFLICT, "session has no BGFT task_id yet")
-        }
+        None => return json_err(StatusCode::CONFLICT, "session has no BGFT task_id yet"),
     };
     let status: PkgInstallStatus = match pkg_install_status(&ps5_addr, task_id) {
         Ok(s) => s,
@@ -445,12 +437,10 @@ async fn serve_handler(
 
     let has_range = headers.contains_key(header::RANGE);
     if has_range {
-        builder = builder
-            .status(StatusCode::PARTIAL_CONTENT)
-            .header(
-                header::CONTENT_RANGE,
-                format!("bytes {start}-{end}/{total}"),
-            );
+        builder = builder.status(StatusCode::PARTIAL_CONTENT).header(
+            header::CONTENT_RANGE,
+            format!("bytes {start}-{end}/{total}"),
+        );
     } else {
         builder = builder.status(StatusCode::OK);
     }

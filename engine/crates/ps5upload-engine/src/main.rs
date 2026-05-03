@@ -2714,8 +2714,7 @@ async fn list_jobs(State(state): State<AppState>) -> impl IntoResponse {
 /// awaits this future, drains in-flight requests up to the cap, then
 /// returns. Replaces a `process::exit(0)` torn-down hard exit that left
 /// in-flight transfers / pkg-host streams dropped abruptly.
-static SHUTDOWN: tokio::sync::OnceCell<tokio::sync::Notify> =
-    tokio::sync::OnceCell::const_new();
+static SHUTDOWN: tokio::sync::OnceCell<tokio::sync::Notify> = tokio::sync::OnceCell::const_new();
 
 async fn shutdown_signal() {
     let notify = SHUTDOWN

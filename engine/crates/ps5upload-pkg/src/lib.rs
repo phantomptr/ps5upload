@@ -317,7 +317,10 @@ fn parse_sfo_into(buf: &[u8], meta: &mut PkgMetadata) -> Result<(), &'static str
         }
         // Most string entries are NUL-terminated within `data_len`.
         let trimmed = &buf[data_abs..data_abs + data_len];
-        let trimmed_end = trimmed.iter().position(|&b| b == 0).unwrap_or(trimmed.len());
+        let trimmed_end = trimmed
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(trimmed.len());
         let val = String::from_utf8_lossy(&trimmed[..trimmed_end]).to_string();
 
         match key {
@@ -336,11 +339,11 @@ fn parse_sfo_into(buf: &[u8], meta: &mut PkgMetadata) -> Result<(), &'static str
 /// Returns None for unknown categories so the UI can default-or-warn.
 fn derive_package_type(category: &str) -> Option<String> {
     match category {
-        "gd" => Some("PS4GD".to_string()),    // game (full)
-        "gp" => Some("PS4DP".to_string()),    // patch / DLC
-        "ac" => Some("PS4AC".to_string()),    // add-on content / DLC
-        "gde" => Some("PS4GDE".to_string()),  // extra
-        "la" => Some("PS4LA".to_string()),    // launcher (educated guess)
+        "gd" => Some("PS4GD".to_string()),   // game (full)
+        "gp" => Some("PS4DP".to_string()),   // patch / DLC
+        "ac" => Some("PS4AC".to_string()),   // add-on content / DLC
+        "gde" => Some("PS4GDE".to_string()), // extra
+        "la" => Some("PS4LA".to_string()),   // launcher (educated guess)
         _ => None,
     }
 }
@@ -348,8 +351,7 @@ fn derive_package_type(category: &str) -> Option<String> {
 /// Tiny base64 encoder so we don't pull in a crate just for icon
 /// transport. Standard alphabet, no line breaks. ~30 lines.
 fn b64_encode(input: &[u8]) -> String {
-    const ALPHA: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPHA: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
     let mut i = 0;
     while i + 3 <= input.len() {
