@@ -567,9 +567,30 @@ int bgft_install_start(const char *url,
             "[bgft] appinst path failed (rc=0x%08X), falling back to BGFT\n",
             (unsigned)app_err);
 
+    /* Save the AppInstUtil error so we can surface it as the
+     * primary cause if BGFT also fails. Without this, the
+     * fall-through used to clobber `*out_err_code` with
+     * BGFT_ERR_LIB_NOT_LOADABLE — which is technically true (BGFT
+     * isn't loadable on this firmware) but tells the user the
+     * wrong story: the install fundamentally failed because Sony
+     * rejected our InstallByPackage call, NOT because BGFT
+     * couldn't load. The user's debug path goes the wrong way.
+     * Now if both backends fail, we surface the AppInstUtil error
+     * (it's more actionable: "Sony rejected this PKG with code X"
+     * vs "lib not loadable"). The fprintf above keeps the BGFT
+     * fallback attempt visible in the payload log. */
+    const uint32_t saved_app_err = app_err;
+
     pthread_once(&g_init_once, bgft_init_once);
     if (!g_init_ok) {
-        *out_err_code = BGFT_ERR_LIB_NOT_LOADABLE;
+        /* Prefer the AppInstUtil error when we have one — it's
+         * the real cause. Fall through to BGFT_ERR_LIB_NOT_LOADABLE
+         * only if AppInstUtil somehow returned 0 in app_err
+         * (shouldn't happen — we got here because appinst_install_start
+         * returned -1, so app_err is set, but defense-in-depth). */
+        *out_err_code = saved_app_err != 0
+                          ? saved_app_err
+                          : BGFT_ERR_LIB_NOT_LOADABLE;
         return -1;
     }
 

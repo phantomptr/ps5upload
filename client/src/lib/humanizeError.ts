@@ -154,6 +154,33 @@ export function humanizePs5Error(raw: string): string {
     return `PS5 kernel rejected the mount: ${tail ? tail[1] : "unknown reason"}. Try a different mount point (e.g. under /data or /mnt/ps5upload) — the image itself is fine.`;
   }
 
+  // ─── Sony AppInstUtil error codes (etaHEN-style install path) ───
+  // Range 0x80A2_FFXX / 0x80A3_00XX. The names below come from
+  // etaHEN's util/source/DirectPKGInstaller.cpp enum. This block
+  // catches the most common ones with actionable copy; rarer ones
+  // fall through to the generic "PS5 rejected the request" path.
+  if (/0x80A30000|SCE_APP_INST_UTIL_ERROR_NOT_INITIALIZED/i.test(raw)) {
+    return "Sony's installer subsystem isn't initialised yet — push the latest bundled payload (Connection → Send payload) so the lazy-init in 2.2.46+ runs. If the error persists, the install API isn't reachable from our process context on this firmware; FTP-upload + Library → Register is the workaround.";
+  }
+  if (/0x80A2FF02|SCE_APP_INSTALLER_ERROR_NOSPACE/i.test(raw)) {
+    return "Your PS5 doesn't have enough free space for this install. Settings → Storage → Free up space, then retry.";
+  }
+  if (/0x80A2FF06|SCE_APP_INSTALLER_ERROR_PKG_INVALID_DRM_TYPE/i.test(raw)) {
+    return "Sony's installer rejected this PKG's DRM type. Try the Library → Register flow with 'Patch DRM' instead — it rewrites applicationDrmType to 'standard' before installing.";
+  }
+  if (/0x80A2FF09|SCE_APP_INSTALLER_ERROR_PKG_INVALID_CONTENT_TYPE/i.test(raw)) {
+    return "Sony's installer doesn't accept this PKG's content type on the current firmware (e.g. some patch-pkgs / DLC formats). The base game's PKG should still install if you have it.";
+  }
+  if (/0x80A2FF14|SCE_APP_INSTALLER_ERROR_BUSY/i.test(raw)) {
+    return "Sony's installer is busy with another install or an unfinished BGFT task. Wait a moment, or check the PS5's Notifications for a stuck download to clear, then retry.";
+  }
+  if (/0x80A2FF15|SCE_APP_INSTALLER_ERROR_DLAPP_ALREADY_INSTALLED/i.test(raw)) {
+    return "This title is already installed. Uninstall it first if you want to re-install.";
+  }
+  if (/0x80A30001|SCE_APP_INST_UTIL_ERROR_OUT_OF_MEMORY/i.test(raw)) {
+    return "Sony's installer ran out of memory mid-install. Reboot the PS5, reload the payload, and retry.";
+  }
+
   // ─── BGFT init failure (0xE0000001 = BGFT_ERR_LIB_NOT_LOADABLE) ──
   // The payload couldn't dlopen libSceBgft.sprx or couldn't resolve
   // one of its export symbols on the user's firmware. The 2.2.43

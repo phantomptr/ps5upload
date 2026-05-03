@@ -4,6 +4,60 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.2.47
+
+**Surface the real install error + Sony AppInstUtil error humanization**
+
+User keeps seeing `0xE0000001 (BGFT_ERR_LIB_NOT_LOADABLE)` even
+after 2.2.46 added AppInstUtil-first dispatch. Root cause analysis:
+when AppInstUtil fails (which it does on this user's firmware/
+process context), we fall through to BGFT, BGFT init also fails,
+and we surface the BGFT error — clobbering the *real* AppInstUtil
+error code that would tell the user what's actually wrong.
+
+Two fixes:
+
+  1. **Preserve the AppInstUtil error code through the BGFT
+     fallback.** `bgft_install_start` now saves the AppInstUtil
+     err_code before trying BGFT; if BGFT init / register / start
+     fails, we surface the *original AppInstUtil* error (which
+     identifies the real cause: "Sony rejected this PKG" /
+     "subsystem not initialised" / "DRM type mismatch" / etc.)
+     instead of the BGFT-generic "lib not loadable". The fprintf
+     trail still logs the BGFT fallback attempt for diagnostic
+     completeness, just doesn't poison the user-visible error.
+
+  2. **Humanize the Sony AppInstUtil error codes.** Added a
+     dedicated block in `humanizeError.ts` for the
+     `0x80A2_FFXX` / `0x80A3_00XX` family (cross-referenced from
+     etaHEN's `DirectPKGInstaller.cpp` enum):
+       - `0x80A30000` (NOT_INITIALIZED) — push the bundled payload
+         so the lazy-init in 2.2.46 runs.
+       - `0x80A2FF02` (NOSPACE) — free up storage.
+       - `0x80A2FF06` (PKG_INVALID_DRM_TYPE) — try Library →
+         Register with "Patch DRM".
+       - `0x80A2FF09` (PKG_INVALID_CONTENT_TYPE) — Sony rejects
+         this content type on the firmware.
+       - `0x80A2FF14` (BUSY) — wait, clear stuck PS5 notifications,
+         retry.
+       - `0x80A2FF15` (DLAPP_ALREADY_INSTALLED) — uninstall first.
+       - `0x80A30001` (OUT_OF_MEMORY) — reboot, reload, retry.
+
+After pushing v2.2.47 the user will now see the **actual** Sony
+error code on a failed install (not the BGFT fallback's
+diagnostic), which lets us point them at the right next step
+instead of debugging BGFT loaders that don't matter.
+
+The AppInstUtil-first dispatch path itself is unchanged — this
+release just makes it report failures honestly. If the user is
+still hitting "fake-pkg won't install", the new error message
+will identify whether it's a Sony DRM/content gate (which is a
+firmware/PKG-format issue, not a payload bug) or a process-context
+issue (which would need more architectural work — running the
+install from a daemon-context like etaHEN does).
+
+---
+
 ## 2.2.46
 
 **AppInstUtil init + same-volume mount default (cross-referenced
