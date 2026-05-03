@@ -127,6 +127,31 @@ mod tests {
     }
 
     #[test]
+    fn user_chosen_mount_path_is_surfaced() {
+        // Regression for 2.2.51: a .ffpkg mounted at a user-chosen path
+        // (e.g. /data/homebrew/PPSA17599) used to be filtered out of the
+        // FS_LIST_VOLUMES response because the payload's path-prefix
+        // allowlist ran before the mount-tracker check. Resulting symptom:
+        // mount succeeds, but Volumes tab and Library mount-badge never see
+        // it, and games inside the image only show up if the /data
+        // recursive walk reaches them under the entry cap.
+        //
+        // The deserializer-level test here documents the wire shape the
+        // fixed payload now emits — a non-prefixed path with source_image
+        // populated from the tracker file.
+        let body = br#"{"volumes":[
+            {"path":"/data/homebrew/PPSA17599","mount_from":"/dev/lvd0","fs_type":"ufs","total_bytes":50000000000,"free_bytes":0,"writable":true,"is_placeholder":false,"source_image":"/data/homebrew/PPSA17599.ffpkg"}
+        ]}"#;
+        let parsed: VolumeList = serde_json::from_slice(body).unwrap();
+        let v = parsed
+            .find("/data/homebrew/PPSA17599")
+            .expect("user-chosen mount surfaced");
+        assert_eq!(v.source_image, "/data/homebrew/PPSA17599.ffpkg");
+        assert_eq!(v.fs_type, "ufs");
+        assert!(v.writable);
+    }
+
+    #[test]
     fn parse_missing_new_fields_defaults_safely() {
         // Pre-upgrade mock server responses lack mount_from + is_placeholder;
         // serde-default should fill them so the upgrade is non-breaking.

@@ -4,6 +4,27 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.2.51
+
+**Mounted .ffpkg / .exfat at user-chosen paths now visible**
+
+A .ffpkg mounted at a user-chosen path (e.g. `/data/homebrew/PPSA17599`)
+mounted successfully but disappeared everywhere — Volumes tab missed
+it, the Library mount-badge stayed on "Mount" instead of "Unmount", and
+games inside only sometimes surfaced (depending on whether the /data
+recursive walk hit the subtree under the entry cap).
+
+- Payload FS_LIST_VOLUMES now probes the mount tracker before the
+  path-prefix allowlist. Any mount we created — legacy
+  /mnt/ps5upload/<name> *or* user-chosen path — surfaces
+  unconditionally.
+- Library scan walks user-chosen mounts as their own volume now,
+  so games inside don't depend on the /data recursive walk reaching
+  them within the entry budget.
+- Volumes tab + Library MOUNTED badge work for any mount path.
+
+---
+
 ## 2.2.50
 
 **Install Package: optional `file://` flow for upload-then-install**

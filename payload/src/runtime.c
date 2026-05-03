@@ -4139,32 +4139,34 @@ static int handle_fs_list_volumes(runtime_state_t *state, int client_fd,
         uint64_t avail = (uint64_t)mnts[i].f_bavail * (uint64_t)mnts[i].f_bsize;
         int writable   = (mnts[i].f_flags & MNT_RDONLY) ? 0 : 1;
 
-        /* Path-prefix allowlist — drops everything outside /data, /mnt/ext*,
-         * /mnt/usb*. This is what the UI wants to render as "available
-         * storage" and consolidates all the classification logic on the
-         * payload side so the engine + renderer don't need to second-guess. */
-        if (!is_user_storage_path(mnt_on)) continue;
-
-        /* Ours-or-theirs split. For mounts under /mnt/ps5upload/<name> we
-         * already know the mount is real (we created it), so skip the
-         * /dev/-prefix and total>0 filters. Those filters exist to hide
-         * ghost /mnt/ext*, /mnt/usb* slots the firmware pre-creates even
-         * without a drive attached, and to hide LVD-layered mounts that
-         * report f_blocks==0 for other tools. For our own mounts, those
-         * filters incorrectly hide the volume from the Volumes screen,
-         * which in turn hides the Unmount button. */
-        /* "ours" was historically just the /mnt/ps5upload/ prefix.
-         * 2.2.25 lets the user mount an image at any allowed path
-         * (/mnt/ext1/games/foo, /data/mounts/bar, …) so we identify
-         * those by tracker presence too. The legacy prefix check
-         * stays for mounts written by older payloads — even though
-         * the new mount_tracker_exists() also recognizes them, the
-         * prefix is cheaper and avoids a stat() per non-our mount in
-         * the FS_LIST_VOLUMES hot path. */
+        /* Surface decision in two halves:
+         *
+         *   1. "Ours" — anything we mounted, identified by either the
+         *      legacy /mnt/ps5upload/<name> prefix OR a tracker file
+         *      written by 2.2.25+ at a user-chosen path
+         *      (e.g. /data/homebrew/PPSA17599). Surface unconditionally
+         *      so the user can see the mount in Volumes and unmount it
+         *      from the UI, regardless of whether it sits under one of
+         *      the system-storage roots. Tracker check costs one stat()
+         *      per mount; ~40 mounts per call so the FS_LIST_VOLUMES hot
+         *      path still completes in well under a millisecond.
+         *
+         *   2. "System storage" — /data, /mnt/ext*, /mnt/usb*. Surfaced
+         *      with the /dev/-prefix + total>0 filters that hide ghost
+         *      hot-plug slots and LVD-layered mounts.
+         *
+         * Pre-2.2.51 the path-prefix allowlist gated the entire loop so
+         * a user-chosen ffpkg mount at /data/homebrew/PPSA17599 was
+         * filtered out before the tracker check ran — the mount
+         * succeeded but the Volumes tab and Library mount-badge never
+         * saw it, and the scanner only found games inside it via the
+         * /data recursive walk (which can be cut off by the entry cap
+         * on populated drives). */
         const int is_ours =
             (strncmp(mnt_on, "/mnt/ps5upload/", 15) == 0) ||
             mount_tracker_exists(mnt_on);
         if (!is_ours) {
+            if (!is_user_storage_path(mnt_on)) continue;
             /* Real-device gate for the /mnt/ext* and /mnt/usb* slots:
              * their paths are hot-plug placeholders, so we require a
              * `/dev/` prefix on mount_from to avoid surfacing sandbox
