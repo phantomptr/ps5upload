@@ -616,7 +616,13 @@ int bgft_install_start(const char *url,
     int task_id = -1;
     int rc = g_bgft_register(&p, &task_id);
     if (rc != 0) {
-        *out_err_code = (uint32_t)rc;
+        /* Prefer the saved AppInstUtil error if we have one — it's
+         * the real cause of the install failure. The BGFT register
+         * failure here is a *secondary* symptom of running on
+         * firmware where neither install path works. The
+         * AppInstUtil-side error is what the humanizer maps to
+         * actionable copy. */
+        *out_err_code = saved_app_err != 0 ? saved_app_err : (uint32_t)rc;
         pthread_mutex_unlock(&g_mtx);
         fprintf(stderr,
                 "[bgft] sceBgftServiceDownloadRegisterTask failed: 0x%08X "
@@ -627,7 +633,9 @@ int bgft_install_start(const char *url,
 
     rc = g_bgft_start(task_id);
     if (rc != 0) {
-        *out_err_code = (uint32_t)rc;
+        /* Same logic: prefer the AppInstUtil-side error code if it
+         * was set during the AppInstUtil-first attempt. */
+        *out_err_code = saved_app_err != 0 ? saved_app_err : (uint32_t)rc;
         pthread_mutex_unlock(&g_mtx);
         fprintf(stderr,
                 "[bgft] sceBgftServiceIntDownloadStartTask(%d) failed: 0x%08X\n",

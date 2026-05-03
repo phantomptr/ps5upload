@@ -159,25 +159,34 @@ export function humanizePs5Error(raw: string): string {
   // etaHEN's util/source/DirectPKGInstaller.cpp enum. This block
   // catches the most common ones with actionable copy; rarer ones
   // fall through to the generic "PS5 rejected the request" path.
-  if (/0x80A30000|SCE_APP_INST_UTIL_ERROR_NOT_INITIALIZED/i.test(raw)) {
+  // Each Sony AppInstUtil code is matched against three string forms:
+  //   - canonical hex (0xNNNNNNNN)
+  //   - decimal signed (engine sometimes forwards int32 cast as
+  //     decimal when err_code_message has no mapping)
+  //   - the SCE_… symbolic name (in case someone wraps it in a
+  //     friendlier message upstream)
+  // Without the decimal forms the humanizer silently fell through
+  // for any code the engine emitted in decimal, leaving the user
+  // with the raw "PS5 rejected the request: -2136862720" copy.
+  if (/0x80A30000|-2136862720|SCE_APP_INST_UTIL_ERROR_NOT_INITIALIZED/i.test(raw)) {
     return "Sony's installer subsystem isn't initialised yet — push the latest bundled payload (Connection → Send payload) so the lazy-init in 2.2.46+ runs. If the error persists, the install API isn't reachable from our process context on this firmware; FTP-upload + Library → Register is the workaround.";
   }
-  if (/0x80A2FF02|SCE_APP_INSTALLER_ERROR_NOSPACE/i.test(raw)) {
+  if (/0x80A2FF02|-2136801278|SCE_APP_INSTALLER_ERROR_NOSPACE/i.test(raw)) {
     return "Your PS5 doesn't have enough free space for this install. Settings → Storage → Free up space, then retry.";
   }
-  if (/0x80A2FF06|SCE_APP_INSTALLER_ERROR_PKG_INVALID_DRM_TYPE/i.test(raw)) {
+  if (/0x80A2FF06|-2136801274|SCE_APP_INSTALLER_ERROR_PKG_INVALID_DRM_TYPE/i.test(raw)) {
     return "Sony's installer rejected this PKG's DRM type. Try the Library → Register flow with 'Patch DRM' instead — it rewrites applicationDrmType to 'standard' before installing.";
   }
-  if (/0x80A2FF09|SCE_APP_INSTALLER_ERROR_PKG_INVALID_CONTENT_TYPE/i.test(raw)) {
+  if (/0x80A2FF09|-2136801271|SCE_APP_INSTALLER_ERROR_PKG_INVALID_CONTENT_TYPE/i.test(raw)) {
     return "Sony's installer doesn't accept this PKG's content type on the current firmware (e.g. some patch-pkgs / DLC formats). The base game's PKG should still install if you have it.";
   }
-  if (/0x80A2FF14|SCE_APP_INSTALLER_ERROR_BUSY/i.test(raw)) {
+  if (/0x80A2FF14|-2136801260|SCE_APP_INSTALLER_ERROR_BUSY/i.test(raw)) {
     return "Sony's installer is busy with another install or an unfinished BGFT task. Wait a moment, or check the PS5's Notifications for a stuck download to clear, then retry.";
   }
-  if (/0x80A2FF15|SCE_APP_INSTALLER_ERROR_DLAPP_ALREADY_INSTALLED/i.test(raw)) {
+  if (/0x80A2FF15|-2136801259|SCE_APP_INSTALLER_ERROR_DLAPP_ALREADY_INSTALLED/i.test(raw)) {
     return "This title is already installed. Uninstall it first if you want to re-install.";
   }
-  if (/0x80A30001|SCE_APP_INST_UTIL_ERROR_OUT_OF_MEMORY/i.test(raw)) {
+  if (/0x80A30001|-2136862719|SCE_APP_INST_UTIL_ERROR_OUT_OF_MEMORY/i.test(raw)) {
     return "Sony's installer ran out of memory mid-install. Reboot the PS5, reload the payload, and retry.";
   }
 

@@ -6271,7 +6271,13 @@ static int fs_mount_validate_post_mount(const char *mp,
      * silently fell through and we should surface that as an error
      * rather than write a tracker that pretends it worked. */
     if (expected_dev && expected_dev[0]) {
-        if (strncmp(sfs.f_mntfromname, expected_dev, sizeof(sfs.f_mntfromname)) != 0) {
+        /* Use strcmp, not strncmp(...,sizeof(f_mntfromname)). Both
+         * fields are NUL-terminated short strings (~10 bytes for
+         * /dev/lvdN); strncmp's length cap was a redundant guard
+         * that just made prefix collisions theoretically possible
+         * if expected_dev ever exceeded MNAMELEN. strcmp is the
+         * correct full-string comparison. */
+        if (strcmp(sfs.f_mntfromname, expected_dev) != 0) {
             snprintf(errbuf, errbuf_cap,
                      "fs_mount_silent_failure: nmount returned 0 but the kernel "
                      "mount table at %s still shows %s — expected %s. The .ffpkg "

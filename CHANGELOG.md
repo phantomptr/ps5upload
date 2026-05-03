@@ -4,6 +4,55 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.2.49
+
+**Audit-pass fixes — 4 bugs in the recent install/mount churn**
+
+Code-review audit of the 2.2.42 → 2.2.48 changes surfaced four
+real issues, all in the new code paths.
+
+  1. **Critical for install UX**: bgft.c register/start failure
+     paths still clobbered the saved AppInstUtil error. The
+     "preserve AppInstUtil error through fallback" logic from
+     2.2.47 only protected the BGFT *init-fail* branch. On
+     firmwares where BGFT loads but its task-register or start
+     fails, the user got the BGFT error code instead of the
+     AppInstUtil one — which is what the humanizer maps to
+     actionable copy. Both BGFT register-fail and start-fail
+     branches now prefer `saved_app_err` when set, falling back
+     to the BGFT rc only if AppInstUtil never set one. **This is
+     the bug that was making the user keep seeing 0xE0000001
+     instead of the real Sony installer error.**
+
+  2. **runtime.c post-mount validation**: `strncmp` with a
+     length cap of `sizeof(f_mntfromname)` was a redundant guard
+     that introduced a theoretical prefix-collision corner case.
+     Replaced with `strcmp` since both fields are NUL-terminated
+     short strings (~10 bytes for `/dev/lvdN`).
+
+  3. **humanizeError.ts AppInstUtil regexes**: only matched the
+     hex form (`0x80A30000`). When the engine forwards an unknown
+     code as decimal, the humanizer silently fell through to the
+     raw "PS5 rejected the request: -2136862720" copy. Each Sony
+     code now matches three forms: hex, decimal-signed, and the
+     SCE_… symbolic name. This is what makes the user actually
+     *see* the actionable copy after pushing v2.2.49 payload.
+
+  4. **Library/index.tsx post-mount timers**: `setTimeout(() =>
+     onChanged(), …)` for the 1 s + 3 s post-mount refreshes had
+     no `mountedRef` gate — a user navigating away mid-mount
+     would leave orphan refreshes hammering the network on a
+     dead component. Both timers now check `mountedRef.current`
+     before firing, matching the pattern used by the download
+     poll loop.
+
+After this release the install path's error reporting is
+internally consistent end-to-end: AppInstUtil's real error
+travels through the BGFT fallback, gets matched by the humanizer
+in either hex or decimal, and surfaces actionable copy in the UI.
+
+---
+
 ## 2.2.48
 
 **.ffpkg mount: detect silent kernel-side mount failures + retry

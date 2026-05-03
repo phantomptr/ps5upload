@@ -976,8 +976,16 @@ function LibraryRow({
       // before the volume was even visible, producing the
       // user-reported "I can see no game folder at the mount,
       // refresh doesn't help" symptom.
-      setTimeout(() => onChanged(), 1000);
-      setTimeout(() => onChanged(), 3000);
+      //
+      // Both timers gate on `mountedRef.current` so a user who
+      // navigates away mid-mount doesn't leave orphan refreshes
+      // hammering the network on a dead component.
+      setTimeout(() => {
+        if (mountedRef.current) onChanged();
+      }, 1000);
+      setTimeout(() => {
+        if (mountedRef.current) onChanged();
+      }, 3000);
     } catch (e) {
       okOutcome = false;
       errMsg = e instanceof Error ? e.message : String(e);
