@@ -4,6 +4,80 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.2.36
+
+**Library mount/unmount UX fixes (real user reports)**
+
+Four interlocking issues with the Mount → Unmount flow on disk
+images, all reported by users. Plus a more honest top-level
+description across all package metadata.
+
+### No Unmount button after mounting at a custom path
+
+The mountMap that drives the MOUNTED badge + Mount/Unmount button
+toggle was hard-gated to mounts under `/mnt/ps5upload/`. After
+2.2.25 added the user-chosen mount-point feature, mounting at e.g.
+`/data/homebrew/Mafia/` left the row stuck in "Mount" state — the
+volume row carried the right `source_image`, but the prefix gate
+filtered it out. Dropped the prefix check so any volume with a
+matching `source_image` flips the row to MOUNTED + Unmount-button.
+The payload's tracker file still validates "is this our mount?" on
+the unmount side, so dropping the client-side prefix gate doesn't
+open a surprise-unmount path.
+
+### Library blanks for a moment after Mount, must click Refresh
+
+A transient race during fs_mount / fs_unmount where the kernel
+mount table briefly returns zero entries was overwriting the
+library's last-known state with an empty list, producing the empty
+state until a manual rescan. Two fixes:
+
+- Stale-empty guard in the refresh path: if scanLibrary returns
+  zero entries when we previously had >0, only update the
+  mountMap + volumes and keep the entries as-is. The next
+  scheduled refresh produces a real count.
+- Post-mount / post-unmount rescans now wait 400 ms before firing,
+  giving the kernel time to fully propagate the new mount state
+  to `getmntinfo`. This matches the timing the user-reported
+  "click again, works" symptom revealed.
+
+### First Mount click errors, retry succeeds
+
+The lvd/md attach pipeline occasionally hits a transient driver
+init or device-node race on the first mount of a session that
+cleanly succeeds on the very next call (~50–500 ms later). The UI
+now retries fsMount once with a 350 ms backoff before surfacing
+the error, absorbing the transient without forcing the user to
+click Mount twice. The second failure (real one) still surfaces
+through the normal error UI.
+
+### One mount, one place
+
+After the mountMap fix above, the Mount button hides as soon as
+the image is mounted — replaced by Unmount. So clicking Mount on
+an already-mounted image isn't possible from the UI; the payload's
+existing reuse-existing-mount short-circuit (returns `reused: true`
+without re-attaching) was the second line of defense and stays as-is.
+
+### Optimistic mount-state updates
+
+Both runMount and runUnmount now optimistically update the local
+mountMap before the background rescan completes, so the row's
+mount badge + button label flip in the same render the user
+clicks. The authoritative state from the next volumes probe
+overwrites this; if for any reason it disagrees, the volumes
+probe wins.
+
+### Description cleanup
+
+Replaced "PS5 Upload — Tauri 2 desktop client" / "PS5 Upload —
+Tauri desktop shell" / the long FTX2-protocol blurb with a single
+short user-facing line — "The all-in-one PS5 companion app." —
+across `client/package.json`, `client/src-tauri/Cargo.toml`,
+`tauri.conf.json` shortDescription + longDescription.
+
+---
+
 ## 2.2.35
 
 **Stale-tmp silent corruption — close the resume-path gap (real user

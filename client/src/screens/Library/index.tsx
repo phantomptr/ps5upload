@@ -146,16 +146,44 @@ export default function LibraryScreen() {
           return [];
         }),
       ]);
+      // image_path → mount_point. Pre-2.2.36 this gated on the mount
+      // landing under /mnt/ps5upload/, which broke the MOUNTED badge
+      // and the Unmount button for any user-chosen mount point (e.g.
+      // /data/homebrew/Mafia/) — the volume row carries the right
+      // source_image either way, so the prefix check was wrong. The
+      // payload's tracker file is the consent record on the unmount
+      // side, so accepting any source_image here doesn't open a
+      // surprise-unmount path: clicking Unmount calls fs_unmount
+      // which still validates "is this our mount?".
       const next = new Map<string, string>();
       for (const v of volumes) {
-        if (v.source_image && v.path.startsWith("/mnt/ps5upload/")) {
+        if (v.source_image) {
           next.set(v.source_image, v.path);
         }
       }
       // Move-modal destinations only make sense for real attached
       // drives, so filter out placeholder/read-only volumes here.
       const writable = volumes.filter((v) => v.writable && !v.is_placeholder);
-      setData(result, next, writable);
+      // Stale-empty guard: a transient race during fs_mount /
+      // fs_unmount can cause scanLibrary to return zero entries
+      // even though there are still games on disk (volumes are
+      // mid-update on the kernel side). If we previously had
+      // entries and the new scan returned nothing, keep the old
+      // entries — only update mountMap + volumes from the fresh
+      // probe — and let the next scheduled refresh produce a real
+      // count. The user-visible symptom this fixes: "library goes
+      // blank after mounting an image, must click Refresh manually."
+      const hadEntries = (useLibraryStore.getState().entries ?? []).length > 0;
+      if (result.length === 0 && hadEntries) {
+        useLibraryStore.setState({
+          mountMap: next,
+          volumes: writable,
+          lastRefreshedAt: Date.now(),
+          error: null,
+        });
+      } else {
+        setData(result, next, writable);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -679,7 +707,32 @@ function LibraryRow({
     let okOutcome = true;
     let errMsg: string | null = null;
     try {
-      const res = await fsMount(addr, entry.path, opts);
+      // First-mount-of-a-session for an image path occasionally hits
+      // a transient lvd/md driver init or device-node race that
+      // cleanly succeeds on the very next call (~50–500 ms later).
+      // Users have reported this as "click Mount, see error, click
+      // again, works." Retry once with a brief backoff to absorb
+      // those without a UI round-trip; the second failure is
+      // surfaced normally.
+      let res;
+      try {
+        res = await fsMount(addr, entry.path, opts);
+      } catch (firstErr) {
+        await new Promise((resolve) => setTimeout(resolve, 350));
+        try {
+          res = await fsMount(addr, entry.path, opts);
+        } catch {
+          throw firstErr;
+        }
+      }
+      // Optimistic mountMap update — flips the row to MOUNTED +
+      // Unmount-button immediately, before the background rescan
+      // refreshes volumes. The volumes-driven authoritative state
+      // overwrites this on the next setData(), but the user gets
+      // an instantly-correct UI in the meantime.
+      useLibraryStore
+        .getState()
+        .addMount(entry.path, res.mount_point);
       // The activity entry started with toPath = opts.mountPoint
       // which is undefined on the legacy fall-through (no
       // user-chosen path — the payload picks
@@ -718,9 +771,14 @@ function LibraryRow({
       setMountNote(
         res.reused
           ? `Already mounted at ${res.mount_point}${roSuffix} — reused the existing mount.${layoutWarning}`
-          : `Mounted at ${res.mount_point}${roSuffix}. Refresh to see the games inside — register + launch them from the Library tab.${layoutWarning}`,
+          : `Mounted at ${res.mount_point}${roSuffix}. Games inside the image will appear in the Library shortly.${layoutWarning}`,
       );
-      onChanged();
+      // Delay the rescan briefly so the new mount has time to
+      // populate getmntinfo + the new directory entries become
+      // visible. Without the delay, scanLibrary occasionally races
+      // and produces an empty result (the user-reported "library
+      // goes blank, click refresh" symptom).
+      setTimeout(() => onChanged(), 400);
     } catch (e) {
       okOutcome = false;
       errMsg = e instanceof Error ? e.message : String(e);
@@ -1173,8 +1231,16 @@ function LibraryRow({
     let errMsg: string | null = null;
     try {
       await fsUnmount(`${host}:${PS5_PAYLOAD_PORT}`, currentMount);
+      // Optimistic mountMap remove so the row flips to NOT-mounted
+      // immediately; the background rescan will confirm.
+      useLibraryStore.getState().removeMount(entry.path);
       setMountNote(`Unmounted ${currentMount}.`);
-      onChanged();
+      // Delay the rescan slightly so the unmount fully propagates
+      // through the kernel mount table before scanLibrary reads it
+      // — without the delay, the just-unmounted volume sometimes
+      // still appears, briefly producing a "library shows mounted-
+      // again" flicker before the next manual refresh.
+      setTimeout(() => onChanged(), 400);
     } catch (e) {
       okOutcome = false;
       errMsg = e instanceof Error ? e.message : String(e);

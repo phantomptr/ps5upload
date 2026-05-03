@@ -35,6 +35,14 @@ export interface LibraryState {
   ) => void;
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
+  /** Optimistic mount add. Lets the UI flip the row to MOUNTED +
+   *  Unmount-button immediately on a successful fs_mount, before the
+   *  background rescan refreshes volumes. The next setData() will
+   *  overwrite this with the authoritative state from getmntinfo. */
+  addMount: (imagePath: string, mountPoint: string) => void;
+  /** Optimistic mount remove. Counterpart to addMount; flips the row
+   *  back to NOT-mounted immediately on a successful fs_unmount. */
+  removeMount: (imagePath: string) => void;
   clear: () => void;
 }
 
@@ -55,6 +63,19 @@ export const useLibraryStore = create<LibraryState>((set) => ({
     }),
   setLoading: (loading) => set({ loading }),
   setError: (error) => set({ error }),
+  addMount: (imagePath, mountPoint) =>
+    set((s) => {
+      const next = new Map(s.mountMap);
+      next.set(imagePath, mountPoint);
+      return { mountMap: next };
+    }),
+  removeMount: (imagePath) =>
+    set((s) => {
+      if (!s.mountMap.has(imagePath)) return {};
+      const next = new Map(s.mountMap);
+      next.delete(imagePath);
+      return { mountMap: next };
+    }),
   clear: () =>
     set({
       entries: null,

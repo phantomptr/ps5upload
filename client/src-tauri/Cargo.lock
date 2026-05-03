@@ -2896,7 +2896,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-desktop"
-version = "2.2.35"
+version = "2.2.36"
 dependencies = [
  "anyhow",
  "blake3",
