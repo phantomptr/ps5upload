@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 
 import { PageHeader, Button, WarningCard } from "../../components";
+import { humanizePs5Error } from "../../lib/humanizeError";
 import {
   useConnectionStore,
   PS5_PAYLOAD_PORT,
@@ -678,7 +679,9 @@ function InstallRow({
       {/* Failure */}
       {item.errMessage && item.status === "failed" && (
         <div className="mt-2 rounded-md border border-[var(--color-bad)] bg-[var(--color-surface-2)] p-2 text-[11px] text-[var(--color-bad)]">
-          <div className="break-words">{item.errMessage}</div>
+          <div className="break-words">
+            {humanizePs5Error(item.errMessage)}
+          </div>
           {item.errCode > 0 && (
             <code className="mt-1 inline-block font-mono text-[10px] opacity-75">
               0x{item.errCode.toString(16).padStart(8, "0")}
