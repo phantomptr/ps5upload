@@ -62,6 +62,7 @@ import {
   isExpectedNotInFlight,
 } from "../../lib/movePollerPolicy";
 import { filterLibraryEntries } from "../../lib/libraryFilter";
+import { humanizePs5Error } from "../../lib/humanizeError";
 import {
   fetchTitleInfo,
   patchesSiteName,
@@ -769,7 +770,7 @@ function LibraryRow({
     } catch (e) {
       okOutcome = false;
       errMsg = e instanceof Error ? e.message : String(e);
-      setError(errMsg);
+      setError(humanizePs5Error(errMsg));
     } finally {
       useActivityHistoryStore
         .getState()
@@ -804,7 +805,7 @@ function LibraryRow({
     } catch (e) {
       okOutcome = false;
       errMsg = e instanceof Error ? e.message : String(e);
-      setError(errMsg);
+      setError(humanizePs5Error(errMsg));
     } finally {
       useActivityHistoryStore
         .getState()
@@ -974,7 +975,7 @@ function LibraryRow({
     } catch (e) {
       okOutcome = false;
       errMsg = e instanceof Error ? e.message : String(e);
-      setError(errMsg);
+      setError(humanizePs5Error(errMsg));
     } finally {
       useActivityHistoryStore
         .getState()
@@ -1436,7 +1437,7 @@ function LibraryRow({
     } catch (e) {
       okOutcome = false;
       errMsg = e instanceof Error ? e.message : String(e);
-      setError(errMsg);
+      setError(humanizePs5Error(errMsg));
     } finally {
       useActivityHistoryStore
         .getState()
@@ -1508,7 +1509,7 @@ function LibraryRow({
     } catch (e) {
       okOutcome = false;
       errMsg = e instanceof Error ? e.message : String(e);
-      setError(errMsg);
+      setError(humanizePs5Error(errMsg));
     } finally {
       useActivityHistoryStore
         .getState()
@@ -1553,7 +1554,7 @@ function LibraryRow({
     } catch (e) {
       okOutcome = false;
       errMsg = e instanceof Error ? e.message : String(e);
-      setError(errMsg);
+      setError(humanizePs5Error(errMsg));
     } finally {
       useActivityHistoryStore
         .getState()
@@ -1585,7 +1586,7 @@ function LibraryRow({
     } catch (e) {
       okOutcome = false;
       errMsg = e instanceof Error ? e.message : String(e);
-      setError(errMsg);
+      setError(humanizePs5Error(errMsg));
     } finally {
       useActivityHistoryStore
         .getState()

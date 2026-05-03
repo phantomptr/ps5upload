@@ -4,6 +4,47 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.2.42
+
+**Library: humanize mount/unmount errors, especially nmount EPERM**
+
+User report:
+
+  engine HTTP 502 Bad Gateway: payload rejected
+  FS_MOUNT(/data/homebrew/PPSA09519.exfat): fs_mount_nmount_failed:
+  Operation not permitted
+
+…and the user's reasonable guess: "is it because I'm mounting to
+/mnt/usb0 while the .exfat is under /data/homebrew?"
+
+Two issues:
+
+  1. The Library row was showing the raw payload error string
+     unfiltered. Every other surface (Volumes, Upload, etc.) goes
+     through `humanizePs5Error` for friendly copy; the Library row
+     was the lone outlier. Now wrapped at all 7 setError sites.
+
+  2. `fs_mount_nmount_failed: Operation not permitted` is a real
+     PS5 kernel-policy rejection — the PS5's nmount(2) refuses
+     certain fspath choices on top of our own path allowlist, and
+     /mnt/usb*/ subpaths are firmware-dependent. The user's guess
+     about the .exfat location is wrong: nmount only cares about
+     where the filesystem *attaches*, not where the backing image
+     lives. Added a specific humanization that says exactly that:
+
+       PS5 kernel refused this mount point (Operation not
+       permitted). The .exfat file's location doesn't matter here
+       — try mounting under /data/homebrew/<name> or
+       /mnt/ps5upload/<name>. Some USB/ext sub-paths are blocked
+       by kernel policy on certain firmware.
+
+  Plus a generic-nmount-failure copy that strips the
+  `fs_mount_nmount_failed:` prefix and tells the user the kernel's
+  own errmsg verbatim with the same "try a different mount point,
+  the image is fine" hint.
+
+---
+
 ## 2.2.41
 
 **Audit-pass fixes — 9 bugs across the recently-changed mount/title/list paths**

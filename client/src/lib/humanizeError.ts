@@ -129,6 +129,30 @@ export function humanizePs5Error(raw: string): string {
   if (/fs_mount_dev_node_missing/i.test(raw)) {
     return "PS5 attached the image but the device node didn't appear. Reboot the PS5 and re-load the payload, then try again.";
   }
+  // The PS5 kernel's nmount enforces its own mount-point policy on
+  // top of our path allowlist. The most common kernel-policy failure
+  // is EPERM ("Operation not permitted") when the chosen fspath is
+  // a path the kernel doesn't allow exfat/ufs mounts under — most
+  // notably arbitrary subpaths of /mnt/usb*/ or /mnt/ext*/. The
+  // backing image's location on disk doesn't matter; what matters
+  // is the *mount point* we're attaching to. /mnt/ps5upload/<name>
+  // and most /data/<...> paths work; USB/ext slots are firmware-
+  // and sub-path-dependent. Surface this clearly so the user knows
+  // to retry with a different mount point instead of debugging the
+  // .exfat itself.
+  if (
+    /fs_mount_nmount_failed/i.test(raw) &&
+    /Operation not permitted|EPERM|operation_not_permitted/i.test(raw)
+  ) {
+    return "PS5 kernel refused this mount point (Operation not permitted). The .exfat file's location doesn't matter here — try mounting under /data/homebrew/<name> or /mnt/ps5upload/<name>. Some USB/ext sub-paths are blocked by kernel policy on certain firmware.";
+  }
+  if (/fs_mount_nmount_failed/i.test(raw)) {
+    // Non-EPERM nmount failure — surface the kernel's own errmsg
+    // verbatim (the payload formats it as "fs_mount_nmount_failed:
+    // <kernel-errmsg-or-strerror>"); strip our prefix for clarity.
+    const tail = raw.match(/fs_mount_nmount_failed:\s*(.+?)(?:\)|$)/i);
+    return `PS5 kernel rejected the mount: ${tail ? tail[1] : "unknown reason"}. Try a different mount point (e.g. under /data or /mnt/ps5upload) — the image itself is fine.`;
+  }
 
   // ─── BGFT / Install Package error codes ─────────────────────────
   // err_code_message in ps5upload-core covers the user-facing copy for
