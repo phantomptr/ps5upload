@@ -853,6 +853,13 @@ export interface LibraryEntry {
    *  disk image is mounted AND its backing folder is also accessible
    *  on the filesystem. */
   titleId?: string | null;
+  /** Last-modified time in seconds since the Unix epoch (st_mtime
+   *  from the payload's lstat). 0 means the payload's stat failed
+   *  for this entry, OR the running payload predates the field —
+   *  treat as "unknown" and sort it to the end of date-sorted
+   *  views. Used by the "Most recent first" / "Oldest first" sort
+   *  options in the Library. */
+  mtime?: number;
 }
 
 /** Walk every writable PS5 volume recursively and return all games
@@ -921,16 +928,28 @@ export async function scanLibrary(transferAddr: string): Promise<LibraryEntry[]>
   // Track visited directories so walker cycles terminate. Keyed by
   // absolute path; values don't matter.
   const visited = new Set<string>();
+  // Per-directory mtime captured from the parent's listing. We
+  // emit game entries when we discover sce_sys/param.json *inside*
+  // a directory, but the mtime we want is the *directory's* —
+  // which we already saw in the parent's listing. This map
+  // bridges the gap so the "Most recent first" sort works for
+  // game folders too.
+  const dirMtime = new Map<string, number>();
 
   const scanLimit = createScanLimiter(6);
 
   const listDir = async (
     path: string
-  ): Promise<Array<{ name?: string; kind?: string; size?: number }>> =>
+  ): Promise<Array<{ name?: string; kind?: string; size?: number; mtime?: number }>> =>
     scanLimit(async () => {
       try {
         const res = await invoke<{
-          entries?: Array<{ name?: string; kind?: string; size?: number }>;
+          entries?: Array<{
+            name?: string;
+            kind?: string;
+            size?: number;
+            mtime?: number;
+          }>;
         }>("ps5_list_dir", { addr, path, offset: 0, limit: 512 });
         const out = res.entries ?? [];
         // Stable sort: dir/file kind first, then name. Eliminates
@@ -990,10 +1009,19 @@ export async function scanLibrary(transferAddr: string): Promise<LibraryEntry[]>
               scope: path,
               size: typeof e.size === "number" ? e.size : 0,
               imageFormat,
+              mtime: typeof e.mtime === "number" ? e.mtime : 0,
             });
           }
         } else if (e.kind === "dir") {
           dirNames.push(e.name);
+          // Capture the directory's mtime now while we have the
+          // parent listing in hand; emitted later when we discover
+          // a game inside this directory (the game's "added"
+          // timestamp is the folder's mtime, not the param.json's).
+          if (typeof e.mtime === "number" && e.mtime > 0) {
+            const childAbs = path === "/" ? `/${e.name}` : `${path}/${e.name}`;
+            dirMtime.set(childAbs, e.mtime);
+          }
         }
       }
 
@@ -1016,6 +1044,7 @@ export async function scanLibrary(transferAddr: string): Promise<LibraryEntry[]>
             volume: volumePath,
             scope: path.substring(0, path.lastIndexOf("/")) || "/",
             size: 0,
+            mtime: dirMtime.get(path) ?? 0,
           });
           continue;
         }

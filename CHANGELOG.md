@@ -4,6 +4,72 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.2.38
+
+**Library mount UX, sort, and "from disk image" badge — real user
+report bundle**
+
+### Unmount button now persists for custom-path mounts
+
+The 2.2.36 fix made the desktop side stop gating mountMap on the
+`/mnt/ps5upload/` prefix, but the optimistic `addMount` we did
+right after a successful fs_mount was being clobbered by the next
+volume probe — the probe sometimes runs before `getmntinfo` has
+caught up to the new mount, so it returns an empty `source_image`
+and overwrites our local optimism. The user-visible symptom: click
+Mount → Unmount button appears for half a second → flips back to
+Mount as the probe lands → the user concludes "no Unmount option
+exists." Fixed by splitting the store into two maps:
+
+  - `mountMap` — derived from the volumes probe (authoritative).
+  - `pendingMounts` — locally added by `addMount`, persists until
+    the probe surfaces the same image_path or `removeMount` is
+    called.
+
+The Library row reads the union, so a freshly-mounted image flips
+to MOUNTED + Unmount in the same render and stays there even if
+the probe is slow. Pruning happens in `setData`: pending entries
+the probe has now confirmed are dropped.
+
+### Mount picker now offers all well-known volumes (USB, ext)
+
+The mount-modal volume dropdown was either-live-OR-fallback, never
+both. So if the live probe returned only `/data`, the user couldn't
+pick `/mnt/usb0` or `/mnt/ext1` from the dropdown even though the
+payload's `is_path_allowed` accepts them. Now the dropdown is the
+union of live + fallback, so every well-known mount root is always
+pickable. Fallback list expanded from `/data /mnt/ext0 /mnt/usb0`
+to also include `/mnt/ext1`, `/mnt/usb1`, `/mnt/usb2`, `/mnt/usb3`.
+
+### Sort dropdown above the entry list
+
+Four options, persisted to localStorage: **Most recent** (default),
+**Oldest first**, **Name (A→Z)**, **Name (Z→A)**. The recent/oldest
+options use the entry's `mtime` from the payload's lstat — newly
+added in this release on the FS_LIST_DIR response. Entries with
+unknown mtime (older payload, stat failure) sort to the bottom so
+they don't pollute the "recent" top. Game folders pick up the
+mtime from the directory entry in the parent listing, which we
+capture during the walk.
+
+### "From disk image" badge on games inside a mounted image
+
+When a game lives inside a currently-mounted disk image, the row
+now carries a small `📦 from foo.exfat` badge so the user can tell
+"this game is uploaded folder content (persistent)" apart from
+"this game lives inside a mountable image (disappears on unmount)."
+Tooltip includes the full image path and a heads-up that
+unmounting hides the title.
+
+### FS_LIST_DIR returns mtime
+
+The payload's directory listing now includes `"mtime":N` (seconds
+since the Unix epoch) per entry. Used by the Library sort. Older
+desktops ignore the field; older payloads return without it and
+the desktop treats the missing value as 0.
+
+---
+
 ## 2.2.37
 
 **Library row UX redesign + Play auto-registers + etaHEN/games preset

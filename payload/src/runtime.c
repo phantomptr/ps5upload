@@ -4368,11 +4368,18 @@ static int handle_fs_list_dir(runtime_state_t *state, int client_fd,
             }
             esc[ei] = '\0';
 
+            /* mtime in seconds since the Unix epoch, or 0 when stat
+             * failed (matches the "unknown" kind branch). The
+             * desktop's Library uses this to sort by recency
+             * ("Most recent first") so a freshly-uploaded game
+             * appears at the top without manual scrolling. */
+            long long mtime_sec = stat_ok ? (long long)st.st_mtime : 0;
             n = snprintf(resp + off, RESP_CAP - off,
-                         "%s{\"name\":\"%s\",\"kind\":\"%s\",\"size\":%llu}",
+                         "%s{\"name\":\"%s\",\"kind\":\"%s\",\"size\":%llu,\"mtime\":%lld}",
                          first_entry ? "" : ",",
                          esc, kind,
-                         (unsigned long long)size);
+                         (unsigned long long)size,
+                         mtime_sec);
         }
         if (n < 0 || (size_t)n >= RESP_CAP - off) {
             truncated = 1;

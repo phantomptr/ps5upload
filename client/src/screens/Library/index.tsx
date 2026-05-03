@@ -123,6 +123,7 @@ export default function LibraryScreen() {
   const payloadStatus = useConnectionStore((s) => s.payloadStatus);
   const entries = useLibraryStore((s) => s.entries);
   const mountMap = useLibraryStore((s) => s.mountMap);
+  const pendingMounts = useLibraryStore((s) => s.pendingMounts);
   const volumes = useLibraryStore((s) => s.volumes);
   const loading = useLibraryStore((s) => s.loading);
   const error = useLibraryStore((s) => s.error);
@@ -182,11 +183,25 @@ export default function LibraryScreen() {
       // blank after mounting an image, must click Refresh manually."
       const hadEntries = (useLibraryStore.getState().entries ?? []).length > 0;
       if (result.length === 0 && hadEntries) {
-        useLibraryStore.setState({
-          mountMap: next,
-          volumes: writable,
-          lastRefreshedAt: Date.now(),
-          error: null,
+        // Stale-empty: keep the entries we already had, but still
+        // update mountMap/volumes from the probe AND prune
+        // pendingMounts entries the probe now confirms (mirrors
+        // setData's prune logic; can't just call setData because
+        // that would clobber `entries` with []).
+        useLibraryStore.setState((s) => {
+          const prunedPending = new Map<string, string>();
+          for (const [imagePath, mountPoint] of s.pendingMounts) {
+            if (!next.has(imagePath)) {
+              prunedPending.set(imagePath, mountPoint);
+            }
+          }
+          return {
+            mountMap: next,
+            pendingMounts: prunedPending,
+            volumes: writable,
+            lastRefreshedAt: Date.now(),
+            error: null,
+          };
         });
       } else {
         setData(result, next, writable);
@@ -242,12 +257,67 @@ export default function LibraryScreen() {
   // their own sections. Memoization keys on the entries array
   // identity (set by setData on refresh) and the query string —
   // both cheap, neither flips on every render.
+  // Sort key persisted to localStorage so reopening the screen
+  // remembers the user's last preference. Default is "recent" so
+  // freshly-uploaded games appear at the top — the most common
+  // "where did the thing I just uploaded go" experience.
+  type SortKey = "recent" | "oldest" | "name-asc" | "name-desc";
+  const [sortKey, setSortKey] = useState<SortKey>(() => {
+    if (typeof window === "undefined") return "recent";
+    const saved = window.localStorage.getItem("ps5upload.library.sort");
+    return saved === "recent" ||
+      saved === "oldest" ||
+      saved === "name-asc" ||
+      saved === "name-desc"
+      ? saved
+      : "recent";
+  });
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("ps5upload.library.sort", sortKey);
+    }
+  }, [sortKey]);
+
+  function applySort(arr: LibraryEntry[]): LibraryEntry[] {
+    const sorted = [...arr];
+    if (sortKey === "name-asc") {
+      sorted.sort((a, b) => a.name.localeCompare(b.name));
+    } else if (sortKey === "name-desc") {
+      sorted.sort((a, b) => b.name.localeCompare(a.name));
+    } else if (sortKey === "recent") {
+      // mtime=0 means unknown (older payload, stat failure) — sort
+      // those to the bottom so they don't pollute the "recent" top.
+      sorted.sort((a, b) => {
+        const am = a.mtime ?? 0;
+        const bm = b.mtime ?? 0;
+        if (am === 0 && bm === 0) return a.name.localeCompare(b.name);
+        if (am === 0) return 1;
+        if (bm === 0) return -1;
+        return bm - am;
+      });
+    } else {
+      // oldest first — same null-aware ordering, reversed.
+      sorted.sort((a, b) => {
+        const am = a.mtime ?? 0;
+        const bm = b.mtime ?? 0;
+        if (am === 0 && bm === 0) return a.name.localeCompare(b.name);
+        if (am === 0) return 1;
+        if (bm === 0) return -1;
+        return am - bm;
+      });
+    }
+    return sorted;
+  }
+
   const split = useMemo(() => {
     const filtered = filterLibraryEntries(entries ?? [], query);
-    const games = filtered.filter((e) => e.kind === "game");
-    const images = filtered.filter((e) => e.kind === "image");
+    const games = applySort(filtered.filter((e) => e.kind === "game"));
+    const images = applySort(filtered.filter((e) => e.kind === "image"));
     return { games, images, total: filtered.length };
-  }, [entries, query]);
+    // applySort closes over sortKey — eslint-deps catches it via the
+    // sortKey dep below, no need to memoize the function itself.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entries, query, sortKey]);
   const totalUnfiltered = entries?.length ?? 0;
   const querying = query.trim() !== "";
 
@@ -361,6 +431,34 @@ export default function LibraryScreen() {
                 {split.total} / {totalUnfiltered}
               </span>
             )}
+            <select
+              value={sortKey}
+              onChange={(e) => setSortKey(e.target.value as SortKey)}
+              className="shrink-0 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-0.5 text-xs text-[var(--color-text)] outline-none hover:bg-[var(--color-surface-3)]"
+              aria-label={tr(
+                "library_sort_aria",
+                undefined,
+                "Sort library entries",
+              )}
+              title={tr(
+                "library_sort_tooltip",
+                undefined,
+                "Choose how the list is ordered. 'Most recent' uses each entry's last-modified time on the PS5.",
+              )}
+            >
+              <option value="recent">
+                {tr("library_sort_recent", undefined, "Most recent")}
+              </option>
+              <option value="oldest">
+                {tr("library_sort_oldest", undefined, "Oldest first")}
+              </option>
+              <option value="name-asc">
+                {tr("library_sort_name_asc", undefined, "Name (A→Z)")}
+              </option>
+              <option value="name-desc">
+                {tr("library_sort_name_desc", undefined, "Name (Z→A)")}
+              </option>
+            </select>
           </div>
 
           {querying && split.total === 0 && (
@@ -395,6 +493,7 @@ export default function LibraryScreen() {
                         entry={e}
                         host={host}
                         mountMap={mountMap}
+                        pendingMounts={pendingMounts}
                         volumes={volumes}
                         onChanged={refresh}
                       />
@@ -416,6 +515,7 @@ export default function LibraryScreen() {
                         entry={e}
                         host={host}
                         mountMap={mountMap}
+                        pendingMounts={pendingMounts}
                         volumes={volumes}
                         onChanged={refresh}
                       />
@@ -480,14 +580,21 @@ function LibraryRow({
   entry,
   host,
   mountMap,
+  pendingMounts,
   volumes,
   onChanged,
 }: {
   entry: LibraryEntry;
   host: string;
-  /** image_path → mount_point. Lets image rows render MOUNTED state
-   *  + offer the right action (Mount vs Unmount). */
+  /** image_path → mount_point from the volumes probe (authoritative).
+   *  Lets image rows render MOUNTED state + offer the right action
+   *  (Mount vs Unmount). */
   mountMap: Map<string, string>;
+  /** image_path → mount_point for fs_mount calls the client just
+   *  made but the probe hasn't surfaced yet. The row reads the union
+   *  so a freshly-mounted image flips to MOUNTED in the same render
+   *  the user clicks (no waiting on the next probe). */
+  pendingMounts: Map<string, string>;
   /** Writable PS5 volumes — surfaced to the Move modal as the
    *  destination dropdown. */
   volumes: Volume[];
@@ -503,6 +610,32 @@ function LibraryRow({
         : entry.imageFormat === "ffpfs"
           ? tr("library_row_kind_ffpfs", undefined, ".ffpfs image")
           : tr("library_row_kind_exfat", undefined, ".exfat image");
+
+  /** If this entry lives inside a currently-mounted disk image,
+   *  return the backing image's path. Lets the row render a
+   *  visually-distinct "from disk image" badge so the user can
+   *  tell uploaded-folder games apart from games-inside-a-mount-
+   *  that-disappears-when-unmounted. */
+  const fromImagePath: string | null = (() => {
+    if (entry.kind !== "game") return null;
+    const all = new Map<string, string>();
+    for (const [k, v] of mountMap) all.set(k, v);
+    for (const [k, v] of pendingMounts) all.set(k, v);
+    let best: { image: string; mount: string } | null = null;
+    for (const [imagePath, mount] of all) {
+      const root = mount.endsWith("/") ? mount : mount + "/";
+      if (entry.path.startsWith(root) || entry.path === mount) {
+        // Longest match wins so nested mounts attribute correctly.
+        if (!best || mount.length > best.mount.length) {
+          best = { image: imagePath, mount };
+        }
+      }
+    }
+    return best?.image ?? null;
+  })();
+  const fromImageBasename = fromImagePath
+    ? (fromImagePath.split("/").pop() ?? fromImagePath)
+    : null;
   const [confirm, setConfirm] = useState<PendingConfirm | null>(null);
   const [busy, setBusy] = useState<BusyState>(null);
   const [error, setError] = useState<string | null>(null);
@@ -561,9 +694,13 @@ function LibraryRow({
   const elapsedMs = useElapsed(busy !== null);
 
   /** Current mount point for this entry (null = not mounted). Only
-   *  meaningful for image rows — games don't go through fs_mount. */
+   *  meaningful for image rows — games don't go through fs_mount.
+   *  Probe-derived `mountMap` is authoritative when present;
+   *  `pendingMounts` covers the post-fs_mount window where the
+   *  probe hasn't caught up yet so the row immediately reflects a
+   *  successful Mount click. */
   const currentMount = entry.kind === "image"
-    ? mountMap.get(entry.path) ?? null
+    ? mountMap.get(entry.path) ?? pendingMounts.get(entry.path) ?? null
     : null;
   const isMounted = currentMount !== null;
 
@@ -1447,7 +1584,26 @@ function LibraryRow({
               className="mt-1 inline-block rounded-full border border-[var(--color-accent)] bg-[var(--color-accent-soft)] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-[var(--color-accent)]"
               title={`Mounted at ${currentMount}`}
             >
-              mounted
+              {tr("library_badge_mounted", undefined, "mounted")}
+            </div>
+          )}
+          {fromImagePath && fromImageBasename && (
+            <div
+              className="mt-1 inline-flex items-center gap-1 rounded-full border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-[var(--color-muted)]"
+              title={tr(
+                "library_badge_from_image_tooltip",
+                { image: fromImagePath },
+                `Lives inside ${fromImagePath}. Unmounting that image will hide this title until you remount it.`,
+              )}
+            >
+              <FileArchive size={9} />
+              <span>
+                {tr(
+                  "library_badge_from_image",
+                  { image: fromImageBasename },
+                  `from ${fromImageBasename}`,
+                )}
+              </span>
             </div>
           )}
         </div>
@@ -1559,6 +1715,13 @@ function LibraryRow({
               </Button>
             </>
           )}
+          {/* eslint-disable react-hooks/refs --
+              The IIFE below builds menu items that capture row-
+              local handlers (runDownload, runUnregister, etc.).
+              The handlers themselves read refs (mountedRef et al.)
+              but only when the user clicks — NOT during render —
+              so the rule's "ref read during render" warning is a
+              false positive. The closures are intentional. */}
           {(() => {
             // Overflow menu items, kind-specific. Order is the
             // expected frequency-of-use: register actions first
@@ -1686,6 +1849,7 @@ function LibraryRow({
               />
             );
           })()}
+          {/* eslint-enable react-hooks/refs */}
         </div>
       </div>
 
@@ -2355,13 +2519,30 @@ function MountModal({
 
   const supportsMountPoint = payloadSupportsMountPoint(payloadVersion);
   const liveVolumePaths = useMemo(() => volumes.map((v) => v.path), [volumes]);
-  const dropdownPaths = useMemo(
-    () =>
-      liveVolumePaths.length > 0
-        ? [...liveVolumePaths].sort()
-        : fallbackMountVolumes(),
-    [liveVolumePaths],
-  );
+  const dropdownPaths = useMemo(() => {
+    // Pre-2.2.38 the dropdown was either live volumes OR fallback,
+    // never both — so if the live probe returned only `/data` (USB
+    // not surfaced for whatever reason), the user couldn't pick
+    // /mnt/usb0 even though the payload's `is_path_allowed` accepts
+    // it. Now we union live + fallback so the user always sees
+    // every well-known mount root, while live entries we've
+    // probed are still preferred and shown first.
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const p of [...liveVolumePaths].sort()) {
+      if (!seen.has(p)) {
+        seen.add(p);
+        out.push(p);
+      }
+    }
+    for (const p of fallbackMountVolumes()) {
+      if (!seen.has(p)) {
+        seen.add(p);
+        out.push(p);
+      }
+    }
+    return out;
+  }, [liveVolumePaths]);
   const freeBytesByPath = useMemo(() => {
     const m = new Map<string, number>();
     for (const v of volumes) m.set(v.path, v.free_bytes);

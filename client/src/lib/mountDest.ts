@@ -50,7 +50,15 @@ export const MOUNT_PRESETS: { label: string; subpath: string; hint: string }[] =
  *  Mount. The default `ps5upload` subpath under any real volume
  *  (`/mnt/ext1/ps5upload/<name>`) gives the same effect without the
  *  rejection. */
-const FALLBACK_VOLUMES = ["/data", "/mnt/ext0", "/mnt/usb0"];
+const FALLBACK_VOLUMES = [
+  "/data",
+  "/mnt/ext0",
+  "/mnt/ext1",
+  "/mnt/usb0",
+  "/mnt/usb1",
+  "/mnt/usb2",
+  "/mnt/usb3",
+];
 
 export interface MountDest {
   volume: string;
