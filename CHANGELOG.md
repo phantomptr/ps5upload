@@ -4,6 +4,32 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.2.56
+
+**NPXS system-pkg pre-flight warning + accurate mid-install error**
+
+Live test confirmed the 2.2.55 known-limit: an `IV0002-NPXS39041_00…`
+Store-update fakepkg got `register_path=shellui-rpc accepted` from
+Sony, then froze the PS5's mgmt service mid-install. Pre-fix, the UI
+told the user "Can't reach your PS5's management service. Make sure
+the payload is loaded" — wrong root cause, wrong fix.
+
+- Install Package row now shows a pre-flight warning the moment an
+  NPXS-prefix pkg is added: "System app pkg — Sony will accept
+  register but install may freeze the mgmt service. Use Settings →
+  Debug Settings → Game → Package Installer instead."
+- Error humanizer takes `contentId` and rewrites the mid-install
+  mgmt-disconnect for NPXS pkgs: "Sony accepts the register but
+  `sceAppInstUtilInstallByPackage` isn't designed for system patches.
+  PS5 typically recovers in a minute or after reboot." Game pkgs
+  (CUSA / PPSA / PCSA / etc.) keep the original "send payload" hint.
+
+Game pkgs install cleanly; this just stops users from chasing a
+phantom payload-loading bug when the actual cause is the API
+mismatch for system pkgs.
+
+---
+
 ## 2.2.55
 
 **Install Package — working end-to-end on FW 9.60**

@@ -223,11 +223,27 @@ export default function InstallPackageScreen() {
       if (meta.head) {
         contentId = meta.head.content_id ?? "";
         packageType = meta.head.package_type ?? "";
-        warnings = meta.head.warnings ?? [];
+        warnings = [...(meta.head.warnings ?? [])];
         if (meta.head.title) displayName = meta.head.title;
       }
     } catch (e) {
       warnings = [`could not read header: ${e}`];
+    }
+    // 2.2.55: NPXS-prefix system pkgs (Store updates, Settings,
+    // built-in apps) DO register cleanly — Sony accepts the
+    // sceAppInstUtilInstallByPackage call and the engine sees
+    // `register_path=shellui-rpc accepted`. But the actual install
+    // destabilises the PS5: the mgmt service stops responding mid-
+    // install and the user sees "Can't reach your PS5's management
+    // service". The API is designed for game pkgs, not system app
+    // patches; we can't replicate Sony's internal Settings → Debug
+    // Settings → Game → Package Installer code path. Pre-flight
+    // warning gives the user a chance to abort before destabilising
+    // the system, with concrete guidance on what to do instead. */
+    if (/^[A-Z]{2}\d{4}-NPXS\d+/i.test(contentId)) {
+      warnings.push(
+        "System app pkg (NPXS-prefix). Sony will accept the register but the install may freeze the PS5's mgmt service mid-flight — `sceAppInstUtilInstallByPackage` is for game pkgs, not system patches. Use Settings → Debug Settings → Game → Package Installer on the PS5 itself for these.",
+      );
     }
 
     add({
@@ -712,7 +728,7 @@ function InstallRow({
       {item.errMessage && item.status === "failed" && (
         <div className="mt-2 rounded-md border border-[var(--color-bad)] bg-[var(--color-surface-2)] p-2 text-[11px] text-[var(--color-bad)]">
           <div className="break-words">
-            {humanizePs5Error(item.errMessage, item.errCode)}
+            {humanizePs5Error(item.errMessage, item.errCode, item.contentId)}
           </div>
           {item.errCode > 0 && (
             <code className="mt-1 inline-block font-mono text-[10px] opacity-75">

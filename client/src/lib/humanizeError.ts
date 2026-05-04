@@ -25,7 +25,18 @@
  *  format check. Passing err_code lets the regex find the hex form
  *  directly. Optional for back-compat with non-pkg callers (FS ops,
  *  transfers) that don't have a numeric err code. */
-export function humanizePs5Error(raw: string, errCode?: number): string {
+export function humanizePs5Error(
+  raw: string,
+  errCode?: number,
+  /** 2.2.55: optional install-context for content-id-aware messages.
+   *  When set, an NPXS-prefix system-pkg install that loses the
+   *  mgmt connection mid-flight gets a clear "this is the system-
+   *  pkg destabilisation symptom" message instead of the generic
+   *  "send payload" hint — the payload IS loaded, Sony just froze
+   *  the mgmt service while trying to install something the API
+   *  isn't designed for. */
+  contentId?: string,
+): string {
   if (!raw && !errCode) return "";
   // Build a lookup string that includes both sources so existing
   // hex-pattern regexes match either way. Lowercase the hex digits
@@ -45,6 +56,25 @@ export function humanizePs5Error(raw: string, errCode?: number): string {
   // is already what they need to see.
   if (/can't read source folder/i.test(raw)) {
     return raw;
+  }
+
+  // ─── NPXS system-pkg + mgmt disconnect mid-install ─────────────────
+  // Sony accepts the register call (we see `register_path=shellui-rpc
+  // accepted`) but `sceAppInstUtilInstallByPackage` isn't designed
+  // for system app pkgs (Store updates, Settings, built-in apps).
+  // The destabilisation surfaces as a mgmt connect/transport failure
+  // some seconds AFTER register success — different root cause from
+  // the generic "no payload loaded" branch below. Caller passes
+  // contentId so we can route this case to the actually-helpful
+  // message.
+  const isNpxs = !!contentId && /^[A-Z]{2}\d{4}-NPXS\d+/i.test(contentId);
+  if (
+    isNpxs &&
+    /connect to .+:911[34]|read frame header|unexpected ?eof|connection reset|broken pipe/i.test(
+      raw,
+    )
+  ) {
+    return "PS5 mgmt service stopped responding mid-install. This is the known NPXS-system-pkg failure mode: Sony accepts the register but `sceAppInstUtilInstallByPackage` isn't designed for system patches (Store updates, Settings, etc.). The PS5 typically recovers on its own in a minute or two, or after a reboot — but ps5upload can't install this pkg. Use Settings → Debug Settings → Game → Package Installer on the PS5 itself for system pkgs.";
   }
 
   // ─── Mid-transfer network drop ─────────────────────────────────────
