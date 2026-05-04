@@ -98,4 +98,51 @@ int bgft_install_status(int32_t task_id,
  * init outcome. */
 const char *bgft_install_unavailable_reason(void);
 
+/* Which Register variant the most recent successful (or attempted)
+ * `bgft_install_start` used. Lets the host surface why a fakepkg
+ * install fell back to the entitlement-checked Regular path on a FW
+ * where IntDebug isn't exposed. Possible values:
+ *   "intdebug" — sceBgftServiceIntDebugDownloadRegisterPkg succeeded
+ *   "regular"  — sceBgftServiceDownloadRegisterTask path used
+ *   "none"     — Register hasn't been attempted yet, or BGFT is
+ *                unavailable on this firmware (no symbols resolved)
+ * Lifetime: static string; safe to embed in JSON without ownership. */
+const char *bgft_install_last_register_path(void);
+
+/* Whether the IntDebug Register symbol resolved at init. 1 = available
+ * (can install fakepkgs without entitlement check), 0 = absent
+ * (regular Register only — fakepkgs likely fail). */
+int bgft_install_intdebug_available(void);
+
+/* Per-tier error codes from the most recent install attempt. Set
+ * unconditionally on every attempt — surfaced via PKG_INSTALL_ACK
+ * so the host's diag panel can distinguish "tier never tried" from
+ * "tier tried and returned code X".
+ *
+ * Sentinel `UINT32_MAX` (0xFFFFFFFF) means the tier wasn't attempted
+ * for this install (e.g. an early-out before reaching it). 0 means
+ * tier completed without error. Any other value is the tier's
+ * returned err_code:
+ *   - shellui_err: 0xE000_xxxx for our RPC machinery; otherwise the
+ *                  Sony err_code AppInstUtil returned from inside
+ *                  ShellUI (typically 0x80B2_xxxx PlayGo or
+ *                  0x80A2_xxxx AppInstaller).
+ *   - appinst_err: same shape, but from the in-process call. The
+ *                  classic 0x80B22404 PlayGo HTTP_404 lives here on
+ *                  FW 9.60+ where Sony rejects our authid.
+ * Lets the user (and us) see *exactly* which tier broke and why,
+ * even when the surfaced err_code came from a later tier's fallback
+ * error (e.g. BGFT_ERR_LIB_NOT_LOADABLE). */
+uint32_t bgft_install_last_shellui_err(void);
+uint32_t bgft_install_last_appinst_err(void);
+
+/* 2.2.54-fix-round-8: companion "was attempted" booleans, since the
+ * value 0xFFFFFFFF (UINT32_MAX) is no longer reserved as the
+ * "not-attempted" sentinel — it can collide with `pt_call` returning
+ * -1, which surfaced as the diagnostic showing "tier never attempted"
+ * when it actually was. Returns 1 if the tier ran during the most
+ * recent bgft_install_start, 0 if not. */
+int bgft_install_last_shellui_err_set(void);
+int bgft_install_last_appinst_err_set(void);
+
 #endif /* PS5UPLOAD2_BGFT_H */

@@ -911,6 +911,13 @@ function TransferStatus({ phase }: { phase: TransferPhase }) {
             </>
           )}
         </dl>
+        {phase.mountWarnings && phase.mountWarnings.length > 0 && (
+          <ul className="mt-2 space-y-1 rounded-md border border-[var(--color-warn)] bg-[var(--color-surface)] p-2 text-[11px] text-[var(--color-warn)]">
+            {phase.mountWarnings.map((w, i) => (
+              <li key={i}>⚠ {w}</li>
+            ))}
+          </ul>
+        )}
       </div>
     );
   }

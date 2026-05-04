@@ -17,6 +17,13 @@
  * a kstuff-style loader has exposed kernel access — kstuff (or an
  * equivalent kernel-RW loader) must run before our payload. */
 #define PS5_SYSTEM_PROCESS_AUTHID  0x4800000000000006ull
+/* 2.2.54-fix-round-6 diagnostic: temporarily set our process to
+ * ShellCore authid permanently (instead of debugger). This proves
+ * out whether 0x80B21106 from Sony is authid-related or daemon-
+ * state related. If ShellCore-permanent fixes installs → my per-
+ * call swap had a bug. If it still fails → Sony's installer daemon
+ * is wedged and needs PS5 reboot. */
+#define PS5_SHELLCORE_AUTHID_DIAG  0x3800000000000010ull
 
 /*
  * PS5 toast notification — pops the message in the top-right corner of
@@ -59,8 +66,19 @@ static runtime_state_t *g_state = NULL;
  * < 0 = elevation failed (no kernel R/W; Sony APIs that need
  * elevation will reject calls). Exposed via STATUS_ACK so clients
  * can warn the user "load kstuff first" without probing Sony APIs.
+ *
+ * `volatile` so the read in runtime.c's STATUS_ACK / PKG_INSTALL_ACK
+ * builders can't be hoisted into a register and cached across an
+ * intervening `runtime_apply_ucred_jailbreak()` call on the same
+ * frame-dispatch thread. Multiple connection threads
+ * (mgmt + transfer + concurrent mgmt clients) read this concurrently
+ * and the dispatcher writes it on every frame. On x86-64 the int
+ * read/write is naturally atomic at the hardware level but the C
+ * abstract machine doesn't guarantee that without `volatile` (or
+ * `_Atomic`); the qualifier preserves the int-vs-int extern type
+ * shape callers already use.
  */
-int g_ucred_elevation_rc = -1;
+volatile int g_ucred_elevation_rc = -1;
 
 static void handle_fatal(int sig) {
     /* If we crashed mid-RPC, we may be holding a ptrace attach to
@@ -125,6 +143,22 @@ void runtime_apply_ucred_jailbreak(void) {
     rc |= kernel_set_ucred_attrs(-1, 0x80000000ull);
     /* sceAuthID — last so if earlier writes fail we at least
      * leave authid in a known state. */
+    /* 2.2.54-fix-round-12: REVERTED permanent ShellCore authid.
+     * Reason: PS5 was black-screening + auto-restarting mid-install
+     * during user testing. Theory: Sony's kernel validates pid+authid
+     * pairs internally on some IPC paths. Setting our process's
+     * authid to ShellCore (0x3800...) while we're NOT actually
+     * SceShellCore (pid 58) creates a forge that's accepted at the
+     * authid gate but later mismatch checks corrupt kernel state ->
+     * watchdog or panic -> auto-restart.
+     *
+     * etaHEN gets away with permanent ShellCore authid because their
+     * payload is INJECTED into SceShellCore's process (so authid AND
+     * pid both match). We're a separate :9021-loaded ELF; per-call
+     * swap (in bgft.c::appinst_install_start and ::appinst_install_status)
+     * is the safe pattern. Default back to debugger authid for kernel
+     * R/W and ptrace; swap to ShellCore only for the install/status
+     * window then restore. */
     rc |= kernel_set_ucred_authid(-1, PS5_SYSTEM_PROCESS_AUTHID);
 
     intptr_t root_vnode = kernel_get_root_vnode();
@@ -177,6 +211,10 @@ int main(void) {
         fprintf(stderr, "runtime_ensure_directories failed\n");
         return 1;
     }
+
+    /* Sweep orphan Tier-1 staging files. Crash-recovery only;
+     * the desktop-side post-install delete handles steady-state. */
+    runtime_sweep_stale_pkg_temp();
 
     if (runtime_init(&state) != 0) {
         fprintf(stderr, "runtime_init failed\n");

@@ -46,6 +46,42 @@ pub struct PkgInstallResponse {
     /// e.g. "libSceBgft.sprx not loadable on this firmware".
     #[serde(default)]
     pub detail: String,
+    /// Which BGFT Register variant the payload used:
+    /// `"intdebug"` — `sceBgftServiceIntDebugDownloadRegisterPkg` (the
+    ///                fakepkg-friendly path; bypasses entitlement check).
+    /// `"regular"`  — `sceBgftServiceDownloadRegisterTask` (entitlement
+    ///                checked; only succeeds for Sony-signed pkgs).
+    /// `"none"`     — Register hasn't been attempted yet, OR BGFT is
+    ///                unavailable on this firmware.
+    /// Added in 2.2.52. Older payloads omit the field; serde defaults
+    /// to "" so a missing value doesn't crash decode.
+    #[serde(default)]
+    pub register_path: String,
+    /// Whether `sceBgftServiceIntDebugDownloadRegisterPkg` was resolvable
+    /// at payload init. False (or missing) means fakepkg installs will
+    /// likely fail with entitlement errors regardless of cred state —
+    /// the symbol simply isn't exposed on this firmware. Added in 2.2.52.
+    #[serde(default)]
+    pub intdebug_avail: bool,
+    /// Whether the payload's process-wide ucred elevation succeeded
+    /// (mirrors STATUS_ACK's `ucred_elevated`). False means the loader
+    /// didn't grant kernel R/W; no Int-family BGFT call will work.
+    /// Added in 2.2.52.
+    #[serde(default)]
+    pub kernel_rw: bool,
+    /// Per-tier error codes from the most recent install attempt.
+    /// `None` = tier wasn't attempted; `Some(0)` = tier completed without
+    /// error; `Some(other)` = tier returned that err_code.
+    /// `shellui_err` covers the ShellUI-RPC tier (Tier 1); `appinst_err`
+    /// covers the in-process AppInstUtil tier (Tier 2). The legacy
+    /// `err_code` field carries whichever tier's error the payload
+    /// surfaced (typically the BGFT direct tier or the saved app err) —
+    /// per-tier fields disambiguate WHERE a multi-tier failure broke.
+    /// Added in 2.2.52-fix.
+    #[serde(default)]
+    pub shellui_err: Option<u32>,
+    #[serde(default)]
+    pub appinst_err: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,6 +107,26 @@ pub struct PkgInstallStatus {
     pub err_code: u32,
     #[serde(default)]
     pub detail: String,
+    /// Live diagnostics — same shape as `PkgInstallResponse`, re-emitted
+    /// by the payload on every status frame so the host sees the
+    /// CURRENT (not start-time) BGFT register_path / intdebug_avail /
+    /// kernel_rw state. If BGFT transitions to phase=error mid-install,
+    /// this lets the user's "Why?" disclosure show real context rather
+    /// than the optimistic snapshot from start. Added in 2.2.52;
+    /// older payloads omit them and serde defaults take over.
+    #[serde(default)]
+    pub register_path: String,
+    #[serde(default)]
+    pub intdebug_avail: bool,
+    #[serde(default)]
+    pub kernel_rw: bool,
+    /// Per-tier error codes — same semantic as `PkgInstallResponse`.
+    /// Re-emitted on every status poll so a mid-install transition
+    /// to error refreshes the breakdown the user sees.
+    #[serde(default)]
+    pub shellui_err: Option<u32>,
+    #[serde(default)]
+    pub appinst_err: Option<u32>,
 }
 
 /// Send the PKG_INSTALL frame and parse the ack.

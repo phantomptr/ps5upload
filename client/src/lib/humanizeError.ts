@@ -11,8 +11,32 @@
 // added once.
 
 /** Rewrite a raw engine/payload error string into a single line of
- *  user-facing copy. Unknown strings are returned as-is. */
-export function humanizePs5Error(raw: string): string {
+ *  user-facing copy. Unknown strings are returned as-is.
+ *
+ *  `errCode` is an optional second source: many of the regex branches
+ *  below look for a Sony hex code (`0x80B22404`, `0x80A2FF15`, …) but
+ *  pre-fix-round-6 the humanizer only saw the err_message string. The
+ *  PKG install path stores err_code in a separate field (rendered as
+ *  a `<code>` block under the human-friendly text) — when err_message
+ *  was just the BGFT-side `detail` (e.g. "BGFT symbol missing (tried:
+ *  …)") and err_code was unmapped (e.g. 0x80B22404), the humanizer
+ *  matched on `BGFT symbol missing` and surfaced the misleading "BGFT
+ *  not loadable" message even though the actual rejection was Sony's
+ *  format check. Passing err_code lets the regex find the hex form
+ *  directly. Optional for back-compat with non-pkg callers (FS ops,
+ *  transfers) that don't have a numeric err code. */
+export function humanizePs5Error(raw: string, errCode?: number): string {
+  if (!raw && !errCode) return "";
+  // Build a lookup string that includes both sources so existing
+  // hex-pattern regexes match either way. Lowercase the hex digits
+  // so case-insensitive regexes don't have to backtrack on every
+  // call. Decimal form is also appended because some humanizer
+  // branches match the negative-int form Sony's docs use.
+  const codeForms =
+    errCode && errCode > 0
+      ? ` 0x${errCode.toString(16).padStart(8, "0")} ${(errCode | 0).toString()}`
+      : "";
+  raw = (raw ?? "") + codeForms;
   if (!raw) return "";
 
   // ─── Source / local filesystem ─────────────────────────────────────
@@ -188,6 +212,71 @@ export function humanizePs5Error(raw: string): string {
   }
   if (/0x80A30001|-2136862719|SCE_APP_INST_UTIL_ERROR_OUT_OF_MEMORY/i.test(raw)) {
     return "Sony's installer ran out of memory mid-install. Reboot the PS5, reload the payload, and retry.";
+  }
+
+  // ─── 0x80B2_xxxx — Sony installer / package-format rejection ────────
+  // 0x80B2_2404 in particular has been observed on PS5-native fakepkgs
+  // submitted via PS4-emu install paths and on pkgs whose header magic
+  // isn't `\x7FCNT` (e.g. the non-canonical `\x7FFIH` produced by some
+  // PS5-native fakepkg signing tools). The rejection happens AFTER
+  // Sony fetched the bytes, so the HTTP-host plumbing is fine — the
+  // installer just can't parse what we handed it. Common causes:
+  //
+  //   - Pkg has a non-canonical header magic (run our /api/pkg/parse
+  //     output past `magic_hex` to verify); Sony's installer expects
+  //     `\x7FCNT` for PS4-format and rejects others.
+  //   - DLC pkg without the base game installed first. Sony refuses
+  //     to install DLC against a missing base.
+  //   - PS5-native pkg (PS5GD/PS5DP) submitted with package_type
+  //     "PS4GD" — type mismatch makes the installer fail header check.
+  //
+  // Without Sony docs for the 0x80B2 namespace we surface the most
+  // likely actionable cause rather than a generic "unknown".
+  if (/\b0x80020023\b/i.test(raw)) {
+    // SCE_KERNEL_ERROR_EAGAIN — errno 35. Sony's installer says "busy /
+    // try again later". Most common cause on FW 9.60: a previous
+    // install for the same content_id is still queued in Sony's
+    // installer state and blocking the new one.
+    return "Sony's installer is busy — error 0x80020023 (EAGAIN). A previous install with the same content_id is still queued on the PS5. Open Settings → Notifications on the PS5 and dismiss any pending Store-related entries, OR reboot the PS5 to clear stale install state. Then retry.";
+  }
+  if (/\b0x80b21106\b/i.test(raw)) {
+    // 0x80B21106 from Sony's AppInstaller. Direct testing across
+    // many install attempts proved this isn't a Sony-stuck-state
+    // symptom — it's "Sony already has a task queued for this
+    // content_id and won't accept a duplicate register". The
+    // first install attempt for a given content_id succeeds; the
+    // second one for the SAME content_id (within the same PS5
+    // session) gets 0x80B21106 because Sony's installer is busy
+    // running the first.
+    //
+    // The previous install probably IS running (or queued) on the
+    // PS5 right now. The desktop's UI shows phase=install
+    // synthetically forever for shellui-rpc-backed tasks; the
+    // actual install runs in Sony's background and surfaces in
+    // the PS5's own Settings → Notifications → Downloads panel.
+    return "Sony's installer rejected this register with 0x80B21106 — most likely because the previous install for the same content_id is still queued/running on the PS5. Check Settings → Notifications → Downloads on the PS5 to see if it's already installing. If you really want to re-register (e.g. the previous attempt failed silently), reboot the PS5 first. DO NOT click Start repeatedly — each retry just confirms Sony's response.";
+  }
+  if (
+    /0x80B2_?2404\b/i.test(raw) ||
+    /-2135858684/i.test(raw) ||
+    /\b0x80b22404\b/i.test(raw)
+  ) {
+    // 0x80B22404 = SCE_PLAYGO_ERROR_CORE_HTTP_STATUS_CODE_404_NOT_FOUND.
+    // This is NOT about the pkg — Sony's installer never looked at
+    // the file. PlayGo's URL pre-flight rejected the fetch before
+    // touching any bytes. The cause is our process context: Sony
+    // whitelists ShellUI's authid for install-side HTTP fetch; calls
+    // from our payload's own context get this error regardless of
+    // pkg validity, cred-forge, or URL contents. The pkg is almost
+    // certainly fine — same file installs via Settings → Debug
+    // Settings → Install Package on the PS5 itself, because that
+    // path runs from ShellUI.
+    return "PS5 rejected our HTTP fetch attempt for the install (0x80B22404). This isn't about the pkg's format — Sony's installer didn't read any of the file's bytes. It's a process-context issue: Sony's PlayGo whitelists ShellUI's process for install-side HTTP fetch and rejects ours. The 2.2.52 build has a new ShellUI-RPC install path that routes through ShellUI's process so the same fetch succeeds. If you're still seeing this error, the running payload is the old one — push the latest payload via Connection → Send payload, restart the install, and the diag panel should show register_path=shellui-rpc.";
+  }
+  if (/\b0x80B2[0-9A-Fa-f]{4}\b/i.test(raw)) {
+    // Other 0x80B2_xxxx — PlayGo errors, not pkg-format errors.
+    // Don't blame the file.
+    return "PS5's PlayGo subsystem rejected the install with a 0x80B2_xxxx error. This is the install fetch path, not the pkg parser — your file likely is fine. Try pushing the latest payload (Connection → Send payload); the new ShellUI-RPC install path bypasses the most common 0x80B2 reject class.";
   }
 
   // ─── BGFT init failure (0xE0000001 = BGFT_ERR_LIB_NOT_LOADABLE) ──

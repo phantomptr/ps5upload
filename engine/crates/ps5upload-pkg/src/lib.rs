@@ -157,11 +157,28 @@ pub fn parse_pkg(path: &Path) -> Result<PkgMetadata, PkgError> {
         // (FakePKG variants, .fpkg dumps, etc.) that Sony's
         // installer won't know how to parse. Tell the user that
         // honestly and let them proceed if they want to try.
+        // 0x7F464948 = `\x7FFIH` is what newer PS5-native fakepkg
+        // signing tools emit (observed on EP/PS5_/DLPSGAME-prefixed
+        // pkgs). Sony's installer accepts both formats — only OUR
+        // parser doesn't fully understand `\x7FFIH` yet, so the
+        // header fields below stay empty (content_id, title, etc.).
+        // Pre-2.2.52 the warning copy implied "your pkg is probably
+        // broken / renamed" which scared users away from working
+        // files; reframe as "we couldn't extract metadata" so they
+        // know the install will still proceed and Sony's installer
+        // is the source of truth on whether the bytes are valid.
+        let magic_label = match magic {
+            0x7F464948 => " (`\\x7FFIH` — used by recent PS5-native fakepkg signing tools)",
+            _ => "",
+        };
         meta.warnings.push(format!(
-            "Unrecognized PKG header magic 0x{magic:08X} (canonical retail PKG is 0x7F434E54 = \\x7FCNT). \
-             Most fake-signed PKGs keep the canonical magic, so this is more likely a renamed non-PKG \
-             file or a tool-specific format Sony's installer won't recognize. The install will proceed \
-             if you confirm — Sony's own installer is the source of truth for whether the bytes are valid."
+            "Couldn't extract pkg metadata: header magic is 0x{magic:08X}{magic_label}, \
+             not the canonical PS4 fakepkg magic 0x7F434E54 (`\\x7FCNT`) that our parser knows. \
+             Content ID, title, and category will be empty in the queue row. The install will \
+             still proceed when you click Start — Sony's own installer is the source of truth \
+             for whether the bytes are valid. If you've installed this pkg before via the PS5's \
+             Settings → Debug Settings → Install Package menu, our path should also work \
+             (2.2.52+ routes the install through ShellUI's process)."
         ));
         // Don't try to parse the rest — layout is unknown.
         return Ok(meta);

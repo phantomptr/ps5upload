@@ -74,6 +74,13 @@ export type TransferPhase =
       skippedFiles: number;
       skippedBytes: number;
       mountedAt?: string;
+      /** Non-fatal mount diagnostics surfaced when `mountAfterUpload`
+       *  ran — image-layout invalid, kernel forced RO, etc. Kept on
+       *  the done-phase so the Upload screen can display the same
+       *  warnings the Library tab shows for a manual mount. Empty /
+       *  absent on non-mount completions or on pre-2.2.52 payloads
+       *  that didn't emit the diagnostic fields. */
+      mountWarnings?: string[];
     }
   | { kind: "failed"; error: string };
 
@@ -270,6 +277,7 @@ export const useTransferStore = create<TransferState>((set) => {
         if (!isLive()) return;
         if (snap.status === "done") {
           let mountedAt: string | undefined;
+          const mountWarnings: string[] = [];
           const finalDest = snap.dest ?? dest;
           // Re-check liveness before initiating the mount. Same race
           // fix as uploadQueue.ts: Stop / reset between done-snapshot
@@ -294,6 +302,28 @@ export const useTransferStore = create<TransferState>((set) => {
                 readOnly: mountReadOnly,
               });
               mountedAt = mounted.mount_point;
+              // Surface non-fatal mount diagnostics — same warnings
+              // the Library row's manual Mount button shows. Pre-2.2.52
+              // this single-shot upload path swallowed them silently
+              // when `mountAfterUpload` was on.
+              if (mounted.layout_valid === false) {
+                mountWarnings.push(
+                  "Image is missing sce_sys/param.json at root — Register/Launch will fail. Re-build the image with files at root (no extra folder).",
+                );
+              }
+              if (mounted.kernel_ro && !mountReadOnly) {
+                mountWarnings.push(
+                  "Kernel mounted this read-only despite the RW pick — common for UFS .ffpkg images on some firmwares. Reads work; writes through the mount will fail.",
+                );
+              }
+              // Stop / reset can land between fsMount completing and
+              // the set({phase:"done"}) below. Without this re-check
+              // the mount is real on the PS5 but the UI flips to idle/
+              // failed via the stop handler — divergent state. Returning
+              // here keeps the user's "Stop = stop" mental model honest;
+              // the live mount stays on the PS5 and surfaces in the
+              // Library on next refresh.
+              if (!isLive()) return;
             } catch (e) {
               if (!isLive()) return;
               set({
@@ -327,6 +357,8 @@ export const useTransferStore = create<TransferState>((set) => {
               skippedFiles: snap.skipped_files ?? 0,
               skippedBytes: snap.skipped_bytes ?? 0,
               mountedAt,
+              mountWarnings:
+                mountWarnings.length > 0 ? mountWarnings : undefined,
             },
           });
         } else if (snap.status === "failed") {

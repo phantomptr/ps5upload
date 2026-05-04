@@ -99,6 +99,13 @@ export interface QueueItem {
    *  the image upload + mount succeeded. Surfaced to the row so users
    *  see where the image landed without flipping to the Volumes tab. */
   mountedAt: string | null;
+  /** Non-fatal warnings the post-upload mount surfaced — layout
+   *  invalid (no sce_sys/param.json at root), kernel forced RO, etc.
+   *  Pre-2.2.52 these warnings only appeared when the user mounted
+   *  via the Library tab; the upload-then-mount path silently
+   *  swallowed them so users with `mountAfterUpload` got no feedback
+   *  about an image that mounted successfully but won't register. */
+  mountWarnings: string[];
   error: string | null;
   addedAt: number;
   startedAt: number | null;
@@ -201,6 +208,7 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
     bytesSent: number;
     bytesPerSec: number;
     mountedAt: string | null;
+    mountWarnings: string[];
   }> => {
     const isFolder =
       item.sourceKind === "folder" || item.sourceKind === "game-folder";
@@ -251,6 +259,7 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
       }
       if (snap.status === "done") {
         let mountedAt: string | null = null;
+        const mountWarnings: string[] = [];
         // Re-check liveness before initiating the mount. Without this,
         // a Stop click between the engine's done-snapshot arrival and
         // the fsMount call would let the mount happen on the PS5
@@ -277,6 +286,21 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
               { mountPoint, readOnly: item.mountReadOnly },
             );
             mountedAt = mounted.mount_point;
+            // Surface non-fatal mount diagnostics — same warnings the
+            // Library row's Mount button shows. Pre-2.2.52 this path
+            // dropped them silently, so an upload-then-mount user with
+            // a misshapen .ffpkg got "all green" feedback for an image
+            // that wouldn't register or wouldn't accept writes.
+            if (mounted.layout_valid === false) {
+              mountWarnings.push(
+                "Image is missing sce_sys/param.json at root — Register/Launch will fail. Re-build the image with files at root (no extra folder).",
+              );
+            }
+            if (mounted.kernel_ro && !item.mountReadOnly) {
+              mountWarnings.push(
+                "Kernel mounted this read-only despite the RW pick — common for UFS .ffpkg images on some firmwares. Reads work; writes through the mount will fail.",
+              );
+            }
           } catch (e) {
             const wrapped = new Error(
               `upload completed, but mount failed: ${
@@ -299,6 +323,7 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
           bytesSent: finalBytes,
           bytesPerSec: averageRate(finalBytes, elapsedMs),
           mountedAt,
+          mountWarnings,
         };
       }
       if (snap.status === "failed") {
@@ -350,6 +375,11 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
           // UI doesn't show NaN MiB/s on the first render after
           // upgrade.
           if (typeof next.bytesPerSec !== "number") next.bytesPerSec = 0;
+          // Back-fill the mountWarnings field added in 2.2.52 — older
+          // persisted docs don't carry it. Default to empty so the UI
+          // can blindly read .mountWarnings.length without optional-
+          // chaining at every site.
+          if (!Array.isArray(next.mountWarnings)) next.mountWarnings = [];
           return next;
         });
         set({
@@ -384,6 +414,7 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
         totalBytes: 0,
         bytesPerSec: 0,
         mountedAt: null,
+        mountWarnings: [],
         error: null,
         addedAt: Date.now(),
         startedAt: null,
@@ -452,21 +483,30 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
           scheduleSave();
 
           try {
-            const { bytesSent, bytesPerSec, mountedAt } = await runOne(
-              next,
-              isLive,
-            );
-            if (!isLive()) return;
+            const { bytesSent, bytesPerSec, mountedAt, mountWarnings } =
+              await runOne(next, isLive);
+            // Always flip to "done" once runOne returns success — the
+            // upload + (optional) mount are committed PS5-side, and
+            // resetting the row to "pending" via resetRunningToPending
+            // would silently lie: the next Start would re-upload + try
+            // to re-mount, hitting EBUSY at mount time and wasting the
+            // bytes already on the console. Pre-2.2.52 a Stop landing
+            // between runOne's success and this `set` produced exactly
+            // that phantom-pending state. Honesty > liveness here:
+            // record the committed work and let the user re-process
+            // the queue if they want to skip the row.
             set((s) => ({
               items: patchItem(s.items, next.id, {
                 status: "done",
                 bytesSent,
                 bytesPerSec,
                 mountedAt,
+                mountWarnings,
                 completedAt: Date.now(),
               }),
             }));
             scheduleSave();
+            if (!isLive()) return;
           } catch (e) {
             if (!isLive()) return;
             const message = e instanceof Error ? e.message : String(e);

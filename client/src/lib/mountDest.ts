@@ -37,28 +37,6 @@ export const MOUNT_PRESETS: { label: string; subpath: string; hint: string }[] =
   { label: "ps5upload", subpath: "ps5upload", hint: "Tool-specific generic folder (legacy)" },
 ];
 
-/** Volume roots where mounting is honored by 2.2.25+ payloads. The
- *  payload's `is_path_allowed` is the source of truth; this list
- *  mirrors the *real-disk* roots for the picker dropdown when the
- *  live `fetchVolumes` probe hasn't returned yet.
- *
- *  Deliberately excludes `/mnt/ps5upload` even though
- *  `is_path_allowed` accepts paths *under* it (`/mnt/ps5upload/foo`
- *  → ok). The payload rejects the namespace root itself with
- *  `fs_mount_bad_mount_point`, so showing it in the dropdown would
- *  surface a destination guaranteed to fail when the user clicks
- *  Mount. The default `ps5upload` subpath under any real volume
- *  (`/mnt/ext1/ps5upload/<name>`) gives the same effect without the
- *  rejection. */
-/** Cold-start fallback volume list used only when the live probe
- *  has returned nothing yet. Kept short on purpose — earlier 2.2.38
- *  expanded this to also include /mnt/ext1 and /mnt/usb1..3, but
- *  that surfaced ghost volumes (USB slots not actually attached)
- *  in the picker, confusing users who picked a slot that didn't
- *  have hardware behind it. The right answer is to trust the live
- *  probe; only fall back here when we have nothing else to show. */
-const FALLBACK_VOLUMES = ["/data", "/mnt/ext0", "/mnt/usb0"];
-
 export interface MountDest {
   volume: string;
   subpath: string;
@@ -139,13 +117,6 @@ export function payloadSupportsMountPoint(payloadVersion: string | null): boolea
   if (!payloadVersion) return false;
   const cmp = compareVersions(payloadVersion, "2.2.25");
   return cmp !== null && cmp >= 0;
-}
-
-/** Volumes the picker shows when the live `fetchVolumes` probe
- *  hasn't returned yet (cold start, payload momentarily unreachable).
- *  Caller should prefer the live list when available. */
-export function fallbackMountVolumes(): string[] {
-  return [...FALLBACK_VOLUMES];
 }
 
 /** Compose a `{volume, subpath, name}` triple into the resolved mount

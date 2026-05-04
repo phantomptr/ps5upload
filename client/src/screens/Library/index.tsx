@@ -72,7 +72,6 @@ import {
 import {
   MOUNT_DEFAULT_SUBPATH,
   MOUNT_PRESETS,
-  fallbackMountVolumes,
   loadMountDest,
   payloadSupportsMountPoint,
   resolveMountPath,
@@ -961,10 +960,33 @@ function LibraryRow({
         opts.mountPoint && res.mount_point !== opts.mountPoint
           ? ` ⚠ Note: payload landed the mount at ${res.mount_point} instead of the path you picked (${opts.mountPoint}). This usually means the running payload predates 2.2.25 and silently ignored the mount-point. Push the bundled payload from Connection → Refresh to update.`
           : "";
+      // Kernel-RO surprise. The user picked RW but the mount came
+      // back read-only — Sony's UFS_DOWNLOAD_DATA image_type does
+      // this on some firmwares regardless of the LVD-RW flag we
+      // pass. Surfacing the kernel state lets the user understand
+      // why writes (e.g. registering as a game folder) won't land.
+      // Suppressed when the user explicitly asked for RO. Field is
+      // optional so older payloads without the diagnostic don't
+      // false-warn.
+      const kernelRoNote =
+        res.kernel_ro && !res.read_only
+          ? ` ⚠ Kernel mounted this read-only despite the RW pick — common for UFS .ffpkg images on some firmwares. Reads (and the Library scan) work; writes through the mount will fail.`
+          : "";
+      // Geometry diagnostics. Show the f_bsize / f_iosize so a user
+      // reporting "mount succeeded but games are invisible" can
+      // share concrete numbers without ssh — sector-size mismatches
+      // between the .ffpkg image and the LVD device are the leading
+      // suspect for empty-mount symptoms. Only shown when the
+      // payload provides them (2.2.52+); pre-2.2.52 mounts simply
+      // omit the diagnostic line.
+      const geomNote =
+        res.f_bsize && res.f_bsize > 0
+          ? ` (f_bsize=${res.f_bsize}${res.f_iosize && res.f_iosize !== res.f_bsize ? `, f_iosize=${res.f_iosize}` : ""})`
+          : "";
       setMountNote(
         res.reused
-          ? `Already mounted at ${res.mount_point}${roSuffix} — reused the existing mount.${layoutWarning}${mismatch}`
-          : `Mounted at ${res.mount_point}${roSuffix}. Games inside the image will appear in the Library shortly.${layoutWarning}${mismatch}`,
+          ? `Already mounted at ${res.mount_point}${roSuffix}${geomNote} — reused the existing mount.${layoutWarning}${mismatch}${kernelRoNote}`
+          : `Mounted at ${res.mount_point}${roSuffix}${geomNote}. Games inside the image will appear in the Library shortly.${layoutWarning}${mismatch}${kernelRoNote}`,
       );
       // Delay the rescan + retry once. The freshly-mounted volume
       // can take 1-2 seconds to surface in getmntinfo on some
@@ -1425,23 +1447,38 @@ function LibraryRow({
    *  mounted. Runs the same fsUnmount the Volumes screen uses.
    *  onChanged refreshes the volumes list which feeds the mountMap. */
   const runUnmount = async () => {
-    if (!isMounted || !currentMount) return;
+    // 2.2.55: works for both image rows AND game rows whose backing
+    // image is mounted. For image rows: mount_point comes from
+    // currentMount (mountMap.get(entry.path)). For game rows:
+    // mount_point comes from the backing image's mountMap entry,
+    // looked up via fromImagePath. Either way, fsUnmount needs the
+    // mount_point (not the image path or game path).
+    let mountPointToUnmount: string | null = currentMount;
+    let imageKey: string | null = entry.path;
+    if (entry.kind === "game" && fromImagePath) {
+      mountPointToUnmount =
+        mountMap.get(fromImagePath) ??
+        pendingMounts.get(fromImagePath) ??
+        null;
+      imageKey = fromImagePath;
+    }
+    if (!mountPointToUnmount) return;
     setBusy("unmount");
     setError(null);
     setMountNote(null);
     const activityId = useActivityHistoryStore
       .getState()
       .start("library-unmount", `Unmounting ${entry.name}`, {
-        fromPath: currentMount,
+        fromPath: mountPointToUnmount,
       });
     let okOutcome = true;
     let errMsg: string | null = null;
     try {
-      await fsUnmount(`${host}:${PS5_PAYLOAD_PORT}`, currentMount);
+      await fsUnmount(`${host}:${PS5_PAYLOAD_PORT}`, mountPointToUnmount);
       // Optimistic mountMap remove so the row flips to NOT-mounted
       // immediately; the background rescan will confirm.
-      useLibraryStore.getState().removeMount(entry.path);
-      setMountNote(`Unmounted ${currentMount}.`);
+      useLibraryStore.getState().removeMount(imageKey);
+      setMountNote(`Unmounted ${mountPointToUnmount}.`);
       // Delay the rescan slightly so the unmount fully propagates
       // through the kernel mount table before scanLibrary reads it
       // — without the delay, the just-unmounted volume sometimes
@@ -1473,7 +1510,7 @@ function LibraryRow({
   // unhelpful "Invalid title ID format" error from the payload.
   const runLaunch = async () => {
     if (entry.kind !== "game" || !entry.titleId) return;
-    setBusy("launch");
+    setBusy("register");
     setError(null);
     setMountNote(null);
     const activityId = useActivityHistoryStore
@@ -1485,34 +1522,52 @@ function LibraryRow({
     let errMsg: string | null = null;
     try {
       const addr = `${host}:${PS5_PAYLOAD_PORT}`;
-      try {
-        await appLaunch(addr, entry.titleId);
-      } catch (firstErr) {
-        // Auto-register-then-launch. Common case: the title was
-        // uploaded but never registered, so app.db doesn't know
-        // about it and sceLncUtilLaunchApp returns "not registered".
-        // The error string the payload surfaces uses Sony's hex
-        // codes (0x80980101 / 0x80980103) and/or the wrapper text
-        // "not registered" / "invalid title id" — match generously
-        // so a small drift in payload error wording doesn't break
-        // this flow. On match: register the source path, settle
-        // briefly so app.db propagates, retry launch.
-        const msg = firstErr instanceof Error ? firstErr.message : String(firstErr);
-        const looksUnregistered =
-          /not\s*registered|0x80980101|0x80980103|invalid\s*title\s*id|app\.db/i.test(
-            msg,
-          );
-        if (!looksUnregistered) throw firstErr;
 
-        setMountNote(
-          `${entry.name} isn't registered yet — registering it now, then launching…`,
-        );
+      // 2.2.55: ALWAYS register first, then launch. Pre-fix the
+      // flow tried launch first and registered as a fallback only
+      // when launch reported "not registered" — but on first-Play
+      // for a freshly-mounted image the launch attempt would emit
+      // a misleading error before the registration kicked in. User
+      // feedback: always register first (idempotent if already
+      // registered), and try patch-DRM register if normal fails.
+      // Then launch.
+      setMountNote(`Registering ${entry.name}…`);
+      try {
         await appRegister(addr, entry.path);
-        // Settle delay so the registration commit hits app.db
-        // before the launch query reads it.
-        await new Promise((resolve) => setTimeout(resolve, 600));
-        await appLaunch(addr, entry.titleId);
+      } catch (regErr) {
+        // Try patch-DRM fallback. Some PKG-extracted dirs have a
+        // DRM type Sony's installer rejects without the patch
+        // (param.sfo's CONTENT_TYPE != GD); the patch fixes that
+        // up before the register call is dispatched. Surface the
+        // FIRST error if patch-DRM also fails so the user has the
+        // root cause, not the secondary symptom.
+        const regMsg = regErr instanceof Error ? regErr.message : String(regErr);
+        // Idempotent re-register returns 0x80990002 ("already
+        // registered") which the payload normalises to success;
+        // if we somehow see it here, treat as success.
+        if (/0x80990002|already\s*registered/i.test(regMsg)) {
+          // proceed to launch
+        } else {
+          setMountNote(
+            `${entry.name} register failed — retrying with DRM-type patch…`,
+          );
+          try {
+            await appRegister(addr, entry.path, { patchDrmType: true });
+          } catch (patchErr) {
+            const patchMsg =
+              patchErr instanceof Error ? patchErr.message : String(patchErr);
+            if (!/0x80990002|already\s*registered/i.test(patchMsg)) {
+              throw regErr;
+            }
+          }
+        }
       }
+      // Settle delay so the registration commit hits app.db
+      // before the launch query reads it.
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      setBusy("launch");
+      setMountNote(`Launching ${entry.titleId}…`);
+      await appLaunch(addr, entry.titleId);
       setMountNote(
         `Launching ${entry.titleId}. Check the PS5 — the title should appear in the foreground in a few seconds.`,
       );
@@ -1776,6 +1831,31 @@ function LibraryRow({
               >
                 {tr("library_details", undefined, "Details")}
               </Button>
+              {/* 2.2.55: Surface unmount on game rows whose backing
+                * image is currently mounted. Pre-fix the unmount
+                * affordance was only on the image row — once a game
+                * is registered, the user opens that game row and
+                * had no way back to unmount without switching to the
+                * Volumes screen. fromImagePath is non-null exactly
+                * when this game lives inside a mounted image; clicking
+                * Unmount calls fs_unmount on the image's mount point. */}
+              {fromImagePath && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  leftIcon={<Unplug size={12} />}
+                  onClick={runUnmount}
+                  disabled={busy !== null}
+                  loading={busy === "unmount"}
+                  title={tr(
+                    "library_unmount_game_tooltip",
+                    undefined,
+                    "Unmount the disk image this game lives in. Sony will refuse if the title is currently running on the PS5.",
+                  )}
+                >
+                  {tr("library_unmount", undefined, "Unmount")}
+                </Button>
+              )}
             </>
           )}
           {/* eslint-disable react-hooks/refs --
@@ -2537,17 +2617,18 @@ function MoveModal({
   );
 }
 
-/** Mount-target picker for `.ffpkg` / `.exfat` images. Mirrors the
- *  Upload screen's DestinationCard and the MoveModal above: volume
- *  dropdown + subpath input + preset chips + leaf-name input + a
- *  resolved-path preview. The resolved path is what the payload's
- *  FS_MOUNT will receive as `mount_point`.
+/** Mount-target picker for `.ffpkg` / `.exfat` images. Volume defaults
+ *  to the image's host volume (kernel-friendly — cross-volume nmount
+ *  hits EPERM on some firmwares; see 2.2.42 humanizer note) but can be
+ *  overridden — users legitimately want to mount a USB-stored image
+ *  under `/data/homebrew/` for launcher discovery, or vice versa.
+ *  Cross-volume picks surface a soft warning so the EPERM trade-off
+ *  is visible without blocking the workflow.
  *
  *  Pre-2.2.25 payloads ignore `mount_point` and only honor
  *  `mount_name`. Detected via `payloadSupportsMountPoint`; when
  *  false the volume + subpath rows are hidden and the modal collapses
- *  to a name-only form (the legacy 2.2.24 behavior). The user gets
- *  a small banner explaining why and how to enable the picker. */
+ *  to a name-only form (the legacy 2.2.24 behavior). */
 function MountModal({
   entry,
   host,
@@ -2558,11 +2639,13 @@ function MountModal({
 }: {
   entry: LibraryEntry;
   host: string;
-  /** Live writable-volumes list from `fetchVolumes`. Falls back to a
-   *  hardcoded list when empty (cold start or probe in flight). */
+  /** Live writable-volumes list from `fetchVolumes`. Drives the volume
+   *  dropdown options — we trust the live probe over a hardcoded
+   *  fallback so a ghost USB slot doesn't appear in the picker. */
   volumes: Volume[];
   /** Reported by STATUS_ACK. Drives the
-   *  `payloadSupportsMountPoint` check that gates the volume picker. */
+   *  `payloadSupportsMountPoint` check that gates the volume + subpath
+   *  picker. */
   payloadVersion: string | null;
   onCancel: () => void;
   /** Caller decides which payload knob to set. We pass `mountPoint`
@@ -2581,25 +2664,45 @@ function MountModal({
   const tr = useTr();
 
   const supportsMountPoint = payloadSupportsMountPoint(payloadVersion);
-  const liveVolumePaths = useMemo(() => volumes.map((v) => v.path), [volumes]);
+
+  // Volume picker options. Two sources merged:
+  //   1. Live writable, non-placeholder mounts from the FS_LIST_VOLUMES
+  //      probe. Hot-plug aware: a USB or M.2 slot only appears when
+  //      the kernel has the drive attached.
+  //   2. A small set of always-allowed bases the payload's
+  //      `is_path_allowed` accepts even when the live probe hasn't
+  //      returned yet:
+  //        - `/data` — internal SSD; the live probe normally surfaces
+  //          this, but during cold-start the modal would otherwise
+  //          show an empty dropdown and block the user.
+  //        - `/mnt/ps5upload` — payload's tool-private mount namespace.
+  //          The kernel doesn't expose this as a "volume" until at
+  //          least one mount exists there, so without the static
+  //          inclusion the legacy mount path becomes inaccessible
+  //          via the picker.
+  //   `/user` (a nullfs view of `/data`) is intentionally omitted —
+  //   mounting on /user/foo and /data/foo land on the same bytes,
+  //   and exposing both in the picker confuses more than it helps.
+  //   Per-volume listings sorted alphabetically; ghost USB slots
+  //   ("/mnt/usb1" with no hardware) stay out because they only
+  //   appear when the live probe reports them.
   const dropdownPaths = useMemo(() => {
-    // Trust the live probe when it has anything to say — those are
-    // the volumes the PS5 actually has writable mounts for right
-    // now. Only fall back to the hardcoded list during cold start
-    // (probe hasn't returned yet). Pre-2.2.40 we *unioned* live +
-    // fallback to be defensive about a probe that might miss USB,
-    // but the union surfaced ghost slots (e.g. /mnt/usb1 with no
-    // hardware behind it), and a user picking a ghost slot results
-    // in a mount that lands somewhere unexpected. Live-only is the
-    // honest UX. */
-    if (liveVolumePaths.length > 0) return [...liveVolumePaths].sort();
-    return fallbackMountVolumes();
-  }, [liveVolumePaths]);
+    const live = volumes
+      .filter((v) => v.writable && !v.is_placeholder)
+      .map((v) => v.path);
+    const merged = new Set([...live, "/data", "/mnt/ps5upload"]);
+    return [...merged].sort();
+  }, [volumes]);
   const freeBytesByPath = useMemo(() => {
     const m = new Map<string, number>();
     for (const v of volumes) m.set(v.path, v.free_bytes);
     return m;
   }, [volumes]);
+
+  // Image's host volume — the kernel-friendly default. Cross-volume
+  // picks surface a soft warning but aren't blocked.
+  const imageVolume =
+    entry.kind === "image" && entry.volume ? entry.volume : null;
 
   // Auto-derive a leaf name from the image basename. Strip the
   // extension so a `dead-space.exfat` image lands at
@@ -2609,20 +2712,12 @@ function MountModal({
     return base.replace(/\.(exfat|ffpkg|ffpfs)$/i, "");
   }, [entry.name]);
 
-  // Initial volume + subpath. Pre-2.2.46 we preferred the user's
-  // last-used `loadMountDest` for *every* image, which produced a
-  // bad surprise: a user mounting `/data/homebrew/foo.exfat` whose
-  // last save was `/mnt/usb0` would default to /mnt/usb0 — and on
-  // many firmwares the kernel rejects the cross-volume nmount with
-  // EPERM (see 2.2.42 humanizer note). The intuitive default is to
-  // mount **into the same volume the image lives on**, which is
-  // also the kernel-friendliest path. The persisted dest still
-  // wins when its volume matches the image's volume — the user's
-  // chosen subpath is preserved across mounts of images that live
-  // on the same drive.
+  // Initial volume + subpath. Saved dest (per-host) wins ONLY when its
+  // volume matches the image's host volume — otherwise the saved value
+  // could surprise the user with a cross-volume default that hits EPERM
+  // (see 2.2.46 fix). For mismatches: default to image's volume +
+  // saved subpath (preserves the user's chosen folder convention).
   const initialDest = useMemo(() => {
-    const imageVolume =
-      entry.kind === "image" && entry.volume ? entry.volume : null;
     const saved = loadMountDest(host);
     if (saved && (!imageVolume || saved.volume === imageVolume)) {
       return saved;
@@ -2633,11 +2728,9 @@ function MountModal({
     };
     // dropdownPaths is computed once on first render and we don't
     // need to recompute when it changes — the user's saved dest +
-    // image-volume is the source of truth. Linting `volumes` /
-    // `dropdownPaths` here would force a re-init each volume probe,
-    // which would clobber a mid-edit subpath input.
+    // image-volume is the source of truth.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [host, entry.kind, entry.volume]);
+  }, [host, imageVolume]);
   const [volume, setVolume] = useState<string>(initialDest.volume);
   const [subpath, setSubpath] = useState<string>(initialDest.subpath);
   const [name, setName] = useState<string>(derivedName);
@@ -2672,28 +2765,6 @@ function MountModal({
     return () => window.removeEventListener("keydown", onKey);
   }, [onCancel]);
 
-  // Keep `volume` in sync with `dropdownPaths`. Two cases this
-  // covers — both produce a controlled-`<select>` value with no
-  // matching option, which React warns about and renders as a
-  // blank dropdown:
-  //
-  //   - User's saved dest references a volume that isn't in the
-  //     current dropdown (e.g., last session was on PS5 with
-  //     /mnt/ext1 attached; today the drive is unplugged so
-  //     dropdownPaths is just /data + the FALLBACK_VOLUMES).
-  //   - The drive is yanked WHILE the modal is open. liveVolumePaths
-  //     re-derives without that volume; the saved `volume` state
-  //     suddenly points at a non-option.
-  //
-  // Snap to the first available volume so the dropdown always
-  // reflects what's actually selectable.
-  useEffect(() => {
-    if (dropdownPaths.length === 0) return;
-    if (!dropdownPaths.includes(volume)) {
-      setVolume(dropdownPaths[0]);
-    }
-  }, [dropdownPaths, volume]);
-
   // Resolved final mount path. The picker is hidden on pre-2.2.25
   // payloads, so falling back to a "/mnt/ps5upload/<name>" preview
   // matches what the payload would actually do.
@@ -2711,19 +2782,35 @@ function MountModal({
     name === "." ||
     name === "..";
 
-  const formatFree = (bytes: number) => {
-    const gib = bytes / 1024 ** 3;
-    if (gib >= 1024) return `${(gib / 1024).toFixed(1)} TB free`;
-    if (gib >= 10) return `${gib.toFixed(0)} GB free`;
-    return `${gib.toFixed(1)} GB free`;
-  };
-
   // Soft warning: mounting outside /mnt/ps5upload/ is allowed but
   // some third-party PS5 game scanners only look at /mnt/ps5upload/.
   // Show the note when the user picks a non-default location so they
   // know what they're trading off.
   const isLegacyRoot =
     !supportsMountPoint || resolvedPath.startsWith("/mnt/ps5upload/");
+
+  // Cross-volume warning: image lives on volume A, user picked volume B.
+  // Some firmwares EPERM the nmount; we don't block (other firmwares
+  // accept it fine, and there are legitimate workflows like "image on
+  // USB, mount under /data/homebrew/ for launcher discovery"). Just
+  // surface the trade-off so an EPERM failure later makes sense.
+  //
+  // Exemption: `/mnt/ps5upload/*` is the payload's tool-private mount
+  // namespace, not a separate physical drive — it's the historical
+  // default mount root and works regardless of which volume the image
+  // lives on. Warning there would be noise.
+  const crossVolume =
+    supportsMountPoint &&
+    imageVolume !== null &&
+    volume !== imageVolume &&
+    volume !== "/mnt/ps5upload";
+
+  const formatFree = (bytes: number) => {
+    const gib = bytes / 1024 ** 3;
+    if (gib >= 1024) return `${(gib / 1024).toFixed(1)} TB free`;
+    if (gib >= 10) return `${gib.toFixed(0)} GB free`;
+    return `${gib.toFixed(1)} GB free`;
+  };
 
   return (
     <div
@@ -2773,7 +2860,10 @@ function MountModal({
                 onChange={(e) => setVolume(e.target.value)}
                 className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-sm"
               >
-                {dropdownPaths.map((p) => {
+                {(dropdownPaths.includes(volume)
+                  ? dropdownPaths
+                  : [volume, ...dropdownPaths]
+                ).map((p) => {
                   const free = freeBytesByPath.get(p);
                   return (
                     <option key={p} value={p}>
@@ -2789,7 +2879,7 @@ function MountModal({
                 placeholder={tr(
                   "library_mount_modal_subpath_placeholder",
                   undefined,
-                  "subpath (e.g. ps5upload)",
+                  "subpath (e.g. homebrew)",
                 )}
                 className="flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-sm"
               />
@@ -2898,6 +2988,16 @@ function MountModal({
               "library_mount_modal_outside_default",
               undefined,
               "Heads-up: third-party PS5 game scanners typically scan /mnt/ps5upload/ for installed games. Mounting outside that root works for the payload, but those scanners may not see this title.",
+            )}
+          </div>
+        )}
+
+        {crossVolume && !nameInvalid && imageVolume && (
+          <div className="mb-3 rounded-md border border-[var(--color-warn)] bg-[var(--color-surface)] p-2 text-[11px] text-[var(--color-warn)]">
+            {tr(
+              "library_mount_modal_cross_volume",
+              { imageVolume, volume },
+              `Heads-up: image lives on ${imageVolume} but you picked ${volume}. Some PS5 firmwares refuse cross-volume nmount with EPERM (the kernel won't mount a file from one drive into a path on another). If the mount fails, retry with ${imageVolume} as the volume.`,
             )}
           </div>
         )}

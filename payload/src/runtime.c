@@ -345,6 +345,9 @@ static uint32_t read_le32(const unsigned char *p);
 /* Component-scoped `..`/`.` rejection used by both is_path_allowed and
  * cleanup_path_allowed. Defined further down near is_path_allowed. */
 static int path_has_dotdot_component(const char *p);
+/* JSON-escape helper. Used by ACK builders that embed user-controlled
+ * paths/strings into JSON bodies. Defined alongside FS_LIST_VOLUMES. */
+static void json_escape_into(const char *src, char *dst, size_t dst_cap);
 /* Forward declarations — runtime_reconcile_mounts uses fs_mount and
  * mount_tracker helpers defined further down in the file. */
 static int fs_mount_try_unmount(const char *mount_point);
@@ -1031,7 +1034,47 @@ int runtime_ensure_directories(void) {
     if (ensure_dir(PS5UPLOAD2_SPOOL_DIR)    != 0) return -1;
     if (ensure_dir(PS5UPLOAD2_DEBUG_DIR)    != 0) return -1;
     if (ensure_dir(PS5UPLOAD2_MOUNTS_DIR)   != 0) return -1;
+    /* /user/data/ps5upload may not exist (parent of pkg_temp). Make
+     * sure the parent is created first. /user/data itself is Sony-
+     * managed and always present. */
+    if (ensure_dir(PS5UPLOAD2_USER_DATA_ROOT) != 0) return -1;
+    if (ensure_dir(PS5UPLOAD2_PKG_TEMP_DIR) != 0) return -1;
     return 0;
+}
+
+/* Sweep stale Tier-1 staging files. Called once on payload init,
+ * after runtime_ensure_directories. Removes any *.pkg in
+ * PS5UPLOAD2_PKG_TEMP_DIR whose mtime is older than 24h — these are
+ * orphans from a desktop-side crash mid-install that the engine
+ * couldn't clean up. The 24h cutoff avoids racing a legitimate
+ * in-flight install from another desktop session.
+ *
+ * Best-effort: failures (opendir/stat/unlink) are logged-and-skipped.
+ * The desktop's normal post-install delete handles the steady-state
+ * cleanup; this sweep is purely the crash-recovery safety net. */
+void runtime_sweep_stale_pkg_temp(void) {
+    DIR *d = opendir(PS5UPLOAD2_PKG_TEMP_DIR);
+    if (!d) return;
+    time_t cutoff = time(NULL) - (24 * 60 * 60);
+    struct dirent *ent;
+    int swept = 0;
+    while ((ent = readdir(d)) != NULL) {
+        if (ent->d_name[0] == '.') continue;
+        char path[512];
+        snprintf(path, sizeof(path), "%s/%s",
+                 PS5UPLOAD2_PKG_TEMP_DIR, ent->d_name);
+        struct stat st;
+        if (stat(path, &st) != 0) continue;
+        if (!S_ISREG(st.st_mode)) continue;
+        if (st.st_mtime > cutoff) continue;
+        if (unlink(path) == 0) swept += 1;
+    }
+    closedir(d);
+    if (swept > 0) {
+        fprintf(stderr,
+                "[payload2] swept %d stale staging file(s) from %s\n",
+                swept, PS5UPLOAD2_PKG_TEMP_DIR);
+    }
 }
 
 /* Startup reconciliation for `/mnt/ps5upload/` mounts.
@@ -1172,9 +1215,17 @@ static void mount_tracker_key(const char *mount_point, char *out, size_t out_cap
     /* Legacy: /mnt/ps5upload/<name> with non-empty leaf. Use the leaf
      * as the key so trackers written by 2.2.24 and earlier still
      * resolve. The leaf is constrained by handle_fs_mount to contain
-     * no slashes / dots, so it's safe to use verbatim. */
+     * no slashes / dots, so it's safe to use verbatim. Defensive
+     * extra check: if the "leaf" actually contains a slash (a path
+     * like /mnt/ps5upload/foo/bar can reach this code via a future
+     * caller that bypasses handle_fs_mount's name validation), fall
+     * through to the hex-escape branch so the tracker key stays
+     * collision-free instead of silently producing `foo/bar.src` —
+     * a path-traversal-shaped filename whose stat()/open() then
+     * fails on a non-existent intermediate directory. */
     if (strncmp(mount_point, FS_MOUNT_BASE "/", base_len + 1) == 0 &&
-        mount_point[base_len + 1] != '\0') {
+        mount_point[base_len + 1] != '\0' &&
+        strchr(mount_point + base_len + 1, '/') == NULL) {
         snprintf(out, out_cap, "%s", mount_point + base_len + 1);
         return;
     }
@@ -1267,20 +1318,28 @@ static int mount_tracker_exists(const char *mount_point) {
  * partial/empty tracker that mount_tracker_read would surface as a
  * truncated source path on next boot. The temp file lives next to
  * the destination so the rename is intra-directory (rename(2) is
- * atomic on the same filesystem). PID is appended to the temp name
- * so two parallel writes for the same mount_point can't clobber
- * each other's temp file mid-rename. */
+ * atomic on the same filesystem). PID + thread id are appended to
+ * the temp name so two parallel writes for the same mount_point —
+ * across processes OR across threads in the same process — can't
+ * clobber each other's temp file mid-rename. Pre-2.2.52 the suffix
+ * was PID-only, which silently raced for two threads of the same
+ * process (one writer's bytes truncated by the other's O_TRUNC). */
 static void mount_tracker_write(const char *mount_point, const char *src_path) {
     char key[256];
     char tracker[512];
-    char tracker_tmp[576];
+    char tracker_tmp[640];
     mount_tracker_key(mount_point, key, sizeof(key));
     if (key[0] == '\0') return;
     int n = snprintf(tracker, sizeof(tracker), "%s/%s.src",
                      PS5UPLOAD2_MOUNTS_DIR, key);
     if (n < 0 || (size_t)n >= sizeof(tracker)) return;
-    n = snprintf(tracker_tmp, sizeof(tracker_tmp), "%s.tmp.%d",
-                 tracker, (int)getpid());
+    /* pthread_self() return type is opaque; cast through uintptr_t for
+     * a stable per-thread integer suffix. The suffix only needs to
+     * disambiguate concurrent writers — collisions across distinct
+     * (process, thread) pairs are vanishingly unlikely on PS5. */
+    n = snprintf(tracker_tmp, sizeof(tracker_tmp), "%s.tmp.%d.%lx",
+                 tracker, (int)getpid(),
+                 (unsigned long)(uintptr_t)pthread_self());
     if (n < 0 || (size_t)n >= sizeof(tracker_tmp)) return;
     int fd = open(tracker_tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) return;
@@ -3960,11 +4019,15 @@ static int handle_cleanup(runtime_state_t *state, int client_fd,
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);
-    len = snprintf(resp, sizeof(resp),
-                   "{\"ok\":true,\"path\":\"%s\",\"removed_files\":%llu,\"removed_dirs\":%llu}",
-                   path,
-                   (unsigned long long)removed_files,
-                   (unsigned long long)removed_dirs);
+    {
+        char path_esc[1024];
+        json_escape_into(path, path_esc, sizeof(path_esc));
+        len = snprintf(resp, sizeof(resp),
+                       "{\"ok\":true,\"path\":\"%s\",\"removed_files\":%llu,\"removed_dirs\":%llu}",
+                       path_esc,
+                       (unsigned long long)removed_files,
+                       (unsigned long long)removed_dirs);
+    }
     if (len < 0) return -1;
     return send_frame(client_fd, FTX2_FRAME_CLEANUP_ACK, 0, trace_id,
                       resp, (uint64_t)len);
@@ -4322,8 +4385,12 @@ static int handle_fs_list_dir(runtime_state_t *state, int client_fd,
         return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id, err, (uint64_t)el);
     }
 
-    n = snprintf(resp + off, RESP_CAP - off,
-                 "{\"path\":\"%s\",\"entries\":[", path);
+    {
+        char path_esc[1024];
+        json_escape_into(path, path_esc, sizeof(path_esc));
+        n = snprintf(resp + off, RESP_CAP - off,
+                     "{\"path\":\"%s\",\"entries\":[", path_esc);
+    }
     if (n < 0 || (size_t)n >= RESP_CAP - off) {
         closedir(dir);
         free(resp);
@@ -4542,9 +4609,13 @@ static int handle_fs_hash(runtime_state_t *state, int client_fd,
     }
     hex[BLAKE3_OUT_LEN * 2] = '\0';
 
-    n = snprintf(resp, sizeof(resp),
-                 "{\"path\":\"%s\",\"size\":%llu,\"hash\":\"%s\"}",
-                 path, (unsigned long long)st.st_size, hex);
+    {
+        char path_esc[1024];
+        json_escape_into(path, path_esc, sizeof(path_esc));
+        n = snprintf(resp, sizeof(resp),
+                     "{\"path\":\"%s\",\"size\":%llu,\"hash\":\"%s\"}",
+                     path_esc, (unsigned long long)st.st_size, hex);
+    }
     if (n < 0 || (size_t)n >= sizeof(resp)) return -1;
 
     pthread_mutex_lock(&state->state_mtx);
@@ -5359,17 +5430,23 @@ static int handle_fs_op_status(int client_fd, uint64_t trace_id,
     char to_esc[1024];
     json_escape_into(snap.from, from_esc, sizeof(from_esc));
     json_escape_into(snap.to,   to_esc,   sizeof(to_esc));
+    /* `cancel_requested` MUST be emitted as a JSON boolean — the
+     * engine's `OpStatus.cancel_requested` is declared `bool` and
+     * serde rejects integer-for-bool, breaking the entire decode.
+     * Same root-cause class as the FS_MOUNT_ACK / PKG_INSTALL_ACK
+     * fixes already shipped this round. */
+    const char *cancel_str = snap.cancel_requested ? "true" : "false";
     len = snprintf(body, sizeof(body),
                    "{\"found\":true,\"op_id\":%llu,\"kind\":\"%s\","
                    "\"from\":\"%s\",\"to\":\"%s\","
                    "\"total_bytes\":%llu,\"bytes_copied\":%llu,"
-                   "\"cancel_requested\":%d}",
+                   "\"cancel_requested\":%s}",
                    (unsigned long long)snap.op_id,
                    snap.kind,
                    from_esc, to_esc,
                    (unsigned long long)snap.total_bytes,
                    (unsigned long long)snap.bytes_copied,
-                   snap.cancel_requested);
+                   cancel_str);
     if (len < 0) return -1;
     /* Truncation here would emit malformed JSON (snprintf returns the
      * would-have-been length, not the written length, when clipped).
@@ -6349,7 +6426,15 @@ static int handle_fs_mount(runtime_state_t *state, int client_fd,
     char fstype[16] = {0};
     char mount_point[256] = {0};
     char devname[32] = {0};
-    char resp[768];
+    /* ACK body holds JSON with up to-512-char escaped image_path, up to
+     * 256-char escaped mount_point, plus dev/fstype/source_image and the
+     * 2.2.52 diagnostic fields (f_bsize/f_iosize/kernel_ro). Worst-case
+     * with realistic inputs (300-char image_path + 200-char mount_point)
+     * was ~980 bytes, the prior resp[768] silently truncated and
+     * snprintf set n=0 → engine received a successful FS_MOUNT_ACK with
+     * an empty body, losing the resolved mount_point. 2 KiB has headroom
+     * for the worst-case escaped-path lengths. */
+    char resp[2048];
     char mount_errmsg[256] = {0};
     struct stat st;
     int unit_id = -1;
@@ -6424,12 +6509,39 @@ static int handle_fs_mount(runtime_state_t *state, int client_fd,
                          mnts[i].f_mntfromname);
                 break;
             }
+            /* Re-write the source tracker on reuse — idempotent. If the
+             * tracker file got deleted out-of-band (manual cleanup,
+             * orphan-reconciliation race, etc.) the next FS_UNMOUNT
+             * would refuse with `fs_unmount_not_our_mount` because
+             * `mount_tracker_exists` returns 0; the user would see a
+             * mount they can't tear down. Writing on every reuse
+             * heals that state without changing the legitimate-reuse
+             * path. */
+            mount_tracker_write(existing, image_path);
+            /* JSON-escape every user-controllable string. is_path_allowed
+             * accepts paths containing '"' or '\' (only `..` and a few
+             * shapes are rejected) so a path like /data/foo"bar would
+             * unescape into invalid JSON in the ACK. Pre-2.2.52 these
+             * sites embedded the raw chars and broke the engine's
+             * decoder for any path containing a quote or backslash. */
+            char ex_esc[768], exdev_esc[64], img_esc[1024], fs_esc[32];
+            json_escape_into(existing,     ex_esc,    sizeof(ex_esc));
+            json_escape_into(existing_dev, exdev_esc, sizeof(exdev_esc));
+            json_escape_into(image_path,   img_esc,   sizeof(img_esc));
+            json_escape_into(fstype,       fs_esc,    sizeof(fs_esc));
+            /* Emit bool fields as JSON booleans (true/false), not as
+             * integer 0/1. The engine's MountResult.read_only is
+             * declared as `bool` and serde rejects integer-for-bool
+             * with `invalid type: integer 1, expected a boolean` —
+             * which used to fail every fs_mount on first attempt with
+             * "decode FS_MOUNT_ACK body as JSON" (see engine.log).
+             * Same fix as round 1's PKG_INSTALL_ACK bool fix. */
+            const char *ro_str = read_only ? "true" : "false";
             n = snprintf(resp, sizeof(resp),
                          "{\"mount_point\":\"%s\",\"dev_node\":\"%s\","
                          "\"fstype\":\"%s\",\"source_image\":\"%s\","
-                         "\"read_only\":%d,\"reused\":true}",
-                         existing, existing_dev, fstype, image_path,
-                         read_only ? 1 : 0);
+                         "\"read_only\":%s,\"reused\":true}",
+                         ex_esc, exdev_esc, fs_esc, img_esc, ro_str);
             if (n < 0 || (size_t)n >= sizeof(resp)) n = 0;
             return send_frame(client_fd, FTX2_FRAME_FS_MOUNT_ACK, 0,
                               trace_id, resp, (uint64_t)n);
@@ -6663,6 +6775,27 @@ static int handle_fs_mount(runtime_state_t *state, int client_fd,
         }
     }
 
+    /* Mount-geometry diagnostics. Statfs the resolved mount point so
+     * we can surface the actual reported block size, I/O block size,
+     * and effective-RO flag back to the client. Lets a user reporting
+     * "mount succeeded but games are invisible" share the geometry
+     * without ssh — sector-size mismatches between the .ffpkg image
+     * and the LVD/MD device are the leading suspect for a UFS image
+     * that mounts but reads as empty. Best-effort: a failing statfs
+     * leaves the diagnostics fields zeroed and the rest of the ACK
+     * intact. */
+    uint64_t diag_bsize = 0;
+    uint64_t diag_iosize = 0;
+    int diag_kernel_ro = 0;
+    {
+        struct statfs sbuf;
+        if (statfs(mount_point, &sbuf) == 0) {
+            diag_bsize = (uint64_t)sbuf.f_bsize;
+            diag_iosize = (uint64_t)sbuf.f_iosize;
+            diag_kernel_ro = (sbuf.f_flags & MNT_RDONLY) ? 1 : 0;
+        }
+    }
+
     /* User-facing PS5 toast. The desktop client surfaces the same
      * info inline in the Library row, but firing a toast here gives
      * users still on the PS5 (e.g. running ps5upload-engine in
@@ -6684,12 +6817,38 @@ static int handle_fs_mount(runtime_state_t *state, int client_fd,
         pop_notification(toast);
     }
 
-    n = snprintf(resp, sizeof(resp),
-                 "{\"mount_point\":\"%s\",\"dev_node\":\"%s\",\"fstype\":\"%s\","
-                 "\"source_image\":\"%s\",\"read_only\":%d,"
-                 "\"layout_valid\":%d}",
-                 mount_point, devname, fstype, image_path,
-                 read_only ? 1 : 0, layout_valid);
+    /* JSON-escape every user-controllable string. is_path_allowed
+     * accepts paths containing '"' or '\' so a path like
+     * /data/foo"bar would unescape into invalid JSON in the ACK.
+     * Pre-2.2.52 these sites embedded the raw chars. */
+    {
+        char mp_esc[768], dev_esc[64], fs_esc[32], img_esc[1024];
+        json_escape_into(mount_point, mp_esc,  sizeof(mp_esc));
+        json_escape_into(devname,     dev_esc, sizeof(dev_esc));
+        json_escape_into(fstype,      fs_esc,  sizeof(fs_esc));
+        json_escape_into(image_path,  img_esc, sizeof(img_esc));
+        /* Emit bool fields as JSON booleans (true/false), not as
+         * integer 0/1. Same root cause as the reuse branch above and
+         * round 1's PKG_INSTALL_ACK fix — engine's MountResult has
+         * read_only/layout_valid/kernel_ro declared as `bool` and
+         * serde rejects integer-for-bool with `invalid type: integer
+         * N, expected a boolean`. That's the source of every
+         * "decode FS_MOUNT_ACK body as JSON" warning in engine.log. */
+        const char *ro_str = read_only ? "true" : "false";
+        const char *layout_str = layout_valid ? "true" : "false";
+        const char *kernel_ro_str = diag_kernel_ro ? "true" : "false";
+        n = snprintf(resp, sizeof(resp),
+                     "{\"mount_point\":\"%s\",\"dev_node\":\"%s\","
+                     "\"fstype\":\"%s\","
+                     "\"source_image\":\"%s\",\"read_only\":%s,"
+                     "\"layout_valid\":%s,"
+                     "\"f_bsize\":%llu,\"f_iosize\":%llu,\"kernel_ro\":%s}",
+                     mp_esc, dev_esc, fs_esc, img_esc,
+                     ro_str, layout_str,
+                     (unsigned long long)diag_bsize,
+                     (unsigned long long)diag_iosize,
+                     kernel_ro_str);
+    }
     if (n < 0 || (size_t)n >= sizeof(resp)) n = 0;
     return send_frame(client_fd, FTX2_FRAME_FS_MOUNT_ACK, 0, trace_id,
                       resp, (uint64_t)n);
@@ -6726,7 +6885,11 @@ static int handle_fs_unmount(runtime_state_t *state, int client_fd,
     const int legacy_match =
         strncmp(mount_point, FS_MOUNT_BASE "/", base_len + 1) == 0 &&
         mount_point[base_len + 1] != '\0';
-    if (strstr(mount_point, "..") != NULL ||
+    /* Component-aware ".." check matches is_path_allowed's semantics —
+     * the substring form rejected legitimate filenames like
+     * `My..Game` that the FS_MOUNT side accepts, leaving the user
+     * with a successfully-mounted image they couldn't unmount. */
+    if (path_has_dotdot_component(mount_point) ||
         (!legacy_match && !mount_tracker_exists(mount_point))) {
         return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
                           "fs_unmount_not_our_mount", 24);
@@ -7163,15 +7326,28 @@ static int handle_pkg_install(runtime_state_t *state, int client_fd,
     uint64_t size = 0;
     int32_t task_id = -1;
     uint32_t err_code = 0;
-    char ack[256];
+    /* 1 KiB ack buffer — pre-2.2.52 was 256, which silently truncated
+     * once we added the 2.2.52 diagnostics (`register_path`, `intdebug_avail`,
+     * `kernel_rw`) on top of the existing detail string. The detail
+     * string can hit ~200 bytes from sceAppInstUtil error decode, plus
+     * the new fields plus the fixed-format envelope. 1 KiB has comfortable
+     * headroom. */
+    char ack[1024];
     int n;
     if (!state || !body) {
         const char *e = "pkg_install_invalid";
         return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
                           e, (uint64_t)strlen(e));
     }
-    /* Hard cap on body length — defensive against malformed input. */
-    if (body_len > 16384) {
+    /* Hard cap on body length — defensive against malformed input.
+     * Using `>=` (not `>`) so we leave room for the NUL terminator
+     * we write at `json_buf[body_len]` below. With `>` and an
+     * exactly-sized 16384-byte body, the NUL would land at index
+     * 16384 — one past the end of the 16384-byte stack buffer. The
+     * pre-fix-round-3 form silently corrupted the next stack slot
+     * on max-sized bodies. */
+    char json_buf[16384];
+    if (body_len >= sizeof(json_buf)) {
         const char *e = "pkg_install_body_too_large";
         return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
                           e, (uint64_t)strlen(e));
@@ -7179,7 +7355,6 @@ static int handle_pkg_install(runtime_state_t *state, int client_fd,
     /* The body is JSON but extract_json_string_field expects a
      * NUL-terminated buffer — we copy into a local buffer and
      * NUL-terminate. */
-    char json_buf[16384];
     memcpy(json_buf, body, (size_t)body_len);
     json_buf[body_len] = '\0';
 
@@ -7212,15 +7387,81 @@ static int handle_pkg_install(runtime_state_t *state, int client_fd,
         const char *r = bgft_install_unavailable_reason();
         if (r) detail = r;
     }
+    /* Diagnostic fields surfaced to the host so a failed install can
+     * be diagnosed without ssh:
+     *   register_path  — which Register variant we used / would use
+     *                    ("intdebug" / "regular" / "none")
+     *   intdebug_avail — whether IntDebug Register symbol resolved
+     *                    (0/1; if 0 fakepkgs are likely to fail with
+     *                     entitlement errors regardless of cred state)
+     *   kernel_rw      — whether process-wide ucred elevation succeeded
+     *                    (mirrors STATUS_ACK's `ucred_elevated` field).
+     *                    g_ucred_elevation_rc lives in main.c. */
+    extern volatile int g_ucred_elevation_rc;
+    const char *register_path = bgft_install_last_register_path();
+    int intdebug_avail = bgft_install_intdebug_available();
+    int kernel_rw = (g_ucred_elevation_rc == 0) ? 1 : 0;
+    /* 2.2.52-fix: per-tier error codes. UINT32_MAX = tier not
+     * attempted; surface as JSON null so the host UI can show "—"
+     * rather than a misleading huge number. */
+    uint32_t shellui_err = bgft_install_last_shellui_err();
+    uint32_t appinst_err = bgft_install_last_appinst_err();
+
     /* Manual JSON encode — small + deterministic, no need for a JSON
-     * library on the payload side. */
+     * library on the payload side. Escape the detail string defensively:
+     * `bgft_install_unavailable_reason()` returns SDK-supplied text
+     * which could in principle contain a `"` or `\`, breaking the
+     * host-side decoder. */
+    char detail_esc[512];
+    char path_esc[32];
+    json_escape_into(detail, detail_esc, sizeof(detail_esc));
+    json_escape_into(register_path, path_esc, sizeof(path_esc));
+    /* Emit `intdebug_avail` / `kernel_rw` as JSON booleans (`true` /
+     * `false`), not as integer 0/1. The engine's PkgInstallResponse
+     * declares both fields as `bool` and serde's default decoder
+     * rejects integer-for-bool with `invalid type: integer 1, expected
+     * a boolean` — that single error rejected the entire ACK decode,
+     * so a 2.2.52 payload with the `%d` form broke every pkg install
+     * (not just the new diagnostics). Stringify to JSON booleans so
+     * decode succeeds. */
+    const char *intdebug_str = intdebug_avail ? "true" : "false";
+    const char *kernel_rw_str = kernel_rw ? "true" : "false";
+    char shellui_buf[24];
+    char appinst_buf[24];
+    /* 2.2.54-fix-round-8: emit null only when the tier wasn't
+     * attempted, NOT when its err code happens to be 0xFFFFFFFF.
+     * Pre-fix used UINT32_MAX as the sentinel — but that collided
+     * with pt_call returning -1 (Sony err code = 0xFFFFFFFF), making
+     * legitimate failures appear as "tier never ran" in diag. */
+    if (bgft_install_last_shellui_err_set()) {
+        snprintf(shellui_buf, sizeof(shellui_buf), "%u", (unsigned)shellui_err);
+    } else {
+        snprintf(shellui_buf, sizeof(shellui_buf), "null");
+    }
+    if (bgft_install_last_appinst_err_set()) {
+        snprintf(appinst_buf, sizeof(appinst_buf), "%u", (unsigned)appinst_err);
+    } else {
+        snprintf(appinst_buf, sizeof(appinst_buf), "null");
+    }
     n = snprintf(ack, sizeof(ack),
-                 "{\"task_id\":%d,\"err_code\":%u,\"detail\":\"%s\"}",
-                 task_id, (unsigned)err_code, detail);
+                 "{\"task_id\":%d,\"err_code\":%u,\"detail\":\"%s\","
+                 "\"register_path\":\"%s\",\"intdebug_avail\":%s,"
+                 "\"kernel_rw\":%s,\"shellui_err\":%s,\"appinst_err\":%s}",
+                 task_id, (unsigned)err_code, detail_esc,
+                 path_esc, intdebug_str, kernel_rw_str,
+                 shellui_buf, appinst_buf);
     if (n < 0 || n >= (int)sizeof(ack)) {
+        /* Truncated — drop the variable-length detail but keep the
+         * fixed-size diagnostics so the host still sees the error
+         * code + register path. The verbose detail string lives in
+         * stderr/klog regardless. */
         n = snprintf(ack, sizeof(ack),
-                     "{\"task_id\":%d,\"err_code\":%u,\"detail\":\"\"}",
-                     task_id, (unsigned)err_code);
+                     "{\"task_id\":%d,\"err_code\":%u,\"detail\":\"\","
+                     "\"register_path\":\"%s\",\"intdebug_avail\":%s,"
+                     "\"kernel_rw\":%s,\"shellui_err\":%s,\"appinst_err\":%s}",
+                     task_id, (unsigned)err_code,
+                     path_esc, intdebug_str, kernel_rw_str,
+                     shellui_buf, appinst_buf);
     }
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
@@ -7236,19 +7477,28 @@ static int handle_pkg_install_status(runtime_state_t *state, int client_fd,
     uint64_t downloaded = 0;
     uint64_t total = 0;
     uint32_t err_code = 0;
-    char ack[256];
+    /* 384 B — pre-fix-round-2 was 256 which silently truncated once
+     * the diagnostic suffix (`register_path` / `intdebug_avail` /
+     * `kernel_rw`) was added. The status frame is polled at 1 Hz
+     * during an active install, so a buffer that's just-barely-big-
+     * enough makes the truncation fallback (which drops downloaded /
+     * total) the worst-case rendering — bumping gives comfortable
+     * headroom without enlarging the wire shape for normal traffic. */
+    char ack[384];
     int n;
     if (!state || !body) {
         const char *e = "pkg_install_status_invalid";
         return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
                           e, (uint64_t)strlen(e));
     }
-    if (body_len > 256) {
+    char json_buf[256];
+    if (body_len >= sizeof(json_buf)) {
+        /* Same off-by-one fix as handle_pkg_install: `>=` reserves
+         * the slot at `json_buf[body_len]` for the NUL terminator. */
         const char *e = "pkg_install_status_body_too_large";
         return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
                           e, (uint64_t)strlen(e));
     }
-    char json_buf[256];
     memcpy(json_buf, body, (size_t)body_len);
     json_buf[body_len] = '\0';
     int task_id = (int)extract_json_uint64_field(json_buf, "task_id");
@@ -7309,18 +7559,59 @@ static int handle_pkg_install_status(runtime_state_t *state, int client_fd,
         }
     }
 
+    /* Re-emit the same diagnostics the install/start ACK carries.
+     * If BGFT transitions to phase=error mid-install, the user's
+     * "Why?" disclosure should reflect the live state — pre-fix the
+     * client only saw the diag captured at install/start, which by
+     * then had said everything was fine. The three globals are
+     * cheap to read (one stat-equivalent + a pointer + one int). */
+    extern volatile int g_ucred_elevation_rc;
+    const char *register_path = bgft_install_last_register_path();
+    int intdebug_avail = bgft_install_intdebug_available();
+    int kernel_rw = (g_ucred_elevation_rc == 0) ? 1 : 0;
+    uint32_t shellui_err = bgft_install_last_shellui_err();
+    uint32_t appinst_err = bgft_install_last_appinst_err();
+    char path_esc[32];
+    json_escape_into(register_path, path_esc, sizeof(path_esc));
+    const char *intdebug_str = intdebug_avail ? "true" : "false";
+    const char *kernel_rw_str = kernel_rw ? "true" : "false";
+    char shellui_buf[24];
+    char appinst_buf[24];
+    /* 2.2.54-fix-round-8: emit null only when the tier wasn't
+     * attempted, NOT when its err code happens to be 0xFFFFFFFF.
+     * Pre-fix used UINT32_MAX as the sentinel — but that collided
+     * with pt_call returning -1 (Sony err code = 0xFFFFFFFF), making
+     * legitimate failures appear as "tier never ran" in diag. */
+    if (bgft_install_last_shellui_err_set()) {
+        snprintf(shellui_buf, sizeof(shellui_buf), "%u", (unsigned)shellui_err);
+    } else {
+        snprintf(shellui_buf, sizeof(shellui_buf), "null");
+    }
+    if (bgft_install_last_appinst_err_set()) {
+        snprintf(appinst_buf, sizeof(appinst_buf), "%u", (unsigned)appinst_err);
+    } else {
+        snprintf(appinst_buf, sizeof(appinst_buf), "null");
+    }
     n = snprintf(ack, sizeof(ack),
                  "{\"phase\":\"%s\",\"downloaded\":%llu,\"total\":%llu,"
-                 "\"err_code\":%u,\"detail\":\"\"}",
+                 "\"err_code\":%u,\"detail\":\"\","
+                 "\"register_path\":\"%s\",\"intdebug_avail\":%s,"
+                 "\"kernel_rw\":%s,\"shellui_err\":%s,\"appinst_err\":%s}",
                  phase_str,
                  (unsigned long long)downloaded,
                  (unsigned long long)total,
-                 (unsigned)err_code);
+                 (unsigned)err_code,
+                 path_esc, intdebug_str, kernel_rw_str,
+                 shellui_buf, appinst_buf);
     if (n < 0 || n >= (int)sizeof(ack)) {
         n = snprintf(ack, sizeof(ack),
                      "{\"phase\":\"%s\",\"downloaded\":0,\"total\":0,"
-                     "\"err_code\":%u,\"detail\":\"\"}",
-                     phase_str, (unsigned)err_code);
+                     "\"err_code\":%u,\"detail\":\"\","
+                     "\"register_path\":\"%s\",\"intdebug_avail\":%s,"
+                     "\"kernel_rw\":%s,\"shellui_err\":%s,\"appinst_err\":%s}",
+                     phase_str, (unsigned)err_code,
+                     path_esc, intdebug_str, kernel_rw_str,
+                     shellui_buf, appinst_buf);
     }
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
@@ -7786,7 +8077,7 @@ static int handle_binary_frame(runtime_state_t *state, int client_fd,
          * value used in main()'s call means "current process";
          * 0 from the kernel = elevation succeeded.
          * `g_ucred_elevation_rc` is defined in main.c. */
-        extern int g_ucred_elevation_rc;
+        extern volatile int g_ucred_elevation_rc;
         const int ucred_elevated = (g_ucred_elevation_rc == 0) ? 1 : 0;
         len = snprintf(body, sizeof(body),
                        "{\"version\":\"%s\","
@@ -8160,6 +8451,8 @@ static int handle_binary_frame(runtime_state_t *state, int client_fd,
                 (unsigned long long)entry->apply_us,
                 (unsigned long long)entry->bytes_received,
                 (unsigned long long)entry->shards_received);
+        char dest_root_esc[1024];
+        json_escape_into(entry->dest_root, dest_root_esc, sizeof(dest_root_esc));
         len = snprintf(body, sizeof(body),
                        "{\"committed\":true,\"tx_id\":\"%s\",\"tx_seq\":%llu,"
                        "\"shards_received\":%llu,\"bytes_received\":%llu,"
@@ -8179,7 +8472,7 @@ static int handle_binary_frame(runtime_state_t *state, int client_fd,
                        (unsigned long long)entry->tx_seq,
                        (unsigned long long)entry->shards_received,
                        (unsigned long long)entry->bytes_received,
-                       entry->dest_root,
+                       dest_root_esc,
                        (unsigned long long)state->active_transactions,
                        (unsigned long long)entry->recv_us,
                        (unsigned long long)entry->write_us,

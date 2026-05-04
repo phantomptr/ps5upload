@@ -13,7 +13,10 @@
 
 //! ps5upload-engine — local HTTP service that drives FTX2 transfers.
 //!
-//! Listens on 127.0.0.1:19113 by default (set PS5UPLOAD_ENGINE_PORT env var to override).
+//! Listens on 0.0.0.0:19113 by default (set PS5UPLOAD_ENGINE_PORT env var to override).
+//! API routes are LAN-guarded via the `loopback_guard` middleware — only
+//! `/pkg-host/*` accepts off-loopback peers (so the PS5 can fetch fakepkg
+//! bytes during install). Everything else 403s any non-loopback source.
 //! Historical note: this was `9114` through 2.1.x, but `9114` is also the
 //! PS5-payload management port. The two live on different machines so
 //! no real collision — but the shared number confused users and logs.
@@ -37,8 +40,9 @@ mod engine_log;
 mod pkg_install;
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{ConnectInfo, Path, Query, Request, State},
     http::{header, StatusCode},
+    middleware::{self, Next},
     response::{
         sse::{Event, KeepAlive, Sse},
         IntoResponse,
@@ -211,6 +215,37 @@ fn mgmt_addr_for(transfer_addr: &str) -> String {
 
 fn mgmt_addr_or_default(addr: Option<String>, default_addr: &str) -> String {
     mgmt_addr_for(addr.as_deref().unwrap_or(default_addr))
+}
+
+/// Loopback guard for the API surface. Pre-2.2.52 the engine bound
+/// `127.0.0.1` only, which kept the API safe from the LAN by accident
+/// — but also broke `.pkg` install because the PS5 couldn't reach
+/// `/pkg-host/*` either. We now bind `0.0.0.0` and gate routes by the
+/// peer's source address: the Tauri webview, CLI tools, and our own
+/// integration tests all connect from `127.0.0.0/8` (or `::1`). Anything
+/// off-loopback hitting an `/api/*` route is a third party that has no
+/// business calling our engine and gets a 403.
+///
+/// `/pkg-host/*` is the single PS5-facing route; it's exempted from the
+/// guard so the console can fetch installable bytes. The route itself
+/// uses a UUIDv4 token in the URL as the auth gate (~122 bits of
+/// entropy, rotated per install, same threat model as DPI / etaHEN).
+async fn loopback_guard(
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    req: Request,
+    next: Next,
+) -> impl IntoResponse {
+    // Whitelisted off-loopback path prefixes. Keep this list tight.
+    const OFF_LOOPBACK_ALLOWED: &[&str] = &["/pkg-host/"];
+    let path = req.uri().path();
+    if OFF_LOOPBACK_ALLOWED.iter().any(|p| path.starts_with(p)) {
+        return next.run(req).await.into_response();
+    }
+    if peer.ip().is_loopback() {
+        return next.run(req).await.into_response();
+    }
+    eprintln!("[ps5upload-engine] refusing off-loopback request to {path} from {peer}");
+    (StatusCode::FORBIDDEN, "loopback only").into_response()
 }
 
 /// Walk a directory and return `(total_bytes, planned_files)` — collects
@@ -2845,11 +2880,11 @@ async fn main() {
         .merge(pkg_install::router(std::sync::Arc::new(
             pkg_install::PkgInstallState::default(),
         )))
-        // The engine binds 127.0.0.1 only, so cross-origin fetches come
-        // from the local Tauri webview (dev: http://localhost:1420, prod:
-        // tauri://localhost) or any local script (`curl`, tests,
-        // smoke-hardware.mjs). Permissive CORS is fine here; there's no
-        // real XSRF surface to protect on a localhost-bound service.
+        // Permissive CORS — the only off-loopback route that ever
+        // sees a real request is `/pkg-host/*` (PS5 server-side fetch,
+        // no browser, no CORS preflight). For loopback Tauri-API hits,
+        // the loopback_guard above is the real auth gate; CORS just
+        // makes browser dev-tools curl reproducers easier.
         .layer(tower_http::cors::CorsLayer::permissive())
         // Explicit body-size cap. Axum's default DefaultBodyLimit is
         // 2 MiB, which is borderline for a TransferFileListReq carrying
@@ -2860,9 +2895,30 @@ async fn main() {
         // legitimate payload (a 100k-entry file list with mid-length
         // paths is well under 30 MiB encoded JSON) and small enough
         // that a runaway request can't blow up RAM on a 4 GB box.
-        .layer(axum::extract::DefaultBodyLimit::max(64 * 1024 * 1024));
+        .layer(axum::extract::DefaultBodyLimit::max(64 * 1024 * 1024))
+        // Loopback-guard middleware MUST be applied last so it ends
+        // up the OUTERMOST layer — axum wraps each `.layer()` around
+        // the one below it. Pre-2.2.52 fix-round-2 the order was
+        // (guard → cors → body-limit), which meant CORS preflight
+        // requests from a LAN browser were answered 200 with
+        // `Access-Control-Allow-Origin: *` BEFORE the guard saw them
+        // — the actual GET still 403'd, but the engine's existence
+        // and CORS posture were enumerable from the LAN. With the
+        // guard outermost, an off-loopback peer hitting any
+        // non-`/pkg-host/*` route is rejected immediately, before
+        // CORS / body-limit / handler.
+        .layer(middleware::from_fn(loopback_guard));
 
-    let bind = format!("127.0.0.1:{port}");
+    // Bind `0.0.0.0` so the PS5 can fetch `/pkg-host/*` for fakepkg
+    // installs. The loopback-guard middleware (above) gates every
+    // other route to peers whose source IP is on the loopback range,
+    // preserving the pre-2.2.52 "API is local-only" invariant for
+    // everything that isn't the deliberately PS5-facing pkg-host
+    // route. Pre-2.2.52 we bound `127.0.0.1`, which kept the API
+    // safe from the LAN by accident — but also broke pkg install
+    // because the PS5 couldn't reach the same listener it had to
+    // download from.
+    let bind = format!("0.0.0.0:{port}");
     println!("[ps5upload-engine] listening on http://{bind}  (ps5={ps5_addr})");
     let listener = match tokio::net::TcpListener::bind(&bind).await {
         Ok(l) => l,
@@ -2878,9 +2934,13 @@ async fn main() {
             // Exit 0 in that case. If even the connect fails, the
             // port's in some half-bound state (e.g. TIME_WAIT or
             // permissions) — exit non-zero with a clear log.
+            // Probe via loopback rather than `bind` (which is `0.0.0.0`
+            // and not a routable connect target). If something is bound
+            // on this port at all, `127.0.0.1:{port}` will accept.
+            let probe_addr = format!("127.0.0.1:{port}");
             let connectable = tokio::time::timeout(
                 std::time::Duration::from_millis(500),
-                tokio::net::TcpStream::connect(&bind),
+                tokio::net::TcpStream::connect(&probe_addr),
             )
             .await
             .ok()
@@ -2907,9 +2967,17 @@ async fn main() {
     // The 10-second watchdog in spawn_parent_watcher is the hard ceiling
     // — if a stuck request blocks the drain (rare; only for pkg-host
     // range reads on a dying PS5), we fall through to process::exit(0).
-    if let Err(e) = axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await
+    // `into_make_service_with_connect_info::<SocketAddr>` is what makes
+    // the `ConnectInfo<SocketAddr>` extractor work in the loopback-guard
+    // middleware. Without this, axum hands handlers a generic ConnectInfo
+    // and the middleware would have to fall back to header-based source
+    // detection (less reliable, easier to spoof from a hostile LAN peer).
+    if let Err(e) = axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await
     {
         eprintln!("[ps5upload-engine] axum serve terminated: {e}");
         std::process::exit(3);

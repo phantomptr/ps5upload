@@ -4,6 +4,68 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.2.55
+
+**Install Package — working end-to-end on FW 9.60**
+
+A jailbroken PS5 on FW 9.60 can now install fakepkgs from the desktop
+without manual etaHEN / Settings → Debug Settings intervention. Pick
+a `.pkg`, click Install, register + launch from the Library.
+
+Three install tiers, picked automatically:
+
+- **Tier 1 (default, single .pkg)** — desktop uploads to
+  `/user/data/ps5upload/pkg_temp/<id>.pkg`, install fires under
+  ShellUI's authid via ptrace RPC with the raw PS5-local path as
+  the URI. Bypasses the PlayGo HTTP gate that was rejecting our
+  process on FW 9.60.
+- **Tier 2 (split sets)** — engine HTTP host on `0.0.0.0:19113` +
+  ShellUI-RPC. Avoids doubling wire time on multi-part 50 GB+ uploads.
+  Engine-side loopback-guard middleware 403s every non-`/pkg-host/*`
+  route to off-loopback peers; the `/pkg-host/*` route is auth'd by
+  per-install UUIDv4 token.
+- **Tier 3 (legacy)** — direct in-process AppInstUtil. Used only on
+  firmwares where ShellUI symbol resolution fails.
+
+Stability + UX polish:
+
+- **Hardware page sensors** retry once with a forced symbol re-resolve
+  when the cached symbol address goes stale (ShellUI respawns silently
+  invalidate the cache after the user exits a game).
+- **Library Unmount on game rows** — once a game is registered the
+  user opens the game row, not the image row; the Unmount button is
+  now there too.
+- **Play button always-registers-first** — register (idempotent),
+  retry with DRM-type patch on failure, settle, then launch.
+- **Mount diagnostics** surface kernel `MNT_RDONLY`, statfs
+  `f_bsize` / `f_iosize`, and image-layout-invalid as non-fatal
+  warnings on both Library and Upload screens.
+- **Install staging cleanup** on register-reject + user cancel
+  (engine-side) and `appinst` slot release on hard status error
+  (payload-side) — stops Sony's installer queue from accumulating
+  stuck tasks across retries.
+- **Engine session map GC** — two-policy prune (`gc_old_sessions`
+  on status polls, plus a complementary install-start prune for
+  sessions that error before the UI ever polls).
+- **Engine bind** is now `0.0.0.0:19113` (was `127.0.0.1`). The PS5
+  needs to reach the host's listener for Tier-2; loopback-guard
+  middleware preserves the local-only invariant for everything else.
+- **Payload startup** now sweeps stale `pkg_temp/*.pkg` files older
+  than 24 h — recovers from a desktop-side crash mid-install.
+- **`g_ucred_elevation_rc`** marked `volatile` — read concurrently
+  from multiple connection threads.
+- **Humanizer** rewritten for `0x80B22404` (no longer blames pkg
+  format) and PS5-native `\x7FFIH` magic.
+
+**Known limitation**: NPXS-prefix system pkgs (e.g. Store-update
+fakepkgs) register cleanly but the install may destabilise the
+system — `sceAppInstUtilInstallByPackage` is for game pkgs, not
+system patches. Use Settings → Debug Settings → Game → Package
+Installer for those. Regular PS4 fakepkgs (UP/EP/JP/HP, CUSA title
+id) install cleanly.
+
+---
+
 ## 2.2.51
 
 **Mounted .ffpkg / .exfat at user-chosen paths now visible**

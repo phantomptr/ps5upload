@@ -37,11 +37,17 @@ function useStatusPolling() {
 
   useEffect(() => {
     if (!host || !host.trim()) {
+      // Host cleared — wipe every payload-derived field so a new
+      // host doesn't inherit stale assertions from the previous one.
+      // Pre-2.2.52 we forgot `ucredElevated` here, leaving e.g. a
+      // green "Kernel R/W: available" pill next to a now-cleared
+      // version/kernel pair.
       setStatus({
         payloadStatus: "unknown",
         payloadStatusHost: null,
         payloadVersion: null,
         ps5Kernel: null,
+        ucredElevated: null,
       });
       return;
     }
@@ -63,6 +69,7 @@ function useStatusPolling() {
             // flicker; only clear when we never had a value.
             payloadVersion: s.payloadVersion,
             ps5Kernel: s.ps5Kernel,
+            ucredElevated: s.ucredElevated,
             // Clear the "rechecking…" indicator any time a tick lands
             // a real result. Connection's handleSend sets probing=true
             // on Replace payload click; this is the safety-net path

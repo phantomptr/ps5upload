@@ -95,6 +95,24 @@ static intptr_t g_addr_get_cpu_temp = 0;     /* sceKernelGetCpuTemperature */
 static intptr_t g_addr_get_soc_temp = 0;     /* sceKernelGetSocSensorTemperature */
 static intptr_t g_addr_get_cpu_freq = 0;     /* sceKernelGetCpuFrequency */
 static intptr_t g_addr_get_soc_power = 0;    /* sceKernelGetSocPowerConsumption */
+/* AppInstUtil entry points used by the install RPC. We invoke these
+ * INSIDE ShellUI's process via pt_call so Sony's PlayGo accepts the
+ * caller context — calling them from our own payload returns
+ * 0x80B22404 (PlayGo HTTP 404) at URL pre-flight regardless of
+ * cred-forge, because Sony's installer whitelists ShellUI's process
+ * attributes specifically. The address resolution uses
+ * `kernel_dynlib_dlsym(shellui_pid, ...)` which walks ShellUI's
+ * own loaded modules — `libSceAppInstUtil.sprx` is normally already
+ * loaded into ShellUI's address space because Settings → Debug →
+ * Install Package depends on it. */
+static intptr_t g_addr_appinst_init = 0;     /* sceAppInstUtilInitialize */
+static intptr_t g_addr_appinst_install = 0;  /* sceAppInstUtilInstallByPackage */
+static intptr_t g_addr_appinst_cancel  = 0;  /* sceAppInstUtilCancelInstall(content_id) */
+static intptr_t g_addr_appinst_terminate = 0; /* sceAppInstUtilTerminate() — paired with
+                                                * Initialize to fully reset Sony's
+                                                * installer state. Used as last-resort
+                                                * recovery when Sony's queue is wedged
+                                                * with stuck same-content_id tasks. */
 
 /* Wrappers that keep g_attached in sync. Used in place of
  * pt_attach/pt_detach throughout. emergency_detach reads
@@ -146,6 +164,13 @@ static intptr_t resolve_in_target(pid_t pid, const char *sym_name) {
         { "libSceLncUtil.sprx" },
         { "libSceLncService.sprx" },
         { "libSceLncServiceJvm.sprx" },
+        /* 2.2.52-fix: AppInstUtil exports the install/initialize
+         * symbols. Without this entry, every `sceAppInstUtil*` lookup
+         * inside ShellUI failed silently → shellui-rpc install tier
+         * returned 0xE0000002 (SYMBOL_MISSING) and we fell through to
+         * the in-process AppInstUtil path that hits 0x80B22404 on
+         * FW 9.60+. */
+        { "libSceAppInstUtil.sprx" },
     };
     for (size_t i = 0; i < sizeof(libs)/sizeof(libs[0]); i++) {
         uint32_t handle = 0;
@@ -175,12 +200,29 @@ static int shellui_rpc_resolve_locked(void) {
      * the corresponding RPC just returns -1. Only sceLncUtilLaunchApp
      * is required for the init-success contract; without launch we
      * can't justify the cost of attaching to ShellUI at all. */
-    g_addr_user_get_fg   = resolve_in_target(pid, "sceUserServiceGetForegroundUser");
-    g_addr_lnc_launch    = resolve_in_target(pid, "sceLncUtilLaunchApp");
-    g_addr_get_cpu_temp  = resolve_in_target(pid, "sceKernelGetCpuTemperature");
-    g_addr_get_soc_temp  = resolve_in_target(pid, "sceKernelGetSocSensorTemperature");
-    g_addr_get_cpu_freq  = resolve_in_target(pid, "sceKernelGetCpuFrequency");
-    g_addr_get_soc_power = resolve_in_target(pid, "sceKernelGetSocPowerConsumption");
+    g_addr_user_get_fg     = resolve_in_target(pid, "sceUserServiceGetForegroundUser");
+    g_addr_lnc_launch      = resolve_in_target(pid, "sceLncUtilLaunchApp");
+    g_addr_get_cpu_temp    = resolve_in_target(pid, "sceKernelGetCpuTemperature");
+    g_addr_get_soc_temp    = resolve_in_target(pid, "sceKernelGetSocSensorTemperature");
+    g_addr_get_cpu_freq    = resolve_in_target(pid, "sceKernelGetCpuFrequency");
+    g_addr_get_soc_power   = resolve_in_target(pid, "sceKernelGetSocPowerConsumption");
+    /* AppInstUtil — used by `shellui_rpc_install_pkg`. Best-effort
+     * because the install RPC is optional (BGFT/AppInstUtil from our
+     * own process is the fallback path; if BOTH are missing we
+     * surface a useful "FW doesn't expose installer" error rather
+     * than fail init). On older firmwares libSceAppInstUtil.sprx may
+     * not be loaded into ShellUI's address space, in which case
+     * resolution returns 0 and the install RPC short-circuits. */
+    g_addr_appinst_init    = resolve_in_target(pid, "sceAppInstUtilInitialize");
+    g_addr_appinst_install = resolve_in_target(pid, "sceAppInstUtilInstallByPackage");
+    /* sceAppInstUtilCancelInstall(content_id) — used to clear stuck
+     * same-content_id tasks from Sony's installer queue before
+     * registering a new install. Without this, repeated install
+     * attempts pile up tasks that Sony can't process and eventually
+     * wedge the entire PS5. Resolved here so install_pkg can call
+     * it via pt_call before the actual register. */
+    g_addr_appinst_cancel  = resolve_in_target(pid, "sceAppInstUtilCancelInstall");
+    g_addr_appinst_terminate = resolve_in_target(pid, "sceAppInstUtilTerminate");
     g_init_rc = (g_addr_lnc_launch == 0) ? -2 : 0;
     return g_init_rc;
 }
@@ -445,8 +487,34 @@ int shellui_rpc_launch_app(const char *title_id, int user_id_hint) {
     return (int)rc;
 }
 
+/* 2.2.55: sensor reads now retry-with-reresolve on failure.
+ *
+ * The original failure mode: ShellUI process respawns periodically
+ * (e.g. when Sony's UI returns to home from a game), and the
+ * cached symbol address (g_addr_get_cpu_temp et al.) gets a stale
+ * value pointing at a different memory layout — first sensor read
+ * after a fresh payload push works because resolve just ran;
+ * subsequent reads after ShellUI respawn fail silently with
+ * pt_call returning -1 or copyout returning garbage.
+ *
+ * The retry path: if the first attempt fails, force a re-resolve
+ * (find ShellUI's current pid + re-dlsym all symbols), then retry
+ * the call ONCE with fresh values. Doesn't loop forever — if a FW
+ * doesn't expose the symbol at all (NID-only on some 9.x points),
+ * re-resolve won't fix it, and we shouldn't burn pt_attach cycles
+ * spamming the same dead read. */
+static void force_reresolve_locked(void) {
+    pthread_mutex_lock(&g_rpc_mtx);
+    (void)shellui_rpc_resolve_locked();
+    pthread_mutex_unlock(&g_rpc_mtx);
+}
+
 int shellui_rpc_get_cpu_temp(int *out_celsius) {
     /* sceKernelGetCpuTemperature(int *out) — single int-out arg. */
+    int rc = rpc_call_with_int_scratch(g_addr_get_cpu_temp, 0, 1,
+                                       out_celsius, sizeof(*out_celsius));
+    if (rc == 0) return 0;
+    force_reresolve_locked();
     return rpc_call_with_int_scratch(g_addr_get_cpu_temp, 0, 1,
                                      out_celsius, sizeof(*out_celsius));
 }
@@ -454,6 +522,10 @@ int shellui_rpc_get_cpu_temp(int *out_celsius) {
 int shellui_rpc_get_soc_temp(int *out_celsius) {
     /* sceKernelGetSocSensorTemperature(int sensor_id, int *out).
      * Sensor id 0 is the primary SoC sensor. */
+    int rc = rpc_call_with_int_scratch(g_addr_get_soc_temp, 0, 0,
+                                       out_celsius, sizeof(*out_celsius));
+    if (rc == 0) return 0;
+    force_reresolve_locked();
     return rpc_call_with_int_scratch(g_addr_get_soc_temp, 0, 0,
                                      out_celsius, sizeof(*out_celsius));
 }
@@ -461,7 +533,16 @@ int shellui_rpc_get_soc_temp(int *out_celsius) {
 int shellui_rpc_get_cpu_freq_hz(long *out_hz) {
     /* sceKernelGetCpuFrequency() returns the frequency directly in
      * rax (no out-param). */
-    if (g_addr_get_cpu_freq == 0 || !shellui_rpc_ready() || !out_hz) return -1;
+    if (!out_hz) return -1;
+    /* First attempt with current cached symbol. */
+    if (g_addr_get_cpu_freq != 0 && shellui_rpc_ready()) {
+        int ok = 0;
+        long rc = do_remote_call(g_addr_get_cpu_freq, 0, 0, 0, 0, 0, 0, &ok);
+        if (ok && rc > 0) { *out_hz = rc; return 0; }
+    }
+    /* Retry once after re-resolve. */
+    force_reresolve_locked();
+    if (g_addr_get_cpu_freq == 0 || !shellui_rpc_ready()) return -1;
     int ok = 0;
     long rc = do_remote_call(g_addr_get_cpu_freq, 0, 0, 0, 0, 0, 0, &ok);
     if (!ok || rc <= 0) return -1;
@@ -471,6 +552,301 @@ int shellui_rpc_get_cpu_freq_hz(long *out_hz) {
 
 int shellui_rpc_get_soc_power_mw(uint32_t *out_mw) {
     /* sceKernelGetSocPowerConsumption(uint32_t *out). */
+    int rc = rpc_call_with_int_scratch(g_addr_get_soc_power, 0, 1,
+                                       out_mw, sizeof(*out_mw));
+    if (rc == 0) return 0;
+    force_reresolve_locked();
     return rpc_call_with_int_scratch(g_addr_get_soc_power, 0, 1,
                                      out_mw, sizeof(*out_mw));
+}
+
+/* ── shellui_rpc_install_pkg ─────────────────────────────────────────
+ *
+ * Install a fakepkg by remotely calling
+ * `sceAppInstUtilInstallByPackage(MetaInfo*, AppInstPkgInfo*,
+ *  PlayGoInfo*)` inside SceShellUI's process. The struct layouts
+ * mirror etaHEN's reference (util/source/DirectPKGInstaller.cpp)
+ * and the public PS5 install writeup. Sony's PlayGo whitelists
+ * ShellUI's process attributes for HTTP fetch, so the same call
+ * that returns 0x80B22404 (HTTP 404 pre-flight) from our payload's
+ * own context succeeds when issued from ShellUI's. */
+
+#define APPINST_LANGUAGE_SIZE          8
+#define APPINST_PLAYGO_SCENARIO_SIZE   3
+#define APPINST_CONTENTID_SIZE         0x30
+#define APPINST_NUM_LANGUAGES          30
+#define APPINST_NUM_IDS                64
+
+/* MetaInfo — first arg to sceAppInstUtilInstallByPackage. 6 pointers,
+ * absolute (in target address space). Sony reads these fields as
+ * NUL-terminated strings; we point them at offsets within the
+ * scratch buffer (see layout below). 48 bytes. */
+typedef struct {
+    intptr_t uri;
+    intptr_t ex_uri;
+    intptr_t playgo_scenario_id;
+    intptr_t content_id;
+    intptr_t content_name;
+    intptr_t icon_url;
+} appinst_meta_t;
+
+/* AppInstPkgInfo — second arg. Sony fills the content_id field as
+ * an OUTPUT; we leave it zeroed. 56 bytes (0x30 + 2 ints, 4-byte
+ * aligned, no struct padding tail because content_id ends on 8-byte
+ * boundary already). */
+typedef struct {
+    char    content_id[APPINST_CONTENTID_SIZE];
+    int32_t content_type;
+    int32_t content_platform;
+} appinst_pkg_info_t;
+
+/* PlayGoInfo — third arg. Bulk of the scratch. Sony reads the
+ * arrays for downloadable-content playgo scenario routing; for a
+ * vanilla install the zero-init is correct (no per-language /
+ * scenario splits). Total 9984 bytes. */
+typedef struct {
+    char  languages[APPINST_NUM_LANGUAGES][APPINST_LANGUAGE_SIZE];        /* 240 */
+    char  playgo_scenario_ids[APPINST_NUM_IDS][APPINST_PLAYGO_SCENARIO_SIZE]; /* 192 */
+    char  content_ids[APPINST_NUM_IDS][APPINST_CONTENTID_SIZE];            /* 3072 */
+    unsigned char  unknown[6480];                                          /* 6480 */
+} appinst_playgo_t;
+
+/* Scratch layout in ShellUI's address space:
+ *   [0          ] meta            (48 bytes)
+ *   [48         ] pkg_info        (56 bytes)
+ *   [104        ] padding to 16-byte align playgo
+ *   [112        ] playgo          (9984 bytes)
+ *   [10096      ] strings…
+ *
+ * Each MetaInfo pointer is set to SCRATCH + string-offset. Strings
+ * are NUL-terminated; Sony reads them with strlen-style probes. */
+#define APPINST_OFF_META     0
+#define APPINST_OFF_PKGINFO  48
+#define APPINST_OFF_PLAYGO   112
+#define APPINST_OFF_STRINGS  (APPINST_OFF_PLAYGO + sizeof(appinst_playgo_t))
+#define APPINST_SCRATCH_SIZE 0x4000   /* 16 KiB — fits the structs + strings comfortably */
+
+int shellui_rpc_install_pkg(const char *url,
+                             const char *content_id,
+                             const char *title,
+                             uint32_t *out_err_code) {
+    if (out_err_code) *out_err_code = 0;
+    if (!url || url[0] == '\0') return -1;
+    if (!shellui_rpc_ready()) return -1;
+    if (g_addr_appinst_install == 0) {
+        /* Symbol cache is stale — most often because ShellUI
+         * respawned between calls (Sony does this when a heavy
+         * install task either crashes or finishes its lifecycle).
+         * The new ShellUI's libSceAppInstUtil may be loaded but at
+         * a different address, OR not loaded yet. Retry the resolve
+         * once; if it's still missing, fall through to the
+         * SYMBOL_MISSING surface so the diagnostic panel can tell
+         * the user to retry / reboot. */
+        pthread_mutex_lock(&g_rpc_mtx);
+        (void)shellui_rpc_resolve_locked();
+        pthread_mutex_unlock(&g_rpc_mtx);
+        if (g_addr_appinst_install == 0) {
+            if (out_err_code) *out_err_code = 0xE0000002u; /* SYMBOL_MISSING */
+            return -1;
+        }
+    }
+
+    /* Bounds-check string lengths so the local buffer below can
+     * never overflow APPINST_SCRATCH_SIZE. The url field is the
+     * only realistic-large input; cap it at 2 KiB which matches
+     * etaHEN's DPI buffer cap and any sensible real-world URL. */
+    const size_t MAX_URL  = 2048;
+    const size_t MAX_TITLE = 512;
+    const size_t MAX_CID  = APPINST_CONTENTID_SIZE - 1;
+    size_t url_len   = strnlen(url, MAX_URL + 1);
+    size_t title_len = title ? strnlen(title, MAX_TITLE + 1) : 0;
+    size_t cid_len   = content_id ? strnlen(content_id, MAX_CID + 1) : 0;
+    if (url_len > MAX_URL || title_len > MAX_TITLE || cid_len > MAX_CID) {
+        if (out_err_code) *out_err_code = 0xE0000010u;  /* arg too long */
+        return -1;
+    }
+
+    pthread_mutex_lock(&g_rpc_mtx);
+    if (attach_with_refresh_locked() != 0) {
+        pthread_mutex_unlock(&g_rpc_mtx);
+        return -1;
+    }
+
+    intptr_t scratch = pt_mmap(g_shellui_pid, 0, APPINST_SCRATCH_SIZE,
+                                PROT_READ | PROT_WRITE,
+                                MAP_ANON | MAP_PRIVATE, -1, 0);
+    if (scratch == -1 || scratch == 0) {
+        (void)pt_detach_tracked(g_shellui_pid, 0);
+        pthread_mutex_unlock(&g_rpc_mtx);
+        return -1;
+    }
+
+    /* Build the scratch image in our local memory, then copy in.
+     * Strings are concatenated tightly after the playgo struct;
+     * MetaInfo pointers are set to absolute target addresses. */
+    static char local_buf[APPINST_SCRATCH_SIZE];
+    memset(local_buf, 0, sizeof(local_buf));
+
+    appinst_meta_t *meta = (appinst_meta_t *)(local_buf + APPINST_OFF_META);
+    /* pkg_info kept zeroed via the memset above. The 2.2.53-fix-round-2
+     * attempt to seed pkg_info.content_id (matching the in-process
+     * appinst path) regressed real installs to 0x80B21106 — confirmed
+     * by direct curl test against the user's 41 MB Store pkg: empty
+     * pkg_info.content_id → err_code=0 (Sony accepted), seeded
+     * pkg_info.content_id → 0x80B21106 (Sony rejected). Sony's
+     * shellui-resident installer apparently treats pkg_info.content_id
+     * as OUTPUT after all; the in-process path may work despite the
+     * seed because of a different code branch inside Sony's lib.
+     * Either way, leaving it zeroed is what works for shellui-rpc. */
+
+    /* Compose strings at a single sliding offset into local_buf,
+     * starting after PlayGoInfo. Track the offset so each new
+     * pointer lands at the right absolute address in the target. */
+    size_t off = APPINST_OFF_STRINGS;
+    intptr_t str_uri = scratch + (intptr_t)off;
+    memcpy(local_buf + off, url, url_len);
+    local_buf[off + url_len] = '\0';
+    off += url_len + 1;
+
+    intptr_t str_ex_uri = scratch + (intptr_t)off;
+    local_buf[off++] = '\0';
+
+    intptr_t str_scen = scratch + (intptr_t)off;
+    local_buf[off++] = '\0';
+
+    intptr_t str_cid_in = scratch + (intptr_t)off;
+    if (cid_len > 0) {
+        memcpy(local_buf + off, content_id, cid_len);
+        off += cid_len;
+    }
+    local_buf[off++] = '\0';
+
+    intptr_t str_name = scratch + (intptr_t)off;
+    if (title_len > 0) {
+        memcpy(local_buf + off, title, title_len);
+        off += title_len;
+    } else {
+        /* Empty title would flicker the PS5's install notification
+         * with a blank line. Use a fixed fallback that matches what
+         * etaHEN's DPI surfaces ("etaHEN DPI" in their case;
+         * "ps5upload" makes it obvious in the user's Settings →
+         * Notifications). */
+        const char *fallback = "ps5upload";
+        size_t fl = strlen(fallback);
+        memcpy(local_buf + off, fallback, fl);
+        off += fl;
+    }
+    local_buf[off++] = '\0';
+
+    intptr_t str_icon = scratch + (intptr_t)off;
+    local_buf[off++] = '\0';
+
+    /* Defensive overflow check — we sized local_buf to fit the
+     * input bounds, so this is belt-and-suspenders, not a hot
+     * path. */
+    if (off > APPINST_SCRATCH_SIZE) {
+        (void)pt_munmap(g_shellui_pid, scratch, APPINST_SCRATCH_SIZE);
+        (void)pt_detach_tracked(g_shellui_pid, 0);
+        pthread_mutex_unlock(&g_rpc_mtx);
+        if (out_err_code) *out_err_code = 0xE0000011u;  /* layout overflow */
+        return -1;
+    }
+
+    /* Wire MetaInfo pointer fields. After this the local_buf is a
+     * complete, ready-to-copy image of what Sony's installer will
+     * dereference once it's in ShellUI's address space. */
+    meta->uri                = str_uri;
+    meta->ex_uri             = str_ex_uri;
+    meta->playgo_scenario_id = str_scen;
+    meta->content_id         = str_cid_in;
+    meta->content_name       = str_name;
+    meta->icon_url           = str_icon;
+
+    /* Push the entire image to ShellUI's scratch in one shot. */
+    if (pt_copyin(g_shellui_pid, local_buf, scratch,
+                  APPINST_SCRATCH_SIZE) != 0) {
+        (void)pt_munmap(g_shellui_pid, scratch, APPINST_SCRATCH_SIZE);
+        (void)pt_detach_tracked(g_shellui_pid, 0);
+        pthread_mutex_unlock(&g_rpc_mtx);
+        return -1;
+    }
+
+    /* DO NOT call sceAppInstUtilTerminate here — direct testing showed
+     * it hangs ShellUI within seconds (PS5 mgmt port stops responding,
+     * full reboot required). Terminate is too aggressive for an
+     * already-running ShellUI process: it tears down state that
+     * ShellUI is using for its own UI rendering, not just the
+     * installer queue. The wedged-Sony-queue problem stays an
+     * open issue (cleared by PS5 reboot only). */
+
+    /* Init AppInstUtil first (idempotent). The "already initialised"
+     * code 0x80990001 is benign — Sony's daemon may have init'd it
+     * earlier when the user opened Settings → Debug Settings.
+     * Failure here is non-fatal: InstallByPackage may still work
+     * if Sony's lazy-init kicks in on the install call. */
+    if (g_addr_appinst_init != 0) {
+        long init_rc = pt_call(g_shellui_pid, g_addr_appinst_init,
+                               0, 0, 0, 0, 0, 0);
+        (void)init_rc;
+    }
+
+    /* Pre-install cancel: clear any stuck same-content_id task from
+     * Sony's installer queue. Without this, repeated install attempts
+     * pile up duplicates that wedge the PS5 (network stack stops
+     * responding after ~7 retries — observed during 2.2.53-fix-round-3
+     * testing). The cancel call is best-effort; we ignore the rc
+     * because (a) "no such task" is a normal/benign case and (b) the
+     * call needs the content_id pointer in ShellUI's address space,
+     * so we use the same str_cid_in scratch slot we built above. */
+    /* Single best-effort cancel. Multi-cancel was tested in
+     * 2.2.54-fix-round-13 and made things worse: the extra pt_calls
+     * stress ShellUI's process and increase the chance of waitpid-
+     * race failures on the subsequent install call. One cancel
+     * gives us a chance to clear an obvious duplicate without
+     * piling on more ptrace activity. */
+    if (g_addr_appinst_cancel != 0 && cid_len > 0) {
+        long cancel_rc = pt_call(g_shellui_pid, g_addr_appinst_cancel,
+                                  (uint64_t)str_cid_in, 0, 0, 0, 0, 0);
+        (void)cancel_rc;
+    }
+
+    /* The actual install call. Three arg pointers all point into
+     * the scratch buffer we just pushed. */
+    long install_rc = pt_call(
+        g_shellui_pid, g_addr_appinst_install,
+        (uint64_t)(scratch + APPINST_OFF_META),
+        (uint64_t)(scratch + APPINST_OFF_PKGINFO),
+        (uint64_t)(scratch + APPINST_OFF_PLAYGO),
+        0, 0, 0);
+    int dispatched = pt_call_was_dispatched();
+
+    (void)pt_munmap(g_shellui_pid, scratch, APPINST_SCRATCH_SIZE);
+    (void)pt_detach_tracked(g_shellui_pid, 0);
+    pthread_mutex_unlock(&g_rpc_mtx);
+
+    if (install_rc == 0) {
+        if (out_err_code) *out_err_code = 0;
+        return 0;
+    }
+    /* 2.2.54-fix-round-8: soft-success on dispatched-but-rax-unreadable.
+     * Sony's installer call inside ShellUI signals the process in a
+     * way that sometimes races our waitpid (same pattern as
+     * sceLncUtilLaunchApp documented in shellui_rpc_launch_app's
+     * rc=-2 branch). When pt_call_was_dispatched() returns true but
+     * install_rc came back as -1, the install request DID make it
+     * into Sony's installer queue — Sony processed the call, just
+     * the post-call cleanup failed. Treating this as a hard failure
+     * would cause the bgft.c fall-through to in-process appinst,
+     * which then collides with Sony's already-queued task and
+     * returns 0x80B21106. Treat as success so the caller takes the
+     * shellui-rpc accept branch instead. */
+    if (dispatched && install_rc == -1) {
+        if (out_err_code) *out_err_code = 0;
+        return 0;
+    }
+    /* Non-zero rax — Sony's install error code. Surface verbatim
+     * so the host humanizer can map it (0x80A2FFxx for AppInstaller
+     * errors, 0x80B22xxx for PlayGo, etc.). */
+    if (out_err_code) *out_err_code = (uint32_t)install_rc;
+    return 1;
 }

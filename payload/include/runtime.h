@@ -144,6 +144,14 @@ int runtime_ensure_directories(void);
  * startup from main.c, after runtime_init completes. Failure-tolerant —
  * any single reconcile error logs + continues so payload still starts. */
 void runtime_reconcile_mounts(void);
+
+/* 2.2.52 Tier-1 staging sweep. Removes *.pkg files in
+ * PS5UPLOAD2_PKG_TEMP_DIR with mtime older than 24 h — orphans
+ * left by desktop crashes mid-install. Call once at payload init,
+ * after runtime_ensure_directories. Failure-tolerant: opendir/stat
+ * errors are silent so payload still starts even if the dir was
+ * never created (e.g. read-only /data, fresh PS5 startup). */
+void runtime_sweep_stale_pkg_temp(void);
 int runtime_try_takeover(runtime_state_t *state);
 int runtime_server_loop(runtime_state_t *state);
 /* Management listener: started from main.c via pthread_create *before*
@@ -173,6 +181,14 @@ void pop_notification(const char *message);
  * and have sensors/launch start working without a reboot. */
 void runtime_apply_ucred_jailbreak(void);
 
-extern int g_ucred_elevation_rc;
+/* `volatile` matches the definition in main.c — without it, the
+ * compiler is allowed to cache reads across function calls into a
+ * register, which on a multi-thread frame dispatcher (where every
+ * connection thread re-runs runtime_apply_ucred_jailbreak() and
+ * mutates this) means a reader could observe a stale -1 long after
+ * elevation succeeded, or vice versa. The qualifier is the cheapest
+ * fix that preserves the existing int-shape extern across all
+ * call sites. */
+extern volatile int g_ucred_elevation_rc;
 
 #endif

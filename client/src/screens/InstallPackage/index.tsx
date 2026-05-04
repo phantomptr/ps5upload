@@ -98,7 +98,6 @@ export default function InstallPackageScreen() {
   const cancel = useInstallQueue((s) => s.cancel);
   const retry = useInstallQueue((s) => s.retry);
   const clearFinished = useInstallQueue((s) => s.clearFinished);
-  const setLocalPs5Path = useInstallQueue((s) => s.setLocalPs5Path);
   const add = useInstallQueue((s) => s.add);
 
   const [pickError, setPickError] = useState<string | null>(null);
@@ -404,7 +403,6 @@ export default function InstallPackageScreen() {
                 onRemove={() => remove(it.id)}
                 onCancel={() => cancel(it.id)}
                 onRetry={() => retry(it.id)}
-                setLocalPs5Path={setLocalPs5Path}
               />
             ))}
           </ul>
@@ -525,14 +523,12 @@ function InstallRow({
   onRemove,
   onCancel,
   onRetry,
-  setLocalPs5Path,
 }: {
   item: InstallQueueItem;
   t: (k: string, fb: string) => string;
   onRemove: () => void;
   onCancel: () => void;
   onRetry: () => void;
-  setLocalPs5Path: (id: string, path: string | null) => void;
 }) {
   const isActive = item.status === "running";
   const pct =
@@ -650,8 +646,40 @@ function InstallRow({
         </div>
       )}
 
+      {/* Tier-1 staging upload progress. Shown only while phase=staging,
+       *  i.e. before the actual install kicks off. Once the worker
+       *  transitions to queued/download/install, the regular progress
+       *  bar below takes over. */}
+      {isActive && item.phase === "staging" && item.totalBytes > 0 && (
+        <div className="mt-2">
+          <div className="mb-1 flex items-baseline justify-between text-[11px] text-[var(--color-muted)]">
+            <span>
+              {t(
+                "install.staging",
+                "Uploading to PS5 staging…",
+              )}
+            </span>
+            <span className="tabular-nums">
+              {fmtBytes(item.stagingBytes)} / {fmtBytes(item.totalBytes)}
+            </span>
+          </div>
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--color-surface-3)]">
+            <div
+              className="h-full bg-[var(--color-accent)] transition-[width] duration-300"
+              style={{
+                width: `${
+                  item.totalBytes > 0
+                    ? Math.min(100, (item.stagingBytes / item.totalBytes) * 100)
+                    : 0
+                }%`,
+              }}
+            />
+          </div>
+        </div>
+      )}
+
       {/* Progress bar */}
-      {isActive && item.totalBytes > 0 && (
+      {isActive && item.phase !== "staging" && item.totalBytes > 0 && (
         <div className="mt-2">
           <div className="mb-1 flex items-baseline justify-between text-[11px] text-[var(--color-muted)]">
             <span className="tabular-nums">
@@ -664,36 +692,6 @@ function InstallRow({
               className="h-full bg-[var(--color-accent)] transition-[width] duration-300"
               style={{ width: `${pct}%` }}
             />
-          </div>
-        </div>
-      )}
-
-      {/* Upload-then-install path picker. The PS5 reads the .pkg
-          from its local disk via a `file://` URL — substantially
-          more reliable than the HTTP-pull default on most
-          firmware/network combos. The user uploads the .pkg via
-          the Upload tab first (or via FTP), then pastes the PS5
-          path here. Empty value falls back to the legacy HTTP-host
-          flow. Only editable while the row is pending. */}
-      {item.status === "pending" && (
-        <div className="mt-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-2 text-[11px]">
-          <label className="flex items-center gap-2 font-medium">
-            <span>PS5-side path (file:// install, recommended)</span>
-            <span className="text-[var(--color-muted)]">— optional</span>
-          </label>
-          <input
-            type="text"
-            placeholder="/data/pkg/foo.pkg  (upload via the Upload tab first)"
-            value={item.localPs5Path ?? ""}
-            onChange={(e) => setLocalPs5Path(item.id, e.target.value)}
-            className="mt-1 w-full rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 font-mono text-[11px] outline-none focus:border-[var(--color-accent)]"
-            spellCheck={false}
-          />
-          <div className="mt-1 text-[10px] text-[var(--color-muted)]">
-            When set, install reads from the PS5's local disk instead
-            of fetching over HTTP. Skip the desktop-IP / firewall /
-            process-context dependencies that bite the HTTP-pull flow.
-            Leave empty to use the legacy HTTP-host install.
           </div>
         </div>
       )}
@@ -714,7 +712,7 @@ function InstallRow({
       {item.errMessage && item.status === "failed" && (
         <div className="mt-2 rounded-md border border-[var(--color-bad)] bg-[var(--color-surface-2)] p-2 text-[11px] text-[var(--color-bad)]">
           <div className="break-words">
-            {humanizePs5Error(item.errMessage)}
+            {humanizePs5Error(item.errMessage, item.errCode)}
           </div>
           {item.errCode > 0 && (
             <code className="mt-1 inline-block font-mono text-[10px] opacity-75">
@@ -722,6 +720,122 @@ function InstallRow({
             </code>
           )}
         </div>
+      )}
+
+      {/* 2.2.52 install-start diagnostics. Rendered on any row whose
+       *  diag was populated (i.e. install/start has run at least
+       *  once — pending rows that haven't started yet skip it). The
+       *  three fields capture the most common failure modes:
+       *    - register_path tells whether the fakepkg-friendly Debug
+       *      Register variant was actually used.
+       *    - intdebug_avail tells whether that variant even resolved.
+       *    - kernel_rw tells whether the loader granted us the
+       *      kernel R/W primitive needed for the privileged call.
+       *  Wrapped in <details> so users only see it when they want to. */}
+      {(item.diag.registerPath !== "" ||
+        item.stagingPath ||
+        item.diag.shelluiErr !== null ||
+        item.diag.appinstErr !== null) && (
+        <details
+          // Auto-expand on failure so the user doesn't have to click
+          // to see context for the error. On non-failed rows the
+          // disclosure stays collapsed (it's diagnostic-only — most
+          // of the time you don't need to look at it).
+          open={item.status === "failed"}
+          className="mt-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-2 text-[11px]"
+        >
+          <summary className="cursor-pointer text-[var(--color-muted)]">
+            Install-start diagnostics
+          </summary>
+          <dl className="mt-2 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 font-mono text-[10px]">
+            <dt className="text-[var(--color-muted)]">register path</dt>
+            <dd>
+              {item.diag.registerPath || "—"}
+              {item.diag.registerPath === "regular" && (
+                <span className="ml-2 text-[var(--color-warn)]">
+                  (entitlement-checked — fakepkg may fail)
+                </span>
+              )}
+              {item.diag.registerPath === "shellui-rpc" && (
+                <span className="ml-2 text-[var(--color-good)]">
+                  (Tier-1 — install routed through ShellUI's process)
+                </span>
+              )}
+            </dd>
+            <dt className="text-[var(--color-muted)]">intdebug avail</dt>
+            <dd>
+              {item.diag.intdebugAvail ? "yes" : "no"}
+              {!item.diag.intdebugAvail && (
+                <span className="ml-2 text-[var(--color-warn)]">
+                  (FW does not expose the fakepkg-friendly Register variant)
+                </span>
+              )}
+            </dd>
+            <dt className="text-[var(--color-muted)]">kernel R/W</dt>
+            <dd>
+              {item.diag.kernelRw ? "yes" : "no"}
+              {!item.diag.kernelRw && (
+                <span className="ml-2 text-[var(--color-warn)]">
+                  (no cred elevation — load via :9021)
+                </span>
+              )}
+            </dd>
+            {/* 2.2.52-fix per-tier err breakdown — null = tier didn't run,
+             *  0 = tier completed cleanly, otherwise Sony's err_code (or
+             *  our 0xE000_xxxx machinery code). Lets the user see WHERE
+             *  Tier 1 / Tier 2 broke when registerPath="none". */}
+            {item.diag.shelluiErr !== null && (
+              <>
+                <dt className="text-[var(--color-muted)]">tier 1 (shellui)</dt>
+                <dd>
+                  {item.diag.shelluiErr === 0 ? (
+                    <span className="text-[var(--color-good)]">accepted</span>
+                  ) : (
+                    <code className="text-[var(--color-bad)]">
+                      0x{item.diag.shelluiErr.toString(16).padStart(8, "0")}
+                    </code>
+                  )}
+                  {item.diag.shelluiErr === 0xe0000002 && (
+                    <span className="ml-2 text-[var(--color-warn)]">
+                      (libSceAppInstUtil not in ShellUI's address space)
+                    </span>
+                  )}
+                </dd>
+              </>
+            )}
+            {item.diag.appinstErr !== null && (
+              <>
+                <dt className="text-[var(--color-muted)]">tier 2 (appinst)</dt>
+                <dd>
+                  {item.diag.appinstErr === 0 ? (
+                    <span className="text-[var(--color-good)]">accepted</span>
+                  ) : (
+                    <code className="text-[var(--color-bad)]">
+                      0x{item.diag.appinstErr.toString(16).padStart(8, "0")}
+                    </code>
+                  )}
+                  {item.diag.appinstErr === 0x80b22404 && (
+                    <span className="ml-2 text-[var(--color-warn)]">
+                      (PlayGo HTTP-404 — process-context reject; expected on
+                      FW 9.60+)
+                    </span>
+                  )}
+                </dd>
+              </>
+            )}
+            {item.stagingPath && (
+              <>
+                <dt className="text-[var(--color-muted)]">staging path</dt>
+                <dd className="break-all">
+                  {item.stagingPath}
+                  <span className="ml-2 text-[var(--color-muted)]">
+                    (auto-deleted after install; payload sweeps stale &gt;24h)
+                  </span>
+                </dd>
+              </>
+            )}
+          </dl>
+        </details>
       )}
     </li>
   );
@@ -744,30 +858,51 @@ function PhaseTracker({
   status: InstallStatus;
   t: (k: string, fb: string) => string;
 }) {
+  // Phase → completed-step mapping. The PhaseDot at step N shows:
+  //   - CheckCircle (done)   when completed > N
+  //   - Loader2 spinning     when completed == N (in-progress, "active")
+  //   - CircleDot dim        when completed < N
+  // So for phase=install, completed=4 means dots 1-3 are CheckCircle
+  // (done) and dot 4 (Installing) shows the spinner.
+  //   staging  → step 1 spinning  (uploading bytes to PS5)
+  //   queued   → step 2 spinning  (Sony queued; no fetch yet)
+  //   download → step 3 spinning  (Sony fetching from us)
+  //   install  → step 4 spinning  (Sony decrypting + writing)
+  //   done     → all CheckCircles (status===done flips dot 4)
   const completed: number =
     status === "done"
-      ? 3
+      ? 4
       : phase === "install"
-        ? 2
-        : phase === "download" || phase === "queued"
-          ? 1
-          : 1;
+        ? 4
+        : phase === "download"
+          ? 3
+          : phase === "queued"
+            ? 2
+            : phase === "staging"
+              ? 1
+              : 0;
   return (
     <div className="flex items-center gap-1.5">
       <PhaseDot
         active={completed >= 1}
         done={completed > 1}
-        label={t("install.phase.host", "Hosting")}
+        label={t("install.phase.staging", "Uploading")}
       />
       <PhaseLine done={completed > 1} />
       <PhaseDot
         active={completed >= 2}
         done={completed > 2}
-        label={t("install.phase.download", "Downloading")}
+        label={t("install.phase.host", "Ready")}
       />
       <PhaseLine done={completed > 2} />
       <PhaseDot
         active={completed >= 3}
+        done={completed > 3}
+        label={t("install.phase.download", "Downloading")}
+      />
+      <PhaseLine done={completed > 3} />
+      <PhaseDot
+        active={completed >= 4}
         done={status === "done"}
         label={t("install.phase.install", "Installing")}
       />

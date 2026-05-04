@@ -587,6 +587,22 @@ export interface MountResult {
    *  payloads (<2.2.32) omit the field; engine defaults to true so
    *  pre-2.2.32 mounts don't trigger false warnings. */
   layout_valid?: boolean;
+  /** statfs-reported block size at the resolved mount point (2.2.52+).
+   *  0 means the field is missing from the payload response (pre-2.2.52)
+   *  or the post-mount statfs failed. Useful when diagnosing UFS images
+   *  that mount at the kernel level but read as empty — sector-size /
+   *  cluster-size mismatches between the .ffpkg image and the LVD
+   *  device tend to surface here as an unexpected value. */
+  f_bsize?: number;
+  /** statfs-reported preferred I/O block size (2.2.52+). Same diagnostic
+   *  purpose as `f_bsize` — useful when the kernel reports a fragment
+   *  size for `f_bsize` and the actual I/O block size lives here. */
+  f_iosize?: number;
+  /** True iff the kernel reports MNT_RDONLY on the resolved mount —
+   *  even when the caller passed `readOnly=false` (2.2.52+). Sony's
+   *  UFS_DOWNLOAD_DATA image_type forces RO on some firmwares and
+   *  this flag lets the UI explain why writes won't land. */
+  kernel_ro?: boolean;
 }
 
 /** Mount a disk image (.exfat / .ffpkg / .ffpfs) on the PS5 via the
@@ -899,9 +915,24 @@ export interface LibraryEntry {
 export async function scanLibrary(transferAddr: string): Promise<LibraryEntry[]> {
   const addr = toMgmtAddr(transferAddr);
   const volumesRaw = await invoke<{ volumes?: Volume[] }>("ps5_volumes", { addr });
+  // Walk every non-placeholder volume — the walker only ever reads
+  // (list_dir, stat for sce_sys/param.json), so a read-only mount is
+  // perfectly walkable. Pre-2.2.52 we filtered by `writable` too, which
+  // hid games inside a UFS-DD .ffpkg whenever the PS5 kernel forced
+  // MNT_RDONLY on the mount (Sony's UFS_DOWNLOAD_DATA image_type tends
+  // to come back read-only on some firmwares regardless of the LVD-RW
+  // flag we passed). The Move-modal still applies its own writable
+  // filter; this list is just the scan roots.
   const volumes = (volumesRaw?.volumes ?? []).filter(
-    (v) => v.writable && !v.is_placeholder
+    (v) => !v.is_placeholder
   );
+  // Set of volume roots — used by the walker to skip descending into
+  // a path that's also a top-level volume root. Without this, a /data
+  // walk and a /data/homebrew/PPSA17599 walk race for the shared
+  // visited set and one short-circuits the other; whichever wins
+  // determines whether the game inside surfaces. With it, the
+  // dedicated mount walk always runs from a clean seed.
+  const volumePathSet = new Set(volumes.map((v) => v.path));
 
   const MAX_DEPTH = 8;
   // Deliberately high — lower caps (50 k) used to bail out mid-walk on
@@ -1060,6 +1091,15 @@ export async function scanLibrary(transferAddr: string): Promise<LibraryEntry[]>
         const child = path === "/" ? `/${name}` : `${path}/${name}`;
         if (SKIP_ABS_PATHS.has(child)) continue;
         if (visited.has(child)) continue;
+        // Skip descending into another volume's root — it gets its
+        // own dedicated walkVolume call. Without this, a /data walk
+        // descending into /data/homebrew/PPSA17599 (where a .ffpkg
+        // is mounted) would mark that path visited and short-circuit
+        // the dedicated mount walk; the games inside would only
+        // surface if the /data walk reached them under the entry cap.
+        // The volumePathSet is captured at scanLibrary entry so the
+        // skip stays consistent across concurrent walks.
+        if (child !== volumePath && volumePathSet.has(child)) continue;
         stack.push({ path: child, depth: depth + 1 });
       }
     }
@@ -1506,16 +1546,31 @@ export async function payloadCheck(
   loaded: boolean;
   payloadVersion: string | null;
   ps5Kernel: string | null;
+  /** Whether the payload's process-wide ucred elevation succeeded.
+   *  True = kernel R/W primitive available; the privileged BGFT
+   *  Int-family symbols (and pkg install) will work. False (or
+   *  null) = the loader didn't grant kernel R/W; install will fail
+   *  even with the right symbols resolved. Surfaced on the
+   *  Connection screen so the user sees the prerequisite state. */
+  ucredElevated: boolean | null;
 }> {
   const resp = await invoke<{
     reachable?: boolean;
     loaded?: boolean;
-    status?: { version?: string; ps5_kernel?: string };
+    status?: {
+      version?: string;
+      ps5_kernel?: string;
+      ucred_elevated?: boolean;
+    };
   }>("payload_check", { ip });
   return {
     reachable: !!resp?.reachable,
     loaded: !!resp?.loaded,
     payloadVersion: resp?.status?.version ?? null,
     ps5Kernel: resp?.status?.ps5_kernel ?? null,
+    ucredElevated:
+      typeof resp?.status?.ucred_elevated === "boolean"
+        ? resp.status.ucred_elevated
+        : null,
   };
 }

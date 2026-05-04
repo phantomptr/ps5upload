@@ -82,6 +82,17 @@ export interface ConnectionState {
    *  cross-referencing against psdevwiki firmware build tables. null if
    *  payload hasn't replied yet or is running an older build. */
   ps5Kernel: string | null;
+  /** Whether the payload's process-wide ucred elevation succeeded.
+   *  true  = kernel R/W primitive available; privileged Sony APIs
+   *          (BGFT IntDebug Register, ShellUI hooks, fakepkg install)
+   *          will work.
+   *  false = the loader didn't grant kernel R/W; install + most
+   *          privileged ops will fail until the user loads via a
+   *          jailbroken entry point (etaHEN, kstuff, etc.).
+   *  null  = pre-2.2.52 payload that doesn't expose the field, or the
+   *          probe hasn't returned yet. Renders as "—" in the UI.
+   *  Set by Connection's payload probe + AppShell's polling tick. */
+  ucredElevated: boolean | null;
   /** True when a fresh payload-info probe is in flight and the
    *  currently-displayed payloadVersion / ps5Kernel may be stale.
    *  Set by Connection's handleSend on entry (the user just kicked
@@ -109,6 +120,7 @@ export interface ConnectionState {
         | "engineStatus"
         | "payloadVersion"
         | "ps5Kernel"
+        | "ucredElevated"
         | "payloadProbing"
       >
     >
@@ -124,6 +136,7 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   payloadStatusHost: null,
   payloadVersion: null,
   ps5Kernel: null,
+  ucredElevated: null,
   payloadProbing: false,
   step1: "idle",
   step1Msg: "Enter your PS5's address and check",

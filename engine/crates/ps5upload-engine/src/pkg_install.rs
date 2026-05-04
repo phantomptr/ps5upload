@@ -64,6 +64,12 @@ pub struct InstallSession {
     /// serving HTTP when this is set).
     pub cancelled: bool,
     pub created_at_unix: u64,
+    /// PS5-side absolute path of the Tier-1 staging file. Set on
+    /// install_start when `local_ps5_path` was provided; the
+    /// status handler best-effort fs_delete's it when the install
+    /// terminates (phase = Done | Error). Then `take()`'s the field
+    /// to None to prevent double-delete on subsequent polls.
+    pub staging_path: Option<String>,
 }
 
 #[derive(Default)]
@@ -121,21 +127,17 @@ pub struct InstallStartRequest {
     /// or fall back to "PS4GD". Useful for unknown-magic PKGs where
     /// the user picks the type manually in the UI.
     pub package_type_override: Option<String>,
-    /// Optional PS5-side absolute path to a pre-uploaded `.pkg`. When
-    /// set, the install URL becomes `file:///<path>` and the
-    /// HTTP-host setup is skipped — Sony's installer reads the
-    /// bytes from the PS5's local filesystem. This is the path
-    /// etaHEN / GoldHEN-style installers use; it's substantially
-    /// more reliable than HTTP-pull because:
+    /// PS5-side absolute path to a pkg already on the console's disk.
+    /// When `Some`, the install URL is built as `file://{local_ps5_path}`
+    /// and the HTTP-host serve_handler is not used. This is the
+    /// "Tier-1" path: bytes already on PS5-local storage + ShellUI-RPC
+    /// install + file:// URL = exactly what Settings → Debug Settings
+    /// → Game → Package Installer does internally. Bypasses both the
+    /// PlayGo HTTP-fetch authid reject (0x80B22404) and the
+    /// engine-side network plumbing entirely.
     ///
-    /// - No desktop-IP / firewall / process-context dependency.
-    /// - Sony's installer accepts file:// URIs from any caller
-    ///   context that can call sceAppInstUtilInstallByPackage.
-    /// - The PS5 needs disk space for the .pkg first, but the
-    ///   existing FTX2 single-file upload (Upload tab) puts it
-    ///   wherever the user wants.
-    ///
-    /// When unset, falls back to the legacy HTTP-host flow.
+    /// When `None`, falls back to the http://{lan-ip}:{port} flow —
+    /// the engine hosts bytes for Sony's BGFT downloader.
     pub local_ps5_path: Option<String>,
 }
 
@@ -147,6 +149,23 @@ pub struct InstallStartResponse {
     pub err_code: u32,
     pub err_message: Option<String>,
     pub detail: String,
+    /// 2.2.52 diagnostics — surfaced to the UI's "Advanced details"
+    /// expander for failed installs. Empty / false on older payloads.
+    /// `register_path` reports which BGFT Register variant ran
+    /// ("intdebug" / "regular" / "none"); `intdebug_avail` is whether
+    /// the IntDebug symbol resolved at all (false = fakepkg installs
+    /// effectively unsupported on this firmware regardless of cred);
+    /// `kernel_rw` mirrors the payload's process-wide cred-elevation
+    /// state.
+    pub register_path: String,
+    pub intdebug_avail: bool,
+    pub kernel_rw: bool,
+    /// Per-tier err codes — null when tier wasn't attempted, 0 when
+    /// it completed cleanly, otherwise the tier's err_code. Lets the
+    /// host UI distinguish "Tier 1 silently bailed out" from "Tier 1
+    /// reached Sony, who returned X". See `PkgInstallResponse`.
+    pub shellui_err: Option<u32>,
+    pub appinst_err: Option<u32>,
 }
 
 async fn install_start_handler(
@@ -164,51 +183,47 @@ async fn install_start_handler(
         .or_else(|| head_meta.package_type.clone())
         .unwrap_or_else(|| "PS4GD".to_string());
 
-    // Two URL strategies:
-    //   1. file:// — preferred when the caller has uploaded the
-    //      .pkg to the PS5's local disk first (via Upload tab or
-    //      similar) and passes its absolute path. Sony's installer
-    //      reads from disk, no network round-trip, no desktop-IP /
-    //      firewall / process-context dependency. Matches what
-    //      etaHEN's DirectPKGInstaller and GoldHEN's RPI use.
-    //   2. http:// — legacy fallback. The desktop hosts the .pkg
-    //      bytes on PS5UPLOAD_ENGINE_PORT and the PS5 pulls them.
-    //      Works when LAN routing is straightforward and the
-    //      desktop's firewall lets the PS5 connect inbound, but
-    //      community installers gave this up because of repeated
-    //      cross-firmware reliability issues.
+    // URL strategy: raw path when caller staged the pkg on PS5 disk
+    // (Tier 1). etaHEN's HookFunctions.cpp on FW 9.60+ passes the
+    // raw path WITHOUT the `file://` prefix to
+    // sceAppInstUtilInstallByPackage:
+    //   `dl_url = selected_pkgs.path;`  (no scheme)
+    // 2.2.54-fix-round-14: switched from `file://{path}` to raw
+    // `{path}` after observing Sony reject all `file://` URLs with
+    // 0x80B21106 even on a freshly-rebooted PS5. The 6.xx branch
+    // uses an HTTP loopback proxy; non-6.xx (incl. 9.60) uses the
+    // bare path. Reference:
+    // https://github.com/etaHEN/etaHEN/blob/main/Source%20Code/shellui/src/HookFunctions.cpp
     let session_id = Uuid::new_v4().to_string();
-    let url = if let Some(local_path) = req.local_ps5_path.as_deref().filter(|s| !s.is_empty()) {
-        // Reject paths that aren't absolute on the PS5 — file:// URIs
-        // need an absolute path or Sony's installer rejects with a
-        // parse error.
-        if !local_path.starts_with('/') {
-            return json_err(
-                StatusCode::BAD_REQUEST,
-                &format!("local_ps5_path must be absolute (start with /), got: {local_path}"),
-            );
+    let url = match req.local_ps5_path.as_deref() {
+        Some(p) if !p.is_empty() => {
+            // Raw path. Sony's installer reads bytes off PS5
+            // local disk; no engine-side HTTP listener needed.
+            p.to_string()
         }
-        format!("file://{local_path}")
-    } else {
-        // Pick the LAN IP this host presents to the PS5. Multi-NIC
-        // safe: bind a UDP socket "connected" to the PS5's mgmt
-        // addr and read the local addr — that's the IP the OS
-        // picked for outbound.
-        let ps5_host_only = req.ps5_addr.split(':').next().unwrap_or("").to_string();
-        let local_ip = match lan_ip_for_ps5(&ps5_host_only) {
-            Ok(ip) => ip,
-            Err(e) => {
-                return json_err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    &format!("could not determine local LAN IP for PS5 {ps5_host_only}: {e}"),
-                )
-            }
-        };
-        let host_port = std::env::var("PS5UPLOAD_ENGINE_PORT")
-            .ok()
-            .and_then(|s| s.parse::<u16>().ok())
-            .unwrap_or(19113);
-        format!("http://{local_ip}:{host_port}/pkg-host/{session_id}/file.pkg")
+        _ => {
+            // Pick the LAN IP this host presents to the PS5. Multi-NIC
+            // safe: bind a UDP socket "connected" to the PS5's mgmt
+            // addr and read the local addr — that's the IP the OS
+            // picked for outbound.
+            let ps5_host_only = req.ps5_addr.split(':').next().unwrap_or("").to_string();
+            let local_ip = match lan_ip_for_ps5(&ps5_host_only) {
+                Ok(ip) => ip,
+                Err(e) => {
+                    return json_err(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        &format!(
+                            "could not determine local LAN IP for PS5 {ps5_host_only}: {e}"
+                        ),
+                    )
+                }
+            };
+            let host_port = std::env::var("PS5UPLOAD_ENGINE_PORT")
+                .ok()
+                .and_then(|s| s.parse::<u16>().ok())
+                .unwrap_or(19113);
+            format!("http://{local_ip}:{host_port}/pkg-host/{session_id}/file.pkg")
+        }
     };
 
     let session = InstallSession {
@@ -234,15 +249,42 @@ async fn install_start_handler(
         detail: String::new(),
         cancelled: false,
         created_at_unix: now_unix(),
+        staging_path: req.local_ps5_path.clone().filter(|s| !s.is_empty()),
     };
 
     // Insert *before* sending the install frame so the HTTP listener
     // is ready to serve when BGFT starts pulling immediately on its end.
-    state
-        .sessions
-        .lock()
-        .unwrap()
-        .insert(session_id.clone(), session.clone());
+    //
+    // 2.2.55: opportunistic GC pass under the same lock to bound the
+    // sessions map across a long-running engine.
+    //
+    // Two-policy GC, by design — see `gc_old_sessions` for the
+    // status-poll-time fallback. Policies:
+    //   1. (here, install_start) Drop sessions whose staging_path is
+    //      already None AND that are older than ~half the
+    //      configured max-age. staging_path == None is a strong
+    //      "we already cleaned up" signal — set by the terminal,
+    //      register-reject, and cancel paths. Aggressive prune of
+    //      definitely-done sessions, while still keeping recent
+    //      rows the UI may poll.
+    //   2. (gc_old_sessions, status_handler) Pure age-based prune at
+    //      full max-age; runs on every status poll. Catches
+    //      sessions that never reached terminal (e.g. user closed
+    //      the app mid-install, no cancel ever fired).
+    //
+    // Without this insert-time pass, a sequence of register-reject
+    // failures (no status polls fire because the UI sees the
+    // immediate error) would bloat the map unbounded — gc_old_sessions
+    // alone wouldn't help because nothing calls status.
+    {
+        let mut sessions = state.sessions.lock().unwrap();
+        let now = now_unix();
+        let aggressive_cutoff = now.saturating_sub(pkg_session_max_age_sec() / 2);
+        sessions.retain(|_, s| {
+            s.created_at_unix > aggressive_cutoff || s.staging_path.is_some()
+        });
+        sessions.insert(session_id.clone(), session.clone());
+    }
 
     let install_req = PkgInstallRequest {
         url: url.clone(),
@@ -252,11 +294,29 @@ async fn install_start_handler(
         package_type,
     };
 
+    crate::log_info!(
+        "pkg_install: addr={} session={} url={} content_id={} title={:?} package_type={} parts={} total={} bytes",
+        req.ps5_addr,
+        session_id,
+        url,
+        session.content_id,
+        session.title,
+        install_req.package_type,
+        session.parts.len(),
+        total_size,
+    );
+
     let resp: PkgInstallResponse = match pkg_install(&req.ps5_addr, &install_req) {
         Ok(r) => r,
         Err(e) => {
             // Roll back the session — the install never started.
             state.sessions.lock().unwrap().remove(&session_id);
+            crate::log_warn!(
+                "pkg_install RPC failed: session={} addr={} err={}",
+                session_id,
+                req.ps5_addr,
+                e,
+            );
             return json_err(
                 StatusCode::BAD_GATEWAY,
                 &format!("payload PKG_INSTALL failed: {e}"),
@@ -275,6 +335,69 @@ async fn install_start_handler(
 
     let err_message = err_code_message(resp.err_code).map(|s| s.to_string());
 
+    if resp.err_code == 0 {
+        crate::log_info!(
+            "pkg_install ok: session={} task_id={} register_path={} intdebug_avail={} kernel_rw={}",
+            session_id,
+            resp.task_id,
+            resp.register_path,
+            resp.intdebug_avail,
+            resp.kernel_rw,
+        );
+    } else {
+        // Sony rejected the register call. Log enough context to
+        // diagnose post-mortem without ssh — the diagnostic disclosure
+        // in the UI shows the same fields, but engine.log gives an
+        // append-only history per attempt.
+        crate::log_warn!(
+            "pkg_install rejected: session={} err_code=0x{:08x} detail={:?} register_path={} intdebug_avail={} kernel_rw={} shellui_err={} appinst_err={}",
+            session_id,
+            resp.err_code,
+            resp.detail,
+            resp.register_path,
+            resp.intdebug_avail,
+            resp.kernel_rw,
+            resp.shellui_err.map_or("null".to_string(), |e| format!("0x{e:08x}")),
+            resp.appinst_err.map_or("null".to_string(), |e| format!("0x{e:08x}")),
+        );
+        // 2.2.55: best-effort staging cleanup on register-reject.
+        // If Sony rejected the register call (e.g. duplicate
+        // content_id, bad authid, FW gate), the install never
+        // entered the BGFT phase machine, so the terminal-phase
+        // cleanup at status-poll time will never fire — and the
+        // staging file would otherwise leak on PS5 disk until the
+        // payload's 24h sweep, polluting Sony's installer queue
+        // and surfacing as 0x80B21106 on the user's NEXT attempt
+        // with the same content_id. Cleaning here makes a failed
+        // register idempotent: retry-after-fix works without
+        // residue. Take() so we don't double-delete if status
+        // somehow runs later. Spawn-blocking because fs_delete
+        // does sync I/O over the mgmt socket.
+        let path_to_clean = {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions
+                .get_mut(&session_id)
+                .and_then(|s| s.staging_path.take())
+        };
+        if let Some(path) = path_to_clean {
+            let addr = req.ps5_addr.clone();
+            let sid = session_id.clone();
+            tokio::task::spawn_blocking(move || {
+                if let Err(e) = ps5upload_core::fs_ops::fs_delete(&addr, &path) {
+                    crate::log_warn!(
+                        "register-reject staging cleanup failed: session={} addr={} path={} err={}",
+                        sid, addr, path, e
+                    );
+                } else {
+                    crate::log_info!(
+                        "register-reject staging cleaned: session={} addr={} path={}",
+                        sid, addr, path
+                    );
+                }
+            });
+        }
+    }
+
     json_ok(&InstallStartResponse {
         session_id,
         url,
@@ -282,6 +405,11 @@ async fn install_start_handler(
         err_code: resp.err_code,
         err_message,
         detail: resp.detail,
+        register_path: resp.register_path,
+        intdebug_avail: resp.intdebug_avail,
+        kernel_rw: resp.kernel_rw,
+        shellui_err: resp.shellui_err,
+        appinst_err: resp.appinst_err,
     })
 }
 
@@ -302,6 +430,19 @@ pub struct StatusResponse {
     pub err_message: Option<String>,
     pub detail: String,
     pub cancelled: bool,
+    /// Live diagnostic snapshot (matches the install/start ack shape).
+    /// Pre-2.2.52-fix-round-2 the host only saw these from install/start;
+    /// if BGFT transitioned to phase=error mid-install the user's
+    /// "Why?" disclosure showed start-time values that said everything
+    /// was fine. Now they refresh on every status poll. Empty / false
+    /// for installs against pre-2.2.52 payloads (serde defaults).
+    pub register_path: String,
+    pub intdebug_avail: bool,
+    pub kernel_rw: bool,
+    /// Live per-tier err breakdown — same semantic as the install/start
+    /// response, refreshed every status poll. See `InstallStartResponse`.
+    pub shellui_err: Option<u32>,
+    pub appinst_err: Option<u32>,
 }
 
 /// Default maximum age (seconds) of an install session before the
@@ -394,6 +535,35 @@ async fn install_status_handler(
         total
     };
 
+    // 2.2.52 Tier-1 staging cleanup. On terminal phase (Done | Error),
+    // delete the staging file the desktop uploaded pre-install. We
+    // `take()` the path so we never re-issue a delete on subsequent
+    // polls. Best-effort: fs_delete failure is logged but not
+    // propagated — the payload's 24h sweep is the safety net.
+    if matches!(status.phase, InstallPhase::Done | InstallPhase::Error) {
+        let path_to_clean = {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions
+                .get_mut(&q.session)
+                .and_then(|s| s.staging_path.take())
+        };
+        if let Some(path) = path_to_clean {
+            let addr = ps5_addr.clone();
+            tokio::task::spawn_blocking(move || {
+                if let Err(e) = ps5upload_core::fs_ops::fs_delete(&addr, &path) {
+                    crate::log_warn!(
+                        "staging cleanup failed: addr={} path={} err={}",
+                        addr,
+                        path,
+                        e
+                    );
+                } else {
+                    crate::log_info!("staging cleaned: addr={} path={}", addr, path);
+                }
+            });
+        }
+    }
+
     json_ok(&StatusResponse {
         session_id: q.session,
         phase: status.phase,
@@ -403,6 +573,11 @@ async fn install_status_handler(
         err_message: err_code_message(status.err_code).map(|s| s.to_string()),
         detail: status.detail,
         cancelled,
+        register_path: status.register_path,
+        intdebug_avail: status.intdebug_avail,
+        kernel_rw: status.kernel_rw,
+        shellui_err: status.shellui_err,
+        appinst_err: status.appinst_err,
     })
 }
 
@@ -426,20 +601,48 @@ async fn install_cancel_handler(
     State(state): State<PkgInstallStateHandle>,
     Json(req): Json<CancelRequest>,
 ) -> Response<Body> {
-    let mut sessions = state.sessions.lock().unwrap();
-    match sessions.get_mut(&req.session) {
-        Some(s) => {
-            s.cancelled = true;
-            json_ok(&CancelResponse {
-                session_id: req.session,
-                host_stopped: true,
-            })
+    // 2.2.55: also take() the staging path so we can delete it after
+    // releasing the lock. Pre-fix the cancel path left the file on
+    // PS5 disk forever — same Sony-queue-pollution failure mode as
+    // the register-reject leak. Pull both fields under a single
+    // lock acquisition so we never race with status_handler taking
+    // the path first.
+    let (cancel_ack, path_to_clean, ps5_addr) = {
+        let mut sessions = state.sessions.lock().unwrap();
+        match sessions.get_mut(&req.session) {
+            Some(s) => {
+                s.cancelled = true;
+                let path = s.staging_path.take();
+                let addr = s.ps5_mgmt_addr.clone();
+                (true, path, addr)
+            }
+            None => return json_err(
+                StatusCode::NOT_FOUND,
+                &format!("no install session {}", req.session),
+            ),
         }
-        None => json_err(
-            StatusCode::NOT_FOUND,
-            &format!("no install session {}", req.session),
-        ),
+    };
+    if let Some(path) = path_to_clean {
+        let sid = req.session.clone();
+        tokio::task::spawn_blocking(move || {
+            if let Err(e) = ps5upload_core::fs_ops::fs_delete(&ps5_addr, &path) {
+                crate::log_warn!(
+                    "cancel staging cleanup failed: session={} addr={} path={} err={}",
+                    sid, ps5_addr, path, e
+                );
+            } else {
+                crate::log_info!(
+                    "cancel staging cleaned: session={} addr={} path={}",
+                    sid, ps5_addr, path
+                );
+            }
+        });
     }
+    let _ = cancel_ack;
+    json_ok(&CancelResponse {
+        session_id: req.session,
+        host_stopped: true,
+    })
 }
 
 // ─── /pkg-host/:session/file.pkg ─────────────────────────────────────
@@ -449,8 +652,35 @@ async fn serve_handler(
     AxumPath(session): AxumPath<String>,
     headers: HeaderMap,
 ) -> Response<Body> {
-    let session = match state.sessions.lock().unwrap().get(&session) {
-        Some(s) if !s.cancelled => s.clone(),
+    // Log every PS5-side fetch attempt. Critical for diagnosing the
+    // SCE_PLAYGO_ERROR_CORE_HTTP_STATUS_CODE_404_NOT_FOUND (0x80B22404)
+    // class of failures: Sony's PlayGo HTTP client got a 404 from us
+    // and we need to see exactly what URL/method/range it asked for
+    // to figure out why. Captures the Range header and the User-Agent
+    // (to identify which Sony component is making the request).
+    let range = headers
+        .get(header::RANGE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("(none)");
+    let ua = headers
+        .get(header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("(none)");
+    // 2.2.55: single lock acquisition (was two — one for `contains_key`
+    // logging, one for the actual `.get`). Cuts mutex pressure under
+    // BGFT's parallel range fetches and removes the small TOCTOU window
+    // where the session could be cancelled between the two acquisitions.
+    let session_lookup = {
+        let sessions = state.sessions.lock().unwrap();
+        sessions.get(&session).cloned()
+    };
+    let session_known = session_lookup.is_some();
+    crate::log_info!(
+        "pkg-host fetch: session={} known={} range={:?} user-agent={:?}",
+        session, session_known, range, ua,
+    );
+    let session = match session_lookup {
+        Some(s) if !s.cancelled => s,
         Some(_) => return plain_response(StatusCode::GONE, "install session was cancelled"),
         None => return plain_response(StatusCode::NOT_FOUND, "no such install session"),
     };
@@ -630,6 +860,7 @@ mod tests {
             detail: String::new(),
             cancelled: false,
             created_at_unix: 0,
+            staging_path: None,
         }
     }
 

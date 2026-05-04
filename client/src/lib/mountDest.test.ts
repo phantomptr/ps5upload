@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   MOUNT_DEFAULT_SUBPATH,
   MOUNT_PRESETS,
-  fallbackMountVolumes,
   loadMountDest,
   payloadSupportsMountPoint,
   resolveMountPath,
@@ -147,8 +146,5 @@ describe("MOUNT_PRESETS + defaults", () => {
   });
   it("default subpath matches Upload's homebrew default", () => {
     expect(MOUNT_DEFAULT_SUBPATH).toBe("homebrew");
-  });
-  it("fallback volumes are non-empty even when the live probe hasn't run", () => {
-    expect(fallbackMountVolumes().length).toBeGreaterThan(0);
   });
 });

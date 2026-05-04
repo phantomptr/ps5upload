@@ -79,6 +79,51 @@ int shellui_rpc_get_soc_temp(int *out_celsius);
 int shellui_rpc_get_cpu_freq_hz(long *out_hz);
 int shellui_rpc_get_soc_power_mw(uint32_t *out_mw);
 
+/* Install a `.pkg` via ShellUI's `sceAppInstUtilInstallByPackage`,
+ * invoked through ptrace remote-call so the caller-pid that Sony's
+ * PlayGo subsystem sees is SceShellUI's — same context the system's
+ * own Settings → Debug Settings → Install Package menu uses. This
+ * is the path that works on FW 9.60+ where direct AppInstUtil calls
+ * from our payload's process get rejected with 0x80B22404
+ * (SCE_PLAYGO_ERROR_CORE_HTTP_STATUS_CODE_404_NOT_FOUND) at URL
+ * pre-flight regardless of cred-forge.
+ *
+ * Mechanism per remote call:
+ *   1. pt_attach to ShellUI.
+ *   2. pt_mmap a ~16 KiB scratch region in ShellUI's address space.
+ *   3. Build MetaInfo + AppInstPkgInfo + PlayGoInfo + their string
+ *      payloads in a local buffer with all pointer fields fixed up
+ *      to point at the corresponding offsets WITHIN the scratch
+ *      region's eventual address.
+ *   4. pt_copyin the local buffer to scratch.
+ *   5. pt_call sceAppInstUtilInitialize() — idempotent; treats
+ *      "already initialised" returns as success.
+ *   6. pt_call sceAppInstUtilInstallByPackage(scratch+meta_off,
+ *      scratch+pkginfo_off, scratch+playgo_off).
+ *   7. Read rax — install accept (0) or Sony error code.
+ *   8. pt_munmap, pt_detach.
+ *
+ * `url`           HTTP URL or absolute PS5 file path Sony's PlayGo
+ *                 should fetch. http://desktop:port/...pkg works in
+ *                 ShellUI's process context where it doesn't in ours.
+ * `content_id`    36-byte content_id from the PKG header (or empty
+ *                 — Sony fills it in the pkg_info struct on return,
+ *                 we don't seed it).
+ * `title`         Display name shown in PS5 install notifications.
+ * `out_err_code`  On return: 0 on accept, or Sony's error code
+ *                 (0x80A2FFxx for AppInstaller errors, 0x80B2xxxx
+ *                 for PlayGo, 0xE000000x for our own machinery).
+ *
+ * Returns 0 if ShellUI accepted the install request. Negative on
+ * RPC machinery failure (couldn't attach, mmap, copyin, or
+ * AppInstUtil isn't loaded into ShellUI's address space). Sony's
+ * own non-zero return goes through the `out_err_code` channel with
+ * a positive return value as documented in launch_app. */
+int shellui_rpc_install_pkg(const char *url,
+                             const char *content_id,
+                             const char *title,
+                             uint32_t *out_err_code);
+
 /* Crash-time recovery: best-effort PT_DETACH any target we have an
  * active attach on. Called from main.c's fatal-signal handler so
  * that if our payload SIGSEGV's mid-RPC we don't leave SceShellUI

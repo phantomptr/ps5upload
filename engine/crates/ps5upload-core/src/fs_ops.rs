@@ -507,6 +507,27 @@ pub struct MountResult {
     /// warning on pre-2.2.32 payloads.
     #[serde(default = "default_layout_valid")]
     pub layout_valid: bool,
+    /// statfs-reported block size at the resolved mount point. Added
+    /// in 2.2.52 to help diagnose UFS images that mount at the kernel
+    /// level but read as empty (typically a sector-size/cluster-size
+    /// mismatch between the image and the LVD-exposed device). Older
+    /// payloads omit the field; serde-default to 0 so a missing value
+    /// doesn't read as a fake validation failure on pre-2.2.52 mounts.
+    #[serde(default)]
+    pub f_bsize: u64,
+    /// statfs-reported preferred I/O block size. Same diagnostics
+    /// purpose as `f_bsize` — useful when the kernel reports a
+    /// fragment size for `f_bsize` and the actual I/O block size lives
+    /// here instead. Added in 2.2.52.
+    #[serde(default)]
+    pub f_iosize: u64,
+    /// True if the kernel reports `MNT_RDONLY` on the resolved mount
+    /// point — even when the caller passed `read_only=false`. PS5's
+    /// UFS_DOWNLOAD_DATA image_type forces RO on some firmwares and
+    /// surfacing this lets the UI explain to the user why writes
+    /// won't land. Added in 2.2.52.
+    #[serde(default)]
+    pub kernel_ro: bool,
 }
 
 fn default_layout_valid() -> bool {

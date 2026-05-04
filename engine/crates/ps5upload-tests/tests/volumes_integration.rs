@@ -54,3 +54,37 @@ fn list_volumes_empty() {
     let result = list_volumes(&srv.addr).expect("list_volumes should succeed on empty list");
     assert!(result.volumes.is_empty());
 }
+
+/// Pins the 2.2.51 payload contract: a `.ffpkg` mounted at a user-chosen
+/// path (e.g. `/data/homebrew/PPSA17599`) surfaces in the FS_LIST_VOLUMES
+/// response with its `source_image` populated from the payload's
+/// `.src` tracker — and the engine round-trips that field cleanly. The
+/// pre-2.2.51 payload bug filtered such non-prefixed paths out before
+/// the tracker check; this integration test catches a regression that
+/// re-introduces a payload-side path filter while leaving the wire shape
+/// unchanged.
+#[test]
+fn list_volumes_surfaces_user_chosen_mount_with_tracker() {
+    let srv = MockServer::start();
+    {
+        let mut st = srv.state.lock().unwrap();
+        st.volumes_json = r#"{"volumes":[
+            {"path":"/data","mount_from":"/dev/ssd0.user","fs_type":"nullfs","total_bytes":800000000000,"free_bytes":500000000000,"writable":true,"is_placeholder":false},
+            {"path":"/data/homebrew/PPSA17599","mount_from":"/dev/lvd0","fs_type":"ufs","total_bytes":50000000000,"free_bytes":0,"writable":true,"is_placeholder":false,"source_image":"/data/homebrew/PPSA17599.ffpkg"}
+        ]}"#.to_string();
+    }
+    let result = list_volumes(&srv.addr).expect("list_volumes should succeed");
+    let mount = result
+        .find("/data/homebrew/PPSA17599")
+        .expect("user-chosen mount path is surfaced");
+    assert_eq!(mount.source_image, "/data/homebrew/PPSA17599.ffpkg");
+    assert_eq!(mount.fs_type, "ufs");
+    assert!(
+        mount.writable,
+        "writable flag should round-trip from MNT_RDONLY=0",
+    );
+    // Library scan reads source_image off the volume; back-compat default
+    // for older payloads is "" (no tracker recorded).
+    let data = result.find("/data").expect("/data present");
+    assert_eq!(data.source_image, "", "non-ours mounts have empty source");
+}

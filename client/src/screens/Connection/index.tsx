@@ -372,6 +372,7 @@ export default function ConnectionScreen() {
               payloadStatusHost: host,
               payloadVersion: status.payloadVersion,
               ps5Kernel: status.ps5Kernel,
+              ucredElevated: status.ucredElevated,
               payloadProbing: false,
             });
           }
@@ -730,6 +731,7 @@ function VersionBlock({ onResend }: { onResend?: () => void }) {
   const tr = useTr();
   const payloadVersion = useConnectionStore((s) => s.payloadVersion);
   const ps5Kernel = useConnectionStore((s) => s.ps5Kernel);
+  const ucredElevated = useConnectionStore((s) => s.ucredElevated);
   const payloadProbing = useConnectionStore((s) => s.payloadProbing);
   const ps5Firmware = parsePS5Firmware(ps5Kernel);
 
@@ -850,6 +852,45 @@ function VersionBlock({ onResend }: { onResend?: () => void }) {
             </dt>
             <dd className="break-all text-[var(--color-muted)]">
               {ps5Kernel}
+            </dd>
+          </>
+        )}
+        {ucredElevated !== null && (
+          <>
+            <dt className="text-[var(--color-muted)]">
+              {tr("connection_kernel_rw", undefined, "Kernel R/W")}
+            </dt>
+            <dd
+              className={
+                // While `payloadProbing` is true the value we're
+                // showing is from BEFORE the new payload booted —
+                // dim+italic to match how `payloadVersion` /
+                // `ps5Kernel` get treated (see `valueClass`). Without
+                // this, a green "available" pill could persist while
+                // the user has just clicked Replace payload, falsely
+                // suggesting the new payload elevated successfully.
+                payloadProbing
+                  ? "text-[var(--color-muted)] italic"
+                  : ucredElevated
+                    ? "text-[var(--color-good)]"
+                    : "text-[var(--color-warn)]"
+              }
+            >
+              {ucredElevated ? (
+                tr(
+                  "connection_kernel_rw_yes",
+                  undefined,
+                  "available — privileged install enabled",
+                )
+              ) : (
+                <>
+                  {tr(
+                    "connection_kernel_rw_no",
+                    undefined,
+                    "not available — load via :9021 (jailbreak loader). Pkg install will fail without this.",
+                  )}
+                </>
+              )}
             </dd>
           </>
         )}
