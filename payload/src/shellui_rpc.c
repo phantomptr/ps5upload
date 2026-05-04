@@ -487,23 +487,41 @@ int shellui_rpc_launch_app(const char *title_id, int user_id_hint) {
     return (int)rc;
 }
 
-/* 2.2.55: sensor reads now retry-with-reresolve on failure.
+/* 2.2.55 + 2.2.59: sensor reads retry-with-reresolve + authid-rearm.
  *
- * The original failure mode: ShellUI process respawns periodically
- * (e.g. when Sony's UI returns to home from a game), and the
- * cached symbol address (g_addr_get_cpu_temp et al.) gets a stale
- * value pointing at a different memory layout — first sensor read
- * after a fresh payload push works because resolve just ran;
- * subsequent reads after ShellUI respawn fail silently with
- * pt_call returning -1 or copyout returning garbage.
+ * Original failure mode (2.2.55 fixed): ShellUI respawns silently
+ * invalidate cached symbol addresses; first sensor read after a fresh
+ * payload push works, subsequent reads return garbage.
  *
- * The retry path: if the first attempt fails, force a re-resolve
- * (find ShellUI's current pid + re-dlsym all symbols), then retry
- * the call ONCE with fresh values. Doesn't loop forever — if a FW
- * doesn't expose the symbol at all (NID-only on some 9.x points),
- * re-resolve won't fix it, and we shouldn't burn pt_attach cycles
- * spamming the same dead read. */
+ * Persistent failure mode (2.2.59 fix): even with the symbol re-resolve,
+ * sensor reads stop working FOREVER after an NPXS install attempt or
+ * any ptrace path that mutates our process's ucred authid. Path:
+ *   bgft.c::appinst_install_start saves authid, swaps to ShellCore,
+ *   calls install, restores authid. The restore is best-effort; if
+ *   it fails (sceKernelSetUcredAttrs returned non-zero, race vs.
+ *   another thread doing kernel R/W, etc.), our process is stuck
+ *   with ShellCore authid 0x3800… instead of debugger authid 0x4800….
+ *   Subsequent pt_attach for sensor reads fails inside sys_ptrace's
+ *   authid swap because ShellCore authid isn't on the ptrace allowlist.
+ *
+ * The fix: on every retry path, re-apply the debugger authid directly.
+ * Idempotent + cheap when authid is already correct (kernel_set_ucred_*
+ * is a single sysctl-style call). When authid was wrong, this restores
+ * it and the retry pt_attach succeeds.
+ *
+ * Don't loop forever: try, fail → reresolve+rearm+retry → fail → -1.
+ * If a FW doesn't expose the symbol at all (NID-only on some 9.x points),
+ * burning more pt_attach cycles won't help. */
+extern int kernel_set_ucred_authid(pid_t pid, uint64_t authid);
+#define PS5_DEBUGGER_AUTHID  0x4800000000000006ull
+
 static void force_reresolve_locked(void) {
+    /* Re-arm the debugger authid before re-resolve. If a prior
+     * bgft.c install path failed to restore on its way out, our
+     * process authid is wrong and the pt_attach inside the next
+     * resolve pass will fail too — making the symbol re-resolve
+     * itself a no-op. Restoring authid first is the prerequisite. */
+    (void)kernel_set_ucred_authid(-1, PS5_DEBUGGER_AUTHID);
     pthread_mutex_lock(&g_rpc_mtx);
     (void)shellui_rpc_resolve_locked();
     pthread_mutex_unlock(&g_rpc_mtx);

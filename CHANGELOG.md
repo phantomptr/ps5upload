@@ -4,6 +4,27 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.2.59
+
+**Hardware sensor self-heal + actionable Unmount-busy message**
+
+- **Sensors stop working over time** — root cause: bgft.c's per-call
+  ShellCore-authid swap could fail to restore the debugger authid on
+  the way out (silent best-effort write). Stuck-with-ShellCore-authid
+  meant every subsequent ptrace failed inside the kernel's authid
+  allowlist check, including sensor reads. Fix: bgft.c restore is now
+  retry-with-verify (3 attempts, read-back to confirm), and the
+  shellui_rpc sensor retry path now re-arms the debugger authid before
+  the second attempt — self-heals even if bgft.c missed the restore.
+- **Unmount EBUSY → "game is running"** — payload `fs_unmount_failed`
+  now distinguishes EBUSY (game has files inside the mount open) and
+  EACCES/EPERM (lost root cred) from the generic case. Frontend
+  humanizer surfaces "the game inside this image is currently running
+  on the PS5. Exit it (PS Home → close the game) and try again." The
+  user gets actionable guidance instead of a generic "unmount failed".
+
+---
+
 ## 2.2.58
 
 **Install Package: replace per-row NPXS warning with a page-level note**

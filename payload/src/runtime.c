@@ -6917,8 +6917,23 @@ static int handle_fs_unmount(runtime_state_t *state, int client_fd,
     }
 
     if (fs_mount_try_unmount(mount_point) != 0) {
+        /* 2.2.59: differentiate EBUSY ("game is running, files
+         * inside the mount are open") from generic failure. The
+         * frontend uses the specific reason to show a
+         * "exit the game on the PS5 first" hint instead of the
+         * generic "unmount failed" — much more actionable. */
+        int saved_errno = errno;
+        const char *reason = "fs_unmount_failed";
+        size_t reason_len = 17;
+        if (saved_errno == EBUSY) {
+            reason = "fs_unmount_busy";
+            reason_len = 15;
+        } else if (saved_errno == EACCES || saved_errno == EPERM) {
+            reason = "fs_unmount_permission";
+            reason_len = 21;
+        }
         return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
-                          "fs_unmount_failed", 17);
+                          reason, reason_len);
     }
     /* Best-effort detach. Worst case we leave the attachment; a fresh
      * mount of the same image gets a new unit. Never fail the user

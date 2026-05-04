@@ -58,6 +58,20 @@ export function humanizePs5Error(
     return raw;
   }
 
+  // ─── Unmount: kernel-busy (game running) ─────────────────────────────
+  // Payload returns `fs_unmount_busy` when the kernel refused the
+  // unmount with EBUSY — the most common cause is that a process on
+  // the PS5 has files inside the mount open (i.e. the game is
+  // running). Pre-2.2.59 the same case surfaced as a generic
+  // "fs_unmount_failed" with no actionable hint. Surface what's
+  // actually wrong and what the user should do.
+  if (/fs_unmount_busy/i.test(raw)) {
+    return "Can't unmount: the game inside this image is currently running on the PS5. Exit it (PS Home → close the game) and try again.";
+  }
+  if (/fs_unmount_permission/i.test(raw)) {
+    return "Can't unmount: kernel refused with EACCES/EPERM. The payload may have lost root credentials — reload it from Connection → Send payload.";
+  }
+
   // ─── NPXS system-pkg + mgmt disconnect mid-install ─────────────────
   // Sony accepts the register call (we see `register_path=shellui-rpc
   // accepted`) but `sceAppInstUtilInstallByPackage` isn't designed

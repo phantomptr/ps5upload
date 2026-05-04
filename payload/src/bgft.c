@@ -339,14 +339,29 @@ static int appinst_install_start(const char *url,
 
     int rc = sceAppInstUtilInstallByPackage(&meta, &pkg_info, &playgo);
 
-    /* Restore prior authid. Best-effort: if restore fails, our
-     * process keeps ShellCore authid which would silently break
-     * subsequent ptrace ops. Log loudly so the diag surfaces it. */
+    /* Restore prior authid. 2.2.59: retry-with-verification. Pre-fix
+     * a single best-effort write left our process stuck with
+     * ShellCore authid on rare write failures, breaking ALL
+     * subsequent ptrace ops (sensor reads, app launch, etc.). Now:
+     *   1. Try the write up to 3 times.
+     *   2. After each attempt, read authid back; if it matches
+     *      `saved_authid`, we're done.
+     *   3. If all 3 fail, log loudly. The shellui_rpc.c sensor path
+     *      also re-arms the debugger authid on retry as a final
+     *      safety net (see force_reresolve_locked). */
     if (authid_swapped) {
-        if (kernel_set_ucred_authid(mypid, saved_authid) != 0) {
+        int restored = 0;
+        for (int attempt = 0; attempt < 3 && !restored; attempt++) {
+            (void)kernel_set_ucred_authid(mypid, saved_authid);
+            if (kernel_get_ucred_authid(mypid) == saved_authid) {
+                restored = 1;
+                break;
+            }
+        }
+        if (!restored) {
             fprintf(stderr,
                     "[bgft] WARN: failed to restore authid 0x%llx after "
-                    "InstallByPackage; subsequent ptrace may fail.\n",
+                    "InstallByPackage (3 attempts); shellui_rpc will rearm.\n",
                     (unsigned long long)saved_authid);
         }
     }
@@ -397,8 +412,17 @@ static int appinst_install_status(int32_t task_id,
 
     int rc = sceAppInstUtilGetInstallStatus(content_id, &st);
 
+    /* Restore prior authid with retry-then-verify (same pattern as
+     * appinst_install_start). The 2.2.59 self-heal in shellui_rpc.c
+     * still catches a missed restore, but verifying here keeps the
+     * window during which our authid is wrong as small as possible —
+     * concurrent sensor reads on another mgmt thread won't see a
+     * transient bad-authid state if the very first write succeeded. */
     if (saved_authid != 0) {
-        (void)kernel_set_ucred_authid(mypid, saved_authid);
+        for (int attempt = 0; attempt < 3; attempt++) {
+            (void)kernel_set_ucred_authid(mypid, saved_authid);
+            if (kernel_get_ucred_authid(mypid) == saved_authid) break;
+        }
     }
 
     if (rc != 0) {
