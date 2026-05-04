@@ -863,6 +863,35 @@ export const useInstallQueue = create<InstallQueueState>((set, get) => ({
         persist(items);
       }
 
+      // 2.2.57: NPXS system-pkg fast-path. Sony accepted the register
+      // (we have a task_id), but `sceAppInstUtilInstallByPackage`
+      // wasn't designed for system patches — the mgmt service freezes
+      // while Sony does its install work, every status poll fails,
+      // and we'd hit pollErrors >= 5 and surface as "failed" even
+      // though the install IS proceeding on the PS5 (the user can
+      // confirm via the console's notification panel + Settings →
+      // Notifications). This is what etaHEN's DPI does for system
+      // pkgs: fire-and-forget with on-console verification, not
+      // status polling.
+      //
+      // Path:
+      //   - register accepts → sleep ~3s (let Sony's install start)
+      //   - mark as "done" with a special message pointing the user
+      //     at the PS5's notification panel
+      //   - skip the poll loop entirely
+      //
+      // Game pkgs (CUSA / PPSA / PCSA / EP / UP / etc.) keep the
+      // normal poll loop — they reliably surface phase=done via
+      // `sceAppInstUtilGetInstallStatus` and the user gets real
+      // progress.
+      const isNpxsContent = /^[A-Z]{2}\d{4}-NPXS\d+/i.test(next.contentId);
+      if (isNpxsContent) {
+        await sleep(3000);
+        if (!isLive()) return;
+        markDone(get, set, next.id);
+        continue;
+      }
+
       // Poll until done or error.
       let phase: InstallPhase = "queued";
       let pollErrors = 0;
