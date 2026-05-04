@@ -212,9 +212,7 @@ async fn install_start_handler(
                 Err(e) => {
                     return json_err(
                         StatusCode::INTERNAL_SERVER_ERROR,
-                        &format!(
-                            "could not determine local LAN IP for PS5 {ps5_host_only}: {e}"
-                        ),
+                        &format!("could not determine local LAN IP for PS5 {ps5_host_only}: {e}"),
                     )
                 }
             };
@@ -280,9 +278,7 @@ async fn install_start_handler(
         let mut sessions = state.sessions.lock().unwrap();
         let now = now_unix();
         let aggressive_cutoff = now.saturating_sub(pkg_session_max_age_sec() / 2);
-        sessions.retain(|_, s| {
-            s.created_at_unix > aggressive_cutoff || s.staging_path.is_some()
-        });
+        sessions.retain(|_, s| s.created_at_unix > aggressive_cutoff || s.staging_path.is_some());
         sessions.insert(session_id.clone(), session.clone());
     }
 
@@ -386,12 +382,17 @@ async fn install_start_handler(
                 if let Err(e) = ps5upload_core::fs_ops::fs_delete(&addr, &path) {
                     crate::log_warn!(
                         "register-reject staging cleanup failed: session={} addr={} path={} err={}",
-                        sid, addr, path, e
+                        sid,
+                        addr,
+                        path,
+                        e
                     );
                 } else {
                     crate::log_info!(
                         "register-reject staging cleaned: session={} addr={} path={}",
-                        sid, addr, path
+                        sid,
+                        addr,
+                        path
                     );
                 }
             });
@@ -616,10 +617,12 @@ async fn install_cancel_handler(
                 let addr = s.ps5_mgmt_addr.clone();
                 (true, path, addr)
             }
-            None => return json_err(
-                StatusCode::NOT_FOUND,
-                &format!("no install session {}", req.session),
-            ),
+            None => {
+                return json_err(
+                    StatusCode::NOT_FOUND,
+                    &format!("no install session {}", req.session),
+                )
+            }
         }
     };
     if let Some(path) = path_to_clean {
@@ -628,12 +631,17 @@ async fn install_cancel_handler(
             if let Err(e) = ps5upload_core::fs_ops::fs_delete(&ps5_addr, &path) {
                 crate::log_warn!(
                     "cancel staging cleanup failed: session={} addr={} path={} err={}",
-                    sid, ps5_addr, path, e
+                    sid,
+                    ps5_addr,
+                    path,
+                    e
                 );
             } else {
                 crate::log_info!(
                     "cancel staging cleaned: session={} addr={} path={}",
-                    sid, ps5_addr, path
+                    sid,
+                    ps5_addr,
+                    path
                 );
             }
         });
@@ -677,7 +685,10 @@ async fn serve_handler(
     let session_known = session_lookup.is_some();
     crate::log_info!(
         "pkg-host fetch: session={} known={} range={:?} user-agent={:?}",
-        session, session_known, range, ua,
+        session,
+        session_known,
+        range,
+        ua,
     );
     let session = match session_lookup {
         Some(s) if !s.cancelled => s,
