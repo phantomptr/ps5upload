@@ -19,6 +19,14 @@ protocol (FTX2) over your LAN.
   per-shard verification and resume on drop.
 - **Mount** `.exfat` and `.ffpkg` disk images natively on the PS5
   (via MDIOCATTACH + nmount). No third-party tool required.
+- **Install fakepkgs** — pick a `.pkg`, click Install. Three-tier
+  pipeline routes Sony's installer through ShellUI's authid via
+  ptrace RPC; verified end-to-end on FW 9.60. Game pkgs (CUSA /
+  PPSA / PCSA / EP / UP) install cleanly.
+- **Register + launch** in the XMB — Library row's Play button
+  always registers first (idempotent), retries with a DRM-type
+  patch on rejection, then launches. Unmount unregisters every
+  title inside the image first so the dashboard stays clean.
 - **Browse** games installed on the PS5 and disk images anywhere on
   any drive.
 - **File System** navigation with chmod / delete / move / copy /
@@ -29,12 +37,13 @@ protocol (FTX2) over your LAN.
   the PS5's loader port (9021), with a replay-from-history panel.
 
 **Q: What does it NOT do?**
-Install or launch titles in the PS5 XMB. Sony's installer and
-launcher APIs require running inside the console's own ShellCore
-process; our standalone userland payload can't satisfy the
-credential checks those APIs enforce. Use a dedicated PS5-side
-installer (send it via the Send payload tab) if you need XMB
-registration.
+Install **system pkgs** (NPXS-prefix — Store updates, Settings app
+patches, built-in apps). Sony's `sceAppInstUtilInstallByPackage` is
+designed for game pkgs; for NPXS the register call is accepted but
+the install path freezes the PS5's mgmt service mid-flight. Use the
+on-PS5 Settings → Debug Settings → Game → Package Installer for
+those — that path is privileged in a way ps5upload can't replicate.
+Game pkgs (UP / EP / JP / HP / CUSA / PPSA / PCSA / etc.) work fine.
 
 ---
 
@@ -324,6 +333,77 @@ that mean?**
 The file is currently attached at `/mnt/ps5upload/<name>/`, and the
 Mount button has flipped to Unmount. The Volumes tab shows the
 mapping explicitly, with the source image path under each mount.
+
+**Q: Does Unmount leave ghost tiles in the PS5 dashboard?**
+No (2.2.60+). Unmount unregisters every title inside the image
+first (Sony's appinst Uninstall removes the app.db row), waits 400
+ms for the commit to land, then unmounts. Pre-fix the kernel
+unmount worked but app.db was left with stale rows pointing at the
+now-gone path, surfacing as ghost tiles or `0x80980103 invalid
+title id` on the next launch attempt.
+
+**Q: Can I unmount while a game is running?**
+No — the kernel refuses with `EBUSY` because a process inside the
+mount has files open. The UI surfaces this as: *"the game inside
+this image is currently running on the PS5. Exit it (PS Home →
+close the game) and try again."* Same protection applies whether
+you trigger Unmount from the Library tab or the Volumes tab.
+
+---
+
+## Install Package
+
+**Q: Can I install fakepkgs from the desktop?**
+Yes (2.2.55+). Open **Install Package**, click **Add .pkg**, pick
+the file, click **Start**. The pipeline:
+1. Engine uploads the bytes to `/user/data/ps5upload/pkg_temp/` on
+   the PS5 (Sony's allowlisted staging path).
+2. Sony's installer (`sceAppInstUtilInstallByPackage`) is invoked
+   under ShellUI's authid via ptrace RPC — bytes never traverse
+   the PlayGo HTTP path that rejects our process.
+3. Engine post-install cleanup deletes the staging file.
+
+Hardware-validated on FW 9.60 with regular game pkgs (UP / EP / JP
+/ HP / CUSA / PPSA / PCSA / etc.).
+
+**Q: My install said "completed" but the row says "verify on PS5".
+Why?**
+The pkg has an NPXS-prefix content_id (`IV0002-NPXS39041_…` etc.) —
+that's a system app pkg (Store update, Settings patch, built-in
+app). Sony accepts the register call but
+`sceAppInstUtilInstallByPackage` isn't designed for system patches;
+the install path tends to freeze the PS5's mgmt service mid-flight.
+We fire-and-forget the register and let the user verify on the PS5
+itself (notification panel / Settings → Notifications → Downloads).
+For system pkgs the canonical path is **on-PS5 Settings → Debug
+Settings → Game → Package Installer** — that's a privileged code
+path ps5upload can't replicate.
+
+**Q: Does Play in the Library register the title first?**
+Yes (2.2.55+). Always-register-first: the Play button calls
+`appRegister` (idempotent if already registered), retries with a
+DRM-type patch on rejection, waits 600 ms for the app.db commit to
+land, then calls `appLaunch`. Pre-fix the flow tried Launch first
+and registered as a fallback — which surfaced misleading "not
+registered" errors before registration kicked in.
+
+**Q: Can I install a split pkg (`*.0`, `*.1`, …)?**
+Yes. The engine detects split-pkg sets when you pick the lead
+file. For split sets the install runs through the Tier-2 HTTP
+host path (the engine serves the bytes; ShellUI fetches them) —
+single uploads stay on Tier-1 (raw path on PS5 disk).
+
+**Q: Where does the staging file go and when does it get cleaned
+up?**
+Staging path: `/user/data/ps5upload/pkg_temp/<id>_<unix-ms>.pkg`.
+Cleanup happens on:
+- Terminal install phase (Done | Error) — engine fs_delete after
+  the status poll reports terminal.
+- Register reject — engine fs_delete immediately (Sony rejected
+  the register, the file is otherwise leaked until 24 h).
+- User cancel — engine fs_delete on the cancel path.
+- Payload startup — sweeps any `*.pkg` older than 24 h as a
+  crash-recovery safety net.
 
 ---
 

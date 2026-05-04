@@ -44,13 +44,28 @@
 - **Send any payload** — push `.elf`, `.bin`, `.js`, or `.lua`
   files to the PS5's loader port (9021). Recent-sends history with
   click-to-replay and per-row success/fail badges.
+- **Install fakepkgs** — pick a `.pkg`, click Install. Three-tier
+  pipeline: bytes staged on PS5-local disk → install fires under
+  ShellUI's authid via ptrace RPC → register / launch from the
+  Library row. Verified end-to-end on FW 9.60. Game pkgs (CUSA /
+  PPSA / PCSA / EP / UP) install cleanly; system pkgs (NPXS-prefix —
+  Store updates, Settings) get registered fire-and-forget with
+  on-PS5 verification (Sony's API isn't designed for system patches,
+  use the on-PS5 Settings → Debug Settings → Game → Package
+  Installer for those).
+- **Register + launch** — Library row's Play button always registers
+  first (idempotent if already registered), retries with DRM-type
+  patch on rejection, then launches. Unmount unregisters every
+  title inside the image first so the dashboard stays clean —
+  no ghost tiles after unmount.
 
 ## What it doesn't do
 
-- **Install / launch titles in XMB.** Sony's installer and launcher
-  APIs require running inside the PS5's ShellCore process. Use a
-  dedicated PS5-side installer (send it via the Send payload tab);
-  ps5upload stays out of that path on purpose.
+- **System pkg patches.** `sceAppInstUtilInstallByPackage` is built
+  for game pkgs; NPXS-prefix system pkgs (Store updates, Settings
+  app patches) register but the install path freezes Sony's mgmt
+  service mid-flight on most firmwares. Use the on-PS5 Settings →
+  Debug Settings → Game → Package Installer for those.
 
 ## A quick look
 

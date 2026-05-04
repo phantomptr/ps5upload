@@ -4,154 +4,83 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## 2.2.59
+## 2.2.60
 
-**Hardware sensor self-heal + actionable Unmount-busy message**
-
-- **Sensors stop working over time** — root cause: bgft.c's per-call
-  ShellCore-authid swap could fail to restore the debugger authid on
-  the way out (silent best-effort write). Stuck-with-ShellCore-authid
-  meant every subsequent ptrace failed inside the kernel's authid
-  allowlist check, including sensor reads. Fix: bgft.c restore is now
-  retry-with-verify (3 attempts, read-back to confirm), and the
-  shellui_rpc sensor retry path now re-arms the debugger authid before
-  the second attempt — self-heals even if bgft.c missed the restore.
-- **Unmount EBUSY → "game is running"** — payload `fs_unmount_failed`
-  now distinguishes EBUSY (game has files inside the mount open) and
-  EACCES/EPERM (lost root cred) from the generic case. Frontend
-  humanizer surfaces "the game inside this image is currently running
-  on the PS5. Exit it (PS Home → close the game) and try again." The
-  user gets actionable guidance instead of a generic "unmount failed".
-
----
-
-## 2.2.58
-
-**Install Package: replace per-row NPXS warning with a page-level note**
-
-The 2.2.56 per-row pre-flight warning ("System app pkg (NPXS-prefix)…")
-was repeating the same paragraph on every NPXS row. Replaced with a
-single subdued info note at the top of the page: "Game pkgs only —
-this installer is built around Sony's game-pkg API. System pkgs
-(NPXS-prefix) will register but typically can't complete here; for
-those use Settings → Debug Settings → Game → Package Installer on
-the PS5 itself." The post-register green "verify on PS5" panel
-already covers the done-state messaging, so the row-level warning
-was redundant.
-
----
-
-## 2.2.57
-
-**NPXS system-pkg fast-path: register-accepted = success in the UI**
-
-2.2.56 changed the error wording but the row still showed "failed"
-because the install poller hit transport errors on every status call
-while Sony was busy doing system-pkg work, then gave up after 5
-retries and marked the row failed — even though the install was
-actually proceeding on the PS5.
-
-- For NPXS-prefix content_ids: skip status polling entirely. Once
-  Sony returns `register_path=shellui-rpc accepted`, sleep ~3 s
-  (let the install kick off) and mark the row done. Same approach
-  etaHEN's DPI uses for system pkgs — fire-and-forget with on-PS5
-  verification.
-- Done-state row shows a green panel: "Register accepted — Sony's
-  installer is processing this system pkg on the PS5. Verify via
-  the PS5's notification panel or Settings → Notifications →
-  Downloads."
-- Game pkgs (CUSA / PPSA / PCSA / EP / UP / etc.) keep the normal
-  poll loop — they reliably report phase=done via
-  `sceAppInstUtilGetInstallStatus` and the user gets real-time
-  progress.
-
----
-
-## 2.2.56
-
-**NPXS system-pkg pre-flight warning + accurate mid-install error**
-
-Live test confirmed the 2.2.55 known-limit: an `IV0002-NPXS39041_00…`
-Store-update fakepkg got `register_path=shellui-rpc accepted` from
-Sony, then froze the PS5's mgmt service mid-install. Pre-fix, the UI
-told the user "Can't reach your PS5's management service. Make sure
-the payload is loaded" — wrong root cause, wrong fix.
-
-- Install Package row now shows a pre-flight warning the moment an
-  NPXS-prefix pkg is added: "System app pkg — Sony will accept
-  register but install may freeze the mgmt service. Use Settings →
-  Debug Settings → Game → Package Installer instead."
-- Error humanizer takes `contentId` and rewrites the mid-install
-  mgmt-disconnect for NPXS pkgs: "Sony accepts the register but
-  `sceAppInstUtilInstallByPackage` isn't designed for system patches.
-  PS5 typically recovers in a minute or after reboot." Game pkgs
-  (CUSA / PPSA / PCSA / etc.) keep the original "send payload" hint.
-
-Game pkgs install cleanly; this just stops users from chasing a
-phantom payload-loading bug when the actual cause is the API
-mismatch for system pkgs.
-
----
-
-## 2.2.55
-
-**Install Package — working end-to-end on FW 9.60**
+**Install Package, Library Play / Unmount, sensor fixes — all in one**
 
 A jailbroken PS5 on FW 9.60 can now install fakepkgs from the desktop
-without manual etaHEN / Settings → Debug Settings intervention. Pick
-a `.pkg`, click Install, register + launch from the Library.
+end-to-end without manual etaHEN / Settings intervention. Plus a
+batch of Library + Hardware fixes that came out of live testing.
 
-Three install tiers, picked automatically:
+**Install Package — three-tier pipeline:**
 
 - **Tier 1 (default, single .pkg)** — desktop uploads to
   `/user/data/ps5upload/pkg_temp/<id>.pkg`, install fires under
-  ShellUI's authid via ptrace RPC with the raw PS5-local path as
-  the URI. Bypasses the PlayGo HTTP gate that was rejecting our
-  process on FW 9.60.
+  ShellUI's authid via ptrace RPC with the raw PS5-local path.
+  Bypasses the PlayGo HTTP gate that rejected our process on FW 9.60.
 - **Tier 2 (split sets)** — engine HTTP host on `0.0.0.0:19113` +
-  ShellUI-RPC. Avoids doubling wire time on multi-part 50 GB+ uploads.
-  Engine-side loopback-guard middleware 403s every non-`/pkg-host/*`
-  route to off-loopback peers; the `/pkg-host/*` route is auth'd by
-  per-install UUIDv4 token.
+  ShellUI-RPC. Avoids doubling wire time on multi-part 50 GB+
+  uploads. Loopback-guard middleware 403s every non-`/pkg-host/*`
+  route to off-loopback peers; `/pkg-host/*` is auth'd by per-
+  install UUIDv4 token.
 - **Tier 3 (legacy)** — direct in-process AppInstUtil. Used only on
   firmwares where ShellUI symbol resolution fails.
 
-Stability + UX polish:
+NPXS-prefix system pkgs (Store updates, Settings patches, built-in
+apps) take a fire-and-forget path: register accepts, then we mark
+the row Done with a "verify on PS5" green panel. A page-level note
+explains this once at the top of the Install Package screen, with
+a humanizer that turns mid-install mgmt-disconnect into the actual
+root cause instead of a misleading "send payload" hint.
 
-- **Hardware page sensors** retry once with a forced symbol re-resolve
-  when the cached symbol address goes stale (ShellUI respawns silently
-  invalidate the cache after the user exits a game).
-- **Library Unmount on game rows** — once a game is registered the
-  user opens the game row, not the image row; the Unmount button is
-  now there too.
-- **Play button always-registers-first** — register (idempotent),
-  retry with DRM-type patch on failure, settle, then launch.
-- **Mount diagnostics** surface kernel `MNT_RDONLY`, statfs
-  `f_bsize` / `f_iosize`, and image-layout-invalid as non-fatal
-  warnings on both Library and Upload screens.
-- **Install staging cleanup** on register-reject + user cancel
-  (engine-side) and `appinst` slot release on hard status error
-  (payload-side) — stops Sony's installer queue from accumulating
-  stuck tasks across retries.
-- **Engine session map GC** — two-policy prune (`gc_old_sessions`
-  on status polls, plus a complementary install-start prune for
-  sessions that error before the UI ever polls).
-- **Engine bind** is now `0.0.0.0:19113` (was `127.0.0.1`). The PS5
-  needs to reach the host's listener for Tier-2; loopback-guard
-  middleware preserves the local-only invariant for everything else.
-- **Payload startup** now sweeps stale `pkg_temp/*.pkg` files older
-  than 24 h — recovers from a desktop-side crash mid-install.
-- **`g_ucred_elevation_rc`** marked `volatile` — read concurrently
-  from multiple connection threads.
-- **Humanizer** rewritten for `0x80B22404` (no longer blames pkg
-  format) and PS5-native `\x7FFIH` magic.
+**Library — Play and Unmount:**
 
-**Known limitation**: NPXS-prefix system pkgs (e.g. Store-update
-fakepkgs) register cleanly but the install may destabilise the
-system — `sceAppInstUtilInstallByPackage` is for game pkgs, not
-system patches. Use Settings → Debug Settings → Game → Package
-Installer for those. Regular PS4 fakepkgs (UP/EP/JP/HP, CUSA title
-id) install cleanly.
+- **Play always registers first** (idempotent), retries with a DRM-
+  type patch on rejection, waits 600 ms for the app.db commit, then
+  launches. No more misleading "not registered" errors flashing
+  before the registration kicks in.
+- **Unmount on game rows** — once a game is registered the user
+  opens the game row, not the image row; Unmount is now there too.
+- **Unmount unregisters titles first** — game-row Unmount unregisters
+  that title; image-row Unmount walks the library, unregisters every
+  title inside that image, settles 400 ms, then unmounts. No ghost
+  tiles in the dashboard, no stale `0x80980103` errors on next launch.
+- **Unmount EBUSY → "game is running"** — payload distinguishes
+  EBUSY from generic failure; humanizer shows "exit the game on the
+  PS5 first" instead of "unmount failed".
+
+**Hardware page sensors stop working over time:**
+
+Root cause: bgft.c's per-call ShellCore-authid swap could fail to
+restore the debugger authid (silent best-effort write). Stuck-with-
+ShellCore-authid breaks every ptrace in our process forever — sensor
+reads, app launch, install retries. Two-layer fix: bgft.c restore is
+now retry-with-verify (3 attempts, read-back to confirm); the
+shellui_rpc sensor retry path re-arms the debugger authid before
+the second attempt — self-heals even if bgft.c missed the restore.
+
+**Engine + payload polish:**
+
+- Engine binds `0.0.0.0:19113` (was `127.0.0.1`) so the PS5 can
+  reach `/pkg-host/*` for Tier-2 installs; loopback-guard middleware
+  preserves the local-only invariant for everything else.
+- Engine session map: two-policy GC (status-poll-time pure-age +
+  install-start-time aggressive prune for register-rejected sessions
+  that never poll).
+- Engine staging cleanup on register-reject + cancel.
+- Engine `serve_handler` collapses two mutex acquisitions into one.
+- Payload startup sweeps stale `pkg_temp/*.pkg` older than 24 h.
+- AppInst slot release on hard status error (was leaking to
+  `TASK_TABLE_FULL`).
+- `g_ucred_elevation_rc` now `volatile` — read concurrently from
+  multiple connection threads.
+- Mount diagnostics surface `kernel_ro`, `f_bsize`, `f_iosize`,
+  `layout_valid` as non-fatal warnings on Library + Upload screens.
+- Wait-time audit: register→launch 600 ms, unregister→unmount 400
+  ms, post-unmount onChanged 400 ms, post-mount onChanged 1000+3000
+  ms (Sony's mount surfacing in `getmntinfo` can lag), staging
+  cleanup 2000 ms (Sony's queue notices file-gone). Confirmed
+  sufficient via direct testing.
 
 ---
 

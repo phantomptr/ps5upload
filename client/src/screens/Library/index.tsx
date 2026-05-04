@@ -1474,7 +1474,63 @@ function LibraryRow({
     let okOutcome = true;
     let errMsg: string | null = null;
     try {
-      await fsUnmount(`${host}:${PS5_PAYLOAD_PORT}`, mountPointToUnmount);
+      const addr = `${host}:${PS5_PAYLOAD_PORT}`;
+      // 2.2.60: unregister any titles inside this image BEFORE
+      // unmount. Pre-fix the kernel unmount worked but Sony's
+      // app.db was left with stale rows pointing at the now-gone
+      // path, surfacing later as ghost tiles in the dashboard or
+      // "0x80980103 invalid title id" on the next launch attempt
+      // for the same image. Sony's appinst Uninstall removes the
+      // app.db row + frees the slot.
+      //
+      // Scope:
+      //   - Game row: unregister this specific title.
+      //   - Image row: unregister every game in the library whose
+      //     fromImagePath matches this image. The library scan
+      //     populated `entries` with the right relations earlier,
+      //     so we can resolve them locally without an extra round-
+      //     trip to the PS5.
+      //
+      // Best-effort: a failed unregister doesn't block the unmount
+      // (might already be unregistered, or the API is unavailable
+      // on this firmware). Errors are logged + the unmount proceeds.
+      const titleIdsToUnregister: string[] = [];
+      if (entry.kind === "game" && entry.titleId) {
+        titleIdsToUnregister.push(entry.titleId);
+      } else if (entry.kind !== "game" && imageKey) {
+        const k = imageKey;
+        const libState = useLibraryStore.getState();
+        const allEntries = libState.entries ?? [];
+        for (const e of allEntries) {
+          if (
+            e.kind === "game" &&
+            e.titleId &&
+            findOwningImage(libState, e.path) === k
+          ) {
+            titleIdsToUnregister.push(e.titleId);
+          }
+        }
+      }
+      if (titleIdsToUnregister.length > 0) {
+        setMountNote(
+          titleIdsToUnregister.length === 1
+            ? `Unregistering ${titleIdsToUnregister[0]}…`
+            : `Unregistering ${titleIdsToUnregister.length} titles…`,
+        );
+        for (const tid of titleIdsToUnregister) {
+          try {
+            await appUnregister(addr, tid);
+          } catch (uErr) {
+            console.warn(`appUnregister(${tid}) failed (best-effort):`, uErr);
+          }
+        }
+        // Settle window so app.db's commit hits disk before the
+        // unmount yanks the source path. Same 400 ms used by the
+        // post-unmount onChanged below — kernel-side propagation
+        // delays are similar in magnitude.
+        await new Promise((resolve) => setTimeout(resolve, 400));
+      }
+      await fsUnmount(addr, mountPointToUnmount);
       // Optimistic mountMap remove so the row flips to NOT-mounted
       // immediately; the background rescan will confirm.
       useLibraryStore.getState().removeMount(imageKey);
