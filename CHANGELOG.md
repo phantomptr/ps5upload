@@ -4,6 +4,32 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.2.57
+
+**NPXS system-pkg fast-path: register-accepted = success in the UI**
+
+2.2.56 changed the error wording but the row still showed "failed"
+because the install poller hit transport errors on every status call
+while Sony was busy doing system-pkg work, then gave up after 5
+retries and marked the row failed — even though the install was
+actually proceeding on the PS5.
+
+- For NPXS-prefix content_ids: skip status polling entirely. Once
+  Sony returns `register_path=shellui-rpc accepted`, sleep ~3 s
+  (let the install kick off) and mark the row done. Same approach
+  etaHEN's DPI uses for system pkgs — fire-and-forget with on-PS5
+  verification.
+- Done-state row shows a green panel: "Register accepted — Sony's
+  installer is processing this system pkg on the PS5. Verify via
+  the PS5's notification panel or Settings → Notifications →
+  Downloads."
+- Game pkgs (CUSA / PPSA / PCSA / EP / UP / etc.) keep the normal
+  poll loop — they reliably report phase=done via
+  `sceAppInstUtilGetInstallStatus` and the user gets real-time
+  progress.
+
+---
+
 ## 2.2.56
 
 **NPXS system-pkg pre-flight warning + accurate mid-install error**

@@ -724,6 +724,28 @@ function InstallRow({
         </div>
       )}
 
+      {/* 2.2.57: NPXS post-register success message. The fast-path in
+        * installQueue.ts marks NPXS pkgs done immediately after Sony
+        * accepts the register (status polling is unreliable for
+        * system pkgs); make sure the user knows they need to verify
+        * on the PS5 itself rather than seeing a generic "Done"
+        * checkmark and assuming progress is observable from the
+        * desktop. */}
+      {item.status === "done" &&
+        /^[A-Z]{2}\d{4}-NPXS\d+/i.test(item.contentId) && (
+          <div className="mt-2 flex items-start gap-2 rounded-md border border-emerald-500/40 bg-emerald-500/5 p-2 text-[11px] text-emerald-700 dark:text-emerald-400">
+            <CheckCircle2 size={12} className="mt-0.5 shrink-0" />
+            <div>
+              Register accepted — Sony's installer is processing this
+              system pkg on the PS5. Verify completion via the PS5's
+              notification panel (top-right) or Settings → Notifications →
+              Downloads. Status polling is skipped for system pkgs because
+              the mgmt service freezes mid-install (a Sony API limitation,
+              not a ps5upload issue).
+            </div>
+          </div>
+        )}
+
       {/* Failure */}
       {item.errMessage && item.status === "failed" && (
         <div className="mt-2 rounded-md border border-[var(--color-bad)] bg-[var(--color-surface-2)] p-2 text-[11px] text-[var(--color-bad)]">
