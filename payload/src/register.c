@@ -28,25 +28,16 @@
 #include <sys/sysctl.h>
 
 #include "register.h"
+#include "sony_api_lock.h"
 
-/* Serializes ALL calls into Sony's install/launch/uninstall APIs across
- * threads. On firmware 9.60, `sceAppInstUtilAppInstallTitleDir` and
- * `sceLncUtilLaunchApp` appear to hold internal locks briefly on
- * return, and concurrent calls from multiple HTTP handler threads
- * can hit Sony's kernel stubs while those locks are still held,
- * deadlocking the calling thread. We force one-at-a-time access
- * regardless of which HTTP handler received the request.
- *
- * Held in tandem with a 200ms post-call usleep so the kernel stub
- * has time to release its internal locks before the next caller
- * enters. */
-static pthread_mutex_t g_sony_api_mtx = PTHREAD_MUTEX_INITIALIZER;
-
-/* Post-call grace period — 200ms. Lets Sony's kernel stub release
- * internal locks before the next install/launch can proceed.
- * usleep is FreeBSD-native and doesn't require a dlsym on
- * sceKernelUsleep. */
-#define SONY_API_POST_SLEEP_US 200000u
+/* Serialization mutex `sony_api_lock` and the 200µs post-call grace
+ * period `SONY_API_POST_SLEEP_US` are now declared in
+ * sony_api_lock.h and shared with bgft.c. Pre-2.2.61 they lived as
+ * `sony_api_lock` static here, which left bgft.c's in-process
+ * AppInstUtil install/status paths racing with the calls in this
+ * file (concurrent register from one mgmt thread + pkg-install
+ * status poll from another could both hit Sony's installer kernel
+ * stubs and deadlock per the FW 9.60 pattern). */
 
 /* -- Mount / install layout ----------------------------------------------
  *
@@ -165,8 +156,8 @@ static reg_module_t g_reg = {0};
  * Without it, the "check resolved, set to 1, do dlopens" pattern had
  * a TOCTOU window where thread B could see resolved==1 before thread
  * A finished resolving fn pointers -- leading to spurious "service
- * unavailable" errors mid-init. */
-#include <pthread.h>
+ * unavailable" errors mid-init. (pthread.h is already included near
+ * the top of the file.) */
 static pthread_once_t g_reg_once = PTHREAD_ONCE_INIT;
 
 /* -- Firmware-major parse ---------------------------------------------- */
@@ -354,7 +345,7 @@ void register_services_init(void) {
      * path. Not strictly required if main.c calls us before the
      * listener spawns, but defense-in-depth for anyone who refactors
      * main.c later. */
-    pthread_mutex_lock(&g_sony_api_mtx);
+    pthread_mutex_lock(&sony_api_lock);
 
     if (g_reg.user_service_initialize) {
         /* sceUserServiceInitialize takes an optional pointer to init
@@ -370,7 +361,7 @@ void register_services_init(void) {
         (void)g_reg.lnc_util_initialize();
     }
 
-    pthread_mutex_unlock(&g_sony_api_mtx);
+    pthread_mutex_unlock(&sony_api_lock);
 }
 
 /* -- Filesystem helpers ------------------------------------------------ */
@@ -1353,18 +1344,18 @@ int register_title_from_path(const char *src_path,
      * installer concurrently (kernel stub deadlock on 9.60); the
      * post-sleep gives Sony's stub time to release internal locks
      * before the next caller. */
-    pthread_mutex_lock(&g_sony_api_mtx);
-    /* Belt-and-suspenders: even though register_services_init() has
-     * already called this from main-thread context at startup, calling
-     * it again before the install is cheap (Sony's init is idempotent)
-     * and ensures the call-site is robust to future refactors where
-     * services_init may be skipped. */
+    pthread_mutex_lock(&sony_api_lock);
+    /* Lazy init of Sony's installer service — main.c does NOT call
+     * `register_services_init` at startup (it has been observed to
+     * hang on some firmware/loader combinations), so the first
+     * `sceAppInstUtilInitialize` call lives here. Sony's init is
+     * idempotent so on subsequent registers this is a near no-op. */
     if (g_reg.app_inst_util_initialize) {
         (void)g_reg.app_inst_util_initialize();
     }
     int res = g_reg.app_install_title_dir(title_id, REG_APP_BASE "/", 0);
     usleep(SONY_API_POST_SLEEP_US);
-    pthread_mutex_unlock(&g_sony_api_mtx);
+    pthread_mutex_unlock(&sony_api_lock);
     /* 0 = new install, 0x80990002 = restored (idempotent), both are success. */
     if (res != 0 && (uint32_t)res != 0x80990002u) {
         /* Roll back the nullfs bind so we don't leak a kernel resource
@@ -1434,20 +1425,32 @@ int unregister_title(const char *title_id, const char **err_reason_out) {
         /* Signature is (title_id, p1, p2). The trailing out-params
          * accept NULL — the call only needs the title_id and
          * returns successfully when the title exists. */
-        pthread_mutex_lock(&g_sony_api_mtx);
+        pthread_mutex_lock(&sony_api_lock);
         (void)g_reg.app_uninstall(title_id, NULL, NULL);
         usleep(SONY_API_POST_SLEEP_US);
-        pthread_mutex_unlock(&g_sony_api_mtx);
+        pthread_mutex_unlock(&sony_api_lock);
     }
     return 0;
 }
 
 /* Opens the PS5's built-in web browser (NPXS20001) via
- * sceSystemServiceLaunchApp. Exposed for the APP_LAUNCH_BROWSER frame. */
+ * sceSystemServiceLaunchApp. Exposed for the APP_LAUNCH_BROWSER frame.
+ *
+ * Holds the same serialization mutex + post-call grace period as the
+ * other Sony-API entry points. The file-level comment on
+ * `sony_api_lock` covers the rationale: `sceSystemServiceLaunchApp`
+ * shares kernel-stub internals with `sceLncUtilLaunchApp` (which is
+ * why `launch_title` uses it as a fallback strategy), so a browser
+ * launch concurrent with a register/launch/uninstall on another
+ * thread can deadlock the same way. Pre-2.2.61 this entry point
+ * skipped the mutex entirely. */
 int register_browser_launch(void) {
     register_module_init();
     if (!g_reg.launch_app_sys) return -1;
+    pthread_mutex_lock(&sony_api_lock);
     int rc = g_reg.launch_app_sys("NPXS20001", NULL, NULL);
+    usleep(SONY_API_POST_SLEEP_US);
+    pthread_mutex_unlock(&sony_api_lock);
     return (rc == 0) ? 0 : -1;
 }
 
@@ -1594,7 +1597,7 @@ int launch_title(const char *title_id, const char **err_reason_out) {
 
     /* Serialize. Only one Sony launch API call at a time — the
      * kernel stubs share locks and concurrent callers deadlock. */
-    pthread_mutex_lock(&g_sony_api_mtx);
+    pthread_mutex_lock(&sony_api_lock);
 
     /* Triple-strategy launch chain. The "param" attempt uses the
      * canonical 24-byte LncAppParam (size, user_id, app_opt,
@@ -1639,7 +1642,7 @@ int launch_title(const char *title_id, const char **err_reason_out) {
         if (rc == 0) launched = 1;
     }
 
-    pthread_mutex_unlock(&g_sony_api_mtx);
+    pthread_mutex_unlock(&sony_api_lock);
 
     if (launched) return 0;
 
