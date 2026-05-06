@@ -32,7 +32,6 @@ export const MOUNT_DEFAULT_SUBPATH = "homebrew";
  *  homebrew is first because it's the recommended default. */
 export const MOUNT_PRESETS: { label: string; subpath: string; hint: string }[] = [
   { label: "homebrew", subpath: "homebrew", hint: "Homebrew apps & games (recommended) — discoverable by every PS5 manager" },
-  { label: "etaHEN/games", subpath: "etaHEN/games", hint: "etaHEN's game scan folder — picked up by etaHEN's launcher" },
   { label: "exfat", subpath: "exfat", hint: "Conventional disk-image holder" },
   { label: "ps5upload", subpath: "ps5upload", hint: "Tool-specific generic folder (legacy)" },
 ];

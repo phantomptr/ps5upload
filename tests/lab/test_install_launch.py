@@ -184,7 +184,7 @@ def main() -> int:
     # Step 4 — APP_REGISTER on the direct game folder. This exercises
     # the Sony install path without any mount indirection, which is
     # the shortest path to a working install call.
-    game_folder = "/mnt/ext1/etaHEN/games/PPSA00000-app"
+    game_folder = "/mnt/ext1/homebrew/games/PPSA00000-app"
     s = Step(f"4. APP_REGISTER  {game_folder}")
     try:
         req = json.dumps({"src_path": game_folder}, separators=(",", ":")).encode()

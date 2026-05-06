@@ -229,7 +229,8 @@ fn mgmt_addr_or_default(addr: Option<String>, default_addr: &str) -> String {
 /// `/pkg-host/*` is the single PS5-facing route; it's exempted from the
 /// guard so the console can fetch installable bytes. The route itself
 /// uses a UUIDv4 token in the URL as the auth gate (~122 bits of
-/// entropy, rotated per install, same threat model as DPI / etaHEN).
+/// entropy, rotated per install — the trust boundary is the local LAN,
+/// same as any other on-LAN homebrew installer).
 async fn loopback_guard(
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     req: Request,

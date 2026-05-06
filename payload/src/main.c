@@ -152,9 +152,9 @@ void runtime_apply_ucred_jailbreak(void) {
      * authid gate but later mismatch checks corrupt kernel state ->
      * watchdog or panic -> auto-restart.
      *
-     * etaHEN gets away with permanent ShellCore authid because their
-     * payload is INJECTED into SceShellCore's process (so authid AND
-     * pid both match). We're a separate :9021-loaded ELF; per-call
+     * Payloads injected directly into SceShellCore's process can keep
+     * permanent ShellCore authid (because authid AND pid both match
+     * Sony's expectations). We're a separate :9021-loaded ELF; per-call
      * swap (in bgft.c::appinst_install_start and ::appinst_install_status)
      * is the safe pattern. Default back to debugger authid for kernel
      * R/W and ptrace; swap to ShellCore only for the install/status

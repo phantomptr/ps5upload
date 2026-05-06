@@ -190,4 +190,66 @@ describe("humanizePs5Error", () => {
       );
     });
   });
+
+  // Each Sony AppInstUtil code is matched in three forms (hex, decimal,
+  // SCE_… symbol) so the engine's varying upstream representations all
+  // route to the same actionable copy. A regression that drops one form
+  // surfaces as "PS5 rejected the request: <raw>" in the UI, which is
+  // exactly the silent-failure mode these tests exist to prevent.
+  describe("Sony AppInstUtil error codes (0x80A2_FFXX / 0x80A3_00XX)", () => {
+    it("0x80A30000 NOT_INITIALIZED → push latest payload", () => {
+      expect(humanizePs5Error("0x80A30000")).toMatch(
+        /Sony's installer subsystem isn't initialised/i,
+      );
+      expect(humanizePs5Error("err -2136862720")).toMatch(
+        /Sony's installer subsystem isn't initialised/i,
+      );
+      expect(
+        humanizePs5Error("SCE_APP_INST_UTIL_ERROR_NOT_INITIALIZED"),
+      ).toMatch(/Sony's installer subsystem isn't initialised/i);
+    });
+    it("0x80A2FF02 NOSPACE → free up storage", () => {
+      expect(humanizePs5Error("Sony rejected: 0x80A2FF02")).toMatch(
+        /enough free space/i,
+      );
+      expect(humanizePs5Error("rc=-2136801278")).toMatch(/enough free space/i);
+      expect(humanizePs5Error("SCE_APP_INSTALLER_ERROR_NOSPACE")).toMatch(
+        /enough free space/i,
+      );
+    });
+    it("0x80A2FF06 INVALID_DRM_TYPE → use Patch-DRM register", () => {
+      expect(humanizePs5Error("0x80A2FF06")).toMatch(
+        /Patch DRM|applicationDrmType/i,
+      );
+      expect(humanizePs5Error("err -2136801274")).toMatch(
+        /Patch DRM|applicationDrmType/i,
+      );
+    });
+    it("0x80A2FF09 INVALID_CONTENT_TYPE → patch / DLC pkg rejected", () => {
+      expect(humanizePs5Error("Sony 0x80A2FF09")).toMatch(/content type/i);
+      expect(humanizePs5Error("rc=-2136801271")).toMatch(/content type/i);
+    });
+    it("0x80A2FF14 BUSY → wait & retry", () => {
+      expect(humanizePs5Error("0x80A2FF14")).toMatch(/busy/i);
+      expect(humanizePs5Error("err=-2136801260")).toMatch(/busy/i);
+    });
+    it("0x80A2FF15 ALREADY_INSTALLED → uninstall first", () => {
+      expect(humanizePs5Error("0x80A2FF15")).toMatch(/already installed/i);
+      expect(humanizePs5Error("rc -2136801259")).toMatch(/already installed/i);
+    });
+    it("0x80A30001 OUT_OF_MEMORY → reboot suggestion", () => {
+      expect(humanizePs5Error("err 0x80A30001")).toMatch(/Reboot the PS5/i);
+      expect(humanizePs5Error("err -2136862719")).toMatch(/Reboot the PS5/i);
+    });
+
+    // Regression guard: an unknown 0x80A3_xxxx code must NOT silently
+    // collide with the NOT_INITIALIZED branch (which is keyed on the
+    // exact 0x80A30000 code). A too-loose `0x80A3` regex would absorb
+    // every code in this range and ship users wrong copy.
+    it("unknown 0x80A3_xxxx code falls through to generic copy", () => {
+      const raw = "Sony returned 0x80A3FFFF";
+      const out = humanizePs5Error(raw);
+      expect(out).not.toMatch(/Sony's installer subsystem isn't initialised/i);
+    });
+  });
 });

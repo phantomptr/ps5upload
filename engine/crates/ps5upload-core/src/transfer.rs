@@ -868,8 +868,22 @@ fn materialise_body(ps: &PlannedShard) -> Result<Vec<u8>> {
             let mut buf = Vec::with_capacity(total);
             for r in records {
                 let p = r.dest_path.as_bytes();
-                buf.extend_from_slice(&(p.len() as u32).to_le_bytes());
-                buf.extend_from_slice(&(r.size as u32).to_le_bytes());
+                // Packed-shard record header is two LE u32s (path_len, size).
+                // Both fields are u32 by wire spec; the planner only routes
+                // small files (PACK_FILE_MAX = 128 KiB) into the packed
+                // path, but assert the bound at the cast site so a future
+                // change to PACK_FILE_MAX can't silently truncate >4 GiB
+                // sizes / paths into a corrupted record stream.
+                let path_len = u32::try_from(p.len())
+                    .with_context(|| format!("pack record path too long: {}", r.dest_path))?;
+                let rec_size = u32::try_from(r.size).with_context(|| {
+                    format!(
+                        "pack record size {} exceeds u32 (file: {})",
+                        r.size, r.dest_path
+                    )
+                })?;
+                buf.extend_from_slice(&path_len.to_le_bytes());
+                buf.extend_from_slice(&rec_size.to_le_bytes());
                 buf.extend_from_slice(p);
                 let mut f = std::fs::File::open(&r.source)
                     .with_context(|| format!("open pack record {}", r.source.display()))?;
@@ -1412,4 +1426,215 @@ pub fn transfer_file_list_resumable(
     resumable_retry(max_retries, "transfer_file_list", initial_flags, |flags| {
         transfer_file_list_with_flags(cfg, tx_id, dest_root, entries, flags)
     })
+}
+
+#[cfg(test)]
+mod materialise_body_tests {
+    //! Tests for the shard-body encoder. The packed-shard wire format
+    //! is a sequence of `[u32 path_len LE][u32 size LE][path bytes][file
+    //! bytes]` records — the payload's reverse parser depends on each
+    //! header field being exactly 4 bytes in the documented order. A
+    //! regression here corrupts every multi-file upload silently, so we
+    //! pin the encoding rather than trusting the comments.
+    use super::*;
+    use std::io::Write;
+
+    fn unique_tempdir(label: &str) -> std::path::PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!(
+            "ps5upload_transfer_test_{}_{}_{}",
+            label,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    #[test]
+    fn empty_shard_materialises_to_zero_bytes() {
+        // `PlannedShard::Empty` exists so the payload still opens and
+        // creates the destination on COMMIT for a 0-byte source file
+        // (e.g. `.gitkeep`). The body must be empty — non-empty would
+        // confuse the payload's record parser.
+        let s = PlannedShard::Empty { shard_seq: 7 };
+        let body = materialise_body(&s).expect("empty shard");
+        assert_eq!(body.len(), 0);
+    }
+
+    #[test]
+    fn non_packed_shard_reads_file_slice() {
+        // Verify the seek+read for the NonPacked path: writing a known
+        // byte pattern and reading back a slice must return exactly
+        // the slice — not too-short, not too-long, not the whole file.
+        let dir = unique_tempdir("nonpacked");
+        let p = dir.join("blob.bin");
+        let mut f = std::fs::File::create(&p).unwrap();
+        let payload: Vec<u8> = (0u8..200u8).collect();
+        f.write_all(&payload).unwrap();
+        drop(f);
+
+        let s = PlannedShard::NonPacked {
+            shard_seq: 0,
+            source: p,
+            offset: 50,
+            len: 32,
+        };
+        let body = materialise_body(&s).expect("non-packed shard");
+        assert_eq!(body, &payload[50..82]);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn packed_shard_emits_documented_record_layout() {
+        // Two records, distinct paths and contents. The body must be:
+        //   [path_len_LE u32][size_LE u32][path bytes][file bytes]
+        // for each record, concatenated with no padding. This is the
+        // contract the payload's reverse parser depends on.
+        let dir = unique_tempdir("packed");
+        let p1 = dir.join("a.bin");
+        let p2 = dir.join("b.bin");
+        std::fs::write(&p1, b"hello").unwrap();
+        std::fs::write(&p2, b"world!!").unwrap();
+
+        let records = vec![
+            PackRecord {
+                dest_path: "sce_sys/icon0.png".to_string(),
+                source: p1,
+                size: 5,
+            },
+            PackRecord {
+                dest_path: "eboot.bin".to_string(),
+                source: p2,
+                size: 7,
+            },
+        ];
+        let s = PlannedShard::Packed {
+            shard_seq: 0,
+            records,
+        };
+        let body = materialise_body(&s).expect("packed shard");
+
+        let mut expected: Vec<u8> = Vec::new();
+        // record 1: path_len=17, size=5, "sce_sys/icon0.png", "hello"
+        expected.extend_from_slice(&17u32.to_le_bytes());
+        expected.extend_from_slice(&5u32.to_le_bytes());
+        expected.extend_from_slice(b"sce_sys/icon0.png");
+        expected.extend_from_slice(b"hello");
+        // record 2: path_len=9, size=7, "eboot.bin", "world!!"
+        expected.extend_from_slice(&9u32.to_le_bytes());
+        expected.extend_from_slice(&7u32.to_le_bytes());
+        expected.extend_from_slice(b"eboot.bin");
+        expected.extend_from_slice(b"world!!");
+
+        assert_eq!(body, expected);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn packed_record_size_overflow_is_rejected() {
+        // The planner only sends files < PACK_FILE_MAX (128 KiB) into
+        // the packed path, so the `u32::try_from` guard is theoretical
+        // today — but a future bump to PACK_FILE_MAX must NOT silently
+        // truncate >4 GiB sizes into a corrupted record stream. Here we
+        // construct a PackRecord whose declared size exceeds u32::MAX
+        // and assert the encoder errors out before opening the file.
+        let dir = unique_tempdir("oversize");
+        let p = dir.join("dummy.bin");
+        // The file is small — the encoder must fail at the size cast,
+        // before reaching the read_exact. If it ever reads the file
+        // first (then casts), this test would fail with a different
+        // error message and signal that the bounds check was bypassed.
+        std::fs::write(&p, b"short").unwrap();
+
+        let s = PlannedShard::Packed {
+            shard_seq: 0,
+            records: vec![PackRecord {
+                dest_path: "huge.bin".to_string(),
+                source: p,
+                size: u64::from(u32::MAX) + 1,
+            }],
+        };
+        let err = materialise_body(&s).expect_err("should reject oversize");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("exceeds u32") || msg.contains("pack record size"),
+            "unexpected error: {msg}"
+        );
+        std::fs::remove_dir_all(dir).ok();
+    }
+}
+
+#[cfg(test)]
+mod retry_classification_tests {
+    //! Tests for `is_retryable_transfer_error`. The retry budget is
+    //! cheap (3 attempts, exp backoff) but a misclassification either
+    //! way is expensive: retrying a permission error wastes user time
+    //! with no chance of success, and NOT retrying a real network drop
+    //! turns a recoverable hiccup into a failed upload.
+    use super::*;
+
+    fn ioerr(kind: std::io::ErrorKind) -> anyhow::Error {
+        anyhow::Error::from(std::io::Error::new(kind, "test"))
+    }
+
+    #[test]
+    fn retries_network_drop_kinds() {
+        for k in [
+            std::io::ErrorKind::ConnectionReset,
+            std::io::ErrorKind::ConnectionAborted,
+            std::io::ErrorKind::BrokenPipe,
+            std::io::ErrorKind::TimedOut,
+            std::io::ErrorKind::UnexpectedEof,
+            std::io::ErrorKind::Interrupted,
+            std::io::ErrorKind::NotConnected,
+        ] {
+            assert!(
+                is_retryable_transfer_error(&ioerr(k)),
+                "expected retry for {k:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn does_not_retry_terminal_kinds() {
+        for k in [
+            std::io::ErrorKind::PermissionDenied,
+            std::io::ErrorKind::NotFound,
+            std::io::ErrorKind::InvalidData,
+            std::io::ErrorKind::AlreadyExists,
+            std::io::ErrorKind::WriteZero,
+        ] {
+            assert!(
+                !is_retryable_transfer_error(&ioerr(k)),
+                "expected NO retry for {k:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn unwraps_through_anyhow_context() {
+        // The transfer-loop wraps every IO error with .with_context(),
+        // so the retry classifier must walk anyhow's cause chain to
+        // find the underlying io::Error. Without this walk every error
+        // is "not retryable" and resume never kicks in.
+        let inner = std::io::Error::new(std::io::ErrorKind::ConnectionReset, "wifi");
+        let wrapped: anyhow::Error = anyhow::Error::from(inner)
+            .context("write_all_parts")
+            .context("send shard 7");
+        assert!(is_retryable_transfer_error(&wrapped));
+    }
+
+    #[test]
+    fn protocol_errors_do_not_retry() {
+        // A bare anyhow::anyhow! string error has no io::Error in its
+        // chain — these are protocol-level rejections like "tx_id
+        // mismatch" or "unknown frame type", which the payload has
+        // already aborted. Retrying can't help.
+        let e: anyhow::Error = anyhow::anyhow!("direct_tx_corrupt");
+        assert!(!is_retryable_transfer_error(&e));
+    }
 }

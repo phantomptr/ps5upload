@@ -16,7 +16,7 @@
 # On failure, the script prints which step failed. Toggle the PS5's
 # network to get a clean slate when ports wedge.
 
-set -eu
+set -euo pipefail
 
 if [ $# -lt 1 ]; then
     echo "usage: $0 <PS5_IP>" >&2

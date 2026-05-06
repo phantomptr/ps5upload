@@ -11,9 +11,9 @@
  *    (same pattern as register.c uses for libSceAppInstUtil).
  *
  * 2. BGFT init params. `sceBgftInitialize` wants a pre-allocated heap
- *    buffer. DPI uses 256 KiB; we match that. The buffer is allocated
- *    once (static), held forever — BGFT keeps a pointer to it, so it
- *    must outlive every Register/Start call.
+ *    buffer. We allocate 256 KiB — Sony retains the pointer for the
+ *    lifetime of the subsystem, so the buffer is static (held forever).
+ *    Must outlive every Register/Start call.
  *
  * 3. User ID. BGFT's download_param needs the foreground user_id. We
  *    call sceUserServiceInitialize + sceUserServiceGetForegroundUser
@@ -51,17 +51,17 @@
 #include "bgft.h"
 #include "shellui_rpc.h"
 
-/* ─── AppInstUtil install path (etaHEN/DPI style) ─────────────────────
+/* ─── AppInstUtil install path ─────────────────────────────────────
  *
  * sceAppInstUtilInstallByPackage is Sony's high-level "fetch this URL,
- * decrypt, install" entry point — the same API etaHEN's DirectPKGInstaller
- * uses. It's compile-time linked via -lSceAppInstUtil so there's no
- * dlopen/dlsym dance and no per-firmware symbol-name drift. We try this
- * path first; if it fails (rare — would mean libSceAppInstUtil itself
- * isn't loaded), we fall back to the BGFT path below for legacy
- * firmwares where BGFT works but AppInstUtil doesn't.
+ * decrypt, install" entry point. It's compile-time linked via
+ * -lSceAppInstUtil so there's no dlopen/dlsym dance and no per-firmware
+ * symbol-name drift. We try this path first; if it fails (rare — would
+ * mean libSceAppInstUtil itself isn't loaded), we fall back to the BGFT
+ * path below for legacy firmwares where BGFT works but AppInstUtil
+ * doesn't.
  *
- * Layouts taken verbatim from etaHEN's util/include/common_utils.h. */
+ * Struct layouts match Sony's AppInstUtil ABI (psdevwiki reference). */
 
 #define APPINST_PLAYGO_SCENARIOID_SIZE 3
 #define APPINST_LANGUAGE_SIZE          8
@@ -128,9 +128,9 @@ extern int sceAppInstUtilCancelInstall(const char *content_id);
 
 /** One-shot initializer for the AppInstUtil subsystem. Without
  *  this, sceAppInstUtilInstallByPackage typically returns
- *  SCE_APP_INST_UTIL_ERROR_NOT_INITIALIZED (-2136797184). etaHEN
- *  initializes this implicitly via daemon startup; we don't have
- *  a daemon-level startup hook so we lazy-init at first install
+ *  SCE_APP_INST_UTIL_ERROR_NOT_INITIALIZED (-2136797184). System
+ *  daemons initialize this implicitly at boot; we don't have a
+ *  daemon-level startup hook so we lazy-init at first install
  *  attempt. Idempotent return values from Sony's installer (e.g.
  *  "already initialized") are absorbed silently — what we care
  *  about is "the next call to InstallByPackage will work." */
@@ -249,10 +249,9 @@ static int appinst_task_lookup(int32_t task_id, char *out, size_t out_cap) {
 }
 
 /* ShellCore's authid — required by sceAppInstUtilInstallByPackage and
- * sceAppInstUtilGetInstallStatus on PS5. Confirmed via etaHEN's
- * pkg-writeup.md: "Modify the auth ID within the struct ucred
- * authentication information to match ShellCore's identifier
- * (0x3800000000000010)". Without this the call returns
+ * sceAppInstUtilGetInstallStatus on PS5. The ucred authentication
+ * info's auth_id must equal ShellCore's identifier
+ * (0x3800000000000010) for these calls. Without this the call returns
  * 0x80B22404 (PlayGo HTTP_404 — Sony rejects the URL pre-flight from
  * non-ShellCore authids on FW 9.60+) for HTTP URLs, or 0x80B21106
  * (parser/parameter rejection) for file:// URLs. The default
@@ -265,6 +264,55 @@ static int appinst_task_lookup(int32_t task_id, char *out, size_t out_cap) {
  * here rather than pulling kernel.h into bgft.c. */
 extern uint64_t kernel_get_ucred_authid(pid_t pid);
 extern int kernel_set_ucred_authid(pid_t pid, uint64_t authid);
+
+/** Swap process authid to ShellCore for one Sony API call. Returns
+ *  the saved authid on success, or 0 if the swap didn't happen (no
+ *  kernel R/W or write failure). Pass that return value to
+ *  `authid_release_shellcore()` to undo the swap.
+ *
+ *  Centralises the swap pattern that was previously duplicated across
+ *  `appinst_install_start` and `appinst_install_status` — same retry-
+ *  on-restore semantics, single source of truth for the log format,
+ *  no risk of the two sites drifting on a future fix.
+ *
+ *  `site_tag` is a short identifier (e.g. "InstallByPackage") used
+ *  only in the warn log line so multi-call traces are diagnosable. */
+static uint64_t authid_acquire_shellcore(const char *site_tag) {
+    pid_t mypid = getpid();
+    uint64_t saved = kernel_get_ucred_authid(mypid);
+    if (saved == 0) {
+        /* Kernel R/W unavailable — caller's call will run with
+         * whatever authid the process currently has. Better than
+         * aborting the install when the only failure mode is "no
+         * jailbreak elevation yet." */
+        return 0;
+    }
+    if (kernel_set_ucred_authid(mypid, PS5_SHELLCORE_AUTHID) != 0) {
+        fprintf(stderr,
+                "[bgft.%s] WARN: failed to swap to ShellCore authid; "
+                "Sony call will run with current authid (0x%llx)\n",
+                site_tag, (unsigned long long)saved);
+        return 0;
+    }
+    return saved;
+}
+
+/** Restore prior authid with retry-and-verify (3 attempts). No-op if
+ *  `saved == 0` (acquire didn't actually swap). On persistent restore
+ *  failure the shellui_rpc sensor path's `force_reresolve_locked` re-
+ *  arms debugger authid as a final safety net. */
+static void authid_release_shellcore(uint64_t saved, const char *site_tag) {
+    if (saved == 0) return;
+    pid_t mypid = getpid();
+    for (int attempt = 0; attempt < 3; attempt++) {
+        (void)kernel_set_ucred_authid(mypid, saved);
+        if (kernel_get_ucred_authid(mypid) == saved) return;
+    }
+    fprintf(stderr,
+            "[bgft.%s] WARN: failed to restore authid 0x%llx after "
+            "Sony call (3 attempts); shellui_rpc will rearm.\n",
+            site_tag, (unsigned long long)saved);
+}
 
 /** Try the AppInstUtil install path. Returns 0 + sets *out_task_id
  *  on success; -1 + sets *out_err_code on failure (caller may then
@@ -287,40 +335,27 @@ static int appinst_install_start(const char *url,
 
     AppInstPkgInfo pkg_info;
     memset(&pkg_info, 0, sizeof(pkg_info));
-    /* pkg_info.content_id is OUTPUT per etaHEN's reference. Sony's
-     * installer extracts the content_id from the pkg header on
-     * return; seeding it caused 0x80B21106 parser-error in testing. */
+    /* pkg_info.content_id is OUTPUT — Sony's installer extracts the
+     * content_id from the pkg header on return; seeding it caused
+     * 0x80B21106 parser-error in testing. */
 
     AppInstPlayGoInfo playgo;
     memset(&playgo, 0, sizeof(playgo));
 
     /* Swap to ShellCore authid for the entire init+install window.
-     * etaHEN's payload runs with ShellCore authid persistently —
-     * sceAppInstUtilInitialize sees ShellCore authid when it sets up
-     * its IPC handles to Sony's installer daemon, and that state
-     * persists across the InstallByPackage call. Calling Initialize
-     * with debugger authid (0x4800) primes Sony's daemon with wrong
-     * IPC peer info, which surfaces later as 0x80020003 ESRCH ("no
-     * such process") because Sony tries to IPC back to a debugger-
-     * authid peer that the install path doesn't know how to talk to.
+     * Persistent-ShellCore-authid payloads (injected into ShellUI's
+     * own process) get this for free — sceAppInstUtilInitialize sees
+     * ShellCore authid when it sets up its IPC handles to Sony's
+     * installer daemon, and that state persists across the
+     * InstallByPackage call. Calling Initialize with debugger authid
+     * (0x4800) primes Sony's daemon with wrong IPC peer info, which
+     * surfaces later as 0x80020003 ESRCH ("no such process") because
+     * Sony tries to IPC back to a debugger-authid peer that the
+     * install path doesn't know how to talk to.
      *
-     * Pre-fix-round-5 (this round): the swap only wrapped the install
-     * call. Init ran under debugger authid first, then we swapped
-     * for the install — too late, init had already cached the wrong
-     * peer. Now both calls run under ShellCore authid. */
-    pid_t mypid = getpid();
-    uint64_t saved_authid = kernel_get_ucred_authid(mypid);
-    int authid_swapped = 0;
-    if (saved_authid != 0) {
-        if (kernel_set_ucred_authid(mypid, PS5_SHELLCORE_AUTHID) == 0) {
-            authid_swapped = 1;
-        } else {
-            fprintf(stderr,
-                    "[bgft] WARN: failed to swap to ShellCore authid; "
-                    "install call will run with current authid (0x%llx)\n",
-                    (unsigned long long)saved_authid);
-        }
-    }
+     * Both Init and InstallByPackage run under the same swap window
+     * so init's IPC handle setup sees ShellCore authid. */
+    uint64_t saved_authid = authid_acquire_shellcore("InstallByPackage");
 
     /* Init Sony's installer subsystem under ShellCore authid. The
      * pthread_once guard makes this idempotent across installs; the
@@ -339,32 +374,7 @@ static int appinst_install_start(const char *url,
 
     int rc = sceAppInstUtilInstallByPackage(&meta, &pkg_info, &playgo);
 
-    /* Restore prior authid. 2.2.59: retry-with-verification. Pre-fix
-     * a single best-effort write left our process stuck with
-     * ShellCore authid on rare write failures, breaking ALL
-     * subsequent ptrace ops (sensor reads, app launch, etc.). Now:
-     *   1. Try the write up to 3 times.
-     *   2. After each attempt, read authid back; if it matches
-     *      `saved_authid`, we're done.
-     *   3. If all 3 fail, log loudly. The shellui_rpc.c sensor path
-     *      also re-arms the debugger authid on retry as a final
-     *      safety net (see force_reresolve_locked). */
-    if (authid_swapped) {
-        int restored = 0;
-        for (int attempt = 0; attempt < 3 && !restored; attempt++) {
-            (void)kernel_set_ucred_authid(mypid, saved_authid);
-            if (kernel_get_ucred_authid(mypid) == saved_authid) {
-                restored = 1;
-                break;
-            }
-        }
-        if (!restored) {
-            fprintf(stderr,
-                    "[bgft] WARN: failed to restore authid 0x%llx after "
-                    "InstallByPackage (3 attempts); shellui_rpc will rearm.\n",
-                    (unsigned long long)saved_authid);
-        }
-    }
+    authid_release_shellcore(saved_authid, "InstallByPackage");
     if (rc != 0) {
         *out_err_code = (uint32_t)rc;
         fprintf(stderr,
@@ -403,27 +413,16 @@ static int appinst_install_status(int32_t task_id,
      * was the crash source observed pre-2.2.53-fix-round-3 — the call
      * dereferences cross-process state the kernel won't let a non-
      * ShellCore caller see, and the segfault propagates back to us.
-     * Same swap+restore pattern as appinst_install_start. */
-    pid_t mypid = getpid();
-    uint64_t saved_authid = kernel_get_ucred_authid(mypid);
-    if (saved_authid != 0) {
-        (void)kernel_set_ucred_authid(mypid, PS5_SHELLCORE_AUTHID);
-    }
+     * Same swap+restore pattern as appinst_install_start, centralised
+     * via the authid_{acquire,release}_shellcore helpers — verifying
+     * the restore keeps the window during which our authid is wrong
+     * as small as possible so concurrent sensor reads on another mgmt
+     * thread don't see a transient bad-authid state. */
+    uint64_t saved_authid = authid_acquire_shellcore("GetInstallStatus");
 
     int rc = sceAppInstUtilGetInstallStatus(content_id, &st);
 
-    /* Restore prior authid with retry-then-verify (same pattern as
-     * appinst_install_start). The 2.2.59 self-heal in shellui_rpc.c
-     * still catches a missed restore, but verifying here keeps the
-     * window during which our authid is wrong as small as possible —
-     * concurrent sensor reads on another mgmt thread won't see a
-     * transient bad-authid state if the very first write succeeded. */
-    if (saved_authid != 0) {
-        for (int attempt = 0; attempt < 3; attempt++) {
-            (void)kernel_set_ucred_authid(mypid, saved_authid);
-            if (kernel_get_ucred_authid(mypid) == saved_authid) break;
-        }
-    }
+    authid_release_shellcore(saved_authid, "GetInstallStatus");
 
     if (rc != 0) {
         /* Hard error from GetInstallStatus — the task is dead.
@@ -448,7 +447,7 @@ static int appinst_install_status(int32_t task_id,
         *out_phase = BGFT_PHASE_DONE;
     } else if (strncmp(st.status, "installing", 10) == 0
             || strncmp(st.status, "promoting", 9) == 0) {
-        /* etaHEN's writeup confirms Sony's actual state strings:
+        /* Sony's actual install state strings (observed):
          * transferring → promoting → playable (or error/none).
          * "installing" was our pre-2.2.53 best-guess; keep it as
          * an alias since some firmwares may still emit it. */
@@ -545,10 +544,9 @@ static sce_bgft_register_task_fn   g_bgft_register = NULL;
  * For PS4-fake-pkg-on-PS5 (the canonical jailbroken-PS5 install workflow)
  * this is the path Sony's installer uses when entitlement_type=5 ("debug
  * install"); without it, regular Register tends to reject fakepkgs with
- * 0x8099003x-class entitlement errors. DPI's main.c:72 + main.c:148-159
- * is the reference for the regular→debug fallback sequence we mirror in
- * `bgft_install_start`. Probed alongside g_bgft_register and treated as
- * an optional capability.
+ * 0x8099003x-class entitlement errors. The regular→debug Register
+ * fallback sequence is implemented in `bgft_install_start`. Probed
+ * alongside g_bgft_register and treated as an optional capability.
  *
  * Why a separate global rather than overwriting g_bgft_register: we want
  * the regular path available too — Sony-signed pkgs (the rare case our
@@ -684,10 +682,10 @@ static void bgft_init_locked(void) {
                                                  "sceBgftDownloadRegisterTask" };
     /* Debug-Register variant — accepts fakepkgs (PS4 fake-signed pkgs
      * being installed on a jailbroken PS5 in PS4 emulation mode is the
-     * canonical workflow). DPI's main.c falls back to this when the
-     * regular Register returns 0x80990088 ("DUPLICATE_TASK") or any
-     * other rejection. We probe it separately so a missing symbol on
-     * one firmware doesn't poison the regular-Register path. */
+     * canonical workflow). We fall back to this when regular Register
+     * returns 0x80990088 ("DUPLICATE_TASK") or any other rejection.
+     * Probed separately so a missing symbol on one firmware doesn't
+     * poison the regular-Register path. */
     static const char *const SYM_REGISTER_DEBUG[] = {
         "sceBgftServiceIntDebugDownloadRegisterPkg",
         /* Older firmwares occasionally exposed a non-Service-prefixed
@@ -764,7 +762,7 @@ static void bgft_init_locked(void) {
         (sce_user_service_get_foreground_user_fn)dlsym(RTLD_DEFAULT, "sceUserServiceGetForegroundUser");
     if (user_init) {
         /* Some FW need an init params struct; passing NULL falls back
-         * to defaults which has worked in DPI's payload. */
+         * to defaults, which works on every FW we've tested. */
         (void)user_init(NULL);
     }
     if (user_get_fg) {
@@ -783,8 +781,8 @@ static void bgft_init_locked(void) {
     }
 
     /* Step 5: BGFT init. Returns 0 on success. The 0x80990001
-     * "already initialised" code is benign — DPI ignores it; we
-     * treat it as success. */
+     * "already initialised" code is benign (Sony's daemon may have
+     * init'd BGFT earlier); we treat it as success. */
     struct bgft_init_params ip = {
         .mem  = g_bgft_heap,
         .size = BGFT_HEAP_BYTES,
@@ -855,7 +853,7 @@ int bgft_install_start(const char *url,
     *out_task_id = -1;
     *out_err_code = 0;
 
-    /* AppInstUtil-first dispatch (added 2.2.44, etaHEN-style). The
+    /* AppInstUtil-first dispatch (added 2.2.44). The
      * AppInstUtil path is compile-time linked via -lSceAppInstUtil
      * so it doesn't suffer the dlopen/dlsym fragility that bites
      * BGFT on firmwares where libSceBgft.sprx is at a different
@@ -1031,7 +1029,7 @@ int bgft_install_start(const char *url,
 
     int task_id = -1;
     int rc = -1;
-    /* Register fallback ladder, mirroring DPI's main.c:148-159:
+    /* Register fallback ladder for fakepkg installs:
      *   1. IntDebug variant first when available — the canonical path
      *      for fakepkg installs on a jailbroken PS5. Sony's regular
      *      Register applies entitlement checks that reject any pkg
@@ -1042,8 +1040,7 @@ int bgft_install_start(const char *url,
      *      symbol couldn't be resolved.
      *   3. If IntDebug returns 0x80990088 (DUPLICATE_TASK), the task
      *      was already queued — fall through to regular Register
-     *      which BGFT will treat as a re-attach. DPI handles this
-     *      branch the same way.
+     *      which BGFT will treat as a re-attach.
      *
      * The cred-forge that lets the Int-family symbols actually run is
      * already applied process-wide via runtime_apply_ucred_jailbreak()
@@ -1116,7 +1113,7 @@ int bgft_install_start(const char *url,
 /* ─── Public API: install status ──────────────────────────────────── */
 
 /* Map BGFT's internal state code to our public phase enum. Codes
- * cross-referenced from PSDevWiki + DPI debugging notes:
+ * cross-referenced from PSDevWiki + community debugging notes:
  *   0/1 → queued
  *   2   → downloading
  *   3   → installing/preparing

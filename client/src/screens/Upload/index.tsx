@@ -1221,16 +1221,9 @@ function MountAfterUploadCard({
  *  "what goes here" terms rather than naming specific managers. */
 const DESTINATION_PRESETS: { label: string; subpath: string; hint: string }[] = [
   // homebrew is first because it's the community-standard scan path
-  // — third-party PS5 game scanners typically read from
-  // <volume>/homebrew. Files landed here are auto-discoverable by
-  // other PS5 tools.
+  // — most PS5 game scanners read from <volume>/homebrew, so files
+  // landed here are auto-discoverable.
   { label: "homebrew", subpath: "homebrew", hint: "Homebrew apps & games (recommended)" },
-  // etaHEN/games is the well-known scan path for users who run
-  // etaHEN as their homebrew enabler. It's not a hard dependency
-  // for ps5upload itself — the payload doesn't talk to etaHEN — but
-  // putting games here means etaHEN's game scanner picks them up
-  // without an extra move step.
-  { label: "etaHEN/games", subpath: "etaHEN/games", hint: "etaHEN's game scan folder" },
   { label: "exfat", subpath: "exfat", hint: "Disk images" },
   { label: "ps5upload", subpath: "ps5upload", hint: "Tool-specific generic folder" },
 ];

@@ -83,12 +83,12 @@ function fmtDuration(seconds: number): string {
 }
 
 export default function InstallPackageScreen() {
+  // `tr(key, fallback)` and `tr(key, vars, fallback)` are both supported
+  // by the `useTr` overloads — see `state/lang.ts::Translator`. We alias
+  // to `t` / `tv` purely to keep historical call sites compact.
   const tr = useTr();
-  const t = (k: string, fb: string) => tr(k, {}, fb);
-  // Same as `t` but accepts variable substitutions; used where the
-  // string contains an interpolation like "{n} total".
-  const tv = (k: string, vars: Record<string, string | number>, fb: string) =>
-    tr(k, vars, fb);
+  const t = tr;
+  const tv = tr;
   const host = useConnectionStore((s) => s.host);
   const items = useInstallQueue((s) => s.items);
   const isRunning = useInstallQueue((s) => s.isRunning);

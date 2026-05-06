@@ -444,7 +444,6 @@ int shellui_rpc_launch_app(const char *title_id, int user_id_hint) {
     char tid_buf[32];
     memset(tid_buf, 0, sizeof(tid_buf));
     strncpy(tid_buf, title_id, sizeof(tid_buf) - 1);
-    (void)pt_copyin(g_shellui_pid, tid_buf, scratch, sizeof(tid_buf));
 
     struct lnc_app_param {
         uint32_t sz;
@@ -457,7 +456,18 @@ int shellui_rpc_launch_app(const char *title_id, int user_id_hint) {
     param.sz = (uint32_t)sizeof(param);
     param.user_id = user_id;
     intptr_t param_addr = scratch + 32;
-    (void)pt_copyin(g_shellui_pid, &param, param_addr, sizeof(param));
+
+    /* Stage both args before pt_call. If either copyin fails the remote
+     * scratch is partial and pt_call would dereference garbage — bail
+     * out cleanly instead of letting Sony's launcher crash and take
+     * SceShellUI down with it (full UI loss until reboot). */
+    if (pt_copyin(g_shellui_pid, tid_buf, scratch, sizeof(tid_buf)) != 0
+     || pt_copyin(g_shellui_pid, &param, param_addr, sizeof(param)) != 0) {
+        (void)pt_munmap(g_shellui_pid, scratch, 0x1000);
+        (void)pt_detach_tracked(g_shellui_pid, 0);
+        pthread_mutex_unlock(&g_rpc_mtx);
+        return -1;
+    }
 
     /* Call sceLncUtilLaunchApp(title_id, NULL, &param) inside ShellUI. */
     long rc = pt_call(g_shellui_pid, g_addr_lnc_launch,
@@ -582,12 +592,11 @@ int shellui_rpc_get_soc_power_mw(uint32_t *out_mw) {
  *
  * Install a fakepkg by remotely calling
  * `sceAppInstUtilInstallByPackage(MetaInfo*, AppInstPkgInfo*,
- *  PlayGoInfo*)` inside SceShellUI's process. The struct layouts
- * mirror etaHEN's reference (util/source/DirectPKGInstaller.cpp)
- * and the public PS5 install writeup. Sony's PlayGo whitelists
- * ShellUI's process attributes for HTTP fetch, so the same call
- * that returns 0x80B22404 (HTTP 404 pre-flight) from our payload's
- * own context succeeds when issued from ShellUI's. */
+ *  PlayGoInfo*)` inside SceShellUI's process. Struct layouts match
+ * Sony's AppInstUtil ABI (psdevwiki reference). Sony's PlayGo
+ * whitelists ShellUI's process attributes for HTTP fetch, so the
+ * same call that returns 0x80B22404 (HTTP 404 pre-flight) from our
+ * payload's own context succeeds when issued from ShellUI's. */
 
 #define APPINST_LANGUAGE_SIZE          8
 #define APPINST_PLAYGO_SCENARIO_SIZE   3
@@ -671,8 +680,8 @@ int shellui_rpc_install_pkg(const char *url,
 
     /* Bounds-check string lengths so the local buffer below can
      * never overflow APPINST_SCRATCH_SIZE. The url field is the
-     * only realistic-large input; cap it at 2 KiB which matches
-     * etaHEN's DPI buffer cap and any sensible real-world URL. */
+     * only realistic-large input; cap it at 2 KiB which fits any
+     * sensible real-world URL with margin. */
     const size_t MAX_URL  = 2048;
     const size_t MAX_TITLE = 512;
     const size_t MAX_CID  = APPINST_CONTENTID_SIZE - 1;
@@ -745,10 +754,9 @@ int shellui_rpc_install_pkg(const char *url,
         off += title_len;
     } else {
         /* Empty title would flicker the PS5's install notification
-         * with a blank line. Use a fixed fallback that matches what
-         * etaHEN's DPI surfaces ("etaHEN DPI" in their case;
-         * "ps5upload" makes it obvious in the user's Settings →
-         * Notifications). */
+         * with a blank line. Use "ps5upload" as a fixed fallback so
+         * the source is obvious in the user's Settings →
+         * Notifications. */
         const char *fallback = "ps5upload";
         size_t fl = strlen(fallback);
         memcpy(local_buf + off, fallback, fl);

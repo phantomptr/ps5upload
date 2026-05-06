@@ -106,10 +106,30 @@ Building from source:
 ```bash
 git clone https://github.com/phantomptr/ps5upload.git
 cd ps5upload
-make dist          # one-shot: payload + engine + client + bundle
+make install       # bootstrap dev env (auto-detects host OS)
+make build         # payload ELF + engine + client UI
+make run-client    # launch the Tauri dev app
 ```
 
-Platform-specific bundle targets: `make dist-mac`,
+`make install` auto-detects your OS and runs one of:
+
+- **`make install-ubuntu`** — Debian / Ubuntu / WSL2: `apt` deps for Tauri
+  (`libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `librsvg2-dev`,
+  `libayatana-appindicator3-dev`, `libxdo-dev`, `libssl-dev`,
+  `build-essential`), Node.js 22 LTS via NodeSource (only if missing),
+  Rust via rustup, and PS5 Payload SDK v0.38 → `~/ps5-payload-sdk`.
+- **`make install-macos`** — macOS: Xcode CLT, Homebrew, `node`, `llvm@18`
+  (the only Homebrew llvm shipped with `ld.lld` — required by
+  `prospero-clang`), Rust via rustup, and PS5 Payload SDK.
+- **`make install-windows`** — Windows 11: Node.js LTS, Rust, VS 2022 Build
+  Tools (C++ workload), WebView2 Runtime, 7-Zip, and PS5 Payload SDK
+  via `winget`. Run from an elevated PowerShell (or any shell with
+  `pwsh` / `powershell.exe` on PATH).
+
+All three install scripts are idempotent — re-running them after a partial
+setup is safe; each step skips if already satisfied.
+
+For per-platform bundles only (no full dev env): `make dist-mac`,
 `make dist-mac-x64`, `make dist-linux`, `make dist-linux-arm`,
 `make dist-win`, and `make dist-win-arm`.
 

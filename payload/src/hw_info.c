@@ -166,10 +166,10 @@ int hw_info_get_text(char *out, size_t out_cap, size_t *out_written,
         int  ncpu             = 0;
 
         if (!g_hw.model_name || g_hw.model_name(model_name) != 0 || model_name[0] == '\0') {
-            strcpy(model_name, "PlayStation 5");
+            snprintf(model_name, sizeof(model_name), "%s", "PlayStation 5");
         }
         if (!g_hw.serial || g_hw.serial(serial) != 0 || serial[0] == '\0') {
-            strcpy(serial, "N/A");
+            snprintf(serial, sizeof(serial), "%s", "N/A");
         }
         sysctl_string("hw.machine",     hw_machine, sizeof(hw_machine));
         sysctl_string("kern.ostype",    ostype,     sizeof(ostype));
