@@ -17,13 +17,14 @@
  * a kstuff-style loader has exposed kernel access — kstuff (or an
  * equivalent kernel-RW loader) must run before our payload. */
 #define PS5_SYSTEM_PROCESS_AUTHID  0x4800000000000006ull
-/* 2.2.54-fix-round-6 diagnostic: temporarily set our process to
- * ShellCore authid permanently (instead of debugger). This proves
- * out whether 0x80B21106 from Sony is authid-related or daemon-
- * state related. If ShellCore-permanent fixes installs → my per-
- * call swap had a bug. If it still fails → Sony's installer daemon
- * is wedged and needs PS5 reboot. */
-#define PS5_SHELLCORE_AUTHID_DIAG  0x3800000000000010ull
+/* The ShellCore authid (0x3800000000000010) is intentionally NOT
+ * defined as a constant here. A 2.2.54-era diagnostic kept the
+ * process permanently elevated to ShellCore authid; that turned
+ * out to forge a (pid, authid) pair the kernel later cross-checks,
+ * causing PS5 black-screen + auto-restart mid-install. We default
+ * back to debugger authid (above) and only swap to ShellCore for
+ * the install/status window inside bgft.c::appinst_install_*.
+ * The full reasoning is in `runtime_apply_ucred_jailbreak` below. */
 
 /*
  * PS5 toast notification — pops the message in the top-right corner of
@@ -209,6 +210,7 @@ int main(void) {
 
     if (runtime_ensure_directories() != 0) {
         fprintf(stderr, "runtime_ensure_directories failed\n");
+        pop_notification("PS5Upload failed: cannot create payload directories");
         return 1;
     }
 
@@ -218,51 +220,46 @@ int main(void) {
 
     if (runtime_init(&state) != 0) {
         fprintf(stderr, "runtime_init failed\n");
+        pop_notification("PS5Upload failed: runtime_init (port bind?)");
         return 1;
     }
 
-    /* NOTE: register_module_init() is NOT called at startup -- the
-     * dlopen path for Sony's sprx libraries has been observed to hang
-     * or crash on some firmware configurations, which would prevent
-     * the payload from ever reaching runtime_try_takeover. The module
-     * self-initialises lazily on the first APP_* request (see
-     * register.c's public entry points), so a broken dlopen only
-     * fails the register/launch/list call, not the whole payload.
+    /* No eager Sony-service init at startup. Both `register_module_init`
+     * (dlopen + dlsym for libSceAppInstUtil/Lnc/UserService) and
+     * `register_services_init` (sceUserServiceInitialize +
+     * sceAppInstUtilInitialize + sceLncUtilInitialize) have been
+     * observed to hang on some firmware/loader combinations,
+     * preventing the payload from ever reaching
+     * `runtime_try_takeover` and binding :9113/:9114. With the
+     * payload listener never up, the desktop times out waiting for
+     * the payload to boot.
      *
-     * However, we DO call register_services_init() eagerly from the
-     * main thread (see below, after takeover). That function invokes
-     * sceUserServiceInitialize + sceAppInstUtilInitialize +
-     * sceLncUtilInitialize so Sony's services are established in
-     * main-thread context. Without this, calling the installer from
-     * a spawned HTTP handler thread hits a kernel-lock deadlock on
-     * firmware 9.60. */
+     * The Sony service inits run lazily inside the relevant entry
+     * points in register.c — `register_title_from_path` calls
+     * `sceAppInstUtilInitialize` before invoking the installer, and
+     * `launch_title` calls `sceUserServiceInitialize` +
+     * `sceLncUtilInitialize` before launching. The serialization
+     * mutex `g_sony_api_mtx` covers the kernel-lock concern that
+     * `register_services_init` was originally added to address. */
 
     if (runtime_try_takeover(&state) != 0) {
         fprintf(stderr, "runtime_takeover failed — another instance may still own the port\n");
+        pop_notification("PS5Upload failed: a previous instance still holds the port — restart the PS5");
         return 1;
     }
 
     if (runtime_write_ownership(&state) != 0) {
         fprintf(stderr, "runtime_write_ownership failed\n");
+        pop_notification("PS5Upload failed: cannot write ownership record");
         return 1;
     }
 
-    /* Startup-time calls to register_services_init() and
-     * runtime_reconcile_mounts() are deliberately disabled. Both
-     * invoke Sony APIs (dlopen of libSceAppInstUtil.sprx,
-     * getmntinfo on potentially-stale entries) that have been
-     * observed to hang on some firmware/loader combinations,
-     * preventing the payload from ever reaching
-     * runtime_server_loop() below — which means the listener
-     * never binds :9113/:9114 and the client times out waiting
-     * for the payload to boot.
-     *
-     * register_services_init still runs lazily on first APP_*
-     * request (via register_module_init in register.c), and
-     * runtime_reconcile_mounts can be invoked on-demand from a
-     * future Volumes → Refresh action. Moving them out of the
-     * startup path trades a ~100ms per-request delay on their
-     * first use for a payload that actually comes up reliably. */
+    /* `runtime_reconcile_mounts` is also deliberately not called at
+     * startup. It walks `getmntinfo` on potentially-stale entries
+     * which has been observed to hang on some firmware/loader
+     * combinations. It is available on-demand from a future Volumes
+     * → Refresh action. Trades a ~100ms per-request delay on first
+     * use for a payload that actually comes up reliably. */
 
     printf("ps5upload2 payload ready on ports transfer=%d mgmt=%d (instance=%llu)\n",
            state.runtime_port, state.mgmt_port,
@@ -286,6 +283,11 @@ int main(void) {
     if (pthread_create(&state.mgmt_thread, NULL,
                        runtime_mgmt_server_loop, &state) != 0) {
         fprintf(stderr, "pthread_create(mgmt) failed\n");
+        pop_notification("PS5Upload failed: cannot start management thread");
+        /* We've already taken over and written ownership; the kernel
+         * will reap the bound sockets at exit, but a stale ownership
+         * record would mislead the next payload's startup probe. */
+        (void)runtime_clear_ownership(&state);
         return 1;
     }
     state.mgmt_thread_started = 1;

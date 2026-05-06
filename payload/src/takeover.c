@@ -4,10 +4,33 @@
 #include <stdint.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <errno.h>
 #include "runtime.h"
+
+/* Per-call recv/send deadline on the takeover handshake. The old
+ * payload's mgmt thread might accept the TCP connection but be
+ * wedged before answering (kernel-deadlocked Sony APIs are a
+ * documented FW 9.60 failure mode), in which case a blocking
+ * recv() hangs the new payload in main() forever. 2 s is generous
+ * for a loopback round-trip; anything slower than that and we'd
+ * rather fall through to the port-poll loop below than block.
+ */
+#define TAKEOVER_RECV_TIMEOUT_SEC 2
+
+/* How long to wait for both ports to be released after the ACK.
+ * The old payload may be flushing a multi-GiB COMMIT_TX on the
+ * transfer port — the historical 2 s ceiling timed out under that
+ * load and surfaced as "takeover failed" even when the old payload
+ * eventually did exit cleanly. Bumping to 10 s covers the
+ * common-case big-upload tail without making a healthy takeover
+ * feel any slower (the loop short-circuits the moment both ports
+ * are gone).
+ */
+#define TAKEOVER_PORT_RELEASE_ATTEMPTS  100
+#define TAKEOVER_PORT_RELEASE_INTERVAL_US 100000
 
 /* ── FTX2 frame helpers (local copies; takeover.c has no other includes) ── */
 
@@ -120,6 +143,18 @@ int runtime_try_takeover(runtime_state_t *state) {
                target_port);
     }
 
+    /* Bound the recv() below — without a deadline, a wedged old
+     * payload that accept()s but never replies blocks the new
+     * payload in main() forever. SO_RCVTIMEO is enough; we don't
+     * need an SO_SNDTIMEO because the kernel queues 28 bytes
+     * locally without ever crossing into the peer. */
+    {
+        struct timeval tv;
+        tv.tv_sec = TAKEOVER_RECV_TIMEOUT_SEC;
+        tv.tv_usec = 0;
+        (void)setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    }
+
     /* Send a proper binary FTX2 TAKEOVER_REQUEST frame. */
     build_takeover_frame(hdr);
     if (send(fd, hdr, sizeof(hdr), 0) != (ssize_t)sizeof(hdr)) {
@@ -127,20 +162,32 @@ int runtime_try_takeover(runtime_state_t *state) {
         close(fd);
         /* Port was open; try to wait for it to close anyway. */
     } else {
-        /* Read the TAKEOVER_ACK (or any response). */
-        got = recv(fd, (char *)resp, sizeof(resp), 0);
+        /* Read the TAKEOVER_ACK (or any response). The recv timeout
+         * above guarantees we don't hang indefinitely if the peer is
+         * wedged — we'll fall through to the port-poll loop below,
+         * which is itself bounded. */
+        got = recv(fd, resp, sizeof(resp), 0);
         if (got > 0) {
             printf("[payload2] takeover ACK received (%zd bytes)\n", got);
-        } else {
+        } else if (got == 0) {
             printf("[payload2] takeover: peer closed without ACK\n");
+        } else if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            printf("[payload2] takeover: ACK timed out after %ds — proceeding to port poll\n",
+                   TAKEOVER_RECV_TIMEOUT_SEC);
+        } else {
+            printf("[payload2] takeover recv error: %s — proceeding to port poll\n",
+                   strerror(errno));
         }
         close(fd);
     }
 
-    /* Wait up to 2 s for the old runtime to release BOTH ports. The
+    /* Wait up to ~10 s for the old runtime to release BOTH ports. The
      * transfer port may linger longer than mgmt if a large COMMIT_TX
-     * is still flushing — we need both gone before we can bind them. */
-    for (attempts = 0; attempts < 20; attempts++) {
+     * is still flushing — we need both gone before we can bind them.
+     * Pre-2.2.61 this was 2 s, which timed out under big-upload tails
+     * even though the old payload would have exited cleanly given a
+     * little more time. */
+    for (attempts = 0; attempts < TAKEOVER_PORT_RELEASE_ATTEMPTS; attempts++) {
         int mgmt_gone = !runtime_port_responding(state->mgmt_port);
         int xfer_gone = !runtime_port_responding(state->runtime_port);
         if (mgmt_gone && xfer_gone) {
@@ -148,12 +195,14 @@ int runtime_try_takeover(runtime_state_t *state) {
             printf("[payload2] takeover completed after %d checks\n", attempts + 1);
             return 0;
         }
-        usleep(100000);
+        usleep(TAKEOVER_PORT_RELEASE_INTERVAL_US);
     }
 
     fprintf(stderr,
-            "[payload2] takeover timed out — ports %d/%d still occupied\n",
-            state->runtime_port, state->mgmt_port);
+            "[payload2] takeover timed out — ports %d/%d still occupied after %d.%ds\n",
+            state->runtime_port, state->mgmt_port,
+            (TAKEOVER_PORT_RELEASE_ATTEMPTS * TAKEOVER_PORT_RELEASE_INTERVAL_US) / 1000000,
+            ((TAKEOVER_PORT_RELEASE_ATTEMPTS * TAKEOVER_PORT_RELEASE_INTERVAL_US) / 100000) % 10);
     /* Return -1 so main() does not attempt to bind over a live peer. */
     return -1;
 }

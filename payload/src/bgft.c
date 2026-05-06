@@ -50,6 +50,7 @@
 
 #include "bgft.h"
 #include "shellui_rpc.h"
+#include "sony_api_lock.h"
 
 /* ─── AppInstUtil install path ─────────────────────────────────────
  *
@@ -135,14 +136,13 @@ extern int sceAppInstUtilCancelInstall(const char *content_id);
  *  "already initialized") are absorbed silently — what we care
  *  about is "the next call to InstallByPackage will work." */
 static pthread_once_t g_appinst_init_once = PTHREAD_ONCE_INIT;
-static int g_appinst_init_rc = 0;
 static void appinst_init_locked(void) {
-    g_appinst_init_rc = sceAppInstUtilInitialize();
-    if (g_appinst_init_rc != 0) {
+    int rc = sceAppInstUtilInitialize();
+    if (rc != 0) {
         fprintf(stderr,
                 "[bgft] sceAppInstUtilInitialize returned 0x%08X "
                 "(non-fatal — common 'already initialised' codes are absorbed)\n",
-                (unsigned)g_appinst_init_rc);
+                (unsigned)rc);
     }
 }
 
@@ -354,7 +354,16 @@ static int appinst_install_start(const char *url,
      * install path doesn't know how to talk to.
      *
      * Both Init and InstallByPackage run under the same swap window
-     * so init's IPC handle setup sees ShellCore authid. */
+     * so init's IPC handle setup sees ShellCore authid.
+     *
+     * The shared `sony_api_lock` covers this entire critical section
+     * including the authid swap. Without it, register.c's concurrent
+     * calls into sceAppInstUtilInstallTitleDir / sceLncUtilLaunchApp
+     * would race against this install's authid window AND Sony's
+     * installer kernel-stub state, hitting the FW 9.60 deadlock.
+     * Acquired BEFORE the swap so a concurrent caller can't observe
+     * a transient ShellCore-authid state. */
+    pthread_mutex_lock(&sony_api_lock);
     uint64_t saved_authid = authid_acquire_shellcore("InstallByPackage");
 
     /* Init Sony's installer subsystem under ShellCore authid. The
@@ -375,6 +384,8 @@ static int appinst_install_start(const char *url,
     int rc = sceAppInstUtilInstallByPackage(&meta, &pkg_info, &playgo);
 
     authid_release_shellcore(saved_authid, "InstallByPackage");
+    usleep(SONY_API_POST_SLEEP_US);
+    pthread_mutex_unlock(&sony_api_lock);
     if (rc != 0) {
         *out_err_code = (uint32_t)rc;
         fprintf(stderr,
@@ -417,12 +428,21 @@ static int appinst_install_status(int32_t task_id,
      * via the authid_{acquire,release}_shellcore helpers — verifying
      * the restore keeps the window during which our authid is wrong
      * as small as possible so concurrent sensor reads on another mgmt
-     * thread don't see a transient bad-authid state. */
+     * thread don't see a transient bad-authid state.
+     *
+     * Shared `sony_api_lock` taken around the whole window: status
+     * polls fire every ~1 s during an active install, so a concurrent
+     * register/launch/uninstall on another mgmt thread is the
+     * realistic deadlock trigger. Pre-2.2.61 the status path raced
+     * those calls against Sony's installer kernel stubs. */
+    pthread_mutex_lock(&sony_api_lock);
     uint64_t saved_authid = authid_acquire_shellcore("GetInstallStatus");
 
     int rc = sceAppInstUtilGetInstallStatus(content_id, &st);
 
     authid_release_shellcore(saved_authid, "GetInstallStatus");
+    usleep(SONY_API_POST_SLEEP_US);
+    pthread_mutex_unlock(&sony_api_lock);
 
     if (rc != 0) {
         /* Hard error from GetInstallStatus — the task is dead.

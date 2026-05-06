@@ -359,3 +359,143 @@ mod drain_chunk_size_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod write_all_parts_tests {
+    //! Pin the `write_all_parts` partial-write retry. The function
+    //! is the single most subtle piece of `Connection`: under
+    //! short-write pressure it has to advance past whole slices,
+    //! trim a partial slice, and skip empty slices left in the
+    //! middle of the cursor without ever shipping an empty IoSlice
+    //! to the kernel as the only thing in the call. Every existing
+    //! caller passes 1–3 slices today, so without these tests the
+    //! advance logic is unexercised in CI.
+    use super::*;
+    use std::io::{self, IoSlice, Write};
+
+    /// Writer that returns at most `chunk` bytes per `write_vectored`,
+    /// to exercise the advance-and-retry loop. `out` accumulates
+    /// everything actually written so callers can assert byte
+    /// equality against the concatenated input.
+    struct ShortWriter {
+        out: Vec<u8>,
+        chunk: usize,
+    }
+
+    impl Write for ShortWriter {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            unreachable!("write_all_parts always uses write_vectored")
+        }
+        fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
+            let mut total = 0;
+            for s in bufs {
+                if total >= self.chunk {
+                    break;
+                }
+                let take = s.len().min(self.chunk - total);
+                self.out.extend_from_slice(&s[..take]);
+                total += take;
+            }
+            Ok(total)
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn writes_all_bytes_under_short_writes() {
+        let a: &[u8] = b"AAAA";
+        let b: &[u8] = b"BBBBBBBB";
+        let c: &[u8] = b"CCCCCC";
+        let mut w = ShortWriter {
+            out: Vec::new(),
+            chunk: 3,
+        };
+        write_all_parts(&mut w, &[a, b, c]).unwrap();
+        let mut expected = Vec::new();
+        expected.extend_from_slice(a);
+        expected.extend_from_slice(b);
+        expected.extend_from_slice(c);
+        assert_eq!(w.out, expected);
+    }
+
+    #[test]
+    fn handles_writes_that_split_within_a_slice() {
+        // chunk=3, slice "AB" (2 bytes): first writev consumes "AB"
+        // and 1 byte of "CDEFGH"; subsequent writes carve up the
+        // remainder. Tests the partial-slice trim path.
+        let a: &[u8] = b"AB";
+        let b: &[u8] = b"CDEFGH";
+        let mut w = ShortWriter {
+            out: Vec::new(),
+            chunk: 3,
+        };
+        write_all_parts(&mut w, &[a, b]).unwrap();
+        assert_eq!(w.out, b"ABCDEFGH");
+    }
+
+    #[test]
+    fn returns_writezero_on_zero_progress() {
+        // A writer that always returns 0 from write_vectored must
+        // surface as ErrorKind::WriteZero rather than spinning.
+        // This is the regression the explicit `if written == 0`
+        // check exists for.
+        struct StubbornWriter;
+        impl Write for StubbornWriter {
+            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+                Ok(0)
+            }
+            fn write_vectored(&mut self, _: &[IoSlice<'_>]) -> io::Result<usize> {
+                Ok(0)
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut w = StubbornWriter;
+        let err = write_all_parts(&mut w, &[b"hello"]).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::WriteZero);
+    }
+
+    #[test]
+    fn empty_parts_list_is_a_noop() {
+        let mut w = ShortWriter {
+            out: Vec::new(),
+            chunk: 1,
+        };
+        write_all_parts(&mut w, &[]).unwrap();
+        assert!(w.out.is_empty());
+    }
+
+    #[test]
+    fn skips_empty_slices_in_input() {
+        // `send_frame_split` already pre-trims, so the production
+        // path doesn't pass intermediate empties — but the function
+        // documents that it tolerates them. Lock that contract in.
+        let mut w = ShortWriter {
+            out: Vec::new(),
+            chunk: 1,
+        };
+        write_all_parts(&mut w, &[b"", b"X", b"", b"Y"]).unwrap();
+        assert_eq!(w.out, b"XY");
+    }
+
+    #[test]
+    fn fully_completes_with_writev_returning_one_byte() {
+        // Pathological short writes (chunk=1) verify the loop
+        // makes forward progress through every byte regardless
+        // of vector layout. 28-byte FrameHeader + 100-byte body
+        // approximates a real shard frame.
+        let hdr = vec![0xaau8; 28];
+        let body = vec![0x55u8; 100];
+        let mut w = ShortWriter {
+            out: Vec::new(),
+            chunk: 1,
+        };
+        write_all_parts(&mut w, &[&hdr, &body]).unwrap();
+        let mut expected = hdr.clone();
+        expected.extend_from_slice(&body);
+        assert_eq!(w.out, expected);
+    }
+}

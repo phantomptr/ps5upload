@@ -295,9 +295,16 @@ static int attach_with_refresh_locked(void) {
  * release at the end guarantees ShellUI is detached before the
  * next caller can attach.
  *
- * `*ok_out` (if non-NULL) is set to 1 on a clean attach + call +
- * detach, 0 on any failure. Distinguishes a -1 rax (function
- * legitimately returned -1) from a -1 we'd return on RPC failure. */
+ * `*ok_out` (if non-NULL) reports whether the RPC machinery itself
+ * (attach + dispatch + detach) ran cleanly — NOT whether the
+ * remote function succeeded. Set to 1 once we make it past the
+ * attach step, regardless of pt_call's return value; 0 means we
+ * couldn't even attach. Callers use this to distinguish an "RPC
+ * couldn't run" failure (retry maybe helps) from "RPC ran, the
+ * remote function returned <rc>" (treat <rc> as the result).
+ * Sensor reads check `ok_out && rc > 0`; the launch path uses
+ * `pt_call_was_dispatched()` for the finer-grained
+ * dispatched-but-waitpid-raced detection. */
 static long do_remote_call(intptr_t addr, uint64_t a0, uint64_t a1,
                             uint64_t a2, uint64_t a3, uint64_t a4,
                             uint64_t a5, int *ok_out) {
@@ -525,7 +532,7 @@ int shellui_rpc_launch_app(const char *title_id, int user_id_hint) {
 extern int kernel_set_ucred_authid(pid_t pid, uint64_t authid);
 #define PS5_DEBUGGER_AUTHID  0x4800000000000006ull
 
-static void force_reresolve_locked(void) {
+static void force_reresolve(void) {
     /* Re-arm the debugger authid before re-resolve. If a prior
      * bgft.c install path failed to restore on its way out, our
      * process authid is wrong and the pt_attach inside the next
@@ -542,7 +549,7 @@ int shellui_rpc_get_cpu_temp(int *out_celsius) {
     int rc = rpc_call_with_int_scratch(g_addr_get_cpu_temp, 0, 1,
                                        out_celsius, sizeof(*out_celsius));
     if (rc == 0) return 0;
-    force_reresolve_locked();
+    force_reresolve();
     return rpc_call_with_int_scratch(g_addr_get_cpu_temp, 0, 1,
                                      out_celsius, sizeof(*out_celsius));
 }
@@ -553,7 +560,7 @@ int shellui_rpc_get_soc_temp(int *out_celsius) {
     int rc = rpc_call_with_int_scratch(g_addr_get_soc_temp, 0, 0,
                                        out_celsius, sizeof(*out_celsius));
     if (rc == 0) return 0;
-    force_reresolve_locked();
+    force_reresolve();
     return rpc_call_with_int_scratch(g_addr_get_soc_temp, 0, 0,
                                      out_celsius, sizeof(*out_celsius));
 }
@@ -569,7 +576,7 @@ int shellui_rpc_get_cpu_freq_hz(long *out_hz) {
         if (ok && rc > 0) { *out_hz = rc; return 0; }
     }
     /* Retry once after re-resolve. */
-    force_reresolve_locked();
+    force_reresolve();
     if (g_addr_get_cpu_freq == 0 || !shellui_rpc_ready()) return -1;
     int ok = 0;
     long rc = do_remote_call(g_addr_get_cpu_freq, 0, 0, 0, 0, 0, 0, &ok);
@@ -583,7 +590,7 @@ int shellui_rpc_get_soc_power_mw(uint32_t *out_mw) {
     int rc = rpc_call_with_int_scratch(g_addr_get_soc_power, 0, 1,
                                        out_mw, sizeof(*out_mw));
     if (rc == 0) return 0;
-    force_reresolve_locked();
+    force_reresolve();
     return rpc_call_with_int_scratch(g_addr_get_soc_power, 0, 1,
                                      out_mw, sizeof(*out_mw));
 }

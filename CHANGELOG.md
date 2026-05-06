@@ -4,6 +4,43 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.2.61
+
+**13-pass audit: boot reliability, install correctness, DoS hardening**
+
+- Takeover handshake no longer hangs on a wedged previous payload
+  (added a 2 s `recv` deadline) and tolerates big-COMMIT_TX tails
+  (port-release wait bumped from 2 s to 10 s).
+- Install path serializes correctly across files: the AppInstUtil
+  install-start and status-poll calls in `bgft.c` now share the same
+  Sony-API mutex as register / launch / uninstall in `register.c`,
+  closing a FW 9.60 deadlock window where a status poll concurrent
+  with a register on another mgmt thread could wedge the calling
+  thread inside Sony's kernel stub.
+- Browser-launch RPC now serializes against the rest of the Sony
+  install/launch surface (was the only call site missing the mutex).
+- pkg-host range responses capped at 16 MiB per request, preventing
+  a malicious LAN client from forcing a multi-GB allocation by
+  requesting `bytes=0-{total-1}` on a large pkg.
+- ELF-loader (port 9021) destination rejects non-ELF files before
+  connecting; .bin / .js / .lua flows on custom loader ports
+  unaffected. Closes a silent wrong-file-picked failure where the
+  loader received garbage and the UI showed "send succeeded" with
+  no payload coming up.
+- Boot-failure reasons now surface as PS5 toast notifications
+  instead of vanishing into stderr (which is invisible on a
+  :9021-loaded payload).
+- Cleanup-on-failure for `pthread_create(mgmt)` no longer leaves a
+  stale ownership record.
+- Deleted ~159 LOC of dead code (`payload_loader.rs`); fixed several
+  stale comments (notably the "we eagerly call
+  register_services_init" claim that contradicted the actual code).
+- Tests: +21 pinned (Rust connection.rs partial-write retry,
+  probes.rs ELF-magic + size-cap + non-default-port behaviour,
+  pkg-host range cap), 255 client TS tests still green.
+
+---
+
 ## 2.2.60
 
 **Install Package, Library Play / Unmount, sensor fixes**

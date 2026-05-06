@@ -758,13 +758,31 @@ async fn resolve_parts_and_meta(
     }
 }
 
+/// Per-response byte cap. A LAN client (or a misbehaving BGFT) that
+/// requests `bytes=0-{total-1}` on a 50 GB pkg would otherwise force the
+/// engine to allocate ~50 GB and OOM. Sony's real BGFT fetches in
+/// MB-sized chunks, so this cap is only ever hit by abuse cases. When a
+/// requested range exceeds the cap, we trim `end` to `start + CAP - 1`
+/// and return that prefix; HTTP Range semantics let the client follow
+/// up with a `bytes=(end+1)-...` request, which is what BGFT already
+/// does for legitimate chunked fetches.
+const PKG_HOST_RESPONSE_BYTES_CAP: u64 = 16 * 1024 * 1024;
+
 /// Map a Range request to (start, end) inclusive over the total size.
 /// We support `bytes=N-M` and `bytes=N-` only — Sony BGFT only sends
-/// those forms in practice.
+/// those forms in practice. Out-of-bounds and inverted ranges are
+/// rejected; over-large ranges are trimmed to the per-response cap so
+/// a malicious large-range request can't OOM the engine.
 fn parse_range_header(headers: &HeaderMap, total: u64) -> Result<(u64, u64), ()> {
     let h = match headers.get(header::RANGE).and_then(|v| v.to_str().ok()) {
         Some(s) => s,
-        None => return Ok((0, total.saturating_sub(1))),
+        None => {
+            // No Range header — serve the prefix up to the cap.
+            let cap_end = PKG_HOST_RESPONSE_BYTES_CAP
+                .saturating_sub(1)
+                .min(total.saturating_sub(1));
+            return Ok((0, cap_end));
+        }
     };
     let after = h.strip_prefix("bytes=").ok_or(())?;
     let (s, e) = after.split_once('-').ok_or(())?;
@@ -776,6 +794,14 @@ fn parse_range_header(headers: &HeaderMap, total: u64) -> Result<(u64, u64), ()>
     };
     if start > end || end >= total {
         return Err(());
+    }
+    // Trim ranges that exceed the per-response byte cap. The client
+    // sees a smaller-than-asked PARTIAL_CONTENT and follows up with
+    // another Range request for the rest — same shape as if we'd been
+    // serving from a stream with a small read buffer.
+    let len = end - start + 1;
+    if len > PKG_HOST_RESPONSE_BYTES_CAP {
+        return Ok((start, start + PKG_HOST_RESPONSE_BYTES_CAP - 1));
     }
     Ok((start, end))
 }
@@ -909,6 +935,59 @@ mod tests {
         let mut h = HeaderMap::new();
         h.insert(header::RANGE, "bytes=200-300".parse().unwrap());
         assert!(parse_range_header(&h, 100).is_err());
+    }
+
+    #[test]
+    fn over_cap_range_is_trimmed() {
+        // A request larger than PKG_HOST_RESPONSE_BYTES_CAP must come
+        // back trimmed to the cap, NOT errored. HTTP Range semantics
+        // let the client follow up for the rest. Without this, a
+        // malicious LAN client requesting `bytes=0-{total-1}` on a
+        // big pkg would force a multi-GB Vec allocation and OOM the
+        // engine.
+        let mut h = HeaderMap::new();
+        // 50 GB total, request the full thing.
+        let total: u64 = 50 * 1024 * 1024 * 1024;
+        h.insert(
+            header::RANGE,
+            format!("bytes=0-{}", total - 1).parse().unwrap(),
+        );
+        let (start, end) = parse_range_header(&h, total).unwrap();
+        assert_eq!(start, 0);
+        assert_eq!(end, PKG_HOST_RESPONSE_BYTES_CAP - 1);
+        assert!(end - start + 1 <= PKG_HOST_RESPONSE_BYTES_CAP);
+    }
+
+    #[test]
+    fn no_range_header_is_capped() {
+        // GET with no Range header on a giant pkg used to return the
+        // whole thing (and OOM). Now serves only the first cap-sized
+        // window; client must follow up with explicit ranges.
+        let h = HeaderMap::new();
+        let total: u64 = 50 * 1024 * 1024 * 1024;
+        let (start, end) = parse_range_header(&h, total).unwrap();
+        assert_eq!(start, 0);
+        assert_eq!(end, PKG_HOST_RESPONSE_BYTES_CAP - 1);
+    }
+
+    #[test]
+    fn small_total_no_range_returns_full_file() {
+        // Tiny pkg with no Range header: cap doesn't kick in, full
+        // file is returned.
+        let h = HeaderMap::new();
+        let (start, end) = parse_range_header(&h, 100).unwrap();
+        assert_eq!(start, 0);
+        assert_eq!(end, 99);
+    }
+
+    #[test]
+    fn under_cap_range_passes_through_unchanged() {
+        // A reasonable BGFT fetch (a few MB) is unaffected by the cap.
+        let mut h = HeaderMap::new();
+        h.insert(header::RANGE, "bytes=1000-2000".parse().unwrap());
+        let (start, end) = parse_range_header(&h, 10_000_000).unwrap();
+        assert_eq!(start, 1000);
+        assert_eq!(end, 2000);
     }
 
     #[test]
