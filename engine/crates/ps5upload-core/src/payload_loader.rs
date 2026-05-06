@@ -11,8 +11,7 @@
 //!
 //! No Unix-socket IPC here. Any PS5-side IPC channels live inside the
 //! PS5 sandbox — only reachable from code running on the console.
-//! Host-side integration lives entirely on TCP :9021 (ELF load) and
-//! optionally HTTP :12800 (DPI PKG installer, not wired here yet).
+//! Host-side integration lives entirely on TCP :9021 (ELF load).
 
 use anyhow::{Context, Result};
 use std::io::Write;

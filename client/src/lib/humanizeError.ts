@@ -10,6 +10,8 @@
 // same ruleset — a new firmware-specific failure mode only has to be
 // added once.
 
+import { isNpxsContentId } from "./npxs";
+
 /** Rewrite a raw engine/payload error string into a single line of
  *  user-facing copy. Unknown strings are returned as-is.
  *
@@ -81,9 +83,8 @@ export function humanizePs5Error(
   // the generic "no payload loaded" branch below. Caller passes
   // contentId so we can route this case to the actually-helpful
   // message.
-  const isNpxs = !!contentId && /^[A-Z]{2}\d{4}-NPXS\d+/i.test(contentId);
   if (
-    isNpxs &&
+    isNpxsContentId(contentId) &&
     /connect to .+:911[34]|read frame header|unexpected ?eof|connection reset|broken pipe/i.test(
       raw,
     )
@@ -222,11 +223,12 @@ export function humanizePs5Error(
     return `PS5 kernel rejected the mount: ${tail ? tail[1] : "unknown reason"}. Try a different mount point (e.g. under /data or /mnt/ps5upload) — the image itself is fine.`;
   }
 
-  // ─── Sony AppInstUtil error codes (etaHEN-style install path) ───
-  // Range 0x80A2_FFXX / 0x80A3_00XX. The names below come from
-  // etaHEN's util/source/DirectPKGInstaller.cpp enum. This block
-  // catches the most common ones with actionable copy; rarer ones
-  // fall through to the generic "PS5 rejected the request" path.
+  // ─── Sony AppInstUtil error codes ─────────────────────────────────
+  // Range 0x80A2_FFXX / 0x80A3_00XX. SCE_APP_INST_UTIL_* names are
+  // Sony's own symbol set (psdevwiki + libSceAppInstUtil exports).
+  // This block catches the most common ones with actionable copy;
+  // rarer ones fall through to the generic "PS5 rejected the
+  // request" path.
   // Each Sony AppInstUtil code is matched against three string forms:
   //   - canonical hex (0xNNNNNNNN)
   //   - decimal signed (engine sometimes forwards int32 cast as

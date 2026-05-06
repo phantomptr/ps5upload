@@ -287,12 +287,12 @@ historical outcomes.
 
 **Q: How do I find one game in a long library?**
 The Library tab has a search bar above the games + images
-sections (2.2.25+). Type a name fragment ("dead"), a title ID
-("PPSA01342"), or a path fragment ("ext1") — matching is live,
-case-insensitive, and runs across all of `name`, `titleId`,
+sections (2.2.25+). Type a name fragment, a title ID prefix
+(`PPSA…`, `CUSA…`), or a path fragment (`ext1`) — matching is
+live, case-insensitive, and runs across all of `name`, `titleId`,
 absolute `path`, scan `scope`, and `volume`. Multi-word queries
-AND-match across fields, so `dead ext1` finds Dead Space on
-`/mnt/ext1` specifically.
+AND-match across fields, so `space ext1` narrows results to
+titles named "space" on `/mnt/ext1`.
 
 **Q: Can I pick where a `.exfat` / `.ffpkg` mounts?**
 Yes (2.2.25+). The Library Mount button opens a modal with the
@@ -303,8 +303,8 @@ same UX as the Upload screen's destination picker:
   appears next to each.
 - **Subpath** — free-form, with the same preset chips as
   Upload (`homebrew`, `exfat`, `ps5upload`).
-- **Name** — auto-derived from the image filename (`Dead
-  Space.exfat` → `Dead Space`), editable.
+- **Name** — auto-derived from the image filename (e.g.
+  `MyGame.exfat` → `MyGame`), editable.
 
 The resolved final path appears under the inputs in real time.
 Your last-used volume + subpath is persisted per host so the
@@ -438,7 +438,7 @@ for a bug report.
 **Q: Deleting a huge game folder used to fail with a "502 Bad
 Gateway" error.**
 Fixed in 2.2.22. The recursive walk on a small-file-heavy folder
-(e.g. PPSA01342 with ~223k files / 19k dirs) takes minutes on PS5
+(roughly 200k files / 20k dirs) takes minutes on PS5
 UFS — long enough that the engine's old 30 s socket timeout fired
 mid-walk while the payload was still deleting in the background.
 Now `fs_delete` uses the same 1-hour deadline `fs_copy` already

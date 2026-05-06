@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { bundledPayloadPath, payloadCheck, sendPayload } from "../api/ps5";
 import { compareVersions } from "../lib/semver";
+import { isNpxsContentId } from "../lib/npxs";
 
 /**
  * Install Package queue. Sequential, like uploadQueue — one BGFT
@@ -92,9 +93,9 @@ export interface InstallQueueItem {
     /** Which BGFT Register variant the payload used / would use.
      *  "intdebug" — fakepkg-friendly BGFT path; cred-elevation works.
      *  "regular"  — entitlement-checked BGFT path; fakepkgs likely fail.
-     *  "appinst"  — sceAppInstUtilInstallByPackage succeeded (the
-     *               etaHEN-style high-level path; bypasses our direct
-     *               BGFT calls but ends up in the same Sony installer).
+     *  "appinst"  — sceAppInstUtilInstallByPackage succeeded (Sony's
+     *               high-level install API; bypasses our direct BGFT
+     *               calls but ends up in the same Sony installer).
      *  "none"     — Register hasn't been attempted yet, or BGFT is
      *               unavailable on this firmware. */
     registerPath: "shellui-rpc" | "intdebug" | "regular" | "appinst" | "none" | "";
@@ -870,9 +871,10 @@ export const useInstallQueue = create<InstallQueueState>((set, get) => ({
       // and we'd hit pollErrors >= 5 and surface as "failed" even
       // though the install IS proceeding on the PS5 (the user can
       // confirm via the console's notification panel + Settings →
-      // Notifications). This is what etaHEN's DPI does for system
-      // pkgs: fire-and-forget with on-console verification, not
-      // status polling.
+      // Notifications). System pkgs require fire-and-forget with
+      // on-console verification, not status polling — Sony's API
+      // isn't designed for system patches and the poll path is
+      // unreliable for them.
       //
       // Path:
       //   - register accepts → sleep ~3s (let Sony's install start)
@@ -884,8 +886,7 @@ export const useInstallQueue = create<InstallQueueState>((set, get) => ({
       // normal poll loop — they reliably surface phase=done via
       // `sceAppInstUtilGetInstallStatus` and the user gets real
       // progress.
-      const isNpxsContent = /^[A-Z]{2}\d{4}-NPXS\d+/i.test(next.contentId);
-      if (isNpxsContent) {
+      if (isNpxsContentId(next.contentId)) {
         await sleep(3000);
         if (!isLive()) return;
         markDone(get, set, next.id);

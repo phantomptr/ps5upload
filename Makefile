@@ -42,6 +42,7 @@ ENGINE_DIR  := engine
 CLIENT_DIR  := client
 
 .PHONY: all help
+.PHONY: install install-ubuntu install-macos install-windows
 .PHONY: setup setup-engine setup-payload setup-client
 .PHONY: build payload engine client _engine-release
 .PHONY: test test-root test-engine test-engine-coverage test-desktop test-payload test-client test-client-coverage
@@ -65,7 +66,13 @@ all: build
 help:
 	@echo "PS5 Upload - Build System"
 	@echo ""
-	@echo "Quick start:"
+	@echo "First-time setup (fresh machine):"
+	@echo "  make install          - Auto-detect host OS and install all dev deps"
+	@echo "  make install-ubuntu   - Ubuntu/Debian/WSL2: apt + rustup + node + PS5 SDK"
+	@echo "  make install-macos    - macOS: brew + rustup + llvm@18 + PS5 SDK"
+	@echo "  make install-windows  - Windows 11: winget + rustup + VS Build Tools + PS5 SDK"
+	@echo ""
+	@echo "Quick start (after install):"
 	@echo "  1. make setup         - Check toolchains, install client deps"
 	@echo "  2. make build         - Build payload ELF + Rust engine + client UI"
 	@echo "  3. make send-payload  - Upload payload ELF to PS5 (PS5_HOST=$(PS5_HOST))"
@@ -118,6 +125,46 @@ ifeq ($(shell uname -s),Darwin)
 	@echo "  LLVM_CONFIG=$(LLVM_CONFIG)"
 	@echo "                                Auto-set on macOS (needs Homebrew llvm@18)"
 endif
+
+#──────────────────────────────────────────────────────────────────────────────
+# Install — fresh-machine bootstrap (apt/brew/winget + rustup + Node + PS5 SDK)
+#
+# `setup` only *checks* toolchains and runs `npm install`; `install` actually
+# installs everything from scratch. The per-OS scripts live in `scripts/` and
+# are idempotent — each step skips if already satisfied — so re-running them
+# after a partial setup is safe.
+#──────────────────────────────────────────────────────────────────────────────
+
+install:
+	@os="$$(uname -s)"; \
+	case "$$os" in \
+	  Linux*)                $(MAKE) install-ubuntu ;; \
+	  Darwin*)               $(MAKE) install-macos ;; \
+	  MINGW*|MSYS*|CYGWIN*)  $(MAKE) install-windows ;; \
+	  *) echo "Unsupported host OS: $$os"; \
+	     echo "Run install-ubuntu / install-macos / install-windows directly."; \
+	     exit 1 ;; \
+	esac
+
+install-ubuntu:
+	@bash scripts/install-ubuntu.sh
+
+install-macos:
+	@bash scripts/install-macos.sh
+
+# On Windows the script is invoked via PowerShell. Tries pwsh (PowerShell 7+)
+# first, then falls back to legacy Windows PowerShell. Run from any shell where
+# `powershell.exe` or `pwsh` is on PATH (Git Bash, MSYS2, native PowerShell).
+install-windows:
+	@if command -v pwsh >/dev/null 2>&1; then \
+	  pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/install-windows.ps1; \
+	elif command -v powershell.exe >/dev/null 2>&1; then \
+	  powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/install-windows.ps1; \
+	else \
+	  echo "ERROR: neither pwsh nor powershell.exe on PATH."; \
+	  echo "  Run scripts/install-windows.ps1 directly from a PowerShell prompt."; \
+	  exit 1; \
+	fi
 
 #──────────────────────────────────────────────────────────────────────────────
 # Setup
@@ -622,7 +669,7 @@ install-hooks:
 	@echo 'echo "Checking documentation..."' >> .git/hooks/pre-commit
 	@echo 'git diff --cached --name-only | grep -E "\.(c|rs|py|h|md)$$" > /dev/null' >> .git/hooks/pre-commit
 	@echo 'if [ $$? -eq 0 ]; then' >> .git/hooks/pre-commit
-	@echo '  echo "Code or docs changed. Keep .progress and specs in sync."' >> .git/hooks/pre-commit
+	@echo '  echo "Code or docs changed. Update README.md / FAQ.md / CHANGELOG.md if user-visible."' >> .git/hooks/pre-commit
 	@echo 'fi' >> .git/hooks/pre-commit
 	@chmod +x .git/hooks/pre-commit
 	@echo "✓ Git hooks installed"

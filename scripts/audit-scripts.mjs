@@ -8,6 +8,7 @@ const strict = process.argv.includes("--strict");
 
 const manualEntrypoints = new Set([
   "scripts/bundle-fonts.py",
+  "scripts/find-orphan-i18n.mjs",
   "scripts/hw-test-loop.sh",
   "scripts/i18n-fill-missing.mjs",
   "scripts/i18n-prune-unused.mjs",

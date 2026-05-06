@@ -88,7 +88,7 @@ export interface ConnectionState {
    *          will work.
    *  false = the loader didn't grant kernel R/W; install + most
    *          privileged ops will fail until the user loads via a
-   *          jailbroken entry point (etaHEN, kstuff, etc.).
+   *          jailbroken entry point (e.g. kstuff) that grants kernel R/W.
    *  null  = pre-2.2.52 payload that doesn't expose the field, or the
    *          probe hasn't returned yet. Renders as "—" in the UI.
    *  Set by Connection's payload probe + AppShell's polling tick. */

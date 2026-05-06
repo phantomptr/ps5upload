@@ -19,6 +19,20 @@ const DEFAULT_IO_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_BUFFERED_BODY: usize = 4 * 1024 * 1024; // 4 MiB — refuse to buffer more
 const DRAIN_CHUNK: usize = 64 * 1024;
 
+/// Saturating buffer-size calculation for `drain_body`. Extracted as a
+/// free function so it can be unit-tested without a TCP stream.
+///
+/// Returns `min(DRAIN_CHUNK, max(1, len_usize))` where `len_usize` is
+/// `usize::try_from(len)` saturated to `DRAIN_CHUNK` on failure (only
+/// possible on hypothetical >64-bit `u64` overflow targets). Caller
+/// must short-circuit `len == 0` before calling — for a non-zero
+/// `len` this never returns 0, which guarantees the drain loop
+/// always makes forward progress.
+fn drain_chunk_size(len: u64) -> usize {
+    let len_usize = usize::try_from(len).unwrap_or(DRAIN_CHUNK);
+    DRAIN_CHUNK.min(len_usize.max(1))
+}
+
 #[cfg(unix)]
 fn tune_unix_socket_buffers(stream: &TcpStream) {
     // The 2026-04-17 best-practices audit suggested dropping SNDBUF to
@@ -244,10 +258,24 @@ impl Connection {
     }
 
     /// Discard exactly `len` bytes from the stream.
+    ///
+    /// Sized buffer is `min(DRAIN_CHUNK, len)` so a small drain doesn't
+    /// allocate 64 KiB unnecessarily. Pre-fix the buffer expression
+    /// was `DRAIN_CHUNK.min(len as usize + 1)` — for a malformed
+    /// `len = u64::MAX` (e.g. corrupted FrameHeader from a flaky link)
+    /// the cast wrapped to `usize::MAX`, the `+ 1` overflowed to 0,
+    /// the buffer was empty, every read advanced 0 bytes, and the
+    /// loop ran forever. `drain_chunk_size` (extracted so it can be
+    /// unit-tested in isolation) plus the `if len == 0` short-circuit
+    /// close that hole.
     pub fn drain_body(&mut self, mut len: u64) -> Result<()> {
-        let mut chunk = vec![0u8; DRAIN_CHUNK.min(len as usize + 1)];
+        if len == 0 {
+            return Ok(());
+        }
+        let chunk_size = drain_chunk_size(len);
+        let mut chunk = vec![0u8; chunk_size];
         while len > 0 {
-            let take = (len as usize).min(chunk.len());
+            let take = chunk.len().min(usize::try_from(len).unwrap_or(usize::MAX));
             self.stream
                 .read_exact(&mut chunk[..take])
                 .context("drain body")?;
@@ -272,5 +300,62 @@ impl Connection {
             self.recv_body_exact(&mut body)?;
         }
         Ok((hdr, body))
+    }
+}
+
+#[cfg(test)]
+mod drain_chunk_size_tests {
+    //! Pin the buffer-sizing logic for `drain_body`. The combination
+    //! of a `u64` parameter and a `usize` allocation is the kind of
+    //! seam where a regression hides until a malformed wire frame
+    //! arrives in production. Pre-2.2.61 the expression was
+    //! `DRAIN_CHUNK.min(len as usize + 1)`, which produced a
+    //! zero-sized buffer for `len = u64::MAX` and put the read loop
+    //! into an infinite zero-byte spin.
+    use super::*;
+
+    #[test]
+    fn small_lens_use_a_small_buffer() {
+        // 1 byte to drain → 1 byte buffer. No point allocating
+        // DRAIN_CHUNK for trivial drains.
+        assert_eq!(drain_chunk_size(1), 1);
+        assert_eq!(drain_chunk_size(7), 7);
+    }
+
+    #[test]
+    fn at_drain_chunk_boundary_uses_full_chunk() {
+        assert_eq!(drain_chunk_size(DRAIN_CHUNK as u64), DRAIN_CHUNK);
+    }
+
+    #[test]
+    fn larger_than_drain_chunk_caps_at_drain_chunk() {
+        // The whole point of chunked drain — we don't want one
+        // 4 GiB allocation just because the body claims to be
+        // 4 GiB. Cap at DRAIN_CHUNK regardless of `len`.
+        assert_eq!(drain_chunk_size(DRAIN_CHUNK as u64 + 1), DRAIN_CHUNK);
+        assert_eq!(drain_chunk_size(4 * 1024 * 1024 * 1024), DRAIN_CHUNK);
+    }
+
+    #[test]
+    fn u64_max_does_not_produce_zero_buffer() {
+        // The regression this guard exists to prevent: a malformed
+        // FrameHeader.body_len = u64::MAX must still produce a
+        // forward-progressing buffer. Pre-fix the buffer was 0
+        // (overflow on `len as usize + 1`) and the read loop spun
+        // forever, wedging the engine.
+        let n = drain_chunk_size(u64::MAX);
+        assert!(n > 0, "buffer must be > 0 for non-zero len");
+        assert_eq!(n, DRAIN_CHUNK);
+    }
+
+    #[test]
+    fn never_returns_zero_for_nonzero_len() {
+        // Property: caller's contract is to short-circuit `len == 0`,
+        // so for every other input drain_chunk_size must be ≥ 1.
+        // This is what guarantees the drain loop terminates. A
+        // sample of edge values walks the cliff cases.
+        for &len in &[1u64, 2, DRAIN_CHUNK as u64 - 1, u64::MAX / 2, u64::MAX] {
+            assert!(drain_chunk_size(len) > 0, "zero buffer for len={len}");
+        }
     }
 }

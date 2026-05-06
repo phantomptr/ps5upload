@@ -96,16 +96,50 @@ if (typeof document !== "undefined") {
  * so every component calling `useTr()` re-renders with the new
  * strings.
  */
-export function useTr() {
+/**
+ * Translator function returned by `useTr()`. Three call shapes are
+ * supported so components can pick the form that reads cleanly:
+ *
+ *   tr("foo")                        — plain lookup, returns the key
+ *                                     itself if unknown.
+ *   tr("foo", "Foo fallback")        — lookup with English fallback if
+ *                                     key is missing in the active
+ *                                     locale AND in English. Avoids
+ *                                     the `tr(key, {}, fallback)` boilerplate
+ *                                     for variable-free strings.
+ *   tr("foo {x}", { x: 1 })          — lookup with `{name}` interpolation.
+ *   tr("foo {x}", { x: 1 }, "Foo {x}") — lookup + interpolation + fallback.
+ */
+export interface Translator {
+  (key: string): string;
+  (key: string, fallback: string): string;
+  (
+    key: string,
+    vars: Record<string, string | number> | undefined,
+    fallback?: string,
+  ): string;
+}
+
+export function useTr(): Translator {
   const lang = useLangStore((s) => s.lang);
-  return useCallback(
+  return useCallback<Translator>(
     (
       key: string,
-      vars?: Record<string, string | number>,
+      varsOrFallback?: Record<string, string | number> | string,
       fallback?: string,
-    ) => {
+    ): string => {
+      let vars: Record<string, string | number> | undefined;
+      let fb: string | undefined;
+      if (typeof varsOrFallback === "string") {
+        // 2-arg form: tr(key, fallback)
+        fb = varsOrFallback;
+      } else {
+        // 1- or 3-arg form: tr(key) / tr(key, vars) / tr(key, vars, fallback)
+        vars = varsOrFallback;
+        fb = fallback;
+      }
       const result = translate(lang, key, vars);
-      if (result === key && fallback !== undefined) return fallback;
+      if (result === key && fb !== undefined) return fb;
       return result;
     },
     [lang],

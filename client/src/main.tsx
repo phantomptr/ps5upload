@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import App from "./App";
+import { RootErrorBoundary } from "./components";
 // Import the theme + lang stores before the first render so their
 // module-load side effects (setting <html data-theme> + <html lang dir>)
 // complete before React paints.
@@ -40,13 +41,15 @@ void hydrateFromUserConfig();
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <BrowserRouter
-      future={{
-        v7_startTransition: true,
-        v7_relativeSplatPath: true,
-      }}
-    >
-      <App />
-    </BrowserRouter>
+    <RootErrorBoundary>
+      <BrowserRouter
+        future={{
+          v7_startTransition: true,
+          v7_relativeSplatPath: true,
+        }}
+      >
+        <App />
+      </BrowserRouter>
+    </RootErrorBoundary>
   </React.StrictMode>
 );

@@ -74,6 +74,15 @@ pub struct InstallSession {
 
 #[derive(Default)]
 pub struct PkgInstallState {
+    /// Active install sessions keyed by UUIDv4. Every route that
+    /// touches this map locks via `.lock().unwrap_or_else(|e|
+    /// e.into_inner())` rather than a bare `.unwrap()`: a panic in
+    /// any handler that holds this lock would otherwise poison the
+    /// mutex and wedge every subsequent install request for the
+    /// engine's lifetime. The `into_inner()` recovery is safe here
+    /// because the map's invariant is per-entry self-contained — a
+    /// partially-mutated session row is no worse than a stale row,
+    /// and the next status poll / GC pass cleans it up.
     pub sessions: Mutex<HashMap<String, InstallSession>>,
 }
 
@@ -184,16 +193,12 @@ async fn install_start_handler(
         .unwrap_or_else(|| "PS4GD".to_string());
 
     // URL strategy: raw path when caller staged the pkg on PS5 disk
-    // (Tier 1). etaHEN's HookFunctions.cpp on FW 9.60+ passes the
-    // raw path WITHOUT the `file://` prefix to
-    // sceAppInstUtilInstallByPackage:
-    //   `dl_url = selected_pkgs.path;`  (no scheme)
-    // 2.2.54-fix-round-14: switched from `file://{path}` to raw
-    // `{path}` after observing Sony reject all `file://` URLs with
-    // 0x80B21106 even on a freshly-rebooted PS5. The 6.xx branch
-    // uses an HTTP loopback proxy; non-6.xx (incl. 9.60) uses the
-    // bare path. Reference:
-    // https://github.com/etaHEN/etaHEN/blob/main/Source%20Code/shellui/src/HookFunctions.cpp
+    // (Tier 1). On FW 9.60+ Sony's installer accepts a bare absolute
+    // path WITHOUT the `file://` prefix; with the prefix it returns
+    // 0x80B21106 (rejected) even on a freshly-rebooted PS5. The 6.xx
+    // branch uses an HTTP loopback proxy; non-6.xx (incl. 9.60) uses
+    // the bare path. Switched from `file://{path}` to raw `{path}` in
+    // 2.2.54-fix-round-14 after direct hardware verification.
     let session_id = Uuid::new_v4().to_string();
     let url = match req.local_ps5_path.as_deref() {
         Some(p) if !p.is_empty() => {
@@ -275,7 +280,7 @@ async fn install_start_handler(
     // immediate error) would bloat the map unbounded — gc_old_sessions
     // alone wouldn't help because nothing calls status.
     {
-        let mut sessions = state.sessions.lock().unwrap();
+        let mut sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
         let now = now_unix();
         let aggressive_cutoff = now.saturating_sub(pkg_session_max_age_sec() / 2);
         sessions.retain(|_, s| s.created_at_unix > aggressive_cutoff || s.staging_path.is_some());
@@ -306,7 +311,11 @@ async fn install_start_handler(
         Ok(r) => r,
         Err(e) => {
             // Roll back the session — the install never started.
-            state.sessions.lock().unwrap().remove(&session_id);
+            state
+                .sessions
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(&session_id);
             crate::log_warn!(
                 "pkg_install RPC failed: session={} addr={} err={}",
                 session_id,
@@ -321,7 +330,7 @@ async fn install_start_handler(
     };
 
     {
-        let mut sessions = state.sessions.lock().unwrap();
+        let mut sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(sess) = sessions.get_mut(&session_id) {
             sess.task_id = Some(resp.task_id);
             sess.err_code = resp.err_code;
@@ -370,7 +379,7 @@ async fn install_start_handler(
         // somehow runs later. Spawn-blocking because fs_delete
         // does sync I/O over the mgmt socket.
         let path_to_clean = {
-            let mut sessions = state.sessions.lock().unwrap();
+            let mut sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
             sessions
                 .get_mut(&session_id)
                 .and_then(|s| s.staging_path.take())
@@ -479,7 +488,7 @@ fn pkg_session_max_age_sec() -> u64 {
 fn gc_old_sessions(state: &PkgInstallStateHandle) {
     let now = now_unix();
     let max_age = pkg_session_max_age_sec();
-    let mut sessions = state.sessions.lock().unwrap();
+    let mut sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
     sessions.retain(|_, s| {
         // Always keep sessions younger than the GC threshold; drop
         // older ones regardless of state. A session that's still
@@ -497,7 +506,7 @@ async fn install_status_handler(
 ) -> Response<Body> {
     gc_old_sessions(&state);
     let (ps5_addr, task_id, total, cancelled) = {
-        let sessions = state.sessions.lock().unwrap();
+        let sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
         match sessions.get(&q.session) {
             None => {
                 return json_err(
@@ -543,7 +552,7 @@ async fn install_status_handler(
     // propagated — the payload's 24h sweep is the safety net.
     if matches!(status.phase, InstallPhase::Done | InstallPhase::Error) {
         let path_to_clean = {
-            let mut sessions = state.sessions.lock().unwrap();
+            let mut sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
             sessions
                 .get_mut(&q.session)
                 .and_then(|s| s.staging_path.take())
@@ -609,7 +618,7 @@ async fn install_cancel_handler(
     // lock acquisition so we never race with status_handler taking
     // the path first.
     let (cancel_ack, path_to_clean, ps5_addr) = {
-        let mut sessions = state.sessions.lock().unwrap();
+        let mut sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
         match sessions.get_mut(&req.session) {
             Some(s) => {
                 s.cancelled = true;
@@ -679,7 +688,7 @@ async fn serve_handler(
     // BGFT's parallel range fetches and removes the small TOCTOU window
     // where the session could be cancelled between the two acquisitions.
     let session_lookup = {
-        let sessions = state.sessions.lock().unwrap();
+        let sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
         sessions.get(&session).cloned()
     };
     let session_known = session_lookup.is_some();
@@ -927,5 +936,48 @@ mod tests {
         // Take the last byte of part0, all of part1, first byte of part2.
         let chunk = read_split_range(&s, 3, 8).unwrap();
         assert_eq!(chunk, b"ABBBBC");
+    }
+
+    #[test]
+    fn sessions_lock_recovers_from_poison() {
+        // Pin the poison-recovery contract for the sessions Mutex.
+        // Every route handler now uses `.lock().unwrap_or_else(|e|
+        // e.into_inner())` so a panic that propagates while the lock
+        // is held doesn't permanently wedge the install API. This test
+        // simulates that exact failure mode: hold the lock, panic
+        // (mutex becomes poisoned), then verify a fresh `.lock()`
+        // call still recovers the inner data via the recovery
+        // pattern.
+        let state = PkgInstallState::default();
+
+        // Insert one session before the simulated panic so we can
+        // assert the data isn't lost on recovery.
+        {
+            let mut sessions = state.sessions.lock().unwrap();
+            sessions.insert(
+                "before-panic".to_string(),
+                dummy_session(vec![(PathBuf::from("/tmp/x"), 1)]),
+            );
+        }
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // Hold the lock, panic — this is what poisons the mutex.
+            let _guard = state.sessions.lock().unwrap();
+            panic!("simulated route-handler panic");
+        }));
+        assert!(result.is_err(), "the panic should propagate");
+        assert!(
+            state.sessions.is_poisoned(),
+            "mutex must be poisoned after a panic-while-holding"
+        );
+
+        // The recovery pattern used at every call site in the engine:
+        let sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(
+            sessions.len(),
+            1,
+            "data inserted before the panic must still be reachable"
+        );
+        assert!(sessions.contains_key("before-panic"));
     }
 }

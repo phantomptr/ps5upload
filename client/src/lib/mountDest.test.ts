@@ -137,12 +137,7 @@ describe("MOUNT_PRESETS + defaults", () => {
     // the conventional PS5-manager scan paths so source + mount end up
     // in a folder every PS5 manager already watches.
     const labels = MOUNT_PRESETS.map((p) => p.label);
-    expect(labels).toEqual([
-      "homebrew",
-      "etaHEN/games",
-      "exfat",
-      "ps5upload",
-    ]);
+    expect(labels).toEqual(["homebrew", "exfat", "ps5upload"]);
   });
   it("default subpath matches Upload's homebrew default", () => {
     expect(MOUNT_DEFAULT_SUBPATH).toBe("homebrew");
