@@ -174,7 +174,10 @@ async fn reap_orphan_listener_on(port: u16) {
     #[cfg(target_os = "macos")]
     let attempts: &[(&str, &[&str])] = &[
         // lsof + xargs kill -9. lsof is preinstalled.
-        ("/bin/sh", &["-c", "lsof -ti tcp:$PORT -sTCP:LISTEN | xargs -r kill -9"]),
+        (
+            "/bin/sh",
+            &["-c", "lsof -ti tcp:$PORT -sTCP:LISTEN | xargs -r kill -9"],
+        ),
     ];
     #[cfg(target_os = "linux")]
     let attempts: &[(&str, &[&str])] = &[

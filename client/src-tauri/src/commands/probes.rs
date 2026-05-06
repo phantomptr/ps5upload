@@ -454,7 +454,11 @@ mod payload_send_tests {
     #[tokio::test]
     async fn rejects_non_elf_on_default_loader_port() {
         let tmp = tempdir();
-        let p = write_fixture(&tmp, "fake.elf", b"NOT AN ELF, ENOUGH BYTES TO PASS THE SIZE CHECK");
+        let p = write_fixture(
+            &tmp,
+            "fake.elf",
+            b"NOT AN ELF, ENOUGH BYTES TO PASS THE SIZE CHECK",
+        );
 
         // Port 0 would also fail to connect, but the magic check fires
         // first because we open and peek before connecting.

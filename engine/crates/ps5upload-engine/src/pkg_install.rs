@@ -955,7 +955,10 @@ mod tests {
         let (start, end) = parse_range_header(&h, total).unwrap();
         assert_eq!(start, 0);
         assert_eq!(end, PKG_HOST_RESPONSE_BYTES_CAP - 1);
-        assert!(end - start + 1 <= PKG_HOST_RESPONSE_BYTES_CAP);
+        // `end - start < CAP` is the post-trim invariant. Avoiding
+        // `+ 1 <= CAP` keeps clippy::int_plus_one quiet without
+        // changing the assertion's semantics.
+        assert!(end - start < PKG_HOST_RESPONSE_BYTES_CAP);
     }
 
     #[test]
