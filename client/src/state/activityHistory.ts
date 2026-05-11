@@ -147,7 +147,20 @@ function loadInitial(): ActivityEntry[] {
   }
 }
 
-function persist(entries: ActivityEntry[]) {
+// Debounced localStorage writer. activityWiring fires update() on
+// every transfer poll tick (~5 Hz during uploads) — without
+// debouncing, a multi-hour upload writes the full entries JSON
+// ~18,000 times, which causes UI jank during big transfers and
+// pressures Linux WebKit's localStorage quota. The debounce
+// collapses bursts to one disk write per quiet window.
+//
+// Synchronous flush before unload guarantees we don't lose the
+// last in-flight write when the user closes the app.
+const PERSIST_DEBOUNCE_MS = 500;
+let persistTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingEntries: ActivityEntry[] | null = null;
+
+function persistNow(entries: ActivityEntry[]) {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
@@ -155,6 +168,34 @@ function persist(entries: ActivityEntry[]) {
     // localStorage write can fail (quota exceeded, private mode).
     // Activity history is nice-to-have; swallow rather than crash.
   }
+}
+
+function persist(entries: ActivityEntry[]) {
+  pendingEntries = entries;
+  if (persistTimer) clearTimeout(persistTimer);
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    if (pendingEntries) {
+      persistNow(pendingEntries);
+      pendingEntries = null;
+    }
+  }, PERSIST_DEBOUNCE_MS);
+}
+
+if (typeof window !== "undefined") {
+  // Best-effort flush on tab close. localStorage.setItem is
+  // synchronous so this completes before the page unloads even
+  // when the debounce window hasn't elapsed.
+  window.addEventListener("beforeunload", () => {
+    if (pendingEntries) {
+      persistNow(pendingEntries);
+      pendingEntries = null;
+      if (persistTimer) {
+        clearTimeout(persistTimer);
+        persistTimer = null;
+      }
+    }
+  });
 }
 
 let nextIdCounter = 0;

@@ -101,6 +101,14 @@ export const usePayloadPlaylistsStore = create<PlaylistState>((set, get) => {
     runStatus: { kind: "idle" },
 
     async hydrate() {
+      // Browser-only contexts: Tauri invoke unavailable. Same rationale
+      // as uploadQueue.hydrate — silently no-op so the user-visible Logs
+      // tab doesn't fill with "invoke undefined" errors during dev/test.
+      const w = window as unknown as { isTauri?: boolean; __TAURI_INTERNALS__?: unknown };
+      if (!w.isTauri && !w.__TAURI_INTERNALS__) {
+        set({ loaded: true });
+        return;
+      }
       try {
         const doc = await payloadPlaylistsLoad<Partial<PlaylistDocument>>();
         set({ playlists: doc.playlists ?? [], loaded: true });

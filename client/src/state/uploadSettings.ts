@@ -12,8 +12,8 @@ import type { ReconcileMode } from "../api/ps5";
  */
 
 const KEY_ALWAYS_OVERWRITE = "ps5upload.always_overwrite";
-const KEY_RECONCILE_MODE = "ps5upload.reconcile_mode";
 const KEY_SHOW_FILES = "ps5upload.show_transfer_files";
+const KEY_BANDWIDTH_CAP = "ps5upload.bandwidth_cap_mbps";
 
 function loadAlwaysOverwrite(): boolean {
   if (typeof window === "undefined") return false;
@@ -36,6 +36,14 @@ function loadShowFiles(): boolean {
   return v === null ? true : v === "true";
 }
 
+function loadBandwidthCap(): number {
+  if (typeof window === "undefined") return 0;
+  const v = window.localStorage.getItem(KEY_BANDWIDTH_CAP);
+  if (!v) return 0;
+  const n = parseFloat(v);
+  return isFinite(n) && n > 0 ? n : 0;
+}
+
 interface UploadSettingsState {
   /** When true, the Upload flow skips the Override/Resume/Cancel
    *  dialog and always overwrites the destination. Useful for
@@ -48,15 +56,19 @@ interface UploadSettingsState {
    *  summary counters). Useful on low-end displays or when the list
    *  feels noisy for folders with thousands of files. */
   showTransferFiles: boolean;
+  /** Outbound bandwidth cap in MB/s. 0 = no cap (use the engine's
+   *  env-var default, also typically 0). Persisted to localStorage. */
+  bandwidthCapMbps: number;
   setAlwaysOverwrite: (on: boolean) => void;
-  setReconcileMode: (m: ReconcileMode) => void;
   setShowTransferFiles: (on: boolean) => void;
+  setBandwidthCapMbps: (n: number) => void;
 }
 
 export const useUploadSettingsStore = create<UploadSettingsState>((set) => ({
   alwaysOverwrite: loadAlwaysOverwrite(),
   reconcileMode: loadReconcileMode(),
   showTransferFiles: loadShowFiles(),
+  bandwidthCapMbps: loadBandwidthCap(),
   setAlwaysOverwrite: (alwaysOverwrite) => {
     window.localStorage.setItem(
       KEY_ALWAYS_OVERWRITE,
@@ -64,15 +76,22 @@ export const useUploadSettingsStore = create<UploadSettingsState>((set) => ({
     );
     set({ alwaysOverwrite });
   },
-  setReconcileMode: (reconcileMode) => {
-    window.localStorage.setItem(KEY_RECONCILE_MODE, reconcileMode);
-    set({ reconcileMode });
-  },
   setShowTransferFiles: (showTransferFiles) => {
     window.localStorage.setItem(
       KEY_SHOW_FILES,
       showTransferFiles ? "true" : "false",
     );
     set({ showTransferFiles });
+  },
+  setBandwidthCapMbps: (bandwidthCapMbps) => {
+    if (bandwidthCapMbps > 0) {
+      window.localStorage.setItem(
+        KEY_BANDWIDTH_CAP,
+        bandwidthCapMbps.toString(),
+      );
+    } else {
+      window.localStorage.removeItem(KEY_BANDWIDTH_CAP);
+    }
+    set({ bandwidthCapMbps });
   },
 }));

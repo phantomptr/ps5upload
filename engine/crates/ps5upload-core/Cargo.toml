@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+base64 = "0.22"
 blake3.workspace = true
 ftx2-proto = { path = "../ftx2-proto" }
 libc = "0.2"

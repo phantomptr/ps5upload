@@ -20,6 +20,319 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+pub mod ufs2;
+pub use ufs2::{Ufs2Error, Ufs2Image};
+
+use std::fs::create_dir_all;
+use std::io::Write as _;
+
+/// Inspect a local UFS2 image (.ffpkg etc) — open the superblock,
+/// resolve sce_sys/param.sfo if present, and return a digest the UI
+/// can render before any upload.
+///
+/// Lives here (not in `ufs2`) because the param.sfo parse re-uses
+/// the same logic as the PKG inspector below — keeping them in one
+/// crate means there's one source of truth for "what does PS5
+/// metadata look like."
+#[derive(Debug, Serialize)]
+pub struct FfpkgInspection {
+    /// Image total bytes per the superblock (block_size × block_count).
+    pub image_bytes: u64,
+    /// UFS2 block size (typically 32768 on PS5 .ffpkg).
+    pub block_size: u32,
+    /// UFS2 fragment size (typically 4096 on PS5 .ffpkg).
+    pub fragment_size: u32,
+    /// Volume label from the superblock. Usually empty for PS5.
+    pub volume_name: String,
+    /// True when sce_sys/param.sfo was found and parsed cleanly.
+    pub has_sce_sys: bool,
+    /// PARAM.SFO `TITLE_ID` field (e.g. "CUSA12345"), when present.
+    pub title_id: Option<String>,
+    /// PARAM.SFO `TITLE` field (game name).
+    pub title: Option<String>,
+    /// PARAM.SFO `CATEGORY` field ("gd"=game data, "gp"=patch, etc.).
+    pub category: Option<String>,
+    /// Top-level entries (one level deep). Lets the UI show "this
+    /// image contains: eboot.bin, sce_sys/, sce_module/, etc."
+    pub root_entries: Vec<RootEntry>,
+    /// Non-fatal warnings collected during inspect.
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RootEntry {
+    pub name: String,
+    pub kind: String,
+    pub size: u64,
+}
+
+/// Maximum bytes we'll extract per call from a single inode.
+/// 4 GiB matches the UFS2 max file size in practice for game assets;
+/// callers can request again if they need more.
+const FFPKG_EXTRACT_MAX: u64 = 4 * 1024 * 1024 * 1024;
+
+/// Result of an extract op — caller can render "wrote N files,
+/// total Y bytes" + per-file detail.
+#[derive(Debug, Serialize)]
+pub struct FfpkgExtractResult {
+    /// Total files written.
+    pub file_count: u64,
+    /// Total bytes written across all files.
+    pub bytes_written: u64,
+    /// First N files we wrote, for renderer display. Capped to keep
+    /// the response payload small even on bulk extracts.
+    pub sample_paths: Vec<String>,
+}
+
+/// Extract a path from a `.ffpkg` to a local directory. `ffpkg_path`
+/// must point at the image; `inner_path` is a slash-separated path
+/// inside the image (e.g. "sce_sys/icon0.png" or "sce_sys" for a
+/// whole subtree); `dest_dir` is a local directory that will receive
+/// the extracted file or subtree.
+///
+/// Read-only on the image — never writes to it. Creates `dest_dir`
+/// if missing. When `inner_path` is a single file, that file is
+/// written directly inside `dest_dir`. When it's a directory, the
+/// directory is created inside `dest_dir` and recursively populated.
+pub fn extract_from_ffpkg(
+    ffpkg_path: &Path,
+    inner_path: &str,
+    dest_dir: &Path,
+) -> Result<FfpkgExtractResult, Ufs2Error> {
+    let mut img = Ufs2Image::open(ffpkg_path)?;
+    let components: Vec<&str> = inner_path
+        .trim_matches('/')
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .collect();
+    let inode = if components.is_empty() {
+        img.read_inode(ufs2::ROOT_INODE)?
+    } else {
+        img.resolve_path(&components)?
+    };
+    create_dir_all(dest_dir).map_err(Ufs2Error::Io)?;
+    let mut result = FfpkgExtractResult {
+        file_count: 0,
+        bytes_written: 0,
+        sample_paths: Vec::new(),
+    };
+    let leaf_name = components.last().copied().unwrap_or("root");
+    if inode.is_file() {
+        let bytes = img.read_file(&inode, FFPKG_EXTRACT_MAX)?;
+        let dest = dest_dir.join(leaf_name);
+        write_file_atomic(&dest, &bytes)?;
+        result.file_count = 1;
+        result.bytes_written = bytes.len() as u64;
+        result.sample_paths.push(dest.display().to_string());
+    } else if inode.is_dir() {
+        let target = dest_dir.join(leaf_name);
+        create_dir_all(&target).map_err(Ufs2Error::Io)?;
+        extract_dir_recursive(&mut img, &inode, &target, &mut result)?;
+    } else {
+        return Err(Ufs2Error::NotFound {
+            component: format!("{leaf_name} (not a file or directory)"),
+        });
+    }
+    Ok(result)
+}
+
+/// Reject directory entry names that could escape the destination
+/// via path traversal or absolute-path injection. UFS dirents are
+/// attacker-controllable inside a hostile .ffpkg, and `Path::join`
+/// with an absolute child silently discards the parent — so a
+/// crafted entry named `/etc/passwd` would write outside `dest`.
+///
+/// Allowed: anything else, including spaces, dots inside the name,
+/// and unicode. We deliberately permit those because legitimate PS5
+/// game asset filenames routinely contain them.
+fn is_safe_child_name(name: &str) -> bool {
+    if name.is_empty() || name == "." || name == ".." {
+        return false;
+    }
+    if name.contains('/') || name.contains('\\') {
+        return false;
+    }
+    if name.contains('\0') {
+        return false;
+    }
+    if Path::new(name).is_absolute() {
+        return false;
+    }
+    true
+}
+
+fn extract_dir_recursive(
+    img: &mut Ufs2Image<std::fs::File>,
+    dir: &ufs2::Inode,
+    dest: &Path,
+    result: &mut FfpkgExtractResult,
+) -> Result<(), Ufs2Error> {
+    let entries = img.list_dir(dir)?;
+    for e in entries {
+        if !is_safe_child_name(&e.name) {
+            // Skip but don't fail the whole extract — a hostile
+            // image's malformed entry shouldn't kill an otherwise-
+            // recoverable archive. The result counts won't include
+            // these, so the user can compare expected vs observed.
+            continue;
+        }
+        let child_path = dest.join(&e.name);
+        let child_inode = img.read_inode(e.inode)?;
+        if child_inode.is_dir() {
+            create_dir_all(&child_path).map_err(Ufs2Error::Io)?;
+            extract_dir_recursive(img, &child_inode, &child_path, result)?;
+        } else if child_inode.is_file() {
+            let bytes = img.read_file(&child_inode, FFPKG_EXTRACT_MAX)?;
+            write_file_atomic(&child_path, &bytes)?;
+            result.file_count += 1;
+            result.bytes_written += bytes.len() as u64;
+            // Cap sample list at 32 paths so the JSON response stays
+            // bounded even on huge extracts.
+            if result.sample_paths.len() < 32 {
+                result.sample_paths.push(child_path.display().to_string());
+            }
+        }
+        // Symlinks and other types are silently skipped — extracting
+        // them with the right semantics across platforms is fiddly
+        // (Windows symlinks need elevated privileges) and these are
+        // rare in PS5 game images.
+    }
+    Ok(())
+}
+
+fn write_file_atomic(path: &Path, bytes: &[u8]) -> Result<(), Ufs2Error> {
+    if let Some(parent) = path.parent() {
+        create_dir_all(parent).map_err(Ufs2Error::Io)?;
+    }
+    let tmp = path.with_extension("ffpkg-tmp");
+    {
+        let mut f = std::fs::File::create(&tmp).map_err(Ufs2Error::Io)?;
+        f.write_all(bytes).map_err(Ufs2Error::Io)?;
+        f.sync_all().map_err(Ufs2Error::Io)?;
+    }
+    std::fs::rename(&tmp, path).map_err(Ufs2Error::Io)?;
+    Ok(())
+}
+
+/// Open a UFS2 image, walk its root + sce_sys, return everything the
+/// inspect dialog needs. Read-only; never writes to the image.
+pub fn inspect_ffpkg(path: &Path) -> Result<FfpkgInspection, Ufs2Error> {
+    let mut img = Ufs2Image::open(path)?;
+    let sb = img.superblock.clone();
+    let mut warnings: Vec<String> = Vec::new();
+
+    let root = img.read_inode(ufs2::ROOT_INODE)?;
+    let entries = img.list_dir(&root)?;
+    let mut root_entries: Vec<RootEntry> = Vec::with_capacity(entries.len());
+    for e in &entries {
+        // Read each child inode just to get its size — cheap, single
+        // 256-byte read per entry.
+        let size = match img.read_inode(e.inode) {
+            Ok(child) => child.size,
+            Err(_) => 0,
+        };
+        root_entries.push(RootEntry {
+            name: e.name.clone(),
+            kind: e.kind.clone(),
+            size,
+        });
+    }
+
+    let mut title_id: Option<String> = None;
+    let mut title: Option<String> = None;
+    let mut category: Option<String> = None;
+    let has_sce_sys = entries
+        .iter()
+        .any(|e| e.name == "sce_sys" && e.kind == "dir");
+    if has_sce_sys {
+        match img.resolve_path(&["sce_sys", "param.sfo"]) {
+            Ok(sfo_inode) if sfo_inode.is_file() => match img.read_file(&sfo_inode, 256 * 1024) {
+                Ok(bytes) => match parse_sfo_string_keys(&bytes) {
+                    Ok(kv) => {
+                        title_id = kv.get("TITLE_ID").cloned();
+                        title = kv.get("TITLE").cloned();
+                        category = kv.get("CATEGORY").cloned();
+                    }
+                    Err(e) => warnings.push(format!("param.sfo parse: {e}")),
+                },
+                Err(e) => warnings.push(format!("param.sfo read: {e}")),
+            },
+            Ok(_) => warnings.push("sce_sys/param.sfo exists but is not a regular file".into()),
+            Err(_) => warnings.push("sce_sys/ is present but param.sfo is missing".into()),
+        }
+    } else {
+        warnings.push("sce_sys/ folder not found at root — image may not be a PS5 game".into());
+    }
+
+    Ok(FfpkgInspection {
+        image_bytes: sb.total_bytes(),
+        block_size: sb.block_size,
+        fragment_size: sb.fragment_size,
+        volume_name: sb.volume_name,
+        has_sce_sys,
+        title_id,
+        title,
+        category,
+        root_entries,
+        warnings,
+    })
+}
+
+/// Parse the string keys from a PARAM.SFO blob. Reuses the same
+/// layout the PKG parser already understands (PSF magic at +0,
+/// key/data tables, entries with format codes).
+///
+/// Returns a flat HashMap of key → string value for the string-typed
+/// (format=4) entries we care about. Non-string entries (uint32
+/// PARENTAL_LEVEL etc) are ignored.
+fn parse_sfo_string_keys(
+    bytes: &[u8],
+) -> Result<std::collections::HashMap<String, String>, String> {
+    if bytes.len() < 20 {
+        return Err("SFO too small".into());
+    }
+    if &bytes[0..4] != b"\x00PSF" {
+        return Err("SFO magic mismatch".into());
+    }
+    let key_table_off = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]) as usize;
+    let data_table_off = u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]) as usize;
+    let entry_count = u32::from_le_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]) as usize;
+    let mut out = std::collections::HashMap::new();
+    let table_off = 20;
+    for i in 0..entry_count {
+        let e = table_off + i * 16;
+        if e + 16 > bytes.len() {
+            break;
+        }
+        let key_off = u16::from_le_bytes([bytes[e], bytes[e + 1]]) as usize;
+        let format = u16::from_le_bytes([bytes[e + 2], bytes[e + 3]]);
+        let data_len =
+            u32::from_le_bytes([bytes[e + 4], bytes[e + 5], bytes[e + 6], bytes[e + 7]]) as usize;
+        let data_off =
+            u32::from_le_bytes([bytes[e + 12], bytes[e + 13], bytes[e + 14], bytes[e + 15]])
+                as usize;
+        let key_abs = key_table_off + key_off;
+        let data_abs = data_table_off + data_off;
+        if data_abs + data_len > bytes.len() || key_abs >= bytes.len() {
+            continue;
+        }
+        let key_end = (key_abs..bytes.len())
+            .find(|i| bytes[*i] == 0)
+            .unwrap_or(bytes.len());
+        let key = String::from_utf8_lossy(&bytes[key_abs..key_end]).into_owned();
+        // Format 4 = UTF-8 string. We skip uint32 (format 4 confusingly
+        // reuses the same number in some tools — but in PSF, 0x0004 is
+        // utf-8 special and 0x0204 is utf-8 normal. Both end at NUL).
+        if format == 0x0004 || format == 0x0204 {
+            let value = String::from_utf8_lossy(&bytes[data_abs..data_abs + data_len])
+                .trim_end_matches('\0')
+                .to_string();
+            out.insert(key, value);
+        }
+    }
+    Ok(out)
+}
+
 /// Magic bytes of a stock PS4/PS5 .pkg file: `\x7FCNT`.
 pub const PKG_MAGIC: u32 = 0x7F434E54;
 
@@ -144,42 +457,23 @@ pub fn parse_pkg(path: &Path) -> Result<PkgMetadata, PkgError> {
             magic_hex: format!("{magic:08X}"),
         };
         // Soften the warning. On a jailbroken PS5 with kernel-level
-        // signature checks bypassed (the only environment ps5upload
-        // runs in), fake-signed retail-format PKGs install fine, and
-        // that's the common case. The pre-2.2.45 wording blamed BGFT
-        // ("Sony BGFT will reject this") which was misleading on
-        // two counts: (1) we now use AppInstUtil as the primary
-        // install backend (2.2.44), not BGFT directly; (2) most
-        // fake PKGs preserve the canonical
-        // \x7FCNT magic anyway — a non-canonical magic typically
-        // means a renamed non-PKG file or a tool-specific format
-        // (FakePKG variants, .fpkg dumps, etc.) that Sony's
-        // installer won't know how to parse. Tell the user that
-        // honestly and let them proceed if they want to try.
-        // 0x7F464948 = `\x7FFIH` is what newer PS5-native fakepkg
-        // signing tools emit (observed on EP/PS5_/DLPSGAME-prefixed
-        // pkgs). Sony's installer accepts both formats — only OUR
-        // parser doesn't fully understand `\x7FFIH` yet, so the
-        // header fields below stay empty (content_id, title, etc.).
-        // Pre-2.2.52 the warning copy implied "your pkg is probably
-        // broken / renamed" which scared users away from working
-        // files; reframe as "we couldn't extract metadata" so they
-        // know the install will still proceed and Sony's installer
-        // is the source of truth on whether the bytes are valid.
-        let magic_label = match magic {
-            0x7F464948 => " (`\\x7FFIH` — used by recent PS5-native fakepkg signing tools)",
-            _ => "",
-        };
-        meta.warnings.push(format!(
-            "Couldn't extract pkg metadata: header magic is 0x{magic:08X}{magic_label}, \
-             not the canonical PS4 fakepkg magic 0x7F434E54 (`\\x7FCNT`) that our parser knows. \
-             Content ID, title, and category will be empty in the queue row. The install will \
-             still proceed when you click Start — Sony's own installer is the source of truth \
-             for whether the bytes are valid. If you've installed this pkg before via the PS5's \
-             Settings → Debug Settings → Install Package menu, our path should also work \
-             (2.2.52+ routes the install through ShellUI's process)."
-        ));
-        // Don't try to parse the rest — layout is unknown.
+        // Unknown header magic: most commonly 0x7F464948 (`\x7FFIH` —
+        // newer PS5-native fakepkg signing tool format) which Sony's
+        // installer accepts but our parser doesn't read yet, so the
+        // metadata (content_id, title, category) stays empty.
+        //
+        // Pre-2.2.52 we pushed a long warning explaining all of this.
+        // The user-facing reality is simpler: "we couldn't read the
+        // file's metadata, but install will still proceed and either
+        // succeed or fail with a real error." That's a step's
+        // success/fail status, not a warning to read. We now stay
+        // silent here — the queue row's metadata fields just stay
+        // empty, and the actual install attempt's success/error is
+        // surfaced through the install_start ACK path.
+        //
+        // The compile-time test below (test_parse_fih_magic) keeps
+        // the recognition of this magic working as a parse decision,
+        // we just stop emitting the verbose user-facing warning.
         return Ok(meta);
     }
 
@@ -468,7 +762,17 @@ mod tests {
             PkgKind::Unknown { magic_hex } => assert_eq!(magic_hex, "7F464948"),
             _ => panic!("expected Unknown kind"),
         }
-        assert!(!meta.warnings.is_empty());
+        // No user-facing warning expected: we used to emit a long
+        // "we don't recognise this magic" warning here, but the user
+        // doesn't need the explanation. The empty-metadata state is
+        // the result; the queue row's blank content_id/title fields
+        // already make the missing metadata visible, and the install
+        // attempt's eventual ACK is the success/fail signal.
+        assert!(meta.warnings.is_empty());
+        // Metadata stays empty since the parser doesn't speak this
+        // format yet — that's the row-display contract.
+        assert!(meta.content_id.is_empty());
+        assert!(meta.title.is_empty());
     }
 
     fn tempdir() -> std::path::PathBuf {

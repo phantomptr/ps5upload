@@ -16,7 +16,5 @@
     "smoke:hardware": "node tests/smoke-hardware.mjs",
     "release": "./scripts/release.sh"
   },
-  "devDependencies": {
-    "playwright": "^1.58.2"
-  }
+  "devDependencies": {}
 }

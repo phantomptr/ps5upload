@@ -14,6 +14,11 @@ import {
 import { AlertTriangle } from "lucide-react";
 import { PageHeader, EmptyState, ErrorCard, Button } from "../../components";
 import { useTr } from "../../state/lang";
+import PowerTelemetryPanel from "./PowerTelemetryPanel";
+import NetworkPanel from "./NetworkPanel";
+import PeripheralPanel from "./PeripheralPanel";
+import SpeedTestPanel from "./SpeedTestPanel";
+import { useDocumentVisible } from "../../lib/visibility";
 
 import { useConnectionStore, PS5_PAYLOAD_PORT } from "../../state/connection";
 import {
@@ -139,20 +144,23 @@ export default function HardwareScreen() {
     }
   }, [host, payloadStatus, info]);
 
-  // Mount + auto-poll every POLL_INTERVAL_MS while payload is up.
-  // Timer is torn down on unmount, disconnect, or tab switch. When the
-  // payload flips to down, also clear any stale error + sensor data so
-  // the UI goes back to a clean "not connected" state instead of
-  // showing last-known readings that are no longer true.
+  // Mount + auto-poll every POLL_INTERVAL_MS while payload is up AND
+  // the window is visible. Pausing on minimize keeps idle laptops
+  // from spamming the PS5's mgmt port (sensor reads are several
+  // RPCs per tick). Resumes on visibility-change with a fresh
+  // immediate refresh so the panel is up-to-date when the user
+  // looks at it again.
+  const visible = useDocumentVisible();
   useEffect(() => {
     if (payloadStatus !== "up") {
       setError(null);
       return;
     }
+    if (!visible) return;
     refresh();
     const id = window.setInterval(refresh, POLL_INTERVAL_MS);
     return () => window.clearInterval(id);
-  }, [payloadStatus, refresh]);
+  }, [payloadStatus, refresh, visible]);
 
   return (
     <div className="p-6">
@@ -338,6 +346,20 @@ export default function HardwareScreen() {
             host={host ?? ""}
             payloadUp={payloadStatus === "up"}
           />
+
+          {/* Lifetime ICC telemetry — fetched on mount + on demand,
+              not on the live-poll interval. Different cadence from
+              the sensor cards above because these values barely
+              move (boot count increments once per boot, operating
+              seconds tracks total uptime). */}
+          {host?.trim() && payloadStatus === "up" && (
+            <>
+              <PowerTelemetryPanel mgmtAddr={`${host.trim()}:9114`} />
+              <NetworkPanel mgmtAddr={`${host.trim()}:9114`} />
+              <SpeedTestPanel mgmtAddr={`${host.trim()}:9114`} />
+              <PeripheralPanel mgmtAddr={`${host.trim()}:9114`} />
+            </>
+          )}
         </div>
       )}
     </div>
@@ -477,6 +499,8 @@ function FanThresholdCard({
         })}
       </div>
 
+      <FanCurvePreview thresholdC={draftC} />
+
       <label className="mb-1 flex items-center justify-between text-xs text-[var(--color-muted)]">
         <span>Custom</span>
         <span className="font-mono tabular-nums">
@@ -519,5 +543,104 @@ function FanThresholdCard({
         the threshold is writable.
       </p>
     </section>
+  );
+}
+
+/**
+ * SVG visualisation of the fan ramp implied by the current threshold.
+ *
+ * The PS5's fan firmware doesn't expose a configurable curve — only
+ * the turbo-engage threshold. This preview shows the *implied* shape:
+ *   - Below threshold: gentle linear ramp from 25% to 70%
+ *   - At threshold: jump to 95% (turbo)
+ *   - Above threshold: held at 95–100%
+ *
+ * The exact curve Sony uses internally isn't documented; this is a
+ * pedagogical approximation so users understand "lower threshold =
+ * fan spins up more eagerly under temp." Honest about the limitation
+ * via the caption.
+ */
+function FanCurvePreview({ thresholdC }: { thresholdC: number }) {
+  const W = 280;
+  const H = 80;
+  const PADDING = 8;
+  const innerW = W - PADDING * 2;
+  const innerH = H - PADDING * 2;
+  // X axis: 30°C → 90°C. Y axis: 0% → 100% fan duty.
+  const tempMin = 30;
+  const tempMax = 90;
+  const xFor = (t: number) =>
+    PADDING + ((t - tempMin) / (tempMax - tempMin)) * innerW;
+  const yFor = (pct: number) => PADDING + (1 - pct / 100) * innerH;
+  // Build polyline points for the implied curve.
+  const t1 = thresholdC - 1;
+  const t2 = thresholdC + 1;
+  const points: Array<[number, number]> = [
+    [tempMin, 25],
+    [t1, 70],
+    [t2, 95],
+    [tempMax, 100],
+  ];
+  const polyPath = points
+    .map(([t, p]) => `${xFor(t).toFixed(1)},${yFor(p).toFixed(1)}`)
+    .join(" ");
+  return (
+    <div className="mb-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-2">
+      <div className="mb-1 flex items-center justify-between text-[10px] text-[var(--color-muted)]">
+        <span>Fan curve preview (approximate)</span>
+        <span className="font-mono tabular-nums text-[var(--color-accent)]">
+          turbo @ {thresholdC}°C
+        </span>
+      </div>
+      <svg width={W} height={H} className="block">
+        {/* Y-axis ticks at 0/50/100 */}
+        {[0, 50, 100].map((p) => (
+          <line
+            key={p}
+            x1={PADDING}
+            y1={yFor(p)}
+            x2={W - PADDING}
+            y2={yFor(p)}
+            stroke="var(--color-border)"
+            strokeDasharray="2 3"
+          />
+        ))}
+        {/* Curve */}
+        <polyline
+          points={polyPath}
+          fill="none"
+          stroke="var(--color-accent)"
+          strokeWidth={2}
+          strokeLinejoin="round"
+        />
+        {/* Threshold marker */}
+        <line
+          x1={xFor(thresholdC)}
+          y1={PADDING}
+          x2={xFor(thresholdC)}
+          y2={H - PADDING}
+          stroke="var(--color-good)"
+          strokeDasharray="3 3"
+        />
+        {/* X-axis labels */}
+        <text
+          x={PADDING}
+          y={H - 1}
+          fontSize="9"
+          fill="var(--color-muted)"
+        >
+          {tempMin}°C
+        </text>
+        <text
+          x={W - PADDING}
+          y={H - 1}
+          fontSize="9"
+          fill="var(--color-muted)"
+          textAnchor="end"
+        >
+          {tempMax}°C
+        </text>
+      </svg>
+    </div>
   );
 }

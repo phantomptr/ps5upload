@@ -44,6 +44,15 @@ function routeToLogStore(entry: EngineLogEntry) {
 }
 
 async function tick() {
+  // Skip when the window is hidden — log catch-up will happen on
+  // the first tick after the window becomes visible again, since
+  // `nextSince` advances only on success. Without this, a minimized
+  // ps5upload still hits the engine HTTP endpoint every second for
+  // hours, burning IPC and battery for no UI benefit. The Page
+  // Visibility API works in Tauri webview the same as in browsers.
+  if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+    return;
+  }
   try {
     const res = await engineLogsTail(nextSince);
     for (const e of res.entries) routeToLogStore(e);

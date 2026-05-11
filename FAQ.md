@@ -6,6 +6,29 @@ jump to what you need.
 
 ---
 
+## Disclaimer
+
+**Use this software entirely at your own risk.** Provided "as is",
+without warranty of any kind.
+
+- It interacts with a **modified PS5** — a jailbroken console with
+  kernel exploits already loaded by you. Modifying console state,
+  bypassing platform integrity checks, or running unsigned code can
+  void your manufacturer warranty, violate the platform's terms of
+  service, and, under certain operations, leave your console
+  unrecoverable without a reinstall.
+- It writes to your PS5 filesystem and can install / register
+  packages with Sony's installer. Mistakes can corrupt the app
+  database or leave Sony's mgmt service wedged. Back up important
+  saves before bulk operations.
+- It is intended only for content you legally own and hardware that
+  belongs to you. How you use it is your responsibility.
+- No support guaranteed — free volunteer-built tool.
+
+If those terms aren't acceptable, do not use this software.
+
+---
+
 ## What ps5upload does (and doesn't)
 
 **Q: What is ps5upload?**
@@ -94,6 +117,20 @@ right-click `PS5Upload.app` → **Open** → **Open** again in the
 Gatekeeper dialog (the app is ad-hoc signed, not notarized).
 Subsequent launches don't prompt.
 
+**If macOS says "PS5Upload is damaged and can't be opened"** — that's
+the *quarantine* extended attribute Safari/Chrome/Firefox added when
+the `.dmg` was downloaded. One-line fix:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/PS5Upload.app
+```
+
+This is a normal macOS workflow for unsigned tools (same as
+ItemzFlow, ftpsrv-mac, and most homebrew utilities — none of these
+pay Apple $99/year for Developer ID + notarization). The bundle's
+hash hasn't changed; you're just telling Gatekeeper "yes, I know
+where this came from."
+
 ### Windows
 
 Nothing on Windows 10 (20H1 / build 19041 or later) and Windows 11 —
@@ -103,6 +140,21 @@ On stripped installs (LTSC, Windows Server without Desktop
 Experience, some N/KN editions), install WebView2 once from
 <https://developer.microsoft.com/microsoft-edge/webview2/>.
 One-time; runtime is shared across every WebView2 app you'll ever run.
+
+**If Windows shows "Windows protected your PC" (SmartScreen)** —
+the app isn't signed with a paid code-signing certificate, so
+SmartScreen treats fresh downloads as low-reputation. Click
+**More info** → **Run anyway**. SmartScreen builds reputation
+silently after that; subsequent launches don't prompt.
+
+If your IT policy blocks "Run anyway", right-click
+`PS5Upload.exe` → **Properties** → tick **Unblock** at the bottom
+of the General tab → **OK**. That removes the Windows
+mark-of-the-web that gates SmartScreen.
+
+Like macOS quarantine, this is normal for unsigned scene tools.
+EV code-signing certs cost ~$400/year and require a hardware
+token — not something a free homebrew project ships.
 
 ### Linux — Debian, Ubuntu, Mint, Pop!_OS
 

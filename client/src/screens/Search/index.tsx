@@ -10,7 +10,10 @@ import {
 import { useConnectionStore, PS5_PAYLOAD_PORT } from "../../state/connection";
 import { searchPS5, type SearchHit, type SearchProgress } from "../../api/ps5";
 import { PageHeader, ErrorCard, Button } from "../../components";
+// Direct import to avoid the barrel's circular-dep warning at build.
+import { usePrompt } from "../../components/ConfirmDialog";
 import { useTr } from "../../state/lang";
+import { formatBytes } from "../../lib/format";
 
 /** Size filter options. `labelKey` resolves through `tr()` at render
  *  time; `labelFallback` is the English text used when the lang file
@@ -25,16 +28,42 @@ const SIZE_OPTIONS: { labelKey: string; labelFallback: string; bytes: number }[]
   { labelKey: "search_size_10gb", labelFallback: "> 10 GB", bytes: 10 * 1024 * 1024 * 1024 },
 ];
 
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  const units = ["KiB", "MiB", "GiB", "TiB"];
-  let v = n / 1024;
-  let i = 0;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i += 1;
+// formatBytes moved to lib/format.ts.
+
+interface SavedSearch {
+  id: string;
+  name: string;
+  pattern: string;
+  minSize: number;
+}
+
+const SAVED_SEARCHES_KEY = "ps5upload.saved_searches.v1";
+
+function loadSavedSearches(): SavedSearch[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(SAVED_SEARCHES_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (s): s is SavedSearch =>
+        typeof s?.id === "string" &&
+        typeof s?.name === "string" &&
+        typeof s?.pattern === "string",
+    );
+  } catch {
+    return [];
   }
-  return `${v.toFixed(v >= 100 ? 0 : v >= 10 ? 1 : 2)} ${units[i]}`;
+}
+
+function persistSavedSearches(s: SavedSearch[]) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(SAVED_SEARCHES_KEY, JSON.stringify(s));
+  } catch {
+    // best-effort
+  }
 }
 
 export default function SearchScreen() {
@@ -42,6 +71,8 @@ export default function SearchScreen() {
   const host = useConnectionStore((s) => s.host);
   const [pattern, setPattern] = useState("");
   const [minSize, setMinSize] = useState(0);
+  const [saved, setSaved] = useState<SavedSearch[]>(() => loadSavedSearches());
+  const { prompt: promptDialog, dialog: promptDialogNode } = usePrompt();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{
@@ -104,8 +135,44 @@ export default function SearchScreen() {
     abortRef.current?.abort();
   };
 
+  async function saveCurrent() {
+    if (!pattern.trim()) return;
+    const name = await promptDialog({
+      title: tr(
+        "search_save_prompt",
+        undefined,
+        "Name this search (e.g. Big PKGs)",
+      ),
+      defaultValue: pattern,
+      okLabel: tr("save", undefined, "Save"),
+    });
+    if (!name?.trim()) return;
+    const id =
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `s_${Math.random().toString(36).slice(2, 10)}`;
+    const next = [
+      { id, name: name.trim(), pattern, minSize },
+      ...saved.filter((s) => s.name !== name.trim()),
+    ].slice(0, 12);
+    setSaved(next);
+    persistSavedSearches(next);
+  }
+
+  function applySaved(s: SavedSearch) {
+    setPattern(s.pattern);
+    setMinSize(s.minSize);
+  }
+
+  function removeSaved(id: string) {
+    const next = saved.filter((s) => s.id !== id);
+    setSaved(next);
+    persistSavedSearches(next);
+  }
+
   return (
     <div className="p-6">
+      {promptDialogNode}
       <PageHeader
         icon={SearchIcon}
         title={tr("search", undefined, "Search")}
@@ -158,6 +225,42 @@ export default function SearchScreen() {
             </Button>
           )}
         </div>
+        {(saved.length > 0 || pattern.trim()) && (
+          <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px]">
+            {pattern.trim() && (
+              <button
+                type="button"
+                onClick={saveCurrent}
+                className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-0.5 hover:bg-[var(--color-surface-3)]"
+              >
+                {tr("search_save", undefined, "Save current")}
+              </button>
+            )}
+            {saved.map((s) => (
+              <span
+                key={s.id}
+                className="inline-flex items-center gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] py-0.5 pl-2 pr-1"
+              >
+                <button
+                  type="button"
+                  onClick={() => applySaved(s)}
+                  title={`${s.pattern} (min ${s.minSize})`}
+                  className="hover:text-[var(--color-accent)]"
+                >
+                  {s.name}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => removeSaved(s.id)}
+                  className="px-1 text-[var(--color-muted)] hover:text-[var(--color-bad)]"
+                  title={tr("search_remove", undefined, "Remove saved search")}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
       </section>
 
       {error && (
@@ -203,12 +306,28 @@ export default function SearchScreen() {
 
       {result && result.hits.length > 0 && (
         <>
-          <div className="mb-2 text-xs text-[var(--color-muted)]">
-            {result.hits.length.toLocaleString()} match
-            {result.hits.length === 1 ? "" : "es"} · scanned{" "}
-            {result.scanned.toLocaleString()} entries
-            {result.cancelled && " · you stopped the search"}
-            {result.truncated && " · stopped at 100k"}
+          <div className="mb-2 flex items-center gap-3 text-xs text-[var(--color-muted)]">
+            <span>
+              {result.hits.length.toLocaleString()} match
+              {result.hits.length === 1 ? "" : "es"} · scanned{" "}
+              {result.scanned.toLocaleString()} entries
+              {result.cancelled && " · you stopped the search"}
+              {result.truncated && " · stopped at 100k"}
+            </span>
+            <button
+              type="button"
+              onClick={() => exportSearchResults(result.hits, "csv")}
+              className="ml-auto rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-0.5 text-[10px] hover:bg-[var(--color-surface-3)]"
+            >
+              {tr("search_export_csv", undefined, "Export CSV")}
+            </button>
+            <button
+              type="button"
+              onClick={() => exportSearchResults(result.hits, "json")}
+              className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-0.5 text-[10px] hover:bg-[var(--color-surface-3)]"
+            >
+              {tr("search_export_json", undefined, "Export JSON")}
+            </button>
           </div>
           <ul className="grid gap-1">
             {result.hits.map((h, i) => {
@@ -236,4 +355,35 @@ export default function SearchScreen() {
       )}
     </div>
   );
+}
+
+/** Save the current hits to disk via the Tauri save dialog. CSV uses
+ *  RFC 4180 quoting (double-quote both wrappers and embedded quotes);
+ *  JSON serializes the entire SearchHit shape. */
+async function exportSearchResults(
+  hits: SearchHit[],
+  format: "csv" | "json",
+) {
+  const { save } = await import("@tauri-apps/plugin-dialog");
+  const { writeTextFile } = await import("@tauri-apps/plugin-fs");
+  const dest = await save({
+    defaultPath: `ps5upload-search-${Date.now()}.${format}`,
+    filters: [{ name: format.toUpperCase(), extensions: [format] }],
+  });
+  if (!dest || typeof dest !== "string") return;
+  if (format === "json") {
+    await writeTextFile(dest, JSON.stringify(hits, null, 2));
+    return;
+  }
+  // CSV
+  const esc = (v: string | number) => {
+    const s = String(v);
+    if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+    return s;
+  };
+  const rows = ["path,name,size,kind"];
+  for (const h of hits) {
+    rows.push([h.path, h.name, h.size, h.kind].map(esc).join(","));
+  }
+  await writeTextFile(dest, rows.join("\n"));
 }

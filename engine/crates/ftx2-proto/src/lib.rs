@@ -216,6 +216,163 @@ pub enum FrameType {
     /// family) — caller maps to a user-facing message.
     PkgInstallStatus = 84,
     PkgInstallStatusAck = 85,
+    /// Graceful PS5 power control. Body is JSON:
+    /// `{"action":"reboot|shutdown|standby|tick"}`.
+    ///   - reboot    → sceSystemServiceRequestReboot
+    ///   - shutdown  → sceSystemServiceRequestPowerOff
+    ///   - standby   → sceSystemStateMgrEnterStandby (rest mode)
+    ///   - tick      → sceSystemServicePowerTick (defer auto-sleep
+    ///     by one tick; useful during long uploads)
+    ///
+    /// ACK body: `{"ok":true}` on success, `{"ok":false,"err":"..."}`
+    /// on Sony API failure. The destructive actions are async — the
+    /// PS5 starts the shutdown sequence and our payload may not get
+    /// to send the ACK before the network drops. Caller must treat
+    /// "no ACK + connection drop" as success for those actions.
+    SystemControl = 86,
+    SystemControlAck = 87,
+    /// Extended power telemetry beyond HwPower. Returns cumulative
+    /// operating seconds (sceKernelIccGetPowerOperatingTime), boot
+    /// cycle count (sceKernelIccGetPowerNumberOfBootShutdown), and
+    /// thermal alert flags (sceKernelIccGetThermalAlert). Useful for
+    /// hardware-health dashboards. ACK body is `key=value\n…` text.
+    /// Read-only; safe even on jailbreak loaders without elevated
+    /// caps (ICC calls don't require kernel R/W).
+    PowerTelemetry = 88,
+    PowerTelemetryAck = 89,
+    /// Enumerate user accounts on the console. Body empty. ACK body
+    /// is JSON: `{"foreground":<uid>,"users":[{"id":N,"name":"..."}, …]}`.
+    /// Resolved via sceUserServiceGetForegroundUser +
+    /// sceUserServiceGetUserName. Read-only.
+    UserList = 90,
+    UserListAck = 91,
+    /// List save data for one user (or all users when `user_id` is 0).
+    /// Body: `{"user_id":N}`. ACK body: JSON with per-game saves
+    /// `{"saves":[{"title_id":"...","user_id":N,"path":"...",
+    /// "size":<u64>,"mtime":<i64>}, …]}`. Walks both
+    /// `/user/home/<uid>/savedata_prospero/<title>` (PS5 native) and
+    /// `/user/home/<uid>/savedata/<title>` (PS4 legacy).
+    ListSaves = 92,
+    ListSavesAck = 93,
+    /// List screenshots stored on the console. Body empty. ACK body:
+    /// JSON `{"items":[{"path":"...","size":N,"mtime":<i64>}, …]}`
+    /// where path is the .jpg/.jpeg under
+    /// `/user/av_contents/thumbnails/photo` (recursive, 5 levels deep).
+    ListScreenshots = 94,
+    ListScreenshotsAck = 95,
+    /// Build / query / search a filesystem index for fast wildcard
+    /// matching across the whole console. The index is in-memory on
+    /// the payload side, rebuilt on demand.
+    /// IndexStart body: `{"roots":["/user","/data",…]}`; ACK with
+    /// `{"started":true}`.
+    /// IndexStatus body empty; ACK with
+    /// `{"phase":"idle|building|ready","files":N,"started_at":<i64>,
+    /// "completed_at":<i64>}`.
+    /// SearchIndex body: `{"query":"*.pkg","size_min":N,"size_max":N,
+    /// "limit":N}`; ACK with `{"results":[{"path":"...","size":N}, …]}`.
+    IndexStart = 96,
+    IndexStartAck = 97,
+    IndexStatus = 98,
+    IndexStatusAck = 99,
+    SearchIndex = 100,
+    SearchIndexAck = 101,
+    IndexCancel = 102,
+    IndexCancelAck = 103,
+    /// App lifecycle control. Body is JSON
+    /// `{"action":"suspend|resume|kill|list","app_id":<u32>}`.
+    ///   - suspend → sceApplicationSuspend(app_id)
+    ///   - resume  → sceApplicationResume(app_id)
+    ///   - kill    → sceApplicationKill(app_id)
+    ///   - list    → sceApplicationGetProcs (app_id ignored), returns
+    ///     `{"apps":[{"app_id":N,"title_id":"...","name":"..."}, …]}`
+    AppLifecycle = 104,
+    AppLifecycleAck = 105,
+    /// Toast — push a styled JSON notification to the PS5 via
+    /// sceNotificationSend (libSceNotification). Body: JSON
+    /// `{"title":"...","subtitle":"...","icon":"...","action_url":"..."}`.
+    /// Fire-and-forget; ACK body is `{"ok":true}`.
+    ToastSend = 106,
+    ToastSendAck = 107,
+    /// Read a chunk of the kernel log (/dev/klog). Body:
+    /// `{"max_bytes":N}` (max 64 KiB). ACK body is the raw kernel
+    /// log text (newline-delimited). Each call drains and returns
+    /// what's currently buffered; the renderer polls every ~1s for
+    /// streaming. The kernel buffer is FIFO so missed reads aren't
+    /// re-readable — for serious logging the user should also
+    /// configure on-PS5 logging to disk.
+    KlogRead = 108,
+    KlogReadAck = 109,
+    /// Enumerate network interfaces (sceNetGetIfList). ACK body:
+    /// JSON `{"interfaces":[{"name":"eth0","mac":"aa:bb:..","ipv4":"...",
+    /// "ipv6":"...","link_state":"up|down","mtu":N}, …]}`. Read-only.
+    NetInterfaces = 110,
+    NetInterfacesAck = 111,
+    /// Peripheral control: BD drive power, USB port power, eject
+    /// disc. Body: `{"action":"eject_disc|bd_power_off|bd_power_on|
+    /// usb_port_off|usb_port_on","port":N}` (port for usb_*).
+    /// Sony's ICC controls; safe even on payloads without kernel R/W.
+    PeripheralControl = 112,
+    PeripheralControlAck = 113,
+    /// Enumerate loaded sprx modules in a process. Body:
+    /// `{"pid":N}`. ACK body: JSON `{"modules":[{"name":"...",
+    /// "base":<u64>,"size":<u64>}, …]}`. Uses sceKernelGetModuleList.
+    /// Read-only.
+    ProcModules = 114,
+    ProcModulesAck = 115,
+    /// Run a single shell command on the PS5 and capture output.
+    /// Body: `{"cmd":"...","cwd":"/abs/path","timeout_secs":N}`.
+    /// ACK body: `{"exit_code":N,"stdout":"...","stderr":"...","timed_out":bool}`.
+    /// stdout/stderr capped at 256 KB each.
+    ShellExec = 116,
+    ShellExecAck = 117,
+    /// CRC32 hash of a file. Body: `{"path":"/abs/..."}`. ACK body:
+    /// `{"crc32":<u32>,"size":<u64>}`. Cheap integrity check; for
+    /// crypto-strength use FsHash (BLAKE3) instead.
+    Crc32File = 118,
+    Crc32FileAck = 119,
+    /// Direct sqlite query of /system_data/priv/mms/app.db for the
+    /// title_id ↔ app_id ↔ display name mapping. Body empty. ACK
+    /// body: `{"apps":[{"title_id":"CUSAxxxxx","app_id":N,
+    /// "name":"..."}, …]}`. Read-only.
+    AppDbQuery = 120,
+    AppDbQueryAck = 121,
+    /// Network round-trip + throughput test. Body: `{"shard_count":N,
+    /// "shard_size_bytes":N}`. Payload echoes each shard back without
+    /// writing to disk. ACK body: `{"sent":N,"recv":N,"bytes":N,
+    /// "elapsed_us":N,"latency_us_p50":N,"latency_us_p95":N}`.
+    /// Useful for diagnosing slow uploads ("is the bottleneck the
+    /// LAN or the PS5's disk?").
+    NetSpeedTest = 122,
+    NetSpeedTestAck = 123,
+    /// Direct .pkg mount via sceFsMountGamePkg, bypassing BGFT.
+    /// Body: `{"pkg_path":"/abs/...","mount_point":"/mnt/ps5upload/foo"}`.
+    /// ACK body: `{"ok":bool,"code":N,"err":"..."}`. Faster than full
+    /// install for testing patches; doesn't register the title in
+    /// the home screen.
+    PkgDirectMount = 124,
+    PkgDirectMountAck = 125,
+    /// Run sceFsUfsFsck on a UFS partition. Body:
+    /// `{"device":"/dev/ufs0","repair":bool}`. ACK body:
+    /// `{"ok":bool,"code":N}`. Read-only by default; the `repair`
+    /// flag must be explicitly true (UI confirms before sending).
+    UfsFsck = 126,
+    UfsFsckAck = 127,
+    /// Write a small file (≤256 KB) on the PS5 atomically.
+    /// Body: `{"path":"/abs/...","bytes":"<base64>","mode":"create|overwrite"}`.
+    /// `mode=create` fails if the file exists; `mode=overwrite` (default)
+    /// replaces it via tmp+rename. Useful for patching small config
+    /// files without going through the heavyweight transfer pipeline.
+    /// ACK body: `{"ok":bool,"size":N}`.
+    FsWriteBytes = 130,
+    FsWriteBytesAck = 131,
+    /// Mount a LWFS patch overlay via sceFsMountLwfs. Body:
+    /// `{"patch_path":"/abs/...","mount_point":"/mnt/...","title_id":"..."}`.
+    /// Patches a title's files without a full reinstall. ACK body
+    /// mirrors PKG_DIRECT_MOUNT_ACK: `{"ok":bool,"code":N,
+    /// "mount_point":"..."}`. Best-effort; sceFsMountLwfs's flag
+    /// semantics are sparsely documented across firmware revisions.
+    LwfsMount = 128,
+    LwfsMountAck = 129,
 }
 
 impl FrameType {
@@ -294,6 +451,52 @@ impl FrameType {
             83 => Ok(Self::PkgInstallAck),
             84 => Ok(Self::PkgInstallStatus),
             85 => Ok(Self::PkgInstallStatusAck),
+            86 => Ok(Self::SystemControl),
+            87 => Ok(Self::SystemControlAck),
+            88 => Ok(Self::PowerTelemetry),
+            89 => Ok(Self::PowerTelemetryAck),
+            90 => Ok(Self::UserList),
+            91 => Ok(Self::UserListAck),
+            92 => Ok(Self::ListSaves),
+            93 => Ok(Self::ListSavesAck),
+            94 => Ok(Self::ListScreenshots),
+            95 => Ok(Self::ListScreenshotsAck),
+            96 => Ok(Self::IndexStart),
+            97 => Ok(Self::IndexStartAck),
+            98 => Ok(Self::IndexStatus),
+            99 => Ok(Self::IndexStatusAck),
+            100 => Ok(Self::SearchIndex),
+            101 => Ok(Self::SearchIndexAck),
+            102 => Ok(Self::IndexCancel),
+            103 => Ok(Self::IndexCancelAck),
+            104 => Ok(Self::AppLifecycle),
+            105 => Ok(Self::AppLifecycleAck),
+            106 => Ok(Self::ToastSend),
+            107 => Ok(Self::ToastSendAck),
+            108 => Ok(Self::KlogRead),
+            109 => Ok(Self::KlogReadAck),
+            110 => Ok(Self::NetInterfaces),
+            111 => Ok(Self::NetInterfacesAck),
+            112 => Ok(Self::PeripheralControl),
+            113 => Ok(Self::PeripheralControlAck),
+            114 => Ok(Self::ProcModules),
+            115 => Ok(Self::ProcModulesAck),
+            116 => Ok(Self::ShellExec),
+            117 => Ok(Self::ShellExecAck),
+            118 => Ok(Self::Crc32File),
+            119 => Ok(Self::Crc32FileAck),
+            120 => Ok(Self::AppDbQuery),
+            121 => Ok(Self::AppDbQueryAck),
+            122 => Ok(Self::NetSpeedTest),
+            123 => Ok(Self::NetSpeedTestAck),
+            124 => Ok(Self::PkgDirectMount),
+            125 => Ok(Self::PkgDirectMountAck),
+            126 => Ok(Self::UfsFsck),
+            127 => Ok(Self::UfsFsckAck),
+            128 => Ok(Self::LwfsMount),
+            129 => Ok(Self::LwfsMountAck),
+            130 => Ok(Self::FsWriteBytes),
+            131 => Ok(Self::FsWriteBytesAck),
             _ => Err(DecodeError::UnknownFrameType(v)),
         }
     }
@@ -659,12 +862,100 @@ mod tests {
             FrameType::FsListVolumesAck,
             FrameType::FsListDir,
             FrameType::FsListDirAck,
+            FrameType::FsHash,
+            FrameType::FsHashAck,
+            FrameType::FsDelete,
+            FrameType::FsDeleteAck,
+            FrameType::FsMove,
+            FrameType::FsMoveAck,
+            FrameType::FsChmod,
+            FrameType::FsChmodAck,
+            FrameType::FsMkdir,
+            FrameType::FsMkdirAck,
+            FrameType::FsRead,
+            FrameType::FsReadAck,
+            FrameType::FsCopy,
+            FrameType::FsCopyAck,
+            FrameType::FsMount,
+            FrameType::FsMountAck,
+            FrameType::FsUnmount,
+            FrameType::FsUnmountAck,
+            FrameType::AppRegister,
+            FrameType::AppRegisterAck,
+            FrameType::AppUnregister,
+            FrameType::AppUnregisterAck,
+            FrameType::AppLaunch,
+            FrameType::AppLaunchAck,
+            FrameType::AppListRegistered,
+            FrameType::AppListRegisteredAck,
+            FrameType::HwInfo,
+            FrameType::HwInfoAck,
+            FrameType::HwTemps,
+            FrameType::HwTempsAck,
+            FrameType::HwPower,
+            FrameType::HwPowerAck,
+            FrameType::AppLaunchBrowser,
+            FrameType::AppLaunchBrowserAck,
             FrameType::HwSetFanThreshold,
             FrameType::HwSetFanThresholdAck,
+            FrameType::ProcList,
+            FrameType::ProcListAck,
+            FrameType::FsOpStatus,
+            FrameType::FsOpStatusAck,
+            FrameType::FsOpCancel,
+            FrameType::FsOpCancelAck,
+            FrameType::HwStorage,
+            FrameType::HwStorageAck,
             FrameType::PkgInstall,
             FrameType::PkgInstallAck,
             FrameType::PkgInstallStatus,
             FrameType::PkgInstallStatusAck,
+            FrameType::SystemControl,
+            FrameType::SystemControlAck,
+            FrameType::PowerTelemetry,
+            FrameType::PowerTelemetryAck,
+            FrameType::UserList,
+            FrameType::UserListAck,
+            FrameType::ListSaves,
+            FrameType::ListSavesAck,
+            FrameType::ListScreenshots,
+            FrameType::ListScreenshotsAck,
+            FrameType::IndexStart,
+            FrameType::IndexStartAck,
+            FrameType::IndexStatus,
+            FrameType::IndexStatusAck,
+            FrameType::SearchIndex,
+            FrameType::SearchIndexAck,
+            FrameType::IndexCancel,
+            FrameType::IndexCancelAck,
+            FrameType::AppLifecycle,
+            FrameType::AppLifecycleAck,
+            FrameType::ToastSend,
+            FrameType::ToastSendAck,
+            FrameType::KlogRead,
+            FrameType::KlogReadAck,
+            FrameType::NetInterfaces,
+            FrameType::NetInterfacesAck,
+            FrameType::PeripheralControl,
+            FrameType::PeripheralControlAck,
+            FrameType::ProcModules,
+            FrameType::ProcModulesAck,
+            FrameType::ShellExec,
+            FrameType::ShellExecAck,
+            FrameType::Crc32File,
+            FrameType::Crc32FileAck,
+            FrameType::AppDbQuery,
+            FrameType::AppDbQueryAck,
+            FrameType::NetSpeedTest,
+            FrameType::NetSpeedTestAck,
+            FrameType::PkgDirectMount,
+            FrameType::PkgDirectMountAck,
+            FrameType::UfsFsck,
+            FrameType::UfsFsckAck,
+            FrameType::LwfsMount,
+            FrameType::LwfsMountAck,
+            FrameType::FsWriteBytes,
+            FrameType::FsWriteBytesAck,
         ];
         for ft in variants {
             assert_eq!(FrameType::try_from_u16(ft as u16).unwrap(), ft);

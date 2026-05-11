@@ -20,7 +20,9 @@ import {
   X,
 } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { PageHeader, Button, useConfirm } from "../../components";
+import { PageHeader, Button } from "../../components";
+// Direct import to avoid the barrel's circular-dep warning at build.
+import { useConfirm, useAlert, usePrompt } from "../../components/ConfirmDialog";
 import { useTr } from "../../state/lang";
 
 import { useConnectionStore, PS5_PAYLOAD_PORT } from "../../state/connection";
@@ -41,6 +43,7 @@ import {
   saveFsLastPath,
 } from "../../lib/fsLastPath";
 import { useActivityHistoryStore } from "../../state/activityHistory";
+import { useRecentPathsStore } from "../../state/recentPaths";
 import {
   useFsClipboardStore,
   type ClipboardItem,
@@ -51,6 +54,8 @@ import {
 } from "../../state/fsBulkOp";
 import { useElapsed } from "../../lib/useElapsed";
 import { runBulkDelete as runBulkDeleteLoop } from "../../lib/bulkDelete";
+import { formatBytes } from "../../lib/format";
+import { humanizePs5Error } from "../../lib/humanizeError";
 
 /**
  * PS5 file explorer with multi-select + cut/copy/paste.
@@ -85,17 +90,7 @@ function formatDuration(sec: number): string {
   return `${h}h ${m % 60}m`;
 }
 
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  const units = ["KiB", "MiB", "GiB", "TiB"];
-  let v = n / 1024;
-  let i = 0;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i += 1;
-  }
-  return `${v.toFixed(v >= 100 ? 0 : v >= 10 ? 1 : 2)} ${units[i]}`;
-}
+// formatBytes moved to lib/format.ts.
 
 function toMgmtAddr(transferAddr: string): string {
   const i = transferAddr.lastIndexOf(":");
@@ -112,6 +107,89 @@ function parent(p: string): string {
 function joinPath(dir: string, name: string): string {
   if (dir.endsWith("/")) return `${dir}${name}`;
   return `${dir}/${name}`;
+}
+
+/** Apply a small DSL to a single name. Returns the new name, or
+ *  the original name unchanged when the pattern doesn't match.
+ *
+ *  Grammar:
+ *    s/old/new/         first-match substring replace
+ *    s/old/new/g        global substring replace
+ *    s/old/new/i        case-insensitive (combine with g: gi or ig)
+ *    ^prefix_           prepend literal prefix
+ *    _suffix$           append literal suffix (before file extension)
+ *    lower              lowercase entire name
+ *    upper              uppercase entire name
+ *
+ *  Deliberately not regex-based: PS5 filenames (e.g. CUSA00001-Backup.zip)
+ *  contain regex metacharacters by default, and exposing regex to a
+ *  bulk-rename UI is a sharp footgun. */
+export function applyRenamePattern(name: string, pattern: string): string {
+  const p = pattern.trim();
+  if (!p) return name;
+
+  // s/old/new/[flags] — split manually so old/new can contain `/`.
+  if (p.startsWith("s/")) {
+    // Find unescaped slashes; we don't support escapes, so look for
+    // the first `/` after position 2 and the next one after that.
+    const firstSlash = 2;
+    const secondSlash = p.indexOf("/", firstSlash);
+    if (secondSlash < 0) return name;
+    const thirdSlash = p.indexOf("/", secondSlash + 1);
+    if (thirdSlash < 0) return name;
+    const old = p.slice(firstSlash, secondSlash);
+    const next = p.slice(secondSlash + 1, thirdSlash);
+    const flags = p.slice(thirdSlash + 1).toLowerCase();
+    if (!old) return name;
+    const global = flags.includes("g");
+    const insensitive = flags.includes("i");
+    if (insensitive) {
+      // No regex — manual case-insensitive find loop.
+      const lower = name.toLowerCase();
+      const lowerOld = old.toLowerCase();
+      let out = "";
+      let i = 0;
+      while (i < name.length) {
+        if (lower.startsWith(lowerOld, i)) {
+          out += next;
+          i += old.length;
+          if (!global) {
+            out += name.slice(i);
+            return out;
+          }
+        } else {
+          out += name[i];
+          i++;
+        }
+      }
+      return out;
+    }
+    return global ? name.split(old).join(next) : name.replace(old, next);
+  }
+
+  if (p.startsWith("^") && p.length > 1) {
+    return p.slice(1) + name;
+  }
+  if (p.endsWith("$") && p.length > 1) {
+    const suffix = p.slice(0, -1);
+    const dot = name.lastIndexOf(".");
+    if (dot > 0) return name.slice(0, dot) + suffix + name.slice(dot);
+    return name + suffix;
+  }
+  if (p === "lower") return name.toLowerCase();
+  if (p === "upper") return name.toUpperCase();
+  return name;
+}
+
+export function isSinglePathName(name: string): boolean {
+  return (
+    name.trim() !== "" &&
+    name === name.trim() &&
+    !name.includes("/") &&
+    !name.includes("\\") &&
+    name !== "." &&
+    name !== ".."
+  );
 }
 
 function crumbs(p: string): { label: string; path: string }[] {
@@ -166,6 +244,8 @@ export default function FileSystemScreen() {
   // no-op in Tauri webview and falls through to plugin-dialog's
   // ACL-gated confirm command.
   const { confirm: confirmDialog, dialog: confirmDialogNode } = useConfirm();
+  const { alert: alertDialog, dialog: alertDialogNode } = useAlert();
+  const { prompt: promptDialog, dialog: promptDialogNode } = usePrompt();
   const elapsedMs = useElapsed(
     busyEntry !== null || bulkOp.op !== null || downloadOp.active,
   );
@@ -203,7 +283,11 @@ export default function FileSystemScreen() {
         return next;
       });
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      // Route through humanizePs5Error so payload-side errors like
+      // `fs_unmount_busy`, `path_not_allowed`, etc. surface as
+      // actionable copy instead of opaque snake_case codes.
+      const raw = e instanceof Error ? e.message : String(e);
+      setError(humanizePs5Error(raw) || raw);
       setEntries(null);
     } finally {
       setLoading(false);
@@ -260,6 +344,10 @@ export default function FileSystemScreen() {
   // location independently.
   useEffect(() => {
     saveFsLastPath(host, path);
+    // Also push into the global recent-paths MRU so the dropdown
+    // surfaces "places I've been recently" across PS5s. Skip "/"
+    // since the recents store filters it anyway.
+    useRecentPathsStore.getState().push(path);
   }, [host, path]);
 
   // Changing directories clears the selection — carrying selections
@@ -347,6 +435,16 @@ export default function FileSystemScreen() {
       setRenaming(null);
       return;
     }
+    if (!isSinglePathName(newName)) {
+      setError(
+        tr(
+          "fs_name_invalid",
+          undefined,
+          "Name can't contain / or \\ and can't be \".\" or \"..\".",
+        ),
+      );
+      return;
+    }
     setBusyEntry({ name: oldName, op: "rename" });
     setError(null);
     try {
@@ -358,16 +456,134 @@ export default function FileSystemScreen() {
       setRenaming(null);
       await refresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const raw = e instanceof Error ? e.message : String(e);
+      setError(humanizePs5Error(raw) || raw);
     } finally {
       setBusyEntry(null);
     }
+  };
+
+  /** Bulk rename via a sed-ish pattern. Pattern grammar (kept tiny):
+   *    - `s/old/new/`  → substring replace (first match, case-sens)
+   *    - `s/old/new/g` → substring replace (all matches)
+   *    - `s/old/new/i` → case-insensitive
+   *    - `^prefix_`    → unconditional prefix
+   *    - `_suffix$`    → unconditional suffix (before extension)
+   *    - `lower` / `upper` → case transform
+   *
+   *  Shows a preview dialog of what would change before applying. */
+  const runBulkRename = async (selectedNames: string[]) => {
+    const pattern = await promptDialog({
+      title: `Bulk rename ${selectedNames.length} item(s)`,
+      message:
+        "Pattern grammar:\n" +
+        "  s/old/new/[gi]   substring replace\n" +
+        "  ^prefix_         add prefix\n" +
+        "  _suffix$         add suffix (before extension)\n" +
+        "  lower / upper    change case",
+      placeholder: "e.g. s/CUSA/PCSA/  or  ^backup_  or  lower",
+      okLabel: tr("fs_bulk_rename_next", undefined, "Next"),
+    });
+    if (!pattern) return;
+    const renames: Array<{ from: string; to: string }> = [];
+    const invalid: string[] = [];
+    for (const name of selectedNames) {
+      const next = applyRenamePattern(name, pattern);
+      if (next && next !== name) {
+        if (isSinglePathName(next)) {
+          renames.push({ from: name, to: next });
+        } else {
+          invalid.push(`${name} → ${next}`);
+        }
+      }
+    }
+    if (invalid.length > 0) {
+      await alertDialog({
+        title: tr("fs_bulk_rename_invalid_title", undefined, "Invalid rename"),
+        message:
+          tr(
+            "fs_bulk_rename_invalid_body",
+            undefined,
+            "Bulk rename produced names containing / or \\, or reserved names . / ...",
+          ) +
+          "\n\n" +
+          invalid.slice(0, 10).map((x) => `  ${x}`).join("\n") +
+          (invalid.length > 10 ? `\n  ...and ${invalid.length - 10} more` : ""),
+      });
+      return;
+    }
+    if (renames.length === 0) {
+      await alertDialog({
+        title: tr("fs_bulk_rename_no_change_title", undefined, "No changes"),
+        message: tr(
+          "fs_bulk_rename_no_change_body",
+          undefined,
+          "The pattern matched no selected file names.",
+        ),
+      });
+      return;
+    }
+    const preview = renames
+      .slice(0, 10)
+      .map((r) => `  ${r.from} → ${r.to}`)
+      .join("\n");
+    const ok = await confirmDialog({
+      title: tr(
+        "fs_bulk_rename_confirm_title",
+        { count: renames.length },
+        `Apply rename to ${renames.length} item(s)?`,
+      ),
+      message:
+        preview +
+        (renames.length > 10
+          ? `\n  …and ${renames.length - 10} more`
+          : ""),
+      confirmLabel: tr("fs_bulk_rename_apply", undefined, "Rename"),
+    });
+    if (!ok) return;
+    setError(null);
+    let okCount = 0;
+    let failCount = 0;
+    for (const r of renames) {
+      try {
+        await fsMove(
+          `${host}:${PS5_PAYLOAD_PORT}`,
+          joinPath(path, r.from),
+          joinPath(path, r.to),
+        );
+        okCount++;
+      } catch (e) {
+        failCount++;
+        if (failCount === 1) {
+          setError(`First failure: ${r.from} → ${r.to}: ${e}`);
+        }
+      }
+    }
+    await alertDialog({
+      title: tr(
+        "fs_bulk_rename_done_title",
+        { ok: okCount, failed: failCount },
+        `Renamed ${okCount} item(s); ${failCount} failed.`,
+      ),
+    });
+    setSelected(new Set());
+    await refresh();
   };
 
   const runMkdir = async () => {
     const name = (mkdirDraft ?? "").trim();
     if (!name) {
       setMkdirDraft(null);
+      return;
+    }
+    if (!isSinglePathName(name)) {
+      setError(
+        tr(
+          "fs_name_invalid",
+          undefined,
+          "Name can't contain / or \\ and can't be \".\" or \"..\".",
+        ),
+      );
       return;
     }
     setBusyEntry({ name, op: "mkdir" });
@@ -377,7 +593,8 @@ export default function FileSystemScreen() {
       setMkdirDraft(null);
       await refresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const raw = e instanceof Error ? e.message : String(e);
+      setError(humanizePs5Error(raw) || raw);
     } finally {
       setBusyEntry(null);
     }
@@ -718,6 +935,160 @@ export default function FileSystemScreen() {
     await refresh();
   };
 
+  const [preview, setPreview] = useState<{
+    name: string;
+    kind: "text" | "image";
+    body: string;
+    size: number;
+  } | null>(null);
+
+  /** Preview a small file inline. Text decodes as UTF-8; .png/.jpg
+   *  show as a data URL. Capped at 256 KB; bigger files surface a
+   *  "too large to preview" hint. */
+  const runPreview = async (entry: DirEntry) => {
+    if (entry.kind !== "file") return;
+    if (entry.size > 256 * 1024) {
+      await alertDialog({
+        title: tr(
+          "fs_preview_too_large_title",
+          undefined,
+          "Preview too large",
+        ),
+        message: tr(
+          "fs_preview_too_large_body",
+          { size: formatBytes(entry.size) },
+          `File is ${formatBytes(entry.size)} — preview is capped at 256 KB. Use Download instead.`,
+        ),
+      });
+      return;
+    }
+    try {
+      const { fsReadPreview } = await import("../../api/ps5");
+      const remote = joinPath(path, entry.name);
+      const r = await fsReadPreview(`${host}:9114`, remote);
+      const ext = (entry.name.split(".").pop() ?? "").toLowerCase();
+      const isImg = ["png", "jpg", "jpeg", "gif", "bmp", "webp"].includes(ext);
+      let body: string;
+      let kind: "text" | "image";
+      if (isImg) {
+        const mime =
+          ext === "jpg" || ext === "jpeg" ? "image/jpeg" : `image/${ext}`;
+        body = `data:${mime};base64,${r.base64}`;
+        kind = "image";
+      } else {
+        // Decode base64 → bytes → UTF-8 (lossy). Replacement
+        // characters are fine for text preview; users get the gist.
+        const bin = atob(r.base64);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        body = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+        kind = "text";
+      }
+      setPreview({ name: entry.name, kind, body, size: r.size });
+    } catch (e) {
+      await alertDialog({
+        title: tr("fs_preview_failed", undefined, "Preview failed"),
+        message: e instanceof Error ? e.message : String(e),
+      });
+    }
+  };
+
+  /** BLAKE3 hash + CRC32 of a single file, side-by-side. Slow but
+   *  thorough — call this when you suspect bit-rot or want crypto
+   *  strength integrity. */
+  const runVerify = async (entry: DirEntry) => {
+    if (entry.kind !== "file") return;
+    try {
+      const { fsBlake3Hash, crc32File } = await import("../../api/ps5");
+      const remote = joinPath(path, entry.name);
+      const addr = `${host}:9114`;
+      // Fire both in parallel — BLAKE3 is the slow one (~3s/GiB)
+      // and CRC32 should overlap with it.
+      const [blake, crc] = await Promise.allSettled([
+        fsBlake3Hash(addr, remote),
+        crc32File(addr, remote),
+      ]);
+      const lines: string[] = [`Verifying ${entry.name}`, ""];
+      if (blake.status === "fulfilled") {
+        lines.push(`BLAKE3: ${blake.value.hash}`);
+        lines.push(`Size:   ${blake.value.size} bytes`);
+      } else {
+        lines.push(`BLAKE3: failed — ${blake.reason}`);
+      }
+      if (crc.status === "fulfilled") {
+        const hex = (crc.value.crc32 ?? 0).toString(16).padStart(8, "0").toUpperCase();
+        lines.push(`CRC32:  0x${hex}`);
+      } else {
+        lines.push(`CRC32: failed — ${crc.reason}`);
+      }
+      await alertDialog({
+        title: tr("fs_verify_result", undefined, "Verify result"),
+        message: lines.join("\n"),
+      });
+    } catch (e) {
+      await alertDialog({
+        title: tr("fs_verify_failed", undefined, "Verify failed"),
+        message: e instanceof Error ? e.message : String(e),
+      });
+    }
+  };
+
+  /** Compute CRC32 of a single file on the PS5 and show it in an
+   *  alert. Useful for spot-checking file integrity post-upload
+   *  without the full BLAKE3 reconcile. */
+  const runCrc32 = async (entry: DirEntry) => {
+    if (entry.kind !== "file") return;
+    try {
+      const { crc32File } = await import("../../api/ps5");
+      const remote = joinPath(path, entry.name);
+      const r = await crc32File(`${host}:9114`, remote);
+      if (r.err) {
+        await alertDialog({
+          title: tr("fs_crc32_failed", undefined, "CRC32 failed"),
+          message: r.err,
+        });
+        return;
+      }
+      const hex = (r.crc32 ?? 0).toString(16).padStart(8, "0").toUpperCase();
+      const expected = await promptDialog({
+        title: tr(
+          "fs_crc32_compare_title",
+          { name: entry.name },
+          `CRC32 of ${entry.name}`,
+        ),
+        message: tr(
+          "fs_crc32_compare_body",
+          { hex, size: r.size ?? 0 },
+          `0x${hex}\n(${r.size ?? 0} bytes)\n\nPaste a known-good CRC32 (hex or decimal) to compare, or leave blank.`,
+        ),
+        okLabel: tr("fs_crc32_compare", undefined, "Compare"),
+      });
+      if (expected !== null && expected.trim()) {
+        const trimmed = expected.trim().toLowerCase();
+        const candidate = trimmed.startsWith("0x")
+          ? parseInt(trimmed.slice(2), 16)
+          : /^[0-9a-f]+$/i.test(trimmed) && trimmed.length === 8
+            ? parseInt(trimmed, 16)
+            : parseInt(trimmed, 10);
+        if (!isNaN(candidate) && candidate === r.crc32) {
+          await alertDialog({
+            title: tr("fs_crc32_match", undefined, "✓ CRC32 matches"),
+          });
+        } else if (!isNaN(candidate)) {
+          await alertDialog({
+            title: tr("fs_crc32_mismatch", undefined, "✗ CRC32 mismatch"),
+            message: `got 0x${hex}, expected 0x${candidate.toString(16).padStart(8, "0").toUpperCase()}`,
+          });
+        }
+      }
+    } catch (e) {
+      await alertDialog({
+        title: tr("fs_crc32_error", undefined, "CRC32 error"),
+        message: e instanceof Error ? e.message : String(e),
+      });
+    }
+  };
+
   /** Save a file or folder under the current dir to the host. Same
    *  flow as Library's per-row Download — pick a host folder, kick
    *  off `transfer_download`, poll jobStatus to terminal. Single-
@@ -847,6 +1218,8 @@ export default function FileSystemScreen() {
   return (
     <div className="p-6">
       {confirmDialogNode}
+      {alertDialogNode}
+      {promptDialogNode}
       <PageHeader
         icon={FolderTree}
         title={tr("file_system", undefined, "File System")}
@@ -953,6 +1326,7 @@ export default function FileSystemScreen() {
             )}
           </span>
         ))}
+        <RecentPathsDropdown onPick={(p) => setPath(p)} currentPath={path} />
       </div>
 
       {/* Clipboard banner: non-empty clipboard shows what's staged and
@@ -1019,6 +1393,20 @@ export default function FileSystemScreen() {
           >
             <Copy size={12} />
             {tr("copy", undefined, "Copy")}
+          </button>
+          <button
+            type="button"
+            onClick={() => runBulkRename(Array.from(selected))}
+            disabled={bulkOp.op !== null || selected.size === 0}
+            title={tr(
+              "fs_bulk_rename_tooltip",
+              undefined,
+              "Bulk rename via pattern (s/old/new/, ^prefix_, _suffix$, lower, upper)",
+            )}
+            className="flex items-center gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 hover:bg-[var(--color-surface-3)] disabled:opacity-50"
+          >
+            <Pencil size={12} />
+            {tr("fs_bulk_rename", undefined, "Bulk rename")}
           </button>
           <button
             type="button"
@@ -1284,6 +1672,48 @@ export default function FileSystemScreen() {
                 >
                   <Pencil size={12} />
                 </button>
+                {!isDir && e.size <= 256 * 1024 && (
+                  <button
+                    type="button"
+                    onClick={() => runPreview(e)}
+                    title={tr(
+                      "fs_preview_tooltip",
+                      undefined,
+                      "Preview small file inline (text or image)",
+                    )}
+                    className="rounded-md border border-[var(--color-border)] p-1 text-[10px] hover:bg-[var(--color-surface-3)]"
+                  >
+                    👁
+                  </button>
+                )}
+                {!isDir && (
+                  <button
+                    type="button"
+                    onClick={() => runCrc32(e)}
+                    title={tr(
+                      "fs_crc32_tooltip",
+                      undefined,
+                      "Compute CRC32 of this file (cheap integrity check)",
+                    )}
+                    className="rounded-md border border-[var(--color-border)] p-1 text-[10px] font-mono hover:bg-[var(--color-surface-3)]"
+                  >
+                    #
+                  </button>
+                )}
+                {!isDir && (
+                  <button
+                    type="button"
+                    onClick={() => runVerify(e)}
+                    title={tr(
+                      "fs_verify_tooltip",
+                      undefined,
+                      "BLAKE3 + CRC32 verification (slower, crypto-strength)",
+                    )}
+                    className="rounded-md border border-[var(--color-border)] p-1 text-[10px] font-mono hover:bg-[var(--color-surface-3)]"
+                  >
+                    ✓
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => runDelete(e.name)}
@@ -1297,6 +1727,46 @@ export default function FileSystemScreen() {
           );
         })}
       </ul>
+      {preview && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          onClick={() => setPreview(null)}
+        >
+          <div
+            className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <header className="flex items-center justify-between border-b border-[var(--color-border)] px-4 py-2">
+              <div>
+                <div className="text-sm font-semibold">{preview.name}</div>
+                <div className="text-[10px] text-[var(--color-muted)]">
+                  {formatBytes(preview.size)} · {preview.kind}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPreview(null)}
+                className="rounded p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text)]"
+              >
+                ✕
+              </button>
+            </header>
+            <div className="flex-1 overflow-auto p-3">
+              {preview.kind === "image" ? (
+                <img
+                  src={preview.body}
+                  alt={preview.name}
+                  className="mx-auto max-h-full"
+                />
+              ) : (
+                <pre className="whitespace-pre-wrap break-all font-mono text-[11px]">
+                  {preview.body}
+                </pre>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1313,6 +1783,89 @@ export default function FileSystemScreen() {
  * file copies. Real byte-level progress would need payload-side
  * incremental fs_copy events; future work.
  */
+/** Compact "recent paths" dropdown that lives next to the breadcrumb
+ *  trail. Hidden when the recents list is empty (no point showing an
+ *  empty button). Positioned to the right of the breadcrumbs so it
+ *  doesn't push the active path off-screen on small windows. */
+function RecentPathsDropdown({
+  onPick,
+  currentPath,
+}: {
+  onPick: (p: string) => void;
+  currentPath: string;
+}) {
+  const tr = useTr();
+  const paths = useRecentPathsStore((s) => s.paths);
+  const remove = useRecentPathsStore((s) => s.remove);
+  const clear = useRecentPathsStore((s) => s.clear);
+  const [open, setOpen] = useState(false);
+
+  // Filter out the current path — no value in offering "go where you
+  // already are." Keeps the list focused on actual destinations.
+  const filtered = useMemo(
+    () => paths.filter((p) => p !== currentPath),
+    [paths, currentPath],
+  );
+
+  if (filtered.length === 0) return null;
+
+  return (
+    <div className="relative ml-auto">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        title={tr("fs_recent_tooltip", undefined, "Recent destinations")}
+        className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
+      >
+        Recent
+        <ChevronRight
+          size={10}
+          className={`transition-transform ${open ? "rotate-90" : ""}`}
+        />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full z-30 mt-1 w-72 overflow-hidden rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] shadow-lg">
+          <ul className="max-h-60 overflow-y-auto py-1">
+            {filtered.map((p) => (
+              <li key={p} className="flex items-center">
+                <button
+                  type="button"
+                  onClick={() => {
+                    onPick(p);
+                    setOpen(false);
+                  }}
+                  className="min-w-0 flex-1 truncate px-2 py-1 text-left font-mono text-[11px] hover:bg-[var(--color-surface-3)]"
+                  title={p}
+                >
+                  {p}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => remove(p)}
+                  className="px-1 py-1 text-[10px] text-[var(--color-muted)] hover:text-[var(--color-bad)]"
+                  title={tr("fs_recent_remove", undefined, "Forget this entry")}
+                >
+                  ×
+                </button>
+              </li>
+            ))}
+          </ul>
+          <button
+            type="button"
+            onClick={() => {
+              clear();
+              setOpen(false);
+            }}
+            className="block w-full border-t border-[var(--color-border)] px-2 py-1 text-left text-[10px] text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
+          >
+            {tr("fs_recent_clear", undefined, "Clear all")}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function BulkOpBanner({
   op,
   total,

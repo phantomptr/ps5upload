@@ -14,14 +14,24 @@
 //!   title_meta  — HTML scrape of public title-info site (cover art)
 
 pub mod app_info;
+pub mod app_lifecycle;
 pub mod companions;
+pub mod diagnostics;
+pub mod discover;
 pub mod folder_inspect;
+pub mod heal_appmeta;
 pub mod keep_awake;
+pub mod payloads;
 pub mod persistence;
 pub mod probes;
 pub mod ps5_engine;
+pub mod saves_screenshots;
+pub mod search_index_cmd;
+pub mod smp;
+pub mod system_power;
 pub mod title_meta;
 pub mod updates;
+pub mod usb_autoloader;
 pub mod user_config;
 
 pub(crate) fn replace_file(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
@@ -53,12 +63,22 @@ pub(crate) fn replace_file(from: &std::path::Path, to: &std::path::Path) -> std:
 // generated `__cmd__<name>` helper macros need to find via `commands::*`.
 // Explicit lists break `generate_handler!`.
 pub use app_info::*;
+pub use app_lifecycle::*;
 pub use companions::*;
+pub use diagnostics::*;
+pub use discover::*;
 pub use folder_inspect::*;
+pub use heal_appmeta::*;
 pub use keep_awake::*;
+pub use payloads::*;
 pub use persistence::*;
 pub use probes::*;
 pub use ps5_engine::*;
+pub use saves_screenshots::*;
+pub use search_index_cmd::*;
+pub use smp::*;
+pub use system_power::*;
 pub use title_meta::*;
 pub use updates::*;
+pub use usb_autoloader::*;
 pub use user_config::*;

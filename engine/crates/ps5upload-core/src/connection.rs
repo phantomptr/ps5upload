@@ -268,13 +268,24 @@ impl Connection {
     /// loop ran forever. `drain_chunk_size` (extracted so it can be
     /// unit-tested in isolation) plus the `if len == 0` short-circuit
     /// close that hole.
+    ///
+    /// Overall deadline: each `read_exact` honors the configured per-
+    /// syscall timeout (30 s default), but a peer that drips one byte
+    /// every 29 s could keep us reading a 4 GiB body forever. Cap
+    /// total wall-clock at 5 minutes regardless of byte count — that's
+    /// well above any legitimate frame and an order of magnitude below
+    /// "user-visible hang" for an interactive UI.
     pub fn drain_body(&mut self, mut len: u64) -> Result<()> {
         if len == 0 {
             return Ok(());
         }
         let chunk_size = drain_chunk_size(len);
         let mut chunk = vec![0u8; chunk_size];
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
         while len > 0 {
+            if std::time::Instant::now() > deadline {
+                bail!("drain_body deadline exceeded with {} bytes remaining", len);
+            }
             let take = chunk.len().min(usize::try_from(len).unwrap_or(usize::MAX));
             self.stream
                 .read_exact(&mut chunk[..take])

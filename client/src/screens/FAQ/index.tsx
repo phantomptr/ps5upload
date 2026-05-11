@@ -58,10 +58,15 @@ export default function FAQScreen() {
   const [raw, setRaw] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  // Bumping `loadAttempt` re-runs the load effect — used by the
+  // retry button so we can recover without a full window reload
+  // (which would dump every other tab's in-flight state too).
+  const [loadAttempt, setLoadAttempt] = useState(0);
 
   useEffect(() => {
     (async () => {
       try {
+        setError(null);
         const content = await invoke<string>("faq_load");
         setRaw(content);
       } catch (e) {
@@ -70,7 +75,7 @@ export default function FAQScreen() {
         setError(msg);
       }
     })();
-  }, []);
+  }, [loadAttempt]);
 
   const { prelude, sections } = useMemo(
     () => (raw ? splitByH2(raw) : { prelude: "", sections: [] }),
@@ -133,7 +138,7 @@ export default function FAQScreen() {
                 <Button
                   variant="secondary"
                   size="sm"
-                  onClick={() => window.location.reload()}
+                  onClick={() => setLoadAttempt((n) => n + 1)}
                 >
                   {tr("try_again", undefined, "Try again")}
                 </Button>

@@ -243,6 +243,13 @@ jobs:
         working-directory: client
         run: npm test
 
+      # i18n coverage gate. validate-repo runs this locally and
+      # TESTING.md elevates it to a release gate; CI was the missing
+      # link. Static command, no event-derived input. Reviewed for
+      # GitHub Actions injection risk: safe.
+      - name: i18n coverage
+        run: npm run i18n:check
+
       - name: Vite production build
         working-directory: client
         run: npm run build:vite
@@ -268,7 +275,12 @@ jobs:
         run: npm run scripts:check
 
       - name: Audit scripts
-        run: npm run scripts:audit
+        # Strict mode: fail CI if any tracked script/test utility
+        # has zero references AND isn't on the manualEntrypoints
+        # allowlist. Previously this only printed warnings, so a
+        # renamed-without-callers script silently slipped through.
+        # Static command, no event-derived input.
+        run: node scripts/audit-scripts.mjs --strict
 
   # ─────────────────────────────────────────────────────────────────────
   # Coverage reports. This is a reporting job, not the primary gate:

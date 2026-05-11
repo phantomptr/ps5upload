@@ -888,22 +888,6 @@ int bgft_install_start(const char *url,
      * 0-N range and route through the BGFT poll. Single mutex
      * isn't shared between the two backends — they don't touch
      * each other's state. */
-    /* Path 0: ShellUI RPC install. Sony's PlayGo whitelists ShellUI's
-     * process attributes for HTTP fetch, so calling
-     * sceAppInstUtilInstallByPackage from inside ShellUI's process
-     * succeeds where the same call from our own context returns
-     * 0x80B22404 (PlayGo HTTP 404 pre-flight) on FW 9.60+ regardless
-     * of cred-forge.
-     *
-     * On success, we synthesize a task_id with APPINST_TASK_ID_FLAG
-     * set and register a slot so bgft_install_status routes the
-     * status poll back through sceAppInstUtilGetInstallStatus
-     * (still works from our process for status — it's only the
-     * install-START that has the caller-pid check). The content_id
-     * the slot needs is whatever we passed in; ShellUI's installer
-     * fills in pkg_info.content_id but we don't read that back yet
-     * (Sony's GetInstallStatus accepts a caller-supplied content_id
-     * just fine). */
     /* Reset per-tier diagnostics so a previous attempt's values
      * don't leak into this one (the host always wants the *current*
      * attempt's tier outcomes, not whatever the last call left). */
@@ -919,66 +903,31 @@ int bgft_install_start(const char *url,
      * "none" is the correct sentinel for "no tier succeeded yet". */
     g_last_register_path = "none";
 
-    {
-        /* Lazily init the ShellUI RPC layer if it hasn't been touched
-         * yet (find ShellUI's pid + resolve symbols inside its address
-         * space). Without this call, shellui_rpc_ready() returns
-         * false and shellui_rpc_install_pkg short-circuits with
-         * rc=-1 / err=0 — Tier 1 silently never runs. The launcher
-         * code path (register.c) does the same lazy init. Idempotent;
-         * subsequent calls are no-ops. */
-        (void)shellui_rpc_init();
-        uint32_t shellui_err = 0;
-        int rc = shellui_rpc_install_pkg(url, content_id, title,
-                                          &shellui_err);
-        /* Record the outcome unconditionally — both rc and shellui_err
-         * matter for diagnostics. shellui_err = 0 on full success;
-         * non-zero either captures Sony's error code (when the call
-         * dispatched) or our own machinery error (0xE000_xxxx range)
-         * when it didn't. The host renders this in the diag panel. */
-        g_last_shellui_err = shellui_err;
-        g_last_shellui_err_set = 1;
-        if (rc == 0) {
-            int32_t tid = appinst_task_register(content_id);
-            if (tid >= 0) {
-                /* OR in the shellui-rpc backing flag so
-                 * bgft_install_status can route AROUND Sony's
-                 * GetInstallStatus (which segfaults our process
-                 * for shellui-rpc-initiated installs on FW 9.60). */
-                *out_task_id = tid | APPINST_VIA_SHELLUI_FLAG;
-                *out_err_code = 0;
-                g_last_register_path = "shellui-rpc";
-                return 0;
-            }
-            /* Task table full — install was queued PS5-side, but we
-             * can't track its status. Surface as a soft success: the
-             * install will run, the user just won't see live progress
-             * on this row. Fall through to register/start tracking
-             * via the legacy AppInstUtil path so we get a tracked
-             * task_id; if THAT also succeeds, the in-flight ShellUI
-             * install will collide with the new register. Better to
-             * fail loud here than silently double-install. */
-            *out_err_code = BGFT_ERR_TASK_TABLE_FULL;
-            return -1;
-        }
-        /* ShellUI RPC failed. Common reasons:
-         *   - libSceAppInstUtil not loaded into ShellUI's address
-         *     space (shellui_err = 0xE0000002 SYMBOL_MISSING).
-         *   - ptrace attach failed (kstuff not loaded; shellui_err = 0).
-         *   - Sony rejected with a real error code (passed through).
-         * In all cases, try the in-process AppInstUtil path below as
-         * a fallback. The shellui_err is preserved into saved_app_err
-         * by the legacy code so it can be surfaced if the fallback
-         * also fails. */
-        if (shellui_err != 0) {
-            fprintf(stderr,
-                    "[bgft] shellui-rpc install failed (rc=0x%08X), trying in-process AppInstUtil\n",
-                    (unsigned)shellui_err);
-        } else {
-            fprintf(stderr,
-                    "[bgft] shellui-rpc install attach/mmap failed, trying in-process AppInstUtil\n");
-        }
-    }
+    /* ─── Tier ordering ──────────────────────────────────────────────
+     *   1. **In-process AppInstUtil** (preferred): call
+     *      sceAppInstUtilInstallByPackage directly with a per-call
+     *      ShellCore-authid swap. No ptrace, no ShellUI freeze, no
+     *      respawn flash. Works for the broad majority of pkgs (DLC,
+     *      regular game pkgs, patches) when Sony's installer doesn't
+     *      require an HTTP fetch.
+     *
+     *   2. **shellui-rpc** (fallback): ptrace into SceShellUI and call
+     *      from there. Required when Sony's PlayGo whitelist gates the
+     *      call on the caller's process attributes — observed as
+     *      0x80B22404 (PlayGo HTTP 404 pre-flight) on FW 9.60+ for
+     *      some pkg shapes. Cost: ShellUI freeze ⇒ Sony's watchdog
+     *      often respawns it ⇒ visible black flash on the TV.
+     *
+     *   3. **Legacy BGFT** (last resort): IntDebug register variants.
+     *      Kept for fakepkg installs where the modern installer path
+     *      rejects on signature checks.
+     *
+     * Empirical observation: the PlayGo gate only engages for the
+     * HTTP-fetch code paths Sony's installer takes for URLs it
+     * considers "remote." Locally-staged file:// URIs (everything
+     * ps5upload installs — we stage to /user/data/ps5upload/pkg_temp/
+     * first) bypass most of that gate, so Tier 1 works for most pkgs
+     * without the ShellUI flash. */
 
     int32_t app_tid = -1;
     uint32_t app_err = 0;
@@ -988,18 +937,51 @@ int bgft_install_start(const char *url,
     if (appinst_rc == 0) {
         *out_task_id = app_tid;
         *out_err_code = 0;
-        /* Tag the path so PKG_INSTALL_ACK / STATUS_ACK don't lie about
-         * which install path succeeded. Pre-fix-round-3 the AppInstUtil
-         * success branch never wrote g_last_register_path, so a status
-         * poll would surface a stale "intdebug" / "regular" left over
-         * from a prior install — misleading the host's diagnostic
-         * disclosure. */
+        /* Tag the success path so the host's diag panel reflects
+         * which tier ran. "appinst" = the in-process AppInstUtil
+         * path, meaning no ShellUI flash. */
         g_last_register_path = "appinst";
         return 0;
     }
     fprintf(stderr,
-            "[bgft] appinst path failed (rc=0x%08X), falling back to BGFT\n",
+            "[bgft] in-process AppInstUtil failed (rc=0x%08X), trying shellui-rpc fallback\n",
             (unsigned)app_err);
+
+    {
+        /* Tier 2: ShellUI RPC fallback. Only reached when the in-process
+         * call failed — typically because Sony's PlayGo whitelist needs
+         * the call to originate from inside ShellUI's process. Lazy-init
+         * the RPC layer; safe to call repeatedly. */
+        (void)shellui_rpc_init();
+        uint32_t shellui_err = 0;
+        int rc = shellui_rpc_install_pkg(url, content_id, title,
+                                          &shellui_err);
+        g_last_shellui_err = shellui_err;
+        g_last_shellui_err_set = 1;
+        if (rc == 0) {
+            int32_t tid = appinst_task_register(content_id);
+            if (tid >= 0) {
+                /* OR in the shellui-rpc backing flag so
+                 * bgft_install_status routes the synthetic-DONE
+                 * bypass — never calls Sony's GetInstallStatus for
+                 * cross-process installs. */
+                *out_task_id = tid | APPINST_VIA_SHELLUI_FLAG;
+                *out_err_code = 0;
+                g_last_register_path = "shellui-rpc";
+                return 0;
+            }
+            *out_err_code = BGFT_ERR_TASK_TABLE_FULL;
+            return -1;
+        }
+        if (shellui_err != 0) {
+            fprintf(stderr,
+                    "[bgft] shellui-rpc install also failed (rc=0x%08X), falling back to legacy BGFT\n",
+                    (unsigned)shellui_err);
+        } else {
+            fprintf(stderr,
+                    "[bgft] shellui-rpc attach/mmap failed, falling back to legacy BGFT\n");
+        }
+    }
 
     /* Save the AppInstUtil error so we can surface it as the
      * primary cause if BGFT also fails. Without this, the
@@ -1169,16 +1151,47 @@ int bgft_install_status(int32_t task_id,
     /* Route to whichever backend issued this task_id. AppInstUtil
      * task ids carry the high-bit flag; BGFT ids do not.
      *
-     * 2.2.54-fix-round-9: route shellui-rpc-backed tasks through
-     * Sony's GetInstallStatus too. The previous synthetic-phase
-     * bypass was defensive — needed when GetInstallStatus crashed
-     * the payload because we called it under debugger authid. With
-     * appinst_install_status now wrapping the call in the ShellCore
-     * authid swap (verified safe via 5 consecutive polls without
-     * crash), real status polling works for shellui-rpc tasks too.
-     * The user gets actual download/install progress in the UI
-     * AND the row transitions from install→done when Sony completes,
-     * which clears Sony's queue and lets the next install register. */
+     * shellui-rpc-backed tasks (APPINST_VIA_SHELLUI_FLAG) take the
+     * synthetic-phase bypass — return INSTALL forever, never call
+     * Sony's GetInstallStatus. Background: the install was dispatched
+     * from INSIDE ShellUI's process (via ptrace), so the install
+     * record lives in ShellUI's IPC state, not ours. Sony's status
+     * API segfaults — or under benign conditions just *blocks for a
+     * long time* — when polled from a different process for the same
+     * content_id. Either failure mode wedges our mgmt thread:
+     *   - segfault → payload crashes mid-install
+     *   - long block → mgmt thread holds sony_api_lock waiting; the
+     *     engine's next 1 s status poll times out connecting to :9114
+     *     → user sees "Can't reach your PS5's management service"
+     *     mid-install (which is what you are seeing on DLC pkgs).
+     *
+     * Sonic-loader takes the same fire-and-forget approach for
+     * cross-process installs. The actual install runs to completion
+     * on the PS5; the user verifies via the PS5 notification panel
+     * and the row transitions to done when they tap "OK" in the UI.
+     *
+     * An earlier "verified safe via 5 consecutive polls" change
+     * removed this bypass — but 5 polls aren't enough to characterise
+     * the install API's behaviour across the variety of pkg
+     * metadata (DLCs, patches, themes) and firmware revisions in the
+     * wild. Restored. */
+    if ((task_id & APPINST_VIA_SHELLUI_FLAG) != 0) {
+        /* Report DONE (not INSTALL) so the engine + UI consider the
+         * row terminal. Sony's queue continues processing the install
+         * in the background; the user verifies completion via the
+         * PS5's notification panel. INSTALL would have left the row
+         * spinning forever — there's no way to detect actual Sony
+         * completion from our process without re-triggering the
+         * GetInstallStatus crash that the bypass was added to avoid.
+         *
+         * The UI's "register_path === shellui-rpc" banner explains
+         * the hand-off so the user knows where to check. */
+        *out_phase = BGFT_PHASE_DONE;
+        *out_downloaded = 0;
+        *out_total = 0;
+        *out_err_code = 0;
+        return 0;
+    }
     if ((task_id & APPINST_TASK_ID_FLAG) != 0) {
         return appinst_install_status(task_id, out_phase, out_downloaded,
                                        out_total, out_err_code);

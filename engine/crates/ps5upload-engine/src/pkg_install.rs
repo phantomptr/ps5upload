@@ -30,7 +30,9 @@ use ps5upload_core::pkg_install::{
     err_code_message, pkg_install, pkg_install_status, InstallPhase, PkgInstallRequest,
     PkgInstallResponse, PkgInstallStatus,
 };
-use ps5upload_pkg::{parse_pkg, parse_split_pkg, PkgMetadata, SplitPkgMetadata};
+use ps5upload_pkg::{
+    extract_from_ffpkg, inspect_ffpkg, parse_pkg, parse_split_pkg, PkgMetadata, SplitPkgMetadata,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -92,11 +94,64 @@ pub fn router(state: PkgInstallStateHandle) -> Router {
     Router::new()
         .route("/api/pkg/parse", post(parse_handler))
         .route("/api/pkg/parse-split", post(parse_split_handler))
+        // Read-only UFS2 image inspector for .ffpkg / .ufs files.
+        // Lets the renderer surface "what's in this image?" before
+        // a multi-GB upload. See ps5upload_pkg::ufs2 for the parser.
+        .route("/api/ffpkg/inspect", post(inspect_handler))
+        // Extract a file or subtree from a local .ffpkg to a local
+        // dir. Useful for grabbing a single asset without uploading
+        // the whole image to the PS5 first.
+        .route("/api/ffpkg/extract", post(extract_handler))
         .route("/api/pkg/install/start", post(install_start_handler))
         .route("/api/pkg/install/status", get(install_status_handler))
         .route("/api/pkg/install/cancel", post(install_cancel_handler))
         .route("/pkg-host/{session}/file.pkg", get(serve_handler))
         .with_state(state)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ExtractRequest {
+    /// Local path to the `.ffpkg` image.
+    pub ffpkg_path: String,
+    /// Slash-separated path inside the image. Empty string = whole
+    /// image (the root directory).
+    #[serde(default)]
+    pub inner_path: String,
+    /// Local directory to write into. Created if missing.
+    pub dest_dir: String,
+}
+
+async fn extract_handler(Json(req): Json<ExtractRequest>) -> Response<Body> {
+    let ffpkg = req.ffpkg_path.clone();
+    let inner = req.inner_path.clone();
+    let dest = req.dest_dir.clone();
+    let res = tokio::task::spawn_blocking(move || {
+        extract_from_ffpkg(
+            std::path::Path::new(&ffpkg),
+            &inner,
+            std::path::Path::new(&dest),
+        )
+    })
+    .await;
+    match res {
+        Ok(Ok(meta)) => json_ok(&meta),
+        Ok(Err(e)) => json_err(StatusCode::BAD_REQUEST, &format!("extract: {e}")),
+        Err(e) => json_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("task: {e}")),
+    }
+}
+
+async fn inspect_handler(Json(req): Json<ParseRequest>) -> Response<Body> {
+    // spawn_blocking because the parser is sync I/O on a potentially
+    // multi-GB image. With ~10 root entries (one inode read each) the
+    // call typically finishes in a few hundred ms; without spawn_blocking
+    // a slow disk could stall the axum reactor.
+    let path = req.path.clone();
+    let res = tokio::task::spawn_blocking(move || inspect_ffpkg(std::path::Path::new(&path))).await;
+    match res {
+        Ok(Ok(meta)) => json_ok(&meta),
+        Ok(Err(e)) => json_err(StatusCode::BAD_REQUEST, &format!("inspect: {e}")),
+        Err(e) => json_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("task: {e}")),
+    }
 }
 
 // ─── /api/pkg/parse ──────────────────────────────────────────────────

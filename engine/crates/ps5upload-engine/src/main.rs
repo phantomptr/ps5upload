@@ -102,7 +102,34 @@ fn make_transfer_config(addr: &str) -> TransferConfig {
             cfg.pack_file_max = n;
         }
     }
+    // Bandwidth cap. `FTX2_BANDWIDTH_MBPS=10` caps outbound at
+    // 10 MB/s; setting `0` (or unsetting) disables the cap. The
+    // throttle is enforced inside the pipelined sender — see
+    // `BandwidthThrottle` in transfer.rs.
+    if let Ok(v) = std::env::var("FTX2_BANDWIDTH_MBPS") {
+        if let Ok(n) = v.parse::<f64>() {
+            if n > 0.0 {
+                cfg.bandwidth_cap_bps = Some((n * 1024.0 * 1024.0) as u64);
+            }
+        }
+    }
     cfg
+}
+
+/// Apply a per-request bandwidth cap to the config. None / 0 / negative
+/// = leave the existing cap (env-var default) in place; positive values
+/// override. Centralised so all four transfer entry points apply the
+/// same precedence rule.
+fn apply_per_request_bandwidth(cfg: &mut TransferConfig, cap_mbps: Option<f64>) {
+    if let Some(n) = cap_mbps {
+        if n > 0.0 {
+            cfg.bandwidth_cap_bps = Some((n * 1024.0 * 1024.0) as u64);
+        } else if n == 0.0 {
+            // Explicit 0 = override "unlimited" — useful for callers
+            // that want to ignore the env-var default.
+            cfg.bandwidth_cap_bps = None;
+        }
+    }
 }
 use serde::{Deserialize, Serialize};
 use std::{
@@ -573,6 +600,10 @@ struct TransferFileReq {
     tx_id: Option<String>,
     dest: String,
     src: String,
+    /// Per-job bandwidth cap in MB/s. None = use the engine's
+    /// default (env-var-controlled). 0 also = no cap.
+    #[serde(default)]
+    bandwidth_cap_mbps: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -583,6 +614,8 @@ struct TransferDirReq {
     src_dir: String,
     #[serde(default)]
     excludes: Vec<String>,
+    #[serde(default)]
+    bandwidth_cap_mbps: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -597,6 +630,8 @@ struct TransferFileListReq {
     tx_id: Option<String>,
     dest_root: String,
     files: Vec<FileListEntryReq>,
+    #[serde(default)]
+    bandwidth_cap_mbps: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -610,6 +645,8 @@ struct TransferDirReconcileReq {
     mode: Option<String>,
     #[serde(default)]
     excludes: Vec<String>,
+    #[serde(default)]
+    bandwidth_cap_mbps: Option<f64>,
 }
 
 #[derive(Serialize)]
@@ -1731,6 +1768,7 @@ async fn transfer_file_handler(
         Arc::clone(&progress),
     );
 
+    let bandwidth_cap = req.bandwidth_cap_mbps;
     tokio::task::spawn_blocking(move || {
         // Drops at closure end (success OR panic), stopping the
         // progress ticker. Without this, a panic in
@@ -1745,6 +1783,7 @@ async fn transfer_file_handler(
             JobFailOnDropGuard::new(Arc::clone(&jobs), events_tx.clone(), job_id, started_at_ms);
         let mut cfg = make_transfer_config(&addr);
         cfg.progress_bytes = Some(Arc::clone(&progress));
+        apply_per_request_bandwidth(&mut cfg, bandwidth_cap);
         // Resume-on-drop for single-file uploads: 1 fresh attempt + 2
         // retries. Without this wrapper a connection hiccup on a multi-
         // GiB single-file upload (e.g. a .pkg / .ffpkg image) would be
@@ -1881,6 +1920,7 @@ async fn transfer_dir_handler(
         let mut cfg = make_transfer_config(&addr);
         cfg.excludes = req.excludes;
         cfg.progress_bytes = Some(Arc::clone(&progress));
+        apply_per_request_bandwidth(&mut cfg, req.bandwidth_cap_mbps);
         // 3 attempts = 1 fresh + 2 resumes. Matches the reconcile handler.
         // An Override upload used to give up on the first network blip;
         // this retry wrapper puts it on equal footing with Resume uploads.
@@ -2029,6 +2069,7 @@ async fn transfer_file_list_handler(
             JobFailOnDropGuard::new(Arc::clone(&jobs), events_tx.clone(), job_id, started_at_ms);
         let mut cfg = make_transfer_config(&addr);
         cfg.progress_bytes = Some(Arc::clone(&progress));
+        apply_per_request_bandwidth(&mut cfg, req.bandwidth_cap_mbps);
         // All transfer endpoints share the same 3-attempt resume policy
         // (1 fresh + 2 resumes). See `transfer_dir_handler` for rationale.
         let result =
@@ -2147,6 +2188,39 @@ async fn transfer_download_handler(
         return json_err(StatusCode::BAD_REQUEST, "dest_dir cannot be empty").into_response();
     }
 
+    let dest_dir = std::path::PathBuf::from(&req.dest_dir);
+    let basename = trimmed_src
+        .rsplit('/')
+        .next()
+        .expect("src_path emptiness already validated");
+    if basename == "." || basename == ".." || basename.contains('/') || basename.contains('\\') {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "src_path produces an invalid destination basename ({basename:?}); refusing to download"
+            ),
+        )
+        .into_response();
+    }
+    match std::fs::metadata(&dest_dir) {
+        Ok(md) if md.is_dir() => {}
+        Ok(_) => {
+            return json_err(
+                StatusCode::BAD_REQUEST,
+                format!("dest_dir is not a directory: {}", dest_dir.display()),
+            )
+            .into_response();
+        }
+        Err(e) => {
+            return json_err(
+                StatusCode::BAD_REQUEST,
+                format!("cannot access dest_dir {}: {e}", dest_dir.display()),
+            )
+            .into_response();
+        }
+    }
+    let dest_root = dest_dir.join(basename);
+
     let job_id = Uuid::new_v4();
     let started_at_ms = now_ms();
 
@@ -2235,56 +2309,6 @@ async fn transfer_download_handler(
         Arc::clone(&progress),
     );
 
-    let dest_dir = std::path::PathBuf::from(req.dest_dir);
-    // Append the remote basename so a single source produces a
-    // single named output even when the user picked a parent dir
-    // ("save to ~/Downloads" → "~/Downloads/MyGame"). The empty/
-    // root-only check above guarantees `trimmed_src` and the rsplit
-    // are non-empty, so the unwrap is safe.
-    let basename = trimmed_src
-        .rsplit('/')
-        .next()
-        .expect("src_path emptiness already validated");
-    // Path-traversal guard. A src_path like `/data/foo/..` produces
-    // basename `..`, and `dest_dir.join("..")` walks one level above
-    // the host folder the user picked — files would land outside the
-    // dialog-selected destination. Same risk for `/data/foo/.` (a
-    // literal `.` segment on the host) and any backslash-bearing
-    // remote name. Reject up-front rather than discover the escape
-    // mid-write.
-    if basename == "." || basename == ".." || basename.contains('/') || basename.contains('\\') {
-        return json_err(
-            StatusCode::BAD_REQUEST,
-            format!(
-                "src_path produces an invalid destination basename ({basename:?}); refusing to download"
-            ),
-        )
-        .into_response();
-    }
-    // Pre-flight the host destination so the user finds out about
-    // a missing/un-writable directory immediately, not after the
-    // job has been polling for several seconds. We require dest_dir
-    // to exist and be a directory; create_dir_all happens later
-    // per-file under dest_root, so we don't need to mkdir here.
-    match std::fs::metadata(&dest_dir) {
-        Ok(md) if md.is_dir() => {}
-        Ok(_) => {
-            return json_err(
-                StatusCode::BAD_REQUEST,
-                format!("dest_dir is not a directory: {}", dest_dir.display()),
-            )
-            .into_response();
-        }
-        Err(e) => {
-            return json_err(
-                StatusCode::BAD_REQUEST,
-                format!("cannot access dest_dir {}: {e}", dest_dir.display()),
-            )
-            .into_response();
-        }
-    }
-    let dest_root = dest_dir.join(basename);
-
     tokio::task::spawn_blocking(move || {
         let _stop_guard = TickerStopGuard::new(stop_ticker);
         let mut fail_guard =
@@ -2337,6 +2361,61 @@ async fn transfer_download_handler(
         }),
     )
         .into_response()
+}
+
+/// POST /api/transfer/dir-diff-preview
+///
+/// Dry-run reconcile: same walk + diff as `dir-reconcile`, but returns
+/// the plan instead of starting an upload. Lets the renderer show
+/// "X new, Y replaced, Z unchanged" before the user clicks Upload.
+/// Always uses Fast mode — the Safe-mode hash check would defeat the
+/// "preview is cheap" promise.
+async fn transfer_dir_diff_preview_handler(
+    State(state): State<AppState>,
+    Json(req): Json<TransferDirReconcileReq>,
+) -> impl IntoResponse {
+    let addr = req.addr.unwrap_or_else(|| state.default_ps5_addr.clone());
+    let mgmt = mgmt_addr_for(&addr);
+    let src_path = std::path::PathBuf::from(&req.src_dir);
+    let dest_root = req.dest_root.clone();
+    let excludes = req.excludes.clone();
+    let res = tokio::task::spawn_blocking(move || {
+        crate::log_info!(
+            "diff-preview: src={src} dest={dest} mgmt={mgmt}",
+            src = src_path.display(),
+            dest = dest_root,
+            mgmt = mgmt,
+        );
+        reconcile(&mgmt, &src_path, &dest_root, ReconcileMode::Fast, &excludes)
+    })
+    .await;
+    match res {
+        Ok(Ok(plan)) => {
+            // Sample first 32 to_send relpaths so the renderer can
+            // show "what would change" without a 50K-file response.
+            let sample: Vec<String> = plan
+                .to_send
+                .iter()
+                .take(32)
+                .map(|f| f.rel_path.clone())
+                .collect();
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "to_send_count": plan.to_send.len(),
+                    "to_send_bytes": plan.bytes_to_send,
+                    "already_present_count": plan.already_present,
+                    "already_present_bytes": plan.bytes_already_present,
+                    "sample_to_send": sample,
+                })),
+            )
+                .into_response()
+        }
+        Ok(Err(e)) => json_err(StatusCode::BAD_REQUEST, format!("reconcile: {e}")).into_response(),
+        Err(e) => {
+            json_err(StatusCode::INTERNAL_SERVER_ERROR, format!("task join: {e}")).into_response()
+        }
+    }
 }
 
 /// POST /api/transfer/dir-reconcile
@@ -2402,6 +2481,16 @@ async fn transfer_dir_reconcile_handler(
     let events_tx = state.events_tx.clone();
 
     tokio::task::spawn_blocking(move || {
+        // Install the panic-survive guard at the TOP of the closure so that
+        // a panic anywhere in Phase 1 (reconcile, local walk) doesn't leave
+        // the job stuck in Running forever. The other three transfer
+        // handlers do the same; this one was previously deferring guard
+        // install until Phase 2, which let pre-Phase-2 panics orphan jobs.
+        // The two existing early-return branches (walk failure / empty
+        // plan) call mark_succeeded() before returning since they already
+        // set the terminal job state themselves.
+        let mut fail_guard =
+            JobFailOnDropGuard::new(Arc::clone(&jobs), events_tx.clone(), job_id, started_at_ms);
         let src_path = std::path::PathBuf::from(&req.src_dir);
         let mgmt = mgmt_addr_for(&addr);
         crate::log_info!(
@@ -2494,6 +2583,7 @@ async fn transfer_dir_reconcile_handler(
                                 error: format!("can't read source folder: {walk_err}"),
                             },
                         );
+                        fail_guard.mark_succeeded();
                         return;
                     }
                 }
@@ -2524,6 +2614,7 @@ async fn transfer_dir_reconcile_handler(
                     commit_ack: None,
                 },
             );
+            fail_guard.mark_succeeded();
             return;
         }
 
@@ -2568,9 +2659,8 @@ async fn transfer_dir_reconcile_handler(
             Arc::clone(&progress),
         );
         // Same panic-survive contract as the other transfer endpoints.
+        // (fail_guard was installed at the top of this closure.)
         let _stop_guard = TickerStopGuard::new(stop_ticker);
-        let mut fail_guard =
-            JobFailOnDropGuard::new(Arc::clone(&jobs), events_tx.clone(), job_id, started_at_ms);
 
         let entries: Vec<FileListEntry> = plan
             .to_send
@@ -2587,6 +2677,7 @@ async fn transfer_dir_reconcile_handler(
         let mut cfg = make_transfer_config(&addr);
         cfg.excludes = req.excludes;
         cfg.progress_bytes = Some(Arc::clone(&progress));
+        apply_per_request_bandwidth(&mut cfg, req.bandwidth_cap_mbps);
         // 3 attempts total — 1 fresh + 2 resumes. Covers the realistic
         // case of a single payload hiccup mid-transfer; if the payload
         // is hard-dead, the third attempt's connect will fail fast and
@@ -2745,18 +2836,47 @@ async fn list_jobs(State(state): State<AppState>) -> impl IntoResponse {
 /// running the engine standalone (`cargo run -p ps5upload-engine`)
 /// doesn't get auto-killed when their stdin closes (e.g. piping a
 /// file in, or running headless under nohup).
-/// Cooperative shutdown signal. Set by the parent-watcher thread when
-/// it sees stdin EOF (parent died). `axum::serve(...).with_graceful_shutdown`
-/// awaits this future, drains in-flight requests up to the cap, then
-/// returns. Replaces a `process::exit(0)` torn-down hard exit that left
-/// in-flight transfers / pkg-host streams dropped abruptly.
+/// Cooperative shutdown signal. Set by either the parent-watcher
+/// thread (stdin EOF when parent died) or a Unix signal handler
+/// (SIGTERM / SIGINT — `kill` from systemd, ^C from a dev terminal).
+/// `axum::serve(...).with_graceful_shutdown` awaits this future,
+/// drains in-flight requests up to the cap, then returns. Replaces
+/// a `process::exit(0)` torn-down hard exit that left in-flight
+/// transfers / pkg-host streams dropped abruptly.
 static SHUTDOWN: tokio::sync::OnceCell<tokio::sync::Notify> = tokio::sync::OnceCell::const_new();
 
 async fn shutdown_signal() {
     let notify = SHUTDOWN
         .get_or_init(|| async { tokio::sync::Notify::new() })
         .await;
-    notify.notified().await;
+    // Race the cooperative notify with platform signal handlers so
+    // both manual `kill` and parent-death paths get clean drain.
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut sigterm = signal(SignalKind::terminate()).expect("install SIGTERM handler");
+        let mut sigint = signal(SignalKind::interrupt()).expect("install SIGINT handler");
+        tokio::select! {
+            _ = notify.notified() => {}
+            _ = sigterm.recv() => {
+                eprintln!("[ps5upload-engine] SIGTERM — shutting down");
+            }
+            _ = sigint.recv() => {
+                eprintln!("[ps5upload-engine] SIGINT — shutting down");
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        // Windows: ctrl-c only. SIGTERM-equivalent is the Windows
+        // service control manager, out of scope for the dev path.
+        tokio::select! {
+            _ = notify.notified() => {}
+            _ = tokio::signal::ctrl_c() => {
+                eprintln!("[ps5upload-engine] Ctrl-C — shutting down");
+            }
+        }
+    }
 }
 
 fn trigger_shutdown() {
@@ -2867,6 +2987,14 @@ async fn main() {
         .route(
             "/api/transfer/dir-reconcile",
             post(transfer_dir_reconcile_handler),
+        )
+        // Dry-run reconcile: walks both trees, returns the "what would
+        // be sent" stats without starting an upload. Used by the
+        // Upload screen's pre-flight diff preview. See
+        // transfer_dir_diff_preview_handler.
+        .route(
+            "/api/transfer/dir-diff-preview",
+            post(transfer_dir_diff_preview_handler),
         )
         .route("/api/version", get(engine_version))
         .route("/api/jobs", get(list_jobs))
@@ -2982,5 +3110,89 @@ async fn main() {
     {
         eprintln!("[ps5upload-engine] axum serve terminated: {e}");
         std::process::exit(3);
+    }
+}
+
+#[cfg(test)]
+mod helpers_tests {
+    use super::*;
+
+    #[test]
+    fn mgmt_addr_for_swaps_port() {
+        assert_eq!(mgmt_addr_for("192.168.1.50:9113"), "192.168.1.50:9114");
+        assert_eq!(mgmt_addr_for("10.0.0.1:1234"), "10.0.0.1:9114");
+    }
+
+    #[test]
+    fn mgmt_addr_for_with_no_port_appends_mgmt() {
+        // Defensive — callers shouldn't pass a port-less addr but the
+        // helper should produce a valid `:9114` value rather than panic.
+        assert_eq!(mgmt_addr_for("192.168.1.50"), "192.168.1.50:9114");
+    }
+
+    #[test]
+    fn mgmt_addr_for_handles_ipv6_with_brackets() {
+        // rsplit on `:` for "[::1]:9113" finds the port-side colon.
+        assert_eq!(mgmt_addr_for("[::1]:9113"), "[::1]:9114");
+    }
+
+    #[test]
+    fn mgmt_addr_or_default_uses_default_when_none() {
+        assert_eq!(
+            mgmt_addr_or_default(None, "192.168.0.1:9113"),
+            "192.168.0.1:9114"
+        );
+    }
+
+    #[test]
+    fn parse_or_random_tx_id_round_trip() {
+        let hex = "0123456789abcdef0123456789abcdef";
+        let bytes = parse_or_random_tx_id(Some(hex)).unwrap();
+        assert_eq!(bytes[0], 0x01);
+        assert_eq!(bytes[15], 0xef);
+    }
+
+    #[test]
+    fn parse_or_random_tx_id_rejects_short() {
+        assert!(parse_or_random_tx_id(Some("dead")).is_err());
+    }
+
+    #[test]
+    fn parse_or_random_tx_id_rejects_invalid_hex() {
+        let bad = "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz";
+        assert!(parse_or_random_tx_id(Some(bad)).is_err());
+    }
+
+    #[test]
+    fn parse_or_random_tx_id_none_yields_uuid() {
+        let a = parse_or_random_tx_id(None).unwrap();
+        let b = parse_or_random_tx_id(None).unwrap();
+        assert_ne!(a, b, "two random tx_ids should differ");
+    }
+
+    #[test]
+    fn hex_val_accepts_both_cases() {
+        assert_eq!(hex_val(b'0').unwrap(), 0);
+        assert_eq!(hex_val(b'9').unwrap(), 9);
+        assert_eq!(hex_val(b'a').unwrap(), 10);
+        assert_eq!(hex_val(b'f').unwrap(), 15);
+        assert_eq!(hex_val(b'A').unwrap(), 10);
+        assert_eq!(hex_val(b'F').unwrap(), 15);
+    }
+
+    #[test]
+    fn hex_val_rejects_non_hex() {
+        assert!(hex_val(b'g').is_err());
+        assert!(hex_val(b' ').is_err());
+        assert!(hex_val(b'!').is_err());
+    }
+
+    #[test]
+    fn now_ms_is_close_to_system_time() {
+        let n = now_ms();
+        assert!(
+            n > 1_700_000_000_000,
+            "now_ms should be reasonable epoch ms"
+        );
     }
 }

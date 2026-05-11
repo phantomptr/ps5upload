@@ -20,6 +20,7 @@ import {
   type RateSample,
 } from "../lib/rollingRate";
 import type { SourceKind } from "./upload";
+import { useUploadSettingsStore } from "./uploadSettings";
 
 /** For folder sources the caller picks one of these strategies at the
  *  moment the dialog is confirmed. Files/exfat images always use
@@ -210,6 +211,13 @@ export const useTransferStore = create<TransferState>((set) => {
         }
       }
 
+      // Read bandwidth cap at the moment we start the upload — the
+      // engine only honors it at start-time (per-job config). The cap
+      // setting was previously wired into the UI but never threaded
+      // through here, so users believed throttling was active when
+      // it wasn't.
+      const bandwidthCap =
+        useUploadSettingsStore.getState().bandwidthCapMbps;
       let jobId: string;
       try {
         if (isFolder && strategy === "resume") {
@@ -220,9 +228,17 @@ export const useTransferStore = create<TransferState>((set) => {
             reconcileMode,
             txId,
             excludes,
+            bandwidthCap,
           );
         } else if (isFolder) {
-          jobId = await startTransferDir(srcPath, dest, addr, txId, excludes);
+          jobId = await startTransferDir(
+            srcPath,
+            dest,
+            addr,
+            txId,
+            excludes,
+            bandwidthCap,
+          );
         } else {
           jobId = await startTransferFile(srcPath, dest, addr);
         }

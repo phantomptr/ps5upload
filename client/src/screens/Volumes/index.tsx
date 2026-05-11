@@ -8,10 +8,12 @@ import {
   EmptyState,
   ErrorCard,
   Button,
-  useConfirm,
 } from "../../components";
+// Direct import to avoid the barrel's circular-dep warning at build.
+import { useConfirm } from "../../components/ConfirmDialog";
 import { humanizePs5Error } from "../../lib/humanizeError";
 import { useTr } from "../../state/lang";
+import { formatBytes } from "../../lib/format";
 
 /** Path prefix for volumes our FS_MOUNT creates. Showing an Unmount
  *  button only for these keeps us from accidentally offering to
@@ -20,16 +22,7 @@ import { useTr } from "../../state/lang";
  *  FS_MOUNT_BASE in payload/src/runtime.c. */
 const PS5UPLOAD_MOUNT_PREFIX = "/mnt/ps5upload/";
 
-function formatBytes(n: number): string {
-  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
-  let v = n;
-  let i = 0;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i += 1;
-  }
-  return `${v.toFixed(v >= 100 ? 0 : v >= 10 ? 1 : 2)} ${units[i]}`;
-}
+// formatBytes moved to lib/format.ts.
 
 export default function VolumesScreen() {
   const tr = useTr();

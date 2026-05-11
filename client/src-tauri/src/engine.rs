@@ -481,6 +481,20 @@ pub async fn start(app: &AppHandle) -> Result<&'static str> {
         }
         sleep(READINESS_POLL).await;
     }
+    // Readiness deadline reached without success. Reap the orphan
+    // child explicitly here rather than leaving it in the slot for
+    // the next start() to clean up via reap_orphan_listener_on. The
+    // child holds open FDs (stdin/stdout/stderr pipes, the listener
+    // socket if it bound) for as long as it sits in the slot; a user
+    // who hits "Retry" minutes later would otherwise have two engine
+    // processes contending for :19113.
+    {
+        let mut guard = child_lock().await.lock().await;
+        if let Some(mut child) = guard.take() {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+        }
+    }
     Err(anyhow!(
         "engine did not become ready at {DEFAULT_ENGINE_URL}{READINESS_PROBE} within {:?}.\n  log: {}\n  Common causes on Windows: SmartScreen / antivirus blocked the freshly-extracted .exe; another process is bound to {DEFAULT_ENGINE_URL}; loopback firewall rule.",
         READINESS_TIMEOUT,
@@ -534,12 +548,18 @@ where
     use std::io::Write as _;
     use tokio::io::AsyncReadExt;
     let mut buf = [0u8; 4096];
-    let mut line = String::new();
-    let emit = |line: &str| {
-        eprintln!("{tag}{line}");
+    // Byte buffer (not String) so multi-byte UTF-8 sequences split
+    // across two reads don't get dropped. Prior implementation called
+    // `std::str::from_utf8(&buf[..n])` and silently discarded the
+    // entire chunk on any UTF-8 error — losing arbitrary bytes
+    // whenever a non-ASCII char straddled a 4 KiB read boundary.
+    let mut line: Vec<u8> = Vec::with_capacity(256);
+    let emit_bytes = |bytes: &[u8]| {
+        let s = String::from_utf8_lossy(bytes);
+        eprintln!("{tag}{s}");
         if let Some(writer) = &log {
             if let Ok(mut f) = writer.lock() {
-                let _ = writeln!(f, "{tag}{line}");
+                let _ = writeln!(f, "{tag}{s}");
                 let _ = f.flush();
             }
         }
@@ -554,23 +574,21 @@ where
                 // termination obvious instead of just "log went
                 // quiet" — ambiguous between "engine fine, no more
                 // output" and "engine died".
-                emit(&format!("[stream-read-error] {e}"));
+                emit_bytes(format!("[stream-read-error] {e}").as_bytes());
                 break;
             }
         };
-        if let Ok(s) = std::str::from_utf8(&buf[..n]) {
-            for ch in s.chars() {
-                if ch == '\n' {
-                    emit(&line);
-                    line.clear();
-                } else {
-                    line.push(ch);
-                }
+        for &b in &buf[..n] {
+            if b == b'\n' {
+                emit_bytes(&line);
+                line.clear();
+            } else {
+                line.push(b);
             }
         }
     }
     if !line.is_empty() {
-        emit(&line);
+        emit_bytes(&line);
     }
 }
 

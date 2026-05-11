@@ -17,12 +17,17 @@ import {
   ExternalLink,
   Boxes,
   PackageOpen,
+  Sparkles,
   type LucideIcon,
 } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { open as openExternal } from "@tauri-apps/plugin-shell";
 
 import { useConnectionStore, PS5_PAYLOAD_PORT } from "../../state/connection";
+import SmpPanel from "./SmpPanel";
+import RunningAppsPanel from "./RunningAppsPanel";
+import { useRunningAppsStore } from "../../state/runningApps";
+import { usePlayTimeStore, formatPlayTime } from "../../state/playTime";
 import {
   scanLibrary,
   fsDelete,
@@ -41,6 +46,7 @@ import {
   gameIconUrl,
   jobStatus,
   startTransferDownload,
+  healAppmeta,
   type LibraryEntry,
   type GameMeta,
   type Volume,
@@ -55,6 +61,7 @@ import {
 } from "../../lib/moveTarget";
 import { useLibraryStore, findOwningImage } from "../../state/library";
 import { useElapsed } from "../../lib/useElapsed";
+import { formatBytes } from "../../lib/format";
 import { createLimiter } from "../../lib/limitConcurrency";
 import { deleteWithRetry } from "../../lib/deleteWithRetry";
 import {
@@ -78,6 +85,7 @@ import {
   saveMountDest,
 } from "../../lib/mountDest";
 import { useActivityHistoryStore } from "../../state/activityHistory";
+import { pushNotification } from "../../state/notifications";
 import {
   PageHeader,
   EmptyState,
@@ -105,17 +113,7 @@ function formatDuration(sec: number): string {
   return `${h}h ${m % 60}m`;
 }
 
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  const units = ["KiB", "MiB", "GiB", "TiB"];
-  let v = n / 1024;
-  let i = 0;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i += 1;
-  }
-  return `${v.toFixed(v >= 100 ? 0 : v >= 10 ? 1 : 2)} ${units[i]}`;
-}
+// formatBytes moved to lib/format.ts — kept consistent across screens.
 
 export default function LibraryScreen() {
   const tr = useTr();
@@ -374,6 +372,19 @@ export default function LibraryScreen() {
         </div>
       )}
 
+      {/* ShadowMount+ awareness panel — auto-hides when SMP isn't
+          installed, expands inline when it is. Read-only. Mounts
+          here because SMP's mounted-image dirs (under /mnt/shadowmnt)
+          are exactly the things this Library tab lists. */}
+      <SmpPanel mgmtAddr={host?.trim() ? `${host.trim()}:9114` : null} />
+
+      {/* Running apps with suspend/resume/kill controls. Auto-hides
+          when nothing is running. Wires Phase 18 (app lifecycle RPCs)
+          + Phase 33 (app.db query) so each row shows a friendly name. */}
+      {host?.trim() && payloadStatus === "up" && (
+        <RunningAppsPanel mgmtAddr={`${host.trim()}:9114`} />
+      )}
+
       {entries === null && !loading && !error && (
         <EmptyState
           message={tr(
@@ -620,6 +631,16 @@ function LibraryRow({
 }) {
   const tr = useTr();
   const Icon = entry.kind === "game" ? Gamepad2 : FileArchive;
+  const runningTitleIds = useRunningAppsStore((s) => s.titleIds);
+  const isTitleRunning =
+    entry.kind === "game" &&
+    !!entry.titleId &&
+    runningTitleIds.has(entry.titleId);
+  const playSeconds = usePlayTimeStore((s) =>
+    entry.kind === "game" && entry.titleId
+      ? s.seconds[entry.titleId]
+      : undefined,
+  );
   const kindLabel =
     entry.kind === "game"
       ? tr("library_row_kind_game", undefined, "Game")
@@ -885,6 +906,17 @@ function LibraryRow({
       } catch (firstErr) {
         const msg = firstErr instanceof Error ? firstErr.message : String(firstErr);
         const sourceUnstable = /fs_mount_source_unstable/i.test(msg);
+        // Only retry on errors that are plausibly transient. A retry
+        // for `path_not_allowed`, `disk_full`, `mount_point_busy`,
+        // `bad_image_magic`, etc. just doubles user-visible latency
+        // before the same error surfaces. Allowlist of what we know
+        // benefits from a wait-and-retry.
+        const transient =
+          sourceUnstable ||
+          /\b(driver_init|device_busy|temporarily|EAGAIN|EBUSY)\b/i.test(msg);
+        if (!transient) {
+          throw firstErr;
+        }
         // 3500 ms covers the legacy 3-second payload gate plus a
         // small safety margin; 350 ms is enough for transient
         // driver-init races. Picked branch matches the user-
@@ -1690,6 +1722,64 @@ function LibraryRow({
     }
   };
 
+  const runBackupGame = async () => {
+    if (entry.kind !== "game") return;
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const dest = await open({
+        directory: true,
+        title: tr(
+          "library_backup_picker",
+          undefined,
+          "Pick a folder to back up the game into",
+        ),
+      });
+      if (!dest || typeof dest !== "string") return;
+      const addr = `${host}:${PS5_PAYLOAD_PORT}`;
+      await startTransferDownload(entry.path, dest, addr, "folder");
+      pushNotification("info", `Backup started: ${entry.name}`, {
+        body: `Downloading ${entry.path} → ${dest}. Track progress in the Activity tab.`,
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const runHealAppmeta = async () => {
+    if (entry.kind !== "game" || !entry.titleId) return;
+    setBusy("register");
+    setError(null);
+    setMountNote(null);
+    try {
+      const mgmtAddr = `${host}:9114`;
+      const res = await healAppmeta(mgmtAddr, entry.titleId, entry.path);
+      const summary =
+        res.copied > 0
+          ? `Healed ${res.copied} file${res.copied === 1 ? "" : "s"} to ${res.appmeta_dir}`
+          : `Nothing to heal — ${res.already_present} files already present in ${res.appmeta_dir}`;
+      setMountNote(summary);
+      if (res.errors > 0) {
+        const firstErr = res.outcomes.find((o) => o.status === "error");
+        setError(
+          `Some files failed: ${firstErr?.error ?? "unknown error"} — see Logs for details.`,
+        );
+        pushNotification("warning", `Heal partial: ${entry.titleId}`, {
+          body: `${res.copied} copied, ${res.errors} failed for ${entry.name}`,
+          link: "/library",
+        });
+      } else if (res.copied > 0) {
+        pushNotification("success", `Healed ${entry.name}`, {
+          body: `Restored ${res.copied} file${res.copied === 1 ? "" : "s"} for ${entry.titleId} — home-screen tile should refresh.`,
+          link: "/library",
+        });
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const runUnregister = async () => {
     if (entry.kind !== "game" || !entry.titleId) return;
     setBusy("unregister");
@@ -1759,6 +1849,30 @@ function LibraryRow({
               title={`Mounted at ${currentMount}`}
             >
               {tr("library_badge_mounted", undefined, "mounted")}
+            </div>
+          )}
+          {entry.kind === "game" && entry.titleId && isTitleRunning && (
+            <div
+              className="mt-1 inline-block rounded-full border border-[var(--color-good)] bg-[var(--color-good-soft)] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-[var(--color-good)]"
+              title={tr(
+                "library_badge_running_tooltip",
+                undefined,
+                "This title is currently running on the PS5 — see the Running apps panel above for suspend/kill controls.",
+              )}
+            >
+              {tr("library_badge_running", undefined, "running")}
+            </div>
+          )}
+          {playSeconds !== undefined && playSeconds > 60 && (
+            <div
+              className="mt-1 text-[10px] tabular-nums text-[var(--color-muted)]"
+              title={tr(
+                "library_play_time_tooltip",
+                undefined,
+                "Tracked while ps5upload is open and the title shows in PROC_LIST. Approximate.",
+              )}
+            >
+              {formatPlayTime(playSeconds)}
             </div>
           )}
           {fromImagePath && fromImageBasename && (
@@ -1969,6 +2083,38 @@ function LibraryRow({
                     "library_unregister_tooltip",
                     undefined,
                     "Remove the XMB tile. Source files on disk are not touched.",
+                  ),
+                });
+                items.push({
+                  label: tr(
+                    "library_heal_metadata",
+                    undefined,
+                    "Heal home-screen metadata",
+                  ),
+                  icon: <Sparkles size={12} />,
+                  onSelect: runHealAppmeta,
+                  disabled: busy !== null,
+                  loading: busy === "register",
+                  title: tr(
+                    "library_heal_metadata_tooltip",
+                    undefined,
+                    "Copies missing icon0.png / param.json / snd0.at9 from this game's sce_sys/ to /user/appmeta/<title_id>/. Idempotent — files already present are left alone. Use when the home-screen tile is blank or the menu music is missing.",
+                  ),
+                });
+                items.push({
+                  label: tr(
+                    "library_backup_to_folder",
+                    undefined,
+                    "Backup to folder…",
+                  ),
+                  icon: <Download size={12} />,
+                  onSelect: runBackupGame,
+                  disabled: busy !== null,
+                  loading: busy === "register",
+                  title: tr(
+                    "library_backup_to_folder_tooltip",
+                    undefined,
+                    "Download this game's source folder to a local directory. Useful for archiving registered games before unregistering, or for bulk-rebuilding library on another PS5.",
                   ),
                 });
               }
@@ -3000,6 +3146,48 @@ function MountModal({
           </div>
           <div className="mt-0.5 break-all font-mono">{resolvedPath}</div>
         </div>
+
+        {/* Pre-flight warning for the Sony-reserved /mnt/usb* and
+         * /mnt/ext* namespaces. The PS5 kernel binds these to its USB
+         * hotplug daemon's authid, and nmount from a debugger-authid
+         * payload typically returns EPERM ("Operation not permitted")
+         * — well-documented behaviour on retail FW. Surface the
+         * trade-off BEFORE the user clicks Mount, so a likely-to-fail
+         * pick gets a chance to switch path without a round-trip to
+         * the engine. Doesn't disable the button; some firmware /
+         * setup combinations DO accept it. */}
+        {supportsMountPoint && /^\/mnt\/(usb|ext)\d/.test(volume) && (
+          <div className="mb-4 rounded-md border border-[var(--color-warn)] bg-[var(--color-surface)] p-2 text-[11px] text-[var(--color-warn)]">
+            <div className="mb-1 font-semibold">
+              {tr(
+                "library_mount_modal_usb_warn_title",
+                undefined,
+                "Sony-reserved volume — mount may be refused (EPERM)",
+              )}
+            </div>
+            <div className="opacity-90">
+              {tr(
+                "library_mount_modal_usb_warn_body",
+                undefined,
+                "/mnt/usb* and /mnt/ext* belong to the PS5 kernel's USB hotplug namespace; mounting an image there is blocked by kernel policy on most firmware. If this fails with \"Operation not permitted\", switch to /mnt/ps5upload (the payload's private mount root) or /data — both work without kernel patches.",
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setVolume("/mnt/ps5upload");
+                setSubpath("");
+              }}
+              className="mt-1.5 rounded border border-[var(--color-warn)] bg-[var(--color-surface)] px-2 py-0.5 text-[10px] hover:bg-[var(--color-surface-3)]"
+            >
+              {tr(
+                "library_mount_modal_usb_warn_switch",
+                undefined,
+                "Switch to /mnt/ps5upload/",
+              )}
+            </button>
+          </div>
+        )}
 
         {supportsReadOnly && (
           <label className="mb-3 flex cursor-pointer items-start gap-2 text-xs">

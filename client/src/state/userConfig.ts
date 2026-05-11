@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { isTauriEnv } from "../lib/tauriEnv";
 
 import { useThemeStore } from "./theme";
 import { useLangStore } from "./lang";
@@ -26,7 +27,7 @@ const DEBOUNCE_MS = 300;
 interface SettingsSnapshot {
   // Top-level keys mirror the renderer's internal store names. Flat by
   // design — easy to hand-edit, easy to extend.
-  theme?: "dark" | "light";
+  theme?: "dark" | "light" | "oled";
   lang?: string;
   /** PS5 IP address the Connection screen probes + sends payload to.
    *  Survives relaunch so users don't re-type it every session. */
@@ -36,6 +37,7 @@ interface SettingsSnapshot {
     always_overwrite?: boolean;
     reconcile_mode?: "fast" | "safe";
     show_transfer_files?: boolean;
+    bandwidth_cap_mbps?: number;
   };
 }
 
@@ -49,6 +51,7 @@ function snapshotCurrent(): SettingsSnapshot {
       always_overwrite: useUploadSettingsStore.getState().alwaysOverwrite,
       reconcile_mode: useUploadSettingsStore.getState().reconcileMode,
       show_transfer_files: useUploadSettingsStore.getState().showTransferFiles,
+      bandwidth_cap_mbps: useUploadSettingsStore.getState().bandwidthCapMbps,
     },
   };
 }
@@ -57,6 +60,7 @@ let pendingTimer: ReturnType<typeof setTimeout> | null = null;
 
 /** Request a file-mirror write. Coalesces rapid changes into one write. */
 function schedulePersist() {
+  if (!isTauriEnv()) return; // browser dev/test contexts: no Tauri invoke
   if (pendingTimer) clearTimeout(pendingTimer);
   pendingTimer = setTimeout(async () => {
     pendingTimer = null;
@@ -101,6 +105,7 @@ export function installUserConfigMirror() {
  *  Used after first-launch hydration so the file always exists reflecting
  *  current state, not just after the user flips a toggle. */
 async function persistNow(): Promise<void> {
+  if (!isTauriEnv()) return;
   if (pendingTimer) {
     clearTimeout(pendingTimer);
     pendingTimer = null;
@@ -132,72 +137,65 @@ export async function hydrateFromUserConfig(): Promise<void> {
     return;
   }
 
-  // Race guard: the user may have typed something during the file read.
-  // Snapshot the initial (seeded-from-localStorage) store values NOW —
-  // only apply the file value if the store hasn't been touched in the
-  // meantime. Without this, a user edit between `installUserConfigMirror`
-  // and the hydration callback could get reverted by the disk value.
-  const seed = {
-    theme: useThemeStore.getState().theme,
-    lang: useLangStore.getState().lang,
-    ps5_host: useConnectionStore.getState().host,
-    keep_awake: useKeepAwakeStore.getState().enabled,
-    always_overwrite: useUploadSettingsStore.getState().alwaysOverwrite,
-    reconcile_mode: useUploadSettingsStore.getState().reconcileMode,
-    show_transfer_files: useUploadSettingsStore.getState().showTransferFiles,
-  };
-
-  if (data.theme === "dark" || data.theme === "light") {
-    if (useThemeStore.getState().theme === seed.theme && data.theme !== seed.theme) {
-      useThemeStore.getState().setTheme(data.theme);
-    }
+  // Skip-when-matches: only apply disk values that actually differ
+  // from the live store state. Avoids spurious setter calls (which
+  // re-fire mirror writes and cascade through subscribers).
+  //
+  // The previous shape included an additional `store === seed` guard
+  // intended as race protection — but `seed` was snapshotted from the
+  // store one statement above, so the equality always held in practice.
+  // Drop the no-op guard and rely on the value-inequality check.
+  const liveTheme = useThemeStore.getState().theme;
+  if (
+    (data.theme === "dark" || data.theme === "light" || data.theme === "oled") &&
+    data.theme !== liveTheme
+  ) {
+    useThemeStore.getState().setTheme(data.theme);
   }
-  if (typeof data.lang === "string") {
-    if (useLangStore.getState().lang === seed.lang && data.lang !== seed.lang) {
-      // setLang narrows to the valid LanguageCode set; unknown codes
-      // fall back to "en" inside the store — no throw.
-      useLangStore.getState().setLang(data.lang as never);
-    }
+  const liveLang = useLangStore.getState().lang;
+  if (typeof data.lang === "string" && data.lang !== liveLang) {
+    // setLang narrows to the valid LanguageCode set; unknown codes
+    // fall back to "en" inside the store — no throw.
+    useLangStore.getState().setLang(data.lang as never);
   }
-  if (typeof data.ps5_host === "string" && data.ps5_host.trim()) {
-    if (
-      useConnectionStore.getState().host === seed.ps5_host &&
-      data.ps5_host !== seed.ps5_host
-    ) {
-      useConnectionStore.getState().setHost(data.ps5_host);
-    }
+  const liveHost = useConnectionStore.getState().host;
+  if (
+    typeof data.ps5_host === "string" &&
+    data.ps5_host.trim() &&
+    data.ps5_host !== liveHost
+  ) {
+    useConnectionStore.getState().setHost(data.ps5_host);
   }
-  if (typeof data.keep_awake === "boolean") {
-    if (
-      useKeepAwakeStore.getState().enabled === seed.keep_awake &&
-      data.keep_awake !== seed.keep_awake
-    ) {
-      await useKeepAwakeStore.getState().setEnabled(data.keep_awake);
-    }
+  const liveKeepAwake = useKeepAwakeStore.getState().enabled;
+  if (typeof data.keep_awake === "boolean" && data.keep_awake !== liveKeepAwake) {
+    await useKeepAwakeStore.getState().setEnabled(data.keep_awake);
   }
   if (data.upload) {
     const u = data.upload;
     const us = useUploadSettingsStore.getState();
     if (
       typeof u.always_overwrite === "boolean" &&
-      us.alwaysOverwrite === seed.always_overwrite &&
-      u.always_overwrite !== seed.always_overwrite
+      u.always_overwrite !== us.alwaysOverwrite
     ) {
       us.setAlwaysOverwrite(u.always_overwrite);
     }
-    if (
-      (u.reconcile_mode === "fast" || u.reconcile_mode === "safe") &&
-      us.reconcileMode === seed.reconcile_mode &&
-      u.reconcile_mode !== seed.reconcile_mode
-    ) {
-      us.setReconcileMode(u.reconcile_mode);
-    }
+    // reconcile_mode is intentionally not hydrated: "safe" was retired
+    // (it ran BLAKE3 on every remote file, which destabilized the
+    // payload on large libraries). The store always reports "fast";
+    // hand-edited "safe" in settings.json gets ignored.
     if (
       typeof u.show_transfer_files === "boolean" &&
-      us.showTransferFiles === seed.show_transfer_files &&
-      u.show_transfer_files !== seed.show_transfer_files
+      u.show_transfer_files !== us.showTransferFiles
     ) {
       us.setShowTransferFiles(u.show_transfer_files);
+    }
+    if (
+      typeof u.bandwidth_cap_mbps === "number" &&
+      Number.isFinite(u.bandwidth_cap_mbps) &&
+      u.bandwidth_cap_mbps >= 0 &&
+      u.bandwidth_cap_mbps !== us.bandwidthCapMbps
+    ) {
+      us.setBandwidthCapMbps(u.bandwidth_cap_mbps);
     }
   }
   // Rewrite once after hydration. If we applied anything the setters

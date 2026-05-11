@@ -1,5 +1,5 @@
-import { Outlet } from "react-router-dom";
-import { useEffect } from "react";
+import { Outlet, useLocation, useNavigate } from "react-router-dom";
+import { useEffect, useRef } from "react";
 import Sidebar from "./Sidebar";
 import StatusBar from "./StatusBar";
 import OperationBar from "./OperationBar";
@@ -8,6 +8,17 @@ import { useUpdateStore } from "../state/update";
 import { engineApi } from "../api/engine";
 import { payloadCheck } from "../api/ps5";
 import { installActivityWiring } from "../state/activityWiring";
+import { ensureRosterMigrated, useRosterStore } from "../state/roster";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { isTauriEnv } from "../lib/tauriEnv";
+import { useDocumentVisible } from "../lib/visibility";
+import { useScheduleRunner } from "../state/schedules";
+import { pushNotification, runNotificationAutoPrune } from "../state/notifications";
+import { powerTick } from "../api/ps5";
+import { CommandPalette } from "../components/CommandPalette";
+import { ShortcutsOverlay } from "../components/ShortcutsOverlay";
+import { useWindowStatePersistence } from "../lib/windowState";
+import { installPlayTimeAccumulator } from "../state/playTime";
 
 /** Background status polling for the engine + payload dots in the
  *  status bar. Runs for the lifetime of the app so the indicators
@@ -20,8 +31,10 @@ import { installActivityWiring } from "../state/activityWiring";
 function useStatusPolling() {
   const host = useConnectionStore((s) => s.host);
   const setStatus = useConnectionStore((s) => s.setStatus);
+  const visible = useDocumentVisible();
 
   useEffect(() => {
+    if (!visible) return;
     let cancelled = false;
     const tick = async () => {
       const up = await engineApi.ping();
@@ -33,9 +46,10 @@ function useStatusPolling() {
       cancelled = true;
       clearInterval(h);
     };
-  }, [setStatus]);
+  }, [setStatus, visible]);
 
   useEffect(() => {
+    if (!visible) return;
     if (!host || !host.trim()) {
       // Host cleared — wipe every payload-derived field so a new
       // host doesn't inherit stale assertions from the previous one.
@@ -78,6 +92,18 @@ function useStatusPolling() {
             // mid-flight, leaving the flag latched).
             payloadProbing: false,
           });
+          // Update the roster row for the active profile so the
+          // sidebar reflects the freshest firmware/payload info
+          // without making the user open a settings dialog.
+          if (s.reachable) {
+            const active = useRosterStore.getState();
+            if (active.active_id) {
+              active.noteSeen(active.active_id, {
+                kernel: s.ps5Kernel,
+                payload: s.payloadVersion,
+              });
+            }
+          }
         }
       } catch {
         if (!cancelled) {
@@ -98,7 +124,7 @@ function useStatusPolling() {
       cancelled = true;
       clearInterval(h);
     };
-  }, [host, setStatus]);
+  }, [host, setStatus, visible]);
 }
 
 /** Fire a TTL-gated update check on mount. The store debounces to
@@ -117,14 +143,141 @@ function useUpdateCheckOnMount() {
   }, [ensureChecked]);
 }
 
+/** App-wide drag-drop listener that auto-routes .pkg files to the
+ *  Install Package screen. Other file types fall through to the
+ *  per-screen handlers (Upload screen subscribes to the same event
+ *  separately). The auto-route only fires when the user is NOT
+ *  already on /install-package — avoids stomping on the screen's
+ *  own picker. */
+function usePkgAutoRoute() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  useEffect(() => {
+    if (!isTauriEnv()) return; // browser-only dev/test contexts skip Tauri APIs
+    let unlisten: (() => void) | null = null;
+    let cancelled = false;
+    const p = getCurrentWebview().onDragDropEvent((e) => {
+      if (cancelled) return;
+      if (e.payload.type !== "drop") return;
+      const first = e.payload.paths?.[0];
+      if (!first) return;
+      if (!first.toLowerCase().endsWith(".pkg")) return;
+      if (location.pathname === "/install-package") return;
+      // Pass the picked path via navigation state — InstallPackage
+      // can pick it up and pre-fill its source field.
+      navigate("/install-package", { state: { droppedPath: first } });
+    });
+    p.then((fn) => {
+      // Tauri unlisten can throw if the webview already tore down its
+      // listener table (HMR, parent destroyed, …). Cleanup is best-
+      // effort so we swallow these specific failures.
+      if (cancelled) { try { fn(); } catch { /* ignore */ } }
+      else unlisten = fn;
+    }).catch(() => { /* subscribe-time rejection: nothing to clean */ });
+    return () => {
+      cancelled = true;
+      if (unlisten) {
+        try { unlisten(); } catch { /* ignore */ }
+      }
+    };
+  }, [navigate, location.pathname]);
+}
+
+/** Persist the last-active route across launches. On mount, if the
+ *  user is at "/" or "/whats-new" but a stored route exists, restore
+ *  it. The stored route is otherwise updated on every navigation
+ *  with a debounce so back/forward chains don't write per click.
+ *
+ *  Skipped routes:
+ *   - /first-run — wizard; users should re-enter through Settings
+ *   - /whats-new — landing default; redundant
+ */
+const LAST_ROUTE_KEY = "ps5upload.last_route";
+const SKIP_RESTORE_ROUTES = new Set(["/first-run", "/whats-new", "/"]);
+
+function useRoutePersistence() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const restoredRef = useRef(false);
+
+  // One-time restore on first paint.
+  useEffect(() => {
+    if (restoredRef.current) return;
+    restoredRef.current = true;
+    if (typeof window === "undefined") return;
+    if (!SKIP_RESTORE_ROUTES.has(location.pathname)) return;
+    let stored: string | null;
+    try {
+      stored = window.localStorage.getItem(LAST_ROUTE_KEY);
+    } catch {
+      return;
+    }
+    if (stored && !SKIP_RESTORE_ROUTES.has(stored)) {
+      navigate(stored, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Debounced write of the current pathname.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (SKIP_RESTORE_ROUTES.has(location.pathname)) return;
+    const id = window.setTimeout(() => {
+      try {
+        window.localStorage.setItem(LAST_ROUTE_KEY, location.pathname);
+      } catch {
+        // best-effort
+      }
+    }, 500);
+    return () => window.clearTimeout(id);
+  }, [location.pathname]);
+}
+
 export default function AppShell() {
   useStatusPolling();
   useUpdateCheckOnMount();
+  useRoutePersistence();
+  useWindowStatePersistence();
+  usePkgAutoRoute();
+  // Schedule runner — fires while window open. Browser-side; for
+  // true cron behaviour the user needs an external scheduler.
+  useScheduleRunner((sch) => {
+    if (sch.action === "notif") {
+      pushNotification("info", `Scheduled: ${sch.label}`, {
+        body: sch.body ?? "Schedule fired.",
+      });
+    } else if (sch.action === "power_tick") {
+      const host = useConnectionStore.getState().host;
+      if (host?.trim()) {
+        void powerTick(`${host.trim()}:9114`).catch(() => {
+          // best-effort
+        });
+        pushNotification("info", `Scheduled: ${sch.label}`, {
+          body: `Sent powerTick to ${host.trim()}.`,
+        });
+      }
+    }
+  });
   // Subscribe-once: wires the per-feature stores (transfer, FS bulk
   // op, FS download) into the cross-screen activity history. Safe to
   // call on every render because installActivityWiring is idempotent.
   useEffect(() => {
     installActivityWiring();
+    // Migrate single-host users into the multi-PS5 roster on first
+    // start. Idempotent — no-op when the roster is already populated.
+    ensureRosterMigrated();
+    // Subscribe-once: cross-store accumulator that credits running
+    // titles with elapsed wall-clock between updates. Idempotent.
+    installPlayTimeAccumulator();
+    // Notification auto-prune: run once at mount + every 6 hours.
+    // Keeps the inbox from accumulating year-old "upload finished"
+    // entries that nobody will ever revisit.
+    runNotificationAutoPrune();
+    const pruneTimer = window.setInterval(
+      runNotificationAutoPrune,
+      6 * 3600 * 1000,
+    );
+    return () => window.clearInterval(pruneTimer);
   }, []);
   return (
     <div className="flex h-full flex-col bg-[var(--color-surface)] text-[var(--color-text)]">
@@ -138,6 +291,8 @@ export default function AppShell() {
       </div>
       <OperationBar />
       <StatusBar />
+      <CommandPalette />
+      <ShortcutsOverlay />
     </div>
   );
 }

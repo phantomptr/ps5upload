@@ -168,3 +168,231 @@ export function useConfirm(): {
 
   return { confirm, dialog };
 }
+
+/* ─────────────────────────────────────────────────────────────────────
+ * useAlert + usePrompt — sibling hooks for the other window.* dialogs
+ * that are no-ops inside Tauri's webview. Same shape as useConfirm:
+ * imperative API returning a Promise, plus a `dialog` element to mount.
+ *
+ * Why we ship our own rather than enable tauri-plugin-dialog's native
+ * dialogs: same reasons documented for useConfirm above — ACL gates,
+ * theming consistency, and the existing modal pattern.
+ * ──────────────────────────────────────────────────────────────────── */
+
+export interface AlertOptions {
+  title: string;
+  message?: string;
+  /** Button label. Defaults to "OK". */
+  okLabel?: string;
+}
+
+interface AlertPending extends AlertOptions {
+  resolve: () => void;
+}
+
+export function useAlert(): {
+  alert: (opts: AlertOptions) => Promise<void>;
+  dialog: React.ReactNode;
+} {
+  const tr = useTr();
+  const [pending, setPending] = useState<AlertPending | null>(null);
+  const titleId = useId();
+  const bodyId = useId();
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+
+  const alert = (opts: AlertOptions) =>
+    new Promise<void>((resolve) => {
+      if (typeof document !== "undefined") {
+        const active = document.activeElement;
+        previousFocusRef.current =
+          active instanceof HTMLElement ? active : null;
+      }
+      setPending({ ...opts, resolve });
+    });
+
+  const settle = () => {
+    if (pending) {
+      pending.resolve();
+      setPending(null);
+      const prev = previousFocusRef.current;
+      previousFocusRef.current = null;
+      if (prev && typeof document !== "undefined") {
+        queueMicrotask(() => prev.focus({ preventScroll: true }));
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (!pending) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape" || e.key === "Enter") {
+        e.preventDefault();
+        settle();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pending]);
+
+  const dialog = pending ? (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      onClick={settle}
+    >
+      <div
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={pending.message ? bodyId : undefined}
+        className="w-full max-w-md rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header
+          id={titleId}
+          className="mb-2 flex items-center gap-2 text-sm font-semibold"
+        >
+          <span>{pending.title}</span>
+        </header>
+        {pending.message && (
+          <p
+            id={bodyId}
+            className="mb-4 whitespace-pre-wrap text-xs text-[var(--color-muted)]"
+          >
+            {pending.message}
+          </p>
+        )}
+        <div className="flex items-center justify-end">
+          <Button variant="primary" size="sm" onClick={settle} autoFocus>
+            {pending.okLabel ?? tr("ok", undefined, "OK")}
+          </Button>
+        </div>
+      </div>
+    </div>
+  ) : null;
+
+  return { alert, dialog };
+}
+
+export interface PromptOptions {
+  title: string;
+  message?: string;
+  /** Pre-filled value. */
+  defaultValue?: string;
+  /** Placeholder text when empty. */
+  placeholder?: string;
+  /** Affirmative button label. Defaults to "OK". */
+  okLabel?: string;
+  /** Cancel button label. Defaults to "Cancel". */
+  cancelLabel?: string;
+}
+
+interface PromptPending extends PromptOptions {
+  resolve: (val: string | null) => void;
+}
+
+export function usePrompt(): {
+  prompt: (opts: PromptOptions) => Promise<string | null>;
+  dialog: React.ReactNode;
+} {
+  const tr = useTr();
+  const [pending, setPending] = useState<PromptPending | null>(null);
+  const [value, setValue] = useState("");
+  const titleId = useId();
+  const bodyId = useId();
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+
+  const prompt = (opts: PromptOptions) =>
+    new Promise<string | null>((resolve) => {
+      if (typeof document !== "undefined") {
+        const active = document.activeElement;
+        previousFocusRef.current =
+          active instanceof HTMLElement ? active : null;
+      }
+      setValue(opts.defaultValue ?? "");
+      setPending({ ...opts, resolve });
+    });
+
+  const settle = (val: string | null) => {
+    if (pending) {
+      pending.resolve(val);
+      setPending(null);
+      setValue("");
+      const prev = previousFocusRef.current;
+      previousFocusRef.current = null;
+      if (prev && typeof document !== "undefined") {
+        queueMicrotask(() => prev.focus({ preventScroll: true }));
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (!pending) return;
+    // Focus the input on mount so the user can type immediately.
+    queueMicrotask(() => inputRef.current?.select());
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        settle(null);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pending]);
+
+  const dialog = pending ? (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      onClick={() => settle(null)}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={pending.message ? bodyId : undefined}
+        className="w-full max-w-md rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header
+          id={titleId}
+          className="mb-2 text-sm font-semibold"
+        >
+          {pending.title}
+        </header>
+        {pending.message && (
+          <p
+            id={bodyId}
+            className="mb-3 whitespace-pre-wrap text-xs text-[var(--color-muted)]"
+          >
+            {pending.message}
+          </p>
+        )}
+        <input
+          ref={inputRef}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              settle(value);
+            }
+          }}
+          placeholder={pending.placeholder}
+          className="mb-4 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 text-sm outline-none focus:border-[var(--color-accent)]"
+        />
+        <div className="flex items-center justify-end gap-2">
+          <Button variant="ghost" size="sm" onClick={() => settle(null)}>
+            {pending.cancelLabel ?? tr("cancel", undefined, "Cancel")}
+          </Button>
+          <Button variant="primary" size="sm" onClick={() => settle(value)}>
+            {pending.okLabel ?? tr("ok", undefined, "OK")}
+          </Button>
+        </div>
+      </div>
+    </div>
+  ) : null;
+
+  return { prompt, dialog };
+}

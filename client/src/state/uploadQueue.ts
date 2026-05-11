@@ -29,6 +29,7 @@ import {
 } from "../lib/rollingRate";
 import type { SourceKind } from "./upload";
 import type { UploadStrategy } from "./transfer";
+import { useUploadSettingsStore } from "./uploadSettings";
 
 /**
  * Sequential upload queue. Lives in its own Zustand store separate
@@ -218,6 +219,8 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
       // Pass the persisted tx_id so a Resume after app restart
       // picks up the payload's existing journal entry instead of
       // minting a fresh tx and re-sending everything.
+      const bandwidthCap =
+        useUploadSettingsStore.getState().bandwidthCapMbps;
       jobId = await startTransferDirReconcile(
         item.sourcePath,
         item.resolvedDest,
@@ -225,14 +228,18 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
         item.reconcileMode,
         item.txIdHex,
         item.excludes,
+        bandwidthCap,
       );
     } else if (isFolder) {
+      const bandwidthCap =
+        useUploadSettingsStore.getState().bandwidthCapMbps;
       jobId = await startTransferDir(
         item.sourcePath,
         item.resolvedDest,
         item.addr,
         item.txIdHex,
         item.excludes,
+        bandwidthCap,
       );
     } else {
       // Single-file uploads don't have a cross-session resume flow
@@ -355,6 +362,16 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
     loaded: false,
 
     async hydrate() {
+      // Browser-only dev/test contexts: Tauri invoke is unavailable.
+      // Mark loaded with the empty in-memory state and skip the call,
+      // otherwise every Upload screen mount logs an "invoke undefined"
+      // error to the user-visible logs. In production (Tauri), this
+      // guard is a no-op.
+      const w = window as unknown as { isTauri?: boolean; __TAURI_INTERNALS__?: unknown };
+      if (!w.isTauri && !w.__TAURI_INTERNALS__) {
+        set({ loaded: true });
+        return;
+      }
       try {
         const doc = await uploadQueueLoad<Partial<QueueDocument>>();
         // Sanitise on load:

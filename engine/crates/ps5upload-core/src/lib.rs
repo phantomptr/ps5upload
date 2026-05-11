@@ -1,5 +1,7 @@
+pub mod app_lifecycle;
 pub mod cleanup;
 pub mod connection;
+pub mod diagnostics;
 pub mod download;
 pub mod excludes;
 pub mod fs_ops;
@@ -7,7 +9,11 @@ pub mod game_meta;
 pub mod hw;
 pub mod log;
 pub mod pkg_install;
+pub mod saves;
+pub mod search_index;
+pub mod system_control;
 pub mod transfer;
+pub mod users;
 pub mod volumes;
 
 /// Compute the BLAKE3-256 digest of a shard's raw bytes.

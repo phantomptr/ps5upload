@@ -663,9 +663,11 @@ pub fn fs_mkdir(addr: &str, path: &str) -> Result<()> {
 
 // ─── App lifecycle (register / unregister / launch / list) ─────────────────
 //
-// Mirrors the payload's register.c pipeline. See specs/ftx2-protocol.md
-// for the wire shape. "Register" stages + installs a title dir;
-// "Launch" calls sceLncUtilLaunchApp on an already-registered title.
+// Mirrors the payload's register.c pipeline. See ftx2-proto's lib.rs
+// FrameType doc comments for the wire shape (the standalone specs/
+// directory was consolidated into in-tree doc comments).
+// "Register" stages + installs a title dir; "Launch" calls
+// sceLncUtilLaunchApp on an already-registered title.
 
 /// Response shape from APP_REGISTER_ACK.
 #[derive(Debug, Clone, Serialize, Deserialize)]

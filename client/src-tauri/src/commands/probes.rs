@@ -170,10 +170,21 @@ async fn do_payload_send(ip: &str, path: &str, target_port: u16) -> Result<u64, 
                 .await
                 .map_err(|e| format!("write: {e}"))?;
         }
-        stream
-            .shutdown()
-            .await
-            .map_err(|e| format!("shutdown: {e}"))?;
+        // Bound the half-close FIN: if the PS5 loader's TCP stack
+        // doesn't promptly ACK our FIN (e.g. its keepalive interval
+        // hasn't fired yet), an unbounded shutdown() can block until
+        // the OS keepalive default fires (Linux: 2 hours). 5 s is
+        // generous for a healthy LAN and keeps the worst case bounded.
+        match tokio::time::timeout(std::time::Duration::from_secs(5), stream.shutdown()).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => return Err(format!("shutdown: {e}")),
+            Err(_) => {
+                // Treat shutdown timeout as success — the bytes are
+                // already in the kernel's send buffer and the loader
+                // typically reads + processes the ELF before ACKing
+                // our half-close anyway.
+            }
+        }
         Ok::<u64, String>(total)
     })
     .await
@@ -214,6 +225,16 @@ pub async fn payload_send(ip: String, path: String, port: Option<u16>) -> serde_
 /// the extracted `.elf` on subsequent sends.
 const EMBEDDED_PAYLOAD_GZ: &[u8] = include_bytes!(env!("PS5UPLOAD_PAYLOAD_GZ_BYTES"));
 
+/// Serialises concurrent calls to `find_bundled_payload`. Tauri serves
+/// commands on an async runtime, so two parallel mounts of the
+/// Connection screen (or React StrictMode's double-effect, or rapid
+/// HMR navigations) can invoke this function simultaneously. Without
+/// a lock both calls truncate the same `.tmp` file, the first wins
+/// the rename, and the second fails with ENOENT — exact symptom:
+///   "rename .../ps5upload.elf.tmp -> .../ps5upload.elf:
+///    No such file or directory (os error 2)"
+static EXTRACT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Extract the embedded `.elf.gz` into the app's local-data dir and
 /// return the decompressed-ELF path. Caches across launches via a
 /// hash stamp of the embedded gzip bytes; a new app build has a new
@@ -238,64 +259,106 @@ fn find_bundled_payload(app: &AppHandle) -> Result<PathBuf, String> {
         hasher.finalize().to_hex().to_string()
     };
 
-    let needs_write = match (fs::read_to_string(&stamp_path), fs::metadata(&out_path)) {
-        (Ok(stored), Ok(meta)) => stored.trim() != embedded_hex || meta.len() == 0,
-        _ => true,
-    };
-
-    if needs_write {
-        let tmp_path = out_path.with_extension("elf.tmp");
-        let mut decoder = flate2::read::GzDecoder::new(EMBEDDED_PAYLOAD_GZ);
-        let mut tmp = fs::File::create(&tmp_path)
-            .map_err(|e| format!("create {}: {e}", tmp_path.display()))?;
-        let mut magic = Vec::with_capacity(4);
-        let mut buf = [0u8; 64 * 1024];
-        let mut total = 0u64;
-        loop {
-            let n = decoder
-                .read(&mut buf)
-                .map_err(|e| format!("gunzip embedded payload: {e}"))?;
-            if n == 0 {
-                break;
-            }
-            if magic.len() < 4 {
-                let take = (4 - magic.len()).min(n);
-                magic.extend_from_slice(&buf[..take]);
-            }
-            total = total.saturating_add(n as u64);
-            if total > EMBEDDED_PAYLOAD_MAX_BYTES {
-                let _ = fs::remove_file(&tmp_path);
-                return Err(format!(
-                    "decompressed embedded payload exceeded {EMBEDDED_PAYLOAD_MAX_BYTES} bytes"
-                ));
-            }
-            tmp.write_all(&buf[..n])
-                .map_err(|e| format!("write {}: {e}", tmp_path.display()))?;
+    // Fast path: another invocation already produced a current
+    // extracted file. Skip the lock entirely so the steady-state
+    // Connection-screen poll is lock-free.
+    if let (Ok(stored), Ok(meta)) = (fs::read_to_string(&stamp_path), fs::metadata(&out_path)) {
+        if stored.trim() == embedded_hex && meta.len() > 0 {
+            return Ok(out_path);
         }
-        if magic.as_slice() != b"\x7FELF" {
+    }
+
+    // Slow path: serialize extraction so concurrent invocations don't
+    // truncate each other's `.tmp` files. The whole "check + write"
+    // happens under the lock; if a parallel call did the work first,
+    // we re-check at the top and short-circuit.
+    let _guard = EXTRACT_LOCK
+        .lock()
+        .map_err(|e| format!("acquire extract lock: {e}"))?;
+
+    // Re-check under the lock — another thread may have just finished.
+    if let (Ok(stored), Ok(meta)) = (fs::read_to_string(&stamp_path), fs::metadata(&out_path)) {
+        if stored.trim() == embedded_hex && meta.len() > 0 {
+            return Ok(out_path);
+        }
+    }
+
+    // Per-invocation tmp filename so a (theoretical) concurrent caller
+    // bypassing the lock — or a stale .tmp from a crashed prior run —
+    // doesn't collide. PID + nanos is unique enough; we clean up our
+    // own tmp on every exit path. Random bytes would be marginally
+    // tighter, but PID+nanos is dependency-free.
+    let tmp_suffix = format!(
+        "tmp.{}.{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    );
+    let tmp_path = out_dir.join(format!("ps5upload.elf.{tmp_suffix}"));
+    let mut decoder = flate2::read::GzDecoder::new(EMBEDDED_PAYLOAD_GZ);
+    let mut tmp =
+        fs::File::create(&tmp_path).map_err(|e| format!("create {}: {e}", tmp_path.display()))?;
+    let mut magic = Vec::with_capacity(4);
+    let mut buf = [0u8; 64 * 1024];
+    let mut total = 0u64;
+    loop {
+        let n = decoder
+            .read(&mut buf)
+            .map_err(|e| format!("gunzip embedded payload: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        if magic.len() < 4 {
+            let take = (4 - magic.len()).min(n);
+            magic.extend_from_slice(&buf[..take]);
+        }
+        total = total.saturating_add(n as u64);
+        if total > EMBEDDED_PAYLOAD_MAX_BYTES {
             let _ = fs::remove_file(&tmp_path);
             return Err(format!(
-                "decompressed payload is not an ELF (first bytes {:02x?})",
-                magic
+                "decompressed embedded payload exceeded {EMBEDDED_PAYLOAD_MAX_BYTES} bytes"
             ));
         }
-        tmp.sync_all()
-            .map_err(|e| format!("fsync {}: {e}", tmp_path.display()))?;
-        drop(tmp);
-        super::replace_file(&tmp_path, &out_path).map_err(|e| {
-            let _ = fs::remove_file(&tmp_path);
-            format!(
-                "rename {} -> {}: {e}",
-                tmp_path.display(),
-                out_path.display()
-            )
-        })?;
-        if let Err(e) = fs::write(&stamp_path, &embedded_hex) {
-            eprintln!(
-                "[bundled-payload] could not write stamp {}: {e} (payload still extracted)",
-                stamp_path.display()
-            );
+        tmp.write_all(&buf[..n])
+            .map_err(|e| format!("write {}: {e}", tmp_path.display()))?;
+    }
+    if magic.as_slice() != b"\x7FELF" {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(format!(
+            "decompressed payload is not an ELF (first bytes {:02x?})",
+            magic
+        ));
+    }
+    tmp.sync_all()
+        .map_err(|e| format!("fsync {}: {e}", tmp_path.display()))?;
+    drop(tmp);
+    if let Err(e) = super::replace_file(&tmp_path, &out_path) {
+        // Best-effort tmp cleanup; ignore failure (file may already be
+        // gone if another invocation snuck through without the lock).
+        let _ = fs::remove_file(&tmp_path);
+        // Recovery: if `out_path` exists post-failure AND its stamp
+        // matches our embedded hash, treat the rename failure as a
+        // benign race — someone else extracted it first. Returning
+        // success here means the user-facing banner only fires on
+        // genuine extraction failures (disk full, permissions, …).
+        if let (Ok(stored), Ok(meta)) = (fs::read_to_string(&stamp_path), fs::metadata(&out_path)) {
+            if stored.trim() == embedded_hex && meta.len() > 0 {
+                return Ok(out_path);
+            }
         }
+        return Err(format!(
+            "rename {} -> {}: {e}",
+            tmp_path.display(),
+            out_path.display()
+        ));
+    }
+    if let Err(e) = fs::write(&stamp_path, &embedded_hex) {
+        eprintln!(
+            "[bundled-payload] could not write stamp {}: {e} (payload still extracted)",
+            stamp_path.display()
+        );
     }
     Ok(out_path)
 }
@@ -374,24 +437,35 @@ pub async fn payload_probe(path: String) -> serde_json::Value {
     // Only read the first 512 KiB — plenty to spot the ASCII signature at
     // the ELF's section headers, and keeps us off disk for big files.
     const PROBE_WINDOW: usize = 512 * 1024;
+    // Distinct error codes so the UI can tell "we couldn't read the
+    // file" from "the file isn't ours". The previous shape collapsed
+    // both into "no_signature", which sent users debugging the wrong
+    // problem (e.g. a permissions issue showed up as "this isn't a
+    // ps5upload binary, are you sure you picked the right file?").
     let mut file = match tokio::fs::File::open(&p).await {
         Ok(f) => f,
-        Err(_) => {
-            // Treat unreadable as "not ours" rather than failing; the UI
-            // shows the code's localised message either way.
+        Err(e) => {
             return serde_json::json!({
                 "is_ps5upload": false,
-                "code": "payload_probe_no_signature",
+                "code": "payload_probe_read_error",
+                "error": format!("open: {e}"),
             });
         }
     };
     let mut window = vec![0u8; PROBE_WINDOW];
     let n = match file.read(&mut window).await {
-        Ok(n) => n,
-        Err(_) => {
+        Ok(0) => {
             return serde_json::json!({
                 "is_ps5upload": false,
-                "code": "payload_probe_no_signature",
+                "code": "payload_probe_too_small",
+            });
+        }
+        Ok(n) => n,
+        Err(e) => {
+            return serde_json::json!({
+                "is_ps5upload": false,
+                "code": "payload_probe_read_error",
+                "error": format!("read: {e}"),
             });
         }
     };

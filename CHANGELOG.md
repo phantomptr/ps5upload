@@ -4,6 +4,40 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.3.0
+
+- Install Package: tries the in-process installer first (no home-screen
+  flash on most pkgs); falls back to the ShellUI route only when Sony's
+  installer requires it.
+- Install Package: cleaner status — a row succeeds, fails, or rolls
+  back. No more low-level "we couldn't extract pkg metadata" notes; if
+  it fails, the error tells you why.
+- Better error for DLC installs whose base game isn't installed yet
+  (was previously a misleading "BGFT not available" message).
+- Shell tab now works on PS5 (no `/bin/sh` on the console — built-in
+  commands: `help`, `ls`, `cat`, `stat`, `ps`, `mount`, `df`, `id`,
+  `uname`, `env`, `sysctl`, `hostname`, `echo`, `sleep`).
+- Save data + Screenshots tabs now populate correctly (older builds
+  used wrong filesystem paths and hex-vs-decimal user-ID parsing).
+- Hardware → Network: lists real interfaces (eth0 / wlan / lo) via
+  the FreeBSD getifaddrs fallback when Sony's API returns empty.
+- Disk Usage: better text visibility — small folders no longer get
+  cells too narrow to read, and the layout fills the window.
+- Kernel Log: optional filter panel groups Sony's routine PSN /
+  storage / framework chatter so you can focus on real issues
+  (default: show everything; click Filters → "Hide Sony noise" to
+  collapse).
+- Mount modal: warns up front when the chosen path is in the Sony-
+  reserved `/mnt/usb*` or `/mnt/ext*` namespaces, with one click to
+  switch to `/mnt/ps5upload/`.
+- Bundled-payload extraction now handles concurrent app launches +
+  shows the real error if extraction fails (no more misleading
+  "run make payload" hint).
+- Smaller fixes: GoldHEN entry removed from the payload library
+  (PS4-only); Compare PS5s tab removed.
+
+---
+
 ## 2.2.61
 
 **13-pass audit: boot reliability, install correctness, DoS hardening**

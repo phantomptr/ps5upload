@@ -11,20 +11,52 @@ import {
   FolderTree,
   Cpu,
   Rocket,
+  Boxes,
+  Save,
+  Image as ImageIcon,
   Settings as SettingsIcon,
   Info,
   Sun,
   Moon,
+  MoonStar,
   Sparkles,
   HelpCircle,
   ScrollText,
   Activity as ActivityIcon,
+  BarChart3,
+  Terminal,
+  TerminalSquare,
+  PieChart,
+  LayoutDashboard,
 } from "lucide-react";
 import clsx from "clsx";
 import { useThemeStore } from "../state/theme";
 import { useTr } from "../state/lang";
 import { useLogsStore } from "../state/logs";
 import { useUpdateStore } from "../state/update";
+import RosterPicker from "./RosterPicker";
+import NotificationInbox from "./NotificationInbox";
+import type { Theme } from "../state/theme";
+
+/** Friendly label for the active theme. Pulled out so the toggle row
+ *  in the footer doesn't need a chained ternary. */
+function themeLabel(
+  theme: Theme,
+  tr: (key: string, vars?: Record<string, string | number>, fallback?: string) => string,
+): string {
+  if (theme === "light") return tr("light_mode", undefined, "Light mode");
+  if (theme === "oled") return tr("oled_mode", undefined, "OLED mode");
+  return tr("dark_mode", undefined, "Dark mode");
+}
+
+/** Icon picker that mirrors `themeLabel`. Three icons keeps each
+ *  state visually distinct: sun (light) → moon (dark) → moon-star
+ *  (OLED). The toggle button cycles through these in order. */
+function themeIcon(theme: Theme) {
+  if (theme === "light") return <Sun size={14} />;
+  if (theme === "oled") return <MoonStar size={14} />;
+  return <Moon size={14} />;
+}
 
 interface NavItem {
   to: string;
@@ -40,20 +72,28 @@ interface NavItem {
 const items: NavItem[] = [
   // ─ What's new / landing ─
   { to: "/whats-new", key: "whats_new", fallback: "What's new", icon: Sparkles, section: { key: "nav_section_overview", fallback: "Overview" } },
+  { to: "/dashboard", key: "dashboard", fallback: "Dashboard", icon: LayoutDashboard },
   // ─ Workflow: get set up, send things, browse ─
   { to: "/connection", key: "connect", fallback: "Connection", icon: Cable, section: { key: "nav_section_workflow", fallback: "Workflow" } },
   { to: "/upload", key: "upload", fallback: "Upload", icon: Upload },
   { to: "/install-package", key: "install_package", fallback: "Install Package", icon: PackageOpen },
   { to: "/library", key: "library", fallback: "Library", icon: LibraryBig },
+  { to: "/saves", key: "saves", fallback: "Save data", icon: Save },
+  { to: "/screenshots", key: "screenshots", fallback: "Screenshots", icon: ImageIcon },
   { to: "/search", key: "search", fallback: "Search", icon: Search },
   { to: "/volumes", key: "volumes", fallback: "Volumes", icon: HardDrive },
+  { to: "/disk-usage", key: "disk_usage", fallback: "Disk usage", icon: PieChart },
   { to: "/file-system", key: "file_system", fallback: "File System", icon: FolderTree },
   { to: "/hardware", key: "hardware", fallback: "Hardware", icon: Cpu },
   { to: "/send-payload", key: "send_payload", fallback: "Send payload", icon: Rocket },
+  { to: "/payloads", key: "payloads", fallback: "Payload library", icon: Boxes },
   // ─ Help / about / debug ─
   { to: "/faq", key: "faq", fallback: "FAQ", icon: HelpCircle, section: { key: "nav_section_help", fallback: "Help" } },
   { to: "/activity", key: "activity", fallback: "Activity", icon: ActivityIcon },
+  { to: "/stats", key: "stats", fallback: "Stats", icon: BarChart3 },
   { to: "/logs", key: "logs", fallback: "Logs", icon: ScrollText },
+  { to: "/kernel-log", key: "kernel_log", fallback: "Kernel log", icon: Terminal },
+  { to: "/shell", key: "shell", fallback: "Shell", icon: TerminalSquare },
   { to: "/settings", key: "settings", fallback: "Settings", icon: SettingsIcon },
   { to: "/about", key: "about", fallback: "About", icon: Info },
 ];
@@ -92,6 +132,13 @@ export default function Sidebar() {
           </span>
         </div>
       </div>
+
+      {/* Multi-PS5 picker — sits between the brand header and nav.
+          Always present so the user can switch consoles from any
+          screen without context-switching. Migrates legacy single-
+          host users to a default profile on first mount via
+          ensureRosterMigrated() in AppShell. */}
+      <RosterPicker />
 
       {/* Navigation — grouped by section. The `section` on the first
           item in a group triggers a small uppercase label above it. */}
@@ -155,25 +202,29 @@ export default function Sidebar() {
         })}
       </nav>
 
-      {/* Theme toggle — minimal footer row. Muted label + icon. */}
+      {/* Theme toggle + notification inbox — minimal footer row.
+          The inbox bell shows unread count badges; the theme toggle
+          cycles Dark → Light → OLED. Both are persistent affordances
+          that live across screens. */}
       <div className="flex items-center justify-between border-t border-[var(--color-border)] px-3 py-2">
         <span className="text-xs text-[var(--color-muted)]">
-          {theme === "dark"
-            ? tr("dark_mode", undefined, "Dark mode")
-            : tr("light_mode", undefined, "Light mode")}
+          {themeLabel(theme, tr)}
         </span>
-        <button
-          type="button"
-          onClick={toggleTheme}
-          aria-label={
-            theme === "dark"
-              ? tr("switch_light_mode")
-              : tr("switch_dark_mode")
-          }
-          className="rounded-md p-1.5 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
-        >
-          {theme === "dark" ? <Sun size={14} /> : <Moon size={14} />}
-        </button>
+        <div className="flex items-center gap-1">
+          <NotificationInbox />
+          <button
+            type="button"
+            onClick={toggleTheme}
+            aria-label={tr(
+              "switch_theme",
+              { current: theme },
+              `Switch theme (current: ${theme})`,
+            )}
+            className="rounded-md p-1.5 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
+          >
+            {themeIcon(theme)}
+          </button>
+        </div>
       </div>
     </aside>
   );

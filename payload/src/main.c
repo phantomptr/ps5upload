@@ -1,8 +1,10 @@
 #include <stdio.h>
 #include <string.h>
 #include <signal.h>
+#include <time.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <dlfcn.h>
 #include <ps5/kernel.h>
 #include "config.h"
 #include "runtime.h"
@@ -27,12 +29,11 @@
  * The full reasoning is in `runtime_apply_ucred_jailbreak` below. */
 
 /*
- * PS5 toast notification — pops the message in the top-right corner of
- * the PS5 UI. Linked straight against the libkernel symbol the legacy
- * payload used; there's no public header for it in the SDK so we
- * forward-declare. Structure layout (particularly the 45-byte header)
- * is reverse-engineered and reproduced here verbatim from the legacy
- * payload to keep the ABI call identical.
+ * PS5 toast notification — pops the message in the top-right corner
+ * of the PS5 UI. The SDK doesn't expose a header for
+ * sceKernelSendNotificationRequest, so we forward-declare it and
+ * provide the structure layout (45-byte reserved header + 3075-byte
+ * message body) that the kernel ABI expects.
  *
  * `pop_notification` is exported (declared in runtime.h) so handlers
  * in runtime.c can fire toasts on user-visible state changes (mount,
@@ -43,14 +44,28 @@ typedef struct ps5_notify_req {
     char _reserved[45];
     char message[3075];
 } ps5_notify_req_t;
-int sceKernelSendNotificationRequest(int, ps5_notify_req_t *, size_t, int);
+typedef int (*sce_send_notification_fn)(int, ps5_notify_req_t *, size_t, int);
 
+/* Resolved at first toast — the SDK stub for libkernel_web exports
+ * sceKernelSendNotificationRequest, but the actual on-PS5 SPRX may
+ * not, and a missing symbol with compile-time linkage kills the
+ * binary at rtld lib_init time (binary never reaches main, no port
+ * bind, silent failure). dlsym pattern lets us tolerate the absence
+ * gracefully — a pop_notification call just becomes a no-op. */
 void pop_notification(const char *message) {
     if (!message || !*message) return;
+    static sce_send_notification_fn p_send = NULL;
+    static int resolved = 0;
+    if (!resolved) {
+        resolved = 1;
+        p_send = (sce_send_notification_fn)
+            dlsym(RTLD_DEFAULT, "sceKernelSendNotificationRequest");
+    }
+    if (!p_send) return;
     ps5_notify_req_t req;
     memset(&req, 0, sizeof(req));
     strncpy(req.message, message, sizeof(req.message) - 1);
-    (void)sceKernelSendNotificationRequest(0, &req, sizeof(req), 0);
+    (void)p_send(0, &req, sizeof(req), 0);
 }
 
 /*
@@ -173,16 +188,53 @@ void runtime_apply_ucred_jailbreak(void) {
     g_ucred_elevation_rc = rc;
 }
 
+/* File-based startup trace. Writes to /data/ps5upload2/startup.log
+ * so a stuck startup can be diagnosed without depending on the
+ * mgmt port coming up (which is exactly what we're trying to
+ * diagnose). The user can FTP into /data/ps5upload2/ and read this
+ * file from any other tool with FS access (e.g. ftpsrv payload).
+ *
+ * Best-effort: if /data/ps5upload2/ doesn't exist yet, the open
+ * call fails and we silently move on. No allocations, no locks —
+ * safe to call from anywhere in the startup path including the
+ * pre-runtime_init window. */
+static void startup_trace(const char *stage) {
+    /* /data/ps5upload/ is created by an earlier payload run (or by
+     * runtime_ensure_directories below); on a brand-new console it
+     * may not exist yet on the very first ENTER_MAIN call, so we fall
+     * back to /data/ which is always writable.
+     *
+     * Earlier path "/data/ps5upload2/..." was a stale-name bug (the
+     * runtime root is /data/ps5upload without the "2"); the trace was
+     * silently never written, hiding a separate startup crash for
+     * weeks. Keep this path consistent with PS5UPLOAD2_RUNTIME_ROOT. */
+    FILE *fp = fopen(PS5UPLOAD2_RUNTIME_ROOT "/startup.log", "a");
+    if (!fp) {
+        fp = fopen("/data/ps5upload_startup.log", "a");
+        if (!fp) return;
+    }
+    struct timespec ts;
+    if (clock_gettime(CLOCK_REALTIME, &ts) != 0) {
+        ts.tv_sec = time(NULL);
+        ts.tv_nsec = 0;
+    }
+    fprintf(fp, "%lld.%03ld %s\n",
+            (long long)ts.tv_sec, (long)(ts.tv_nsec / 1000000), stage);
+    fclose(fp);
+}
+
 int main(void) {
     int rc = 0;
     runtime_state_t state = {0};
     g_state = &state;
+    startup_trace("ENTER_MAIN");
 
     /* Run the elevation once at startup. May fail silently if
      * kernel R/W isn't yet available (kstuff not loaded). In
      * that case shellui_rpc_init() will retry on first sensor
      * read so users who load kstuff later are still served. */
     runtime_apply_ucred_jailbreak();
+    startup_trace("UCRED_JAILBREAK_DONE");
 
     /* Release port on crash or external kill. */
     signal(SIGSEGV, handle_fatal);
@@ -208,21 +260,27 @@ int main(void) {
      * ordering of the last-known-working 2.1.0 build is safer than
      * adding diagnostics that could themselves regress startup. */
 
+    startup_trace("BEFORE_ENSURE_DIRECTORIES");
     if (runtime_ensure_directories() != 0) {
+        startup_trace("ENSURE_DIRECTORIES_FAILED");
         fprintf(stderr, "runtime_ensure_directories failed\n");
         pop_notification("PS5Upload failed: cannot create payload directories");
         return 1;
     }
+    startup_trace("ENSURE_DIRECTORIES_DONE");
 
     /* Sweep orphan Tier-1 staging files. Crash-recovery only;
      * the desktop-side post-install delete handles steady-state. */
     runtime_sweep_stale_pkg_temp();
+    startup_trace("SWEEP_DONE");
 
     if (runtime_init(&state) != 0) {
+        startup_trace("RUNTIME_INIT_FAILED");
         fprintf(stderr, "runtime_init failed\n");
         pop_notification("PS5Upload failed: runtime_init (port bind?)");
         return 1;
     }
+    startup_trace("RUNTIME_INIT_DONE");
 
     /* No eager Sony-service init at startup. Both `register_module_init`
      * (dlopen + dlsym for libSceAppInstUtil/Lnc/UserService) and
@@ -242,17 +300,22 @@ int main(void) {
      * mutex `g_sony_api_mtx` covers the kernel-lock concern that
      * `register_services_init` was originally added to address. */
 
+    startup_trace("BEFORE_TAKEOVER");
     if (runtime_try_takeover(&state) != 0) {
+        startup_trace("TAKEOVER_FAILED");
         fprintf(stderr, "runtime_takeover failed — another instance may still own the port\n");
         pop_notification("PS5Upload failed: a previous instance still holds the port — restart the PS5");
         return 1;
     }
+    startup_trace("TAKEOVER_DONE");
 
     if (runtime_write_ownership(&state) != 0) {
+        startup_trace("WRITE_OWNERSHIP_FAILED");
         fprintf(stderr, "runtime_write_ownership failed\n");
         pop_notification("PS5Upload failed: cannot write ownership record");
         return 1;
     }
+    startup_trace("WRITE_OWNERSHIP_DONE");
 
     /* `runtime_reconcile_mounts` is also deliberately not called at
      * startup. It walks `getmntinfo` on potentially-stale entries
@@ -277,11 +340,13 @@ int main(void) {
                  state.runtime_port, state.mgmt_port);
         pop_notification(banner);
     }
+    startup_trace("TOAST_DONE");
     /* Spawn the management listener thread BEFORE entering the transfer
      * loop. The mgmt loop owns :9114 and answers STATUS/TAKEOVER/etc.
      * while the transfer loop is busy inside a long upload on :9113. */
     if (pthread_create(&state.mgmt_thread, NULL,
                        runtime_mgmt_server_loop, &state) != 0) {
+        startup_trace("MGMT_THREAD_FAILED");
         fprintf(stderr, "pthread_create(mgmt) failed\n");
         pop_notification("PS5Upload failed: cannot start management thread");
         /* We've already taken over and written ownership; the kernel
@@ -291,8 +356,10 @@ int main(void) {
         return 1;
     }
     state.mgmt_thread_started = 1;
+    startup_trace("MGMT_THREAD_SPAWNED");
 
     rc = runtime_server_loop(&state);
+    startup_trace("SERVER_LOOP_EXITED");
 
     /* Ask the mgmt thread to exit by closing its listener. accept()
      * returns with EBADF, mgmt loop sees shutdown_requested and

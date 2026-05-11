@@ -124,3 +124,51 @@ CLAUDE.local.md
 *.AppImage
 *.deb
 *.rpm
+
+# ─── Playwright + UI test artefacts ──────────────────────────────────────
+# Browser automation drops snapshots and console logs here during
+# development. Reproducible from a fresh test run, not checked in.
+.playwright-mcp/
+*.playwright-mcp/
+playwright-report/
+test-results/
+
+# ─── Dev screenshots / debug captures ────────────────────────────────────
+# Screenshots taken during UI debugging end up at the repo root.
+# /logo.png is explicitly tracked (anchored under client/public + root).
+disk-usage-fixed.png
+dashboard.png
+library-narrow.png
+settings-narrow.png
+shell-now.png
+klog-filtered.png
+debug-*.png
+ui-debug-*.png
+
+# ─── Local /tmp helpers + diagnostic scripts ─────────────────────────────
+# Ad-hoc Python scripts written during debugging sessions
+# (sendpayload, test_shell, klog_monitor, …) — they live in /tmp
+# during dev and shouldn't get committed if copied into the repo root.
+sendpayload.py
+test_shell.py
+test_screens.py
+klog_monitor.py
+klog_now.txt
+klog_phase*.txt
+ps5_startup.log
+ps5upload_*.log
+ps5upload_main_entered
+
+# ─── macOS Application Support cache (extracted payload at runtime) ─────
+# In case anyone runs the bundle from inside this checkout.
+ps5upload.elf.tmp
+ps5upload.elf.tmp.*
+ps5upload.elf.gz.blake3.tmp
+
+# ─── Personal scratch + notes ───────────────────────────────────────────
+# Anything in /scratch or /notes-local that a dev wants to keep
+# locally without checking in.
+/scratch/
+/notes-local/
+NOTES.local.md
+TODO.local.md

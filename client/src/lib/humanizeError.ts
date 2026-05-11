@@ -343,6 +343,44 @@ export function humanizePs5Error(
     return "Your PS5 firmware doesn't expose Sony's BGFT installer in a way ps5upload can use. Push the latest bundled payload (Connection → Send payload) — it tries more library paths and symbol variants. If it still fails, install via FTP + Library → Register instead; .pkg-via-BGFT isn't available on this firmware.";
   }
 
+  // ─── 0x80020002 — sceKernelOpen() ENOENT from Sony's installer ──
+  // Sony encodes Unix errno values as 0x80020000 + errno. 0x80020002
+  // is ENOENT ("No such file or directory") from the kernel-side
+  // sceKernelOpen — meaning Sony's installer COULDN'T OPEN something
+  // when it tried to resolve the pkg.
+  //
+  // The most common cause (verified via klog on 2026-05-11) is a DLC
+  // pkg whose base game isn't installed:
+  //
+  //   - DLC content_ids have shape <store>-<base>_<patch>-<dlc>
+  //     e.g. EP7579-PPSA17599_00-EXP33DLC10000PS5  (PPSA17599 is base)
+  //   - When Sony's installer opens the pkg, it follows references
+  //     into the base game's app_home / sce_sys dir under /rnps/.
+  //     If the base game isn't installed, that path is missing →
+  //     sceKernelOpen returns ENOENT → 0x80020002 surfaces.
+  //
+  // For NON-DLC content_ids the same error means the file was deleted
+  // between staging and install (race condition we've fixed) OR the
+  // engine staged to a path Sony's installer doesn't accept. Surface
+  // both as options.
+  if (
+    /\b0x80020002\b/i.test(raw) ||
+    /sceKernelOpen.*0x80020002/i.test(raw) ||
+    /SCE_KERNEL_ERROR_ENOENT/i.test(raw)
+  ) {
+    // Sniff the content_id from the error context to give a sharper
+    // message. DLC pattern: "<2 letters><4 digits>-<base>_<patch>-<dlc>"
+    // where the third dash is the DLC marker.
+    const dlcMatch = (contentId ?? "").match(
+      /^([A-Z]{2}\d{4})-([A-Z0-9]+)_\d+-([A-Z0-9_]+)$/i,
+    );
+    if (dlcMatch) {
+      const baseTitle = dlcMatch[2];
+      return `This looks like a DLC pkg (content_id ${contentId}). Sony's installer needs the base game (${baseTitle}) to be installed BEFORE the DLC, because the install reads metadata from the base game's app_home. Install ${baseTitle} first, then retry this DLC. The 0x80020002 is the kernel reporting "no such file" when it tried to follow the base-game reference — not a problem with your DLC pkg.`;
+    }
+    return "Sony's installer couldn't open a file it needed during install (kernel error 0x80020002 = ENOENT). If this is a DLC pkg, the base game isn't installed yet — install the base first. Otherwise the staging file may have been deleted between upload and install; retry the install once. If it keeps failing, FTP-upload the pkg to /user/data/ps5upload/pkg_temp/ manually and use Library → Register to install.";
+  }
+
   // ─── BGFT / Install Package error codes ─────────────────────────
   // err_code_message in ps5upload-core covers the user-facing copy for
   // the common 0x80990xxx codes; the queue surfaces these directly.

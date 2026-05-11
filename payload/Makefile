@@ -38,6 +38,14 @@ CFLAGS := -Wall -Wextra -Werror -g $(INCLUDES)
 # load, dlsym returns NULL for the missing symbols and the
 # affected handler returns a clear "service_unavailable" error
 # instead of crashing. Belt-and-braces.
+# Compile-time linkage: ONLY libraries we know are present on every
+# supported PS5 firmware. A missing DT_NEEDED entry makes rtld refuse
+# to load the binary at all (no toast, no port bind, loader silently
+# rejects the ELF — exact symptom we hit when the previous build
+# added libSceFsInternalForVsh / libSceNet / libSceSysCore here).
+# Optional features (sceFsMountGamePkg, sceNetGetIfList, etc.)
+# dlopen their backing SPRX at runtime — missing SPRX → handler
+# returns "service_unavailable" instead of bricking the payload.
 LIBS := -lSceSystemService -lSceUserService -lSceAppInstUtil -lSceNotification
 
 SRCS := src/main.c src/runtime.c src/takeover.c src/register.c src/hw_info.c \

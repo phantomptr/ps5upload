@@ -15,6 +15,7 @@ import {
 import clsx from "clsx";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { isTauriEnv } from "../../lib/tauriEnv";
 import { convertFileSrc } from "@tauri-apps/api/core";
 
 import {
@@ -36,26 +37,21 @@ import {
   type UploadStrategy,
 } from "../../state/transfer";
 import { useConnectionStore, PS5_PAYLOAD_PORT } from "../../state/connection";
+import { pushNotification } from "../../state/notifications";
+import { useRosterStore } from "../../state/roster";
 import { useNavigate } from "react-router-dom";
 import { PageHeader, WarningCard, Button } from "../../components";
+import FfpkgInspectorPanel from "./FfpkgInspectorPanel";
+import FolderDiffPanel from "./FolderDiffPanel";
 import { useUploadSettingsStore } from "../../state/uploadSettings";
 import { useUploadQueueStore } from "../../state/uploadQueue";
 import { resolveUploadDest } from "../../lib/uploadDest";
 import { QueuePanel } from "./QueuePanel";
 import { humanizePs5Error } from "../../lib/humanizeError";
+import { formatBytes } from "../../lib/format";
 import { useTr } from "../../state/lang";
 
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  const units = ["KiB", "MiB", "GiB", "TiB"];
-  let v = n / 1024;
-  let i = 0;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i += 1;
-  }
-  return `${v.toFixed(v >= 100 ? 0 : v >= 10 ? 1 : 2)} ${units[i]}`;
-}
+// formatBytes moved to lib/format.ts.
 
 /** Map discriminated SourceKind to its one-line "Detected: ..." string. */
 function detectedLabel(source: PickedSource): { icon: LucideIcon; label: string } {
@@ -120,6 +116,7 @@ export default function UploadScreen() {
   //     callback could touch the store for the wrong screen. Short-
   //     circuit on `cancelled` at entry.
   useEffect(() => {
+    if (!isTauriEnv()) return; // browser dev/test contexts skip Tauri-only APIs
     let unlisten: (() => void) | null = null;
     let cancelled = false;
     const p = getCurrentWebview().onDragDropEvent(async (e) => {
@@ -140,14 +137,29 @@ export default function UploadScreen() {
     });
     p.then((fn) => {
       if (cancelled) {
-        fn();
+        // Same try/catch as the cleanup below — Tauri's unlisten can
+        // throw if the webview already tore down its listener table
+        // (HMR, parent webview destroyed, etc).
+        try { fn(); } catch { /* ignore */ }
       } else {
         unlisten = fn;
       }
+    }).catch(() => {
+      // onDragDropEvent's Promise can reject if the webview is gone
+      // before subscription completes. Silently ignore — there's no
+      // listener to unregister.
     });
     return () => {
       cancelled = true;
-      if (unlisten) unlisten();
+      if (unlisten) {
+        // Wrap in try/catch: Tauri 2's _unlisten looks up
+        // listeners[eventId].handlerId. If the webview tore down its
+        // listener table between subscribe + cleanup (HMR, route
+        // remount during dev, parent webview destroyed), the lookup
+        // throws TypeError. Cleanup is fire-and-forget; we don't
+        // care if the unregister fails.
+        try { unlisten(); } catch { /* ignore */ }
+      }
     };
   }, [pickFile, pickFolder]);
 
@@ -543,6 +555,14 @@ function Step2Options(props: {
           </button>
         </div>
 
+        {/* Local UFS2 inspector — only meaningful for .ffpkg images.
+            Lets the user see "what's in this image" before uploading
+            multiple GB. Read-only, no PS5 needed. */}
+        {source.kind === "image" &&
+          source.path.toLowerCase().endsWith(".ffpkg") && (
+            <FfpkgInspectorPanel path={source.path} />
+          )}
+
         {source.wrappedHint && (
           <WrappedHintChip
             hint={source.wrappedHint}
@@ -561,6 +581,13 @@ function Step2Options(props: {
           fileCount={source.meta.file_count}
         />
       )}
+
+      <FolderDiffSlot
+        source={source}
+        destinationVolume={destinationVolume}
+        destinationSubpath={destinationSubpath}
+        excludes={excludes}
+      />
 
       {showMountToggle && (
         <MountAfterUploadCard
@@ -584,6 +611,8 @@ function Step2Options(props: {
           ).dest
         }
       />
+
+      <BandwidthCard />
 
       {showExcludes && (
         <ExcludesCard
@@ -634,7 +663,101 @@ function Step2Options(props: {
               : "Upload now"}
         </button>
       </div>
+      <MirrorToRosterButton
+        sourceKind={source.kind}
+        srcPath={source.path}
+        destinationVolume={destinationVolume}
+        destinationSubpath={destinationSubpath}
+        excludes={excludes.filter((e) => e.enabled).map((e) => e.pattern)}
+      />
     </>
+  );
+}
+
+/** Fan-out the current upload to every other PS5 in the roster.
+ *  Bypasses the regular transfer store — each mirrored upload runs
+ *  via direct invoke so it doesn't compete for the store's
+ *  single-job slot. Each appears in the Activity tab as its own
+ *  entry. Best-effort: failures are logged as notifications, the
+ *  rest of the fan-out continues. */
+function MirrorToRosterButton({
+  sourceKind,
+  srcPath,
+  destinationVolume,
+  destinationSubpath,
+  excludes,
+}: {
+  sourceKind: PickedSource["kind"];
+  srcPath: string;
+  destinationVolume: string | null;
+  destinationSubpath: string;
+  excludes: string[];
+}) {
+  const tr = useTr();
+  const profiles = useRosterStore((s) => s.profiles);
+  const activeId = useRosterStore((s) => s.active_id);
+  const others = profiles.filter((p) => p.id !== activeId);
+  const [busy, setBusy] = useState(false);
+  if (others.length === 0) return null;
+  if (sourceKind !== "folder" && sourceKind !== "game-folder" && sourceKind !== "file") {
+    return null;
+  }
+  if (!destinationVolume) return null;
+
+  async function fanOut() {
+    setBusy(true);
+    try {
+      const { startTransferDir, startTransferFile } = await import("../../api/ps5");
+      const leaf = srcPath.replace(/\\/g, "/").split("/").filter(Boolean).pop() ?? "";
+      const dest =
+        `${destinationVolume}` +
+        (destinationSubpath ? `/${destinationSubpath}` : "") +
+        `/${leaf}`;
+      const tasks = others.map(async (p) => {
+        const addr = `${p.host}:${PS5_PAYLOAD_PORT}`;
+        try {
+          if (sourceKind === "file") {
+            await startTransferFile(srcPath, dest, addr);
+          } else {
+            await startTransferDir(srcPath, dest, addr, null, excludes);
+          }
+          pushNotification("info", `Mirrored to ${p.name}`, {
+            body: `${srcPath} → ${dest}`,
+          });
+        } catch (e) {
+          pushNotification("error", `Mirror failed: ${p.name}`, {
+            body: e instanceof Error ? e.message : String(e),
+          });
+        }
+      });
+      await Promise.allSettled(tasks);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mt-3 rounded-md border border-dashed border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-xs">
+      <div className="flex items-center gap-2">
+        <span className="flex-1 text-[var(--color-muted)]">
+          {tr(
+            "upload_mirror_label",
+            { count: others.length },
+            `Also send to other PS5s in roster (${others.length})`,
+          )}
+        </span>
+        <button
+          type="button"
+          onClick={fanOut}
+          disabled={busy}
+          className="rounded-md border border-[var(--color-border)] px-2 py-1 text-[11px] hover:bg-[var(--color-surface-2)] disabled:opacity-50"
+        >
+          {busy
+            ? tr("upload_mirror_busy", undefined, "Mirroring…")
+            : tr("upload_mirror_send", undefined, "Mirror now")}
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -913,8 +1036,8 @@ function TransferStatus({ phase }: { phase: TransferPhase }) {
         </dl>
         {phase.mountWarnings && phase.mountWarnings.length > 0 && (
           <ul className="mt-2 space-y-1 rounded-md border border-[var(--color-warn)] bg-[var(--color-surface)] p-2 text-[11px] text-[var(--color-warn)]">
-            {phase.mountWarnings.map((w, i) => (
-              <li key={i}>⚠ {w}</li>
+            {phase.mountWarnings.map((w) => (
+              <li key={w}>⚠ {w}</li>
             ))}
           </ul>
         )}
@@ -1150,6 +1273,96 @@ function FolderStatsCard({
   return (
     <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4 text-sm text-[var(--color-muted)]">
       {formatBytes(totalBytes)} across {fileCount.toLocaleString()} files
+    </section>
+  );
+}
+
+/** Wrapper that pulls `host` from the connection store and adapts the
+ *  Upload screen's exclude shape to FolderDiffPanel's API. Renders
+ *  null when the inputs aren't sufficient (no host, no destination,
+ *  not a folder upload) — keeps Step2Options' main render clean. */
+function FolderDiffSlot({
+  source,
+  destinationVolume,
+  destinationSubpath,
+  excludes,
+}: {
+  source: PickedSource;
+  destinationVolume: string | null;
+  destinationSubpath: string;
+  excludes: { pattern: string; enabled: boolean }[];
+}) {
+  const host = useConnectionStore((s) => s.host);
+  if (source.kind !== "folder" && source.kind !== "game-folder") return null;
+  if (!destinationVolume || !host?.trim()) return null;
+  const leaf = source.path.replace(/\\/g, "/").split("/").filter(Boolean).pop() ?? "";
+  const dest =
+    `${destinationVolume}` +
+    (destinationSubpath ? `/${destinationSubpath}` : "") +
+    `/${leaf}`;
+  const enabledPatterns = excludes
+    .filter((e) => e.enabled)
+    .map((e) => e.pattern);
+  return (
+    <FolderDiffPanel
+      srcDir={source.path}
+      destRoot={dest}
+      transferAddr={`${host.trim()}:${PS5_PAYLOAD_PORT}`}
+      excludes={enabledPatterns}
+    />
+  );
+}
+
+/** Per-job bandwidth-cap input. Persists to localStorage via the
+ *  upload settings store so the user's preferred cap survives app
+ *  restarts. 0 = no cap. The actual transport-layer pacing happens
+ *  inside the engine's PipelinedSender (Phase 29's BandwidthThrottle). */
+function BandwidthCard() {
+  const tr = useTr();
+  const cap = useUploadSettingsStore((s) => s.bandwidthCapMbps);
+  const setCap = useUploadSettingsStore((s) => s.setBandwidthCapMbps);
+  return (
+    <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
+      <div className="flex items-center gap-2">
+        <label className="text-sm font-medium">
+          {tr("upload_bandwidth_label", undefined, "Upload speed cap")}
+        </label>
+        <input
+          type="number"
+          min={0}
+          step={0.5}
+          value={cap}
+          onChange={(e) => {
+            const n = parseFloat(e.target.value);
+            setCap(isFinite(n) && n > 0 ? n : 0);
+          }}
+          className="w-20 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-xs"
+          placeholder="0"
+        />
+        <span className="text-xs text-[var(--color-muted)]">MB/s</span>
+        {cap > 0 && (
+          <button
+            type="button"
+            onClick={() => setCap(0)}
+            className="text-[10px] text-[var(--color-muted)] underline-offset-2 hover:underline"
+          >
+            {tr("upload_bandwidth_clear", undefined, "remove cap")}
+          </button>
+        )}
+      </div>
+      <p className="mt-1 text-[11px] text-[var(--color-muted)]">
+        {cap > 0
+          ? tr(
+              "upload_bandwidth_active",
+              { cap },
+              `Outbound shards paced to ~${cap} MB/s. Useful when sharing the LAN with video calls or game streaming.`,
+            )
+          : tr(
+              "upload_bandwidth_off",
+              undefined,
+              "0 = no cap (default). Set a positive value to throttle uploads when sharing bandwidth.",
+            )}
+      </p>
     </section>
   );
 }

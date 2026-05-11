@@ -1,6 +1,6 @@
 [package]
 name = "ps5upload-desktop"
-version = "2.2.61"
+version = "2.3.0"
 description = "The all-in-one PS5 companion app."
 edition = "2021"
 rust-version = "1.77"
@@ -63,6 +63,27 @@ ps5upload-core = { path = "../../engine/crates/ps5upload-core" }
 # size, and avoids the Windows file-lock issue (re-reading an .exe
 # the OS has open elsewhere).
 blake3 = "1"
+
+# Base64 encoding for the file-preview Tauri command — the
+# `commands/diagnostics.rs::fs_read_preview` returns the file bytes
+# as base64 so the renderer can use them as a `data:` URL for image
+# previews. Pure-Rust, no system deps.
+base64 = "0.22"
+
+# mDNS service discovery for the Connection screen's "Find PS5s on the
+# network" button. Pure-Rust implementation — no system avahi/bonjour
+# linkage, so cross-compilation to all desktop targets (macOS arm64/x64,
+# Windows x64/arm64, Linux x64/arm64) stays single-toolchain. Used only
+# from `commands/discover.rs`; a discovery is a single 3-second LAN
+# browse, not a long-running daemon.
+mdns-sd = { version = "0.13", default-features = false, features = ["async"] }
+
+# libc for `statvfs` in the USB autoloader's drive enumeration
+# (commands/usb_autoloader.rs). Already pulled in transitively via
+# ps5upload-core, but listed explicitly here so a future change to
+# core's deps doesn't silently remove our access.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [features]
 # Default: build Tauri-native (no custom features yet)

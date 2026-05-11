@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { isTauriEnv } from "../../lib/tauriEnv";
 import {
   PackageOpen,
   Plus,
@@ -108,6 +110,21 @@ export default function InstallPackageScreen() {
     hydrate();
   }, [hydrate]);
 
+  // Auto-route from Phase 61's app-wide drag-drop: when a user drops
+  // a .pkg from any other screen, AppShell navigates here with the
+  // path tucked into location state. Pull it out + auto-enqueue.
+  const location = useLocation();
+  useEffect(() => {
+    const dropped = (location.state as { droppedPath?: string } | null)
+      ?.droppedPath;
+    if (dropped) {
+      void addPkgPath(dropped);
+      // Clear the state so a refresh doesn't re-add.
+      window.history.replaceState({}, "");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.key]);
+
   // Drag-drop active state for the visual cue. Same shape as
   // Upload screen's drop handler.
   const [dropActive, setDropActive] = useState(false);
@@ -124,6 +141,7 @@ export default function InstallPackageScreen() {
     // Use `host` directly here rather than `hostReady` (declared
     // further down in the component body, would TDZ). Same idea.
     if (!host) return;
+    if (!isTauriEnv()) return; // browser dev/test contexts skip Tauri-only APIs
     let unlisten: (() => void) | null = null;
     let cancelled = false;
     const p = getCurrentWebview().onDragDropEvent(async (e) => {
@@ -152,15 +170,18 @@ export default function InstallPackageScreen() {
       }
     });
     p.then((fn) => {
-      if (cancelled) {
-        fn();
-      } else {
-        unlisten = fn;
-      }
-    });
+      // Tauri unlisten can throw if the webview tore down its listener
+      // table between subscribe + cleanup (HMR, parent destroyed).
+      // Swallow — there's nothing actionable when the listener is
+      // already gone.
+      if (cancelled) { try { fn(); } catch { /* ignore */ } }
+      else unlisten = fn;
+    }).catch(() => { /* subscribe-time rejection: nothing to clean */ });
     return () => {
       cancelled = true;
-      if (unlisten) unlisten();
+      if (unlisten) {
+        try { unlisten(); } catch { /* ignore */ }
+      }
     };
     // addPkgPath is stable across renders (defined inside the
     // component but doesn't depend on props/state that change), so
@@ -725,8 +746,8 @@ function InstallRow({
         <div className="mt-2 flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/5 p-2 text-[11px] text-amber-700 dark:text-amber-400">
           <AlertTriangle size={12} className="mt-0.5 shrink-0" />
           <div className="space-y-0.5">
-            {item.warnings.map((w, i) => (
-              <div key={i}>{w}</div>
+            {item.warnings.map((w) => (
+              <div key={w}>{w}</div>
             ))}
           </div>
         </div>
@@ -739,17 +760,30 @@ function InstallRow({
         * on the PS5 itself rather than seeing a generic "Done"
         * checkmark and assuming progress is observable from the
         * desktop. */}
+      {/* Hand-off banner: shown for installs dispatched via shellui-rpc
+       * (Tier 1) — the actual install runs in ShellUI's process via
+       * Sony's queue, and we deliberately don't poll Sony's status API
+       * from our process to avoid the cross-process segfault / hang
+       * documented at bgft.c:159. The row is marked done immediately
+       * once shellui-rpc accepts the dispatch; the user verifies the
+       * real completion via the PS5's on-screen notification.
+       *
+       * Covers DLC, regular game pkgs, AND system NPXS pkgs (all of
+       * which route through shellui-rpc when the fakepkg-friendly
+       * register variant is unavailable). */}
       {item.status === "done" &&
-        /^[A-Z]{2}\d{4}-NPXS\d+/i.test(item.contentId) && (
+        (item.diag.registerPath === "shellui-rpc" ||
+          /^[A-Z]{2}\d{4}-NPXS\d+/i.test(item.contentId)) && (
           <div className="mt-2 flex items-start gap-2 rounded-md border border-emerald-500/40 bg-emerald-500/5 p-2 text-[11px] text-emerald-700 dark:text-emerald-400">
             <CheckCircle2 size={12} className="mt-0.5 shrink-0" />
             <div>
-              Register accepted — Sony's installer is processing this
-              system pkg on the PS5. Verify completion via the PS5's
-              notification panel (top-right) or Settings → Notifications →
-              Downloads. Status polling is skipped for system pkgs because
-              the mgmt service freezes mid-install (a Sony API limitation,
-              not a ps5upload issue).
+              Install dispatched to PS5 — Sony's queue is processing it
+              in the background. Verify completion via the PS5's
+              notification panel (top-right) or Settings → Notifications
+              → Downloads. We mark this row done as soon as the dispatch
+              is accepted because polling Sony's status API from our
+              process is unsafe for cross-process installs (would
+              segfault or hang the payload — see bgft.c).
             </div>
           </div>
         )}

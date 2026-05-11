@@ -9,6 +9,9 @@
 //! later commit; the first pass (`config_load`, `config_save`) covers
 //! enough for App.tsx to boot without Electron.
 
+use std::sync::OnceLock;
+use std::time::Duration;
+
 use serde::Deserialize;
 
 use crate::engine;
@@ -17,9 +20,29 @@ use crate::engine;
 // responses from the engine without dragging every schema into Rust.
 type JsonValue = serde_json::Value;
 
+/// Shared HTTP client with explicit timeouts. Without these, a wedged
+/// engine sidecar would leave every UI panel's invoke promise hanging
+/// forever — visible to users as Library/Volumes/Stats panels stuck in
+/// the loading state until app restart.
+///
+/// `connect_timeout` is short because the engine is local (loopback);
+/// 2s is generous for "is the local sidecar up." `timeout` (60s) covers
+/// the slowest expected payload-side operation; long-running endpoints
+/// (multi-GB file copy) stream their own progress, so the request itself
+/// returns quickly with a job_id.
+fn http_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(2))
+            .timeout(Duration::from_secs(60))
+            .build()
+            .expect("failed to build engine HTTP client")
+    })
+}
+
 async fn get_json(url: &str) -> Result<JsonValue, String> {
-    let client = reqwest::Client::new();
-    let resp = client
+    let resp = http_client()
         .get(url)
         .send()
         .await
@@ -41,8 +64,7 @@ async fn get_json(url: &str) -> Result<JsonValue, String> {
 }
 
 async fn post_json(url: &str, body: &JsonValue) -> Result<JsonValue, String> {
-    let client = reqwest::Client::new();
-    let resp = client
+    let resp = http_client()
         .post(url)
         .json(body)
         .send()
@@ -140,6 +162,9 @@ pub struct TransferDirReq {
     pub tx_id: Option<String>,
     #[serde(default)]
     pub excludes: Vec<String>,
+    /// Outbound bandwidth cap in MB/s. None or 0 means uncapped.
+    #[serde(default)]
+    pub bandwidth_cap_mbps: Option<f64>,
 }
 
 #[tauri::command]
@@ -152,6 +177,7 @@ pub async fn transfer_dir(req: TransferDirReq) -> Result<JsonValue, String> {
         "addr": req.addr,
         "tx_id": req.tx_id,
         "excludes": req.excludes,
+        "bandwidth_cap_mbps": req.bandwidth_cap_mbps,
     });
     post_json(&url, &body).await
 }
@@ -196,6 +222,9 @@ pub struct TransferDirReconcileReq {
     pub mode: Option<String>, // "fast" | "safe"
     #[serde(default)]
     pub excludes: Vec<String>,
+    /// Outbound bandwidth cap in MB/s. None or 0 means uncapped.
+    #[serde(default)]
+    pub bandwidth_cap_mbps: Option<f64>,
 }
 
 // ── Destructive FS ops ──────────────────────────────────────────────────────
@@ -552,6 +581,7 @@ pub async fn transfer_dir_reconcile(req: TransferDirReconcileReq) -> Result<Json
         "tx_id": req.tx_id,
         "mode": req.mode,
         "excludes": req.excludes,
+        "bandwidth_cap_mbps": req.bandwidth_cap_mbps,
     });
     post_json(&url, &body).await
 }
@@ -593,6 +623,61 @@ pub async fn pkg_metadata(path: String) -> Result<JsonValue, String> {
 pub async fn pkg_metadata_split(path: String) -> Result<JsonValue, String> {
     let url = format!("{}/api/pkg/parse-split", engine::url());
     post_json(&url, &serde_json::json!({ "path": path })).await
+}
+
+/// Pre-flight folder diff: walks local + remote, returns the
+/// "what would actually change" stats without uploading. UI uses
+/// this to show "X new, Y replaced" before the user commits to a
+/// multi-GB transfer.
+#[tauri::command]
+pub async fn transfer_dir_diff_preview(
+    src_dir: String,
+    dest_root: String,
+    addr: String,
+    excludes: Vec<String>,
+) -> Result<JsonValue, String> {
+    let url = format!("{}/api/transfer/dir-diff-preview", engine::url());
+    post_json(
+        &url,
+        &serde_json::json!({
+            "src_dir": src_dir,
+            "dest_root": dest_root,
+            "addr": addr,
+            "excludes": excludes,
+        }),
+    )
+    .await
+}
+
+/// Inspect a local UFS2 image file (`.ffpkg`, `.ufs`) without
+/// uploading. Returns superblock info, root directory contents, and
+/// PARAM.SFO metadata when sce_sys/param.sfo exists. Read-only —
+/// safe to run on any file the user picks.
+#[tauri::command]
+pub async fn ffpkg_inspect(path: String) -> Result<JsonValue, String> {
+    let url = format!("{}/api/ffpkg/inspect", engine::url());
+    post_json(&url, &serde_json::json!({ "path": path })).await
+}
+
+/// Extract a file or subtree from a local `.ffpkg` to a local dir.
+/// `inner_path` is slash-separated and refers to the path inside the
+/// image (empty string = whole image root). Read-only on the image.
+#[tauri::command]
+pub async fn ffpkg_extract(
+    ffpkg_path: String,
+    inner_path: String,
+    dest_dir: String,
+) -> Result<JsonValue, String> {
+    let url = format!("{}/api/ffpkg/extract", engine::url());
+    post_json(
+        &url,
+        &serde_json::json!({
+            "ffpkg_path": ffpkg_path,
+            "inner_path": inner_path,
+            "dest_dir": dest_dir,
+        }),
+    )
+    .await
 }
 
 /// Kick off an install. Returns the session_id, the HTTP URL the PS5

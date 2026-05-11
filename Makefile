@@ -1,17 +1,18 @@
 # PS5 Upload - Root Makefile
 #
-# Tree layout (after the 2.1 restructure):
+# Tree layout (current):
 #   payload/   — PS5 C payload (FreeBSD 11)
 #   engine/    — Rust workspace: ftx2-proto, ps5upload-core, -engine HTTP service,
-#                -lab CLI, -tests mock server, -bench
+#                -lab CLI, -tests mock server, -bench, -pkg
 #   client/    — Tauri 2 desktop app, cross-platform (Linux/macOS/Windows, x64+arm64)
 #   tests/     — root integration smoke + tests/lab/ (real-hardware shell scripts)
 #   bench/     — golden workloads, baselines, perf-gate helpers
-#   specs/     — FTX2 protocol, payload lifecycle, engine-UI test contract
+#   scripts/   — install + dev helpers (one per OS, plus shared mjs utilities)
 #
-# Retired in 2.1: app/ (browser server), shared/ (legacy JS modules), ui/ (empty
-# scaffold), client/electron/ (Tauri replaces Electron). The 1.x C payload was
-# already gone pre-rename.
+# Retired pre-2.1: app/ (browser server), shared/ (legacy JS modules),
+# ui/ (empty scaffold), client/electron/ (Tauri replaces Electron),
+# specs/ (consolidated into in-tree doc comments + CHANGELOG), tools/
+# (folded into scripts/). The 1.x C payload was already gone pre-rename.
 
 JOBS ?= $(shell getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || echo 4)
 NPM_INSTALL ?= npm install --no-audit --no-fund
@@ -391,7 +392,7 @@ dist-linux-arm: payload setup-client
 # Testing
 #──────────────────────────────────────────────────────────────────────────────
 
-test: test-root test-engine test-payload test-client
+test: test-root test-engine test-desktop test-payload test-client
 	@echo ""
 	@echo "✓ All tests passed"
 	@echo ""

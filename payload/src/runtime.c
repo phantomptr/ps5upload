@@ -1,8 +1,12 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdarg.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/utsname.h>
+#include <dlfcn.h>
+#include <sys/wait.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/param.h>
@@ -15,6 +19,9 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
+#include <ifaddrs.h>
+#include <net/if.h>
+#include <net/if_dl.h>
 #include <dirent.h>
 #include <errno.h>
 #include <pthread.h>
@@ -55,7 +62,8 @@ extern int posix_fallocate(int fd, off_t offset, off_t len);
 #define FTX2_FRAME_ERROR 3u
 #define FTX2_FRAME_BEGIN_TX 10u
 #define FTX2_FRAME_BEGIN_TX_ACK 11u
-/* BeginTx TxMeta flag bits (see specs/ftx2-protocol.md). Bit 0 = RESUME:
+/* BeginTx TxMeta flag bits (mirror of ftx2-proto's lib.rs FrameType
+ * doc comments — the standalone specs/ tree was retired). Bit 0 = RESUME:
  * host asks the payload to reuse an already-interrupted tx_id instead of
  * allocating a fresh slot. Unknown / non-resumable tx_ids fall through to
  * fresh-BeginTx semantics (flag becomes a no-op). */
@@ -167,6 +175,75 @@ extern int posix_fallocate(int fd, off_t offset, off_t len);
 #define FTX2_FRAME_PKG_INSTALL_ACK          83u
 #define FTX2_FRAME_PKG_INSTALL_STATUS       84u
 #define FTX2_FRAME_PKG_INSTALL_STATUS_ACK   85u
+/* Power control: reboot/shutdown/standby/tick. Body is a tiny JSON
+ * `{"action":"..."}`. Sony API calls inside the payload — no kernel
+ * R/W needed. ACK body is `{"ok":true}` or `{"ok":false,"err":"..."}`. */
+#define FTX2_FRAME_SYSTEM_CONTROL           86u
+#define FTX2_FRAME_SYSTEM_CONTROL_ACK       87u
+/* Extended power telemetry — operating seconds, boot count, thermal
+ * alert flags. Read-only, ICC-based; safe even without kernel R/W. */
+#define FTX2_FRAME_POWER_TELEMETRY          88u
+#define FTX2_FRAME_POWER_TELEMETRY_ACK      89u
+/* User account enumeration. */
+#define FTX2_FRAME_USER_LIST                90u
+#define FTX2_FRAME_USER_LIST_ACK            91u
+/* Save data listing per-user. */
+#define FTX2_FRAME_LIST_SAVES               92u
+#define FTX2_FRAME_LIST_SAVES_ACK           93u
+/* Screenshot listing. */
+#define FTX2_FRAME_LIST_SCREENSHOTS         94u
+#define FTX2_FRAME_LIST_SCREENSHOTS_ACK     95u
+/* Filesystem index build/query/search. */
+#define FTX2_FRAME_INDEX_START              96u
+#define FTX2_FRAME_INDEX_START_ACK          97u
+#define FTX2_FRAME_INDEX_STATUS             98u
+#define FTX2_FRAME_INDEX_STATUS_ACK         99u
+#define FTX2_FRAME_SEARCH_INDEX             100u
+#define FTX2_FRAME_SEARCH_INDEX_ACK         101u
+#define FTX2_FRAME_INDEX_CANCEL             102u
+#define FTX2_FRAME_INDEX_CANCEL_ACK         103u
+/* App lifecycle (suspend/resume/kill/list). */
+#define FTX2_FRAME_APP_LIFECYCLE            104u
+#define FTX2_FRAME_APP_LIFECYCLE_ACK        105u
+/* Rich JSON toast (sceNotificationSend). */
+#define FTX2_FRAME_TOAST_SEND               106u
+#define FTX2_FRAME_TOAST_SEND_ACK           107u
+/* Kernel log streaming. */
+#define FTX2_FRAME_KLOG_READ                108u
+#define FTX2_FRAME_KLOG_READ_ACK            109u
+/* Network interface enumeration. */
+#define FTX2_FRAME_NET_INTERFACES           110u
+#define FTX2_FRAME_NET_INTERFACES_ACK       111u
+/* Peripheral (BD/USB) control. */
+#define FTX2_FRAME_PERIPHERAL_CONTROL       112u
+#define FTX2_FRAME_PERIPHERAL_CONTROL_ACK   113u
+/* Process module list (loaded sprx). */
+#define FTX2_FRAME_PROC_MODULES             114u
+#define FTX2_FRAME_PROC_MODULES_ACK         115u
+/* Shell command execution. */
+#define FTX2_FRAME_SHELL_EXEC               116u
+#define FTX2_FRAME_SHELL_EXEC_ACK           117u
+/* CRC32 file checksum. */
+#define FTX2_FRAME_CRC32_FILE               118u
+#define FTX2_FRAME_CRC32_FILE_ACK           119u
+/* sqlite query of app.db. */
+#define FTX2_FRAME_APPDB_QUERY              120u
+#define FTX2_FRAME_APPDB_QUERY_ACK          121u
+/* Network round-trip + throughput test. */
+#define FTX2_FRAME_NET_SPEED_TEST           122u
+#define FTX2_FRAME_NET_SPEED_TEST_ACK       123u
+/* Direct .pkg mount via sceFsMountGamePkg. */
+#define FTX2_FRAME_PKG_DIRECT_MOUNT         124u
+#define FTX2_FRAME_PKG_DIRECT_MOUNT_ACK     125u
+/* UFS fsck. */
+#define FTX2_FRAME_UFS_FSCK                 126u
+#define FTX2_FRAME_UFS_FSCK_ACK             127u
+/* LWFS patch overlay mount. */
+#define FTX2_FRAME_LWFS_MOUNT               128u
+#define FTX2_FRAME_LWFS_MOUNT_ACK           129u
+/* Atomic small-file write (≤256 KB). */
+#define FTX2_FRAME_FS_WRITE_BYTES           130u
+#define FTX2_FRAME_FS_WRITE_BYTES_ACK       131u
 /* Where we place mount points. Scoped under /mnt/ps5upload/ so it
  * never collides with mount paths owned by other utilities. */
 #define FS_MOUNT_BASE "/mnt/ps5upload"
@@ -345,9 +422,19 @@ static uint32_t read_le32(const unsigned char *p);
 /* Component-scoped `..`/`.` rejection used by both is_path_allowed and
  * cleanup_path_allowed. Defined further down near is_path_allowed. */
 static int path_has_dotdot_component(const char *p);
+/* Writable-roots allowlist. Used by every destructive FS handler and
+ * the BEGIN_TX/STREAM_SHARD ingestion path so a hostile manifest can
+ * not write outside the allowlisted roots. See is_path_allowed for
+ * the exact set. */
+static int is_path_allowed(const char *p);
 /* JSON-escape helper. Used by ACK builders that embed user-controlled
  * paths/strings into JSON bodies. Defined alongside FS_LIST_VOLUMES. */
 static void json_escape_into(const char *src, char *dst, size_t dst_cap);
+static const char *json_string_end(const char *start, const char *limit);
+static int json_copy_unescaped_string(const char *start, const char *end,
+                                      char *out, size_t out_len);
+static const char *find_bounded(const char *hay, size_t hay_len,
+                                const char *needle);
 /* Forward declarations — runtime_reconcile_mounts uses fs_mount and
  * mount_tracker helpers defined further down in the file. */
 static int fs_mount_try_unmount(const char *mount_point);
@@ -492,29 +579,16 @@ static void extract_json_string_field(const char *json, const char *field,
     char needle[64];
     const char *pos = NULL;
     const char *start = NULL;
-    size_t len = 0;
+    const char *end = NULL;
     if (!json || !field || !out || out_len == 0) return;
     out[0] = '\0';
     snprintf(needle, sizeof(needle), "\"%s\":\"", field);
     pos = strstr(json, needle);
     if (!pos) return;
     start = pos + strlen(needle);
-    /* Walk to the closing quote, treating `\"` as an escaped quote
-     * inside the value rather than a string terminator. The engine
-     * never emits backslash-escapes for path content (paths can't
-     * contain `"` on PS5 filesystems anyway), but a malformed or
-     * crafted body shouldn't truncate to a wrong path that downstream
-     * code then operates on. */
-    while (start[len] && start[len] != '"') {
-        if (start[len] == '\\' && start[len + 1] != '\0') {
-            len += 2; /* skip escape sequence */
-            continue;
-        }
-        len += 1;
-    }
-    if (len == 0 || len + 1 > out_len) return;
-    memcpy(out, start, len);
-    out[len] = '\0';
+    end = json_string_end(start, NULL);
+    if (!end) return;
+    if (json_copy_unescaped_string(start, end, out, out_len) != 0) out[0] = '\0';
 }
 
 static uint64_t extract_json_uint64_field(const char *json, const char *field) {
@@ -765,11 +839,13 @@ static runtime_tx_entry_t *runtime_alloc_tx_entry(runtime_state_t *state,
 static int runtime_flush_tx_record(const runtime_state_t *state,
                                     const runtime_tx_entry_t *entry) {
     char path[512];
+    char dest_root_esc[512];
     FILE *fp = NULL;
     if (!state || !entry) return -1;
     snprintf(path, sizeof(path), "%s/tx_%s.json", PS5UPLOAD2_TX_DIR, entry->tx_id_hex);
     fp = fopen(path, "w");
     if (!fp) return -1;
+    json_escape_into(entry->dest_root, dest_root_esc, sizeof(dest_root_esc));
     fprintf(fp,
             "{\"tx_id\":\"%s\",\"tx_seq\":%llu,\"state\":\"%s\","
             "\"shards_received\":%llu,\"bytes_received\":%llu,"
@@ -783,7 +859,7 @@ static int runtime_flush_tx_record(const runtime_state_t *state,
             (unsigned long long)entry->total_shards,
             (unsigned long long)entry->total_bytes,
             (unsigned long long)entry->file_count,
-            entry->dest_root);
+            dest_root_esc);
     fclose(fp);
     return 0;
 }
@@ -819,7 +895,7 @@ static int runtime_load_tx_entries(runtime_state_t *state) {
         char tx_id_hex[33];
         unsigned char tx_id[16];
         char path[512];
-        char record[512];
+        char record[1024];
         unsigned long long tx_seq = 0;
         runtime_tx_entry_t *entry = NULL;
         const char *name = de->d_name;
@@ -1028,17 +1104,39 @@ static void runtime_mark_tx_interrupted_by_id(runtime_state_t *state,
 /* ── Public lifecycle ─────────────────────────────────────────────────────────── */
 
 int runtime_ensure_directories(void) {
+    /* Critical dirs — all under /data which the loader's process
+     * always has write access to. If any of these fail, the payload
+     * truly can't function, so abort startup. */
     if (ensure_dir(PS5UPLOAD2_RUNTIME_ROOT) != 0) return -1;
     if (ensure_dir(PS5UPLOAD2_RUNTIME_DIR)  != 0) return -1;
     if (ensure_dir(PS5UPLOAD2_TX_DIR)       != 0) return -1;
     if (ensure_dir(PS5UPLOAD2_SPOOL_DIR)    != 0) return -1;
     if (ensure_dir(PS5UPLOAD2_DEBUG_DIR)    != 0) return -1;
     if (ensure_dir(PS5UPLOAD2_MOUNTS_DIR)   != 0) return -1;
-    /* /user/data/ps5upload may not exist (parent of pkg_temp). Make
-     * sure the parent is created first. /user/data itself is Sony-
-     * managed and always present. */
-    if (ensure_dir(PS5UPLOAD2_USER_DATA_ROOT) != 0) return -1;
-    if (ensure_dir(PS5UPLOAD2_PKG_TEMP_DIR) != 0) return -1;
+    /* Optional dirs under /user — Sony-managed root with stricter
+     * permissions. Without ucred elevation (kstuff not loaded yet)
+     * these mkdirs fail with EACCES. They're only used by the pkg
+     * install flow, so a failure here MUST NOT abort startup —
+     * otherwise sending ps5upload before kstuff would prevent the
+     * mgmt port from ever opening, breaking the whole "load kstuff
+     * later" recovery path the rest of the codebase supports.
+     *
+     * The pkg-install handler re-tries the mkdirs at request time
+     * (after kstuff has had a chance to land), so the user's first
+     * pkg install still succeeds even if startup couldn't pre-create
+     * the dirs. */
+    if (ensure_dir(PS5UPLOAD2_USER_DATA_ROOT) != 0) {
+        fprintf(stderr,
+                "[payload2] /user/data dir create skipped (likely no kstuff yet); "
+                "pkg install will retry on demand\n");
+    } else {
+        /* Only attempt the leaf if the parent succeeded. */
+        if (ensure_dir(PS5UPLOAD2_PKG_TEMP_DIR) != 0) {
+            fprintf(stderr,
+                    "[payload2] pkg_temp dir create skipped; "
+                    "pkg install will retry on demand\n");
+        }
+    }
     return 0;
 }
 
@@ -1596,6 +1694,27 @@ static void write_le64(unsigned char *p, uint64_t v) {
     for (i = 0; i < 8; i++) p[i] = (unsigned char)((v >> (8 * i)) & 0xff);
 }
 
+/* Loop until `len` bytes have been sent. Treats EINTR as retry; returns
+ * 0 on full send, -1 on hard error or peer disconnect. Without this loop,
+ * a single short write (common when SO_SNDBUF fills under load) leaves
+ * the framing desynced and the next dispatcher iteration reads garbage
+ * as a header — manifests to users as random "bad_magic" disconnects. */
+static int send_full(int fd, const void *buf, size_t len) {
+    const unsigned char *p = (const unsigned char *)buf;
+    size_t remaining = len;
+    while (remaining > 0) {
+        ssize_t n = send(fd, p, remaining, 0);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (n == 0) return -1;
+        p += (size_t)n;
+        remaining -= (size_t)n;
+    }
+    return 0;
+}
+
 static int send_frame(int fd, uint16_t frame_type, uint32_t flags,
                       uint64_t trace_id, const void *body, uint64_t body_len) {
     unsigned char hdr[FTX2_HEADER_LEN];
@@ -1605,9 +1724,9 @@ static int send_frame(int fd, uint16_t frame_type, uint32_t flags,
     write_le32(hdr + 8, flags);
     write_le64(hdr + 12, body_len);
     write_le64(hdr + 20, trace_id);
-    if (send(fd, hdr, sizeof(hdr), 0) != (ssize_t)sizeof(hdr)) return -1;
+    if (send_full(fd, hdr, sizeof(hdr)) != 0) return -1;
     if (body_len > 0 && body) {
-        if (send(fd, body, (size_t)body_len, 0) != (ssize_t)body_len) return -1;
+        if (send_full(fd, body, (size_t)body_len) != 0) return -1;
     }
     return 0;
 }
@@ -1741,9 +1860,16 @@ static void *piped_writer_thread(void *arg) {
         if (write_full(pw->fd, buf, (size_t)len) != 0) {
             pthread_mutex_lock(&pw->lock);
             pw->writer_error = 1;
-            /* Mark remaining slots empty so producer can unblock. */
-            pw->slot[i].len = 0;
-            pthread_cond_signal(&pw->cv_empty[i]);
+            /* Mark BOTH slots empty so a producer waiting on the
+             * other slot's cv_empty wakes up too. The prior code
+             * only signaled cv_empty[i], which left a producer
+             * blocked on cv_empty[1-i] stuck until the recv timeout
+             * eventually broke the connection — observably as
+             * "transfer hangs forever" after a write_full failure. */
+            pw->slot[0].len = 0;
+            pw->slot[1].len = 0;
+            pthread_cond_broadcast(&pw->cv_empty[0]);
+            pthread_cond_broadcast(&pw->cv_empty[1]);
             pthread_mutex_unlock(&pw->lock);
             return NULL;
         }
@@ -2887,17 +3013,26 @@ static int build_manifest_index(const char *blob, size_t blob_len,
         obj_end = strchr(obj_start, '}');
         if (!obj_end) { free(idx); return -1; }
 
-        /* Extract shard_start / shard_count from within this object only. We
-         * temporarily NUL-terminate at obj_end to scope the helper's strstr. */
+        /* Extract shard_start / shard_count from within this object only.
+         * Per-object isolation matters: a malformed/crafted manifest where
+         * one object's `shard_start` is missing would otherwise cause
+         * extract_json_uint64_field's unbounded strstr to skip ahead and
+         * read the NEXT object's value, silently aliasing the two. We
+         * make a NUL-terminated stack copy of just the object slice so
+         * the helper's strstr can't escape past obj_end. */
         {
-            /* Safe: we don't mutate the caller's blob. We only read within
-             * [obj_start, obj_end]. extract_* helpers take a const char * and
-             * use strstr which stops at the first match — as long as the next
-             * object's fields don't appear before this object's closing brace,
-             * we're fine. The writer emits one object per file so fields are
-             * well-separated. */
-            s_start = extract_json_uint64_field(obj_start, "shard_start");
-            s_count = extract_json_uint64_field(obj_start, "shard_count");
+            char obj_buf[1024];
+            size_t obj_len = (size_t)(obj_end - obj_start) + 1; /* include '}' */
+            if (obj_len >= sizeof(obj_buf)) {
+                /* Object larger than our stack buffer — no real manifest
+                 * has 1KB+ per-file metadata (~150B typical, includes
+                 * up-to-512B path). Reject as malformed. */
+                free(idx); return -1;
+            }
+            memcpy(obj_buf, obj_start, obj_len);
+            obj_buf[obj_len] = '\0';
+            s_start = extract_json_uint64_field(obj_buf, "shard_start");
+            s_count = extract_json_uint64_field(obj_buf, "shard_count");
             if (s_count == 0) s_count = 1;
         }
         if (s_start == 0) { free(idx); return -1; }
@@ -2915,10 +3050,8 @@ static int build_manifest_index(const char *blob, size_t blob_len,
         if (!path_key || path_key >= obj_end) { free(idx); return -1; }
         path_value_start = path_key + strlen("\"path\":\"");
         path_value_end = path_value_start;
-        while (path_value_end < obj_end && *path_value_end != '"') {
-            path_value_end += 1;
-        }
-        if (path_value_end >= obj_end) { free(idx); return -1; }
+        path_value_end = json_string_end(path_value_start, obj_end);
+        if (!path_value_end) { free(idx); return -1; }
         plen = (size_t)(path_value_end - path_value_start);
         if (plen == 0 || plen >= 512) { free(idx); return -1; }
 
@@ -3001,8 +3134,10 @@ static int lookup_manifest_index(const manifest_index_entry_t *idx,
                 return -1;
             }
             memset(out, 0, sizeof(*out));
-            memcpy(out->path, blob + poff, plen);
-            out->path[plen] = '\0';
+            if (json_copy_unescaped_string(blob + poff, blob + poff + plen,
+                                           out->path, sizeof(out->path)) != 0) {
+                return -1;
+            }
             out->shard_start = s;
             out->shard_count = ec;
             return 0;
@@ -3498,6 +3633,22 @@ static int handle_packed_shard(runtime_state_t *state, int client_fd,
         if (want_verify) blake3_hasher_update(&hasher, (unsigned char *)path, path_len);
         path[path_len] = '\0';
         remaining -= path_len;
+
+        /* Defence in depth: every per-record `path` carried by a packed
+         * STREAM_SHARD must pass the same writable-roots allowlist used
+         * elsewhere. Without this, a hostile LAN client could include
+         * a record like "/system_data/priv/foo" + arbitrary bytes and
+         * the open(O_WRONLY|O_CREAT|O_TRUNC) below would write it.
+         * The BEGIN_TX dest_root check above is the first line of
+         * defence; this is the second, since per-record paths are
+         * sent independently and aren't constrained by the manifest
+         * dest_root in any structural way. */
+        if (!is_path_allowed(path)) {
+            if (remaining > 0) (void)drain_shard_data(client_fd, remaining);
+            runtime_abort_tx_fatal(state, entry);
+            return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
+                              "packed_path_not_allowed", 23);
+        }
 
         /* Parent-dir cache is reader-thread-only; this stays correct whether
          * the pool is active or not. */
@@ -4112,6 +4263,63 @@ static void json_escape_into(const char *src, char *dst, size_t dst_cap) {
     dst[ei] = '\0';
 }
 
+static const char *json_string_end(const char *start, const char *limit) {
+    const char *p = start;
+    if (!p) return NULL;
+    while ((!limit || p < limit) && *p) {
+        if (*p == '"') return p;
+        if (*p == '\\') {
+            p++;
+            if ((limit && p >= limit) || !*p) return NULL;
+        }
+        p++;
+    }
+    return NULL;
+}
+
+static int json_copy_unescaped_string(const char *start, const char *end,
+                                      char *out, size_t out_len) {
+    size_t oi = 0;
+    const char *p = start;
+    if (!start || !end || !out || out_len == 0 || end < start) return -1;
+    while (p < end) {
+        unsigned char c = (unsigned char)*p++;
+        if (c == '\\') {
+            if (p >= end) return -1;
+            c = (unsigned char)*p++;
+            switch (c) {
+                case '"': case '\\': case '/': break;
+                case 'b': c = '\b'; break;
+                case 'f': c = '\f'; break;
+                case 'n': c = '\n'; break;
+                case 'r': c = '\r'; break;
+                case 't': c = '\t'; break;
+                case 'u':
+                    if (end - p < 4) return -1;
+                    p += 4;
+                    c = '?';
+                    break;
+                default:
+                    return -1;
+            }
+        }
+        if (c == '\0' || oi + 1 >= out_len) return -1;
+        out[oi++] = (char)c;
+    }
+    out[oi] = '\0';
+    return 0;
+}
+
+static const char *find_bounded(const char *hay, size_t hay_len,
+                                const char *needle) {
+    size_t needle_len = needle ? strlen(needle) : 0;
+    if (!hay || !needle || needle_len == 0 || needle_len > hay_len) return NULL;
+    for (size_t i = 0; i <= hay_len - needle_len; i++) {
+        if (memcmp(hay + i, needle, needle_len) == 0) return hay + i;
+    }
+    return NULL;
+}
+
 /* Returns non-zero iff the mount is one we want to surface to the client:
  * the three PS5 storage shapes the UI cares about, and only when a real
  * device is backing the mount (not a sandbox nullfs view or a pseudo fs).
@@ -4288,9 +4496,19 @@ static int handle_fs_list_volumes(runtime_state_t *state, int client_fd,
             break;
         }
         off += (size_t)n;
+        /* Defensive belt-and-braces clamp. The check above already
+         * keeps us under RESP_CAP, but if it ever fails to (e.g. a
+         * future code path adds an unchecked snprintf in the loop)
+         * we'd underflow `RESP_CAP - off` in the next iteration into
+         * a multi-GB size_t. Cap so the worst case is "nothing
+         * appended" instead of "writes past the heap buffer". */
+        if (off >= RESP_CAP) { off = RESP_CAP - 1; break; }
         first_volume = 0;
     }
 
+    /* Reserve room for the "]}" trailer — if a previous iteration
+     * landed on the boundary, leave space for the close-array tokens. */
+    if (off + 2 >= RESP_CAP) { free(resp); return -1; }
     n = snprintf(resp + off, RESP_CAP - off, "]}");
     if (n < 0 || (size_t)n >= RESP_CAP - off) { free(resp); return -1; }
     off += (size_t)n;
@@ -4557,7 +4775,12 @@ static int handle_fs_hash(runtime_state_t *state, int client_fd,
     if (request_body) {
         extract_json_string_field(request_body, "path", path, sizeof(path));
     }
-    if (!path[0] || path[0] != '/' || strstr(path, "..") != NULL) {
+    /* Use the component-aware dotdot check so legitimate filenames
+     * like "save..bak" (allowed) pass through; the bare strstr "..":
+     * substring rejected those by mistake. is_path_allowed already
+     * uses the same component check internally — wraps with the
+     * writable-roots allowlist for consistency with other handlers. */
+    if (!path[0] || !is_path_allowed(path)) {
         return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
                           "fs_hash_bad_path", 16);
     }
@@ -7211,6 +7434,2748 @@ static int handle_hw_power(runtime_state_t *state, int client_fd, uint64_t trace
                               FTX2_FRAME_HW_POWER_ACK, "hw_power_failed");
 }
 
+/* ── System control (reboot / shutdown / standby / wake-tick) ─────────── */
+
+/* Sony API declarations — these live in libSceSystemService (already in
+ * Makefile LIBS). We forward-declare here rather than #include because
+ * the SDK doesn't ship a public header for the "request" family. */
+extern int sceSystemServiceRequestPowerOff(void);
+extern int sceSystemServiceRequestReboot(void);
+extern int sceSystemServicePowerTick(void);
+/* ICC telemetry — runtime-resolved via dlsym so a missing symbol on
+ * a given firmware doesn't break the entire payload at load time.
+ *
+ * Empirical (2026-05-10): `sceKernelIccGetThermalAlert` is exported
+ * by the SDK's libkernel_web.so STUB but NOT by the actual on-PS5
+ * libkernel_web.sprx on at least one firmware in the field. With it
+ * declared `extern` (compile-time linkage), rtld's lib_init step
+ * fails when our binary loads — main() never runs, no port bind, no
+ * toast, silent failure. dlsym pattern lets the binary load and just
+ * leaves the function pointer NULL when missing; call sites null-check
+ * and substitute "err" in the response.
+ *
+ * Same pattern preemptively applied to the other Icc Get* symbols so
+ * a future Sony firmware change (removing more) doesn't repeat the
+ * outage. The Control* power-state functions are dlsym'd for the same
+ * reason in their own block. */
+typedef int (*sce_icc_u32_fn)(unsigned int *out);
+typedef int (*sce_icc_u16_fn)(unsigned short *out);
+typedef int (*sce_icc_u8_fn)(unsigned char *out);
+static sce_icc_u32_fn p_sceKernelIccGetPowerOperatingTime = NULL;
+static sce_icc_u32_fn p_sceKernelIccGetPowerNumberOfBootShutdown = NULL;
+static sce_icc_u16_fn p_sceKernelIccGetThermalAlert = NULL;
+static sce_icc_u8_fn  p_sceKernelIccGetPowerUpCause = NULL;
+static int            sce_icc_get_resolve_attempted = 0;
+static void resolve_sce_icc_get(void) {
+    if (sce_icc_get_resolve_attempted) return;
+    sce_icc_get_resolve_attempted = 1;
+    p_sceKernelIccGetPowerOperatingTime = (sce_icc_u32_fn)
+        dlsym(RTLD_DEFAULT, "sceKernelIccGetPowerOperatingTime");
+    p_sceKernelIccGetPowerNumberOfBootShutdown = (sce_icc_u32_fn)
+        dlsym(RTLD_DEFAULT, "sceKernelIccGetPowerNumberOfBootShutdown");
+    p_sceKernelIccGetThermalAlert = (sce_icc_u16_fn)
+        dlsym(RTLD_DEFAULT, "sceKernelIccGetThermalAlert");
+    p_sceKernelIccGetPowerUpCause = (sce_icc_u8_fn)
+        dlsym(RTLD_DEFAULT, "sceKernelIccGetPowerUpCause");
+}
+/* User service — libSceUserService. Initialise/Terminate are
+ * idempotent; we call Initialize once on first user-list request and
+ * leave the service open for subsequent calls. The list call returns
+ * a fixed-size 16-int array — Sony's UI supports up to 16 users.
+ *
+ * sceUserServiceGetUserName takes (user_id, out_buf, out_buf_size)
+ * and writes a UTF-8 null-terminated name. */
+extern int sceUserServiceInitialize(void *params);
+extern int sceUserServiceGetForegroundUser(int *user_id);
+extern int sceUserServiceGetLoginUserIdList(int *id_list);
+extern int sceUserServiceGetUserName(int user_id, char *name, size_t size);
+#define USER_SERVICE_MAX_USERS 16
+
+/* App lifecycle — libSceSysCore exports. ApplicationGetProcs returns
+ * the count of running apps via the in-out arg; the caller passes a
+ * buffer + max_count and reads back the list. The proc struct shape
+ * varies across firmware revisions but the first 4-byte field is
+ * always the app_id. We treat each entry as opaque 24 bytes (a
+ * documented-stable size from sceApplicationGetAppInfoByAppId
+ * usage in the wild) and only extract app_id at offset 0.
+ *
+ * The Sony "GetProcs" type is `SceAppCallProcInfo` per psdevwiki.
+ * For our purposes — list running app_ids so the user can
+ * suspend/resume them — only the app_id field matters. */
+/* libSceSysCore exports — also dlopen-resolved at first use (see the
+ * libSceFsInternalForVsh comment for the rationale: compile-time
+ * linkage of optional SPRX deps blocks the entire payload from
+ * loading on FW where any one is missing). */
+typedef int (*sce_app_simple_fn)(unsigned int app_id);
+typedef int (*sce_app_get_procs_fn)(void *info_buf, int max_count,
+                                     int *out_count);
+static sce_app_simple_fn   p_sceApplicationSuspend    = NULL;
+static sce_app_simple_fn   p_sceApplicationResume     = NULL;
+static sce_app_simple_fn   p_sceApplicationKill       = NULL;
+static sce_app_get_procs_fn p_sceApplicationGetProcs  = NULL;
+static int sce_syscore_resolve_attempted = 0;
+static int resolve_sce_syscore(void) {
+    if (sce_syscore_resolve_attempted) {
+        return (p_sceApplicationGetProcs || p_sceApplicationSuspend)
+            ? 0 : -1;
+    }
+    sce_syscore_resolve_attempted = 1;
+    void *h = dlopen("libSceSysCore.sprx", RTLD_LAZY);
+    if (!h) return -1;
+    p_sceApplicationSuspend  = (sce_app_simple_fn)
+        dlsym(h, "sceApplicationSuspend");
+    p_sceApplicationResume   = (sce_app_simple_fn)
+        dlsym(h, "sceApplicationResume");
+    p_sceApplicationKill     = (sce_app_simple_fn)
+        dlsym(h, "sceApplicationKill");
+    p_sceApplicationGetProcs = (sce_app_get_procs_fn)
+        dlsym(h, "sceApplicationGetProcs");
+    return (p_sceApplicationGetProcs || p_sceApplicationSuspend)
+        ? 0 : -1;
+}
+
+/* Rich notification — libSceNotification. The JSON template format
+ * is `{"requestId":N,"useIconImageUri":true,"requestId":1,
+ *      "imageUri":"<url>","targetId":"NoTargetId","userId":N,
+ *      "type":0,"messageType":N,"summary":"<title>","app":{
+ *      "type":0},"icon":<NotificationIconType>,"messageBody":"<body>",
+ *      ...}` — the docs are spotty, so we send a minimal shape and
+ * Sony's daemon fills in defaults. */
+/* sceNotificationSend — dlsym-resolved like the rest of the Sce*
+ * surface (see reference_ps5_sdk_stub_vs_sprx note). SDK stub exports
+ * it; on-console libSceNotification SPRX may not on every firmware,
+ * and an eager-bound undef silently kills payload load. */
+typedef int (*sce_notification_send_fn)(int target_user_id, int unknown_flag,
+                                         const char *json_template);
+static sce_notification_send_fn p_sceNotificationSend = NULL;
+static int sce_notification_resolve_attempted = 0;
+static void resolve_sce_notification(void) {
+    if (sce_notification_resolve_attempted) return;
+    sce_notification_resolve_attempted = 1;
+    p_sceNotificationSend = (sce_notification_send_fn)
+        dlsym(RTLD_DEFAULT, "sceNotificationSend");
+}
+
+/* Peripheral control + module enumeration — also dlsym-resolved for
+ * the same reason as sceKernelIccGet*: the SDK stub exports them but
+ * the actual on-PS5 SPRX may not, and a missing symbol kills load.
+ * Even though these passed in field testing today (only ThermalAlert
+ * was the assassin on this firmware), preemptive hardening avoids
+ * repeating the same diagnostic cycle on the next FW that drops one. */
+typedef int (*sce_icc_bd_fn)(int state);
+typedef int (*sce_icc_usb_fn)(int port, int state);
+typedef struct sce_module_info {
+    size_t size;             /* sizeof(struct), Sony fills */
+    char   name[256];
+    int    type;             /* internal */
+    int    pad;
+    void  *base_addr;
+    size_t code_size;
+    void  *code_segment;
+    /* … more fields, but we only need name + base + size … */
+} sce_module_info_t;
+typedef int (*sce_get_module_list_fn)(int *handle_list, int max_handles,
+                                       int *out_count);
+typedef int (*sce_get_module_info_fn)(int handle, sce_module_info_t *info);
+
+static sce_icc_bd_fn         p_sceKernelIccControlBDPowerState  = NULL;
+static sce_icc_usb_fn        p_sceKernelIccControlUSBPowerState = NULL;
+static sce_get_module_list_fn p_sceKernelGetModuleList          = NULL;
+static sce_get_module_info_fn p_sceKernelGetModuleInfo          = NULL;
+static int                    sce_kernel_extras_resolve_attempted = 0;
+static void resolve_sce_kernel_extras(void) {
+    if (sce_kernel_extras_resolve_attempted) return;
+    sce_kernel_extras_resolve_attempted = 1;
+    p_sceKernelIccControlBDPowerState = (sce_icc_bd_fn)
+        dlsym(RTLD_DEFAULT, "sceKernelIccControlBDPowerState");
+    p_sceKernelIccControlUSBPowerState = (sce_icc_usb_fn)
+        dlsym(RTLD_DEFAULT, "sceKernelIccControlUSBPowerState");
+    p_sceKernelGetModuleList = (sce_get_module_list_fn)
+        dlsym(RTLD_DEFAULT, "sceKernelGetModuleList");
+    p_sceKernelGetModuleInfo = (sce_get_module_info_fn)
+        dlsym(RTLD_DEFAULT, "sceKernelGetModuleInfo");
+}
+
+/* sceNetGetIfList — populates an array of network interface info
+ * structs and returns the count. Per psdevwiki the struct shape is
+ * 0x500 bytes, but only the first ~100 contain user-visible fields
+ * (name, addresses, MAC). We treat each entry as 0x500 opaque bytes
+ * and read the documented offsets.
+ *
+ * Resolved via dlopen at first use rather than compile-time linkage.
+ * libSceNet isn't accessible to user-mode loaders on every PS5
+ * firmware; a missing DT_NEEDED entry would cause rtld to refuse
+ * to load the entire payload (no toast, no port bind, loader
+ * silently rejects). With dlopen, missing → handler returns
+ * `service_unavailable` and the rest of the payload keeps working. */
+typedef int (*sce_net_init_fn)(void);
+typedef int (*sce_net_get_if_list_fn)(void *list, int max_count, int *out_count);
+static sce_net_get_if_list_fn p_sceNetGetIfList = NULL;
+static int sce_net_resolve_attempted = 0;
+static int resolve_sce_net(void) {
+    if (sce_net_resolve_attempted) {
+        return p_sceNetGetIfList ? 0 : -1;
+    }
+    sce_net_resolve_attempted = 1;
+    void *h = dlopen("libSceNet.sprx", RTLD_LAZY);
+    if (!h) return -1;
+    sce_net_init_fn init = (sce_net_init_fn)dlsym(h, "sceNetInit");
+    if (init) (void)init();  /* best-effort init */
+    p_sceNetGetIfList = (sce_net_get_if_list_fn)dlsym(h, "sceNetGetIfList");
+    return p_sceNetGetIfList ? 0 : -1;
+}
+#define NET_IF_ENTRY_BYTES 0x500
+#define NET_IF_MAX_ENTRIES 16
+/* sceSystemStateMgrEnterStandby is an alias inside the same library;
+ * not all firmware revisions expose it directly. We dlsym at runtime
+ * so a missing symbol degrades to "standby_unavailable" rather than
+ * a load-time symbol error. */
+
+/* Parse `{"action":"<name>"}` from a body. Returns one of the
+ * SC_ACTION_* enum values, or -1 if the JSON is malformed / unknown. */
+typedef enum {
+    SC_ACTION_REBOOT = 0,
+    SC_ACTION_SHUTDOWN = 1,
+    SC_ACTION_STANDBY = 2,
+    SC_ACTION_TICK = 3,
+} system_control_action_t;
+
+static int parse_system_control_action(const char *body, uint64_t body_len,
+                                        system_control_action_t *out) {
+    if (!body || body_len == 0 || body_len > 256) return -1;
+    /* Look for `"action":"<value>"`. We don't need a full JSON parser
+     * for one tiny field — substring search is enough and avoids
+     * pulling in cJSON (not currently linked). */
+    char buf[260];
+    memcpy(buf, body, (size_t)body_len);
+    buf[body_len] = '\0';
+    const char *needle = "\"action\"";
+    const char *p = strstr(buf, needle);
+    if (!p) return -1;
+    p += strlen(needle);
+    while (*p == ' ' || *p == ':') p++;
+    if (*p != '"') return -1;
+    p++;
+    /* p now points at the value start. Find closing quote. */
+    const char *e = strchr(p, '"');
+    if (!e) return -1;
+    size_t vlen = (size_t)(e - p);
+    if (vlen == 6 && strncmp(p, "reboot", 6) == 0) {
+        *out = SC_ACTION_REBOOT;
+        return 0;
+    }
+    if (vlen == 8 && strncmp(p, "shutdown", 8) == 0) {
+        *out = SC_ACTION_SHUTDOWN;
+        return 0;
+    }
+    if (vlen == 7 && strncmp(p, "standby", 7) == 0) {
+        *out = SC_ACTION_STANDBY;
+        return 0;
+    }
+    if (vlen == 4 && strncmp(p, "tick", 4) == 0) {
+        *out = SC_ACTION_TICK;
+        return 0;
+    }
+    return -1;
+}
+
+static int handle_system_control(runtime_state_t *state, int client_fd,
+                                  uint64_t trace_id, const char *body,
+                                  uint64_t body_len) {
+    if (!state) return -1;
+    system_control_action_t action;
+    if (parse_system_control_action(body, body_len, &action) != 0) {
+        const char *err = "{\"ok\":false,\"err\":\"bad_action\"}";
+        return send_frame(client_fd, FTX2_FRAME_SYSTEM_CONTROL_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+
+    /* Reply BEFORE invoking destructive APIs — reboot/shutdown will
+     * tear down our network stack, so the client may never see the
+     * ACK if we send after. The client treats "no ACK + drop" as
+     * success per the protocol contract. */
+    int rc = 0;
+    int err_code = 0;
+    const char *err_str = NULL;
+    switch (action) {
+    case SC_ACTION_REBOOT:
+        /* Send ACK first, then call API. */
+        rc = send_frame(client_fd, FTX2_FRAME_SYSTEM_CONTROL_ACK, 0,
+                        trace_id, "{\"ok\":true,\"action\":\"reboot\"}", 28);
+        sceSystemServiceRequestReboot();
+        return rc;
+    case SC_ACTION_SHUTDOWN:
+        rc = send_frame(client_fd, FTX2_FRAME_SYSTEM_CONTROL_ACK, 0,
+                        trace_id, "{\"ok\":true,\"action\":\"shutdown\"}", 30);
+        sceSystemServiceRequestPowerOff();
+        return rc;
+    case SC_ACTION_STANDBY: {
+        /* sceSystemStateMgrEnterStandby is dlsym'd to handle FW where
+         * the symbol moved or doesn't exist. */
+        void *h = dlsym(RTLD_DEFAULT, "sceSystemStateMgrEnterStandby");
+        if (!h) {
+            err_str = "{\"ok\":false,\"err\":\"standby_unavailable\"}";
+            return send_frame(client_fd, FTX2_FRAME_SYSTEM_CONTROL_ACK,
+                              0, trace_id, err_str, strlen(err_str));
+        }
+        int (*enter_standby)(void) = (int (*)(void))h;
+        rc = send_frame(client_fd, FTX2_FRAME_SYSTEM_CONTROL_ACK, 0,
+                        trace_id, "{\"ok\":true,\"action\":\"standby\"}", 30);
+        enter_standby();
+        return rc;
+    }
+    case SC_ACTION_TICK:
+        /* Tick is non-destructive; we can ACK after. */
+        err_code = sceSystemServicePowerTick();
+        if (err_code == 0) {
+            return send_frame(client_fd, FTX2_FRAME_SYSTEM_CONTROL_ACK,
+                              0, trace_id,
+                              "{\"ok\":true,\"action\":\"tick\"}", 26);
+        }
+        {
+            char buf[128];
+            int n = snprintf(buf, sizeof(buf),
+                             "{\"ok\":false,\"err\":\"power_tick_failed\","
+                             "\"code\":%d}", err_code);
+            return send_frame(client_fd, FTX2_FRAME_SYSTEM_CONTROL_ACK,
+                              0, trace_id, buf, (size_t)n);
+        }
+    }
+    /* Unreachable, but quiet the compiler. */
+    return -1;
+}
+
+/* ── Power telemetry handler ─────────────────────────────────────────── */
+
+static int handle_power_telemetry(runtime_state_t *state, int client_fd,
+                                   uint64_t trace_id) {
+    if (!state) return -1;
+    /* Each ICC call is independent — failures are non-fatal so the
+     * caller still sees whatever did succeed. We emit `<key>=<value>`
+     * for successful reads and `<key>=err` for the others. */
+    char body[512];
+    int n = 0;
+    unsigned int op_secs = 0;
+    unsigned int boot_cycles = 0;
+    unsigned short thermal_flags = 0;
+    unsigned char power_up_cause = 0;
+    resolve_sce_icc_get();
+    int rc_op   = p_sceKernelIccGetPowerOperatingTime
+                    ? p_sceKernelIccGetPowerOperatingTime(&op_secs) : -1;
+    int rc_boot = p_sceKernelIccGetPowerNumberOfBootShutdown
+                    ? p_sceKernelIccGetPowerNumberOfBootShutdown(&boot_cycles) : -1;
+    int rc_therm = p_sceKernelIccGetThermalAlert
+                    ? p_sceKernelIccGetThermalAlert(&thermal_flags) : -1;
+    int rc_pwc  = p_sceKernelIccGetPowerUpCause
+                    ? p_sceKernelIccGetPowerUpCause(&power_up_cause) : -1;
+    if (rc_op == 0) {
+        n += snprintf(body + n, sizeof(body) - n,
+                      "operating_seconds=%u\n", op_secs);
+    } else {
+        n += snprintf(body + n, sizeof(body) - n,
+                      "operating_seconds=err\n");
+    }
+    if (rc_boot == 0) {
+        n += snprintf(body + n, sizeof(body) - n,
+                      "boot_cycles=%u\n", boot_cycles);
+    } else {
+        n += snprintf(body + n, sizeof(body) - n,
+                      "boot_cycles=err\n");
+    }
+    if (rc_therm == 0) {
+        n += snprintf(body + n, sizeof(body) - n,
+                      "thermal_alert_flags=%u\n", (unsigned)thermal_flags);
+    } else {
+        n += snprintf(body + n, sizeof(body) - n,
+                      "thermal_alert_flags=err\n");
+    }
+    if (rc_pwc == 0) {
+        n += snprintf(body + n, sizeof(body) - n,
+                      "power_up_cause=%u\n", (unsigned)power_up_cause);
+    } else {
+        n += snprintf(body + n, sizeof(body) - n,
+                      "power_up_cause=err\n");
+    }
+    pthread_mutex_lock(&state->state_mtx);
+    state->command_count += 1;
+    pthread_mutex_unlock(&state->state_mtx);
+    return send_frame(client_fd, FTX2_FRAME_POWER_TELEMETRY_ACK, 0,
+                      trace_id, body, (uint64_t)n);
+}
+
+/* ── User account enumeration ────────────────────────────────────────── */
+
+static int handle_user_list(runtime_state_t *state, int client_fd,
+                            uint64_t trace_id) {
+    if (!state) return -1;
+    /* Init is idempotent — Sony's API is documented to no-op on a
+     * second call. We don't track a "first call done" flag because
+     * the cost is negligible and statelessness avoids cross-thread
+     * locking concerns. */
+    sceUserServiceInitialize(NULL);
+    int foreground = -1;
+    int rc_fg = sceUserServiceGetForegroundUser(&foreground);
+    int ids[USER_SERVICE_MAX_USERS];
+    /* Sony fills unused slots with -1; iterate until we hit one. */
+    for (int i = 0; i < USER_SERVICE_MAX_USERS; i++) ids[i] = -1;
+    int rc_list = sceUserServiceGetLoginUserIdList(ids);
+    /* Build response JSON. Bounded buffer — 16 users × ~80 bytes per
+     * entry max = ~1.3 KB. 4 KB gives generous headroom. */
+    char body[4096];
+    int n = 0;
+    n += snprintf(body + n, sizeof(body) - n,
+                  "{\"foreground\":%d,\"err_fg\":%d,\"err_list\":%d,\"users\":[",
+                  rc_fg == 0 ? foreground : -1, rc_fg, rc_list);
+    int wrote_one = 0;
+    for (int i = 0; i < USER_SERVICE_MAX_USERS; i++) {
+        if (ids[i] < 0) continue;
+        char name[64];
+        name[0] = '\0';
+        int rc_name = sceUserServiceGetUserName(ids[i], name, sizeof(name));
+        if (n >= (int)sizeof(body) - 100) break;
+        if (wrote_one) {
+            body[n++] = ',';
+        }
+        wrote_one = 1;
+        char esc[128];
+        json_escape_into(name, esc, sizeof(esc));
+        n += snprintf(body + n, sizeof(body) - n,
+                      "{\"id\":%d,\"name\":\"%s\",\"foreground\":%s,\"err_name\":%d}",
+                      ids[i], esc,
+                      ids[i] == foreground ? "true" : "false", rc_name);
+    }
+    if (n < (int)sizeof(body) - 2) {
+        body[n++] = ']';
+        body[n++] = '}';
+    }
+    pthread_mutex_lock(&state->state_mtx);
+    state->command_count += 1;
+    pthread_mutex_unlock(&state->state_mtx);
+    return send_frame(client_fd, FTX2_FRAME_USER_LIST_ACK, 0, trace_id,
+                      body, (uint64_t)n);
+}
+
+/* ── Save-data listing ───────────────────────────────────────────────── */
+
+/* Walk a savedata root for one user, appending JSON entries to `body`.
+ * `root` is e.g. "/user/home/<uid>/savedata_prospero" or
+ * "/user/home/<uid>/savedata". Each child dir is a title_id; we record
+ * the dir path + total size + mtime. Per-title descents are NOT done —
+ * that data lives inside each game's savedata folder and Sony's PFS
+ * encryption hides it from us anyway.
+ *
+ * Returns the number of entries written; -1 on error (caller handles). */
+static int append_saves_for_root(const char *root, int user_id, int kind_is_ps4,
+                                  char *body, int *n, int cap, int already_wrote) {
+    DIR *dp = opendir(root);
+    if (!dp) return 0;  /* Missing root is fine — user just hasn't used PS4 saves yet. */
+    int count = 0;
+    int wrote_one = already_wrote;
+    struct dirent *e;
+    while ((e = readdir(dp)) != NULL) {
+        if (e->d_name[0] == '.') continue;
+        char path[1024];
+        snprintf(path, sizeof(path), "%s/%s", root, e->d_name);
+        struct stat st;
+        if (stat(path, &st) != 0) continue;
+        if (!S_ISDIR(st.st_mode)) continue;
+        /* Compute dir size by single-level scan — cheap and bounded.
+         * We don't need exact size; "approximate disk usage" is what
+         * the user wants for "is this save backup worth keeping?". */
+        long long total = 0;
+        DIR *cd = opendir(path);
+        if (cd) {
+            struct dirent *fe;
+            while ((fe = readdir(cd)) != NULL) {
+                if (fe->d_name[0] == '.') continue;
+                char child[1500];
+                snprintf(child, sizeof(child), "%s/%s", path, fe->d_name);
+                struct stat fst;
+                if (stat(child, &fst) == 0) total += fst.st_size;
+            }
+            closedir(cd);
+        }
+        char esc_title[512];
+        char esc_path[2048];
+        json_escape_into(e->d_name, esc_title, sizeof(esc_title));
+        json_escape_into(path, esc_path, sizeof(esc_path));
+        if (*n >= cap - 2800) break;
+        if (wrote_one) {
+            body[(*n)++] = ',';
+        }
+        wrote_one = 1;
+        *n += snprintf(body + *n, cap - *n,
+                       "{\"title_id\":\"%s\",\"user_id\":%d,\"path\":\"%s\","
+                       "\"size\":%lld,\"mtime\":%lld,\"kind\":\"%s\"}",
+                       esc_title, user_id, esc_path, total,
+                       (long long)st.st_mtime,
+                       kind_is_ps4 ? "ps4" : "ps5");
+        count++;
+    }
+    closedir(dp);
+    return count;
+}
+
+static int handle_list_saves(runtime_state_t *state, int client_fd,
+                              uint64_t trace_id, const char *body, uint64_t body_len) {
+    if (!state) return -1;
+    /* Optional `{"user_id":N}` body filters to one user; else walk all
+     * user dirs under /user/home. */
+    int filter_uid = 0;
+    if (body && body_len > 0 && body_len < 256) {
+        char buf[260];
+        memcpy(buf, body, (size_t)body_len);
+        buf[body_len] = '\0';
+        const char *p = strstr(buf, "\"user_id\"");
+        if (p) {
+            p += strlen("\"user_id\"");
+            while (*p == ' ' || *p == ':') p++;
+            filter_uid = atoi(p);
+        }
+    }
+
+    /* Response body is large — saves can number in the hundreds. 64 KB
+     * is comfortable; the ~100-byte-per-entry budget gives room for
+     * ~600 entries before truncation. */
+    char *resp = malloc(64 * 1024);
+    if (!resp) {
+        const char *err = "{\"err\":\"oom\"}";
+        return send_frame(client_fd, FTX2_FRAME_LIST_SAVES_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+    int cap = 64 * 1024;
+    int n = 0;
+    n += snprintf(resp + n, cap - n, "{\"saves\":[");
+    int wrote_one = 0;
+
+    DIR *home = opendir("/user/home");
+    if (home) {
+        struct dirent *uent;
+        while ((uent = readdir(home)) != NULL) {
+            if (uent->d_name[0] == '.') continue;
+            /* PS5 user dirs are 8-hex-digit IDs (e.g. "179a0cd8"), NOT
+             * decimal integers as the earlier `atoi(d_name)` assumed.
+             * `atoi("179a0cd8")` stopped at the 'a' and returned 179,
+             * then snprintf built `/user/home/179/...` which doesn't
+             * exist — Saves screen always came back empty.
+             *
+             * Parse hex into a u32 for the JSON `user_id` field, but
+             * always build paths from the raw directory name so non-
+             * numeric or edge-case names still resolve. */
+            const char *raw_name = uent->d_name;
+            char *endp = NULL;
+            unsigned long uid_u32 = strtoul(raw_name, &endp, 16);
+            if (!endp || *endp != '\0' || uid_u32 == 0) continue;
+            int uid_for_json = (int)(uid_u32 & 0x7FFFFFFFu);
+            if (filter_uid != 0 && uid_for_json != filter_uid) continue;
+            char ps5_root[256];
+            char ps4_root[256];
+            snprintf(ps5_root, sizeof(ps5_root),
+                     "/user/home/%s/savedata_prospero", raw_name);
+            snprintf(ps4_root, sizeof(ps4_root),
+                     "/user/home/%s/savedata", raw_name);
+            int c = append_saves_for_root(ps5_root, uid_for_json, 0,
+                                          resp, &n, cap, wrote_one);
+            if (c > 0) wrote_one = 1;
+            c = append_saves_for_root(ps4_root, uid_for_json, 1,
+                                      resp, &n, cap, wrote_one);
+            if (c > 0) wrote_one = 1;
+            if (n >= cap - 100) break;
+        }
+        closedir(home);
+    }
+    if (n < cap - 2) {
+        resp[n++] = ']';
+        resp[n++] = '}';
+    }
+    int rc = send_frame(client_fd, FTX2_FRAME_LIST_SAVES_ACK, 0, trace_id,
+                        resp, (uint64_t)n);
+    free(resp);
+    pthread_mutex_lock(&state->state_mtx);
+    state->command_count += 1;
+    pthread_mutex_unlock(&state->state_mtx);
+    return rc;
+}
+
+/* ── Screenshot listing ──────────────────────────────────────────────── */
+
+/* Recursively walk dir up to `depth_left` levels deep; for each image
+ * file append a JSON entry to the buffer. Sony stores PS5 screenshots
+ * as JPEG XR (`.jxr`) at:
+ *   /user/av_contents/photo/<userId>/<userId>/<batch>/<file>.jxr       (full-res, ~1 MiB)
+ *   /user/av_contents/thumbnails/photo/<userId>/<userId>/<batch>/<file>.jxr.jxr  (thumbnail)
+ * with `.dat` (raw) and `.meta` sidecars next to each.
+ *
+ * Earlier this filter accepted only `.jpg`/`.jpeg`, which matched 0
+ * files on actual PS5 firmware — the Screenshots tab showed empty even
+ * though the user had screenshots. We accept .jxr too now; the client
+ * lists metadata only (no inline rendering) so the lack of a JXR
+ * decoder in the browser doesn't matter — the user downloads the
+ * original .jxr and opens it in a viewer that supports JPEG XR. */
+static int walk_screenshots(const char *root, int depth_left,
+                             char *body, int *n, int cap, int *wrote_one) {
+    if (depth_left <= 0) return 0;
+    DIR *dp = opendir(root);
+    if (!dp) return 0;
+    int count = 0;
+    struct dirent *e;
+    while ((e = readdir(dp)) != NULL) {
+        if (e->d_name[0] == '.') continue;
+        char path[1024];
+        snprintf(path, sizeof(path), "%s/%s", root, e->d_name);
+        struct stat st;
+        if (stat(path, &st) != 0) continue;
+        if (S_ISDIR(st.st_mode)) {
+            count += walk_screenshots(path, depth_left - 1, body, n, cap, wrote_one);
+            continue;
+        }
+        /* Accept .jxr (Sony's native format), and legacy .jpg/.jpeg
+         * (in case a future FW or sidecar starts writing them). The
+         * `.jxr.jxr` thumbnail double-suffix is matched by the .jxr
+         * extension check since strrchr finds the trailing one. Skip
+         * .dat/.meta sidecars and anything else. */
+        const char *ext = strrchr(e->d_name, '.');
+        if (!ext) continue;
+        if (strcmp(ext, ".jxr") != 0 &&
+            strcmp(ext, ".jpg") != 0 &&
+            strcmp(ext, ".jpeg") != 0) continue;
+        char esc_path[2048];
+        json_escape_into(path, esc_path, sizeof(esc_path));
+        if (*n >= cap - 2300) break;
+        if (*wrote_one) {
+            body[(*n)++] = ',';
+        }
+        *wrote_one = 1;
+        *n += snprintf(body + *n, cap - *n,
+                       "{\"path\":\"%s\",\"size\":%lld,\"mtime\":%lld}",
+                       esc_path, (long long)st.st_size, (long long)st.st_mtime);
+        count++;
+    }
+    closedir(dp);
+    return count;
+}
+
+/* ── Filesystem search index ──────────────────────────────────────────
+ *
+ * Build an in-memory index of every regular file under a set of roots,
+ * then offer wildcard + size-filter searches against it.
+ *
+ * State is global to this translation unit: g_index_phase + g_index_lock
+ * + g_index_entries. One indexing operation at a time; the renderer is
+ * expected to call INDEX_STATUS to wait for completion before searching.
+ *
+ * Bounds: 64-byte (path) × 200K typical = 12-13 MB. Allocated via
+ * realloc-with-doubling so the working set stays close to actual file
+ * count. */
+
+typedef struct {
+    char *path;  /* malloc'd, null-terminated */
+    long long size;
+} index_entry_t;
+
+static pthread_mutex_t g_index_lock = PTHREAD_MUTEX_INITIALIZER;
+static int g_index_phase = 0;  /* 0=idle, 1=building, 2=ready */
+static index_entry_t *g_index_entries = NULL;
+static size_t g_index_count = 0;
+static size_t g_index_cap = 0;
+static int g_index_cancel = 0;
+static time_t g_index_started_at = 0;
+static time_t g_index_completed_at = 0;
+static pthread_t g_index_thread;
+static int g_index_thread_alive = 0;
+
+static void index_clear_locked(void) {
+    if (g_index_entries) {
+        for (size_t i = 0; i < g_index_count; i++) {
+            free(g_index_entries[i].path);
+        }
+        free(g_index_entries);
+        g_index_entries = NULL;
+    }
+    g_index_count = 0;
+    g_index_cap = 0;
+}
+
+static int index_push_locked(const char *path, long long size) {
+    if (g_index_count >= g_index_cap) {
+        size_t new_cap = g_index_cap == 0 ? 4096 : g_index_cap * 2;
+        index_entry_t *next =
+            realloc(g_index_entries, new_cap * sizeof(index_entry_t));
+        if (!next) return -1;
+        g_index_entries = next;
+        g_index_cap = new_cap;
+    }
+    g_index_entries[g_index_count].path = strdup(path);
+    if (!g_index_entries[g_index_count].path) return -1;
+    g_index_entries[g_index_count].size = size;
+    g_index_count++;
+    return 0;
+}
+
+static void index_walk(const char *root, int depth) {
+    if (depth > 10) return;
+    pthread_mutex_lock(&g_index_lock);
+    int cancel = g_index_cancel;
+    pthread_mutex_unlock(&g_index_lock);
+    if (cancel) return;
+    DIR *dp = opendir(root);
+    if (!dp) return;
+    struct dirent *e;
+    while ((e = readdir(dp)) != NULL) {
+        if (e->d_name[0] == '.') continue;
+        char path[1024];
+        snprintf(path, sizeof(path), "%s/%s", root, e->d_name);
+        struct stat st;
+        if (stat(path, &st) != 0) continue;
+        if (S_ISDIR(st.st_mode)) {
+            index_walk(path, depth + 1);
+        } else if (S_ISREG(st.st_mode)) {
+            pthread_mutex_lock(&g_index_lock);
+            index_push_locked(path, (long long)st.st_size);
+            pthread_mutex_unlock(&g_index_lock);
+        }
+    }
+    closedir(dp);
+}
+
+typedef struct {
+    /* Up to 8 roots to walk in this index build. */
+    char roots[8][256];
+    int root_count;
+} index_thread_args_t;
+
+static void *index_thread_fn(void *arg) {
+    index_thread_args_t *args = (index_thread_args_t *)arg;
+    for (int i = 0; i < args->root_count; i++) {
+        index_walk(args->roots[i], 0);
+    }
+    pthread_mutex_lock(&g_index_lock);
+    g_index_phase = 2;
+    g_index_completed_at = time(NULL);
+    g_index_thread_alive = 0;
+    pthread_mutex_unlock(&g_index_lock);
+    free(args);
+    return NULL;
+}
+
+/* Tiny glob match: `*` matches any sequence, `?` matches one char.
+ * Both are case-insensitive. Recursive — fine for typical patterns
+ * with one or two wildcards; bounded by call depth (max 16).
+ * Returns 1 on match, 0 on miss. */
+static int glob_match(const char *pat, const char *str, int depth) {
+    if (depth > 16) return 0;
+    while (*pat) {
+        if (*pat == '*') {
+            pat++;
+            if (!*pat) return 1;
+            while (*str) {
+                if (glob_match(pat, str, depth + 1)) return 1;
+                str++;
+            }
+            return 0;
+        }
+        if (*pat == '?') {
+            if (!*str) return 0;
+            pat++;
+            str++;
+            continue;
+        }
+        char a = *pat;
+        char b = *str;
+        if (a >= 'A' && a <= 'Z') a += 32;
+        if (b >= 'A' && b <= 'Z') b += 32;
+        if (a != b) return 0;
+        pat++;
+        str++;
+    }
+    return *str == '\0';
+}
+
+static int handle_index_start(runtime_state_t *state, int client_fd,
+                               uint64_t trace_id, const char *body, uint64_t body_len) {
+    if (!state) return -1;
+    pthread_mutex_lock(&g_index_lock);
+    if (g_index_phase == 1) {
+        pthread_mutex_unlock(&g_index_lock);
+        const char *err = "{\"started\":false,\"err\":\"already_building\"}";
+        return send_frame(client_fd, FTX2_FRAME_INDEX_START_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+    index_clear_locked();
+    g_index_phase = 1;
+    g_index_started_at = time(NULL);
+    g_index_completed_at = 0;
+    g_index_cancel = 0;
+    pthread_mutex_unlock(&g_index_lock);
+
+    /* Parse roots from `{"roots":["/a","/b"]}`. Cheap string search
+     * rather than full JSON — body is small, format is fixed. */
+    index_thread_args_t *args = calloc(1, sizeof(*args));
+    if (!args) {
+        pthread_mutex_lock(&g_index_lock);
+        g_index_phase = 0;
+        pthread_mutex_unlock(&g_index_lock);
+        const char *err = "{\"started\":false,\"err\":\"oom\"}";
+        return send_frame(client_fd, FTX2_FRAME_INDEX_START_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+    if (body && body_len > 0 && body_len < 1024) {
+        char tmp[1024];
+        memcpy(tmp, body, body_len);
+        tmp[body_len] = '\0';
+        const char *p = tmp;
+        while ((p = strchr(p, '"')) != NULL && args->root_count < 8) {
+            p++;
+            if (*p == '/') {
+                const char *e = strchr(p, '"');
+                if (!e) break;
+                size_t len = (size_t)(e - p);
+                if (len < sizeof(args->roots[0])) {
+                    memcpy(args->roots[args->root_count], p, len);
+                    args->roots[args->root_count][len] = '\0';
+                    args->root_count++;
+                }
+                p = e + 1;
+            }
+        }
+    }
+    if (args->root_count == 0) {
+        /* Sensible default. */
+        strcpy(args->roots[0], "/user");
+        strcpy(args->roots[1], "/data");
+        args->root_count = 2;
+    }
+    pthread_mutex_lock(&g_index_lock);
+    g_index_thread_alive = 1;
+    pthread_mutex_unlock(&g_index_lock);
+    if (pthread_create(&g_index_thread, NULL, index_thread_fn, args) != 0) {
+        free(args);
+        pthread_mutex_lock(&g_index_lock);
+        g_index_phase = 0;
+        g_index_thread_alive = 0;
+        pthread_mutex_unlock(&g_index_lock);
+        const char *err = "{\"started\":false,\"err\":\"thread_create\"}";
+        return send_frame(client_fd, FTX2_FRAME_INDEX_START_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+    pthread_detach(g_index_thread);
+    pthread_mutex_lock(&state->state_mtx);
+    state->command_count += 1;
+    pthread_mutex_unlock(&state->state_mtx);
+    const char *ok = "{\"started\":true}";
+    return send_frame(client_fd, FTX2_FRAME_INDEX_START_ACK, 0, trace_id,
+                      ok, strlen(ok));
+}
+
+static int handle_index_status(runtime_state_t *state, int client_fd,
+                                uint64_t trace_id) {
+    if (!state) return -1;
+    pthread_mutex_lock(&g_index_lock);
+    char body[256];
+    int n = snprintf(body, sizeof(body),
+                     "{\"phase\":\"%s\",\"files\":%zu,\"started_at\":%lld,"
+                     "\"completed_at\":%lld}",
+                     g_index_phase == 0 ? "idle" :
+                     g_index_phase == 1 ? "building" : "ready",
+                     g_index_count,
+                     (long long)g_index_started_at,
+                     (long long)g_index_completed_at);
+    pthread_mutex_unlock(&g_index_lock);
+    return send_frame(client_fd, FTX2_FRAME_INDEX_STATUS_ACK, 0,
+                      trace_id, body, (uint64_t)n);
+}
+
+static int handle_search_index(runtime_state_t *state, int client_fd,
+                                uint64_t trace_id, const char *body, uint64_t body_len) {
+    if (!state) return -1;
+    /* Parse `{"query":"...","size_min":N,"size_max":N,"limit":N}`. */
+    char qbuf[256] = {0};
+    long long size_min = 0;
+    long long size_max = 0;
+    int limit = 200;
+    if (body && body_len > 0 && body_len < 1024) {
+        char tmp[1024];
+        memcpy(tmp, body, body_len);
+        tmp[body_len] = '\0';
+        const char *p = strstr(tmp, "\"query\"");
+        if (p) {
+            p = strchr(p, ':');
+            if (p) p = strchr(p, '"');
+            if (p) {
+                p++;
+                const char *e = strchr(p, '"');
+                if (e && (size_t)(e - p) < sizeof(qbuf)) {
+                    memcpy(qbuf, p, (size_t)(e - p));
+                    qbuf[e - p] = '\0';
+                }
+            }
+        }
+        p = strstr(tmp, "\"size_min\"");
+        if (p) {
+            p = strchr(p, ':');
+            if (p) size_min = atoll(p + 1);
+        }
+        p = strstr(tmp, "\"size_max\"");
+        if (p) {
+            p = strchr(p, ':');
+            if (p) size_max = atoll(p + 1);
+        }
+        p = strstr(tmp, "\"limit\"");
+        if (p) {
+            p = strchr(p, ':');
+            if (p) limit = atoi(p + 1);
+        }
+    }
+    if (limit <= 0 || limit > 5000) limit = 200;
+    if (!qbuf[0]) strcpy(qbuf, "*");
+
+    char *resp = malloc(256 * 1024);
+    if (!resp) {
+        const char *err = "{\"err\":\"oom\"}";
+        return send_frame(client_fd, FTX2_FRAME_SEARCH_INDEX_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+    int cap = 256 * 1024;
+    int n = 0;
+    n += snprintf(resp + n, cap - n, "{\"results\":[");
+    int wrote_one = 0;
+    int matched = 0;
+    pthread_mutex_lock(&g_index_lock);
+    for (size_t i = 0; i < g_index_count && matched < limit; i++) {
+        const char *path = g_index_entries[i].path;
+        if (!path) continue;
+        const char *base = strrchr(path, '/');
+        base = base ? base + 1 : path;
+        if (!glob_match(qbuf, base, 0)) continue;
+        long long sz = g_index_entries[i].size;
+        if (size_min > 0 && sz < size_min) continue;
+        if (size_max > 0 && sz > size_max) continue;
+        char esc_path[2048];
+        json_escape_into(path, esc_path, sizeof(esc_path));
+        if (n >= cap - 2300) break;
+        if (wrote_one) resp[n++] = ',';
+        wrote_one = 1;
+        n += snprintf(resp + n, cap - n,
+                      "{\"path\":\"%s\",\"size\":%lld}",
+                      esc_path, sz);
+        matched++;
+    }
+    pthread_mutex_unlock(&g_index_lock);
+    if (n < cap - 2) {
+        resp[n++] = ']';
+        resp[n++] = '}';
+    }
+    int rc = send_frame(client_fd, FTX2_FRAME_SEARCH_INDEX_ACK, 0,
+                        trace_id, resp, (uint64_t)n);
+    free(resp);
+    pthread_mutex_lock(&state->state_mtx);
+    state->command_count += 1;
+    pthread_mutex_unlock(&state->state_mtx);
+    return rc;
+}
+
+/* ── App lifecycle (suspend/resume/kill/list) ────────────────────────── */
+
+/* sceApplicationGetProcs returns up to N opaque proc-info blobs;
+ * each is at least 4 bytes (app_id at offset 0). The full struct is
+ * larger and FW-version-dependent, but every revision keeps app_id
+ * first. We allocate N × sizeof(uint32_t) × 16 (256-byte safe slot
+ * per entry — generous bound for any FW). 64 entries × 256 = 16 KB. */
+#define APP_PROCS_MAX_COUNT 64
+#define APP_PROCS_SLOT_BYTES 256
+
+static int handle_app_lifecycle(runtime_state_t *state, int client_fd,
+                                 uint64_t trace_id, const char *body,
+                                 uint64_t body_len) {
+    if (!state) return -1;
+    char action[16] = {0};
+    unsigned int app_id = 0;
+    if (body && body_len > 0 && body_len < 1024) {
+        char tmp[1024];
+        memcpy(tmp, body, body_len);
+        tmp[body_len] = '\0';
+        const char *p = strstr(tmp, "\"action\"");
+        if (p) {
+            p = strchr(p, ':');
+            if (p) p = strchr(p, '"');
+            if (p) {
+                p++;
+                const char *e = strchr(p, '"');
+                if (e && (size_t)(e - p) < sizeof(action)) {
+                    memcpy(action, p, (size_t)(e - p));
+                    action[e - p] = '\0';
+                }
+            }
+        }
+        p = strstr(tmp, "\"app_id\"");
+        if (p) {
+            p = strchr(p, ':');
+            if (p) app_id = (unsigned int)atoll(p + 1);
+        }
+    }
+    if (action[0] == '\0') {
+        const char *err = "{\"ok\":false,\"err\":\"bad_action\"}";
+        return send_frame(client_fd, FTX2_FRAME_APP_LIFECYCLE_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+    if (strcmp(action, "list") == 0) {
+        /* Heap-allocate the procs scratch + response buffers. The
+         * mgmt thread frame is tight (the dispatcher itself uses
+         * ~3 KiB of locals across nested calls) and a 16 KiB +
+         * ~32 KiB pair on stack pushed close to the guard page on
+         * some firmware revisions. Heap allocation costs one
+         * malloc/free per call which is dwarfed by the sceApp* RPC. */
+        const size_t resp_cap = 16384;
+        unsigned char *buf = calloc(APP_PROCS_MAX_COUNT,
+                                    APP_PROCS_SLOT_BYTES);
+        char *resp = malloc(resp_cap);
+        if (!buf || !resp) {
+            free(buf); free(resp);
+            const char *err = "{\"ok\":false,\"err\":\"out_of_memory\"}";
+            return send_frame(client_fd, FTX2_FRAME_APP_LIFECYCLE_ACK,
+                              0, trace_id, err, strlen(err));
+        }
+        int count = 0;
+        int rc = -1;
+        if (resolve_sce_syscore() == 0 && p_sceApplicationGetProcs) {
+            rc = p_sceApplicationGetProcs(buf, APP_PROCS_MAX_COUNT, &count);
+        }
+        if (rc != 0 || count < 0) count = 0;
+        if (count > APP_PROCS_MAX_COUNT) count = APP_PROCS_MAX_COUNT;
+        int n = 0;
+        n += snprintf(resp + n, resp_cap - n,
+                      "{\"ok\":true,\"action\":\"list\",\"apps\":[");
+        for (int i = 0; i < count; i++) {
+            unsigned int aid;
+            memcpy(&aid, buf + (size_t)i * APP_PROCS_SLOT_BYTES,
+                   sizeof(aid));
+            if (n >= (int)resp_cap - 60) break;
+            if (i > 0) resp[n++] = ',';
+            n += snprintf(resp + n, resp_cap - n,
+                          "{\"app_id\":%u}", aid);
+        }
+        if (n < (int)resp_cap - 2) {
+            resp[n++] = ']';
+            resp[n++] = '}';
+        }
+        pthread_mutex_lock(&state->state_mtx);
+        state->command_count += 1;
+        pthread_mutex_unlock(&state->state_mtx);
+        int sret = send_frame(client_fd, FTX2_FRAME_APP_LIFECYCLE_ACK,
+                              0, trace_id, resp, (uint64_t)n);
+        free(buf);
+        free(resp);
+        return sret;
+    }
+    if (app_id == 0) {
+        const char *err = "{\"ok\":false,\"err\":\"app_id_required\"}";
+        return send_frame(client_fd, FTX2_FRAME_APP_LIFECYCLE_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+    if (resolve_sce_syscore() != 0) {
+        const char *err = "{\"ok\":false,\"err\":\"libSceSysCore_unavailable\"}";
+        return send_frame(client_fd, FTX2_FRAME_APP_LIFECYCLE_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+    int rc = -1;
+    if (strcmp(action, "suspend") == 0) {
+        rc = p_sceApplicationSuspend ? p_sceApplicationSuspend(app_id) : -1;
+    } else if (strcmp(action, "resume") == 0) {
+        rc = p_sceApplicationResume ? p_sceApplicationResume(app_id) : -1;
+    } else if (strcmp(action, "kill") == 0) {
+        rc = p_sceApplicationKill ? p_sceApplicationKill(app_id) : -1;
+    } else {
+        const char *err = "{\"ok\":false,\"err\":\"unknown_action\"}";
+        return send_frame(client_fd, FTX2_FRAME_APP_LIFECYCLE_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+    pthread_mutex_lock(&state->state_mtx);
+    state->command_count += 1;
+    pthread_mutex_unlock(&state->state_mtx);
+    char resp[160];
+    int n = snprintf(resp, sizeof(resp),
+                     "{\"ok\":%s,\"action\":\"%s\",\"app_id\":%u,\"code\":%d}",
+                     rc == 0 ? "true" : "false", action, app_id, rc);
+    return send_frame(client_fd, FTX2_FRAME_APP_LIFECYCLE_ACK, 0,
+                      trace_id, resp, (uint64_t)n);
+}
+
+/* ── Kernel log read ─────────────────────────────────────────────────── */
+
+/* Open /dev/klog once and read what's currently buffered. The kernel
+ * log device returns 0 bytes when the buffer is empty (non-blocking
+ * by default). We cap reads at 64 KB per call so the response stays
+ * bounded. */
+static int handle_klog_read(runtime_state_t *state, int client_fd,
+                             uint64_t trace_id, const char *body,
+                             uint64_t body_len) {
+    if (!state) return -1;
+    size_t max_bytes = 16 * 1024;
+    if (body && body_len > 0 && body_len < 256) {
+        char tmp[260];
+        memcpy(tmp, body, body_len);
+        tmp[body_len] = '\0';
+        const char *p = strstr(tmp, "\"max_bytes\"");
+        if (p) {
+            p = strchr(p, ':');
+            if (p) {
+                long long v = atoll(p + 1);
+                if (v > 0) {
+                    max_bytes = (size_t)v;
+                    if (max_bytes > 64 * 1024) max_bytes = 64 * 1024;
+                }
+            }
+        }
+    }
+    int fd = open("/dev/klog", O_RDONLY | O_NONBLOCK);
+    if (fd < 0) {
+        const char *err = "open_klog_failed";
+        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
+                          err, strlen(err));
+    }
+    char *buf = malloc(max_bytes);
+    if (!buf) {
+        close(fd);
+        const char *err = "klog_oom";
+        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
+                          err, strlen(err));
+    }
+    ssize_t n = read(fd, buf, max_bytes);
+    close(fd);
+    if (n < 0) n = 0;
+    int rc = send_frame(client_fd, FTX2_FRAME_KLOG_READ_ACK, 0,
+                        trace_id, buf, (uint64_t)n);
+    free(buf);
+    pthread_mutex_lock(&state->state_mtx);
+    state->command_count += 1;
+    pthread_mutex_unlock(&state->state_mtx);
+    return rc;
+}
+
+/* ── Network interface listing ───────────────────────────────────────── */
+
+static int handle_net_interfaces(runtime_state_t *state, int client_fd,
+                                  uint64_t trace_id) {
+    if (!state) return -1;
+    /* Two-path enumeration:
+     *
+     *   1) sceNetGetIfList — Sony's official API. Has rich fields
+     *      (mtu, flags, bandwidth, etc.) but empirically fails on
+     *      FW 9.60 retail (returns non-zero rc or zero count) even
+     *      with elevated authid. Try it first; degrade silently on
+     *      failure.
+     *
+     *   2) getifaddrs — FreeBSD libc walks PF_ROUTE directly. Works
+     *      everywhere the OS has interfaces. Returns name + IPv4 +
+     *      IPv6 + MAC + flags + (via SIOCGIFMTU) mtu.
+     *
+     * Both produce the same JSON shape:
+     *   {"interfaces":[{name,mac,ipv4[,ipv6],mtu,flags,up},…],
+     *    "source":"sceNetGetIfList"|"getifaddrs"}
+     *
+     * The desktop UI doesn't branch on source; it just renders the
+     * entries. `source` is a diag hint so we know which path won. */
+    char resp[8192];
+    int n = 0;
+    int wrote_any = 0;
+    const char *source = NULL;
+    n += snprintf(resp + n, sizeof(resp) - n, "{\"interfaces\":[");
+
+    /* ── Path 1: sceNetGetIfList ── */
+    if (resolve_sce_net() == 0) {
+        unsigned char if_buf[NET_IF_MAX_ENTRIES * NET_IF_ENTRY_BYTES];
+        memset(if_buf, 0, sizeof(if_buf));
+        int count = 0;
+        int sce_rc = p_sceNetGetIfList(if_buf, NET_IF_MAX_ENTRIES, &count);
+        if (sce_rc == 0 && count > 0) {
+            source = "sceNetGetIfList";
+            if (count > NET_IF_MAX_ENTRIES) count = NET_IF_MAX_ENTRIES;
+            /* Per psdevwiki SceNetIfInfo offsets (stable 9.x–12.x):
+             *   +0    flags (u32)
+             *   +8    name (32 bytes, null-terminated)
+             *   +0x28 mtu (u32)
+             *   +0x34 mac (6 bytes)
+             *   +0x40 ipv4 addr (4 bytes) */
+            for (int i = 0; i < count; i++) {
+                const unsigned char *e = if_buf + (size_t)i * NET_IF_ENTRY_BYTES;
+                char name_safe[33], name_esc[80];
+                memcpy(name_safe, e + 8, 32);
+                name_safe[32] = '\0';
+                json_escape_into(name_safe, name_esc, sizeof(name_esc));
+                const unsigned char *mac = e + 0x34;
+                const unsigned char *ipv4 = e + 0x40;
+                unsigned int mtu, flags;
+                memcpy(&mtu,   e + 0x28, sizeof(mtu));
+                memcpy(&flags, e,        sizeof(flags));
+                if (n >= (int)sizeof(resp) - 256) break;
+                if (wrote_any) resp[n++] = ',';
+                wrote_any = 1;
+                n += snprintf(resp + n, sizeof(resp) - n,
+                              "{\"name\":\"%s\","
+                              "\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\","
+                              "\"ipv4\":\"%u.%u.%u.%u\","
+                              "\"mtu\":%u,\"flags\":%u}",
+                              name_esc,
+                              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
+                              ipv4[0], ipv4[1], ipv4[2], ipv4[3],
+                              mtu, flags);
+            }
+        }
+    }
+
+    /* ── Path 2: getifaddrs fallback ──
+     * Reached when Sony's API returned no entries (failure or empty).
+     * Re-uses the same `resp` buffer + wrote_any counter so the JSON
+     * stays well-formed regardless of which path filled it. */
+    if (!wrote_any) {
+        struct ifaddrs *ifa_head = NULL;
+        if (getifaddrs(&ifa_head) == 0 && ifa_head) {
+            source = "getifaddrs";
+            char seen_names[NET_IF_MAX_ENTRIES][32];
+            int seen_count = 0;
+            for (struct ifaddrs *ifa = ifa_head; ifa; ifa = ifa->ifa_next) {
+                if (!ifa->ifa_name) continue;
+                /* Skip names we've already emitted (one entry per
+                 * interface, with all addresses collated). */
+                int dup = 0;
+                for (int j = 0; j < seen_count; j++) {
+                    if (strcmp(seen_names[j], ifa->ifa_name) == 0) { dup = 1; break; }
+                }
+                if (dup) continue;
+                if (seen_count >= NET_IF_MAX_ENTRIES) break;
+                snprintf(seen_names[seen_count], sizeof(seen_names[0]),
+                         "%s", ifa->ifa_name);
+                seen_count++;
+
+                char ipv4[INET_ADDRSTRLEN]  = "";
+                char ipv6[INET6_ADDRSTRLEN] = "";
+                char mac[18]                = "";
+                for (struct ifaddrs *q = ifa_head; q; q = q->ifa_next) {
+                    if (!q->ifa_name || !q->ifa_addr) continue;
+                    if (strcmp(q->ifa_name, ifa->ifa_name) != 0) continue;
+                    if (q->ifa_addr->sa_family == AF_INET && !ipv4[0]) {
+                        const struct sockaddr_in *sa =
+                            (const struct sockaddr_in *)q->ifa_addr;
+                        inet_ntop(AF_INET, &sa->sin_addr, ipv4, sizeof(ipv4));
+                    } else if (q->ifa_addr->sa_family == AF_INET6 && !ipv6[0]) {
+                        const struct sockaddr_in6 *sa =
+                            (const struct sockaddr_in6 *)q->ifa_addr;
+                        inet_ntop(AF_INET6, &sa->sin6_addr, ipv6, sizeof(ipv6));
+                    } else if (q->ifa_addr->sa_family == AF_LINK && !mac[0]) {
+                        const struct sockaddr_dl *sdl =
+                            (const struct sockaddr_dl *)q->ifa_addr;
+                        if (sdl->sdl_alen == 6) {
+                            const unsigned char *m =
+                                (const unsigned char *)LLADDR(sdl);
+                            snprintf(mac, sizeof(mac),
+                                     "%02x:%02x:%02x:%02x:%02x:%02x",
+                                     m[0], m[1], m[2], m[3], m[4], m[5]);
+                        }
+                    }
+                }
+                unsigned int mtu = 0;
+                int sk = socket(AF_INET, SOCK_DGRAM, 0);
+                if (sk >= 0) {
+                    struct ifreq ifr;
+                    memset(&ifr, 0, sizeof(ifr));
+                    strncpy(ifr.ifr_name, ifa->ifa_name, IFNAMSIZ - 1);
+                    if (ioctl(sk, SIOCGIFMTU, &ifr) == 0) {
+                        mtu = (unsigned int)ifr.ifr_mtu;
+                    }
+                    close(sk);
+                }
+                /* Skip purely-down placeholder interfaces with no
+                 * address — those are tunnel slots Sony's UI hides. */
+                if (!ipv4[0] && !ipv6[0] && !mac[0]) continue;
+                if (n >= (int)sizeof(resp) - 384) break;
+                if (wrote_any) resp[n++] = ',';
+                wrote_any = 1;
+                char name_esc[80];
+                json_escape_into(ifa->ifa_name, name_esc, sizeof(name_esc));
+                int up = (ifa->ifa_flags & IFF_UP) ? 1 : 0;
+                n += snprintf(resp + n, sizeof(resp) - n,
+                              "{\"name\":\"%s\",\"flags\":%u,\"mtu\":%u,"
+                              "\"mac\":\"%s\",\"ipv4\":\"%s\",\"ipv6\":\"%s\","
+                              "\"up\":%s}",
+                              name_esc, (unsigned)ifa->ifa_flags,
+                              mtu, mac, ipv4, ipv6,
+                              up ? "true" : "false");
+            }
+            freeifaddrs(ifa_head);
+        }
+    }
+
+    if (!wrote_any) {
+        const char *err =
+            "{\"err\":\"no_interfaces_reported\",\"interfaces\":[],"
+            "\"hint\":\"both sceNetGetIfList and getifaddrs returned no usable interfaces\"}";
+        return send_frame(client_fd, FTX2_FRAME_NET_INTERFACES_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+    n += snprintf(resp + n, sizeof(resp) - n,
+                  "],\"source\":\"%s\"}", source ? source : "unknown");
+    pthread_mutex_lock(&state->state_mtx);
+    state->command_count += 1;
+    pthread_mutex_unlock(&state->state_mtx);
+    return send_frame(client_fd, FTX2_FRAME_NET_INTERFACES_ACK, 0,
+                      trace_id, resp, (uint64_t)n);
+}
+
+/* ── Peripheral control (BD/USB power) ───────────────────────────────── */
+
+static int handle_peripheral_control(runtime_state_t *state, int client_fd,
+                                      uint64_t trace_id, const char *body,
+                                      uint64_t body_len) {
+    if (!state) return -1;
+    char action[32] = {0};
+    int port = 0;
+    if (body && body_len > 0 && body_len < 512) {
+        char tmp[516];
+        memcpy(tmp, body, body_len);
+        tmp[body_len] = '\0';
+        const char *p = strstr(tmp, "\"action\"");
+        if (p) {
+            p = strchr(p, ':');
+            if (p) p = strchr(p, '"');
+            if (p) {
+                p++;
+                const char *e = strchr(p, '"');
+                if (e && (size_t)(e - p) < sizeof(action)) {
+                    memcpy(action, p, (size_t)(e - p));
+                    action[e - p] = '\0';
+                }
+            }
+        }
+        p = strstr(tmp, "\"port\"");
+        if (p) {
+            p = strchr(p, ':');
+            if (p) port = atoi(p + 1);
+        }
+    }
+    resolve_sce_kernel_extras();
+    int rc = -1;
+    if (strcmp(action, "bd_power_off") == 0) {
+        rc = p_sceKernelIccControlBDPowerState
+                ? p_sceKernelIccControlBDPowerState(0) : -1;
+    } else if (strcmp(action, "bd_power_on") == 0) {
+        rc = p_sceKernelIccControlBDPowerState
+                ? p_sceKernelIccControlBDPowerState(1) : -1;
+    } else if (strcmp(action, "eject_disc") == 0) {
+        /* Disc eject is "BD power off then on" on PS5 — there's no
+         * dedicated eject syscall. State 2 corresponds to "eject"
+         * per psdevwiki notes, but we fall back to power-cycle if
+         * it's rejected. */
+        if (p_sceKernelIccControlBDPowerState) {
+            rc = p_sceKernelIccControlBDPowerState(2);
+            if (rc != 0) {
+                p_sceKernelIccControlBDPowerState(0);
+                rc = p_sceKernelIccControlBDPowerState(1);
+            }
+        }
+    } else if (strcmp(action, "usb_port_off") == 0) {
+        rc = p_sceKernelIccControlUSBPowerState
+                ? p_sceKernelIccControlUSBPowerState(port, 0) : -1;
+    } else if (strcmp(action, "usb_port_on") == 0) {
+        rc = p_sceKernelIccControlUSBPowerState
+                ? p_sceKernelIccControlUSBPowerState(port, 1) : -1;
+    } else {
+        const char *err = "{\"ok\":false,\"err\":\"unknown_action\"}";
+        return send_frame(client_fd, FTX2_FRAME_PERIPHERAL_CONTROL_ACK,
+                          0, trace_id, err, strlen(err));
+    }
+    pthread_mutex_lock(&state->state_mtx);
+    state->command_count += 1;
+    pthread_mutex_unlock(&state->state_mtx);
+    char resp[160];
+    int n = snprintf(resp, sizeof(resp),
+                     "{\"ok\":%s,\"action\":\"%s\",\"port\":%d,\"code\":%d}",
+                     rc == 0 ? "true" : "false", action, port, rc);
+    return send_frame(client_fd, FTX2_FRAME_PERIPHERAL_CONTROL_ACK,
+                      0, trace_id, resp, (uint64_t)n);
+}
+
+/* ── Shell command exec ──────────────────────────────────────────────── */
+
+/* Run a single shell command via popen(), capturing stdout+stderr.
+ *
+ * Security note: the `cmd` string is passed verbatim to /bin/sh -c.
+ * That's intentional — the renderer uses this for explicit
+ * "advanced debugging" workflows (the user typed a command into a
+ * shell prompt). We do NOT interpolate any other field into the
+ * shell string (no separate cwd/env), so there is no injection
+ * surface beyond what the user themselves typed. The whole RPC
+ * surface (FS_DELETE, FS_CHMOD, etc.) already trusts an
+ * authenticated LAN caller; this is the same trust boundary.
+ *
+ * We cap stdout+stderr at 256 KB and timeout at 30s. */
+/* ── Built-in shell command interpreter ─────────────────────────────
+ *
+ * PS5 doesn't ship a shell binary (no /bin/sh, no /system/bin/sh,
+ * nothing). popen("...", "r") in handle_shell_exec always fails on
+ * PS5 because there's nothing for the libc shell-fork to exec. We
+ * implement a tiny built-in interpreter that handles the commands
+ * a PS5 operator actually wants — directory listing, file read,
+ * uname, ps, mount, sysctl, df, id — using the same syscalls the
+ * rest of the payload already uses.
+ *
+ * Returns 0 on recognised command (sets *out_text + *out_exit;
+ * caller frees out_text). Returns -1 on unrecognised command (caller
+ * may fall through to popen path or surface "not supported").
+ *
+ * Threading: stateless — each invocation creates its own buffer. No
+ * shared state, no locking. */
+static char *strdup_safe(const char *s) {
+    if (!s) return NULL;
+    size_t n = strlen(s);
+    char *r = malloc(n + 1);
+    if (r) memcpy(r, s, n + 1);
+    return r;
+}
+
+/* Split cmd into argv on whitespace. argv MUST be sized for at least
+ * `max_args` slots; the last useful slot becomes the unparsed tail
+ * (handy for `cat <path with spaces>` where we don't actually parse
+ * quotes). Returns argc. */
+static int shell_split(char *cmd, char *argv[], int max_args) {
+    int argc = 0;
+    char *p = cmd;
+    while (*p && argc < max_args) {
+        while (*p == ' ' || *p == '\t') p++;
+        if (!*p) break;
+        argv[argc++] = p;
+        while (*p && *p != ' ' && *p != '\t') p++;
+        if (*p) { *p = '\0'; p++; }
+    }
+    return argc;
+}
+
+/* Append `fmt`-formatted output to a dynamically grown buffer. Returns
+ * the new len; updates *cap and *buf on grow. */
+static size_t shell_appendf(char **buf, size_t *cap, size_t len,
+                             const char *fmt, ...) {
+    va_list ap;
+    while (1) {
+        va_start(ap, fmt);
+        size_t avail = (*cap > len) ? (*cap - len) : 0;
+        int n = vsnprintf(*buf + len, avail, fmt, ap);
+        va_end(ap);
+        if (n < 0) return len;
+        if ((size_t)n < avail) return len + (size_t)n;
+        size_t want = (*cap == 0 ? 1024u : *cap * 2u);
+        if (want < len + (size_t)n + 1) want = len + (size_t)n + 1;
+        char *nb = realloc(*buf, want);
+        if (!nb) return len;
+        *buf = nb;
+        *cap = want;
+    }
+}
+
+static int handle_shell_builtin(const char *cmd_in, char **out_text,
+                                 int *out_exit) {
+    if (!cmd_in || !out_text || !out_exit) return -1;
+    *out_text = NULL;
+    *out_exit = 0;
+    char cmdbuf[2100];
+    snprintf(cmdbuf, sizeof(cmdbuf), "%s", cmd_in);
+    char *argv[32];
+    int argc = shell_split(cmdbuf, argv, 32);
+    if (argc == 0) return -1;
+    const char *prog = argv[0];
+
+    char *out = NULL;
+    size_t cap = 0, len = 0;
+
+    if (strcmp(prog, "help") == 0) {
+        len = shell_appendf(&out, &cap, len,
+            "ps5upload built-in shell commands (PS5 has no /bin/sh):\n"
+            "  help                    show this list\n"
+            "  ls [path]               list directory (default /)\n"
+            "  cat <path>              print file contents (8 KiB cap)\n"
+            "  stat <path>             show file metadata\n"
+            "  pwd                     print working dir (always /)\n"
+            "  uname [-a]              kernel info\n"
+            "  ps                      running processes (pid + name)\n"
+            "  mount                   active mount table\n"
+            "  df                      filesystem usage\n"
+            "  id                      effective uid/gid/authid\n"
+            "  env                     environment variables\n"
+            "  sysctl <name>           read a sysctl by name\n"
+            "  sleep <secs>            sleep N seconds (1-30)\n"
+            "  true | false            exit code 0 / 1\n"
+            "  hostname                kern.hostname sysctl\n"
+            "  echo <args...>          print args verbatim\n");
+        *out_text = out;
+        return 0;
+    }
+    if (strcmp(prog, "true") == 0) { *out_text = strdup_safe(""); return 0; }
+    if (strcmp(prog, "false") == 0) {
+        *out_text = strdup_safe("");
+        *out_exit = 1;
+        return 0;
+    }
+    if (strcmp(prog, "pwd") == 0) {
+        char cwd[1024];
+        if (getcwd(cwd, sizeof(cwd))) {
+            len = shell_appendf(&out, &cap, len, "%s\n", cwd);
+        } else {
+            len = shell_appendf(&out, &cap, len, "/\n");
+        }
+        *out_text = out;
+        return 0;
+    }
+    if (strcmp(prog, "echo") == 0) {
+        for (int i = 1; i < argc; i++) {
+            len = shell_appendf(&out, &cap, len, "%s%s",
+                                 argv[i], i + 1 < argc ? " " : "\n");
+        }
+        if (argc == 1) len = shell_appendf(&out, &cap, len, "\n");
+        *out_text = out;
+        return 0;
+    }
+    if (strcmp(prog, "uname") == 0) {
+        struct utsname u;
+        if (uname(&u) != 0) {
+            *out_text = strdup_safe("uname: failed\n");
+            *out_exit = 1;
+            return 0;
+        }
+        int all = (argc >= 2 && strcmp(argv[1], "-a") == 0);
+        if (all) {
+            len = shell_appendf(&out, &cap, len, "%s %s %s %s %s\n",
+                                 u.sysname, u.nodename, u.release,
+                                 u.version, u.machine);
+        } else {
+            len = shell_appendf(&out, &cap, len, "%s\n", u.sysname);
+        }
+        *out_text = out;
+        return 0;
+    }
+    if (strcmp(prog, "hostname") == 0) {
+        char host[256] = {0};
+        size_t hl = sizeof(host);
+        int mib[2] = {CTL_KERN, KERN_HOSTNAME};
+        if (sysctl(mib, 2, host, &hl, NULL, 0) == 0) {
+            len = shell_appendf(&out, &cap, len, "%s\n", host);
+        } else {
+            len = shell_appendf(&out, &cap, len, "(unknown)\n");
+            *out_exit = 1;
+        }
+        *out_text = out;
+        return 0;
+    }
+    if (strcmp(prog, "id") == 0) {
+        uid_t uid = getuid(), euid = geteuid();
+        gid_t gid = getgid(), egid = getegid();
+        pid_t pid = getpid();
+        len = shell_appendf(&out, &cap, len,
+                            "uid=%u euid=%u gid=%u egid=%u pid=%d "
+                            "ucred_elevation_rc=%d\n",
+                            (unsigned)uid, (unsigned)euid,
+                            (unsigned)gid, (unsigned)egid, (int)pid,
+                            g_ucred_elevation_rc);
+        *out_text = out;
+        return 0;
+    }
+    if (strcmp(prog, "env") == 0) {
+        extern char **environ;
+        for (char **e = environ; e && *e; e++) {
+            len = shell_appendf(&out, &cap, len, "%s\n", *e);
+        }
+        if (!out) out = strdup_safe("");
+        *out_text = out;
+        return 0;
+    }
+    if (strcmp(prog, "sleep") == 0) {
+        int s = argc >= 2 ? atoi(argv[1]) : 0;
+        if (s < 1) s = 1;
+        if (s > 30) s = 30;
+        sleep((unsigned)s);
+        *out_text = strdup_safe("");
+        return 0;
+    }
+    if (strcmp(prog, "ls") == 0) {
+        const char *path = argc >= 2 ? argv[1] : "/";
+        DIR *dp = opendir(path);
+        if (!dp) {
+            len = shell_appendf(&out, &cap, len, "ls: %s: %s\n",
+                                 path, strerror(errno));
+            *out_text = out;
+            *out_exit = 1;
+            return 0;
+        }
+        struct dirent *e;
+        while ((e = readdir(dp)) != NULL) {
+            if (e->d_name[0] == '.' && e->d_name[1] == '\0') continue;
+            if (e->d_name[0] == '.' && e->d_name[1] == '.' && e->d_name[2] == '\0') continue;
+            char child[1024];
+            snprintf(child, sizeof(child), "%s/%s",
+                     strcmp(path, "/") == 0 ? "" : path, e->d_name);
+            struct stat st;
+            char type_c = '?';
+            long long size = 0;
+            if (stat(child, &st) == 0) {
+                if (S_ISDIR(st.st_mode)) type_c = 'd';
+                else if (S_ISREG(st.st_mode)) type_c = 'f';
+                else if (S_ISLNK(st.st_mode)) type_c = 'l';
+                else type_c = 'o';
+                size = (long long)st.st_size;
+            }
+            len = shell_appendf(&out, &cap, len, "%c %12lld  %s\n",
+                                 type_c, size, e->d_name);
+        }
+        closedir(dp);
+        if (!out) out = strdup_safe("");
+        *out_text = out;
+        return 0;
+    }
+    if (strcmp(prog, "cat") == 0) {
+        if (argc < 2) {
+            *out_text = strdup_safe("cat: missing operand\n");
+            *out_exit = 1;
+            return 0;
+        }
+        const char *path = argv[1];
+        int fd = open(path, O_RDONLY);
+        if (fd < 0) {
+            len = shell_appendf(&out, &cap, len, "cat: %s: %s\n",
+                                 path, strerror(errno));
+            *out_text = out;
+            *out_exit = 1;
+            return 0;
+        }
+        char chunk[8192];
+        ssize_t total = 0;
+        ssize_t r;
+        while ((r = read(fd, chunk, sizeof(chunk))) > 0) {
+            len = shell_appendf(&out, &cap, len, "%.*s", (int)r, chunk);
+            total += r;
+            if (total > 8 * 1024) break;
+        }
+        close(fd);
+        if (total > 8 * 1024) {
+            len = shell_appendf(&out, &cap, len,
+                                 "\n(... cat output capped at 8 KiB)\n");
+        }
+        if (!out) out = strdup_safe("");
+        *out_text = out;
+        return 0;
+    }
+    if (strcmp(prog, "stat") == 0) {
+        if (argc < 2) {
+            *out_text = strdup_safe("stat: missing operand\n");
+            *out_exit = 1;
+            return 0;
+        }
+        struct stat st;
+        if (stat(argv[1], &st) != 0) {
+            len = shell_appendf(&out, &cap, len, "stat: %s: %s\n",
+                                 argv[1], strerror(errno));
+            *out_exit = 1;
+        } else {
+            len = shell_appendf(&out, &cap, len,
+                                 "path: %s\nsize: %lld\nmode: 0%o\n"
+                                 "uid: %u\ngid: %u\nmtime: %lld\n"
+                                 "type: %s\n",
+                                 argv[1], (long long)st.st_size,
+                                 (unsigned)st.st_mode,
+                                 (unsigned)st.st_uid, (unsigned)st.st_gid,
+                                 (long long)st.st_mtime,
+                                 S_ISDIR(st.st_mode) ? "dir" :
+                                 S_ISREG(st.st_mode) ? "file" :
+                                 S_ISLNK(st.st_mode) ? "link" : "other");
+        }
+        *out_text = out;
+        return 0;
+    }
+    if (strcmp(prog, "mount") == 0) {
+        struct statfs *mnts = NULL;
+        int n = getmntinfo(&mnts, MNT_NOWAIT);
+        for (int i = 0; i < n && mnts; i++) {
+            len = shell_appendf(&out, &cap, len, "%-10s %-30s %s\n",
+                                 mnts[i].f_fstypename,
+                                 mnts[i].f_mntfromname,
+                                 mnts[i].f_mntonname);
+        }
+        if (!out) out = strdup_safe("");
+        *out_text = out;
+        return 0;
+    }
+    if (strcmp(prog, "df") == 0) {
+        struct statfs *mnts = NULL;
+        int n = getmntinfo(&mnts, MNT_NOWAIT);
+        len = shell_appendf(&out, &cap, len,
+                             "%-30s %12s %12s %12s  use%%\n",
+                             "filesystem", "blocks", "used", "avail");
+        for (int i = 0; i < n && mnts; i++) {
+            uint64_t bs = mnts[i].f_bsize;
+            uint64_t total = (uint64_t)mnts[i].f_blocks * bs;
+            uint64_t free_b = (uint64_t)mnts[i].f_bfree * bs;
+            uint64_t used = total - free_b;
+            int pct = total > 0 ? (int)((used * 100) / total) : 0;
+            len = shell_appendf(&out, &cap, len,
+                                 "%-30s %12llu %12llu %12llu  %3d%%\n",
+                                 mnts[i].f_mntonname,
+                                 (unsigned long long)(total / 1024),
+                                 (unsigned long long)(used  / 1024),
+                                 (unsigned long long)(free_b / 1024),
+                                 pct);
+        }
+        if (!out) out = strdup_safe("");
+        *out_text = out;
+        return 0;
+    }
+    if (strcmp(prog, "ps") == 0) {
+        /* proc_list_get_json returns a JSON blob like
+         *   {"ok":true,"procs":[{"pid":123,"name":"SceShellUI"},...]}
+         * Re-parse the pid+name pairs into a pretty 2-column listing.
+         * Avoids reaching for a JSON library — the format is fixed and
+         * we own both producer + consumer. */
+        char *jbuf = malloc(64 * 1024);
+        if (!jbuf) {
+            *out_text = strdup_safe("ps: oom\n");
+            *out_exit = 1;
+            return 0;
+        }
+        size_t jwritten = 0;
+        const char *jerr = NULL;
+        if (proc_list_get_json(jbuf, 64 * 1024, &jwritten, &jerr) != 0) {
+            len = shell_appendf(&out, &cap, len,
+                                 "ps: %s\n", jerr ? jerr : "failed");
+            free(jbuf);
+            *out_text = out;
+            *out_exit = 1;
+            return 0;
+        }
+        /* Walk the JSON looking for "pid":N pairs and "name":"..." pairs.
+         * Robust enough for our fixed shape; not a general JSON parser. */
+        char *p = jbuf;
+        while (p && *p) {
+            char *pp = strstr(p, "\"pid\":");
+            if (!pp) break;
+            int pid_val = atoi(pp + 6);
+            char *np = strstr(pp, "\"name\":\"");
+            if (!np) break;
+            np += 8;
+            char *ne = strchr(np, '"');
+            if (!ne) break;
+            char name_buf[64];
+            size_t nl = (size_t)(ne - np);
+            if (nl >= sizeof(name_buf)) nl = sizeof(name_buf) - 1;
+            memcpy(name_buf, np, nl);
+            name_buf[nl] = '\0';
+            len = shell_appendf(&out, &cap, len, "%6d  %s\n",
+                                 pid_val, name_buf);
+            p = ne + 1;
+        }
+        free(jbuf);
+        if (!out) out = strdup_safe("");
+        *out_text = out;
+        return 0;
+    }
+    if (strcmp(prog, "sysctl") == 0) {
+        if (argc < 2) {
+            *out_text = strdup_safe("sysctl: missing name\n");
+            *out_exit = 1;
+            return 0;
+        }
+        char val[1024] = {0};
+        size_t vl = sizeof(val);
+        if (sysctlbyname(argv[1], val, &vl, NULL, 0) != 0) {
+            len = shell_appendf(&out, &cap, len,
+                                 "sysctl: %s: %s\n", argv[1], strerror(errno));
+            *out_exit = 1;
+        } else {
+            len = shell_appendf(&out, &cap, len, "%s\n", val);
+        }
+        *out_text = out;
+        return 0;
+    }
+    /* Unknown command — let the caller decide whether to fall through
+     * to popen or surface a "not supported" error. */
+    (void)len;
+    if (out) free(out);
+    return -1;
+}
+
+static int handle_shell_exec(runtime_state_t *state, int client_fd,
+                              uint64_t trace_id, const char *body,
+                              uint64_t body_len) {
+    if (!state) return -1;
+    char cmd[2048] = {0};
+    int timeout_secs = 30;
+    if (body && body_len > 0 && body_len < 4096) {
+        char tmp[4100];
+        memcpy(tmp, body, (size_t)body_len);
+        tmp[body_len] = '\0';
+        const char *p = strstr(tmp, "\"cmd\"");
+        if (p) {
+            p = strchr(p, ':');
+            if (p) p = strchr(p, '"');
+            if (p) {
+                p++;
+                const char *e = strchr(p, '"');
+                if (e && (size_t)(e - p) < sizeof(cmd)) {
+                    memcpy(cmd, p, (size_t)(e - p));
+                    cmd[e - p] = '\0';
+                }
+            }
+        }
+        p = strstr(tmp, "\"timeout_secs\"");
+        if (p) {
+            p = strchr(p, ':');
+            if (p) {
+                int n = atoi(p + 1);
+                if (n > 0 && n < 600) timeout_secs = n;
+            }
+        }
+    }
+    if (cmd[0] == '\0') {
+        const char *err = "{\"err\":\"empty_cmd\"}";
+        return send_frame(client_fd, FTX2_FRAME_SHELL_EXEC_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+    /* PS5 has NO shell binary — there's no /bin/sh, /system/bin/sh, or
+     * any other executable popen() could fork+exec. Skip the popen
+     * call entirely and route every command through our built-in
+     * interpreter (handle_shell_builtin) which uses the payload's
+     * existing FS/proc/uname code paths to answer the most-common
+     * "what's the state of this PS5?" queries. */
+    {
+        char *builtin_out = NULL;
+        int builtin_exit = -1;
+        int builtin_rc = handle_shell_builtin(cmd, &builtin_out, &builtin_exit);
+        if (builtin_rc == 0) {
+            /* Build the response JSON in the same shape as the legacy
+             * popen path so the desktop UI's renderer is unchanged. */
+            size_t out_len = builtin_out ? strlen(builtin_out) : 0;
+            char *resp_b = malloc(out_len + 512);
+            if (!resp_b) {
+                free(builtin_out);
+                const char *err = "{\"err\":\"oom\"}";
+                return send_frame(client_fd, FTX2_FRAME_SHELL_EXEC_ACK, 0,
+                                  trace_id, err, strlen(err));
+            }
+            int n_b = 0;
+            n_b += snprintf(resp_b + n_b, 256,
+                            "{\"exit_code\":%d,\"timed_out\":false,"
+                            "\"stdout\":\"", builtin_exit);
+            size_t cap_b = out_len + 512;
+            for (size_t i = 0; i < out_len && (size_t)n_b < cap_b - 8; i++) {
+                unsigned char c = (unsigned char)builtin_out[i];
+                if (c == '\\' || c == '"') { resp_b[n_b++] = '\\'; resp_b[n_b++] = (char)c; }
+                else if (c == '\n') { resp_b[n_b++] = '\\'; resp_b[n_b++] = 'n'; }
+                else if (c == '\r') { resp_b[n_b++] = '\\'; resp_b[n_b++] = 'r'; }
+                else if (c == '\t') { resp_b[n_b++] = '\\'; resp_b[n_b++] = 't'; }
+                else if (c < 0x20) { n_b += snprintf(resp_b + n_b, cap_b - n_b, "\\u%04x", c); }
+                else { resp_b[n_b++] = (char)c; }
+            }
+            n_b += snprintf(resp_b + n_b, cap_b - n_b, "\"}");
+            free(builtin_out);
+            int rc_b = send_frame(client_fd, FTX2_FRAME_SHELL_EXEC_ACK, 0,
+                                   trace_id, resp_b, (uint64_t)n_b);
+            free(resp_b);
+            pthread_mutex_lock(&state->state_mtx);
+            state->command_count += 1;
+            pthread_mutex_unlock(&state->state_mtx);
+            (void)timeout_secs;
+            return rc_b;
+        }
+        /* Built-in didn't recognise this command — fall through to the
+         * popen path. On PS5 popen will fail (no shell binary); the
+         * UI then sees a clear "shell binary missing" message instead
+         * of the previous opaque "popen_failed". On a hypothetical
+         * future PS5 build that DOES expose /bin/sh, popen would
+         * work and we'd execute the command for real. */
+    }
+
+    /* Append redirect so popen captures stderr too. */
+    char shellcmd[2200];
+    snprintf(shellcmd, sizeof(shellcmd), "%s 2>&1", cmd);
+    FILE *fp = popen(shellcmd, "r");
+    if (!fp) {
+        /* Most common cause: PS5 doesn't ship /bin/sh. Give the user
+         * an actionable message instead of "popen_failed". */
+        char err[512];
+        int el = snprintf(err, sizeof(err),
+                          "{\"exit_code\":127,\"timed_out\":false,"
+                          "\"stdout\":\"PS5 has no shell binary (popen errno %d: %s).\\n"
+                          "Built-in commands available: help, ls, pwd, cat, stat, uname, "
+                          "ps, mount, df, id, env, sysctl, sleep, true, false\\n"
+                          "Try 'help' for the full list.\"}",
+                          errno, strerror(errno));
+        if (el < 0) el = 0;
+        if ((size_t)el >= sizeof(err)) el = (int)sizeof(err) - 1;
+        return send_frame(client_fd, FTX2_FRAME_SHELL_EXEC_ACK, 0,
+                          trace_id, err, (uint64_t)el);
+    }
+    int fd = fileno(fp);
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags >= 0) fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+
+    char *outbuf = malloc(256 * 1024);
+    if (!outbuf) {
+        pclose(fp);
+        const char *err = "{\"err\":\"oom\"}";
+        return send_frame(client_fd, FTX2_FRAME_SHELL_EXEC_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+    size_t out_n = 0;
+    size_t out_cap = 256 * 1024 - 1;
+    time_t deadline = time(NULL) + timeout_secs;
+    int timed_out = 0;
+    while (1) {
+        if (time(NULL) >= deadline) {
+            timed_out = 1;
+            break;
+        }
+        char chunk[4096];
+        ssize_t r = read(fd, chunk, sizeof(chunk));
+        if (r > 0) {
+            size_t take = (size_t)r;
+            if (out_n + take > out_cap) take = out_cap - out_n;
+            if (take > 0) {
+                memcpy(outbuf + out_n, chunk, take);
+                out_n += take;
+            }
+        } else if (r == 0) {
+            break;
+        } else {
+            usleep(10000);
+        }
+    }
+    int status = pclose(fp);
+    int exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    outbuf[out_n] = '\0';
+
+    char *resp = malloc(out_n + 512);
+    if (!resp) {
+        free(outbuf);
+        const char *err = "{\"err\":\"oom\"}";
+        return send_frame(client_fd, FTX2_FRAME_SHELL_EXEC_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+    int n = 0;
+    n += snprintf(resp + n, 256, "{\"exit_code\":%d,\"timed_out\":%s,"
+                                  "\"stdout\":\"", exit_code,
+                  timed_out ? "true" : "false");
+    size_t cap_total = out_n + 512;
+    for (size_t i = 0; i < out_n && (size_t)n < cap_total - 8; i++) {
+        unsigned char c = (unsigned char)outbuf[i];
+        if (c == '\\' || c == '"') {
+            resp[n++] = '\\';
+            resp[n++] = (char)c;
+        } else if (c == '\n') { resp[n++] = '\\'; resp[n++] = 'n'; }
+        else if (c == '\r') { resp[n++] = '\\'; resp[n++] = 'r'; }
+        else if (c == '\t') { resp[n++] = '\\'; resp[n++] = 't'; }
+        else if (c < 0x20) { n += snprintf(resp + n, cap_total - n, "\\u%04x", c); }
+        else { resp[n++] = (char)c; }
+    }
+    n += snprintf(resp + n, cap_total - n, "\"}");
+    free(outbuf);
+    int rc = send_frame(client_fd, FTX2_FRAME_SHELL_EXEC_ACK, 0,
+                        trace_id, resp, (uint64_t)n);
+    free(resp);
+    pthread_mutex_lock(&state->state_mtx);
+    state->command_count += 1;
+    pthread_mutex_unlock(&state->state_mtx);
+    return rc;
+}
+
+/* ── CRC32 file checksum ─────────────────────────────────────────────── */
+
+static uint32_t g_crc32_table[256];
+static int g_crc32_table_built = 0;
+static void build_crc32_table(void) {
+    if (g_crc32_table_built) return;
+    for (int i = 0; i < 256; i++) {
+        uint32_t c = (uint32_t)i;
+        for (int j = 0; j < 8; j++) {
+            c = (c & 1) ? (0xedb88320u ^ (c >> 1)) : (c >> 1);
+        }
+        g_crc32_table[i] = c;
+    }
+    g_crc32_table_built = 1;
+}
+
+static int handle_crc32_file(runtime_state_t *state, int client_fd,
+                              uint64_t trace_id, const char *body,
+                              uint64_t body_len) {
+    if (!state) return -1;
+    char path[1024] = {0};
+    if (body && body_len > 0 && body_len < 1024) {
+        char tmp[1028];
+        memcpy(tmp, body, (size_t)body_len);
+        tmp[body_len] = '\0';
+        const char *p = strstr(tmp, "\"path\"");
+        if (p) {
+            p = strchr(p, ':');
+            if (p) p = strchr(p, '"');
+            if (p) {
+                p++;
+                const char *e = strchr(p, '"');
+                if (e && (size_t)(e - p) < sizeof(path)) {
+                    memcpy(path, p, (size_t)(e - p));
+                    path[e - p] = '\0';
+                }
+            }
+        }
+    }
+    if (path[0] == '\0') {
+        const char *err = "{\"err\":\"empty_path\"}";
+        return send_frame(client_fd, FTX2_FRAME_CRC32_FILE_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        const char *err = "{\"err\":\"open_failed\"}";
+        return send_frame(client_fd, FTX2_FRAME_CRC32_FILE_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+    build_crc32_table();
+    uint32_t crc = 0xffffffffu;
+    uint64_t total = 0;
+    char buf[64 * 1024];
+    while (1) {
+        ssize_t n = read(fd, buf, sizeof(buf));
+        if (n <= 0) break;
+        for (ssize_t i = 0; i < n; i++) {
+            crc = g_crc32_table[(crc ^ (unsigned char)buf[i]) & 0xff]
+                  ^ (crc >> 8);
+        }
+        total += (uint64_t)n;
+    }
+    close(fd);
+    crc ^= 0xffffffffu;
+    char resp[160];
+    int rn = snprintf(resp, sizeof(resp),
+                      "{\"crc32\":%u,\"size\":%llu}",
+                      crc, (unsigned long long)total);
+    pthread_mutex_lock(&state->state_mtx);
+    state->command_count += 1;
+    pthread_mutex_unlock(&state->state_mtx);
+    return send_frame(client_fd, FTX2_FRAME_CRC32_FILE_ACK, 0,
+                      trace_id, resp, (uint64_t)rn);
+}
+
+/* ── app.db query ────────────────────────────────────────────────────── */
+
+/* sqlite functions resolved via RTLD_DEFAULT — same pattern as
+ * register.c's resolution. We re-resolve here rather than hand
+ * pointers across module boundaries because handle_appdb_query is
+ * the only sqlite consumer outside register.c and we want the
+ * runtime path to fail gracefully if libsqlite has moved (firmware
+ * delta) without propagating that failure into other handlers. */
+typedef struct sqlite3      sqlite3;
+typedef struct sqlite3_stmt sqlite3_stmt;
+typedef int  (*adb_open_v2_fn)(const char *, sqlite3 **, int, const char *);
+typedef int  (*adb_close_fn)(sqlite3 *);
+typedef int  (*adb_prepare_v2_fn)(sqlite3 *, const char *, int,
+                                   sqlite3_stmt **, const char **);
+typedef int  (*adb_step_fn)(sqlite3_stmt *);
+typedef int  (*adb_finalize_fn)(sqlite3_stmt *);
+typedef const unsigned char *(*adb_column_text_fn)(sqlite3_stmt *, int);
+typedef int  (*adb_column_int_fn)(sqlite3_stmt *, int);
+#define ADB_SQLITE_OPEN_READONLY 0x00000001
+#define ADB_SQLITE_ROW 100
+
+static int handle_appdb_query(runtime_state_t *state, int client_fd,
+                               uint64_t trace_id) {
+    if (!state) return -1;
+    adb_open_v2_fn       sq_open_v2  = (adb_open_v2_fn)dlsym(RTLD_DEFAULT, "sqlite3_open_v2");
+    adb_close_fn         sq_close    = (adb_close_fn)dlsym(RTLD_DEFAULT, "sqlite3_close");
+    adb_prepare_v2_fn    sq_prepare  = (adb_prepare_v2_fn)dlsym(RTLD_DEFAULT, "sqlite3_prepare_v2");
+    adb_step_fn          sq_step     = (adb_step_fn)dlsym(RTLD_DEFAULT, "sqlite3_step");
+    adb_finalize_fn      sq_finalize = (adb_finalize_fn)dlsym(RTLD_DEFAULT, "sqlite3_finalize");
+    adb_column_text_fn   sq_text     = (adb_column_text_fn)dlsym(RTLD_DEFAULT, "sqlite3_column_text");
+    adb_column_int_fn    sq_int      = (adb_column_int_fn)dlsym(RTLD_DEFAULT, "sqlite3_column_int");
+    if (!sq_open_v2 || !sq_close || !sq_prepare || !sq_step ||
+        !sq_finalize || !sq_text || !sq_int) {
+        const char *err = "{\"err\":\"sqlite_unavailable\",\"apps\":[]}";
+        return send_frame(client_fd, FTX2_FRAME_APPDB_QUERY_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+    sqlite3 *db = NULL;
+    int rc = sq_open_v2("/system_data/priv/mms/app.db",
+                         &db, ADB_SQLITE_OPEN_READONLY, NULL);
+    if (rc != 0 || !db) {
+        if (db) sq_close(db);
+        const char *err = "{\"err\":\"open_appdb_failed\",\"apps\":[]}";
+        return send_frame(client_fd, FTX2_FRAME_APPDB_QUERY_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+    sqlite3_stmt *stmt = NULL;
+    /* tbl_appbrowse_2_appinfo holds title_id + appId + name. Schema
+     * stable across PS5 firmware revisions per psdevwiki. */
+    const char *sql =
+        "SELECT titleId, appId, appName FROM tbl_appbrowse_2_appinfo "
+        "WHERE titleId IS NOT NULL ORDER BY titleId";
+    rc = sq_prepare(db, sql, -1, &stmt, NULL);
+    if (rc != 0 || !stmt) {
+        if (stmt) sq_finalize(stmt);
+        sq_close(db);
+        const char *err = "{\"err\":\"prepare_failed\",\"apps\":[]}";
+        return send_frame(client_fd, FTX2_FRAME_APPDB_QUERY_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+    char *resp = malloc(64 * 1024);
+    if (!resp) {
+        sq_finalize(stmt);
+        sq_close(db);
+        const char *err = "{\"err\":\"oom\",\"apps\":[]}";
+        return send_frame(client_fd, FTX2_FRAME_APPDB_QUERY_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+    int cap = 64 * 1024;
+    int n = 0;
+    n += snprintf(resp + n, cap - n, "{\"apps\":[");
+    int wrote_one = 0;
+    while ((rc = sq_step(stmt)) == ADB_SQLITE_ROW) {
+        const unsigned char *tid = sq_text(stmt, 0);
+        int aid = sq_int(stmt, 1);
+        const unsigned char *name = sq_text(stmt, 2);
+        if (!tid) continue;
+        char tid_esc[64];
+        char name_esc[512];
+        json_escape_into((const char *)tid, tid_esc, sizeof(tid_esc));
+        json_escape_into(name ? (const char *)name : "", name_esc, sizeof(name_esc));
+        if (n >= cap - 700) break;
+        if (wrote_one) resp[n++] = ',';
+        wrote_one = 1;
+        n += snprintf(resp + n, cap - n,
+                      "{\"title_id\":\"%s\",\"app_id\":%d,\"name\":\"%s\"}",
+                      tid_esc, aid, name_esc);
+    }
+    if (n < cap - 2) {
+        resp[n++] = ']';
+        resp[n++] = '}';
+    }
+    sq_finalize(stmt);
+    sq_close(db);
+    int rc2 = send_frame(client_fd, FTX2_FRAME_APPDB_QUERY_ACK, 0,
+                         trace_id, resp, (uint64_t)n);
+    free(resp);
+    pthread_mutex_lock(&state->state_mtx);
+    state->command_count += 1;
+    pthread_mutex_unlock(&state->state_mtx);
+    return rc2;
+}
+
+/* ── Direct .pkg mount + UFS fsck ────────────────────────────────────── */
+
+/* Sony's libSceFsInternalForVsh exports — undocumented signatures.
+ * Sigs derived from reverse-engineering work and SDK header leaks
+ * across multiple firmware revisions. Both are best-effort: we
+ * forward the user's args and surface the return code.
+ *
+ * Resolved via dlopen at first use rather than compile-time linkage.
+ * libSceFsInternalForVsh is a VSH-internal SPRX that's blocked from
+ * user-mode loaders on some firmware. Compile-time linkage caused
+ * rtld to refuse the entire payload (no toast, no port bind, loader
+ * silently rejects). With dlopen the handlers degrade gracefully
+ * to "service_unavailable" and the rest of the payload works. */
+typedef int (*sce_fs_mount_game_pkg_fn)(const char *pkg_path,
+                                         const char *mount_point, int flags);
+typedef int (*sce_fs_ufs_fsck_fn)(const char *device, int flags, void *opts);
+typedef int (*sce_fs_mount_lwfs_fn)(const char *patch_path,
+                                     const char *mount_point,
+                                     const char *title_id, int flags);
+static sce_fs_mount_game_pkg_fn p_sceFsMountGamePkg = NULL;
+static sce_fs_ufs_fsck_fn      p_sceFsUfsFsck      = NULL;
+static sce_fs_mount_lwfs_fn    p_sceFsMountLwfs    = NULL;
+static int sce_fs_internal_resolve_attempted = 0;
+static int resolve_sce_fs_internal(void) {
+    if (sce_fs_internal_resolve_attempted) {
+        /* If at least one symbol resolved we say "ok" — individual
+         * call sites null-check their specific function pointer. */
+        return (p_sceFsMountGamePkg || p_sceFsUfsFsck || p_sceFsMountLwfs)
+            ? 0 : -1;
+    }
+    sce_fs_internal_resolve_attempted = 1;
+    void *h = dlopen("libSceFsInternalForVsh.sprx", RTLD_LAZY);
+    if (!h) return -1;
+    p_sceFsMountGamePkg = (sce_fs_mount_game_pkg_fn)
+        dlsym(h, "sceFsMountGamePkg");
+    p_sceFsUfsFsck = (sce_fs_ufs_fsck_fn)
+        dlsym(h, "sceFsUfsFsck");
+    p_sceFsMountLwfs = (sce_fs_mount_lwfs_fn)
+        dlsym(h, "sceFsMountLwfs");
+    return (p_sceFsMountGamePkg || p_sceFsUfsFsck || p_sceFsMountLwfs)
+        ? 0 : -1;
+}
+
+/* Helper: extract a quoted string field from the input JSON body
+ * into a fixed buffer. Same one-pass parser as the other handlers
+ * use; bounded, no allocation. */
+static int parse_json_string_field_local(const char *body, uint64_t body_len,
+                                          const char *field, char *out,
+                                          size_t out_size) {
+    if (!body || body_len == 0 || !field || !out || out_size == 0) return -1;
+    char needle[64];
+    snprintf(needle, sizeof(needle), "\"%s\"", field);
+    const char *body_end = body + body_len;
+    const char *p = find_bounded(body, (size_t)body_len, needle);
+    if (!p) return -1;
+    p += strlen(needle);
+    while (p < body_end && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')) p++;
+    if (p >= body_end || *p != ':') return -1;
+    p++;
+    while (p < body_end && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')) p++;
+    if (p >= body_end || *p != '"') return -1;
+    p++;
+    const char *e = json_string_end(p, body_end);
+    if (!e) return -1;
+    return json_copy_unescaped_string(p, e, out, out_size);
+}
+
+static int handle_pkg_direct_mount(runtime_state_t *state, int client_fd,
+                                    uint64_t trace_id, const char *body,
+                                    uint64_t body_len) {
+    if (!state) return -1;
+    char pkg_path[512] = {0};
+    char mount_point[256] = {0};
+    if (parse_json_string_field_local(body, body_len, "pkg_path",
+                                       pkg_path, sizeof(pkg_path)) != 0 ||
+        pkg_path[0] == '\0') {
+        const char *err = "{\"ok\":false,\"err\":\"pkg_path_required\"}";
+        return send_frame(client_fd, FTX2_FRAME_PKG_DIRECT_MOUNT_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+    if (parse_json_string_field_local(body, body_len, "mount_point",
+                                       mount_point, sizeof(mount_point)) != 0 ||
+        mount_point[0] == '\0') {
+        /* Default to /mnt/ps5upload/<basename>. */
+        const char *base = strrchr(pkg_path, '/');
+        base = base ? base + 1 : pkg_path;
+        snprintf(mount_point, sizeof(mount_point),
+                 "/mnt/ps5upload/%s.mount", base);
+    }
+    /* Restrict the mount point to writable roots. Without this a
+     * client could mount over /system_data, /user/system, etc. — Sony
+     * may or may not refuse, and we shouldn't gamble. The pkg source
+     * itself is also gated; a hostile pkg lookup outside the writable
+     * roots is rejected. */
+    if (!is_path_allowed(mount_point) || !is_path_allowed(pkg_path)) {
+        const char *err = "{\"ok\":false,\"err\":\"path_not_allowed\"}";
+        return send_frame(client_fd, FTX2_FRAME_PKG_DIRECT_MOUNT_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+    /* Resolve the optional libSceFsInternalForVsh export at first use. */
+    if (resolve_sce_fs_internal() != 0 || !p_sceFsMountGamePkg) {
+        const char *err = "{\"ok\":false,\"err\":\"libSceFsInternalForVsh_unavailable\"}";
+        return send_frame(client_fd, FTX2_FRAME_PKG_DIRECT_MOUNT_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+    /* Best-effort mkdir of the mount point. */
+    int created_mp = (mkdir(mount_point, 0755) == 0);
+    int rc = p_sceFsMountGamePkg(pkg_path, mount_point, 0);
+    if (rc != 0 && created_mp) {
+        /* Clean up the empty mount-point dir we just made so a
+         * failed attempt doesn't leave litter on the FS. */
+        (void)rmdir(mount_point);
+    }
+    pthread_mutex_lock(&state->state_mtx);
+    state->command_count += 1;
+    pthread_mutex_unlock(&state->state_mtx);
+    char mount_point_esc[512];
+    char resp[700];
+    json_escape_into(mount_point, mount_point_esc, sizeof(mount_point_esc));
+    int n = snprintf(resp, sizeof(resp),
+                     "{\"ok\":%s,\"code\":%d,\"mount_point\":\"%s\"}",
+                     rc == 0 ? "true" : "false", rc, mount_point_esc);
+    return send_frame(client_fd, FTX2_FRAME_PKG_DIRECT_MOUNT_ACK, 0,
+                      trace_id, resp, (uint64_t)n);
+}
+
+static int handle_ufs_fsck(runtime_state_t *state, int client_fd,
+                            uint64_t trace_id, const char *body,
+                            uint64_t body_len) {
+    if (!state) return -1;
+    char device[256] = {0};
+    if (parse_json_string_field_local(body, body_len, "device",
+                                       device, sizeof(device)) != 0 ||
+        device[0] == '\0') {
+        const char *err = "{\"ok\":false,\"err\":\"device_required\"}";
+        return send_frame(client_fd, FTX2_FRAME_UFS_FSCK_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+    /* Restrict the device to ones we created (md*, lvd*) plus the
+     * external storage devices the PS5 exposes. Without this a
+     * client could pass /dev/da0 (system internal disk) with
+     * repair=true and corrupt the OS partition. The check is exact-
+     * prefix; further numbers/digits are allowed for unit ids. */
+    {
+        const char *d = device;
+        const char *suffix = NULL;
+        int allowed = 0;
+        if (strncmp(d, "/dev/md", 7) == 0) suffix = d + 7;
+        else if (strncmp(d, "/dev/lvd", 8) == 0) suffix = d + 8;
+        else if (strncmp(d, "/dev/da", 7) == 0) suffix = d + 7;
+        if (suffix && suffix[0] >= '0' && suffix[0] <= '9') {
+            const char *s = suffix;
+            allowed = 1;
+            while (*s) {
+                int is_digit = *s >= '0' && *s <= '9';
+                int is_lower = *s >= 'a' && *s <= 'z';
+                int is_upper = *s >= 'A' && *s <= 'Z';
+                if (!is_digit && !is_lower && !is_upper) {
+                    allowed = 0;
+                    break;
+                }
+                s++;
+            }
+        }
+        if (strncmp(d, "/dev/da0", 8) == 0) allowed = 0;
+        if (!allowed) {
+            const char *err = "{\"ok\":false,\"err\":\"device_not_allowed\"}";
+            return send_frame(client_fd, FTX2_FRAME_UFS_FSCK_ACK, 0,
+                              trace_id, err, strlen(err));
+        }
+    }
+    /* Repair flag — we look for `"repair":true`; anything else is
+     * read-only (the safer default). */
+    int repair = 0;
+    if (body && body_len > 0 && body_len < 1024) {
+        char tmp[1028];
+        memcpy(tmp, body, (size_t)body_len);
+        tmp[body_len] = '\0';
+        if (strstr(tmp, "\"repair\":true")) {
+            repair = 1;
+        }
+    }
+    if (resolve_sce_fs_internal() != 0 || !p_sceFsUfsFsck) {
+        const char *err = "{\"ok\":false,\"err\":\"libSceFsInternalForVsh_unavailable\"}";
+        return send_frame(client_fd, FTX2_FRAME_UFS_FSCK_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+    /* Sony's flags layout is opaque; per psdevwiki, flag 1 enables
+     * write-mode repair and flag 0 is read-only check. The opts
+     * pointer is documented as "implementation-specific" — we pass
+     * NULL which works for the simple checks we need. */
+    int rc = p_sceFsUfsFsck(device, repair ? 1 : 0, NULL);
+    pthread_mutex_lock(&state->state_mtx);
+    state->command_count += 1;
+    pthread_mutex_unlock(&state->state_mtx);
+    char device_esc[512];
+    char resp[700];
+    json_escape_into(device, device_esc, sizeof(device_esc));
+    int n = snprintf(resp, sizeof(resp),
+                     "{\"ok\":%s,\"code\":%d,\"device\":\"%s\",\"repair\":%s}",
+                     rc == 0 ? "true" : "false", rc, device_esc,
+                     repair ? "true" : "false");
+    return send_frame(client_fd, FTX2_FRAME_UFS_FSCK_ACK, 0,
+                      trace_id, resp, (uint64_t)n);
+}
+
+static int handle_lwfs_mount(runtime_state_t *state, int client_fd,
+                              uint64_t trace_id, const char *body,
+                              uint64_t body_len) {
+    if (!state) return -1;
+    char patch_path[512] = {0};
+    char mount_point[256] = {0};
+    char title_id[64] = {0};
+    if (parse_json_string_field_local(body, body_len, "patch_path",
+                                       patch_path, sizeof(patch_path)) != 0 ||
+        patch_path[0] == '\0') {
+        const char *err = "{\"ok\":false,\"err\":\"patch_path_required\"}";
+        return send_frame(client_fd, FTX2_FRAME_LWFS_MOUNT_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+    if (parse_json_string_field_local(body, body_len, "mount_point",
+                                       mount_point, sizeof(mount_point)) != 0 ||
+        mount_point[0] == '\0') {
+        const char *base = strrchr(patch_path, '/');
+        base = base ? base + 1 : patch_path;
+        snprintf(mount_point, sizeof(mount_point),
+                 "/mnt/ps5upload/%s.lwfs", base);
+    }
+    parse_json_string_field_local(body, body_len, "title_id",
+                                   title_id, sizeof(title_id));
+    if (!is_path_allowed(mount_point) || !is_path_allowed(patch_path)) {
+        const char *err = "{\"ok\":false,\"err\":\"path_not_allowed\"}";
+        return send_frame(client_fd, FTX2_FRAME_LWFS_MOUNT_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+    if (resolve_sce_fs_internal() != 0 || !p_sceFsMountLwfs) {
+        const char *err = "{\"ok\":false,\"err\":\"libSceFsInternalForVsh_unavailable\"}";
+        return send_frame(client_fd, FTX2_FRAME_LWFS_MOUNT_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+    int created_mp = (mkdir(mount_point, 0755) == 0);
+    int rc = p_sceFsMountLwfs(patch_path, mount_point,
+                              title_id[0] ? title_id : NULL, 0);
+    if (rc != 0 && created_mp) {
+        (void)rmdir(mount_point);
+    }
+    pthread_mutex_lock(&state->state_mtx);
+    state->command_count += 1;
+    pthread_mutex_unlock(&state->state_mtx);
+    char mount_point_esc[512];
+    char title_id_esc[128];
+    char resp[800];
+    json_escape_into(mount_point, mount_point_esc, sizeof(mount_point_esc));
+    json_escape_into(title_id, title_id_esc, sizeof(title_id_esc));
+    int n = snprintf(resp, sizeof(resp),
+                     "{\"ok\":%s,\"code\":%d,\"mount_point\":\"%s\","
+                     "\"title_id\":\"%s\"}",
+                     rc == 0 ? "true" : "false", rc, mount_point_esc,
+                     title_id_esc);
+    return send_frame(client_fd, FTX2_FRAME_LWFS_MOUNT_ACK, 0,
+                      trace_id, resp, (uint64_t)n);
+}
+
+/* ── Atomic small-file write ─────────────────────────────────────────── */
+
+/* Decode base64 into a freshly-malloc'd buffer. Returns NULL on
+ * malformed input or oversize. Cap is enforced by the caller. */
+static unsigned char *base64_decode(const char *s, size_t s_len, size_t *out_len) {
+    static const signed char tab[256] = {
+        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+        -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,62,-1,-1,-1,63,
+        52,53,54,55,56,57,58,59,60,61,-1,-1,-1,-1,-1,-1,
+        -1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9,10,11,12,13,14,
+        15,16,17,18,19,20,21,22,23,24,25,-1,-1,-1,-1,-1,
+        -1,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,
+        41,42,43,44,45,46,47,48,49,50,51,-1,-1,-1,-1,-1,
+    };
+    size_t out_cap = (s_len / 4) * 3 + 4;
+    unsigned char *out = malloc(out_cap);
+    if (!out) return NULL;
+    int v = 0;
+    int bits = 0;
+    size_t out_n = 0;
+    for (size_t i = 0; i < s_len; i++) {
+        unsigned char c = (unsigned char)s[i];
+        if (c == '=' || c == '\n' || c == '\r' || c == ' ') continue;
+        signed char d = tab[c];
+        if (d < 0) {
+            free(out);
+            return NULL;
+        }
+        v = (v << 6) | d;
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            if (out_n >= out_cap) {
+                free(out);
+                return NULL;
+            }
+            out[out_n++] = (unsigned char)((v >> bits) & 0xff);
+        }
+    }
+    *out_len = out_n;
+    return out;
+}
+
+/* Path safety: must be absolute, no `..` segments, no `://` scheme. */
+/* Same allowlist as the rest of the destructive FS handlers. The
+ * old standalone implementation accepted "any absolute path without
+ * .. or ://" — which let a client write under /system, /system_data,
+ * /dev, etc. Per audit, replaced with the central is_path_allowed
+ * for consistency. Kept the function for call-site stability. */
+static int is_safe_write_path(const char *p) {
+    return is_path_allowed(p);
+}
+
+#define FS_WRITE_BYTES_MAX 262144  /* 256 KB cap */
+
+static int handle_fs_write_bytes(runtime_state_t *state, int client_fd,
+                                  uint64_t trace_id, const char *body,
+                                  uint64_t body_len) {
+    if (!state) return -1;
+    if (!body || body_len == 0 || body_len > 512 * 1024) {
+        const char *err = "{\"ok\":false,\"err\":\"body_required\"}";
+        return send_frame(client_fd, FTX2_FRAME_FS_WRITE_BYTES_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+    /* Parse path + base64. We do single-pass extraction; no full JSON
+     * library here. */
+    char path[1024] = {0};
+    char mode[16] = "overwrite";
+    if (parse_json_string_field_local(body, body_len, "path",
+                                       path, sizeof(path)) != 0 ||
+        path[0] == '\0') {
+        const char *err = "{\"ok\":false,\"err\":\"path_required\"}";
+        return send_frame(client_fd, FTX2_FRAME_FS_WRITE_BYTES_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+    if (!is_safe_write_path(path)) {
+        const char *err = "{\"ok\":false,\"err\":\"path_unsafe\"}";
+        return send_frame(client_fd, FTX2_FRAME_FS_WRITE_BYTES_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+    parse_json_string_field_local(body, body_len, "mode",
+                                   mode, sizeof(mode));
+    /* Locate the bytes field's value. We need its raw start/end so we
+     * don't allocate a huge intermediate buffer to copy it. */
+    const char *p = strstr(body, "\"bytes\"");
+    if (!p) {
+        const char *err = "{\"ok\":false,\"err\":\"bytes_required\"}";
+        return send_frame(client_fd, FTX2_FRAME_FS_WRITE_BYTES_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+    p = (const char *)memchr(p, ':', body_len - (size_t)(p - body));
+    if (!p) {
+        const char *err = "{\"ok\":false,\"err\":\"bytes_malformed\"}";
+        return send_frame(client_fd, FTX2_FRAME_FS_WRITE_BYTES_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+    p++;
+    while ((size_t)(p - body) < body_len && (*p == ' ' || *p == '\t')) p++;
+    if ((size_t)(p - body) >= body_len || *p != '"') {
+        const char *err = "{\"ok\":false,\"err\":\"bytes_malformed\"}";
+        return send_frame(client_fd, FTX2_FRAME_FS_WRITE_BYTES_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+    p++;  /* past opening quote */
+    /* Find closing quote. */
+    const char *e = p;
+    while ((size_t)(e - body) < body_len && *e != '"') e++;
+    if ((size_t)(e - body) >= body_len) {
+        const char *err = "{\"ok\":false,\"err\":\"bytes_unterminated\"}";
+        return send_frame(client_fd, FTX2_FRAME_FS_WRITE_BYTES_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+    size_t b64_len = (size_t)(e - p);
+    /* Sanity: 256 KB raw → ~342 KB base64. Cap input length so we
+     * don't allocate huge transient buffers for malicious clients. */
+    if (b64_len > 380 * 1024) {
+        const char *err = "{\"ok\":false,\"err\":\"too_large\"}";
+        return send_frame(client_fd, FTX2_FRAME_FS_WRITE_BYTES_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+    size_t decoded_len = 0;
+    unsigned char *decoded = base64_decode(p, b64_len, &decoded_len);
+    if (!decoded) {
+        const char *err = "{\"ok\":false,\"err\":\"bad_base64\"}";
+        return send_frame(client_fd, FTX2_FRAME_FS_WRITE_BYTES_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+    if (decoded_len > FS_WRITE_BYTES_MAX) {
+        free(decoded);
+        const char *err = "{\"ok\":false,\"err\":\"size_capped\"}";
+        return send_frame(client_fd, FTX2_FRAME_FS_WRITE_BYTES_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+    /* `mode=create` rejects pre-existing files. Use stat() to check. */
+    if (strcmp(mode, "create") == 0) {
+        struct stat st;
+        if (stat(path, &st) == 0) {
+            free(decoded);
+            const char *err = "{\"ok\":false,\"err\":\"exists\"}";
+            return send_frame(client_fd, FTX2_FRAME_FS_WRITE_BYTES_ACK, 0,
+                              trace_id, err, strlen(err));
+        }
+    }
+    /* Atomic write: tmp file → rename. */
+    char tmpath[1100];
+    snprintf(tmpath, sizeof(tmpath), "%s.ps5upload.tmp", path);
+    int fd = open(tmpath, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) {
+        free(decoded);
+        const char *err = "{\"ok\":false,\"err\":\"open_failed\"}";
+        return send_frame(client_fd, FTX2_FRAME_FS_WRITE_BYTES_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+    ssize_t written_total = 0;
+    while ((size_t)written_total < decoded_len) {
+        ssize_t w = write(fd, decoded + written_total,
+                          decoded_len - (size_t)written_total);
+        if (w <= 0) {
+            close(fd);
+            unlink(tmpath);
+            free(decoded);
+            const char *err = "{\"ok\":false,\"err\":\"write_failed\"}";
+            return send_frame(client_fd, FTX2_FRAME_FS_WRITE_BYTES_ACK, 0,
+                              trace_id, err, strlen(err));
+        }
+        written_total += w;
+    }
+    fsync(fd);
+    close(fd);
+    free(decoded);
+    if (rename(tmpath, path) != 0) {
+        unlink(tmpath);
+        const char *err = "{\"ok\":false,\"err\":\"rename_failed\"}";
+        return send_frame(client_fd, FTX2_FRAME_FS_WRITE_BYTES_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+    pthread_mutex_lock(&state->state_mtx);
+    state->command_count += 1;
+    pthread_mutex_unlock(&state->state_mtx);
+    char resp[128];
+    int n = snprintf(resp, sizeof(resp),
+                     "{\"ok\":true,\"size\":%zd}", written_total);
+    return send_frame(client_fd, FTX2_FRAME_FS_WRITE_BYTES_ACK, 0,
+                      trace_id, resp, (uint64_t)n);
+}
+
+/* ── Network round-trip ack ──────────────────────────────────────────── */
+
+/* The "speed test" is observed entirely on the client side. The
+ * client sends N empty-body NetSpeedTest frames; the payload just
+ * acks each one cheaply. The client measures wall time around the
+ * batch and per-frame round-trips. No state on the payload. */
+static int handle_net_speed_test(runtime_state_t *state, int client_fd,
+                                  uint64_t trace_id, const char *body,
+                                  uint64_t body_len) {
+    if (!state) return -1;
+    (void)body;
+    (void)body_len;
+    pthread_mutex_lock(&state->state_mtx);
+    state->command_count += 1;
+    pthread_mutex_unlock(&state->state_mtx);
+    const char *resp = "{\"ok\":true}";
+    return send_frame(client_fd, FTX2_FRAME_NET_SPEED_TEST_ACK, 0,
+                      trace_id, resp, strlen(resp));
+}
+
+/* ── Module enumeration ──────────────────────────────────────────────── */
+
+static int handle_proc_modules(runtime_state_t *state, int client_fd,
+                                uint64_t trace_id, const char *body,
+                                uint64_t body_len) {
+    if (!state) return -1;
+    /* `pid` parsed for future use — current sceKernelGetModuleList
+     * returns the calling process's modules; we don't have a clean
+     * cross-process module enumeration without ptrace. The pid arg
+     * is accepted so the protocol remains stable when we add it. */
+    (void)body;
+    (void)body_len;
+    resolve_sce_kernel_extras();
+    int handles[256];
+    int count = 0;
+    int rc = p_sceKernelGetModuleList
+                ? p_sceKernelGetModuleList(handles, 256, &count) : -1;
+    if (rc != 0) count = 0;
+    if (count > 256) count = 256;
+    char *resp = malloc(64 * 1024);
+    if (!resp) {
+        const char *err = "{\"err\":\"oom\",\"modules\":[]}";
+        return send_frame(client_fd, FTX2_FRAME_PROC_MODULES_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+    int cap = 64 * 1024;
+    int n = 0;
+    n += snprintf(resp + n, cap - n, "{\"modules\":[");
+    int wrote_one = 0;
+    for (int i = 0; i < count; i++) {
+        sce_module_info_t info;
+        memset(&info, 0, sizeof(info));
+        info.size = sizeof(info);
+        if (!p_sceKernelGetModuleInfo) continue;
+        if (p_sceKernelGetModuleInfo(handles[i], &info) != 0) continue;
+        char esc_name[260];
+        json_escape_into(info.name, esc_name, sizeof(esc_name));
+        if (n >= cap - 200) break;
+        if (wrote_one) resp[n++] = ',';
+        wrote_one = 1;
+        n += snprintf(resp + n, cap - n,
+                      "{\"handle\":%d,\"name\":\"%s\","
+                      "\"base\":\"%p\",\"code_size\":%zu}",
+                      handles[i], esc_name, info.base_addr, info.code_size);
+    }
+    if (n < cap - 2) {
+        resp[n++] = ']';
+        resp[n++] = '}';
+    }
+    int rc2 = send_frame(client_fd, FTX2_FRAME_PROC_MODULES_ACK, 0,
+                         trace_id, resp, (uint64_t)n);
+    free(resp);
+    pthread_mutex_lock(&state->state_mtx);
+    state->command_count += 1;
+    pthread_mutex_unlock(&state->state_mtx);
+    return rc2;
+}
+
+/* ── Rich JSON toast (sceNotificationSend) ───────────────────────────── */
+
+static int handle_toast_send(runtime_state_t *state, int client_fd,
+                              uint64_t trace_id, const char *body,
+                              uint64_t body_len) {
+    if (!state) return -1;
+    /* Body is the JSON the renderer wants to forward. We don't try to
+     * validate it — Sony's daemon parses the template; an invalid
+     * shape just produces a silently-dropped notification. We do
+     * size-cap to 4 KB to keep an over-eager renderer from streaming
+     * huge bodies. */
+    if (!body || body_len == 0 || body_len > 4096) {
+        const char *err = "{\"ok\":false,\"err\":\"body_required\"}";
+        return send_frame(client_fd, FTX2_FRAME_TOAST_SEND_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+    /* Need a null-terminated copy for sceNotificationSend. */
+    char *json = malloc(body_len + 1);
+    if (!json) {
+        const char *err = "{\"ok\":false,\"err\":\"oom\"}";
+        return send_frame(client_fd, FTX2_FRAME_TOAST_SEND_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+    memcpy(json, body, body_len);
+    json[body_len] = '\0';
+    /* `target_user_id = -1` = broadcast to all logged-in users.
+     * `flag = 0` (system-default formatting). Return is non-zero on
+     * malformed JSON or daemon offline; we surface it for the
+     * renderer to log but don't treat as fatal. */
+    resolve_sce_notification();
+    int rc = p_sceNotificationSend
+                ? p_sceNotificationSend(-1, 0, json)
+                : -1; /* symbol missing on this FW: toast unavailable */
+    free(json);
+    pthread_mutex_lock(&state->state_mtx);
+    state->command_count += 1;
+    pthread_mutex_unlock(&state->state_mtx);
+    char resp[64];
+    int n = snprintf(resp, sizeof(resp), "{\"ok\":%s,\"code\":%d}",
+                     rc == 0 ? "true" : "false", rc);
+    return send_frame(client_fd, FTX2_FRAME_TOAST_SEND_ACK, 0, trace_id,
+                      resp, (uint64_t)n);
+}
+
+static int handle_index_cancel(runtime_state_t *state, int client_fd,
+                                uint64_t trace_id) {
+    if (!state) return -1;
+    pthread_mutex_lock(&g_index_lock);
+    g_index_cancel = 1;
+    pthread_mutex_unlock(&g_index_lock);
+    const char *ok = "{\"cancelled\":true}";
+    return send_frame(client_fd, FTX2_FRAME_INDEX_CANCEL_ACK, 0,
+                      trace_id, ok, strlen(ok));
+}
+
+static int handle_list_screenshots(runtime_state_t *state, int client_fd,
+                                    uint64_t trace_id) {
+    if (!state) return -1;
+    char *resp = malloc(64 * 1024);
+    if (!resp) {
+        const char *err = "{\"err\":\"oom\"}";
+        return send_frame(client_fd, FTX2_FRAME_LIST_SCREENSHOTS_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+    int cap = 64 * 1024;
+    int n = 0;
+    n += snprintf(resp + n, cap - n, "{\"items\":[");
+    int wrote_one = 0;
+    /* Walk full-resolution first (originals the user actually wants
+     * to download); then thumbnails as a fallback for any orphans
+     * where the original was deleted but the thumbnail lingered. */
+    walk_screenshots("/user/av_contents/photo", 5,
+                     resp, &n, cap, &wrote_one);
+    walk_screenshots("/user/av_contents/thumbnails/photo", 5,
+                     resp, &n, cap, &wrote_one);
+    if (n < cap - 2) {
+        resp[n++] = ']';
+        resp[n++] = '}';
+    }
+    int rc = send_frame(client_fd, FTX2_FRAME_LIST_SCREENSHOTS_ACK, 0,
+                        trace_id, resp, (uint64_t)n);
+    free(resp);
+    pthread_mutex_lock(&state->state_mtx);
+    state->command_count += 1;
+    pthread_mutex_unlock(&state->state_mtx);
+    return rc;
+}
+
 static int handle_hw_storage(runtime_state_t *state, int client_fd, uint64_t trace_id) {
     return handle_hw_text_op(state, client_fd, trace_id, hw_storage_get_text,
                               FTX2_FRAME_HW_STORAGE_ACK, "hw_storage_failed");
@@ -7260,7 +10225,6 @@ static int handle_hw_set_fan_threshold(runtime_state_t *state, int client_fd,
  * sceSystemServiceLaunchApp with the known-stable NPXS browser title
  * id. Resolved via the same libSceSystemService handle the launch path
  * already uses. */
-extern void *register_browser_launch_handle(void);  /* defined in register.c */
 extern int   register_browser_launch(void);
 
 static int handle_app_launch_browser(runtime_state_t *state, int client_fd,
@@ -7847,6 +10811,14 @@ static int handle_binary_frame(runtime_state_t *state, int client_fd,
         }
         pthread_mutex_unlock(&state->state_mtx);
         if (!entry) {
+            /* Roll back the optimistic active_transactions increment we
+             * did before calling runtime_alloc_tx_entry. Without this,
+             * every tx_table_full rejection permanently inflates the
+             * counter, corrupting STATUS_ACK and the crash-recovery
+             * journal's "active_transactions=" field. */
+            pthread_mutex_lock(&state->state_mtx);
+            if (state->active_transactions > 0) state->active_transactions -= 1;
+            pthread_mutex_unlock(&state->state_mtx);
             free(begin_body);
             return send_frame(client_fd, FTX2_FRAME_ERROR, 0, hdr.trace_id,
                               "tx_table_full", 13);
@@ -7860,6 +10832,30 @@ static int handle_binary_frame(runtime_state_t *state, int client_fd,
         if (!is_resume && bextra && bextra_len > 0) {
             extract_json_string_field(bextra, "dest_root",
                                       entry->dest_root, sizeof(entry->dest_root));
+            /* Reject manifests whose dest_root would let a LAN client
+             * write outside the allowlisted writable roots
+             * (/data, /user, /mnt/ext_, /mnt/usb_, /mnt/ps5upload/_).
+             * Without this, a crafted BEGIN_TX with dest_root of
+             * "/system_ex/..." or "/system_data/priv/..." passes
+             * straight into the open()+write() path further down with
+             * no further validation. The directory traversal check is
+             * inside is_path_allowed (component-scoped, rejects "..").
+             */
+            if (entry->dest_root[0] && !is_path_allowed(entry->dest_root)) {
+                /* runtime_abort_tx_fatal handles the state.active_transactions
+                 * decrement, marks state="aborted", flushes the journal
+                 * record, and releases tmp/manifest resources — the
+                 * complete cleanup path. The earlier draft just unlocked
+                 * the per-slot mutex via runtime_release_tx_entry, which
+                 * left in_use=1 and active_transactions over-counted —
+                 * the slot would leak until the periodic janitor sweep
+                 * (or never, since journal flush hadn't yet run). */
+                runtime_abort_tx_fatal(state, entry);
+                free(begin_body);
+                return send_frame(client_fd, FTX2_FRAME_ERROR, 0,
+                                  hdr.trace_id,
+                                  "dest_root_not_allowed", 21);
+            }
             entry->total_shards = extract_json_uint64_field(bextra, "total_shards");
             entry->total_bytes  = extract_json_uint64_field(bextra, "total_bytes");
             entry->file_count   = extract_json_uint64_field(bextra, "file_count");
@@ -7980,8 +10976,12 @@ static int handle_binary_frame(runtime_state_t *state, int client_fd,
                         if ((uint64_t)poff + (uint64_t)plen > bextra_len) {
                             continue;
                         }
-                        memcpy(file_path, blob + poff, plen);
-                        file_path[plen] = '\0';
+                        if (json_copy_unescaped_string(blob + poff,
+                                                       blob + poff + plen,
+                                                       file_path,
+                                                       sizeof(file_path)) != 0) {
+                            continue;
+                        }
                         snprintf(stale_tmp, sizeof(stale_tmp),
                                  "%s.ps5up2-tmp", file_path);
                         (void)unlink(stale_tmp);
@@ -8016,6 +11016,69 @@ static int handle_binary_frame(runtime_state_t *state, int client_fd,
         ret = send_frame(client_fd, FTX2_FRAME_BEGIN_TX_ACK, 0, hdr.trace_id,
                          resp, (uint64_t)len);
         return ret;
+    }
+
+    if (hdr.frame_type == FTX2_FRAME_FS_WRITE_BYTES ||
+        hdr.frame_type == FTX2_FRAME_TOAST_SEND) {
+        uint64_t body_cap = hdr.frame_type == FTX2_FRAME_FS_WRITE_BYTES
+            ? (uint64_t)512 * 1024
+            : (uint64_t)4096;
+        char *large_body = NULL;
+        if (hdr.body_len > body_cap) {
+            uint64_t remaining = hdr.body_len;
+            char discard[256];
+            uint16_t ack_frame = hdr.frame_type == FTX2_FRAME_FS_WRITE_BYTES
+                ? FTX2_FRAME_FS_WRITE_BYTES_ACK
+                : FTX2_FRAME_TOAST_SEND_ACK;
+            const char *ack = "{\"ok\":false,\"err\":\"body_too_large\"}";
+            while (remaining > 0) {
+                size_t take = remaining > sizeof(discard)
+                    ? sizeof(discard)
+                    : (size_t)remaining;
+                if (recv_exact(client_fd, discard, take) != 0) return -1;
+                remaining -= (uint64_t)take;
+            }
+            return send_frame(client_fd, ack_frame, 0, hdr.trace_id,
+                              ack, strlen(ack));
+        }
+        if (hdr.body_len > 0) {
+            large_body = (char *)malloc((size_t)hdr.body_len + 1);
+            if (!large_body) {
+                uint64_t remaining = hdr.body_len;
+                char discard[256];
+                uint16_t ack_frame = hdr.frame_type == FTX2_FRAME_FS_WRITE_BYTES
+                    ? FTX2_FRAME_FS_WRITE_BYTES_ACK
+                    : FTX2_FRAME_TOAST_SEND_ACK;
+                const char *ack = "{\"ok\":false,\"err\":\"out_of_memory\"}";
+                while (remaining > 0) {
+                    size_t take = remaining > sizeof(discard)
+                        ? sizeof(discard)
+                        : (size_t)remaining;
+                    if (recv_exact(client_fd, discard, take) != 0) return -1;
+                    remaining -= (uint64_t)take;
+                }
+                return send_frame(client_fd, ack_frame, 0, hdr.trace_id,
+                                  ack, strlen(ack));
+            }
+            if (recv_exact(client_fd, large_body, (size_t)hdr.body_len) != 0) {
+                free(large_body);
+                return -1;
+            }
+            large_body[hdr.body_len] = '\0';
+        }
+        if (hdr.frame_type == FTX2_FRAME_FS_WRITE_BYTES) {
+            int rc = handle_fs_write_bytes(state, client_fd, hdr.trace_id,
+                                           large_body ? large_body : "",
+                                           hdr.body_len);
+            free(large_body);
+            return rc;
+        } else {
+            int rc = handle_toast_send(state, client_fd, hdr.trace_id,
+                                       large_body ? large_body : "",
+                                       hdr.body_len);
+            free(large_body);
+            return rc;
+        }
     }
 
     /* Read the body for all other (small) frame types. */
@@ -8324,8 +11387,12 @@ static int handle_binary_frame(runtime_state_t *state, int client_fd,
                         char tmp_path[512 + 16];
                         size_t plen = idx[fi].path_len;
                         if (plen == 0 || plen >= sizeof(file_path)) continue;
-                        memcpy(file_path, entry->manifest_blob + idx[fi].path_offset, plen);
-                        file_path[plen] = '\0';
+                        if (json_copy_unescaped_string(entry->manifest_blob + idx[fi].path_offset,
+                                                       entry->manifest_blob + idx[fi].path_offset + plen,
+                                                       file_path,
+                                                       sizeof(file_path)) != 0) {
+                            continue;
+                        }
                         snprintf(tmp_path, sizeof(tmp_path), "%s.ps5up2-tmp", file_path);
                         /* Two legitimate layouts here:
                          *   - non-packed record:  data at tmp_path, rename -> file_path
@@ -8698,7 +11765,83 @@ abort_done:
         return handle_pkg_install_status(state, client_fd, hdr.trace_id,
                                          request_body, hdr.body_len);
     }
-
+    if (hdr.frame_type == FTX2_FRAME_SYSTEM_CONTROL) {
+        return handle_system_control(state, client_fd, hdr.trace_id,
+                                     request_body, hdr.body_len);
+    }
+    if (hdr.frame_type == FTX2_FRAME_POWER_TELEMETRY) {
+        return handle_power_telemetry(state, client_fd, hdr.trace_id);
+    }
+    if (hdr.frame_type == FTX2_FRAME_USER_LIST) {
+        return handle_user_list(state, client_fd, hdr.trace_id);
+    }
+    if (hdr.frame_type == FTX2_FRAME_LIST_SAVES) {
+        return handle_list_saves(state, client_fd, hdr.trace_id,
+                                 request_body, hdr.body_len);
+    }
+    if (hdr.frame_type == FTX2_FRAME_LIST_SCREENSHOTS) {
+        return handle_list_screenshots(state, client_fd, hdr.trace_id);
+    }
+    if (hdr.frame_type == FTX2_FRAME_INDEX_START) {
+        return handle_index_start(state, client_fd, hdr.trace_id,
+                                  request_body, hdr.body_len);
+    }
+    if (hdr.frame_type == FTX2_FRAME_INDEX_STATUS) {
+        return handle_index_status(state, client_fd, hdr.trace_id);
+    }
+    if (hdr.frame_type == FTX2_FRAME_SEARCH_INDEX) {
+        return handle_search_index(state, client_fd, hdr.trace_id,
+                                   request_body, hdr.body_len);
+    }
+    if (hdr.frame_type == FTX2_FRAME_INDEX_CANCEL) {
+        return handle_index_cancel(state, client_fd, hdr.trace_id);
+    }
+    if (hdr.frame_type == FTX2_FRAME_APP_LIFECYCLE) {
+        return handle_app_lifecycle(state, client_fd, hdr.trace_id,
+                                    request_body, hdr.body_len);
+    }
+    if (hdr.frame_type == FTX2_FRAME_KLOG_READ) {
+        return handle_klog_read(state, client_fd, hdr.trace_id,
+                                request_body, hdr.body_len);
+    }
+    if (hdr.frame_type == FTX2_FRAME_NET_INTERFACES) {
+        return handle_net_interfaces(state, client_fd, hdr.trace_id);
+    }
+    if (hdr.frame_type == FTX2_FRAME_PERIPHERAL_CONTROL) {
+        return handle_peripheral_control(state, client_fd, hdr.trace_id,
+                                          request_body, hdr.body_len);
+    }
+    if (hdr.frame_type == FTX2_FRAME_PROC_MODULES) {
+        return handle_proc_modules(state, client_fd, hdr.trace_id,
+                                    request_body, hdr.body_len);
+    }
+    if (hdr.frame_type == FTX2_FRAME_SHELL_EXEC) {
+        return handle_shell_exec(state, client_fd, hdr.trace_id,
+                                  request_body, hdr.body_len);
+    }
+    if (hdr.frame_type == FTX2_FRAME_CRC32_FILE) {
+        return handle_crc32_file(state, client_fd, hdr.trace_id,
+                                  request_body, hdr.body_len);
+    }
+    if (hdr.frame_type == FTX2_FRAME_APPDB_QUERY) {
+        return handle_appdb_query(state, client_fd, hdr.trace_id);
+    }
+    if (hdr.frame_type == FTX2_FRAME_NET_SPEED_TEST) {
+        return handle_net_speed_test(state, client_fd, hdr.trace_id,
+                                      request_body, hdr.body_len);
+    }
+    if (hdr.frame_type == FTX2_FRAME_PKG_DIRECT_MOUNT) {
+        return handle_pkg_direct_mount(state, client_fd, hdr.trace_id,
+                                        request_body, hdr.body_len);
+    }
+    if (hdr.frame_type == FTX2_FRAME_UFS_FSCK) {
+        return handle_ufs_fsck(state, client_fd, hdr.trace_id,
+                                request_body, hdr.body_len);
+    }
+    if (hdr.frame_type == FTX2_FRAME_LWFS_MOUNT) {
+        return handle_lwfs_mount(state, client_fd, hdr.trace_id,
+                                  request_body, hdr.body_len);
+    }
     return send_frame(client_fd, FTX2_FRAME_ERROR, 0, hdr.trace_id,
                       "unsupported_frame", 17);
 }

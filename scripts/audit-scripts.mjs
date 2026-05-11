@@ -16,6 +16,12 @@ const manualEntrypoints = new Set([
   "scripts/release-posts.js",
   "scripts/translate-i18n.py",
   "tests/lab/README.md",
+  // Both test_*.py are hardware-lab manual entrypoints. The
+  // launch-only one was already documented; the install_launch one
+  // was passing the audit via an accidental self-reference (the
+  // grep counts the basename appearing in the file's own argparse
+  // help text). Rename-safe addition keeps strict-mode passes.
+  "tests/lab/test_install_launch.py",
   "tests/lab/test_launch_only.py",
 ]);
 

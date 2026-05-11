@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Settings as SettingsIcon,
   Moon as SleepIcon,
@@ -10,7 +10,12 @@ import {
   CheckCircle2,
   AlertTriangle,
   Loader2,
+  Sun,
+  Moon,
+  MoonStar,
+  Gauge,
 } from "lucide-react";
+import { useThemeStore, type Theme } from "../../state/theme";
 
 import { PageHeader } from "../../components";
 
@@ -20,6 +25,21 @@ import { useUploadSettingsStore } from "../../state/uploadSettings";
 import { userConfigPath } from "../../state/userConfig";
 import { useUpdateStore, type UpdatePhase } from "../../state/update";
 import type { LanguageCode } from "../../i18n";
+// Static imports for stores already pulled into the main bundle by
+// AppShell / Connection — the prior dynamic `import()` form here
+// produced "dynamic import will not move module into another chunk"
+// warnings at build because the modules were always loaded already.
+// Keeping the imports static eliminates the warning + avoids the
+// per-call promise overhead.
+import { useScheduleStore } from "../../state/schedules";
+import {
+  getNotifPruneDays,
+  setNotifPruneDays,
+} from "../../state/notifications";
+import {
+  useAuditLogStore,
+  type AuditEntry,
+} from "../../state/auditLog";
 
 function Section({
   title,
@@ -223,7 +243,690 @@ export default function SettingsScreen() {
             </div>
           </div>
         </Section>
+
+        <Section title={tr("settings_section_appearance", undefined, "Appearance")}>
+          <ThemePicker />
+        </Section>
+
+        <Section title={tr("settings_section_bandwidth", undefined, "Bandwidth")}>
+          <BandwidthHelp />
+        </Section>
+
+        <Section title={tr("settings_section_diagnostic", undefined, "Diagnostics")} full>
+          <BugReportButton />
+        </Section>
+
+        <Section title={tr("settings_section_backup", undefined, "Backup / restore")} full>
+          <BackupRestorePanel />
+        </Section>
+
+        <Section title={tr("settings_section_audit", undefined, "Audit log")} full>
+          <AuditLogPanel />
+        </Section>
+
+        <Section title={tr("settings_section_schedules", undefined, "Schedules")} full>
+          <SchedulesPanel />
+        </Section>
+
+        <Section title={tr("settings_section_notifications", undefined, "Notifications")} full>
+          <NotifPrunePanel />
+        </Section>
       </div>
+    </div>
+  );
+}
+
+/** Scheduler UI. Add/remove daily/weekly/once schedules that fire
+ *  while the app is open. Limited to power_tick (keep PS5 awake) and
+ *  notif (reminders) actions for now — extending to "trigger this
+ *  upload at 3am" would need queue plumbing. */
+function SchedulesPanel() {
+  const tr = useTr();
+  // Subscribe directly via the hook — selecting `s.schedules` keeps
+  // the panel in sync without the prior dynamic-import dance.
+  const schedules = useScheduleStore((s) => s.schedules);
+  const [labelDraft, setLabelDraft] = useState("");
+  const [hhmmDraft, setHhmmDraft] = useState("03:00");
+  const [actionDraft, setActionDraft] = useState<"power_tick" | "notif">("notif");
+
+  function add() {
+    if (!labelDraft.trim() || !/^\d\d:\d\d$/.test(hhmmDraft)) return;
+    useScheduleStore.getState().add({
+      enabled: true,
+      kind: "daily",
+      action: actionDraft,
+      hhmm: hhmmDraft,
+      label: labelDraft.trim(),
+    });
+    setLabelDraft("");
+  }
+
+  function toggle(id: string, enabled: boolean) {
+    useScheduleStore.getState().update(id, { enabled });
+  }
+
+  function remove(id: string) {
+    useScheduleStore.getState().remove(id);
+  }
+
+  return (
+    <div className="space-y-3 text-sm">
+      <p className="text-[11px] text-[var(--color-muted)]">
+        {tr(
+          "schedules_caveat",
+          undefined,
+          "Schedules fire only while ps5upload is open. For true overnight automation, set a system cron job that hits the engine HTTP API instead.",
+        )}
+      </p>
+      {schedules.length > 0 && (
+        <ul className="space-y-1">
+          {schedules.map((s) => (
+            <li
+              key={s.id}
+              className="flex items-center gap-2 rounded-md border border-[var(--color-border)] p-2 text-xs"
+            >
+              <input
+                type="checkbox"
+                checked={s.enabled}
+                onChange={(e) => toggle(s.id, e.target.checked)}
+              />
+              <span className="font-medium">{s.label}</span>
+              <span className="text-[var(--color-muted)]">
+                {s.kind === "daily" && `daily at ${s.hhmm}`}
+                {s.kind === "weekly" && `weekly at ${s.hhmm}`}
+                {s.kind === "once" && s.oneShotMs &&
+                  `once at ${new Date(s.oneShotMs).toLocaleString()}`}
+                {" · "}
+                {s.action}
+              </span>
+              <button
+                type="button"
+                onClick={() => remove(s.id)}
+                className="ml-auto text-[10px] text-[var(--color-muted)] hover:text-[var(--color-bad)]"
+              >
+                {tr("schedules_remove", undefined, "remove")}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="flex flex-wrap items-center gap-2 rounded-md border border-dashed border-[var(--color-border)] p-2 text-xs">
+        <input
+          type="text"
+          value={labelDraft}
+          onChange={(e) => setLabelDraft(e.target.value)}
+          placeholder="Label (e.g. nightly tick)"
+          className="flex-1 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-xs"
+        />
+        <input
+          type="time"
+          value={hhmmDraft}
+          onChange={(e) => setHhmmDraft(e.target.value)}
+          className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-xs"
+        />
+        <select
+          value={actionDraft}
+          onChange={(e) => setActionDraft(e.target.value as "notif" | "power_tick")}
+          className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-xs"
+        >
+          <option value="notif">Notify only</option>
+          <option value="power_tick">PS5 power tick</option>
+        </select>
+        <button
+          type="button"
+          onClick={add}
+          disabled={!labelDraft.trim() || !/^\d\d:\d\d$/.test(hhmmDraft)}
+          className="rounded-md bg-[var(--color-accent)] px-2 py-1 text-xs text-[var(--color-accent-contrast)] disabled:opacity-50"
+        >
+          {tr("schedules_add", undefined, "Add daily")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Lets the user choose how long notifications are kept. Default 30
+ *  days; 0 disables auto-prune. Pruning runs at app start + every 6h
+ *  (wired in AppShell). Setting changes take effect on the next tick
+ *  — instant pruning isn't worth the surprise of "I changed it to 1
+ *  day and lost everything." */
+function NotifPrunePanel() {
+  const tr = useTr();
+  const [days, setDays] = useState<number>(() => getNotifPruneDays());
+
+  function pickDays(d: number) {
+    setNotifPruneDays(d);
+    setDays(d);
+  }
+
+  const options: Array<{ days: number; label: string }> = [
+    { days: 7, label: "7 days" },
+    { days: 30, label: "30 days" },
+    { days: 90, label: "90 days" },
+    { days: 0, label: "Never (keep all)" },
+  ];
+
+  return (
+    <div className="space-y-2 text-sm">
+      <div className="text-[11px] text-[var(--color-muted)]">
+        {tr(
+          "notif_prune_hint",
+          undefined,
+          "Notifications older than this are auto-deleted. Runs at startup and every 6 hours.",
+        )}
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {options.map((o) => (
+          <button
+            key={o.days}
+            type="button"
+            onClick={() => pickDays(o.days)}
+            className={`rounded-md border px-2 py-1 text-xs ${
+              days === o.days
+                ? "border-[var(--color-accent)] bg-[var(--color-accent-soft)] text-[var(--color-accent)]"
+                : "border-[var(--color-border)] hover:bg-[var(--color-surface-3)]"
+            }`}
+          >
+            {o.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Read-only viewer for the audit log. Shows the last 100 entries
+ *  with destructive actions called out. No clear button — the audit
+ *  log is meant to be a permanent local safety record. */
+function AuditLogPanel() {
+  const tr = useTr();
+  // Subscribe directly. Reverse via useMemo so the list selector stays
+  // referentially stable per underlying-array-identity (avoids the
+  // same "snapshot must be stable" trap as the Dashboard).
+  const rawEntries = useAuditLogStore((s) => s.entries);
+  const entries: AuditEntry[] = useMemo(
+    () => [...rawEntries].reverse(),
+    [rawEntries],
+  );
+  if (entries.length === 0) {
+    return (
+      <p className="text-xs text-[var(--color-muted)]">
+        {tr(
+          "audit_empty",
+          undefined,
+          "No destructive actions recorded yet. Reboots, deletes, unregisters, and similar will appear here as you perform them.",
+        )}
+      </p>
+    );
+  }
+  return (
+    <div className="max-h-96 overflow-y-auto rounded-md border border-[var(--color-border)] bg-[var(--color-surface)]">
+      <table className="w-full text-xs">
+        <thead className="text-[10px] uppercase tracking-wide text-[var(--color-muted)]">
+          <tr>
+            <th className="px-2 py-1 text-left">
+              {tr("audit_when", undefined, "When")}
+            </th>
+            <th className="px-2 py-1 text-left">
+              {tr("audit_kind", undefined, "Action")}
+            </th>
+            <th className="px-2 py-1 text-left">
+              {tr("audit_what", undefined, "Detail")}
+            </th>
+            <th className="px-2 py-1 text-left">
+              {tr("audit_context", undefined, "Context")}
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {entries.slice(0, 100).map((e) => (
+            <tr
+              key={e.id}
+              className={`border-t border-[var(--color-border)] ${
+                e.failed ? "text-[var(--color-bad)]" : ""
+              }`}
+            >
+              <td className="px-2 py-1 tabular-nums text-[10px]">
+                {new Date(e.ts).toLocaleString()}
+              </td>
+              <td className="px-2 py-1 font-mono text-[10px]">{e.kind}</td>
+              <td className="px-2 py-1">{e.what}</td>
+              <td className="px-2 py-1 truncate text-[10px] text-[var(--color-muted)]">
+                {e.context ?? ""}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/**
+ * Settings backup/restore. Bundles all the localStorage keys that
+ * encode user preferences (theme, lang, roster, notifications,
+ * activity history, upload settings) plus the Tauri-managed
+ * settings.json into one JSON document. User can save it to disk
+ * and re-import to migrate to a new machine or roll back after a
+ * config corruption.
+ *
+ * Note: the on-disk settings.json (~/.ps5upload/settings.json) is
+ * authoritative for the cross-app fields it covers; on import we
+ * write back to localStorage and let the next launch's userConfig
+ * sync flush to disk.
+ */
+function BackupRestorePanel() {
+  const tr = useTr();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
+
+  // List every persisted key the renderer owns. Adding a new
+  // store with localStorage backing? Add the key here so Backup
+  // captures it. Off-by-one names like "activityHistory" (no -v1
+  // suffix) are real — match what each store actually writes.
+  const KEYS = [
+    "ps5upload.theme",
+    "ps5upload.host",
+    "ps5upload.lang",
+    "ps5upload.roster.v1",
+    "ps5upload.notifications.v1",
+    "ps5upload.activityHistory",
+    "ps5upload.audit-log.v1",
+    "ps5upload.upload-settings",
+    "ps5upload.companion-suggestion.dismissed",
+    "ps5upload.schedules.v1",
+    "ps5upload.saved_searches.v1",
+    "ps5upload.recent_paths.v1",
+    "ps5upload.play_time.v1",
+    "ps5upload.window_state.v1",
+    "ps5upload.notif_prune_days.v1",
+    "ps5upload.last_route",
+    "ps5upload.fs.lastPath",
+    "ps5upload.library.sort",
+    "ps5upload.titleinfo.cache",
+    "ps5upload.mount.lastDest",
+    "ps5upload.install_queue.v1",
+    "ps5upload.bandwidth_cap_mbps",
+    "ps5upload.keep_awake",
+    "ps5upload.always_overwrite",
+    "ps5upload.show_transfer_files",
+  ];
+
+  async function exportBundle() {
+    setBusy(true);
+    setError(null);
+    setInfo(null);
+    try {
+      const { save } = await import("@tauri-apps/plugin-dialog");
+      const { writeTextFile } = await import("@tauri-apps/plugin-fs");
+      const bundle: Record<string, unknown> = {
+        meta: {
+          generated_at_ms: Date.now(),
+          schema: 1,
+        },
+        local_storage: {} as Record<string, string | null>,
+      };
+      const ls = bundle.local_storage as Record<string, string | null>;
+      for (const k of KEYS) {
+        ls[k] = window.localStorage.getItem(k);
+      }
+      const dest = await save({
+        defaultPath: `ps5upload-settings-${Date.now()}.json`,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (!dest || typeof dest !== "string") return;
+      await writeTextFile(dest, JSON.stringify(bundle, null, 2));
+      setInfo(`Saved to ${dest}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function importBundle() {
+    setBusy(true);
+    setError(null);
+    setInfo(null);
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const { readTextFile } = await import("@tauri-apps/plugin-fs");
+      const src = await open({
+        multiple: false,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (!src || typeof src !== "string") return;
+      const text = await readTextFile(src);
+      const parsed = JSON.parse(text);
+      if (
+        !parsed ||
+        typeof parsed !== "object" ||
+        typeof parsed.local_storage !== "object"
+      ) {
+        throw new Error("file is not a ps5upload settings bundle");
+      }
+      const ls = parsed.local_storage as Record<string, unknown>;
+      const actions: Array<{ key: string; value: string | null }> = [];
+      for (const k of KEYS) {
+        const v = ls[k];
+        if (typeof v === "string") {
+          actions.push({ key: k, value: v });
+        } else if (v === null) {
+          actions.push({ key: k, value: null });
+        } else if (v !== undefined) {
+          throw new Error(`invalid value for ${k}`);
+        }
+      }
+      for (const { key, value } of actions) {
+        if (value === null) window.localStorage.removeItem(key);
+        else window.localStorage.setItem(key, value);
+      }
+      const restored = actions.length;
+      setInfo(
+        `Restored ${restored} key${restored === 1 ? "" : "s"}. Restart the app for all changes to take effect.`,
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="space-y-3 text-sm">
+      <p className="text-xs text-[var(--color-muted)]">
+        {tr(
+          "settings_backup_hint",
+          undefined,
+          "Bundle theme, PS5 roster, notification history, activity log, and other preferences into one JSON file. Useful for moving to a new machine or recovering after wiping the app's storage.",
+        )}
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={exportBundle}
+          disabled={busy}
+          className="inline-flex items-center gap-1 rounded-md bg-[var(--color-accent)] px-3 py-1.5 text-xs text-[var(--color-accent-contrast)] disabled:opacity-50"
+        >
+          {busy ? (
+            <Loader2 size={11} className="animate-spin" />
+          ) : (
+            <Download size={11} />
+          )}
+          {tr("settings_backup_export", undefined, "Export bundle")}
+        </button>
+        <button
+          type="button"
+          onClick={importBundle}
+          disabled={busy}
+          className="inline-flex items-center gap-1 rounded-md border border-[var(--color-border)] px-3 py-1.5 text-xs hover:bg-[var(--color-surface)] disabled:opacity-50"
+        >
+          {tr("settings_backup_import", undefined, "Import bundle…")}
+        </button>
+      </div>
+      {info && (
+        <div className="flex items-center gap-1 text-[11px] text-[var(--color-good)]">
+          <CheckCircle2 size={11} />
+          {info}
+        </div>
+      )}
+      {error && (
+        <div className="flex items-start gap-1 text-[11px] text-[var(--color-bad)]">
+          <AlertTriangle size={11} className="mt-0.5 shrink-0" />
+          {error}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Three-way theme picker. The sidebar's existing theme button cycles
+ *  through dark → light → oled, but a settings-page picker is more
+ *  discoverable and lets the user jump straight to OLED without
+ *  cycling through light. */
+function ThemePicker() {
+  const tr = useTr();
+  const theme = useThemeStore((s) => s.theme);
+  const setTheme = useThemeStore((s) => s.setTheme);
+  const options: Array<{
+    value: Theme;
+    label: string;
+    description: string;
+    icon: React.ReactNode;
+  }> = [
+    {
+      value: "dark",
+      label: tr("theme_dark", undefined, "Dark"),
+      description: tr(
+        "theme_dark_hint",
+        undefined,
+        "Default. Slight surface elevation, balanced contrast.",
+      ),
+      icon: <Moon size={14} />,
+    },
+    {
+      value: "light",
+      label: tr("theme_light", undefined, "Light"),
+      description: tr(
+        "theme_light_hint",
+        undefined,
+        "Daytime colours, high readability.",
+      ),
+      icon: <Sun size={14} />,
+    },
+    {
+      value: "oled",
+      label: tr("theme_oled", undefined, "OLED"),
+      description: tr(
+        "theme_oled_hint",
+        undefined,
+        "Pure-#000 background. Mitigates burn-in on OLED panels.",
+      ),
+      icon: <MoonStar size={14} />,
+    },
+  ];
+  return (
+    <div className="space-y-2">
+      {options.map((o) => (
+        <button
+          key={o.value}
+          type="button"
+          onClick={() => setTheme(o.value)}
+          className={`flex w-full items-start gap-2 rounded-md border p-2 text-left ${
+            theme === o.value
+              ? "border-[var(--color-accent)] bg-[var(--color-surface)]"
+              : "border-[var(--color-border)] hover:bg-[var(--color-surface)]"
+          }`}
+        >
+          <span className="mt-0.5">{o.icon}</span>
+          <span className="min-w-0 flex-1">
+            <div className="text-sm font-medium">{o.label}</div>
+            <div className="text-[11px] text-[var(--color-muted)]">
+              {o.description}
+            </div>
+          </span>
+          {theme === o.value && (
+            <CheckCircle2 size={12} className="text-[var(--color-good)]" />
+          )}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Bandwidth-throttle hint. The actual per-job throttle UI lives in
+ *  the Upload screen (BandwidthCard) and is wired end-to-end through
+ *  the renderer → Tauri command → engine HTTP body since the most
+ *  recent fix. The env-var fallback (FTX2_BANDWIDTH_MBPS) still works
+ *  for headless engine runs but is no longer the user-facing path. */
+function BandwidthHelp() {
+  const tr = useTr();
+  return (
+    <div className="space-y-2 text-sm">
+      <div className="flex items-start gap-2">
+        <Gauge size={14} className="mt-0.5 shrink-0 text-[var(--color-muted)]" />
+        <div className="min-w-0 flex-1">
+          <div className="font-medium">
+            {tr("settings_bandwidth_title", undefined, "Bandwidth throttle")}
+          </div>
+          <div className="mt-0.5 text-xs text-[var(--color-muted)]">
+            {tr(
+              "settings_bandwidth_hint",
+              undefined,
+              "Cap outbound transfer speed to leave headroom for video calls / game streaming. Set the cap on the Upload screen — it applies to the next started transfer. The FTX2_BANDWIDTH_MBPS env var still works for headless engine runs.",
+            )}
+          </div>
+          <div className="mt-2 rounded-md bg-[var(--color-surface)] px-2 py-1 font-mono text-[11px]">
+            FTX2_BANDWIDTH_MBPS=10  # headless / scripted only
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * One-click bug report bundle. Pulls together everything a maintainer
+ * usually asks for in an issue: app version, OS info, recent log
+ * entries, payload status, last 50 activity entries, last 20
+ * notifications, redacted user config (no IPs / hostnames). Writes
+ * to a user-picked .json path.
+ *
+ * Lives entirely in the renderer — every store this needs is already
+ * in the renderer state. No new payload calls.
+ */
+function BugReportButton() {
+  const tr = useTr();
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  /** Per-source counts shown next to the Save button so users can
+   *  see what's about to leave their machine. Computed lazily on the
+   *  first build click and refreshed on each subsequent click. */
+  const [summary, setSummary] = useState<{
+    logs: number;
+    activity: number;
+    notifications: number;
+    rosterPS5s: number;
+    schedules: number;
+    playTimeTitles: number;
+  } | null>(null);
+
+  async function build() {
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    try {
+      const { save } = await import("@tauri-apps/plugin-dialog");
+      const { writeTextFile } = await import("@tauri-apps/plugin-fs");
+      const { getVersion } = await import("@tauri-apps/api/app");
+      const { buildDiagnosticBundle } = await import(
+        "../../lib/diagnosticBundle"
+      );
+
+      const appVersion = await getVersion().catch(() => "unknown");
+      const bundle = buildDiagnosticBundle({ appVersion, redact: true });
+      // Surface a per-source summary so the user knows what's in
+      // the bundle before sharing. Counts come straight from the
+      // bundle so the displayed numbers always match the file.
+      setSummary({
+        logs: bundle.recent_logs.length,
+        activity: bundle.recent_activity.length,
+        notifications: bundle.recent_notifications.length,
+        rosterPS5s: bundle.roster.length,
+        schedules: bundle.schedules_count,
+        playTimeTitles: bundle.play_time_titles,
+      });
+
+      const dest = await save({
+        defaultPath: `ps5upload-bug-report-${Date.now()}.json`,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (!dest || typeof dest !== "string") {
+        setBusy(false);
+        return;
+      }
+      await writeTextFile(dest, JSON.stringify(bundle, null, 2));
+      setResult(dest);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="text-sm">
+      <div className="font-medium">
+        {tr("bug_report_title", undefined, "Save bug report bundle")}
+      </div>
+      <div className="mt-0.5 text-xs text-[var(--color-muted)]">
+        {tr(
+          "bug_report_hint",
+          undefined,
+          "One-click JSON bundle with app version, OS, recent logs, activity history, and connection state. PS5 IP is stripped — safe to attach to a public issue.",
+        )}
+      </div>
+      <button
+        type="button"
+        onClick={build}
+        disabled={busy}
+        className="mt-3 inline-flex items-center gap-1.5 rounded-md bg-[var(--color-accent)] px-3 py-1.5 text-xs text-[var(--color-accent-contrast)] disabled:opacity-50"
+      >
+        {busy ? (
+          <Loader2 size={11} className="animate-spin" />
+        ) : (
+          <Download size={11} />
+        )}
+        {busy
+          ? tr("bug_report_busy", undefined, "Building…")
+          : tr("bug_report_action", undefined, "Save bug report")}
+      </button>
+      {result && (
+        <div className="mt-2 flex items-center gap-1 text-[11px] text-[var(--color-good)]">
+          <CheckCircle2 size={11} />
+          {tr("bug_report_done", { path: result }, `Saved to ${result}`)}
+        </div>
+      )}
+      {error && (
+        <div className="mt-2 flex items-start gap-1 text-[11px] text-[var(--color-bad)]">
+          <AlertTriangle size={11} className="mt-0.5 shrink-0" />
+          {error}
+        </div>
+      )}
+      {summary && (
+        <div className="mt-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-[11px]">
+          <div className="mb-1 font-medium text-[var(--color-muted)]">
+            {tr("bug_report_includes", undefined, "Bundle includes")}
+          </div>
+          <ul className="grid grid-cols-2 gap-x-4 gap-y-0.5 tabular-nums text-[10px]">
+            <li>
+              {summary.logs} {tr("bug_report_logs", undefined, "log entries")}
+            </li>
+            <li>
+              {summary.activity}{" "}
+              {tr("bug_report_activity", undefined, "activity rows")}
+            </li>
+            <li>
+              {summary.notifications}{" "}
+              {tr("bug_report_notifs", undefined, "notifications")}
+            </li>
+            <li>
+              {summary.rosterPS5s}{" "}
+              {tr("bug_report_ps5s", undefined, "PS5 profiles (host redacted)")}
+            </li>
+            <li>
+              {summary.schedules}{" "}
+              {tr("bug_report_schedules", undefined, "schedules")}
+            </li>
+            <li>
+              {summary.playTimeTitles}{" "}
+              {tr("bug_report_playtime", undefined, "playtime entries")}
+            </li>
+          </ul>
+        </div>
+      )}
     </div>
   );
 }

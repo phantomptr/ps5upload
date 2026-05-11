@@ -1567,7 +1567,15 @@ int launch_title(const char *title_id, const char **err_reason_out) {
             int rc2 = shellui_rpc_launch_app(title_id, fg_user);
             if (rc2 == 0 || rc2 == -2) return 0;
             if (rc2 > 0) {
-                static __thread char reason_buf[80];
+                /* Plain static (not __thread): the SDK's emutls
+                 * implementation prevents the binary from loading
+                 * on this firmware. Mgmt loop is single-threaded,
+                 * but two clients connecting in rapid succession
+                 * could race the read. Acceptable: the buffer is
+                 * always written immediately before err_reason_out
+                 * is set, and the consumer copies before another
+                 * launch can occur (single-threaded). */
+                static char reason_buf[80];
                 snprintf(reason_buf, sizeof(reason_buf),
                          "launch_sony_error_0x%08x", (unsigned int)rc2);
                 if (err_reason_out) *err_reason_out = reason_buf;
@@ -1649,14 +1657,14 @@ int launch_title(const char *title_id, const char **err_reason_out) {
     /* All strategies failed. Surface a diagnostic so the engine error
      * includes which paths we tried.
      *
-     * Thread-local buffer — two mgmt threads can be executing this
-     * concurrently (launch from client A + launch from client B), and
-     * a plain `static char` would race both `snprintf` and the reader
-     * that follows the returned pointer. `__thread` gives each mgmt
-     * thread its own buffer so the returned const char * stays valid
-     * for the caller's use-and-copy window without a lock. */
+     * Plain static (not __thread): the SDK's emutls implementation
+     * prevents the binary from loading on PS5 firmware (rtld lib_init
+     * fails when emutls symbols are present, even before main runs).
+     * Mgmt loop is single-threaded; the worst case race is two near-
+     * simultaneous launches stomping the same buffer just before the
+     * caller copies the const char *. Acceptable for an error path. */
     {
-        static __thread char reason_buf[128];
+        static char reason_buf[128];
         snprintf(reason_buf, sizeof(reason_buf),
                  "launch_all_strategies_failed: param=%d null=%d sys=%d",
                  tried_param, tried_null, tried_sys);

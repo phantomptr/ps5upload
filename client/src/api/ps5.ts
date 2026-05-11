@@ -102,15 +102,18 @@ export async function startTransferFile(
   return res.job_id;
 }
 
-/** Start a recursive directory upload. `destRoot` is the parent dir on
- *  the PS5 under which `srcDir`'s *contents* land. Overwrites whatever
- *  is already there — use `startTransferDirReconcile` for resume. */
+/** Start a recursive directory upload. `destRoot` is the final remote
+ *  directory whose contents should mirror `srcDir`'s contents. Callers
+ *  that want `/data/homebrew/MyGame` must pass that full path, not the
+ *  parent `/data/homebrew`. Overwrites whatever is already there — use
+ *  `startTransferDirReconcile` for resume. */
 export async function startTransferDir(
   srcDir: string,
   destRoot: string,
   addr: string,
   txId?: string | null,
   excludes?: string[],
+  bandwidthCapMbps?: number,
 ): Promise<string> {
   const res = await invoke<{ job_id: string }>("transfer_dir", {
     req: {
@@ -119,6 +122,8 @@ export async function startTransferDir(
       addr,
       tx_id: txId ?? null,
       excludes: excludes ?? [],
+      bandwidth_cap_mbps:
+        bandwidthCapMbps && bandwidthCapMbps > 0 ? bandwidthCapMbps : null,
     },
   });
   return res.job_id;
@@ -143,6 +148,7 @@ export async function startTransferDirReconcile(
   mode: ReconcileMode,
   txId?: string | null,
   excludes?: string[],
+  bandwidthCapMbps?: number,
 ): Promise<string> {
   const res = await invoke<{ job_id: string }>("transfer_dir_reconcile", {
     req: {
@@ -152,6 +158,8 @@ export async function startTransferDirReconcile(
       mode,
       tx_id: txId ?? null,
       excludes: excludes ?? [],
+      bandwidth_cap_mbps:
+        bandwidthCapMbps && bandwidthCapMbps > 0 ? bandwidthCapMbps : null,
     },
   });
   return res.job_id;
@@ -232,6 +240,34 @@ export async function startTransferDownload(
     },
   });
   return res.job_id;
+}
+
+// ─── Folder diff (pre-upload preview) ─────────────────────────────────
+
+export interface DirDiffPreview {
+  to_send_count: number;
+  to_send_bytes: number;
+  already_present_count: number;
+  already_present_bytes: number;
+  /** First 32 relpaths that would be sent. Renderer can show these
+   *  as a "preview list" without overwhelming the UI on large diffs. */
+  sample_to_send: string[];
+}
+
+/** Pre-flight diff: shows what would change without doing the upload.
+ *  Always uses Fast (size-only) reconcile mode. */
+export async function dirDiffPreview(
+  srcDir: string,
+  destRoot: string,
+  transferAddr: string,
+  excludes: string[],
+): Promise<DirDiffPreview> {
+  return invoke<DirDiffPreview>("transfer_dir_diff_preview", {
+    srcDir,
+    destRoot,
+    addr: transferAddr,
+    excludes,
+  });
 }
 
 /** Whole-document load for the upload-queue store. The renderer owns
@@ -820,6 +856,769 @@ export async function probeCompanions(
   return invoke<CompanionStatus[]>("companion_probe", { host });
 }
 
+// ─── LAN discovery (mDNS-SD + TCP probe) ──────────────────────────────
+// Backed by `discover_ps5` in the Rust command layer. Single one-shot
+// browse — the renderer triggers it from the Connection screen's "Find
+// PS5s" button. Returns candidates sorted by confidence so the UI can
+// render them without re-sorting; the first row is the best guess.
+
+export interface DiscoveredHost {
+  ip: string;
+  hostname: string | null;
+  /** All IPv4/IPv6 addresses we observed for this host. The `ip` field
+   *  is the best one to type into the host input; `all_ips` is shown
+   *  as a tooltip / "Use alternate" affordance for dual-homed PS5s. */
+  all_ips: string[];
+  /** mDNS service types observed (without the trailing `.local`). */
+  services: string[];
+  /** :9021 reachable — the universal payload-loader port. */
+  loader_port_open: boolean;
+  /** :9114 reachable — our own payload is already running here. */
+  payload_port_open: boolean;
+  /** 0-100 score; see commands/discover.rs::confidence for weights. */
+  confidence: number;
+  /** Pre-computed `confidence >= 50` so the renderer doesn't repeat
+   *  the threshold value. UI shows a green badge when true. */
+  likely_ps5: boolean;
+}
+
+export interface DiscoverResult {
+  ok: boolean;
+  candidates: DiscoveredHost[];
+  scanned_ms: number;
+  browsed_services: string[];
+  /** Present only on init failure (e.g., mDNS daemon refused to start
+   *  because something else holds the port). UI shows it inline. */
+  error?: string;
+}
+
+/** Browse the LAN for PS5 candidates via mDNS-SD + TCP probe.
+ *  `timeoutSecs` is clamped to [1, 10] on the Rust side; default 3s. */
+export async function discoverPs5(
+  timeoutSecs?: number,
+): Promise<DiscoverResult> {
+  return invoke<DiscoverResult>("discover_ps5", {
+    timeoutSecs: timeoutSecs ?? null,
+  });
+}
+
+// ─── Payload Library (curated catalogue + GitHub fetch) ───────────────
+// Backed by `commands/payloads.rs`. Three primitives:
+//   - catalogue: static list of supported payloads
+//   - release: fetch latest GitHub release (cached on disk)
+//   - inventory + download: manage the on-disk cache the Send and
+//     USB-autoloader flows both consume
+
+export interface PayloadInfo {
+  id: string;
+  display_name: string;
+  role: string;
+  description: string;
+  repo_owner: string;
+  repo_name: string;
+  on_console_marker_path: string | null;
+  process_name_hint: string | null;
+  ports: number[];
+  autoload_priority: number;
+  autoload_delay_ms: number;
+  homepage: string;
+}
+
+export interface PayloadReleaseInfo {
+  payload_id: string;
+  tag: string;
+  name: string;
+  body: string;
+  published_at: string;
+  html_url: string;
+  picked_asset_url: string;
+  picked_asset_name: string;
+  picked_asset_size: number;
+  cached_age_secs: number;
+}
+
+export interface PayloadLocalEntry {
+  payload_id: string;
+  version: string;
+  path: string;
+  size: number;
+  mtime: number;
+}
+
+export async function payloadsCatalog(): Promise<PayloadInfo[]> {
+  return invoke<PayloadInfo[]>("payloads_catalog");
+}
+
+export async function payloadsRelease(
+  id: string,
+  forceRefresh = false,
+): Promise<PayloadReleaseInfo> {
+  return invoke<PayloadReleaseInfo>("payloads_release", {
+    id,
+    forceRefresh,
+  });
+}
+
+export async function payloadsLocalInventory(): Promise<PayloadLocalEntry[]> {
+  return invoke<PayloadLocalEntry[]>("payloads_local_inventory");
+}
+
+export async function payloadsLocalPath(id: string): Promise<string | null> {
+  return invoke<string | null>("payloads_local_path", { id });
+}
+
+export async function payloadsDownload(
+  id: string,
+  assetUrl: string,
+  version: string,
+): Promise<PayloadLocalEntry> {
+  return invoke<PayloadLocalEntry>("payloads_download", {
+    id,
+    assetUrl,
+    version,
+  });
+}
+
+// ─── ShadowMount+ awareness (read-only) ───────────────────────────────
+
+export interface SmpMountedImage {
+  mount_point: string;
+  derived_name: string;
+}
+
+export interface SmpStatus {
+  installed: boolean;
+  running: boolean;
+  config_ini: string | null;
+  autotune_ini: string | null;
+  debug_log_tail: string | null;
+  mounted_images: SmpMountedImage[];
+  errors: string[];
+}
+
+/** SMP status snapshot. `addr` is the management-port address. */
+export async function smpStatus(addr: string): Promise<SmpStatus> {
+  return invoke<SmpStatus>("smp_status", { addr });
+}
+
+// ─── USB autoloader wizard ────────────────────────────────────────────
+
+export interface UsbDrive {
+  path: string;
+  label: string;
+  free_bytes: number;
+  total_bytes: number;
+}
+
+export interface AutoloaderInstallResult {
+  written: string[];
+  autoload_txt: string;
+  skipped: string[];
+}
+
+export async function usbListRemovable(): Promise<UsbDrive[]> {
+  return invoke<UsbDrive[]>("usb_list_removable");
+}
+
+export async function usbAutoloaderInstall(req: {
+  drive_path: string;
+  payload_ids: string[];
+  include_ps5upload?: boolean;
+}): Promise<AutoloaderInstallResult> {
+  return invoke<AutoloaderInstallResult>("usb_autoloader_install", { req });
+}
+
+// ─── Game metadata healing ────────────────────────────────────────────
+
+export interface HealOutcome {
+  file: string;
+  status:
+    | "copied"
+    | "already_present"
+    | "missing_from_source"
+    | "skipped_no_source"
+    | "error";
+  error: string | null;
+}
+
+export interface HealResult {
+  title_id: string;
+  appmeta_dir: string;
+  source_dir: string;
+  outcomes: HealOutcome[];
+  copied: number;
+  already_present: number;
+  errors: number;
+}
+
+/** Restore missing /user/appmeta/<TID>/ files (icon0.png, param.json,
+ *  snd0.at9) from the game source's sce_sys/. Idempotent — files
+ *  already in /user/appmeta/<TID>/ are left untouched. `addr` is the
+ *  management-port address. */
+export async function healAppmeta(
+  addr: string,
+  titleId: string,
+  sourcePath: string,
+): Promise<HealResult> {
+  return invoke<HealResult>("heal_appmeta", {
+    addr,
+    titleId,
+    sourcePath,
+  });
+}
+
+// ─── Local .ffpkg inspector (UFS2 reader) ─────────────────────────────
+
+export interface FfpkgRootEntry {
+  name: string;
+  kind: "dir" | "file" | "link" | "other";
+  size: number;
+}
+
+export interface FfpkgInspection {
+  /** Total bytes per the UFS2 superblock (block_count × block_size). */
+  image_bytes: number;
+  block_size: number;
+  fragment_size: number;
+  /** Volume label from the superblock (usually empty for PS5 .ffpkg). */
+  volume_name: string;
+  /** True when sce_sys/ folder is present at root. */
+  has_sce_sys: boolean;
+  /** PARAM.SFO TITLE_ID (e.g. "CUSA12345") if found. */
+  title_id: string | null;
+  /** PARAM.SFO TITLE (game name). */
+  title: string | null;
+  /** PARAM.SFO CATEGORY ("gd"=game, "gp"=patch, "gc"=add-on, ...). */
+  category: string | null;
+  root_entries: FfpkgRootEntry[];
+  warnings: string[];
+}
+
+/** Inspect a UFS2 image (.ffpkg / .ufs) locally — no PS5 needed.
+ *  Reads the superblock, lists root entries, parses sce_sys/param.sfo
+ *  if present. Cheap (~100ms typical) regardless of image size. */
+export async function ffpkgInspect(path: string): Promise<FfpkgInspection> {
+  return invoke<FfpkgInspection>("ffpkg_inspect", { path });
+}
+
+export interface FfpkgExtractResult {
+  file_count: number;
+  bytes_written: number;
+  /** First 32 paths written. Useful for renderer "wrote N files" with
+   *  a "show files" expander. */
+  sample_paths: string[];
+}
+
+/** Extract a file or subtree from a local .ffpkg to a local dir.
+ *  `innerPath` is slash-separated; empty string means the whole image
+ *  root. Read-only on the image. */
+export async function ffpkgExtract(
+  ffpkgPath: string,
+  innerPath: string,
+  destDir: string,
+): Promise<FfpkgExtractResult> {
+  return invoke<FfpkgExtractResult>("ffpkg_extract", {
+    ffpkgPath,
+    innerPath,
+    destDir,
+  });
+}
+
+// ─── PS5 power control (reboot/shutdown/standby/tick) ─────────────────
+
+export interface PowerControlAck {
+  ok: boolean;
+  action?: string;
+  err?: string;
+  code?: number;
+}
+
+/** Reboot the PS5. Async — the connection drops as soon as Sony's
+ *  reboot starts, but the payload sends ACK first; core treats the
+ *  expected drop as success. */
+export async function powerReboot(addr: string): Promise<PowerControlAck> {
+  return invoke<PowerControlAck>("power_reboot", { addr });
+}
+
+/** Power off the PS5. Same drop-is-success semantics as reboot. */
+export async function powerShutdown(addr: string): Promise<PowerControlAck> {
+  return invoke<PowerControlAck>("power_shutdown", { addr });
+}
+
+/** Enter rest mode (standby). May be unavailable on some firmware
+ *  revisions where the symbol moved — ack carries `err:"standby_unavailable"`
+ *  in that case. */
+export async function powerStandby(addr: string): Promise<PowerControlAck> {
+  return invoke<PowerControlAck>("power_standby", { addr });
+}
+
+/** Defer the auto-sleep timer by one tick. Non-destructive; useful
+ *  to run on a schedule during long uploads to keep the PS5 awake. */
+export async function powerTick(addr: string): Promise<PowerControlAck> {
+  return invoke<PowerControlAck>("power_tick", { addr });
+}
+
+export interface PowerTelemetry {
+  /** Cumulative power-on seconds since first boot. Null when this PS5
+   *  generation doesn't expose the metric. */
+  operating_seconds: number | null;
+  /** Boot/shutdown cycle count. */
+  boot_cycles: number | null;
+  /** Bit-flagged thermal alert state. 0 = no alert. */
+  thermal_alert_flags: number | null;
+  /** Power-up cause code (Sony-internal codes — surfaced raw). */
+  power_up_cause: number | null;
+}
+
+/** Fetch lifetime ICC telemetry (operating seconds, boot count,
+ *  thermal alerts). Read-only — safe even on payloads without
+ *  kernel R/W. */
+export async function powerTelemetryGet(addr: string): Promise<PowerTelemetry> {
+  return invoke<PowerTelemetry>("power_telemetry_get", { addr });
+}
+
+// ─── User account enumeration ─────────────────────────────────────────
+
+export interface UserAccount {
+  id: number;
+  name: string;
+  /** True for the currently-active foreground user. */
+  foreground: boolean;
+  /** Sony API error code from sceUserServiceGetUserName. 0 = ok. */
+  err_name: number;
+}
+
+export interface UserList {
+  /** User id of the foreground user, or -1 when unavailable. */
+  foreground: number;
+  err_fg: number;
+  err_list: number;
+  users: UserAccount[];
+}
+
+/** Enumerate logged-in user accounts on the PS5. */
+export async function userListGet(addr: string): Promise<UserList> {
+  return invoke<UserList>("user_list_get", { addr });
+}
+
+// ─── Save data + screenshot listing ───────────────────────────────────
+
+export interface SaveEntry {
+  title_id: string;
+  user_id: number;
+  path: string;
+  size: number;
+  mtime: number;
+  /** "ps5" for native, "ps4" for legacy savedata. */
+  kind: "ps5" | "ps4";
+}
+
+export interface SaveList {
+  saves: SaveEntry[];
+}
+
+/** List save data folders. user_id=0 lists every user's saves. */
+export async function savesList(
+  addr: string,
+  userId?: number,
+): Promise<SaveList> {
+  return invoke<SaveList>("saves_list", {
+    addr,
+    userId: userId ?? null,
+  });
+}
+
+export interface ScreenshotEntry {
+  path: string;
+  size: number;
+  mtime: number;
+}
+
+export interface ScreenshotList {
+  items: ScreenshotEntry[];
+}
+
+/** List screenshots from /user/av_contents/thumbnails/photo. */
+export async function screenshotsList(addr: string): Promise<ScreenshotList> {
+  return invoke<ScreenshotList>("screenshots_list", { addr });
+}
+
+// ─── Filesystem search index ──────────────────────────────────────────
+
+export interface IndexStartResult {
+  started: boolean;
+  err?: string;
+}
+
+export interface IndexStatusResult {
+  phase: "idle" | "building" | "ready";
+  files: number;
+  started_at: number;
+  completed_at: number;
+}
+
+export interface SearchIndexHit {
+  path: string;
+  size: number;
+}
+
+export interface SearchResults {
+  results: SearchIndexHit[];
+}
+
+export async function fsIndexStart(
+  addr: string,
+  roots?: string[],
+): Promise<IndexStartResult> {
+  return invoke<IndexStartResult>("fs_index_start", {
+    addr,
+    roots: roots ?? null,
+  });
+}
+
+export async function fsIndexStatus(addr: string): Promise<IndexStatusResult> {
+  return invoke<IndexStatusResult>("fs_index_status", { addr });
+}
+
+export async function fsSearchIndex(
+  addr: string,
+  query: string,
+  opts?: { sizeMin?: number; sizeMax?: number; limit?: number },
+): Promise<SearchResults> {
+  return invoke<SearchResults>("fs_search_index", {
+    addr,
+    query,
+    sizeMin: opts?.sizeMin ?? null,
+    sizeMax: opts?.sizeMax ?? null,
+    limit: opts?.limit ?? null,
+  });
+}
+
+export async function fsIndexCancel(addr: string): Promise<void> {
+  return invoke<void>("fs_index_cancel", { addr });
+}
+
+// ─── App lifecycle + rich toast ───────────────────────────────────────
+
+export interface RunningApp {
+  app_id: number;
+}
+
+export interface AppLifecycleAck {
+  ok: boolean;
+  action?: string;
+  app_id?: number;
+  code?: number;
+  err?: string;
+  apps?: RunningApp[];
+}
+
+export async function appSuspend(addr: string, appId: number): Promise<AppLifecycleAck> {
+  return invoke<AppLifecycleAck>("app_suspend", { addr, appId });
+}
+export async function appResume(addr: string, appId: number): Promise<AppLifecycleAck> {
+  return invoke<AppLifecycleAck>("app_resume", { addr, appId });
+}
+export async function appKill(addr: string, appId: number): Promise<AppLifecycleAck> {
+  return invoke<AppLifecycleAck>("app_kill", { addr, appId });
+}
+export async function appListRunning(addr: string): Promise<AppLifecycleAck> {
+  return invoke<AppLifecycleAck>("app_list_running", { addr });
+}
+
+export interface ToastPushAck {
+  ok: boolean;
+  code?: number;
+  err?: string;
+}
+
+/** Push a styled toast notification to the PS5. Best-effort —
+ *  malformed templates are silently dropped by Sony's daemon. */
+export async function toastPush(
+  addr: string,
+  title: string,
+  opts?: { subtitle?: string; icon?: string; actionUrl?: string },
+): Promise<ToastPushAck> {
+  return invoke<ToastPushAck>("toast_push", {
+    addr,
+    title,
+    subtitle: opts?.subtitle ?? null,
+    icon: opts?.icon ?? null,
+    actionUrl: opts?.actionUrl ?? null,
+  });
+}
+
+// ─── Diagnostics RPCs ─────────────────────────────────────────────────
+
+/** Drain the kernel log buffer into a string. Empty when nothing
+ *  new arrived since the last call. */
+export async function klogChunk(addr: string, maxBytes?: number): Promise<string> {
+  return invoke<string>("klog_chunk", {
+    addr,
+    maxBytes: maxBytes ?? null,
+  });
+}
+
+export interface NetInterface {
+  name: string;
+  mac: string;
+  ipv4: string;
+  mtu: number;
+  flags: number;
+}
+export interface NetInterfaceList {
+  interfaces: NetInterface[];
+  err?: string;
+}
+export async function netInterfacesGet(addr: string): Promise<NetInterfaceList> {
+  return invoke<NetInterfaceList>("net_interfaces_get", { addr });
+}
+
+export interface PeripheralAck {
+  ok: boolean;
+  action?: string;
+  port?: number;
+  code?: number;
+  err?: string;
+}
+export async function peripheralEject(addr: string): Promise<PeripheralAck> {
+  return invoke<PeripheralAck>("peripheral_eject", { addr });
+}
+export async function peripheralBdOff(addr: string): Promise<PeripheralAck> {
+  return invoke<PeripheralAck>("peripheral_bd_off", { addr });
+}
+export async function peripheralBdOn(addr: string): Promise<PeripheralAck> {
+  return invoke<PeripheralAck>("peripheral_bd_on", { addr });
+}
+export async function peripheralUsbOff(addr: string, port: number): Promise<PeripheralAck> {
+  return invoke<PeripheralAck>("peripheral_usb_off", { addr, port });
+}
+export async function peripheralUsbOn(addr: string, port: number): Promise<PeripheralAck> {
+  return invoke<PeripheralAck>("peripheral_usb_on", { addr, port });
+}
+
+export interface ModuleInfo {
+  handle: number;
+  name: string;
+  /** Hex string ("0x7f1234…") — preserved as string to avoid JS
+   *  Number precision loss past 2^53. */
+  base: string;
+  code_size: number;
+}
+export interface ModuleList {
+  modules: ModuleInfo[];
+  err?: string;
+}
+export async function procModulesGet(addr: string, pid?: number): Promise<ModuleList> {
+  return invoke<ModuleList>("proc_modules_get", {
+    addr,
+    pid: pid ?? null,
+  });
+}
+
+// ─── Shell + CRC32 + app.db + speed test ──────────────────────────────
+
+export interface ShellRunResult {
+  exit_code?: number;
+  timed_out: boolean;
+  stdout: string;
+  err?: string;
+}
+
+/** Run a shell command on the PS5. timeout_secs caps payload-side
+ *  wait. stdout (with stderr merged) capped at 256 KB. */
+export async function shellRun(
+  addr: string,
+  cmd: string,
+  timeoutSecs?: number,
+): Promise<ShellRunResult> {
+  return invoke<ShellRunResult>("shell_run_cmd", {
+    addr,
+    cmd,
+    timeoutSecs: timeoutSecs ?? null,
+  });
+}
+
+export interface Crc32Result {
+  crc32?: number;
+  size?: number;
+  err?: string;
+}
+
+export async function crc32File(addr: string, path: string): Promise<Crc32Result> {
+  return invoke<Crc32Result>("crc32_file_get", { addr, path });
+}
+
+export interface AppDbEntry {
+  title_id: string;
+  app_id: number;
+  name: string;
+}
+
+export interface AppDbList {
+  apps: AppDbEntry[];
+  err?: string;
+}
+
+export async function appdbQuery(addr: string): Promise<AppDbList> {
+  return invoke<AppDbList>("appdb_query_get", { addr });
+}
+
+export interface NetSpeedTestResult {
+  round_trips: number;
+  elapsed_ms: number;
+  avg_rtt_us: number;
+  p50_rtt_us: number;
+  p95_rtt_us: number;
+}
+
+export async function netSpeedTestRun(
+  addr: string,
+  roundTrips?: number,
+): Promise<NetSpeedTestResult> {
+  return invoke<NetSpeedTestResult>("net_speed_test_run", {
+    addr,
+    roundTrips: roundTrips ?? null,
+  });
+}
+
+export interface PkgDirectMountResult {
+  ok: boolean;
+  code?: number;
+  mount_point?: string;
+  err?: string;
+}
+
+/** Mount a .pkg file directly via sceFsMountGamePkg (bypasses BGFT
+ *  install). Faster for testing patches; doesn't register the title
+ *  in the home screen. */
+export async function pkgDirectMount(
+  addr: string,
+  pkgPath: string,
+  mountPoint?: string,
+): Promise<PkgDirectMountResult> {
+  return invoke<PkgDirectMountResult>("pkg_direct_mount_run", {
+    addr,
+    pkgPath,
+    mountPoint: mountPoint ?? null,
+  });
+}
+
+export interface UfsFsckResult {
+  ok: boolean;
+  code?: number;
+  device?: string;
+  repair: boolean;
+  err?: string;
+}
+
+/** Run UFS fsck on a device. repair=false is a read-only check;
+ *  true attempts repair (UI should confirm before sending true). */
+export async function ufsFsck(
+  addr: string,
+  device: string,
+  repair: boolean,
+): Promise<UfsFsckResult> {
+  return invoke<UfsFsckResult>("ufs_fsck_run", { addr, device, repair });
+}
+
+export interface FsReadPreviewResult {
+  size: number;
+  /** Base64-encoded file bytes. Use as `data:image/...;base64,<…>`
+   *  for images, or decode to UTF-8 for text. Capped at 256 KB. */
+  base64: string;
+}
+
+export interface LwfsMountResult {
+  ok: boolean;
+  code?: number;
+  mount_point?: string;
+  title_id?: string;
+  err?: string;
+}
+
+export interface FsWriteBytesResult {
+  ok: boolean;
+  size?: number;
+  err?: string;
+}
+
+/** Atomic small-file write (≤256 KB). `bytes` is raw bytes — this
+ *  helper handles base64 encoding to dodge IPC binary-transfer
+ *  awkwardness. For larger files use the regular transfer pipeline. */
+export async function fsWriteBytes(
+  addr: string,
+  path: string,
+  bytes: Uint8Array,
+  createOnly = false,
+): Promise<FsWriteBytesResult> {
+  // Browser-side base64: btoa expects a binary string.
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  const bytesB64 = btoa(bin);
+  return invoke<FsWriteBytesResult>("fs_write_bytes_run", {
+    addr,
+    path,
+    bytesB64,
+    createOnly,
+  });
+}
+
+/** Convenience: write a UTF-8 string. */
+export async function fsWriteText(
+  addr: string,
+  path: string,
+  text: string,
+  createOnly = false,
+): Promise<FsWriteBytesResult> {
+  return fsWriteBytes(addr, path, new TextEncoder().encode(text), createOnly);
+}
+
+/** Mount a LWFS patch overlay (sceFsMountLwfs). Lets a title see
+ *  patched files without a full reinstall. */
+export async function lwfsMount(
+  addr: string,
+  patchPath: string,
+  mountPoint?: string,
+  titleId?: string,
+): Promise<LwfsMountResult> {
+  return invoke<LwfsMountResult>("lwfs_mount_run", {
+    addr,
+    patchPath,
+    mountPoint: mountPoint ?? null,
+    titleId: titleId ?? null,
+  });
+}
+
+export interface Blake3HashResult {
+  path: string;
+  size: number;
+  hash: string;
+}
+
+/** BLAKE3 hash a single PS5-side file (~2-3 s per GiB on PS5 UFS).
+ *  Crypto-strength integrity check; for casual integrity use CRC32. */
+export async function fsBlake3Hash(
+  addr: string,
+  path: string,
+): Promise<Blake3HashResult> {
+  return invoke<Blake3HashResult>("fs_blake3_hash", { addr, path });
+}
+
+/** Read up to 256 KB of a PS5-side file. Used by the FileSystem
+ *  screen's preview pane for small files. */
+export async function fsReadPreview(
+  addr: string,
+  path: string,
+  maxBytes?: number,
+): Promise<FsReadPreviewResult> {
+  return invoke<FsReadPreviewResult>("fs_read_preview", {
+    addr,
+    path,
+    maxBytes: maxBytes ?? null,
+  });
+}
+
 /** Bounds mirror the payload's clamp (payload/include/hw_info.h) and
  *  the engine's range check (engine/crates/ps5upload-core/src/hw.rs).
  *  Keeping them in sync here lets the UI prevent out-of-range
@@ -1394,6 +2193,20 @@ export async function jobStatus(jobId: string): Promise<JobSnapshot> {
   return raw as unknown as JobSnapshot;
 }
 
+export async function waitForJob(
+  jobId: string,
+  intervalMs = 500,
+): Promise<JobSnapshot> {
+  while (true) {
+    const snap = await jobStatus(jobId);
+    if (snap.status === "done") return snap;
+    if (snap.status === "failed") {
+      throw new Error(snap.error ?? "job failed");
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+}
+
 export interface EngineLogEntry {
   seq: number;
   ts_ms: number;
@@ -1553,10 +2366,16 @@ export async function payloadCheck(
    *  even with the right symbols resolved. Surfaced on the
    *  Connection screen so the user sees the prerequisite state. */
   ucredElevated: boolean | null;
+  /** Raw error string from the engine when reachable=false. Lets the
+   *  Connection screen's wait-for-boot banner surface what actually
+   *  went wrong (TCP connect refused, STATUS_ACK timeout, etc.)
+   *  instead of just "didn't come up". null when reachable. */
+  error: string | null;
 }> {
   const resp = await invoke<{
     reachable?: boolean;
     loaded?: boolean;
+    error?: string;
     status?: {
       version?: string;
       ps5_kernel?: string;
@@ -1572,5 +2391,6 @@ export async function payloadCheck(
       typeof resp?.status?.ucred_elevated === "boolean"
         ? resp.status.ucred_elevated
         : null,
+    error: resp?.reachable ? null : resp?.error ?? null,
   };
 }

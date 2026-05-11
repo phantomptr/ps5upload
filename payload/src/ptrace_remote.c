@@ -188,12 +188,18 @@ int pt_copyout(pid_t pid, intptr_t addr, void *buf, size_t len) {
  * memory at bak_rsp-8 is below the function's pre-call rsp;
  * writing it doesn't disturb anything live, and after we restore
  * regs to bak_reg the slot becomes "below rsp" again. */
-/* Thread-local flag set by pt_call. 1 means "remote function was
- * actually dispatched (pt_continue returned 0)" — even if a later
- * cleanup step (waitpid / getregs) failed and pt_call returned -1,
- * the call itself made it into the target. Read via
- * pt_call_was_dispatched(). */
-static __thread int g_pt_call_dispatched = 0;
+/* Plain static (not __thread): the SDK's emutls implementation
+ * prevents the binary from loading on PS5 firmware (rtld lib_init
+ * fails when emutls symbols are present, even before main runs).
+ * Acceptable here because pt_call is invoked under sony_api_lock —
+ * only one ptrace conversation runs at a time, so this flag's
+ * read/write are already serialized.
+ *
+ * 1 means "remote function was actually dispatched (pt_continue
+ * returned 0)" — even if a later cleanup step (waitpid / getregs)
+ * failed and pt_call returned -1, the call itself made it into the
+ * target. Read via pt_call_was_dispatched(). */
+static int g_pt_call_dispatched = 0;
 
 int pt_call_was_dispatched(void) {
     return g_pt_call_dispatched;

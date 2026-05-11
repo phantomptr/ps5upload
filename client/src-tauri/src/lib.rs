@@ -70,6 +70,7 @@ pub fn run() {
             commands::transfer_file,
             commands::transfer_dir,
             commands::transfer_dir_reconcile,
+            commands::transfer_dir_diff_preview,
             commands::transfer_download,
             commands::ps5_fs_delete,
             commands::ps5_fs_move,
@@ -96,6 +97,10 @@ pub fn run() {
             // call sceBgftService* → poll status.
             commands::pkg_metadata,
             commands::pkg_metadata_split,
+            // Read-only UFS2 image inspector (browse a local .ffpkg
+            // before uploading). See ps5upload_pkg::ufs2.
+            commands::ffpkg_inspect,
+            commands::ffpkg_extract,
             commands::pkg_install_start,
             commands::pkg_install_status,
             commands::pkg_install_cancel,
@@ -103,6 +108,88 @@ pub fn run() {
             // `companion_probe` checks which well-known scene tools
             // are alive on the PS5 host.
             commands::companion_probe,
+            // ── LAN discovery (mDNS-SD + TCP probe) ─────────────────
+            // `discover_ps5` browses well-known mDNS service types
+            // and TCP-probes :9021/:9114 on each discovered host so
+            // the Connection screen's "Find PS5s" button can populate
+            // the IP field automatically. Read-only (we don't
+            // advertise ourselves). See commands/discover.rs.
+            commands::discover_ps5,
+            // ── Payload Library (curated catalogue + GitHub fetch) ──
+            // The Payloads tab uses these to list third-party
+            // homebrew payloads (kstuff, SMP, etaHEN, …),
+            // fetch their latest releases from GitHub, cache to disk,
+            // and re-send via the existing payload_send flow. See
+            // commands/payloads.rs.
+            commands::payloads_catalog,
+            commands::payloads_release,
+            commands::payloads_local_inventory,
+            commands::payloads_local_path,
+            commands::payloads_download,
+            // ── ShadowMount+ awareness (read-only) ──────────────────
+            // `smp_status` collects the on-console SMP state — config,
+            // autotune, mounted images, debug-log tail — so the
+            // Library tab can surface it without making the user FTP
+            // into the console. We never write SMP's files. See
+            // commands/smp.rs.
+            commands::smp_status,
+            // ── USB autoloader wizard ───────────────────────────────
+            // Enumerate removable drives + write a curated
+            // ps5_autoloader/ folder to one. Cross-platform; pulls
+            // payloads from the Phase 2 cache, never re-downloads
+            // here. See commands/usb_autoloader.rs.
+            commands::usb_list_removable,
+            commands::usb_autoloader_install,
+            // ── Game metadata healing ───────────────────────────────
+            // `heal_appmeta` restores missing /user/appmeta/<TID>/
+            // entries (icon0.png, param.json, snd0.at9) from the
+            // game source's sce_sys/. See commands/heal_appmeta.rs.
+            commands::heal_appmeta,
+            // ── PS5 power control (reboot/shutdown/standby/tick) ────
+            // Sends SYSTEM_CONTROL frames; the destructive actions
+            // tear down the network so a connection-drop is treated
+            // as success in core. See commands/system_power.rs.
+            commands::power_reboot,
+            commands::power_shutdown,
+            commands::power_standby,
+            commands::power_tick,
+            commands::power_telemetry_get,
+            commands::user_list_get,
+            // ── Save data + screenshot listing ──────────────────────
+            commands::saves_list,
+            commands::screenshots_list,
+            // ── Filesystem search index (payload-side) ──────────────
+            commands::fs_index_start,
+            commands::fs_index_status,
+            commands::fs_search_index,
+            commands::fs_index_cancel,
+            // ── App lifecycle (suspend/resume/kill/list) + toast ────
+            commands::app_suspend,
+            commands::app_resume,
+            commands::app_kill,
+            commands::app_list_running,
+            commands::toast_push,
+            // ── Diagnostics: klog stream, net interfaces, peripheral
+            //    control (BD/USB power), loaded module enumeration ──
+            commands::klog_chunk,
+            commands::net_interfaces_get,
+            commands::peripheral_eject,
+            commands::peripheral_bd_off,
+            commands::peripheral_bd_on,
+            commands::peripheral_usb_off,
+            commands::peripheral_usb_on,
+            commands::proc_modules_get,
+            // Shell + CRC32 + app.db query + net speed test
+            commands::shell_run_cmd,
+            commands::crc32_file_get,
+            commands::appdb_query_get,
+            commands::net_speed_test_run,
+            commands::pkg_direct_mount_run,
+            commands::ufs_fsck_run,
+            commands::lwfs_mount_run,
+            commands::fs_write_bytes_run,
+            commands::fs_read_preview,
+            commands::fs_blake3_hash,
             // ── Persistence (send-payload history) ──────────────────
             commands::send_payload_history_load,
             commands::send_payload_history_add,

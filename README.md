@@ -13,7 +13,7 @@
   <a href="https://github.com/phantomptr/ps5upload/releases"><img alt="release" src="https://img.shields.io/github/v/release/phantomptr/ps5upload?display_name=tag&sort=semver&color=blue" /></a>
   <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-GPL--3-green" /></a>
   <img alt="platforms" src="https://img.shields.io/badge/platforms-macOS_·_Linux_·_Windows-lightgrey" />
-  <img alt="firmware" src="https://img.shields.io/badge/PS5_firmware-1.00_–_12.70-orange" />
+  <img alt="firmware" src="https://img.shields.io/badge/PS5_firmware-9.00_–_11.60_validated_•_others_best_effort-orange" />
   <a href="https://discord.gg/fzK3xddtrM"><img alt="discord" src="https://img.shields.io/badge/discord-join-5865F2" /></a>
 </p>
 
@@ -38,9 +38,11 @@
   ops (chmod, delete, move, copy, mkdir) with a real directory
   tree. Bulk delete of a 200k-file folder shows live progress
   with a working Stop button.
-- **Live hardware view** — model, serial, uptime, CPU frequency,
-  RAM; plus a fan-threshold control that rings through to
-  `/dev/icc_fan` for quieter operation.
+- **Hardware view** — model, serial, uptime, CPU frequency, RAM;
+  plus a fan-threshold control that rings through to `/dev/icc_fan`
+  for quieter operation. Live CPU/SoC temperature is unreliable on
+  current firmware (libkernel exports drift between FW points), so
+  the temp reading may show `—`; the rest of the panel is stable.
 - **Send any payload** — push `.elf`, `.bin`, `.js`, or `.lua`
   files to the PS5's loader port (9021). Recent-sends history with
   click-to-replay and per-row success/fail badges.
@@ -78,14 +80,39 @@ Pre-built downloads land on the
 
 | Platform | File | How to install |
 |---|---|---|
-| macOS (Apple Silicon / Intel) | `PS5Upload-<ver>-mac-{arm64,x64}.dmg` | Open the `.dmg`, drag PS5Upload into Applications |
-| Windows (x64 / ARM64) | `PS5Upload-<ver>-win-{x64,arm64}.zip` | Unzip, double-click `PS5Upload.exe` — portable, no installer |
+| macOS (Apple Silicon / Intel) | `PS5Upload-<ver>-mac-{arm64,x64}.dmg` | Open the `.dmg`, drag PS5Upload into Applications. See **First launch on macOS** below — Gatekeeper blocks downloaded apps the first time. |
+| Windows (x64 / ARM64) | `PS5Upload-<ver>-win-{x64,arm64}.zip` | Unzip, double-click `PS5Upload.exe` — portable, no installer. See **First launch on Windows** — SmartScreen warns on first run. |
 | Linux (x64 / ARM64) | `PS5Upload-<ver>-linux-{x64,arm64}.zip` | Unzip, `chmod +x PS5Upload.AppImage`, then `./PS5Upload.AppImage` |
+
+### First-launch warnings (and why they're there)
+
+ps5upload is not code-signed with paid OS certificates — same as
+every other PS5 scene tool. The OS's verification layers
+(Gatekeeper on macOS, SmartScreen on Windows) treat unsigned downloads
+as suspicious until you allow them once. The one-time bypass:
+
+**macOS** — "App is damaged" or "cannot be opened":
+```bash
+xattr -dr com.apple.quarantine /Applications/PS5Upload.app
+```
+That removes the *quarantine* attribute macOS slaps on every file
+downloaded from a browser. Alternatively, right-click PS5Upload in
+Applications → **Open** → click **Open** in the prompt. Either method
+only needs to be done once per install.
+
+**Windows** — "Windows protected your PC" SmartScreen prompt:
+- Click **More info** → **Run anyway**.
+- Only shown until SmartScreen builds reputation for the binary;
+  subsequent launches are silent.
+- If your IT policy blocks "Run anyway", unzip + right-click
+  `PS5Upload.exe` → **Properties** → check **Unblock** → **OK**.
+
+**Linux** — no equivalent warning. Just `chmod +x` and launch.
 
 ### System requirements
 
 - **macOS** 11 (Big Sur) or newer. No dependencies — ad-hoc signed,
-  right-click → Open on first launch to bypass Gatekeeper.
+  see *First launch* above for the one-line quarantine bypass.
 - **Windows** 10 (build 19041+) or Windows 11. Ships with the
   Microsoft Edge WebView2 runtime by default; LTSC / stripped
   installs may need
@@ -148,12 +175,10 @@ The payload stays loaded until the PS5 reboots or goes into rest mode.
 ```
 client/ (Tauri 2 · React · TypeScript)
    │
-   ├── in-process ── engine crates (ps5upload-core, ftx2-proto)
-   │
-   └── OR spawns ── ps5upload-engine (HTTP :19113, optional)
-                            │
-                            ▼  FTX2 binary framing
-                  payload/ps5upload.elf  (PS5 C payload, ports 9113 + 9114)
+   └── spawns ── ps5upload-engine (HTTP :19113)
+                          │
+                          ▼  FTX2 binary framing
+                payload/ps5upload.elf  (PS5 C payload, ports 9113 + 9114)
 ```
 
 Three layers:
@@ -163,9 +188,8 @@ Three layers:
   BLAKE3 verification, mount pipelines, and FS ops.
 - **`engine/`** — Rust workspace with the protocol types, transfer
   logic, HTTP service, lab CLI, mock server, and benchmarks.
-- **`client/`** — Tauri 2 desktop app. Uses the engine crates
-  in-process via Tauri IPC; the HTTP engine is available as a
-  separate process for CLI / CI use.
+- **`client/`** — Tauri 2 desktop app. Tauri IPC commands proxy to the
+  sidecar HTTP engine, keeping the engine usable from CLI / CI too.
 
 ## Build
 
@@ -324,10 +348,12 @@ below 4.x is obscure and above 12.70 is future work.
   expected for now. Other PS5-side tools see the mount via
   `/mnt/ps5upload/`, and the source path is recorded in our
   tracker so reconcile-on-next-boot keeps state consistent.
-* CPU/SoC temperature and SoC power readings come back live on
-  FW 9.60 via the same ShellUI RPC path. The Hardware tab
-  refreshes every 5 s; a brief `—` means the most recent RPC
-  didn't complete in time and the next tick will refresh.
+* Live CPU/SoC temperature and SoC power readings via the ShellUI
+  RPC path are unreliable across firmware revisions: libkernel
+  exports them by NID-only on some FW points and the call returns
+  garbage or fails outright. The Hardware tab still refreshes every
+  5 s; a persistent `—` for temps usually means your firmware's
+  exports are NID-only, not that the payload is broken.
 
 **Q: "No writable storage found"?**
 * The tool blocks writes to read-only system partitions. If you
@@ -348,9 +374,9 @@ below 4.x is obscure and above 12.70 is future work.
 
 **Q: Where are config and logs saved?**
 * The desktop client uses the OS app-data directory:
-  * **Windows:** `%APPDATA%\ps5upload`
-  * **macOS:** `~/Library/Application Support/ps5upload`
-  * **Linux:** `~/.local/share/ps5upload`
+  * **Windows:** `%APPDATA%\com.phantomptr.ps5upload`
+  * **macOS:** `~/Library/Application Support/com.phantomptr.ps5upload`
+  * **Linux:** `~/.local/share/com.phantomptr.ps5upload`
 
 **Q: Does this work on PS4?**
 * No. The payload is compiled specifically for the PS5 (FreeBSD
@@ -377,13 +403,41 @@ below 4.x is obscure and above 12.70 is future work.
 
 ## Disclaimer
 
-This software is for educational purposes. It is intended for use
-with legally obtained software and homebrew applications on hardware
-you own.
+> **Use this software entirely at your own risk.** It is provided
+> "as is", without warranty of any kind, express or implied,
+> including but not limited to warranties of merchantability, fitness
+> for a particular purpose, and non-infringement.
 
-**Use at your own risk.** The authors are not responsible for any
-data loss, bricked hardware, or other issues that arise from using
-this tool.
+You are solely responsible for how, where, and on what hardware you
+use this tool. By downloading, installing, or running it, you
+acknowledge and accept that:
+
+- **It interacts with a modified PS5.** This tool only works on a
+  console that has been jailbroken / has kernel exploits loaded by
+  the user. Modifying console state, bypassing platform integrity
+  checks, or running unsigned code may void your manufacturer
+  warranty, violate the platform's terms of service, and — under
+  certain operations — leave your console unrecoverable without a
+  reinstall. You took those steps before this tool entered the
+  picture; this tool does not put you in that state and cannot
+  reverse it.
+- **It writes to your PS5's filesystem and can install / register
+  packages with Sony's installer.** Mistakes can corrupt the
+  console's app database, leave orphaned mount points, or wedge
+  Sony's mgmt service mid-install. Recovery normally means a
+  reboot or — worst case — a factory reset. Back up anything
+  important before bulk operations.
+- **It is intended for use only with content you legally own and
+  hardware that belongs to you.** Using it to install, mount, or
+  distribute software you do not have the legal right to use is
+  your responsibility, not the project's.
+- **No support is guaranteed.** This is a free, volunteer-built
+  tool. The author may answer questions on Discord but is under no
+  obligation to provide fixes, updates, or compensation if anything
+  goes wrong.
+
+If any of the above is not acceptable to you, do not use this
+software.
 
 ## Third-Party Libraries
 
@@ -414,16 +468,11 @@ This software builds on the following open-source projects:
 GNU General Public License v3.0 (GPLv3).
 Free to use, free to modify. See [`LICENSE`](LICENSE).
 
-## Credits
+## Author
 
-Created by **PhantomPtr**.
+Created and maintained by **PhantomPtr**.
 
 * [Follow me on X (@phantomptr)](https://x.com/phantomptr)
-
-ps5upload builds on work and conventions from the PS5 homebrew
-ecosystem (ELF loader port 9021, FreeBSD 11 mount layout, Sony
-kernel API signatures). Specific attributions live in the commits
-that introduced each piece.
 
 ## Support
 

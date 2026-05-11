@@ -51,6 +51,38 @@
   --color-bad-soft: oklch(0.94 0.05 25);
 }
 
+/* OLED variant of the dark theme.
+ *
+ * Pure-#000 background instead of the standard dark theme's slight
+ * lift (0.18 luminance). The point is to mitigate burn-in on OLED
+ * panels — every pixel set to #000 is literally off, which both
+ * reduces the heat budget and removes the "ghost image" risk for
+ * persistent UI like the sidebar. Surfaces step up by very small
+ * amounts so card boundaries remain visible without forcing the
+ * panel to drive low-luminance pixels (which is where banding shows
+ * up on OLED).
+ *
+ * Colours are cooler-shifted than the dark theme by design — pure
+ * black backgrounds make slightly-warm greys read as muddy. */
+:root[data-theme="oled"] {
+  --color-surface: oklch(0 0 0);
+  --color-surface-2: oklch(0.10 0.005 250);
+  --color-surface-3: oklch(0.16 0.005 250);
+  --color-border: oklch(0.22 0.005 250);
+  --color-border-strong: oklch(0.32 0.005 250);
+  --color-muted: oklch(0.55 0.01 250);
+  --color-text: oklch(0.96 0.005 250);
+  --color-accent: oklch(0.74 0.15 250);
+  --color-accent-contrast: oklch(0 0 0);
+  --color-accent-soft: oklch(0.22 0.07 250);
+  --color-good: oklch(0.74 0.14 150);
+  --color-good-soft: oklch(0.18 0.06 150);
+  --color-warn: oklch(0.80 0.15 75);
+  --color-warn-soft: oklch(0.20 0.07 75);
+  --color-bad: oklch(0.68 0.20 25);
+  --color-bad-soft: oklch(0.20 0.10 25);
+}
+
 html,
 body,
 #root {

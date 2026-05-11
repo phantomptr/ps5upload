@@ -86,6 +86,20 @@ pub struct TransferConfig {
     /// updates without adding a lock to the hot send loop. A `None` here
     /// keeps the single-shot legacy behavior (no progress reporting).
     pub progress_bytes: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
+    /// Optional outbound bandwidth cap, in bytes per second. `None` =
+    /// unlimited (current behaviour). When set, the transfer loop
+    /// sleeps after each shard's wire write to bring the running
+    /// average below this cap. Useful when uploading from a connection
+    /// that's also carrying video calls / game streaming and you want
+    /// to leave headroom.
+    ///
+    /// Implementation: token-bucket-style sleep — track wall time +
+    /// bytes written since the throttle started, sleep enough to
+    /// bring the average down to the cap. Coarse-grained (sleeps
+    /// happen between shards, not within a single shard's TCP write),
+    /// so the actual rate may briefly spike above the cap by one
+    /// shard's worth of bytes.
+    pub bandwidth_cap_bps: Option<u64>,
 }
 
 impl TransferConfig {
@@ -100,6 +114,7 @@ impl TransferConfig {
             pack_file_max: DEFAULT_PACK_FILE_MAX,
             excludes: Vec::new(),
             progress_bytes: None,
+            bandwidth_cap_bps: None,
         }
     }
 
@@ -246,8 +261,8 @@ fn send_and_expect(
 ///
 /// When non-zero, the client MUST skip streaming shards with
 /// `shard_seq <= last_acked_shard` — the payload has already journalled
-/// them from a prior (interrupted) connection. See `specs/ftx2-protocol.md`
-/// "Resume flow (2.1+)".
+/// them from a prior (interrupted) connection. The wire-level resume
+/// flow lives in the FrameType doc comments (`BeginTxAck` body bits).
 fn parse_last_acked_shard(body: &[u8], is_resume: bool) -> u64 {
     match serde_json::from_slice::<serde_json::Value>(body) {
         Ok(v) => match v.get("last_acked_shard").and_then(|s| s.as_u64()) {
@@ -351,6 +366,48 @@ struct PipelinedSender<'a> {
     max_inflight_bytes: usize,
     tx_id: [u8; 16],
     total_shards: u64,
+    /// Bandwidth throttle state. `None` = unlimited (no sleeps).
+    /// `Some(BandwidthThrottle)` = sleep between shards to enforce
+    /// the configured bytes-per-second ceiling.
+    throttle: Option<BandwidthThrottle>,
+}
+
+/// Token-bucket-style throttle. Tracks bytes sent + wall time since
+/// it started, sleeps just enough between shards to keep the running
+/// average below `cap_bps`. Coarse-grained: a single shard's TCP
+/// write isn't paced internally, so the instantaneous rate during
+/// one shard's send may briefly spike above the cap.
+struct BandwidthThrottle {
+    cap_bps: u64,
+    started_at: std::time::Instant,
+    bytes_sent: u64,
+}
+
+impl BandwidthThrottle {
+    fn new(cap_bps: u64) -> Self {
+        Self {
+            cap_bps: cap_bps.max(1),
+            started_at: std::time::Instant::now(),
+            bytes_sent: 0,
+        }
+    }
+
+    /// Record `n` bytes just sent and sleep if we're ahead of pace.
+    /// Called after each successful shard send.
+    fn account_and_pace(&mut self, n: usize) {
+        self.bytes_sent = self.bytes_sent.saturating_add(n as u64);
+        let elapsed = self.started_at.elapsed();
+        let target_secs = self.bytes_sent as f64 / self.cap_bps as f64;
+        let elapsed_secs = elapsed.as_secs_f64();
+        if target_secs > elapsed_secs {
+            let sleep_for = target_secs - elapsed_secs;
+            // Cap the sleep at 1s — if we ever fall this far behind
+            // pace it's better to take many short sleeps than one
+            // huge one (keeps the rate smoother on the consumer side).
+            let sleep_clamped = sleep_for.min(1.0);
+            std::thread::sleep(std::time::Duration::from_secs_f64(sleep_clamped));
+        }
+    }
 }
 
 impl<'a> PipelinedSender<'a> {
@@ -362,6 +419,7 @@ impl<'a> PipelinedSender<'a> {
     ) -> Self {
         let max_inflight_shards = cfg.inflight_shards.max(1);
         let max_inflight_bytes = cfg.inflight_bytes.max(1);
+        let throttle = cfg.bandwidth_cap_bps.map(BandwidthThrottle::new);
         Self {
             c,
             inflight: VecDeque::with_capacity(max_inflight_shards),
@@ -370,6 +428,7 @@ impl<'a> PipelinedSender<'a> {
             max_inflight_bytes,
             tx_id,
             total_shards,
+            throttle,
         }
     }
 
@@ -409,6 +468,12 @@ impl<'a> PipelinedSender<'a> {
             .send_frame_split(FrameType::StreamShard, &hdr_bytes, data)?;
         self.inflight.push_back((shard_seq, data.len()));
         self.inflight_bytes += data.len();
+        // Pace AFTER the frame is on the wire — gives a tighter bound
+        // than sleeping before the send (where outstanding inflight
+        // bytes from earlier shards would skew the math).
+        if let Some(t) = self.throttle.as_mut() {
+            t.account_and_pace(data.len());
+        }
         Ok(())
     }
 

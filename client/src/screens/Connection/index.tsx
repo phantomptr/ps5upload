@@ -12,8 +12,10 @@ import {
   bundledPayloadPath,
   bundledPayloadInfo,
   probeCompanions,
+  discoverPs5,
   type BundledPayloadInfo,
   type CompanionStatus,
+  type DiscoveredHost,
 } from "../../api/ps5";
 import { pollUntilReady, type PollHandle } from "../../lib/pollUntilReady";
 import { parsePS5Firmware } from "../../lib/ps5Firmware";
@@ -27,9 +29,12 @@ import {
   Send,
   ArrowRight,
   Plug,
+  Radar,
+  Sparkles,
 } from "lucide-react";
 import { PageHeader, Button } from "../../components";
 import { useTr } from "../../state/lang";
+import PowerControl from "./PowerControl";
 
 type StepState = "idle" | "busy" | "ok" | "fail";
 
@@ -285,26 +290,32 @@ export default function ConnectionScreen() {
     }
   };
 
-  async function handleCheck() {
-    if (!host?.trim()) {
+  async function handleCheck(overrideHost?: string) {
+    // Optional `overrideHost` lets the discover panel auto-trigger a
+    // check against the host the user just picked, without relying on
+    // React state having re-rendered yet — calling handleCheck() with
+    // no arg from a setTimeout right after setHost would close over
+    // the *old* host value and probe the wrong address.
+    const target = (overrideHost ?? host).trim();
+    if (!target) {
       settleStep1("fail", "Enter your PS5's IP address first.");
       return;
     }
-    flashStep1("busy", `Checking ${host}:${PS5_LOADER_PORT}…`);
+    flashStep1("busy", `Checking ${target}:${PS5_LOADER_PORT}…`);
     settleStep2("idle", tr("connection_payload_not_loaded", undefined, "Payload not loaded yet"));
     setTransientStep2(null);
     setTransientStep2Msg(null);
-    const ok = await portCheck(host, PS5_LOADER_PORT);
+    const ok = await portCheck(target, PS5_LOADER_PORT);
     if (ok) {
       settleStep1("ok", tr(
           "connection_port_open",
-          { port: PS5_LOADER_PORT, host },
-          `Port ${PS5_LOADER_PORT} is open on ${host}`,
+          { port: PS5_LOADER_PORT, host: target },
+          `Port ${PS5_LOADER_PORT} is open on ${target}`,
         ));
     } else {
       settleStep1(
         "fail",
-        `Port ${PS5_LOADER_PORT} is not open on ${host}`,
+        `Port ${PS5_LOADER_PORT} is not open on ${target}`,
       );
     }
   }
@@ -348,6 +359,11 @@ export default function ConnectionScreen() {
     // before arming a new one — otherwise two polls race and both
     // eventually call settleStep2, flipping the visible state.
     pollHandle.current?.cancel();
+    // Capture the last raw probe error so the timeout banner can
+    // tell the user *why* the payload looks dead (kstuff not loaded,
+    // mgmt port refused, etc.) rather than the generic "didn't come
+    // up". Updated on every failed probe; surfaced in onResolved.
+    let lastProbeError = "";
     pollHandle.current = pollUntilReady({
       probe: async () => {
         // payloadCheck returns reachability AND the new version /
@@ -358,26 +374,35 @@ export default function ConnectionScreen() {
         // writing version + kernel into the store the moment the new
         // payload answers, the VersionBlock flips to the new numbers
         // in lock-step with step2 going "ok".
-        const status = await payloadCheck(host);
-        if (status.reachable) {
-          // Guard against a host change mid-flight. handleSend
-          // captured `host` in its closure when the user clicked
-          // Replace; if they typed a new IP into the input before
-          // this probe resolved, the result we're holding is for
-          // the OLD host. Don't pollute the store with it — let
-          // AppShell's host-change effect handle the NEW host.
-          if (useConnectionStore.getState().host === host) {
-            setStatus({
-              payloadStatus: "up",
-              payloadStatusHost: host,
-              payloadVersion: status.payloadVersion,
-              ps5Kernel: status.ps5Kernel,
-              ucredElevated: status.ucredElevated,
-              payloadProbing: false,
-            });
+        try {
+          const status = await payloadCheck(host);
+          if (status.reachable) {
+            // Guard against a host change mid-flight. handleSend
+            // captured `host` in its closure when the user clicked
+            // Replace; if they typed a new IP into the input before
+            // this probe resolved, the result we're holding is for
+            // the OLD host. Don't pollute the store with it — let
+            // AppShell's host-change effect handle the NEW host.
+            if (useConnectionStore.getState().host === host) {
+              setStatus({
+                payloadStatus: "up",
+                payloadStatusHost: host,
+                payloadVersion: status.payloadVersion,
+                ps5Kernel: status.ps5Kernel,
+                ucredElevated: status.ucredElevated,
+                payloadProbing: false,
+              });
+            }
+            return "ok";
           }
+          // Reachable=false: the engine returned 502 or similar.
+          // Stash the engine's diagnostic for the timeout banner.
+          if (status.error) lastProbeError = status.error;
+          return "fail";
+        } catch (e) {
+          lastProbeError = e instanceof Error ? e.message : String(e);
+          return "fail";
         }
-        return status.reachable ? "ok" : "fail";
       },
       initialDelayMs: 1500,
       intervalMs: 1000,
@@ -391,9 +416,16 @@ export default function ConnectionScreen() {
           // the rechecking flag so the banner doesn't dangle —
           // there's nothing further coming for it.
           setStatus({ payloadProbing: false });
+          // Suggest the most common cause (no kstuff loaded yet) when
+          // the symptom looks like "boot then immediate exit". Surface
+          // the last raw probe error if any so the user has something
+          // concrete to search for / report.
+          const tail = lastProbeError
+            ? ` Last probe: ${lastProbeError}.`
+            : "";
           settleStep2(
             "fail",
-            "Payload didn't come up within 20s. If your PS5 is on, the ELF may have crashed — try sending again.",
+            `Payload didn't come up within 20s.${tail} Common causes: kstuff isn't loaded yet (run First Run, or send kstuff first via Send payload), the ELF crashed on boot, or the PS5 is unreachable. Try sending again.`,
           );
         }
       },
@@ -413,6 +445,46 @@ export default function ConnectionScreen() {
       />
 
       <div className="mx-auto grid max-w-3xl gap-4">
+        {/* First-run wizard nudge — shown only before the user has a
+            running payload. Once step2 is "ok" they don't need it.
+            One-click path; falls through to this manual flow if they
+            prefer it. */}
+        {step2 !== "ok" && (
+          <div className="flex flex-wrap items-start gap-3 rounded-md border border-[var(--color-accent)] bg-[var(--color-surface-2)] p-3 text-xs">
+            <Sparkles
+              size={14}
+              className="mt-0.5 shrink-0 text-[var(--color-accent)]"
+            />
+            <div className="min-w-0 flex-1">
+              <div className="font-semibold text-[var(--color-text)]">
+                {tr(
+                  "connection_first_run_nudge_title",
+                  undefined,
+                  "First time setting up?",
+                )}
+              </div>
+              <div className="text-[var(--color-muted)]">
+                {tr(
+                  "connection_first_run_nudge_body",
+                  undefined,
+                  "The setup wizard installs kstuff + ShadowMount+ + ps5upload in one click. Or just step through the manual flow below.",
+                )}
+              </div>
+            </div>
+            <Button
+              variant="primary"
+              size="sm"
+              rightIcon={<ArrowRight size={11} />}
+              onClick={() => navigate("/first-run")}
+            >
+              {tr(
+                "connection_first_run_nudge_action",
+                undefined,
+                "Open setup wizard",
+              )}
+            </Button>
+          </div>
+        )}
         <StepCard
           index={1}
           title={tr("connection_step1_title", undefined, "Tell the app where your PS5 is")}
@@ -431,7 +503,7 @@ export default function ConnectionScreen() {
                 settleStep2("idle", tr("connection_payload_not_loaded", undefined, "Payload not loaded yet"));
               }}
               onKeyDown={(e) => {
-                if (e.key === "Enter") handleCheck();
+                if (e.key === "Enter") void handleCheck();
               }}
               placeholder="192.168.1.50"
               disabled={step2 === "busy"}
@@ -440,7 +512,7 @@ export default function ConnectionScreen() {
             <Button
               variant="secondary"
               size="md"
-              onClick={handleCheck}
+              onClick={() => void handleCheck()}
               disabled={!host.trim() || step1 === "busy" || step2 === "busy"}
               loading={step1 === "busy"}
               title={tr(
@@ -452,6 +524,24 @@ export default function ConnectionScreen() {
               {tr("connection_check", undefined, "Check")}
             </Button>
           </div>
+          <DiscoverPanel
+            disabled={step2 === "busy"}
+            currentHost={host}
+            onPick={(picked) => {
+              // Set the host, then auto-trigger handleCheck so the
+              // user gets to step 2 in a single click rather than
+              // (a) typing IP, (b) clicking Discover, (c) picking,
+              // (d) clicking Check. The point of discovery is to
+              // collapse those into one gesture.
+              setHost(picked);
+              settleStep1("idle", "Enter your PS5's address and check");
+              settleStep2("idle", tr("connection_payload_not_loaded", undefined, "Payload not loaded yet"));
+              // Pass the picked host explicitly so we don't race
+              // React's re-render — handleCheck's closure captures
+              // the host that was current at last render.
+              void handleCheck(picked);
+            }}
+          />
           <p className="mt-3 text-xs text-[var(--color-muted)]">
             {tr(
               "connection_step1_hint",
@@ -525,8 +615,262 @@ export default function ConnectionScreen() {
         )}
 
         {host.trim() && <CompanionStrip host={host.trim()} />}
+
+        {/* Power control — only render once payload is up since the
+            destructive actions need a working mgmt-port connection. */}
+        {step2 === "ok" && <PowerControl host={host.trim()} />}
+        {step2 === "ok" && <CompanionSuggestion />}
       </div>
     </div>
+  );
+}
+
+/**
+ * "Find PS5s on the network" — collapsed by default; user clicks the
+ * Radar button to run a 3-second LAN scan via mDNS-SD + TCP probe.
+ *
+ * Design choices:
+ *   - Inline panel (not a modal): keeps the user's eye on the IP
+ *     input. Picking a row writes back to the same field they were
+ *     about to type into, so visual continuity matters.
+ *   - One-click "Use" per row: clicking auto-runs handleCheck against
+ *     the picked host so the user goes from "I don't know my PS5's
+ *     IP" to "Step 1 green" in two clicks total (Discover → Use).
+ *   - Confidence badges (highly likely / possible / unknown): the
+ *     backend is honest about uncertainty — "we found a host on your
+ *     LAN that has the right ports open" is not the same as "we
+ *     found a PS5." The badge tells the user how much to trust each
+ *     row.
+ *   - No automatic discovery on mount: a constant LAN browse would
+ *     spam mDNS traffic on every Connection-tab visit. User-initiated
+ *     keeps it explicit and quiet.
+ */
+function DiscoverPanel({
+  disabled,
+  currentHost,
+  onPick,
+}: {
+  disabled: boolean;
+  currentHost: string;
+  onPick: (ip: string) => void;
+}) {
+  const tr = useTr();
+  const [scanning, setScanning] = useState(false);
+  const [hasScanned, setHasScanned] = useState(false);
+  const [candidates, setCandidates] = useState<DiscoveredHost[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [scannedMs, setScannedMs] = useState(0);
+
+  async function runScan() {
+    setScanning(true);
+    setError(null);
+    try {
+      const res = await discoverPs5();
+      setCandidates(res.candidates);
+      setScannedMs(res.scanned_ms);
+      if (res.error) setError(res.error);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setCandidates([]);
+    } finally {
+      setScanning(false);
+      setHasScanned(true);
+    }
+  }
+
+  return (
+    <div className="mt-2">
+      <Button
+        variant="ghost"
+        size="sm"
+        leftIcon={
+          scanning ? (
+            <Loader2 size={12} className="animate-spin" />
+          ) : (
+            <Radar size={12} />
+          )
+        }
+        onClick={runScan}
+        disabled={disabled || scanning}
+      >
+        {scanning
+          ? tr("connection_discover_scanning", undefined, "Scanning LAN…")
+          : hasScanned
+            ? tr(
+                "connection_discover_rescan",
+                undefined,
+                "Scan again",
+              )
+            : tr(
+                "connection_discover_find",
+                undefined,
+                "Find PS5s on the network",
+              )}
+      </Button>
+      {hasScanned && !scanning && (
+        <DiscoverResults
+          candidates={candidates}
+          currentHost={currentHost}
+          scannedMs={scannedMs}
+          error={error}
+          onPick={onPick}
+        />
+      )}
+    </div>
+  );
+}
+
+function DiscoverResults({
+  candidates,
+  currentHost,
+  scannedMs,
+  error,
+  onPick,
+}: {
+  candidates: DiscoveredHost[];
+  currentHost: string;
+  scannedMs: number;
+  error: string | null;
+  onPick: (ip: string) => void;
+}) {
+  const tr = useTr();
+  if (error) {
+    return (
+      <div className="mt-2 rounded-md border border-[var(--color-bad)] bg-[var(--color-surface)] p-2 text-[11px] text-[var(--color-bad)]">
+        {error}
+      </div>
+    );
+  }
+  if (candidates.length === 0) {
+    return (
+      <div className="mt-2 rounded-md border border-dashed border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-[11px] text-[var(--color-muted)]">
+        {tr(
+          "connection_discover_empty",
+          { ms: scannedMs },
+          `No candidates found in ${scannedMs} ms. Make sure your PS5 is on the same LAN; try plugging it into Ethernet, or type the IP manually.`,
+        )}
+      </div>
+    );
+  }
+  return (
+    <div className="mt-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)]">
+      <div className="border-b border-[var(--color-border)] px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+        {tr(
+          "connection_discover_header",
+          { count: candidates.length, ms: scannedMs },
+          `${candidates.length} candidate(s) — scanned in ${scannedMs} ms`,
+        )}
+      </div>
+      <ul className="divide-y divide-[var(--color-border)]">
+        {candidates.map((c) => (
+          <DiscoverRow
+            key={c.ip}
+            row={c}
+            isCurrent={c.ip === currentHost.trim()}
+            onPick={onPick}
+          />
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function DiscoverRow({
+  row,
+  isCurrent,
+  onPick,
+}: {
+  row: DiscoveredHost;
+  isCurrent: boolean;
+  onPick: (ip: string) => void;
+}) {
+  const tr = useTr();
+  // Three confidence buckets so the badge colour matches the user's
+  // mental model: green = "yes, this is your PS5", amber = "looks
+  // PS5-ish, give it a try", muted = "host showed up but no PS5
+  // signals — probably not it".
+  const tier =
+    row.confidence >= 50 ? "high" : row.confidence >= 20 ? "mid" : "low";
+  const tierColor =
+    tier === "high"
+      ? "bg-[var(--color-good-soft)] text-[var(--color-good)]"
+      : tier === "mid"
+        ? "bg-[var(--color-warn-soft)] text-[var(--color-warn)]"
+        : "text-[var(--color-muted)]";
+  const tierLabel =
+    tier === "high"
+      ? tr(
+          "connection_discover_tier_high",
+          undefined,
+          "highly likely PS5",
+        )
+      : tier === "mid"
+        ? tr("connection_discover_tier_mid", undefined, "possibly PS5")
+        : tr("connection_discover_tier_low", undefined, "unknown");
+  const badges: string[] = [];
+  if (row.payload_port_open)
+    badges.push(
+      tr(
+        "connection_discover_badge_payload",
+        undefined,
+        "ps5upload running",
+      ),
+    );
+  if (row.loader_port_open)
+    badges.push(
+      tr(
+        "connection_discover_badge_loader",
+        undefined,
+        "loader port open",
+      ),
+    );
+  for (const svc of row.services) {
+    // Strip the leading underscore + "_tcp" suffix for compactness:
+    // "_sonic-loader._tcp" → "sonic-loader"
+    const clean = svc.replace(/^_/, "").replace(/\._tcp$/, "");
+    badges.push(clean);
+  }
+  return (
+    <li className="flex items-center gap-3 px-3 py-2 text-xs">
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className="font-mono text-sm font-semibold">{row.ip}</span>
+          {row.hostname && (
+            <span className="truncate text-[var(--color-muted)]">
+              {row.hostname}
+            </span>
+          )}
+          <span
+            className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${tierColor}`}
+            title={`confidence: ${row.confidence}/100`}
+          >
+            {tierLabel}
+          </span>
+        </div>
+        {badges.length > 0 && (
+          <div className="mt-1 flex flex-wrap gap-1.5 text-[10px] text-[var(--color-muted)]">
+            {badges.map((b) => (
+              <span
+                key={b}
+                className="rounded bg-[var(--color-surface-3)] px-1.5 py-0.5"
+              >
+                {b}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+      <Button
+        variant={isCurrent ? "ghost" : "secondary"}
+        size="sm"
+        onClick={() => onPick(row.ip)}
+        disabled={isCurrent}
+      >
+        {isCurrent
+          ? tr("connection_discover_current", undefined, "current")
+          : tr("connection_discover_use", undefined, "Use")}
+      </Button>
+    </li>
   );
 }
 
@@ -552,9 +896,29 @@ function BundledPayloadBanner() {
       .catch((e) => setErr(e instanceof Error ? e.message : String(e)));
   }, []);
   if (err) {
+    /* Show the backend's actual error string so the user knows WHY
+     * extraction failed (mkdir EACCES, gunzip corruption, ELF magic
+     * mismatch, disk full, …). The previous hardcoded "run make
+     * payload first" message was misleading: the payload IS embedded
+     * via include_bytes! at build time, so once the desktop shell
+     * compiles, `make payload` no longer affects the running shell —
+     * a fresh `tauri build` does. The most-likely real causes are:
+     *   - desktop shell was built with an older payload (rebuild shell)
+     *   - app_local_data_dir is not writable (permissions / sandbox)
+     *   - disk full
+     *   - gzip in the bundle is corrupted (very rare; fresh build fixes) */
     return (
       <div className="mb-3 rounded-md border border-[var(--color-bad)] bg-[var(--color-surface)] p-2 text-[11px] text-[var(--color-bad)]">
-        Can't find ps5upload.elf — run <code>make payload</code> first.
+        <div className="font-semibold">Bundled payload not available</div>
+        <div className="mt-0.5 break-words font-mono text-[10px] opacity-90">
+          {err}
+        </div>
+        <div className="mt-1 text-[10px] opacity-80">
+          If you've just rebuilt the payload, also rebuild the desktop
+          shell (<code>cargo build</code> in <code>client/src-tauri</code>)
+          so the new bytes get embedded. The shell embeds{" "}
+          <code>ps5upload.elf.gz</code> at compile time.
+        </div>
       </div>
     );
   }
@@ -684,6 +1048,77 @@ function CompanionStrip({ host }: { host: string }) {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Suggestion banner pointing the user at the Payloads tab to install
+ * additional homebrew (kstuff, ShadowMount+, etc.). Dismissible —
+ * remembers the user's "don't show again" choice via localStorage.
+ *
+ * Doesn't try to detect what's already installed (that would require
+ * cross-coupling with the SMP detection panel, which lives on the
+ * Library tab); just a discoverability nudge.
+ */
+function CompanionSuggestion() {
+  const tr = useTr();
+  const navigate = useNavigate();
+  const [dismissed, setDismissed] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return window.localStorage.getItem("ps5upload.companion-suggestion.dismissed") === "1";
+    } catch {
+      return false;
+    }
+  });
+  if (dismissed) return null;
+  const dismiss = () => {
+    try {
+      window.localStorage.setItem("ps5upload.companion-suggestion.dismissed", "1");
+    } catch {
+      // best-effort persistence
+    }
+    setDismissed(true);
+  };
+  return (
+    <div className="flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 text-xs">
+      <Sparkles
+        size={14}
+        className="mt-0.5 shrink-0 text-[var(--color-accent)]"
+      />
+      <div className="min-w-0 flex-1">
+        <div className="font-semibold">
+          {tr(
+            "companion_suggest_title",
+            undefined,
+            "Add more capabilities?",
+          )}
+        </div>
+        <div className="text-[var(--color-muted)]">
+          {tr(
+            "companion_suggest_body",
+            undefined,
+            "ps5upload pairs with kstuff (kernel exploit), ShadowMount+ (auto-mount game backups), and a dozen other homebrew payloads. The Payload library tab installs them in one click.",
+          )}
+        </div>
+      </div>
+      <Button
+        variant="primary"
+        size="sm"
+        rightIcon={<ArrowRight size={11} />}
+        onClick={() => navigate("/payloads")}
+      >
+        {tr("companion_suggest_open", undefined, "Open library")}
+      </Button>
+      <button
+        type="button"
+        onClick={dismiss}
+        className="rounded p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text)]"
+        title={tr("companion_suggest_dismiss", undefined, "Don't show again")}
+      >
+        ✕
+      </button>
     </div>
   );
 }

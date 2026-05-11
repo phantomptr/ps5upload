@@ -9,11 +9,16 @@
 # Requirements: cargo in PATH, PowerShell 5.1+
 
 param(
-    [string]$Ps5Addr    = $env:PS5_ADDR ?? "192.168.137.2:9113",
+    # Defaults via if/else rather than the `??` null-coalescing
+    # operator — the latter is PowerShell 7.0+ only and the script
+    # advertises PS 5.1+ compatibility. On Windows 10/11 with stock
+    # Windows PowerShell, the `??` form fails to parse before the
+    # script even runs.
+    [string]$Ps5Addr    = $(if ($env:PS5_ADDR) { $env:PS5_ADDR } else { "192.168.137.2:9113" }),
     # Engine listens on 19113 by default; matches the desktop client's
     # hard-coded probe URL and the PS5UPLOAD_ENGINE_PORT env var the
     # engine reads at startup.
-    [string]$EnginePort = $env:PS5UPLOAD_ENGINE_PORT ?? "19113"
+    [string]$EnginePort = $(if ($env:PS5UPLOAD_ENGINE_PORT) { $env:PS5UPLOAD_ENGINE_PORT } else { "19113" })
 )
 
 $ErrorActionPreference = "Stop"

@@ -36,6 +36,7 @@ export default function ActivityScreen() {
   const clear = useActivityHistoryStore((s) => s.clear);
   const clearRunning = useActivityHistoryStore((s) => s.clearRunning);
   const [confirmClear, setConfirmClear] = useState(false);
+  const [view, setView] = useState<"list" | "timeline">("list");
 
   const running = entries.filter((e) => e.outcome === "running");
   const past = entries.filter((e) => e.outcome !== "running");
@@ -51,18 +52,48 @@ export default function ActivityScreen() {
           "Your last 100 operations across uploads, downloads, and file management. Persisted across app restarts.",
         )}
         right={
-          entries.length > 0 ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              leftIcon={<Trash2 size={12} />}
-              onClick={() => setConfirmClear(true)}
-            >
-              {tr("activity_clear", undefined, "Clear history")}
-            </Button>
-          ) : null
+          <div className="flex items-center gap-2">
+            <div className="flex rounded-md border border-[var(--color-border)] text-[10px]">
+              <button
+                type="button"
+                onClick={() => setView("list")}
+                className={`rounded-l-md px-2 py-1 ${
+                  view === "list"
+                    ? "bg-[var(--color-accent)] text-[var(--color-accent-contrast)]"
+                    : "hover:bg-[var(--color-surface-3)]"
+                }`}
+              >
+                {tr("activity_view_list", undefined, "List")}
+              </button>
+              <button
+                type="button"
+                onClick={() => setView("timeline")}
+                className={`rounded-r-md px-2 py-1 ${
+                  view === "timeline"
+                    ? "bg-[var(--color-accent)] text-[var(--color-accent-contrast)]"
+                    : "hover:bg-[var(--color-surface-3)]"
+                }`}
+              >
+                {tr("activity_view_timeline", undefined, "Timeline")}
+              </button>
+            </div>
+            {entries.length > 0 ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                leftIcon={<Trash2 size={12} />}
+                onClick={() => setConfirmClear(true)}
+              >
+                {tr("activity_clear", undefined, "Clear history")}
+              </Button>
+            ) : null}
+          </div>
         }
       />
+
+      {view === "timeline" && entries.length > 0 && (
+        <ActivityTimeline entries={entries} />
+      )}
 
       {entries.length === 0 && (
         <EmptyState
@@ -77,7 +108,7 @@ export default function ActivityScreen() {
         />
       )}
 
-      {running.length > 0 && (
+      {view === "list" && running.length > 0 && (
         <section className="mb-6">
           <header className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
             <Loader2 size={13} className="animate-spin" />
@@ -110,7 +141,7 @@ export default function ActivityScreen() {
         </section>
       )}
 
-      {past.length > 0 && (
+      {view === "list" && past.length > 0 && (
         <section>
           <header className="mb-3 text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
             {tr("activity_past", undefined, "Recent")}
@@ -399,4 +430,117 @@ function formatRelative(
   }
   const d = new Date(ms);
   return d.toLocaleString();
+}
+
+/**
+ * Horizontal timeline grouped by day. Each row is one calendar day;
+ * each block is one operation positioned along the 24-hour x-axis.
+ * Color encodes outcome (green=done, amber=running, red=failed,
+ * grey=stopped). Hover for the full detail.
+ */
+function ActivityTimeline({ entries }: { entries: ActivityEntry[] }) {
+  const tr = useTr();
+  // Group entries by local-day key (YYYY-MM-DD).
+  const byDay = new Map<string, ActivityEntry[]>();
+  for (const e of entries) {
+    const d = new Date(e.startedAtMs);
+    const key = `${d.getFullYear()}-${(d.getMonth() + 1)
+      .toString()
+      .padStart(2, "0")}-${d.getDate().toString().padStart(2, "0")}`;
+    const arr = byDay.get(key) ?? [];
+    arr.push(e);
+    byDay.set(key, arr);
+  }
+  const days = Array.from(byDay.entries()).sort((a, b) =>
+    b[0].localeCompare(a[0]),
+  );
+
+  function blockColor(outcome: ActivityOutcome): string {
+    switch (outcome) {
+      case "done":
+        return "var(--color-good)";
+      case "running":
+        return "var(--color-warn)";
+      case "failed":
+        return "var(--color-bad)";
+      case "stopped":
+      default:
+        return "var(--color-muted)";
+    }
+  }
+
+  return (
+    <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
+      <header className="mb-3 flex items-center gap-2">
+        <h3 className="text-sm font-semibold">
+          {tr(
+            "activity_timeline_title",
+            { count: days.length },
+            `Timeline (${days.length} days)`,
+          )}
+        </h3>
+        <span className="text-[10px] text-[var(--color-muted)]">
+          {tr(
+            "activity_timeline_legend",
+            undefined,
+            "green=done · amber=running · red=failed · grey=stopped",
+          )}
+        </span>
+      </header>
+      <div className="space-y-1">
+        {/* X-axis labels: 0h, 6h, 12h, 18h, 24h. */}
+        <div className="ml-20 flex justify-between text-[10px] text-[var(--color-muted)]">
+          <span>00:00</span>
+          <span>06:00</span>
+          <span>12:00</span>
+          <span>18:00</span>
+          <span>24:00</span>
+        </div>
+        {days.map(([day, dayEntries]) => (
+          <div key={day} className="flex items-center gap-2">
+            <div className="w-20 shrink-0 text-[10px] tabular-nums text-[var(--color-muted)]">
+              {day}
+            </div>
+            <div className="relative h-5 flex-1 rounded-sm bg-[var(--color-surface)]">
+              {/* Hour gridlines */}
+              {[0.25, 0.5, 0.75].map((p) => (
+                <div
+                  key={p}
+                  className="absolute top-0 h-full border-l border-[var(--color-border)]"
+                  style={{ left: `${p * 100}%` }}
+                />
+              ))}
+              {dayEntries.map((e) => {
+                const start = new Date(e.startedAtMs);
+                const end = e.endedAtMs ? new Date(e.endedAtMs) : new Date();
+                const dayStart = new Date(start);
+                dayStart.setHours(0, 0, 0, 0);
+                const dayMs = 86_400_000;
+                const left = ((start.getTime() - dayStart.getTime()) / dayMs) * 100;
+                const widthMs = end.getTime() - start.getTime();
+                const widthPct = Math.max(0.4, (widthMs / dayMs) * 100);
+                return (
+                  <div
+                    key={e.id}
+                    className="absolute top-0.5 h-4 rounded-sm hover:opacity-80"
+                    style={{
+                      left: `${left.toFixed(2)}%`,
+                      width: `${Math.min(100 - left, widthPct).toFixed(2)}%`,
+                      backgroundColor: blockColor(e.outcome),
+                    }}
+                    title={`${e.label} · ${e.outcome} · ${start.toLocaleTimeString()}${
+                      e.endedAtMs ? ` → ${end.toLocaleTimeString()}` : ""
+                    }`}
+                  />
+                );
+              })}
+            </div>
+            <div className="w-12 text-right text-[10px] tabular-nums text-[var(--color-muted)]">
+              {dayEntries.length}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
 }

@@ -513,8 +513,16 @@ export const useInstallQueue = create<InstallQueueState>((set, get) => ({
 
   async start() {
     if (get().isRunning) return;
-    const myRun = get().runId + 1;
-    set({ runId: myRun, isRunning: true });
+    // Atomic increment-and-claim. Naive `read get().runId, +1, set
+    // {runId: myRun, isRunning: true}` lets two interleaved start()
+    // calls both compute the same myRun (the second's get() sees
+    // pre-set state because zustand updates are sync-but-microtask).
+    // The functional-set form forces a single observable transition.
+    let myRun = -1;
+    set((s) => {
+      myRun = s.runId + 1;
+      return { runId: myRun, isRunning: true };
+    });
 
     const isLive = () => get().runId === myRun;
 

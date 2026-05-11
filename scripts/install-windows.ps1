@@ -115,6 +115,22 @@ if (-not (Has-Cmd 7z)) {
   Winget-Install -Id '7zip.7zip' -Name '7-Zip'
 }
 
+# ─── 5b. LLVM 18 (prospero-clang dependency) ──────────────────────────────────
+# The PS5 payload toolchain (prospero-clang + ld.lld) needs LLVM 18 with
+# lld included. Without this `make payload` fails on a fresh Windows
+# checkout — the SDK ships its own clang shim but expects host lld to be
+# discoverable. macOS pins llvm@18 via brew, Ubuntu via apt; do the
+# equivalent here. winget's LLVM.LLVM tracks latest, which is fine —
+# prospero-clang is forward-compatible with newer host LLVM.
+if (Has-Cmd clang) {
+  Ok "LLVM/clang already installed: $(clang --version | Select-Object -First 1)"
+} else {
+  Winget-Install -Id 'LLVM.LLVM' -Name 'LLVM (clang + lld)'
+  # Make clang/lld discoverable in this session for any subsequent
+  # `make payload` step the user runs from the same shell.
+  $env:Path = "${env:ProgramFiles}\LLVM\bin;$env:Path"
+}
+
 # ─── 6. PS5 Payload SDK ────────────────────────────────────────────────────────
 if (Test-Path (Join-Path $SdkDir 'toolchain\prospero.mk')) {
   Ok "PS5 SDK already present at $SdkDir"
