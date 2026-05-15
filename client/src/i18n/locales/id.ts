@@ -1052,6 +1052,20 @@ sendpayload_typical_ports_caveat: "Ini adalah default umum — loader kustom dap
 "install.tag.staged": "staged",
 "install.retryAsStaged": "Coba lagi sebagai \"Unggah lalu pasang\"",
 "install.retryAsStagedHint": "Menggunakan jalur lama: unggah .pkg ke PS5 dulu, lalu pasang. Coba ini jika PS5 tidak dapat mencapai PC ini melalui HTTP (firewall, VLAN).",
+hardware_systime_title: "Waktu sistem",
+hardware_systime_ps5: "Waktu PS5",
+hardware_systime_pc: "PC Anda",
+hardware_systime_drift: "Selisih",
+hardware_systime_drift_hint: "PS5 dikurangi PC, dalam detik. Positif = PS5 lebih cepat.",
+hardware_systime_sync: "Sinkronkan PS5 dengan waktu PC",
+hardware_systime_confirm: "Mengatur jam sistem PS5. Dapat memengaruhi trofi, stempel waktu save, dan pemeriksaan DRM.",
+hardware_systime_confirm_yes: "Setel jam",
+hardware_systime_confirm_no: "Batal",
+hardware_systime_syncing: "Menyinkronkan…",
+hardware_systime_stub_no_op: "PS5 melaporkan sukses tetapi jam tidak benar-benar berubah. Biasanya berarti loader tidak memberikan kernel R/W ke payload — muat ulang via kstuff dan coba lagi.",
+hardware_systime_synced: "Tersinkronkan.",
+hardware_systime_new_label: "Sekarang:",
+hardware_systime_failed: "Tidak bisa menyinkronkan waktu",
 };
 
 export default id;

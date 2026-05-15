@@ -29,6 +29,7 @@
 #include "runtime.h"
 #include "register.h"
 #include "hw_info.h"
+#include "sys_time.h"
 #include "proc_list.h"
 #include "blake3.h"
 
@@ -244,6 +245,27 @@ extern int posix_fallocate(int fd, off_t offset, off_t len);
 /* Atomic small-file write (≤256 KB). */
 #define FTX2_FRAME_FS_WRITE_BYTES           130u
 #define FTX2_FRAME_FS_WRITE_BYTES_ACK       131u
+/* System clock get/set via sceSystemServiceGet/SetCurrentDateTime
+ * (see payload/src/sys_time.c). Bodies are JSON.
+ *   TIME_GET request:  {} (empty)
+ *   TIME_GET_ACK:      {"ok":bool,"err_code":N,"year":Y,"month":M,
+ *                       "day":D,"hour":h,"min":m,"sec":s}
+ *   TIME_SET request:  {"year":Y,"month":M,"day":D,"hour":h,"min":m,
+ *                       "sec":s}  (UTC; microsecond is unused)
+ *   TIME_SET_ACK:      {"ok":bool,"err_code":N,"prior_unix":N,
+ *                       "new_unix":N}
+ *      prior_unix / new_unix are -1 if get failed; the desktop uses
+ *      them to detect "rc=0 but the clock didn't actually move" SDK-
+ *      stub no-ops on firmwares where libSceSystemService exports the
+ *      symbol but the runtime SPRX doesn't implement it. Requires
+ *      ucred-elevated loader (kstuff or similar) since the underlying
+ *      SceShellCore IPC checks the caller's system-service capability;
+ *      a non-elevated payload sees a Sony privilege-rejected err_code
+ *      and surfaces it to the user. */
+#define FTX2_FRAME_TIME_GET                 132u
+#define FTX2_FRAME_TIME_GET_ACK             133u
+#define FTX2_FRAME_TIME_SET                 134u
+#define FTX2_FRAME_TIME_SET_ACK             135u
 /* Where we place mount points. Scoped under /mnt/ps5upload/ so it
  * never collides with mount paths owned by other utilities. */
 #define FS_MOUNT_BASE "/mnt/ps5upload"
@@ -7434,6 +7456,136 @@ static int handle_hw_power(runtime_state_t *state, int client_fd, uint64_t trace
                               FTX2_FRAME_HW_POWER_ACK, "hw_power_failed");
 }
 
+/* ── System clock get/set (sys_time.c wrappers) ────────────────────────── */
+
+/* Tiny ASCII-digit JSON field reader. Pulls "<name>":N out of a JSON
+ * blob; returns 1 on success + writes *out, 0 otherwise. Doesn't
+ * handle quoted-string values (we don't need them for the time-set
+ * request, which is integer-only). Tolerates whitespace between
+ * `:` and the digits. Used in handle_time_set below. */
+static int json_read_int_field(const char *body, size_t body_len,
+                                const char *name, long *out) {
+    char needle[32];
+    int needle_len = snprintf(needle, sizeof(needle), "\"%s\"", name);
+    if (needle_len <= 0 || (size_t)needle_len >= sizeof(needle)) return 0;
+    if (body_len < (size_t)needle_len) return 0;
+    const char *body_end = body + body_len;
+    const char *p = find_bounded(body, body_len, needle);
+    if (!p) return 0;
+    p += needle_len;
+    while (p < body_end && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')) p++;
+    if (p >= body_end || *p != ':') return 0;
+    p++;
+    while (p < body_end && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')) p++;
+    if (p >= body_end) return 0;
+    int neg = 0;
+    if (*p == '-') { neg = 1; p++; }
+    if (p >= body_end || *p < '0' || *p > '9') return 0;
+    long v = 0;
+    while (p < body_end && *p >= '0' && *p <= '9') {
+        /* Guard against overflow of the fields the caller cares about
+         * (year/month/day/...). 10-digit cap is enough for any sane
+         * input; out-of-range values fail the per-field validation
+         * inside sys_time_set anyway. */
+        if (v > 100000000L) return 0;
+        v = v * 10 + (*p - '0');
+        p++;
+    }
+    *out = neg ? -v : v;
+    return 1;
+}
+
+static int handle_time_get(runtime_state_t *state, int client_fd,
+                            uint64_t trace_id) {
+    if (!state) return -1;
+    sce_datetime_t dt;
+    memset(&dt, 0, sizeof(dt));
+    uint32_t ec = 0;
+    int rc = sys_time_get(&dt, &ec);
+    char body[256];
+    int n;
+    if (rc == 0) {
+        n = snprintf(body, sizeof(body),
+                     "{\"ok\":true,\"err_code\":0,"
+                     "\"year\":%u,\"month\":%u,\"day\":%u,"
+                     "\"hour\":%u,\"min\":%u,\"sec\":%u}",
+                     (unsigned)dt.year, (unsigned)dt.month, (unsigned)dt.day,
+                     (unsigned)dt.hour, (unsigned)dt.minute, (unsigned)dt.second);
+    } else {
+        n = snprintf(body, sizeof(body),
+                     "{\"ok\":false,\"err_code\":%u}",
+                     (unsigned)ec);
+    }
+    if (n < 0 || (size_t)n >= sizeof(body)) {
+        const char *fb = "{\"ok\":false,\"err_code\":0}";
+        return send_frame(client_fd, FTX2_FRAME_TIME_GET_ACK, 0, trace_id,
+                          fb, (uint64_t)strlen(fb));
+    }
+    pthread_mutex_lock(&state->state_mtx);
+    state->command_count += 1;
+    pthread_mutex_unlock(&state->state_mtx);
+    return send_frame(client_fd, FTX2_FRAME_TIME_GET_ACK, 0, trace_id,
+                      body, (uint64_t)n);
+}
+
+static int handle_time_set(runtime_state_t *state, int client_fd,
+                            uint64_t trace_id,
+                            const char *request_body, uint64_t body_len) {
+    if (!state) return -1;
+    if (!request_body || body_len == 0) {
+        const char *err = "{\"ok\":false,\"err_code\":3758104577}"; /* SYS_TIME_ERR_NULL_ARG */
+        return send_frame(client_fd, FTX2_FRAME_TIME_SET_ACK, 0, trace_id,
+                          err, (uint64_t)strlen(err));
+    }
+    /* Pull each field. Missing fields default to zero, which the
+     * sys_time_set range check will reject — caller mistake produces
+     * a clean rc=-1 with SYS_TIME_ERR_NULL_ARG-style err_code. */
+    long year = 0, month = 0, day = 0, hour = 0, minute = 0, second = 0;
+    int ok_year = json_read_int_field(request_body, (size_t)body_len, "year",  &year);
+    int ok_mon  = json_read_int_field(request_body, (size_t)body_len, "month", &month);
+    int ok_day  = json_read_int_field(request_body, (size_t)body_len, "day",   &day);
+    int ok_hr   = json_read_int_field(request_body, (size_t)body_len, "hour",  &hour);
+    int ok_min  = json_read_int_field(request_body, (size_t)body_len, "min",   &minute);
+    int ok_sec  = json_read_int_field(request_body, (size_t)body_len, "sec",   &second);
+    if (!ok_year || !ok_mon || !ok_day || !ok_hr || !ok_min || !ok_sec ||
+        year < 1970 || year > 2200 || month < 1 || month > 12 ||
+        day < 1 || day > 31 || hour < 0 || hour > 23 ||
+        minute < 0 || minute > 59 || second < 0 || second > 59) {
+        const char *err = "{\"ok\":false,\"err_code\":3758104577}"; /* SYS_TIME_ERR_NULL_ARG */
+        return send_frame(client_fd, FTX2_FRAME_TIME_SET_ACK, 0, trace_id,
+                          err, (uint64_t)strlen(err));
+    }
+    sce_datetime_t dt;
+    memset(&dt, 0, sizeof(dt));
+    dt.year   = (uint16_t)year;
+    dt.month  = (uint16_t)month;
+    dt.day    = (uint16_t)day;
+    dt.hour   = (uint16_t)hour;
+    dt.minute = (uint16_t)minute;
+    dt.second = (uint16_t)second;
+    uint32_t ec = 0;
+    int64_t prior_unix = -1, new_unix = -1;
+    int rc = sys_time_set(&dt, &ec, &prior_unix, &new_unix);
+    char body[256];
+    int n = snprintf(body, sizeof(body),
+                     "{\"ok\":%s,\"err_code\":%u,"
+                     "\"prior_unix\":%lld,\"new_unix\":%lld}",
+                     rc == 0 ? "true" : "false",
+                     (unsigned)ec,
+                     (long long)prior_unix,
+                     (long long)new_unix);
+    if (n < 0 || (size_t)n >= sizeof(body)) {
+        const char *fb = "{\"ok\":false,\"err_code\":0}";
+        return send_frame(client_fd, FTX2_FRAME_TIME_SET_ACK, 0, trace_id,
+                          fb, (uint64_t)strlen(fb));
+    }
+    pthread_mutex_lock(&state->state_mtx);
+    state->command_count += 1;
+    pthread_mutex_unlock(&state->state_mtx);
+    return send_frame(client_fd, FTX2_FRAME_TIME_SET_ACK, 0, trace_id,
+                      body, (uint64_t)n);
+}
+
 /* ── System control (reboot / shutdown / standby / wake-tick) ─────────── */
 
 /* Sony API declarations — these live in libSceSystemService (already in
@@ -11752,6 +11904,13 @@ abort_done:
     if (hdr.frame_type == FTX2_FRAME_HW_SET_FAN_THRESHOLD) {
         return handle_hw_set_fan_threshold(state, client_fd, hdr.trace_id,
                                             request_body, hdr.body_len);
+    }
+    if (hdr.frame_type == FTX2_FRAME_TIME_GET) {
+        return handle_time_get(state, client_fd, hdr.trace_id);
+    }
+    if (hdr.frame_type == FTX2_FRAME_TIME_SET) {
+        return handle_time_set(state, client_fd, hdr.trace_id,
+                                request_body, hdr.body_len);
     }
     if (hdr.frame_type == FTX2_FRAME_PROC_LIST) {
         return handle_proc_list(state, client_fd, hdr.trace_id,

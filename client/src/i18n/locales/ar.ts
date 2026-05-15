@@ -1053,6 +1053,20 @@ sendpayload_typical_ports_caveat: "هذه إعدادات افتراضية شائ
 "install.tag.staged": "مرحلي",
 "install.retryAsStaged": "إعادة المحاولة كـ \"تحميل ثم تثبيت\"",
 "install.retryAsStagedHint": "يستخدم المسار القديم: يحمّل ملف .pkg إلى PS5 أولاً ثم يثبّت. جرّب هذا إذا لم يتمكن PS5 من الوصول إلى هذا الكمبيوتر عبر HTTP (جدار حماية، VLAN).",
+hardware_systime_title: "وقت النظام",
+hardware_systime_ps5: "وقت PS5",
+hardware_systime_pc: "جهازك",
+hardware_systime_drift: "الفارق",
+hardware_systime_drift_hint: "PS5 ناقص الكمبيوتر، بالثواني. الموجب يعني أن PS5 متقدم.",
+hardware_systime_sync: "مزامنة PS5 مع وقت الكمبيوتر",
+hardware_systime_confirm: "سيؤدي ذلك إلى تعيين ساعة نظام PS5. قد يؤثر هذا على الجوائز، وأوقات الحفظ، وعمليات التحقق من DRM.",
+hardware_systime_confirm_yes: "ضبط الساعة",
+hardware_systime_confirm_no: "إلغاء",
+hardware_systime_syncing: "جارٍ المزامنة…",
+hardware_systime_stub_no_op: "أبلغ PS5 عن النجاح ولكن الساعة لم تتغير فعليًا. عادةً يعني ذلك أن المُحمِّل لم يمنح الـ payload صلاحية kernel R/W — أعد التحميل عبر kstuff وحاول مرة أخرى.",
+hardware_systime_synced: "تمت المزامنة.",
+hardware_systime_new_label: "الآن:",
+hardware_systime_failed: "تعذرت مزامنة الوقت",
 };
 
 export default ar;

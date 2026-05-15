@@ -11,6 +11,7 @@ pub mod log;
 pub mod pkg_install;
 pub mod saves;
 pub mod search_index;
+pub mod sys_time;
 pub mod system_control;
 pub mod transfer;
 pub mod users;

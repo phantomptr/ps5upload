@@ -1053,6 +1053,20 @@ sendpayload_typical_ports_caveat: "これらは一般的なデフォルト値で
 "install.tag.staged": "ステージ済み",
 "install.retryAsStaged": "\"アップロードしてからインストール\" として再試行",
 "install.retryAsStagedHint": "従来のパスを使用: まず .pkg を PS5 にアップロードしてからインストールします。PS5 が HTTP でこの PC に到達できなかった場合（ファイアウォール、VLAN）に試してください。",
+hardware_systime_title: "システム時刻",
+hardware_systime_ps5: "PS5 の時刻",
+hardware_systime_pc: "この PC",
+hardware_systime_drift: "ずれ",
+hardware_systime_drift_hint: "PS5 マイナス PC、秒単位。プラスは PS5 が進んでいることを示します。",
+hardware_systime_sync: "PS5 を PC の時刻に同期",
+hardware_systime_confirm: "PS5 のシステム時計を設定します。トロフィー、セーブのタイムスタンプ、DRM チェックに影響することがあります。",
+hardware_systime_confirm_yes: "時計を設定",
+hardware_systime_confirm_no: "キャンセル",
+hardware_systime_syncing: "同期中…",
+hardware_systime_stub_no_op: "PS5 は成功を返しましたが、時計は実際には動いていません。通常はローダーが payload にカーネル R/W を付与しなかったことを意味します — kstuff 経由で再ロードしてやり直してください。",
+hardware_systime_synced: "同期しました。",
+hardware_systime_new_label: "現在:",
+hardware_systime_failed: "時刻を同期できませんでした",
 };
 
 export default ja;

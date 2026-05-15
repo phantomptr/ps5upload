@@ -1054,6 +1054,20 @@ sendpayload_typical_ports_caveat: "Đây là các giá trị mặc định phổ
 "install.tag.staged": "đã tải",
 "install.retryAsStaged": "Thử lại với \"Tải lên rồi cài đặt\"",
 "install.retryAsStagedHint": "Sử dụng đường dẫn cũ: tải .pkg lên PS5 trước rồi cài đặt. Hãy thử nếu PS5 không thể tiếp cận PC này qua HTTP (tường lửa, VLAN).",
+hardware_systime_title: "Giờ hệ thống",
+hardware_systime_ps5: "Giờ PS5",
+hardware_systime_pc: "PC của bạn",
+hardware_systime_drift: "Chênh lệch",
+hardware_systime_drift_hint: "PS5 trừ PC, tính bằng giây. Dương = PS5 nhanh hơn.",
+hardware_systime_sync: "Đồng bộ PS5 với giờ PC",
+hardware_systime_confirm: "Đặt đồng hồ hệ thống PS5. Có thể ảnh hưởng đến trophy, dấu thời gian lưu, và kiểm tra DRM.",
+hardware_systime_confirm_yes: "Đặt đồng hồ",
+hardware_systime_confirm_no: "Hủy",
+hardware_systime_syncing: "Đang đồng bộ…",
+hardware_systime_stub_no_op: "PS5 báo thành công nhưng đồng hồ thực sự không thay đổi. Thường nghĩa là loader không cấp kernel R/W cho payload — tải lại qua kstuff và thử lại.",
+hardware_systime_synced: "Đã đồng bộ.",
+hardware_systime_new_label: "Bây giờ:",
+hardware_systime_failed: "Không thể đồng bộ giờ",
 };
 
 export default vi;

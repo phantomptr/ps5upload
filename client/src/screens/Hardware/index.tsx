@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import {
   Cpu,
   Thermometer,
@@ -9,6 +10,7 @@ import {
   Fan,
   Check,
   HardDrive,
+  CalendarClock,
 } from "lucide-react";
 
 import { AlertTriangle } from "lucide-react";
@@ -21,6 +23,12 @@ import SpeedTestPanel from "./SpeedTestPanel";
 import { useDocumentVisible } from "../../lib/visibility";
 
 import { useConnectionStore, PS5_PAYLOAD_PORT } from "../../state/connection";
+import {
+  psTimeToDate,
+  formatUtcCompact,
+  formatDrift,
+  type PsTimeJson,
+} from "../../lib/sysTimeFormat";
 import {
   fetchHwInfo,
   fetchHwPower,
@@ -347,6 +355,11 @@ export default function HardwareScreen() {
             payloadUp={payloadStatus === "up"}
           />
 
+          <SystemTimeCard
+            host={host ?? ""}
+            payloadUp={payloadStatus === "up"}
+          />
+
           {/* Lifetime ICC telemetry — fetched on mount + on demand,
               not on the live-poll interval. Different cadence from
               the sensor cards above because these values barely
@@ -655,3 +668,204 @@ function FanCurvePreview({ thresholdC }: { thresholdC: number }) {
     </div>
   );
 }
+
+/* ─── System time card ───────────────────────────────────────────────── */
+
+/** Wire shape returned by ps5_time_sync. `stub_no_op` is the engine-
+ *  side heuristic for "payload said ok but the clock didn't move". */
+interface PsTimeSyncJson {
+  ok: boolean;
+  err_code: number;
+  reason: string;
+  prior_unix: number;
+  new_unix: number;
+  stub_no_op: boolean;
+}
+
+function SystemTimeCard({
+  host,
+  payloadUp,
+}: {
+  host: string;
+  payloadUp: boolean;
+}) {
+  const tr = useTr();
+  const [ps5Time, setPs5Time] = useState<PsTimeJson | null>(null);
+  const [pcNowMs, setPcNowMs] = useState<number>(() => Date.now());
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [lastResult, setLastResult] = useState<PsTimeSyncJson | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const canSync = payloadUp && !!host.trim() && !busy;
+
+  /* Fetch PS5 time on mount + after each sync. We re-poll the PS5
+   * every 30s (which is fine for the drift indicator — sub-second
+   * accuracy is irrelevant here). PC time is rendered from a fresh
+   * Date.now() on every second-tick so the drift number stays live. */
+  const refreshPs5 = useCallback(async () => {
+    if (!payloadUp || !host.trim()) return;
+    try {
+      const addr = `${host}:${PS5_PAYLOAD_PORT}`;
+      const r = (await invoke("ps5_time_get", { addr })) as PsTimeJson;
+      setPs5Time(r);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, [host, payloadUp]);
+
+  useEffect(() => {
+    if (!payloadUp) return;
+    refreshPs5();
+    const id = window.setInterval(refreshPs5, 30_000);
+    return () => window.clearInterval(id);
+  }, [payloadUp, refreshPs5]);
+
+  /* Tick PC clock every second so the drift display updates live.
+   * Light enough we don't bother gating on document visibility. */
+  useEffect(() => {
+    const id = window.setInterval(() => setPcNowMs(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  const ps5Date = psTimeToDate(ps5Time);
+  const pcDate = new Date(pcNowMs);
+
+  const handleSync = useCallback(async () => {
+    if (!canSync) return;
+    setBusy(true);
+    setError(null);
+    setLastResult(null);
+    try {
+      const targetUnixSeconds = Math.floor(Date.now() / 1000);
+      const addr = `${host}:${PS5_PAYLOAD_PORT}`;
+      const r = (await invoke("ps5_time_sync", {
+        addr,
+        targetUnixSeconds,
+      })) as PsTimeSyncJson;
+      setLastResult(r);
+      setConfirming(false);
+      /* Re-fetch PS5 time so the card reflects the new clock right
+       * away, not 30s later when the next poll lands. */
+      await refreshPs5();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [canSync, host, refreshPs5]);
+
+  return (
+    <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
+      <header className="mb-3 flex items-center gap-2 text-xs uppercase tracking-wide text-[var(--color-muted)]">
+        <CalendarClock size={14} />
+        <span>{tr("hardware_systime_title", "System time")}</span>
+      </header>
+
+      <div className="space-y-2 text-xs">
+        <StatRow
+          label={tr("hardware_systime_ps5", "PS5 time")}
+          value={formatUtcCompact(ps5Date)}
+        />
+        <StatRow
+          label={tr("hardware_systime_pc", "Your PC")}
+          value={formatUtcCompact(pcDate)}
+        />
+        <StatRow
+          label={tr("hardware_systime_drift", "Drift")}
+          value={formatDrift(ps5Date, pcNowMs)}
+          hint={tr(
+            "hardware_systime_drift_hint",
+            "PS5 minus PC, in seconds. Positive = PS5 is ahead.",
+          )}
+        />
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        {!confirming && !busy && (
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={!canSync}
+            onClick={() => setConfirming(true)}
+          >
+            {tr("hardware_systime_sync", "Sync PS5 to PC time")}
+          </Button>
+        )}
+        {confirming && !busy && (
+          <>
+            <span className="text-[11px] text-[var(--color-muted)]">
+              {tr(
+                "hardware_systime_confirm",
+                "Sets the PS5 system clock. This can affect trophies, save timestamps, and DRM checks.",
+              )}
+            </span>
+            <Button variant="primary" size="sm" onClick={handleSync}>
+              {tr("hardware_systime_confirm_yes", "Set clock")}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setConfirming(false)}
+            >
+              {tr("hardware_systime_confirm_no", "Cancel")}
+            </Button>
+          </>
+        )}
+        {busy && (
+          <span className="inline-flex items-center gap-1 text-[11px] text-[var(--color-muted)]">
+            <Loader2 size={12} className="animate-spin" />
+            {tr("hardware_systime_syncing", "Syncing…")}
+          </span>
+        )}
+      </div>
+
+      {/* Result line — success / stub-no-op / failure */}
+      {lastResult && !busy && (
+        <div className="mt-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-[11px]">
+          {lastResult.stub_no_op ? (
+            <div className="text-[var(--color-bad)]">
+              {tr(
+                "hardware_systime_stub_no_op",
+                "PS5 reported success but the clock didn't actually move. Usually means the loader didn't grant the payload kernel R/W — reload via kstuff and try again.",
+              )}
+            </div>
+          ) : lastResult.ok ? (
+            <div className="text-[var(--color-good)]">
+              {tr("hardware_systime_synced", "Synced.")}
+              {lastResult.new_unix > 0 && (
+                <>
+                  {" "}
+                  <span className="text-[var(--color-muted)]">
+                    {tr("hardware_systime_new_label", "Now:")}{" "}
+                    {formatUtcCompact(new Date(lastResult.new_unix * 1000))}
+                  </span>
+                </>
+              )}
+            </div>
+          ) : (
+            <div className="text-[var(--color-bad)]">
+              {tr("hardware_systime_failed", "Couldn't sync time")}
+              {lastResult.reason && (
+                <div className="mt-1 text-[var(--color-muted)]">
+                  {lastResult.reason}
+                </div>
+              )}
+              {lastResult.err_code !== 0 && (
+                <code className="mt-1 inline-block font-mono text-[10px] opacity-75">
+                  0x{lastResult.err_code.toString(16).padStart(8, "0")}
+                </code>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {error && (
+        <div className="mt-2 text-[11px] text-[var(--color-bad)]">{error}</div>
+      )}
+    </section>
+  );
+}
+

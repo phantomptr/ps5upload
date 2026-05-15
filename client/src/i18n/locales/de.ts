@@ -1053,6 +1053,20 @@ sendpayload_typical_ports_caveat: "Das sind gängige Standards — eigene Loader
 "install.tag.staged": "gestaffelt",
 "install.retryAsStaged": "Als „Hochladen, dann installieren\" wiederholen",
 "install.retryAsStagedHint": "Nutzt den alten Pfad: lädt die .pkg zuerst auf die PS5 und installiert dann. Probiere das, wenn die PS5 diesen PC nicht über HTTP erreichen konnte (Firewall, VLAN).",
+hardware_systime_title: "Systemzeit",
+hardware_systime_ps5: "PS5-Zeit",
+hardware_systime_pc: "Dieser PC",
+hardware_systime_drift: "Abweichung",
+hardware_systime_drift_hint: "PS5 minus PC in Sekunden. Positiv = PS5 ist voraus.",
+hardware_systime_sync: "PS5 mit PC-Zeit synchronisieren",
+hardware_systime_confirm: "Setzt die PS5-Systemuhr. Kann sich auf Trophäen, Spielstand-Zeitstempel und DRM-Prüfungen auswirken.",
+hardware_systime_confirm_yes: "Uhr stellen",
+hardware_systime_confirm_no: "Abbrechen",
+hardware_systime_syncing: "Synchronisiere…",
+hardware_systime_stub_no_op: "Die PS5 meldet Erfolg, aber die Uhr hat sich nicht bewegt. In der Regel hat der Loader dem Payload keine Kernel-R/W erteilt — über kstuff neu laden und erneut versuchen.",
+hardware_systime_synced: "Synchronisiert.",
+hardware_systime_new_label: "Jetzt:",
+hardware_systime_failed: "Zeit konnte nicht synchronisiert werden",
 };
 
 export default de;

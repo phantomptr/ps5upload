@@ -373,6 +373,26 @@ pub enum FrameType {
     /// semantics are sparsely documented across firmware revisions.
     LwfsMount = 128,
     LwfsMountAck = 129,
+    /// PS5 system clock get/set via sceSystemServiceGet/SetCurrentDateTime.
+    /// All UTC.
+    ///   TIME_GET  request body: empty.
+    ///   TIME_GET_ACK body: `{"ok":bool,"err_code":N,"year":Y,
+    ///                       "month":M,"day":D,"hour":h,"min":m,"sec":s}`.
+    ///   TIME_SET  request body: `{"year":Y,"month":M,"day":D,
+    ///                            "hour":h,"min":m,"sec":s}`.
+    ///   TIME_SET_ACK body: `{"ok":bool,"err_code":N,
+    ///                       "prior_unix":N,"new_unix":N}`.
+    /// `prior_unix` + `new_unix` are -1 if the bookend get failed; the
+    /// desktop uses them to detect "rc=0 but the clock didn't actually
+    /// move" SDK-stub no-ops on firmwares where the symbol exists but
+    /// the runtime SPRX doesn't implement the underlying syscall.
+    /// The set call requires a ucred-elevated loader (kstuff or
+    /// equivalent) — without it, SceShellCore's authid check rejects
+    /// the IPC and the payload surfaces the Sony err_code.
+    TimeGet = 132,
+    TimeGetAck = 133,
+    TimeSet = 134,
+    TimeSetAck = 135,
 }
 
 impl FrameType {
@@ -497,6 +517,10 @@ impl FrameType {
             129 => Ok(Self::LwfsMountAck),
             130 => Ok(Self::FsWriteBytes),
             131 => Ok(Self::FsWriteBytesAck),
+            132 => Ok(Self::TimeGet),
+            133 => Ok(Self::TimeGetAck),
+            134 => Ok(Self::TimeSet),
+            135 => Ok(Self::TimeSetAck),
             _ => Err(DecodeError::UnknownFrameType(v)),
         }
     }
@@ -956,6 +980,10 @@ mod tests {
             FrameType::LwfsMountAck,
             FrameType::FsWriteBytes,
             FrameType::FsWriteBytesAck,
+            FrameType::TimeGet,
+            FrameType::TimeGetAck,
+            FrameType::TimeSet,
+            FrameType::TimeSetAck,
         ];
         for ft in variants {
             assert_eq!(FrameType::try_from_u16(ft as u16).unwrap(), ft);

@@ -4,6 +4,28 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.7.0
+
+- **New "Sync time" card on the Hardware screen.** Shows the PS5
+  clock alongside your PC's clock plus the live drift between them
+  (updates once a second). One click sets the PS5 system clock to
+  match your PC's UTC time. Confirmation prompt before the set
+  (clock changes can affect trophies, save timestamps, and DRM
+  checks).
+- The set goes through Sony's `sceSystemServiceSetCurrentDateTime`,
+  which lives in `SceShellCore` IPC. Requires a ucred-elevated
+  loader (kstuff or equivalent) — without it, Sony's authid check
+  rejects the call and the desktop surfaces the Sony err_code with
+  a hint to reload via kstuff.
+- The payload bookends every set with a get-before + get-after and
+  reports both unix epochs. On some firmwares the SDK stub returns
+  rc=0 but the underlying syscall is a no-op; the desktop detects
+  this (post-set unix more than 5 s away from the requested target)
+  and renders a clear "PS5 reported success but the clock didn't
+  actually move" warning instead of a misleading success message.
+
+---
+
 ## 2.6.0
 
 - **Stream install (DPI 2.0) is the new default for Install Package.**

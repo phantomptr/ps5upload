@@ -1052,6 +1052,20 @@ sendpayload_typical_ports_caveat: "Bunlar yaygın varsayılanlardır — özel l
 "install.tag.staged": "yüklendi",
 "install.retryAsStaged": "\"Yükle ve sonra kur\" olarak yeniden dene",
 "install.retryAsStagedHint": "Eski yolu kullanır: önce .pkg dosyasını PS5'e yükler, sonra kurar. PS5 bu PC'ye HTTP üzerinden erişemediyse (güvenlik duvarı, VLAN) deneyin.",
+hardware_systime_title: "Sistem saati",
+hardware_systime_ps5: "PS5 saati",
+hardware_systime_pc: "Bilgisayarınız",
+hardware_systime_drift: "Sapma",
+hardware_systime_drift_hint: "PS5 eksi PC, saniye cinsinden. Pozitif = PS5 ileride.",
+hardware_systime_sync: "PS5'i PC saatine eşitle",
+hardware_systime_confirm: "PS5 sistem saatini ayarlar. Kupaları, kayıt zaman damgalarını ve DRM denetimlerini etkileyebilir.",
+hardware_systime_confirm_yes: "Saati ayarla",
+hardware_systime_confirm_no: "İptal",
+hardware_systime_syncing: "Eşitleniyor…",
+hardware_systime_stub_no_op: "PS5 başarı bildirdi ancak saat aslında değişmedi. Genellikle loader'ın payload'a kernel R/W vermediği anlamına gelir — kstuff ile yeniden yükleyip tekrar deneyin.",
+hardware_systime_synced: "Eşitlendi.",
+hardware_systime_new_label: "Şimdi:",
+hardware_systime_failed: "Saat eşitlenemedi",
 };
 
 export default tr;

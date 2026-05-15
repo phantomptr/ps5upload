@@ -66,6 +66,9 @@ use ps5upload_core::{
         hw_info, hw_power, hw_set_fan_threshold, hw_storage, hw_temps, proc_list, HwInfo, HwPower,
         HwStorage, HwTemps, ProcList,
     },
+    sys_time::{
+        humanize_err as sys_time_humanize, ps5_time_get, ps5_time_set, PsTime, PsTimeSetResult,
+    },
     transfer::{
         transfer_dir_resumable, transfer_file_list_resumable, transfer_file_path_resumable,
         FileListEntry, TransferConfig, TX_FLAG_RESUME,
@@ -1498,6 +1501,81 @@ async fn ps5_hw_power(
         .and_then(|r| r);
     match r {
         Ok(v) => (StatusCode::OK, Json(v)).into_response(),
+        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
+    }
+}
+
+// ── System clock (TIME_GET / TIME_SET) ─────────────────────────────
+
+#[derive(Debug, serde::Deserialize)]
+struct TimeSyncReq {
+    addr: Option<String>,
+    /// Target wall-clock time as unix seconds (UTC). Caller usually
+    /// passes their own PC's clock; we pass it straight through to
+    /// the payload.
+    target_unix_seconds: i64,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct TimeSyncResp {
+    /// Raw payload-reported `ok` field. Note `ok: true` doesn't mean
+    /// the clock moved — see `stub_no_op` for the detection.
+    ok: bool,
+    err_code: u32,
+    /// Short, user-readable reason for the err_code. Empty when ok.
+    reason: String,
+    prior_unix: i64,
+    new_unix: i64,
+    /// True when the payload reported `ok` but the post-set unix is
+    /// still &gt;5s away from the requested target. Indicates the SDK
+    /// stub returned success without actually touching the clock.
+    stub_no_op: bool,
+}
+
+async fn ps5_time_get_route(
+    State(state): State<AppState>,
+    Query(q): Query<AddrQuery>,
+) -> impl IntoResponse {
+    let addr = mgmt_addr_or_default(q.addr, &state.default_ps5_addr);
+    let r: Result<PsTime, anyhow::Error> = tokio::task::spawn_blocking(move || ps5_time_get(&addr))
+        .await
+        .map_err(anyhow::Error::from)
+        .and_then(|r| r);
+    match r {
+        Ok(v) => (StatusCode::OK, Json(v)).into_response(),
+        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
+    }
+}
+
+async fn ps5_time_sync_route(
+    State(state): State<AppState>,
+    Json(req): Json<TimeSyncReq>,
+) -> impl IntoResponse {
+    let addr = mgmt_addr_or_default(req.addr, &state.default_ps5_addr);
+    let target = req.target_unix_seconds;
+    let r: Result<PsTimeSetResult, anyhow::Error> =
+        tokio::task::spawn_blocking(move || ps5_time_set(&addr, target))
+            .await
+            .map_err(anyhow::Error::from)
+            .and_then(|r| r);
+    match r {
+        Ok(v) => {
+            // Stub-no-op heuristic: payload says ok, post-set get
+            // succeeded (new_unix != -1), yet the clock is &gt;5s
+            // away from what we asked for. Either the SDK stub is a
+            // no-op on this firmware, or the underlying syscall is
+            // refusing silently. Surface so the UI can warn.
+            let stub_no_op = v.ok && v.new_unix >= 0 && (v.new_unix - target).abs() > 5;
+            let resp = TimeSyncResp {
+                ok: v.ok,
+                err_code: v.err_code,
+                reason: sys_time_humanize(v.err_code),
+                prior_unix: v.prior_unix,
+                new_unix: v.new_unix,
+                stub_no_op,
+            };
+            (StatusCode::OK, Json(resp)).into_response()
+        }
         Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
     }
 }
@@ -3111,6 +3189,8 @@ async fn main() {
         .route("/api/ps5/app/unregister", post(ps5_app_unregister))
         .route("/api/ps5/hw/info", get(ps5_hw_info))
         .route("/api/ps5/hw/temps", get(ps5_hw_temps))
+        .route("/api/ps5/time/get", get(ps5_time_get_route))
+        .route("/api/ps5/time/sync", post(ps5_time_sync_route))
         .route("/api/ps5/hw/power", get(ps5_hw_power))
         .route("/api/ps5/hw/storage", get(ps5_hw_storage))
         .route("/api/ps5/proc/list", get(ps5_proc_list))

@@ -543,6 +543,35 @@ pub async fn ps5_hw_power(addr: Option<String>) -> Result<JsonValue, String> {
     get_json(&addr_url("/api/ps5/hw/power", addr.as_deref())).await
 }
 
+/// Read the PS5's current system clock. Cheap; safe to call once on
+/// the Hardware screen render and again right after a sync.
+#[tauri::command]
+pub async fn ps5_time_get(addr: Option<String>) -> Result<JsonValue, String> {
+    get_json(&addr_url("/api/ps5/time/get", addr.as_deref())).await
+}
+
+/// Set the PS5's system clock to `target_unix_seconds` (UTC). The
+/// payload bookends the set with a get-before + get-after so the
+/// response can flag the "rc=0 but the clock didn't move" SDK-stub
+/// no-op case (response field `stub_no_op: true`). Caller typically
+/// passes `Math.floor(Date.now() / 1000)` to sync to PC time.
+#[tauri::command]
+pub async fn ps5_time_sync(
+    addr: Option<String>,
+    target_unix_seconds: i64,
+) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/ps5/time/sync");
+    post_json(
+        &url,
+        &serde_json::json!({
+            "addr": addr,
+            "target_unix_seconds": target_unix_seconds,
+        }),
+    )
+    .await
+}
+
 /// "Console Storage" aggregate matching what PS5 Settings shows
 /// (added in 2.2.26). Returns total/free/used/reserved across
 /// `/user effective + /system_data + /system_ex` plus per-partition

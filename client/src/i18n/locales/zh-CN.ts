@@ -1060,6 +1060,20 @@ sendpayload_typical_ports_caveat: "这些是常见默认值 — 自定义 loader
 "install.tag.staged": "已上传",
 "install.retryAsStaged": "以\"先上传后安装\"方式重试",
 "install.retryAsStagedHint": "使用旧路径：先将 .pkg 上传到 PS5，然后安装。如果 PS5 无法通过 HTTP 访问此 PC（防火墙、VLAN），请试试这个。",
+hardware_systime_title: "系统时间",
+hardware_systime_ps5: "PS5 时间",
+hardware_systime_pc: "你的电脑",
+hardware_systime_drift: "偏差",
+hardware_systime_drift_hint: "PS5 减去电脑，单位秒。正值 = PS5 走得快。",
+hardware_systime_sync: "将 PS5 同步到电脑时间",
+hardware_systime_confirm: "设置 PS5 系统时钟。可能影响奖杯、存档时间戳和 DRM 校验。",
+hardware_systime_confirm_yes: "设置时钟",
+hardware_systime_confirm_no: "取消",
+hardware_systime_syncing: "正在同步…",
+hardware_systime_stub_no_op: "PS5 报告成功但时钟实际未变。通常意味着加载器未给 payload 授予内核读写权限 — 通过 kstuff 重新加载并重试。",
+hardware_systime_synced: "已同步。",
+hardware_systime_new_label: "现在:",
+hardware_systime_failed: "无法同步时间",
 };
 
 export default zh_CN;
