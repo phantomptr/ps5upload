@@ -1052,6 +1052,20 @@ sendpayload_typical_ports_caveat: "เหล่านี้เป็นค่า
 "install.tag.staged": "อัปโหลดแล้ว",
 "install.retryAsStaged": "ลองใหม่เป็น \"อัปโหลดก่อนแล้วติดตั้ง\"",
 "install.retryAsStagedHint": "ใช้เส้นทางแบบเก่า: อัปโหลด .pkg ไปยัง PS5 ก่อน แล้วจึงติดตั้ง ลองวิธีนี้หาก PS5 ไม่สามารถเข้าถึง PC นี้ผ่าน HTTP ได้ (ไฟร์วอลล์, VLAN)",
+hardware_systime_title: "เวลาของระบบ",
+hardware_systime_ps5: "เวลา PS5",
+hardware_systime_pc: "PC ของคุณ",
+hardware_systime_drift: "ส่วนต่าง",
+hardware_systime_drift_hint: "PS5 ลบด้วย PC เป็นวินาที ค่าบวก = PS5 เร็วกว่า",
+hardware_systime_sync: "ซิงค์ PS5 ให้ตรงกับเวลาของ PC",
+hardware_systime_confirm: "ตั้งค่านาฬิการะบบของ PS5 อาจส่งผลต่อถ้วยรางวัล, เวลาประทับของเซฟ และการตรวจสอบ DRM",
+hardware_systime_confirm_yes: "ตั้งนาฬิกา",
+hardware_systime_confirm_no: "ยกเลิก",
+hardware_systime_syncing: "กำลังซิงค์…",
+hardware_systime_stub_no_op: "PS5 รายงานสำเร็จแต่นาฬิกาไม่ได้เปลี่ยนจริง โดยทั่วไปหมายถึง loader ไม่ได้ให้ kernel R/W แก่ payload — โหลดใหม่ผ่าน kstuff แล้วลองอีกครั้ง",
+hardware_systime_synced: "ซิงค์เรียบร้อย",
+hardware_systime_new_label: "ตอนนี้:",
+hardware_systime_failed: "ซิงค์เวลาไม่สำเร็จ",
 };
 
 export default th;

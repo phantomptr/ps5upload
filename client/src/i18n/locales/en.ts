@@ -1112,6 +1112,20 @@ sendpayload_typical_ports_caveat: "These are common defaults — custom loaders 
 "install.tag.staged": "staged",
 "install.retryAsStaged": "Retry as Upload then install",
 "install.retryAsStagedHint": "Uses the legacy path: uploads the .pkg to the PS5 first, then installs. Try this if the PS5 couldn't reach this PC over HTTP (firewall, VLAN).",
+hardware_systime_title: "System time",
+hardware_systime_ps5: "PS5 time",
+hardware_systime_pc: "Your PC",
+hardware_systime_drift: "Drift",
+hardware_systime_drift_hint: "PS5 minus PC, in seconds. Positive = PS5 is ahead.",
+hardware_systime_sync: "Sync PS5 to PC time",
+hardware_systime_confirm: "Sets the PS5 system clock. This can affect trophies, save timestamps, and DRM checks.",
+hardware_systime_confirm_yes: "Set clock",
+hardware_systime_confirm_no: "Cancel",
+hardware_systime_syncing: "Syncing…",
+hardware_systime_stub_no_op: "PS5 reported success but the clock didn't actually move. Usually means the loader didn't grant the payload kernel R/W — reload via kstuff and try again.",
+hardware_systime_synced: "Synced.",
+hardware_systime_new_label: "Now:",
+hardware_systime_failed: "Couldn't sync time",
 };
 
 export default en;
