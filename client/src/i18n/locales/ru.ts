@@ -1043,6 +1043,15 @@ sendpayload_port_js_desc: "WebKit / payload браузерной стадии",
 sendpayload_port_lua_desc: "Плагины среды выполнения Lua",
 sendpayload_port_jar_desc: "BD-JB / среда выполнения BDJ",
 sendpayload_typical_ports_caveat: "Это общепринятые значения по умолчанию — пользовательские загрузчики могут слушать на любом порту.",
+"install.method.label": "Метод установки",
+"install.method.stream": "Поток (DPI 2.0)",
+"install.method.streamHint": "BGFT забирает байты с этого ПК и устанавливает за один проход. Без 2× дискового пространства, нативная пауза/возобновление.",
+"install.method.stage": "Загрузка, затем установка",
+"install.method.stageHint": "Сначала загружает .pkg на диск PS5, затем устанавливает оттуда. Используйте, когда PS5 не может достучаться до этого ПК по HTTP.",
+"install.tag.stream": "поток",
+"install.tag.staged": "загружено",
+"install.retryAsStaged": "Повторить как «Загрузка, затем установка»",
+"install.retryAsStagedHint": "Использует устаревший путь: сначала загружает .pkg на PS5, затем устанавливает. Попробуйте, если PS5 не смог достучаться до этого ПК по HTTP (брандмауэр, VLAN).",
 };
 
 export default ru;

@@ -1045,6 +1045,15 @@ sendpayload_port_js_desc: "WebKit / payload giai đoạn trình duyệt",
 sendpayload_port_lua_desc: "Plugin runtime Lua",
 sendpayload_port_jar_desc: "BD-JB / runtime BDJ",
 sendpayload_typical_ports_caveat: "Đây là các giá trị mặc định phổ biến — loader tùy chỉnh có thể lắng nghe trên bất kỳ cổng nào.",
+"install.method.label": "Phương thức cài đặt",
+"install.method.stream": "Truyền trực tuyến (DPI 2.0)",
+"install.method.streamHint": "BGFT lấy byte từ PC này và cài đặt trong một lần. Không cần 2× dung lượng đĩa, tạm dừng/tiếp tục có sẵn.",
+"install.method.stage": "Tải lên rồi cài đặt",
+"install.method.stageHint": "Tải .pkg lên đĩa PS5 trước, rồi cài đặt từ đó. Dùng khi PS5 không thể tiếp cận PC này qua HTTP.",
+"install.tag.stream": "stream",
+"install.tag.staged": "đã tải",
+"install.retryAsStaged": "Thử lại với \"Tải lên rồi cài đặt\"",
+"install.retryAsStagedHint": "Sử dụng đường dẫn cũ: tải .pkg lên PS5 trước rồi cài đặt. Hãy thử nếu PS5 không thể tiếp cận PC này qua HTTP (tường lửa, VLAN).",
 };
 
 export default vi;

@@ -1044,6 +1044,15 @@ sendpayload_port_js_desc: "WebKit / ブラウザステージのペイロード",
 sendpayload_port_lua_desc: "Lua ランタイムプラグイン",
 sendpayload_port_jar_desc: "BD-JB / BDJ ランタイム",
 sendpayload_typical_ports_caveat: "これらは一般的なデフォルト値です — カスタムローダーは任意のポートで待ち受ける可能性があります。",
+"install.method.label": "インストール方法",
+"install.method.stream": "ストリーム (DPI 2.0)",
+"install.method.streamHint": "BGFT がこの PC からバイトを取得し、1パスでインストールします。2倍のディスク容量不要、ネイティブの一時停止/再開対応。",
+"install.method.stage": "アップロードしてからインストール",
+"install.method.stageHint": "まず .pkg を PS5 のディスクにアップロードしてから、そこからインストールします。PS5 が HTTP でこの PC に到達できない場合に使用してください。",
+"install.tag.stream": "ストリーム",
+"install.tag.staged": "ステージ済み",
+"install.retryAsStaged": "\"アップロードしてからインストール\" として再試行",
+"install.retryAsStagedHint": "従来のパスを使用: まず .pkg を PS5 にアップロードしてからインストールします。PS5 が HTTP でこの PC に到達できなかった場合（ファイアウォール、VLAN）に試してください。",
 };
 
 export default ja;

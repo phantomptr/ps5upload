@@ -1044,6 +1044,15 @@ sendpayload_port_js_desc: "WebKit / Browser-Stage-Payloads",
 sendpayload_port_lua_desc: "Lua-Laufzeit-Plugins",
 sendpayload_port_jar_desc: "BD-JB / BDJ-Laufzeit",
 sendpayload_typical_ports_caveat: "Das sind gängige Standards — eigene Loader können auf beliebigen Ports lauschen.",
+"install.method.label": "Installationsmethode",
+"install.method.stream": "Stream (DPI 2.0)",
+"install.method.streamHint": "BGFT zieht die Bytes direkt von diesem PC und installiert in einem Durchgang. Kein doppelter Speicherplatz, natives Pause/Fortsetzen.",
+"install.method.stage": "Hochladen, dann installieren",
+"install.method.stageHint": "Lädt die .pkg-Datei zuerst auf die PS5-Festplatte hoch und installiert dann von dort. Verwenden, wenn die PS5 diesen PC nicht über HTTP erreichen kann.",
+"install.tag.stream": "stream",
+"install.tag.staged": "gestaffelt",
+"install.retryAsStaged": "Als „Hochladen, dann installieren\" wiederholen",
+"install.retryAsStagedHint": "Nutzt den alten Pfad: lädt die .pkg zuerst auf die PS5 und installiert dann. Probiere das, wenn die PS5 diesen PC nicht über HTTP erreichen konnte (Firewall, VLAN).",
 };
 
 export default de;

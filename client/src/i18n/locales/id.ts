@@ -1043,6 +1043,15 @@ sendpayload_port_js_desc: "WebKit / payload tahap browser",
 sendpayload_port_lua_desc: "Plugin runtime Lua",
 sendpayload_port_jar_desc: "BD-JB / runtime BDJ",
 sendpayload_typical_ports_caveat: "Ini adalah default umum — loader kustom dapat mendengarkan di port mana saja.",
+"install.method.label": "Metode pemasangan",
+"install.method.stream": "Streaming (DPI 2.0)",
+"install.method.streamHint": "BGFT menarik byte dari PC ini dan menginstal dalam satu lintasan. Tidak perlu ruang disk 2×, pause/resume bawaan.",
+"install.method.stage": "Unggah lalu pasang",
+"install.method.stageHint": "Unggah .pkg ke disk PS5 dulu, lalu pasang dari sana. Gunakan saat PS5 tidak dapat mencapai PC ini melalui HTTP.",
+"install.tag.stream": "streaming",
+"install.tag.staged": "staged",
+"install.retryAsStaged": "Coba lagi sebagai \"Unggah lalu pasang\"",
+"install.retryAsStagedHint": "Menggunakan jalur lama: unggah .pkg ke PS5 dulu, lalu pasang. Coba ini jika PS5 tidak dapat mencapai PC ini melalui HTTP (firewall, VLAN).",
 };
 
 export default id;

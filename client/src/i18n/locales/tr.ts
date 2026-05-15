@@ -1043,6 +1043,15 @@ sendpayload_port_js_desc: "WebKit / tarayıcı aşaması payload'ları",
 sendpayload_port_lua_desc: "Lua çalışma zamanı eklentileri",
 sendpayload_port_jar_desc: "BD-JB / BDJ çalışma zamanı",
 sendpayload_typical_ports_caveat: "Bunlar yaygın varsayılanlardır — özel loader'lar herhangi bir bağlantı noktasında dinleyebilir.",
+"install.method.label": "Kurulum yöntemi",
+"install.method.stream": "Akış (DPI 2.0)",
+"install.method.streamHint": "BGFT baytları doğrudan bu PC'den çeker ve tek geçişte kurar. 2× disk alanı gerekmez, yerel duraklat/devam et desteği.",
+"install.method.stage": "Yükle ve sonra kur",
+"install.method.stageHint": "Önce .pkg dosyasını PS5 diskine yükler, ardından oradan kurar. PS5'in bu PC'ye HTTP üzerinden erişemediği durumlarda kullanın.",
+"install.tag.stream": "akış",
+"install.tag.staged": "yüklendi",
+"install.retryAsStaged": "\"Yükle ve sonra kur\" olarak yeniden dene",
+"install.retryAsStagedHint": "Eski yolu kullanır: önce .pkg dosyasını PS5'e yükler, sonra kurar. PS5 bu PC'ye HTTP üzerinden erişemediyse (güvenlik duvarı, VLAN) deneyin.",
 };
 
 export default tr;

@@ -1044,6 +1044,15 @@ sendpayload_port_js_desc: "WebKit / ब्राउज़र-स्टेज pay
 sendpayload_port_lua_desc: "Lua रनटाइम प्लगइन",
 sendpayload_port_jar_desc: "BD-JB / BDJ रनटाइम",
 sendpayload_typical_ports_caveat: "ये सामान्य डिफ़ॉल्ट हैं — कस्टम loader किसी भी पोर्ट पर सुन सकते हैं।",
+"install.method.label": "इंस्टॉल विधि",
+"install.method.stream": "स्ट्रीम (DPI 2.0)",
+"install.method.streamHint": "BGFT इस PC से बाइट्स खींचता है और एक ही पास में इंस्टॉल करता है। 2× डिस्क स्पेस नहीं, मूल pause/resume।",
+"install.method.stage": "अपलोड फिर इंस्टॉल",
+"install.method.stageHint": "पहले .pkg को PS5 डिस्क पर अपलोड करें, फिर वहाँ से इंस्टॉल करें। तब उपयोग करें जब PS5 HTTP के माध्यम से इस PC तक नहीं पहुँच सकता।",
+"install.tag.stream": "स्ट्रीम",
+"install.tag.staged": "स्टेज्ड",
+"install.retryAsStaged": "\"अपलोड फिर इंस्टॉल\" के रूप में पुनः प्रयास करें",
+"install.retryAsStagedHint": "पुराने पथ का उपयोग करता है: पहले .pkg को PS5 पर अपलोड करता है, फिर इंस्टॉल करता है। यदि PS5 HTTP के माध्यम से इस PC तक नहीं पहुँच सका (firewall, VLAN) तो इसे आज़माएँ।",
 };
 
 export default hi;

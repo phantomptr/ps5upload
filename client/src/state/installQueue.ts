@@ -4,6 +4,10 @@ import { getVersion } from "@tauri-apps/api/app";
 import { bundledPayloadPath, payloadCheck, sendPayload } from "../api/ps5";
 import { compareVersions } from "../lib/semver";
 import { isNpxsContentId } from "../lib/npxs";
+import {
+  useInstallSettingsStore,
+  type InstallMethod,
+} from "./installSettings";
 
 /**
  * Install Package queue. Sequential, like uploadQueue — one BGFT
@@ -72,6 +76,20 @@ export interface InstallQueueItem {
   /** Warnings from the parse step (e.g. unknown magic). Surfaced as
    *  a yellow caution row before install starts. */
   warnings: string[];
+  /** How this item is being installed.
+   *  - "stream" (DPI 2.0): the desktop engine serves the .pkg over
+   *    HTTP with Range; BGFT on the PS5 streams + installs in one
+   *    pass. No 2× disk space, no upload step, native pause/resume.
+   *    This is the default for new items.
+   *  - "stage" (legacy Tier-1): upload the .pkg to PS5 disk first,
+   *    then BGFT installs from that local file. 2× space required;
+   *    used when stream mode is unreachable (PS5 can't see the
+   *    desktop's HTTP port — segregated VLAN, host firewall).
+   *  Recorded on the item so toggling the default mid-install
+   *  doesn't switch what's already in flight. The retry path
+   *  preserves the original choice unless the user explicitly
+   *  re-queues. */
+  installMethod: InstallMethod;
   /** 2.2.52 Tier-1 staging: PS5-side absolute path the pkg was
    *  uploaded to before install. Set after the staging upload succeeds
    *  and the install request fires with `local_ps5_path = stagingPath`.
@@ -129,11 +147,13 @@ interface InstallQueueState {
 
   add(item: Omit<InstallQueueItem, "id" | "addedAt" | "status" | "phase" |
     "bytesDownloaded" | "errCode" | "errMessage" | "sessionId" | "taskId" |
-    "startedAt" | "finishedAt" | "diag" | "stagingPath" | "stagingBytes">): void;
+    "startedAt" | "finishedAt" | "diag" | "stagingPath" | "stagingBytes" |
+    "installMethod"> & { installMethod?: InstallMethod }): void;
   remove(id: string): void;
   clearFinished(): void;
   retry(id: string): void;
 
+  retryWith(id: string, installMethod: InstallMethod): void;
   start(): Promise<void>;
   stop(): void;
   cancel(id: string): Promise<void>;
@@ -259,6 +279,15 @@ function load(): InstallQueueItem[] {
           typeof rawStagingPath === "string" && rawStagingPath.length > 0
             ? rawStagingPath
             : null;
+        // Back-fill `installMethod` for items persisted by 2.5.x or
+        // earlier — those rows always staged (it was the only path).
+        // We default un-tagged rows to "stage" rather than "stream" so
+        // a retry of an already-completed-by-staging install doesn't
+        // unexpectedly switch methods mid-life. Brand-new items added
+        // after hydration get the user's current default via add().
+        const rawMethod = (rest as { installMethod?: unknown }).installMethod;
+        const installMethod: InstallMethod =
+          rawMethod === "stream" ? "stream" : "stage";
         return {
           ...rest,
           diag: diagOk
@@ -294,6 +323,7 @@ function load(): InstallQueueItem[] {
               },
           stagingPath,
           stagingBytes: 0,
+          installMethod,
         };
       });
   } catch {
@@ -420,8 +450,17 @@ export const useInstallQueue = create<InstallQueueState>((set, get) => ({
   },
 
   add(input) {
+    // Default installMethod from the settings store when the caller
+    // doesn't specify it. We read at add-time (not at run-time) so a
+    // queued item locks in the method the user picked when they added
+    // it — toggling the default later doesn't retroactively switch
+    // already-queued items.
+    const installMethod: InstallMethod =
+      input.installMethod ??
+      useInstallSettingsStore.getState().installMethod;
     const item: InstallQueueItem = {
       ...input,
+      installMethod,
       id: newId(),
       status: "pending",
       phase: "idle",
@@ -479,6 +518,37 @@ export const useInstallQueue = create<InstallQueueState>((set, get) => ({
             taskId: null,
             startedAt: null,
             finishedAt: null,
+          }
+        : it,
+    );
+    set({ items });
+    persist(items);
+  },
+
+  retryWith(id, installMethod) {
+    // Same as retry() but also switches the item's installMethod.
+    // Used by the "Retry as staged install" fallback button on a
+    // failed stream-mode row when the PS5 couldn't reach the
+    // desktop's HTTP port (firewall, segregated VLAN). We clear the
+    // staging marker too so the runner's pre-install staging step
+    // re-decides fresh whether to stage (it will, since
+    // installMethod is now "stage").
+    const items = get().items.map((it) =>
+      it.id === id
+        ? {
+            ...it,
+            installMethod,
+            status: "pending" as InstallStatus,
+            phase: "idle" as InstallPhase,
+            bytesDownloaded: 0,
+            errCode: 0,
+            errMessage: null,
+            sessionId: null,
+            taskId: null,
+            startedAt: null,
+            finishedAt: null,
+            stagingPath: null,
+            stagingBytes: 0,
           }
         : it,
     );
@@ -578,19 +648,26 @@ export const useInstallQueue = create<InstallQueueState>((set, get) => ({
         persist(items);
       }
 
-      // ── Tier-1 staging upload ────────────────────────────────────
+      // ── Tier-1 staging upload (legacy "stage" install method) ───
       // Upload the pkg bytes to PS5-side staging dir before kicking
       // off the install. Sony's installer reads from local disk +
       // ShellUI-RPC fires the call from ShellUI's authid context —
       // this combo bypasses the FW 9.60 PlayGo HTTP-fetch reject
       // (0x80B22404) entirely.
       //
-      // Skipped for: split-pkg sets (would double the wire time on
-      // 50GB+ uploads — Tier-2 HTTP path is fine when the install
-      // call originates from ShellUI), and any case where the
-      // staging upload itself fails (best-effort fallback to Tier-2).
+      // Skipped for:
+      //   - DPI 2.0 (`installMethod === "stream"`): the desktop engine
+      //     serves the .pkg over HTTP with Range support, BGFT streams
+      //     + installs in one pass, no 2× disk space needed, pause/
+      //     resume comes from BGFT natively. localPs5Path stays null
+      //     → engine builds the HTTP URL in pkg_install_start.
+      //   - Split-pkg sets: staging would double wire time on 50GB+
+      //     uploads. The Tier-2 HTTP path is fine for split sets
+      //     because the install call still originates from ShellUI.
+      //   - Any case where the staging upload itself fails — we fall
+      //     through with localPs5Path null (Tier-2 best-effort).
       let localPs5Path: string | null = null;
-      if (!next.isSplit) {
+      if (!next.isSplit && next.installMethod === "stage") {
         const stagingPath = `/user/data/ps5upload/pkg_temp/${next.id}_${Date.now()}.pkg`;
         // Mark phase=staging so the row's progress bar shows the
         // upload, not a stale "queued" state. bytesDownloaded gets

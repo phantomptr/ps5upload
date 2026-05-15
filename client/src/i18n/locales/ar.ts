@@ -1044,6 +1044,15 @@ sendpayload_port_js_desc: "WebKit / حمولات مرحلة المتصفح",
 sendpayload_port_lua_desc: "مكوّنات Lua الإضافية",
 sendpayload_port_jar_desc: "BD-JB / بيئة تشغيل BDJ",
 sendpayload_typical_ports_caveat: "هذه إعدادات افتراضية شائعة — قد يستمع المُحمِّلون المخصّصون على أي منفذ.",
+"install.method.label": "طريقة التثبيت",
+"install.method.stream": "البث (DPI 2.0)",
+"install.method.streamHint": "يقوم BGFT بسحب البيانات من هذا الكمبيوتر والتثبيت في تمريرة واحدة. لا حاجة لمساحة مضاعفة، إيقاف/استئناف أصلي.",
+"install.method.stage": "تحميل ثم تثبيت",
+"install.method.stageHint": "تحميل ملف .pkg إلى قرص PS5 أولاً، ثم التثبيت من هناك. استخدمه عندما لا يستطيع PS5 الوصول إلى هذا الكمبيوتر عبر HTTP.",
+"install.tag.stream": "بث",
+"install.tag.staged": "مرحلي",
+"install.retryAsStaged": "إعادة المحاولة كـ \"تحميل ثم تثبيت\"",
+"install.retryAsStagedHint": "يستخدم المسار القديم: يحمّل ملف .pkg إلى PS5 أولاً ثم يثبّت. جرّب هذا إذا لم يتمكن PS5 من الوصول إلى هذا الكمبيوتر عبر HTTP (جدار حماية، VLAN).",
 };
 
 export default ar;

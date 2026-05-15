@@ -4,6 +4,24 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.6.0
+
+- **Stream install (DPI 2.0) is the new default for Install Package.**
+  The desktop now serves the `.pkg` over HTTP and BGFT pulls + installs
+  it in one pass — no upload step, no 2× disk space, native pause/
+  resume from BGFT itself. The previous "upload then install" path
+  stays available as a one-click fallback on the failure card for the
+  rare LAN topologies where the PS5 can't reach the desktop's HTTP
+  port (firewall, segregated VLAN).
+- A new segmented control on the Install Package screen lets you pick
+  the default install method; per-row badges (`stream` / `staged`)
+  show at a glance which path each queued item is using.
+- The engine-side HTTP serve route, BGFT URL handover, and Range
+  support were already in tree — this release wires the UI choice
+  through so the path actually gets used by default.
+
+---
+
 ## 2.5.2
 
 - **Windows `.exe` launches on a freshly-installed Windows 11**,

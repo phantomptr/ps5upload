@@ -48,8 +48,13 @@
   9021 elfldr, `.js` → 50000 WebKit-stage, `.lua` → 9026, `.jar` →
   9025 BD-JB / BDJ; custom loaders may listen anywhere). Recent-sends
   history with click-to-replay and per-row success/fail badges.
-- **Install fakepkgs** — pick a `.pkg`, click Install. Three-tier
-  pipeline: bytes staged on PS5-local disk → install fires under
+- **Install fakepkgs** — pick a `.pkg`, click Install. Default is
+  **Stream install (DPI 2.0)**: desktop serves the bytes over HTTP +
+  BGFT pulls + installs in one pass (no 2× disk space, native pause/
+  resume). The legacy "upload then install" pipeline is one click
+  away on the failure card for LANs where the PS5 can't reach the
+  desktop's HTTP port. When the legacy path runs: bytes staged on
+  PS5-local disk → install fires under
   ShellUI's authid via ptrace RPC → register / launch from the
   Library row. Verified end-to-end on FW 9.60. Game pkgs (CUSA /
   PPSA / PCSA / EP / UP) install cleanly; system pkgs (NPXS-prefix —

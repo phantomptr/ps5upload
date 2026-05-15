@@ -36,6 +36,10 @@ import {
   type InstallPhase,
   type InstallStatus,
 } from "../../state/installQueue";
+import {
+  useInstallSettingsStore,
+  type InstallMethod,
+} from "../../state/installSettings";
 import { useTr } from "../../state/lang";
 
 interface SplitParseResponse {
@@ -100,6 +104,7 @@ export default function InstallPackageScreen() {
   const remove = useInstallQueue((s) => s.remove);
   const cancel = useInstallQueue((s) => s.cancel);
   const retry = useInstallQueue((s) => s.retry);
+  const retryWith = useInstallQueue((s) => s.retryWith);
   const clearFinished = useInstallQueue((s) => s.clearFinished);
   const add = useInstallQueue((s) => s.add);
 
@@ -446,6 +451,9 @@ export default function InstallPackageScreen() {
           )}
         </div>
 
+        <InstallMethodPicker t={t} />
+
+
         {items.length === 0 ? (
           <EmptyInstallPanel t={t} dropActive={dropActive} />
         ) : (
@@ -458,11 +466,87 @@ export default function InstallPackageScreen() {
                 onRemove={() => remove(it.id)}
                 onCancel={() => cancel(it.id)}
                 onRetry={() => retry(it.id)}
+                onRetryAsStaged={() => retryWith(it.id, "stage")}
               />
             ))}
           </ul>
         )}
       </section>
+    </div>
+  );
+}
+
+/* ─── Install method picker ───────────────────────────────────────── */
+
+/** Compact two-option segmented control for choosing the default
+ *  install method. The selection writes to useInstallSettingsStore;
+ *  the install queue reads the setting at item-add time and locks it
+ *  into the queue row so toggling here doesn't disturb in-flight
+ *  installs.
+ *
+ *  Stream (DPI 2.0) is highlighted as the recommended default — no
+ *  2× disk space, no upload step, native BGFT pause/resume. The
+ *  staging path stays available for users whose LAN topology
+ *  prevents the PS5 from reaching the desktop's HTTP port
+ *  (segregated VLAN, host firewall). */
+function InstallMethodPicker({
+  t,
+}: {
+  t: (k: string, fb: string) => string;
+}) {
+  const method = useInstallSettingsStore((s) => s.installMethod);
+  const setMethod = useInstallSettingsStore((s) => s.setInstallMethod);
+  const options: Array<{ value: InstallMethod; label: string; hint: string }> = [
+    {
+      value: "stream",
+      label: t("install.method.stream", "Stream (DPI 2.0)"),
+      hint: t(
+        "install.method.streamHint",
+        "BGFT pulls bytes from this PC and installs in one pass. No 2× disk space, native pause/resume.",
+      ),
+    },
+    {
+      value: "stage",
+      label: t("install.method.stage", "Upload then install"),
+      hint: t(
+        "install.method.stageHint",
+        "Upload .pkg to PS5 disk first, then install from there. Use when the PS5 can't reach this PC over HTTP.",
+      ),
+    },
+  ];
+  const active = options.find((o) => o.value === method) ?? options[0];
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-[var(--color-muted)]">
+      <span>{t("install.method.label", "Install method")}:</span>
+      <div
+        role="radiogroup"
+        aria-label={t("install.method.label", "Install method")}
+        className="inline-flex overflow-hidden rounded-md border border-[var(--color-border)]"
+      >
+        {options.map((opt) => {
+          const selected = opt.value === method;
+          return (
+            <button
+              key={opt.value}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              onClick={() => setMethod(opt.value)}
+              title={opt.hint}
+              className={
+                "px-2.5 py-1 text-[11px] transition-colors " +
+                (selected
+                  ? "bg-[var(--color-accent)] text-white"
+                  : "bg-[var(--color-surface)] text-[var(--color-text)] hover:bg-[var(--color-surface-hover)]")
+              }
+            >
+              {opt.label}
+            </button>
+          );
+        })}
+      </div>
+      <span className="opacity-70">·</span>
+      <span className="leading-snug">{active.hint}</span>
     </div>
   );
 }
@@ -578,12 +662,17 @@ function InstallRow({
   onRemove,
   onCancel,
   onRetry,
+  onRetryAsStaged,
 }: {
   item: InstallQueueItem;
   t: (k: string, fb: string) => string;
   onRemove: () => void;
   onCancel: () => void;
   onRetry: () => void;
+  /** Re-queue this item with installMethod="stage" (Tier-1 upload-
+   *  then-install). Shown only on a failed stream-mode row — the
+   *  fallback for "the PS5 couldn't reach this PC's HTTP port". */
+  onRetryAsStaged: () => void;
 }) {
   const isActive = item.status === "running";
   const pct =
@@ -617,6 +706,16 @@ function InstallRow({
             <span className="truncate font-medium">{item.displayName}</span>
             {item.isSplit && <Tag>{t("install.tag.split", "split")}</Tag>}
             {item.packageType && <Tag>{item.packageType}</Tag>}
+            {/* Install-method badge so the user sees at-a-glance how
+                this row is being installed, especially useful when
+                the queue mixes legacy + DPI 2.0 rows (e.g. a retry of
+                an old persisted item runs as "stage" while new adds
+                run as "stream"). */}
+            <Tag>
+              {item.installMethod === "stream"
+                ? t("install.tag.stream", "stream")
+                : t("install.tag.staged", "staged")}
+            </Tag>
           </div>
 
           {/* content_id */}
@@ -805,6 +904,34 @@ function InstallRow({
             <code className="mt-1 inline-block font-mono text-[10px] opacity-75">
               0x{item.errCode.toString(16).padStart(8, "0")}
             </code>
+          )}
+          {/* DPI 2.0 → legacy fallback. We can't always tell from the
+              err_code alone whether the PS5 failed to fetch the URL
+              vs Sony's installer rejecting the bytes — but offering
+              the fallback as a one-click action is harmless either
+              way, and it's the single most likely fix for a
+              stream-mode failure on a LAN where the PS5 can't reach
+              the desktop's HTTP port (firewall, segregated VLAN). */}
+          {item.installMethod === "stream" && (
+            <div className="mt-2">
+              <button
+                type="button"
+                onClick={onRetryAsStaged}
+                className="inline-flex items-center gap-1 rounded border border-[var(--color-bad)] bg-[var(--color-surface)] px-2 py-1 text-[11px] font-medium text-[var(--color-text)] hover:bg-[var(--color-surface-hover)]"
+              >
+                <RotateCcw size={12} />
+                {t(
+                  "install.retryAsStaged",
+                  "Retry as Upload then install",
+                )}
+              </button>
+              <div className="mt-1 text-[10px] text-[var(--color-muted)]">
+                {t(
+                  "install.retryAsStagedHint",
+                  "Uses the legacy path: uploads the .pkg to the PS5 first, then installs. Try this if the PS5 couldn't reach this PC over HTTP (firewall, VLAN).",
+                )}
+              </div>
+            </div>
           )}
         </div>
       )}

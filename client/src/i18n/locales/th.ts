@@ -1043,6 +1043,15 @@ sendpayload_port_js_desc: "WebKit / payload ขั้นเบราว์เซ
 sendpayload_port_lua_desc: "ปลั๊กอินรันไทม์ Lua",
 sendpayload_port_jar_desc: "BD-JB / รันไทม์ BDJ",
 sendpayload_typical_ports_caveat: "เหล่านี้เป็นค่าเริ่มต้นทั่วไป — loader ที่กำหนดเองอาจรับฟังที่พอร์ตใดก็ได้",
+"install.method.label": "วิธีการติดตั้ง",
+"install.method.stream": "สตรีม (DPI 2.0)",
+"install.method.streamHint": "BGFT ดึงไบต์จาก PC นี้และติดตั้งในรอบเดียว ไม่ต้องใช้พื้นที่ดิสก์ 2 เท่า รองรับ pause/resume ในตัว",
+"install.method.stage": "อัปโหลดก่อนแล้วติดตั้ง",
+"install.method.stageHint": "อัปโหลด .pkg ไปยังดิสก์ของ PS5 ก่อน จากนั้นติดตั้งจากที่นั่น ใช้เมื่อ PS5 ไม่สามารถเข้าถึง PC นี้ผ่าน HTTP ได้",
+"install.tag.stream": "สตรีม",
+"install.tag.staged": "อัปโหลดแล้ว",
+"install.retryAsStaged": "ลองใหม่เป็น \"อัปโหลดก่อนแล้วติดตั้ง\"",
+"install.retryAsStagedHint": "ใช้เส้นทางแบบเก่า: อัปโหลด .pkg ไปยัง PS5 ก่อน แล้วจึงติดตั้ง ลองวิธีนี้หาก PS5 ไม่สามารถเข้าถึง PC นี้ผ่าน HTTP ได้ (ไฟร์วอลล์, VLAN)",
 };
 
 export default th;

@@ -1044,6 +1044,15 @@ sendpayload_port_js_desc: "WebKit / 브라우저 단계 페이로드",
 sendpayload_port_lua_desc: "Lua 런타임 플러그인",
 sendpayload_port_jar_desc: "BD-JB / BDJ 런타임",
 sendpayload_typical_ports_caveat: "이는 일반적인 기본값입니다 — 사용자 정의 로더는 어떤 포트에서든 수신 대기할 수 있습니다.",
+"install.method.label": "설치 방법",
+"install.method.stream": "스트리밍 (DPI 2.0)",
+"install.method.streamHint": "BGFT가 이 PC에서 바이트를 가져와 한 번에 설치합니다. 2배 디스크 공간 불필요, 기본 일시정지/재개 지원.",
+"install.method.stage": "업로드 후 설치",
+"install.method.stageHint": "먼저 .pkg를 PS5 디스크에 업로드한 후 거기에서 설치합니다. PS5가 HTTP로 이 PC에 도달할 수 없을 때 사용하세요.",
+"install.tag.stream": "스트림",
+"install.tag.staged": "스테이지됨",
+"install.retryAsStaged": "\"업로드 후 설치\"로 재시도",
+"install.retryAsStagedHint": "기존 경로 사용: 먼저 .pkg를 PS5에 업로드한 후 설치합니다. PS5가 HTTP로 이 PC에 도달할 수 없었던 경우(방화벽, VLAN)에 시도하세요.",
 };
 
 export default ko;

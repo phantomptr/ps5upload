@@ -1051,6 +1051,15 @@ sendpayload_port_js_desc: "WebKit / 浏览器阶段载荷",
 sendpayload_port_lua_desc: "Lua 运行时插件",
 sendpayload_port_jar_desc: "BD-JB / BDJ 运行时",
 sendpayload_typical_ports_caveat: "这些是常见默认值 — 自定义 loader 可以监听任意端口。",
+"install.method.label": "安装方式",
+"install.method.stream": "流式 (DPI 2.0)",
+"install.method.streamHint": "BGFT 直接从此 PC 拉取字节并一次性安装。无需 2× 磁盘空间，原生暂停/恢复。",
+"install.method.stage": "先上传后安装",
+"install.method.stageHint": "先将 .pkg 上传到 PS5 磁盘，然后从那里安装。当 PS5 无法通过 HTTP 访问此 PC 时使用。",
+"install.tag.stream": "流式",
+"install.tag.staged": "已上传",
+"install.retryAsStaged": "以\"先上传后安装\"方式重试",
+"install.retryAsStagedHint": "使用旧路径：先将 .pkg 上传到 PS5，然后安装。如果 PS5 无法通过 HTTP 访问此 PC（防火墙、VLAN），请试试这个。",
 };
 
 export default zh_CN;
