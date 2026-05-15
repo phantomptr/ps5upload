@@ -392,21 +392,20 @@ jobs:
               # libfuse2 from the default install — so a brand-new
               # `apt install ubuntu-desktop` user double-clicking the
               # AppImage gets "AppImage requires FUSE to run" and
-              # nothing happens. APPIMAGE_EXTRACT_AND_RUN=1 makes the
-              # AppImage runtime self-extract to /tmp and exec from
-              # there instead — no fuse, no kernel module, no apt
-              # install. Users on stock 24.04+ just run PS5Upload.sh
-              # and it works; users with libfuse2 already installed
-              # can still use the .AppImage directly if they prefer.
-              cat > "$staging/PS5Upload.sh" <<'SH'
-#!/bin/sh
-# PS5Upload Linux launcher (fresh-install safe).
-# Forces the AppImage to self-extract instead of fuse-mounting, so
-# fresh Ubuntu 24.04+ (which doesn't ship libfuse2) just works.
-set -e
-here="$(cd "$(dirname "$0")" && pwd)"
-exec env APPIMAGE_EXTRACT_AND_RUN=1 "$here/PS5Upload.AppImage" "$@"
-SH
+              # nothing happens. The wrapper sets
+              # APPIMAGE_EXTRACT_AND_RUN=1 before exec'ing, which
+              # makes the AppImage runtime self-extract to /tmp
+              # instead — no fuse, no kernel module, no apt install.
+              # Users on stock 24.04+ just run PS5Upload.sh and it
+              # works; users with libfuse2 already installed can
+              # still use the .AppImage directly if they prefer.
+              #
+              # The wrapper itself lives at
+              # scripts/release/linux-launcher.sh so its contents go
+              # through the normal repo review (not inline in YAML,
+              # which is both harder to lint and harder to indent —
+              # an inline heredoc broke 2.5.2's release.yml parsing).
+              cp -v scripts/release/linux-launcher.sh "$staging/PS5Upload.sh"
               chmod +x "$staging/PS5Upload.sh"
               (cd "$staging" && zip -9 "$dist_abs/PS5Upload.zip" PS5Upload.AppImage PS5Upload.sh)
               rm -rf "$staging"
