@@ -832,38 +832,56 @@ function InstallRow({
           className="mt-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-2 text-[11px]"
         >
           <summary className="cursor-pointer text-[var(--color-muted)]">
-            Install-start diagnostics
+            {t("install_start_diagnostics", "Install-start diagnostics")}
           </summary>
           <dl className="mt-2 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 font-mono text-[10px]">
-            <dt className="text-[var(--color-muted)]">register path</dt>
+            <dt className="text-[var(--color-muted)]">
+              {t("install_register_path_label", "register path")}
+            </dt>
             <dd>
               {item.diag.registerPath || "—"}
               {item.diag.registerPath === "regular" && (
                 <span className="ml-2 text-[var(--color-warn)]">
-                  (entitlement-checked — fakepkg may fail)
+                  {t(
+                    "install_register_path_entitlement_checked",
+                    "(entitlement-checked — fakepkg may fail)",
+                  )}
                 </span>
               )}
               {item.diag.registerPath === "shellui-rpc" && (
                 <span className="ml-2 text-[var(--color-good)]">
-                  (Tier-1 — install routed through ShellUI's process)
+                  {t(
+                    "install_register_path_tier1",
+                    "(Tier-1 — install routed through ShellUI's process)",
+                  )}
                 </span>
               )}
             </dd>
-            <dt className="text-[var(--color-muted)]">intdebug avail</dt>
+            <dt className="text-[var(--color-muted)]">
+              {t("install_intdebug_avail_label", "intdebug avail")}
+            </dt>
             <dd>
               {item.diag.intdebugAvail ? "yes" : "no"}
               {!item.diag.intdebugAvail && (
                 <span className="ml-2 text-[var(--color-warn)]">
-                  (FW does not expose the fakepkg-friendly Register variant)
+                  {t(
+                    "install_intdebug_no_register_variant",
+                    "(FW does not expose the fakepkg-friendly Register variant)",
+                  )}
                 </span>
               )}
             </dd>
-            <dt className="text-[var(--color-muted)]">kernel R/W</dt>
+            <dt className="text-[var(--color-muted)]">
+              {t("install_kernel_rw_label", "kernel R/W")}
+            </dt>
             <dd>
               {item.diag.kernelRw ? "yes" : "no"}
               {!item.diag.kernelRw && (
                 <span className="ml-2 text-[var(--color-warn)]">
-                  (no cred elevation — load via :9021)
+                  {t(
+                    "install_kernel_rw_no_cred",
+                    "(no cred elevation — load via :9021)",
+                  )}
                 </span>
               )}
             </dd>
@@ -873,10 +891,14 @@ function InstallRow({
              *  Tier 1 / Tier 2 broke when registerPath="none". */}
             {item.diag.shelluiErr !== null && (
               <>
-                <dt className="text-[var(--color-muted)]">tier 1 (shellui)</dt>
+                <dt className="text-[var(--color-muted)]">
+                  {t("install_tier1_shellui_label", "tier 1 (shellui)")}
+                </dt>
                 <dd>
                   {item.diag.shelluiErr === 0 ? (
-                    <span className="text-[var(--color-good)]">accepted</span>
+                    <span className="text-[var(--color-good)]">
+                      {t("install_shellui_accepted", "accepted")}
+                    </span>
                   ) : (
                     <code className="text-[var(--color-bad)]">
                       0x{item.diag.shelluiErr.toString(16).padStart(8, "0")}
@@ -884,7 +906,10 @@ function InstallRow({
                   )}
                   {item.diag.shelluiErr === 0xe0000002 && (
                     <span className="ml-2 text-[var(--color-warn)]">
-                      (libSceAppInstUtil not in ShellUI's address space)
+                      {t(
+                        "install_shellui_no_appinstutil",
+                        "(libSceAppInstUtil not in ShellUI's address space)",
+                      )}
                     </span>
                   )}
                 </dd>
@@ -892,10 +917,14 @@ function InstallRow({
             )}
             {item.diag.appinstErr !== null && (
               <>
-                <dt className="text-[var(--color-muted)]">tier 2 (appinst)</dt>
+                <dt className="text-[var(--color-muted)]">
+                  {t("install_tier2_appinst_label", "tier 2 (appinst)")}
+                </dt>
                 <dd>
                   {item.diag.appinstErr === 0 ? (
-                    <span className="text-[var(--color-good)]">accepted</span>
+                    <span className="text-[var(--color-good)]">
+                      {t("install_appinst_accepted", "accepted")}
+                    </span>
                   ) : (
                     <code className="text-[var(--color-bad)]">
                       0x{item.diag.appinstErr.toString(16).padStart(8, "0")}
@@ -903,8 +932,10 @@ function InstallRow({
                   )}
                   {item.diag.appinstErr === 0x80b22404 && (
                     <span className="ml-2 text-[var(--color-warn)]">
-                      (PlayGo HTTP-404 — process-context reject; expected on
-                      FW 9.60+)
+                      {t(
+                        "install_appinst_playgo_404",
+                        "(PlayGo HTTP-404 — process-context reject; expected on FW 9.60+)",
+                      )}
                     </span>
                   )}
                 </dd>
@@ -912,11 +943,16 @@ function InstallRow({
             )}
             {item.stagingPath && (
               <>
-                <dt className="text-[var(--color-muted)]">staging path</dt>
+                <dt className="text-[var(--color-muted)]">
+                  {t("install_staging_path_label", "staging path")}
+                </dt>
                 <dd className="break-all">
                   {item.stagingPath}
                   <span className="ml-2 text-[var(--color-muted)]">
-                    (auto-deleted after install; payload sweeps stale &gt;24h)
+                    {t(
+                      "install_staging_path_note",
+                      "(auto-deleted after install; payload sweeps stale >24h)",
+                    )}
                   </span>
                 </dd>
               </>

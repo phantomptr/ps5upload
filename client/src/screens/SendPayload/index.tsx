@@ -71,7 +71,7 @@ interface SendHistoryStore {
 function probeMessage(code: string, isPs5upload: boolean): string {
   switch (code) {
     case "payload_probe_invalid_ext":
-      return "Payload must be a .elf, .bin, .js, or .lua file.";
+      return "Payload must be a .elf, .bin, .js, .lua, or .jar file.";
     case "payload_probe_detected":
       return "This is a PS5Upload payload.";
     case "payload_probe_no_signature":
@@ -179,7 +179,7 @@ export default function SendPayloadScreen() {
       multiple: false,
       directory: false,
       filters: [
-        { name: "Payload", extensions: ["elf", "bin", "js", "lua"] },
+        { name: "Payload", extensions: ["elf", "bin", "js", "lua", "jar"] },
         { name: "All files", extensions: ["*"] },
       ],
     });
@@ -259,7 +259,7 @@ export default function SendPayloadScreen() {
         description={tr(
           "send_payload_description",
           undefined,
-          "Send any PS5 payload file — .elf, .bin, .js, or .lua (kstuff, custom homebrew loaders, browser-stage exploits, plugin scripts) — to your PS5. Same flow as the Connection tab, just pointed at a file you choose.",
+          "Send any PS5 payload file — .elf, .bin, .js, .lua, or .jar (kstuff, custom homebrew loaders, browser-stage exploits, plugin scripts, BD-JB JARs) — to your PS5. Same flow as the Connection tab, just pointed at a file you choose. Note: BD-JB-style .jar payloads need a JAR-aware loader on a non-9021 port — set the port to whatever your loader listens on.",
         )}
       />
 
@@ -274,7 +274,7 @@ export default function SendPayloadScreen() {
           <div className="grid grid-cols-[1fr_7rem] gap-3">
             <div>
               <label className="block text-xs uppercase tracking-wide text-[var(--color-muted)]">
-                PS5 IP address
+                {tr("sendpayload_ps5_ip_address", undefined, "PS5 IP address")}
               </label>
               <input
                 value={host}
@@ -285,7 +285,7 @@ export default function SendPayloadScreen() {
             </div>
             <div>
               <label className="block text-xs uppercase tracking-wide text-[var(--color-muted)]">
-                Port
+                {tr("sendpayload_port", undefined, "Port")}
               </label>
               <input
                 value={portText}
@@ -302,11 +302,56 @@ export default function SendPayloadScreen() {
             </div>
           </div>
           <div className="mt-1 text-xs text-[var(--color-muted)]">
-            Sent to <code>{host || "…"}</code>:
-            {parsedPort ?? portText}. Default {PS5_LOADER_PORT} matches
-            the elfldr convention — change only if your loader listens
-            elsewhere.
+            {tr("sendpayload_sent_to", undefined, "Sent to")}{" "}
+            <code>{host || "…"}</code>:
+            {parsedPort ?? portText}
+            {tr("sendpayload_default", undefined, ". Default")} {PS5_LOADER_PORT}{" "}
+            {tr(
+              "sendpayload_elfldr_convention",
+              undefined,
+              "matches the elfldr convention — change only if your loader listens elsewhere.",
+            )}
           </div>
+          {/* Reference: typical loader ports per payload format. Kept
+              collapsed so the form stays uncluttered; expanded users
+              get a quick lookup without leaving the screen. These are
+              community-common defaults — custom loaders may listen
+              anywhere, hence the caveat. */}
+          <details className="mt-2 text-xs text-[var(--color-muted)]">
+            <summary className="cursor-pointer select-none">
+              {tr(
+                "sendpayload_typical_ports_summary",
+                "Typical loader ports by format",
+              )}
+            </summary>
+            <ul className="mt-2 ml-4 list-disc space-y-1">
+              <li>
+                <code>.elf</code> → <code>9021</code> ·{" "}
+                {tr("sendpayload_port_elf_desc", "elfldr (default)")}
+              </li>
+              <li>
+                <code>.js</code> → <code>50000</code> ·{" "}
+                {tr(
+                  "sendpayload_port_js_desc",
+                  "WebKit / browser-stage payloads",
+                )}
+              </li>
+              <li>
+                <code>.lua</code> → <code>9026</code> ·{" "}
+                {tr("sendpayload_port_lua_desc", "Lua runtime plugins")}
+              </li>
+              <li>
+                <code>.jar</code> → <code>9025</code> ·{" "}
+                {tr("sendpayload_port_jar_desc", "BD-JB / BDJ runtime")}
+              </li>
+            </ul>
+            <p className="mt-2">
+              {tr(
+                "sendpayload_typical_ports_caveat",
+                "These are common defaults — custom loaders may listen on any port.",
+              )}
+            </p>
+          </details>
 
           {/* File picker + editable path. The text input is the
               canonical source of truth — the Choose button just fills
@@ -314,7 +359,7 @@ export default function SendPayloadScreen() {
               terminal, which is handy when they know exactly where
               their payload lives. */}
           <label className="mt-5 block text-xs uppercase tracking-wide text-[var(--color-muted)]">
-            Payload file
+            {tr("sendpayload_payload_file", undefined, "Payload file")}
           </label>
           <div className="mt-2 flex items-center gap-2">
             <button
@@ -324,7 +369,7 @@ export default function SendPayloadScreen() {
               className="flex shrink-0 items-center gap-2 rounded-md border border-[var(--color-border)] px-3 py-2 text-sm hover:bg-[var(--color-surface-3)] disabled:opacity-50"
             >
               <FolderOpen size={14} />
-              Choose
+              {tr("sendpayload_choose", undefined, "Choose")}
             </button>
             <input
               value={elfPathText}
@@ -332,7 +377,7 @@ export default function SendPayloadScreen() {
               onBlur={() => {
                 if (elfPath && elfPath.length > 0) probeFile(elfPath);
               }}
-              placeholder="/path/to/payload.elf (or .bin / .js / .lua)"
+              placeholder="/path/to/payload.elf (or .bin / .js / .lua / .jar)"
               spellCheck={false}
               className="flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 font-mono text-xs outline-none focus:border-[var(--color-accent)]"
             />
@@ -386,7 +431,7 @@ export default function SendPayloadScreen() {
               ) : (
                 <Send size={14} />
               )}
-              Send
+              {tr("sendpayload_send", undefined, "Send")}
             </button>
           </div>
 
@@ -398,13 +443,15 @@ export default function SendPayloadScreen() {
               />
               <div>
                 <div className="font-medium text-[var(--color-good)]">
-                  Payload sent to {host}:{parsedPort ?? PS5_LOADER_PORT}
+                  {tr("sendpayload_payload_sent_to", undefined, "Payload sent to")}{" "}
+                  {host}:{parsedPort ?? PS5_LOADER_PORT}
                 </div>
                 <div className="mt-0.5 text-[var(--color-muted)]">
-                  If the file was a working payload, your PS5 is now
-                  running it. Most loaders don't flash an obvious UI
-                  change — check the payload's own notification or
-                  status indicator on the console.
+                  {tr(
+                    "sendpayload_sent_followup",
+                    undefined,
+                    "If the file was a working payload, your PS5 is now running it. Most loaders don't flash an obvious UI change — check the payload's own notification or status indicator on the console.",
+                  )}
                 </div>
               </div>
             </div>
@@ -415,7 +462,7 @@ export default function SendPayloadScreen() {
               <XCircle size={14} className="mt-0.5 text-[var(--color-bad)]" />
               <div>
                 <div className="font-medium text-[var(--color-bad)]">
-                  Couldn't send
+                  {tr("sendpayload_couldnt_send", undefined, "Couldn't send")}
                 </div>
                 <div className="mt-0.5 text-[var(--color-muted)]">
                   {status.error}
@@ -438,9 +485,9 @@ export default function SendPayloadScreen() {
 
       <p className="mt-4 text-xs text-[var(--color-muted)]">
         Only send payloads from sources you trust — a malicious .elf,
-        .bin, .js, or .lua file can do anything on your PS5. ps5upload
-        doesn't bundle or verify third-party loaders; you're responsible
-        for the files you pick.
+        .bin, .js, .lua, or .jar file can do anything on your PS5.
+        ps5upload doesn't bundle or verify third-party loaders; you're
+        responsible for the files you pick.
       </p>
 
       <PlaylistsPanel host={host} port={parsedPort ?? PS5_LOADER_PORT} />
@@ -458,29 +505,35 @@ function HistoryPanel({
   onReplay: (rec: SendHistoryRecord) => void;
   onClear: () => void;
 }) {
+  const tr = useTr();
   return (
     <aside className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
       <header className="mb-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <History size={14} />
-          <h2 className="text-sm font-semibold">Recent sends</h2>
+          <h2 className="text-sm font-semibold">
+            {tr("sendpayload_recent_sends", undefined, "Recent sends")}
+          </h2>
         </div>
         <button
           type="button"
           onClick={onClear}
           disabled={records.length === 0}
-          title="Clear history"
+          title={tr("sendpayload_clear_history", undefined, "Clear history")}
           className="flex items-center gap-1 rounded-md border border-[var(--color-border)] px-2 py-1 text-[11px] hover:bg-[var(--color-surface-3)] disabled:opacity-40"
         >
           <Trash2 size={11} />
-          Clear
+          {tr("sendpayload_clear", undefined, "Clear")}
         </button>
       </header>
 
       {records.length === 0 ? (
         <div className="rounded-md border border-dashed border-[var(--color-border)] p-4 text-center text-xs text-[var(--color-muted)]">
-          No sends yet. Successful and failed sends will both appear
-          here for quick replay.
+          {tr(
+            "sendpayload_no_sends_yet",
+            undefined,
+            "No sends yet. Successful and failed sends will both appear here for quick replay.",
+          )}
         </div>
       ) : (
         <ul className="grid max-h-[28rem] gap-1.5 overflow-y-auto pr-1">

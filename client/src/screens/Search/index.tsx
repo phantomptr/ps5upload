@@ -279,17 +279,23 @@ export default function SearchScreen() {
               size={14}
               className="animate-spin text-[var(--color-accent)]"
             />
-            <span className="font-medium">Searching</span>
+            <span className="font-medium">
+              {tr("search_searching", undefined, "Searching")}
+            </span>
             <span className="text-xs text-[var(--color-muted)]">
-              {progress.scanned.toLocaleString()} entr
-              {progress.scanned === 1 ? "y" : "ies"} scanned ·{" "}
-              {progress.hits.toLocaleString()} match
-              {progress.hits === 1 ? "" : "es"} so far
+              {progress.scanned.toLocaleString()}{" "}
+              {tr("search_entr", undefined, "entr")}
+              {progress.scanned === 1 ? "y" : "ies"}{" "}
+              {tr("search_scanned_progress", undefined, "scanned ·")}{" "}
+              {progress.hits.toLocaleString()}{" "}
+              {tr("search_match_progress", undefined, "match")}
+              {progress.hits === 1 ? "" : "es"}{" "}
+              {tr("search_so_far", undefined, "so far")}
             </span>
           </div>
           {progress.currentPath && (
             <div className="mt-1 truncate font-mono text-xs text-[var(--color-muted)]">
-              in {progress.currentPath}
+              {tr("search_in", undefined, "in")} {progress.currentPath}
             </div>
           )}
         </div>
@@ -308,9 +314,12 @@ export default function SearchScreen() {
         <>
           <div className="mb-2 flex items-center gap-3 text-xs text-[var(--color-muted)]">
             <span>
-              {result.hits.length.toLocaleString()} match
-              {result.hits.length === 1 ? "" : "es"} · scanned{" "}
-              {result.scanned.toLocaleString()} entries
+              {result.hits.length.toLocaleString()}{" "}
+              {tr("search_match_result", undefined, "match")}
+              {result.hits.length === 1 ? "" : "es"}{" "}
+              {tr("search_scanned_result", undefined, "· scanned")}{" "}
+              {result.scanned.toLocaleString()}{" "}
+              {tr("search_entries_result", undefined, "entries")}
               {result.cancelled && " · you stopped the search"}
               {result.truncated && " · stopped at 100k"}
             </span>

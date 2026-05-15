@@ -75,15 +75,23 @@ function useStatusPolling() {
       try {
         const s = await payloadCheck(probedHost);
         if (!cancelled) {
+          // On a transient miss (reachable=false) payloadCheck has no
+          // STATUS body to parse, so it returns version/kernel/ucred as
+          // null. Writing those nulls straight through would blank the
+          // UI on every single failed poll — the comment here used to
+          // promise "keep the last-known version" but the code didn't
+          // actually do it. Carry the prior values over instead, but
+          // ONLY when they belong to THIS host: a freshly-switched host
+          // must not inherit the previous PS5's firmware string.
+          const prev = useConnectionStore.getState();
+          const carryOver =
+            !s.reachable && prev.payloadStatusHost === probedHost;
           setStatus({
             payloadStatus: s.reachable ? "up" : "down",
             payloadStatusHost: probedHost,
-            // Keep the last-known version while payload is briefly
-            // unreachable (e.g. a single failed poll) so the UI doesn't
-            // flicker; only clear when we never had a value.
-            payloadVersion: s.payloadVersion,
-            ps5Kernel: s.ps5Kernel,
-            ucredElevated: s.ucredElevated,
+            payloadVersion: carryOver ? prev.payloadVersion : s.payloadVersion,
+            ps5Kernel: carryOver ? prev.ps5Kernel : s.ps5Kernel,
+            ucredElevated: carryOver ? prev.ucredElevated : s.ucredElevated,
             // Clear the "rechecking…" indicator any time a tick lands
             // a real result. Connection's handleSend sets probing=true
             // on Replace payload click; this is the safety-net path

@@ -418,7 +418,7 @@ impl<R: Read + Seek> Ufs2Image<R> {
             }
             let frag = inode.direct[i];
             let take = remaining.min(bsize);
-            self.read_block_or_hole(frag, take, &mut out)?;
+            self.read_block_or_hole(inode.number, frag, take, &mut out)?;
             remaining -= take;
         }
         // Indirect block chain. Each indirect block holds
@@ -432,6 +432,7 @@ impl<R: Read + Seek> Ufs2Image<R> {
         let mut visited: HashSet<u64> = HashSet::with_capacity(64);
         if remaining > 0 && inode.indirect[0] != 0 {
             self.read_indirect(
+                inode.number,
                 inode.indirect[0],
                 1,
                 ptrs_per_block,
@@ -442,6 +443,7 @@ impl<R: Read + Seek> Ufs2Image<R> {
         }
         if remaining > 0 && inode.indirect[1] != 0 {
             self.read_indirect(
+                inode.number,
                 inode.indirect[1],
                 2,
                 ptrs_per_block,
@@ -452,6 +454,7 @@ impl<R: Read + Seek> Ufs2Image<R> {
         }
         if remaining > 0 && inode.indirect[2] != 0 {
             self.read_indirect(
+                inode.number,
                 inode.indirect[2],
                 3,
                 ptrs_per_block,
@@ -463,8 +466,15 @@ impl<R: Read + Seek> Ufs2Image<R> {
         Ok(out)
     }
 
+    // 8 args: this is a tight recursive block-walker — `inode_num` is
+    // carried purely so a corrupt pointer can be reported as
+    // BlockOutOfRange, and the rest (depth, remaining, out, visited)
+    // are all genuine per-recursion walk state. Bundling them into a
+    // struct would obscure more than it clarifies.
+    #[allow(clippy::too_many_arguments)]
     fn read_indirect(
         &mut self,
+        inode_num: u64,
         block: u64,
         depth: u8,
         ptrs_per_block: u64,
@@ -474,6 +484,16 @@ impl<R: Read + Seek> Ufs2Image<R> {
     ) -> Result<(), Ufs2Error> {
         if *remaining == 0 || block == 0 {
             return Ok(());
+        }
+        // An indirect block pointer past the end of the image is
+        // corruption — surface it as BlockOutOfRange rather than a
+        // generic EOF Io error from the read_exact below.
+        if block >= self.superblock.size_fragments {
+            return Err(Ufs2Error::BlockOutOfRange {
+                inode: inode_num,
+                block,
+                total_blocks: self.superblock.size_fragments,
+            });
         }
         if !visited.insert(block) {
             // Cycle — same indirect block visited twice. Stop the
@@ -493,10 +513,18 @@ impl<R: Read + Seek> Ufs2Image<R> {
             let ptr = read_u64(&buf, i * 8);
             if depth == 1 {
                 let take = (*remaining).min(bsize);
-                self.read_block_or_hole(ptr, take, out)?;
+                self.read_block_or_hole(inode_num, ptr, take, out)?;
                 *remaining -= take;
             } else {
-                self.read_indirect(ptr, depth - 1, ptrs_per_block, remaining, out, visited)?;
+                self.read_indirect(
+                    inode_num,
+                    ptr,
+                    depth - 1,
+                    ptrs_per_block,
+                    remaining,
+                    out,
+                    visited,
+                )?;
             }
         }
         Ok(())
@@ -504,6 +532,7 @@ impl<R: Read + Seek> Ufs2Image<R> {
 
     fn read_block_or_hole(
         &mut self,
+        inode_num: u64,
         block: u64,
         len: u64,
         out: &mut Vec<u8>,
@@ -512,6 +541,19 @@ impl<R: Read + Seek> Ufs2Image<R> {
             // Sparse hole — UFS represents holes as null pointers.
             out.resize(out.len() + len as usize, 0u8);
             return Ok(());
+        }
+        // A corrupt inode can point at a fragment past the end of the
+        // image. Catch it with a precise BlockOutOfRange instead of
+        // letting frag_offset + seek + read_exact surface it as a
+        // generic "unexpected EOF" Io error — the descriptive variant
+        // tells the user the .ffpkg is structurally corrupt, not
+        // merely truncated.
+        if block >= self.superblock.size_fragments {
+            return Err(Ufs2Error::BlockOutOfRange {
+                inode: inode_num,
+                block,
+                total_blocks: self.superblock.size_fragments,
+            });
         }
         let off = self.superblock.frag_offset(block);
         self.reader.seek(SeekFrom::Start(off))?;

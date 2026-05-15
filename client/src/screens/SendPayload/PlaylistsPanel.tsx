@@ -324,7 +324,7 @@ function PlaylistCard({
       multiple: false,
       directory: false,
       filters: [
-        { name: "Payload", extensions: ["elf", "bin", "js", "lua"] },
+        { name: "Payload", extensions: ["elf", "bin", "js", "lua", "jar"] },
         { name: "All files", extensions: ["*"] },
       ],
     });

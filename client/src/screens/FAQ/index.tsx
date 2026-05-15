@@ -117,7 +117,7 @@ export default function FAQScreen() {
               type="button"
               onClick={() => setQuery("")}
               className="rounded p-0.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)]"
-              aria-label="Clear search"
+              aria-label={tr("faq_clear_search", "Clear search")}
             >
               <X size={12} />
             </button>

@@ -221,7 +221,7 @@ export default function HardwareScreen() {
             title={tr("hardware_temperatures", undefined, "Temperatures")}
           >
             <StatRow
-              label="CPU"
+              label={tr("hardware_label_cpu", "CPU")}
               value={formatTemp(temps?.cpu_temp ?? 0)}
               hint={
                 temps && temps.cpu_temp === 0
@@ -234,7 +234,7 @@ export default function HardwareScreen() {
               }
             />
             <StatRow
-              label="SoC"
+              label={tr("hardware_label_soc", "SoC")}
               value={formatTemp(temps?.soc_temp ?? 0)}
               hint={
                 temps && temps.soc_temp === 0
@@ -429,6 +429,7 @@ function FanThresholdCard({
   host: string;
   payloadUp: boolean;
 }) {
+  const tr = useTr();
   /* No read-back is possible (see FTX2 protocol note on
    * HwSetFanThreshold). This component only reflects values the
    * user has set via this UI during the current session — after a
@@ -467,7 +468,9 @@ function FanThresholdCard({
     <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
       <header className="mb-3 flex items-center gap-2 text-xs uppercase tracking-wide text-[var(--color-muted)]">
         <Fan size={14} />
-        <span className="font-semibold">Fan threshold</span>
+        <span className="font-semibold">
+          {tr("hardware_fan_threshold", "Fan threshold")}
+        </span>
         {busy && (
           <Loader2 size={12} className="animate-spin text-[var(--color-accent)]" />
         )}
@@ -502,7 +505,7 @@ function FanThresholdCard({
       <FanCurvePreview thresholdC={draftC} />
 
       <label className="mb-1 flex items-center justify-between text-xs text-[var(--color-muted)]">
-        <span>Custom</span>
+        <span>{tr("hardware_fan_custom", "Custom")}</span>
         <span className="font-mono tabular-nums">
           {draftC}°C
         </span>
@@ -524,7 +527,7 @@ function FanThresholdCard({
           disabled={!canSet || lastSetC === draftC}
           className="rounded-md border border-[var(--color-border)] px-3 py-1 text-xs hover:bg-[var(--color-surface-3)] disabled:opacity-50"
         >
-          Apply
+          {tr("hardware_apply", "Apply")}
         </button>
       </div>
 
@@ -537,10 +540,15 @@ function FanThresholdCard({
 
       <p className="mt-3 text-xs text-[var(--color-muted)]">
         {lastSetC !== null ? (
-          <>Set to <span className="font-mono">{lastSetC}°C</span>. </>
+          <>
+            {tr("hardware_fan_set_to", "Set to")}{" "}
+            <span className="font-mono">{lastSetC}°C</span>.{" "}
+          </>
         ) : null}
-        Persists until PS5 reboot. Fan RPM can't be read back — only
-        the threshold is writable.
+        {tr(
+          "hardware_fan_persist_note",
+          "Persists until PS5 reboot. Fan RPM can't be read back — only the threshold is writable.",
+        )}
       </p>
     </section>
   );
@@ -561,6 +569,7 @@ function FanThresholdCard({
  * via the caption.
  */
 function FanCurvePreview({ thresholdC }: { thresholdC: number }) {
+  const tr = useTr();
   const W = 280;
   const H = 80;
   const PADDING = 8;
@@ -587,9 +596,11 @@ function FanCurvePreview({ thresholdC }: { thresholdC: number }) {
   return (
     <div className="mb-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-2">
       <div className="mb-1 flex items-center justify-between text-[10px] text-[var(--color-muted)]">
-        <span>Fan curve preview (approximate)</span>
+        <span>
+          {tr("hardware_fan_curve_preview", "Fan curve preview (approximate)")}
+        </span>
         <span className="font-mono tabular-nums text-[var(--color-accent)]">
-          turbo @ {thresholdC}°C
+          {tr("hardware_fan_turbo_at", "turbo @")} {thresholdC}°C
         </span>
       </div>
       <svg width={W} height={H} className="block">

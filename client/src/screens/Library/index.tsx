@@ -131,10 +131,21 @@ export default function LibraryScreen() {
 
   const refresh = useCallback(async () => {
     if (!host?.trim()) return;
+    // Host-switch race guard: refresh() is async and writes into the
+    // shared useLibraryStore. If the user points the app at a new PS5
+    // mid-scan, a slow scan of the PREVIOUS host can land after the new
+    // host's scan and repaint the old console's library under the new
+    // host's name. Capture the host this run targets and drop the
+    // result (store write, error, loading-clear) if it's been
+    // superseded. refresh itself is keyed on `host`, so the new host
+    // gets its own fresh invocation.
+    const probedHost = host;
+    const isStale = () =>
+      useConnectionStore.getState().host !== probedHost;
     setLoading(true);
     setError(null);
     try {
-      const addr = `${host}:${PS5_PAYLOAD_PORT}`;
+      const addr = `${probedHost}:${PS5_PAYLOAD_PORT}`;
       // Volume probe failure is non-fatal for the library scan
       // itself (the Move modal degrades to "no destinations
       // available" instead of blocking the whole screen), but we
@@ -169,6 +180,9 @@ export default function LibraryScreen() {
       // Move-modal destinations only make sense for real attached
       // drives, so filter out placeholder/read-only volumes here.
       const writable = volumes.filter((v) => v.writable && !v.is_placeholder);
+      // Drop the result if the user switched hosts while the scan was
+      // in flight — see the probedHost guard at the top of refresh().
+      if (isStale()) return;
       // Stale-empty guard: a transient race during fs_mount /
       // fs_unmount can cause scanLibrary to return zero entries
       // even though there are still games on disk (volumes are
@@ -178,14 +192,6 @@ export default function LibraryScreen() {
       // probe — and let the next scheduled refresh produce a real
       // count. The user-visible symptom this fixes: "library goes
       // blank after mounting an image, must click Refresh manually."
-      // Stale-empty guard: a transient race during fs_mount /
-      // fs_unmount can cause scanLibrary to return zero entries
-      // even though there are still games on disk (volumes are
-      // mid-update on the kernel side). If we previously had
-      // entries and the new scan returned nothing, keep the old
-      // entries — only update mountMap + volumes from the fresh
-      // probe — and let the next scheduled refresh produce a real
-      // count.
       //
       // Both branches go through a single `useLibraryStore.setState`
       // callback so the read-of-entries and the conditional write
@@ -223,9 +229,12 @@ export default function LibraryScreen() {
         };
       });
     } catch (e) {
+      if (isStale()) return;
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setLoading(false);
+      // Leave `loading` alone if we've been superseded — the new
+      // host's own refresh now owns the loading indicator.
+      if (!isStale()) setLoading(false);
     }
   }, [host, setLoading, setError]);
 

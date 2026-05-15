@@ -56,8 +56,10 @@ protocol (FTX2) over your LAN.
   mkdir.
 - **Hardware** monitoring (model, serial, uptime, RAM, CPU freq)
   and fan-threshold control.
-- **Send payload** — push `.elf`, `.bin`, `.js`, or `.lua` files to
-  the PS5's loader port (9021), with a replay-from-history panel.
+- **Send payload** — push `.elf`, `.bin`, `.js`, `.lua`, or `.jar`
+  files to the PS5's loader port (typical defaults: `.elf` → 9021,
+  `.js` → 50000, `.lua` → 9026, `.jar` → 9025 for BD-JB / BDJ), with
+  a replay-from-history panel.
 
 **Q: What does it NOT do?**
 Install **system pkgs** (NPXS-prefix — Store updates, Settings app
@@ -237,7 +239,10 @@ for the payload to come up, then unlocks the rest of the tabs.
 **Q: How do I send a different payload (kstuff, kernel patches,
 plugin scripts, etc)?**
 Open the **Send payload** tab, click **Choose**, pick any `.elf`,
-`.bin`, `.js`, or `.lua` file, and click **Send**. The app probes
+`.bin`, `.js`, `.lua`, or `.jar` file, set the port to whatever your
+loader listens on (the screen has a built-in cheat sheet — `.elf` →
+9021, `.js` → 50000, `.lua` → 9026, `.jar` → 9025 for BD-JB / BDJ),
+and click **Send**. The app probes
 the file, shows you whether it looks like a ps5upload payload or
 something else, and records the send in a history panel so you
 can replay it without re-picking the file.

@@ -7,3 +7,13 @@ declare interface Window {
     once?: (event: string, cb: (payload: any) => void) => void;
   };
 }
+
+/// <reference types="vite/client" />
+interface ImportMetaEnv {
+  readonly DEV: boolean;
+  readonly PROD: boolean;
+  readonly MODE: string;
+}
+interface ImportMeta {
+  readonly env: ImportMetaEnv;
+}

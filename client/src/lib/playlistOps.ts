@@ -6,7 +6,8 @@
 // in isolation than as inline closures over the Zustand store.
 
 export interface PlaylistStep {
-  /** Absolute path on the host to a .elf/.bin payload file. */
+  /** Absolute path on the host to a payload file
+   *  (.elf/.bin/.js/.lua/.jar — whatever your loader accepts). */
   path: string;
   /** Milliseconds to sleep after this step's send completes (success
    *  OR failure, whichever happens). 0 = no sleep. The runner uses

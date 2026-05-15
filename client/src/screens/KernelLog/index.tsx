@@ -339,21 +339,23 @@ export default function KernelLogScreen() {
           {showFilters && (
             <div className="mb-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-[11px]">
               <div className="mb-1.5 flex items-center justify-between">
-                <span className="font-semibold">Categories</span>
+                <span className="font-semibold">
+                  {tr("kernellog_categories", undefined, "Categories")}
+                </span>
                 <div className="flex gap-2">
                   <button
                     type="button"
                     onClick={hideSonyDefaults}
                     className="text-[10px] underline-offset-2 hover:underline"
                   >
-                    Hide Sony noise
+                    {tr("kernellog_hide_sony_noise", undefined, "Hide Sony noise")}
                   </button>
                   <button
                     type="button"
                     onClick={showAll}
                     className="text-[10px] underline-offset-2 hover:underline"
                   >
-                    Show all (default)
+                    {tr("kernellog_show_all_default", undefined, "Show all (default)")}
                   </button>
                 </div>
               </div>
@@ -385,11 +387,11 @@ export default function KernelLogScreen() {
                 })}
               </div>
               <div className="mt-2 text-[10px] text-[var(--color-muted)]">
-                Default-hidden categories are Sony's own subsystems that
-                emit constantly on every jailbroken PS5 regardless of
-                what payload is running. They aren't caused by
-                ps5upload. The crash, ps5upload, and other-payload
-                categories are always visible by default.
+                {tr(
+                  "kernellog_default_hidden_explainer",
+                  undefined,
+                  "Default-hidden categories are Sony's own subsystems that emit constantly on every jailbroken PS5 regardless of what payload is running. They aren't caused by ps5upload. The crash, ps5upload, and other-payload categories are always visible by default.",
+                )}
               </div>
             </div>
           )}
@@ -429,12 +431,15 @@ export default function KernelLogScreen() {
           </div>
           <div className="mt-2 flex items-center justify-between text-[10px] text-[var(--color-muted)]">
             <span>
-              showing {visible.length} of {entries.length} line
+              {tr("kernellog_showing", undefined, "showing")} {visible.length}{" "}
+              {tr("kernellog_of", undefined, "of")} {entries.length}{" "}
+              {tr("kernellog_line", undefined, "line")}
               {entries.length === 1 ? "" : "s"}
               {hiddenCats.size > 0 && (
                 <>
                   {" · "}
-                  {entries.length - visible.length} hidden by filter
+                  {entries.length - visible.length}{" "}
+                  {tr("kernellog_hidden_by_filter", undefined, "hidden by filter")}
                 </>
               )}
             </span>

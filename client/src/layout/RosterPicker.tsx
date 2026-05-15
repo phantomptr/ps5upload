@@ -241,7 +241,7 @@ function RosterManageModal({ onClose }: { onClose: () => void }) {
                       <input
                         value={editName}
                         onChange={(e) => setEditName(e.target.value)}
-                        placeholder="Name"
+                        placeholder={tr("roster_edit_name_placeholder", "Name")}
                         className="flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1"
                       />
                       <input

@@ -315,7 +315,7 @@ export default function SavesScreen() {
               />
               <h3 className="text-sm font-semibold">{title_id}</h3>
               <span className="text-[11px] text-[var(--color-muted)]">
-                {entries.length} folder
+                {entries.length} {tr("saves_folder", undefined, "folder")}
                 {entries.length === 1 ? "" : "s"}
               </span>
             </header>
@@ -333,7 +333,8 @@ export default function SavesScreen() {
                       {e.path}
                     </code>
                     <div className="text-[10px] text-[var(--color-muted)]">
-                      user {e.user_id} · {formatBytes(e.size)} ·{" "}
+                      {tr("saves_user", undefined, "user")} {e.user_id} ·{" "}
+                      {formatBytes(e.size)} ·{" "}
                       {new Date(e.mtime * 1000).toLocaleDateString()}
                     </div>
                   </div>

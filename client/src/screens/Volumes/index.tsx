@@ -177,7 +177,7 @@ export default function VolumesScreen() {
         <section className="mb-6">
           <header className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
             <FileArchive size={13} />
-            Mounted disk images
+            {tr("volumes_mounted_disk_images", undefined, "Mounted disk images")}
             <span className="text-[10px] text-[var(--color-muted)]">
               · {mountedImages.length}
             </span>
@@ -203,7 +203,7 @@ export default function VolumesScreen() {
         <section>
           <header className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
             <HardDrive size={13} />
-            Storage drives
+            {tr("volumes_storage_drives", undefined, "Storage drives")}
             <span className="text-[10px] text-[var(--color-muted)]">
               · {storageDrives.length}
             </span>
@@ -233,6 +233,7 @@ function MountedImageCard({
   unmounting: boolean;
   anyUnmountInFlight: boolean;
 }) {
+  const tr = useTr();
   const pct =
     v.total_bytes > 0
       ? Math.max(0, Math.min(100, 100 - (v.free_bytes / v.total_bytes) * 100))
@@ -268,7 +269,7 @@ function MountedImageCard({
           )}
         </div>
         <span className="shrink-0 rounded-full border border-[var(--color-accent)] bg-[var(--color-accent-soft)] px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-[var(--color-accent)]">
-          mounted
+          {tr("volumes_mounted", undefined, "mounted")}
         </span>
       </div>
 
@@ -276,9 +277,14 @@ function MountedImageCard({
         <div>
           <div className="mb-1 flex items-baseline justify-between text-xs text-[var(--color-muted)]">
             <span>
-              {formatBytes(v.free_bytes)} free of {formatBytes(v.total_bytes)}
+              {formatBytes(v.free_bytes)}{" "}
+              {tr("volumes_free_of_mounted", undefined, "free of")}{" "}
+              {formatBytes(v.total_bytes)}
             </span>
-            <span className="tabular-nums">{pct.toFixed(0)}% used</span>
+            <span className="tabular-nums">
+              {pct.toFixed(0)}
+              {tr("volumes_pct_used_mounted", undefined, "% used")}
+            </span>
           </div>
           <div className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--color-surface-3)]">
             <div
@@ -301,7 +307,7 @@ function MountedImageCard({
           disabled={anyUnmountInFlight}
           loading={unmounting}
         >
-          Unmount
+          {tr("volumes_unmount", undefined, "Unmount")}
         </Button>
       </div>
     </article>
@@ -311,6 +317,7 @@ function MountedImageCard({
 /** Permanent storage drive. No unmount action — these are
  *  internal/USB drives the user shouldn't be unmounting from here. */
 function StorageCard({ volume: v }: { volume: Volume }) {
+  const tr = useTr();
   const pct =
     v.total_bytes > 0
       ? Math.max(0, Math.min(100, 100 - (v.free_bytes / v.total_bytes) * 100))
@@ -329,7 +336,7 @@ function StorageCard({ volume: v }: { volume: Volume }) {
         </div>
         {!v.writable && (
           <span className="shrink-0 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-3)] px-2 py-0.5 text-[10px] uppercase tracking-wide text-[var(--color-muted)]">
-            read-only
+            {tr("volumes_read_only", undefined, "read-only")}
           </span>
         )}
       </div>
@@ -338,9 +345,14 @@ function StorageCard({ volume: v }: { volume: Volume }) {
         <div>
           <div className="mb-1 flex items-baseline justify-between text-xs text-[var(--color-muted)]">
             <span>
-              {formatBytes(v.free_bytes)} free of {formatBytes(v.total_bytes)}
+              {formatBytes(v.free_bytes)}{" "}
+              {tr("volumes_free_of_storage", undefined, "free of")}{" "}
+              {formatBytes(v.total_bytes)}
             </span>
-            <span className="tabular-nums">{pct.toFixed(0)}% used</span>
+            <span className="tabular-nums">
+              {pct.toFixed(0)}
+              {tr("volumes_pct_used_storage", undefined, "% used")}
+            </span>
           </div>
           <div className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--color-surface-3)]">
             <div

@@ -5,6 +5,7 @@ import { ArrowRight, Search } from "lucide-react";
 import { useThemeStore } from "../state/theme";
 import { useConnectionStore } from "../state/connection";
 import { pushNotification } from "../state/notifications";
+import { useTr } from "../state/lang";
 
 /**
  * Command palette — Cmd/Ctrl+K. Lists navigation targets and a small
@@ -114,6 +115,7 @@ function useCommands(close: () => void): Command[] {
 }
 
 export function CommandPalette() {
+  const tr = useTr();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [activeIdx, setActiveIdx] = useState(0);
@@ -227,17 +229,24 @@ export function CommandPalette() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={handleKey}
-            placeholder="Type a command or search…"
+            placeholder={tr(
+              "cmdpalette_search_placeholder",
+              "Type a command or search…",
+            )}
             className="flex-1 bg-transparent text-sm outline-none"
           />
           <span className="rounded bg-[var(--color-surface-3)] px-1.5 py-0.5 text-[10px] text-[var(--color-muted)]">
-            Esc
+            {tr("cmdpalette_esc", "Esc")}
           </span>
         </div>
         <div className="max-h-[50vh] overflow-y-auto py-1">
           {filtered.length === 0 ? (
             <div className="px-4 py-8 text-center text-xs text-[var(--color-muted)]">
-              No commands match "{query}"
+              {tr(
+                "cmdpalette_no_match",
+                { query },
+                'No commands match "{query}"',
+              )}
             </div>
           ) : (
             grouped.map(({ group, items }) => (
@@ -275,7 +284,10 @@ export function CommandPalette() {
           )}
         </div>
         <div className="border-t border-[var(--color-border)] px-3 py-1.5 text-[10px] text-[var(--color-muted)]">
-          ↑↓ navigate · Enter run · Esc close · Cmd/Ctrl+K toggle
+          {tr(
+            "cmdpalette_footer_hint",
+            "↑↓ navigate · Enter run · Esc close · Cmd/Ctrl+K toggle",
+          )}
         </div>
       </div>
     </div>

@@ -163,11 +163,21 @@ async fn reap_orphan_listener_on(port: u16) {
         ),
         // Fallback: classic netstat + taskkill. Works on Server SKUs
         // that may have PowerShell stripped down.
+        //
+        // `findstr LISTENING` runs FIRST so only listener rows survive
+        // (their foreign-address column is always `0.0.0.0:0`, which
+        // can't collide with our port). Then `findstr /C:":%PORT% "`
+        // is a *literal* match anchored by a trailing space: that
+        // pins it to the end of the local-address column and stops
+        // `:9113` from also matching a `:91130`-style neighbour or a
+        // bare `9113` substring elsewhere on the line. The old
+        // `findstr :%PORT%` was an unanchored substring search and
+        // could taskkill an unrelated PID.
         (
             "cmd.exe",
             &[
                 "/C",
-                "for /f \"tokens=5\" %a in ('netstat -ano ^| findstr :%PORT% ^| findstr LISTENING') do taskkill /F /PID %a",
+                "for /f \"tokens=5\" %a in ('netstat -ano ^| findstr LISTENING ^| findstr /C:\":%PORT% \"') do taskkill /F /PID %a",
             ],
         ),
     ];

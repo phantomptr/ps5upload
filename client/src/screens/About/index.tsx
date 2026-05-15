@@ -204,12 +204,12 @@ export default function AboutScreen() {
           />
         </div>
         <p className="opacity-60">
-          Made with{" "}
+          {tr("about_made_with", "Made with")}{" "}
           <Heart
             size={10}
             className="mx-0.5 inline -translate-y-[1px] text-[var(--color-bad)]"
           />{" "}
-          for the PS5 scene.
+          {tr("about_for_the_ps5_scene", "for the PS5 scene.")}
         </p>
       </footer>
     </div>

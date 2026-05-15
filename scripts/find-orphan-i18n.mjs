@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /*
- * Diagnostic: list i18n keys defined in `client/src/i18n.ts` (English
- * is the canonical superset) that are not referenced by any source
- * file under `client/src/`.
+ * Diagnostic: list i18n keys defined in `client/src/i18n/locales/en.ts`
+ * (English is the canonical superset) that are not referenced by any
+ * source file under `client/src/`.
  *
  * Advisory only — keys accessed via template-string interpolation
  * (`tr(\`status.${kind}\`)`) won't appear as literal strings and
@@ -10,6 +10,12 @@
  * required before deleting; the script just narrows the list.
  *
  * Run: `node scripts/find-orphan-i18n.mjs`
+ *
+ * Locale-split aware: the old monolithic `client/src/i18n.ts` (one
+ * `const translations = { en: {...}, ... }` block) is gone — each
+ * locale now lives in `client/src/i18n/locales/<code>.ts`. We read
+ * the canonical `en.ts` literal the same isolated-vm way
+ * `i18n-coverage.mjs` does.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -18,24 +24,35 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const I18N_PATH = path.join(repoRoot, "client/src/i18n.ts");
+const LOCALES_DIR = path.join(repoRoot, "client/src/i18n/locales");
+const EN_PATH = path.join(LOCALES_DIR, "en.ts");
+
+/** Extract the `const <id>: Translations = { ... }` literal from a
+ *  locale file and evaluate it in an isolated V8 context. Mirrors
+ *  `loadTranslations()` in scripts/i18n-coverage.mjs — keep the two in
+ *  sync if the locale-file shape ever changes. */
+function loadLocaleDict(fp) {
+  const src = fs.readFileSync(fp, "utf8");
+  const startMatch = src.match(
+    /^const\s+[A-Za-z_][A-Za-z0-9_]*\s*:\s*Translations\s*=\s*/m,
+  );
+  if (!startMatch) {
+    throw new Error(`${fp}: could not find 'const <name>: Translations =' declaration`);
+  }
+  const startIdx = startMatch.index + startMatch[0].length;
+  const endMatch = src.slice(startIdx).match(/\n};\s*\n\s*export default/);
+  if (!endMatch) {
+    throw new Error(`${fp}: could not find end of literal (};\\nexport default)`);
+  }
+  const literalSrc = src.slice(startIdx, startIdx + endMatch.index + "\n}".length);
+  return vm.runInNewContext(`(${literalSrc})`, Object.create(null), { timeout: 1000 });
+}
 
 function loadEnKeys() {
-  const src = fs.readFileSync(I18N_PATH, "utf8");
-  const startIdx = src.search(/^const translations\s*=\s*/m);
-  const cutoff = src.indexOf("export type LanguageCode");
-  if (startIdx < 0 || cutoff < 0) {
-    throw new Error("i18n.ts: could not find translations literal");
+  if (!fs.existsSync(EN_PATH)) {
+    throw new Error(`canonical locale not found: ${EN_PATH}`);
   }
-  const literal = src
-    .slice(startIdx, cutoff)
-    .replace(/^const translations\s*=\s*/, "")
-    .trim()
-    .replace(/;\s*$/, "");
-  const obj = vm.runInNewContext(`(${literal})`, Object.create(null), {
-    timeout: 1000,
-  });
-  return Object.keys(obj.en);
+  return Object.keys(loadLocaleDict(EN_PATH));
 }
 
 function readAllClientSrc() {
@@ -50,7 +67,15 @@ function readAllClientSrc() {
   const files = res.stdout
     .trim()
     .split("\n")
-    .filter((f) => /\.(tsx?|ts)$/.test(f) && !f.endsWith("i18n.ts"));
+    // Exclude the locale dictionaries themselves — they *define* the
+    // keys, they don't *reference* them. Including them would make
+    // every key look "used".
+    .filter(
+      (f) =>
+        /\.(tsx?|ts)$/.test(f) &&
+        !f.startsWith("client/src/i18n/locales/") &&
+        f !== "client/src/i18n.ts",
+    );
   return files
     .map((f) => fs.readFileSync(path.join(repoRoot, f), "utf8"))
     .join("\n");

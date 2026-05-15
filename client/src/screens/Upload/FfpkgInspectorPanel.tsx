@@ -276,10 +276,12 @@ function MetaGrid({ meta }: { meta: FfpkgInspection }) {
       <dd>
         {meta.has_sce_sys ? (
           <span className="inline-flex items-center gap-1 text-[var(--color-good)]">
-            <CheckCircle2 size={11} /> present
+            <CheckCircle2 size={11} /> {tr("ffpkg_sce_sys_present", "present")}
           </span>
         ) : (
-          <span className="text-[var(--color-warn)]">missing</span>
+          <span className="text-[var(--color-warn)]">
+            {tr("ffpkg_sce_sys_missing", "missing")}
+          </span>
         )}
       </dd>
     </dl>

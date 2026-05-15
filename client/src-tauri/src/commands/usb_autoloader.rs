@@ -411,6 +411,30 @@ pub async fn usb_autoloader_install(
         return Err(format!("drive path is not a directory: {}", req.drive_path));
     }
 
+    // Re-validate server-side that the target is actually one of the
+    // removable drives we enumerated. The frontend passes back a value
+    // from `usb_list_removable`, but this command must not trust that:
+    // a malformed or replayed IPC call could otherwise point
+    // `drive_path` at any writable directory (`/`, the user's home, a
+    // system folder) and we'd happily create `ps5_autoloader/` there
+    // and write ELF files into it. "exists + is a dir" is necessary
+    // but nowhere near sufficient.
+    let requested = req.drive_path.clone();
+    let known = tokio::task::spawn_blocking(enumerate_drives)
+        .await
+        .map_err(|e| format!("drive enumeration failed: {e}"))?;
+    let canon_req = std::fs::canonicalize(&drive).ok();
+    let is_known = known.iter().any(|d| {
+        d.path == requested
+            || (canon_req.is_some() && std::fs::canonicalize(&d.path).ok() == canon_req)
+    });
+    if !is_known {
+        return Err(format!(
+            "refusing to write: {} is not a currently-mounted removable drive",
+            requested
+        ));
+    }
+
     let autoloader_dir = drive.join("ps5_autoloader");
     std::fs::create_dir_all(&autoloader_dir).map_err(|e| format!("create ps5_autoloader/: {e}"))?;
 

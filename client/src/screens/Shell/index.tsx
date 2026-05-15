@@ -225,11 +225,13 @@ function ShellHistoryRow({ entry }: { entry: HistoryEntry }) {
                 : "text-[var(--color-warn)]"
             }
           >
-            · exit {exit ?? "?"}
+            {tr("shell_exit", "· exit")} {exit ?? "?"}
           </span>
         )}
         {entry.result?.timed_out && (
-          <span className="text-[var(--color-warn)]">· timed out</span>
+          <span className="text-[var(--color-warn)]">
+            {tr("shell_timed_out", "· timed out")}
+          </span>
         )}
       </div>
       <div className="mt-0.5 font-medium text-[var(--color-accent)]">

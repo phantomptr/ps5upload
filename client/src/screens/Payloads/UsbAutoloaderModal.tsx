@@ -120,7 +120,7 @@ export default function UsbAutoloaderModal({
             type="button"
             onClick={onClose}
             className="text-[var(--color-muted)] hover:text-[var(--color-text)]"
-            aria-label="close"
+            aria-label={tr("usbmodal_close", "close")}
           >
             <X size={16} />
           </button>
@@ -190,7 +190,7 @@ export default function UsbAutoloaderModal({
                       </div>
                     </div>
                     <div className="text-right text-[10px] text-[var(--color-muted)]">
-                      {formatBytes(d.free_bytes)} free /{" "}
+                      {formatBytes(d.free_bytes)} {tr("usbmodal_free_slash", "free /")}{" "}
                       {formatBytes(d.total_bytes)}
                     </div>
                   </li>
@@ -241,7 +241,7 @@ export default function UsbAutoloaderModal({
                       <div className="min-w-0 flex-1">
                         <div className="font-medium">{p.display_name}</div>
                         <div className="text-[10px] text-[var(--color-muted)]">
-                          {p.role} · priority {p.autoload_priority}
+                          {p.role} {tr("usbmodal_priority", "· priority")} {p.autoload_priority}
                         </div>
                       </div>
                       {cached && inventoryById[p.id]?.version && (

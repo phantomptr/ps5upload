@@ -495,6 +495,7 @@ function Step2Options(props: {
     onUpload,
     onAddToQueue,
   } = props;
+  const tr = useTr();
 
   const { icon: KindIcon, label: kindLabel } = detectedLabel(source);
   const showExcludes = source.kind === "folder" || source.kind === "game-folder";
@@ -513,12 +514,12 @@ function Step2Options(props: {
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <span className="rounded-full bg-[var(--color-surface-3)] px-2 py-0.5 text-xs font-medium">
-                Detected: {kindLabel}
+                {tr("upload_detected_label", "Detected:")} {kindLabel}
               </span>
               {detecting && (
                 <span className="inline-flex items-center gap-1 text-xs text-[var(--color-muted)]">
                   <Loader2 size={12} className="animate-spin" />
-                  Inspecting…
+                  {tr("upload_inspecting", "Inspecting…")}
                 </span>
               )}
             </div>
@@ -534,7 +535,7 @@ function Step2Options(props: {
           <button
             type="button"
             onClick={onClear}
-            title="Choose a different source"
+            title={tr("upload_choose_diff_source", "Choose a different source")}
             className="rounded-md p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
           >
             <X size={16} />
@@ -619,7 +620,7 @@ function Step2Options(props: {
           onClick={onClear}
           className="rounded-md border border-[var(--color-border)] px-4 py-2 text-sm hover:bg-[var(--color-surface-3)]"
         >
-          Cancel
+          {tr("upload_cancel", "Cancel")}
         </button>
         {/* Add-to-queue: capture the current source + options into the
             persisted upload queue without starting the transfer. The
@@ -630,9 +631,12 @@ function Step2Options(props: {
           onClick={() => onAddToQueue("overwrite")}
           disabled={detecting || preflightBusy}
           className="rounded-md border border-[var(--color-border)] px-4 py-2 text-sm hover:bg-[var(--color-surface-3)] disabled:opacity-50"
-          title="Add this upload to the queue without starting it"
+          title={tr(
+            "upload_add_to_queue_tooltip",
+            "Add this upload to the queue without starting it",
+          )}
         >
-          Add to queue
+          {tr("upload_add_to_queue", "Add to queue")}
         </button>
         <button
           type="button"
@@ -762,6 +766,7 @@ function ExistingDestinationDialog({
   onResume: () => void;
   onCancel: () => void;
 }) {
+  const tr = useTr();
   // Clean destination → simple Start/Cancel confirm.
   // Existing content → three-way Override/Resume/Cancel for folders,
   // two-way Override/Cancel for single files (no resume concept on a
@@ -777,7 +782,8 @@ function ExistingDestinationDialog({
 
   const subtitle = !hasExisting ? (
     <>
-      Upload to <span className="font-mono text-xs">{dest}</span>?
+      {tr("upload_dialog_upload_to", "Upload to")}{" "}
+      <span className="font-mono text-xs">{dest}</span>?
     </>
   ) : (
     <>
@@ -801,11 +807,14 @@ function ExistingDestinationDialog({
               onClick={onResume}
               className="flex items-start gap-3 rounded-md border border-[var(--color-accent)] bg-[var(--color-accent)] p-3 text-left text-sm text-[var(--color-accent-contrast)] hover:opacity-90"
             >
-              <span className="font-medium">Resume</span>
+              <span className="font-medium">
+                {tr("upload_dialog_resume", "Resume")}
+              </span>
               <span className="text-xs opacity-90">
-                Skip files that are already there; only send what's new
-                or changed. Compares file sizes -- per-shard BLAKE3
-                verification on the actual upload catches any mismatch.
+                {tr(
+                  "upload_dialog_resume_desc",
+                  "Skip files that are already there; only send what's new or changed. Compares file sizes -- per-shard BLAKE3 verification on the actual upload catches any mismatch.",
+                )}
               </span>
             </button>
           )}
@@ -838,7 +847,9 @@ function ExistingDestinationDialog({
             onClick={onCancel}
             className="flex items-start gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-left text-sm hover:bg-[var(--color-surface-3)]"
           >
-            <span className="font-medium">Cancel</span>
+            <span className="font-medium">
+              {tr("upload_dialog_cancel", "Cancel")}
+            </span>
             <span className="text-xs text-[var(--color-muted)]">
               {hasExisting
                 ? "Don't upload. Pick a different destination or source."
@@ -848,7 +859,10 @@ function ExistingDestinationDialog({
         </div>
 
         <p className="mt-3 text-xs text-[var(--color-muted)]">
-          You can turn off this prompt in Settings → Upload.
+          {tr(
+            "upload_dialog_turn_off_prompt",
+            "You can turn off this prompt in Settings → Upload.",
+          )}
         </p>
       </div>
     </div>
@@ -856,6 +870,7 @@ function ExistingDestinationDialog({
 }
 
 function TransferStatus({ phase }: { phase: TransferPhase }) {
+  const tr = useTr();
   // Read settings directly — threading through Step2Options just to get
   // here would add props for something that's a rendering decision.
   const showFiles = useUploadSettingsStore((s) => s.showTransferFiles);
@@ -871,7 +886,7 @@ function TransferStatus({ phase }: { phase: TransferPhase }) {
     return (
       <div className="mb-3 flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 text-sm">
         <Loader2 size={14} className="animate-spin text-[var(--color-accent)]" />
-        Preparing upload…
+        {tr("upload_status_preparing", "Preparing upload…")}
       </div>
     );
   }
@@ -895,7 +910,10 @@ function TransferStatus({ phase }: { phase: TransferPhase }) {
             size={14}
             className="animate-spin text-[var(--color-accent)]"
           />
-          Checking what's already on your PS5…
+          {tr(
+            "upload_status_checking_existing",
+            "Checking what's already on your PS5…",
+          )}
         </div>
       );
     }
@@ -911,7 +929,9 @@ function TransferStatus({ phase }: { phase: TransferPhase }) {
               size={14}
               className="animate-spin text-[var(--color-accent)]"
             />
-            <span className="font-medium">Uploading</span>
+            <span className="font-medium">
+              {tr("upload_status_uploading", "Uploading")}
+            </span>
             <span className="text-xs text-[var(--color-muted)]">
               {formatBytes(bytesSent)}
               {totalBytes > 0 && ` / ${formatBytes(totalBytes)}`}
@@ -919,12 +939,18 @@ function TransferStatus({ phase }: { phase: TransferPhase }) {
               {files.length > 0 && (
                 <>
                   {" · "}
-                  {filesCompleted.toLocaleString()} of{" "}
-                  {files.length.toLocaleString()} files
+                  {filesCompleted.toLocaleString()}{" "}
+                  {tr("upload_status_of", "of")}{" "}
+                  {files.length.toLocaleString()}{" "}
+                  {tr("upload_status_files", "files")}
                 </>
               )}
               {skippedFiles > 0 && (
-                <> · {skippedFiles.toLocaleString()} skipped</>
+                <>
+                  {" · "}
+                  {skippedFiles.toLocaleString()}{" "}
+                  {tr("upload_status_skipped", "skipped")}
+                </>
               )}
             </span>
           </div>
@@ -932,16 +958,22 @@ function TransferStatus({ phase }: { phase: TransferPhase }) {
             <span>
               {bytesPerSec > 0 ? `${formatBytes(bytesPerSec)}/s` : "—"}
               {etaSec !== null && bytesPerSec > 0 && (
-                <> · ETA {formatDuration(etaSec)}</>
+                <>
+                  {" · "}
+                  {tr("upload_status_eta", "ETA")} {formatDuration(etaSec)}
+                </>
               )}
             </span>
             <button
               type="button"
               onClick={() => resetTransfer()}
               className="rounded-md border border-[var(--color-border)] px-2 py-0.5 text-[10px] text-[var(--color-text)] hover:bg-[var(--color-surface-3)]"
-              title="Stop watching this upload (engine job continues server-side until next BEGIN_TX preempts it)"
+              title={tr(
+                "upload_status_stop_tooltip",
+                "Stop watching this upload (engine job continues server-side until next BEGIN_TX preempts it)",
+              )}
             >
-              Stop
+              {tr("upload_status_stop", "Stop")}
             </button>
           </div>
         </div>
@@ -979,11 +1011,16 @@ function TransferStatus({ phase }: { phase: TransferPhase }) {
         <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs text-[var(--color-muted)]">
           {!allSkipped && (
             <>
-              <dt>Sent</dt>
+              <dt>{tr("upload_done_sent", "Sent")}</dt>
               <dd className="text-[var(--color-text)]">
                 {formatBytes(phase.bytesSent)}
                 {phase.filesSent > 0 && (
-                  <> across {phase.filesSent.toLocaleString()} files</>
+                  <>
+                    {" "}
+                    {tr("upload_done_across", "across")}{" "}
+                    {phase.filesSent.toLocaleString()}{" "}
+                    {tr("upload_done_files", "files")}
+                  </>
                 )}
               </dd>
             </>
@@ -992,28 +1029,30 @@ function TransferStatus({ phase }: { phase: TransferPhase }) {
             <>
               <dt>{allSkipped ? "Already present" : "Skipped"}</dt>
               <dd className="text-[var(--color-text)]">
-                {phase.skippedFiles.toLocaleString()} files (
-                {formatBytes(phase.skippedBytes)}) already on PS5
+                {phase.skippedFiles.toLocaleString()}{" "}
+                {tr("upload_done_skipped_files", "files (")}
+                {formatBytes(phase.skippedBytes)}
+                {tr("upload_done_skipped_suffix", ") already on PS5")}
               </dd>
             </>
           )}
-          <dt>Time</dt>
+          <dt>{tr("upload_done_time", "Time")}</dt>
           <dd className="text-[var(--color-text)]">
             {formatDuration(phase.elapsedMs / 1000)}
             {avg > 0 && (
               <span className="text-[var(--color-muted)]">
                 {" "}
-                — avg {formatBytes(avg)}/s
+                {tr("upload_done_avg", "— avg")} {formatBytes(avg)}/s
               </span>
             )}
           </dd>
-          <dt>Destination</dt>
+          <dt>{tr("upload_done_destination", "Destination")}</dt>
           <dd className="font-mono text-[var(--color-text)]">
             {phase.dest}
           </dd>
           {phase.mountedAt && (
             <>
-              <dt>Mounted at</dt>
+              <dt>{tr("upload_done_mounted_at", "Mounted at")}</dt>
               <dd className="font-mono text-[var(--color-text)]">
                 {phase.mountedAt}
               </dd>
@@ -1034,7 +1073,9 @@ function TransferStatus({ phase }: { phase: TransferPhase }) {
   // failed
   return (
     <div className="mb-3 rounded-md border border-[var(--color-bad)] bg-[var(--color-surface-2)] p-3 text-sm">
-      <div className="font-medium text-[var(--color-bad)]">Upload failed</div>
+      <div className="font-medium text-[var(--color-bad)]">
+        {tr("upload_failed_title", "Upload failed")}
+      </div>
       <div className="mt-0.5 text-xs text-[var(--color-muted)]">
         {humanizeUploadError(phase.error)}
       </div>
@@ -1070,6 +1111,7 @@ function FileListPanel({
   files: PlannedFile[];
   completed: number;
 }) {
+  const tr = useTr();
   const total = files.length;
   // No auto-scroll needed — the ordering puts the current file at the
   // top of the list, so it's visible without any scrolling math.
@@ -1077,7 +1119,7 @@ function FileListPanel({
   return (
     <div className="mt-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-xs">
       <div className="mb-1 flex items-center justify-between text-[var(--color-muted)]">
-        <span>Files</span>
+        <span>{tr("upload_file_list_files", "Files")}</span>
         <span>
           {completed.toLocaleString()} / {total.toLocaleString()}
         </span>
@@ -1170,21 +1212,28 @@ function WrappedHintChip({
   hint: { path: string; title: string | null; title_id: string | null };
   onUse: () => void;
 }) {
+  const tr = useTr();
   const name = hint.title || hint.title_id || hint.path;
   return (
     <div className="mt-3 flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-3)] p-3 text-xs">
       <Info size={14} className="mt-0.5 shrink-0 text-[var(--color-accent)]" />
       <div className="flex-1">
-        This folder isn't a game on its own, but it contains a game folder
-        inside: <span className="font-medium">{name}</span>. Did you mean to
-        upload that one?
+        {tr(
+          "upload_wrapped_hint_intro",
+          "This folder isn't a game on its own, but it contains a game folder inside:",
+        )}{" "}
+        <span className="font-medium">{name}</span>
+        {tr(
+          "upload_wrapped_hint_suffix",
+          ". Did you mean to upload that one?",
+        )}
       </div>
       <button
         type="button"
         onClick={onUse}
         className="shrink-0 rounded-md bg-[var(--color-accent)] px-2.5 py-1 text-xs font-medium text-[var(--color-accent-contrast)]"
       >
-        Use it
+        {tr("upload_wrapped_hint_use", "Use it")}
       </button>
     </div>
   );
@@ -1204,6 +1253,7 @@ function GameMetaCard({
     meta_source: string;
   };
 }) {
+  const tr = useTr();
   const coverSrc = useMemo(
     () => (meta.icon0_path ? convertFileSrc(meta.icon0_path) : null),
     [meta.icon0_path]
@@ -1217,7 +1267,7 @@ function GameMetaCard({
           {coverSrc && !coverFailed ? (
             <img
               src={coverSrc}
-              alt="cover"
+              alt={tr("upload_game_cover_alt", "cover")}
               className="h-full w-full object-cover"
               onError={() => setCoverFailed(true)}
             />
@@ -1238,10 +1288,11 @@ function GameMetaCard({
           <div className="mt-0.5 text-xs text-[var(--color-muted)]">
             {meta.content_version ? `v${meta.content_version} · ` : ""}
             {formatBytes(meta.total_size)} · {meta.file_count.toLocaleString()}{" "}
-            files
+            {tr("upload_game_meta_files", "files")}
           </div>
           <div className="mt-1 flex items-center gap-1 text-xs text-[var(--color-muted)]">
-            <Info size={12} /> parsed from <code>{meta.meta_source}</code>
+            <Info size={12} /> {tr("upload_game_meta_parsed_from", "parsed from")}{" "}
+            <code>{meta.meta_source}</code>
           </div>
         </div>
       </div>
@@ -1256,9 +1307,11 @@ function FolderStatsCard({
   totalBytes: number;
   fileCount: number;
 }) {
+  const tr = useTr();
   return (
     <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4 text-sm text-[var(--color-muted)]">
-      {formatBytes(totalBytes)} across {fileCount.toLocaleString()} files
+      {formatBytes(totalBytes)} {tr("upload_folder_stats_across", "across")}{" "}
+      {fileCount.toLocaleString()} {tr("upload_folder_stats_files", "files")}
     </section>
   );
 }
@@ -1364,6 +1417,7 @@ function MountAfterUploadCard({
   readOnly: boolean;
   onChangeReadOnly: (on: boolean) => void;
 }) {
+  const tr = useTr();
   return (
     <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5">
       <label className="flex items-start gap-3 text-sm">
@@ -1374,12 +1428,14 @@ function MountAfterUploadCard({
           className="mt-0.5 accent-[var(--color-accent)]"
         />
         <div>
-          <div className="font-medium">Mount after upload</div>
+          <div className="font-medium">
+            {tr("upload_mount_after_title", "Mount after upload")}
+          </div>
           <div className="mt-0.5 text-xs text-[var(--color-muted)]">
-            After the image lands on the PS5, the payload mounts it via the
-            kernel's LVD backend. Off by default — turn on if you also want
-            the image attached so the title shows up in the launcher
-            immediately.
+            {tr(
+              "upload_mount_after_desc",
+              "After the image lands on the PS5, the payload mounts it via the kernel's LVD backend. Off by default — turn on if you also want the image attached so the title shows up in the launcher immediately.",
+            )}
           </div>
         </div>
       </label>
@@ -1401,11 +1457,14 @@ function MountAfterUploadCard({
           className="mt-0.5 accent-[var(--color-accent)]"
         />
         <div>
-          <div className="font-medium">Mount read-only</div>
+          <div className="font-medium">
+            {tr("upload_mount_readonly_title", "Mount read-only")}
+          </div>
           <div className="mt-0.5 text-xs text-[var(--color-muted)]">
-            Recommended. Prevents the PS5 from writing save data into the
-            image (which would silently corrupt the file on disk and break
-            re-mount). Turn off only for editable scratch images.
+            {tr(
+              "upload_mount_readonly_desc",
+              "Recommended. Prevents the PS5 from writing save data into the image (which would silently corrupt the file on disk and break re-mount). Turn off only for editable scratch images.",
+            )}
           </div>
         </div>
       </label>
@@ -1448,6 +1507,7 @@ function DestinationCard({
    *  the payload isn't reachable yet. */
   availableVolumes: Volume[];
 }) {
+  const tr = useTr();
   // Trust the payload when it answers: it already filters to writable
   // non-placeholder volumes (see the upstream filter where
   // availableVolumes is set). Hardcoded roots are only a placeholder
@@ -1478,7 +1538,7 @@ function DestinationCard({
     <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5">
       <div className="mb-3 flex items-center gap-2 text-sm font-semibold">
         <HardDrive size={14} />
-        Destination
+        {tr("upload_dest_card_title", "Destination")}
       </div>
 
       <div className="mb-3 flex items-center gap-2 text-sm">
@@ -1487,7 +1547,9 @@ function DestinationCard({
           onChange={(e) => onChange(e.target.value || null)}
           className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-sm"
         >
-          <option value="">(auto — largest free)</option>
+          <option value="">
+            {tr("upload_dest_auto", "(auto — largest free)")}
+          </option>
           {dropdownPaths.map((p) => {
             const free = freeBytesByPath.get(p);
             return (
@@ -1506,7 +1568,9 @@ function DestinationCard({
       </div>
 
       <div className="flex flex-wrap items-center gap-1.5">
-        <span className="text-xs text-[var(--color-muted)]">Presets:</span>
+        <span className="text-xs text-[var(--color-muted)]">
+          {tr("upload_dest_presets", "Presets:")}
+        </span>
         {DESTINATION_PRESETS.map((p) => {
           const active = subpath === p.subpath;
           return (
@@ -1530,15 +1594,17 @@ function DestinationCard({
 
       <div className="mt-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-2.5">
         <div className="text-xs uppercase tracking-wide text-[var(--color-muted)]">
-          Final path on PS5
+          {tr("upload_dest_final_path", "Final path on PS5")}
         </div>
         <div className="mt-0.5 break-all font-mono text-xs text-[var(--color-text)]">
           {resolvedDest}
         </div>
       </div>
       <p className="mt-2 text-xs text-[var(--color-muted)]">
-        If the destination folder doesn't exist yet on the PS5, it will
-        be created when you start the upload.
+        {tr(
+          "upload_dest_will_create",
+          "If the destination folder doesn't exist yet on the PS5, it will be created when you start the upload.",
+        )}
       </p>
     </section>
   );
@@ -1559,20 +1625,23 @@ function ExcludesCard({
   onAdd: (p: string) => void;
   onRemove: (p: string) => void;
 }) {
+  const tr = useTr();
   const [draft, setDraft] = useState("");
   return (
     <section className="mb-6 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5">
-      <h2 className="mb-3 text-sm font-semibold">Files to upload</h2>
+      <h2 className="mb-3 text-sm font-semibold">
+        {tr("upload_files_to_upload", "Files to upload")}
+      </h2>
 
       <div className="mb-3 grid gap-2 sm:grid-cols-2">
         <ModeRadio
-          label="Include all files"
+          label={tr("upload_include_all_files", "Include all files")}
           hint="Default. Nothing is filtered."
           checked={mode === "all"}
           onCheck={() => onSetMode("all")}
         />
         <ModeRadio
-          label="Apply exclude rules"
+          label={tr("upload_apply_exclude_rules", "Apply exclude rules")}
           hint="Skip junk files and anything you add below."
           checked={mode === "rules"}
           onCheck={() => onSetMode("rules")}
@@ -1629,7 +1698,7 @@ function ExcludesCard({
               className="flex items-center gap-1 rounded-md border border-[var(--color-border)] px-3 py-1.5 text-xs hover:bg-[var(--color-surface-3)] disabled:opacity-50"
             >
               <Plus size={12} />
-              Add
+              {tr("upload_exclude_add", "Add")}
             </button>
           </form>
         </div>
@@ -1690,6 +1759,7 @@ export type { SourceKind };
  * the actual transfer won't work until the PS5 is listening.
  */
 function PayloadReadinessBanner() {
+  const tr = useTr();
   const status = useConnectionStore((s) => s.payloadStatus);
   const navigate = useNavigate();
   if (status === "up") return null;
@@ -1712,7 +1782,7 @@ function PayloadReadinessBanner() {
             size="sm"
             onClick={() => navigate("/connection")}
           >
-            Go to Connection
+            {tr("upload_go_to_connection", "Go to Connection")}
           </Button>
         }
       />

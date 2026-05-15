@@ -909,15 +909,29 @@ function BundledPayloadBanner() {
      *   - gzip in the bundle is corrupted (very rare; fresh build fixes) */
     return (
       <div className="mb-3 rounded-md border border-[var(--color-bad)] bg-[var(--color-surface)] p-2 text-[11px] text-[var(--color-bad)]">
-        <div className="font-semibold">Bundled payload not available</div>
+        <div className="font-semibold">
+          {tr(
+            "connection_bundled_payload_unavailable",
+            "Bundled payload not available",
+          )}
+        </div>
         <div className="mt-0.5 break-words font-mono text-[10px] opacity-90">
           {err}
         </div>
         <div className="mt-1 text-[10px] opacity-80">
-          If you've just rebuilt the payload, also rebuild the desktop
-          shell (<code>cargo build</code> in <code>client/src-tauri</code>)
-          so the new bytes get embedded. The shell embeds{" "}
-          <code>ps5upload.elf.gz</code> at compile time.
+          {tr(
+            "connection_rebuild_shell_hint",
+            "If you've just rebuilt the payload, also rebuild the desktop shell (",
+          )}
+          <code>cargo build</code>{" "}
+          {tr("connection_rebuild_shell_in", "in")}{" "}
+          <code>client/src-tauri</code>
+          {tr(
+            "connection_rebuild_shell_embeds",
+            ") so the new bytes get embedded. The shell embeds",
+          )}{" "}
+          <code>ps5upload.elf.gz</code>{" "}
+          {tr("connection_rebuild_shell_compile_time", "at compile time.")}
         </div>
       </div>
     );
@@ -1332,12 +1346,17 @@ function VersionBlock({ onResend }: { onResend?: () => void }) {
       </dl>
       {ps5Kernel && !ps5Firmware && (
         <p className="mt-2 text-[11px] text-[var(--color-muted)]">
-          Couldn't parse a firmware number from the kernel string. Look
-          up the kernel ID on psdevwiki.com, or run{" "}
+          {tr(
+            "connection_firmware_parse_failed",
+            "Couldn't parse a firmware number from the kernel string. Look up the kernel ID on psdevwiki.com, or run",
+          )}{" "}
           <code className="rounded bg-[var(--color-surface-3)] px-1">
             ps5-versions.elf
           </code>{" "}
-          from the Send payload tab.
+          {tr(
+            "connection_firmware_from_send_tab",
+            "from the Send payload tab.",
+          )}
         </p>
       )}
 

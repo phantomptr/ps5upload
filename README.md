@@ -43,9 +43,11 @@
   for quieter operation. Live CPU/SoC temperature is unreliable on
   current firmware (libkernel exports drift between FW points), so
   the temp reading may show `—`; the rest of the panel is stable.
-- **Send any payload** — push `.elf`, `.bin`, `.js`, or `.lua`
-  files to the PS5's loader port (9021). Recent-sends history with
-  click-to-replay and per-row success/fail badges.
+- **Send any payload** — push `.elf`, `.bin`, `.js`, `.lua`, or
+  `.jar` files to the PS5's loader port (typical defaults: `.elf` →
+  9021 elfldr, `.js` → 50000 WebKit-stage, `.lua` → 9026, `.jar` →
+  9025 BD-JB / BDJ; custom loaders may listen anywhere). Recent-sends
+  history with click-to-replay and per-row success/fail badges.
 - **Install fakepkgs** — pick a `.pkg`, click Install. Three-tier
   pipeline: bytes staged on PS5-local disk → install fires under
   ShellUI's authid via ptrace RPC → register / launch from the

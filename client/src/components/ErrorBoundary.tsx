@@ -1,5 +1,7 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
 import { log } from "../state/logs";
+import { useLangStore } from "../state/lang";
+import { t as translate } from "../i18n";
 
 interface Props {
   children: ReactNode;
@@ -24,10 +26,40 @@ interface State {
  */
 export class RootErrorBoundary extends Component<Props, State> {
   state: State = { err: null, componentStack: "" };
+  /** Unsubscribe handle for the language-store subscription. */
+  private unsubLang: (() => void) | null = null;
 
   static getDerivedStateFromError(err: Error): State {
     return { err, componentStack: "" };
   }
+
+  componentDidMount() {
+    // This is a class component, so `useTr()` (a hook) is off-limits.
+    // Subscribe to the language store directly and force a re-render
+    // when `lang` changes so the crash screen still respects a
+    // language switch. The subscription only matters while the error
+    // UI is on screen — but it's cheap to keep for the boundary's
+    // whole lifetime and avoids wiring it up inside componentDidCatch.
+    this.unsubLang = useLangStore.subscribe((s, prev) => {
+      if (s.lang !== prev.lang) this.forceUpdate();
+    });
+  }
+
+  componentWillUnmount() {
+    this.unsubLang?.();
+    this.unsubLang = null;
+  }
+
+  /** Non-hook translator for this class component. Reads the current
+   *  language straight off the store and falls back to the English
+   *  string when the key is absent (mirrors `useTr()`'s 2-arg form).
+   *  The locale dict may still be lazy-loading when a crash happens;
+   *  `translate()` returns the key itself in that case, so we fall
+   *  back to English — the right behaviour for an error screen. */
+  private tr = (key: string, fallback: string): string => {
+    const result = translate(useLangStore.getState().lang, key);
+    return result === key ? fallback : result;
+  };
 
   componentDidCatch(err: Error, info: ErrorInfo) {
     // Send to the in-app log store so the Logs tab shows it. We use
@@ -53,14 +85,17 @@ export class RootErrorBoundary extends Component<Props, State> {
         >
           <div className="w-full max-w-xl rounded-xl border border-[var(--color-bad)] bg-[var(--color-bad-soft)] p-6">
             <div className="text-base font-semibold text-[var(--color-bad)]">
-              Something went wrong rendering this screen.
+              {this.tr(
+                "errorboundary_something_wrong",
+                "Something went wrong rendering this screen.",
+              )}
             </div>
             <div className="mt-1 break-words text-sm text-[var(--color-text)]">
               {err.name}: {err.message}
             </div>
             <details className="mt-3 text-xs text-[var(--color-muted)]">
               <summary className="cursor-pointer select-none">
-                Show stack trace
+                {this.tr("errorboundary_show_stack", "Show stack trace")}
               </summary>
               <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded bg-[var(--color-surface)] p-3 font-mono text-[11px] leading-tight">
                 {err.stack ?? "(no stack)"}
@@ -75,18 +110,21 @@ export class RootErrorBoundary extends Component<Props, State> {
                 }
                 className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-sm font-medium hover:bg-[var(--color-surface-hover)]"
               >
-                Try again
+                {this.tr("errorboundary_try_again", "Try again")}
               </button>
               <button
                 type="button"
                 onClick={() => window.location.reload()}
                 className="rounded-md bg-[var(--color-bad)] px-3 py-1.5 text-sm font-medium text-white hover:opacity-90"
               >
-                Reload window
+                {this.tr("errorboundary_reload_window", "Reload window")}
               </button>
             </div>
             <div className="mt-3 text-[11px] text-[var(--color-muted)]">
-              The error has been recorded in the Logs tab.
+              {this.tr(
+                "errorboundary_recorded_in_logs",
+                "The error has been recorded in the Logs tab.",
+              )}
             </div>
           </div>
         </div>

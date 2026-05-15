@@ -81,10 +81,21 @@ pub fn save_archive_cleanup_temp(path: String) -> Result<(), String> {
     // Safety net: only delete inside the system temp dir. If the renderer
     // ever passes a bad path (or this command is misused), we won't
     // recursively wipe an arbitrary directory.
+    //
+    // `Path::starts_with` is true when `p == tmp`, so a `starts_with`
+    // check alone would happily `remove_dir_all` the entire system temp
+    // root. Require that `p` is a *strict* descendant AND that its final
+    // component carries the `ps5upload-save-` prefix that
+    // `save_archive_make_temp` always stamps — so cleanup can only ever
+    // touch a dir this module created.
     let tmp = std::env::temp_dir();
-    if !p.starts_with(&tmp) {
+    let named_ours = p
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.starts_with("ps5upload-save-"));
+    if !p.starts_with(&tmp) || p == tmp.as_path() || !named_ours {
         return Err(format!(
-            "refusing to clean path outside temp dir: {}",
+            "refusing to clean path outside our temp scratch dirs: {}",
             p.display()
         ));
     }
@@ -313,6 +324,16 @@ fn backup_finalize(title_dir: &Path) -> Result<SaveArchiveBackupFinalizeResp> {
             if read_ok && byte0[0] == 0x01 {
                 // PS4 / PS2-Classic / PSP-Classic — strip the prefix.
                 let new_path = title_dir.join(rest);
+                // Don't let a prefix-strip silently clobber a sibling that
+                // already occupies the unprefixed name (e.g. both
+                // `sdimg_SLUS-20268` and a bare `SLUS-20268` present) —
+                // `fs::rename` overwrites the destination on Unix.
+                if new_path.exists() {
+                    return Err(anyhow!(
+                        "cannot strip sdimg_ prefix: {} already exists",
+                        new_path.display()
+                    ));
+                }
                 std::fs::rename(&path, &new_path).with_context(|| {
                     format!("rename {} -> {}", path.display(), new_path.display())
                 })?;

@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { Keyboard, X } from "lucide-react";
 
+import { useTr } from "../state/lang";
+
 /**
  * Press `?` to display every keybinding the app supports. Modeled
  * after GitHub's `?` overlay — globally available, dismisses on
@@ -41,6 +43,7 @@ const SHORTCUTS: Array<{ section: string; items: Shortcut[] }> = [
 ];
 
 export function ShortcutsOverlay() {
+  const tr = useTr();
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
@@ -77,7 +80,9 @@ export function ShortcutsOverlay() {
         <header className="flex items-center justify-between border-b border-[var(--color-border)] px-4 py-3">
           <div className="flex items-center gap-2">
             <Keyboard size={14} className="text-[var(--color-muted)]" />
-            <h2 className="text-sm font-semibold">Keyboard shortcuts</h2>
+            <h2 className="text-sm font-semibold">
+              {tr("shortcuts_title", "Keyboard shortcuts")}
+            </h2>
           </div>
           <button
             type="button"

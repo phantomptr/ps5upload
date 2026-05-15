@@ -4,6 +4,40 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.5.0
+
+- **`.jar` payloads** can now be sent — both from the Send Payload
+  screen and as steps inside playlists. Useful for BD-JB / BDJ-runtime
+  loaders. A new collapsible reference under the port field lists
+  typical loader ports per format (`.elf` → 9021 elfldr, `.js` →
+  50000 WebKit-stage, `.lua` → 9026, `.jar` → 9025 BD-JB) with a
+  note that custom loaders may listen on any port.
+- **Sidebar nav and other data-driven UI** now translate correctly in
+  all 17 non-English locales. Labels like "Dashboard", "Save data",
+  "Screenshots", "Disk usage", "Payload library", "Kernel log", and
+  "Shell" used to silently fall back to English even when the locale
+  had a translation, because the keys never made it into the
+  canonical English dictionary. A dev-mode console warning now
+  catches any future occurrences of the same gap.
+- **Full translation refresh** across all non-English locales —
+  roughly 190 keys per locale of pending backlog caught up, including
+  Connection screen, Upload status messages, Install Package
+  diagnostics, and all the small UI fragments that had been showing
+  in English for months.
+- **Multi-pass bug sweep** fixed several real correctness issues
+  across the engine, the Tauri shell, and the PS5 payload metadata
+  parsers — including a payload-version flicker on transient probe
+  misses, a library-refresh race on host switch, a Windows port-
+  killer that could `taskkill` an unrelated PID, an unsafe drive-path
+  acceptance in the USB autoloader wizard, and three corruption-error
+  paths in the PKG / UFS2 parsers that always surfaced as a generic
+  EOF instead of the descriptive `BlockOutOfRange` variant.
+- **Internal**: every user-visible string in JSX is now enforced at
+  build time to route through the translator — adding a hardcoded
+  label is a lint error, not a silent gap.
+
+---
+
 ## 2.4.0
 
 - Save data backup is now a clean `<title_id>.zip` with just the image

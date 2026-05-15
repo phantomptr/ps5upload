@@ -355,7 +355,10 @@ function SchedulesPanel() {
           type="text"
           value={labelDraft}
           onChange={(e) => setLabelDraft(e.target.value)}
-          placeholder="Label (e.g. nightly tick)"
+          placeholder={tr(
+            "settings_schedule_label_placeholder",
+            "Label (e.g. nightly tick)",
+          )}
           className="flex-1 rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-xs"
         />
         <input
@@ -369,8 +372,10 @@ function SchedulesPanel() {
           onChange={(e) => setActionDraft(e.target.value as "notif" | "power_tick")}
           className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-xs"
         >
-          <option value="notif">Notify only</option>
-          <option value="power_tick">PS5 power tick</option>
+          <option value="notif">{tr("settings_notify_only", "Notify only")}</option>
+          <option value="power_tick">
+            {tr("settings_ps5_power_tick", "PS5 power tick")}
+          </option>
         </select>
         <button
           type="button"

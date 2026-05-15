@@ -298,11 +298,22 @@ fn parse_sfo_string_keys(
     let data_table_off = u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]) as usize;
     let entry_count = u32::from_le_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]) as usize;
     let mut out = std::collections::HashMap::new();
-    let table_off = 20;
+    let table_off: usize = 20;
     for i in 0..entry_count {
-        let e = table_off + i * 16;
-        if e + 16 > bytes.len() {
-            break;
+        // All of these offsets come straight off disk as u32/u16 and
+        // are widened with `as usize`. On a 32-bit build `usize` is
+        // also 32-bit, so `table_off + i*16`, `key_table_off + key_off`
+        // and `data_abs + data_len` can each wrap — a wrapped sum that
+        // lands below `bytes.len()` would sail past the bounds check
+        // and panic (or worse) on the slice below. Do every add/mul
+        // with checked arithmetic and skip the entry on overflow.
+        let e = match i.checked_mul(16).and_then(|m| table_off.checked_add(m)) {
+            Some(e) => e,
+            None => break,
+        };
+        match e.checked_add(16) {
+            Some(end) if end <= bytes.len() => {}
+            _ => break,
         }
         let key_off = u16::from_le_bytes([bytes[e], bytes[e + 1]]) as usize;
         let format = u16::from_le_bytes([bytes[e + 2], bytes[e + 3]]);
@@ -311,9 +322,19 @@ fn parse_sfo_string_keys(
         let data_off =
             u32::from_le_bytes([bytes[e + 12], bytes[e + 13], bytes[e + 14], bytes[e + 15]])
                 as usize;
-        let key_abs = key_table_off + key_off;
-        let data_abs = data_table_off + data_off;
-        if data_abs + data_len > bytes.len() || key_abs >= bytes.len() {
+        let key_abs = match key_table_off.checked_add(key_off) {
+            Some(v) => v,
+            None => continue,
+        };
+        let data_abs = match data_table_off.checked_add(data_off) {
+            Some(v) => v,
+            None => continue,
+        };
+        let data_end = match data_abs.checked_add(data_len) {
+            Some(v) => v,
+            None => continue,
+        };
+        if data_end > bytes.len() || key_abs >= bytes.len() {
             continue;
         }
         let key_end = (key_abs..bytes.len())
@@ -324,7 +345,7 @@ fn parse_sfo_string_keys(
         // reuses the same number in some tools — but in PSF, 0x0004 is
         // utf-8 special and 0x0204 is utf-8 normal. Both end at NUL).
         if format == 0x0004 || format == 0x0204 {
-            let value = String::from_utf8_lossy(&bytes[data_abs..data_abs + data_len])
+            let value = String::from_utf8_lossy(&bytes[data_abs..data_end])
                 .trim_end_matches('\0')
                 .to_string();
             out.insert(key, value);
@@ -626,7 +647,13 @@ fn parse_sfo_into(buf: &[u8], meta: &mut PkgMetadata) -> Result<(), &'static str
         let data_len = u32::from_le_bytes([e[4], e[5], e[6], e[7]]) as usize;
         let d_off = u32::from_le_bytes([e[12], e[13], e[14], e[15]]) as usize;
 
-        let key_abs = keys_off + key_off;
+        // Offsets are u16/u32 widened with `as usize`; on a 32-bit
+        // build these sums can wrap. Checked arithmetic keeps a
+        // wrapped value from slipping under the `buf.len()` guard.
+        let key_abs = match keys_off.checked_add(key_off) {
+            Some(v) => v,
+            None => continue,
+        };
         if key_abs >= buf.len() {
             continue;
         }
@@ -637,12 +664,19 @@ fn parse_sfo_into(buf: &[u8], meta: &mut PkgMetadata) -> Result<(), &'static str
             .unwrap_or(buf.len());
         let key = std::str::from_utf8(&buf[key_abs..key_end]).unwrap_or("");
 
-        let data_abs = data_off + d_off;
-        if data_abs + data_len > buf.len() {
+        let data_abs = match data_off.checked_add(d_off) {
+            Some(v) => v,
+            None => continue,
+        };
+        let data_end = match data_abs.checked_add(data_len) {
+            Some(v) => v,
+            None => continue,
+        };
+        if data_end > buf.len() {
             continue;
         }
         // Most string entries are NUL-terminated within `data_len`.
-        let trimmed = &buf[data_abs..data_abs + data_len];
+        let trimmed = &buf[data_abs..data_end];
         let trimmed_end = trimmed
             .iter()
             .position(|&b| b == 0)

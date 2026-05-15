@@ -109,8 +109,11 @@ pub async fn payload_check(ip: String) -> serde_json::Value {
 /// file silently streamed garbage to the loader, which then either
 /// hung or no-oped — surfacing to the user as "send succeeded but
 /// the payload didn't come up." Other ports (custom-build loaders,
-/// .bin/.js/.lua scene flows surfaced by `payload_probe`) skip the
-/// check; those formats don't begin with the ELF magic.
+/// .bin/.js/.lua/.jar scene flows surfaced by `payload_probe`) skip
+/// the check; those formats don't begin with the ELF magic. JARs in
+/// particular start with `PK\x03\x04` (ZIP) — sending them to :9021
+/// would be a no-op; users targeting BD-JB-style loaders are expected
+/// to set a non-9021 port in the Send Payload screen.
 async fn do_payload_send(ip: &str, path: &str, target_port: u16) -> Result<u64, String> {
     let mut file = tokio::fs::File::open(path)
         .await
@@ -403,7 +406,7 @@ pub async fn payload_bundled_path(app: AppHandle) -> serde_json::Value {
 /// that `App.tsx PayloadProbeResult` is declared against:
 ///   { is_ps5upload: boolean, code: 'payload_probe_<reason>' }
 /// where <reason> is one of:
-///   invalid_ext    — extension isn't .elf/.bin/.js/.lua
+///   invalid_ext    — extension isn't .elf/.bin/.js/.lua/.jar
 ///   detected       — filename or file contents contain the "ps5upload"
 ///                    signature; this is our payload
 ///   no_signature   — accepted extension but doesn't look like ours
@@ -414,6 +417,9 @@ pub async fn payload_bundled_path(app: AppHandle) -> serde_json::Value {
 ///   - .bin     : raw blobs (some kernel patches ship as .bin)
 ///   - .js      : browser-stage JS exploits
 ///   - .lua     : scripting-runtime plugins
+///   - .jar     : BD-JB / BDJ-runtime payloads (Andy Nguyen's BD-JB
+///                chain and follow-ups; user-supplied JAR-aware
+///                loaders typically listen on a non-9021 port)
 /// The probe doesn't gate — it just labels. The UI tells the user
 /// what kind of file they picked; the actual loader on the PS5 side
 /// is responsible for accepting or rejecting it.
@@ -425,7 +431,7 @@ pub async fn payload_probe(path: String) -> serde_json::Value {
         .and_then(|e| e.to_str())
         .map(|s| s.to_ascii_lowercase())
         .unwrap_or_default();
-    if !matches!(ext.as_str(), "elf" | "bin" | "js" | "lua") {
+    if !matches!(ext.as_str(), "elf" | "bin" | "js" | "lua" | "jar") {
         return serde_json::json!({
             "is_ps5upload": false,
             "code": "payload_probe_invalid_ext",

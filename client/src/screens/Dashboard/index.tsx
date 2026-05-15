@@ -114,21 +114,28 @@ export default function DashboardScreen() {
         />
       ) : (
         <div className="mx-auto grid max-w-6xl gap-3 md:grid-cols-2 xl:grid-cols-3">
-          <DashCard icon={<Cable size={14} />} title="Connection">
-            <KvRow label="Host" value={host || "—"} />
+          <DashCard
+            icon={<Cable size={14} />}
+            title={tr("dashboard_connection_title", "Connection")}
+          >
+            <KvRow label={tr("dashboard_label_host", "Host")} value={host || "—"} />
             <KvRow
-              label="Engine"
+              label={tr("dashboard_label_engine", "Engine")}
               value={engineStatus === "up" ? "up" : "down"}
               good={engineStatus === "up"}
             />
             <KvRow
-              label="Payload"
+              label={tr("dashboard_label_payload", "Payload")}
               value={payloadVersion ? `v${payloadVersion}` : "up"}
               good={payloadStatus === "up"}
             />
-            <KvRow label="Kernel" value={ps5Kernel ?? "—"} small />
             <KvRow
-              label="Kernel R/W"
+              label={tr("dashboard_label_kernel", "Kernel")}
+              value={ps5Kernel ?? "—"}
+              small
+            />
+            <KvRow
+              label={tr("dashboard_label_kernel_rw", "Kernel R/W")}
               value={
                 ucredElevated === null
                   ? "—"
@@ -141,23 +148,26 @@ export default function DashboardScreen() {
             />
           </DashCard>
 
-          <DashCard icon={<Cpu size={14} />} title="Live sensors">
+          <DashCard
+            icon={<Cpu size={14} />}
+            title={tr("dashboard_live_sensors_title", "Live sensors")}
+          >
             {temps ? (
               <>
                 <KvRow
-                  label="CPU"
+                  label={tr("dashboard_label_cpu", "CPU")}
                   value={`${temps.cpu_temp?.toFixed(0) ?? "?"}°C`}
                 />
                 <KvRow
-                  label="SoC"
+                  label={tr("dashboard_label_soc", "SoC")}
                   value={`${temps.soc_temp?.toFixed(0) ?? "?"}°C`}
                 />
                 <KvRow
-                  label="CPU freq"
+                  label={tr("dashboard_label_cpu_freq", "CPU freq")}
                   value={`${(temps.cpu_freq_mhz ?? 0).toFixed(0)} MHz`}
                 />
                 <KvRow
-                  label="SoC power"
+                  label={tr("dashboard_label_soc_power", "SoC power")}
                   value={`${((temps.soc_power_mw ?? 0) / 1000).toFixed(1)} W`}
                 />
               </>
@@ -167,7 +177,7 @@ export default function DashboardScreen() {
             {power && (
               <>
                 <KvRow
-                  label="Lifetime"
+                  label={tr("dashboard_label_lifetime", "Lifetime")}
                   value={`${power.operating_time_hours ?? 0}h, ${power.boot_count ?? 0} boots`}
                 />
               </>
@@ -180,7 +190,7 @@ export default function DashboardScreen() {
           >
             {runningTitleIds.size === 0 ? (
               <div className="text-[11px] text-[var(--color-muted)]">
-                Nothing currently running.
+                {tr("dashboard_nothing_running", "Nothing currently running.")}
               </div>
             ) : (
               <ul className="space-y-0.5 text-[11px]">
@@ -193,17 +203,20 @@ export default function DashboardScreen() {
                   ))}
                 {runningTitleIds.size > 5 && (
                   <li className="text-[var(--color-muted)]">
-                    + {runningTitleIds.size - 5} more
+                    + {runningTitleIds.size - 5} {tr("dashboard_more", "more")}
                   </li>
                 )}
               </ul>
             )}
           </DashCard>
 
-          <DashCard icon={<ActivityIcon size={14} />} title="Recent activity">
+          <DashCard
+            icon={<ActivityIcon size={14} />}
+            title={tr("dashboard_recent_activity_title", "Recent activity")}
+          >
             {recentActivity.length === 0 ? (
               <div className="text-[11px] text-[var(--color-muted)]">
-                No recent operations.
+                {tr("dashboard_no_recent_operations", "No recent operations.")}
               </div>
             ) : (
               <ul className="space-y-0.5 text-[11px]">
@@ -234,10 +247,13 @@ export default function DashboardScreen() {
             )}
           </DashCard>
 
-          <DashCard icon={<Bell size={14} />} title="Recent notifications">
+          <DashCard
+            icon={<Bell size={14} />}
+            title={tr("dashboard_recent_notifications_title", "Recent notifications")}
+          >
             {recentNotifs.length === 0 ? (
               <div className="text-[11px] text-[var(--color-muted)]">
-                No notifications yet.
+                {tr("dashboard_no_notifications", "No notifications yet.")}
               </div>
             ) : (
               <ul className="space-y-1 text-[11px]">

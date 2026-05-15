@@ -361,6 +361,7 @@ function FailedRowErrorCard({
   reason: string | null;
   detail: string | null;
 }) {
+  const tr = useTr();
   const humanized = humanizeJobErrorReason(reason ?? undefined);
   return (
     <div className="mt-2 rounded-md border border-[var(--color-bad)] bg-[var(--color-surface-2)] p-2 text-[11px] text-[var(--color-bad)]">
@@ -374,7 +375,7 @@ function FailedRowErrorCard({
           )}
           <details className="mt-1 cursor-pointer">
             <summary className="text-[10px] text-[var(--color-muted)] hover:text-[var(--color-text)]">
-              raw error
+              {tr("queue_raw_error", "raw error")}
             </summary>
             <code className="mt-1 block whitespace-pre-wrap break-all font-mono text-[10px] text-[var(--color-muted)]">
               {rawError}

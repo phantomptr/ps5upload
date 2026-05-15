@@ -529,6 +529,7 @@ function AutotuneSubsection({
   edits?: Record<string, string>;
   onEdit?: (editKey: string, value: string) => void;
 }) {
+  const tr = useTr();
   return (
     <div>
       <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
@@ -564,7 +565,7 @@ function AutotuneSubsection({
                           ? "border-[var(--color-accent)]"
                           : "border-[var(--color-border)]"
                       }`}
-                      placeholder="(blank=delete)"
+                      placeholder={tr("smp_blank_delete", "(blank=delete)")}
                     />
                   ) : (
                     r.value

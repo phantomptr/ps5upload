@@ -135,6 +135,23 @@ export function ensureLocale(code: LanguageCode): Promise<void> {
  *  Unknown placeholders stay verbatim (signal to the developer that a
  *  call site is using a key that doesn't have that placeholder, or
  *  vice versa). */
+/** Dev-mode safety net for the "key in code but not in any dictionary"
+ *  class of i18n gap that bypasses both the ESLint rule and the
+ *  phantom extractor. Triggered when a `tr(key, ...)` call hits a key
+ *  that isn't in the active locale AND isn't in English — the caller
+ *  is about to fall back to the inline `fallback` string passed at
+ *  the call site (via `useTr()`), which means non-English users will
+ *  see English no matter what. Common cause: data-driven UIs that
+ *  invoke `tr(item.key, item.fallback)` over an array of `{key,
+ *  fallback}` objects (Sidebar nav, command palette items, table
+ *  configs); the extractor needs literal `tr("x","y")` pairs to
+ *  harvest, so those keys never land in en.ts.
+ *
+ *  Warnings are deduped per key so a 100-item nav doesn't flood the
+ *  console. Production builds (import.meta.env.DEV false) skip the
+ *  whole check — zero runtime cost. */
+const warnedMissingKeys = new Set<string>();
+
 export function t(
   lang: string,
   key: string,
@@ -143,6 +160,21 @@ export function t(
   const langCode = (lang in loaded ? lang : "en") as LanguageCode;
   const dict = loaded[langCode] ?? loaded.en!;
   const raw = dict[key] ?? loaded.en![key] ?? key;
+  if (import.meta.env?.DEV) {
+    if (
+      raw === key &&
+      !(key in dict) &&
+      !(key in (loaded.en ?? {})) &&
+      !warnedMissingKeys.has(key)
+    ) {
+      warnedMissingKeys.add(key);
+      console.warn(
+        `[i18n] missing key "${key}" — not in ${langCode} or en. ` +
+          "The call site's fallback string will render; non-English " +
+          "users will see English. Add this key to client/src/i18n/locales/en.ts.",
+      );
+    }
+  }
   if (!vars) return raw;
   return raw.replace(/\{(\w+)\}/g, (match, name) =>
     Object.prototype.hasOwnProperty.call(vars, name)

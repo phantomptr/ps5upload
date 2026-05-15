@@ -1024,7 +1024,17 @@ fn list_remote_scoped(
                 out.insert(rel_child, entry.size);
             }
             offset += listing.entries.len() as u64;
-            if listing.entries.is_empty() || !listing.truncated {
+            // `truncated` only means "the response buffer filled up" — it
+            // is NOT set when a full `limit`-sized page is returned. A dir
+            // with exactly 300 files returns 256 entries with
+            // truncated=false, so breaking on `!truncated` would silently
+            // drop files 257+. The natural end of a listing is a *short*
+            // page (fewer than `limit`) that wasn't buffer-truncated; a
+            // full 256-entry page (truncated or not) means "ask again".
+            // The empty-page check covers the exact-multiple-of-256 case.
+            if listing.entries.is_empty()
+                || (!listing.truncated && (listing.entries.len() as u64) < 256)
+            {
                 break;
             }
         }

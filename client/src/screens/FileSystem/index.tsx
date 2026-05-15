@@ -1233,7 +1233,7 @@ export default function FileSystemScreen() {
               onClick={() => setMkdirDraft("")}
               disabled={loading || !host?.trim()}
             >
-              New folder
+              {tr("fs_new_folder", "New folder")}
             </Button>
             <Button
               variant="secondary"
@@ -1243,7 +1243,7 @@ export default function FileSystemScreen() {
               disabled={loading || !host?.trim()}
               loading={loading}
             >
-              Refresh
+              {tr("fs_refresh", "Refresh")}
             </Button>
           </div>
         }
@@ -1289,7 +1289,7 @@ export default function FileSystemScreen() {
             )}
             {volumes.map((v) => (
               <option key={v.path} value={v.path}>
-                {v.path} · {formatBytes(v.free_bytes)} free
+                {v.path} · {formatBytes(v.free_bytes)} {tr("fs_free", "free")}
               </option>
             ))}
           </select>
@@ -1547,13 +1547,16 @@ export default function FileSystemScreen() {
 
       {entries === null && !loading && !error && (
         <div className="rounded-md border border-dashed border-[var(--color-border)] p-4 text-center text-xs text-[var(--color-muted)]">
-          Connect to your PS5 first — use the Connection tab.
+          {tr(
+            "fs_connect_first",
+            "Connect to your PS5 first — use the Connection tab.",
+          )}
         </div>
       )}
 
       {entries && entries.length === 0 && (
         <div className="rounded-md border border-dashed border-[var(--color-border)] p-4 text-center text-xs text-[var(--color-muted)]">
-          Empty folder.
+          {tr("fs_empty_folder", "Empty folder.")}
         </div>
       )}
 
@@ -1817,7 +1820,7 @@ function RecentPathsDropdown({
         title={tr("fs_recent_tooltip", undefined, "Recent destinations")}
         className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
       >
-        Recent
+        {tr("fs_recent", "Recent")}
         <ChevronRight
           size={10}
           className={`transition-transform ${open ? "rotate-90" : ""}`}

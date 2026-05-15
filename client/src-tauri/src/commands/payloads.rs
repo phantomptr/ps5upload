@@ -392,11 +392,13 @@ fn read_cached_release(path: &std::path::Path) -> Option<(GithubRelease, u64)> {
 /// would land on disk and immediately fail the ELF magic check.
 ///
 /// We prioritise the executable shapes the loader actually accepts:
-/// `.elf` first, then `.bin`/`.lua`/`.js` for non-ELF loaders some
-/// payloads use. Everything else is last-resort and almost always a
+/// `.elf` first, then `.bin`/`.lua`/`.js`/`.jar` for non-ELF loaders
+/// some payloads use. `.jar` is last because BD-JB-style JAR payloads
+/// need a JAR-aware loader on a non-9021 port — the :9021 elfldr
+/// rejects them. Everything else is last-resort and almost always a
 /// mistake (e.g. `shadowmountplus-1.6beta10.zip` is the source
 /// bundle, not the runnable payload — bug observed in the field).
-const PAYLOAD_EXT_PRIORITY: &[&str] = &[".elf", ".bin", ".lua", ".js"];
+const PAYLOAD_EXT_PRIORITY: &[&str] = &[".elf", ".bin", ".lua", ".js", ".jar"];
 
 fn ext_priority(name: &str) -> usize {
     let lower = name.to_ascii_lowercase();
