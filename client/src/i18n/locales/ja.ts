@@ -1074,6 +1074,7 @@ logged_error_many: "{count} 件のエラーをログ",
 library_fpkg_kstuff_tip: "ヒント: .ffpkg / .exfat のマウントを高速化（3〜4倍）するには、デフォルトの kstuff の代わりに drakmor/kstuff-lite（ファームウェア 3.00-10.01）を試してください。Payloads ライブラリからインストールできます。",
 library_fpkg_kstuff_tip_repo: "GitHubで見る",
 library_fpkg_kstuff_tip_dismiss: "今後表示しない",
+payloads_refresh_error_banner: "GitHub からの更新に失敗しました — キャッシュされたスナップショットを表示しています。GitHub の最新タグは、ここに表示されているものより新しい可能性があります。",
 };
 
 export default ja;

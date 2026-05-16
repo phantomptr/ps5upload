@@ -989,6 +989,14 @@ export interface PayloadReleaseInfo {
   picked_asset_name: string;
   picked_asset_size: number;
   cached_age_secs: number;
+  /** Present when the response came from cache because the live
+   *  fetch failed (network down, GitHub rate-limited, 5xx outage,
+   *  malformed body). UI should render a banner so the user knows
+   *  the data is potentially stale and what went wrong, instead of
+   *  silently presenting "old data as if fresh". Omitted (undefined)
+   *  when the fetch succeeded. Mirrors sonicloader's `refreshError`
+   *  field — see backend `payloads.rs::ReleaseInfo`. */
+  refresh_error?: string;
 }
 
 export interface PayloadLocalEntry {

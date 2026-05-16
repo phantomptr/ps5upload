@@ -1073,6 +1073,7 @@ logged_error_many: "{count}টি লগ করা ত্রুটি",
 library_fpkg_kstuff_tip: "টিপ: দ্রুত .ffpkg / .exfat মাউন্টিং (3-4×) এর জন্য, ডিফল্ট kstuff এর পরিবর্তে drakmor/kstuff-lite (ফার্মওয়্যার 3.00-10.01) ব্যবহার করুন। Payloads লাইব্রেরি থেকে ইনস্টল করুন।",
 library_fpkg_kstuff_tip_repo: "GitHub-এ দেখুন",
 library_fpkg_kstuff_tip_dismiss: "আর দেখাবেন না",
+payloads_refresh_error_banner: "GitHub থেকে রিফ্রেশ করা যায়নি — ক্যাশ করা স্ন্যাপশট দেখানো হচ্ছে। GitHub-এর সর্বশেষ ট্যাগ এখানে যা দেখানো হয়েছে তার চেয়ে নতুন হতে পারে।",
 };
 
 export default bn;

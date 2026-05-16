@@ -1074,6 +1074,7 @@ logged_error_many: "{count}개의 오류 기록됨",
 library_fpkg_kstuff_tip: "팁: .ffpkg / .exfat 마운트를 더 빠르게(3-4배) 하려면 기본 kstuff 대신 drakmor/kstuff-lite(펌웨어 3.00-10.01)를 사용해 보세요. Payloads 라이브러리에서 설치할 수 있습니다.",
 library_fpkg_kstuff_tip_repo: "GitHub에서 보기",
 library_fpkg_kstuff_tip_dismiss: "다시 표시하지 않음",
+payloads_refresh_error_banner: "GitHub에서 새로 고침하지 못했습니다 — 캐시된 스냅샷을 표시 중입니다. GitHub의 최신 태그가 여기에 표시된 것보다 최신일 수 있습니다.",
 };
 
 export default ko;

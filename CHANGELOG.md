@@ -4,6 +4,66 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.8.0
+
+This release lifts a handful of ideas from sonicloader (sister
+project) after a deep cross-read of their PKG install path. Three
+concrete improvements landed; the big one — bundling DPI as a new
+install tier — is split into a catalogue entry now and a full
+install-runner integration in a follow-up release.
+
+Also fixes a long-latent Upload-screen race that was held back from
+2.7.x for verification.
+
+- **The Upload screen no longer shows the wrong file/folder in the
+  destination preview after picking a second source.** When
+  inspectFolder for the first pick resolved AFTER the user had
+  already picked a different source, its closure-captured `path`
+  would overwrite the newer source.path — the destination preview
+  then rendered the OLD name even though the user had moved on, and
+  hitting Upload would land the wrong source at the displayed path.
+  Fixed by guarding the post-await `set()` with `get().source?.path
+  === path` so stale inspect results are dropped. 4 unit tests
+  cover the race patterns (folder→folder, folder→file, stale
+  failure, no-race control).
+
+- **Staged-install PKGs now land on the PS5 as `<ContentID>.pkg`
+  instead of `<queue-id>_<ts>.pkg`.** Sony's installer keys on the
+  basename for some FW points and silently rejects mismatched
+  names — a class of "PKG installer rejected the file" failures
+  that looked like the PKG was bad but were actually a naming
+  mismatch. Fix is symmetric with sonicloader's
+  `canonicalise_pkg_filename` (homebrew.c:436). Falls back to the
+  legacy `<id>_<ts>.pkg` shape when the PKG header has no parseable
+  ContentID, so malformed homebrew PKGs still get a shot at install.
+- **The Payloads release info now survives a GitHub outage.** The
+  cache was already saving release JSON on disk and falling back on
+  network errors, but a 403 (rate-limited) or 5xx (Cloudflare
+  hiccup) bypassed it — the user saw "fetch failed" even when a
+  perfectly good cached snapshot was sitting there. Now any non-2xx
+  response (or malformed body, or read error) also falls back to
+  the cached snapshot, with a yellow "couldn't refresh — showing
+  cached" banner so it's clear the data might be stale. Pattern
+  ported from sonicloader's `src/releases.c:383-409` with the
+  `refreshError` field name kept.
+- **`ezremote-dpi` (cy33hc/ps5-ezremote-dpi) is now in the payload
+  catalogue.** DPI is a long-lived install daemon that owns Sony's
+  install state machine for a PKG's full lifetime, sidestepping
+  the class of "install accepted then evaporates" bugs that hit
+  cross-process callers. Install it from the Library tab. In a
+  follow-up release the install runner will offer "DPI" as a new
+  install method that proxies through it; this release lands the
+  catalogue entry so anyone can install DPI today.
+
+Sonicloader fields we explicitly verified we don't need to port
+(already covered): persistent notification inbox (we have
+`state/notifications.ts` with the same 64-entry ring + persistence
+shape), /data → /user/data sandbox path rewrite (already in
+`payload/include/config.h`), and the FTX2 wire protocol (strictly
+more capable than their loopback DPI socket / chunked HTTP).
+
+---
+
 ## 2.7.2
 
 - **drakmor/kstuff-lite is now in the payload catalogue.** It's a

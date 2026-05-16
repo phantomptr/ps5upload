@@ -1073,6 +1073,7 @@ logged_error_many: "{count} erros registrados",
 library_fpkg_kstuff_tip: "Dica: para montagem mais rápida de .ffpkg / .exfat (3-4×), experimente drakmor/kstuff-lite (firmware 3.00-10.01) em vez do kstuff padrão. Instale pela biblioteca de Payloads.",
 library_fpkg_kstuff_tip_repo: "Ver no GitHub",
 library_fpkg_kstuff_tip_dismiss: "Não mostrar novamente",
+payloads_refresh_error_banner: "Não foi possível atualizar do GitHub — mostrando snapshot em cache. A tag mais recente no GitHub pode ser mais nova do que a mostrada aqui.",
 };
 
 export default pt_BR;

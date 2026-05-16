@@ -4,6 +4,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { bundledPayloadPath, payloadCheck, sendPayload } from "../api/ps5";
 import { compareVersions } from "../lib/semver";
 import { isNpxsContentId } from "../lib/npxs";
+import { stagingBasename } from "../lib/pkgStagingPath";
 import {
   useInstallSettingsStore,
   type InstallMethod,
@@ -668,7 +669,15 @@ export const useInstallQueue = create<InstallQueueState>((set, get) => ({
       //     through with localPs5Path null (Tier-2 best-effort).
       let localPs5Path: string | null = null;
       if (!next.isSplit && next.installMethod === "stage") {
-        const stagingPath = `/user/data/ps5upload/pkg_temp/${next.id}_${Date.now()}.pkg`;
+        // Name the staging file after the PKG's ContentID when we
+        // have it. Sony's installer code paths key on basename for
+        // some FW points — sonicloader's homebrew.c:436
+        // (canonicalise_pkg_filename) discovered this empirically by
+        // observing silent rejections of perfectly-valid PKGs whose
+        // filename didn't match the embedded ContentID. Falls back
+        // to `<queueId>_<ts>.pkg` when ContentID is missing/unsafe.
+        const basename = stagingBasename(next.contentId, next.id, Date.now());
+        const stagingPath = `/user/data/ps5upload/pkg_temp/${basename}`;
         // Mark phase=staging so the row's progress bar shows the
         // upload, not a stale "queued" state. bytesDownloaded gets
         // re-purposed via stagingBytes for the upload progress.

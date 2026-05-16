@@ -406,6 +406,27 @@ function PayloadCard({
               </span>
             )}
           </div>
+          {release.refresh_error && (
+            // Live fetch failed (GitHub down, rate-limited, etc.)
+            // but we have a cached snapshot. Show that explicitly
+            // instead of swallowing it — without this banner the
+            // user has no way to tell live data from N-day-stale
+            // cache, and might wonder why the "latest" version
+            // doesn't match a release they just saw on GitHub.
+            <div className="mt-2 flex items-start gap-1.5 rounded-md border border-[var(--color-warn)] bg-[var(--color-surface)] p-2 text-[11px] text-[var(--color-warn)]">
+              <AlertTriangle size={11} className="mt-0.5 shrink-0" />
+              <span>
+                {tr(
+                  "payloads_refresh_error_banner",
+                  undefined,
+                  "Couldn't refresh from GitHub — showing cached snapshot. The latest tag on GitHub may be newer than what's shown here.",
+                )}{" "}
+                <span className="text-[var(--color-muted)]">
+                  ({release.refresh_error})
+                </span>
+              </span>
+            </div>
+          )}
           {release.body && (
             <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words text-[var(--color-text)]">
               {release.body}
