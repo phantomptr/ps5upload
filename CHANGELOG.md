@@ -4,6 +4,27 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.7.2
+
+- **drakmor/kstuff-lite is now in the payload catalogue.** It's a
+  fork of EchoStretch's kstuff-lite with a hot path for `.ffpkg`
+  (UFS) mounting — measured 3-4× faster end-to-end — and lower
+  overhead in the repeated mount/unmount cycles that ShadowMount+
+  exercises heavily. Narrower firmware range (3.00 → 10.01) than
+  the default kstuff (which covers 1.00 → 12.x via runtime NID
+  resolution), so it's a sibling option, not a replacement. Browse
+  to the Payloads tab to install. Pick only one kstuff variant —
+  both write the same `/data/kstuff.elf` marker, and autoload runs
+  whichever you put in your autoload list.
+- **Library tab now nudges you toward the faster build if you
+  actually use `.ffpkg` / `.exfat` images.** A small dismissible
+  tip appears under the "Disk images" section header (only when
+  you have at least one image in your library) with a one-click
+  link to the drakmor repo. Translated in all 17 non-English
+  locales.
+
+---
+
 ## 2.7.1
 
 - **Resending the payload now shuts down the running one first.**
