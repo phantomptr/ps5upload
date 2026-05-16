@@ -1071,6 +1071,9 @@ queue_strategy_overwrite: "استبدال",
 queue_strategy_resume: "استئناف",
 logged_error_one: "خطأ مسجل واحد",
 logged_error_many: "{count} أخطاء مسجلة",
+library_fpkg_kstuff_tip: "نصيحة: لتركيب .ffpkg / .exfat أسرع (3-4×)، جرّب drakmor/kstuff-lite (البرنامج الثابت 3.00-10.01) بدلًا من kstuff الافتراضي. التثبيت من مكتبة الحمولات.",
+library_fpkg_kstuff_tip_repo: "عرض على GitHub",
+library_fpkg_kstuff_tip_dismiss: "عدم العرض مرة أخرى",
 };
 
 export default ar;

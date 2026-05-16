@@ -168,6 +168,9 @@ library_empty_title: "Nothing in the scan folders yet",
 library_empty_message: "Upload a game folder or disk image, or register titles with a PS5-side installer — they'll show up here.",
 library_games: "Games",
 library_disk_images: "Disk images (.exfat / .ffpkg)",
+library_fpkg_kstuff_tip: "Tip: for faster .ffpkg / .exfat mounting (3-4×), try drakmor/kstuff-lite (FW 3.00-10.01) instead of the default kstuff. Install from the Payloads library.",
+library_fpkg_kstuff_tip_repo: "View on GitHub",
+library_fpkg_kstuff_tip_dismiss: "Don't show again",
 
 // FileSystem screen
 file_system: "File System",

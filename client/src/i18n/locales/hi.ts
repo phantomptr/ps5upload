@@ -1071,6 +1071,9 @@ queue_strategy_overwrite: "अधिलेखित करें",
 queue_strategy_resume: "फिर से शुरू",
 logged_error_one: "1 लॉग की गई त्रुटि",
 logged_error_many: "{count} लॉग की गई त्रुटियाँ",
+library_fpkg_kstuff_tip: "सुझाव: तेज़ .ffpkg / .exfat माउंटिंग (3-4×) के लिए, डिफ़ॉल्ट kstuff के बजाय drakmor/kstuff-lite (फर्मवेयर 3.00-10.01) आज़माएँ। Payloads लाइब्रेरी से इंस्टॉल करें।",
+library_fpkg_kstuff_tip_repo: "GitHub पर देखें",
+library_fpkg_kstuff_tip_dismiss: "फिर से न दिखाएँ",
 };
 
 export default hi;

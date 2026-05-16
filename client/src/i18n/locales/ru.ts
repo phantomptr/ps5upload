@@ -1070,6 +1070,9 @@ queue_strategy_overwrite: "Перезаписать",
 queue_strategy_resume: "Продолжить",
 logged_error_one: "1 ошибка в журнале",
 logged_error_many: "{count} ошибок в журнале",
+library_fpkg_kstuff_tip: "Совет: для более быстрого монтирования .ffpkg / .exfat (в 3-4 раза) попробуйте drakmor/kstuff-lite (прошивка 3.00-10.01) вместо стандартного kstuff. Установите из библиотеки Payloads.",
+library_fpkg_kstuff_tip_repo: "Открыть на GitHub",
+library_fpkg_kstuff_tip_dismiss: "Больше не показывать",
 };
 
 export default ru;

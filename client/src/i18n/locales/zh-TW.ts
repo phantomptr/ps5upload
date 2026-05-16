@@ -1072,6 +1072,9 @@ queue_strategy_overwrite: "覆寫",
 queue_strategy_resume: "繼續",
 logged_error_one: "已記錄 1 個錯誤",
 logged_error_many: "已記錄 {count} 個錯誤",
+library_fpkg_kstuff_tip: "提示：若要讓 .ffpkg / .exfat 掛載更快（3-4 倍），請改用 drakmor/kstuff-lite（韌體 3.00-10.01），取代預設的 kstuff。可從 Payloads 程式庫安裝。",
+library_fpkg_kstuff_tip_repo: "在 GitHub 上檢視",
+library_fpkg_kstuff_tip_dismiss: "不再顯示",
 };
 
 export default zh_TW;

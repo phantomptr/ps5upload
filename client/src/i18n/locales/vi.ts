@@ -1072,6 +1072,9 @@ queue_strategy_overwrite: "Ghi đè",
 queue_strategy_resume: "Tiếp tục",
 logged_error_one: "1 lỗi đã ghi",
 logged_error_many: "{count} lỗi đã ghi",
+library_fpkg_kstuff_tip: "Mẹo: để mount .ffpkg / .exfat nhanh hơn (3-4 lần), hãy thử drakmor/kstuff-lite (firmware 3.00-10.01) thay vì kstuff mặc định. Cài đặt từ thư viện Payloads.",
+library_fpkg_kstuff_tip_repo: "Xem trên GitHub",
+library_fpkg_kstuff_tip_dismiss: "Đừng hiển thị lại",
 };
 
 export default vi;

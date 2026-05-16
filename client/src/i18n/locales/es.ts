@@ -1071,6 +1071,9 @@ queue_strategy_overwrite: "Sobrescribir",
 queue_strategy_resume: "Reanudar",
 logged_error_one: "1 error registrado",
 logged_error_many: "{count} errores registrados",
+library_fpkg_kstuff_tip: "Sugerencia: para montar .ffpkg / .exfat más rápido (3-4×), prueba drakmor/kstuff-lite (firmware 3.00-10.01) en lugar del kstuff predeterminado. Instálalo desde la biblioteca de Payloads.",
+library_fpkg_kstuff_tip_repo: "Ver en GitHub",
+library_fpkg_kstuff_tip_dismiss: "No mostrar de nuevo",
 };
 
 export default es;

@@ -546,6 +546,7 @@ export default function LibraryScreen() {
                     title={tr("library_disk_images", undefined, "Disk images (.exfat / .ffpkg / .ffpfs)")}
                     count={split.images.length}
                   />
+                  <FpkgKstuffTip />
                   <div className="grid gap-2">
                     {split.images.map((e, i) => (
                       <LibraryRow
@@ -3362,6 +3363,85 @@ function ConfirmRow({
           {runLabel}
         </Button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * One-line tip surfaced in the Library "Disk images" section: nudge
+ * .ffpkg/.exfat users at drakmor/kstuff-lite which has a measured
+ * 3-4× faster mount path than EchoStretch's lite build. Only renders
+ * if the user has at least one disk image in their library (the
+ * caller's `split.images.length > 0` gate handles that). Dismissible
+ * — choice persists in localStorage so it doesn't keep nagging.
+ *
+ * We deliberately don't try to detect which kstuff is loaded (both
+ * variants drop the same /data/kstuff.elf marker; the active one is
+ * only inferrable from the user's autoload list). The cost of a
+ * stale tip when the user is already on drakmor is one extra
+ * click on the dismiss X — cheap. The cost of NOT showing it when
+ * they're on the slower default is every mount being slower than
+ * it has to be.
+ */
+function FpkgKstuffTip() {
+  const tr = useTr();
+  const [dismissed, setDismissed] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return (
+        window.localStorage.getItem(
+          "ps5upload.fpkg-kstuff-tip.dismissed",
+        ) === "1"
+      );
+    } catch {
+      return false;
+    }
+  });
+  if (dismissed) return null;
+  const dismiss = () => {
+    try {
+      window.localStorage.setItem(
+        "ps5upload.fpkg-kstuff-tip.dismissed",
+        "1",
+      );
+    } catch {
+      // best-effort persistence
+    }
+    setDismissed(true);
+  };
+  return (
+    <div className="mb-2 flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-2 text-xs">
+      <Sparkles
+        size={13}
+        className="mt-0.5 shrink-0 text-[var(--color-accent)]"
+      />
+      <div className="min-w-0 flex-1 text-[var(--color-muted)]">
+        {tr(
+          "library_fpkg_kstuff_tip",
+          undefined,
+          "Tip: for faster .ffpkg / .exfat mounting (3-4×), try drakmor/kstuff-lite (FW 3.00-10.01) instead of the default kstuff. Install from the Payloads library.",
+        )}{" "}
+        <button
+          type="button"
+          onClick={() =>
+            openExternal("https://github.com/drakmor/kstuff-lite").catch(
+              () => {},
+            )
+          }
+          className="inline-flex items-center gap-0.5 underline decoration-dotted hover:text-[var(--color-text)]"
+        >
+          {tr("library_fpkg_kstuff_tip_repo", undefined, "View on GitHub")}
+          <ExternalLink size={10} />
+        </button>
+      </div>
+      <button
+        type="button"
+        onClick={dismiss}
+        className="shrink-0 rounded p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text)]"
+        title={tr("library_fpkg_kstuff_tip_dismiss", undefined, "Don't show again")}
+      >
+        ✕
+      </button>
     </div>
   );
 }

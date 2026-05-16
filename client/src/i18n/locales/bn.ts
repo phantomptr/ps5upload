@@ -1070,6 +1070,9 @@ queue_strategy_overwrite: "ওভাররাইট",
 queue_strategy_resume: "পুনরায় শুরু",
 logged_error_one: "১টি লগ করা ত্রুটি",
 logged_error_many: "{count}টি লগ করা ত্রুটি",
+library_fpkg_kstuff_tip: "টিপ: দ্রুত .ffpkg / .exfat মাউন্টিং (3-4×) এর জন্য, ডিফল্ট kstuff এর পরিবর্তে drakmor/kstuff-lite (ফার্মওয়্যার 3.00-10.01) ব্যবহার করুন। Payloads লাইব্রেরি থেকে ইনস্টল করুন।",
+library_fpkg_kstuff_tip_repo: "GitHub-এ দেখুন",
+library_fpkg_kstuff_tip_dismiss: "আর দেখাবেন না",
 };
 
 export default bn;

@@ -129,7 +129,11 @@ struct CatalogueEntry {
 /// Sources for the entries:
 ///   - kstuff-echostretch: covers FW 1.00 → 12.x via runtime NID
 ///     resolution; the same binary works on every supported firmware
-///     revision.
+///     revision. Best default when firmware coverage matters most.
+///   - kstuff-lite-drakmor: fork of EchoStretch/kstuff-lite tuned for
+///     3-4× faster .ffpkg (UFS) mounting and lower per-mount overhead.
+///     Narrower FW range (3.00 → 10.01). Better choice for users whose
+///     primary workflow is ShadowMount+ with .ffpkg / .exfat images.
 ///   - shadowmountplus: the homebrew mount layer most users pair with
 ///     kstuff for image-based game launching.
 ///   - ftpsrv / websrv / ps5-app-dumper: utility payloads in common
@@ -151,6 +155,32 @@ const CATALOGUE: &[CatalogueEntry] = &[
         autoload_priority: 0,
         autoload_delay_ms: 3000,
         homepage: "https://github.com/EchoStretch/kstuff",
+    },
+    CatalogueEntry {
+        // Same role as kstuff-echostretch (kernel R/W + ucred elevation
+        // + ShadowMount+ enablement) — they're alternatives, not
+        // companions. Install only one. Picked over the EchoStretch
+        // build when the user's main workflow is mounting .ffpkg /
+        // .exfat images: drakmor's tree includes the per-mount fast
+        // path and the repeated-operation overhead reduction
+        // (autoload pause/resume + remount cycles) that ShadowMount+
+        // exercises heavily. Marker path is shared (both drop
+        // /data/kstuff.elf) so detection-of-presence is a single
+        // probe — but the *active* variant has to be inferred from
+        // user choice in the autoload list, not the marker.
+        id: "kstuff-lite-drakmor",
+        display_name: "kstuff-lite (drakmor — fpkg-optimized)",
+        role: "Kernel exploit + R/W primitive — 3-4× faster .ffpkg mounting",
+        description: "Fork of EchoStretch/kstuff-lite with a hot path for .ffpkg (UFS) mounts and lower overhead in repeated mount/unmount cycles — measured 3-4× faster end-to-end than the upstream lite build. Supports FW 3.00 → 10.01 (narrower than the EchoStretch full kstuff; pick this only if your firmware is in range). Recommended when your primary workflow is ShadowMount+ with .ffpkg or .exfat images. Same load-first ordering as any other kstuff: must boot before ShadowMount+ or ps5upload.",
+        repo_owner: "drakmor",
+        repo_name: "kstuff-lite",
+        asset_name_hint: "kstuff",
+        on_console_marker_path: Some("/data/kstuff.elf"),
+        process_name_hint: None,
+        ports: &[],
+        autoload_priority: 0,
+        autoload_delay_ms: 3000,
+        homepage: "https://github.com/drakmor/kstuff-lite",
     },
     CatalogueEntry {
         id: "shadowmountplus",

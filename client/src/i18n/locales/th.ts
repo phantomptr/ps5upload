@@ -1070,6 +1070,9 @@ queue_strategy_overwrite: "เขียนทับ",
 queue_strategy_resume: "ทำต่อ",
 logged_error_one: "1 ข้อผิดพลาดในบันทึก",
 logged_error_many: "{count} ข้อผิดพลาดในบันทึก",
+library_fpkg_kstuff_tip: "เคล็ดลับ: เพื่อการเมานต์ .ffpkg / .exfat ที่เร็วขึ้น (3-4 เท่า) ลองใช้ drakmor/kstuff-lite (เฟิร์มแวร์ 3.00-10.01) แทน kstuff เริ่มต้น ติดตั้งจากไลบรารี Payloads",
+library_fpkg_kstuff_tip_repo: "ดูบน GitHub",
+library_fpkg_kstuff_tip_dismiss: "ไม่ต้องแสดงอีก",
 };
 
 export default th;
