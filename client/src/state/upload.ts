@@ -131,6 +131,18 @@ export const useUploadStore = create<UploadState>((set, get) => ({
     });
     try {
       const inspection = await inspectFolder(path);
+      // Stale-result guard. inspectFolder is async (walks the dir,
+      // parses param.sfo, etc. — can take seconds on slow disks). If
+      // the user picked a different source while this inspect was
+      // in flight (another folder via pickFolder, or a file via
+      // pickFile), the latest pick wins. Without this guard, an
+      // earlier inspect that resolves second would set source.path
+      // back to its closure-captured `path` arg, silently clobbering
+      // the newer source — the destination preview then renders
+      // the OLD file/folder name even though the user already moved
+      // on, and the upload at that preview path would land the
+      // wrong source entirely if they hit Upload before noticing.
+      if (get().source?.path !== path) return;
       const isGame = inspection.result.meta_source !== "none";
       set({
         source: {
@@ -143,6 +155,9 @@ export const useUploadStore = create<UploadState>((set, get) => ({
         detectError: null,
       });
     } catch (e) {
+      // Same race window for the failure branch — don't surface an
+      // error for an inspect the user already abandoned.
+      if (get().source?.path !== path) return;
       set({
         detecting: false,
         detectError: e instanceof Error ? e.message : String(e),

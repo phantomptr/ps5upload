@@ -1073,6 +1073,7 @@ logged_error_many: "{count} kesalahan tercatat",
 library_fpkg_kstuff_tip: "Tip: untuk pemasangan .ffpkg / .exfat yang lebih cepat (3-4×), coba drakmor/kstuff-lite (firmware 3.00-10.01) daripada kstuff default. Pasang dari pustaka Payloads.",
 library_fpkg_kstuff_tip_repo: "Lihat di GitHub",
 library_fpkg_kstuff_tip_dismiss: "Jangan tampilkan lagi",
+payloads_refresh_error_banner: "Tidak dapat me-refresh dari GitHub — menampilkan snapshot dari cache. Tag terbaru di GitHub mungkin lebih baru dari yang ditampilkan di sini.",
 };
 
 export default id;

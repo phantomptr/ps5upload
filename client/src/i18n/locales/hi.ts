@@ -1074,6 +1074,7 @@ logged_error_many: "{count} लॉग की गई त्रुटियाँ"
 library_fpkg_kstuff_tip: "सुझाव: तेज़ .ffpkg / .exfat माउंटिंग (3-4×) के लिए, डिफ़ॉल्ट kstuff के बजाय drakmor/kstuff-lite (फर्मवेयर 3.00-10.01) आज़माएँ। Payloads लाइब्रेरी से इंस्टॉल करें।",
 library_fpkg_kstuff_tip_repo: "GitHub पर देखें",
 library_fpkg_kstuff_tip_dismiss: "फिर से न दिखाएँ",
+payloads_refresh_error_banner: "GitHub से रिफ्रेश नहीं किया जा सका — कैश्ड स्नैपशॉट दिखाया जा रहा है। GitHub पर नवीनतम टैग यहाँ दिखाए गए से नया हो सकता है।",
 };
 
 export default hi;

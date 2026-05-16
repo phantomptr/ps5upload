@@ -1074,6 +1074,7 @@ logged_error_many: "{count} protokollierte Fehler",
 library_fpkg_kstuff_tip: "Tipp: Für schnelleres .ffpkg-/.exfat-Mounten (3-4×) probiere drakmor/kstuff-lite (Firmware 3.00-10.01) anstelle des Standard-kstuff. Installation aus der Payload-Bibliothek.",
 library_fpkg_kstuff_tip_repo: "Auf GitHub ansehen",
 library_fpkg_kstuff_tip_dismiss: "Nicht mehr anzeigen",
+payloads_refresh_error_banner: "Konnte nicht von GitHub aktualisiert werden — zeige zwischengespeicherten Snapshot. Der neueste Tag auf GitHub könnte neuer sein als der hier angezeigte.",
 };
 
 export default de;

@@ -1074,6 +1074,7 @@ logged_error_many: "{count} أخطاء مسجلة",
 library_fpkg_kstuff_tip: "نصيحة: لتركيب .ffpkg / .exfat أسرع (3-4×)، جرّب drakmor/kstuff-lite (البرنامج الثابت 3.00-10.01) بدلًا من kstuff الافتراضي. التثبيت من مكتبة الحمولات.",
 library_fpkg_kstuff_tip_repo: "عرض على GitHub",
 library_fpkg_kstuff_tip_dismiss: "عدم العرض مرة أخرى",
+payloads_refresh_error_banner: "تعذر التحديث من GitHub — يتم عرض لقطة مخزنة. قد يكون الإصدار الأحدث على GitHub أحدث مما هو معروض هنا.",
 };
 
 export default ar;

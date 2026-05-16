@@ -1075,6 +1075,7 @@ logged_error_many: "已記錄 {count} 個錯誤",
 library_fpkg_kstuff_tip: "提示：若要讓 .ffpkg / .exfat 掛載更快（3-4 倍），請改用 drakmor/kstuff-lite（韌體 3.00-10.01），取代預設的 kstuff。可從 Payloads 程式庫安裝。",
 library_fpkg_kstuff_tip_repo: "在 GitHub 上檢視",
 library_fpkg_kstuff_tip_dismiss: "不再顯示",
+payloads_refresh_error_banner: "無法從 GitHub 重新整理 — 顯示快取快照。GitHub 上的最新標籤可能比此處顯示的更新。",
 };
 
 export default zh_TW;

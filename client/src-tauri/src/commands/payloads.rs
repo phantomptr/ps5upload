@@ -243,6 +243,44 @@ const CATALOGUE: &[CatalogueEntry] = &[
         homepage: "https://github.com/ps5-payload-dev/websrv",
     },
     CatalogueEntry {
+        // PKG-install daemon — alternative install pipeline to our
+        // payload's in-process AppInstUtil + ShellUI-RPC tiers.
+        //
+        // The trick DPI solves: Sony's installer's `Register/Start`
+        // calls own a long-lived state machine; if the caller process
+        // dies (or the kernel garbage-collects the call's owning
+        // context) before the install finishes, the install
+        // "evaporates" — accepted, then silently aborted. DPI runs
+        // as its own process whose only job is to own that state
+        // machine for the install's lifetime, which is why
+        // sonicloader and ezremote-client both prefer it as the
+        // primary install path.
+        //
+        // Wire protocol on loopback 127.0.0.1:9040: send raw URL or
+        // /user/data path bytes, read up to 256 bytes back; "ok" /
+        // "queued" / "" = success, anything else = the rejection
+        // reason. No framing, no length prefix.
+        //
+        // Caveat: DPI binds 127.0.0.1, so the desktop cannot reach
+        // it directly — only an on-PS5 process can. As of 2.8.0 the
+        // catalogue entry lets users install DPI from the Library
+        // tab; the payload-side proxy frame that lets our install
+        // runner actually USE DPI as a tier ships in a follow-up.
+        id: "ezremote-dpi",
+        display_name: "ezremote-DPI (install daemon)",
+        role: "PKG install daemon",
+        description: "Long-lived loopback install daemon (127.0.0.1:9040). Owns Sony's PlayGo/AppInstUtil install state machine so installs don't evaporate when the calling process exits. Sonicloader and ezremote-client both use this as their primary install path. Once installed, ps5upload's install runner will offer a 'DPI' method that proxies to it (planned for follow-up).",
+        repo_owner: "cy33hc",
+        repo_name: "ps5-ezremote-dpi",
+        asset_name_hint: "ezremote-dpi",
+        on_console_marker_path: Some("/data/ezremote-dpi.elf"),
+        process_name_hint: Some("ezremote-dpi"),
+        ports: &[],
+        autoload_priority: 3,
+        autoload_delay_ms: 500,
+        homepage: "https://github.com/cy33hc/ps5-ezremote-dpi",
+    },
+    CatalogueEntry {
         id: "ps5-app-dumper",
         display_name: "ps5-app-dumper",
         role: "Dump installed apps to USB",
@@ -384,6 +422,18 @@ pub struct ReleaseInfo {
     /// Cache freshness in seconds. UI surfaces this as "checked Ns
     /// ago" so users know whether to hit Refresh.
     cached_age_secs: u64,
+    /// Set when the response came from cache because the live fetch
+    /// failed (network error, GitHub 403 rate limit, 5xx outage,
+    /// non-JSON body). UI renders a banner so the user knows the
+    /// data is potentially stale and what went wrong. Sonicloader's
+    /// `src/releases.c` calls this `refreshError`; we mirror the
+    /// pattern because the alternative — bubbling the error up and
+    /// hiding the cached data — leaves the user with no way to
+    /// install anything during a transient GitHub outage. `None`
+    /// when the fetch succeeded (data is live) or when no cache
+    /// existed and the fetch failed (call returned Err).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    refresh_error: Option<String>,
 }
 
 /// Cache file path for a payload's release manifest. Per-payload so
@@ -512,6 +562,24 @@ pub async fn payloads_release(
         .user_agent(HTTP_USER_AGENT)
         .build()
         .map_err(|e| format!("http client: {e}"))?;
+    // Inline closure: fall back to stale cache with `refresh_error`
+    // populated. Returns Ok(info) when a usable cache exists, Err
+    // (with the original fetch error) when it doesn't. Threading a
+    // single error path through three failure modes (network, HTTP,
+    // body parse) without this helper would mean duplicating the
+    // stale-cache read three times.
+    let fallback_to_stale = |reason: String| -> Result<ReleaseInfo, String> {
+        if let Some((release, age)) = read_stale_cached_release(&cache_path) {
+            return Ok(release_to_info_with_refresh_error(
+                entry,
+                &release,
+                age,
+                Some(reason),
+            ));
+        }
+        Err(reason)
+    };
+
     let resp = match client
         .get(&url)
         .header("Accept", "application/vnd.github+json")
@@ -520,32 +588,36 @@ pub async fn payloads_release(
     {
         Ok(r) => r,
         Err(e) => {
-            // Network failure: fall back to whatever cache we have,
-            // even if expired. Better stale than nothing.
-            if let Ok(bytes) = std::fs::read(&cache_path) {
-                if let Ok(release) = serde_json::from_slice::<GithubRelease>(&bytes) {
-                    let age = std::fs::metadata(&cache_path)
-                        .ok()
-                        .and_then(|m| m.modified().ok())
-                        .and_then(|t| SystemTime::now().duration_since(t).ok())
-                        .map(|d| d.as_secs())
-                        .unwrap_or(0);
-                    return Ok(release_to_info(entry, &release, age));
-                }
-            }
-            return Err(format!("fetch {url}: {e}"));
+            // Network failure: stale cache is better than nothing.
+            return fallback_to_stale(format!("fetch {url}: {e}"));
         }
     };
     if !resp.status().is_success() {
-        return Err(format!(
+        let status = resp.status();
+        // GitHub returns 403 with `X-RateLimit-Remaining: 0` when the
+        // unauth'd hourly quota is exhausted (60/h per IP). 429 is
+        // their secondary "abuse detection" limit. 5xx is GitHub being
+        // down (rare but happens — Cloudflare 502s on the API). All
+        // three benefit from the stale cache fallback. We bias toward
+        // serving stale data on any non-2xx because the alternative
+        // (hard error → user sees nothing) is strictly worse than
+        // "showing slightly old data with a refresh-error banner".
+        // The cached-age field is already in the response so the UI
+        // can tell the user when the cached snapshot is from.
+        return fallback_to_stale(format!(
             "fetch {url}: HTTP {} ({})",
-            resp.status().as_u16(),
-            resp.status().canonical_reason().unwrap_or("unknown status")
+            status.as_u16(),
+            status.canonical_reason().unwrap_or("unknown status")
         ));
     }
-    let body = resp.text().await.map_err(|e| format!("read body: {e}"))?;
-    let release: GithubRelease =
-        serde_json::from_str(&body).map_err(|e| format!("parse release JSON: {e}"))?;
+    let body = match resp.text().await {
+        Ok(b) => b,
+        Err(e) => return fallback_to_stale(format!("read body: {e}")),
+    };
+    let release: GithubRelease = match serde_json::from_str(&body) {
+        Ok(r) => r,
+        Err(e) => return fallback_to_stale(format!("parse release JSON: {e}")),
+    };
 
     // Persist before returning so a successful fetch warms the cache
     // even if the renderer ignores the response.
@@ -560,6 +632,20 @@ fn release_to_info(
     entry: &CatalogueEntry,
     release: &GithubRelease,
     cached_age_secs: u64,
+) -> ReleaseInfo {
+    release_to_info_with_refresh_error(entry, release, cached_age_secs, None)
+}
+
+/// Same as `release_to_info` but carries an explicit `refresh_error`
+/// for the caller to attach. Used by the stale-cache fallback paths
+/// (network failure, HTTP 4xx/5xx, unparseable body) so the UI can
+/// render a "couldn't refresh — showing cached" banner without
+/// hiding the cached data behind a hard error.
+fn release_to_info_with_refresh_error(
+    entry: &CatalogueEntry,
+    release: &GithubRelease,
+    cached_age_secs: u64,
+    refresh_error: Option<String>,
 ) -> ReleaseInfo {
     let (name, url, size) = pick_asset(release, entry.asset_name_hint);
     ReleaseInfo {
@@ -577,7 +663,28 @@ fn release_to_info(
         picked_asset_name: name,
         picked_asset_size: size,
         cached_age_secs,
+        refresh_error,
     }
+}
+
+/// Try to load a stale (expired-TTL or otherwise) cached release from
+/// disk. Used as the fallback whenever a live fetch fails — network
+/// error, HTTP 403/429/5xx, unparseable JSON body. Returns the parsed
+/// release plus its file age in seconds. `None` when no cache exists
+/// or it's corrupt.
+///
+/// Distinct from `read_cached_release` which respects the TTL and is
+/// the fast path. This one ignores the TTL entirely because "stale
+/// is better than nothing" is the whole point of the fallback.
+fn read_stale_cached_release(path: &std::path::Path) -> Option<(GithubRelease, u64)> {
+    let bytes = std::fs::read(path).ok()?;
+    let release: GithubRelease = serde_json::from_slice(&bytes).ok()?;
+    let mtime = std::fs::metadata(path).ok().and_then(|m| m.modified().ok());
+    let age = mtime
+        .and_then(|t| SystemTime::now().duration_since(t).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    Some((release, age))
 }
 
 // ─── On-disk inventory & download ───────────────────────────────────

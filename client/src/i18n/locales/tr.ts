@@ -1073,6 +1073,7 @@ logged_error_many: "{count} günlüklenmiş hata",
 library_fpkg_kstuff_tip: "İpucu: .ffpkg / .exfat'i daha hızlı (3-4 kat) bağlamak için varsayılan kstuff yerine drakmor/kstuff-lite (sürüm 3.00-10.01) deneyin. Payloads kitaplığından yükleyin.",
 library_fpkg_kstuff_tip_repo: "GitHub'da görüntüle",
 library_fpkg_kstuff_tip_dismiss: "Tekrar gösterme",
+payloads_refresh_error_banner: "GitHub'dan yenilenemiyor — önbelleğe alınmış anlık görüntü gösteriliyor. GitHub'daki en son etiket burada gösterilenden daha yeni olabilir.",
 };
 
 export default tr;

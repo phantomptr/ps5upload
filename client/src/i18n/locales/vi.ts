@@ -1075,6 +1075,7 @@ logged_error_many: "{count} lỗi đã ghi",
 library_fpkg_kstuff_tip: "Mẹo: để mount .ffpkg / .exfat nhanh hơn (3-4 lần), hãy thử drakmor/kstuff-lite (firmware 3.00-10.01) thay vì kstuff mặc định. Cài đặt từ thư viện Payloads.",
 library_fpkg_kstuff_tip_repo: "Xem trên GitHub",
 library_fpkg_kstuff_tip_dismiss: "Đừng hiển thị lại",
+payloads_refresh_error_banner: "Không thể làm mới từ GitHub — đang hiển thị ảnh chụp nhanh trong bộ nhớ đệm. Thẻ mới nhất trên GitHub có thể mới hơn so với những gì hiển thị ở đây.",
 };
 
 export default vi;
