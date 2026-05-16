@@ -8,6 +8,7 @@ pub mod fs_ops;
 pub mod game_meta;
 pub mod hw;
 pub mod log;
+pub mod payload_lifecycle;
 pub mod pkg_install;
 pub mod saves;
 pub mod search_index;

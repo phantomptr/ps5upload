@@ -168,11 +168,22 @@ export function t(
       !warnedMissingKeys.has(key)
     ) {
       warnedMissingKeys.add(key);
-      console.warn(
-        `[i18n] missing key "${key}" — not in ${langCode} or en. ` +
-          "The call site's fallback string will render; non-English " +
-          "users will see English. Add this key to client/src/i18n/locales/en.ts.",
-      );
+      // Defer the warn off the render frame. Without this, the patched
+      // console.warn in state/logs.ts writes synchronously into the
+      // logs store; ANY component already reading from that store
+      // (e.g. Sidebar's errorCount selector) then sees React fire
+      // "Cannot update a component (X) while rendering a different
+      // component (Y)" — because t() is being called inside the very
+      // render that subscribes to the store. queueMicrotask defers
+      // until after the current render flushes; the warning still
+      // fires per (lang, key) exactly once, just on the next tick.
+      queueMicrotask(() => {
+        console.warn(
+          `[i18n] missing key "${key}" — not in ${langCode} or en. ` +
+            "The call site's fallback string will render; non-English " +
+            "users will see English. Add this key to client/src/i18n/locales/en.ts.",
+        );
+      });
     }
   }
   if (!vars) return raw;

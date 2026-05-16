@@ -1067,6 +1067,10 @@ hardware_systime_stub_no_op: "PS5 ने सफलता बताई लेक�
 hardware_systime_synced: "सिंक हो गया।",
 hardware_systime_new_label: "अब:",
 hardware_systime_failed: "समय सिंक नहीं हो सका",
+queue_strategy_overwrite: "अधिलेखित करें",
+queue_strategy_resume: "फिर से शुरू",
+logged_error_one: "1 लॉग की गई त्रुटि",
+logged_error_many: "{count} लॉग की गई त्रुटियाँ",
 };
 
 export default hi;

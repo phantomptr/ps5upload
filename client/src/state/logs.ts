@@ -131,11 +131,36 @@ export function installConsoleCapture(): void {
   // Also capture unhandled promise rejections — these typically point
   // at API calls that blew up without a try/catch around them.
   window.addEventListener("unhandledrejection", (e) => {
+    // Tauri 2's `_unlisten` returns `() => void` synchronously, but
+    // internally spawns an async `unregisterListener` whose rejection
+    // we have no way to attach `.catch` to from userland (safeUnlisten
+    // does its best on the returned value, but there isn't one). When
+    // the listener table is torn down between subscribe and cleanup
+    // (HMR reload, route remount, parent webview destroyed) that
+    // inner Promise rejects with `TypeError: undefined is not an
+    // object (evaluating 'listeners[eventId].handlerId')`. The
+    // listener is already gone — the symptom is exactly the thing we
+    // wanted to happen — so swallow it silently. Log at debug so
+    // bug-reporters still see we noticed.
+    const reason = e.reason;
+    const msg =
+      reason && typeof (reason as { message?: unknown }).message === "string"
+        ? ((reason as { message: string }).message)
+        : "";
+    if (msg.includes("listeners[eventId].handlerId")) {
+      e.preventDefault();
+      useLogsStore.getState().append(
+        "debug",
+        "tauri",
+        "Tauri unregisterListener race (listener already gone)",
+      );
+      return;
+    }
     useLogsStore.getState().append(
       "error",
       "promise",
       "Unhandled rejection",
-      e.reason,
+      reason,
     );
   });
   window.addEventListener("error", (e) => {

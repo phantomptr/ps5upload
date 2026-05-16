@@ -1066,6 +1066,10 @@ hardware_systime_stub_no_op: "PS5 সফলতা জানিয়েছে �
 hardware_systime_synced: "সিঙ্ক হয়েছে।",
 hardware_systime_new_label: "এখন:",
 hardware_systime_failed: "সময় সিঙ্ক করা যায়নি",
+queue_strategy_overwrite: "ওভাররাইট",
+queue_strategy_resume: "পুনরায় শুরু",
+logged_error_one: "১টি লগ করা ত্রুটি",
+logged_error_many: "{count}টি লগ করা ত্রুটি",
 };
 
 export default bn;

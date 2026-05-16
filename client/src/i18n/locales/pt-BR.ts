@@ -1066,6 +1066,10 @@ hardware_systime_stub_no_op: "O PS5 reportou sucesso mas o relógio não mudou d
 hardware_systime_synced: "Sincronizado.",
 hardware_systime_new_label: "Agora:",
 hardware_systime_failed: "Não foi possível sincronizar a hora",
+queue_strategy_overwrite: "Sobrescrever",
+queue_strategy_resume: "Retomar",
+logged_error_one: "1 erro registrado",
+logged_error_many: "{count} erros registrados",
 };
 
 export default pt_BR;

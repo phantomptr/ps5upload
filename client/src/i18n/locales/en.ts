@@ -1126,6 +1126,10 @@ hardware_systime_stub_no_op: "PS5 reported success but the clock didn't actually
 hardware_systime_synced: "Synced.",
 hardware_systime_new_label: "Now:",
 hardware_systime_failed: "Couldn't sync time",
+queue_strategy_overwrite: "Overwrite",
+queue_strategy_resume: "Resume",
+logged_error_one: "1 logged error",
+logged_error_many: "{count} logged errors",
 };
 
 export default en;

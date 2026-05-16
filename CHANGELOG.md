@@ -4,6 +4,43 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.7.1
+
+- **Resending the payload now shuts down the running one first.**
+  Before re-uploading to `:9021`, the desktop opens `:9114` and
+  sends a graceful `Shutdown` frame (200 ms total budget). The old
+  payload exits cleanly, the new ELF mmaps into a fresh process,
+  and the cascade of stale-state errors after every resend is gone
+  (most visibly the `pkg_install` retry storm on the Install Package
+  screen, which was the old payload still answering long after a
+  new one had been "loaded"). If nothing's listening on `:9114`
+  (first boot, payload crashed), the pre-shutdown is a no-op and
+  the send proceeds.
+- **Sidebar no longer triggers React's "setState during render"
+  warning.** A dev-only i18n missing-key warning was calling
+  `console.warn` synchronously from inside `t()`; the patched
+  `console.warn` in the log capture wrote into the logs store, and
+  the Sidebar — which reads error-count from that same store —
+  closed the loop. Warning is now deferred via `queueMicrotask`,
+  so it still fires once per missing key but outside the render
+  frame.
+- **Tauri listener-teardown race is swallowed quietly.** When a
+  webview unmounts mid-`unregisterListener` the inner Promise
+  rejects with `TypeError: undefined is not an object (evaluating
+  'listeners[eventId].handlerId')`. The listener is already gone —
+  exactly what we wanted — so the global `unhandledrejection`
+  handler now intercepts that specific message, prevents the
+  default ERROR banner, and logs at `debug` instead.
+- **Three missing i18n keys added in all 17 non-English locales:**
+  `queue_strategy_overwrite`, `queue_strategy_resume`, and the
+  pluralized `logged_error_one` / `logged_error_many` used by the
+  Sidebar error chip. These were template-literal lookups the
+  phantom extractor can't auto-detect; non-English users were
+  seeing English fallbacks on the Install Package strategy buttons
+  and the Logs nav badge.
+
+---
+
 ## 2.7.0
 
 - **New "Sync time" card on the Hardware screen.** Shows the PS5

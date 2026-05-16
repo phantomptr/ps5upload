@@ -1066,6 +1066,10 @@ hardware_systime_stub_no_op: "PS5 başarı bildirdi ancak saat aslında değişm
 hardware_systime_synced: "Eşitlendi.",
 hardware_systime_new_label: "Şimdi:",
 hardware_systime_failed: "Saat eşitlenemedi",
+queue_strategy_overwrite: "Üzerine yaz",
+queue_strategy_resume: "Devam et",
+logged_error_one: "1 günlüklenmiş hata",
+logged_error_many: "{count} günlüklenmiş hata",
 };
 
 export default tr;

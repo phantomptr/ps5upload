@@ -1067,6 +1067,10 @@ hardware_systime_stub_no_op: "أبلغ PS5 عن النجاح ولكن الساع
 hardware_systime_synced: "تمت المزامنة.",
 hardware_systime_new_label: "الآن:",
 hardware_systime_failed: "تعذرت مزامنة الوقت",
+queue_strategy_overwrite: "استبدال",
+queue_strategy_resume: "استئناف",
+logged_error_one: "خطأ مسجل واحد",
+logged_error_many: "{count} أخطاء مسجلة",
 };
 
 export default ar;

@@ -1067,6 +1067,10 @@ hardware_systime_stub_no_op: "La PS5 a renvoyé un succès mais l'horloge n'a pa
 hardware_systime_synced: "Synchronisé.",
 hardware_systime_new_label: "Maintenant :",
 hardware_systime_failed: "Impossible de synchroniser l'heure",
+queue_strategy_overwrite: "Remplacer",
+queue_strategy_resume: "Reprendre",
+logged_error_one: "1 erreur enregistrée",
+logged_error_many: "{count} erreurs enregistrées",
 };
 
 export default fr;

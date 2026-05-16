@@ -146,6 +146,36 @@ async fn do_payload_send(ip: &str, path: &str, target_port: u16) -> Result<u64, 
             .await
             .map_err(|e| format!("seek {path}: {e}"))?;
     }
+    // Best-effort old-payload eviction. When the user resends payload
+    // bytes to :9021, the PS5 ELF loader spawns a fresh process — but
+    // the OLD ps5upload payload is unaware and keeps running. The two
+    // contend for :9114 and the new bind fails, leaving the OLD
+    // payload still answering with whatever its (possibly stale) wire
+    // protocol expects. Symptom users see: "I sent the payload but
+    // installs still fail with read frame header." Send a Shutdown
+    // frame to the existing :9114 first, give it a moment to free
+    // the ports, THEN push the new ELF. No-op when nothing's
+    // listening on :9114 (first send of the session, console
+    // rebooted, etc) — shutdown_running_payload returns Ok(false)
+    // and we proceed normally.
+    //
+    // Only relevant for the ELF loader path. On other ports (.jar
+    // BD-JB loader, .js webkit stages, etc) we don't own the
+    // protocol on :9114 and the shutdown handshake doesn't apply.
+    if target_port == PS5_LOADER_PORT {
+        let mgmt_addr = format!("{ip}:9114");
+        // Off the async runtime — Connection is blocking I/O.
+        let _ = tokio::task::spawn_blocking(move || {
+            ps5upload_core::payload_lifecycle::shutdown_running_payload(&mgmt_addr)
+        })
+        .await;
+        // Brief grace period for the OS to recycle :9114 after the
+        // old process exits. 600 ms is enough for the typical FreeBSD
+        // close-wait → unbind transition on the PS5 we've measured;
+        // anything more would noticeably slow the user-facing send.
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+    }
+
     let addr = format!("{ip}:{target_port}");
     let mut stream = timeout(CONNECT_TIMEOUT, TcpStream::connect(&addr))
         .await

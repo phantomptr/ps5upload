@@ -1066,6 +1066,10 @@ hardware_systime_stub_no_op: "PS5 melaporkan sukses tetapi jam tidak benar-benar
 hardware_systime_synced: "Tersinkronkan.",
 hardware_systime_new_label: "Sekarang:",
 hardware_systime_failed: "Tidak bisa menyinkronkan waktu",
+queue_strategy_overwrite: "Timpa",
+queue_strategy_resume: "Lanjutkan",
+logged_error_one: "1 kesalahan tercatat",
+logged_error_many: "{count} kesalahan tercatat",
 };
 
 export default id;

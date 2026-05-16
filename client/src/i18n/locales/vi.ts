@@ -1068,6 +1068,10 @@ hardware_systime_stub_no_op: "PS5 báo thành công nhưng đồng hồ thực s
 hardware_systime_synced: "Đã đồng bộ.",
 hardware_systime_new_label: "Bây giờ:",
 hardware_systime_failed: "Không thể đồng bộ giờ",
+queue_strategy_overwrite: "Ghi đè",
+queue_strategy_resume: "Tiếp tục",
+logged_error_one: "1 lỗi đã ghi",
+logged_error_many: "{count} lỗi đã ghi",
 };
 
 export default vi;
