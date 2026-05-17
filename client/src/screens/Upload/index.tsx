@@ -502,7 +502,17 @@ function Step2Options(props: {
   const showMountToggle = source.kind === "image";
   const inFlight =
     transferPhase.kind === "starting" || transferPhase.kind === "running";
-  const uploadDisabled = detecting || inFlight || preflightBusy;
+  // (2.11.0) Mutual-exclusion with QueuePanel. The PS5 payload's
+  // transfer port is single-client — concurrent FTX2 connections
+  // serialize at the socket, but the UI would say both are
+  // "running" while one silently waits. Worse: a user clicking
+  // "Upload" with a queue already running can stack work the user
+  // doesn't realise will take twice as long. Disable both Upload
+  // buttons while the queue runs; QueuePanel does the symmetric
+  // disable of its Start button while a one-shot is in flight.
+  const queueRunning = useUploadQueueStore((s) => s.running);
+  const uploadDisabled =
+    detecting || inFlight || preflightBusy || queueRunning;
 
   return (
     <>
@@ -642,6 +652,15 @@ function Step2Options(props: {
           type="button"
           onClick={onUpload}
           disabled={uploadDisabled}
+          title={
+            queueRunning
+              ? tr(
+                  "upload_disabled_queue_running",
+                  undefined,
+                  "Upload queue is running — pause the queue to start a one-shot upload, or use 'Add to queue' to append.",
+                )
+              : undefined
+          }
           className="rounded-md bg-[var(--color-accent)] px-6 py-2 text-sm font-medium text-[var(--color-accent-contrast)] disabled:opacity-50"
         >
           {preflightBusy

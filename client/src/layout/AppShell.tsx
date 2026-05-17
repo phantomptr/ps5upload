@@ -10,7 +10,7 @@ import { payloadCheck } from "../api/ps5";
 import { installActivityWiring } from "../state/activityWiring";
 import { ensureRosterMigrated, useRosterStore } from "../state/roster";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { isTauriEnv } from "../lib/tauriEnv";
+import { isTauriEnv, safeUnlisten } from "../lib/tauriEnv";
 import { useDocumentVisible } from "../lib/visibility";
 import { useScheduleRunner } from "../state/schedules";
 import { pushNotification, runNotificationAutoPrune } from "../state/notifications";
@@ -176,17 +176,19 @@ function usePkgAutoRoute() {
       navigate("/install-package", { state: { droppedPath: first } });
     });
     p.then((fn) => {
-      // Tauri unlisten can throw if the webview already tore down its
-      // listener table (HMR, parent destroyed, …). Cleanup is best-
-      // effort so we swallow these specific failures.
-      if (cancelled) { try { fn(); } catch { /* ignore */ } }
+      // (2.11.0) Use safeUnlisten — was bare try/catch inline. Upload
+      // and InstallPackage already standardised on safeUnlisten;
+      // AppShell was the lone holdout, and the global unhandled-
+      // rejection handler we added in 2.7.1 only catches the listener-
+      // table-race rejection AFTER it fires. Using safeUnlisten on the
+      // immediate-unlisten path here keeps every drag-drop site
+      // identical and prevents the next regression of forgetting it.
+      if (cancelled) safeUnlisten(fn);
       else unlisten = fn;
     }).catch(() => { /* subscribe-time rejection: nothing to clean */ });
     return () => {
       cancelled = true;
-      if (unlisten) {
-        try { unlisten(); } catch { /* ignore */ }
-      }
+      if (unlisten) safeUnlisten(unlisten);
     };
   }, [navigate, location.pathname]);
 }

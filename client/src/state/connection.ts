@@ -7,13 +7,20 @@ import { create } from "zustand";
 export const PS5_LOADER_PORT = 9021;
 
 /** localStorage key for the last-typed PS5 host. Persisted so a
- *  reload doesn't drop the user back to the hardcoded 192.168.137.2
- *  default — the typical user has a single PS5 IP they reuse across
- *  sessions. Only the host is persisted; everything downstream of
- *  it (probe results, version, kernel) is re-derived on next probe
- *  rather than restored as stale data. */
+ *  reload doesn't drop the user back to empty — the typical user
+ *  has a single PS5 IP they reuse across sessions. Only the host
+ *  is persisted; everything downstream of it (probe results,
+ *  version, kernel) is re-derived on next probe rather than
+ *  restored as stale data. */
 const HOST_STORAGE_KEY = "ps5upload.host";
-const DEFAULT_HOST = "192.168.137.2";
+/** Empty default (2.11.0). Previously hardcoded `192.168.137.2`
+ *  which is the USB-tether-on-Windows-ICS gateway — wrong for
+ *  ~95% of users, who hit a confusing red "Check failed" on first
+ *  Connection click because they didn't notice the field already
+ *  had a non-empty value. Empty default lets the placeholder do
+ *  its job and forces the user to read what they're typing. The
+ *  Discover panel below the input remains the recommended onboarding. */
+const DEFAULT_HOST = "";
 
 function loadStoredHost(): string {
   if (typeof window === "undefined") return DEFAULT_HOST;

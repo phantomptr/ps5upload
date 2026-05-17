@@ -1,5 +1,7 @@
 import { useFsBulkOpStore, useFsDownloadOpStore } from "./fsBulkOp";
 import { useTransferStore } from "./transfer";
+import { useUploadQueueStore } from "./uploadQueue";
+import { useInstallQueue } from "./installQueue";
 import {
   useActivityHistoryStore,
   type ActivityKind,
@@ -165,6 +167,164 @@ export function installActivityWiring() {
         error: state.errorBanner ?? undefined,
       });
       downloadActivityId = null;
+    }
+  });
+
+  // ── Upload Queue (2.11.0 — was missing) ─────────────────────────
+  //
+  // Before this subscription, clicking Start on the Upload Queue
+  // panel kicked off a real transfer in the engine but the
+  // OperationBar at the bottom of the app stayed dark — the only
+  // activityHistory subscriber for FTX2 uploads was useTransferStore
+  // (the single-shot Upload-screen flow). Users had to look in the
+  // Upload-screen QueuePanel to see queue progress; navigating away
+  // hid it entirely. Now the per-item running state forwards into
+  // activityHistory so the OperationBar lights up regardless of which
+  // surface kicked off the upload.
+  //
+  // Sequential queue semantics: at most one item is `running` at a
+  // time. We track the active item's activity id by item id (not a
+  // single global ref) because the queue runner can advance to the
+  // next item between renders and we need to clean up the prior id
+  // before starting a new one.
+  const uploadQueueActivityIds = new Map<string, string>();
+  useUploadQueueStore.subscribe((state, prev) => {
+    if (state.items === prev.items) return;
+    const prevById = new Map(prev.items.map((it) => [it.id, it]));
+    for (const item of state.items) {
+      const prevItem = prevById.get(item.id);
+      const wasRunning = prevItem?.status === "running";
+      const isRunning = item.status === "running";
+      // Started running this tick — open an activity entry.
+      if (isRunning && !wasRunning) {
+        const id = useActivityHistoryStore
+          .getState()
+          .start("upload-queue", `Queue: ${item.displayName}`, {
+            fromPath: item.sourcePath,
+            toPath: item.resolvedDest,
+          });
+        uploadQueueActivityIds.set(item.id, id);
+        continue;
+      }
+      // Still running — update byte progress so the OperationBar
+      // shows a live byte counter.
+      if (isRunning && wasRunning) {
+        const activityId = uploadQueueActivityIds.get(item.id);
+        if (
+          activityId &&
+          (item.bytesSent !== prevItem?.bytesSent ||
+            item.totalBytes !== prevItem?.totalBytes)
+        ) {
+          useActivityHistoryStore.getState().update(activityId, {
+            bytes: item.bytesSent,
+            totalBytes: item.totalBytes,
+          });
+        }
+        continue;
+      }
+      // Transitioned out of running — finish with the right outcome.
+      if (!isRunning && wasRunning) {
+        const activityId = uploadQueueActivityIds.get(item.id);
+        if (activityId) {
+          // uploadQueue has no "cancelled" terminal state — stop()
+          // flips running items back to "pending" via runId bump.
+          // So we only see done/failed/back-to-pending here. Map
+          // pending-after-running to "stopped" (user clicked stop).
+          const outcome: "done" | "failed" | "stopped" =
+            item.status === "done"
+              ? "done"
+              : item.status === "failed"
+                ? "failed"
+                : "stopped";
+          useActivityHistoryStore.getState().finish(activityId, outcome, {
+            bytes: item.bytesSent,
+            error: item.errorReason ?? undefined,
+          });
+          uploadQueueActivityIds.delete(item.id);
+        }
+      }
+    }
+    // Items removed entirely (clear()) — flush any orphaned activity
+    // ids as "stopped" so the OperationBar doesn't show a phantom
+    // running entry.
+    for (const [itemId, activityId] of uploadQueueActivityIds) {
+      if (!state.items.some((it) => it.id === itemId)) {
+        useActivityHistoryStore.getState().finish(activityId, "stopped", {
+          error: "removed from queue",
+        });
+        uploadQueueActivityIds.delete(itemId);
+      }
+    }
+  });
+
+  // ── Install Queue (2.11.0 — was missing) ────────────────────────
+  //
+  // Same shape as Upload Queue subscription above. Different store,
+  // different item type (InstallQueueItem has bytesDownloaded vs
+  // QueueItem's bytesSent), but the begin/update/finish lifecycle is
+  // identical. A user starting an install batch with the Upload
+  // screen open never saw OperationBar updates for the install
+  // progress — same root cause as the upload-queue gap. NPXS system
+  // installs jump immediately to `done` because their actual install
+  // happens off-app (Sony's notification panel), so they show as a
+  // brief "Install: <title>" entry in the OperationBar that
+  // immediately finishes — which is the correct signal.
+  const installQueueActivityIds = new Map<string, string>();
+  useInstallQueue.subscribe((state, prev) => {
+    if (state.items === prev.items) return;
+    const prevById = new Map(prev.items.map((it) => [it.id, it]));
+    for (const item of state.items) {
+      const prevItem = prevById.get(item.id);
+      const wasRunning = prevItem?.status === "running";
+      const isRunning = item.status === "running";
+      if (isRunning && !wasRunning) {
+        const id = useActivityHistoryStore
+          .getState()
+          .start("install-queue", `Install: ${item.displayName}`, {
+            fromPath: item.pkgPath,
+            files: 1,
+          });
+        installQueueActivityIds.set(item.id, id);
+        continue;
+      }
+      if (isRunning && wasRunning) {
+        const activityId = installQueueActivityIds.get(item.id);
+        if (
+          activityId &&
+          (item.bytesDownloaded !== prevItem?.bytesDownloaded ||
+            item.totalBytes !== prevItem?.totalBytes)
+        ) {
+          useActivityHistoryStore.getState().update(activityId, {
+            bytes: item.bytesDownloaded,
+            totalBytes: item.totalBytes,
+          });
+        }
+        continue;
+      }
+      if (!isRunning && wasRunning) {
+        const activityId = installQueueActivityIds.get(item.id);
+        if (activityId) {
+          const outcome =
+            item.status === "done"
+              ? "done"
+              : item.status === "cancelled"
+                ? "stopped"
+                : "failed";
+          useActivityHistoryStore.getState().finish(activityId, outcome, {
+            bytes: item.bytesDownloaded,
+            error: item.errMessage ?? undefined,
+          });
+          installQueueActivityIds.delete(item.id);
+        }
+      }
+    }
+    for (const [itemId, activityId] of installQueueActivityIds) {
+      if (!state.items.some((it) => it.id === itemId)) {
+        useActivityHistoryStore.getState().finish(activityId, "stopped", {
+          error: "removed from queue",
+        });
+        installQueueActivityIds.delete(itemId);
+      }
     }
   });
 }

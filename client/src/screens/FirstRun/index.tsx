@@ -373,7 +373,7 @@ export default function FirstRunScreen() {
 
         {step1 === "ok" && (
           <SetupCard
-            index={3}
+            index={2}
             icon={Box}
             title={tr(
               "first_run_step3_title",
@@ -434,7 +434,7 @@ export default function FirstRunScreen() {
 
         {step3 === "ok" && (
           <SetupCard
-            index={4}
+            index={3}
             icon={HardDrive}
             title={tr("first_run_step4_title", undefined, "You're ready")}
             state="ok"

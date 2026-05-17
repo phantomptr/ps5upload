@@ -23,6 +23,7 @@ import {
   type QueueItem,
   type QueueItemStatus,
 } from "../../state/uploadQueue";
+import { useTransferStore } from "../../state/transfer";
 
 /** Inline queue panel rendered below the single-shot upload UI on the
  *  Upload screen. Visible only when the queue has items OR while the
@@ -44,6 +45,15 @@ export function QueuePanel() {
   const retryFailed = useUploadQueueStore((s) => s.retryFailed);
   const setContinueOnFailure = useUploadQueueStore(
     (s) => s.setContinueOnFailure,
+  );
+  // (2.11.0) Mutual-exclusion with the Upload-screen one-shot
+  // transfer. The PS5 payload's transfer port is single-client,
+  // so a queue Start while a one-shot is in flight would block at
+  // the socket and the UI would show two "running" things. Gate
+  // the Start button on transferInFlight; the Upload screen's
+  // Upload button does the symmetric disable on `queueRunning`.
+  const transferInFlight = useTransferStore(
+    (s) => s.phase.kind === "starting" || s.phase.kind === "running",
   );
 
   // Hydrate once on mount. The store exposes a `loaded` flag so we
@@ -122,7 +132,16 @@ export function QueuePanel() {
               size="sm"
               leftIcon={<Play size={12} />}
               onClick={() => void start()}
-              disabled={pendingCount === 0}
+              disabled={pendingCount === 0 || transferInFlight}
+              title={
+                transferInFlight
+                  ? tr(
+                      "queue_disabled_oneshot_in_flight",
+                      undefined,
+                      "A one-shot upload is in flight — wait for it to finish before starting the queue.",
+                    )
+                  : undefined
+              }
             >
               {tr("queue_start", undefined, "Start")}
             </Button>

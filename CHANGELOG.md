@@ -4,6 +4,81 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.11.0
+
+Phase 1 of a 4-phase design coherence pass surfaced by a 4-agent
+audit (IA, workflow walkthroughs, conceptual model, cross-feature
+inconsistency). The other 3 phases (rename + IA restructure +
+shared primitive extraction) are intentionally scoped to follow-up
+releases — they touch many call sites and want their own focused
+verification windows.
+
+This release lands 5 discrete fixes that fell out of the audit as
+real user-visible bugs, none of which were on the radar before the
+review:
+
+- **The OperationBar at the bottom now lights up for Upload Queue
+  and Install Queue runs.** Previously `activityWiring.ts` only
+  subscribed to 3 of the relevant stores; queue runs (Upload Queue
+  Start, Install Queue Start) fired real engine transfers but the
+  ActivityBar / Activity tab stayed dark — "where do I look to see
+  what's happening?" had inconsistent answers depending on which
+  surface kicked off the work. Now every queue item start/progress/
+  terminal forwards into activityHistory, so cross-screen "what's
+  in flight" reads from a single source again.
+- **The Upload screen and the Upload Queue panel are now mutually
+  exclusive.** The PS5 payload's transfer port is single-client, so
+  starting the queue while a one-shot upload is in flight (or vice
+  versa) would block at the socket while both UIs displayed
+  "running". The Upload button now disables with an explanatory
+  tooltip while the queue runs; the queue Start button does the
+  symmetric disable on one-shot in-flight. "Add to queue" stays
+  enabled because it's a staging action, not a network one.
+- **AppShell drag-drop now uses `safeUnlisten`** to match Upload +
+  InstallPackage. Was the lone holdout using a bare `try/catch`
+  that the global unhandled-rejection handler from 2.7.1 only
+  caught after-the-fact; this brings every drag-drop site to the
+  same pattern and prevents the next regression of forgetting it.
+- **First-Run wizard step numbers are now 1/2/3** instead of 1/3/4.
+  `SetupCard index={3}` was a leftover from a removed step 2 — the
+  numbers in the UI looked like a typo without a footnote.
+- **Default PS5 host is now empty** (was hardcoded
+  `192.168.137.2`, the USB-tether-on-Windows-ICS gateway). Wrong
+  for ~95% of users, who clicked Check on first launch, got a red
+  error, and may not have noticed the field already had a value.
+  Empty default lets the placeholder (`192.168.1.50`) do its job
+  and forces the user to read what they're typing. The Discover
+  panel remains the recommended onboarding.
+
+### Deferred to Phase 2-4
+
+- **B3** (real cancel — payload-side ABORT_TX frame) needs a
+  C-payload change plus hardware verification; held for a focused
+  payload session.
+- **B4** (open-coded poll loops in Library/FileSystem) and **B8**
+  (dual `toMgmtAddr` signatures) get fixed when the Phase 3
+  primitives (`useCancelableJob`, `lib/addr.ts`) land — extracting
+  them now would mean two refactors of the same code.
+- **Phase 2 + 4** (vocabulary cleanup + sidebar IA restructure +
+  Send Payload / Payload library merge with tabs + Settings split)
+  is a separate i18n-heavy release with ~300 translation key
+  changes; held until the primitive refactor is in (Phase 3) so
+  renames land on stable shapes.
+- **Phase 3** (extract `useCancelableJob`, `lib/addr.ts`,
+  `useStaleHostGuard`) is a substantial refactor pass: ~300 new
+  LOC of primitives, ~600+ LOC of duplication removed, touches 5
+  long-running-action stores and ~40 call sites. Wants its own
+  focused session with careful test coverage.
+
+The full audit lives in this session's notes; the design report
+identified ~20 actionable items across the 4 phases, with credit
+also given to 5 things the team has clearly designed exceptionally
+well (the OperationBar contract, Saves' handleRestore host guard,
+transfer.ts' resume architecture, Connection's VersionBlock
+rechecking UX, InstallPackage's diagnostic block).
+
+---
+
 ## 2.10.0
 
 Adds a full **Date & Time settings** panel to the Hardware screen
