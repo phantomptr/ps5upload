@@ -111,9 +111,6 @@ activity_hours_ago: "{count}h fa",
 activity_stop_tooltip: "Smetti di osservare questa operazione (il job dell'engine può proseguire lato server)",
 keep_awake_hint: "Impedisce a display e sistema di andare in sospensione mentre l'app è attiva, così gli upload lunghi non vengono interrotti.",
 keep_awake_unsupported: "Non ancora supportato su questo sistema operativo.",
-ops_in_flight: "{count} operazioni in corso",
-ops_open_activity: "Apri Attività",
-ops_toggle: "Mostra/nascondi pannello operazioni",
 
 connection_title: "Connetti la tua PS5",
 connection_description: "Tre passi rapidi prima del primo upload. Da fare una sola volta per ogni avvio della PS5 — il payload resta caricato finché la console non si riavvia o entra in standby.",
@@ -1120,6 +1117,9 @@ nav_section_browse: "Esplora PS5",
 nav_section_system: "Sistema",
 nav_section_diagnostics: "Diagnostica",
 payloads_title: "Catalogo homebrew",
+activity_bar_in_flight: "{count} attività in corso",
+activity_bar_open: "Vedi attività",
+activity_bar_toggle: "Alterna pannello attività",
 };
 
 export default it;

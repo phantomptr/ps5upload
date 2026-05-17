@@ -111,9 +111,6 @@ activity_hours_ago: "{count} घंटे पहले",
 activity_stop_tooltip: "इस गतिविधि को देखना बंद करें (इंजन कार्य सर्वर पर जारी रह सकता है)",
 keep_awake_hint: "ऐप चलते समय डिस्प्ले और सिस्टम स्लीप को रोकता है ताकि लंबे अपलोड बाधित न हों।",
 keep_awake_unsupported: "इस OS पर अभी समर्थित नहीं।",
-ops_in_flight: "{count} गतिविधियाँ चल रही हैं",
-ops_open_activity: "गतिविधि देखें",
-ops_toggle: "गतिविधि पैनल टॉगल करें",
 
 connection_title: "अपने PS5 से कनेक्ट करें",
 connection_description: "आपके पहले अपलोड से पहले तीन त्वरित चरण। PS5 चालू होने के बाद केवल एक बार करना होगा — कंसोल पुनः आरंभ होने या रेस्ट मोड में जाने तक पेलोड लोड रहता है।",
@@ -1121,6 +1118,9 @@ nav_section_browse: "PS5 ब्राउज़ करें",
 nav_section_system: "सिस्टम",
 nav_section_diagnostics: "डायग्नोस्टिक्स",
 payloads_title: "होमब्रू कैटलॉग",
+activity_bar_in_flight: "{count} गतिविधि(याँ) चल रही हैं",
+activity_bar_open: "गतिविधि देखें",
+activity_bar_toggle: "गतिविधि पैनल टॉगल करें",
 };
 
 export default hi;

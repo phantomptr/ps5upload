@@ -112,9 +112,6 @@ activity_hours_ago: "{count}g trước",
 activity_stop_tooltip: "Ngừng theo dõi (tác vụ engine có thể vẫn chạy ngầm)",
 keep_awake_hint: "Chặn màn hình và chế độ ngủ trong khi ứng dụng đang chạy để các lần tải lên dài không bị gián đoạn.",
 keep_awake_unsupported: "Chưa được hỗ trợ trên hệ điều hành này.",
-ops_in_flight: "{count} thao tác đang chạy",
-ops_open_activity: "Xem Hoạt động",
-ops_toggle: "Bật/tắt bảng thao tác",
 
 connection_title: "Kết nối với PS5 của bạn",
 connection_description: "Ba bước nhanh trước lần tải lên đầu tiên. Bạn chỉ cần làm một lần mỗi khi PS5 khởi động — payload vẫn được tải cho đến khi máy khởi động lại hoặc vào chế độ nghỉ.",
@@ -1122,6 +1119,9 @@ nav_section_browse: "Duyệt PS5",
 nav_section_system: "Hệ thống",
 nav_section_diagnostics: "Chẩn đoán",
 payloads_title: "Danh mục Homebrew",
+activity_bar_in_flight: "{count} hoạt động đang chạy",
+activity_bar_open: "Xem hoạt động",
+activity_bar_toggle: "Bật/tắt bảng hoạt động",
 };
 
 export default vi;

@@ -111,9 +111,6 @@ activity_hours_ago: "{count} ชั่วโมงที่แล้ว",
 activity_stop_tooltip: "หยุดดูการดำเนินการนี้ (งานของ engine อาจดำเนินต่อในฝั่งเซิร์ฟเวอร์)",
 keep_awake_hint: "ป้องกันไม่ให้จอภาพและระบบเข้าสู่โหมดสลีปขณะแอปทำงาน เพื่อไม่ให้การอัปโหลดที่ใช้เวลานานถูกขัดจังหวะ",
 keep_awake_unsupported: "ยังไม่รองรับบนระบบปฏิบัติการนี้",
-ops_in_flight: "{count} การดำเนินการกำลังทำงาน",
-ops_open_activity: "เปิดกิจกรรม",
-ops_toggle: "สลับแผงการดำเนินการ",
 
 connection_title: "เชื่อมต่อกับ PS5 ของคุณ",
 connection_description: "สามขั้นตอนสั้น ๆ ก่อนการอัปโหลดครั้งแรก ทำเพียงครั้งเดียวเมื่อ PS5 เปิดเครื่อง — เพย์โหลดจะยังคงโหลดไว้จนกว่าคอนโซลจะรีสตาร์ทหรือเข้าโหมดพัก",
@@ -1120,6 +1117,9 @@ nav_section_browse: "เรียกดู PS5",
 nav_section_system: "ระบบ",
 nav_section_diagnostics: "การวินิจฉัย",
 payloads_title: "แค็ตตาล็อก Homebrew",
+activity_bar_in_flight: "{count} กิจกรรมกำลังทำงาน",
+activity_bar_open: "ดูกิจกรรม",
+activity_bar_toggle: "สลับแผงกิจกรรม",
 };
 
 export default th;

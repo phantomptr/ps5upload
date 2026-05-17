@@ -130,9 +130,12 @@ activity_hours_ago: "{count}h ago",
 activity_stop_tooltip: "Stop watching this operation (engine job may continue server-side)",
 keep_awake_hint: "Blocks display and system sleep while the app is running so long uploads don't get interrupted.",
 keep_awake_unsupported: "Not supported on this OS yet.",
-ops_in_flight: "{count} operation(s) running",
-ops_open_activity: "View Activity",
-ops_toggle: "Toggle operations panel",
+// 2.12.0: OperationBar → ActivityBar rename (terminology consistency
+// with the existing Activity screen + activityHistory store). Old
+// `ops_*` keys retired; new `activity_bar_*` keys below.
+activity_bar_in_flight: "{count} activity item(s) running",
+activity_bar_open: "View Activity",
+activity_bar_toggle: "Toggle activity panel",
 
 // Connection screen
 connection_title: "Connect to your PS5",

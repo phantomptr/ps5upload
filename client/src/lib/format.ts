@@ -1,7 +1,7 @@
 /**
  * Shared formatters for byte sizes and durations. Identical
  * implementations existed inline in 7+ screens; extracting them here
- * is the prerequisite for any cross-screen UI (the OperationBar and
+ * is the prerequisite for any cross-screen UI (the ActivityBar and
  * Activity tab both need consistent rendering, and we can't have one
  * banner saying "1.2 GiB" while another says "1234 MiB" for the same
  * number).

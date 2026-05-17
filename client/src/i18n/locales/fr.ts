@@ -107,9 +107,6 @@ activity_hours_ago: "il y a {count} h",
 activity_stop_tooltip: "Arrêter de surveiller cette opération (la tâche de l'engine peut continuer côté serveur)",
 keep_awake_hint: "Empêche l'écran et le système de se mettre en veille pendant que l'app fonctionne, afin que les longs envois ne soient pas interrompus.",
 keep_awake_unsupported: "Pas encore pris en charge sur ce système.",
-ops_in_flight: "{count} opération(s) en cours",
-ops_open_activity: "Ouvrir l'Activité",
-ops_toggle: "Basculer le panneau des opérations",
 
 connection_title: "Connecter à votre PS5",
 connection_description: "Trois étapes rapides avant votre premier transfert. À faire une seule fois par démarrage de la PS5 — le payload reste chargé jusqu'au redémarrage ou la mise en veille de la console.",
@@ -1121,6 +1118,9 @@ nav_section_browse: "Parcourir la PS5",
 nav_section_system: "Système",
 nav_section_diagnostics: "Diagnostics",
 payloads_title: "Catalogue Homebrew",
+activity_bar_in_flight: "{count} activité(s) en cours",
+activity_bar_open: "Voir l'activité",
+activity_bar_toggle: "Basculer le panneau d'activité",
 };
 
 export default fr;

@@ -111,9 +111,6 @@ activity_hours_ago: "{count}ч назад",
 activity_stop_tooltip: "Перестать наблюдать за операцией (задача в engine может продолжаться на сервере)",
 keep_awake_hint: "Блокирует сон дисплея и системы во время работы приложения, чтобы длинные загрузки не прерывались.",
 keep_awake_unsupported: "Пока не поддерживается на этой ОС.",
-ops_in_flight: "{count} операций выполняется",
-ops_open_activity: "Открыть Активность",
-ops_toggle: "Переключить панель операций",
 
 connection_title: "Подключение к PS5",
 connection_description: "Три быстрых шага перед первой загрузкой. Делается один раз за загрузку PS5 — payload остаётся загруженным до перезагрузки или режима сна консоли.",
@@ -1120,6 +1117,9 @@ nav_section_browse: "Просмотр PS5",
 nav_section_system: "Система",
 nav_section_diagnostics: "Диагностика",
 payloads_title: "Каталог homebrew",
+activity_bar_in_flight: "выполняется активностей: {count}",
+activity_bar_open: "Открыть активность",
+activity_bar_toggle: "Переключить панель активности",
 };
 
 export default ru;

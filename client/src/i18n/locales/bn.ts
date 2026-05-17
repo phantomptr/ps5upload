@@ -111,9 +111,6 @@ activity_hours_ago: "{count} ঘণ্টা আগে",
 activity_stop_tooltip: "এই অপারেশন দেখা বন্ধ করুন (ইঞ্জিন কাজ সার্ভারে চলতে পারে)",
 keep_awake_hint: "অ্যাপ চলাকালীন ডিসপ্লে এবং সিস্টেম স্লিপ ব্লক করে যাতে দীর্ঘ আপলোড বাধাগ্রস্ত না হয়।",
 keep_awake_unsupported: "এই OS-এ এখনো সমর্থিত নয়।",
-ops_in_flight: "{count}টি অপারেশন চলছে",
-ops_open_activity: "কার্যকলাপ দেখুন",
-ops_toggle: "অপারেশন প্যানেল টগল করুন",
 
 connection_title: "আপনার PS5-এ সংযুক্ত হন",
 connection_description: "আপনার প্রথম আপলোডের আগে তিনটি দ্রুত পদক্ষেপ। PS5 চালু হওয়ার সময় শুধু একবার করতে হবে — কনসোল পুনরায় চালু না হওয়া বা রেস্ট মোডে না যাওয়া পর্যন্ত পেলোড লোড থাকে।",
@@ -1120,6 +1117,9 @@ nav_section_browse: "PS5 ব্রাউজ করুন",
 nav_section_system: "সিস্টেম",
 nav_section_diagnostics: "ডায়াগনস্টিকস",
 payloads_title: "হোমব্রু ক্যাটালগ",
+activity_bar_in_flight: "{count}টি কার্যকলাপ চলছে",
+activity_bar_open: "কার্যকলাপ দেখুন",
+activity_bar_toggle: "কার্যকলাপ প্যানেল টগল করুন",
 };
 
 export default bn;

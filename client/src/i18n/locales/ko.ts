@@ -112,9 +112,6 @@ activity_hours_ago: "{count}시간 전",
 activity_stop_tooltip: "이 작업 모니터링 중지 (engine 작업은 서버 측에서 계속될 수 있음)",
 keep_awake_hint: "앱이 실행되는 동안 디스플레이와 시스템 절전을 차단하여 긴 업로드가 중단되지 않도록 합니다.",
 keep_awake_unsupported: "이 OS에서는 아직 지원되지 않습니다.",
-ops_in_flight: "{count}개 작업 실행 중",
-ops_open_activity: "활동 열기",
-ops_toggle: "작업 패널 전환",
 
 connection_title: "PS5에 연결",
 connection_description: "첫 업로드 전 세 가지 빠른 단계. PS5가 부팅될 때마다 한 번만 수행하면 됩니다 — 콘솔이 재부팅되거나 절전 모드에 들어갈 때까지 payload는 로드된 상태로 유지됩니다.",
@@ -1121,6 +1118,9 @@ nav_section_browse: "PS5 탐색",
 nav_section_system: "시스템",
 nav_section_diagnostics: "진단",
 payloads_title: "Homebrew 카탈로그",
+activity_bar_in_flight: "{count}개의 활동 항목 실행 중",
+activity_bar_open: "활동 보기",
+activity_bar_toggle: "활동 패널 토글",
 };
 
 export default ko;

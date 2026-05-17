@@ -111,9 +111,6 @@ activity_hours_ago: "{count}j lalu",
 activity_stop_tooltip: "Berhenti memantau operasi ini (tugas engine mungkin terus berjalan di sisi server)",
 keep_awake_hint: "Mencegah layar dan sistem tidur saat aplikasi berjalan agar unggahan panjang tidak terganggu.",
 keep_awake_unsupported: "Belum didukung di OS ini.",
-ops_in_flight: "{count} operasi berjalan",
-ops_open_activity: "Buka Aktivitas",
-ops_toggle: "Alihkan panel operasi",
 
 connection_title: "Hubungkan ke PS5 Anda",
 connection_description: "Tiga langkah cepat sebelum unggahan pertama Anda. Hanya perlu dilakukan sekali setiap kali PS5 dinyalakan — payload tetap dimuat hingga konsol dimulai ulang atau memasuki mode istirahat.",
@@ -1120,6 +1117,9 @@ nav_section_browse: "Jelajahi PS5",
 nav_section_system: "Sistem",
 nav_section_diagnostics: "Diagnostik",
 payloads_title: "Katalog homebrew",
+activity_bar_in_flight: "{count} aktivitas berjalan",
+activity_bar_open: "Lihat aktivitas",
+activity_bar_toggle: "Alihkan panel aktivitas",
 };
 
 export default id;

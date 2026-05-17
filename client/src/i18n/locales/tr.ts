@@ -111,9 +111,6 @@ activity_hours_ago: "{count}sa önce",
 activity_stop_tooltip: "Bu işlemi izlemeyi bırak (engine işi sunucuda devam edebilir)",
 keep_awake_hint: "Uygulama çalışırken ekran ve sistem uyumasını engeller, böylece uzun yüklemeler kesintiye uğramaz.",
 keep_awake_unsupported: "Bu işletim sisteminde henüz desteklenmiyor.",
-ops_in_flight: "{count} işlem çalışıyor",
-ops_open_activity: "Etkinliği aç",
-ops_toggle: "İşlem panelini aç/kapat",
 
 connection_title: "PS5'inize bağlanın",
 connection_description: "İlk yüklemenizden önce üç hızlı adım. PS5 her açıldığında yalnızca bir kez yapmanız gerekir — payload, konsol yeniden başlatılana veya dinlenme moduna girene kadar yüklü kalır.",
@@ -1120,6 +1117,9 @@ nav_section_browse: "PS5'e Gözat",
 nav_section_system: "Sistem",
 nav_section_diagnostics: "Tanılama",
 payloads_title: "Homebrew kataloğu",
+activity_bar_in_flight: "{count} etkinlik öğesi çalışıyor",
+activity_bar_open: "Etkinliği görüntüle",
+activity_bar_toggle: "Etkinlik panelini değiştir",
 };
 
 export default tr;

@@ -107,9 +107,6 @@ activity_hours_ago: "منذ {count} س",
 activity_stop_tooltip: "إيقاف مراقبة هذه العملية (قد تستمر مهمة المحرك على الخادم)",
 keep_awake_hint: "يمنع شاشة العرض والنظام من الدخول في وضع السكون أثناء تشغيل التطبيق حتى لا تنقطع عمليات التحميل الطويلة.",
 keep_awake_unsupported: "غير مدعوم على هذا النظام بعد.",
-ops_in_flight: "{count} عملية قيد التشغيل",
-ops_open_activity: "فتح النشاط",
-ops_toggle: "تبديل لوحة العمليات",
 
 connection_title: "اتصل بـ PS5 الخاص بك",
 connection_description: "ثلاث خطوات سريعة قبل أول رفع لك. يجب القيام بها مرة واحدة فقط في كل مرة يتم فيها تشغيل PS5 — يبقى الحمل محملاً حتى تتم إعادة تشغيل وحدة التحكم أو الدخول في وضع الراحة.",
@@ -1121,6 +1118,9 @@ nav_section_browse: "تصفح PS5",
 nav_section_system: "النظام",
 nav_section_diagnostics: "التشخيص",
 payloads_title: "كتالوج البرامج المنزلية",
+activity_bar_in_flight: "{count} عنصر نشاط قيد التشغيل",
+activity_bar_open: "عرض النشاط",
+activity_bar_toggle: "تبديل لوحة النشاط",
 };
 
 export default ar;

@@ -10,20 +10,27 @@ import { formatBytes, formatDuration } from "../lib/format";
 import { useTr } from "../state/lang";
 
 /**
- * Persistent footer bar that surfaces in-flight operations across
+ * Persistent footer bar that surfaces in-flight activity across
  * every screen. Without it, a user who starts a copy on the
  * FileSystem screen and navigates to Library has no global signal
  * that work is still happening — the per-screen banner disappears
  * with the screen.
  *
- * Collapsed: a single line with the live op count + a click-through
- * to the Activity tab. Expanded: per-op summary with elapsed +
- * progress numbers + speed.
+ * Collapsed: a single line with the live activity count + a
+ * click-through to the Activity tab. Expanded: per-item summary
+ * with elapsed + progress numbers + speed.
  *
- * Renders nothing when no ops are running, so the chrome stays out
- * of the way during idle.
+ * Renders nothing when nothing's in flight, so the chrome stays
+ * out of the way during idle.
+ *
+ * 2.12.0: renamed from OperationBar -> ActivityBar. The
+ * conceptual-model audit flagged "operation" as a term used only
+ * here while the rest of the app says "activity" (the screen, the
+ * history store, the i18n keys). Two names for the same idea was
+ * gratuitous; "ActivityBar" pairs with the Activity screen so the
+ * user can guess where the bar's "View Activity" link goes.
  */
-export default function OperationBar() {
+export default function ActivityBar() {
   const tr = useTr();
   const navigate = useNavigate();
   const entries = useActivityHistoryStore((s) => s.entries);
@@ -40,14 +47,14 @@ export default function OperationBar() {
           onClick={() => setExpanded((v) => !v)}
           className="flex flex-1 items-center gap-2 truncate hover:opacity-80"
           aria-expanded={expanded}
-          aria-label={tr("ops_toggle", undefined, "Toggle operations panel")}
+          aria-label={tr("activity_bar_toggle", undefined, "Toggle activity panel")}
         >
           <Loader2 size={12} className="animate-spin text-[var(--color-accent)]" />
           <span className="font-medium">
             {tr(
-              "ops_in_flight",
+              "activity_bar_in_flight",
               { count: running.length },
-              `${running.length} operation${running.length === 1 ? "" : "s"} running`,
+              `${running.length} activity item${running.length === 1 ? "" : "s"} running`,
             )}
           </span>
           <span className="ml-2 truncate text-[var(--color-muted)]">
@@ -61,7 +68,7 @@ export default function OperationBar() {
           onClick={() => navigate("/activity")}
           className="rounded-md border border-[var(--color-border)] px-2 py-0.5 text-[10px] text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
         >
-          {tr("ops_open_activity", undefined, "View Activity")}
+          {tr("activity_bar_open", undefined, "View Activity")}
         </button>
       </div>
 

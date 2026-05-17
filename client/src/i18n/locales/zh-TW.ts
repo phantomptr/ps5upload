@@ -108,9 +108,6 @@ activity_hours_ago: "{count} 小時前",
 activity_stop_tooltip: "停止觀察此操作 (engine 任務可能在伺服端繼續)",
 keep_awake_hint: "應用執行期間阻止顯示器和系統休眠,以免長時間上傳被中斷。",
 keep_awake_unsupported: "此作業系統暫不支援。",
-ops_in_flight: "{count} 個操作進行中",
-ops_open_activity: "打開活動",
-ops_toggle: "切換操作面板",
 
 connection_title: "連接到您的 PS5",
 connection_description: "首次上傳前的三個簡單步驟。每次 PS5 啟動後只需操作一次 — payload 會一直保持載入狀態,直到主機重啟或進入休眠。",
@@ -1122,6 +1119,9 @@ nav_section_browse: "瀏覽 PS5",
 nav_section_system: "系統",
 nav_section_diagnostics: "診斷",
 payloads_title: "Homebrew 目錄",
+activity_bar_in_flight: "{count} 個活動項目正在執行",
+activity_bar_open: "檢視活動",
+activity_bar_toggle: "切換活動面板",
 };
 
 export default zh_TW;

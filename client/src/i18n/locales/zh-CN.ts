@@ -108,9 +108,6 @@ activity_hours_ago: "{count} 小时前",
 activity_stop_tooltip: "停止观察此操作 (engine 任务可能在服务端继续)",
 keep_awake_hint: "应用运行期间阻止显示器和系统休眠,以免长时间上传被中断。",
 keep_awake_unsupported: "此操作系统暂不支持。",
-ops_in_flight: "{count} 个操作进行中",
-ops_open_activity: "打开活动",
-ops_toggle: "切换操作面板",
 
 // Connection
 connection_title: "连接到您的 PS5",
@@ -1128,6 +1125,9 @@ nav_section_browse: "浏览 PS5",
 nav_section_system: "系统",
 nav_section_diagnostics: "诊断",
 payloads_title: "Homebrew 目录",
+activity_bar_in_flight: "{count} 个活动项正在运行",
+activity_bar_open: "查看活动",
+activity_bar_toggle: "切换活动面板",
 };
 
 export default zh_CN;

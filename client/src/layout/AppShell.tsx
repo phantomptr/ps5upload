@@ -2,7 +2,7 @@ import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useEffect, useRef } from "react";
 import Sidebar from "./Sidebar";
 import StatusBar from "./StatusBar";
-import OperationBar from "./OperationBar";
+import ActivityBar from "./ActivityBar";
 import { useConnectionStore } from "../state/connection";
 import { useUpdateStore } from "../state/update";
 import { engineApi } from "../api/engine";
@@ -299,7 +299,7 @@ export default function AppShell() {
           </div>
         </main>
       </div>
-      <OperationBar />
+      <ActivityBar />
       <StatusBar />
       <CommandPalette />
       <ShortcutsOverlay />

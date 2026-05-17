@@ -8,7 +8,7 @@ import { create } from "zustand";
  * availability, "PS5 went offline mid-upload" type things.
  *
  * Differs from `activityHistory.ts`: that store tracks the running
- * roster of operations and is consumed by the OperationBar for
+ * roster of operations and is consumed by the ActivityBar for
  * live status. Notifications are the *post-hoc* surface — "what
  * happened lately while I was on another screen?"
  *

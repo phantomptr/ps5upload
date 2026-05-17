@@ -107,9 +107,6 @@ activity_hours_ago: "hace {count} h",
 activity_stop_tooltip: "Dejar de supervisar esta operación (el trabajo del engine puede continuar en el servidor)",
 keep_awake_hint: "Bloquea la suspensión de la pantalla y del sistema mientras la app está activa para que las subidas largas no se interrumpan.",
 keep_awake_unsupported: "Aún no es compatible con este sistema operativo.",
-ops_in_flight: "{count} operación(es) en curso",
-ops_open_activity: "Abrir Actividad",
-ops_toggle: "Alternar panel de operaciones",
 
 connection_title: "Conectar a tu PS5",
 connection_description: "Tres pasos rápidos antes de tu primera subida. Solo necesitas hacerlo una vez por arranque de PS5 — el payload permanece cargado hasta que la consola se reinicia o entra en reposo.",
@@ -1121,6 +1118,9 @@ nav_section_browse: "Explorar PS5",
 nav_section_system: "Sistema",
 nav_section_diagnostics: "Diagnóstico",
 payloads_title: "Catálogo de homebrew",
+activity_bar_in_flight: "{count} actividad(es) en curso",
+activity_bar_open: "Ver actividad",
+activity_bar_toggle: "Alternar panel de actividad",
 };
 
 export default es;

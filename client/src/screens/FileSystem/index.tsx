@@ -428,7 +428,7 @@ export default function FileSystemScreen() {
     if (!ok) return;
     setBusyEntry({ name, op: "rename" }); // cheap reuse of spinner
     setError(null);
-    // Track in the global activity log so the OperationBar shows
+    // Track in the global activity log so the ActivityBar shows
     // "Deleting <name>" while it's in flight. Single-item deletes on
     // a directory tree (a 100 GB game folder) can take minutes — the
     // user needs a global signal that the work is still happening

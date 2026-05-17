@@ -87,7 +87,7 @@ export function installActivityWiring() {
   let bulkActivityId: string | null = null;
   useFsBulkOpStore.subscribe((state, prev) => {
     // Forward per-item byte progress (currentBytesCopied + currentSize)
-    // into the activity entry so the OperationBar / Activity tab tick
+    // into the activity entry so the ActivityBar / Activity tab tick
     // in lockstep with the in-screen banner. Without this, FS pastes
     // showed "Running" with no bytes for the whole op duration.
     if (state.op !== null && bulkActivityId !== null) {
@@ -174,12 +174,12 @@ export function installActivityWiring() {
   //
   // Before this subscription, clicking Start on the Upload Queue
   // panel kicked off a real transfer in the engine but the
-  // OperationBar at the bottom of the app stayed dark — the only
+  // ActivityBar at the bottom of the app stayed dark — the only
   // activityHistory subscriber for FTX2 uploads was useTransferStore
   // (the single-shot Upload-screen flow). Users had to look in the
   // Upload-screen QueuePanel to see queue progress; navigating away
   // hid it entirely. Now the per-item running state forwards into
-  // activityHistory so the OperationBar lights up regardless of which
+  // activityHistory so the ActivityBar lights up regardless of which
   // surface kicked off the upload.
   //
   // Sequential queue semantics: at most one item is `running` at a
@@ -206,7 +206,7 @@ export function installActivityWiring() {
         uploadQueueActivityIds.set(item.id, id);
         continue;
       }
-      // Still running — update byte progress so the OperationBar
+      // Still running — update byte progress so the ActivityBar
       // shows a live byte counter.
       if (isRunning && wasRunning) {
         const activityId = uploadQueueActivityIds.get(item.id);
@@ -245,7 +245,7 @@ export function installActivityWiring() {
       }
     }
     // Items removed entirely (clear()) — flush any orphaned activity
-    // ids as "stopped" so the OperationBar doesn't show a phantom
+    // ids as "stopped" so the ActivityBar doesn't show a phantom
     // running entry.
     for (const [itemId, activityId] of uploadQueueActivityIds) {
       if (!state.items.some((it) => it.id === itemId)) {
@@ -263,11 +263,11 @@ export function installActivityWiring() {
   // different item type (InstallQueueItem has bytesDownloaded vs
   // QueueItem's bytesSent), but the begin/update/finish lifecycle is
   // identical. A user starting an install batch with the Upload
-  // screen open never saw OperationBar updates for the install
+  // screen open never saw ActivityBar updates for the install
   // progress — same root cause as the upload-queue gap. NPXS system
   // installs jump immediately to `done` because their actual install
   // happens off-app (Sony's notification panel), so they show as a
-  // brief "Install: <title>" entry in the OperationBar that
+  // brief "Install: <title>" entry in the ActivityBar that
   // immediately finishes — which is the correct signal.
   const installQueueActivityIds = new Map<string, string>();
   useInstallQueue.subscribe((state, prev) => {

@@ -106,12 +106,12 @@ interface ActivityHistoryState {
    *  state with a synthetic note. Use case: rows that got orphaned
    *  because their underlying op died without firing `finish()` —
    *  the desktop process was killed, the engine restarted, the
-   *  payload disconnected mid-poll, etc. Without this the OperationBar
+   *  payload disconnected mid-poll, etc. Without this the ActivityBar
    *  shows a forever-running ghost until the user restarts the app
    *  (which `loadInitial` then converts via the same logic). Past
    *  entries are left alone — only running rows get touched. */
   clearRunning: () => void;
-  /** All entries currently in `running` state — the OperationBar
+  /** All entries currently in `running` state — the ActivityBar
    *  reads this to show the global in-flight indicator. Computed
    *  in-place so callers don't need a selector. */
   runningEntries: () => ActivityEntry[];
@@ -128,7 +128,7 @@ function loadInitial(): ActivityEntry[] {
     // closed is now stale (the underlying op didn't actually keep
     // running). Mark those as "stopped" with a synthetic note so the
     // history stays accurate. Without this, restarting the app
-    // leaves the OperationBar showing forever-running ghosts.
+    // leaves the ActivityBar showing forever-running ghosts.
     return parsed
       .filter((e: unknown): e is ActivityEntry =>
         typeof e === "object" && e !== null && typeof (e as ActivityEntry).id === "string",
@@ -228,7 +228,7 @@ export const useActivityHistoryStore = create<ActivityHistoryState>(
         // terminal entries over running ones. The naive
         // `slice(0, MAX_ENTRIES)` would silently drop the *oldest*
         // entry — which can be a still-running operation, leaving
-        // its work in flight but invisible to the OperationBar
+        // its work in flight but invisible to the ActivityBar
         // and Activity tab. Walk from oldest backwards looking for
         // a terminal entry to drop; only fall back to dropping a
         // running one if every existing entry is still running

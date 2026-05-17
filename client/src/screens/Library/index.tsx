@@ -784,7 +784,7 @@ function LibraryRow({
   const runDelete = async () => {
     setBusy("delete");
     setError(null);
-    // Library row Delete shows up in the global OperationBar so the
+    // Library row Delete shows up in the global ActivityBar so the
     // user can see "Deleting Dead Space" while navigating away mid-
     // delete. fs-delete is the same kind FileSystem bulk + single
     // delete use; the label disambiguates by name.
@@ -1088,7 +1088,7 @@ function LibraryRow({
     // fs_copy with it; we can then poll FS_OP_STATUS for live byte
     // progress and fire FS_OP_CANCEL on Stop.
     const opId = Math.floor(Math.random() * Number.MAX_SAFE_INTEGER);
-    // Record into the cross-screen Activity log so the OperationBar
+    // Record into the cross-screen Activity log so the ActivityBar
     // and Activity tab can show this op alongside FS bulk + transfer
     // ops. Library has its own component-local state, so without
     // this entry the move would never appear in the global view.
@@ -1126,7 +1126,7 @@ function LibraryRow({
               totalBytes: snap.total_bytes,
             });
           }
-          // Mirror to Activity so the OperationBar / Activity tab
+          // Mirror to Activity so the ActivityBar / Activity tab
           // tick in lockstep with the local row.
           useActivityHistoryStore.getState().update(activityId, {
             bytes: snap.bytes_copied,
@@ -1334,7 +1334,7 @@ function LibraryRow({
     const kind: "file" | "folder" =
       entry.kind === "image" ? "file" : "folder";
     // Track the download in the global activity log so the
-    // OperationBar shows live progress + "still running" while the
+    // ActivityBar shows live progress + "still running" while the
     // user is on another tab. Library Download has its own polling
     // loop (it doesn't go through useFsDownloadOpStore that
     // FileSystem uses, since the row holds component-local state),
@@ -1458,7 +1458,7 @@ function LibraryRow({
           totalBytes: snap.total_bytes ?? 0,
         });
         // Mirror live progress to the activity entry so the
-        // OperationBar speedometer ticks.
+        // ActivityBar speedometer ticks.
         useActivityHistoryStore.getState().update(activityId, {
           bytes: snap.bytes_sent ?? 0,
           totalBytes: snap.total_bytes ?? 0,

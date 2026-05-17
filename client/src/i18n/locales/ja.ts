@@ -112,9 +112,6 @@ activity_hours_ago: "{count}時間前",
 activity_stop_tooltip: "この操作の監視を停止 (engine ジョブはサーバー側で継続する可能性)",
 keep_awake_hint: "アプリ実行中はディスプレイとシステムスリープをブロックし、長時間のアップロードが中断されないようにします。",
 keep_awake_unsupported: "このOSではまだサポートされていません。",
-ops_in_flight: "{count}件の操作が実行中",
-ops_open_activity: "アクティビティを開く",
-ops_toggle: "操作パネルを切り替え",
 
 connection_title: "PS5 に接続",
 connection_description: "初回アップロード前の3つの簡単なステップ。PS5 起動ごとに1回だけ必要 — payload は本体が再起動またはレストモードに入るまで読み込まれたままです。",
@@ -1121,6 +1118,9 @@ nav_section_browse: "PS5 を閲覧",
 nav_section_system: "システム",
 nav_section_diagnostics: "診断",
 payloads_title: "Homebrew カタログ",
+activity_bar_in_flight: "{count} 件のアクティビティが実行中",
+activity_bar_open: "アクティビティを表示",
+activity_bar_toggle: "アクティビティパネルを切り替え",
 };
 
 export default ja;
