@@ -25,9 +25,12 @@ function run(label, command, args, opts = {}) {
 }
 
 function existsOnPath(bin) {
-  const cmd = os.platform() === "win32" ? "where" : "command";
-  const args = os.platform() === "win32" ? [bin] : ["-v", bin];
-  return spawnSync(cmd, args, { shell: true, stdio: "ignore" }).status === 0;
+  if (os.platform() === "win32") {
+    return spawnSync("where", [bin], { stdio: "ignore" }).status === 0;
+  }
+  return spawnSync("sh", ["-c", "command -v \"$1\" >/dev/null 2>&1", "sh", bin], {
+    stdio: "ignore",
+  }).status === 0;
 }
 
 function firstExisting(paths) {

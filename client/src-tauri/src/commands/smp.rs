@@ -218,7 +218,7 @@ fn read_text_file_or_record(addr: &str, path: &str, errors: &mut Vec<String>) ->
         }
         Err(e) => {
             let s = e.to_string();
-            if s.contains("ENOENT") || s.contains("No such file") {
+            if is_missing_optional_file_error(&s) {
                 // Not an error — file just hasn't been written yet
                 // (e.g. autotune.ini is created lazily on first
                 // tuning event).
@@ -229,6 +229,12 @@ fn read_text_file_or_record(addr: &str, path: &str, errors: &mut Vec<String>) ->
             }
         }
     }
+}
+
+fn is_missing_optional_file_error(message: &str) -> bool {
+    message.contains("ENOENT")
+        || message.contains("No such file")
+        || message.contains("fs_read_stat_failed")
 }
 
 /// Strip SMP's CRC32 hash suffix from a mount-point dir name.
@@ -272,5 +278,16 @@ mod tests {
     fn derive_handles_short_names() {
         assert_eq!(derive_image_name("a"), "a");
         assert_eq!(derive_image_name(""), "");
+    }
+
+    #[test]
+    fn optional_file_missing_detection_handles_payload_stat_failure() {
+        assert!(is_missing_optional_file_error(
+            "payload rejected FS_READ(/data/shadowmount/autotune.ini): fs_read_stat_failed"
+        ));
+        assert!(is_missing_optional_file_error("No such file or directory"));
+        assert!(!is_missing_optional_file_error(
+            "payload rejected FS_READ(/data/shadowmount/autotune.ini): fs_read_path_not_allowed"
+        ));
     }
 }

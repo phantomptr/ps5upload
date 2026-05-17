@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import {
   FolderTree,
   Folder,
@@ -31,6 +30,7 @@ import {
   fsMove,
   fsMkdir,
   fsCopy,
+  fsListDir,
   fsOpStatus,
   fsOpCancel,
   jobStatus,
@@ -276,18 +276,14 @@ export default function FileSystemScreen() {
     // "stale path" helper since path semantics are screen-local).
     const probe = guard.capture();
     const probedPath = path;
-    const addr = toMgmtAddr(probe.host);
     setLoading(true);
     setError(null);
     try {
-      const listing = await invoke<{
-        entries?: DirEntry[];
-        truncated?: boolean;
-      }>("ps5_list_dir", { addr, path: probedPath, offset: 0, limit: 256 });
+      const listing = await fsListDir(probe.host, probedPath);
       // Drop result if user navigated or switched host mid-request.
       if (path !== probedPath) return;
       if (probe.isStale()) return;
-      const raw = listing.entries ?? [];
+      const raw: DirEntry[] = listing;
       raw.sort((a, b) => {
         if (a.kind !== b.kind) {
           if (a.kind === "dir") return -1;

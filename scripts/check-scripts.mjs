@@ -48,8 +48,12 @@ function run(label, cmd, args) {
 }
 
 function hasCommand(cmd) {
-  const probe = process.platform === "win32" ? ["where", [cmd]] : ["command", ["-v", cmd]];
-  return spawnSync(probe[0], probe[1], { shell: true, stdio: "ignore" }).status === 0;
+  if (process.platform === "win32") {
+    return spawnSync("where", [cmd], { stdio: "ignore" }).status === 0;
+  }
+  return spawnSync("sh", ["-c", "command -v \"$1\" >/dev/null 2>&1", "sh", cmd], {
+    stdio: "ignore",
+  }).status === 0;
 }
 
 const files = walk(repoRoot);

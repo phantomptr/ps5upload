@@ -1225,6 +1225,8 @@ queue_strategy_overwrite: "Overwrite",
 queue_strategy_resume: "Resume",
 logged_error_one: "1 logged error",
 logged_error_many: "{count} logged errors",
+queue_disabled_oneshot_in_flight: "A one-shot upload is in flight — wait for it to finish before starting the queue.",
+upload_disabled_queue_running: "Upload queue is running — pause the queue to start a one-shot upload, or use 'Add to queue' to append.",
 };
 
 export default en;

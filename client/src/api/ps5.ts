@@ -413,33 +413,59 @@ export async function searchPS5(
     const { path, depth } = stack.pop()!;
     if (depth > MAX_DEPTH) continue;
     maybeEmit(path);
-    let listing: { entries?: Array<{ name?: string; kind?: string; size?: number }> };
-    try {
-      listing = await invoke("ps5_list_dir", {
-        addr,
-        path,
-        offset: 0,
-        limit: 256,
-      });
-    } catch {
-      continue;
-    }
-    for (const e of listing.entries ?? []) {
-      scanned += 1;
-      if (!e.name) continue;
-      const full = path.endsWith("/") ? `${path}${e.name}` : `${path}/${e.name}`;
-      if (e.kind === "dir") {
-        stack.push({ path: full, depth: depth + 1 });
+    let offset = 0;
+    while (true) {
+      if (signal?.aborted) {
+        cancelled = true;
+        break;
       }
-      const size = typeof e.size === "number" ? e.size : 0;
-      if (size < minSize) continue;
-      if (!regex.test(e.name)) continue;
-      hits.push({
-        path: full,
-        name: e.name,
-        size,
-        kind: e.kind ?? "unknown",
-      });
+      if (scanned >= MAX_ENTRIES_SCANNED) {
+        truncated = true;
+        break;
+      }
+      let listing: {
+        entries?: Array<{ name?: string; kind?: string; size?: number }>;
+        truncated?: boolean;
+      };
+      try {
+        listing = await invoke("ps5_list_dir", {
+          addr,
+          path,
+          offset,
+          limit: 256,
+        });
+      } catch {
+        break;
+      }
+      const entries = listing.entries ?? [];
+      if (entries.length === 0) break;
+      for (const e of entries) {
+        scanned += 1;
+        if (!e.name) continue;
+        const full = path.endsWith("/") ? `${path}${e.name}` : `${path}/${e.name}`;
+        if (e.kind === "dir") {
+          stack.push({ path: full, depth: depth + 1 });
+        }
+        const size = typeof e.size === "number" ? e.size : 0;
+        if (size < minSize) continue;
+        if (!regex.test(e.name)) continue;
+        hits.push({
+          path: full,
+          name: e.name,
+          size,
+          kind: e.kind ?? "unknown",
+        });
+        if (scanned >= MAX_ENTRIES_SCANNED) {
+          truncated = true;
+          break;
+        }
+      }
+      if (truncated || cancelled || !listing.truncated) break;
+      offset += entries.length;
+      maybeEmit(path);
+    }
+    if (truncated || cancelled) {
+      break;
     }
   }
   // Final emit so UI reflects the full count even if we skipped the
