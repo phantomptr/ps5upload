@@ -11229,9 +11229,11 @@ static int handle_shell_builtin(const char *cmd_in, char **out_text,
         struct statfs *mnts = NULL;
         int n = getmntinfo(&mnts, MNT_NOWAIT);
         const char *fstype = NULL;
+        const char *from = NULL;
         for (int i = 0; i < n && mnts; i++) {
             if (strcmp(mnts[i].f_mntonname, mnt) == 0) {
                 fstype = mnts[i].f_fstypename;
+                from = mnts[i].f_mntfromname;
                 break;
             }
         }
@@ -11242,6 +11244,10 @@ static int handle_shell_builtin(const char *cmd_in, char **out_text,
             *out_exit = 1;
             return 0;
         }
+        /* nmount(2) iovec: each option name + value pair, iov_len
+         * INCLUDES the trailing NUL byte (per man page). `from`
+         * comes from the existing mount's f_mntfromname so the
+         * kernel matches the underlying device/source correctly. */
         struct iovec iov[6];
         iov[0].iov_base = (void *)"fstype";
         iov[0].iov_len = strlen("fstype") + 1;
@@ -11253,8 +11259,8 @@ static int handle_shell_builtin(const char *cmd_in, char **out_text,
         iov[3].iov_len = strlen(mnt) + 1;
         iov[4].iov_base = (void *)"from";
         iov[4].iov_len = strlen("from") + 1;
-        iov[5].iov_base = (void *)mnt; /* harmless; nullfs/ufs ignore */
-        iov[5].iov_len = strlen(mnt) + 1;
+        iov[5].iov_base = (void *)from;
+        iov[5].iov_len = strlen(from) + 1;
         if (nmount(iov, 6, MNT_UPDATE) != 0) {
             len = shell_appendf(&out, &cap, len,
                                  "mtrw: %s: %s (need kernel R/W via kstuff?)\n",
