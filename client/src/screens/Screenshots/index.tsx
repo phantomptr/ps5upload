@@ -15,6 +15,7 @@ import {
 } from "../../api/ps5";
 import { useConnectionStore, PS5_PAYLOAD_PORT } from "../../state/connection";
 import { mgmtAddr } from "../../lib/addr";
+import { useStaleHostGuard } from "../../lib/staleHostGuard";
 import { PageHeader, Button, EmptyState, ErrorCard } from "../../components";
 import { useTr } from "../../state/lang";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -32,6 +33,7 @@ export default function ScreenshotsScreen() {
   const tr = useTr();
   const host = useConnectionStore((s) => s.host);
   const payloadStatus = useConnectionStore((s) => s.payloadStatus);
+  const guard = useStaleHostGuard();
   const [items, setItems] = useState<ScreenshotEntry[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -90,29 +92,24 @@ export default function ScreenshotsScreen() {
 
   const refresh = useCallback(async () => {
     if (!host?.trim() || payloadStatus !== "up") return;
-    // Host-stale guard (2.9.0). screenshotsList can take seconds on
-    // a console with thousands of screenshots; if the user switches
-    // PS5 mid-list, OLD's screenshots would appear under NEW's name.
-    // Less destructive than Saves (downloadOne uses click-time host
-    // so the actual file fetch is consistent) but the displayed
-    // list / counts / sizes are wrong, which is enough to misdirect
-    // a user looking for a specific shot.
-    const probedHost = host.trim();
-    const isStale = () =>
-      useConnectionStore.getState().host?.trim() !== probedHost;
+    // Host-stale guard (2.12.0 migrated to canonical useStaleHostGuard).
+    // screenshotsList can take seconds on a console with thousands of
+    // shots; if the user switches PS5 mid-list, OLD's screenshots
+    // would appear under NEW's name.
+    const probe = guard.capture();
     setLoading(true);
     setError(null);
     try {
-      const r = await screenshotsList(mgmtAddr(probedHost));
-      if (isStale()) return;
+      const r = await screenshotsList(mgmtAddr(probe.host));
+      if (probe.isStale()) return;
       setItems(r.items);
     } catch (e) {
-      if (isStale()) return;
+      if (probe.isStale()) return;
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
-  }, [host, payloadStatus]);
+  }, [host, payloadStatus, guard]);
 
   useEffect(() => {
     refresh();

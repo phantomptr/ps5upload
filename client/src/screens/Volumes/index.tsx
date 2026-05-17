@@ -14,6 +14,8 @@ import { useConfirm } from "../../components/ConfirmDialog";
 import { humanizePs5Error } from "../../lib/humanizeError";
 import { useTr } from "../../state/lang";
 import { formatBytes } from "../../lib/format";
+import { transferAddr } from "../../lib/addr";
+import { useStaleHostGuard } from "../../lib/staleHostGuard";
 
 /** Path prefix for volumes our FS_MOUNT creates. Showing an Unmount
  *  button only for these keeps us from accidentally offering to
@@ -27,6 +29,7 @@ const PS5UPLOAD_MOUNT_PREFIX = "/mnt/ps5upload/";
 export default function VolumesScreen() {
   const tr = useTr();
   const host = useConnectionStore((s) => s.host);
+  const guard = useStaleHostGuard();
   const payloadStatus = useConnectionStore((s) => s.payloadStatus);
   const [volumes, setVolumes] = useState<Volume[] | null>(null);
   const [loading, setLoading] = useState(false);
@@ -38,23 +41,19 @@ export default function VolumesScreen() {
 
   const refresh = useCallback(async () => {
     if (!host?.trim()) return;
-    // Host-stale guard (2.9.0). fetchVolumes can take a few seconds
-    // on a PS5 with many mounts; if the user roster-switches before
-    // it returns, the OLD list would be attributed to the new host
-    // and a later Unmount click would either fail (wrong addr,
-    // wrong mount_point) OR succeed against an identically-named
-    // mount on the new console — unmounting the wrong volume.
-    const probedHost = host.trim();
-    const isStale = () =>
-      useConnectionStore.getState().host?.trim() !== probedHost;
+    // Host-stale guard (2.12.0 migrated to canonical useStaleHostGuard).
+    // fetchVolumes can take seconds on a PS5 with many mounts; an
+    // OLD list attributed to NEW host could lead to Unmount clicks
+    // targeting the wrong console.
+    const probe = guard.capture();
     setLoading(true);
     setError(null);
     try {
-      const list = await fetchVolumes(`${probedHost}:${PS5_PAYLOAD_PORT}`);
-      if (isStale()) return;
+      const list = await fetchVolumes(transferAddr(probe.host));
+      if (probe.isStale()) return;
       setVolumes(list);
     } catch (e) {
-      if (isStale()) return;
+      if (probe.isStale()) return;
       const raw = e instanceof Error ? e.message : String(e);
       // Run through the shared humanizer so transient
       // `fs_list_volumes_getmntinfo_failed` payload errors surface
@@ -64,7 +63,7 @@ export default function VolumesScreen() {
     } finally {
       setLoading(false);
     }
-  }, [host]);
+  }, [host, guard]);
 
   const handleUnmount = async (mountPoint: string) => {
     if (!host?.trim()) return;

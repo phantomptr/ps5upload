@@ -31,6 +31,7 @@ import { useTr } from "../../state/lang";
 import { startTransferDownload } from "../../api/ps5";
 import { formatBytes } from "../../lib/format";
 import { mgmtAddr } from "../../lib/addr";
+import { useStaleHostGuard } from "../../lib/staleHostGuard";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { pushNotification } from "../../state/notifications";
 
@@ -51,6 +52,7 @@ export default function SavesScreen() {
   const tr = useTr();
   const host = useConnectionStore((s) => s.host);
   const payloadStatus = useConnectionStore((s) => s.payloadStatus);
+  const guard = useStaleHostGuard();
   const [saves, setSaves] = useState<SaveEntry[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -75,30 +77,28 @@ export default function SavesScreen() {
 
   const refresh = useCallback(async () => {
     if (!host?.trim() || payloadStatus !== "up") return;
-    // Host-stale guard (2.9.0). savesList against host A can take
-    // seconds on a console with many user accounts; if the user
-    // switches roster to host B before it returns, the OLD list would
+    // Host-stale guard (2.9.0, 2.12.0 migrated to canonical
+    // useStaleHostGuard). savesList against host A can take seconds
+    // on a console with many user accounts; if the user switches
+    // roster to host B before it returns, the OLD list would
     // overwrite state and the UI would attribute A's saves to B —
-    // dangerous when combined with handleRestore (a Restore click on
-    // an entry shown under B would wipe B's actual save dir of the
-    // same title_id, then upload A's data there). Same canonical
-    // probedHost+isStale pattern Library uses.
-    const probedHost = host.trim();
-    const isStale = () =>
-      useConnectionStore.getState().host?.trim() !== probedHost;
+    // dangerous when combined with handleRestore (a Restore click
+    // on an entry shown under B would wipe B's actual save dir of
+    // the same title_id, then upload A's data there).
+    const probe = guard.capture();
     setLoading(true);
     setError(null);
     try {
-      const r = await savesList(mgmtAddr(probedHost));
-      if (isStale()) return;
+      const r = await savesList(mgmtAddr(probe.host));
+      if (probe.isStale()) return;
       setSaves(r.saves);
     } catch (e) {
-      if (isStale()) return;
+      if (probe.isStale()) return;
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
-  }, [host, payloadStatus]);
+  }, [host, payloadStatus, guard]);
 
   useEffect(() => {
     refresh();

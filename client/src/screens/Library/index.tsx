@@ -62,7 +62,8 @@ import {
 import { useLibraryStore, findOwningImage } from "../../state/library";
 import { useElapsed } from "../../lib/useElapsed";
 import { formatBytes } from "../../lib/format";
-import { mgmtAddr } from "../../lib/addr";
+import { mgmtAddr, transferAddr } from "../../lib/addr";
+import { useStaleHostGuard } from "../../lib/staleHostGuard";
 import { createLimiter } from "../../lib/limitConcurrency";
 import { deleteWithRetry } from "../../lib/deleteWithRetry";
 import {
@@ -119,6 +120,7 @@ function formatDuration(sec: number): string {
 export default function LibraryScreen() {
   const tr = useTr();
   const host = useConnectionStore((s) => s.host);
+  const guard = useStaleHostGuard();
   const payloadStatus = useConnectionStore((s) => s.payloadStatus);
   const entries = useLibraryStore((s) => s.entries);
   const mountMap = useLibraryStore((s) => s.mountMap);
@@ -134,19 +136,18 @@ export default function LibraryScreen() {
     if (!host?.trim()) return;
     // Host-switch race guard: refresh() is async and writes into the
     // shared useLibraryStore. If the user points the app at a new PS5
-    // mid-scan, a slow scan of the PREVIOUS host can land after the new
-    // host's scan and repaint the old console's library under the new
-    // host's name. Capture the host this run targets and drop the
-    // result (store write, error, loading-clear) if it's been
-    // superseded. refresh itself is keyed on `host`, so the new host
-    // gets its own fresh invocation.
-    const probedHost = host;
-    const isStale = () =>
-      useConnectionStore.getState().host !== probedHost;
+    // mid-scan, a slow scan of the PREVIOUS host can land after the
+    // new host's scan and repaint the old console's library under
+    // the new host's name. (2.12.0: migrated to canonical
+    // useStaleHostGuard from lib/staleHostGuard — was hand-rolled
+    // here and was the original template the 2.9.0 audit told the
+    // other 6 screens to copy.)
+    const probe = guard.capture();
+    const isStale = probe.isStale;
     setLoading(true);
     setError(null);
     try {
-      const addr = `${probedHost}:${PS5_PAYLOAD_PORT}`;
+      const addr = transferAddr(probe.host);
       // Volume probe failure is non-fatal for the library scan
       // itself (the Move modal degrades to "no destinations
       // available" instead of blocking the whole screen), but we
@@ -237,7 +238,7 @@ export default function LibraryScreen() {
       // host's own refresh now owns the loading indicator.
       if (!isStale()) setLoading(false);
     }
-  }, [host, setLoading, setError]);
+  }, [host, setLoading, setError, guard]);
 
   // Auto-refresh policy:
   //   - First time Library is visited after mount → always refresh

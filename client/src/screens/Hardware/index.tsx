@@ -21,6 +21,8 @@ import NetworkPanel from "./NetworkPanel";
 import PeripheralPanel from "./PeripheralPanel";
 import SpeedTestPanel from "./SpeedTestPanel";
 import { useDocumentVisible } from "../../lib/visibility";
+import { transferAddr } from "../../lib/addr";
+import { useStaleHostGuard } from "../../lib/staleHostGuard";
 
 import { useConnectionStore, PS5_PAYLOAD_PORT } from "../../state/connection";
 import {
@@ -104,6 +106,7 @@ export default function HardwareScreen() {
   const tr = useTr();
   const host = useConnectionStore((s) => s.host);
   const payloadStatus = useConnectionStore((s) => s.payloadStatus);
+  const guard = useStaleHostGuard();
 
   const [info, setInfo] = useState<HwInfo | null>(null);
   const [temps, setTemps] = useState<HwTemps | null>(null);
@@ -128,13 +131,13 @@ export default function HardwareScreen() {
     // NEW host's identity (model/serial in the System card is
     // especially misleading). Auto-poll resolves it in ≤5s but the
     // first-after-switch render lies.
-    const probedHost = host;
-    const isStale = () =>
-      useConnectionStore.getState().host !== probedHost;
+    // 2.12.0: migrated from local probedHost+isStale to canonical
+    // useStaleHostGuard.
+    const probe = guard.capture();
     setLoading(true);
     setError(null);
     try {
-      const addr = `${probedHost}:${PS5_PAYLOAD_PORT}`;
+      const addr = transferAddr(probe.host);
       const [nextTemps, nextPower, nextStorage] = await Promise.all([
         fetchHwTemps(addr),
         fetchHwPower(addr),
@@ -146,24 +149,24 @@ export default function HardwareScreen() {
         // of the tab keep working.
         fetchHwStorage(addr).catch(() => null),
       ]);
-      if (isStale()) return;
+      if (probe.isStale()) return;
       setTemps(nextTemps);
       setPower(nextPower);
       setStorage(nextStorage);
       // info is static; fetch once if we don't have it yet.
       if (info === null) {
         const nextInfo = await fetchHwInfo(addr).catch(() => null);
-        if (isStale()) return;
+        if (probe.isStale()) return;
         if (nextInfo) setInfo(nextInfo);
       }
     } catch (e) {
-      if (isStale()) return;
+      if (probe.isStale()) return;
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       busy.current = false;
       setLoading(false);
     }
-  }, [host, payloadStatus, info]);
+  }, [host, payloadStatus, info, guard]);
 
   // Mount + auto-poll every POLL_INTERVAL_MS while payload is up AND
   // the window is visible. Pausing on minimize keeps idle laptops
@@ -708,6 +711,7 @@ function SystemTimeCard({
   payloadUp: boolean;
 }) {
   const tr = useTr();
+  const guardSys = useStaleHostGuard();
   const [ps5Time, setPs5Time] = useState<PsTimeJson | null>(null);
   const [pcNowMs, setPcNowMs] = useState<number>(() => Date.now());
   const [confirming, setConfirming] = useState(false);
@@ -730,20 +734,19 @@ function SystemTimeCard({
     // hits the right console, but they'd be syncing based on bad
     // data). Belt-and-suspenders since the 30s poll resolves it,
     // but a 30s window of misleading drift is enough to mislead.
-    const probedHost = host;
-    const isStale = () =>
-      useConnectionStore.getState().host !== probedHost;
+    // 2.12.0: canonical useStaleHostGuard.
+    const probe = guardSys.capture();
     try {
-      const addr = `${probedHost}:${PS5_PAYLOAD_PORT}`;
+      const addr = transferAddr(probe.host);
       const r = (await invoke("ps5_time_get", { addr })) as PsTimeJson;
-      if (isStale()) return;
+      if (probe.isStale()) return;
       setPs5Time(r);
       setError(null);
     } catch (e) {
-      if (isStale()) return;
+      if (probe.isStale()) return;
       setError(e instanceof Error ? e.message : String(e));
     }
-  }, [host, payloadUp]);
+  }, [host, payloadUp, guardSys]);
 
   useEffect(() => {
     if (!payloadUp) return;
@@ -1006,6 +1009,7 @@ function DateTimeStateCard({
   payloadUp: boolean;
 }) {
   const tr = useTr();
+  const guardDt = useStaleHostGuard();
   const [state, setState] = useState<PsTimeStateJson | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1038,24 +1042,22 @@ function DateTimeStateCard({
 
   const refresh = useCallback(async () => {
     if (!payloadUp || !host.trim()) return;
-    // Host-stale guard (mirrors the rest of Hardware).
-    const probedHost = host;
-    const isStale = () =>
-      useConnectionStore.getState().host !== probedHost;
+    // 2.12.0: canonical useStaleHostGuard (was hand-rolled per Hardware).
+    const probe = guardDt.capture();
     setLoading(true);
     try {
-      const addr = `${probedHost}:${PS5_PAYLOAD_PORT}`;
+      const addr = transferAddr(probe.host);
       const r = (await invoke("ps5_time_state_get", { addr })) as PsTimeStateJson;
-      if (isStale()) return;
+      if (probe.isStale()) return;
       setState(r);
       setError(null);
     } catch (e) {
-      if (isStale()) return;
+      if (probe.isStale()) return;
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
-  }, [host, payloadUp]);
+  }, [host, payloadUp, guardDt]);
 
   useEffect(() => {
     if (!payloadUp) return;

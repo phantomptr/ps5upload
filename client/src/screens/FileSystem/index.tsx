@@ -95,6 +95,7 @@ function formatDuration(sec: number): string {
 // previously had two different signatures across screens (bare host
 // vs transfer-port addr); the canonical helper accepts either.
 import { mgmtAddr as toMgmtAddr } from "../../lib/addr";
+import { useStaleHostGuard } from "../../lib/staleHostGuard";
 
 function parent(p: string): string {
   if (p === "/" || p === "") return "/";
@@ -207,6 +208,7 @@ function crumbs(p: string): { label: string; path: string }[] {
 export default function FileSystemScreen() {
   const tr = useTr();
   const host = useConnectionStore((s) => s.host);
+  const guard = useStaleHostGuard();
   const payloadStatus = useConnectionStore((s) => s.payloadStatus);
   const clipboard = useFsClipboardStore();
   // Restore the user's last-browsed path for THIS host. The lazy
@@ -269,9 +271,12 @@ export default function FileSystemScreen() {
     // changed. `path` is captured directly because it's the closure
     // value at refresh start; `host` we re-read because it lives in
     // a global store.
-    const probedHost = host.trim();
+    // 2.12.0: canonical useStaleHostGuard for the host check;
+    // probedPath is path-specific and stays inline (no general
+    // "stale path" helper since path semantics are screen-local).
+    const probe = guard.capture();
     const probedPath = path;
-    const addr = toMgmtAddr(`${probedHost}:${PS5_PAYLOAD_PORT}`);
+    const addr = toMgmtAddr(probe.host);
     setLoading(true);
     setError(null);
     try {
@@ -280,13 +285,8 @@ export default function FileSystemScreen() {
         truncated?: boolean;
       }>("ps5_list_dir", { addr, path: probedPath, offset: 0, limit: 256 });
       // Drop result if user navigated or switched host mid-request.
-      // Compares against `path` (the CURRENT closure value re-captured
-      // from the dep array — useCallback regenerates on path change)
-      // and the store's live host. If either differs, a newer refresh
-      // is already in flight and will populate state correctly.
       if (path !== probedPath) return;
-      const liveHost = useConnectionStore.getState().host?.trim();
-      if (liveHost !== probedHost) return;
+      if (probe.isStale()) return;
       const raw = listing.entries ?? [];
       raw.sort((a, b) => {
         if (a.kind !== b.kind) {
@@ -310,8 +310,7 @@ export default function FileSystemScreen() {
       // abandoned listing shouldn't replace a valid one the user is
       // currently looking at.
       if (path !== probedPath) return;
-      const liveHost = useConnectionStore.getState().host?.trim();
-      if (liveHost !== probedHost) return;
+      if (probe.isStale()) return;
       // Route through humanizePs5Error so payload-side errors like
       // `fs_unmount_busy`, `path_not_allowed`, etc. surface as
       // actionable copy instead of opaque snake_case codes.
@@ -325,7 +324,7 @@ export default function FileSystemScreen() {
       // "loading-spinner-stuck-forever" UX bug.
       setLoading(false);
     }
-  }, [host, path]);
+  }, [host, path, guard]);
 
   useEffect(() => {
     if (payloadStatus === "up") refresh();
