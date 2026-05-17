@@ -3,6 +3,7 @@ import { Boxes, Rocket } from "lucide-react";
 
 import { PageHeader } from "../../components";
 import { useTr } from "../../state/lang";
+import { makeTabKeyHandler } from "../../lib/tabKeyboardNav";
 import CatalogPanel from "./CatalogPanel";
 import SendPanel from "./SendPanel";
 
@@ -42,6 +43,11 @@ export default function PayloadsScreen() {
   const setActiveTab = (next: TabId) => {
     setSearchParams({ tab: next }, { replace: true });
   };
+  const onTabKey = makeTabKeyHandler<TabId>(
+    TABS.map((t) => t.id),
+    setActiveTab,
+    (id) => `payloads-tab-${id}`,
+  );
 
   const description =
     activeTab === "send"
@@ -85,6 +91,7 @@ export default function PayloadsScreen() {
               aria-selected={isActive}
               tabIndex={isActive ? 0 : -1}
               onClick={() => setActiveTab(id)}
+              onKeyDown={(e) => onTabKey(e, id)}
               className={
                 "flex items-center gap-1.5 border-b-2 px-3 py-2 text-sm transition-colors " +
                 (isActive

@@ -3,6 +3,7 @@ import { ScrollText, Terminal } from "lucide-react";
 
 import { PageHeader } from "../../components";
 import { useTr } from "../../state/lang";
+import { makeTabKeyHandler } from "../../lib/tabKeyboardNav";
 import AppLogsPanel from "./AppLogsPanel";
 import KernelLogPanel from "./KernelLogPanel";
 
@@ -42,6 +43,11 @@ export default function LogsScreen() {
      * land on first. */
     setSearchParams({ tab: next }, { replace: true });
   };
+  const onTabKey = makeTabKeyHandler<TabId>(
+    TABS.map((t) => t.id),
+    setActiveTab,
+    (id) => `logs-tab-${id}`,
+  );
 
   const activeMeta = TABS.find((t) => t.id === activeTab)!;
   const description =
@@ -89,6 +95,7 @@ export default function LogsScreen() {
               aria-selected={isActive}
               tabIndex={isActive ? 0 : -1}
               onClick={() => setActiveTab(id)}
+              onKeyDown={(e) => onTabKey(e, id)}
               className={
                 "flex items-center gap-1.5 border-b-2 px-3 py-2 text-sm transition-colors " +
                 (isActive

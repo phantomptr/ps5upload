@@ -558,23 +558,37 @@ pub struct AbortResult {
 /// frame round-trip; end-to-end "cancel mid-upload" needs a real
 /// console.
 pub fn abort_transaction(addr: &str, tx_id: [u8; 16]) -> Result<AbortResult> {
+    use anyhow::Context;
     use ftx2_proto::FrameType;
+    // Hex tx_id is the lever for log diagnosis — without it the
+    // user sees "read frame header: ..." with no clue which
+    // transaction was being aborted on which host. Format once
+    // and reuse on every error branch.
+    let tx_hex: String = tx_id.iter().fold(String::with_capacity(32), |mut acc, b| {
+        use std::fmt::Write as _;
+        let _ = write!(acc, "{b:02x}");
+        acc
+    });
     let body = tx_meta_buf(tx_id, 0, b"");
-    let mut c = Connection::connect(addr)?;
-    c.send_frame(FrameType::AbortTx, &body)?;
-    let (hdr, body) = c.recv_frame()?;
+    let mut c = Connection::connect(addr)
+        .with_context(|| format!("ABORT_TX connect to {addr} for tx_id={tx_hex}"))?;
+    c.send_frame(FrameType::AbortTx, &body)
+        .with_context(|| format!("ABORT_TX send for tx_id={tx_hex}"))?;
+    let (hdr, body) = c
+        .recv_frame()
+        .with_context(|| format!("ABORT_TX recv ACK for tx_id={tx_hex}"))?;
     match hdr.frame_type() {
         Ok(FrameType::AbortTxAck) => Ok(AbortResult { ack_body: body }),
         Ok(FrameType::Error) => {
             let msg = String::from_utf8_lossy(&body).into_owned();
-            anyhow::bail!("abort_tx error: {msg}");
+            anyhow::bail!("ABORT_TX error for tx_id={tx_hex}: {msg}");
         }
         Ok(other) => {
-            anyhow::bail!("unexpected response to ABORT_TX: {other:?}");
+            anyhow::bail!("unexpected response to ABORT_TX (tx_id={tx_hex}): {other:?}");
         }
         Err(e) => {
             anyhow::bail!(
-                "ABORT_TX response had undecodable frame_type ({}): {e:?}",
+                "ABORT_TX response had undecodable frame_type ({}) for tx_id={tx_hex}: {e:?}",
                 hdr.frame_type
             );
         }
