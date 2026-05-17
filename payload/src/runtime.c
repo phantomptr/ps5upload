@@ -25,6 +25,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <pthread.h>
+#include <signal.h>
 #include "config.h"
 #include "runtime.h"
 #include "register.h"
@@ -9516,22 +9517,51 @@ static int handle_shell_builtin(const char *cmd_in, char **out_text,
 
     if (strcmp(prog, "help") == 0) {
         len = shell_appendf(&out, &cap, len,
-            "ps5upload built-in shell commands (PS5 has no /bin/sh):\n"
+            "ps5upload built-in shell commands (PS5 has no /bin/sh).\n"
+            "Quoting: 'literal', \"weak\", \\X — paths with spaces OK.\n"
+            "\n"
+            "Inspect:\n"
             "  help                    show this list\n"
             "  ls [path]               list directory (default /)\n"
             "  cat <path>              print file contents (8 KiB cap)\n"
+            "  head [-n N] <path>      first N lines (default 10)\n"
+            "  tail [-n N] <path>      last N lines (default 10)\n"
+            "  wc [-lwc] <path>        line / word / byte counts\n"
             "  stat <path>             show file metadata\n"
+            "  file <path>             magic-byte detect (coming Tier 2)\n"
+            "\n"
+            "Filesystem:\n"
             "  pwd                     print working dir (always /)\n"
-            "  uname [-a]              kernel info\n"
-            "  ps                      running processes (pid + name)\n"
+            "  touch <path>...         create or bump mtime\n"
+            "  mkdir [-p] <path>...    create directory\n"
+            "  rmdir <path>...         remove empty directory\n"
+            "  which <name>            find homebrew binary by name\n"
             "  mount                   active mount table\n"
             "  df                      filesystem usage\n"
+            "\n"
+            "Processes:\n"
+            "  ps                      running processes (pid + name)\n"
+            "  pid <name>              find pid(s) by substring match\n"
+            "  kill [-N] <pid>...      send signal N (default 15/TERM)\n"
+            "\n"
+            "System:\n"
+            "  date [+FMT]             current UTC time (strftime format)\n"
+            "  uname [-a]              kernel info\n"
+            "  hostname                kern.hostname sysctl\n"
             "  id                      effective uid/gid/authid\n"
             "  env                     environment variables\n"
             "  sysctl <name>           read a sysctl by name\n"
             "  sleep <secs>            sleep N seconds (1-30)\n"
+            "  sync                    flush dirty buffers\n"
+            "  klog [-n N]             last N bytes of /dev/klog\n"
+            "  notify <msg...>         PS5 toast notification\n"
+            "\n"
+            "Path utils:\n"
+            "  basename <path>         strip dir part\n"
+            "  dirname <path>          strip file part\n"
+            "\n"
+            "Misc:\n"
             "  true | false            exit code 0 / 1\n"
-            "  hostname                kern.hostname sysctl\n"
             "  echo <args...>          print args verbatim\n");
         *out_text = out;
         return 0;
@@ -9819,6 +9849,501 @@ static int handle_shell_builtin(const char *cmd_in, char **out_text,
         *out_text = out;
         return 0;
     }
+    /* ── 2.13.0 Tier 1 additions ───────────────────────────────────── */
+    if (strcmp(prog, "date") == 0) {
+        /* `date` (no arg) → default RFC-like format. `date +FMT` → user
+         * format. UTC only — PS5 system clock is stored UTC, and the
+         * Hardware tab has the proper TZ display if the user wants
+         * local. */
+        time_t t = time(NULL);
+        struct tm tm_utc;
+        gmtime_r(&t, &tm_utc);
+        const char *fmt = "%Y-%m-%d %H:%M:%S UTC";
+        char user_fmt[128];
+        if (argc >= 2 && argv[1][0] == '+') {
+            snprintf(user_fmt, sizeof(user_fmt), "%s", argv[1] + 1);
+            fmt = user_fmt;
+        }
+        char buf[256];
+        if (strftime(buf, sizeof(buf), fmt, &tm_utc) == 0) {
+            *out_text = strdup_safe("date: bad format or output too long\n");
+            *out_exit = 1;
+            return 0;
+        }
+        len = shell_appendf(&out, &cap, len, "%s\n", buf);
+        *out_text = out;
+        return 0;
+    }
+    if (strcmp(prog, "basename") == 0) {
+        if (argc < 2) {
+            *out_text = strdup_safe("basename: missing operand\n");
+            *out_exit = 1;
+            return 0;
+        }
+        const char *p = strrchr(argv[1], '/');
+        const char *base = p ? p + 1 : argv[1];
+        if (*base == '\0') base = "/"; /* "/" → "/" */
+        len = shell_appendf(&out, &cap, len, "%s\n", base);
+        *out_text = out;
+        return 0;
+    }
+    if (strcmp(prog, "dirname") == 0) {
+        if (argc < 2) {
+            *out_text = strdup_safe("dirname: missing operand\n");
+            *out_exit = 1;
+            return 0;
+        }
+        char tmp[1024];
+        snprintf(tmp, sizeof(tmp), "%s", argv[1]);
+        /* Strip trailing slashes except for root. */
+        size_t L = strlen(tmp);
+        while (L > 1 && tmp[L - 1] == '/') tmp[--L] = '\0';
+        char *p = strrchr(tmp, '/');
+        const char *d = ".";
+        if (p == tmp) d = "/";
+        else if (p) { *p = '\0'; d = tmp; }
+        len = shell_appendf(&out, &cap, len, "%s\n", d);
+        *out_text = out;
+        return 0;
+    }
+    if (strcmp(prog, "touch") == 0) {
+        if (argc < 2) {
+            *out_text = strdup_safe("touch: missing operand\n");
+            *out_exit = 1;
+            return 0;
+        }
+        int any_err = 0;
+        for (int i = 1; i < argc; i++) {
+            /* Create if missing, then bump mtime+atime to now. */
+            int fd = open(argv[i], O_CREAT | O_WRONLY, 0644);
+            if (fd < 0) {
+                len = shell_appendf(&out, &cap, len,
+                                     "touch: %s: %s\n", argv[i], strerror(errno));
+                any_err = 1;
+                continue;
+            }
+            close(fd);
+            /* Use utimes(NULL) = bump both to current wall clock. */
+            if (utimes(argv[i], NULL) != 0) {
+                len = shell_appendf(&out, &cap, len,
+                                     "touch: %s: utimes: %s\n", argv[i],
+                                     strerror(errno));
+                any_err = 1;
+            }
+        }
+        if (any_err) *out_exit = 1;
+        if (!out) out = strdup_safe("");
+        *out_text = out;
+        return 0;
+    }
+    if (strcmp(prog, "mkdir") == 0) {
+        int parents = 0;
+        int first_path = 1;
+        if (argc >= 2 && strcmp(argv[1], "-p") == 0) {
+            parents = 1;
+            first_path = 2;
+        }
+        if (argc <= first_path) {
+            *out_text = strdup_safe("mkdir: missing operand\n");
+            *out_exit = 1;
+            return 0;
+        }
+        int any_err = 0;
+        for (int i = first_path; i < argc; i++) {
+            if (!parents) {
+                if (mkdir(argv[i], 0755) != 0) {
+                    len = shell_appendf(&out, &cap, len,
+                                         "mkdir: %s: %s\n", argv[i],
+                                         strerror(errno));
+                    any_err = 1;
+                }
+                continue;
+            }
+            /* -p: walk components, mkdir each ignoring EEXIST. */
+            char tmp[1024];
+            snprintf(tmp, sizeof(tmp), "%s", argv[i]);
+            for (char *p = tmp + (tmp[0] == '/' ? 1 : 0); *p; p++) {
+                if (*p == '/') {
+                    *p = '\0';
+                    if (mkdir(tmp, 0755) != 0 && errno != EEXIST) {
+                        len = shell_appendf(&out, &cap, len,
+                                             "mkdir: %s: %s\n", tmp,
+                                             strerror(errno));
+                        any_err = 1;
+                        break;
+                    }
+                    *p = '/';
+                }
+            }
+            if (mkdir(tmp, 0755) != 0 && errno != EEXIST) {
+                len = shell_appendf(&out, &cap, len,
+                                     "mkdir: %s: %s\n", tmp, strerror(errno));
+                any_err = 1;
+            }
+        }
+        if (any_err) *out_exit = 1;
+        if (!out) out = strdup_safe("");
+        *out_text = out;
+        return 0;
+    }
+    if (strcmp(prog, "rmdir") == 0) {
+        if (argc < 2) {
+            *out_text = strdup_safe("rmdir: missing operand\n");
+            *out_exit = 1;
+            return 0;
+        }
+        int any_err = 0;
+        for (int i = 1; i < argc; i++) {
+            if (rmdir(argv[i]) != 0) {
+                len = shell_appendf(&out, &cap, len,
+                                     "rmdir: %s: %s\n", argv[i],
+                                     strerror(errno));
+                any_err = 1;
+            }
+        }
+        if (any_err) *out_exit = 1;
+        if (!out) out = strdup_safe("");
+        *out_text = out;
+        return 0;
+    }
+    if (strcmp(prog, "kill") == 0) {
+        int sig = SIGTERM;
+        int first = 1;
+        /* Accept `kill -9 PID` or `kill -SIGKILL PID` (numeric only for
+         * now — symbolic names would need a table). */
+        if (argc >= 3 && argv[1][0] == '-') {
+            int n = atoi(argv[1] + 1);
+            if (n > 0 && n < 64) sig = n;
+            first = 2;
+        }
+        if (argc <= first) {
+            *out_text = strdup_safe("kill: missing PID\n");
+            *out_exit = 1;
+            return 0;
+        }
+        int any_err = 0;
+        for (int i = first; i < argc; i++) {
+            int pid = atoi(argv[i]);
+            if (pid <= 0) {
+                len = shell_appendf(&out, &cap, len,
+                                     "kill: %s: not a pid\n", argv[i]);
+                any_err = 1;
+                continue;
+            }
+            if (kill((pid_t)pid, sig) != 0) {
+                len = shell_appendf(&out, &cap, len,
+                                     "kill: %d: %s\n", pid, strerror(errno));
+                any_err = 1;
+            }
+        }
+        if (any_err) *out_exit = 1;
+        if (!out) out = strdup_safe("");
+        *out_text = out;
+        return 0;
+    }
+    if (strcmp(prog, "sync") == 0) {
+        sync();
+        *out_text = strdup_safe("");
+        return 0;
+    }
+    if (strcmp(prog, "notify") == 0) {
+        /* Join argv[1..] with spaces and fire as a PS5 toast. Useful
+         * for "I'm done, see this notification" from scripts. */
+        if (argc < 2) {
+            *out_text = strdup_safe("notify: missing message\n");
+            *out_exit = 1;
+            return 0;
+        }
+        char msg[1024] = {0};
+        size_t mi = 0;
+        for (int i = 1; i < argc && mi + 1 < sizeof(msg); i++) {
+            int n = snprintf(msg + mi, sizeof(msg) - mi, "%s%s",
+                             argv[i], i + 1 < argc ? " " : "");
+            if (n < 0) break;
+            mi += (size_t)n;
+        }
+        pop_notification(msg);
+        len = shell_appendf(&out, &cap, len, "notified: %s\n", msg);
+        *out_text = out;
+        return 0;
+    }
+    if (strcmp(prog, "head") == 0) {
+        /* head [-n N] PATH — first N lines (default 10). N is clamped
+         * to [1, 1000] so a malicious script can't ask for 1B lines. */
+        int n_lines = 10;
+        int first = 1;
+        if (argc >= 4 && strcmp(argv[1], "-n") == 0) {
+            int v = atoi(argv[2]);
+            if (v >= 1 && v <= 1000) n_lines = v;
+            first = 3;
+        }
+        if (argc <= first) {
+            *out_text = strdup_safe("head: missing PATH\n");
+            *out_exit = 1;
+            return 0;
+        }
+        FILE *fp = fopen(argv[first], "r");
+        if (!fp) {
+            len = shell_appendf(&out, &cap, len,
+                                 "head: %s: %s\n", argv[first], strerror(errno));
+            *out_text = out;
+            *out_exit = 1;
+            return 0;
+        }
+        char line[4096];
+        int emitted = 0;
+        while (emitted < n_lines && fgets(line, sizeof(line), fp)) {
+            len = shell_appendf(&out, &cap, len, "%s", line);
+            emitted++;
+        }
+        fclose(fp);
+        if (!out) out = strdup_safe("");
+        *out_text = out;
+        return 0;
+    }
+    if (strcmp(prog, "tail") == 0) {
+        /* tail [-n N] PATH — last N lines (default 10). For O(file-size)
+         * walking we read the whole file (capped 256 KiB) then count
+         * newlines backward. Simpler than seeking-back-and-rescanning
+         * and more than fast enough for shell-tab use cases. */
+        int n_lines = 10;
+        int first = 1;
+        if (argc >= 4 && strcmp(argv[1], "-n") == 0) {
+            int v = atoi(argv[2]);
+            if (v >= 1 && v <= 1000) n_lines = v;
+            first = 3;
+        }
+        if (argc <= first) {
+            *out_text = strdup_safe("tail: missing PATH\n");
+            *out_exit = 1;
+            return 0;
+        }
+        int fd = open(argv[first], O_RDONLY);
+        if (fd < 0) {
+            len = shell_appendf(&out, &cap, len,
+                                 "tail: %s: %s\n", argv[first], strerror(errno));
+            *out_text = out;
+            *out_exit = 1;
+            return 0;
+        }
+        off_t fsize = lseek(fd, 0, SEEK_END);
+        if (fsize < 0) fsize = 0;
+        off_t want = fsize;
+        if (want > 256 * 1024) want = 256 * 1024;
+        if (lseek(fd, fsize - want, SEEK_SET) == (off_t)-1) {
+            close(fd);
+            *out_text = strdup_safe("tail: seek failed\n");
+            *out_exit = 1;
+            return 0;
+        }
+        char *buf = malloc((size_t)want + 1);
+        if (!buf) {
+            close(fd);
+            *out_text = strdup_safe("tail: oom\n");
+            *out_exit = 1;
+            return 0;
+        }
+        ssize_t rd = read(fd, buf, (size_t)want);
+        close(fd);
+        if (rd <= 0) {
+            free(buf);
+            if (!out) out = strdup_safe("");
+            *out_text = out;
+            return 0;
+        }
+        buf[rd] = '\0';
+        /* Walk backward N+1 newlines (or fewer = print everything). */
+        int seen = 0;
+        ssize_t i = rd - 1;
+        /* Skip trailing newline so we count "real" line ends. */
+        if (i >= 0 && buf[i] == '\n') i--;
+        for (; i >= 0; i--) {
+            if (buf[i] == '\n') {
+                seen++;
+                if (seen >= n_lines) { i++; break; }
+            }
+        }
+        if (i < 0) i = 0;
+        len = shell_appendf(&out, &cap, len, "%s", buf + i);
+        if (rd > 0 && buf[rd - 1] != '\n') {
+            len = shell_appendf(&out, &cap, len, "\n");
+        }
+        free(buf);
+        *out_text = out;
+        return 0;
+    }
+    if (strcmp(prog, "wc") == 0) {
+        /* wc [-l|-c|-w] PATH — line / byte / word counts. Default
+         * shows all three. */
+        int show_l = 1, show_w = 1, show_c = 1;
+        int first = 1;
+        if (argc >= 3 && argv[1][0] == '-') {
+            show_l = show_w = show_c = 0;
+            const char *flags = argv[1] + 1;
+            for (const char *f = flags; *f; f++) {
+                if (*f == 'l') show_l = 1;
+                else if (*f == 'w') show_w = 1;
+                else if (*f == 'c') show_c = 1;
+            }
+            first = 2;
+        }
+        if (argc <= first) {
+            *out_text = strdup_safe("wc: missing PATH\n");
+            *out_exit = 1;
+            return 0;
+        }
+        int fd = open(argv[first], O_RDONLY);
+        if (fd < 0) {
+            len = shell_appendf(&out, &cap, len,
+                                 "wc: %s: %s\n", argv[first], strerror(errno));
+            *out_text = out;
+            *out_exit = 1;
+            return 0;
+        }
+        unsigned long long lines = 0, words = 0, bytes = 0;
+        int in_word = 0;
+        char chunk[8192];
+        ssize_t r;
+        while ((r = read(fd, chunk, sizeof(chunk))) > 0) {
+            bytes += (unsigned long long)r;
+            for (ssize_t k = 0; k < r; k++) {
+                unsigned char c = (unsigned char)chunk[k];
+                if (c == '\n') lines++;
+                if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
+                    in_word = 0;
+                } else if (!in_word) {
+                    in_word = 1;
+                    words++;
+                }
+            }
+        }
+        close(fd);
+        if (show_l) len = shell_appendf(&out, &cap, len, "%8llu", lines);
+        if (show_w) len = shell_appendf(&out, &cap, len, "%8llu", words);
+        if (show_c) len = shell_appendf(&out, &cap, len, "%8llu", bytes);
+        len = shell_appendf(&out, &cap, len, " %s\n", argv[first]);
+        *out_text = out;
+        return 0;
+    }
+    if (strcmp(prog, "which") == 0) {
+        /* Look for NAME in a short list of common PS5 dirs that
+         * homebrew ELFs land in. PS5 has no system PATH, so this is
+         * a convention not a shell-var lookup. */
+        if (argc < 2) {
+            *out_text = strdup_safe("which: missing NAME\n");
+            *out_exit = 1;
+            return 0;
+        }
+        static const char *dirs[] = {
+            "/data/bin/", "/data/", "/user/homebrew/bin/",
+            "/mnt/usb0/homebrew/bin/", "/system/vsh/app/", NULL,
+        };
+        int found = 0;
+        for (int d = 0; dirs[d]; d++) {
+            char p[1024];
+            snprintf(p, sizeof(p), "%s%s", dirs[d], argv[1]);
+            if (access(p, F_OK) == 0) {
+                len = shell_appendf(&out, &cap, len, "%s\n", p);
+                found = 1;
+            }
+        }
+        if (!found) {
+            len = shell_appendf(&out, &cap, len,
+                                 "which: %s: not found\n", argv[1]);
+            *out_exit = 1;
+        }
+        *out_text = out;
+        return 0;
+    }
+    if (strcmp(prog, "klog") == 0) {
+        /* klog [-n N] — last N bytes from /dev/klog (default 4 KiB,
+         * clamped to 64 KiB). Useful for quick kernel-log peeks from
+         * shell without leaving the tab for /logs?tab=kernel. */
+        size_t n_bytes = 4 * 1024;
+        if (argc >= 3 && strcmp(argv[1], "-n") == 0) {
+            long v = atol(argv[2]);
+            if (v > 0 && v <= 64 * 1024) n_bytes = (size_t)v;
+        }
+        int fd = open("/dev/klog", O_RDONLY | O_NONBLOCK);
+        if (fd < 0) {
+            len = shell_appendf(&out, &cap, len,
+                                 "klog: open /dev/klog: %s\n", strerror(errno));
+            *out_text = out;
+            *out_exit = 1;
+            return 0;
+        }
+        char *buf = malloc(n_bytes);
+        if (!buf) {
+            close(fd);
+            *out_text = strdup_safe("klog: oom\n");
+            *out_exit = 1;
+            return 0;
+        }
+        ssize_t r = read(fd, buf, n_bytes);
+        close(fd);
+        if (r < 0) r = 0;
+        len = shell_appendf(&out, &cap, len, "%.*s", (int)r, buf);
+        if (r > 0 && buf[r - 1] != '\n') {
+            len = shell_appendf(&out, &cap, len, "\n");
+        }
+        free(buf);
+        *out_text = out;
+        return 0;
+    }
+    if (strcmp(prog, "pid") == 0) {
+        /* pid NAME — print the pid(s) of processes matching NAME
+         * (substring). Saves users a `ps | grep`. */
+        if (argc < 2) {
+            *out_text = strdup_safe("pid: missing NAME\n");
+            *out_exit = 1;
+            return 0;
+        }
+        char *jbuf = malloc(64 * 1024);
+        if (!jbuf) {
+            *out_text = strdup_safe("pid: oom\n");
+            *out_exit = 1;
+            return 0;
+        }
+        size_t jwritten = 0;
+        const char *jerr = NULL;
+        if (proc_list_get_json(jbuf, 64 * 1024, &jwritten, &jerr) != 0) {
+            len = shell_appendf(&out, &cap, len,
+                                 "pid: %s\n", jerr ? jerr : "failed");
+            free(jbuf);
+            *out_text = out;
+            *out_exit = 1;
+            return 0;
+        }
+        const char *needle = argv[1];
+        int found = 0;
+        char *p = jbuf;
+        while (p && *p) {
+            char *pp = strstr(p, "\"pid\":");
+            if (!pp) break;
+            int pid_val = atoi(pp + 6);
+            char *np = strstr(pp, "\"name\":\"");
+            if (!np) break;
+            np += 8;
+            char *ne = strchr(np, '"');
+            if (!ne) break;
+            char name_buf[64];
+            size_t nl = (size_t)(ne - np);
+            if (nl >= sizeof(name_buf)) nl = sizeof(name_buf) - 1;
+            memcpy(name_buf, np, nl);
+            name_buf[nl] = '\0';
+            if (strstr(name_buf, needle)) {
+                len = shell_appendf(&out, &cap, len, "%d %s\n",
+                                     pid_val, name_buf);
+                found++;
+            }
+            p = ne + 1;
+        }
+        free(jbuf);
+        if (!found) *out_exit = 1;
+        if (!out) out = strdup_safe("");
+        *out_text = out;
+        return 0;
+    }
     /* Unknown command — let the caller decide whether to fall through
      * to popen or surface a "not supported" error. */
     (void)len;
@@ -9924,13 +10449,15 @@ static int handle_shell_exec(runtime_state_t *state, int client_fd,
     if (!fp) {
         /* Most common cause: PS5 doesn't ship /bin/sh. Give the user
          * an actionable message instead of "popen_failed". */
-        char err[512];
+        char err[768];
         int el = snprintf(err, sizeof(err),
                           "{\"exit_code\":127,\"timed_out\":false,"
                           "\"stdout\":\"PS5 has no shell binary (popen errno %d: %s).\\n"
-                          "Built-in commands available: help, ls, pwd, cat, stat, uname, "
-                          "ps, mount, df, id, env, sysctl, sleep, true, false\\n"
-                          "Try 'help' for the full list.\"}",
+                          "Built-in commands available — type 'help' for the full list "
+                          "(~32 commands including ls/cat/head/tail/wc/stat/find/grep/du/"
+                          "cp/mv/rm/chmod/mkdir/rmdir/touch/ln/ps/pid/kill/sync/mount/df/"
+                          "date/uname/hostname/id/env/sysctl/sleep/notify/klog/which/"
+                          "basename/dirname/echo/true/false).\"}",
                           errno, strerror(errno));
         if (el < 0) el = 0;
         if ((size_t)el >= sizeof(err)) el = (int)sizeof(err) - 1;
