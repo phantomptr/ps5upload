@@ -9531,15 +9531,26 @@ static int handle_shell_builtin(const char *cmd_in, char **out_text,
             "  tail [-n N] <path>      last N lines (default 10)\n"
             "  wc [-lwc] <path>        line / word / byte counts\n"
             "  stat <path>             show file metadata\n"
-            "  file <path>             magic-byte detect (coming Tier 2)\n"
+            "  file <path>...          detect file type by magic bytes\n"
+            "  xxd | hexdump [-C] <p>  canonical hex+ASCII (16 KiB cap)\n"
+            "  find [path] [-name G] [-type f|d|l]   FTS walker\n"
+            "  grep [-riElc] PAT path  POSIX regex search\n"
+            "  du [-sh] <path>...      disk usage\n"
+            "  sfoinfo <path>          parse param.sfo key/value pairs\n"
             "\n"
             "Filesystem:\n"
             "  pwd                     print working dir (always /)\n"
             "  touch <path>...         create or bump mtime\n"
             "  mkdir [-p] <path>...    create directory\n"
             "  rmdir <path>...         remove empty directory\n"
+            "  rm [-rf] <path>...      delete (refuses /system, /preinst)\n"
+            "  cp [-r] SRC... DST      file or dir copy (256 MiB cap)\n"
+            "  mv SRC... DST           rename, cross-FS copy+unlink\n"
+            "  chmod [-R] OCT <path>   change mode (octal only)\n"
+            "  ln -s TARGET LINK       create symbolic link\n"
             "  which <name>            find homebrew binary by name\n"
             "  mount                   active mount table\n"
+            "  mtrw [/path]            remount /system rw (needs kstuff)\n"
             "  df                      filesystem usage\n"
             "\n"
             "Processes:\n"
@@ -11198,6 +11209,169 @@ static int handle_shell_builtin(const char *cmd_in, char **out_text,
             len = shell_appendf(&out, &cap, len, "%s: %s\n", argv[i], kind);
         }
         if (any_err) *out_exit = 1;
+        *out_text = out;
+        return 0;
+    }
+    /* ── 2.13.0 Tier 3: PS5-specific niche ───────────────────────── */
+    if (strcmp(prog, "mtrw") == 0) {
+        /* Remount /system (or arbitrary mount) read-write — one of the
+         * most-asked PS5 verbs. Sony mounts /system + /system_ex
+         * read-only; turning them rw lets users patch system
+         * resources or install custom UI assets. Requires kernel R/W
+         * (kstuff) — otherwise nmount returns EACCES.
+         *
+         * Usage: `mtrw` (= /system), `mtrw /system_ex`, `mtrw /preinst`. */
+        const char *mnt = argc >= 2 ? argv[1] : "/system";
+        /* nmount(MNT_UPDATE) with the iovec containing the mount
+         * point + fstype keeps the same fs but flips rdonly. The
+         * "fstype" must match what's already mounted there (ufs or
+         * nullfs typically); we look it up via getmntinfo. */
+        struct statfs *mnts = NULL;
+        int n = getmntinfo(&mnts, MNT_NOWAIT);
+        const char *fstype = NULL;
+        for (int i = 0; i < n && mnts; i++) {
+            if (strcmp(mnts[i].f_mntonname, mnt) == 0) {
+                fstype = mnts[i].f_fstypename;
+                break;
+            }
+        }
+        if (!fstype) {
+            len = shell_appendf(&out, &cap, len,
+                                 "mtrw: %s: not a mounted filesystem\n", mnt);
+            *out_text = out;
+            *out_exit = 1;
+            return 0;
+        }
+        struct iovec iov[6];
+        iov[0].iov_base = (void *)"fstype";
+        iov[0].iov_len = strlen("fstype") + 1;
+        iov[1].iov_base = (void *)fstype;
+        iov[1].iov_len = strlen(fstype) + 1;
+        iov[2].iov_base = (void *)"fspath";
+        iov[2].iov_len = strlen("fspath") + 1;
+        iov[3].iov_base = (void *)mnt;
+        iov[3].iov_len = strlen(mnt) + 1;
+        iov[4].iov_base = (void *)"from";
+        iov[4].iov_len = strlen("from") + 1;
+        iov[5].iov_base = (void *)mnt; /* harmless; nullfs/ufs ignore */
+        iov[5].iov_len = strlen(mnt) + 1;
+        if (nmount(iov, 6, MNT_UPDATE) != 0) {
+            len = shell_appendf(&out, &cap, len,
+                                 "mtrw: %s: %s (need kernel R/W via kstuff?)\n",
+                                 mnt, strerror(errno));
+            *out_text = out;
+            *out_exit = 1;
+            return 0;
+        }
+        len = shell_appendf(&out, &cap, len, "%s remounted rw (%s)\n",
+                             mnt, fstype);
+        *out_text = out;
+        return 0;
+    }
+    if (strcmp(prog, "sfoinfo") == 0) {
+        /* `sfoinfo PATH` — parse SCE param.sfo and print key/value
+         * pairs. Format:
+         *   magic    0x00 0x50 0x53 0x46 (\x00PSF)
+         *   version  uint32 LE (usually 0x01010000)
+         *   k_table  uint32 LE — offset to key table (UTF-8 names)
+         *   d_table  uint32 LE — offset to data table (values)
+         *   n_entries uint32 LE
+         *   entries[n_entries]: {
+         *      uint16 LE key_off (into k_table)
+         *      uint8  align
+         *      uint8  fmt    (0x04=utf8, 0x02=utf8-sz, 0x04=int32)
+         *      uint32 LE used_size
+         *      uint32 LE total_size
+         *      uint32 LE data_off (into d_table)
+         *   }
+         * We read the whole file (cap 64 KiB) into memory and parse
+         * in-place. */
+        if (argc < 2) {
+            *out_text = strdup_safe("sfoinfo: missing PATH\n");
+            *out_exit = 1;
+            return 0;
+        }
+        int fd = open(argv[1], O_RDONLY);
+        if (fd < 0) {
+            len = shell_appendf(&out, &cap, len,
+                                 "sfoinfo: %s: %s\n", argv[1], strerror(errno));
+            *out_text = out;
+            *out_exit = 1;
+            return 0;
+        }
+        unsigned char *sfo = malloc(64 * 1024);
+        if (!sfo) {
+            close(fd);
+            *out_text = strdup_safe("sfoinfo: oom\n");
+            *out_exit = 1;
+            return 0;
+        }
+        ssize_t r = read(fd, sfo, 64 * 1024);
+        close(fd);
+        if (r < 20 || sfo[0] != 0x00 || sfo[1] != 'P' || sfo[2] != 'S' ||
+            sfo[3] != 'F') {
+            free(sfo);
+            len = shell_appendf(&out, &cap, len,
+                                 "sfoinfo: %s: not a SFO file\n", argv[1]);
+            *out_text = out;
+            *out_exit = 1;
+            return 0;
+        }
+        /* little-endian uint32 read */
+        #define LE32(off) ((uint32_t)sfo[off] | ((uint32_t)sfo[off+1] << 8) |    \
+                          ((uint32_t)sfo[off+2] << 16) | ((uint32_t)sfo[off+3] << 24))
+        uint32_t k_table = LE32(8);
+        uint32_t d_table = LE32(12);
+        uint32_t n = LE32(16);
+        if (n > 256 || k_table >= (uint32_t)r || d_table >= (uint32_t)r) {
+            free(sfo);
+            len = shell_appendf(&out, &cap, len,
+                                 "sfoinfo: %s: corrupt SFO header\n", argv[1]);
+            *out_text = out;
+            *out_exit = 1;
+            return 0;
+        }
+        for (uint32_t i = 0; i < n; i++) {
+            uint32_t e_off = 20 + i * 16;
+            if (e_off + 16 > (uint32_t)r) break;
+            uint16_t k_off = (uint16_t)(sfo[e_off] | (sfo[e_off+1] << 8));
+            uint8_t fmt    = sfo[e_off + 3];
+            uint32_t used  = LE32(e_off + 4);
+            uint32_t d_off = LE32(e_off + 12);
+            const char *key = (const char *)(sfo + k_table + k_off);
+            const unsigned char *data = sfo + d_table + d_off;
+            if (k_table + k_off >= (uint32_t)r) break;
+            if (d_table + d_off + used > (uint32_t)r) break;
+            len = shell_appendf(&out, &cap, len, "%-24s = ", key);
+            if (fmt == 0x04 && used == 4) {
+                /* int32 */
+                uint32_t v = (uint32_t)data[0] | ((uint32_t)data[1] << 8) |
+                              ((uint32_t)data[2] << 16) | ((uint32_t)data[3] << 24);
+                len = shell_appendf(&out, &cap, len, "%u (0x%08x)\n", v, v);
+            } else {
+                /* utf-8 string — used may include trailing NUL */
+                size_t print_len = used;
+                if (print_len > 0 && data[print_len - 1] == 0) print_len--;
+                /* Be defensive about non-printables. */
+                int ok = 1;
+                for (size_t k = 0; k < print_len; k++) {
+                    if (data[k] < 0x09 ||
+                        (data[k] > 0x0d && data[k] < 0x20)) {
+                        ok = 0;
+                        break;
+                    }
+                }
+                if (ok) {
+                    len = shell_appendf(&out, &cap, len, "\"%.*s\"\n",
+                                         (int)print_len, data);
+                } else {
+                    len = shell_appendf(&out, &cap, len, "(binary, %u bytes)\n",
+                                         used);
+                }
+            }
+        }
+        #undef LE32
+        free(sfo);
         *out_text = out;
         return 0;
     }
