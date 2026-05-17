@@ -26,6 +26,9 @@
 #include <errno.h>
 #include <pthread.h>
 #include <signal.h>
+#include <fts.h>
+#include <fnmatch.h>
+#include <regex.h>
 #include "config.h"
 #include "runtime.h"
 #include "register.h"
@@ -10340,6 +10343,481 @@ static int handle_shell_builtin(const char *cmd_in, char **out_text,
         }
         free(jbuf);
         if (!found) *out_exit = 1;
+        if (!out) out = strdup_safe("");
+        *out_text = out;
+        return 0;
+    }
+    /* ── 2.13.0 Tier 2a: file operations ─────────────────────────── */
+    if (strcmp(prog, "ln") == 0) {
+        /* Symlink only — `ln -s TARGET LINK`. Hardlinks (`ln`) are
+         * possible on PS5 but rarely useful since /system is RO. */
+        if (argc < 4 || strcmp(argv[1], "-s") != 0) {
+            *out_text = strdup_safe("ln: usage: ln -s TARGET LINK\n");
+            *out_exit = 1;
+            return 0;
+        }
+        if (symlink(argv[2], argv[3]) != 0) {
+            len = shell_appendf(&out, &cap, len,
+                                 "ln: %s -> %s: %s\n",
+                                 argv[3], argv[2], strerror(errno));
+            *out_exit = 1;
+        }
+        if (!out) out = strdup_safe("");
+        *out_text = out;
+        return 0;
+    }
+    if (strcmp(prog, "chmod") == 0) {
+        /* chmod [-R] MODE PATH... — accepts octal (0644, 644) only.
+         * Symbolic mode (u+x etc.) is omitted for simplicity; octal
+         * is what most PS5 use-cases want anyway (chmod 755 on a
+         * homebrew ELF). */
+        int recursive = 0;
+        int mode_at = 1;
+        if (argc >= 4 && strcmp(argv[1], "-R") == 0) {
+            recursive = 1;
+            mode_at = 2;
+        }
+        if (argc <= mode_at + 1) {
+            *out_text = strdup_safe("chmod: usage: chmod [-R] MODE PATH...\n");
+            *out_exit = 1;
+            return 0;
+        }
+        const char *mode_s = argv[mode_at];
+        long mode = strtol(mode_s, NULL, 8);
+        if (mode <= 0 || mode > 07777) {
+            *out_text = strdup_safe("chmod: invalid octal mode\n");
+            *out_exit = 1;
+            return 0;
+        }
+        int any_err = 0;
+        for (int i = mode_at + 1; i < argc; i++) {
+            if (!recursive) {
+                if (chmod(argv[i], (mode_t)mode) != 0) {
+                    len = shell_appendf(&out, &cap, len,
+                                         "chmod: %s: %s\n", argv[i],
+                                         strerror(errno));
+                    any_err = 1;
+                }
+                continue;
+            }
+            /* -R: walk via fts. */
+            char *paths[2] = { (char *)argv[i], NULL };
+            FTS *fts = fts_open(paths, FTS_PHYSICAL | FTS_NOCHDIR, NULL);
+            if (!fts) {
+                len = shell_appendf(&out, &cap, len,
+                                     "chmod: %s: fts_open: %s\n",
+                                     argv[i], strerror(errno));
+                any_err = 1;
+                continue;
+            }
+            FTSENT *ent;
+            while ((ent = fts_read(fts)) != NULL) {
+                if (ent->fts_info == FTS_DP) continue; /* post-order dirs */
+                if (ent->fts_info == FTS_DNR || ent->fts_info == FTS_ERR) {
+                    len = shell_appendf(&out, &cap, len,
+                                         "chmod: %s: %s\n", ent->fts_path,
+                                         strerror(ent->fts_errno));
+                    any_err = 1;
+                    continue;
+                }
+                if (chmod(ent->fts_accpath, (mode_t)mode) != 0) {
+                    len = shell_appendf(&out, &cap, len,
+                                         "chmod: %s: %s\n", ent->fts_path,
+                                         strerror(errno));
+                    any_err = 1;
+                }
+            }
+            fts_close(fts);
+        }
+        if (any_err) *out_exit = 1;
+        if (!out) out = strdup_safe("");
+        *out_text = out;
+        return 0;
+    }
+    if (strcmp(prog, "mv") == 0) {
+        /* `mv SRC... DST` — POSIX semantics. If DST is a dir, src is
+         * placed inside; otherwise rename. Falls back to copy+delete
+         * across filesystems (errno EXDEV). */
+        if (argc < 3) {
+            *out_text = strdup_safe("mv: usage: mv SRC... DST\n");
+            *out_exit = 1;
+            return 0;
+        }
+        const char *dst = argv[argc - 1];
+        struct stat dst_st;
+        int dst_is_dir = (stat(dst, &dst_st) == 0 && S_ISDIR(dst_st.st_mode));
+        int n_src = argc - 2;
+        if (n_src > 1 && !dst_is_dir) {
+            *out_text = strdup_safe("mv: multi-src requires DST to be a directory\n");
+            *out_exit = 1;
+            return 0;
+        }
+        int any_err = 0;
+        for (int i = 1; i <= n_src; i++) {
+            char target[1024];
+            if (dst_is_dir) {
+                const char *base = strrchr(argv[i], '/');
+                base = base ? base + 1 : argv[i];
+                snprintf(target, sizeof(target), "%s/%s", dst, base);
+            } else {
+                snprintf(target, sizeof(target), "%s", dst);
+            }
+            if (rename(argv[i], target) == 0) continue;
+            if (errno != EXDEV) {
+                len = shell_appendf(&out, &cap, len,
+                                     "mv: %s -> %s: %s\n",
+                                     argv[i], target, strerror(errno));
+                any_err = 1;
+                continue;
+            }
+            /* Cross-FS — copy then unlink. Single file only; cross-FS
+             * directory mv is too complex for shell tab (use cp -r +
+             * rm -r explicitly). */
+            struct stat sst;
+            if (stat(argv[i], &sst) != 0 || !S_ISREG(sst.st_mode)) {
+                len = shell_appendf(&out, &cap, len,
+                                     "mv: %s -> %s: cross-FS, only files supported\n",
+                                     argv[i], target);
+                any_err = 1;
+                continue;
+            }
+            int sfd = open(argv[i], O_RDONLY);
+            if (sfd < 0) {
+                len = shell_appendf(&out, &cap, len,
+                                     "mv: %s: %s\n", argv[i], strerror(errno));
+                any_err = 1;
+                continue;
+            }
+            int dfd = open(target, O_WRONLY | O_CREAT | O_TRUNC,
+                           sst.st_mode & 0777);
+            if (dfd < 0) {
+                close(sfd);
+                len = shell_appendf(&out, &cap, len,
+                                     "mv: %s: %s\n", target, strerror(errno));
+                any_err = 1;
+                continue;
+            }
+            char buf[64 * 1024];
+            ssize_t r;
+            int copy_err = 0;
+            while ((r = read(sfd, buf, sizeof(buf))) > 0) {
+                ssize_t off = 0;
+                while (off < r) {
+                    ssize_t w = write(dfd, buf + off, (size_t)(r - off));
+                    if (w <= 0) { copy_err = 1; break; }
+                    off += w;
+                }
+                if (copy_err) break;
+            }
+            close(sfd);
+            close(dfd);
+            if (copy_err || r < 0) {
+                len = shell_appendf(&out, &cap, len,
+                                     "mv: %s -> %s: copy failed\n",
+                                     argv[i], target);
+                any_err = 1;
+                unlink(target);
+                continue;
+            }
+            if (unlink(argv[i]) != 0) {
+                len = shell_appendf(&out, &cap, len,
+                                     "mv: %s: copied but couldn't unlink: %s\n",
+                                     argv[i], strerror(errno));
+                any_err = 1;
+            }
+        }
+        if (any_err) *out_exit = 1;
+        if (!out) out = strdup_safe("");
+        *out_text = out;
+        return 0;
+    }
+    if (strcmp(prog, "cp") == 0) {
+        /* `cp [-r] SRC... DST` — file (or recursive dir) copy. Caps
+         * single-file size at 256 MiB to avoid OOM (PS5 RAM is
+         * tight; users who want bigger transfers should use the
+         * Upload tab). */
+        int recursive = 0;
+        int first_src = 1;
+        if (argc >= 4 && strcmp(argv[1], "-r") == 0) {
+            recursive = 1;
+            first_src = 2;
+        }
+        if (argc <= first_src + 1) {
+            *out_text = strdup_safe("cp: usage: cp [-r] SRC... DST\n");
+            *out_exit = 1;
+            return 0;
+        }
+        const char *dst = argv[argc - 1];
+        int n_src = argc - first_src - 1;
+        struct stat dst_st;
+        int dst_is_dir = (stat(dst, &dst_st) == 0 && S_ISDIR(dst_st.st_mode));
+        if (n_src > 1 && !dst_is_dir) {
+            *out_text = strdup_safe("cp: multi-src requires DST to be a directory\n");
+            *out_exit = 1;
+            return 0;
+        }
+        int any_err = 0;
+        for (int i = first_src; i < first_src + n_src; i++) {
+            const char *src = argv[i];
+            struct stat sst;
+            if (stat(src, &sst) != 0) {
+                len = shell_appendf(&out, &cap, len,
+                                     "cp: %s: %s\n", src, strerror(errno));
+                any_err = 1;
+                continue;
+            }
+            if (S_ISDIR(sst.st_mode) && !recursive) {
+                len = shell_appendf(&out, &cap, len,
+                                     "cp: %s: is a directory (use -r)\n", src);
+                any_err = 1;
+                continue;
+            }
+            char target[1024];
+            if (dst_is_dir) {
+                const char *base = strrchr(src, '/');
+                base = base ? base + 1 : src;
+                snprintf(target, sizeof(target), "%s/%s", dst, base);
+            } else {
+                snprintf(target, sizeof(target), "%s", dst);
+            }
+            if (!recursive || S_ISREG(sst.st_mode)) {
+                /* Single-file copy. */
+                if (sst.st_size > 256LL * 1024 * 1024) {
+                    len = shell_appendf(&out, &cap, len,
+                                         "cp: %s: %lld bytes exceeds 256 MiB cap "
+                                         "— use Upload tab instead\n",
+                                         src, (long long)sst.st_size);
+                    any_err = 1;
+                    continue;
+                }
+                int sfd = open(src, O_RDONLY);
+                if (sfd < 0) {
+                    len = shell_appendf(&out, &cap, len,
+                                         "cp: %s: %s\n", src, strerror(errno));
+                    any_err = 1;
+                    continue;
+                }
+                int dfd = open(target, O_WRONLY | O_CREAT | O_TRUNC,
+                               sst.st_mode & 0777);
+                if (dfd < 0) {
+                    close(sfd);
+                    len = shell_appendf(&out, &cap, len,
+                                         "cp: %s: %s\n", target, strerror(errno));
+                    any_err = 1;
+                    continue;
+                }
+                char buf[64 * 1024];
+                ssize_t r;
+                int copy_err = 0;
+                while ((r = read(sfd, buf, sizeof(buf))) > 0) {
+                    ssize_t off = 0;
+                    while (off < r) {
+                        ssize_t w = write(dfd, buf + off, (size_t)(r - off));
+                        if (w <= 0) { copy_err = 1; break; }
+                        off += w;
+                    }
+                    if (copy_err) break;
+                }
+                close(sfd);
+                close(dfd);
+                if (copy_err || r < 0) {
+                    len = shell_appendf(&out, &cap, len,
+                                         "cp: %s -> %s: copy failed\n",
+                                         src, target);
+                    any_err = 1;
+                    unlink(target);
+                }
+                continue;
+            }
+            /* Recursive directory copy via FTS. */
+            char *paths[2] = { (char *)src, NULL };
+            FTS *fts = fts_open(paths, FTS_PHYSICAL | FTS_NOCHDIR, NULL);
+            if (!fts) {
+                len = shell_appendf(&out, &cap, len,
+                                     "cp: %s: fts_open: %s\n",
+                                     src, strerror(errno));
+                any_err = 1;
+                continue;
+            }
+            size_t src_prefix_len = strlen(src);
+            FTSENT *ent;
+            while ((ent = fts_read(fts)) != NULL) {
+                if (ent->fts_info == FTS_DP) continue;
+                if (ent->fts_info == FTS_DNR || ent->fts_info == FTS_ERR) {
+                    len = shell_appendf(&out, &cap, len,
+                                         "cp: %s: %s\n", ent->fts_path,
+                                         strerror(ent->fts_errno));
+                    any_err = 1;
+                    continue;
+                }
+                /* dst_path = target + (fts_path - src) */
+                const char *rel = ent->fts_path + src_prefix_len;
+                while (*rel == '/') rel++;
+                char dpath[1024];
+                if (*rel)
+                    snprintf(dpath, sizeof(dpath), "%s/%s", target, rel);
+                else
+                    snprintf(dpath, sizeof(dpath), "%s", target);
+                if (ent->fts_info == FTS_D) {
+                    if (mkdir(dpath, ent->fts_statp->st_mode & 0777) != 0
+                        && errno != EEXIST) {
+                        len = shell_appendf(&out, &cap, len,
+                                             "cp: %s: mkdir: %s\n",
+                                             dpath, strerror(errno));
+                        any_err = 1;
+                    }
+                    continue;
+                }
+                if (ent->fts_info != FTS_F) continue;
+                /* File copy — same byte loop as the single-file path. */
+                int sfd = open(ent->fts_accpath, O_RDONLY);
+                if (sfd < 0) {
+                    len = shell_appendf(&out, &cap, len,
+                                         "cp: %s: %s\n", ent->fts_path,
+                                         strerror(errno));
+                    any_err = 1;
+                    continue;
+                }
+                int dfd = open(dpath, O_WRONLY | O_CREAT | O_TRUNC,
+                               ent->fts_statp->st_mode & 0777);
+                if (dfd < 0) {
+                    close(sfd);
+                    len = shell_appendf(&out, &cap, len,
+                                         "cp: %s: %s\n", dpath, strerror(errno));
+                    any_err = 1;
+                    continue;
+                }
+                char buf[64 * 1024];
+                ssize_t rd;
+                while ((rd = read(sfd, buf, sizeof(buf))) > 0) {
+                    ssize_t off = 0;
+                    while (off < rd) {
+                        ssize_t w = write(dfd, buf + off, (size_t)(rd - off));
+                        if (w <= 0) { rd = -1; break; }
+                        off += w;
+                    }
+                }
+                close(sfd);
+                close(dfd);
+                if (rd < 0) {
+                    len = shell_appendf(&out, &cap, len,
+                                         "cp: %s -> %s: copy failed\n",
+                                         ent->fts_path, dpath);
+                    any_err = 1;
+                    unlink(dpath);
+                }
+            }
+            fts_close(fts);
+        }
+        if (any_err) *out_exit = 1;
+        if (!out) out = strdup_safe("");
+        *out_text = out;
+        return 0;
+    }
+    if (strcmp(prog, "rm") == 0) {
+        /* `rm [-r] [-f] PATH...` — refuses /system* and /preinst* to
+         * avoid bricking the console. -f silences "missing operand"
+         * errors AND ENOENT but does NOT suppress permission errors
+         * (these are real bugs the user wants to know about). */
+        int recursive = 0;
+        int force = 0;
+        int first = 1;
+        while (first < argc && argv[first][0] == '-') {
+            for (const char *f = argv[first] + 1; *f; f++) {
+                if (*f == 'r' || *f == 'R') recursive = 1;
+                else if (*f == 'f') force = 1;
+            }
+            first++;
+        }
+        if (argc <= first) {
+            if (!force) {
+                *out_text = strdup_safe("rm: missing operand\n");
+                *out_exit = 1;
+                return 0;
+            }
+            *out_text = strdup_safe("");
+            return 0;
+        }
+        int any_err = 0;
+        for (int i = first; i < argc; i++) {
+            const char *p = argv[i];
+            /* Trip-wire on system paths. /system is read-only via
+             * mount flags but recursive rm on it would still try and
+             * spam errors; refusing here surfaces an actionable
+             * message instead. */
+            if (strncmp(p, "/system/", 8) == 0 ||
+                strcmp(p, "/system") == 0 ||
+                strncmp(p, "/preinst/", 9) == 0 ||
+                strcmp(p, "/preinst") == 0 ||
+                strcmp(p, "/") == 0) {
+                len = shell_appendf(&out, &cap, len,
+                                     "rm: %s: refusing to touch system path\n", p);
+                any_err = 1;
+                continue;
+            }
+            struct stat sst;
+            if (lstat(p, &sst) != 0) {
+                if (!force) {
+                    len = shell_appendf(&out, &cap, len,
+                                         "rm: %s: %s\n", p, strerror(errno));
+                    any_err = 1;
+                }
+                continue;
+            }
+            if (S_ISDIR(sst.st_mode) && !recursive) {
+                len = shell_appendf(&out, &cap, len,
+                                     "rm: %s: is a directory (use -r)\n", p);
+                any_err = 1;
+                continue;
+            }
+            if (!S_ISDIR(sst.st_mode)) {
+                if (unlink(p) != 0) {
+                    len = shell_appendf(&out, &cap, len,
+                                         "rm: %s: %s\n", p, strerror(errno));
+                    any_err = 1;
+                }
+                continue;
+            }
+            /* Recursive directory remove via FTS post-order. */
+            char *paths[2] = { (char *)p, NULL };
+            FTS *fts = fts_open(paths,
+                                 FTS_PHYSICAL | FTS_NOCHDIR, NULL);
+            if (!fts) {
+                len = shell_appendf(&out, &cap, len,
+                                     "rm: %s: fts_open: %s\n", p,
+                                     strerror(errno));
+                any_err = 1;
+                continue;
+            }
+            FTSENT *ent;
+            while ((ent = fts_read(fts)) != NULL) {
+                if (ent->fts_info == FTS_DNR || ent->fts_info == FTS_ERR) {
+                    len = shell_appendf(&out, &cap, len,
+                                         "rm: %s: %s\n", ent->fts_path,
+                                         strerror(ent->fts_errno));
+                    any_err = 1;
+                    continue;
+                }
+                if (ent->fts_info == FTS_D) continue; /* pre-order */
+                if (ent->fts_info == FTS_DP) {
+                    if (rmdir(ent->fts_accpath) != 0) {
+                        len = shell_appendf(&out, &cap, len,
+                                             "rm: %s: %s\n", ent->fts_path,
+                                             strerror(errno));
+                        any_err = 1;
+                    }
+                    continue;
+                }
+                if (unlink(ent->fts_accpath) != 0) {
+                    len = shell_appendf(&out, &cap, len,
+                                         "rm: %s: %s\n", ent->fts_path,
+                                         strerror(errno));
+                    any_err = 1;
+                }
+            }
+            fts_close(fts);
+        }
+        if (any_err) *out_exit = 1;
         if (!out) out = strdup_safe("");
         *out_text = out;
         return 0;
