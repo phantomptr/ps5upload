@@ -52,56 +52,77 @@ use zip::{CompressionMethod, ZipArchive, ZipWriter};
 static TEMP_DIR_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 #[tauri::command]
-pub fn save_archive_make_temp(prefix: String) -> Result<String, String> {
-    let safe: String = prefix
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
-        .take(40)
-        .collect();
-    let ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let n = TEMP_DIR_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("ps5upload-save-{safe}-{ts}-{n}"));
-    // `create_dir` (not `create_dir_all`) so the rare case where our
-    // path *does* somehow already exist surfaces as an error instead
-    // of a silent shared-state hazard. Parent (the OS temp root) is
-    // always present, so the recursive variant isn't needed.
-    std::fs::create_dir(&dir).map_err(|e| format!("create_dir {}: {e}", dir.display()))?;
-    Ok(dir.to_string_lossy().into_owned())
+pub async fn save_archive_make_temp(prefix: String) -> Result<String, String> {
+    // Sync FS work on a Tauri command runs on the main thread —
+    // create_dir is one syscall (usually <1 ms) so the prior sync
+    // version was tolerable but inconsistent with the rest of the
+    // file's spawn_blocking pattern. Routing through spawn_blocking
+    // matches save_archive_zip and keeps the main thread responsive
+    // even under FS contention.
+    tokio::task::spawn_blocking(move || {
+        let safe: String = prefix
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+            .take(40)
+            .collect();
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let n = TEMP_DIR_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("ps5upload-save-{safe}-{ts}-{n}"));
+        // `create_dir` (not `create_dir_all`) so the rare case where
+        // our path *does* somehow already exist surfaces as an error
+        // instead of a silent shared-state hazard. Parent (the OS
+        // temp root) is always present, so the recursive variant
+        // isn't needed.
+        std::fs::create_dir(&dir).map_err(|e| format!("create_dir {}: {e}", dir.display()))?;
+        Ok(dir.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|e| format!("save_archive_make_temp join: {e}"))?
 }
 
 #[tauri::command]
-pub fn save_archive_cleanup_temp(path: String) -> Result<(), String> {
+pub async fn save_archive_cleanup_temp(path: String) -> Result<(), String> {
     if path.is_empty() {
         return Ok(());
     }
-    let p = Path::new(&path);
-    // Safety net: only delete inside the system temp dir. If the renderer
-    // ever passes a bad path (or this command is misused), we won't
-    // recursively wipe an arbitrary directory.
-    //
-    // `Path::starts_with` is true when `p == tmp`, so a `starts_with`
-    // check alone would happily `remove_dir_all` the entire system temp
-    // root. Require that `p` is a *strict* descendant AND that its final
-    // component carries the `ps5upload-save-` prefix that
-    // `save_archive_make_temp` always stamps — so cleanup can only ever
-    // touch a dir this module created.
-    let tmp = std::env::temp_dir();
-    let named_ours = p
-        .file_name()
-        .and_then(|n| n.to_str())
-        .is_some_and(|n| n.starts_with("ps5upload-save-"));
-    if !p.starts_with(&tmp) || p == tmp.as_path() || !named_ours {
-        return Err(format!(
-            "refusing to clean path outside our temp scratch dirs: {}",
-            p.display()
-        ));
-    }
-    // Best-effort: caller treats cleanup failure as non-fatal.
-    let _ = std::fs::remove_dir_all(p);
-    Ok(())
+    // remove_dir_all walks every entry under the scratch dir — for a
+    // save with hundreds of files this is a meaningful syscall budget
+    // (10s of ms minimum, more on slow disks). Sync command would
+    // freeze the UI thread for the entire walk. spawn_blocking lets
+    // it run on the blocking pool.
+    tokio::task::spawn_blocking(move || {
+        let p = Path::new(&path);
+        // Safety net: only delete inside the system temp dir. If the
+        // renderer ever passes a bad path (or this command is
+        // misused), we won't recursively wipe an arbitrary directory.
+        //
+        // `Path::starts_with` is true when `p == tmp`, so a
+        // `starts_with` check alone would happily `remove_dir_all`
+        // the entire system temp root. Require that `p` is a *strict*
+        // descendant AND that its final component carries the
+        // `ps5upload-save-` prefix that `save_archive_make_temp`
+        // always stamps — so cleanup can only ever touch a dir this
+        // module created.
+        let tmp = std::env::temp_dir();
+        let named_ours = p
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with("ps5upload-save-"));
+        if !p.starts_with(&tmp) || p == tmp.as_path() || !named_ours {
+            return Err(format!(
+                "refusing to clean path outside our temp scratch dirs: {}",
+                p.display()
+            ));
+        }
+        // Best-effort: caller treats cleanup failure as non-fatal.
+        let _ = std::fs::remove_dir_all(p);
+        Ok(())
+    })
+    .await
+    .map_err(|e| format!("save_archive_cleanup_temp join: {e}"))?
 }
 
 // ── zip a downloaded save folder ────────────────────────────────────────

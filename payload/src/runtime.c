@@ -12169,8 +12169,21 @@ commit_done:
             return send_frame(client_fd, FTX2_FRAME_ERROR, 0, hdr.trace_id,
                               "tx_not_found", 12);
         }
+        /* Guard against double-finalize. COMMIT_TX has the
+         * equivalent check at line ~11851. Without this, a replayed
+         * ABORT_TX or a confused client that issues both COMMIT and
+         * ABORT for the same tx_id will re-flush a terminal entry
+         * with state="aborted" — silently overwriting a "committed"
+         * record in the journal. The entry stays acquired, so the
+         * `abort_done:` cleanup still runs. */
+        if (strcmp(entry->state, "active") != 0) {
+            rc = send_frame(client_fd, FTX2_FRAME_ERROR, 0, hdr.trace_id,
+                            "tx_not_active", 13);
+            goto abort_done;
+        }
         pthread_mutex_lock(&state->state_mtx);
         if (state->active_transactions > 0) state->active_transactions -= 1;
+        uint64_t active_now = state->active_transactions;
         pthread_mutex_unlock(&state->state_mtx);
         snprintf(entry->state, sizeof(entry->state), "%s", "aborted");
         (void)runtime_flush_tx_record(state, entry);
@@ -12181,7 +12194,7 @@ commit_done:
                        "{\"aborted\":true,\"tx_id\":\"%s\","
                        "\"active_transactions\":%llu}",
                        entry->tx_id_hex,
-                       (unsigned long long)state->active_transactions);
+                       (unsigned long long)active_now);
         if (len < 0) { rc = -1; goto abort_done; }
         /* Abort took the tx terminal — see the matching clear in COMMIT_TX
          * for why we do this. */
