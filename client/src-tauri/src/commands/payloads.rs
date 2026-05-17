@@ -89,10 +89,17 @@ struct CatalogueEntry {
     role: &'static str,
     /// Two-sentence description for the detail card.
     description: &'static str,
-    /// Where the releases live. We currently support GitHub only;
-    /// Gitea/forgejo support would be a follow-up (a few payloads
-    /// in the homebrew ecosystem are hosted on self-run Gitea
-    /// instances — same JSON shape, different base URL).
+    /// Where the releases live. `github.com` is the default; any
+    /// Forgejo or Gitea server (which expose an API at
+    /// `/api/v1/repos/...` with JSON shape identical to GitHub's,
+    /// down to the `tag_name` field and asset `name` /
+    /// `browser_download_url` fields) is also supported. We
+    /// URL-rewrite by host: `github.com` becomes
+    /// `https://api.github.com/repos/...`; any other host becomes
+    /// `https://{host}/api/v1/repos/...`. 2.13.0 added this to
+    /// unlock the earthonion-hosted PS5 payloads (garlic-worker,
+    /// np-fake-signin, lapyjb) that aren't mirrored on GitHub.
+    repo_host: &'static str,
     repo_owner: &'static str,
     repo_name: &'static str,
     /// Substring matched against each release asset's `name` field
@@ -127,6 +134,7 @@ struct CatalogueEntry {
 /// top so they're visible without scrolling.
 ///
 /// Sources for the entries:
+///
 ///   - kstuff-echostretch: covers FW 1.00 → 12.x via runtime NID
 ///     resolution; the same binary works on every supported firmware
 ///     revision. Best default when firmware coverage matters most.
@@ -146,6 +154,7 @@ const CATALOGUE: &[CatalogueEntry] = &[
         display_name: "kstuff-lite (EchoStretch)",
         role: "Kernel exploit + R/W primitive",
         description: "Kernel patcher for the full PS5 firmware range. Resolves kernel symbols at runtime via the SDK's NID table, so the same binary covers FW 1.00 → 12.x. Required by ShadowMountPlus and most other privileged payloads. Load this first.",
+        repo_host: "github.com",
         repo_owner: "EchoStretch",
         repo_name: "kstuff",
         asset_name_hint: "kstuff",
@@ -172,6 +181,7 @@ const CATALOGUE: &[CatalogueEntry] = &[
         display_name: "kstuff-lite (drakmor — fpkg-optimized)",
         role: "Kernel exploit + R/W primitive — 3-4× faster .ffpkg mounting",
         description: "Fork of EchoStretch/kstuff-lite with a hot path for .ffpkg (UFS) mounts and lower overhead in repeated mount/unmount cycles — measured 3-4× faster end-to-end than the upstream lite build. Supports FW 3.00 → 10.01 (narrower than the EchoStretch full kstuff; pick this only if your firmware is in range). Recommended when your primary workflow is ShadowMount+ with .ffpkg or .exfat images. Same load-first ordering as any other kstuff: must boot before ShadowMount+ or ps5upload.",
+        repo_host: "github.com",
         repo_owner: "drakmor",
         repo_name: "kstuff-lite",
         asset_name_hint: "kstuff",
@@ -187,6 +197,7 @@ const CATALOGUE: &[CatalogueEntry] = &[
         display_name: "ShadowMount+",
         role: "Auto-mount daemon for game backups",
         description: "Watches /mnt/usb*, /mnt/ext*, /data for .ffpkg/.exfat/.ffpfs game images and auto-mounts + registers them. Includes fakelib (backports) overlay and kstuff autopause.",
+        repo_host: "github.com",
         repo_owner: "drakmor",
         repo_name: "shadowMountPlus",
         asset_name_hint: "shadowmountplus",
@@ -202,6 +213,7 @@ const CATALOGUE: &[CatalogueEntry] = &[
         display_name: "etaHEN",
         role: "Homebrew enabler + jailbreak helper",
         description: "Long-running homebrew enabler with toolbox features. Faster app jailbreak than the on-the-fly path; provides the HijackerCommand IPC many homebrew apps expect on :9028.",
+        repo_host: "github.com",
         repo_owner: "LightningMods",
         repo_name: "etaHEN",
         asset_name_hint: "etaHEN",
@@ -217,6 +229,7 @@ const CATALOGUE: &[CatalogueEntry] = &[
         display_name: "ftpsrv",
         role: "FTP server payload",
         description: "Lightweight FTP server on :2121 with SELF↔ELF auto-decryption and remount-RW SITE commands. Lets you browse the PS5's filesystem from any FTP client.",
+        repo_host: "github.com",
         repo_owner: "ps5-payload-dev",
         repo_name: "ftpsrv",
         asset_name_hint: "ftpsrv",
@@ -232,6 +245,7 @@ const CATALOGUE: &[CatalogueEntry] = &[
         display_name: "websrv",
         role: "Web-based homebrew launcher",
         description: "HTTP server on :8080 serving a homebrew launcher page. Pairs with the homebrew bundles distributed by ps5-payload-dev.",
+        repo_host: "github.com",
         repo_owner: "ps5-payload-dev",
         repo_name: "websrv",
         asset_name_hint: "websrv",
@@ -270,6 +284,7 @@ const CATALOGUE: &[CatalogueEntry] = &[
         display_name: "ezremote-DPI (install daemon)",
         role: "PKG install daemon",
         description: "Long-lived loopback install daemon (127.0.0.1:9040). Owns Sony's PlayGo/AppInstUtil install state machine so installs don't evaporate when the calling process exits. Sonicloader and ezremote-client both use this as their primary install path. Once installed, ps5upload's install runner will offer a 'DPI' method that proxies to it (planned for follow-up).",
+        repo_host: "github.com",
         repo_owner: "cy33hc",
         repo_name: "ps5-ezremote-dpi",
         asset_name_hint: "ezremote-dpi",
@@ -285,6 +300,7 @@ const CATALOGUE: &[CatalogueEntry] = &[
         display_name: "ps5-app-dumper",
         role: "Dump installed apps to USB",
         description: "Dumps installed PS5 apps to USB or internal storage in fakepkg/folder format. Reads config from /data/ps5-app-dumper/config.ini.",
+        repo_host: "github.com",
         repo_owner: "ps5-payload-dev",
         repo_name: "ps5-app-dumper",
         asset_name_hint: "dumper",
@@ -300,6 +316,7 @@ const CATALOGUE: &[CatalogueEntry] = &[
         display_name: "Itemzflow",
         role: "PS5 native homebrew launcher UI",
         description: "Full-screen native PS5 launcher for homebrew, fpkg games, and FTP browsing. Heavyweight (~50 MB) but the most polished launcher in the scene.",
+        repo_host: "github.com",
         repo_owner: "LightningMods",
         repo_name: "itemzflow_PS5",
         asset_name_hint: "itemzflow",
@@ -325,6 +342,7 @@ const CATALOGUE: &[CatalogueEntry] = &[
         display_name: "shsrv (telnet shell + ELF launcher + gdb)",
         role: "42-command telnet shell + hbldr + hbdbg",
         description: "Telnet server on :2323 with 42 POSIX-ish commands (sfoinfo, file, hexdump, find with -exec, etc.) plus hbldr (launch unsigned ELF with full A/V) and hbdbg (gdb-style debugger). Our Shell tab covers the same 42 built-ins via :9114 authenticated FTX2; install shsrv if you want hbldr/hbdbg or you prefer telnet access. Connect via `telnet <ps5-ip> 2323`.",
+        repo_host: "github.com",
         repo_owner: "ps5-payload-dev",
         repo_name: "shsrv",
         asset_name_hint: "shsrv",
@@ -334,6 +352,100 @@ const CATALOGUE: &[CatalogueEntry] = &[
         autoload_priority: 4,
         autoload_delay_ms: 200,
         homepage: "https://github.com/ps5-payload-dev/shsrv",
+    },
+    CatalogueEntry {
+        // Lapy JB Daemon (voidwhisper) — per-pid jailbreak
+        // daemon that replaces etaHEN's HijackerCommand IPC.
+        // Lets Itemzflow, xplorer, and other apps using the
+        // universalps5 PRX run without etaHEN running. Same
+        // user benefit as etaHEN's app-jb side with a much
+        // smaller payload. Sonic Loader bundles this as
+        // /payloads/lapyjb.elf and starts it at boot; here we
+        // just reference the upstream release. NB: hosted on
+        // git.earthonion.com (Forgejo), not github — uses our
+        // 2.13.0 catalog Forgejo support.
+        id: "lapyjb",
+        display_name: "Lapy JB Daemon (voidwhisper)",
+        role: "Per-PID jailbreak daemon — drops etaHEN dependency",
+        description: "Standalone PID-jailbreak daemon that handles app escalation directly. Apps that previously needed etaHEN's HijackerCommand IPC (Itemzflow, xplorer, anything using universalps5 PRX) just work with lapyjb running. Smaller, simpler than etaHEN — recommended over etaHEN if you only need the app-jb side.",
+        repo_host: "git.earthonion.com",
+        repo_owner: "voidwhisper",
+        repo_name: "lapy-jb-daemon",
+        asset_name_hint: "lapyjb",
+        on_console_marker_path: None,
+        process_name_hint: Some("lapyjb.elf"),
+        ports: &[],
+        autoload_priority: 3,
+        autoload_delay_ms: 500,
+        homepage: "https://git.earthonion.com/voidwhisper/lapy-jb-daemon",
+    },
+    CatalogueEntry {
+        // Offline account activation — registers user slots in
+        // the PS5 settings registry without signing into PSN.
+        // Useful for fresh-jailbreak setups where the user
+        // wants to play homebrew/backups without any PSN
+        // account. Sonic Loader uses earthonion's fork that
+        // dropped the SDL2 UI for headless registry writes.
+        id: "np-fake-signin",
+        display_name: "NP Fake Sign-in",
+        role: "Offline account activation (no PSN required)",
+        description: "Headless payload that registers PS5 user slots directly via the system registry. Replaces having to sign into a real PSN account just to set up local users — handy for fresh jailbreaks, secondary accounts, or test profiles. One-shot ELF: send, runs, exits.",
+        repo_host: "git.earthonion.com",
+        repo_owner: "earthonion",
+        repo_name: "np-fake-signin",
+        asset_name_hint: "np-fake-signin",
+        on_console_marker_path: None,
+        process_name_hint: None,
+        ports: &[],
+        autoload_priority: 5,
+        autoload_delay_ms: 200,
+        homepage: "https://git.earthonion.com/earthonion/np-fake-signin",
+    },
+    CatalogueEntry {
+        // Garlic Worker — community save-decryption queue
+        // worker that processes encrypted PS4/PS5 save files
+        // for users who request them via garlicsaves.com.
+        // **Privacy-sensitive**: connects out to a community
+        // server. Catalog entry only; users opt in by
+        // installing + running. Sonic Loader has this enabled
+        // by default; we keep it off-by-default to honour the
+        // no-telemetry posture.
+        id: "garlic-worker",
+        display_name: "Garlic Worker (community save processor)",
+        role: "Process community save decryption jobs (opt-in)",
+        description: "Background worker that drains the community save-decryption queue from garlicsaves.com. Handles both PS4 and PS5 saves natively. **Privacy notice**: connects to garlicsaves.com and processes other users' encrypted save files. Off by default — install + run manually if you want to contribute back to the community queue.",
+        repo_host: "git.earthonion.com",
+        repo_owner: "earthonion",
+        repo_name: "garlic-worker",
+        asset_name_hint: "garlic-worker-ps5",
+        on_console_marker_path: None,
+        process_name_hint: Some("garlic-worker"),
+        ports: &[],
+        autoload_priority: 6,
+        autoload_delay_ms: 200,
+        homepage: "https://git.earthonion.com/earthonion/garlic-worker",
+    },
+    CatalogueEntry {
+        // Garlic SaveMgr — decrypts and re-encrypts YOUR OWN
+        // save files locally on the console (no network). Two
+        // distinct daemons: savemgr (decrypt yours) is what
+        // most users want; worker (community queue) is the
+        // opt-in cooperative bit. Sonic Loader bundles both;
+        // we catalog both separately for clarity.
+        id: "garlic-savemgr",
+        display_name: "Garlic SaveMgr (decrypt your own saves)",
+        role: "Decrypt + re-encrypt your own PS5/PS4 saves",
+        description: "On-console save decrypt/encrypt daemon. Lets you back up saves in plaintext, edit them on PC, and re-encrypt for the same console. No network — operates purely on saves you already own. Companion to ps5upload's Saves tab; install this for round-trip plaintext editing workflows.",
+        repo_host: "git.earthonion.com",
+        repo_owner: "earthonion",
+        repo_name: "garlic-savemgr",
+        asset_name_hint: "garlic-savemgr",
+        on_console_marker_path: None,
+        process_name_hint: Some("garlic-savemgr"),
+        ports: &[],
+        autoload_priority: 5,
+        autoload_delay_ms: 200,
+        homepage: "https://git.earthonion.com/earthonion/garlic-savemgr",
     },
     CatalogueEntry {
         // Companion to /logs?tab=kernel for users who want
@@ -348,6 +460,7 @@ const CATALOGUE: &[CatalogueEntry] = &[
         display_name: "klogsrv",
         role: "Persistent /dev/klog netcat server + rotated log",
         description: "Streams /dev/klog over TCP :3232 and tees it to /data/klog/klog.log (10-backup rotation). Useful for capturing kernel-log activity that happens while the ps5upload desktop app is closed, or for tailing klog via plain netcat without our payload.",
+        repo_host: "github.com",
         repo_owner: "ps5-payload-dev",
         repo_name: "klogsrv",
         asset_name_hint: "klogsrv",
@@ -601,10 +714,21 @@ pub async fn payloads_release(
         }
     }
 
-    let url = format!(
-        "https://api.github.com/repos/{}/{}/releases/latest",
-        entry.repo_owner, entry.repo_name
-    );
+    // GitHub uses a separate `api.github.com` host; Gitea/Forgejo
+    // serve the API under the same host as the web UI at /api/v1/.
+    // JSON shape is otherwise identical (verified against
+    // git.earthonion.com running Forgejo 15 / gitea-1.22).
+    let url = if entry.repo_host == "github.com" {
+        format!(
+            "https://api.github.com/repos/{}/{}/releases/latest",
+            entry.repo_owner, entry.repo_name
+        )
+    } else {
+        format!(
+            "https://{}/api/v1/repos/{}/{}/releases/latest",
+            entry.repo_host, entry.repo_owner, entry.repo_name
+        )
+    };
     let client = reqwest::Client::builder()
         .timeout(RELEASE_FETCH_TIMEOUT)
         .user_agent(HTTP_USER_AGENT)
