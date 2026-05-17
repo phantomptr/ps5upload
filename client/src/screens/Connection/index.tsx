@@ -72,8 +72,8 @@ function sendButtonLabel(
 ): string {
   if (state !== "busy") {
     return state === "ok"
-      ? tr("connection_send_resend", undefined, "Resend payload")
-      : tr("connection_send_send", undefined, "Send payload");
+      ? tr("connection_send_resend", undefined, "Resend helper")
+      : tr("connection_send_send", undefined, "Send helper");
   }
   const sec = Math.max(1, Math.round(elapsedMs / 1000));
   const m = (msg || "").toLowerCase();
@@ -85,7 +85,7 @@ function sendButtonLabel(
     return tr(
       "connection_send_waiting",
       { sec },
-      `Waiting for payload… (${sec}s)`,
+      `Waiting for helper… (${sec}s)`,
     );
   return tr("connection_send_working", { sec }, `Working… (${sec}s)`);
 }
@@ -251,10 +251,10 @@ export default function ConnectionScreen() {
         ));
       }
       if ((transientStep2 ?? storedStep2) !== "ok") {
-        settleStep2("ok", tr("connection_payload_running", { host }, `Payload is running on ${host}`));
+        settleStep2("ok", tr("connection_payload_running", { host }, `Helper is running on ${host}`));
       }
     } else if (payloadStatus === "down" && storedStep2 === "ok") {
-      setStoredStep2("idle", tr("connection_payload_not_loaded", undefined, "Payload not loaded yet"));
+      setStoredStep2("idle", tr("connection_payload_not_loaded", undefined, "Helper not loaded yet"));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [payloadStatus, payloadStatusHost, host]);
@@ -284,7 +284,7 @@ export default function ConnectionScreen() {
       setTransientStep2(null);
       setTransientStep2Msg(null);
     } else {
-      setStoredStep2("idle", tr("connection_payload_not_loaded", undefined, "Payload not loaded yet"));
+      setStoredStep2("idle", tr("connection_payload_not_loaded", undefined, "Helper not loaded yet"));
       setTransientStep2(s);
       setTransientStep2Msg(msg);
     }
@@ -302,7 +302,7 @@ export default function ConnectionScreen() {
       return;
     }
     flashStep1("busy", `Checking ${target}:${PS5_LOADER_PORT}…`);
-    settleStep2("idle", tr("connection_payload_not_loaded", undefined, "Payload not loaded yet"));
+    settleStep2("idle", tr("connection_payload_not_loaded", undefined, "Helper not loaded yet"));
     setTransientStep2(null);
     setTransientStep2Msg(null);
     const ok = await portCheck(target, PS5_LOADER_PORT);
@@ -410,7 +410,7 @@ export default function ConnectionScreen() {
       onResolved: (result) => {
         pollHandle.current = null;
         if (result === "ok") {
-          settleStep2("ok", tr("connection_payload_running", { host }, `Payload is running on ${host}`));
+          settleStep2("ok", tr("connection_payload_running", { host }, `Helper is running on ${host}`));
         } else {
           // Probe loop exhausted without a reachable payload. Clear
           // the rechecking flag so the banner doesn't dangle —
@@ -440,7 +440,7 @@ export default function ConnectionScreen() {
         description={tr(
           "connection_description",
           undefined,
-          "Three quick steps before your first upload. You only need to do this once per PS5 boot — the payload stays loaded until the console reboots or goes into rest mode.",
+          "Three quick steps before your first upload. You only need to do this once per PS5 boot — the helper stays loaded until the console reboots or goes into rest mode.",
         )}
       />
 
@@ -500,7 +500,7 @@ export default function ConnectionScreen() {
               onChange={(e) => {
                 setHost(e.target.value);
                 settleStep1("idle", "Enter your PS5's address and check");
-                settleStep2("idle", tr("connection_payload_not_loaded", undefined, "Payload not loaded yet"));
+                settleStep2("idle", tr("connection_payload_not_loaded", undefined, "Helper not loaded yet"));
               }}
               onKeyDown={(e) => {
                 if (e.key === "Enter") void handleCheck();
@@ -535,7 +535,7 @@ export default function ConnectionScreen() {
               // collapse those into one gesture.
               setHost(picked);
               settleStep1("idle", "Enter your PS5's address and check");
-              settleStep2("idle", tr("connection_payload_not_loaded", undefined, "Payload not loaded yet"));
+              settleStep2("idle", tr("connection_payload_not_loaded", undefined, "Helper not loaded yet"));
               // Pass the picked host explicitly so we don't race
               // React's re-render — handleCheck's closure captures
               // the host that was current at last render.
@@ -554,7 +554,7 @@ export default function ConnectionScreen() {
         {step1 === "ok" && (
           <StepCard
             index={2}
-            title={tr("connection_step2_title", undefined, "Send the payload to your PS5")}
+            title={tr("connection_step2_title", undefined, "Send the PS5Upload helper to your PS5")}
             state={step2}
             stateText={step2Msg}
           >
@@ -562,7 +562,7 @@ export default function ConnectionScreen() {
               {tr(
                 "connection_step2_hint",
                 { port: PS5_LOADER_PORT },
-                `The payload is a small program your PS5 runs in memory to accept uploads. Sent over port ${PS5_LOADER_PORT}; it takes a few seconds for the PS5 to respond once the bytes arrive.`,
+                `The PS5Upload helper is a small program your PS5 runs in memory to accept uploads. Sent over port ${PS5_LOADER_PORT}; it takes a few seconds for the PS5 to respond once the bytes arrive.`,
               )}
             </p>
             <BundledPayloadBanner />
@@ -581,7 +581,7 @@ export default function ConnectionScreen() {
                 {tr(
                   "connection_step2_busy_hint",
                   undefined,
-                  "The PS5 typically boots the payload within 3-5 seconds. We keep polling for up to 20 seconds before giving up — if it times out, send it again.",
+                  "The PS5 typically boots the helper within 3-5 seconds. We keep polling for up to 20 seconds before giving up — if it times out, send it again.",
                 )}
               </p>
             )}
@@ -600,7 +600,7 @@ export default function ConnectionScreen() {
               {tr(
                 "connection_step3_hint",
                 undefined,
-                "Go to the Upload tab and drop in a game folder, a .exfat image, or a .ffpkg image. For disk images, hit Mount in the Library tab. To register installed apps on your PS5 home screen, use a PS5-side installer (send it via the Send payload tab).",
+                "Go to the Upload tab and drop in a game folder, a .exfat image, or a .ffpkg image. For disk images, hit Mount in the Library tab. To register installed apps on your PS5 home screen, use a PS5-side installer (send it via the Payloads → Send file tab).",
               )}
             </p>
             <Button
@@ -912,7 +912,7 @@ function BundledPayloadBanner() {
         <div className="font-semibold">
           {tr(
             "connection_bundled_payload_unavailable",
-            "Bundled payload not available",
+            "Bundled helper not available",
           )}
         </div>
         <div className="mt-0.5 break-words font-mono text-[10px] opacity-90">
@@ -921,7 +921,7 @@ function BundledPayloadBanner() {
         <div className="mt-1 text-[10px] opacity-80">
           {tr(
             "connection_rebuild_shell_hint",
-            "If you've just rebuilt the payload, also rebuild the desktop shell (",
+            "If you've just rebuilt the helper, also rebuild the desktop shell (",
           )}
           <code>cargo build</code>{" "}
           {tr("connection_rebuild_shell_in", "in")}{" "}
@@ -1251,7 +1251,7 @@ function VersionBlock({ onResend }: { onResend?: () => void }) {
         {payloadProbing && !payloadVersion && (
           <>
             <dt className="text-[var(--color-muted)]">
-              {tr("connection_block_payload", undefined, "Payload")}
+              {tr("connection_block_payload", undefined, "Helper")}
             </dt>
             <dd className="text-[var(--color-muted)] italic">
               {tr("connection_block_probing", undefined, "Probing…")}
@@ -1261,7 +1261,7 @@ function VersionBlock({ onResend }: { onResend?: () => void }) {
         {payloadVersion && (
           <>
             <dt className="text-[var(--color-muted)]">
-              {tr("connection_block_payload", undefined, "Payload")}
+              {tr("connection_block_payload", undefined, "Helper")}
             </dt>
             <dd className={valueClass}>
               v{payloadVersion}
@@ -1355,7 +1355,7 @@ function VersionBlock({ onResend }: { onResend?: () => void }) {
           </code>{" "}
           {tr(
             "connection_firmware_from_send_tab",
-            "from the Send payload tab.",
+            "from the Payloads → Send file tab.",
           )}
         </p>
       )}
@@ -1371,14 +1371,14 @@ function VersionBlock({ onResend }: { onResend?: () => void }) {
               {tr(
                 "connection_payload_outdated_title",
                 undefined,
-                "PS5 has an older payload than this app",
+                "PS5 has an older helper than this app",
               )}
             </div>
             <p className="mt-0.5 text-[var(--color-muted)]">
               {tr(
                 "connection_payload_outdated_body",
                 { running: payloadVersion, bundled: appVersion },
-                `Running v${payloadVersion}, this app ships v${appVersion}. The bundled payload includes fixes the older one is missing — replace it for the best results.`,
+                `Running v${payloadVersion}, this app ships v${appVersion}. The bundled helper includes fixes the older one is missing — replace it for the best results.`,
               )}
             </p>
           </div>
@@ -1392,7 +1392,7 @@ function VersionBlock({ onResend }: { onResend?: () => void }) {
               {tr(
                 "connection_payload_outdated_action",
                 undefined,
-                "Replace payload",
+                "Replace helper",
               )}
             </Button>
           )}

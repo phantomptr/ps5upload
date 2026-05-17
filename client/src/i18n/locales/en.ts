@@ -198,7 +198,6 @@ search_stop_tooltip: "Stop the current search",
 search_failed: "Search failed",
 
 // Logs screen
-logs_description: "In-app log of errors, warnings, and notable events. Useful for bug reports — click Copy to grab a plain-text dump.",
 logs_description_app: "In-app log of errors, warnings, and notable events on the desktop side. Useful for bug reports — click Copy to grab a plain-text dump.",
 logs_description_kernel: "Live stream of /dev/klog from the payload. Open Filters to hide Sony's routine subsystem chatter while hunting a specific issue.",
 logs_tab_app: "App",
@@ -208,7 +207,6 @@ logs_empty_message: "Errors and warnings will appear here as you use the app.",
 logs_filter_no_matches: "No entries match the current filter. Try switching filters.",
 
 // Send payload screen
-send_payload_description: "Send any PS5 payload file — .elf, .bin, .js, or .lua (kstuff, custom homebrew loaders, browser-stage exploits, plugin scripts) — to your PS5. Same flow as the Connection tab, just pointed at a file you choose.",
 
 // Volumes screen
 volumes: "Volumes",
@@ -257,7 +255,6 @@ status_no_active_transfers: "no active transfers",
 // user's lang has every other label translated — that's the
 // 'Hardware / Send payload / Settings / About' gap visible in
 // 2.2.0 testing.
-send_payload: "Send payload",
 settings: "Settings",
 // Settings screen body — checkbox cards + storage card
 settings_description: "App preferences — language, keep-awake, upload defaults, and where your settings are stored.",
@@ -737,6 +734,7 @@ payloads_tab_catalog: "Catalog",
 payloads_tab_send: "Send file",
 payloads_download: "Download {version}",
 payloads_load_failed: "Could not load catalogue",
+payloads_inventory_failed: "Could not read local payload cache",
 payloads_loading: "Loading catalogue…",
 payloads_no_host: "No PS5 host set. Connect on the Connection screen first.",
 payloads_not_cached: "not downloaded",
@@ -745,7 +743,6 @@ payloads_redownload: "Re-download",
 payloads_refresh: "Refresh",
 payloads_release_info: "{tag} · published {when}",
 payloads_send: "Send to PS5",
-payloads_title: "Homebrew catalog",
 payloads_up_to_date: "cached {version}",
 payloads_update: "Update to {version}",
 peripheral_action_done: "BD {action} requested",
@@ -1118,9 +1115,8 @@ dashboard: "Dashboard",
 saves: "Save data",
 screenshots: "Screenshots",
 disk_usage: "Disk usage",
-payloads: "Homebrew catalog",
+payloads: "Payloads",
 stats: "Stats",
-kernel_log: "Kernel log",
 shell: "Shell",
 sendpayload_typical_ports_summary: "Typical loader ports by format",
 sendpayload_port_elf_desc: "elfldr (default)",

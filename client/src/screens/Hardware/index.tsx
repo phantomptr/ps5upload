@@ -214,11 +214,11 @@ export default function HardwareScreen() {
         <EmptyState
           icon={Cpu}
           size="hero"
-          title={tr("payload_not_connected", undefined, "Payload not connected")}
+          title={tr("payload_not_connected", undefined, "Helper not connected")}
           message={tr(
             "payload_not_connected_message",
             undefined,
-            "Head to Connection and Send payload first — hardware info becomes available once the payload is running.",
+            "Head to Connection and Send helper first — hardware info becomes available once the helper is running.",
           )}
         />
       )}

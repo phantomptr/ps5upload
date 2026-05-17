@@ -161,6 +161,21 @@ export default function CatalogPanel() {
   }
 
   if (!catalog) {
+    // Loading vs failure: distinguish so the user isn't stuck on
+    // "Loading catalogue…" forever when payloadsCatalog() rejected
+    // (network down, JSON parse error, missing config). Without
+    // this branch the error banner would only be rendered AFTER
+    // `catalog` populated, which never happens on failure.
+    if (errors._global) {
+      return (
+        <div className="mx-auto w-full max-w-5xl">
+          <ErrorCard
+            title={tr("payloads_load_failed", undefined, "Could not load catalogue")}
+            detail={errors._global}
+          />
+        </div>
+      );
+    }
     return (
       <div className="text-sm text-[var(--color-muted)]">
         {tr("payloads_loading", undefined, "Loading catalogue…")}
@@ -196,6 +211,21 @@ export default function CatalogPanel() {
           <ErrorCard
             title={tr("payloads_load_failed", undefined, "Could not load catalogue")}
             detail={errors._global}
+          />
+        )}
+        {errors._inventory && (
+          // Inventory load failure: without this banner, a corrupted
+          // or unreachable local cache would show every payload as
+          // "not downloaded" — user would re-download and silently
+          // overwrite, or worse, never realise their cached files
+          // weren't being found.
+          <ErrorCard
+            title={tr(
+              "payloads_inventory_failed",
+              undefined,
+              "Could not read local payload cache",
+            )}
+            detail={errors._inventory}
           />
         )}
         {catalog.map((p) => (

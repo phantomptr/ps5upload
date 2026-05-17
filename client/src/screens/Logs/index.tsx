@@ -67,14 +67,27 @@ export default function LogsScreen() {
 
       {/* Tab strip. Underline-style for low visual weight — the page
           header already announces the screen. Active tab gets the
-          accent border + bold weight so it reads at a glance. */}
-      <div className="mb-4 flex items-center gap-1 border-b border-[var(--color-border)]">
+          accent border + bold weight so it reads at a glance.
+          A11y: role=tablist + role=tab + aria-selected is the WAI-
+          ARIA pattern for tabs (aria-pressed is for toggle buttons,
+          which screen readers announce differently). aria-controls
+          ties each tab to its rendered panel id. */}
+      <div
+        role="tablist"
+        aria-label={tr("logs", undefined, "Logs")}
+        className="mb-4 flex items-center gap-1 border-b border-[var(--color-border)]"
+      >
         {TABS.map(({ id, icon: Icon, key, fallback }) => {
           const isActive = id === activeTab;
           return (
             <button
               key={id}
               type="button"
+              role="tab"
+              id={`logs-tab-${id}`}
+              aria-controls={`logs-panel-${id}`}
+              aria-selected={isActive}
+              tabIndex={isActive ? 0 : -1}
               onClick={() => setActiveTab(id)}
               className={
                 "flex items-center gap-1.5 border-b-2 px-3 py-2 text-sm transition-colors " +
@@ -82,7 +95,6 @@ export default function LogsScreen() {
                   ? "border-[var(--color-accent)] font-semibold text-[var(--color-accent)]"
                   : "border-transparent text-[var(--color-muted)] hover:text-[var(--color-text)]")
               }
-              aria-pressed={isActive}
             >
               <Icon size={14} strokeWidth={1.75} />
               {tr(key, undefined, fallback)}
@@ -91,7 +103,14 @@ export default function LogsScreen() {
         })}
       </div>
 
-      {activeTab === "kernel" ? <KernelLogPanel /> : <AppLogsPanel />}
+      <div
+        role="tabpanel"
+        id={`logs-panel-${activeTab}`}
+        aria-labelledby={`logs-tab-${activeTab}`}
+        className="flex min-h-0 flex-1 flex-col"
+      >
+        {activeTab === "kernel" ? <KernelLogPanel /> : <AppLogsPanel />}
+      </div>
     </div>
   );
 }

@@ -36,8 +36,8 @@ export default function StatusBar() {
       <div className="flex items-center gap-2" title={tr("status_engine_tooltip", undefined, "ps5upload-engine sidecar on localhost:19113")}>
         {dot(engineStatus)} {tr("status_engine", undefined, "engine")}
       </div>
-      <div className="flex items-center gap-2" title={tr("status_payload_tooltip", undefined, "PS5 payload on :9113")}>
-        {dot(payloadStatus)} {tr("status_payload", undefined, "payload")}
+      <div className="flex items-center gap-2" title={tr("status_payload_tooltip", undefined, "PS5Upload helper on :9113")}>
+        {dot(payloadStatus)} {tr("status_payload", undefined, "helper")}
         {payloadVersion && (
           <span className="rounded bg-[var(--color-surface-3)] px-1 font-mono text-[10px]">
             v{payloadVersion}

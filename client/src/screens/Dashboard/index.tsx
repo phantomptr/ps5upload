@@ -125,7 +125,7 @@ export default function DashboardScreen() {
               good={engineStatus === "up"}
             />
             <KvRow
-              label={tr("dashboard_label_payload", "Payload")}
+              label={tr("dashboard_label_payload", "Helper")}
               value={payloadVersion ? `v${payloadVersion}` : "up"}
               good={payloadStatus === "up"}
             />

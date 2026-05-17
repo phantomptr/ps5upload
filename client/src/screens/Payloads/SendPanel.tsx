@@ -19,6 +19,7 @@ import {
 } from "../../state/connection";
 import { sendPayload } from "../../api/ps5";
 import { useTr } from "../../state/lang";
+import { pushNotification } from "../../state/notifications";
 import { PlaylistsPanel } from "./PlaylistsPanel";
 
 /**
@@ -164,8 +165,13 @@ export default function SendPanel() {
     try {
       await invoke("send_payload_history_clear");
       setHistory([]);
-    } catch {
-      // Non-fatal.
+    } catch (e) {
+      // User-initiated: clicking Clear and seeing nothing happen is
+      // confusing. The on-disk file might be read-only, full, or
+      // gone — surface so the user knows to investigate.
+      pushNotification("warning", "Couldn't clear send history", {
+        body: e instanceof Error ? e.message : String(e),
+      });
     }
   }, []);
 
@@ -179,14 +185,26 @@ export default function SendPanel() {
   };
 
   const pickFile = async () => {
-    const picked = await openDialog({
-      multiple: false,
-      directory: false,
-      filters: [
-        { name: "Payload", extensions: ["elf", "bin", "js", "lua", "jar"] },
-        { name: "All files", extensions: ["*"] },
-      ],
-    });
+    // Tauri's dialog plugin can reject if the plugin failed to load
+    // (misbuilt binary), permission denied, or the OS dialog itself
+    // errors. Without try/catch the rejection becomes an unhandled
+    // promise — the user clicks Choose and gets no feedback at all.
+    let picked: string | string[] | null;
+    try {
+      picked = await openDialog({
+        multiple: false,
+        directory: false,
+        filters: [
+          { name: "Payload", extensions: ["elf", "bin", "js", "lua", "jar"] },
+          { name: "All files", extensions: ["*"] },
+        ],
+      });
+    } catch (e) {
+      pushNotification("warning", "Couldn't open file picker", {
+        body: e instanceof Error ? e.message : String(e),
+      });
+      return;
+    }
     if (typeof picked !== "string") return;
     setElfPath(picked);
     setElfPathText(picked);

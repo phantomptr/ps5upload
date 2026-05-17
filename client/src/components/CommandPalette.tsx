@@ -62,14 +62,21 @@ function useCommands(close: () => void): Command[] {
       nav("/disk-usage", "Disk usage"),
       nav("/file-system", "File System", ["browse", "files"]),
       nav("/hardware", "Hardware", ["temps", "power"]),
-      // Keep "payload library" as a search alias for muscle memory from
-      // pre-2.12.0 — the screen is now called "Homebrew catalog".
-      nav("/payloads", "Homebrew catalog", ["payload library", "kstuff", "shadowmount", "etahen"]),
-      nav("/send-payload", "Send payload"),
+      // 2.12.0 merged the SendPayload + KernelLog screens into tabs.
+      // Keep old labels as keyword aliases for muscle memory; the
+      // canonical entries are now /payloads and /logs with tabs.
+      nav("/payloads", "Payloads", [
+        "homebrew catalog",
+        "payload library",
+        "kstuff",
+        "shadowmount",
+        "etahen",
+      ]),
+      nav("/payloads?tab=send", "Send file (Payloads)", ["send payload"]),
       nav("/activity", "Activity"),
       nav("/stats", "Stats"),
       nav("/logs", "Logs"),
-      nav("/kernel-log", "Kernel log", ["dmesg"]),
+      nav("/logs?tab=kernel", "Kernel log (Logs)", ["dmesg", "klog"]),
       nav("/shell", "Shell", ["terminal"]),
       nav("/settings", "Settings"),
       nav("/about", "About"),
