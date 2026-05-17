@@ -311,6 +311,31 @@ const CATALOGUE: &[CatalogueEntry] = &[
         homepage: "https://github.com/LightningMods/itemzflow_PS5",
     },
     CatalogueEntry {
+        // Companion to our Shell tab. Pre-2.13.0 we shipped 17
+        // in-payload built-ins; 2.13.0 raised that to 42 (parity
+        // with shsrv). shsrv still offers two things our built-
+        // ins don't: (a) `hbldr` — full ELF launcher with audio +
+        // video, useful for running standalone homebrew apps with
+        // graphical output; (b) `hbdbg` — gdb-style debug shell.
+        // Both rely on the SpZeroConf injection chain
+        // (elfldr.c:74,593) which we don't currently implement in
+        // our payload. Add as a one-click companion for users who
+        // want those two features. GPLv3.
+        id: "shsrv",
+        display_name: "shsrv (telnet shell + ELF launcher + gdb)",
+        role: "42-command telnet shell + hbldr + hbdbg",
+        description: "Telnet server on :2323 with 42 POSIX-ish commands (sfoinfo, file, hexdump, find with -exec, etc.) plus hbldr (launch unsigned ELF with full A/V) and hbdbg (gdb-style debugger). Our Shell tab covers the same 42 built-ins via :9114 authenticated FTX2; install shsrv if you want hbldr/hbdbg or you prefer telnet access. Connect via `telnet <ps5-ip> 2323`.",
+        repo_owner: "ps5-payload-dev",
+        repo_name: "shsrv",
+        asset_name_hint: "shsrv",
+        on_console_marker_path: None,
+        process_name_hint: Some("shsrv.elf"),
+        ports: &[2323],
+        autoload_priority: 4,
+        autoload_delay_ms: 200,
+        homepage: "https://github.com/ps5-payload-dev/shsrv",
+    },
+    CatalogueEntry {
         // Companion to /logs?tab=kernel for users who want
         // persistent on-console klog capture across desktop-app
         // restarts. ps5upload's own KLOG_READ already streams
