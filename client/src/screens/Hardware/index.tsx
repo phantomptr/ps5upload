@@ -71,6 +71,35 @@ function formatBytes(n: number): string {
   return `${mib.toFixed(0)} MiB`;
 }
 
+/** Format three load-average values as "X.XX / Y.YY / Z.ZZ".
+ *  Negative inputs render as "—" — the payload uses -1.00 to mean
+ *  "getloadavg unavailable on this firmware". Two decimals matches
+ *  what BSD/Linux `uptime` shows; finer precision is noise. */
+function formatLoadAvg(a: number, b: number, c: number): string {
+  const fmt = (n: number) => (n < 0 ? "—" : n.toFixed(2));
+  return `${fmt(a)} / ${fmt(b)} / ${fmt(c)}`;
+}
+
+/** Format Sony's packed kernel firmware version word.
+ *
+ *  The encoding is the same one Sony's libkernel uses internally:
+ *  the high 16 bits hold the family ("9.60" = 0x0960), the low 16
+ *  bits hold the point release. We render it as `MAJOR.MINOR.POINT`
+ *  so users can compare against the FW number their console reports
+ *  in Settings → System.
+ *
+ *  Example: 0x09600000 → "9.60.0000", 0x09601000 → "9.60.1000".
+ */
+function formatKernelFw(v: number): string {
+  if (v <= 0) return "—";
+  const major = (v >>> 24) & 0xff;
+  const minor = (v >>> 16) & 0xff;
+  const point = v & 0xffff;
+  return `${major.toString(16).padStart(2, "0")}.${minor
+    .toString(16)
+    .padStart(2, "0")}.${point.toString(16).padStart(4, "0")}`;
+}
+
 /** Friendlier "Console Storage" formatter that mirrors the GB units PS5
  *  Settings shows. Uses GB (decimal 10^9) deliberately — Sony's UI uses
  *  GB even though the underlying counts are GiB-sized; keep parity so
@@ -334,6 +363,29 @@ export default function HardwareScreen() {
               label={tr("hw_running_since_boot", undefined, "Running since boot")}
               value={formatUptime(power?.operating_time_sec ?? 0)}
             />
+            {/* System load avg comes from the SDK's getloadavg (added
+                via the 2026-05 ps5-payload-dev/sdk refresh). Negative
+                value = kernel didn't return a reading on this FW; we
+                hide the row instead of showing a confusing "-1.00". */}
+            {power && power.load_avg_1m >= 0 && (
+              <StatRow
+                label={tr("hw_load_avg", undefined, "Load avg (1m / 5m / 15m)")}
+                value={formatLoadAvg(
+                  power.load_avg_1m,
+                  power.load_avg_5m,
+                  power.load_avg_15m,
+                )}
+                hint={
+                  info?.ncpu
+                    ? tr(
+                        "hw_load_avg_hint_ncpu",
+                        { ncpu: info.ncpu },
+                        `Full load on this PS5 ≈ ${info.ncpu}.00`,
+                      )
+                    : undefined
+                }
+              />
+            )}
           </SensorCard>
 
           <SensorCard
@@ -343,6 +395,21 @@ export default function HardwareScreen() {
             <StatRow label={tr("hw_model", undefined, "Model")} value={info?.model ?? "—"} />
             <StatRow label={tr("hw_serial", undefined, "Serial")} value={info?.serial ?? "—"} />
             <StatRow label={tr("hw_os", undefined, "OS")} value={info?.os ?? "—"} />
+            {/* Precise FW word via kernel R/W (added via the 2026-05
+                SDK refresh, kernel_get_fw_version). 0 means kernel
+                R/W wasn't available on this loader — fall back to
+                the kern.version string already in info.os. */}
+            {info && info.kernel_fw_version > 0 && (
+              <StatRow
+                label={tr("hw_fw_precise", undefined, "FW (kernel)")}
+                value={formatKernelFw(info.kernel_fw_version)}
+                hint={tr(
+                  "hw_fw_precise_hint",
+                  undefined,
+                  "Read via kernel R/W (kstuff/etaHEN). Precise point release.",
+                )}
+              />
+            )}
             <StatRow
               label={tr("hw_ram", undefined, "RAM")}
               value={info ? formatBytes(info.physmem) : "—"}

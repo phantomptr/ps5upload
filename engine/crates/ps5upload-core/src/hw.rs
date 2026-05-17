@@ -32,6 +32,15 @@ pub struct HwInfo {
     pub os: String,
     pub ncpu: u32,
     pub physmem: u64,
+    /// Sony's packed firmware version word, read from kernel data
+    /// memory via the SDK's `kernel_get_fw_version()` helper. 0 when
+    /// kernel R/W is unavailable on the running payload (no kstuff
+    /// loaded, or payload doesn't have the required perms) — in that
+    /// case fall back to the kern.version string parse on the
+    /// desktop side. Precise enough to distinguish FW points within
+    /// a family (e.g. 9.60 vs 9.6010).
+    #[serde(default)]
+    pub kernel_fw_version: u32,
 }
 
 /// Live sensor readings. Values of 0 mean "API not available on this
@@ -53,6 +62,24 @@ pub struct HwPower {
     pub operating_time_minutes: u64,
     pub boot_count: u64,
     pub power_consumption_mw: u32,
+    /// System load average (1, 5, 15 minute windows) via the SDK's
+    /// `getloadavg()` — added to prospero-libc in the 2026-05
+    /// ps5-payload-dev/sdk update. Stored as fractional values
+    /// (e.g. 0.42 = 42% of one core average); the payload sends
+    /// integer centi-units on the wire and the engine divides by
+    /// 100 here so consumers get a normal `f32`. Negative value
+    /// means the getloadavg call failed on this firmware (the
+    /// payload encodes that as -1.00).
+    #[serde(default = "default_loadavg_unavailable")]
+    pub load_avg_1m: f32,
+    #[serde(default = "default_loadavg_unavailable")]
+    pub load_avg_5m: f32,
+    #[serde(default = "default_loadavg_unavailable")]
+    pub load_avg_15m: f32,
+}
+
+fn default_loadavg_unavailable() -> f32 {
+    -1.0
 }
 
 /// Parse a newline-separated "key=value" body into a lookup closure.
@@ -107,6 +134,9 @@ pub fn hw_info(addr: &str) -> Result<HwInfo> {
         os: get("os").unwrap_or("").to_string(),
         ncpu: get("ncpu").and_then(|v| v.parse().ok()).unwrap_or(0),
         physmem: get("physmem").and_then(|v| v.parse().ok()).unwrap_or(0),
+        kernel_fw_version: get("kernel_fw_version")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0),
     })
 }
 
@@ -134,6 +164,19 @@ pub fn hw_temps(addr: &str) -> Result<HwTemps> {
 pub fn hw_power(addr: &str) -> Result<HwPower> {
     let body = round_trip(addr, FrameType::HwPower, FrameType::HwPowerAck, "HW_POWER")?;
     let get = parse_kv(&body);
+    /* Wire format is integer centi-units (× 100). Divide here so
+     * consumers downstream see a normal fractional value. Missing
+     * key OR parse failure → -1.0 (the "unavailable" sentinel that
+     * matches what the payload emits when getloadavg itself fails);
+     * keeps "old payload doesn't send this field" and "new payload
+     * couldn't read it" indistinguishable to the UI, which is the
+     * right behavior — both render the same "unavailable" chip. */
+    let la = |k: &str| -> f32 {
+        get(k)
+            .and_then(|v| v.parse::<i32>().ok())
+            .map(|c| c as f32 / 100.0)
+            .unwrap_or(-1.0)
+    };
     Ok(HwPower {
         operating_time_sec: get("operating_time_sec")
             .and_then(|v| v.parse().ok())
@@ -148,6 +191,9 @@ pub fn hw_power(addr: &str) -> Result<HwPower> {
         power_consumption_mw: get("power_consumption_mw")
             .and_then(|v| v.parse().ok())
             .unwrap_or(0),
+        load_avg_1m: la("load_avg_1m_centi"),
+        load_avg_5m: la("load_avg_5m_centi"),
+        load_avg_15m: la("load_avg_15m_centi"),
     })
 }
 

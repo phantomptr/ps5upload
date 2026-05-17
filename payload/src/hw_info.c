@@ -29,6 +29,8 @@
 #include <sys/types.h>
 #include <dlfcn.h>
 
+#include <ps5/kernel.h>
+
 #include "hw_info.h"
 #include "shellui_rpc.h"
 
@@ -211,6 +213,21 @@ int hw_info_get_text(char *out, size_t out_cap, size_t *out_written,
         }
         if (physmem == 0) physmem = 16ULL * 1024 * 1024 * 1024;
 
+        /* Precise firmware version via the SDK's kernel-R/W helper
+         * (ps5-payload-sdk 2026-05 update). Returns a packed uint32
+         * encoding Sony's internal version word — the SDK kernel R/W
+         * layer reads it from KERNEL_ADDRESS_DATA_BASE + an offset
+         * that's now maintained for FW 1.00 → 12.xx. Reports 0 when
+         * kernel R/W is unavailable (no kstuff loaded yet, payload
+         * not running with required perms), in which case the
+         * desktop falls back to its kern.version string parser.
+         *
+         * Why bother when we already parse kern.version: the kernel
+         * string only carries the family ("9.60"); this raw word lets
+         * Settings-equivalent precision land (e.g. "9.6010.00")
+         * without scraping psdevwiki at the desktop side. */
+        uint32_t kfw = kernel_get_fw_version();
+
         int n = snprintf(g_hwinfo_buf, sizeof(g_hwinfo_buf),
             "model=%s\n"
             "serial=%s\n"
@@ -220,9 +237,11 @@ int hw_info_get_text(char *out, size_t out_cap, size_t *out_written,
             "hw_machine=%s\n"
             "os=%s %s\n"
             "ncpu=%d\n"
-            "physmem=%llu\n",
+            "physmem=%llu\n"
+            "kernel_fw_version=%u\n",
             model_name, serial, model_name, hw_machine,
-            ostype, osrelease, ncpu, (unsigned long long)physmem);
+            ostype, osrelease, ncpu, (unsigned long long)physmem,
+            (unsigned)kfw);
         if (n < 0) n = 0;
         if ((size_t)n >= sizeof(g_hwinfo_buf)) n = sizeof(g_hwinfo_buf) - 1;
         g_hwinfo_len = (size_t)n;
@@ -411,15 +430,35 @@ int hw_power_get_text(char *out, size_t out_cap, size_t *out_written,
     uint64_t hours   = uptime_sec / 3600;
     uint64_t minutes = (uptime_sec % 3600) / 60;
 
+    /* System load average (1, 5, 15 min) via getloadavg — added to
+     * the SDK's libc in the 2026-05 ps5-payload-dev/sdk update. Same
+     * shape as BSD/Linux: 0.00 = idle, 1.00 per logical core = fully
+     * loaded. Returns -1 on failure; we report `-1.00` so the
+     * desktop can distinguish "unavailable" from "0.00 idle".
+     *
+     * We scale to centi-units (× 100) in the wire format because the
+     * key=value parser on the engine side is integer-only — the
+     * existing field family (operating_time_*, boot_count) is all
+     * %llu. Engine divides by 100 for display. */
+    double la[3] = { -1.0, -1.0, -1.0 };
+    int la_count = getloadavg(la, 3);
+    long la_1m  = la_count > 0 ? (long)(la[0] * 100.0) : -100;
+    long la_5m  = la_count > 1 ? (long)(la[1] * 100.0) : -100;
+    long la_15m = la_count > 2 ? (long)(la[2] * 100.0) : -100;
+
     int n = snprintf(out, out_cap,
         "operating_time_sec=%llu\n"
         "operating_time_hours=%llu\n"
         "operating_time_minutes=%llu\n"
         "boot_count=0\n"
-        "power_consumption_mw=0\n",
+        "power_consumption_mw=0\n"
+        "load_avg_1m_centi=%ld\n"
+        "load_avg_5m_centi=%ld\n"
+        "load_avg_15m_centi=%ld\n",
         (unsigned long long)uptime_sec,
         (unsigned long long)hours,
-        (unsigned long long)minutes);
+        (unsigned long long)minutes,
+        la_1m, la_5m, la_15m);
     if (n < 0 || (size_t)n >= out_cap) {
         if (err_reason_out) *err_reason_out = "hw_power_format_failed";
         return -1;

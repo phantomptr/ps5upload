@@ -830,6 +830,13 @@ export interface HwInfo {
   ncpu: number;
   /** bytes */
   physmem: number;
+  /** Sony's packed firmware version word read via kernel R/W. 0
+   *  when unavailable on the payload's current loader (no kstuff
+   *  → no kernel R/W). When non-zero this is more precise than the
+   *  parsed kern.version string — distinguishes FW points within
+   *  a family (9.60 vs 9.6010). Added 2.13.0 via the
+   *  ps5-payload-sdk 2026-05 update. */
+  kernel_fw_version: number;
 }
 
 export interface HwTemps {
@@ -849,6 +856,14 @@ export interface HwPower {
   operating_time_minutes: number;
   boot_count: number;
   power_consumption_mw: number;
+  /** System load average (1, 5, 15 minute windows). Same shape as
+   *  BSD/Linux: 0.00 = idle, 1.00 per logical core = fully loaded.
+   *  Negative value means the kernel didn't return a reading on
+   *  this firmware (treat as "unavailable" in the UI). Added 2.13.0
+   *  via the SDK's `getloadavg()` from the 2026-05 update. */
+  load_avg_1m: number;
+  load_avg_5m: number;
+  load_avg_15m: number;
 }
 
 export async function fetchHwInfo(transferAddr: string): Promise<HwInfo> {
