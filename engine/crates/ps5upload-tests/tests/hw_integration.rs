@@ -14,6 +14,7 @@
 mod mock_server;
 use mock_server::MockServer;
 
+use ps5upload_core::diagnostics::shell_run;
 use ps5upload_core::fs_ops::{app_launch, app_list_registered, app_register};
 use ps5upload_core::hw::{
     app_launch_browser, hw_info, hw_power, hw_set_fan_threshold, hw_temps, proc_list,
@@ -193,4 +194,28 @@ fn proc_list_round_trip() {
         .expect("SceShellUI entry");
     assert_eq!(shell.pid, 97);
     assert!(list.error.is_none());
+}
+
+#[test]
+fn shell_run_keeps_cwd_by_session_across_connections() {
+    let srv = MockServer::start();
+    let session = "shell-test-session";
+
+    let cd = shell_run(&srv.addr, "cd /data", Some(session), Some("/"), 30).expect("cd");
+    assert_eq!(cd.exit_code, Some(0));
+    assert_eq!(cd.cwd.as_deref(), Some("/data"));
+    assert_eq!(cd.session_id.as_deref(), Some(session));
+
+    let pwd = shell_run(&srv.addr, "pwd", Some(session), Some("/"), 30).expect("pwd");
+    assert_eq!(pwd.exit_code, Some(0));
+    assert_eq!(pwd.stdout, "/data\n");
+    assert_eq!(pwd.cwd.as_deref(), Some("/data"));
+
+    let ls = shell_run(&srv.addr, "ls", Some(session), Some("/"), 30).expect("ls");
+    assert_eq!(ls.exit_code, Some(0));
+    assert_eq!(ls.stdout, "listed:/data\n");
+    assert_eq!(ls.cwd.as_deref(), Some("/data"));
+
+    let other = shell_run(&srv.addr, "pwd", Some("other-session"), Some("/"), 30).expect("pwd");
+    assert_eq!(other.stdout, "/\n");
 }

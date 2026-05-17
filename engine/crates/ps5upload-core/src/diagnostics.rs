@@ -158,14 +158,27 @@ pub struct ShellRunResult {
     #[serde(default)]
     pub stdout: String,
     #[serde(default)]
+    pub cwd: Option<String>,
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
     pub err: Option<String>,
 }
 
 /// Run a shell command on the PS5. `timeout_secs` clamps the
 /// payload-side wait. stdout (with stderr merged) capped at 256 KB.
-pub fn shell_run(addr: &str, cmd: &str, timeout_secs: u32) -> Result<ShellRunResult> {
+pub fn shell_run(
+    addr: &str,
+    cmd: &str,
+    session_id: Option<&str>,
+    cwd: Option<&str>,
+    timeout_secs: u32,
+) -> Result<ShellRunResult> {
+    let cwd = cwd.filter(|v| v.starts_with('/')).unwrap_or("/");
     let body = serde_json::json!({
         "cmd": cmd,
+        "session_id": session_id.unwrap_or("default"),
+        "cwd": cwd,
         "timeout_secs": timeout_secs,
     });
     let body = serde_json::to_vec(&body)?;

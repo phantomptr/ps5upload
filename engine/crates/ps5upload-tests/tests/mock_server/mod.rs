@@ -49,6 +49,7 @@ pub(crate) struct MockState {
     /// affected tx as "interrupted" so a subsequent BeginTx with
     /// TX_FLAG_RESUME can pick up where it left off.
     pub(crate) drop_after_shards: Option<u64>,
+    pub(crate) shell_sessions: HashMap<String, String>,
 }
 
 impl Default for MockState {
@@ -59,6 +60,7 @@ impl Default for MockState {
             applied: HashMap::new(),
             volumes_json: DEFAULT_VOLUMES_JSON.to_string(),
             drop_after_shards: None,
+            shell_sessions: HashMap::new(),
         }
     }
 }
@@ -680,6 +682,50 @@ fn handle_connection_inner(mut stream: TcpStream, state: Arc<Mutex<MockState>>) 
                 let body = br#"{"ok":true,"procs":[{"pid":97,"name":"SceShellUI"},{"pid":113,"name":"payload.elf"}]}"#;
                 send_frame(&mut stream, FrameType::ProcListAck, body);
             }
+            FrameType::ShellExec => {
+                let mut body = vec![0u8; hdr.body_len as usize];
+                read_exact(&mut stream, &mut body);
+                let json = String::from_utf8_lossy(&body);
+                let cmd = extract_json_str(&json, "cmd").unwrap_or_default();
+                let session_id =
+                    extract_json_str(&json, "session_id").unwrap_or_else(|| "default".to_string());
+                let fallback_cwd = extract_json_str(&json, "cwd")
+                    .filter(|v| v.starts_with('/'))
+                    .unwrap_or_else(|| "/".to_string());
+
+                let mut st = state.lock().unwrap();
+                let cwd = st
+                    .shell_sessions
+                    .entry(session_id.clone())
+                    .or_insert(fallback_cwd);
+
+                let mut exit_code = 0;
+                let mut stdout = String::new();
+                if cmd == "pwd" {
+                    stdout = format!("{cwd}\n");
+                } else if cmd == "ls" {
+                    stdout = format!("listed:{cwd}\n");
+                } else if let Some(target) = cmd.strip_prefix("cd ") {
+                    if target.starts_with('/') {
+                        *cwd = target.to_string();
+                    } else if cwd == "/" {
+                        *cwd = format!("/{target}");
+                    } else {
+                        *cwd = format!("{cwd}/{target}");
+                    }
+                } else {
+                    exit_code = 127;
+                    stdout = format!("{cmd}: command not found\n");
+                }
+
+                let resp = format!(
+                    r#"{{"exit_code":{exit_code},"timed_out":false,"stdout":"{}","cwd":"{}","session_id":"{}"}}"#,
+                    json_escape(&stdout),
+                    json_escape(cwd),
+                    json_escape(&session_id),
+                );
+                send_frame(&mut stream, FrameType::ShellExecAck, resp.as_bytes());
+            }
 
             _ => {
                 let mut discard = vec![0u8; hdr.body_len as usize];
@@ -720,6 +766,15 @@ fn extract_json_str(json: &str, field: &str) -> Option<String> {
     let val_start = val_start + 1;
     let end = json[val_start..].find('"')? + val_start;
     Some(json[val_start..end].to_string())
+}
+
+fn json_escape(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
 }
 
 fn extract_json_u64(json: &str, field: &str) -> Option<u64> {

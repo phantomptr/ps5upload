@@ -11,6 +11,7 @@ import { useConnectionStore } from "../../state/connection";
 import { mgmtAddr } from "../../lib/addr";
 import { PageHeader, Button, EmptyState } from "../../components";
 import { useTr } from "../../state/lang";
+import { splitShellSequence } from "./shellSequence";
 
 interface HistoryEntry {
   id: string;
@@ -21,19 +22,6 @@ interface HistoryEntry {
   durationMs?: number;
 }
 
-/**
- * Shell terminal — single-shot exec UI over Phase 31's shell_run RPC.
- *
- * Each "Send" round-trips one command and appends result. No
- * interactive PTY (the payload's popen is single-shot); no streaming
- * partial output (256 KB cap drains as one chunk on EOF).
- *
- * Up/down arrow recall the last 50 commands. Cleared on tab unmount.
- *
- * Security: every command runs as the payload's effective user
- * (ucred-elevated when kstuff loaded). Same trust boundary as the
- * rest of the FTX2 surface.
- */
 export default function ShellScreen() {
   const tr = useTr();
   const host = useConnectionStore((s) => s.host);
@@ -43,13 +31,18 @@ export default function ShellScreen() {
   const [busy, setBusy] = useState(false);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [historyCursor, setHistoryCursor] = useState<number | null>(null);
+  const [cwd, setCwd] = useState("/");
   const inputRef = useRef<HTMLInputElement>(null);
   const outputRef = useRef<HTMLDivElement>(null);
+  const sessionIdRef = useRef("");
 
   const send = useCallback(async () => {
     const trimmed = cmd.trim();
     if (!trimmed || busy) return;
     if (!host?.trim() || payloadStatus !== "up") return;
+    if (!sessionIdRef.current) {
+      sessionIdRef.current = `shell-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    }
     const id = `${Date.now()}-${Math.random()}`;
     const entry: HistoryEntry = {
       id,
@@ -62,10 +55,43 @@ export default function ShellScreen() {
     setHistoryCursor(null);
     const t0 = performance.now();
     try {
-      const r = await shellRun(mgmtAddr(host), trimmed, 30);
+      const parts = splitShellSequence(trimmed);
+      let currentCwd = cwd;
+      let previousExit = 0;
+      let stdout = "";
+      let lastResult: ShellRunResult | null = null;
+
+      for (const part of parts) {
+        if (part.op === "and" && previousExit !== 0) continue;
+
+        const r = await shellRun(
+          mgmtAddr(host),
+          part.cmd,
+          sessionIdRef.current,
+          currentCwd,
+          30,
+        );
+        lastResult = r;
+        previousExit = r.exit_code ?? 1;
+        stdout += r.stdout ?? "";
+
+        if (r.cwd?.startsWith("/")) {
+          currentCwd = r.cwd;
+        } else if (isCdCommand(part.cmd) && r.exit_code === 0) {
+          const lines = r.stdout.trim().split(/\r?\n/).filter(Boolean);
+          const nextCwd = lines[lines.length - 1];
+          if (nextCwd?.startsWith("/")) currentCwd = nextCwd;
+        }
+
+        if (r.timed_out) break;
+      }
+
       const durationMs = performance.now() - t0;
+      if (!lastResult) throw new Error("No shell command to run");
+      const result: ShellRunResult = { ...lastResult, stdout, cwd: currentCwd };
+      setCwd(currentCwd);
       setHistory((prev) =>
-        prev.map((h) => (h.id === id ? { ...h, result: r, durationMs } : h)),
+        prev.map((h) => (h.id === id ? { ...h, result, durationMs } : h)),
       );
     } catch (e) {
       const durationMs = performance.now() - t0;
@@ -83,7 +109,7 @@ export default function ShellScreen() {
         }
       });
     }
-  }, [cmd, busy, host, payloadStatus]);
+  }, [cmd, busy, cwd, host, payloadStatus]);
 
   function handleKey(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key === "Enter") {
@@ -121,7 +147,7 @@ export default function ShellScreen() {
         description={tr(
           "shell_description",
           undefined,
-          "One-shot remote command execution. Each command runs in the payload's process context; stdout and stderr are merged and capped at 256 KB. Use up/down arrows for command history.",
+          "Stateful remote shell session. Commands run in the payload's process context; stdout and stderr are merged and capped at 256 KB. Use up/down arrows for command history.",
         )}
         right={
           <Button
@@ -168,7 +194,12 @@ export default function ShellScreen() {
             )}
           </div>
           <div className="flex items-center gap-2">
-            <span className="font-mono text-xs text-[var(--color-muted)]">$</span>
+            <span
+              className="max-w-[35%] truncate font-mono text-xs text-[var(--color-muted)]"
+              title={cwd}
+            >
+              {cwd} $
+            </span>
             <input
               ref={inputRef}
               type="text"
@@ -204,6 +235,10 @@ export default function ShellScreen() {
       )}
     </div>
   );
+}
+
+function isCdCommand(cmd: string): boolean {
+  return cmd === "cd" || cmd.startsWith("cd ");
 }
 
 function ShellHistoryRow({ entry }: { entry: HistoryEntry }) {

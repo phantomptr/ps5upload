@@ -21,6 +21,7 @@
 use anyhow::{bail, Context, Result};
 use ftx2_proto::{FrameType, ShardAck, ShardHeader, TxMeta};
 use ps5upload_core::connection::Connection;
+use ps5upload_core::diagnostics::shell_run;
 use ps5upload_core::fs_ops::{app_launch, app_list_registered, app_register, app_unregister};
 use ps5upload_core::hash_shard;
 use ps5upload_core::transfer::{transfer_dir, transfer_file, TransferConfig};
@@ -285,6 +286,7 @@ fn usage() -> ! {
     eprintln!("  unregister   TITLE_ID      reverse registration");
     eprintln!("  launch       TITLE_ID      sceLncUtilLaunchApp");
     eprintln!("  apps                       list titles present in app.db");
+    eprintln!("  shell       SESSION CWD CMD...   run shell command via :9114");
     std::process::exit(1);
 }
 
@@ -328,6 +330,16 @@ fn do_apps(addr: &str) -> Result<()> {
             if a.image_backed { "yes" } else { "no" }
         );
     }
+    Ok(())
+}
+
+fn do_shell(addr: &str, session: &str, cwd: &str, cmd: &str) -> Result<()> {
+    let res = shell_run(addr, cmd, Some(session), Some(cwd), 30)?;
+    println!("exit_code={:?}", res.exit_code);
+    println!("timed_out={}", res.timed_out);
+    println!("cwd={}", res.cwd.as_deref().unwrap_or(""));
+    println!("session_id={}", res.session_id.as_deref().unwrap_or(""));
+    print!("{}", res.stdout);
     Ok(())
 }
 
@@ -401,6 +413,16 @@ fn main() -> Result<()> {
             do_launch(addr, title_id)
         }
         "apps" => do_apps(addr),
+        "shell" => {
+            let session = rest.get(1).map(|s| s.as_str()).unwrap_or_else(|| usage());
+            let cwd = rest.get(2).map(|s| s.as_str()).unwrap_or_else(|| usage());
+            let cmd = rest
+                .get(3..)
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| usage())
+                .join(" ");
+            do_shell(addr, session, cwd, &cmd)
+        }
         cmd => bail!("unknown command: {cmd}"),
     }
 }

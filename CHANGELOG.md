@@ -4,6 +4,21 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.12.0
+
+High-level fixes and packaging cleanup:
+
+- Shell is now stateful by session: `cd /data`, then `ls` or `pwd`,
+  keeps the expected working directory across commands.
+- Fixed shell argument parsing so commands with paths, like
+  `cd /data` and `ls /data`, no longer collapse to the first word.
+- Added live-test coverage for shell cwd persistence and a lab CLI
+  command for direct shell testing against a running payload.
+- Improved Linux release guidance around AppImage/WebKitGTK startup
+  issues on Fedora/Bazzite-style systems.
+
+---
+
 ## 2.11.0
 
 Phase 1 of a 4-phase design coherence pass surfaced by a 4-agent

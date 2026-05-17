@@ -320,9 +320,9 @@ pub enum FrameType {
     ProcModules = 114,
     ProcModulesAck = 115,
     /// Run a single shell command on the PS5 and capture output.
-    /// Body: `{"cmd":"...","cwd":"/abs/path","timeout_secs":N}`.
-    /// ACK body: `{"exit_code":N,"stdout":"...","stderr":"...","timed_out":bool}`.
-    /// stdout/stderr capped at 256 KB each.
+    /// Body: `{"cmd":"...","session_id":"...","cwd":"/abs/path","timeout_secs":N}`.
+    /// ACK body: `{"exit_code":N,"stdout":"...","cwd":"/abs/path","session_id":"...","timed_out":bool}`.
+    /// stdout capped at 256 KB.
     ShellExec = 116,
     ShellExecAck = 117,
     /// CRC32 hash of a file. Body: `{"path":"/abs/..."}`. ACK body:

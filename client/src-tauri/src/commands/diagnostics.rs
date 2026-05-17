@@ -73,14 +73,18 @@ pub async fn proc_modules_get(addr: String, pid: Option<i32>) -> Result<JsonValu
 pub async fn shell_run_cmd(
     addr: String,
     cmd: String,
+    session_id: Option<String>,
+    cwd: Option<String>,
     timeout_secs: Option<u32>,
 ) -> Result<JsonValue, String> {
     let t = timeout_secs.unwrap_or(30);
-    tokio::task::spawn_blocking(move || shell_run(&addr, &cmd, t))
-        .await
-        .map_err(|e| format!("shell task: {e}"))?
-        .map(|v| serde_json::to_value(v).unwrap_or(serde_json::json!({})))
-        .map_err(|e| format!("shell: {e}"))
+    tokio::task::spawn_blocking(move || {
+        shell_run(&addr, &cmd, session_id.as_deref(), cwd.as_deref(), t)
+    })
+    .await
+    .map_err(|e| format!("shell task: {e}"))?
+    .map(|v| serde_json::to_value(v).unwrap_or(serde_json::json!({})))
+    .map_err(|e| format!("shell: {e}"))
 }
 
 #[tauri::command]

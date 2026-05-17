@@ -1604,6 +1604,8 @@ export interface ShellRunResult {
   exit_code?: number;
   timed_out: boolean;
   stdout: string;
+  cwd?: string;
+  session_id?: string;
   err?: string;
 }
 
@@ -1612,11 +1614,15 @@ export interface ShellRunResult {
 export async function shellRun(
   addr: string,
   cmd: string,
+  sessionId?: string,
+  cwd?: string,
   timeoutSecs?: number,
 ): Promise<ShellRunResult> {
   return invoke<ShellRunResult>("shell_run_cmd", {
     addr,
     cmd,
+    sessionId: sessionId ?? null,
+    cwd: cwd ?? null,
     timeoutSecs: timeoutSecs ?? null,
   });
 }

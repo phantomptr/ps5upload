@@ -9633,6 +9633,7 @@ static int shell_split(char *cmd, char *argv[], int max_args) {
             }
             *w++ = *p++;
         }
+        while (*p == ' ' || *p == '\t') p++;
         *w++ = '\0'; /* terminate this arg */
     }
     return argc;
@@ -9642,8 +9643,17 @@ static int shell_split(char *cmd, char *argv[], int max_args) {
  * the new len; updates *cap and *buf on grow. */
 static size_t shell_appendf(char **buf, size_t *cap, size_t len,
                              const char *fmt, ...) {
+    const size_t max_cap = 256u * 1024u;
     va_list ap;
     while (1) {
+        if (len >= max_cap - 1) return len;
+        if (!*buf || *cap == 0) {
+            char *nb = malloc(1024u);
+            if (!nb) return len;
+            *buf = nb;
+            *cap = 1024u;
+            (*buf)[0] = '\0';
+        }
         va_start(ap, fmt);
         size_t avail = (*cap > len) ? (*cap - len) : 0;
         int n = vsnprintf(*buf + len, avail, fmt, ap);
@@ -9652,11 +9662,301 @@ static size_t shell_appendf(char **buf, size_t *cap, size_t len,
         if ((size_t)n < avail) return len + (size_t)n;
         size_t want = (*cap == 0 ? 1024u : *cap * 2u);
         if (want < len + (size_t)n + 1) want = len + (size_t)n + 1;
+        if (want > max_cap) want = max_cap;
+        if (*cap >= max_cap) return len;
         char *nb = realloc(*buf, want);
         if (!nb) return len;
         *buf = nb;
         *cap = want;
     }
+}
+
+static pthread_mutex_t g_shell_cwd_mtx = PTHREAD_MUTEX_INITIALIZER;
+
+#define PS5UPLOAD2_SHELL_SESSIONS 16
+typedef struct {
+    int in_use;
+    char session_id[96];
+    char cwd[1024];
+    uint64_t last_used;
+} shell_session_t;
+static pthread_mutex_t g_shell_session_mtx = PTHREAD_MUTEX_INITIALIZER;
+static shell_session_t g_shell_sessions[PS5UPLOAD2_SHELL_SESSIONS];
+static uint64_t g_shell_session_seq = 0;
+
+static const char *shell_valid_cwd(const char *cwd) {
+    return (cwd && cwd[0] == '/') ? cwd : "/";
+}
+
+static int shell_valid_session_id(const char *session_id) {
+    if (!session_id || !session_id[0]) return 0;
+    for (const char *p = session_id; *p; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (c < 0x21 || c > 0x7e || c == '"' || c == '\\') return 0;
+    }
+    return 1;
+}
+
+static void shell_session_get(const char *session_id, const char *fallback,
+                              char *out, size_t cap) {
+    const char *base = shell_valid_cwd(fallback);
+    if (!out || cap == 0) return;
+    snprintf(out, cap, "%s", base);
+    if (!shell_valid_session_id(session_id)) return;
+    pthread_mutex_lock(&g_shell_session_mtx);
+    g_shell_session_seq += 1;
+    int free_idx = -1;
+    int oldest_idx = 0;
+    uint64_t oldest = UINT64_MAX;
+    for (int i = 0; i < PS5UPLOAD2_SHELL_SESSIONS; i++) {
+        shell_session_t *s = &g_shell_sessions[i];
+        if (s->in_use && strcmp(s->session_id, session_id) == 0) {
+            s->last_used = g_shell_session_seq;
+            snprintf(out, cap, "%s", shell_valid_cwd(s->cwd));
+            pthread_mutex_unlock(&g_shell_session_mtx);
+            return;
+        }
+        if (!s->in_use && free_idx < 0) free_idx = i;
+        if (s->in_use && s->last_used < oldest) {
+            oldest = s->last_used;
+            oldest_idx = i;
+        }
+    }
+    int idx = free_idx >= 0 ? free_idx : oldest_idx;
+    shell_session_t *s = &g_shell_sessions[idx];
+    memset(s, 0, sizeof(*s));
+    s->in_use = 1;
+    s->last_used = g_shell_session_seq;
+    snprintf(s->session_id, sizeof(s->session_id), "%s", session_id);
+    snprintf(s->cwd, sizeof(s->cwd), "%s", base);
+    snprintf(out, cap, "%s", s->cwd);
+    pthread_mutex_unlock(&g_shell_session_mtx);
+}
+
+static void shell_session_set(const char *session_id, const char *cwd) {
+    if (!shell_valid_session_id(session_id)) return;
+    const char *next = shell_valid_cwd(cwd);
+    pthread_mutex_lock(&g_shell_session_mtx);
+    g_shell_session_seq += 1;
+    int free_idx = -1;
+    int oldest_idx = 0;
+    uint64_t oldest = UINT64_MAX;
+    for (int i = 0; i < PS5UPLOAD2_SHELL_SESSIONS; i++) {
+        shell_session_t *s = &g_shell_sessions[i];
+        if (s->in_use && strcmp(s->session_id, session_id) == 0) {
+            snprintf(s->cwd, sizeof(s->cwd), "%s", next);
+            s->last_used = g_shell_session_seq;
+            pthread_mutex_unlock(&g_shell_session_mtx);
+            return;
+        }
+        if (!s->in_use && free_idx < 0) free_idx = i;
+        if (s->in_use && s->last_used < oldest) {
+            oldest = s->last_used;
+            oldest_idx = i;
+        }
+    }
+    int idx = free_idx >= 0 ? free_idx : oldest_idx;
+    shell_session_t *s = &g_shell_sessions[idx];
+    memset(s, 0, sizeof(*s));
+    s->in_use = 1;
+    s->last_used = g_shell_session_seq;
+    snprintf(s->session_id, sizeof(s->session_id), "%s", session_id);
+    snprintf(s->cwd, sizeof(s->cwd), "%s", next);
+    pthread_mutex_unlock(&g_shell_session_mtx);
+}
+
+static int shell_json_string_field(const char *body, uint64_t body_len,
+                                   const char *field, char *out, size_t cap) {
+    if (!body || !field || !out || cap == 0) return -1;
+    out[0] = '\0';
+    char key[80];
+    int kn = snprintf(key, sizeof(key), "\"%s\"", field);
+    if (kn < 0 || (size_t)kn >= sizeof(key)) return -1;
+    const char *end = body + body_len;
+    const char *p = body;
+    while (p < end) {
+        const char *hit = strstr(p, key);
+        if (!hit || hit >= end) return -1;
+        p = hit + (size_t)kn;
+        while (p < end && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')) p++;
+        if (p >= end || *p != ':') continue;
+        p++;
+        while (p < end && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')) p++;
+        if (p >= end || *p != '"') return -1;
+        p++;
+        size_t n = 0;
+        while (p < end && *p != '"') {
+            unsigned char c = (unsigned char)*p++;
+            if (c == '\\' && p < end) {
+                unsigned char e = (unsigned char)*p++;
+                if (e == '"' || e == '\\' || e == '/') c = e;
+                else if (e == 'n') c = '\n';
+                else if (e == 'r') c = '\r';
+                else if (e == 't') c = '\t';
+                else if (e == 'b') c = '\b';
+                else if (e == 'f') c = '\f';
+                else if (e == 'u') {
+                    if (p + 4 <= end) p += 4;
+                    c = '?';
+                } else {
+                    c = e;
+                }
+            }
+            if (n + 1 < cap) out[n++] = (char)c;
+        }
+        if (p >= end || *p != '"') return -1;
+        out[n] = '\0';
+        return 0;
+    }
+    return -1;
+}
+
+static int shell_send_json_result(runtime_state_t *state, int client_fd,
+                                  uint64_t trace_id, int exit_code,
+                                  const char *stdout_text,
+                                  const char *cwd_text,
+                                  const char *session_id,
+                                  int timed_out) {
+    size_t out_len = stdout_text ? strlen(stdout_text) : 0;
+    size_t cwd_len = cwd_text ? strlen(cwd_text) : 1;
+    size_t sid_len = session_id ? strlen(session_id) : 0;
+    char *resp = malloc(out_len + cwd_len + sid_len + 680);
+    if (!resp) {
+        const char *err = "{\"err\":\"oom\"}";
+        return send_frame(client_fd, FTX2_FRAME_SHELL_EXEC_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+    int n = 0;
+    size_t cap = out_len + cwd_len + sid_len + 680;
+    n += snprintf(resp + n, cap - (size_t)n,
+                  "{\"exit_code\":%d,\"timed_out\":%s,\"stdout\":\"",
+                  exit_code, timed_out ? "true" : "false");
+    for (size_t i = 0; i < out_len && (size_t)n < cap - 8; i++) {
+        unsigned char c = (unsigned char)stdout_text[i];
+        if (c == '\\' || c == '"') { resp[n++] = '\\'; resp[n++] = (char)c; }
+        else if (c == '\n') { resp[n++] = '\\'; resp[n++] = 'n'; }
+        else if (c == '\r') { resp[n++] = '\\'; resp[n++] = 'r'; }
+        else if (c == '\t') { resp[n++] = '\\'; resp[n++] = 't'; }
+        else if (c < 0x20) { n += snprintf(resp + n, cap - (size_t)n, "\\u%04x", c); }
+        else { resp[n++] = (char)c; }
+    }
+    n += snprintf(resp + n, cap - (size_t)n, "\",\"cwd\":\"");
+    const char *cwd_src = (cwd_text && cwd_text[0]) ? cwd_text : "/";
+    for (size_t i = 0; cwd_src[i] && (size_t)n < cap - 8; i++) {
+        unsigned char c = (unsigned char)cwd_src[i];
+        if (c == '\\' || c == '"') { resp[n++] = '\\'; resp[n++] = (char)c; }
+        else if (c == '\n') { resp[n++] = '\\'; resp[n++] = 'n'; }
+        else if (c == '\r') { resp[n++] = '\\'; resp[n++] = 'r'; }
+        else if (c == '\t') { resp[n++] = '\\'; resp[n++] = 't'; }
+        else if (c < 0x20) { n += snprintf(resp + n, cap - (size_t)n, "\\u%04x", c); }
+        else { resp[n++] = (char)c; }
+    }
+    n += snprintf(resp + n, cap - (size_t)n, "\",\"session_id\":\"");
+    const char *sid_src = session_id ? session_id : "";
+    for (size_t i = 0; sid_src[i] && (size_t)n < cap - 8; i++) {
+        unsigned char c = (unsigned char)sid_src[i];
+        if (c == '\\' || c == '"') { resp[n++] = '\\'; resp[n++] = (char)c; }
+        else if (c == '\n') { resp[n++] = '\\'; resp[n++] = 'n'; }
+        else if (c == '\r') { resp[n++] = '\\'; resp[n++] = 'r'; }
+        else if (c == '\t') { resp[n++] = '\\'; resp[n++] = 't'; }
+        else if (c < 0x20) { n += snprintf(resp + n, cap - (size_t)n, "\\u%04x", c); }
+        else { resp[n++] = (char)c; }
+    }
+    n += snprintf(resp + n, cap - (size_t)n, "\"}");
+    int rc = send_frame(client_fd, FTX2_FRAME_SHELL_EXEC_ACK, 0,
+                        trace_id, resp, (uint64_t)n);
+    free(resp);
+    if (state) {
+        pthread_mutex_lock(&state->state_mtx);
+        state->command_count += 1;
+        pthread_mutex_unlock(&state->state_mtx);
+    }
+    return rc;
+}
+
+static int shell_join_path(const char *cwd, const char *path,
+                           char *out, size_t cap) {
+    if (!path || !*path) path = "/";
+    if (path[0] == '/') {
+        int n = snprintf(out, cap, "%s", path);
+        return (n >= 0 && (size_t)n < cap) ? 0 : -1;
+    }
+    if (!cwd || cwd[0] != '/') cwd = "/";
+    int n = snprintf(out, cap, "%s%s%s",
+                     cwd,
+                     strcmp(cwd, "/") == 0 ? "" : "/",
+                     path);
+    return (n >= 0 && (size_t)n < cap) ? 0 : -1;
+}
+
+static int shell_resolve_dir(const char *cwd, const char *path,
+                             char *out, size_t cap, char *err, size_t err_cap) {
+    char joined[1024];
+    if (shell_join_path(cwd, path, joined, sizeof(joined)) != 0) {
+        snprintf(err, err_cap, "path too long");
+        return -1;
+    }
+    char resolved[1024];
+    if (!realpath(joined, resolved)) {
+        snprintf(err, err_cap, "%s", strerror(errno));
+        return -1;
+    }
+    struct stat st;
+    if (stat(resolved, &st) != 0) {
+        snprintf(err, err_cap, "%s", strerror(errno));
+        return -1;
+    }
+    if (!S_ISDIR(st.st_mode)) {
+        snprintf(err, err_cap, "not a directory");
+        return -1;
+    }
+    int n = snprintf(out, cap, "%s", resolved);
+    if (n < 0 || (size_t)n >= cap) {
+        snprintf(err, err_cap, "path too long");
+        return -1;
+    }
+    return 0;
+}
+
+static int shell_ls_path(const char *path, char **out_text, int *out_exit) {
+    if (!path || !out_text || !out_exit) return -1;
+    *out_text = NULL;
+    *out_exit = 0;
+    char *out = NULL;
+    size_t cap = 0, len = 0;
+    DIR *dp = opendir(path);
+    if (!dp) {
+        len = shell_appendf(&out, &cap, len, "ls: %s: %s\n",
+                            path, strerror(errno));
+        *out_text = out;
+        *out_exit = 1;
+        return 0;
+    }
+    struct dirent *e;
+    while ((e = readdir(dp)) != NULL) {
+        if (e->d_name[0] == '.' && e->d_name[1] == '\0') continue;
+        if (e->d_name[0] == '.' && e->d_name[1] == '.' && e->d_name[2] == '\0') continue;
+        char child[1024];
+        struct stat st;
+        char type_c = '?';
+        long long size = 0;
+        int cn = snprintf(child, sizeof(child), "%s/%s",
+                          strcmp(path, "/") == 0 ? "" : path,
+                          e->d_name);
+        if (cn >= 0 && (size_t)cn < sizeof(child) && stat(child, &st) == 0) {
+            if (S_ISDIR(st.st_mode)) type_c = 'd';
+            else if (S_ISREG(st.st_mode)) type_c = 'f';
+            else if (S_ISLNK(st.st_mode)) type_c = 'l';
+            else type_c = 'o';
+            size = (long long)st.st_size;
+        }
+        len = shell_appendf(&out, &cap, len, "%c %12lld  %s\n",
+                            type_c, size, e->d_name);
+    }
+    closedir(dp);
+    if (!out) out = strdup_safe("");
+    *out_text = out;
+    return 0;
 }
 
 static int handle_shell_builtin(const char *cmd_in, char **out_text,
@@ -9695,7 +9995,8 @@ static int handle_shell_builtin(const char *cmd_in, char **out_text,
             "  sfoinfo <path>          parse param.sfo key/value pairs\n"
             "\n"
             "Filesystem:\n"
-            "  pwd                     print working dir (always /)\n"
+            "  cd [path]               change working dir (default /)\n"
+            "  pwd                     print working dir\n"
             "  touch <path>...         create or bump mtime\n"
             "  mkdir [-p] <path>...    create directory\n"
             "  rmdir <path>...         remove empty directory\n"
@@ -9740,6 +10041,23 @@ static int handle_shell_builtin(const char *cmd_in, char **out_text,
     if (strcmp(prog, "false") == 0) {
         *out_text = strdup_safe("");
         *out_exit = 1;
+        return 0;
+    }
+    if (strcmp(prog, "cd") == 0) {
+        const char *path = argc >= 2 ? argv[1] : "/";
+        if (chdir(path) != 0) {
+            len = shell_appendf(&out, &cap, len, "cd: %s: %s\n",
+                                 path, strerror(errno));
+            *out_text = out;
+            *out_exit = 1;
+            return 0;
+        }
+        char cwd[1024];
+        if (getcwd(cwd, sizeof(cwd))) {
+            len = shell_appendf(&out, &cap, len, "%s\n", cwd);
+        }
+        if (!out) out = strdup_safe("");
+        *out_text = out;
         return 0;
     }
     if (strcmp(prog, "pwd") == 0) {
@@ -9824,38 +10142,7 @@ static int handle_shell_builtin(const char *cmd_in, char **out_text,
     }
     if (strcmp(prog, "ls") == 0) {
         const char *path = argc >= 2 ? argv[1] : "/";
-        DIR *dp = opendir(path);
-        if (!dp) {
-            len = shell_appendf(&out, &cap, len, "ls: %s: %s\n",
-                                 path, strerror(errno));
-            *out_text = out;
-            *out_exit = 1;
-            return 0;
-        }
-        struct dirent *e;
-        while ((e = readdir(dp)) != NULL) {
-            if (e->d_name[0] == '.' && e->d_name[1] == '\0') continue;
-            if (e->d_name[0] == '.' && e->d_name[1] == '.' && e->d_name[2] == '\0') continue;
-            char child[1024];
-            snprintf(child, sizeof(child), "%s/%s",
-                     strcmp(path, "/") == 0 ? "" : path, e->d_name);
-            struct stat st;
-            char type_c = '?';
-            long long size = 0;
-            if (stat(child, &st) == 0) {
-                if (S_ISDIR(st.st_mode)) type_c = 'd';
-                else if (S_ISREG(st.st_mode)) type_c = 'f';
-                else if (S_ISLNK(st.st_mode)) type_c = 'l';
-                else type_c = 'o';
-                size = (long long)st.st_size;
-            }
-            len = shell_appendf(&out, &cap, len, "%c %12lld  %s\n",
-                                 type_c, size, e->d_name);
-        }
-        closedir(dp);
-        if (!out) out = strdup_safe("");
-        *out_text = out;
-        return 0;
+        return shell_ls_path(path, out_text, out_exit);
     }
     if (strcmp(prog, "cat") == 0) {
         if (argc < 2) {
@@ -11662,25 +11949,22 @@ static int handle_shell_exec(runtime_state_t *state, int client_fd,
                               uint64_t body_len) {
     if (!state) return -1;
     char cmd[2048] = {0};
+    char cwd[1024] = "/";
+    char fallback_cwd[1024] = "/";
+    char session_id[96] = "";
     int timeout_secs = 30;
     if (body && body_len > 0 && body_len < 4096) {
         char tmp[4100];
         memcpy(tmp, body, (size_t)body_len);
         tmp[body_len] = '\0';
-        const char *p = strstr(tmp, "\"cmd\"");
-        if (p) {
-            p = strchr(p, ':');
-            if (p) p = strchr(p, '"');
-            if (p) {
-                p++;
-                const char *e = strchr(p, '"');
-                if (e && (size_t)(e - p) < sizeof(cmd)) {
-                    memcpy(cmd, p, (size_t)(e - p));
-                    cmd[e - p] = '\0';
-                }
-            }
+        (void)shell_json_string_field(tmp, body_len, "cmd", cmd, sizeof(cmd));
+        if (shell_json_string_field(tmp, body_len, "cwd", fallback_cwd, sizeof(fallback_cwd)) != 0 ||
+            fallback_cwd[0] != '/') {
+            snprintf(fallback_cwd, sizeof(fallback_cwd), "/");
         }
-        p = strstr(tmp, "\"timeout_secs\"");
+        (void)shell_json_string_field(tmp, body_len, "session_id",
+                                      session_id, sizeof(session_id));
+        const char *p = strstr(tmp, "\"timeout_secs\"");
         if (p) {
             p = strchr(p, ':');
             if (p) {
@@ -11689,10 +11973,61 @@ static int handle_shell_exec(runtime_state_t *state, int client_fd,
             }
         }
     }
+    shell_session_get(session_id, fallback_cwd, cwd, sizeof(cwd));
     if (cmd[0] == '\0') {
         const char *err = "{\"err\":\"empty_cmd\"}";
         return send_frame(client_fd, FTX2_FRAME_SHELL_EXEC_ACK, 0,
                           trace_id, err, strlen(err));
+    }
+    {
+        char probe[2100];
+        char *argv_probe[8];
+        snprintf(probe, sizeof(probe), "%s", cmd);
+        int argc_probe = shell_split(probe, argv_probe, 8);
+        if (argc_probe > 0 && strcmp(argv_probe[0], "pwd") == 0) {
+            char out[1100];
+            snprintf(out, sizeof(out), "%s\n", cwd);
+            return shell_send_json_result(state, client_fd, trace_id, 0, out, cwd, session_id, 0);
+        }
+        if (argc_probe > 0 && strcmp(argv_probe[0], "cd") == 0) {
+            const char *target = argc_probe >= 2 ? argv_probe[1] : "/";
+            char resolved[1024];
+            char err[160];
+            if (shell_resolve_dir(cwd, target, resolved, sizeof(resolved),
+                                  err, sizeof(err)) != 0) {
+                char out[1400];
+                snprintf(out, sizeof(out), "cd: %s: %s\n", target, err);
+                return shell_send_json_result(state, client_fd, trace_id, 1, out, cwd, session_id, 0);
+            }
+            shell_session_set(session_id, resolved);
+            snprintf(cwd, sizeof(cwd), "%s", resolved);
+            return shell_send_json_result(state, client_fd, trace_id, 0, "", cwd, session_id, 0);
+        }
+        if (argc_probe > 0 && strcmp(argv_probe[0], "ls") == 0 && argc_probe <= 2) {
+            const char *target = argc_probe >= 2 ? argv_probe[1] : cwd;
+            char abs_path[1024];
+            char err[160];
+            if (shell_resolve_dir(cwd, target, abs_path, sizeof(abs_path),
+                                  err, sizeof(err)) != 0) {
+                char out[1400];
+                snprintf(out, sizeof(out), "ls: %s: %s\n", target, err);
+                return shell_send_json_result(state, client_fd, trace_id, 1, out, cwd, session_id, 0);
+            }
+            char *builtin_out = NULL;
+            int builtin_exit = -1;
+            int builtin_rc = shell_ls_path(abs_path, &builtin_out, &builtin_exit);
+            if (builtin_rc == 0) {
+                int rc = shell_send_json_result(state, client_fd, trace_id,
+                                                builtin_exit,
+                                                builtin_out ? builtin_out : "",
+                                                cwd,
+                                                session_id,
+                                                0);
+                free(builtin_out);
+                return rc;
+            }
+            free(builtin_out);
+        }
     }
     /* PS5 has NO shell binary — there's no /bin/sh, /system/bin/sh, or
      * any other executable popen() could fork+exec. Skip the popen
@@ -11703,144 +12038,48 @@ static int handle_shell_exec(runtime_state_t *state, int client_fd,
     {
         char *builtin_out = NULL;
         int builtin_exit = -1;
-        int builtin_rc = handle_shell_builtin(cmd, &builtin_out, &builtin_exit);
+        int builtin_rc = -1;
+
+        pthread_mutex_lock(&g_shell_cwd_mtx);
+        char saved_cwd[1024];
+        int have_saved_cwd = getcwd(saved_cwd, sizeof(saved_cwd)) != NULL;
+        if (cwd[0] && chdir(cwd) != 0) {
+            size_t cap = 0, len = 0;
+            builtin_exit = 1;
+            len = shell_appendf(&builtin_out, &cap, len,
+                                "shell: cwd %s: %s\n", cwd, strerror(errno));
+            (void)len;
+            builtin_rc = 0;
+        } else {
+            builtin_rc = handle_shell_builtin(cmd, &builtin_out, &builtin_exit);
+        }
+        if (have_saved_cwd) {
+            (void)chdir(saved_cwd);
+        } else {
+            (void)chdir("/");
+        }
+        pthread_mutex_unlock(&g_shell_cwd_mtx);
+
         if (builtin_rc == 0) {
-            /* Build the response JSON in the same shape as the legacy
-             * popen path so the desktop UI's renderer is unchanged. */
-            size_t out_len = builtin_out ? strlen(builtin_out) : 0;
-            char *resp_b = malloc(out_len + 512);
-            if (!resp_b) {
-                free(builtin_out);
-                const char *err = "{\"err\":\"oom\"}";
-                return send_frame(client_fd, FTX2_FRAME_SHELL_EXEC_ACK, 0,
-                                  trace_id, err, strlen(err));
-            }
-            int n_b = 0;
-            n_b += snprintf(resp_b + n_b, 256,
-                            "{\"exit_code\":%d,\"timed_out\":false,"
-                            "\"stdout\":\"", builtin_exit);
-            size_t cap_b = out_len + 512;
-            for (size_t i = 0; i < out_len && (size_t)n_b < cap_b - 8; i++) {
-                unsigned char c = (unsigned char)builtin_out[i];
-                if (c == '\\' || c == '"') { resp_b[n_b++] = '\\'; resp_b[n_b++] = (char)c; }
-                else if (c == '\n') { resp_b[n_b++] = '\\'; resp_b[n_b++] = 'n'; }
-                else if (c == '\r') { resp_b[n_b++] = '\\'; resp_b[n_b++] = 'r'; }
-                else if (c == '\t') { resp_b[n_b++] = '\\'; resp_b[n_b++] = 't'; }
-                else if (c < 0x20) { n_b += snprintf(resp_b + n_b, cap_b - n_b, "\\u%04x", c); }
-                else { resp_b[n_b++] = (char)c; }
-            }
-            n_b += snprintf(resp_b + n_b, cap_b - n_b, "\"}");
-            free(builtin_out);
-            int rc_b = send_frame(client_fd, FTX2_FRAME_SHELL_EXEC_ACK, 0,
-                                   trace_id, resp_b, (uint64_t)n_b);
-            free(resp_b);
-            pthread_mutex_lock(&state->state_mtx);
-            state->command_count += 1;
-            pthread_mutex_unlock(&state->state_mtx);
             (void)timeout_secs;
+            int rc_b = shell_send_json_result(state, client_fd, trace_id,
+                                              builtin_exit,
+                                              builtin_out ? builtin_out : "",
+                                              cwd,
+                                              session_id,
+                                              0);
+            free(builtin_out);
             return rc_b;
         }
-        /* Built-in didn't recognise this command — fall through to the
-         * popen path. On PS5 popen will fail (no shell binary); the
-         * UI then sees a clear "shell binary missing" message instead
-         * of the previous opaque "popen_failed". On a hypothetical
-         * future PS5 build that DOES expose /bin/sh, popen would
-         * work and we'd execute the command for real. */
+        free(builtin_out);
     }
 
-    /* Append redirect so popen captures stderr too. */
-    char shellcmd[2200];
-    snprintf(shellcmd, sizeof(shellcmd), "%s 2>&1", cmd);
-    FILE *fp = popen(shellcmd, "r");
-    if (!fp) {
-        /* Most common cause: PS5 doesn't ship /bin/sh. Give the user
-         * an actionable message instead of "popen_failed". */
-        char err[768];
-        int el = snprintf(err, sizeof(err),
-                          "{\"exit_code\":127,\"timed_out\":false,"
-                          "\"stdout\":\"PS5 has no shell binary (popen errno %d: %s).\\n"
-                          "Built-in commands available — type 'help' for the full list "
-                          "(~32 commands including ls/cat/head/tail/wc/stat/find/grep/du/"
-                          "cp/mv/rm/chmod/mkdir/rmdir/touch/ln/ps/pid/kill/sync/mount/df/"
-                          "date/uname/hostname/id/env/sysctl/sleep/notify/klog/which/"
-                          "basename/dirname/echo/true/false).\"}",
-                          errno, strerror(errno));
-        if (el < 0) el = 0;
-        if ((size_t)el >= sizeof(err)) el = (int)sizeof(err) - 1;
-        return send_frame(client_fd, FTX2_FRAME_SHELL_EXEC_ACK, 0,
-                          trace_id, err, (uint64_t)el);
-    }
-    int fd = fileno(fp);
-    int flags = fcntl(fd, F_GETFL, 0);
-    if (flags >= 0) fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-
-    char *outbuf = malloc(256 * 1024);
-    if (!outbuf) {
-        pclose(fp);
-        const char *err = "{\"err\":\"oom\"}";
-        return send_frame(client_fd, FTX2_FRAME_SHELL_EXEC_ACK, 0,
-                          trace_id, err, strlen(err));
-    }
-    size_t out_n = 0;
-    size_t out_cap = 256 * 1024 - 1;
-    time_t deadline = time(NULL) + timeout_secs;
-    int timed_out = 0;
-    while (1) {
-        if (time(NULL) >= deadline) {
-            timed_out = 1;
-            break;
-        }
-        char chunk[4096];
-        ssize_t r = read(fd, chunk, sizeof(chunk));
-        if (r > 0) {
-            size_t take = (size_t)r;
-            if (out_n + take > out_cap) take = out_cap - out_n;
-            if (take > 0) {
-                memcpy(outbuf + out_n, chunk, take);
-                out_n += take;
-            }
-        } else if (r == 0) {
-            break;
-        } else {
-            usleep(10000);
-        }
-    }
-    int status = pclose(fp);
-    int exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-    outbuf[out_n] = '\0';
-
-    char *resp = malloc(out_n + 512);
-    if (!resp) {
-        free(outbuf);
-        const char *err = "{\"err\":\"oom\"}";
-        return send_frame(client_fd, FTX2_FRAME_SHELL_EXEC_ACK, 0,
-                          trace_id, err, strlen(err));
-    }
-    int n = 0;
-    n += snprintf(resp + n, 256, "{\"exit_code\":%d,\"timed_out\":%s,"
-                                  "\"stdout\":\"", exit_code,
-                  timed_out ? "true" : "false");
-    size_t cap_total = out_n + 512;
-    for (size_t i = 0; i < out_n && (size_t)n < cap_total - 8; i++) {
-        unsigned char c = (unsigned char)outbuf[i];
-        if (c == '\\' || c == '"') {
-            resp[n++] = '\\';
-            resp[n++] = (char)c;
-        } else if (c == '\n') { resp[n++] = '\\'; resp[n++] = 'n'; }
-        else if (c == '\r') { resp[n++] = '\\'; resp[n++] = 'r'; }
-        else if (c == '\t') { resp[n++] = '\\'; resp[n++] = 't'; }
-        else if (c < 0x20) { n += snprintf(resp + n, cap_total - n, "\\u%04x", c); }
-        else { resp[n++] = (char)c; }
-    }
-    n += snprintf(resp + n, cap_total - n, "\"}");
-    free(outbuf);
-    int rc = send_frame(client_fd, FTX2_FRAME_SHELL_EXEC_ACK, 0,
-                        trace_id, resp, (uint64_t)n);
-    free(resp);
-    pthread_mutex_lock(&state->state_mtx);
-    state->command_count += 1;
-    pthread_mutex_unlock(&state->state_mtx);
-    return rc;
+    (void)timeout_secs;
+    char msg[512];
+    snprintf(msg, sizeof(msg),
+             "%s: command not found. PS5Upload shell only supports built-ins; type 'help'.\n",
+             cmd[0] ? cmd : "shell");
+    return shell_send_json_result(state, client_fd, trace_id, 127, msg, cwd, session_id, 0);
 }
 
 /* ── CRC32 file checksum ─────────────────────────────────────────────── */
@@ -14663,6 +14902,9 @@ void *runtime_mgmt_server_loop(void *state_ptr) {
                 }
             }
             pthread_t tid;
+            if (attr_p) {
+                (void)pthread_attr_setstacksize(attr_p, 512u * 1024u);
+            }
             int rc = pthread_create(&tid, attr_p, mgmt_client_thread, ctx);
             if (attr_p) pthread_attr_destroy(attr_p);
             if (rc == 0) {
