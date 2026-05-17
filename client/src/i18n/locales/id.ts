@@ -745,7 +745,6 @@ settings_backup_import: "Import bundle…",
 settings_bandwidth_hint: "Cap outbound transfer speed to leave headroom for video calls / game streaming. Set the cap on the Upload screen — it applies to the next started transfer. The FTX2_BANDWIDTH_MBPS env var still works for headless engine runs.",
 settings_bandwidth_title: "Bandwidth throttle",
 settings_section_appearance: "Appearance",
-settings_section_audit: "Audit log",
 settings_section_backup: "Backup / restore",
 settings_section_bandwidth: "Bandwidth",
 settings_section_diagnostic: "Diagnostics",
@@ -1120,6 +1119,9 @@ payloads_title: "Katalog homebrew",
 activity_bar_in_flight: "{count} aktivitas berjalan",
 activity_bar_open: "Lihat aktivitas",
 activity_bar_toggle: "Alihkan panel aktivitas",
+audit_log: "Log audit",
+audit_log_title: "Log audit",
+audit_log_description: "Catatan lokal permanen dari tindakan destruktif dan tidak dapat dibatalkan yang telah Anda lakukan. Tidak ada tombol hapus — itu disengaja. 100 entri terakhir ditampilkan; entri lama keluar dari buffer cincin.",
 };
 
 export default id;

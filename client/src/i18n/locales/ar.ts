@@ -746,7 +746,6 @@ settings_backup_import: "Import bundle…",
 settings_bandwidth_hint: "Cap outbound transfer speed to leave headroom for video calls / game streaming. Set the cap on the Upload screen — it applies to the next started transfer. The FTX2_BANDWIDTH_MBPS env var still works for headless engine runs.",
 settings_bandwidth_title: "Bandwidth throttle",
 settings_section_appearance: "Appearance",
-settings_section_audit: "Audit log",
 settings_section_backup: "Backup / restore",
 settings_section_bandwidth: "Bandwidth",
 settings_section_diagnostic: "Diagnostics",
@@ -1121,6 +1120,9 @@ payloads_title: "كتالوج البرامج المنزلية",
 activity_bar_in_flight: "{count} عنصر نشاط قيد التشغيل",
 activity_bar_open: "عرض النشاط",
 activity_bar_toggle: "تبديل لوحة النشاط",
+audit_log: "سجل التدقيق",
+audit_log_title: "سجل التدقيق",
+audit_log_description: "سجل محلي دائم للإجراءات المدمرة وغير القابلة للعكس التي قمت بها. لا يوجد زر مسح — هذا مقصود. يتم عرض آخر 100 إدخال؛ تتدحرج الإدخالات الأقدم من المخزن المؤقت الحلقي.",
 };
 
 export default ar;

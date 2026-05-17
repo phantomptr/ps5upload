@@ -745,7 +745,6 @@ settings_backup_import: "Import bundle…",
 settings_bandwidth_hint: "Cap outbound transfer speed to leave headroom for video calls / game streaming. Set the cap on the Upload screen — it applies to the next started transfer. The FTX2_BANDWIDTH_MBPS env var still works for headless engine runs.",
 settings_bandwidth_title: "Bandwidth throttle",
 settings_section_appearance: "Appearance",
-settings_section_audit: "Audit log",
 settings_section_backup: "Backup / restore",
 settings_section_bandwidth: "Bandwidth",
 settings_section_diagnostic: "Diagnostics",
@@ -1120,6 +1119,9 @@ payloads_title: "হোমব্রু ক্যাটালগ",
 activity_bar_in_flight: "{count}টি কার্যকলাপ চলছে",
 activity_bar_open: "কার্যকলাপ দেখুন",
 activity_bar_toggle: "কার্যকলাপ প্যানেল টগল করুন",
+audit_log: "অডিট লগ",
+audit_log_title: "অডিট লগ",
+audit_log_description: "আপনার সম্পাদিত ধ্বংসাত্মক এবং অপরিবর্তনীয় ক্রিয়াগুলির স্থায়ী স্থানীয় রেকর্ড। কোন ক্লিয়ার বোতাম নেই — এটি ইচ্ছাকৃত। শেষ 100টি এন্ট্রি দেখানো হয়েছে; পুরানো এন্ট্রিগুলি রিং বাফার থেকে রোল অফ হয়।",
 };
 
 export default bn;

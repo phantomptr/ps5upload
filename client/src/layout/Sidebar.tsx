@@ -28,6 +28,7 @@ import {
   TerminalSquare,
   PieChart,
   LayoutDashboard,
+  ShieldCheck,
 } from "lucide-react";
 import clsx from "clsx";
 import { useThemeStore } from "../state/theme";
@@ -114,6 +115,7 @@ const items: NavItem[] = [
   { to: "/stats", key: "stats", fallback: "Stats", icon: BarChart3 },
   { to: "/logs", key: "logs", fallback: "Logs", icon: ScrollText },
   { to: "/kernel-log", key: "kernel_log", fallback: "Kernel log", icon: Terminal },
+  { to: "/audit-log", key: "audit_log", fallback: "Audit log", icon: ShieldCheck },
 
   // ─ Footer-style utility entries (still rendered inline for now;
   //   a future change could split them visually with a divider) ─

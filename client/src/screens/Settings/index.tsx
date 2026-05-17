@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Settings as SettingsIcon,
   Moon as SleepIcon,
@@ -36,10 +36,8 @@ import {
   getNotifPruneDays,
   setNotifPruneDays,
 } from "../../state/notifications";
-import {
-  useAuditLogStore,
-  type AuditEntry,
-} from "../../state/auditLog";
+// useAuditLogStore + AuditEntry moved to screens/AuditLog/index.tsx
+// (2.12.0 — promoted out of Settings junk drawer).
 
 function Section({
   title,
@@ -260,10 +258,13 @@ export default function SettingsScreen() {
           <BackupRestorePanel />
         </Section>
 
-        <Section title={tr("settings_section_audit", undefined, "Audit log")} full>
-          <AuditLogPanel />
-        </Section>
-
+        {/* 2.12.0: Audit log promoted out of Settings to its own
+            top-level route (/audit-log) under Diagnostics. It's a
+            permanent local safety record, conceptually adjacent to
+            Activity/Logs — burying it as a Settings card meant
+            users who wanted "what did I delete last week?" had to
+            scroll through preferences to find it. AuditLogPanel
+            removed too. */}
         <Section title={tr("settings_section_schedules", undefined, "Schedules")} full>
           <SchedulesPanel />
         </Section>
@@ -440,72 +441,10 @@ function NotifPrunePanel() {
   );
 }
 
-/** Read-only viewer for the audit log. Shows the last 100 entries
- *  with destructive actions called out. No clear button — the audit
- *  log is meant to be a permanent local safety record. */
-function AuditLogPanel() {
-  const tr = useTr();
-  // Subscribe directly. Reverse via useMemo so the list selector stays
-  // referentially stable per underlying-array-identity (avoids the
-  // same "snapshot must be stable" trap as the Dashboard).
-  const rawEntries = useAuditLogStore((s) => s.entries);
-  const entries: AuditEntry[] = useMemo(
-    () => [...rawEntries].reverse(),
-    [rawEntries],
-  );
-  if (entries.length === 0) {
-    return (
-      <p className="text-xs text-[var(--color-muted)]">
-        {tr(
-          "audit_empty",
-          undefined,
-          "No destructive actions recorded yet. Reboots, deletes, unregisters, and similar will appear here as you perform them.",
-        )}
-      </p>
-    );
-  }
-  return (
-    <div className="max-h-96 overflow-y-auto rounded-md border border-[var(--color-border)] bg-[var(--color-surface)]">
-      <table className="w-full text-xs">
-        <thead className="text-[10px] uppercase tracking-wide text-[var(--color-muted)]">
-          <tr>
-            <th className="px-2 py-1 text-left">
-              {tr("audit_when", undefined, "When")}
-            </th>
-            <th className="px-2 py-1 text-left">
-              {tr("audit_kind", undefined, "Action")}
-            </th>
-            <th className="px-2 py-1 text-left">
-              {tr("audit_what", undefined, "Detail")}
-            </th>
-            <th className="px-2 py-1 text-left">
-              {tr("audit_context", undefined, "Context")}
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {entries.slice(0, 100).map((e) => (
-            <tr
-              key={e.id}
-              className={`border-t border-[var(--color-border)] ${
-                e.failed ? "text-[var(--color-bad)]" : ""
-              }`}
-            >
-              <td className="px-2 py-1 tabular-nums text-[10px]">
-                {new Date(e.ts).toLocaleString()}
-              </td>
-              <td className="px-2 py-1 font-mono text-[10px]">{e.kind}</td>
-              <td className="px-2 py-1">{e.what}</td>
-              <td className="px-2 py-1 truncate text-[10px] text-[var(--color-muted)]">
-                {e.context ?? ""}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
+// 2.12.0: AuditLogPanel moved to its own top-level screen at
+// /audit-log (under Diagnostics in the sidebar). See
+// screens/AuditLog/index.tsx — the table render is identical;
+// only the rehousing changed.
 
 /**
  * Settings backup/restore. Bundles all the localStorage keys that

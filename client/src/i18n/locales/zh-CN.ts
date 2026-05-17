@@ -753,7 +753,6 @@ settings_backup_import: "Import bundle…",
 settings_bandwidth_hint: "Cap outbound transfer speed to leave headroom for video calls / game streaming. Set the cap on the Upload screen — it applies to the next started transfer. The FTX2_BANDWIDTH_MBPS env var still works for headless engine runs.",
 settings_bandwidth_title: "Bandwidth throttle",
 settings_section_appearance: "Appearance",
-settings_section_audit: "Audit log",
 settings_section_backup: "Backup / restore",
 settings_section_bandwidth: "Bandwidth",
 settings_section_diagnostic: "Diagnostics",
@@ -1128,6 +1127,9 @@ payloads_title: "Homebrew 目录",
 activity_bar_in_flight: "{count} 个活动项正在运行",
 activity_bar_open: "查看活动",
 activity_bar_toggle: "切换活动面板",
+audit_log: "审计日志",
+audit_log_title: "审计日志",
+audit_log_description: "您执行的破坏性和不可逆操作的永久本地记录。无清除按钮 — 这是有意的。显示最近 100 个条目；较旧的条目从环形缓冲区中滚出。",
 };
 
 export default zh_CN;
