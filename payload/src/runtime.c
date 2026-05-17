@@ -36,6 +36,7 @@
 #include "sys_time.h"
 #include "sys_registry.h"
 #include "proc_list.h"
+#include "smp_meta.h"
 #include "blake3.h"
 
 /* PS5 SDK's `<fcntl.h>` hides `posix_fadvise` and its POSIX_FADV_* constants
@@ -275,6 +276,10 @@ extern int posix_fallocate(int fd, off_t offset, off_t len);
 #define FTX2_FRAME_TIME_STATE_GET_ACK       137u
 #define FTX2_FRAME_TIME_STATE_SET           138u
 #define FTX2_FRAME_TIME_STATE_SET_ACK       139u
+#define FTX2_FRAME_SMP_META_CONTROL         140u
+#define FTX2_FRAME_SMP_META_CONTROL_ACK     141u
+#define FTX2_FRAME_SMP_META_STATS           142u
+#define FTX2_FRAME_SMP_META_STATS_ACK       143u
 /* Where we place mount points. Scoped under /mnt/ps5upload/ so it
  * never collides with mount paths owned by other utilities. */
 #define FS_MOUNT_BASE "/mnt/ps5upload"
@@ -7999,6 +8004,137 @@ static int handle_time_state_set(runtime_state_t *state, int client_fd,
                       body, (uint64_t)n);
 }
 
+/* ── SMP metadata self-healer ───────────────────────────────────────────
+ *
+ * Thin façade over smp_meta.c primitives. Two frames:
+ *   SMP_META_CONTROL — action=start | run_now | set_poll (with interval)
+ *   SMP_META_STATS   — read-only stats snapshot
+ *
+ * `action` parsing uses literal-substring matching rather than a JSON
+ * string-field reader because the three keywords are unique and never
+ * appear as a substring of each other, so the simpler approach can't
+ * misfire. The runtime.c-wide JSON helpers (json_read_int_field) handle
+ * the `interval` numeric. Action precedence (start > set_poll > run_now)
+ * matters only if the caller sends multiple in one frame — we treat
+ * that as a single highest-precedence operation rather than chaining. */
+
+static int handle_smp_meta_control(runtime_state_t *state, int client_fd,
+                                   uint64_t trace_id,
+                                   const char *request_body,
+                                   uint64_t body_len) {
+    if (!state) return -1;
+
+    /* Empty body defaults to a no-op stats-only ACK so a probe call
+     * doesn't accidentally start the watcher. Desktop should send
+     * explicit {"action":"start"} when it actually wants the worker. */
+    int do_start    = 0;
+    int do_run_now  = 0;
+    int do_set_poll = 0;
+    long interval   = 0;
+
+    if (request_body && body_len > 0 && body_len < 4096) {
+        /* Length-bounded substring scan against tiny needles. PS5's
+         * libc doesn't expose memmem, and we want to stay inside
+         * body_len bytes (the JSON may not be NUL-terminated by the
+         * frame reader). Body is JSON, so the keywords can only
+         * appear inside the action string value. */
+        #define HAS_NEEDLE(needle, nlen) ({                              \
+            int _found = 0;                                              \
+            if ((size_t)(body_len) >= (size_t)(nlen)) {                  \
+                for (size_t _i = 0;                                      \
+                     _i + (size_t)(nlen) <= (size_t)(body_len); _i++) {  \
+                    if (memcmp(request_body + _i, (needle), (nlen)) == 0) { \
+                        _found = 1; break;                               \
+                    }                                                    \
+                }                                                        \
+            }                                                            \
+            _found;                                                      \
+        })
+        if (HAS_NEEDLE("\"start\"",    7))  do_start    = 1;
+        if (HAS_NEEDLE("\"run_now\"",  9))  do_run_now  = 1;
+        if (HAS_NEEDLE("\"set_poll\"", 10)) do_set_poll = 1;
+        #undef HAS_NEEDLE
+        if (do_set_poll) {
+            (void)json_read_int_field(request_body, (size_t)body_len, "interval", &interval);
+        }
+    }
+
+    int err = 0;
+    if (do_start) {
+        if (smp_meta_init() != 0) err = 1;
+    }
+    /* run_now is harmless before init (it just sets a flag the worker
+     * will read once started); set_poll likewise just updates the
+     * atomic. So we run them whether or not start was issued. */
+    if (do_run_now) (void)smp_meta_run_now();
+    int poll = smp_meta_get_poll_seconds();
+    if (do_set_poll) poll = smp_meta_set_poll_seconds((int)interval);
+
+    char body[160];
+    int n;
+    if (err) {
+        n = snprintf(body, sizeof(body),
+                     "{\"ok\":false,\"err\":\"pthread_create_failed\","
+                     "\"poll_seconds\":%d}", poll);
+    } else {
+        n = snprintf(body, sizeof(body),
+                     "{\"ok\":true,\"poll_seconds\":%d}", poll);
+    }
+    if (n < 0 || (size_t)n >= sizeof(body)) {
+        const char *fb = "{\"ok\":false,\"err\":\"truncated\"}";
+        return send_frame(client_fd, FTX2_FRAME_SMP_META_CONTROL_ACK, 0,
+                          trace_id, fb, (uint64_t)strlen(fb));
+    }
+    pthread_mutex_lock(&state->state_mtx);
+    state->command_count += 1;
+    pthread_mutex_unlock(&state->state_mtx);
+    return send_frame(client_fd, FTX2_FRAME_SMP_META_CONTROL_ACK, 0, trace_id,
+                      body, (uint64_t)n);
+}
+
+static int handle_smp_meta_stats(runtime_state_t *state, int client_fd,
+                                  uint64_t trace_id) {
+    if (!state) return -1;
+
+    smp_meta_stats_t s;
+    smp_meta_get_stats(&s);
+
+    /* JSON-escape last_missing minimally: TITLE_ID only contains
+     * [A-Z0-9], so no escaping is needed. We still copy through a
+     * sanity bound to prevent any non-printable from leaking if the
+     * field gets corrupted upstream. */
+    char tid[64];
+    size_t j = 0;
+    for (size_t i = 0; i < sizeof(s.last_missing) && s.last_missing[i]; i++) {
+        unsigned char c = (unsigned char)s.last_missing[i];
+        if (c < 0x20 || c > 0x7E || c == '"' || c == '\\') break;
+        if (j + 1 >= sizeof(tid)) break;
+        tid[j++] = (char)c;
+    }
+    tid[j] = '\0';
+
+    char body[384];
+    int n = snprintf(body, sizeof(body),
+        "{\"running\":%s,\"poll_seconds\":%d,\"last_run_unix\":%llu,"
+        "\"games_scanned\":%d,\"icons_healed\":%d,\"pics_healed\":%d,"
+        "\"json_healed\":%d,\"still_missing\":%d,\"last_missing\":\"%s\"}",
+        s.running ? "true" : "false",
+        s.poll_seconds,
+        (unsigned long long)s.last_run_unix,
+        s.games_scanned, s.icons_healed, s.pics_healed,
+        s.json_healed, s.still_missing, tid);
+    if (n < 0 || (size_t)n >= sizeof(body)) {
+        const char *fb = "{\"ok\":false,\"err\":\"truncated\"}";
+        return send_frame(client_fd, FTX2_FRAME_SMP_META_STATS_ACK, 0,
+                          trace_id, fb, (uint64_t)strlen(fb));
+    }
+    pthread_mutex_lock(&state->state_mtx);
+    state->command_count += 1;
+    pthread_mutex_unlock(&state->state_mtx);
+    return send_frame(client_fd, FTX2_FRAME_SMP_META_STATS_ACK, 0, trace_id,
+                      body, (uint64_t)n);
+}
+
 /* ── System control (reboot / shutdown / standby / wake-tick) ─────────── */
 
 /* Sony API declarations — these live in libSceSystemService (already in
@@ -14093,6 +14229,13 @@ abort_done:
     if (hdr.frame_type == FTX2_FRAME_TIME_STATE_SET) {
         return handle_time_state_set(state, client_fd, hdr.trace_id,
                                        request_body, hdr.body_len);
+    }
+    if (hdr.frame_type == FTX2_FRAME_SMP_META_CONTROL) {
+        return handle_smp_meta_control(state, client_fd, hdr.trace_id,
+                                        request_body, hdr.body_len);
+    }
+    if (hdr.frame_type == FTX2_FRAME_SMP_META_STATS) {
+        return handle_smp_meta_stats(state, client_fd, hdr.trace_id);
     }
     if (hdr.frame_type == FTX2_FRAME_PROC_LIST) {
         return handle_proc_list(state, client_fd, hdr.trace_id,

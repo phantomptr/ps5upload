@@ -90,6 +90,8 @@ pub fn run() {
             commands::ps5_time_state_get,
             commands::ps5_time_state_set,
             commands::ps5_hw_set_fan_threshold,
+            commands::ps5_smp_meta_control,
+            commands::ps5_smp_meta_stats,
             commands::ps5_app_launch,
             commands::ps5_app_register,
             commands::ps5_app_unregister,

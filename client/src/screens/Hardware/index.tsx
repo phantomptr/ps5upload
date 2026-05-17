@@ -11,6 +11,7 @@ import {
   Check,
   HardDrive,
   CalendarClock,
+  Image as ImageIcon,
 } from "lucide-react";
 
 import { AlertTriangle } from "lucide-react";
@@ -37,12 +38,15 @@ import {
   fetchHwStorage,
   fetchHwTemps,
   setFanThreshold,
+  smpMetaControl,
+  smpMetaStats,
   FAN_THRESHOLD_MIN_C,
   FAN_THRESHOLD_MAX_C,
   type HwInfo,
   type HwPower,
   type HwStorage,
   type HwTemps,
+  type SmpMetaStats,
 } from "../../api/ps5";
 
 /** Hardware Monitor tab — live sensor + uptime view.
@@ -385,6 +389,11 @@ export default function HardwareScreen() {
             payloadUp={payloadStatus === "up"}
           />
 
+          <SmpMetaCard
+            host={host ?? ""}
+            payloadUp={payloadStatus === "up"}
+          />
+
           <SystemTimeCard
             host={host ?? ""}
             payloadUp={payloadStatus === "up"}
@@ -706,6 +715,235 @@ function FanCurvePreview({ thresholdC }: { thresholdC: number }) {
         </text>
       </svg>
     </div>
+  );
+}
+
+/* ─── SMP metadata self-healer card ──────────────────────────────────── */
+
+/** Off-by-default control surface for the payload's appmeta heal worker.
+ *
+ *  This is the "set it and forget it" companion to the per-game manual
+ *  heal on the Library screen: once enabled, the PS5-side pthread
+ *  re-sweeps every poll_seconds (default 30s, range 5-600) and copies
+ *  any missing icon0.png / pic*.png / param.json from each game's
+ *  sce_sys into /user/appmeta. Stats refresh on a slow 15s tick while
+ *  the worker is running.
+ *
+ *  Why opt-in rather than always-on: most ps5upload sessions are
+ *  transfer-only, so paying for a pthread + 30s wake-up tick on every
+ *  payload boot would be wasted work. The user is the right signal —
+ *  if they're seeing blank tiles, they'll come here and toggle it on. */
+function SmpMetaCard({
+  host,
+  payloadUp,
+}: {
+  host: string;
+  payloadUp: boolean;
+}) {
+  const tr = useTr();
+  const [stats, setStats] = useState<SmpMetaStats | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [pollDraft, setPollDraft] = useState<number>(30);
+  const visible = useDocumentVisible();
+  const guard = useStaleHostGuard();
+
+  const canTalk = payloadUp && !!host.trim();
+
+  const refresh = useCallback(async () => {
+    if (!canTalk) return;
+    const probe = guard.capture();
+    try {
+      const s = await smpMetaStats(transferAddr(probe.host));
+      if (probe.isStale()) return;
+      setStats(s);
+      setError(null);
+      if (s.poll_seconds > 0) setPollDraft(s.poll_seconds);
+    } catch (e) {
+      if (probe.isStale()) return;
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, [canTalk, guard]);
+
+  /* Initial fetch + slow poll. 15s cadence is well inside the 30s
+   * default sweep interval, so the user sees a fresh row within one
+   * sweep of any healing activity. Pauses when the tab is hidden so
+   * a background window doesn't generate idle traffic. */
+  useEffect(() => {
+    if (!canTalk || !visible) return;
+    void refresh();
+    const id = setInterval(() => void refresh(), 15_000);
+    return () => clearInterval(id);
+  }, [canTalk, visible, refresh]);
+
+  const start = useCallback(async () => {
+    if (!canTalk || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const ack = await smpMetaControl(transferAddr(host), "start");
+      if (!ack.ok) {
+        setError(ack.err || "start_failed");
+      }
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [canTalk, busy, host, refresh]);
+
+  const runNow = useCallback(async () => {
+    if (!canTalk || busy) return;
+    setBusy(true);
+    try {
+      await smpMetaControl(transferAddr(host), "run_now");
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [canTalk, busy, host, refresh]);
+
+  const applyPoll = useCallback(
+    async (seconds: number) => {
+      if (!canTalk || busy) return;
+      const clamped = Math.max(5, Math.min(600, Math.round(seconds)));
+      setBusy(true);
+      try {
+        const ack = await smpMetaControl(transferAddr(host), "set_poll", clamped);
+        setPollDraft(ack.poll_seconds || clamped);
+        await refresh();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [canTalk, busy, host, refresh],
+  );
+
+  const running = stats?.running === true;
+  const lastRunLabel = stats?.last_run_unix
+    ? new Date(stats.last_run_unix * 1000).toLocaleTimeString()
+    : tr("smp_meta_never_run", "never");
+
+  return (
+    <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
+      <header className="mb-3 flex items-center gap-2 text-xs uppercase tracking-wide text-[var(--color-muted)]">
+        <ImageIcon size={14} />
+        <span className="font-semibold">
+          {tr("smp_meta_title", "SMP appmeta heal")}
+        </span>
+        {busy && (
+          <Loader2 size={12} className="animate-spin text-[var(--color-accent)]" />
+        )}
+        <span className="ml-auto flex items-center gap-1 text-[10px] font-medium">
+          {running ? (
+            <>
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--color-good)]" />
+              {tr("smp_meta_running", "running")}
+            </>
+          ) : (
+            <>
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--color-muted)]" />
+              {tr("smp_meta_stopped", "off")}
+            </>
+          )}
+        </span>
+      </header>
+
+      <p className="mb-3 text-[11px] text-[var(--color-muted)]">
+        {tr(
+          "smp_meta_blurb",
+          "Background worker that copies missing icons + game art from /user/app into /user/appmeta. Fixes blank home-screen tiles caused by ShadowMountPlus. Off by default.",
+        )}
+      </p>
+
+      {!running ? (
+        <Button
+          variant="primary"
+          size="sm"
+          onClick={() => void start()}
+          disabled={!canTalk || busy}
+        >
+          {tr("smp_meta_enable", "Enable")}
+        </Button>
+      ) : (
+        <>
+          <dl className="mb-3 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
+            <dt className="text-[var(--color-muted)]">
+              {tr("smp_meta_games", "Games")}
+            </dt>
+            <dd className="font-mono tabular-nums">{stats?.games_scanned ?? 0}</dd>
+            <dt className="text-[var(--color-muted)]">
+              {tr("smp_meta_icons", "Icons healed")}
+            </dt>
+            <dd className="font-mono tabular-nums">{stats?.icons_healed ?? 0}</dd>
+            <dt className="text-[var(--color-muted)]">
+              {tr("smp_meta_pics", "Other art")}
+            </dt>
+            <dd className="font-mono tabular-nums">{stats?.pics_healed ?? 0}</dd>
+            <dt className="text-[var(--color-muted)]">
+              {tr("smp_meta_json", "param.json")}
+            </dt>
+            <dd className="font-mono tabular-nums">{stats?.json_healed ?? 0}</dd>
+            <dt className="text-[var(--color-muted)]">
+              {tr("smp_meta_missing", "Unfixable")}
+            </dt>
+            <dd className="font-mono tabular-nums">
+              {stats?.still_missing ?? 0}
+              {stats?.last_missing && (
+                <span className="ml-1 text-[var(--color-muted)]">
+                  ({stats.last_missing})
+                </span>
+              )}
+            </dd>
+            <dt className="text-[var(--color-muted)]">
+              {tr("smp_meta_last_run", "Last sweep")}
+            </dt>
+            <dd className="font-mono tabular-nums">{lastRunLabel}</dd>
+          </dl>
+
+          <label className="mb-1 flex items-center justify-between text-xs text-[var(--color-muted)]">
+            <span>{tr("smp_meta_interval", "Poll interval")}</span>
+            <span className="font-mono tabular-nums">{pollDraft}s</span>
+          </label>
+          <div className="mb-3 flex items-center gap-2">
+            <input
+              type="range"
+              min={5}
+              max={600}
+              step={5}
+              value={pollDraft}
+              onChange={(e) => setPollDraft(Number(e.target.value))}
+              onMouseUp={() => void applyPoll(pollDraft)}
+              onTouchEnd={() => void applyPoll(pollDraft)}
+              disabled={!canTalk || busy}
+              className="flex-1"
+            />
+          </div>
+
+          <Button
+            variant="ghost"
+            size="sm"
+            leftIcon={<RefreshCw size={12} />}
+            onClick={() => void runNow()}
+            disabled={!canTalk || busy}
+          >
+            {tr("smp_meta_run_now", "Sweep now")}
+          </Button>
+        </>
+      )}
+
+      {error && (
+        <div className="mt-2 flex items-start gap-1 text-[10px] text-[var(--color-bad)]">
+          <AlertTriangle size={11} className="mt-0.5 shrink-0" />
+          <span className="font-mono break-all">{error}</span>
+        </div>
+      )}
+    </section>
   );
 }
 

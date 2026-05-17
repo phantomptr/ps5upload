@@ -412,6 +412,37 @@ pub enum FrameType {
     /// — same envelope as TimeSet.
     TimeStateSet = 138,
     TimeStateSetAck = 139,
+    /// ShadowMountPlus metadata self-healer control frame. The payload
+    /// has a background worker (`smp_meta.c`) that copies missing
+    /// icon0.png / pic*.png / param.json from `/user/app/<TID>/sce_sys`
+    /// into `/user/appmeta/<TID>` to fix SMP's "blank home-screen tile"
+    /// failure mode. The worker is off until the user opts in. Body is
+    /// JSON: `{"action":"start|run_now|set_poll","interval"?: <int>}`.
+    /// Sub-actions:
+    ///
+    ///   - `start` — first call launches the watcher (idempotent on
+    ///     subsequent calls). The worker waits 60 s for kstuff/SMP to
+    ///     settle before its first sweep, then sweeps every
+    ///     `poll_seconds` (default 30).
+    ///   - `run_now` — set the run-now flag so the next 1 s tick triggers
+    ///     an immediate sweep instead of waiting for the next interval.
+    ///   - `set_poll` — set the watcher's tick interval. Clamped to
+    ///     [5, 600] seconds inside the payload; ACK echoes the clamped
+    ///     value so the UI can reconcile slider position.
+    ///
+    /// Ack body: `{"ok":true,"poll_seconds":<int>}` on success;
+    /// `{"ok":false,"err":"..."}` on failure (e.g. pthread_create EAGAIN).
+    SmpMetaControl = 140,
+    SmpMetaControlAck = 141,
+    /// Snapshot of the SMP-meta worker's stats. Body: empty. Ack body:
+    /// JSON with `running`, `poll_seconds`, `last_run_unix`,
+    /// `games_scanned`, `icons_healed`, `pics_healed`, `json_healed`,
+    /// `still_missing`, and `last_missing` (TITLE_ID of most recent
+    /// unfixable game, or empty string when everything is healthy).
+    /// Safe to call before SmpMetaControl/start — returns
+    /// `running:false` with zeroed counters.
+    SmpMetaStats = 142,
+    SmpMetaStatsAck = 143,
 }
 
 impl FrameType {
@@ -544,6 +575,10 @@ impl FrameType {
             137 => Ok(Self::TimeStateGetAck),
             138 => Ok(Self::TimeStateSet),
             139 => Ok(Self::TimeStateSetAck),
+            140 => Ok(Self::SmpMetaControl),
+            141 => Ok(Self::SmpMetaControlAck),
+            142 => Ok(Self::SmpMetaStats),
+            143 => Ok(Self::SmpMetaStatsAck),
             _ => Err(DecodeError::UnknownFrameType(v)),
         }
     }
@@ -1011,6 +1046,10 @@ mod tests {
             FrameType::TimeStateGetAck,
             FrameType::TimeStateSet,
             FrameType::TimeStateSetAck,
+            FrameType::SmpMetaControl,
+            FrameType::SmpMetaControlAck,
+            FrameType::SmpMetaStats,
+            FrameType::SmpMetaStatsAck,
         ];
         for ft in variants {
             assert_eq!(FrameType::try_from_u16(ft as u16).unwrap(), ft);

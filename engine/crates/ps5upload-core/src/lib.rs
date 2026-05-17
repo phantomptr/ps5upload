@@ -12,6 +12,7 @@ pub mod payload_lifecycle;
 pub mod pkg_install;
 pub mod saves;
 pub mod search_index;
+pub mod smp_meta;
 pub mod sys_time;
 pub mod system_control;
 pub mod transfer;

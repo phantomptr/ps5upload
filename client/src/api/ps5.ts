@@ -1796,7 +1796,9 @@ export const FAN_THRESHOLD_MAX_C = 80;
 /** Set the PS5's fan-turbo threshold in °C. `/dev/icc_fan` ioctl —
  *  the canonical fan-threshold mechanism on PS5. Persists until the
  *  PS5 reboots — there is no read-back, so we can't verify the current
- *  setting, only write new ones. */
+ *  setting, only write new ones. Since 2.13.0 the payload's background
+ *  watcher re-applies the threshold every 15s to defeat the firmware
+ *  reset on app/game launch — see `payload/src/hw_info.c` (fan watcher). */
 export async function setFanThreshold(
   transferAddr: string,
   thresholdC: number,
@@ -1806,6 +1808,55 @@ export async function setFanThreshold(
     addr,
     thresholdC: Math.round(thresholdC),
   });
+}
+
+/** ShadowMountPlus metadata self-healer. The PS5-side background worker
+ *  (payload/src/smp_meta.c) periodically copies missing icon0.png /
+ *  pic*.png / param.json from /user/app/<TID>/sce_sys into
+ *  /user/appmeta/<TID> to fix SMP's blank-tile failure mode. Off by
+ *  default; the desktop opts in via `smpMetaControl({action:"start"})`,
+ *  then polls `smpMetaStats` to render progress. */
+export interface SmpMetaStats {
+  running: boolean;
+  poll_seconds: number;
+  /** Unix seconds, 0 if no sweep has completed yet. */
+  last_run_unix: number;
+  games_scanned: number;
+  icons_healed: number;
+  pics_healed: number;
+  json_healed: number;
+  still_missing: number;
+  /** Empty string when no game is unfixable. */
+  last_missing: string;
+}
+
+export interface SmpMetaControlAck {
+  ok: boolean;
+  /** Post-clamp [5, 600] interval. Always populated. */
+  poll_seconds: number;
+  /** Sentinel; empty on success. Only known value:
+   *  "pthread_create_failed". */
+  err: string;
+}
+
+export type SmpMetaAction = "start" | "run_now" | "set_poll";
+
+export async function smpMetaControl(
+  transferAddr: string,
+  action: SmpMetaAction,
+  interval?: number,
+): Promise<SmpMetaControlAck> {
+  const addr = toMgmtAddr(transferAddr);
+  return invoke<SmpMetaControlAck>("ps5_smp_meta_control", {
+    addr,
+    action,
+    interval: interval ?? null,
+  });
+}
+
+export async function smpMetaStats(transferAddr: string): Promise<SmpMetaStats> {
+  const addr = toMgmtAddr(transferAddr);
+  return invoke<SmpMetaStats>("ps5_smp_meta_stats", { addr });
 }
 
 export type LibraryKind = "game" | "image";

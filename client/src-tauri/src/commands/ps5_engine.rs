@@ -656,6 +656,42 @@ pub async fn ps5_hw_set_fan_threshold(
     .await
 }
 
+/// ShadowMountPlus metadata self-healer control. `action` must be one
+/// of `"start"`, `"run_now"`, `"set_poll"` — anything else is silently
+/// a no-op inside the payload. `interval` is only consulted on
+/// `set_poll`; clamped to [5, 600] by the payload. The UI calls this
+/// the first time the user clicks "Enable" in the SMP Meta Heal panel
+/// (action=start), then occasionally on slider changes (set_poll) or
+/// manual triggers (run_now).
+#[tauri::command]
+pub async fn ps5_smp_meta_control(
+    addr: Option<String>,
+    action: String,
+    interval: Option<i32>,
+) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/ps5/smp-meta/control");
+    let mut body = serde_json::Map::new();
+    if let Some(a) = addr {
+        body.insert("addr".into(), serde_json::Value::String(a));
+    }
+    body.insert("action".into(), serde_json::Value::String(action));
+    if let Some(v) = interval {
+        body.insert("interval".into(), serde_json::Value::Number(v.into()));
+    }
+    post_json(&url, &serde_json::Value::Object(body)).await
+}
+
+/// Snapshot of the SMP-meta worker's stats. Safe to call even before
+/// the worker is started — returns `running:false` with zeroed
+/// counters. The panel polls this on a slow tick (10–30 s) so the
+/// user can see "N icons healed this sweep" land without manually
+/// refreshing.
+#[tauri::command]
+pub async fn ps5_smp_meta_stats(addr: Option<String>) -> Result<JsonValue, String> {
+    get_json(&addr_url("/api/ps5/smp-meta/stats", addr.as_deref())).await
+}
+
 #[tauri::command]
 pub async fn transfer_dir_reconcile(req: TransferDirReconcileReq) -> Result<JsonValue, String> {
     let base = engine::url();

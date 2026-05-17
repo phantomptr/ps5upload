@@ -1632,6 +1632,53 @@ async fn ps5_time_state_set_route(
     }
 }
 
+/// SMP-meta worker control. Wraps `smp_meta_control` in spawn_blocking
+/// because the underlying Connection is sync TCP. The `addr` field on
+/// the request body is optional — falls back to the engine's default
+/// PS5 addr — keeping the route shape consistent with the rest of the
+/// /api/ps5/* surface.
+#[derive(serde::Deserialize)]
+struct SmpMetaControlReq {
+    addr: Option<String>,
+    #[serde(flatten)]
+    inner: ps5upload_core::smp_meta::SmpMetaControlRequest,
+}
+
+async fn ps5_smp_meta_control_route(
+    State(state): State<AppState>,
+    Json(req): Json<SmpMetaControlReq>,
+) -> impl IntoResponse {
+    let addr = mgmt_addr_or_default(req.addr, &state.default_ps5_addr);
+    let inner = req.inner;
+    let r: Result<ps5upload_core::smp_meta::SmpMetaControlAck, anyhow::Error> =
+        tokio::task::spawn_blocking(move || {
+            ps5upload_core::smp_meta::smp_meta_control(&addr, &inner)
+        })
+        .await
+        .map_err(anyhow::Error::from)
+        .and_then(|r| r);
+    match r {
+        Ok(v) => (StatusCode::OK, Json(v)).into_response(),
+        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
+    }
+}
+
+async fn ps5_smp_meta_stats_route(
+    State(state): State<AppState>,
+    Query(q): Query<AddrQuery>,
+) -> impl IntoResponse {
+    let addr = mgmt_addr_or_default(q.addr, &state.default_ps5_addr);
+    let r: Result<ps5upload_core::smp_meta::SmpMetaStats, anyhow::Error> =
+        tokio::task::spawn_blocking(move || ps5upload_core::smp_meta::smp_meta_stats(&addr))
+            .await
+            .map_err(anyhow::Error::from)
+            .and_then(|r| r);
+    match r {
+        Ok(v) => (StatusCode::OK, Json(v)).into_response(),
+        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
+    }
+}
+
 /// "Console Storage" aggregate. Same shape PS5 Settings shows: total
 /// across `/user effective + /system_data + /system_ex`, free across
 /// the same set, plus the per-partition breakdown for diagnostics.
@@ -3287,6 +3334,11 @@ async fn main() {
         .route("/api/ps5/time/sync", post(ps5_time_sync_route))
         .route("/api/ps5/time/state/get", get(ps5_time_state_get_route))
         .route("/api/ps5/time/state/set", post(ps5_time_state_set_route))
+        .route(
+            "/api/ps5/smp-meta/control",
+            post(ps5_smp_meta_control_route),
+        )
+        .route("/api/ps5/smp-meta/stats", get(ps5_smp_meta_stats_route))
         .route("/api/ps5/hw/power", get(ps5_hw_power))
         .route("/api/ps5/hw/storage", get(ps5_hw_storage))
         .route("/api/ps5/proc/list", get(ps5_proc_list))
