@@ -1194,12 +1194,14 @@ function LibraryRow({
         if (moveStopRef.current) {
           try {
             await fsOpCancel(addr, opId);
-          } catch {
+          } catch (e) {
             // Best effort — the payload's cp_rf will still bail at
             // its next cancel check via the in-band flag set by
             // the engine's RPC; even if our cancel call lost the
             // race or hit a transient error, the user-visible
             // "Stop" goal is met by the between-iterations check.
+            // Greppable warn so we know when this drops.
+            console.warn("fsOpCancel (library move) failed:", e);
           }
           break;
         }

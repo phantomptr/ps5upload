@@ -734,11 +734,15 @@ export default function FileSystemScreen() {
               if (useFsBulkOpStore.getState().cancelRequested) {
                 try {
                   await fsOpCancel(addr, opId);
-                } catch {
+                } catch (e) {
                   // Best effort — even if cancel RPC fails, the
                   // payload's rm_rf_op will exit on the next
                   // between-entries check and the loop will see
-                  // cancelRequested in shouldCancel.
+                  // cancelRequested in shouldCancel. But on a
+                  // single huge file the between-iterations check
+                  // never fires, so a lost cancel feels like Stop
+                  // doesn't work. Greppable warn so we know when.
+                  console.warn("fsOpCancel (delete) failed:", e);
                 }
                 break;
               }
@@ -890,10 +894,13 @@ export default function FileSystemScreen() {
             if (useFsBulkOpStore.getState().cancelRequested) {
               try {
                 await fsOpCancel(addr, opId);
-              } catch {
+              } catch (e) {
                 // Best effort — even if the cancel RPC fails, the
                 // payload's cp_rf will still complete the current
-                // file and the loop will exit between items.
+                // file and the loop will exit between items. On a
+                // single 28 GiB file though, "between items" never
+                // fires — log so we know when this drops.
+                console.warn("fsOpCancel (copy) failed:", e);
               }
               break;
             }

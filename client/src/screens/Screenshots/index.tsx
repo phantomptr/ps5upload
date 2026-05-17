@@ -127,12 +127,17 @@ export default function ScreenshotsScreen() {
     });
     if (!dest || typeof dest !== "string") return;
     try {
-      await startTransferDownload(
+      // startTransferDownload only enqueues an engine job; pre-fix
+      // we stopped here and any later transfer failure (network
+      // drop, permission denied, disk full) was invisible. Mirror
+      // the bulk path: await waitForJob so failures surface.
+      const jobId = await startTransferDownload(
         item.path,
         dest,
         `${host.trim()}:${PS5_PAYLOAD_PORT}`,
         "file",
       );
+      await waitForJob(jobId);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }

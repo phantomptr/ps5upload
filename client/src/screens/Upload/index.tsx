@@ -716,7 +716,8 @@ function MirrorToRosterButton({
   async function fanOut() {
     setBusy(true);
     try {
-      const { startTransferDir, startTransferFile } = await import("../../api/ps5");
+      const { startTransferDir, startTransferFile, waitForJob } =
+        await import("../../api/ps5");
       const leaf = srcPath.replace(/\\/g, "/").split("/").filter(Boolean).pop() ?? "";
       const dest =
         `${destinationVolume}` +
@@ -725,11 +726,17 @@ function MirrorToRosterButton({
       const tasks = others.map(async (p) => {
         const addr = `${p.host}:${PS5_PAYLOAD_PORT}`;
         try {
-          if (sourceKind === "file") {
-            await startTransferFile(srcPath, dest, addr);
-          } else {
-            await startTransferDir(srcPath, dest, addr, null, excludes);
-          }
+          // startTransferFile/Dir only ENQUEUE the job; pre-fix we
+          // fired a success notification here and walked away. A
+          // 30 GB mirror to four PS5s would toast "Mirrored to X"
+          // within a second per peer, even if half of them later
+          // failed mid-stream (offline, full, path-denied). Await
+          // waitForJob so the notification reflects actual outcome.
+          const jobId =
+            sourceKind === "file"
+              ? await startTransferFile(srcPath, dest, addr)
+              : await startTransferDir(srcPath, dest, addr, null, excludes);
+          await waitForJob(jobId);
           pushNotification("info", `Mirrored to ${p.name}`, {
             body: `${srcPath} → ${dest}`,
           });
