@@ -50,7 +50,7 @@ LIBS := -lSceSystemService -lSceUserService -lSceAppInstUtil -lSceNotification
 
 SRCS := src/main.c src/runtime.c src/takeover.c src/register.c src/hw_info.c \
         src/proc_list.c src/ptrace_remote.c src/shellui_rpc.c src/bgft.c \
-        src/sony_api_lock.c src/sys_time.c src/sys_registry.c \
+        src/sony_api_lock.c src/sys_time.c src/sys_registry.c src/smp_meta.c \
         $(BLAKE3_SRCS)
 
 # Headers as Make prerequisites so editing a .h triggers a rebuild. This
