@@ -57,9 +57,13 @@ interface SplitParseResponse {
   };
 }
 
-function toMgmtAddr(host: string): string {
-  return `${host}:9114`;
-}
+// 2.12.0 — replaced local toMgmtAddr (signature: bare host) with the
+// canonical `mgmtAddr` from lib/addr. Side effect: this file's
+// helper had the OPPOSITE signature of FileSystem's same-named
+// helper (which took a transfer-port addr), a real footgun if any
+// code crossed paths. `mgmtAddr` accepts ANY shape and always
+// returns `host:9114`.
+import { mgmtAddr as toMgmtAddr } from "../../lib/addr";
 
 function basename(p: string): string {
   const norm = p.replace(/\\/g, "/");

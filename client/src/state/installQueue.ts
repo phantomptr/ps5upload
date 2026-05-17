@@ -338,12 +338,11 @@ function newId(): string {
   return Math.random().toString(36).slice(2, 11);
 }
 
-/** Strip ":port" from "ip:port" — payloadCheck/sendPayload want the
- *  bare IP, but the install queue carries "ip:9114" (mgmt port). */
-function bareIp(addr: string): string {
-  const i = addr.indexOf(":");
-  return i < 0 ? addr : addr.slice(0, i);
-}
+// 2.12.0 — local `bareIp` migrated to canonical `hostOf` from
+// lib/addr. Identical behaviour, but consolidating to one source
+// of truth so future "where do we strip ports?" greps find one
+// answer.
+import { hostOf as bareIp } from "../lib/addr";
 
 /** Ensure the PS5 is running the same payload version that the
  *  desktop app bundles. Auto-pushes via the loader (port 9021) if

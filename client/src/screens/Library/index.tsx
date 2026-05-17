@@ -62,6 +62,7 @@ import {
 import { useLibraryStore, findOwningImage } from "../../state/library";
 import { useElapsed } from "../../lib/useElapsed";
 import { formatBytes } from "../../lib/format";
+import { mgmtAddr } from "../../lib/addr";
 import { createLimiter } from "../../lib/limitConcurrency";
 import { deleteWithRetry } from "../../lib/deleteWithRetry";
 import {
@@ -1761,8 +1762,8 @@ function LibraryRow({
     setError(null);
     setMountNote(null);
     try {
-      const mgmtAddr = `${host}:9114`;
-      const res = await healAppmeta(mgmtAddr, entry.titleId, entry.path);
+      const addr = mgmtAddr(host);
+      const res = await healAppmeta(addr, entry.titleId, entry.path);
       const summary =
         res.copied > 0
           ? `Healed ${res.copied} file${res.copied === 1 ? "" : "s"} to ${res.appmeta_dir}`

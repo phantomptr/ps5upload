@@ -14,6 +14,7 @@ import {
   type ScreenshotEntry,
 } from "../../api/ps5";
 import { useConnectionStore, PS5_PAYLOAD_PORT } from "../../state/connection";
+import { mgmtAddr } from "../../lib/addr";
 import { PageHeader, Button, EmptyState, ErrorCard } from "../../components";
 import { useTr } from "../../state/lang";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -102,7 +103,7 @@ export default function ScreenshotsScreen() {
     setLoading(true);
     setError(null);
     try {
-      const r = await screenshotsList(`${probedHost}:9114`);
+      const r = await screenshotsList(mgmtAddr(probedHost));
       if (isStale()) return;
       setItems(r.items);
     } catch (e) {

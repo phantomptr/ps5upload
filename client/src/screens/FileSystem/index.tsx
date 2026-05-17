@@ -91,11 +91,10 @@ function formatDuration(sec: number): string {
 }
 
 // formatBytes moved to lib/format.ts.
-
-function toMgmtAddr(transferAddr: string): string {
-  const i = transferAddr.lastIndexOf(":");
-  return i < 0 ? `${transferAddr}:9114` : `${transferAddr.slice(0, i)}:9114`;
-}
+// toMgmtAddr migrated to lib/addr::mgmtAddr in 2.12.0 — same name
+// previously had two different signatures across screens (bare host
+// vs transfer-port addr); the canonical helper accepts either.
+import { mgmtAddr as toMgmtAddr } from "../../lib/addr";
 
 function parent(p: string): string {
   if (p === "/" || p === "") return "/";
@@ -999,7 +998,7 @@ export default function FileSystemScreen() {
     try {
       const { fsReadPreview } = await import("../../api/ps5");
       const remote = joinPath(path, entry.name);
-      const r = await fsReadPreview(`${host}:9114`, remote);
+      const r = await fsReadPreview(toMgmtAddr(host), remote);
       const ext = (entry.name.split(".").pop() ?? "").toLowerCase();
       const isImg = ["png", "jpg", "jpeg", "gif", "bmp", "webp"].includes(ext);
       let body: string;
@@ -1035,7 +1034,7 @@ export default function FileSystemScreen() {
     try {
       const { fsBlake3Hash, crc32File } = await import("../../api/ps5");
       const remote = joinPath(path, entry.name);
-      const addr = `${host}:9114`;
+      const addr = toMgmtAddr(host);
       // Fire both in parallel — BLAKE3 is the slow one (~3s/GiB)
       // and CRC32 should overlap with it.
       const [blake, crc] = await Promise.allSettled([
@@ -1075,7 +1074,7 @@ export default function FileSystemScreen() {
     try {
       const { crc32File } = await import("../../api/ps5");
       const remote = joinPath(path, entry.name);
-      const r = await crc32File(`${host}:9114`, remote);
+      const r = await crc32File(toMgmtAddr(host), remote);
       if (r.err) {
         await alertDialog({
           title: tr("fs_crc32_failed", undefined, "CRC32 failed"),

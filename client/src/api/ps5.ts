@@ -2321,14 +2321,15 @@ export async function checkDestinationFreeSpace(
   }
 }
 
-/** Swap a PS5 transfer-port addr (`host:9113`) to the management-port
- *  addr (`host:9114`). FS_* frames run on mgmt; the transfer port
- *  rejects them with "wrong_port". Mirrors `mgmt_addr_for` in the engine. */
-function toMgmtAddr(transferAddr: string): string {
-  const lastColon = transferAddr.lastIndexOf(":");
-  if (lastColon < 0) return `${transferAddr}:9114`;
-  return `${transferAddr.slice(0, lastColon)}:9114`;
-}
+// `toMgmtAddr` migrated to `lib/addr.ts::mgmtAddr` in 2.12.0 — see
+// the head of that module for the rationale (canonical address helpers,
+// kills the "two `toMgmtAddr` with different signatures" footgun).
+// The shim below is kept as a local re-export so the existing
+// `toMgmtAddr(transferAddr)` call sites in this file compile without
+// every line being touched in this PR. New code should import
+// `mgmtAddr` directly from `lib/addr`.
+import { mgmtAddr as _mgmtAddr } from "../lib/addr";
+const toMgmtAddr = _mgmtAddr;
 
 /** Probe the destination on the PS5 to decide whether to show the
  *  Override/Resume/Cancel dialog.

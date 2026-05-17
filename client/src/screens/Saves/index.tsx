@@ -30,6 +30,7 @@ import { useConfirm } from "../../components/ConfirmDialog";
 import { useTr } from "../../state/lang";
 import { startTransferDownload } from "../../api/ps5";
 import { formatBytes } from "../../lib/format";
+import { mgmtAddr } from "../../lib/addr";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { pushNotification } from "../../state/notifications";
 
@@ -88,7 +89,7 @@ export default function SavesScreen() {
     setLoading(true);
     setError(null);
     try {
-      const r = await savesList(`${probedHost}:9114`);
+      const r = await savesList(mgmtAddr(probedHost));
       if (isStale()) return;
       setSaves(r.saves);
     } catch (e) {

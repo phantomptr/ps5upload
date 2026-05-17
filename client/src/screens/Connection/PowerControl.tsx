@@ -13,6 +13,7 @@ import {
   powerStandby,
   type PowerControlAck,
 } from "../../api/ps5";
+import { mgmtAddr } from "../../lib/addr";
 import { Button } from "../../components";
 // Direct import to avoid the barrel's circular-dep warning at build.
 import { useConfirm } from "../../components/ConfirmDialog";
@@ -36,7 +37,7 @@ export default function PowerControl({ host }: { host: string }) {
   const [error, setError] = useState<string | null>(null);
   const { confirm: confirmDialog, dialog: confirmDialogNode } = useConfirm();
 
-  const mgmtAddr = `${host}:9114`;
+  const addr = mgmtAddr(host);
 
   async function run(
     kind: "reboot" | "shutdown" | "standby",
@@ -64,7 +65,7 @@ export default function PowerControl({ host }: { host: string }) {
     setError(null);
     setLast(null);
     try {
-      const ack = await fn(mgmtAddr);
+      const ack = await fn(addr);
       setLast(ack);
       if (ack.ok) {
         pushNotification("info", `PS5 ${kind} requested`, {

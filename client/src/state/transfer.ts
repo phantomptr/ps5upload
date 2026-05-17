@@ -457,8 +457,11 @@ export const useTransferStore = create<TransferState>((set) => {
  *  use as the resume-txid cache key. We deliberately key by host, not
  *  full addr, so the port choice doesn't fragment records — a user who
  *  later lands on a payload with a different transfer port should still
- *  be able to resume, because the payload's tx journal is port-agnostic. */
-function hostFromAddr(addr: string): string {
-  const i = addr.lastIndexOf(":");
-  return i < 0 ? addr : addr.slice(0, i);
-}
+ *  be able to resume, because the payload's tx journal is port-agnostic.
+ *
+ *  2.12.0: migrated to canonical `hostOf` from lib/addr. Behaviour
+ *  difference: old `hostFromAddr` used `lastIndexOf`, new `hostOf`
+ *  uses `indexOf` — collapses a double-suffix `ip:port:port` to the
+ *  leftmost colon. For resume-txid lookup that's strictly safer (a
+ *  legacy double-suffix record won't fragment further). */
+import { hostOf as hostFromAddr } from "../lib/addr";
