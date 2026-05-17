@@ -746,7 +746,6 @@ settings_backup_import: "Import bundle…",
 settings_bandwidth_hint: "Cap outbound transfer speed to leave headroom for video calls / game streaming. Set the cap on the Upload screen — it applies to the next started transfer. The FTX2_BANDWIDTH_MBPS env var still works for headless engine runs.",
 settings_bandwidth_title: "Bandwidth throttle",
 settings_section_appearance: "Appearance",
-settings_section_audit: "Audit log",
 settings_section_backup: "Backup / restore",
 settings_section_bandwidth: "Bandwidth",
 settings_section_diagnostic: "Diagnostics",
@@ -1121,6 +1120,9 @@ payloads_title: "होमब्रू कैटलॉग",
 activity_bar_in_flight: "{count} गतिविधि(याँ) चल रही हैं",
 activity_bar_open: "गतिविधि देखें",
 activity_bar_toggle: "गतिविधि पैनल टॉगल करें",
+audit_log: "ऑडिट लॉग",
+audit_log_title: "ऑडिट लॉग",
+audit_log_description: "आपके द्वारा की गई विनाशकारी और अपरिवर्तनीय कार्रवाइयों का स्थायी स्थानीय रिकॉर्ड। कोई क्लियर बटन नहीं — यह जानबूझकर है। अंतिम 100 प्रविष्टियाँ दिखाई गई हैं; पुरानी प्रविष्टियाँ रिंग बफर से बाहर निकल जाती हैं।",
 };
 
 export default hi;

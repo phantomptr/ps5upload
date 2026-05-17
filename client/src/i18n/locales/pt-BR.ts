@@ -745,7 +745,6 @@ settings_backup_import: "Import bundle…",
 settings_bandwidth_hint: "Cap outbound transfer speed to leave headroom for video calls / game streaming. Set the cap on the Upload screen — it applies to the next started transfer. The FTX2_BANDWIDTH_MBPS env var still works for headless engine runs.",
 settings_bandwidth_title: "Bandwidth throttle",
 settings_section_appearance: "Appearance",
-settings_section_audit: "Audit log",
 settings_section_backup: "Backup / restore",
 settings_section_bandwidth: "Bandwidth",
 settings_section_diagnostic: "Diagnóstico",
@@ -1120,6 +1119,9 @@ payloads_title: "Catálogo de homebrew",
 activity_bar_in_flight: "{count} atividade(s) em execução",
 activity_bar_open: "Ver atividade",
 activity_bar_toggle: "Alternar painel de atividade",
+audit_log: "Log de auditoria",
+audit_log_title: "Log de auditoria",
+audit_log_description: "Registro local permanente de ações destrutivas e irreversíveis que você realizou. Sem botão para limpar — é deliberado. As últimas 100 entradas são exibidas; as mais antigas saem do buffer circular.",
 };
 
 export default pt_BR;

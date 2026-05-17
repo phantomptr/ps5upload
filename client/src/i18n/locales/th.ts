@@ -745,7 +745,6 @@ settings_backup_import: "Import bundle…",
 settings_bandwidth_hint: "Cap outbound transfer speed to leave headroom for video calls / game streaming. Set the cap on the Upload screen — it applies to the next started transfer. The FTX2_BANDWIDTH_MBPS env var still works for headless engine runs.",
 settings_bandwidth_title: "Bandwidth throttle",
 settings_section_appearance: "Appearance",
-settings_section_audit: "Audit log",
 settings_section_backup: "Backup / restore",
 settings_section_bandwidth: "Bandwidth",
 settings_section_diagnostic: "Diagnostics",
@@ -1120,6 +1119,9 @@ payloads_title: "แค็ตตาล็อก Homebrew",
 activity_bar_in_flight: "{count} กิจกรรมกำลังทำงาน",
 activity_bar_open: "ดูกิจกรรม",
 activity_bar_toggle: "สลับแผงกิจกรรม",
+audit_log: "บันทึกการตรวจสอบ",
+audit_log_title: "บันทึกการตรวจสอบ",
+audit_log_description: "บันทึกท้องถิ่นถาวรของการกระทำที่ทำลายล้างและไม่สามารถย้อนกลับได้ที่คุณดำเนินการ ไม่มีปุ่มล้าง — เป็นเจตนา แสดง 100 รายการล่าสุด รายการที่เก่ากว่าจะหลุดออกจากบัฟเฟอร์วงแหวน",
 };
 
 export default th;

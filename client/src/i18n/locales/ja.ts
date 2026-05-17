@@ -746,7 +746,6 @@ settings_backup_import: "Import bundle…",
 settings_bandwidth_hint: "Cap outbound transfer speed to leave headroom for video calls / game streaming. Set the cap on the Upload screen — it applies to the next started transfer. The FTX2_BANDWIDTH_MBPS env var still works for headless engine runs.",
 settings_bandwidth_title: "Bandwidth throttle",
 settings_section_appearance: "Appearance",
-settings_section_audit: "Audit log",
 settings_section_backup: "Backup / restore",
 settings_section_bandwidth: "Bandwidth",
 settings_section_diagnostic: "Diagnostics",
@@ -1121,6 +1120,9 @@ payloads_title: "Homebrew カタログ",
 activity_bar_in_flight: "{count} 件のアクティビティが実行中",
 activity_bar_open: "アクティビティを表示",
 activity_bar_toggle: "アクティビティパネルを切り替え",
+audit_log: "監査ログ",
+audit_log_title: "監査ログ",
+audit_log_description: "実行した破壊的かつ取り消し不可能なアクションの永続的なローカル記録。クリアボタンはありません — 意図的です。最新の 100 件のエントリが表示されます。古いエントリはリングバッファから外れます。",
 };
 
 export default ja;

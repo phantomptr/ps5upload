@@ -746,7 +746,6 @@ settings_backup_import: "Import bundle…",
 settings_bandwidth_hint: "Cap outbound transfer speed to leave headroom for video calls / game streaming. Set the cap on the Upload screen — it applies to the next started transfer. The FTX2_BANDWIDTH_MBPS env var still works for headless engine runs.",
 settings_bandwidth_title: "Bandwidth throttle",
 settings_section_appearance: "Appearance",
-settings_section_audit: "Audit log",
 settings_section_backup: "Backup / restore",
 settings_section_bandwidth: "Bandwidth",
 settings_section_diagnostic: "Diagnostics",
@@ -1121,6 +1120,9 @@ payloads_title: "Homebrew 카탈로그",
 activity_bar_in_flight: "{count}개의 활동 항목 실행 중",
 activity_bar_open: "활동 보기",
 activity_bar_toggle: "활동 패널 토글",
+audit_log: "감사 로그",
+audit_log_title: "감사 로그",
+audit_log_description: "수행한 파괴적이고 되돌릴 수 없는 작업의 영구 로컬 기록입니다. 지우기 버튼 없음 — 의도적입니다. 최근 100개 항목이 표시됩니다. 오래된 항목은 링 버퍼에서 빠져나갑니다.",
 };
 
 export default ko;

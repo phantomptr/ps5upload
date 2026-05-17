@@ -747,7 +747,6 @@ settings_backup_import: "Import bundle…",
 settings_bandwidth_hint: "Cap outbound transfer speed to leave headroom for video calls / game streaming. Set the cap on the Upload screen — it applies to the next started transfer. The FTX2_BANDWIDTH_MBPS env var still works for headless engine runs.",
 settings_bandwidth_title: "Bandwidth throttle",
 settings_section_appearance: "Appearance",
-settings_section_audit: "Audit log",
 settings_section_backup: "Backup / restore",
 settings_section_bandwidth: "Bandwidth",
 settings_section_diagnostic: "Diagnostics",
@@ -1122,6 +1121,9 @@ payloads_title: "Danh mục Homebrew",
 activity_bar_in_flight: "{count} hoạt động đang chạy",
 activity_bar_open: "Xem hoạt động",
 activity_bar_toggle: "Bật/tắt bảng hoạt động",
+audit_log: "Nhật ký kiểm tra",
+audit_log_title: "Nhật ký kiểm tra",
+audit_log_description: "Bản ghi cục bộ vĩnh viễn của các hành động phá hủy và không thể đảo ngược mà bạn đã thực hiện. Không có nút xóa — điều đó có chủ ý. 100 mục cuối cùng được hiển thị; các mục cũ hơn rời khỏi bộ đệm vòng.",
 };
 
 export default vi;
