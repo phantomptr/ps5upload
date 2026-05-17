@@ -10822,6 +10822,385 @@ static int handle_shell_builtin(const char *cmd_in, char **out_text,
         *out_text = out;
         return 0;
     }
+    /* ── 2.13.0 Tier 2b: search + inspect ───────────────────────── */
+    if (strcmp(prog, "find") == 0) {
+        /* `find [PATH] [-name GLOB] [-type f|d|l]` — walk PATH (default
+         * .) and print entries matching the filters. Cap at 10000
+         * entries to stay within 256 KiB response budget. */
+        const char *path = ".";
+        const char *name_glob = NULL;
+        char type_filter = 0;
+        int i = 1;
+        if (i < argc && argv[i][0] != '-') {
+            path = argv[i++];
+        }
+        while (i < argc) {
+            if (i + 1 < argc && strcmp(argv[i], "-name") == 0) {
+                name_glob = argv[i + 1];
+                i += 2;
+            } else if (i + 1 < argc && strcmp(argv[i], "-type") == 0) {
+                type_filter = argv[i + 1][0];
+                i += 2;
+            } else {
+                len = shell_appendf(&out, &cap, len,
+                                     "find: unknown arg %s\n", argv[i]);
+                *out_exit = 1;
+                *out_text = out;
+                return 0;
+            }
+        }
+        char *paths[2] = { (char *)path, NULL };
+        FTS *fts_h = fts_open(paths, FTS_PHYSICAL | FTS_NOCHDIR, NULL);
+        if (!fts_h) {
+            len = shell_appendf(&out, &cap, len,
+                                 "find: %s: %s\n", path, strerror(errno));
+            *out_text = out;
+            *out_exit = 1;
+            return 0;
+        }
+        int count = 0;
+        int truncated = 0;
+        FTSENT *ent;
+        while ((ent = fts_read(fts_h)) != NULL) {
+            if (ent->fts_info == FTS_DP) continue;
+            if (ent->fts_info == FTS_DNR || ent->fts_info == FTS_ERR) continue;
+            if (type_filter) {
+                char t = 0;
+                if (ent->fts_info == FTS_D) t = 'd';
+                else if (ent->fts_info == FTS_F) t = 'f';
+                else if (ent->fts_info == FTS_SL || ent->fts_info == FTS_SLNONE) t = 'l';
+                if (t != type_filter) continue;
+            }
+            if (name_glob) {
+                const char *base = strrchr(ent->fts_path, '/');
+                base = base ? base + 1 : ent->fts_path;
+                if (fnmatch(name_glob, base, 0) != 0) continue;
+            }
+            len = shell_appendf(&out, &cap, len, "%s\n", ent->fts_path);
+            count++;
+            if (count >= 10000) {
+                truncated = 1;
+                break;
+            }
+        }
+        fts_close(fts_h);
+        if (truncated) {
+            len = shell_appendf(&out, &cap, len,
+                                 "(... find result capped at 10000 entries; "
+                                 "narrow with -name or -type)\n");
+        }
+        if (!out) out = strdup_safe("");
+        *out_text = out;
+        return 0;
+    }
+    if (strcmp(prog, "grep") == 0) {
+        /* `grep [-r] [-i] [-E] [-l] [-c] PATTERN PATH...` — POSIX
+         * regex via regex.h. -r walks dirs via FTS. -l prints only
+         * matching filenames. -c prints only counts. Caps output at
+         * 5000 match lines. */
+        int recursive = 0, case_i = 0, list_only = 0, count_only = 0;
+        int i = 1;
+        while (i < argc && argv[i][0] == '-' && argv[i][1]) {
+            for (const char *f = argv[i] + 1; *f; f++) {
+                if (*f == 'r' || *f == 'R') recursive = 1;
+                else if (*f == 'i') case_i = 1;
+                else if (*f == 'E') { /* default; accepted */ }
+                else if (*f == 'l') list_only = 1;
+                else if (*f == 'c') count_only = 1;
+                else {
+                    len = shell_appendf(&out, &cap, len,
+                                         "grep: bad flag -%c\n", *f);
+                    *out_exit = 1;
+                    *out_text = out;
+                    return 0;
+                }
+            }
+            i++;
+        }
+        if (i >= argc) {
+            *out_text = strdup_safe("grep: usage: grep [-riElc] PATTERN PATH...\n");
+            *out_exit = 1;
+            return 0;
+        }
+        const char *pat = argv[i++];
+        regex_t re;
+        int flags = REG_EXTENDED | (case_i ? REG_ICASE : 0);
+        int rrc = regcomp(&re, pat, flags);
+        if (rrc != 0) {
+            char errbuf[256];
+            regerror(rrc, &re, errbuf, sizeof(errbuf));
+            len = shell_appendf(&out, &cap, len,
+                                 "grep: bad pattern: %s\n", errbuf);
+            *out_exit = 1;
+            *out_text = out;
+            return 0;
+        }
+        if (i >= argc) {
+            regfree(&re);
+            *out_text = strdup_safe("grep: missing PATH (stdin not supported)\n");
+            *out_exit = 1;
+            return 0;
+        }
+        int total_matches = 0;
+        int total_capped = 0;
+        for (; i < argc && !total_capped; i++) {
+            const char *p = argv[i];
+            struct stat st_p;
+            int is_dir = (stat(p, &st_p) == 0 && S_ISDIR(st_p.st_mode));
+            char *paths[2] = { (char *)p, NULL };
+            FTS *fts_h = NULL;
+            if (recursive && is_dir) {
+                fts_h = fts_open(paths,
+                                FTS_PHYSICAL | FTS_NOCHDIR, NULL);
+                if (!fts_h) {
+                    len = shell_appendf(&out, &cap, len,
+                                         "grep: %s: %s\n", p, strerror(errno));
+                    continue;
+                }
+            } else if (is_dir) {
+                len = shell_appendf(&out, &cap, len,
+                                     "grep: %s: is a directory (use -r)\n", p);
+                continue;
+            }
+            const char *next_path = NULL;
+            FTSENT *ent = NULL;
+            while (1) {
+                if (fts_h) {
+                    ent = fts_read(fts_h);
+                    if (!ent) break;
+                    if (ent->fts_info != FTS_F) continue;
+                    next_path = ent->fts_path;
+                } else {
+                    if (next_path) break;
+                    next_path = p;
+                }
+                FILE *fp = fopen(next_path, "r");
+                if (!fp) {
+                    len = shell_appendf(&out, &cap, len,
+                                         "grep: %s: %s\n", next_path, strerror(errno));
+                    if (!fts_h) break;
+                    continue;
+                }
+                char line[8192];
+                int file_match_count = 0;
+                while (fgets(line, sizeof(line), fp)) {
+                    size_t L = strlen(line);
+                    if (L > 0 && line[L - 1] == '\n') line[L - 1] = '\0';
+                    if (regexec(&re, line, 0, NULL, 0) != 0) continue;
+                    file_match_count++;
+                    total_matches++;
+                    if (!list_only && !count_only) {
+                        len = shell_appendf(&out, &cap, len, "%s%s%s\n",
+                                             (recursive && fts_h) ? next_path : "",
+                                             (recursive && fts_h) ? ":" : "",
+                                             line);
+                    }
+                    if (list_only) break;
+                    if (total_matches >= 5000) {
+                        total_capped = 1;
+                        break;
+                    }
+                }
+                fclose(fp);
+                if (list_only && file_match_count > 0) {
+                    len = shell_appendf(&out, &cap, len, "%s\n", next_path);
+                }
+                if (count_only) {
+                    if (recursive && fts_h) {
+                        len = shell_appendf(&out, &cap, len, "%s:%d\n",
+                                             next_path, file_match_count);
+                    } else {
+                        len = shell_appendf(&out, &cap, len, "%d\n",
+                                             file_match_count);
+                    }
+                }
+                if (!fts_h) break;
+                if (total_capped) break;
+            }
+            if (fts_h) fts_close(fts_h);
+        }
+        regfree(&re);
+        if (total_matches == 0 && !count_only) *out_exit = 1;
+        if (total_capped) {
+            len = shell_appendf(&out, &cap, len,
+                                 "(... grep result capped at 5000 matches)\n");
+        }
+        if (!out) out = strdup_safe("");
+        *out_text = out;
+        return 0;
+    }
+    if (strcmp(prog, "du") == 0) {
+        /* `du [-sh] PATH...` — summary in human-readable units. */
+        int human = 0;
+        int i = 1;
+        if (i < argc && argv[i][0] == '-') {
+            for (const char *f = argv[i] + 1; *f; f++) {
+                if (*f == 'h') human = 1;
+                else if (*f == 's') { /* default; accepted */ }
+            }
+            i++;
+        }
+        if (i >= argc) {
+            *out_text = strdup_safe("du: usage: du [-sh] PATH...\n");
+            *out_exit = 1;
+            return 0;
+        }
+        for (; i < argc; i++) {
+            char *paths[2] = { (char *)argv[i], NULL };
+            FTS *fts_h = fts_open(paths,
+                                 FTS_PHYSICAL | FTS_NOCHDIR, NULL);
+            if (!fts_h) {
+                len = shell_appendf(&out, &cap, len,
+                                     "du: %s: %s\n", argv[i], strerror(errno));
+                *out_exit = 1;
+                continue;
+            }
+            unsigned long long total_bytes = 0;
+            FTSENT *ent;
+            while ((ent = fts_read(fts_h)) != NULL) {
+                if (ent->fts_info == FTS_DP) continue;
+                if (ent->fts_info == FTS_DNR || ent->fts_info == FTS_ERR) continue;
+                if (ent->fts_info == FTS_F) {
+                    total_bytes += (unsigned long long)ent->fts_statp->st_size;
+                }
+            }
+            fts_close(fts_h);
+            if (human) {
+                const char *unit = "B";
+                double v = (double)total_bytes;
+                if (v >= 1024) { v /= 1024; unit = "K"; }
+                if (v >= 1024) { v /= 1024; unit = "M"; }
+                if (v >= 1024) { v /= 1024; unit = "G"; }
+                if (v >= 1024) { v /= 1024; unit = "T"; }
+                len = shell_appendf(&out, &cap, len, "%.1f%s\t%s\n",
+                                     v, unit, argv[i]);
+            } else {
+                len = shell_appendf(&out, &cap, len, "%llu\t%s\n",
+                                     total_bytes / 1024, argv[i]);
+            }
+        }
+        if (!out) out = strdup_safe("");
+        *out_text = out;
+        return 0;
+    }
+    if (strcmp(prog, "xxd") == 0 || strcmp(prog, "hexdump") == 0) {
+        /* `xxd PATH` — canonical `hexdump -C` layout. 16 bytes per
+         * row, offset + hex + ASCII. Cap at 16 KiB. */
+        int first = 1;
+        if (strcmp(prog, "hexdump") == 0 && argc >= 2 &&
+            strcmp(argv[1], "-C") == 0) {
+            first = 2;
+        }
+        if (argc <= first) {
+            *out_text = strdup_safe("xxd: missing PATH\n");
+            *out_exit = 1;
+            return 0;
+        }
+        int fd = open(argv[first], O_RDONLY);
+        if (fd < 0) {
+            len = shell_appendf(&out, &cap, len,
+                                 "xxd: %s: %s\n", argv[first], strerror(errno));
+            *out_text = out;
+            *out_exit = 1;
+            return 0;
+        }
+        unsigned char chunk[16];
+        long offset = 0;
+        ssize_t r;
+        long total = 0;
+        while (total < 16 * 1024 && (r = read(fd, chunk, sizeof(chunk))) > 0) {
+            len = shell_appendf(&out, &cap, len, "%08lx  ", offset);
+            for (int k = 0; k < 16; k++) {
+                if (k < r) {
+                    len = shell_appendf(&out, &cap, len, "%02x ", chunk[k]);
+                } else {
+                    len = shell_appendf(&out, &cap, len, "   ");
+                }
+                if (k == 7) {
+                    len = shell_appendf(&out, &cap, len, " ");
+                }
+            }
+            len = shell_appendf(&out, &cap, len, " |");
+            for (int k = 0; k < r; k++) {
+                unsigned char c = chunk[k];
+                len = shell_appendf(&out, &cap, len, "%c",
+                                     (c >= 0x20 && c < 0x7f) ? c : '.');
+            }
+            len = shell_appendf(&out, &cap, len, "|\n");
+            offset += r;
+            total += r;
+        }
+        close(fd);
+        if (total >= 16 * 1024) {
+            len = shell_appendf(&out, &cap, len,
+                                 "(... xxd output capped at 16 KiB)\n");
+        }
+        *out_text = out;
+        return 0;
+    }
+    if (strcmp(prog, "file") == 0) {
+        /* Magic-byte detection for PS5-relevant file types. */
+        if (argc < 2) {
+            *out_text = strdup_safe("file: missing PATH\n");
+            *out_exit = 1;
+            return 0;
+        }
+        int any_err = 0;
+        for (int i = 1; i < argc; i++) {
+            int fd = open(argv[i], O_RDONLY);
+            if (fd < 0) {
+                len = shell_appendf(&out, &cap, len,
+                                     "%s: %s\n", argv[i], strerror(errno));
+                any_err = 1;
+                continue;
+            }
+            unsigned char m[32] = {0};
+            ssize_t r = read(fd, m, sizeof(m));
+            close(fd);
+            const char *kind = "data";
+            if (r >= 4) {
+                if (m[0] == 0x4f && m[1] == 0x15 && m[2] == 0x3d && m[3] == 0x1d)
+                    kind = "PS5 SELF (Sony-signed)";
+                else if (m[0] == 0x7f && m[1] == 'E' && m[2] == 'L' && m[3] == 'F')
+                    kind = "ELF executable";
+                else if (m[0] == 0x7f && m[1] == 'P' && m[2] == 'R' && m[3] == 'X')
+                    kind = "PRX library";
+                else if (r >= 8 && m[0] == 'S' && m[1] == 'C' && m[2] == 'E' &&
+                         m[3] == 'U' && m[4] == 'F')
+                    kind = "PS5 PUP firmware update";
+                else if (m[0] == 0x7f && m[1] == 'C' && m[2] == 'N' && m[3] == 'T')
+                    kind = "PS5 PKG content package";
+                else if (m[0] == 0x89 && m[1] == 'P' && m[2] == 'N' && m[3] == 'G')
+                    kind = "PNG image";
+                else if (r >= 3 && m[0] == 0xff && m[1] == 0xd8 && m[2] == 0xff)
+                    kind = "JPEG image";
+                else if (m[0] == 'P' && m[1] == 'K' && m[2] == 0x03 && m[3] == 0x04)
+                    kind = "ZIP archive";
+                else if (m[0] == 0x00 && m[1] == 'P' && m[2] == 'S' && m[3] == 'F')
+                    kind = "param.sfo metadata";
+                else if (r >= 8 && m[0] == 0 && m[1] == 0 && m[2] == 0 &&
+                         m[3] == 0 && m[4] == 'M' && m[5] == 'O' && m[6] == 'V')
+                    kind = "MOV/MP4 video";
+                else {
+                    int printable = 1;
+                    for (ssize_t k = 0; k < r; k++) {
+                        unsigned char c = m[k];
+                        if (c < 0x09 || (c > 0x0d && c < 0x20) || c >= 0x7f) {
+                            printable = 0;
+                            break;
+                        }
+                    }
+                    if (printable && r > 0) kind = "ASCII text";
+                }
+            } else if (r == 0) {
+                kind = "empty";
+            }
+            len = shell_appendf(&out, &cap, len, "%s: %s\n", argv[i], kind);
+        }
+        if (any_err) *out_exit = 1;
+        *out_text = out;
+        return 0;
+    }
     /* Unknown command — let the caller decide whether to fall through
      * to popen or surface a "not supported" error. */
     (void)len;
