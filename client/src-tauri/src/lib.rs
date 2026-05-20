@@ -69,6 +69,8 @@ pub fn run() {
             commands::ps5_list_dir,
             commands::transfer_file,
             commands::transfer_dir,
+            commands::transfer_zip,
+            commands::zip_inspect,
             commands::transfer_dir_reconcile,
             commands::transfer_dir_diff_preview,
             commands::transfer_download,

@@ -30,6 +30,7 @@ import {
   probeDestination,
   type PlannedFile,
   type Volume,
+  type ZipInspect,
 } from "../../api/ps5";
 import {
   useTransferStore,
@@ -71,6 +72,8 @@ function detectedLabel(source: PickedSource): { icon: LucideIcon; label: string 
       return { icon: FolderOpen, label: "Folder" };
     case "game-folder":
       return { icon: Gamepad2, label: "Game folder" };
+    case "archive":
+      return { icon: FileArchive, label: "Compressed dump (.zip)" };
   }
 }
 
@@ -180,6 +183,7 @@ export default function UploadScreen() {
       destinationVolume,
       destinationSubpath,
       source.path,
+      source.kind === "archive",
     );
     const addr = `${host}:${PS5_PAYLOAD_PORT}`;
     const displayName =
@@ -258,7 +262,10 @@ export default function UploadScreen() {
   };
 
   const handleUpload = async () => {
-    if (!source || detecting || preflightBusy) return;
+    // detectError set = source couldn't be inspected (corrupt/unreadable
+    // zip, failed folder walk). Don't ship a half-detected source — for an
+    // archive that's `zipInfo: null`, which would fail deep in the flow.
+    if (!source || detecting || preflightBusy || detectError) return;
     if (!host?.trim()) {
       useTransferStore.setState({
         phase: {
@@ -268,12 +275,17 @@ export default function UploadScreen() {
       });
       return;
     }
+    // Archives extract into a directory, so the pre-flight probe treats them
+    // as a folder destination (check the named subdir, not a same-named file).
     const isFolder =
-      source.kind === "folder" || source.kind === "game-folder";
+      source.kind === "folder" ||
+      source.kind === "game-folder" ||
+      source.kind === "archive";
     const { dest } = resolveUploadDest(
       destinationVolume,
       destinationSubpath,
       source.path,
+      source.kind === "archive",
     );
     const addr = `${host}:${PS5_PAYLOAD_PORT}`;
 
@@ -498,7 +510,10 @@ function Step2Options(props: {
   const tr = useTr();
 
   const { icon: KindIcon, label: kindLabel } = detectedLabel(source);
-  const showExcludes = source.kind === "folder" || source.kind === "game-folder";
+  const showExcludes =
+    source.kind === "folder" ||
+    source.kind === "game-folder" ||
+    source.kind === "archive";
   const showMountToggle = source.kind === "image";
   const inFlight =
     transferPhase.kind === "starting" || transferPhase.kind === "running";
@@ -512,7 +527,7 @@ function Step2Options(props: {
   // disable of its Start button while a one-shot is in flight.
   const queueRunning = useUploadQueueStore((s) => s.running);
   const uploadDisabled =
-    detecting || inFlight || preflightBusy || queueRunning;
+    detecting || inFlight || preflightBusy || queueRunning || !!detectError;
 
   return (
     <>
@@ -579,6 +594,10 @@ function Step2Options(props: {
         />
       )}
 
+      {source.kind === "archive" && source.zipInfo && (
+        <ZipArchiveCard info={source.zipInfo} />
+      )}
+
       <FolderDiffSlot
         source={source}
         destinationVolume={destinationVolume}
@@ -605,6 +624,7 @@ function Step2Options(props: {
             destinationVolume,
             destinationSubpath,
             source.path,
+            source.kind === "archive",
           ).dest
         }
       />
@@ -639,7 +659,7 @@ function Step2Options(props: {
         <button
           type="button"
           onClick={() => onAddToQueue("overwrite")}
-          disabled={detecting || preflightBusy}
+          disabled={detecting || preflightBusy || !!detectError}
           className="rounded-md border border-[var(--color-border)] px-4 py-2 text-sm hover:bg-[var(--color-surface-3)] disabled:opacity-50"
           title={tr(
             "upload_add_to_queue_tooltip",
@@ -708,7 +728,12 @@ function MirrorToRosterButton({
   const others = profiles.filter((p) => p.id !== activeId);
   const [busy, setBusy] = useState(false);
   if (others.length === 0) return null;
-  if (sourceKind !== "folder" && sourceKind !== "game-folder" && sourceKind !== "file") {
+  if (
+    sourceKind !== "folder" &&
+    sourceKind !== "game-folder" &&
+    sourceKind !== "file" &&
+    sourceKind !== "archive"
+  ) {
     return null;
   }
   if (!destinationVolume) return null;
@@ -716,9 +741,13 @@ function MirrorToRosterButton({
   async function fanOut() {
     setBusy(true);
     try {
-      const { startTransferDir, startTransferFile, waitForJob } =
+      const { startTransferDir, startTransferFile, startTransferZip, waitForJob } =
         await import("../../api/ps5");
-      const leaf = srcPath.replace(/\\/g, "/").split("/").filter(Boolean).pop() ?? "";
+      const rawLeaf =
+        srcPath.replace(/\\/g, "/").split("/").filter(Boolean).pop() ?? "";
+      // Archives extract into a folder named after the zip, minus `.zip`.
+      const leaf =
+        sourceKind === "archive" ? rawLeaf.replace(/\.zip$/i, "") : rawLeaf;
       const dest =
         `${destinationVolume}` +
         (destinationSubpath ? `/${destinationSubpath}` : "") +
@@ -735,7 +764,9 @@ function MirrorToRosterButton({
           const jobId =
             sourceKind === "file"
               ? await startTransferFile(srcPath, dest, addr)
-              : await startTransferDir(srcPath, dest, addr, null, excludes);
+              : sourceKind === "archive"
+                ? await startTransferZip(srcPath, dest, addr, null, excludes)
+                : await startTransferDir(srcPath, dest, addr, null, excludes);
           await waitForJob(jobId);
           pushNotification("info", `Mirrored to ${p.name}`, {
             body: `${srcPath} → ${dest}`,
@@ -1338,6 +1369,69 @@ function FolderStatsCard({
     <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4 text-sm text-[var(--color-muted)]">
       {formatBytes(totalBytes)} {tr("upload_folder_stats_across", "across")}{" "}
       {fileCount.toLocaleString()} {tr("upload_folder_stats_files", "files")}
+    </section>
+  );
+}
+
+/** Preview card for a `.zip` source: what it stores vs. what lands on the
+ *  PS5, the space saved, and the embedded game (if any). Reassures the user
+ *  that the archive is decompressed on the host and lands extracted on the
+ *  console — no extra step, no temp copy of the whole game. */
+function ZipArchiveCard({ info }: { info: ZipInspect }) {
+  const tr = useTr();
+  // Space saved by keeping the dump zipped, as a percentage. Guard against a
+  // zero/over-100% reading (already-compressed game data can make a "zip"
+  // marginally larger than its contents).
+  const savedPct =
+    info.total_uncompressed > 0 && info.compressed_size < info.total_uncompressed
+      ? Math.round(
+          (1 - info.compressed_size / info.total_uncompressed) * 100,
+        )
+      : 0;
+  const isGame = !!(info.title || info.title_id);
+  return (
+    <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5">
+      <div className="flex items-start gap-3">
+        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md bg-[var(--color-surface-3)] text-[var(--color-muted)]">
+          {isGame ? <Gamepad2 size={22} /> : <FileArchive size={22} />}
+        </div>
+        <div className="min-w-0 flex-1">
+          {isGame && (
+            <>
+              <div className="text-xs text-[var(--color-muted)]">
+                {info.title_id ?? "—"}
+                {info.content_id ? <> · {info.content_id}</> : null}
+              </div>
+              <div className="truncate text-lg font-semibold">
+                {info.title ?? "(untitled)"}
+              </div>
+            </>
+          )}
+          <div className="mt-0.5 text-sm">
+            <span className="font-medium">{formatBytes(info.compressed_size)}</span>{" "}
+            {tr("upload_zip_zipped", "zipped")} →{" "}
+            <span className="font-medium">
+              {formatBytes(info.total_uncompressed)}
+            </span>{" "}
+            {tr("upload_zip_extracted", "extracted")} ·{" "}
+            {info.file_count.toLocaleString()}{" "}
+            {tr("upload_folder_stats_files", "files")}
+          </div>
+          {savedPct > 0 && (
+            <div className="mt-0.5 text-xs text-[var(--color-good)]">
+              {tr("upload_zip_saves", "saves")} {savedPct}%{" "}
+              {tr("upload_zip_on_disk", "on disk")}
+            </div>
+          )}
+          <div className="mt-1 flex items-center gap-1 text-xs text-[var(--color-muted)]">
+            <Info size={12} />{" "}
+            {tr(
+              "upload_zip_explainer",
+              "Decompressed on your computer and streamed in — files land already extracted on the PS5.",
+            )}
+          </div>
+        </div>
+      </div>
     </section>
   );
 }

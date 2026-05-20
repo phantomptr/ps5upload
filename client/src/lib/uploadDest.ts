@@ -33,11 +33,17 @@ export function resolveUploadDest(
   volume: string | null,
   subpath: string,
   sourcePath: string,
+  /** When the source is a `.zip` archive, the trailing `.zip` is stripped
+   *  from the folder name so the extracted game lands at
+   *  `<destRoot>/MyGame`, not `<destRoot>/MyGame.zip`. (The archive is
+   *  decompressed host-side; only its contents reach the PS5.) */
+  isArchive = false,
 ): { destRoot: string; dest: string } {
   const vol = volume ?? "/data";
   const sub = subpath.replace(/^\/+|\/+$/g, "");
   const destRoot = sub ? `${vol}/${sub}` : vol;
-  const name = basename(sourcePath);
+  const raw = basename(sourcePath);
+  const name = isArchive ? raw.replace(/\.zip$/i, "") : raw;
   const dest = name ? `${destRoot}/${name}` : destRoot;
   return { destRoot, dest };
 }

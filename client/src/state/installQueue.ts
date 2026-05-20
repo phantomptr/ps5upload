@@ -1040,6 +1040,16 @@ export const useInstallQueue = create<InstallQueueState>((set, get) => ({
           continue;
         }
         if (!isLive()) return;
+        // The user may have cancelled THIS item via cancel(), which sets its
+        // status to "cancelled" locally but does not bump runId (that would
+        // tear down the whole queue worker, not just this item). The engine's
+        // pkg_install_status doesn't always report cancelled=true — cancel
+        // may only stop host-side serving, or BGFT may complete on the PS5
+        // anyway — so re-check our own status and stop without re-marking.
+        // Without this, a finished/failed install overwrites the user's
+        // "Cancelled" with "Done"/"Failed" and re-fires library-invalidate.
+        const liveItem = get().items.find((x) => x.id === next.id);
+        if (!liveItem || liveItem.status === "cancelled") break;
         phase = st.phase ?? phase;
         // Refresh the diag block from the live status response. If
         // the payload omits the fields (pre-2.2.52 firmware), keep

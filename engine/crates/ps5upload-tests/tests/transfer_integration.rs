@@ -48,10 +48,24 @@ fn transfer_file_empty_data() {
     let cfg = TransferConfig::new(&srv.addr);
     let tx_id = random_tx_id();
 
-    // Empty file: 0 bytes → 1 shard of 0 bytes? Actually chunks(N) on empty
-    // slice returns 0 chunks. We expect 0 shards_sent and a direct commit.
+    // Empty file: 0 bytes still needs ONE empty shard so the payload's
+    // direct writer creates the temp file that COMMIT renames into place.
+    // (Sending zero shards made commit fail with `direct_rename_failed` on
+    // real hardware — the temp file was never created.)
     let result = transfer_file(&cfg, tx_id, "/data/empty.bin", b"").unwrap();
     assert_eq!(result.bytes_sent, 0);
+    assert_eq!(
+        result.shards_sent, 1,
+        "empty file must still send one shard"
+    );
+    // The mock assembles non-packed shards under dest_root → the empty file
+    // is materialised (present, zero-length), not absent.
+    let st = srv.state.lock().unwrap();
+    assert_eq!(
+        st.applied.get("/data/empty.bin").map(|v| v.as_slice()),
+        Some(b"".as_ref()),
+        "empty file must be created on the payload"
+    );
 }
 
 #[test]

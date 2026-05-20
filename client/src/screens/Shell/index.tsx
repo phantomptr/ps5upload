@@ -63,6 +63,7 @@ export default function ShellScreen() {
 
       for (const part of parts) {
         if (part.op === "and" && previousExit !== 0) continue;
+        if (part.op === "or" && previousExit === 0) continue;
 
         const r = await shellRun(
           mgmtAddr(host),

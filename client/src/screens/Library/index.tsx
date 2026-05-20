@@ -610,7 +610,8 @@ type BusyState =
   | "download"
   | "launch"
   | "register"
-  | "unregister";
+  | "unregister"
+  | "heal";
 
 interface DownloadProgress {
   bytesReceived: number;
@@ -1761,7 +1762,7 @@ function LibraryRow({
 
   const runHealAppmeta = async () => {
     if (entry.kind !== "game" || !entry.titleId) return;
-    setBusy("register");
+    setBusy("heal");
     setError(null);
     setMountNote(null);
     try {
@@ -2108,7 +2109,7 @@ function LibraryRow({
                   icon: <Sparkles size={12} />,
                   onSelect: runHealAppmeta,
                   disabled: busy !== null,
-                  loading: busy === "register",
+                  loading: busy === "heal",
                   title: tr(
                     "library_heal_metadata_tooltip",
                     undefined,
@@ -2124,7 +2125,9 @@ function LibraryRow({
                   icon: <Download size={12} />,
                   onSelect: runBackupGame,
                   disabled: busy !== null,
-                  loading: busy === "register",
+                  // Backup enqueues a download job (tracked in Activity) and
+                  // doesn't hold `busy` — it never spun on "register".
+                  loading: false,
                   title: tr(
                     "library_backup_to_folder_tooltip",
                     undefined,

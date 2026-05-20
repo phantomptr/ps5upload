@@ -859,7 +859,11 @@ function SmpMetaCard({
       if (probe.isStale()) return;
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      if (!probe.isStale()) setBusy(false);
+      // Always clear the local busy flag — gating it on !isStale() left the
+      // panel permanently disabled when the host switched mid-RPC (busy is
+      // component-local UI state; the stale guard already blocks stale
+      // data/error writes above).
+      setBusy(false);
     }
   }, [canTalk, busy, guard, refresh]);
 
@@ -882,7 +886,11 @@ function SmpMetaCard({
       if (probe.isStale()) return;
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      if (!probe.isStale()) setBusy(false);
+      // Always clear the local busy flag — gating it on !isStale() left the
+      // panel permanently disabled when the host switched mid-RPC (busy is
+      // component-local UI state; the stale guard already blocks stale
+      // data/error writes above).
+      setBusy(false);
     }
   }, [canTalk, busy, guard, refresh]);
 

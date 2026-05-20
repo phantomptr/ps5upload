@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { HardDrive, FileArchive, Unplug, RefreshCw } from "lucide-react";
 
-import { useConnectionStore, PS5_PAYLOAD_PORT } from "../../state/connection";
+import { useConnectionStore } from "../../state/connection";
 import { fetchVolumes, fsUnmount, type Volume } from "../../api/ps5";
 import {
   PageHeader,
@@ -67,6 +67,12 @@ export default function VolumesScreen() {
 
   const handleUnmount = async (mountPoint: string) => {
     if (!host?.trim()) return;
+    // Capture the target console BEFORE the confirm dialog, which the user
+    // can sit on for any length of time. Without this, switching the active
+    // PS5 while the dialog is open would fire the unmount against the live
+    // `host` and surprise the user; the guard makes us act on the captured
+    // console and bail entirely if they switched away.
+    const probe = guard.capture();
     const ok = await confirmDialog({
       title: tr(
         "volumes_unmount_confirm_title",
@@ -82,13 +88,19 @@ export default function VolumesScreen() {
       destructive: true,
     });
     if (!ok) return;
+    if (probe.isStale()) return;
     setUnmountingPath(mountPoint);
     setError(null);
     try {
-      await fsUnmount(`${host}:${PS5_PAYLOAD_PORT}`, mountPoint);
+      await fsUnmount(transferAddr(probe.host), mountPoint);
+      if (probe.isStale()) return;
       await refresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (probe.isStale()) return;
+      const raw = e instanceof Error ? e.message : String(e);
+      // Humanize like refresh() — a raw `fs_unmount_busy` code isn't
+      // actionable to the user.
+      setError(humanizePs5Error(raw) || raw);
     } finally {
       setUnmountingPath(null);
     }

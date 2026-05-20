@@ -83,6 +83,10 @@ pub enum Ufs2Error {
     BadSuperblock { field: &'static str, value: u64 },
     #[error("inode {inode} has unrecognized type bits 0x{mode:04x}")]
     BadInodeMode { inode: u64, mode: u16 },
+    #[error("inode number {inode} is out of range (image has {max} inodes)")]
+    InodeOutOfRange { inode: u64, max: u64 },
+    #[error("directory tree exceeds max depth {max} — refusing to recurse (possible cycle or pathological nesting in the image)")]
+    WalkTooDeep { max: u32 },
     #[error("inode {inode} would point at block {block} which is past the image's {total_blocks} blocks")]
     BlockOutOfRange {
         inode: u64,
@@ -311,6 +315,20 @@ impl Ufs2Image<File> {
 impl<R: Read + Seek> Ufs2Image<R> {
     /// Read inode `n`. Cheap — single seek + 256-byte read.
     pub fn read_inode(&mut self, n: u64) -> Result<Inode, Ufs2Error> {
+        // Bound the (attacker-controlled) inode number before computing an
+        // offset. Directory-entry inode numbers come straight off a
+        // potentially-hostile image; an out-of-range number would otherwise
+        // map (via saturating offset math) to an in-file offset belonging to
+        // unrelated data and be reinterpreted as an inode (type confusion).
+        // Inode 0 is reserved/invalid in UFS. Max = cg_count * inodes_per_cg.
+        let max_inode =
+            (self.superblock.cg_count as u64).saturating_mul(self.superblock.inodes_per_cg as u64);
+        if n == 0 || n >= max_inode {
+            return Err(Ufs2Error::InodeOutOfRange {
+                inode: n,
+                max: max_inode,
+            });
+        }
         let off = self.superblock.inode_offset(n);
         self.reader.seek(SeekFrom::Start(off))?;
         let mut buf = [0u8; INODE_SIZE as usize];
@@ -403,11 +421,18 @@ impl<R: Read + Seek> Ufs2Image<R> {
         // 32-bit-host safety: `Vec::with_capacity(inode.size as usize)`
         // silently truncates on Windows x86. usize::try_from converts
         // the runtime-checked failure to our typed error.
-        let cap_usize = usize::try_from(inode.size).map_err(|_| Ufs2Error::FileTooLarge {
+        let size_usize = usize::try_from(inode.size).map_err(|_| Ufs2Error::FileTooLarge {
             size: inode.size,
             cap: usize::MAX as u64,
         })?;
-        let mut out = Vec::with_capacity(cap_usize);
+        // Do NOT pre-allocate the full declared size. `inode.size` is read
+        // straight off (untrusted) disk, so a few-KB image can claim a
+        // multi-GiB inode and force that allocation here before a single
+        // block is read (a decompression/parse bomb). The read loop below
+        // grows `out` only as real blocks/holes are consumed — bounded by
+        // `remaining` (≤ cap) — so hint a small ceiling and let it grow.
+        const PREALLOC_CEILING: usize = 8 * 1024 * 1024;
+        let mut out = Vec::with_capacity(size_usize.min(PREALLOC_CEILING));
         let mut remaining = inode.size;
         let bsize = self.superblock.block_size as u64;
 

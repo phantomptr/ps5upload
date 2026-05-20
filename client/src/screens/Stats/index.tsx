@@ -173,10 +173,18 @@ function computeStats(entries: ActivityEntry[]): ComputedStats {
       bytes: 0,
     });
   }
-  const startMs = todayStart.getTime() - 29 * 86400 * 1000;
   for (const e of entries) {
-    if (e.startedAtMs < startMs) continue;
-    const offset = Math.floor((e.startedAtMs - startMs) / (86400 * 1000));
+    // Bucket by CALENDAR day, matching how the labels above are built. The
+    // old fixed-86,400,000-ms division drifted from local midnight whenever
+    // the 30-day window crossed a DST change (a local day is 23h or 25h),
+    // misattributing entries near a day boundary by ±1 day. Snapping both
+    // ends to local midnight and Math.round-ing absorbs the DST hour.
+    const entryDay = new Date(e.startedAtMs);
+    entryDay.setHours(0, 0, 0, 0);
+    const daysAgo = Math.round(
+      (todayStart.getTime() - entryDay.getTime()) / 86_400_000,
+    );
+    const offset = 29 - daysAgo;
     if (offset >= 0 && offset < 30) {
       last30Days[offset].count++;
       last30Days[offset].bytes += e.bytes ?? 0;

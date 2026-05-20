@@ -413,6 +413,24 @@ export default function FirstRunScreen() {
                       "Download + send (kstuff → SMP → ps5upload)",
                     )}
             </Button>
+            {/* Cancel: the install is a multi-step chain with sleeps + several
+                round trips. The cancel flag was only ever set on unmount, so
+                a user with no button had no way to abort. Sets the flag the
+                step loop already checks and resets the card to idle. */}
+            {step3 === "busy" && (
+              <Button
+                variant="secondary"
+                size="md"
+                className="ml-2"
+                onClick={() => {
+                  cancelled.current = true;
+                  setStep3("idle");
+                  setStep3Msg("");
+                }}
+              >
+                {tr("first_run_cancel", undefined, "Cancel")}
+              </Button>
+            )}
             {step3Detail.length > 0 && (
               <ul className="mt-3 space-y-1.5">
                 {step3Detail.map((s) => (

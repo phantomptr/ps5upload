@@ -3170,6 +3170,27 @@ static int build_manifest_index(const char *blob, size_t blob_len,
         plen = (size_t)(path_value_end - path_value_start);
         if (plen == 0 || plen >= 512) { free(idx); return -1; }
 
+        /* Validate every manifest file path against the writable-roots
+         * allowlist (is_path_allowed also rejects ".." components and any
+         * absolute path outside the allowed roots, even for not-yet-created
+         * destinations). BEGIN_TX validates dest_root and handle_packed_shard
+         * validates packed per-record paths, but the multi-file DIRECT writer
+         * (handle_stream_shard) and the SPOOL apply (runtime_apply_spool)
+         * consume these `files[].path` entries straight from the manifest —
+         * without this, a crafted manifest with an absolute path like
+         * /system_ex/... would let any LAN client write outside the allowed
+         * roots through the elevated payload. Reject the whole tx on any bad
+         * path so a single poisoned entry can't be partially applied. */
+        {
+            char pbuf[512];
+            memcpy(pbuf, path_value_start, plen);
+            pbuf[plen] = '\0';
+            if (!is_path_allowed(pbuf)) {
+                free(idx);
+                return -1;
+            }
+        }
+
         idx[n].shard_start = s_start;
         idx[n].shard_count = (uint32_t)s_count;
         idx[n].path_offset = (uint32_t)(path_value_start - blob);
@@ -3377,7 +3398,13 @@ static int manifest_get_nth_file_path(const char *json, uint64_t n,
             out->shard_count = extract_json_uint64_field(obj_start, "shard_count");
             /* shard_count defaults to 1 if absent (old format compat). */
             if (out->shard_count == 0) out->shard_count = 1;
-            return out->path[0] ? 0 : -1;
+            if (!out->path[0]) return -1;
+            /* Same writable-roots/".." guard as build_manifest_index: the
+             * spool apply path (runtime_apply_spool) fopen()s out->path
+             * directly, so a manifest path outside the allowed roots would
+             * otherwise be an arbitrary file write. */
+            if (!is_path_allowed(out->path)) return -1;
+            return 0;
         }
         /* Skip to the closing brace of this object. */
         p = strchr(p, '}');
@@ -4056,11 +4083,32 @@ static int handle_stream_shard(runtime_state_t *state, int client_fd,
                 write_ok = drain_shard_data(client_fd, data_len);
             }
             if (write_ok != 0) { rc = -1; goto out; }
-        } else if (want_verify) {
-            /* Zero-length shard: digest is BLAKE3 of empty input. */
-            blake3_hasher h;
-            blake3_hasher_init(&h);
-            blake3_hasher_finalize(&h, computed, BLAKE3_OUT_LEN);
+        } else {
+            /* Zero-length shard. */
+            if (want_verify) {
+                /* digest is BLAKE3 of empty input. */
+                blake3_hasher h;
+                blake3_hasher_init(&h);
+                blake3_hasher_finalize(&h, computed, BLAKE3_OUT_LEN);
+            }
+            /* A 0-byte single-file direct upload still needs its
+             * <dest>.ps5up2-tmp created so COMMIT_TX's temp->final rename
+             * succeeds. The write dispatch above is gated on data_len>0, so
+             * without this an empty single file fails commit with
+             * `direct_rename_failed` (confirmed on hardware). Calling the
+             * persistent writer with data_len=0 opens the tmp (O_CREAT|
+             * O_TRUNC) and writes nothing — leaving the empty file for
+             * COMMIT to close + rename, exactly like any 1-shard file.
+             * Multi-file empty files don't need this: they ride inside
+             * packed shards, which always have data_len>0. */
+            if (entry && entry->direct_mode && entry->file_count <= 1 &&
+                shard_seq == 1 && !entry->direct_fd_open) {
+                if (runtime_write_shard_persistent(entry, client_fd, 0, 1, 0,
+                                                   NULL) != 0) {
+                    rc = -1;
+                    goto out;
+                }
+            }
         }
         /* Streaming verify — digest was computed while writing. */
         if (entry && want_verify &&
@@ -8626,9 +8674,12 @@ static int append_saves_for_root(const char *root, int user_id, int kind_is_ps4,
         struct stat st;
         if (stat(path, &st) != 0) continue;
         if (!S_ISDIR(st.st_mode)) continue;
-        /* Compute dir size by single-level scan — cheap and bounded.
-         * We don't need exact size; "approximate disk usage" is what
-         * the user wants for "is this save backup worth keeping?". */
+        /* Compute dir size by a TWO-level scan (immediate files + one level
+         * of subdirectories). Saves keep metadata under `sce_sys/` (icons,
+         * param.sfo, sealed keys), which a single-level scan skipped — so the
+         * reported size understated the save (and the resulting backup zip).
+         * One level of descent covers sce_sys without unbounded recursion;
+         * still "approximate disk usage", just no longer missing sce_sys. */
         long long total = 0;
         DIR *cd = opendir(path);
         if (cd) {
@@ -8638,7 +8689,27 @@ static int append_saves_for_root(const char *root, int user_id, int kind_is_ps4,
                 char child[1500];
                 snprintf(child, sizeof(child), "%s/%s", path, fe->d_name);
                 struct stat fst;
-                if (stat(child, &fst) == 0) total += fst.st_size;
+                if (stat(child, &fst) != 0) continue;
+                if (S_ISREG(fst.st_mode)) {
+                    total += fst.st_size;
+                } else if (S_ISDIR(fst.st_mode)) {
+                    /* Descend one level (e.g. sce_sys/) — files only, no
+                     * further recursion. */
+                    DIR *gd = opendir(child);
+                    if (gd) {
+                        struct dirent *ge;
+                        while ((ge = readdir(gd)) != NULL) {
+                            if (ge->d_name[0] == '.') continue;
+                            char gchild[2100];
+                            snprintf(gchild, sizeof(gchild), "%s/%s",
+                                     child, ge->d_name);
+                            struct stat gst;
+                            if (stat(gchild, &gst) == 0 && S_ISREG(gst.st_mode))
+                                total += gst.st_size;
+                        }
+                        closedir(gd);
+                    }
+                }
             }
             closedir(cd);
         }

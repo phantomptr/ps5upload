@@ -1,4 +1,4 @@
-export type ShellSequenceOp = "always" | "and";
+export type ShellSequenceOp = "always" | "and" | "or";
 
 export interface ShellSequencePart {
   op: ShellSequenceOp;
@@ -51,6 +51,18 @@ export function splitShellSequence(input: string): ShellSequencePart[] {
     if (!quote && ch === "&" && next === "&") {
       pushCurrent();
       nextOp = "and";
+      i += 1;
+      continue;
+    }
+
+    // `||` — run the next part only if the previous FAILED. Without this
+    // it fell through to the literal-append default and `a || b` was sent
+    // as one command, whose handling depended entirely on the remote
+    // parser. (A single `|` pipe is left in the command — the payload's
+    // builtin shell, not the client, decides what to do with it.)
+    if (!quote && ch === "|" && next === "|") {
+      pushCurrent();
+      nextOp = "or";
       i += 1;
       continue;
     }

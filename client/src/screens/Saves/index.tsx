@@ -201,7 +201,7 @@ export default function SavesScreen() {
         message: tr(
           "saves_restore_confirm_body",
           undefined,
-          "Pick a .zip whose top-level folder is named the same as the title ID. The current PS5 save will be overwritten.",
+          "Pick a .zip whose top-level folder is named the same as the title ID. This WIPES the current PS5 save first, then uploads the backup — if the upload is interrupted (network drop, disk full), the save can be left empty with no automatic rollback. Back up the existing save first if it matters.",
         ),
         destructive: true,
         confirmLabel: tr("saves_restore_confirm_label", undefined, "Restore"),

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FolderTree,
   Folder,
@@ -226,6 +226,9 @@ export default function FileSystemScreen() {
   // banner for what's a degraded-but-functional state.
   const [volumes, setVolumes] = useState<Volume[] | null>(null);
   const [entries, setEntries] = useState<DirEntry[] | null>(null);
+  // Path of the most recent listing request — used to drop a stale (slower)
+  // response from a folder the user already navigated away from. See refresh.
+  const latestListReqRef = useRef<string>("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -276,12 +279,19 @@ export default function FileSystemScreen() {
     // "stale path" helper since path semantics are screen-local).
     const probe = guard.capture();
     const probedPath = path;
+    // Mark this as the latest in-flight listing request. The previous
+    // `path !== probedPath` check was dead code — both sides were the same
+    // closure constant — so a fast A→B navigation let A's slower response
+    // resolve last and paint A's contents under path B (and per-row Delete
+    // then targets B/<name>). Comparing the closure's path against this ref
+    // after the await actually drops the superseded request.
+    latestListReqRef.current = probedPath;
     setLoading(true);
     setError(null);
     try {
       const listing = await fsListDir(probe.host, probedPath);
-      // Drop result if user navigated or switched host mid-request.
-      if (path !== probedPath) return;
+      // Drop result if a newer listing (different path) superseded this one.
+      if (latestListReqRef.current !== probedPath) return;
       if (probe.isStale()) return;
       const raw: DirEntry[] = listing;
       raw.sort((a, b) => {
@@ -305,7 +315,7 @@ export default function FileSystemScreen() {
       // Same stale-guard on the error path: a failure for an
       // abandoned listing shouldn't replace a valid one the user is
       // currently looking at.
-      if (path !== probedPath) return;
+      if (latestListReqRef.current !== probedPath) return;
       if (probe.isStale()) return;
       // Route through humanizePs5Error so payload-side errors like
       // `fs_unmount_busy`, `path_not_allowed`, etc. surface as
@@ -473,6 +483,19 @@ export default function FileSystemScreen() {
       );
       return;
     }
+    // Don't silently clobber: the payload's rename() over an existing file
+    // destroys it and reports success. Block when the target name is already
+    // taken in this folder (the Move modal guards this too).
+    if ((entries ?? []).some((en) => en.name === newName)) {
+      setError(
+        tr(
+          "fs_rename_target_exists",
+          { name: newName },
+          `An item named "${newName}" already exists here — rename would overwrite it. Pick another name or delete it first.`,
+        ),
+      );
+      return;
+    }
     setBusyEntry({ name: oldName, op: "rename" });
     setError(null);
     try {
@@ -551,6 +574,47 @@ export default function FileSystemScreen() {
       });
       return;
     }
+    // Overwrite guard: the payload's rename() silently destroys an existing
+    // destination. Reject if any new name collides with a file already in
+    // this folder (that isn't itself being renamed away), or if two renames
+    // map onto the same target — otherwise the batch reports "N renamed, 0
+    // failed" while the colliding files clobber each other.
+    {
+      const fromSet = new Set(renames.map((r) => r.from));
+      const existing = new Set((entries ?? []).map((en) => en.name));
+      const seenTargets = new Set<string>();
+      const conflicts: string[] = [];
+      for (const r of renames) {
+        if (seenTargets.has(r.to)) {
+          conflicts.push(`${r.to}  (two items rename to this)`);
+        }
+        seenTargets.add(r.to);
+        if (existing.has(r.to) && !fromSet.has(r.to)) {
+          conflicts.push(`${r.to}  (already exists)`);
+        }
+      }
+      if (conflicts.length > 0) {
+        await alertDialog({
+          title: tr(
+            "fs_bulk_rename_conflict_title",
+            undefined,
+            "Rename would overwrite files",
+          ),
+          message:
+            tr(
+              "fs_bulk_rename_conflict_body",
+              undefined,
+              "These target names collide and would destroy existing files — no files were renamed:",
+            ) +
+            "\n\n" +
+            conflicts.slice(0, 10).map((c) => `  ${c}`).join("\n") +
+            (conflicts.length > 10
+              ? `\n  …and ${conflicts.length - 10} more`
+              : ""),
+        });
+        return;
+      }
+    }
     const preview = renames
       .slice(0, 10)
       .map((r) => `  ${r.from} → ${r.to}`)
@@ -571,7 +635,7 @@ export default function FileSystemScreen() {
     if (!ok) return;
     setError(null);
     let okCount = 0;
-    let failCount = 0;
+    const failures: string[] = [];
     for (const r of renames) {
       try {
         await fsMove(
@@ -581,18 +645,28 @@ export default function FileSystemScreen() {
         );
         okCount++;
       } catch (e) {
-        failCount++;
-        if (failCount === 1) {
-          setError(`First failure: ${r.from} → ${r.to}: ${e}`);
-        }
+        const msg = e instanceof Error ? e.message : String(e);
+        failures.push(`${r.from} → ${r.to}: ${humanizePs5Error(msg) || msg}`);
       }
+    }
+    if (failures.length > 0) {
+      setError(`First failure: ${failures[0]}`);
     }
     await alertDialog({
       title: tr(
         "fs_bulk_rename_done_title",
-        { ok: okCount, failed: failCount },
-        `Renamed ${okCount} item(s); ${failCount} failed.`,
+        { ok: okCount, failed: failures.length },
+        `Renamed ${okCount} item(s); ${failures.length} failed.`,
       ),
+      // Show WHICH renames failed and why, not just a count — a partial
+      // batch otherwise gives no actionable detail.
+      message:
+        failures.length > 0
+          ? failures.slice(0, 10).map((f) => `  ${f}`).join("\n") +
+            (failures.length > 10
+              ? `\n  …and ${failures.length - 10} more`
+              : "")
+          : undefined,
     });
     setSelected(new Set());
     await refresh();

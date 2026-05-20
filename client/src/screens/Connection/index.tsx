@@ -298,10 +298,24 @@ export default function ConnectionScreen() {
     // the *old* host value and probe the wrong address.
     const target = (overrideHost ?? host).trim();
     if (!target) {
-      settleStep1("fail", "Enter your PS5's IP address first.");
+      settleStep1(
+        "fail",
+        tr(
+          "connection_enter_ip_first",
+          undefined,
+          "Enter your PS5's IP address first.",
+        ),
+      );
       return;
     }
-    flashStep1("busy", `Checking ${target}:${PS5_LOADER_PORT}…`);
+    flashStep1(
+      "busy",
+      tr(
+        "connection_checking",
+        { target, port: PS5_LOADER_PORT },
+        "Checking {target}:{port}…",
+      ),
+    );
     settleStep2("idle", tr("connection_payload_not_loaded", undefined, "Helper not loaded yet"));
     setTransientStep2(null);
     setTransientStep2Msg(null);
@@ -315,7 +329,11 @@ export default function ConnectionScreen() {
     } else {
       settleStep1(
         "fail",
-        `Port ${PS5_LOADER_PORT} is not open on ${target}`,
+        tr(
+          "connection_port_closed",
+          { port: PS5_LOADER_PORT, host: target },
+          "Port {port} is not open on {host}",
+        ),
       );
     }
   }
@@ -338,12 +356,23 @@ export default function ConnectionScreen() {
       payloadVersion: null,
       ps5Kernel: null,
     });
-    flashStep2("busy", "Locating bundled payload ELF…");
+    flashStep2(
+      "busy",
+      tr(
+        "connection_locating_elf",
+        undefined,
+        "Locating bundled payload ELF…",
+      ),
+    );
     try {
       const elf = await bundledPayloadPath();
       flashStep2(
         "busy",
-        `Sending ${elf} to ${host}:${PS5_LOADER_PORT}…`,
+        tr(
+          "connection_sending_elf",
+          { elf, host, port: PS5_LOADER_PORT },
+          "Sending {elf} to {host}:{port}…",
+        ),
       );
       await sendPayload(host, elf);
     } catch (e) {
@@ -354,7 +383,10 @@ export default function ConnectionScreen() {
       settleStep2("fail", e instanceof Error ? e.message : String(e));
       return;
     }
-    flashStep2("busy", "Waiting for payload to boot…");
+    flashStep2(
+      "busy",
+      tr("connection_waiting_boot", undefined, "Waiting for payload to boot…"),
+    );
     // Cancel any prior in-flight poll (e.g. user mashed Send twice)
     // before arming a new one — otherwise two polls race and both
     // eventually call settleStep2, flipping the visible state.
@@ -425,7 +457,11 @@ export default function ConnectionScreen() {
             : "";
           settleStep2(
             "fail",
-            `Payload didn't come up within 20s.${tail} Common causes: kstuff isn't loaded yet (run First Run, or send kstuff first via Send payload), the ELF crashed on boot, or the PS5 is unreachable. Try sending again.`,
+            tr(
+              "connection_payload_timeout",
+              { tail },
+              "Payload didn't come up within 20s.{tail} Common causes: kstuff isn't loaded yet (run First Run, or send kstuff first via Send payload), the ELF crashed on boot, or the PS5 is unreachable. Try sending again.",
+            ),
           );
         }
       },

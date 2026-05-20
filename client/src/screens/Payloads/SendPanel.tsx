@@ -73,6 +73,19 @@ interface SendHistoryStore {
   updated_at?: number;
 }
 
+/** Typical PS5 loader port for a payload file's extension. Mirrors the
+ *  "Typical loader ports by format" reference table in this panel:
+ *  .js → 50000 (WebKit stage), .lua → 9026, .jar → 9025 (BD-JB/BDJ),
+ *  .elf/.bin → 9021 (elfldr). Returns null for unknown extensions. */
+function loaderPortForExt(path: string): number | null {
+  const p = path.toLowerCase();
+  if (p.endsWith(".js")) return 50000;
+  if (p.endsWith(".lua")) return 9026;
+  if (p.endsWith(".jar")) return 9025;
+  if (p.endsWith(".elf") || p.endsWith(".bin")) return PS5_LOADER_PORT;
+  return null;
+}
+
 function probeMessage(code: string, isPs5upload: boolean): string {
   switch (code) {
     case "payload_probe_invalid_ext":
@@ -119,7 +132,20 @@ export default function SendPanel() {
   // disappear if the user clicks Send immediately.
   const [elfPathText, setElfPathText] = useState<string>("");
   const [portText, setPortText] = useState<string>(String(PS5_LOADER_PORT));
+  // Once the user types in the port field (or replays a history record),
+  // stop auto-deriving the port from the picked file's extension so a
+  // deliberate custom port is never clobbered.
+  const [portManuallyEdited, setPortManuallyEdited] = useState(false);
   const [status, setStatus] = useState<Status>({ kind: "idle" });
+
+  // Clear a terminal send banner when the user edits the target. The "sent"
+  // banner renders the LIVE host/port, so without this, editing the IP after
+  // a successful send made it read "Payload sent to <new-host>" — a false
+  // success for a console that was never sent to.
+  const clearSendBannerOnEdit = () =>
+    setStatus((s) =>
+      s.kind === "sent" || s.kind === "failed" ? { kind: "idle" } : s,
+    );
   const [history, setHistory] = useState<SendHistoryRecord[]>([]);
 
   const parsedPort = (() => {
@@ -208,6 +234,13 @@ export default function SendPanel() {
     if (typeof picked !== "string") return;
     setElfPath(picked);
     setElfPathText(picked);
+    // Auto-set the loader port to the format's typical port so a picked
+    // .jar/.lua/.js doesn't silently go to the default 9021 and fail. Skip
+    // if the user has set a port themselves — see portManuallyEdited.
+    if (!portManuallyEdited) {
+      const mapped = loaderPortForExt(picked);
+      if (mapped !== null) setPortText(String(mapped));
+    }
     await probeFile(picked);
   };
 
@@ -264,6 +297,9 @@ export default function SendPanel() {
     setElfPath(rec.path);
     setElfPathText(rec.path);
     setPortText(String(rec.port));
+    // The record's port is a deliberate choice — pin it so a later file
+    // pick doesn't auto-derive a different port over it.
+    setPortManuallyEdited(true);
     if (rec.host && !host) setHost(rec.host);
     await probeFile(rec.path);
   };
@@ -315,7 +351,10 @@ export default function SendPanel() {
               </label>
               <input
                 value={host}
-                onChange={(e) => setHost(e.target.value)}
+                onChange={(e) => {
+                  setHost(e.target.value);
+                  clearSendBannerOnEdit();
+                }}
                 placeholder="192.168.1.50"
                 className="mt-2 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm outline-none focus:border-[var(--color-accent)]"
               />
@@ -326,7 +365,11 @@ export default function SendPanel() {
               </label>
               <input
                 value={portText}
-                onChange={(e) => setPortText(e.target.value)}
+                onChange={(e) => {
+                  setPortText(e.target.value);
+                  setPortManuallyEdited(true);
+                  clearSendBannerOnEdit();
+                }}
                 placeholder={String(PS5_LOADER_PORT)}
                 inputMode="numeric"
                 className={

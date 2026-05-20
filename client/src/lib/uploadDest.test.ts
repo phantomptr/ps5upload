@@ -60,6 +60,31 @@ describe("resolveUploadDest", () => {
     expect(dest).toBe("/mnt/ext0/exfat/map.exfat");
   });
 
+  it("strips the .zip extension for an archive source", () => {
+    // A .zip is decompressed host-side; only its contents reach the PS5, so
+    // the destination folder is named after the archive minus `.zip` — not
+    // `.../MyGame.zip` (which would extract into a folder literally named
+    // "MyGame.zip").
+    const { dest } = resolveUploadDest(
+      "/data",
+      "homebrew",
+      "/Users/me/MyGame.ZIP",
+      true,
+    );
+    expect(dest).toBe("/data/homebrew/MyGame");
+  });
+
+  it("keeps a .zip name verbatim when the source is NOT an archive", () => {
+    // Defensive: the same path uploaded as a plain file (isArchive omitted)
+    // keeps its extension.
+    const { dest } = resolveUploadDest(
+      "/data",
+      "homebrew",
+      "/Users/me/save.zip",
+    );
+    expect(dest).toBe("/data/homebrew/save.zip");
+  });
+
   it("normalizes subpaths — leading/trailing slashes don't leak", () => {
     const { dest } = resolveUploadDest(
       "/data",

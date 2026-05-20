@@ -2948,11 +2948,12 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
+ "zip",
 ]
 
 [[package]]
 name = "ps5upload-desktop"
-version = "2.12.1"
+version = "2.13.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",

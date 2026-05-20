@@ -1,8 +1,10 @@
 import { create } from "zustand";
 import {
   inspectFolder,
+  zipInspect,
   type FolderInspectResult,
   type WrappedGameHint,
+  type ZipInspect,
 } from "../api/ps5";
 
 /**
@@ -17,8 +19,12 @@ import {
  *   folder      — plain folder; adds exclude rules.
  *   game-folder — folder with parseable sce_sys/param.*; adds the
  *                 meta card above excludes.
+ *   archive     — a `.zip` game dump; the engine decompresses on the host
+ *                 and streams the files in, so they land already extracted
+ *                 on the PS5. Adds a "compressed → extracted" card and the
+ *                 same exclude rules as a folder.
  */
-export type SourceKind = "file" | "image" | "folder" | "game-folder";
+export type SourceKind = "file" | "image" | "folder" | "game-folder" | "archive";
 
 export interface PickedSource {
   kind: SourceKind;
@@ -27,6 +33,8 @@ export interface PickedSource {
   meta: FolderInspectResult | null;
   /** Present when the root isn't a game but a single child subdir is. */
   wrappedHint: WrappedGameHint | null;
+  /** Populated for `archive` — the zip's central-directory preview. */
+  zipInfo: ZipInspect | null;
 }
 
 /** Exclude model. Default is "all" — upload everything, no filters.
@@ -87,6 +95,13 @@ function isImagePath(path: string): boolean {
   return p.endsWith(".exfat") || p.endsWith(".ffpkg");
 }
 
+/** A `.zip` game dump — the engine decompresses it on the host and streams
+ *  the files in. ZIP is the only archive format we support (see the
+ *  "drop .rar" scope decision: modern scene .rar is split + encrypted). */
+function isArchivePath(path: string): boolean {
+  return path.toLowerCase().endsWith(".zip");
+}
+
 export const useUploadStore = create<UploadState>((set, get) => ({
   source: null,
   detecting: false,
@@ -106,9 +121,48 @@ export const useUploadStore = create<UploadState>((set, get) => ({
   excludes: defaultExcludes,
 
   async pickFile(path) {
+    // A .zip is an archive source: optimistically mark it, then inspect the
+    // central directory (fast — no inflation) to show what it expands to and
+    // detect an embedded game. Mirrors pickFolder's stale-result guard.
+    if (isArchivePath(path)) {
+      set({
+        source: {
+          kind: "archive",
+          path,
+          meta: null,
+          wrappedHint: null,
+          zipInfo: null,
+        },
+        detecting: true,
+        detectError: null,
+        mountAfterUpload: false,
+      });
+      try {
+        const zipInfo = await zipInspect(path);
+        if (get().source?.path !== path) return;
+        set({
+          source: {
+            kind: "archive",
+            path,
+            meta: null,
+            wrappedHint: null,
+            zipInfo,
+          },
+          detecting: false,
+          detectError: null,
+        });
+      } catch (e) {
+        if (get().source?.path !== path) return;
+        set({
+          detecting: false,
+          detectError: e instanceof Error ? e.message : String(e),
+        });
+      }
+      return;
+    }
     const kind: SourceKind = isImagePath(path) ? "image" : "file";
     set({
-      source: { kind, path, meta: null, wrappedHint: null },
+      source: { kind, path, meta: null, wrappedHint: null, zipInfo: null },
       detecting: false,
       detectError: null,
       // mount-after-upload defaults OFF — even for disk images. The
@@ -125,7 +179,13 @@ export const useUploadStore = create<UploadState>((set, get) => ({
   async pickFolder(path) {
     // Optimistic set so the UI can render "Inspecting <path>…" immediately.
     set({
-      source: { kind: "folder", path, meta: null, wrappedHint: null },
+      source: {
+        kind: "folder",
+        path,
+        meta: null,
+        wrappedHint: null,
+        zipInfo: null,
+      },
       detecting: true,
       detectError: null,
     });
@@ -150,6 +210,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
           path,
           meta: inspection.result,
           wrappedHint: inspection.wrapped_hint,
+          zipInfo: null,
         },
         detecting: false,
         detectError: null,

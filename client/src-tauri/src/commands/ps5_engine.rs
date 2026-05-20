@@ -182,6 +182,50 @@ pub async fn transfer_dir(req: TransferDirReq) -> Result<JsonValue, String> {
     post_json(&url, &body).await
 }
 
+#[derive(Debug, Deserialize)]
+pub struct TransferZipReq {
+    pub zip_path: String,
+    pub dest_root: String,
+    pub addr: Option<String>,
+    pub tx_id: Option<String>,
+    #[serde(default)]
+    pub excludes: Vec<String>,
+    #[serde(default)]
+    pub bandwidth_cap_mbps: Option<f64>,
+}
+
+/// Upload a `.zip`'s contents, decompressing on the host so files land
+/// already extracted on the PS5. Proxies the engine's `/api/transfer/zip`.
+#[tauri::command]
+pub async fn transfer_zip(req: TransferZipReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/transfer/zip");
+    let body = serde_json::json!({
+        "zip_path": req.zip_path,
+        "dest_root": req.dest_root,
+        "addr": req.addr,
+        "tx_id": req.tx_id,
+        "excludes": req.excludes,
+        "bandwidth_cap_mbps": req.bandwidth_cap_mbps,
+    });
+    post_json(&url, &body).await
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ZipInspectReq {
+    pub zip_path: String,
+}
+
+/// Preview a `.zip` (file count, compressed vs uncompressed size, embedded
+/// game metadata) without extracting it. Proxies `/api/zip/inspect`.
+#[tauri::command]
+pub async fn zip_inspect(req: ZipInspectReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/zip/inspect");
+    let body = serde_json::json!({ "zip_path": req.zip_path });
+    post_json(&url, &body).await
+}
+
 /// PS5 → host download. The engine walks the remote tree (or single
 /// file) and pulls bytes via FS_READ on the management port. Response
 /// is the standard `{ job_id }` shape — poll job_status to see

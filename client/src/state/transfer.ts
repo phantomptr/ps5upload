@@ -4,6 +4,7 @@ import {
   startTransferFile,
   startTransferDir,
   startTransferDirReconcile,
+  startTransferZip,
   fsMount,
   fsUnmount,
   jobStatus,
@@ -158,6 +159,11 @@ export const useTransferStore = create<TransferState>((set) => {
       set({ phase: { kind: "starting" } });
 
       const isFolder = sourceKind === "folder" || sourceKind === "game-folder";
+      // A zip archive is a multi-file transfer like a folder, so it carries a
+      // tx_id for cross-session shard resume (worth it for big dumps over
+      // flaky wifi) — but it has no reconcile mode (there's no local folder
+      // to diff against), so it always routes through startTransferZip.
+      const isArchive = sourceKind === "archive";
 
       // Helper: is this run still the live one? If the user cancelled
       // or kicked off another upload, we're stale and MUST NOT write
@@ -173,8 +179,9 @@ export const useTransferStore = create<TransferState>((set) => {
       // a tx_id would just create surprise skip-behavior on re-upload.
       const host = hostFromAddr(addr);
       let txId: string | null = null;
-      if (isFolder) {
-        const persistedMode = strategy === "resume" ? "reconcile" : "dir";
+      if (isFolder || isArchive) {
+        const persistedMode =
+          isFolder && strategy === "resume" ? "reconcile" : "dir";
         if (strategy === "overwrite") {
           // Override means "start from scratch" — drop any prior tx_id
           // so the next Resume click doesn't accidentally skip shards
@@ -238,6 +245,15 @@ export const useTransferStore = create<TransferState>((set) => {
           );
         } else if (isFolder) {
           jobId = await startTransferDir(
+            srcPath,
+            dest,
+            addr,
+            txId,
+            excludes,
+            bandwidthCap,
+          );
+        } else if (isArchive) {
+          jobId = await startTransferZip(
             srcPath,
             dest,
             addr,
@@ -412,14 +428,23 @@ export const useTransferStore = create<TransferState>((set) => {
           const files = snap.files ?? [];
           // Cumulative-sum the file sizes to find how many have been
           // "completed" — defined as: their cumulative end byte is at
-          // or below bytesSent. Close enough for UI: on packed shards,
-          // a burst of files all flip to ✓ at once when the shard
-          // commits, which is honest.
+          // or below the bytes accounted for. Close enough for UI: on
+          // packed shards, a burst of files all flip to ✓ at once when
+          // the shard commits, which is honest.
+          //
+          // On a resume/reconcile upload, `files` is the FULL planned
+          // list but `bytesSent` counts only the delta actually streamed;
+          // already-present files are tracked separately in skippedBytes.
+          // Add skippedBytes to the threshold so the head-of-list skipped
+          // files count as done — otherwise the "N of M files" readout
+          // stalls during exactly the resume flow this is meant for.
+          const skippedBytes = snap.skipped_bytes ?? 0;
+          const accountedBytes = bytesSent + skippedBytes;
           let cum = 0;
           let filesCompleted = 0;
           for (const f of files) {
             cum += f.size;
-            if (cum <= bytesSent) filesCompleted++;
+            if (cum <= accountedBytes) filesCompleted++;
             else break;
           }
           set({

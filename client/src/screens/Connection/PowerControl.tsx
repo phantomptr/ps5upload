@@ -66,7 +66,12 @@ export default function PowerControl({ host }: { host: string }) {
     setLast(null);
     try {
       const ack = await fn(addr);
-      setLast(ack);
+      // Record a "last action" only on success — setting it unconditionally
+      // showed the green success line AND the red error line together when
+      // the payload rejected the action (ack.ok === false).
+      if (ack.ok) {
+        setLast(ack);
+      }
       if (ack.ok) {
         pushNotification("info", `PS5 ${kind} requested`, {
           body: ack.err

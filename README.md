@@ -30,6 +30,15 @@
   walk away. Every running row shows live MiB/s and ETA; done
   rows show the wall-clock-average rate so you can spot a slow
   destination. Queue state survives app restarts.
+- **Compressed `.zip` uploads** — keep a game dump as a single `.zip`
+  on your PC (less disk, easier to move) and upload it directly.
+  ps5upload decompresses on the host and streams the files into the
+  same FTX2 pipeline, so they land **already extracted** on the PS5 —
+  no manual unzip, no temp copy of the whole game. The Upload screen
+  previews the expansion (`zipped → extracted`, file count, space
+  saved) and detects the embedded game. Decompresses one file at a
+  time (large files spill to a temp file), so a 100 GB archive doesn't
+  need 100 GB of RAM. ZIP only — unpack `.rar` on the PC first.
 - **Native image mount** — attach `.exfat` and `.ffpkg` images on
   the PS5 (MDIOCATTACH + nmount) with no third-party helper. Every
   mount survives payload restarts and auto-reconciles on startup.
@@ -75,6 +84,10 @@
   app patches) register but the install path freezes Sony's mgmt
   service mid-flight on most firmwares. Use the on-PS5 Settings →
   Debug Settings → Game → Package Installer for those.
+- **`.rar` archives.** Only `.zip` is supported for compressed uploads.
+  Modern scene `.rar` is typically split multi-part + encrypted, which
+  isn't worth the unrar maintenance/licensing tax — and no other PS5
+  homebrew tool supports it either. Unpack `.rar` on the PC first.
 
 ## A quick look
 
@@ -89,7 +102,7 @@ Pre-built downloads land on the
 |---|---|---|
 | macOS (Apple Silicon / Intel) | `PS5Upload-<ver>-mac-{arm64,x64}.dmg` | Open the `.dmg`, drag PS5Upload into Applications. See **First launch on macOS** below — Gatekeeper blocks downloaded apps the first time. |
 | Windows (x64 / ARM64) | `PS5Upload-<ver>-win-{x64,arm64}.zip` | Unzip, double-click `PS5Upload.exe` — portable, no installer. See **First launch on Windows** — SmartScreen warns on first run. |
-| Linux (x64 / ARM64) | `PS5Upload-<ver>-linux-{x64,arm64}.zip` | Unzip, `chmod +x PS5Upload.AppImage`, then `./PS5Upload.AppImage` |
+| Linux (x64 / ARM64) | `PS5Upload-<ver>-linux-{x64,arm64}.zip` | Unzip, then `chmod +x PS5Upload.sh PS5Upload.AppImage` and run **`./PS5Upload.sh`** (the wrapper — handles the FUSE-less and WebKit white-screen cases for you). Running `./PS5Upload.AppImage` directly also works if your system has libfuse2 and a happy WebKitGTK. |
 
 ### First-launch warnings (and why they're there)
 

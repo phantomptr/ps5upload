@@ -71,6 +71,13 @@ pub struct RootEntry {
 /// callers can request again if they need more.
 const FFPKG_EXTRACT_MAX: u64 = 4 * 1024 * 1024 * 1024;
 
+/// Max directory-tree depth `extract_dir_recursive` will descend. UFS dir
+/// entries are attacker-controllable in a hostile .ffpkg; a crafted entry
+/// whose inode points back at an ancestor directory (a cycle), or simply a
+/// pathologically deep tree, would otherwise recurse until the stack
+/// overflows. 64 matches the payload's rm_rf/cp_rf depth cap.
+const FFPKG_EXTRACT_MAX_DEPTH: u32 = 64;
+
 /// Result of an extract op — caller can render "wrote N files,
 /// total Y bytes" + per-file detail.
 #[derive(Debug, Serialize)]
@@ -127,7 +134,7 @@ pub fn extract_from_ffpkg(
     } else if inode.is_dir() {
         let target = dest_dir.join(leaf_name);
         create_dir_all(&target).map_err(Ufs2Error::Io)?;
-        extract_dir_recursive(&mut img, &inode, &target, &mut result)?;
+        extract_dir_recursive(&mut img, &inode, &target, &mut result, 0)?;
     } else {
         return Err(Ufs2Error::NotFound {
             component: format!("{leaf_name} (not a file or directory)"),
@@ -166,7 +173,17 @@ fn extract_dir_recursive(
     dir: &ufs2::Inode,
     dest: &Path,
     result: &mut FfpkgExtractResult,
+    depth: u32,
 ) -> Result<(), Ufs2Error> {
+    // Bound recursion against a hostile image with a directory cycle or
+    // pathological nesting (the block-pointer walk has cycle detection, but
+    // the directory tree didn't). "." / ".." are already skipped by
+    // is_safe_child_name, so a cycle requires a crafted non-dotdot entry.
+    if depth > FFPKG_EXTRACT_MAX_DEPTH {
+        return Err(Ufs2Error::WalkTooDeep {
+            max: FFPKG_EXTRACT_MAX_DEPTH,
+        });
+    }
     let entries = img.list_dir(dir)?;
     for e in entries {
         if !is_safe_child_name(&e.name) {
@@ -180,7 +197,7 @@ fn extract_dir_recursive(
         let child_inode = img.read_inode(e.inode)?;
         if child_inode.is_dir() {
             create_dir_all(&child_path).map_err(Ufs2Error::Io)?;
-            extract_dir_recursive(img, &child_inode, &child_path, result)?;
+            extract_dir_recursive(img, &child_inode, &child_path, result, depth + 1)?;
         } else if child_inode.is_file() {
             let bytes = img.read_file(&child_inode, FFPKG_EXTRACT_MAX)?;
             write_file_atomic(&child_path, &bytes)?;
@@ -558,7 +575,11 @@ pub fn parse_split_pkg(head_path: &Path) -> Result<SplitPkgMetadata, PkgError> {
             break;
         }
     }
-    let total_size: u64 = part_sizes.iter().sum();
+    // saturating_add, not sum(): summing filesystem-controlled u64 sizes with
+    // `iter().sum()` panics on overflow in debug builds. Not practically
+    // reachable (would need exabytes on disk), but a parser entry point
+    // shouldn't panic on its inputs.
+    let total_size: u64 = part_sizes.iter().copied().fold(0u64, u64::saturating_add);
 
     Ok(SplitPkgMetadata {
         parts,

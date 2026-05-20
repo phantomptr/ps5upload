@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Disc3,
   Power,
@@ -29,6 +29,14 @@ export default function PeripheralPanel({ mgmtAddr }: { mgmtAddr: string }) {
   const [busy, setBusy] = useState<null | "eject" | "off" | "on">(null);
   const [last, setLast] = useState<PeripheralAck | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Clear the last ack / error when the active console changes — the panel
+  // stays mounted across host switches, so a stale "Eject" success from
+  // console A must not linger under console B.
+  useEffect(() => {
+    setLast(null);
+    setError(null);
+  }, [mgmtAddr]);
 
   async function run(
     kind: "eject" | "off" | "on",

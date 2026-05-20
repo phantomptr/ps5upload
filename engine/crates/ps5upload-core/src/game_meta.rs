@@ -134,7 +134,13 @@ pub fn parse_param_json_bytes(bytes: &[u8]) -> Result<FolderInspectResult> {
         .get("contentVersion")
         .and_then(|x| x.as_str())
         .map(String::from);
-    let application_category_type = v.get("applicationCategoryType").and_then(|x| x.as_i64());
+    // Some third-party dump tools emit numeric param.json fields as quoted
+    // strings (e.g. "0"). Accept both so the game/patch/voucher
+    // classification doesn't silently fall back to "unknown".
+    let application_category_type = v.get("applicationCategoryType").and_then(|x| {
+        x.as_i64()
+            .or_else(|| x.as_str().and_then(|s| s.trim().parse().ok()))
+    });
 
     let title = localized_title(&v);
 
@@ -242,6 +248,21 @@ mod tests {
     use super::*;
     use std::io::Write;
     use std::path::PathBuf;
+
+    #[test]
+    fn param_json_accepts_numeric_or_string_category() {
+        // Numeric form (standard).
+        let num = parse_param_json_bytes(br#"{"applicationCategoryType":0}"#).unwrap();
+        assert_eq!(num.application_category_type, Some(0));
+        // String form (some third-party dump tools) must parse, not drop.
+        let strv = parse_param_json_bytes(br#"{"applicationCategoryType":"0"}"#).unwrap();
+        assert_eq!(strv.application_category_type, Some(0));
+        let strv2 = parse_param_json_bytes(br#"{"applicationCategoryType":" 5 "}"#).unwrap();
+        assert_eq!(strv2.application_category_type, Some(5));
+        // Garbage string → None, not a parse error for the whole file.
+        let bad = parse_param_json_bytes(br#"{"applicationCategoryType":"abc"}"#).unwrap();
+        assert_eq!(bad.application_category_type, None);
+    }
 
     fn tmpdir(name: &str) -> PathBuf {
         let mut p = std::env::temp_dir();

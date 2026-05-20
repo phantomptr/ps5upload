@@ -4,6 +4,54 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.13.0
+
+**Upload a `.zip` and it lands extracted on the PS5.** Keep a game dump as a
+single compressed `.zip` on your PC — smaller and easier to move around — and
+upload it directly. ps5upload decompresses it on your computer and streams the
+files straight into the fast-transfer pipeline, so they arrive already
+extracted on the console — no manual unzip, and no temporary full-size copy
+on your disk. The Upload screen previews what the archive expands to (e.g.
+"12 GB zipped → 47 GB extracted · 1,204 files") and detects the game's title
+from its `param.json`. Resume, excludes, the bandwidth cap, and multi-console
+mirroring all work just like folder uploads. ZIP only — `.rar` stays
+unsupported (modern scene `.rar` is split + encrypted; unpack it first).
+
+**Reliability fixes (verified on real hardware):**
+
+- Folder downloads no longer double-nest (files landed at `…/foo/foo/`) and
+  no longer stop at 256 files — large directories now paginate correctly.
+- Uploading a single empty (0-byte) file works instead of failing at commit.
+- Upload-queue failures show the plain-language hint (e.g. "PS5 ran out of
+  space — click Retry to resume") instead of a raw error, and per-file
+  progress stays accurate when a transfer resumes.
+
+**Polish across the app:**
+
+- Rename (single and bulk) refuses to overwrite an existing file, matching
+  the guard the Move dialog already had.
+- Fixed several stale-data-after-host-switch bugs on the Hardware and
+  Volumes screens, and a Power control that showed a success line and an
+  error at the same time.
+- Disk Usage shows a drillable list for a folder whose children are all
+  subfolders, instead of a blank panel.
+- Smaller touches: a first-run installer Cancel button, correct Library
+  spinner labels, bulk screenshot/rename that continue past a failed item,
+  and localized Connection step messages.
+
+**Hardening.** Untrusted `.ffpkg`/UFS2 images and upload manifests are now
+validated before use — path-allowlist checks, bounded allocations, and depth
+caps — and hosting a large package over HTTP serves it completely instead of
+silently truncating.
+
+**Linux white-screen fix (Bazzite / SteamOS / NVIDIA).** The `PS5Upload.sh`
+launcher now disables WebKitGTK's accelerated compositing path, so the app no
+longer opens as a blank white window on affected GPU/compositor stacks.
+Launch via `./PS5Upload.sh` (the recommended entry point), and see the FAQ's
+"white screen on Linux" entry for the rare stack that needs more.
+
+---
+
 ## 2.12.1
 
 Audit-fix + CI repair point release. 2.12.0's release build failed

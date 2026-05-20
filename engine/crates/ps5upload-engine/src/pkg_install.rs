@@ -72,6 +72,12 @@ pub struct InstallSession {
     /// terminates (phase = Done | Error). Then `take()`'s the field
     /// to None to prevent double-delete on subsequent polls.
     pub staging_path: Option<String>,
+    /// Cached terminal status. Once an install reaches Done/Error the
+    /// payload may reap the BGFT task_id, so re-polling it would 502 and
+    /// flip a finished install to a spurious error on the client's next
+    /// poll. We snapshot the terminal status here and replay it for any
+    /// later poll instead of hitting the (now-gone) task.
+    pub terminal_status: Option<PkgInstallStatus>,
 }
 
 #[derive(Default)]
@@ -162,16 +168,31 @@ pub struct ParseRequest {
 }
 
 async fn parse_handler(Json(req): Json<ParseRequest>) -> Response<Body> {
-    match parse_pkg(std::path::Path::new(&req.path)) {
-        Ok(meta) => json_ok(&meta),
-        Err(e) => json_err(StatusCode::BAD_REQUEST, &format!("parse failed: {e}")),
+    // spawn_blocking: parse_pkg is synchronous disk I/O (reads the pkg
+    // header); a slow/remote path would otherwise stall the async reactor.
+    // Mirrors inspect_handler / extract_handler below — parse_handler was
+    // the lone holdout still blocking inline.
+    let res = tokio::task::spawn_blocking(move || parse_pkg(std::path::Path::new(&req.path))).await;
+    match res {
+        Ok(Ok(meta)) => json_ok(&meta),
+        Ok(Err(e)) => json_err(StatusCode::BAD_REQUEST, &format!("parse failed: {e}")),
+        Err(e) => json_err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("parse task panicked: {e}"),
+        ),
     }
 }
 
 async fn parse_split_handler(Json(req): Json<ParseRequest>) -> Response<Body> {
-    match parse_split_pkg(std::path::Path::new(&req.path)) {
-        Ok(meta) => json_ok(&meta),
-        Err(e) => json_err(StatusCode::BAD_REQUEST, &format!("split parse failed: {e}")),
+    let res =
+        tokio::task::spawn_blocking(move || parse_split_pkg(std::path::Path::new(&req.path))).await;
+    match res {
+        Ok(Ok(meta)) => json_ok(&meta),
+        Ok(Err(e)) => json_err(StatusCode::BAD_REQUEST, &format!("split parse failed: {e}")),
+        Err(e) => json_err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("split parse task panicked: {e}"),
+        ),
     }
 }
 
@@ -308,6 +329,7 @@ async fn install_start_handler(
         cancelled: false,
         created_at_unix: now_unix(),
         staging_path: req.local_ps5_path.clone().filter(|s| !s.is_empty()),
+        terminal_status: None,
     };
 
     // Insert *before* sending the install frame so the HTTP listener
@@ -573,7 +595,7 @@ async fn install_status_handler(
     Query(q): Query<StatusQuery>,
 ) -> Response<Body> {
     gc_old_sessions(&state);
-    let (ps5_addr, task_id, total, cancelled) = {
+    let (ps5_addr, task_id, total, cancelled, terminal) = {
         let sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
         match sessions.get(&q.session) {
             None => {
@@ -587,9 +609,17 @@ async fn install_status_handler(
                 s.task_id,
                 s.total_size,
                 s.cancelled,
+                s.terminal_status.clone(),
             ),
         }
     };
+    // Once the install has finished, replay the cached terminal status and
+    // do NOT re-poll: the payload may have reaped the BGFT task_id, so a
+    // fresh PKG_INSTALL_STATUS would fail and turn a succeeded install into
+    // a spurious 502 on the client's next poll.
+    if let Some(status) = terminal {
+        return json_ok(&build_status_response(q.session, status, total, cancelled));
+    }
     let task_id = match task_id {
         Some(t) => t,
         None => return json_err(StatusCode::CONFLICT, "session has no BGFT task_id yet"),
@@ -604,14 +634,9 @@ async fn install_status_handler(
         }
     };
 
-    // Surface the BGFT-reported total bytes only when it's non-zero;
-    // BGFT sometimes reports 0 before download starts. Otherwise fall
-    // back to our own known total.
-    let total = if status.total > 0 {
-        status.total
-    } else {
-        total
-    };
+    // (`total` from the session is the fallback for build_status_response,
+    // which prefers the BGFT-reported size when non-zero — BGFT reports 0
+    // before the download starts.)
 
     // 2.2.52 Tier-1 staging cleanup. On terminal phase (Done | Error),
     // delete the staging file the desktop uploaded pre-install. We
@@ -655,8 +680,36 @@ async fn install_status_handler(
         }
     }
 
-    json_ok(&StatusResponse {
-        session_id: q.session,
+    // Snapshot the terminal status so later polls replay it instead of
+    // re-hitting the (soon-to-be-reaped) BGFT task — see the short-circuit
+    // at the top of this handler.
+    if matches!(status.phase, InstallPhase::Done | InstallPhase::Error) {
+        let mut sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(s) = sessions.get_mut(&q.session) {
+            s.terminal_status = Some(status.clone());
+        }
+    }
+
+    json_ok(&build_status_response(q.session, status, total, cancelled))
+}
+
+/// Build the wire `StatusResponse` from a payload `PkgInstallStatus`.
+/// `fallback_total` is our own known size, used when BGFT reports 0
+/// (which it does before the download starts). Shared by the live path
+/// and the cached-terminal replay so both render identically.
+fn build_status_response(
+    session_id: String,
+    status: PkgInstallStatus,
+    fallback_total: u64,
+    cancelled: bool,
+) -> StatusResponse {
+    let total = if status.total > 0 {
+        status.total
+    } else {
+        fallback_total
+    };
+    StatusResponse {
+        session_id,
         phase: status.phase,
         downloaded: status.downloaded,
         total,
@@ -669,7 +722,7 @@ async fn install_status_handler(
         kernel_rw: status.kernel_rw,
         shellui_err: status.shellui_err,
         appinst_err: status.appinst_err,
-    })
+    }
 }
 
 // ─── /api/pkg/install/cancel ─────────────────────────────────────────
@@ -849,8 +902,17 @@ async fn serve_handler(
         .header(header::ACCEPT_RANGES, "bytes")
         .header(header::CONTENT_LENGTH, len.to_string());
 
+    // Respond 206 + Content-Range whenever the body is a *subset* of the
+    // file — i.e. there was a Range header, OR a bare GET whose body the
+    // 16 MiB cap trimmed below `total` (`end + 1 < total`). The bare-GET
+    // case is the important one: without Content-Range, a plain
+    // `GET` on a >16 MiB pkg returned `200 OK` + `Content-Length: 16 MiB`
+    // and no signal that more bytes existed — any non-Range consumer would
+    // treat a truncated package as complete. Only a body that covers the
+    // whole file gets a bare `200 OK`.
     let has_range = headers.contains_key(header::RANGE);
-    if has_range {
+    let is_partial = serve_is_partial(has_range, end, total);
+    if is_partial {
         builder = builder.status(StatusCode::PARTIAL_CONTENT).header(
             header::CONTENT_RANGE,
             format!("bytes {start}-{end}/{total}"),
@@ -889,6 +951,17 @@ async fn resolve_parts_and_meta(
 /// up with a `bytes=(end+1)-...` request, which is what BGFT already
 /// does for legitimate chunked fetches.
 const PKG_HOST_RESPONSE_BYTES_CAP: u64 = 16 * 1024 * 1024;
+
+/// Decide whether a pkg-host response must be `206 Partial Content` (with a
+/// `Content-Range`) rather than a bare `200 OK`. True when the client sent a
+/// Range header, OR when the served body covers less than the whole file
+/// (`end + 1 < total`) — the latter happens on a bare GET whose body the
+/// 16 MiB cap trimmed. Without the second case a plain GET on a >16 MiB pkg
+/// returned `200 OK` for a truncated body, so any non-Range consumer treated
+/// an incomplete package as complete.
+fn serve_is_partial(has_range: bool, end: u64, total: u64) -> bool {
+    has_range || end + 1 < total
+}
 
 /// Map a Range request to (start, end) inclusive over the total size.
 /// We support `bytes=N-M` and `bytes=N-` only — Sony BGFT only sends
@@ -1029,6 +1102,7 @@ mod tests {
             cancelled: false,
             created_at_unix: 0,
             staging_path: None,
+            terminal_status: None,
         }
     }
 
@@ -1103,6 +1177,26 @@ mod tests {
         let (start, end) = parse_range_header(&h, 100).unwrap();
         assert_eq!(start, 0);
         assert_eq!(end, 99);
+    }
+
+    #[test]
+    fn serve_partial_status_matches_body_coverage() {
+        let total: u64 = 50 * 1024 * 1024 * 1024;
+        // Bare GET trimmed by the cap → must be 206 (body < total).
+        let (s, e) = parse_range_header(&HeaderMap::new(), total).unwrap();
+        assert_eq!(s, 0);
+        assert!(
+            serve_is_partial(false, e, total),
+            "trimmed bare GET must be 206"
+        );
+        // Bare GET on a small pkg that fits → bare 200.
+        let (_s2, e2) = parse_range_header(&HeaderMap::new(), 100).unwrap();
+        assert!(
+            !serve_is_partial(false, e2, 100),
+            "whole-file bare GET must be 200"
+        );
+        // Any explicit Range → 206, even if it happens to cover the file.
+        assert!(serve_is_partial(true, 99, 100));
     }
 
     #[test]

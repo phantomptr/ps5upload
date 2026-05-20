@@ -8,21 +8,34 @@ import {
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 
+type RawEntry = { name?: string; kind?: string; size?: number };
 interface DirListResult {
-  entries?: Array<{ name?: string; kind?: string; size?: number }>;
+  entries?: RawEntry[];
+  truncated?: boolean;
 }
 
-async function listDirRaw(
-  addr: string,
-  path: string,
-  limit: number,
-): Promise<DirListResult> {
-  return invoke<DirListResult>("ps5_list_dir", {
-    addr,
-    path,
-    offset: 0,
-    limit,
-  });
+/** The payload caps every FS_LIST_DIR response at 256 entries. */
+const LIST_PAGE = 256;
+
+/** List EVERY entry in a remote dir, paging until exhausted. The old
+ *  single-shot `limit: 2048` was silently clamped to 256 by the payload,
+ *  so any folder with >256 children had its usage massively undercounted. */
+async function listDirAll(addr: string, path: string): Promise<RawEntry[]> {
+  const all: RawEntry[] = [];
+  let offset = 0;
+  for (;;) {
+    const res = await invoke<DirListResult>("ps5_list_dir", {
+      addr,
+      path,
+      offset,
+      limit: LIST_PAGE,
+    });
+    const ents = res.entries ?? [];
+    all.push(...ents);
+    offset += ents.length;
+    if (ents.length === 0 || (!res.truncated && ents.length < LIST_PAGE)) break;
+  }
+  return all;
 }
 import { useConnectionStore } from "../../state/connection";
 import { PageHeader, Button, EmptyState } from "../../components";
@@ -61,25 +74,32 @@ export default function DiskUsageScreen() {
 
   const refresh = useCallback(async () => {
     if (!host?.trim() || payloadStatus !== "up") return;
+    // Drop-stale token: this walk is N+1 round trips over the LAN, so a fast
+    // drill A→B (or a host switch) could let an older walk resolve last and
+    // paint the wrong folder. Capture host+path and bail if either changed.
+    const token = `${host.trim()}::${path}`;
+    const isStale = () => `${host.trim()}::${path}` !== token;
+    const addr = `${host.trim()}:9114`;
     setLoading(true);
     setError(null);
     try {
-      const listing = await listDirRaw(`${host.trim()}:9114`, path, 2048);
-      // First pass: top-level entries with their direct sizes.
-      // For directories we recurse one more level so the pie has
-      // meaningful sizes for each top-level folder.
+      const entries = await listDirAll(addr, path);
+      if (isStale()) return;
+      // First pass: top-level entries with their direct sizes. For
+      // directories we recurse one more level so the pie has meaningful
+      // sizes. NOTE: directory totals are still files-in-immediate-children
+      // only — FS_LIST_DIR carries no recursive size and there's no du, so a
+      // folder of subfolders legitimately sums to 0 (see the totalBytes==0
+      // fallback list in the render).
       const result: DirNode[] = [];
-      const entries = listing.entries ?? [];
       for (const e of entries) {
         if (!e.name) continue;
         if (e.kind === "dir") {
-          // Recursive walk capped at depth 1 (so /user/app sums all
-          // its immediate children but doesn't fan out further).
           let total = 0;
           try {
             const childPath = path === "/" ? `/${e.name}` : `${path}/${e.name}`;
-            const child = await listDirRaw(`${host.trim()}:9114`, childPath, 2048);
-            for (const c of child.entries ?? []) {
+            const child = await listDirAll(addr, childPath);
+            for (const c of child) {
               total += c.size ?? 0;
             }
           } catch {
@@ -101,9 +121,11 @@ export default function DiskUsageScreen() {
           });
         }
       }
+      if (isStale()) return;
       result.sort((a, b) => b.totalSize - a.totalSize);
       setNodes(result);
     } catch (e) {
+      if (isStale()) return;
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
@@ -227,6 +249,42 @@ export default function DiskUsageScreen() {
 
           {nodes && nodes.length > 0 && totalBytes > 0 && (
             <Treemap nodes={nodes} totalBytes={totalBytes} onDrill={drill} />
+          )}
+
+          {/* Folder of subfolders: every child is a directory, which carries
+              no size (no recursive du on the payload), so totalBytes is 0 and
+              the treemap can't render. Show a drillable list + explain, rather
+              than a blank panel. */}
+          {nodes && nodes.length > 0 && totalBytes === 0 && !loading && (
+            <div className="space-y-2">
+              <p className="text-xs text-[var(--color-muted)]">
+                {tr(
+                  "disk_usage_no_recursive_sizes",
+                  undefined,
+                  "Folder sizes aren't computed recursively, so a folder containing only subfolders shows 0 B here. Drill in to see file sizes.",
+                )}
+              </p>
+              <ul className="divide-y divide-[var(--color-border)] rounded-md border border-[var(--color-border)]">
+                {nodes.map((n) => (
+                  <li key={n.name}>
+                    <button
+                      type="button"
+                      onClick={() => drill(n.name, n.isDir)}
+                      disabled={!n.isDir}
+                      className="flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-[var(--color-surface-3)] disabled:cursor-default disabled:hover:bg-transparent"
+                    >
+                      <span className="truncate">
+                        {n.isDir ? "📁 " : "📄 "}
+                        {n.name}
+                      </span>
+                      <span className="ml-3 shrink-0 text-xs text-[var(--color-muted)]">
+                        {n.isDir ? "—" : formatBytes(n.size)}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
           )}
         </div>
       )}

@@ -113,7 +113,10 @@ export default function SearchScreen() {
     setProgress({ scanned: 0, hits: 0, currentPath: "" });
     try {
       const res = await searchPS5(
-        `${host}:${PS5_PAYLOAD_PORT}`,
+        // trim() to match the gate above and every other screen — a stored
+        // host with stray whitespace would otherwise form a bad address
+        // even though the Search button was enabled.
+        `${host.trim()}:${PS5_PAYLOAD_PORT}`,
         pattern,
         minSize,
         setProgress,

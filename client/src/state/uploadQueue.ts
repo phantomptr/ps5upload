@@ -7,6 +7,7 @@ import {
   startTransferDir,
   startTransferDirReconcile,
   startTransferFile,
+  startTransferZip,
   uploadQueueLoad,
   uploadQueueSave,
   UploadJobError,
@@ -31,6 +32,7 @@ import {
 import type { SourceKind } from "./upload";
 import type { UploadStrategy } from "./transfer";
 import { useUploadSettingsStore } from "./uploadSettings";
+import { pushNotification } from "./notifications";
 import { createRunGen } from "../lib/runGen";
 
 /**
@@ -229,9 +231,24 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
   }> => {
     const isFolder =
       item.sourceKind === "folder" || item.sourceKind === "game-folder";
+    const isArchive = item.sourceKind === "archive";
 
     let jobId: string;
-    if (isFolder && item.strategy === "resume") {
+    if (isArchive) {
+      // A .zip is decompressed host-side and streamed in (lands extracted).
+      // Carry the persisted tx_id for cross-session shard resume, just like
+      // folders; there's no reconcile mode (no local tree to diff).
+      const bandwidthCap =
+        useUploadSettingsStore.getState().bandwidthCapMbps;
+      jobId = await startTransferZip(
+        item.sourcePath,
+        item.resolvedDest,
+        item.addr,
+        item.txIdHex,
+        item.excludes,
+        bandwidthCap,
+      );
+    } else if (isFolder && item.strategy === "resume") {
       // Pass the persisted tx_id so a Resume after app restart
       // picks up the payload's existing journal entry instead of
       // minting a fresh tx and re-sending everything.
@@ -356,7 +373,17 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
         };
       }
       if (snap.status === "failed") {
-        throw new Error(snap.error ?? "upload failed");
+        // Throw the *structured* error so start()'s catch can lift
+        // error_reason/error_detail onto the item — the queue row's
+        // humanized hint (humanizeJobErrorReason, e.g. "PS5 ran out of
+        // space — click Retry to resume") depends on these. A plain
+        // Error here drops the reason, so the row showed only the raw
+        // {"error":…,"detail":…} blob the single-shot path avoids.
+        throw new UploadJobError(
+          snap.error ?? "upload failed",
+          snap.error_reason,
+          snap.error_detail,
+        );
       }
       // Still running — push live progress + smoothed rate into the
       // item so the row shows a moving bar + speed without an extra
@@ -487,6 +514,23 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
     },
 
     clear() {
+      // If an item is mid-transfer, the engine job + the real PS5-side
+      // write keep running after we wipe the queue (the transfer port is
+      // single-client, so the next upload will block behind it until it
+      // finishes). Surface that instead of going silent — otherwise the
+      // user clicks Clear, the UI empties, and a subsequent upload
+      // mysteriously stalls behind the orphaned transfer. Mirrors the
+      // documented reset() caveat in transfer.ts.
+      const inFlight = get().items.find((it) => it.status === "running");
+      if (inFlight) {
+        pushNotification(
+          "info",
+          "Queue cleared — one upload is still finishing",
+          {
+            body: `"${inFlight.displayName}" is already transferring to the PS5 and will run to completion. The next upload waits until it's done.`,
+          },
+        );
+      }
       // Bumps the gen counter so any in-flight run exits at next await.
       gen.next();
       set({ items: [], running: false });

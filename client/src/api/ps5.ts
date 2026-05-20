@@ -62,6 +62,28 @@ export async function inspectFolder(path: string): Promise<FolderInspection> {
   return { result: res.result, wrapped_hint: res.wrapped_hint };
 }
 
+/** Central-directory preview of a `.zip` game dump. `total_uncompressed` is
+ *  what lands on the PS5; `compressed_size` is what the user stores. Game
+ *  fields are populated when the archive carries `sce_sys/param.json`. */
+export interface ZipInspect {
+  file_count: number;
+  total_uncompressed: number;
+  compressed_size: number;
+  title: string | null;
+  title_id: string | null;
+  content_id: string | null;
+  application_category_type: number | null;
+  /** Path inside the zip that holds `sce_sys/` (the game root), or null. */
+  game_root: string | null;
+}
+
+/** Inspect a `.zip` without extracting it. Reads only the central directory
+ *  (plus, at most, one small embedded param.json), so it's fast even for a
+ *  100 GB archive. Throws if the file isn't a readable zip. */
+export async function zipInspect(zipPath: string): Promise<ZipInspect> {
+  return invoke<ZipInspect>("zip_inspect", { req: { zip_path: zipPath } });
+}
+
 /**
  * Send the payload ELF to the PS5's ELF loader.
  *
@@ -118,6 +140,32 @@ export async function startTransferDir(
   const res = await invoke<{ job_id: string }>("transfer_dir", {
     req: {
       src_dir: srcDir,
+      dest_root: destRoot,
+      addr,
+      tx_id: txId ?? null,
+      excludes: excludes ?? [],
+      bandwidth_cap_mbps:
+        bandwidthCapMbps && bandwidthCapMbps > 0 ? bandwidthCapMbps : null,
+    },
+  });
+  return res.job_id;
+}
+
+/** Start a zip-archive upload. The engine decompresses on the host so files
+ *  land already extracted under `destRoot` — no temp copy of the whole game,
+ *  no payload changes. Same `destRoot` contract as `startTransferDir`: pass
+ *  the full final directory (e.g. `/data/homebrew/MyGame`). */
+export async function startTransferZip(
+  zipPath: string,
+  destRoot: string,
+  addr: string,
+  txId?: string | null,
+  excludes?: string[],
+  bandwidthCapMbps?: number,
+): Promise<string> {
+  const res = await invoke<{ job_id: string }>("transfer_zip", {
+    req: {
+      zip_path: zipPath,
       dest_root: destRoot,
       addr,
       tx_id: txId ?? null,

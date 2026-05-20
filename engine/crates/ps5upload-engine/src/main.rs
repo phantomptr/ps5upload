@@ -28,6 +28,8 @@
 //!   GET  /api/ps5/status              → PS5 runtime STATUS_ACK body (JSON)
 //!   POST /api/transfer/file           → start single-file transfer job
 //!   POST /api/transfer/dir            → start directory transfer job
+//!   POST /api/transfer/zip            → start zip-archive transfer (decompress on host)
+//!   POST /api/zip/inspect             → preview a .zip (counts/sizes/game meta)
 //!   POST /api/transfer/file-list      → start multi-file transfer from explicit list
 //!   GET  /api/jobs/{id}               → poll job status/result
 //!   GET  /api/jobs                    → list all jobs (summary)
@@ -70,8 +72,9 @@ use ps5upload_core::{
         humanize_err as sys_time_humanize, ps5_time_get, ps5_time_set, PsTime, PsTimeSetResult,
     },
     transfer::{
-        transfer_dir_resumable, transfer_file_list_resumable, transfer_file_path_resumable,
-        FileListEntry, TransferConfig, TX_FLAG_RESUME,
+        inspect_zip, transfer_dir_resumable, transfer_file_list_resumable,
+        transfer_file_path_resumable, transfer_zip_resumable, zip_plan_preview, FileListEntry,
+        TransferConfig, DEFAULT_ZIP_ENTRY_RAM_THRESHOLD, TX_FLAG_RESUME,
     },
     volumes::{list_volumes, VolumeList},
 };
@@ -700,6 +703,30 @@ struct TransferDirReq {
     excludes: Vec<String>,
     #[serde(default)]
     bandwidth_cap_mbps: Option<f64>,
+}
+
+/// Upload a `.zip`'s contents, decompressing on the host so files land
+/// already extracted on the PS5. Same shape as `TransferDirReq` but the
+/// source is an archive path instead of a directory.
+#[derive(Deserialize)]
+struct TransferZipReq {
+    addr: Option<String>,
+    tx_id: Option<String>,
+    dest_root: String,
+    zip_path: String,
+    #[serde(default)]
+    excludes: Vec<String>,
+    #[serde(default)]
+    bandwidth_cap_mbps: Option<f64>,
+    /// Per-entry RAM-vs-temp inflate threshold, in MiB. None = engine default
+    /// (`FTX2_ZIP_RAM_THRESHOLD_MB` env, else the core default).
+    #[serde(default)]
+    ram_threshold_mb: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct ZipInspectReq {
+    zip_path: String,
 }
 
 #[derive(Deserialize)]
@@ -1806,8 +1833,15 @@ fn validate_meta_path(path: &str) -> Result<(), (StatusCode, String)> {
             "path must be absolute (start with /)".into(),
         ));
     }
-    if path.contains("..") {
-        return Err((StatusCode::BAD_REQUEST, "path must not contain '..'".into()));
+    // Reject `..` as a path *component* only — a substring check would
+    // also reject legitimate names that merely contain ".." (e.g. a folder
+    // literally named `my..game`). Traversal is what we're guarding
+    // against, and that's always a standalone `..` segment.
+    if path.split('/').any(|seg| seg == "..") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "path must not contain a '..' segment".into(),
+        ));
     }
     Ok(())
 }
@@ -1825,9 +1859,13 @@ async fn ps5_game_meta(
         // param.json — tiny (~1 KiB for real PS5 titles), just pull the
         // whole thing in one FS_READ. If the file isn't there, return
         // a default response; the UI will still show the folder name.
+        // Cap at the payload's single-read max (2 MiB), not 256 KiB: a
+        // param.json with many localizedParameters locales can exceed
+        // 256 KiB, and a truncated read fails to parse → silent "no
+        // metadata". 2 MiB covers any realistic param.json in one call.
         let param_path = format!("{}/sce_sys/param.json", path.trim_end_matches('/'));
         let (title, title_id, content_id, content_version, application_category_type) =
-            match fs_read(&addr, &param_path, 0, 256 * 1024) {
+            match fs_read(&addr, &param_path, 0, 2 * 1024 * 1024) {
                 Ok(bytes) if !bytes.is_empty() => match parse_param_json_bytes(&bytes) {
                     Ok(r) => (
                         r.title,
@@ -2204,6 +2242,22 @@ async fn transfer_dir_handler(
         0
     };
 
+    // Fail fast on a missing / non-directory source. walk_plan swallows
+    // read errors (returns empty), so without this a typo'd path or a
+    // permissions problem would start a "Running → 0 bytes" job (or a fake
+    // "Done, 0 files") instead of a clear error — mirroring the up-front
+    // stat that transfer_file_handler already does for single files.
+    if !std::path::Path::new(&req.src_dir).is_dir() {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "source directory not found or not a directory: {}",
+                req.src_dir
+            ),
+        )
+        .into_response();
+    }
+
     let job_id = Uuid::new_v4();
     let started_at_ms = now_ms();
     crate::log_info!(
@@ -2286,6 +2340,168 @@ async fn transfer_dir_handler(
                         files_sent: files_sent_count,
                         skipped_files: skipped_files_count,
                         skipped_bytes: skipped_bytes_count,
+                        commit_ack: serde_json::from_str(&r.commit_ack_body).ok(),
+                    },
+                )
+            }
+            Err(e) => {
+                let completed_at_ms = now_ms();
+                set_job(
+                    &jobs,
+                    &events_tx,
+                    job_id,
+                    job_failed_from_err(started_at_ms, completed_at_ms, &e),
+                )
+            }
+        }
+        fail_guard.mark_succeeded();
+    });
+
+    (
+        StatusCode::ACCEPTED,
+        Json(JobCreated {
+            job_id: job_id.to_string(),
+        }),
+    )
+        .into_response()
+}
+
+/// POST /api/zip/inspect — central-directory-only preview of a `.zip`
+/// (file count, compressed vs uncompressed size, embedded game metadata).
+/// Never inflates the bulk of the archive. Used by the Upload screen so the
+/// user sees what a compressed dump expands to before sending it.
+async fn zip_inspect_handler(Json(req): Json<ZipInspectReq>) -> impl IntoResponse {
+    let zip_path = req.zip_path;
+    match tokio::task::spawn_blocking(move || inspect_zip(std::path::Path::new(&zip_path))).await {
+        Ok(Ok(inspect)) => (StatusCode::OK, Json(inspect)).into_response(),
+        Ok(Err(e)) => json_err(StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+        Err(e) => json_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// POST /api/transfer/zip — start a zip-archive upload job. Mirrors
+/// `transfer_dir_handler`: plan (central directory) → BEGIN_TX → stream shards
+/// (inflating one entry at a time) → COMMIT_TX, with the same job/progress/SSE
+/// plumbing and resume semantics. The progress denominator is the *total
+/// uncompressed* size (what actually lands on the PS5).
+async fn transfer_zip_handler(
+    State(state): State<AppState>,
+    Json(req): Json<TransferZipReq>,
+) -> impl IntoResponse {
+    let addr = req.addr.unwrap_or_else(|| state.default_ps5_addr.clone());
+    let caller_supplied_tx_id = req.tx_id.is_some();
+    let tx_id = match parse_or_random_tx_id(req.tx_id.as_deref()) {
+        Ok(id) => id,
+        Err(e) => return json_err(StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    };
+    let initial_flags = if caller_supplied_tx_id {
+        TX_FLAG_RESUME
+    } else {
+        0
+    };
+
+    // Central-directory-only plan: total uncompressed bytes (progress
+    // denominator) + the file list (UI tree). A corrupt/missing zip fails
+    // here with a clear message instead of starting a doomed job.
+    let (total_bytes, preview) =
+        match zip_plan_preview(std::path::Path::new(&req.zip_path), &req.excludes) {
+            Ok(v) => v,
+            Err(e) => return json_err(StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+        };
+    let files: Vec<PlannedFile> = preview
+        .into_iter()
+        .map(|(rel_path, size)| PlannedFile { rel_path, size })
+        .collect();
+    let files_sent_count = files.len() as u64;
+
+    // RAM-vs-temp inflate threshold: request override (MiB) → env → core
+    // default. Bounds the host memory/temp the zip path can use at once.
+    let ram_threshold = req
+        .ram_threshold_mb
+        .map(|mb| mb.saturating_mul(1024 * 1024))
+        .or_else(|| {
+            std::env::var("FTX2_ZIP_RAM_THRESHOLD_MB")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .map(|mb| mb.saturating_mul(1024 * 1024))
+        })
+        .unwrap_or(DEFAULT_ZIP_ENTRY_RAM_THRESHOLD);
+
+    let job_id = Uuid::new_v4();
+    let started_at_ms = now_ms();
+    crate::log_info!(
+        "transfer_zip: job={job_id} addr={addr} zip={} dest_root={} resume={} files={} bytes={total_bytes}",
+        req.zip_path,
+        req.dest_root,
+        caller_supplied_tx_id,
+        files_sent_count
+    );
+    let progress = Arc::new(AtomicU64::new(0));
+    let ctx = TickerContext {
+        started_at_ms,
+        total_bytes,
+        skipped_files: 0,
+        skipped_bytes: 0,
+    };
+    set_job(
+        &state.jobs,
+        &state.events_tx,
+        job_id,
+        JobState::Running {
+            started_at_ms,
+            bytes_sent: 0,
+            total_bytes,
+            files,
+            skipped_files: 0,
+            skipped_bytes: 0,
+        },
+    );
+
+    let jobs = Arc::clone(&state.jobs);
+    let events_tx = state.events_tx.clone();
+    let stop_ticker = spawn_progress_ticker(
+        Arc::clone(&jobs),
+        events_tx.clone(),
+        job_id,
+        ctx,
+        Arc::clone(&progress),
+    );
+
+    tokio::task::spawn_blocking(move || {
+        let _stop_guard = TickerStopGuard::new(stop_ticker);
+        let mut fail_guard =
+            JobFailOnDropGuard::new(Arc::clone(&jobs), events_tx.clone(), job_id, started_at_ms);
+        let mut cfg = make_transfer_config(&addr);
+        cfg.excludes = req.excludes;
+        cfg.progress_bytes = Some(Arc::clone(&progress));
+        apply_per_request_bandwidth(&mut cfg, req.bandwidth_cap_mbps);
+        let result = transfer_zip_resumable(
+            &cfg,
+            tx_id,
+            &req.dest_root,
+            std::path::Path::new(&req.zip_path),
+            ram_threshold,
+            2,
+            initial_flags,
+        );
+        match result {
+            Ok(r) => {
+                let completed_at_ms = now_ms();
+                set_job(
+                    &jobs,
+                    &events_tx,
+                    job_id,
+                    JobState::Done {
+                        started_at_ms,
+                        completed_at_ms,
+                        elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
+                        tx_id_hex: r.tx_id_hex,
+                        shards_sent: r.shards_sent,
+                        bytes_sent: r.bytes_sent,
+                        dest: r.dest,
+                        files_sent: files_sent_count,
+                        skipped_files: 0,
+                        skipped_bytes: 0,
                         commit_ack: serde_json::from_str(&r.commit_ack_body).ok(),
                     },
                 )
@@ -2568,6 +2784,14 @@ async fn transfer_download_handler(
             .into_response();
         }
     }
+    // `dest_root` is the LOGICAL landing path (dest_dir/<basename>) reported
+    // back to the UI for display. It is NOT the write root: the download
+    // manifest's rel_paths already begin with `<basename>` (walk_remote_dir
+    // prefixes folder entries, and the single-file branch sets rel_path =
+    // basename), so files are written under `dest_dir` directly — joining
+    // basename again here as the write root double-nested everything as
+    // `dest_dir/foo/foo/...` (confirmed on hardware). See download_to_local
+    // call below, which now takes `dest_dir`.
     let dest_root = dest_dir.join(basename);
 
     let job_id = Uuid::new_v4();
@@ -2662,7 +2886,9 @@ async fn transfer_download_handler(
         let _stop_guard = TickerStopGuard::new(stop_ticker);
         let mut fail_guard =
             JobFailOnDropGuard::new(Arc::clone(&jobs), events_tx.clone(), job_id, started_at_ms);
-        let result = download_to_local(&mgmt_addr, &dest_root, &manifest, Some(&progress));
+        // Write root is `dest_dir` (NOT dest_root) — rel_paths already carry
+        // the basename prefix; see the dest_root comment above.
+        let result = download_to_local(&mgmt_addr, &dest_dir, &manifest, Some(&progress));
         match result {
             Ok(bytes_written) => {
                 let completed_at_ms = now_ms();
@@ -3349,6 +3575,8 @@ async fn main() {
         .route("/api/ps5/game-icon", get(ps5_game_icon))
         .route("/api/transfer/file", post(transfer_file_handler))
         .route("/api/transfer/dir", post(transfer_dir_handler))
+        .route("/api/transfer/zip", post(transfer_zip_handler))
+        .route("/api/zip/inspect", post(zip_inspect_handler))
         .route("/api/transfer/file-list", post(transfer_file_list_handler))
         .route("/api/transfer/download", post(transfer_download_handler))
         .route(

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Gauge, Loader2, Play, AlertTriangle } from "lucide-react";
 import { netSpeedTestRun, type NetSpeedTestResult } from "../../api/ps5";
 import { Button } from "../../components";
@@ -20,6 +20,14 @@ export default function SpeedTestPanel({ mgmtAddr }: { mgmtAddr: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [rounds, setRounds] = useState(64);
+
+  // Clear results when the active console changes — the panel stays mounted
+  // across host switches, so without this it would show console A's RTT
+  // numbers under console B.
+  useEffect(() => {
+    setResult(null);
+    setError(null);
+  }, [mgmtAddr]);
 
   async function run() {
     setBusy(true);

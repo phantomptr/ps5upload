@@ -372,40 +372,68 @@ struct PipelinedSender<'a> {
     throttle: Option<BandwidthThrottle>,
 }
 
-/// Token-bucket-style throttle. Tracks bytes sent + wall time since
-/// it started, sleeps just enough between shards to keep the running
-/// average below `cap_bps`. Coarse-grained: a single shard's TCP
-/// write isn't paced internally, so the instantaneous rate during
-/// one shard's send may briefly spike above the cap.
+/// Token-bucket throttle. `allowance` (in bytes) refills continuously at
+/// `cap_bps`, capped at a one-second burst; each send spends `n` tokens and
+/// sleeps off any deficit.
+///
+/// Why a bucket and not a cumulative bytes/elapsed average: the old version
+/// compared total `bytes_sent` against `cap_bps * elapsed_since_start`. Once
+/// real elapsed time ran ahead of the byte target — which any stall (slow
+/// ACK, network hiccup, a long drain) guarantees — it concluded "behind
+/// pace" forever and stopped sleeping, silently abandoning the cap for the
+/// rest of the transfer. That's the opposite of what the cap is for (leave
+/// headroom when the link is contended). The bucket can't bank more than one
+/// second of unspent credit, so a stall grants at most a one-second burst
+/// and pacing resumes immediately after.
 struct BandwidthThrottle {
-    cap_bps: u64,
-    started_at: std::time::Instant,
-    bytes_sent: u64,
+    cap_bps: f64,
+    /// Available send budget in bytes. May go negative between the spend and
+    /// the compensating sleep; carried forward so oversized shards still get
+    /// fully paced across calls.
+    allowance: f64,
+    last_refill: std::time::Instant,
 }
 
 impl BandwidthThrottle {
     fn new(cap_bps: u64) -> Self {
+        let cap = cap_bps.max(1) as f64;
         Self {
-            cap_bps: cap_bps.max(1),
-            started_at: std::time::Instant::now(),
-            bytes_sent: 0,
+            cap_bps: cap,
+            allowance: cap, // start with one second of burst headroom
+            last_refill: std::time::Instant::now(),
+        }
+    }
+
+    /// Pure pacing math: refill against `now`, spend `n`, and return how long
+    /// the caller must sleep. Split out from the wall-clock sleep so it's
+    /// unit-testable with synthetic timestamps.
+    fn charge(&mut self, n: usize, now: std::time::Instant) -> std::time::Duration {
+        let dt = now
+            .saturating_duration_since(self.last_refill)
+            .as_secs_f64();
+        self.last_refill = now;
+        // Refill, capped at one second of burst — this clamp is the fix: a
+        // long idle stretch can't accumulate unbounded credit.
+        self.allowance = (self.allowance + dt * self.cap_bps).min(self.cap_bps);
+        self.allowance -= n as f64;
+        if self.allowance < 0.0 {
+            // Sleep off the deficit, clamped to 1s so one huge shard against
+            // a low cap is paced over several short sleeps. Credit the time
+            // we'll sleep so the deficit isn't also charged on the next call.
+            let deficit_secs = (-self.allowance / self.cap_bps).min(1.0);
+            self.allowance += deficit_secs * self.cap_bps;
+            std::time::Duration::from_secs_f64(deficit_secs)
+        } else {
+            std::time::Duration::ZERO
         }
     }
 
     /// Record `n` bytes just sent and sleep if we're ahead of pace.
     /// Called after each successful shard send.
     fn account_and_pace(&mut self, n: usize) {
-        self.bytes_sent = self.bytes_sent.saturating_add(n as u64);
-        let elapsed = self.started_at.elapsed();
-        let target_secs = self.bytes_sent as f64 / self.cap_bps as f64;
-        let elapsed_secs = elapsed.as_secs_f64();
-        if target_secs > elapsed_secs {
-            let sleep_for = target_secs - elapsed_secs;
-            // Cap the sleep at 1s — if we ever fall this far behind
-            // pace it's better to take many short sleeps than one
-            // huge one (keeps the rate smoother on the consumer side).
-            let sleep_clamped = sleep_for.min(1.0);
-            std::thread::sleep(std::time::Duration::from_secs_f64(sleep_clamped));
+        let sleep_for = self.charge(n, std::time::Instant::now());
+        if !sleep_for.is_zero() {
+            std::thread::sleep(sleep_for);
         }
     }
 }
@@ -654,7 +682,16 @@ fn transfer_file_with_flags(
 ) -> Result<TransferResult> {
     let tx_id_hex = bytes_to_hex(&tx_id);
     let total_bytes = data.len() as u64;
-    let total_shards = data.chunks(cfg.shard_size).count() as u64;
+    // A 0-byte file still needs ONE (empty) shard: the payload's direct
+    // writer only creates the `.ps5up2-tmp` file when it receives a shard,
+    // so with zero shards COMMIT's temp→final rename fails with
+    // `direct_rename_failed` (confirmed on hardware). The dir path handles
+    // this via PlannedShard::Empty; mirror it here.
+    let total_shards = if data.is_empty() {
+        1
+    } else {
+        data.chunks(cfg.shard_size).count() as u64
+    };
 
     let manifest_json = serde_json::to_vec(&Manifest {
         dest_root: dest.to_string(),
@@ -699,13 +736,21 @@ fn transfer_file_with_flags(
     let mut shards_sent = 0u64;
     {
         let mut sender = PipelinedSender::new(&mut c, cfg, tx_id, total_shards);
-        for (i, chunk) in data.chunks(cfg.shard_size).enumerate() {
-            let shard_seq = i as u64 + 1;
-            if shard_seq > last_acked_shard {
-                sender.send(shard_seq, chunk)?;
+        if data.is_empty() {
+            // Single empty shard so the payload materialises the 0-byte file.
+            if last_acked_shard < 1 {
+                sender.send(1, &[])?;
                 shards_sent += 1;
-                if let Some(p) = &cfg.progress_bytes {
-                    p.fetch_add(chunk.len() as u64, std::sync::atomic::Ordering::Relaxed);
+            }
+        } else {
+            for (i, chunk) in data.chunks(cfg.shard_size).enumerate() {
+                let shard_seq = i as u64 + 1;
+                if shard_seq > last_acked_shard {
+                    sender.send(shard_seq, chunk)?;
+                    shards_sent += 1;
+                    if let Some(p) = &cfg.progress_bytes {
+                        p.fetch_add(chunk.len() as u64, std::sync::atomic::Ordering::Relaxed);
+                    }
                 }
             }
         }
@@ -776,8 +821,13 @@ fn transfer_file_path_with_flags(
         bail!("source is not a regular file: {}", src.display());
     }
     let total_bytes = meta.len();
+    // A 0-byte file needs ONE empty shard (not zero) so the payload's direct
+    // writer creates the temp file that COMMIT renames into place — otherwise
+    // commit fails with `direct_rename_failed` (confirmed on hardware). With
+    // total_shards=1 the size-driven send loop below reads a 0-length chunk
+    // and emits the empty shard naturally.
     let total_shards = if total_bytes == 0 {
-        0
+        1
     } else {
         total_bytes.div_ceil(cfg.shard_size as u64)
     };
@@ -1601,6 +1651,842 @@ pub fn transfer_file_list_resumable(
     resumable_retry(max_retries, "transfer_file_list", initial_flags, |flags| {
         transfer_file_list_with_flags(cfg, tx_id, dest_root, entries, flags)
     })
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Zip-archive transfer — stream-decompress a .zip straight into the FTX2 pipe
+// ════════════════════════════════════════════════════════════════════════════
+//
+// The goal (feature request: "compress game dumps … extract them directly to
+// the console"): let users keep a game as a single `.zip` on the PC and upload
+// it so the files land *already extracted* on the PS5 — no temp copy of the
+// whole game, and no payload changes (the console receives raw files exactly as
+// it does for a folder upload).
+//
+// ── Why this is just `transfer_dir` with a different byte source ─────────────
+//
+// `transfer_dir` plans shards from `(file, offset, len)` and materialises each
+// shard lazily by `seek + read`. A DEFLATE-compressed zip entry is NOT
+// seekable, so we can't seek to an arbitrary offset of the *decompressed*
+// stream on demand. The fix is the same one SimpleZipDrive uses: inflate a
+// whole entry once into a seekable cache (RAM for small entries, a temp file
+// for large ones), then serve the shard's byte range out of that cache.
+//
+// ── Why a single-entry cache suffices (Strategy C) ──────────────────────────
+//
+// Shards are planned and sent in entry order, and all of an entry's shards are
+// contiguous. So the cache only ever needs to hold the *current* entry: when a
+// shard for a different entry arrives, we evict and inflate the new one. This
+// bounds host memory/temp to one entry's uncompressed size and makes resume
+// trivial — a resumed mid-entry shard just re-inflates that entry locally
+// (cheap, no re-download) and reads the resumed range. Tiny entries that get
+// coalesced into a packed shard are inflated whole on the spot (they're below
+// `pack_file_max`, i.e. 128 KiB) and never touch the single-entry cache.
+
+/// Entries whose *uncompressed* size is at or above this inflate to a temp
+/// file; smaller entries inflate into a RAM buffer. 512 MiB matches
+/// SimpleZipDrive's default per-file RAM threshold. Only one entry is ever
+/// cached at a time, so this is the peak extra RAM the zip path can use.
+pub const DEFAULT_ZIP_ENTRY_RAM_THRESHOLD: u64 = 512 * 1024 * 1024;
+
+/// Distinct cache-file id per `ZipMaterialiser`, so two concurrent zip
+/// transfers in the same process can't collide on `pid-index` temp names.
+static ZIP_MATERIALISER_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Sanitize a zip entry name into a safe POSIX-relative path (forward
+/// slashes for the PS5). Rejects traversal (`..`), NUL, backslash segments,
+/// and absolute/empty paths — the same zip-slip defense as the client's
+/// `save_archive::sanitize_entry`, returning a string instead of a host
+/// `PathBuf`. Returns `None` for directory-only or unsafe names.
+fn sanitize_zip_entry(name: &str) -> Option<String> {
+    let mut parts: Vec<&str> = Vec::new();
+    for seg in name.split('/') {
+        if seg.is_empty() || seg == "." {
+            continue;
+        }
+        if seg == ".." {
+            return None;
+        }
+        if seg.contains('\\') || seg.contains('\0') {
+            return None;
+        }
+        parts.push(seg);
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    Some(parts.join("/"))
+}
+
+/// One file entry inside the source zip, resolved from the central directory.
+/// `entry_index` indexes back into `ZipArchive::by_index`.
+struct ZipPlanFile {
+    dest_path: String,
+    entry_index: usize,
+    size: u64,
+}
+
+/// One packed record sourced from a zip entry (parallels `PackRecord`, which
+/// is file-backed).
+struct ZipPackRecord {
+    dest_path: String,
+    entry_index: usize,
+    size: u64,
+}
+
+/// A planned zip shard. Parallels `PlannedShard` but sources bytes from zip
+/// entries via a `ZipMaterialiser` instead of from files on disk.
+enum ZipShard {
+    Empty {
+        shard_seq: u64,
+    },
+    /// A slice `[offset, offset+len)` of one entry's *uncompressed* bytes.
+    /// `entry_size` is the entry's full uncompressed length (from the central
+    /// directory) — needed so the materialiser sizes its cache and validates
+    /// the inflate against the true size, not just this shard's slice.
+    NonPacked {
+        shard_seq: u64,
+        entry_index: usize,
+        entry_size: u64,
+        offset: u64,
+        len: u64,
+    },
+    /// Many small entries coalesced into one packed shard body.
+    Packed {
+        shard_seq: u64,
+        records: Vec<ZipPackRecord>,
+    },
+}
+
+fn zip_shard_seq(zs: &ZipShard) -> u64 {
+    match zs {
+        ZipShard::Empty { shard_seq }
+        | ZipShard::NonPacked { shard_seq, .. }
+        | ZipShard::Packed { shard_seq, .. } => *shard_seq,
+    }
+}
+
+fn zip_shard_meta(zs: &ZipShard) -> (u32, u32) {
+    match zs {
+        ZipShard::Empty { .. } | ZipShard::NonPacked { .. } => (1, 0),
+        ZipShard::Packed { records, .. } => (records.len() as u32, SHARD_FLAG_PACKED),
+    }
+}
+
+/// The currently-inflated entry, kept seekable so shard byte-ranges can be
+/// served without re-decompressing.
+enum ZipEntryCache {
+    Mem {
+        index: usize,
+        data: Vec<u8>,
+    },
+    Tmp {
+        index: usize,
+        file: std::fs::File,
+        path: std::path::PathBuf,
+    },
+}
+
+impl ZipEntryCache {
+    fn index(&self) -> usize {
+        match self {
+            ZipEntryCache::Mem { index, .. } | ZipEntryCache::Tmp { index, .. } => *index,
+        }
+    }
+}
+
+/// Owns the open archive and the single-entry inflate cache. Drops/evicts the
+/// temp file on drop so an aborted transfer doesn't leak cache files.
+struct ZipMaterialiser {
+    archive: zip::ZipArchive<std::io::BufReader<std::fs::File>>,
+    ram_threshold: u64,
+    tmp_dir: std::path::PathBuf,
+    id: u64,
+    cache: Option<ZipEntryCache>,
+}
+
+impl ZipMaterialiser {
+    fn new(
+        archive: zip::ZipArchive<std::io::BufReader<std::fs::File>>,
+        ram_threshold: u64,
+        tmp_dir: std::path::PathBuf,
+    ) -> Self {
+        Self {
+            archive,
+            ram_threshold,
+            tmp_dir,
+            id: ZIP_MATERIALISER_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            cache: None,
+        }
+    }
+
+    /// Drop the cached entry, deleting the temp file if there was one.
+    fn evict(&mut self) {
+        if let Some(ZipEntryCache::Tmp { path, .. }) = self.cache.take() {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+
+    /// Ensure `index` is the cached entry, inflating it whole if not. The
+    /// inflated length is checked against the central-directory size we
+    /// planned with — a mismatch means a corrupt/lying zip and fails loudly
+    /// rather than silently truncating the file delivered to the PS5.
+    fn ensure_entry(&mut self, index: usize, expected: u64) -> Result<()> {
+        if self.cache.as_ref().map(ZipEntryCache::index) == Some(index) {
+            return Ok(());
+        }
+        self.evict();
+        use std::io::Read;
+        let mut zf = self
+            .archive
+            .by_index(index)
+            .with_context(|| format!("open zip entry {index}"))?;
+        if expected < self.ram_threshold {
+            let mut data = Vec::with_capacity(expected as usize);
+            zf.read_to_end(&mut data)
+                .with_context(|| format!("inflate zip entry {index} to memory"))?;
+            if data.len() as u64 != expected {
+                bail!(
+                    "zip entry {index} inflated to {} bytes, central directory said {expected}",
+                    data.len()
+                );
+            }
+            self.cache = Some(ZipEntryCache::Mem { index, data });
+        } else {
+            let path = self.tmp_dir.join(format!(
+                "ps5upload-zipcache-{}-{}-{index}.tmp",
+                std::process::id(),
+                self.id
+            ));
+            let mut wf = std::fs::File::create(&path)
+                .with_context(|| format!("create zip cache file {}", path.display()))?;
+            let written = std::io::copy(&mut zf, &mut wf)
+                .with_context(|| format!("inflate zip entry {index} to {}", path.display()))?;
+            drop(zf);
+            wf.sync_all().ok();
+            drop(wf);
+            if written != expected {
+                let _ = std::fs::remove_file(&path);
+                bail!("zip entry {index} inflated to {written} bytes, central directory said {expected}");
+            }
+            let file = std::fs::File::open(&path)
+                .with_context(|| format!("reopen zip cache file {}", path.display()))?;
+            self.cache = Some(ZipEntryCache::Tmp { index, file, path });
+        }
+        Ok(())
+    }
+
+    /// Serve `[offset, offset+len)` of entry `index` (uncompressed) from the
+    /// cache, inflating the entry first if needed. `entry_size` is the entry's
+    /// full uncompressed length, used to size the cache and bounds-check.
+    fn read_range(
+        &mut self,
+        index: usize,
+        entry_size: u64,
+        offset: u64,
+        len: u64,
+    ) -> Result<Vec<u8>> {
+        // checked_add: `entry_size` originates from the (untrusted) zip
+        // central directory, so guard the bound itself against u64 wrap —
+        // not just the slice math below.
+        if offset.checked_add(len).is_none_or(|end| end > entry_size) {
+            bail!("zip shard range {offset}+{len} exceeds entry {index} size {entry_size}");
+        }
+        self.ensure_entry(index, entry_size)?;
+        use std::io::{Read, Seek, SeekFrom};
+        match self.cache.as_mut().expect("ensure_entry populated cache") {
+            ZipEntryCache::Mem { data, .. } => {
+                let start = offset as usize;
+                let end = start
+                    .checked_add(len as usize)
+                    .context("zip shard range overflow")?;
+                let slice = data
+                    .get(start..end)
+                    .context("zip shard range out of bounds (mem cache)")?;
+                Ok(slice.to_vec())
+            }
+            ZipEntryCache::Tmp { file, .. } => {
+                file.seek(SeekFrom::Start(offset))
+                    .context("seek zip cache file")?;
+                let mut buf = vec![0u8; len as usize];
+                file.read_exact(&mut buf).context("read zip cache file")?;
+                Ok(buf)
+            }
+        }
+    }
+
+    /// Inflate an entire small entry without disturbing the single-entry
+    /// cache. Used for packed records, which are below `pack_file_max`.
+    fn read_whole_small(&mut self, index: usize, expected: u64) -> Result<Vec<u8>> {
+        use std::io::Read;
+        let mut zf = self
+            .archive
+            .by_index(index)
+            .with_context(|| format!("open packed zip entry {index}"))?;
+        let mut data = Vec::with_capacity(expected as usize);
+        zf.read_to_end(&mut data)
+            .with_context(|| format!("inflate packed zip entry {index}"))?;
+        if data.len() as u64 != expected {
+            bail!(
+                "packed zip entry {index} inflated to {} bytes, central directory said {expected}",
+                data.len()
+            );
+        }
+        Ok(data)
+    }
+
+    /// Materialise one shard's wire body — the zip analogue of
+    /// `materialise_body`. Packed bodies use the same
+    /// `[u32 path_len][u32 size][path][data]` record layout the payload's
+    /// pack parser expects.
+    fn body(&mut self, zs: &ZipShard) -> Result<Vec<u8>> {
+        match zs {
+            ZipShard::Empty { .. } => Ok(Vec::new()),
+            ZipShard::NonPacked {
+                entry_index,
+                entry_size,
+                offset,
+                len,
+                ..
+            } => self.read_range(*entry_index, *entry_size, *offset, *len),
+            ZipShard::Packed { records, .. } => {
+                // Don't pin a large cached entry while emitting tiny records.
+                self.evict();
+                let mut buf = Vec::new();
+                for r in records {
+                    let data = self.read_whole_small(r.entry_index, r.size)?;
+                    let p = r.dest_path.as_bytes();
+                    let path_len = u32::try_from(p.len())
+                        .with_context(|| format!("packed zip path too long: {}", r.dest_path))?;
+                    let rec_size = u32::try_from(r.size).with_context(|| {
+                        format!("packed zip size {} exceeds u32: {}", r.size, r.dest_path)
+                    })?;
+                    buf.extend_from_slice(&path_len.to_le_bytes());
+                    buf.extend_from_slice(&rec_size.to_le_bytes());
+                    buf.extend_from_slice(p);
+                    buf.extend_from_slice(&data);
+                }
+                Ok(buf)
+            }
+        }
+    }
+}
+
+impl Drop for ZipMaterialiser {
+    fn drop(&mut self) {
+        self.evict();
+    }
+}
+
+/// Lightweight preview of a `.zip` for the Upload screen: how much it expands
+/// to, how many files, and the game it contains (if it carries a
+/// `sce_sys/param.json`). Reads only the central directory plus, at most, one
+/// small `param.json` — never inflates the bulk of the archive.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ZipInspect {
+    /// Number of extractable file entries (directories excluded).
+    pub file_count: u64,
+    /// Sum of uncompressed sizes — what lands on the PS5.
+    pub total_uncompressed: u64,
+    /// Size of the `.zip` on disk — what the user is storing.
+    pub compressed_size: u64,
+    /// Game title from an embedded `sce_sys/param.json`, if any.
+    pub title: Option<String>,
+    /// Title ID, e.g. "PPSA00000".
+    pub title_id: Option<String>,
+    /// Content ID, e.g. "EP0000-PPSA00000_00-…".
+    pub content_id: Option<String>,
+    /// `applicationCategoryType` (0 = game).
+    pub application_category_type: Option<i64>,
+    /// The path *inside the zip* that contains `sce_sys/` (the game root),
+    /// e.g. "MyGame" for `MyGame/sce_sys/param.json`, or "" if param.json is
+    /// at the archive root. `None` when no game metadata was found.
+    pub game_root: Option<String>,
+}
+
+/// Inspect a `.zip` without extracting it. Walks the central directory for
+/// counts/sizes and, if it finds the shallowest `sce_sys/param.json`, parses
+/// it in memory for game metadata.
+pub fn inspect_zip(zip_path: &Path) -> Result<ZipInspect> {
+    let compressed_size = std::fs::metadata(zip_path)
+        .with_context(|| format!("stat zip {}", zip_path.display()))?
+        .len();
+    let file = std::fs::File::open(zip_path)
+        .with_context(|| format!("open zip {}", zip_path.display()))?;
+    let mut archive = zip::ZipArchive::new(std::io::BufReader::new(file))
+        .with_context(|| format!("read zip central directory {}", zip_path.display()))?;
+
+    let mut file_count = 0u64;
+    let mut total_uncompressed = 0u64;
+    // Find the shallowest "<root>/sce_sys/param.json" (fewest path segments)
+    // so a wrapped dump (`MyGame/sce_sys/…`) and a root dump
+    // (`sce_sys/…`) both resolve to the real game root.
+    let mut param_hit: Option<(usize, usize, String)> = None; // (depth, entry_index, game_root)
+    for i in 0..archive.len() {
+        let (name, size, is_dir) = {
+            let e = archive
+                .by_index(i)
+                .with_context(|| format!("read zip entry {i}"))?;
+            (e.name().to_string(), e.size(), e.is_dir())
+        };
+        if is_dir {
+            continue;
+        }
+        let Some(rel) = sanitize_zip_entry(&name) else {
+            continue;
+        };
+        file_count += 1;
+        total_uncompressed += size;
+        if let Some(root) = rel.strip_suffix("sce_sys/param.json") {
+            let game_root = root.trim_end_matches('/').to_string();
+            let depth = rel.split('/').count();
+            if param_hit.as_ref().is_none_or(|(d, _, _)| depth < *d) {
+                param_hit = Some((depth, i, game_root));
+            }
+        }
+    }
+
+    let mut inspect = ZipInspect {
+        file_count,
+        total_uncompressed,
+        compressed_size,
+        title: None,
+        title_id: None,
+        content_id: None,
+        application_category_type: None,
+        game_root: None,
+    };
+
+    if let Some((_, idx, game_root)) = param_hit {
+        use std::io::Read;
+        // Cap the inflate: a real param.json is a few KiB, but inspect_zip
+        // runs on user-supplied archives just to render the Upload preview,
+        // so a crafted entry named sce_sys/param.json that decompresses to
+        // gigabytes (zip bomb) must not OOM the engine before any upload
+        // even starts. `take` bounds the read; a param.json that doesn't
+        // fit in 4 MiB simply fails to parse and we fall through to the
+        // size/count-only preview.
+        const MAX_PARAM_JSON: u64 = 4 * 1024 * 1024;
+        let mut bytes = Vec::new();
+        let zf = archive
+            .by_index(idx)
+            .context("open embedded sce_sys/param.json")?;
+        zf.take(MAX_PARAM_JSON)
+            .read_to_end(&mut bytes)
+            .context("read embedded sce_sys/param.json")?;
+        // A malformed param.json shouldn't fail the whole inspect — the
+        // size/count preview is still useful, so swallow parse errors.
+        if let Ok(meta) = crate::game_meta::parse_param_json_bytes(&bytes) {
+            inspect.title = meta.title;
+            inspect.title_id = meta.title_id;
+            inspect.content_id = meta.content_id;
+            inspect.application_category_type = meta.application_category_type;
+            inspect.game_root = Some(game_root);
+        }
+    }
+
+    Ok(inspect)
+}
+
+/// Engine-facing preview of what a zip transfer will send: total uncompressed
+/// bytes (the progress-bar denominator) and a sorted `(rel_path, size)` list
+/// (the UI file tree). Applies the same sanitize + excludes the transfer does,
+/// reading only the central directory. Lets the HTTP engine render a zip job
+/// without taking its own dependency on the `zip` crate.
+pub fn zip_plan_preview(zip_path: &Path, excludes: &[String]) -> Result<(u64, Vec<(String, u64)>)> {
+    let file = std::fs::File::open(zip_path)
+        .with_context(|| format!("open zip {}", zip_path.display()))?;
+    let mut archive = zip::ZipArchive::new(std::io::BufReader::new(file))
+        .with_context(|| format!("read zip central directory {}", zip_path.display()))?;
+    let mut files: Vec<(String, u64)> = Vec::new();
+    for i in 0..archive.len() {
+        let (name, size, is_dir) = {
+            let e = archive
+                .by_index(i)
+                .with_context(|| format!("read zip entry {i}"))?;
+            (e.name().to_string(), e.size(), e.is_dir())
+        };
+        if is_dir {
+            continue;
+        }
+        let Some(rel) = sanitize_zip_entry(&name) else {
+            continue;
+        };
+        if !excludes.is_empty() && crate::excludes::is_excluded_strings(Path::new(&rel), excludes) {
+            continue;
+        }
+        files.push((rel, size));
+    }
+    // Collapse duplicate paths keeping the last (same rule as
+    // transfer_zip_with_opts) so the preview's total + file count match
+    // exactly what the transfer sends — otherwise the progress bar's
+    // denominator would exceed the bytes actually streamed.
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut deduped: Vec<(String, u64)> = Vec::with_capacity(files.len());
+    for f in files {
+        if deduped.last().is_some_and(|(p, _)| *p == f.0) {
+            deduped.pop();
+        }
+        deduped.push(f);
+    }
+    let total = deduped.iter().map(|(_, s)| *s).sum();
+    Ok((total, deduped))
+}
+
+/// Transfer a `.zip`'s contents to `dest_root` on the PS5, decompressing on
+/// the host so files land already extracted. Default RAM threshold, fresh
+/// transaction. See `transfer_zip_with_opts` for the full contract.
+pub fn transfer_zip(
+    cfg: &TransferConfig,
+    tx_id: [u8; 16],
+    dest_root: &str,
+    zip_path: &Path,
+) -> Result<TransferResult> {
+    transfer_zip_with_opts(
+        cfg,
+        tx_id,
+        dest_root,
+        zip_path,
+        DEFAULT_ZIP_ENTRY_RAM_THRESHOLD,
+        0,
+    )
+}
+
+/// Full-control zip transfer. `ram_threshold` is the per-entry RAM/temp-spill
+/// cutoff (see `DEFAULT_ZIP_ENTRY_RAM_THRESHOLD`); `flags` is the BEGIN_TX
+/// flag word (`TX_FLAG_RESUME` to adopt an interrupted tx of the same
+/// `tx_id`). Mirrors `transfer_dir_with_flags`: a metadata-only planning pass
+/// (central directory) builds the manifest + shard plan, then the send pass
+/// materialises each shard's bytes just before it goes out — here by inflating
+/// one entry at a time into a seekable cache.
+pub fn transfer_zip_with_opts(
+    cfg: &TransferConfig,
+    tx_id: [u8; 16],
+    dest_root: &str,
+    zip_path: &Path,
+    ram_threshold: u64,
+    flags: u32,
+) -> Result<TransferResult> {
+    let tx_id_hex = bytes_to_hex(&tx_id);
+
+    let file = std::fs::File::open(zip_path)
+        .with_context(|| format!("open zip {}", zip_path.display()))?;
+    let mut archive = zip::ZipArchive::new(std::io::BufReader::new(file))
+        .with_context(|| format!("read zip central directory {}", zip_path.display()))?;
+
+    // ── Planning pass ── central-directory only, no inflation. Enumerate file
+    //    entries, sanitize names (zip-slip), apply excludes, sort for a stable
+    //    manifest, then split/pack into shards exactly like `transfer_dir`.
+    let mut plan_files: Vec<ZipPlanFile> = Vec::new();
+    for i in 0..archive.len() {
+        let (name, size, is_dir) = {
+            let e = archive
+                .by_index(i)
+                .with_context(|| format!("read zip entry {i}"))?;
+            (e.name().to_string(), e.size(), e.is_dir())
+        };
+        if is_dir {
+            continue;
+        }
+        let Some(rel) = sanitize_zip_entry(&name) else {
+            bail!("zip contains an unsafe or invalid entry path: {name:?}");
+        };
+        if !cfg.excludes.is_empty()
+            && crate::excludes::is_excluded_strings(Path::new(&rel), &cfg.excludes)
+        {
+            continue;
+        }
+        let dest_path = join_ps5_path(dest_root, Path::new(&rel));
+        plan_files.push(ZipPlanFile {
+            dest_path,
+            entry_index: i,
+            size,
+        });
+    }
+    if plan_files.is_empty() {
+        bail!(
+            "zip has no extractable files (after exclusions): {}",
+            zip_path.display()
+        );
+    }
+    // Stable sort by dest_path → duplicates land adjacent. Two distinct zip
+    // entries can map to one dest_path (ZIP permits duplicate names, and
+    // sanitize collapses `a/./b`, `a//b`, `a/b`). Collapse them keeping the
+    // *last* (the copy that would win on disk anyway, since the payload
+    // writes shards in manifest order) — otherwise we'd send the bytes
+    // twice and report an inflated file_count. Stable sort preserves the
+    // original relative order within a run, so "last" is deterministic.
+    plan_files.sort_by(|a, b| a.dest_path.cmp(&b.dest_path));
+    let before_dedup = plan_files.len();
+    {
+        let mut deduped: Vec<ZipPlanFile> = Vec::with_capacity(plan_files.len());
+        for pf in plan_files.drain(..) {
+            if deduped.last().is_some_and(|p| p.dest_path == pf.dest_path) {
+                deduped.pop();
+            }
+            deduped.push(pf);
+        }
+        plan_files = deduped;
+    }
+    if plan_files.len() < before_dedup {
+        eprintln!(
+            "[zip] {} duplicate destination path(s) in archive collapsed (last-writer-wins)",
+            before_dedup - plan_files.len()
+        );
+    }
+
+    let mut planned_files: Vec<ManifestFile> = Vec::with_capacity(plan_files.len());
+    let mut planned_shards: Vec<ZipShard> = Vec::new();
+    let mut total_bytes = 0u64;
+    let mut next_seq: u64 = 1;
+    let pack_enabled = cfg.pack_size > 0;
+    let pack_threshold = if pack_enabled { cfg.pack_file_max } else { 0 };
+    let pack_target = cfg.pack_size.max(4096);
+    // Inline packer — `PackPlanner` is file-source-specific, so the zip path
+    // keeps its own small accumulator with the identical coalescing rule.
+    let mut pack_records: Vec<ZipPackRecord> = Vec::new();
+    let mut pack_body: usize = 0;
+    let mut pack_seq: u64 = 0;
+
+    for pf in &plan_files {
+        total_bytes += pf.size;
+        if pack_enabled && (pf.size as usize) < pack_threshold {
+            let rec_size = PACKED_RECORD_PREFIX_LEN + pf.dest_path.len() + pf.size as usize;
+            if !pack_records.is_empty() && pack_body + rec_size > pack_target {
+                planned_shards.push(ZipShard::Packed {
+                    shard_seq: pack_seq,
+                    records: std::mem::take(&mut pack_records),
+                });
+                pack_body = 0;
+            }
+            if pack_records.is_empty() {
+                pack_seq = next_seq;
+                next_seq += 1;
+            }
+            pack_body += rec_size;
+            pack_records.push(ZipPackRecord {
+                dest_path: pf.dest_path.clone(),
+                entry_index: pf.entry_index,
+                size: pf.size,
+            });
+            planned_files.push(ManifestFile {
+                path: pf.dest_path.clone(),
+                size: pf.size,
+                shard_start: pack_seq,
+                shard_count: 1,
+            });
+        } else {
+            if !pack_records.is_empty() {
+                planned_shards.push(ZipShard::Packed {
+                    shard_seq: pack_seq,
+                    records: std::mem::take(&mut pack_records),
+                });
+                pack_body = 0;
+            }
+            let shard_start = next_seq;
+            let mut shard_count = 0u64;
+            if pf.size == 0 {
+                planned_shards.push(ZipShard::Empty {
+                    shard_seq: next_seq,
+                });
+                next_seq += 1;
+                shard_count = 1;
+            } else {
+                let mut offset = 0u64;
+                while offset < pf.size {
+                    let chunk_len = std::cmp::min(cfg.shard_size as u64, pf.size - offset);
+                    planned_shards.push(ZipShard::NonPacked {
+                        shard_seq: next_seq,
+                        entry_index: pf.entry_index,
+                        entry_size: pf.size,
+                        offset,
+                        len: chunk_len,
+                    });
+                    next_seq += 1;
+                    shard_count += 1;
+                    offset += chunk_len;
+                }
+            }
+            planned_files.push(ManifestFile {
+                path: pf.dest_path.clone(),
+                size: pf.size,
+                shard_start,
+                shard_count,
+            });
+        }
+    }
+    if !pack_records.is_empty() {
+        planned_shards.push(ZipShard::Packed {
+            shard_seq: pack_seq,
+            records: std::mem::take(&mut pack_records),
+        });
+    }
+
+    let total_shards = next_seq - 1;
+    let file_count = planned_files.len() as u64;
+
+    let manifest_json = serde_json::to_vec(&Manifest {
+        dest_root: dest_root.to_string(),
+        file_count,
+        total_bytes,
+        total_shards,
+        files: planned_files,
+    })?;
+
+    let mut c = Connection::connect(&cfg.addr)?;
+    let begin_ack = send_and_expect(
+        &mut c,
+        FrameType::BeginTx,
+        &tx_meta_buf_flags(tx_id, 2, flags, &manifest_json),
+        FrameType::BeginTxAck,
+    )?;
+    let last_acked_shard = parse_last_acked_shard(&begin_ack, flags & TX_FLAG_RESUME != 0);
+
+    // ── Send pass ── inflate one entry at a time into a seekable cache and
+    //    serve each shard's range. Skipped (already-acked) shards on resume
+    //    don't force re-sends; the cache re-inflates locally when first
+    //    touched.
+    let mut mat = ZipMaterialiser::new(archive, ram_threshold, std::env::temp_dir());
+    let mut shards_sent = 0u64;
+    {
+        let mut sender = PipelinedSender::new(&mut c, cfg, tx_id, total_shards);
+        for zs in &planned_shards {
+            let seq = zip_shard_seq(zs);
+            if seq <= last_acked_shard {
+                continue;
+            }
+            let body = mat.body(zs)?;
+            let (record_count, sflags) = zip_shard_meta(zs);
+            shards_sent += 1;
+            let wire_len = body.len() as u64;
+            sender.send_with(seq, &body, record_count, sflags)?;
+            if let Some(p) = &cfg.progress_bytes {
+                p.fetch_add(wire_len, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+        sender.drain()?;
+    }
+    drop(mat); // evict any temp cache file before COMMIT
+
+    let commit_ack = send_and_expect(
+        &mut c,
+        FrameType::CommitTx,
+        &tx_meta_buf(tx_id, 0, b""),
+        FrameType::CommitTxAck,
+    )?;
+
+    Ok(TransferResult {
+        tx_id_hex,
+        shards_sent,
+        bytes_sent: total_bytes,
+        dest: dest_root.to_string(),
+        commit_ack_body: String::from_utf8_lossy(&commit_ack).into_owned(),
+    })
+}
+
+/// `transfer_zip` with automatic resume-on-network-drop. See
+/// `transfer_dir_resumable` for the `initial_flags` contract.
+pub fn transfer_zip_resumable(
+    cfg: &TransferConfig,
+    tx_id: [u8; 16],
+    dest_root: &str,
+    zip_path: &Path,
+    ram_threshold: u64,
+    max_retries: u32,
+    initial_flags: u32,
+) -> Result<TransferResult> {
+    resumable_retry(max_retries, "transfer_zip", initial_flags, |flags| {
+        transfer_zip_with_opts(cfg, tx_id, dest_root, zip_path, ram_threshold, flags)
+    })
+}
+
+#[cfg(test)]
+mod bandwidth_throttle_tests {
+    use super::BandwidthThrottle;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn stall_does_not_disable_pacing() {
+        // Regression for the cumulative-average bug: a stall used to bank
+        // unlimited credit and silently stop pacing for the rest of the tx.
+        let mut t = BandwidthThrottle::new(1000); // 1000 B/s
+        let t0 = Instant::now();
+        assert!(t.charge(1000, t0).is_zero()); // spend initial 1s burst
+                                               // 100-second stall, then resume sending.
+        let after = t0 + Duration::from_secs(100);
+        // The stall grants at most one second of burst, not 100.
+        assert!(t.charge(1000, after).is_zero());
+        // With the burst spent and no further time elapsed, the next at-cap
+        // send must pace (~1s) — proving the cap wasn't abandoned.
+        let sleep = t.charge(1000, after);
+        assert!(
+            sleep >= Duration::from_millis(900),
+            "expected ~1s pacing after stall, got {sleep:?}"
+        );
+    }
+
+    #[test]
+    fn steady_send_at_cap_does_not_sleep() {
+        let mut t = BandwidthThrottle::new(1000);
+        let mut now = Instant::now();
+        assert!(t.charge(1000, now).is_zero()); // burst
+        for _ in 0..5 {
+            now += Duration::from_secs(1);
+            assert!(
+                t.charge(1000, now).is_zero(),
+                "1000 B/s under a 1000 B/s cap should not sleep"
+            );
+        }
+    }
+
+    #[test]
+    fn oversized_send_paces_over_multiple_calls() {
+        let mut t = BandwidthThrottle::new(1000);
+        let now = Instant::now();
+        // 3000 B against a 1000 B/s cap: burst covers 1000, deficit paced
+        // out in 1s-clamped slices across calls.
+        assert_eq!(t.charge(3000, now), Duration::from_secs(1));
+        let second = t.charge(0, now);
+        assert!(
+            second >= Duration::from_millis(900) && second <= Duration::from_secs(1),
+            "remaining deficit should pace ~1s, got {second:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod zip_sanitize_tests {
+    use super::sanitize_zip_entry;
+
+    #[test]
+    fn rejects_traversal_and_unsafe() {
+        assert_eq!(sanitize_zip_entry("../etc/passwd"), None);
+        assert_eq!(sanitize_zip_entry("a/../../b"), None);
+        assert_eq!(sanitize_zip_entry("a/b\0c"), None);
+        assert_eq!(sanitize_zip_entry("a\\b"), None); // backslash segment
+        assert_eq!(sanitize_zip_entry(""), None);
+        // Note: directory entries are filtered out upstream via is_dir(), so
+        // sanitize never has to reject a trailing-slash name — "dir/" simply
+        // drops the empty segment and yields "dir".
+        assert_eq!(sanitize_zip_entry("dir/").as_deref(), Some("dir"));
+    }
+
+    #[test]
+    fn normalises_safe_paths_to_forward_slashes() {
+        assert_eq!(
+            sanitize_zip_entry("CUSA03474/sce_sys/icon0.png").as_deref(),
+            Some("CUSA03474/sce_sys/icon0.png")
+        );
+        // Redundant separators and "." segments are collapsed.
+        assert_eq!(
+            sanitize_zip_entry("a//./b/c.txt").as_deref(),
+            Some("a/b/c.txt")
+        );
+        assert_eq!(
+            sanitize_zip_entry("eboot.bin").as_deref(),
+            Some("eboot.bin")
+        );
+    }
 }
 
 #[cfg(test)]

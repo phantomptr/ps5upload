@@ -40,6 +40,9 @@ protocol (FTX2) over your LAN.
 **Q: What does it actually do?**
 - **Transfer** files and folders at near-wire speed, with BLAKE3
   per-shard verification and resume on drop.
+- **Upload a compressed `.zip`** of a game — decompressed on your PC
+  and streamed in, so it lands already extracted on the PS5 (no manual
+  unzip, no temp copy of the whole game).
 - **Mount** `.exfat` and `.ffpkg` disk images natively on the PS5
   (via MDIOCATTACH + nmount). No third-party tool required.
 - **Install fakepkgs** — pick a `.pkg`, click Install. Three-tier
@@ -222,6 +225,48 @@ logind`. Present on every mainstream desktop distro. If you're on a
 non-systemd distro (Alpine, Void, Gentoo OpenRC, Devuan) the toggle
 won't work — everything else does.
 
+**Q: The window opens but it's just a white/blank screen (Bazzite,
+SteamOS, NVIDIA, etc.).**
+
+This is WebKitGTK failing to render with accelerated compositing /
+the DMABUF renderer on your GPU/compositor — common on gaming distros
+(Bazzite, SteamOS) and NVIDIA. Fixes, easiest first:
+
+1. **Launch via the wrapper, not the bare AppImage.** Run
+   `./PS5Upload.sh` (shipped in the release `.zip` next to
+   `PS5Upload.AppImage`). The wrapper sets
+   `WEBKIT_DISABLE_COMPOSITING_MODE=1` and
+   `WEBKIT_DISABLE_DMABUF_RENDERER=1` for you, which fixes the vast
+   majority of white screens. (If you ran `WEBKIT_DISABLE_DMABUF_
+   RENDERER=1 ./PS5Upload.AppImage` and it didn't help, it's almost
+   certainly the *compositing-mode* var you were missing — the wrapper
+   sets both.)
+
+2. **Still white?** Force X11 instead of Wayland:
+
+   ```sh
+   GDK_BACKEND=x11 ./PS5Upload.sh
+   ```
+
+3. **Still white?** Fall back to software rendering (slower UI, but
+   reliable — good for confirming it's a GPU-path problem):
+
+   ```sh
+   LIBGL_ALWAYS_SOFTWARE=1 ./PS5Upload.sh
+   ```
+
+You can combine these (e.g. `GDK_BACKEND=x11 LIBGL_ALWAYS_SOFTWARE=1
+./PS5Upload.sh`). If even software rendering shows a white screen, run
+`./PS5Upload.AppImage` from a terminal and share the output — a
+`WebKitWebProcess`/`WebKitNetworkProcess` crash there points at a
+WebKitGTK packaging problem rather than a GPU one, which is a
+different fix.
+
+On the immutable-OS distros (Bazzite, Silverblue, etc.) the host
+WebKitGTK libraries are layered with `rpm-ostree install` and need a
+reboot to take effect; the AppImage bundles its own copies, but the
+core GTK/Wayland/X11 client libs still come from the host.
+
 ---
 
 ## Getting started
@@ -298,6 +343,31 @@ Yes. Drop any `.exfat` or `.ffpkg` image. After upload, open the
 the image via `/dev/lvd*` and mounts it at `/mnt/ps5upload/<name>/`.
 The Volumes tab shows the result with a progress bar and Unmount
 button.
+
+**Q: Can I upload a compressed `.zip` of a game?**
+Yes — and the files arrive **already extracted** on the PS5. Keep the
+game as a single `.zip` on your PC (less disk, easier to move), drop it
+on the Upload screen, and ps5upload decompresses it on your computer
+while streaming the files into the normal transfer pipeline. There's no
+manual unzip step, and no temporary copy of the whole game on your disk
+— it decompresses one file at a time (large files briefly spill to a
+temp file), so a 100 GB archive doesn't need 100 GB of free RAM. The
+screen previews what the archive expands to (`zipped → extracted`, file
+count, and the % saved on disk) and detects the embedded game if it has
+a `sce_sys/param.json`. The destination folder is named after the
+`.zip` (minus the extension). Resume, excludes, the bandwidth cap, and
+mirroring to other consoles all work the same as a folder upload.
+
+A note on space savings: PS5 game data is often already compressed, so
+DEFLATE (ZIP's method) sometimes shrinks a dump a lot and sometimes
+barely at all — the preview's "saves N%" shows the real number for your
+archive before you commit to sending it.
+
+**Q: What about `.rar` / `.7z`?**
+Only `.zip` is supported. Modern scene `.rar` is usually split
+multi-part + encrypted (and no other PS5 homebrew tool handles it
+either), so unpack those on the PC and re-zip, or upload the extracted
+folder directly.
 
 **Q: Why does the Library sometimes show a game twice?**
 If the same title is present both as a folder on disk and inside a

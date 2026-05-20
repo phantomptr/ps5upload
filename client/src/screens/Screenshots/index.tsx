@@ -39,6 +39,9 @@ export default function ScreenshotsScreen() {
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
+  // Per-row in-flight set so a single download shows a spinner and can't be
+  // double-fired (previously the row button had no busy feedback at all).
+  const [busyPaths, setBusyPaths] = useState<Set<string>>(new Set());
 
   const allSelected = useMemo(() => {
     return !!items && items.length > 0 && selected.size === items.length;
@@ -73,18 +76,37 @@ export default function ScreenshotsScreen() {
     setBulkBusy(true);
     setError(null);
     try {
+      // Per-item: one failed screenshot (transient network drop) must not
+      // abort the rest of the batch and leave the user with no idea which
+      // transferred. Continue past failures, then keep only the failed
+      // paths selected so a re-run retries just those.
+      const failed: string[] = [];
+      let okCount = 0;
       for (const path of selected) {
-        const jobId = await startTransferDownload(
-          path,
-          dest,
-          `${host.trim()}:${PS5_PAYLOAD_PORT}`,
-          "file",
-        );
-        await waitForJob(jobId);
+        try {
+          const jobId = await startTransferDownload(
+            path,
+            dest,
+            `${host.trim()}:${PS5_PAYLOAD_PORT}`,
+            "file",
+          );
+          await waitForJob(jobId);
+          okCount++;
+        } catch (e) {
+          failed.push(path);
+          console.warn("[screenshots] download failed:", path, e);
+        }
       }
-      setSelected(new Set());
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setSelected(new Set(failed));
+      if (failed.length > 0) {
+        setError(
+          tr(
+            "screenshots_bulk_partial",
+            { ok: okCount, failed: failed.length },
+            `Downloaded ${okCount}; ${failed.length} failed — failed ones stay selected to retry.`,
+          ),
+        );
+      }
     } finally {
       setBulkBusy(false);
     }
@@ -126,6 +148,7 @@ export default function ScreenshotsScreen() {
       ),
     });
     if (!dest || typeof dest !== "string") return;
+    setBusyPaths((s) => new Set(s).add(item.path));
     try {
       // startTransferDownload only enqueues an engine job; pre-fix
       // we stopped here and any later transfer failure (network
@@ -140,6 +163,12 @@ export default function ScreenshotsScreen() {
       await waitForJob(jobId);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusyPaths((s) => {
+        const next = new Set(s);
+        next.delete(item.path);
+        return next;
+      });
     }
   }
 
@@ -272,8 +301,15 @@ export default function ScreenshotsScreen() {
                 <Button
                   variant="ghost"
                   size="sm"
-                  leftIcon={<Download size={11} />}
+                  leftIcon={
+                    busyPaths.has(item.path) ? (
+                      <Loader2 size={11} className="animate-spin" />
+                    ) : (
+                      <Download size={11} />
+                    )
+                  }
                   onClick={() => downloadOne(item)}
+                  disabled={busyPaths.has(item.path)}
                 >
                   {tr("screenshots_download", undefined, "Download")}
                 </Button>

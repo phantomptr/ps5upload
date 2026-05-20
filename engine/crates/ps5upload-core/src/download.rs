@@ -96,19 +96,12 @@ pub fn enumerate_download_set(
             // For a single file the "rel_path" is just its basename
             // — that becomes `<dest_dir>/<basename>` on the host. We
             // need the size, which the parent's list_dir hands us
-            // for free.
+            // for free. Paginate: the payload caps FS_LIST_DIR at 256
+            // entries/page, so a one-shot listing would miss a target
+            // file that sorts beyond entry 256 and report it "not found".
             let parent = remote_parent(src_path);
-            let listing = list_dir(
-                addr,
-                &parent,
-                ListDirOptions {
-                    offset: 0,
-                    limit: u64::MAX,
-                },
-            )
-            .with_context(|| format!("list_dir {parent} (parent of {src_path})"))?;
-            let entry = listing
-                .entries
+            let entry = list_dir_all(addr, &parent)
+                .with_context(|| format!("list_dir {parent} (parent of {src_path})"))?
                 .into_iter()
                 .find(|e| e.name == basename)
                 .ok_or_else(|| anyhow::anyhow!("source file not found: {src_path}"))?;
@@ -142,6 +135,63 @@ pub fn enumerate_download_set(
 /// before any of those cases produced a clean error.
 const WALK_REMOTE_MAX_DEPTH: u32 = 64;
 
+/// The payload clamps every FS_LIST_DIR response to this many entries
+/// (`runtime.c` page cap), setting `truncated` only when its response
+/// buffer fills. A directory with more children than this must be read
+/// in pages — see `list_dir_all`.
+const REMOTE_LIST_PAGE: u64 = 256;
+
+/// List *every* entry in a remote directory, paging in `REMOTE_LIST_PAGE`
+/// chunks until exhausted. The download path previously passed
+/// `limit: u64::MAX` and read a single page, silently dropping every
+/// entry past the payload's 256-cap — truncating downloads of any folder
+/// with >256 children, and making single-file downloads spuriously fail
+/// for files beyond entry 256. The break condition mirrors
+/// `fs_ops::list_remote_scoped`: stop on an empty page or a *short*
+/// (< page) page that wasn't buffer-truncated, so an exact multiple of
+/// 256 still triggers one more (empty) request rather than stopping early.
+fn list_dir_all(addr: &str, dir: &str) -> Result<Vec<DirEntry>> {
+    paginate_entries(|offset| {
+        let listing = list_dir(
+            addr,
+            dir,
+            ListDirOptions {
+                offset,
+                limit: REMOTE_LIST_PAGE,
+            },
+        )
+        .with_context(|| format!("list_dir {dir} (offset {offset})"))?;
+        Ok((listing.entries, listing.truncated))
+    })
+}
+
+/// Pure pagination loop, factored out of `list_dir_all` so the
+/// break-condition (the exact spot the truncation bug lived) is
+/// unit-testable without a live payload. `fetch(offset)` returns one
+/// `REMOTE_LIST_PAGE`-sized page as `(entries, truncated)`.
+fn paginate_entries<F>(mut fetch: F) -> Result<Vec<DirEntry>>
+where
+    F: FnMut(u64) -> Result<(Vec<DirEntry>, bool)>,
+{
+    let mut all = Vec::new();
+    let mut offset = 0u64;
+    loop {
+        let (entries, truncated) = fetch(offset)?;
+        let n = entries.len() as u64;
+        all.extend(entries);
+        offset += n;
+        // Natural end of a listing is an empty page or a *short* page
+        // (< REMOTE_LIST_PAGE) that wasn't buffer-truncated. A full page
+        // (truncated or not) means "ask again" — an exact multiple of
+        // 256 must page once more (and get an empty page) rather than
+        // stop early.
+        if n == 0 || (!truncated && n < REMOTE_LIST_PAGE) {
+            break;
+        }
+    }
+    Ok(all)
+}
+
 fn walk_remote_dir(
     addr: &str,
     remote_dir: &str,
@@ -158,19 +208,13 @@ fn walk_remote_dir(
             remote_dir
         );
     }
-    let listing = list_dir(
-        addr,
-        remote_dir,
-        ListDirOptions {
-            offset: 0,
-            limit: u64::MAX,
-        },
-    )
-    .with_context(|| format!("list_dir {remote_dir}"))?;
+    // Paginated — a one-shot `limit: u64::MAX` listing is clamped to 256
+    // by the payload and would silently drop every entry past 256.
+    let mut entries: Vec<DirEntry> =
+        list_dir_all(addr, remote_dir).with_context(|| format!("list_dir {remote_dir}"))?;
     // Sort for stable, predictable order — matches the engine's
     // upload `walk_plan` so users see the same ordering on both
     // directions of transfer.
-    let mut entries: Vec<DirEntry> = listing.entries;
     entries.sort_by(|a, b| a.name.cmp(&b.name));
     for entry in entries {
         let child_rel = if rel_prefix.is_empty() {
@@ -462,6 +506,63 @@ fn local_dest_for(dest_dir: &Path, rel_path: &str) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Build a fake pager over `total` synthetic file entries that mimics
+    /// the payload: each call returns up to `REMOTE_LIST_PAGE` entries
+    /// starting at `offset`, with `truncated=false` (the payload only sets
+    /// truncated when its response buffer fills, which a clean page-sized
+    /// reply does not).
+    fn fake_pager(total: u64) -> impl FnMut(u64) -> Result<(Vec<DirEntry>, bool)> {
+        move |offset: u64| {
+            let end = (offset + REMOTE_LIST_PAGE).min(total);
+            let entries = (offset..end)
+                .map(|i| DirEntry {
+                    name: format!("f{i:05}.bin"),
+                    kind: "file".to_string(),
+                    size: 1,
+                })
+                .collect();
+            Ok((entries, false))
+        }
+    }
+
+    #[test]
+    fn paginate_reads_every_entry_past_the_256_cap() {
+        // The truncation bug: a one-shot listing stopped at 256. These
+        // sizes straddle the page boundary, including the exact-multiple
+        // case that naively breaking on a short page would mishandle.
+        for total in [0u64, 1, 255, 256, 257, 300, 512, 513, 1000] {
+            let all = paginate_entries(fake_pager(total)).unwrap();
+            assert_eq!(all.len() as u64, total, "lost entries at total={total}");
+            // No duplicates / gaps: names are unique and complete.
+            let mut names: Vec<_> = all.iter().map(|e| e.name.clone()).collect();
+            names.sort();
+            names.dedup();
+            assert_eq!(names.len() as u64, total, "dup/gap at total={total}");
+        }
+    }
+
+    #[test]
+    fn paginate_stops_on_truncated_short_page() {
+        // A buffer-truncated page (truncated=true) shorter than the cap
+        // still means "ask again", but once the source is exhausted the
+        // next page is empty and we stop — no infinite loop.
+        let mut pages = vec![
+            (vec![ent("a"), ent("b")], true), // truncated short page → continue
+            (vec![ent("c")], false),          // short, not truncated → stop after
+        ]
+        .into_iter();
+        let all = paginate_entries(|_offset| Ok(pages.next().unwrap())).unwrap();
+        assert_eq!(all.len(), 3);
+    }
+
+    fn ent(name: &str) -> DirEntry {
+        DirEntry {
+            name: name.to_string(),
+            kind: "file".to_string(),
+            size: 0,
+        }
+    }
 
     #[test]
     fn remote_basename_handles_trailing_slash() {

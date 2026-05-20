@@ -24,7 +24,10 @@ use ps5upload_core::connection::Connection;
 use ps5upload_core::diagnostics::shell_run;
 use ps5upload_core::fs_ops::{app_launch, app_list_registered, app_register, app_unregister};
 use ps5upload_core::hash_shard;
-use ps5upload_core::transfer::{transfer_dir, transfer_file, TransferConfig};
+use ps5upload_core::saves::list_saves;
+use ps5upload_core::transfer::{
+    inspect_zip, transfer_dir, transfer_file, transfer_zip, TransferConfig,
+};
 use ps5upload_core::volumes::list_volumes;
 
 const DEFAULT_ADDR: &str = "192.168.137.2:9113";
@@ -223,6 +226,42 @@ fn do_transfer_dir(addr: &str, tx_id_hex: &str, dest_root: &str, src_dir: &str) 
     do_query_tx(addr, tx_id_hex)
 }
 
+fn do_saves(addr: &str) -> Result<()> {
+    let list = list_saves(addr, 0)?;
+    for s in &list.saves {
+        println!(
+            "{:<16} size={:<12} kind={:<3} path={}",
+            s.title_id, s.size, s.kind, s.path
+        );
+    }
+    println!("({} save(s))", list.saves.len());
+    Ok(())
+}
+
+fn do_transfer_zip(addr: &str, tx_id_hex: &str, dest_root: &str, zip_path: &str) -> Result<()> {
+    let tx_id = parse_tx_id(tx_id_hex)?;
+    let cfg = TransferConfig::new(addr);
+    let zp = std::path::Path::new(zip_path);
+    let ins = inspect_zip(zp)?;
+    println!(
+        "zip: {} files, {} zipped -> {} extracted{}",
+        ins.file_count,
+        ins.compressed_size,
+        ins.total_uncompressed,
+        ins.title
+            .as_deref()
+            .map(|t| format!(" [{t} / {}]", ins.title_id.as_deref().unwrap_or("?")))
+            .unwrap_or_default()
+    );
+    let r = transfer_zip(&cfg, tx_id, dest_root, zp)?;
+    println!(
+        "done: shards={} bytes={} tx={}",
+        r.shards_sent, r.bytes_sent, r.tx_id_hex
+    );
+    println!("commit_ack: {}", r.commit_ack_body);
+    do_query_tx(addr, tx_id_hex)
+}
+
 fn do_send_shard(addr: &str, tx_id_hex: &str, shard_seq: u64) -> Result<()> {
     let tx_id = parse_tx_id(tx_id_hex)?;
 
@@ -282,10 +321,12 @@ fn usage() -> ! {
     eprintln!("  send-shard   TX_ID_HEX SHARD_SEQ");
     eprintln!("  transfer     TX_ID_HEX DEST_FILE FILE_PATH");
     eprintln!("  transfer-dir TX_ID_HEX DEST_ROOT SRC_DIR");
+    eprintln!("  transfer-zip TX_ID_HEX DEST_ROOT ZIP_PATH  decompress+stream a .zip");
     eprintln!("  register     SRC_PATH      register a game folder");
     eprintln!("  unregister   TITLE_ID      reverse registration");
     eprintln!("  launch       TITLE_ID      sceLncUtilLaunchApp");
     eprintln!("  apps                       list titles present in app.db");
+    eprintln!("  saves                      list save-data folders + sizes (:9114)");
     eprintln!("  shell       SESSION CWD CMD...   run shell command via :9114");
     std::process::exit(1);
 }
@@ -400,6 +441,12 @@ fn main() -> Result<()> {
             let src_dir = rest.get(3).map(|s| s.as_str()).unwrap_or_else(|| usage());
             do_transfer_dir(addr, tx_id, dest_root, src_dir)
         }
+        "transfer-zip" => {
+            let tx_id = rest.get(1).map(|s| s.as_str()).unwrap_or_else(|| usage());
+            let dest_root = rest.get(2).map(|s| s.as_str()).unwrap_or_else(|| usage());
+            let zip_path = rest.get(3).map(|s| s.as_str()).unwrap_or_else(|| usage());
+            do_transfer_zip(addr, tx_id, dest_root, zip_path)
+        }
         "register" => {
             let src_path = rest.get(1).map(|s| s.as_str()).unwrap_or_else(|| usage());
             do_register(addr, src_path)
@@ -413,6 +460,7 @@ fn main() -> Result<()> {
             do_launch(addr, title_id)
         }
         "apps" => do_apps(addr),
+        "saves" => do_saves(addr),
         "shell" => {
             let session = rest.get(1).map(|s| s.as_str()).unwrap_or_else(|| usage());
             let cwd = rest.get(2).map(|s| s.as_str()).unwrap_or_else(|| usage());
