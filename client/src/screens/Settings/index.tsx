@@ -503,7 +503,7 @@ function BackupRestorePanel() {
     setInfo(null);
     try {
       const { save } = await import("@tauri-apps/plugin-dialog");
-      const { writeTextFile } = await import("@tauri-apps/plugin-fs");
+      const { writeTextFileToPath } = await import("../../lib/saveTextFile");
       const bundle: Record<string, unknown> = {
         meta: {
           generated_at_ms: Date.now(),
@@ -520,7 +520,7 @@ function BackupRestorePanel() {
         filters: [{ name: "JSON", extensions: ["json"] }],
       });
       if (!dest || typeof dest !== "string") return;
-      await writeTextFile(dest, JSON.stringify(bundle, null, 2));
+      await writeTextFileToPath(dest, JSON.stringify(bundle, null, 2));
       setInfo(`Saved to ${dest}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -535,13 +535,13 @@ function BackupRestorePanel() {
     setInfo(null);
     try {
       const { open } = await import("@tauri-apps/plugin-dialog");
-      const { readTextFile } = await import("@tauri-apps/plugin-fs");
+      const { readTextFileFromPath } = await import("../../lib/saveTextFile");
       const src = await open({
         multiple: false,
         filters: [{ name: "JSON", extensions: ["json"] }],
       });
       if (!src || typeof src !== "string") return;
-      const text = await readTextFile(src);
+      const text = await readTextFileFromPath(src);
       const parsed = JSON.parse(text);
       if (
         !parsed ||
@@ -763,7 +763,7 @@ function BugReportButton() {
     setResult(null);
     try {
       const { save } = await import("@tauri-apps/plugin-dialog");
-      const { writeTextFile } = await import("@tauri-apps/plugin-fs");
+      const { writeTextFileToPath } = await import("../../lib/saveTextFile");
       const { getVersion } = await import("@tauri-apps/api/app");
       const { buildDiagnosticBundle } = await import(
         "../../lib/diagnosticBundle"
@@ -791,7 +791,7 @@ function BugReportButton() {
         setBusy(false);
         return;
       }
-      await writeTextFile(dest, JSON.stringify(bundle, null, 2));
+      await writeTextFileToPath(dest, JSON.stringify(bundle, null, 2));
       setResult(dest);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));

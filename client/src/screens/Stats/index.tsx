@@ -38,14 +38,14 @@ export default function StatsScreen() {
   async function exportCsv() {
     if (entries.length === 0) return;
     const { save } = await import("@tauri-apps/plugin-dialog");
-    const { writeTextFile } = await import("@tauri-apps/plugin-fs");
+    const { writeTextFileToPath } = await import("../../lib/saveTextFile");
     const dest = await save({
       defaultPath: `ps5upload-activity-${Date.now()}.csv`,
       filters: [{ name: "CSV", extensions: ["csv"] }],
     });
     if (!dest || typeof dest !== "string") return;
     const csv = activityToCsv(entries);
-    await writeTextFile(dest, csv);
+    await writeTextFileToPath(dest, csv);
   }
 
   return (

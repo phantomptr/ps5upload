@@ -60,8 +60,44 @@ import {
  *      flips to "down"; our refresh() early-returns on that)
  *
  *  Static info (model, serial, OS, RAM) is fetched once per mount;
- *  live temps and uptime are polled every 5s. */
+ *  uptime + storage are polled every 5s. Live temps/clock/power are NOT
+ *  polled — they're the one read that ptraces SceShellUI (briefly
+ *  freezing the whole PS5 UI), which powered consoles off when run on a
+ *  5s timer alongside other homebrew. They're now read on demand only.
+ *  See payload/src/hw_info.c::hw_temps_get_text + shellui_rpc.c. */
 const POLL_INTERVAL_MS = 5_000;
+
+/** Minimum gap between manual sensor reads. Each read ptraces
+ *  SceShellUI; back-to-back reads compound the destabilization that the
+ *  old auto-poll caused, so a button-masher can't recreate it. */
+const SENSOR_READ_COOLDOWN_MS = 10_000;
+
+/**
+ * Safety gate for an on-demand live-sensor read. Returns true when a
+ * fresh read should be allowed right now.
+ *
+ * Reading sensors is the only Hardware action that ptraces SceShellUI —
+ * it momentarily SIGSTOPs the process that renders the entire PS5 UI. On
+ * the old 5s auto-poll this powered consoles off when other homebrew
+ * (etaHEN / shadowMOUNT / kstuff) was also manipulating processes.
+ * Manual + cooldown is the compromise: the user opts into each read, and
+ * the cooldown stops a rapid re-click from rebuilding the ptrace storm.
+ *
+ * TODO(maintainer): tune this policy — it's a pure safety knob and your
+ * call. A shorter cooldown is friendlier when watching a temp climb
+ * under load, but every read carries the ShellUI-freeze risk, so erring
+ * long is the safe default. For a stronger guard you could also refuse
+ * while a transfer/install is in flight (that's exactly when a ShellUI
+ * freeze is most likely to cascade) by reading the relevant store
+ * selectors here. The conservative time-only default below keeps the
+ * build green until you decide.
+ */
+function shouldAllowSensorRead(lastReadAt: number | null, now: number): boolean {
+  if (lastReadAt !== null && now - lastReadAt < SENSOR_READ_COOLDOWN_MS) {
+    return false;
+  }
+  return true;
+}
 
 function formatBytes(n: number): string {
   if (n <= 0) return "—";
@@ -148,6 +184,15 @@ export default function HardwareScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Live sensors (temps/clock/power) are NO LONGER on the auto-poll —
+  // they're the only read that ptraces SceShellUI, which froze consoles
+  // when polled every 5s alongside other homebrew. Read on demand via
+  // readSensors() with its own busy/loading state so a sensor read never
+  // blocks (or is blocked by) the safe info/uptime/storage poll.
+  const sensorBusy = useRef(false);
+  const [sensorLoading, setSensorLoading] = useState(false);
+  const [sensorReadAt, setSensorReadAt] = useState<number | null>(null);
+
   // Guard flag: if a previous refresh is still pending, skip new
   // ticks. Prevents overlapping requests if the PS5 is slow to
   // respond.
@@ -177,19 +222,22 @@ export default function HardwareScreen() {
     setError(null);
     try {
       const addr = transferAddr(probe.host);
-      const [nextTemps, nextPower, nextStorage] = await Promise.all([
-        fetchHwTemps(addr),
+      // NOTE: fetchHwTemps is deliberately NOT here — it ptraces
+      // SceShellUI and must never run on a timer (the console-power-off
+      // bug). It moved to readSensors() (on-demand). Everything left in
+      // this poll is ptrace-free: power = sysctl uptime/loadavg,
+      // storage = statfs, info = in-process dlsym.
+      const [nextPower, nextStorage] = await Promise.all([
         fetchHwPower(addr),
         // Storage is essentially static at the per-second polling rate
         // (a 100 GB game install changes free-space slowly), but
-        // refreshing it alongside temps keeps the card live without
+        // refreshing it alongside uptime keeps the card live without
         // a separate slow timer. Pre-2.2.26 payloads fail this with
         // unsupported_frame; treat that as "no data" and let the rest
         // of the tab keep working.
         fetchHwStorage(addr).catch(() => null),
       ]);
       if (probe.isStale()) return;
-      setTemps(nextTemps);
       setPower(nextPower);
       setStorage(nextStorage);
       // info is static; fetch once if we don't have it yet. Read
@@ -215,12 +263,38 @@ export default function HardwareScreen() {
     }
   }, [host, payloadStatus, guard]);
 
+  // On-demand live-sensor read. Deliberately separate from refresh()
+  // and never armed on a timer: this is the one path that ptraces
+  // SceShellUI (see shouldAllowSensorRead's safety note). A single user
+  // click → a single read, gated by the cooldown.
+  const readSensors = useCallback(async () => {
+    if (!host?.trim() || payloadStatus !== "up") return;
+    if (sensorBusy.current) return;
+    if (!shouldAllowSensorRead(sensorReadAt, Date.now())) return;
+    sensorBusy.current = true;
+    setSensorLoading(true);
+    setError(null);
+    const probe = guard.capture();
+    try {
+      const addr = transferAddr(probe.host);
+      const next = await fetchHwTemps(addr);
+      if (probe.isStale()) return;
+      setTemps(next);
+      setSensorReadAt(Date.now());
+    } catch (e) {
+      if (probe.isStale()) return;
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      sensorBusy.current = false;
+      setSensorLoading(false);
+    }
+  }, [host, payloadStatus, guard, sensorReadAt]);
+
   // Mount + auto-poll every POLL_INTERVAL_MS while payload is up AND
   // the window is visible. Pausing on minimize keeps idle laptops
-  // from spamming the PS5's mgmt port (sensor reads are several
-  // RPCs per tick). Resumes on visibility-change with a fresh
-  // immediate refresh so the panel is up-to-date when the user
-  // looks at it again.
+  // from spamming the PS5's mgmt port. Resumes on visibility-change
+  // with a fresh immediate refresh so the panel is up-to-date when the
+  // user looks at it again. (Temps are excluded — they're on-demand.)
   const visible = useDocumentVisible();
   useEffect(() => {
     if (payloadStatus !== "up") {
@@ -242,7 +316,7 @@ export default function HardwareScreen() {
         description={tr(
           "hardware_description",
           undefined,
-          "Live system info, temperatures, and uptime for the PS5. Auto-refreshes every 5 seconds while the payload is connected.",
+          "System info, uptime, and storage for the PS5 — auto-refreshed every 5 seconds while the payload is connected. Live temperatures, clock, and power are read on demand (see below).",
         )}
         right={
           <Button
@@ -282,6 +356,49 @@ export default function HardwareScreen() {
             )}
             detail={error}
           />
+        </div>
+      )}
+
+      {payloadStatus === "up" && (
+        <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
+          <div className="flex items-start gap-2">
+            <AlertTriangle
+              size={14}
+              className="mt-0.5 shrink-0 text-amber-500"
+            />
+            <div className="flex-1 text-xs text-[var(--color-muted)]">
+              {tr(
+                "hw_sensors_manual_warning",
+                undefined,
+                "Live temperature, clock, and power readings briefly pause the PS5's system UI to take a measurement. To avoid destabilizing the console — especially with etaHEN / shadowMOUNT / kstuff also running — they are no longer read automatically. Read them on demand:",
+              )}
+            </div>
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-3">
+            <Button
+              variant="secondary"
+              size="sm"
+              leftIcon={
+                sensorLoading ? (
+                  <Loader2 size={12} className="animate-spin" />
+                ) : (
+                  <Thermometer size={12} />
+                )
+              }
+              onClick={readSensors}
+              disabled={
+                sensorLoading || !host?.trim() || payloadStatus !== "up"
+              }
+            >
+              {tr("hw_read_sensors", undefined, "Read sensors")}
+            </Button>
+            {sensorReadAt !== null && (
+              <span className="text-xs text-[var(--color-muted)]">
+                {tr("hw_sensors_last_read", undefined, "Last read")}{" "}
+                {new Date(sensorReadAt).toLocaleTimeString()}
+              </span>
+            )}
+          </div>
         </div>
       )}
 

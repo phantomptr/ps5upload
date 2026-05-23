@@ -377,14 +377,14 @@ async function exportSearchResults(
   format: "csv" | "json",
 ) {
   const { save } = await import("@tauri-apps/plugin-dialog");
-  const { writeTextFile } = await import("@tauri-apps/plugin-fs");
+  const { writeTextFileToPath } = await import("../../lib/saveTextFile");
   const dest = await save({
     defaultPath: `ps5upload-search-${Date.now()}.${format}`,
     filters: [{ name: format.toUpperCase(), extensions: [format] }],
   });
   if (!dest || typeof dest !== "string") return;
   if (format === "json") {
-    await writeTextFile(dest, JSON.stringify(hits, null, 2));
+    await writeTextFileToPath(dest, JSON.stringify(hits, null, 2));
     return;
   }
   // CSV
@@ -397,5 +397,5 @@ async function exportSearchResults(
   for (const h of hits) {
     rows.push([h.path, h.name, h.size, h.kind].map(esc).join(","));
   }
-  await writeTextFile(dest, rows.join("\n"));
+  await writeTextFileToPath(dest, rows.join("\n"));
 }

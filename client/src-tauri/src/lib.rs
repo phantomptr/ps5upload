@@ -23,6 +23,30 @@ mod engine;
 
 /// Build and run the Tauri application. `main.rs` just calls this.
 pub fn run() {
+    // Linux WebKitGTK white-screen rescue. On some GPU/compositor stacks
+    // (Bazzite, SteamOS, NVIDIA, parts of Mesa) WebKitGTK's accelerated
+    // compositing + DMABUF renderer produce a blank/white window. The
+    // shipped `PS5Upload.sh` launcher exports these vars, but a user who
+    // double-clicks the bare AppImage (or runs the .deb / folder build)
+    // never goes through that wrapper. Setting them here — at the very
+    // top of process startup, before the webview's child web process is
+    // spawned and inherits our environment — applies the fix to every
+    // launch method, not just the wrapper.
+    //
+    // Single-threaded at this point (no Tauri runtime, no engine thread
+    // yet), so set_var is sound; edition 2021 keeps it safe (non-unsafe).
+    // We only set when unset, so a user can still force the accelerated
+    // path back with e.g. `WEBKIT_DISABLE_COMPOSITING_MODE=0 ...`.
+    #[cfg(target_os = "linux")]
+    {
+        if std::env::var_os("WEBKIT_DISABLE_COMPOSITING_MODE").is_none() {
+            std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+        }
+        if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        }
+    }
+
     let app = tauri::Builder::default()
         // Single-instance MUST be the first plugin so its `init` runs
         // before any other setup (window creation, engine spawn). When
@@ -181,6 +205,13 @@ pub fn run() {
             // backups are clean and cross-tool compatible.
             commands::save_archive_backup_finalize,
             commands::save_archive_restore_prepare,
+            // Generic text read/write at a user-picked path — backs the
+            // bug-report bundle + settings export/import + search/stats
+            // exports, which can't use plugin-fs read/writeTextFile
+            // (dialog paths fall outside the fs scope). See
+            // commands/save_text_file.rs.
+            commands::save_text_file,
+            commands::read_text_file,
             // ── Filesystem search index (payload-side) ──────────────
             commands::fs_index_start,
             commands::fs_index_status,
