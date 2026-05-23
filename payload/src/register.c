@@ -890,7 +890,16 @@ static int parse_title_from_param_sfo(const char *path,
         size_t klen = strnlen(key, keymax);
         if (klen == keymax) continue; /* unterminated */
 
-        if (data_tbl + data_off + param_len > (uint32_t)st.st_size) continue;
+        /* 64-bit sum: data_off and param_len are full untrusted uint32s
+         * from the file, so `data_tbl + data_off + param_len` in uint32
+         * arithmetic can WRAP past 2^32 to a small value that slips under
+         * st.st_size — then `val = buf + data_tbl + data_off` points way
+         * out of bounds and the memcpy below reads off the heap (crash on
+         * a crafted/corrupt param.sfo). Widening to u64 can't wrap for
+         * these ≤4 GiB inputs, so a bogus offset correctly fails here. */
+        if ((uint64_t)data_tbl + (uint64_t)data_off + (uint64_t)param_len
+            > (uint64_t)st.st_size)
+            continue;
         const char *val = (const char *)(buf + data_tbl + data_off);
 
         if (strcmp(key, "TITLE_ID") == 0 && out_id[0] == '\0') {
