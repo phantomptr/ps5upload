@@ -101,6 +101,19 @@ pub async fn keep_awake_state() -> serde_json::Value {
     })
 }
 
+/// Release any active inhibitor at app exit. `HOLDER` is a `static`, so
+/// its contents are never dropped during process teardown — without this,
+/// an enabled `caffeinate` / `systemd-inhibit` child outlives the app and
+/// the machine can't idle-sleep until the user reboots or kills it by
+/// hand. Call from the `RunEvent::Exit` handler, alongside `engine::stop()`.
+/// (Windows is a no-op: its exec-state flags clear automatically when the
+/// process exits.)
+pub async fn keep_awake_release_on_exit() {
+    if let Some(handle) = holder().lock().await.take() {
+        release_inhibitor(handle).await;
+    }
+}
+
 async fn release_inhibitor(handle: Handle) {
     match handle {
         #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -130,6 +143,10 @@ fn acquire_inhibitor() -> Result<Option<Handle>, String> {
     // display sleep, matching v1.5.4's 'prevent-display-sleep' blocker.
     let child = Command::new("caffeinate")
         .args(["-disu"])
+        // Kill the child if its Handle is ever dropped — belt to the
+        // exit-handler's suspenders (the HOLDER static itself isn't
+        // dropped at exit, so keep_awake_release_on_exit covers that path).
+        .kill_on_drop(true)
         .spawn()
         .map_err(|e| format!("spawn caffeinate: {e}"))?;
     Ok(Some(Handle::Process(child)))
@@ -160,6 +177,9 @@ fn acquire_inhibitor() -> Result<Option<Handle>, String> {
             "sleep",
             "infinity",
         ])
+        // See the caffeinate spawn — kill on Handle drop; exit-handler
+        // release covers the never-dropped HOLDER static.
+        .kill_on_drop(true)
         .spawn()
         .map_err(|e| format!("spawn systemd-inhibit: {e}"))?;
     Ok(Some(Handle::Process(child)))

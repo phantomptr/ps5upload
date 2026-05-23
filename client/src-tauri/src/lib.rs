@@ -314,6 +314,12 @@ pub fn run() {
             // tokio runtime stays alive until we return from this
             // closure, so the async kill path completes.
             tauri::async_runtime::block_on(async {
+                // Release the keep-awake inhibitor first. Its handle lives
+                // in a `static` that isn't dropped at process exit, so an
+                // enabled caffeinate/systemd-inhibit child would otherwise
+                // outlive the app and block the machine from idle-sleeping
+                // until reboot.
+                commands::keep_awake_release_on_exit().await;
                 engine::stop().await;
             });
         }
