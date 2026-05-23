@@ -1592,7 +1592,13 @@ async fn ps5_time_sync_route(
             // away from what we asked for. Either the SDK stub is a
             // no-op on this firmware, or the underlying syscall is
             // refusing silently. Surface so the UI can warn.
-            let stub_no_op = v.ok && v.new_unix >= 0 && (v.new_unix - target).abs() > 5;
+            // i128 subtraction: `target` is request-controlled (i64 from
+            // JSON) and `v.new_unix` is payload-derived, so `new_unix -
+            // target` in i64 can overflow (e.g. target = i64::MIN) —
+            // debug panics, release wraps to a wrong boolean. Widen so the
+            // drift comparison is always correct.
+            let stub_no_op =
+                v.ok && v.new_unix >= 0 && (v.new_unix as i128 - target as i128).abs() > 5;
             let resp = TimeSyncResp {
                 ok: v.ok,
                 err_code: v.err_code,

@@ -494,11 +494,15 @@ fn flatten_wrapper_subdirs(title_dir: &Path) -> Result<()> {
 
     // Move every entry under `cur` up to `title_dir`. Staging path
     // makes these collision-free.
+    // Propagate a per-entry read error rather than filter_map(|e| e.ok()):
+    // silently dropping a DirEntry would leave that file behind, and the
+    // remove_dir_all below then deletes it permanently — a silently
+    // incomplete backup. (Project rule: never swallow I/O failures.)
     let to_move: Vec<(PathBuf, std::ffi::OsString)> = std::fs::read_dir(&cur)
         .with_context(|| format!("read_dir {}", cur.display()))?
-        .filter_map(|e| e.ok())
-        .map(|e| (e.path(), e.file_name()))
-        .collect();
+        .map(|e| e.map(|e| (e.path(), e.file_name())))
+        .collect::<std::io::Result<Vec<_>>>()
+        .with_context(|| format!("read_dir entry under {}", cur.display()))?;
     for (src, name) in to_move {
         let dst = title_dir.join(&name);
         if dst.exists() {
@@ -614,6 +618,18 @@ fn restore_prepare(title_dir: &Path) -> Result<SaveArchiveRestorePrepareResp> {
         // expected filename in `savedata_prospero/<title>/`.
         let new_name = format!("sdimg_{name}");
         let new_path = title_dir.join(&new_name);
+        // Don't clobber an existing sdimg_<name>. A user-edited / resigner
+        // zip can carry BOTH `<name>` and `sdimg_<name>` (the latter
+        // skipped above); std::fs::rename overwrites on Unix (destroying
+        // the real image) and errors on Windows. Surface it instead —
+        // the same guard backup_finalize uses for the inverse rename.
+        if new_path.exists() {
+            return Err(anyhow!(
+                "restore: both {} and {} are present — refusing to overwrite the existing sdimg_ image",
+                name,
+                new_name
+            ));
+        }
         std::fs::rename(entry.path(), &new_path).with_context(|| {
             format!(
                 "rename {} -> {}",
