@@ -235,7 +235,14 @@ long pt_call(pid_t pid, intptr_t addr, ...) {
         return -1;
     }
     jmp_reg.r_rsp = ret_slot;
-    if (pt_setregs(pid, &jmp_reg) != 0) return -1;
+    if (pt_setregs(pid, &jmp_reg) != 0) {
+        /* Best-effort restore of the original registers in case the
+         * failed PT_SETREGS partially applied — keeps this path
+         * consistent with every other failure branch below, which all
+         * restore bak_reg before returning. */
+        (void)pt_setregs(pid, &bak_reg);
+        return -1;
+    }
 
     if (pt_continue(pid, 0) != 0) {
         (void)pt_setregs(pid, &bak_reg);

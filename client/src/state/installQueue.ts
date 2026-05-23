@@ -788,6 +788,19 @@ export const useInstallQueue = create<InstallQueueState>((set, get) => ({
             while (isLive()) {
               await sleep(500);
               if (!isLive()) return;
+              // Per-item cancel: cancel(id) marks the item "cancelled"
+              // WITHOUT bumping runId (it shouldn't tear down the whole
+              // queue), so isLive() stays true. Without this the staging
+              // upload runs to completion on a row the user already
+              // cancelled. Bail out — stagedOk stays false, and the
+              // pre-install cancel guard below then skips the install
+              // frame for this item.
+              if (
+                get().items.find((it) => it.id === next.id)?.status ===
+                "cancelled"
+              ) {
+                break;
+              }
               // JobState serializes with `tag="status"` — see
               // engine/main.rs:JobState. Variants: running/done/failed.
               let js: {

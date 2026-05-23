@@ -61,6 +61,13 @@ static int find_pid_by_name(const char *name) {
         int ki_structsize = *(int *)ptr;
         if (ki_structsize <= 0 ||
             (size_t)(ptr - buf) + ki_structsize > buf_size) break;
+        /* Defensive: the bounds check above proves `ki_structsize` bytes
+         * fit, but we then read fixed offsets PID(72) and TDNAME(447);
+         * make sure the entry is actually large enough to contain them
+         * before dereferencing. On every supported FW kinfo_proc is
+         * ~1088 bytes, so this never trips in practice — it just hardens
+         * against a malformed/short entry. */
+        if (ki_structsize <= KINFO_TDNAME_OFFSET) break;
         pid_t ki_pid = *(pid_t *)&ptr[KINFO_PID_OFFSET];
         const char *ki_tdname = (const char *)&ptr[KINFO_TDNAME_OFFSET];
         if (strcmp(ki_tdname, name) == 0) {

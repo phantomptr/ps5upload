@@ -1148,6 +1148,20 @@ fn planned_shard_meta(ps: &PlannedShard) -> (u32, u32) {
     }
 }
 
+/// File-data bytes a shard carries, EXCLUDING packed-record framing.
+/// The live-progress denominator is the sum of uncompressed file sizes
+/// (`walk_plan` / file-size sum), so the numerator must count file bytes
+/// too — a packed shard's wire body adds `[u32 path_len][u32 size][path]`
+/// per record, and counting that (body.len()) pushed the progress bar
+/// past 100% on directories of many small files.
+fn planned_shard_data_len(ps: &PlannedShard) -> u64 {
+    match ps {
+        PlannedShard::Empty { .. } => 0,
+        PlannedShard::NonPacked { len, .. } => *len,
+        PlannedShard::Packed { records, .. } => records.iter().map(|r| r.size).sum(),
+    }
+}
+
 /// Transfer every file under `src_dir` to `dest_root` on the PS5.
 ///
 /// Sharding strategy:
@@ -1335,10 +1349,16 @@ pub fn transfer_dir_with_flags(
             let body = materialise_body(ps)?;
             let (record_count, flags) = planned_shard_meta(ps);
             shards_sent += 1;
-            let wire_len = body.len() as u64;
             sender.send_with(seq, &body, record_count, flags)?;
             if let Some(p) = &cfg.progress_bytes {
-                p.fetch_add(wire_len, std::sync::atomic::Ordering::Relaxed);
+                // File-data bytes only — packed shards carry per-record
+                // framing that isn't part of the plan total (the progress
+                // denominator), so counting body.len() pushed the bar past
+                // 100% on dirs of many small files.
+                p.fetch_add(
+                    planned_shard_data_len(ps),
+                    std::sync::atomic::Ordering::Relaxed,
+                );
             }
         }
         sender.drain()?;
@@ -1533,10 +1553,16 @@ pub fn transfer_file_list_with_flags(
             let body = materialise_body(ps)?;
             let (record_count, flags) = planned_shard_meta(ps);
             shards_sent += 1;
-            let wire_len = body.len() as u64;
             sender.send_with(seq, &body, record_count, flags)?;
             if let Some(p) = &cfg.progress_bytes {
-                p.fetch_add(wire_len, std::sync::atomic::Ordering::Relaxed);
+                // File-data bytes only — packed shards carry per-record
+                // framing that isn't part of the plan total (the progress
+                // denominator), so counting body.len() pushed the bar past
+                // 100% on dirs of many small files.
+                p.fetch_add(
+                    planned_shard_data_len(ps),
+                    std::sync::atomic::Ordering::Relaxed,
+                );
             }
         }
         sender.drain()?;
@@ -1784,6 +1810,16 @@ fn zip_shard_meta(zs: &ZipShard) -> (u32, u32) {
     match zs {
         ZipShard::Empty { .. } | ZipShard::NonPacked { .. } => (1, 0),
         ZipShard::Packed { records, .. } => (records.len() as u32, SHARD_FLAG_PACKED),
+    }
+}
+
+/// File-data bytes a zip shard carries, excluding packed-record framing.
+/// See `planned_shard_data_len` for why the progress numerator needs this.
+fn zip_shard_data_len(zs: &ZipShard) -> u64 {
+    match zs {
+        ZipShard::Empty { .. } => 0,
+        ZipShard::NonPacked { len, .. } => *len,
+        ZipShard::Packed { records, .. } => records.iter().map(|r| r.size).sum(),
     }
 }
 
@@ -2483,10 +2519,11 @@ pub fn transfer_zip_with_opts(
             let body = mat.body(zs)?;
             let (record_count, sflags) = zip_shard_meta(zs);
             shards_sent += 1;
-            let wire_len = body.len() as u64;
             sender.send_with(seq, &body, record_count, sflags)?;
             if let Some(p) = &cfg.progress_bytes {
-                p.fetch_add(wire_len, std::sync::atomic::Ordering::Relaxed);
+                // File-data bytes only (see transfer_dir) — packed-shard
+                // framing isn't part of the plan total.
+                p.fetch_add(zip_shard_data_len(zs), std::sync::atomic::Ordering::Relaxed);
             }
         }
         sender.drain()?;
