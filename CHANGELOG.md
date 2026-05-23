@@ -6,51 +6,22 @@ What's new in ps5upload, written for humans.
 
 ## 2.14.0
 
-**The Hardware screen no longer crashes the PS5.** Sitting on the Hardware tab
-could power the console off within seconds — the live temperature / clock /
-power readouts poll the system UI in a way that destabilizes the console,
-especially alongside etaHEN / shadowMOUNT / kstuff. Those live sensors are now
-read **on demand** (a "Read sensors" button) instead of automatically every few
-seconds; system info, uptime, storage, and the date/time card stay live and are
-completely safe. If you saw random shutdowns on the Hardware tab, that's fixed.
+A stability-focused release.
 
-**Diagnostics that actually save.** "Save bug report bundle" — plus the Settings
-export/import and the Search/Stats exports — failed silently with a permissions
-error; they now write correctly. The bug-report bundle also captures your *most
-recent* activity now, not the oldest.
-
-**Send Payload: pick once.** Choosing a payload file used to leave the Send
-button disabled until you picked it a second time. Fixed.
-
-**Payload playlists: reorder + one-click re-run.** You can now move playlists
-up/down, and a "Recently run" strip re-runs a playlist with a single click.
-
-**Linux: no more white screen.** The blank/white window on Ubuntu / SteamOS /
-NVIDIA is fixed for the AppImage even when you double-click it directly
-(previously only launching via `PS5Upload.sh` applied the workaround).
-
-**Zip uploads:**
-
-- A zip compressed with an unsupported method (Deflate64, LZMA, BZip2, Zstd) now
-  gives a clear "re-zip with standard Deflate" message instead of a confusing
-  failure.
-- Inspecting a large zip no longer pins the disk at 100% / hangs, and the
-  preview no longer shows a contradictory "→ 0 B extracted" for some archives.
-
-**Installing packages:** if the desktop engine or the PS5 helper isn't ready,
-starting an install now shows a clear, actionable message instead of appearing
-to do nothing.
-
-**Keep-awake** no longer leaves a sleep-blocker process running after you quit
-the app — your machine can idle-sleep again without a reboot.
-
-**Under the hood (safety + correctness):** two PS5-payload memory-safety fixes
-(a fan-control buffer overflow and an out-of-bounds read on a malformed
-`param.sfo`); a transfer "ghost-commit" guard so a stale resume can't finalize
-an upload that sent nothing; a progress bar that could exceed 100% on many small
-files; a save-restore edge that could overwrite the wrong image or silently drop
-a file; and a Library/ShadowMount panel crash on game names with non-Latin
-characters.
+- **Fixed: the Hardware screen could power off the PS5.** Live temperature,
+  clock, and power are now read on demand instead of auto-polling; system info,
+  uptime, storage, and the clock stay live.
+- **Linux white screen fixed** for the AppImage on double-click (Ubuntu /
+  SteamOS / NVIDIA), not just when launched via `PS5Upload.sh`.
+- **Diagnostics and exports now save** — the bug-report bundle and the
+  Settings / Search / Stats exports were failing silently.
+- **Send Payload** now enables the Send button on the first file pick.
+- **Payload playlists** can be reordered, with a one-click "recently run" list.
+- **Zip uploads** show a clear message for unsupported compression, and large
+  archives no longer hang while being inspected.
+- **Clearer install errors** when the desktop engine or PS5 helper isn't ready.
+- Plus a batch of safety and correctness fixes under the hood, including two
+  PS5-payload memory-safety fixes.
 
 ---
 

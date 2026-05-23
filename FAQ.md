@@ -232,15 +232,16 @@ This is WebKitGTK failing to render with accelerated compositing /
 the DMABUF renderer on your GPU/compositor — common on gaming distros
 (Bazzite, SteamOS) and NVIDIA. Fixes, easiest first:
 
-1. **Launch via the wrapper, not the bare AppImage.** Run
-   `./PS5Upload.sh` (shipped in the release `.zip` next to
-   `PS5Upload.AppImage`). The wrapper sets
-   `WEBKIT_DISABLE_COMPOSITING_MODE=1` and
-   `WEBKIT_DISABLE_DMABUF_RENDERER=1` for you, which fixes the vast
-   majority of white screens. (If you ran `WEBKIT_DISABLE_DMABUF_
-   RENDERER=1 ./PS5Upload.AppImage` and it didn't help, it's almost
-   certainly the *compositing-mode* var you were missing — the wrapper
-   sets both.)
+1. **Update to the latest version — the fix is now built in.** As of
+   2.14.0 the app sets `WEBKIT_DISABLE_COMPOSITING_MODE=1` and
+   `WEBKIT_DISABLE_DMABUF_RENDERER=1` itself at startup, so a plain
+   double-click of `PS5Upload.AppImage` (or the `.deb` / folder build)
+   should render correctly — no wrapper needed. On older builds, launch
+   via `./PS5Upload.sh` (shipped in the release `.zip` next to
+   `PS5Upload.AppImage`), which sets the same vars. (If you ran
+   `WEBKIT_DISABLE_DMABUF_RENDERER=1 ./PS5Upload.AppImage` and it didn't
+   help, the missing piece was the *compositing-mode* var — both are now
+   set automatically.)
 
 2. **Still white?** Force X11 instead of Wayland:
 

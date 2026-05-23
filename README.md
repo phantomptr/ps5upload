@@ -47,11 +47,14 @@
   ops (chmod, delete, move, copy, mkdir) with a real directory
   tree. Bulk delete of a 200k-file folder shows live progress
   with a working Stop button.
-- **Hardware view** — model, serial, uptime, CPU frequency, RAM;
-  plus a fan-threshold control that rings through to `/dev/icc_fan`
-  for quieter operation. Live CPU/SoC temperature is unreliable on
-  current firmware (libkernel exports drift between FW points), so
-  the temp reading may show `—`; the rest of the panel is stable.
+- **Hardware view** — model, serial, uptime, storage, RAM, and the PS5
+  date/time, refreshed live; plus a fan-threshold control that rings
+  through to `/dev/icc_fan` for quieter operation. Live CPU/SoC
+  temperature, clock, and power are read **on demand** (a button), not
+  auto-polled — each read briefly pauses the system UI, so polling them
+  could destabilize the console. They're also unreliable on current
+  firmware (libkernel exports drift between FW points), so a reading may
+  show `—`; everything else on the panel is stable.
 - **Send any payload** — push `.elf`, `.bin`, `.js`, `.lua`, or
   `.jar` files to the PS5's loader port (typical defaults: `.elf` →
   9021 elfldr, `.js` → 50000 WebKit-stage, `.lua` → 9026, `.jar` →
@@ -368,12 +371,15 @@ below 4.x is obscure and above 12.70 is future work.
   expected for now. Other PS5-side tools see the mount via
   `/mnt/ps5upload/`, and the source path is recorded in our
   tracker so reconcile-on-next-boot keeps state consistent.
-* Live CPU/SoC temperature and SoC power readings via the ShellUI
-  RPC path are unreliable across firmware revisions: libkernel
-  exports them by NID-only on some FW points and the call returns
-  garbage or fails outright. The Hardware tab still refreshes every
-  5 s; a persistent `—` for temps usually means your firmware's
-  exports are NID-only, not that the payload is broken.
+* Live CPU/SoC temperature, clock, and SoC power are read **on demand**
+  (the Hardware tab's "Read sensors" button), not on a timer. Each read
+  briefly ptrace-pauses the system UI, and doing that on a loop could
+  destabilize the console — it powered some consoles off — so the auto-
+  refresh now covers only the ptrace-free data (info, uptime, storage,
+  date/time). These readings are also unreliable across firmware
+  revisions: libkernel exports them by NID-only on some FW points and the
+  call returns garbage or fails, so a persistent `—` usually means your
+  firmware's exports are NID-only, not that the payload is broken.
 
 **Q: "No writable storage found"?**
 * The tool blocks writes to read-only system partitions. If you
