@@ -966,6 +966,23 @@ pub async fn payloads_download(
     if asset_url.is_empty() {
         return Err("no asset url".to_string());
     }
+    // Pin the asset URL to this entry's repo_host (defense-in-depth,
+    // mirroring updates.rs and the repo_host allowlist in
+    // payloads_release). The asset comes from the release's
+    // browser_download_url, which for both GitHub and Forgejo is served
+    // from the same host as the repo — so this never rejects a legit
+    // asset, and reqwest still follows GitHub's internal 302 to its asset
+    // CDN because we only pin the URL we actually request. Without it, a
+    // renderer-supplied asset_url could aim our GET at an arbitrary host.
+    match reqwest::Url::parse(&asset_url) {
+        Ok(u) if u.scheme() == "https" && u.host_str() == Some(entry.repo_host) => {}
+        _ => {
+            return Err(format!(
+                "asset url for {} must be https on {}",
+                entry.id, entry.repo_host
+            ));
+        }
+    }
     let dir = payload_cache_dir(&app, entry.id)?;
 
     let client = reqwest::Client::builder()

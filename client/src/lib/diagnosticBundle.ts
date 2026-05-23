@@ -121,7 +121,10 @@ export function buildDiagnosticBundle(opts: {
     })),
     schedules_count: schedules.length,
     play_time_titles: Object.keys(playTimes).length,
-    recent_activity: activity.slice(-50).map((e) => ({
+    // Activity is stored newest-first (activityHistory prepends), so the
+    // NEWEST 50 are slice(0, 50) — slice(-50) grabbed the OLDEST 50,
+    // defeating the point of a "recent activity" diagnostic field.
+    recent_activity: activity.slice(0, 50).map((e) => ({
       id: e.id,
       label: e.label,
       outcome: e.outcome,

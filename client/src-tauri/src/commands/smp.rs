@@ -244,18 +244,23 @@ fn is_missing_optional_file_error(message: &str) -> bool {
 /// If the name doesn't match that pattern we return it unchanged —
 /// future SMP versions might use a different scheme.
 fn derive_image_name(dir_name: &str) -> String {
-    let len = dir_name.len();
-    if len < 10 {
+    // Operate on chars, not bytes: the suffix is always 9 ASCII chars
+    // ("_" + 8 hex) but the head can be any UTF-8 (game/image names often
+    // contain non-ASCII). The old byte-based `split_at(len - 9)` panicked
+    // when a multi-byte codepoint sat within the last 9 bytes, taking down
+    // the whole SMP-status snapshot for that one mount.
+    let chars: Vec<char> = dir_name.chars().collect();
+    if chars.len() < 10 {
         return dir_name.to_string();
     }
-    let (head, tail) = dir_name.split_at(len - 9);
-    if !tail.starts_with('_') {
+    let split = chars.len() - 9;
+    if chars[split] != '_' {
         return dir_name.to_string();
     }
-    if !tail[1..].chars().all(|c| c.is_ascii_hexdigit()) {
+    if !chars[split + 1..].iter().all(|c| c.is_ascii_hexdigit()) {
         return dir_name.to_string();
     }
-    head.to_string()
+    chars[..split].iter().collect()
 }
 
 #[cfg(test)]
@@ -266,6 +271,15 @@ mod tests {
     fn derive_strips_hex_suffix() {
         assert_eq!(derive_image_name("Outlast2_a3c3fd8b"), "Outlast2");
         assert_eq!(derive_image_name("My Game_deadbeef"), "My Game");
+    }
+
+    #[test]
+    fn derive_handles_non_ascii_without_panicking() {
+        // Byte-based split_at(len - 9) used to panic when a multi-byte
+        // codepoint landed in the last 9 bytes. char-based logic is safe.
+        assert_eq!(derive_image_name("x日a3c3fd8"), "x日a3c3fd8"); // < 10 chars → unchanged
+        assert_eq!(derive_image_name("日本_a3c3fd8b"), "日本"); // strips ASCII suffix off a UTF-8 head
+        assert_eq!(derive_image_name("日本語ゲーム_deadbeef"), "日本語ゲーム");
     }
 
     #[test]
