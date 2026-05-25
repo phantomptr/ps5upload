@@ -6,6 +6,7 @@ import {
   useActivityHistoryStore,
   type ActivityKind,
 } from "./activityHistory";
+import { setTransferKeepAwake } from "../lib/keepAwakeHold";
 
 /**
  * Subscribes to the per-feature stores (transfer, FS bulk, FS
@@ -29,6 +30,34 @@ let installed = false;
 export function installActivityWiring() {
   if (installed) return;
   installed = true;
+
+  // ── Keep-awake while transfers run ───────────────────────────────
+  // A long upload/download/install must not die to the computer idle-
+  // sleeping mid-stream. Derive a single "is any transfer in flight"
+  // signal straight from store state (not the activity-history
+  // bookkeeping below, so the two concerns stay independent) and
+  // reconcile the OS sleep inhibitor on every relevant change. The hold
+  // is edge-collapsed + best-effort in `setTransferKeepAwake`, and the
+  // Rust side refcounts it separately from the manual Settings toggle.
+  const anyTransferActive = (): boolean => {
+    const phase = useTransferStore.getState().phase.kind;
+    if (phase === "starting" || phase === "running") return true;
+    if (useFsDownloadOpStore.getState().active) return true;
+    if (useUploadQueueStore.getState().items.some((it) => it.status === "running"))
+      return true;
+    if (useInstallQueue.getState().items.some((it) => it.status === "running"))
+      return true;
+    return false;
+  };
+  const reconcileKeepAwake = () => setTransferKeepAwake(anyTransferActive());
+  useTransferStore.subscribe(reconcileKeepAwake);
+  useFsDownloadOpStore.subscribe(reconcileKeepAwake);
+  useUploadQueueStore.subscribe(reconcileKeepAwake);
+  useInstallQueue.subscribe(reconcileKeepAwake);
+  // Subscriptions only fire on CHANGE, so reconcile once now in case a
+  // transfer is already in flight when wiring installs (e.g. the upload
+  // queue auto-resumed from a hydrate before this ran).
+  reconcileKeepAwake();
 
   // ── Transfer (Upload screen) ──────────────────────────────────────
   // Tracks the running activity-id across phase transitions so we

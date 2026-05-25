@@ -2606,6 +2606,12 @@ export function humanizeJobErrorReason(reason: string | undefined): string | nul
       return "The PS5 ran out of free space (or an external drive disconnected) while writing the file. Free up space on the destination drive and click Retry — the upload resumes from where it stopped.";
     case "direct_tx_corrupt":
       return "The PS5 detected protocol corruption on this transfer. Restart the payload from the Send Payload tab and retry.";
+    case "packed_unsupported":
+      return "The PS5 helper rejected a packed transfer — this happens with an outdated payload when a folder upload comes down to a single small file (e.g. a Resume of a game with many tiny files). Update ps5upload to the latest version, re-send the payload from the Send Payload tab, then retry.";
+    case "size_mismatch":
+    case "shards_incomplete":
+    case "spool_apply_failed":
+      return "The transfer didn't finish before being interrupted — a file on the PS5 is incomplete, so it wasn't published (your old copy, if any, is untouched). This usually means the PS5 went into rest mode or lost power mid-upload. Keep the console awake (Settings → System → Power Saving → Set Time Until PS5 Turns Off), then re-run this item — Resume now re-sends only the missing files, or choose Override for a clean copy.";
     case "fs_write_failed_errno_28":
     case "fs_write_failed_errno_27":
       return "Destination filesystem rejected the write (out of space or file too big). Pick a different destination drive or free space.";

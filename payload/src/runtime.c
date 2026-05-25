@@ -886,7 +886,7 @@ static int runtime_flush_tx_record(const runtime_state_t *state,
             "{\"tx_id\":\"%s\",\"tx_seq\":%llu,\"state\":\"%s\","
             "\"shards_received\":%llu,\"bytes_received\":%llu,"
             "\"total_shards\":%llu,\"total_bytes\":%llu,"
-            "\"file_count\":%llu,\"dest_root\":\"%s\"}\n",
+            "\"file_count\":%llu,\"multi_file\":%d,\"dest_root\":\"%s\"}\n",
             entry->tx_id_hex,
             (unsigned long long)entry->tx_seq,
             entry->state,
@@ -895,6 +895,7 @@ static int runtime_flush_tx_record(const runtime_state_t *state,
             (unsigned long long)entry->total_shards,
             (unsigned long long)entry->total_bytes,
             (unsigned long long)entry->file_count,
+            entry->multi_file ? 1 : 0,
             dest_root_esc);
     fclose(fp);
     return 0;
@@ -963,6 +964,13 @@ static int runtime_load_tx_entries(runtime_state_t *state) {
         entry->total_shards    = extract_json_uint64_field(record, "total_shards");
         entry->total_bytes     = extract_json_uint64_field(record, "total_bytes");
         entry->file_count      = extract_json_uint64_field(record, "file_count");
+        /* Restore the multi-file flag. Legacy journals (written before this
+         * field existed) report 0; fall back to the old `file_count > 1`
+         * proxy so a pre-upgrade in-flight tx still routes correctly. New
+         * journals carry the authoritative value (1 even for a kind==2 tx
+         * that happens to hold a single file). */
+        entry->multi_file      = (extract_json_uint64_field(record, "multi_file") != 0) ||
+                                 (entry->file_count > 1);
         extract_json_string_field(record, "dest_root", entry->dest_root, sizeof(entry->dest_root));
     }
     closedir(dir);
@@ -3055,6 +3063,7 @@ struct manifest_file_entry {
     char path[512];
     uint64_t shard_start; /* 1-based, first shard for this file */
     uint64_t shard_count; /* number of shards carrying this file */
+    uint64_t size;        /* expected file size in bytes (0 if absent) */
 };
 typedef struct manifest_file_entry manifest_file_entry_t;
 
@@ -3118,6 +3127,7 @@ static int build_manifest_index(const char *blob, size_t blob_len,
         const char *obj_end;
         uint64_t s_start;
         uint64_t s_count;
+        uint64_t s_size;
         const char *path_key;
         const char *path_value_start;
         const char *path_value_end;
@@ -3148,6 +3158,15 @@ static int build_manifest_index(const char *blob, size_t blob_len,
             obj_buf[obj_len] = '\0';
             s_start = extract_json_uint64_field(obj_buf, "shard_start");
             s_count = extract_json_uint64_field(obj_buf, "shard_count");
+            /* `size` MUST be read from the bounded object slice too. The
+             * unbounded variant (extract_json_uint64_field(obj_start, …))
+             * silently reads the NEXT object's `size` when this object
+             * lacks one — and `idx[].size` is the value the COMMIT-time
+             * integrity check trusts to detect a short/corrupt file, so a
+             * stale read there could validate a truncated file against the
+             * wrong size and let corruption pass as success. Same isolation
+             * rationale as shard_start/shard_count above. */
+            s_size  = extract_json_uint64_field(obj_buf, "size");
             if (s_count == 0) s_count = 1;
         }
         if (s_start == 0) { free(idx); return -1; }
@@ -3195,7 +3214,7 @@ static int build_manifest_index(const char *blob, size_t blob_len,
         idx[n].shard_count = (uint32_t)s_count;
         idx[n].path_offset = (uint32_t)(path_value_start - blob);
         idx[n].path_len    = (uint32_t)plen;
-        idx[n].size        = extract_json_uint64_field(obj_start, "size");
+        idx[n].size        = s_size;
         n += 1;
 
         /* Ordering tolerance: we require only non-decreasing shard_start.
@@ -3396,6 +3415,7 @@ static int manifest_get_nth_file_path(const char *json, uint64_t n,
             extract_json_string_field(obj_start, "path", out->path, sizeof(out->path));
             out->shard_start = extract_json_uint64_field(obj_start, "shard_start");
             out->shard_count = extract_json_uint64_field(obj_start, "shard_count");
+            out->size        = extract_json_uint64_field(obj_start, "size");
             /* shard_count defaults to 1 if absent (old format compat). */
             if (out->shard_count == 0) out->shard_count = 1;
             if (!out->path[0]) return -1;
@@ -3493,10 +3513,10 @@ static int runtime_write_manifest(const runtime_tx_entry_t *entry,
 /*
  * After a successful COMMIT_TX: apply spooled shards to the filesystem.
  *
- * Single-file (file_count <= 1):
+ * Single-file (kind==1, !multi_file):
  *   Concatenate shards 1..shards_received into dest_root.
  *
- * Multi-file (file_count > 1):
+ * Multi-file (kind==2, multi_file — may carry a single file):
  *   Read the persisted manifest; shard K maps to files[K-1].path.
  *   Each shard is a complete file (one shard per file).
  *
@@ -3513,8 +3533,8 @@ static int runtime_apply_spool(const runtime_tx_entry_t *entry) {
     snprintf(spool_dir, sizeof(spool_dir), "%s/spool_%s",
              PS5UPLOAD2_SPOOL_DIR, entry->tx_id_hex);
 
-    /* ── Multi-file path ── */
-    if (entry->file_count > 1) {
+    /* ── Multi-file path ── (kind==2; may carry a single file) */
+    if (entry->multi_file) {
         /* Heap-allocate the manifest sized to the on-disk file. The
          * direct-mode path was migrated to a heap blob in 2.1 to fix
          * silent corruption on >60-file transfers; this spool path
@@ -3598,6 +3618,24 @@ static int runtime_apply_spool(const runtime_tx_entry_t *entry) {
              * non-null guard. */
             if (out) fclose(out);
             if (rc_apply != 0) break;
+            /* Commit-time integrity (spool analogue of the direct-path
+             * size checks in COMMIT_TX): the concatenated file must match
+             * the manifest size. A missing/short spool shard — e.g. a
+             * partial write left by a power-loss-interrupted run — would
+             * otherwise publish a short file that reports success. Fail
+             * loudly instead. (size 0 / absent: skip, nothing to verify.) */
+            if (mf.size > 0) {
+                struct stat st_sp;
+                int ok = (stat(mf.path, &st_sp) == 0);
+                if (!ok || (uint64_t)st_sp.st_size != mf.size) {
+                    fprintf(stderr,
+                            "[payload2] spool apply size mismatch %s: have %lld want %llu\n",
+                            mf.path, (long long)(ok ? (long long)st_sp.st_size : -1),
+                            (unsigned long long)mf.size);
+                    rc_apply = -1;
+                    break;
+                }
+            }
             printf("[payload2] applied %llu shards -> %s\n",
                    (unsigned long long)mf.shard_count, mf.path);
         }
@@ -3644,6 +3682,19 @@ static int runtime_apply_spool(const runtime_tx_entry_t *entry) {
             fclose(in);
         }
         fclose(out);
+        /* Commit-time integrity: single-file spool result must match the
+         * manifest's total size before we declare success. */
+        if (entry->total_bytes > 0) {
+            struct stat st_sp;
+            int ok = (stat(entry->dest_root, &st_sp) == 0);
+            if (!ok || (uint64_t)st_sp.st_size != entry->total_bytes) {
+                fprintf(stderr,
+                        "[payload2] spool apply size mismatch %s: have %lld want %llu\n",
+                        entry->dest_root, (long long)(ok ? (long long)st_sp.st_size : -1),
+                        (unsigned long long)entry->total_bytes);
+                return -1;
+            }
+        }
         printf("[payload2] apply done: %llu shards -> %s\n",
                (unsigned long long)entry->shards_received, entry->dest_root);
         return 0;
@@ -3677,6 +3728,80 @@ static int runtime_cleanup_spool(const runtime_tx_entry_t *entry) {
     closedir(dir);
     (void)rmdir(spool_dir);
     return 0;
+}
+
+/*
+ * Resume integrity: recompute the durable cursor from what's actually on
+ * disk instead of trusting the journaled shard COUNT.
+ *
+ * The journal can run AHEAD of the bytes that truly reached storage:
+ * streaming shard writes and the journal flush aren't fsync'd, so a
+ * power-loss / rest-mode kill can lose page-cache data (worst on
+ * USB/exFAT). Trusting `shards_received` as the resume point would then
+ * make the client SKIP shards whose data never landed → a file silently
+ * missing interior bytes (the "ps5upload corrupts, FTP is fine" report).
+ *
+ * Reconcile at FILE granularity, which is the safe unit: each file's
+ * first shard truncates its tmp, so re-sending a whole file rewrites it
+ * cleanly — no partial-shard append-offset hazard. A file is "durable"
+ * if EITHER its final path OR its `<path>.ps5up2-tmp` exists at exactly
+ * the manifest size (packed small files land at the final path,
+ * non-packed at the tmp). Clamp `shards_received` down to
+ * (first non-durable file's shard_start - 1) so the client re-sends from
+ * there. This only ever LOWERS the cursor; a too-low result merely
+ * re-sends (idempotent), and the COMMIT_TX size check is the backstop.
+ */
+static void reconcile_resume_cursor(runtime_tx_entry_t *entry) {
+    const manifest_index_entry_t *idx;
+    uint64_t i;
+    uint64_t min_bad_start = 0; /* 0 = no gap found */
+    if (!entry || !entry->manifest_index || entry->manifest_index_count == 0) {
+        return;
+    }
+    if (!entry->manifest_blob) return;
+    idx = (const manifest_index_entry_t *)entry->manifest_index;
+    for (i = 0; i < entry->manifest_index_count; i++) {
+        char path[512];
+        char tmp_path[512 + 16];
+        size_t plen = idx[i].path_len;
+        struct stat st;
+        int durable = 0;
+        if (idx[i].size == 0) continue; /* empty files: nothing to verify */
+        if (plen == 0 || plen >= sizeof(path)) continue;
+        if ((uint64_t)idx[i].path_offset + (uint64_t)plen > entry->manifest_blob_len) {
+            continue;
+        }
+        if (json_copy_unescaped_string(entry->manifest_blob + idx[i].path_offset,
+                                       entry->manifest_blob + idx[i].path_offset + plen,
+                                       path, sizeof(path)) != 0) {
+            continue;
+        }
+        if (stat(path, &st) == 0 && (uint64_t)st.st_size == idx[i].size) {
+            durable = 1;
+        } else {
+            snprintf(tmp_path, sizeof(tmp_path), "%s.ps5up2-tmp", path);
+            if (stat(tmp_path, &st) == 0 && (uint64_t)st.st_size == idx[i].size) {
+                durable = 1;
+            }
+        }
+        if (!durable &&
+            (min_bad_start == 0 || idx[i].shard_start < min_bad_start)) {
+            min_bad_start = idx[i].shard_start;
+        }
+    }
+    if (min_bad_start > 0) {
+        uint64_t reconciled = min_bad_start - 1;
+        if (reconciled < entry->shards_received) {
+            fprintf(stderr,
+                    "[payload2] resume reconcile tx %s: cursor %llu -> %llu "
+                    "(first non-durable file starts at shard %llu)\n",
+                    entry->tx_id_hex,
+                    (unsigned long long)entry->shards_received,
+                    (unsigned long long)reconciled,
+                    (unsigned long long)min_bad_start);
+            entry->shards_received = reconciled;
+        }
+    }
 }
 
 /* Encode a SHARD_ACK into a 48-byte buffer (no struct padding assumptions). */
@@ -3988,10 +4113,16 @@ static int handle_stream_shard(runtime_state_t *state, int client_fd,
             for (i = 0; i < BLAKE3_OUT_LEN; i++) {
                 if (shard_hdr_bytes[24 + i] != 0) { want_verify = 1; break; }
             }
-            if (!entry || !entry->direct_mode || entry->file_count <= 1 ||
+            if (!entry || !entry->direct_mode || !entry->multi_file ||
                 record_count_hdr == 0) {
                 /* Packed shards are only meaningful for an active multi-file
-                 * direct-mode tx with ≥1 records. Reject cleanly. */
+                 * direct-mode tx (kind==2) with ≥1 records. Gate on
+                 * `multi_file`, NOT `file_count > 1`: a kind==2 folder upload
+                 * can legitimately carry a single (packed) small file — e.g.
+                 * a resume that narrowed to one remaining file — and gating
+                 * on the count rejected it as `packed_unsupported` (the
+                 * Astro-Bot "many tiny files" report). Reject cleanly only
+                 * when the tx genuinely isn't a multi-file direct receiver. */
                 (void)drain_shard_data(client_fd, data_len);
                 if (entry) runtime_abort_tx_fatal(state, entry);
                 rc = send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
@@ -4015,9 +4146,9 @@ static int handle_stream_shard(runtime_state_t *state, int client_fd,
         }
         if (data_len > 0) {
             int write_ok;
-            if (entry && entry->direct_mode && entry->file_count <= 1) {
-                /* Single-file direct: stream into <dest>.ps5up2-tmp via a
-                 * persistent fd and (for large txs) a persistent writer
+            if (entry && entry->direct_mode && !entry->multi_file) {
+                /* Single-file direct (kind==1): stream into <dest>.ps5up2-tmp
+                 * via a persistent fd and (for large txs) a persistent writer
                  * thread. First shard opens + ftruncates, COMMIT_TX closes +
                  * renames, and any terminal transition (ABORT / takeover /
                  * shutdown / fatal) unlinks the tmp through
@@ -4029,7 +4160,7 @@ static int handle_stream_shard(runtime_state_t *state, int client_fd,
                                                           data_len,
                                                           is_first, prealloc,
                                                           want_verify ? computed : NULL);
-            } else if (entry && entry->direct_mode && entry->file_count > 1) {
+            } else if (entry && entry->direct_mode && entry->multi_file) {
                 /* Multi-file direct: route this shard to the owning file's
                  * tmp via the in-memory manifest index built at BEGIN_TX.
                  * If the index is missing (e.g. a recovered-after-takeover
@@ -4101,7 +4232,7 @@ static int handle_stream_shard(runtime_state_t *state, int client_fd,
              * COMMIT to close + rename, exactly like any 1-shard file.
              * Multi-file empty files don't need this: they ride inside
              * packed shards, which always have data_len>0. */
-            if (entry && entry->direct_mode && entry->file_count <= 1 &&
+            if (entry && entry->direct_mode && !entry->multi_file &&
                 shard_seq == 1 && !entry->direct_fd_open) {
                 if (runtime_write_shard_persistent(entry, client_fd, 0, 1, 0,
                                                    NULL) != 0) {
@@ -13592,6 +13723,7 @@ static int handle_binary_frame(runtime_state_t *state, int client_fd,
                 entry->total_bytes     = 0;
                 entry->file_count      = 0;
                 entry->direct_mode     = 0;
+                entry->multi_file      = 0;
                 entry->tmp_path[0]     = '\0';
                 entry->dest_root[0]    = '\0';
                 snprintf(entry->state, sizeof(entry->state), "active");
@@ -13658,6 +13790,12 @@ static int handle_binary_frame(runtime_state_t *state, int client_fd,
             entry->total_bytes  = extract_json_uint64_field(bextra, "total_bytes");
             entry->file_count   = extract_json_uint64_field(bextra, "file_count");
             if (entry->file_count == 0) entry->file_count = 1;
+            /* Authoritative single-vs-multi-file decision: the BEGIN_TX kind,
+             * NOT file_count. kind==2 is a multi-file (folder) transaction
+             * even when it carries exactly one file — see runtime_tx_entry_t
+             * ::multi_file. The engine packs lone small files, so this MUST
+             * be set for the packed-shard path to accept them. */
+            entry->multi_file   = (bmeta.kind == 2);
             (void)runtime_write_manifest(entry, bextra, (size_t)bextra_len);
         }
         /* Enable direct-write path:
@@ -13678,7 +13816,58 @@ static int handle_binary_frame(runtime_state_t *state, int client_fd,
          * shards_received is about to tell the client to skip past.
          */
         if (is_resume) {
-            /* Intentionally nothing — entry is adopted as-is. */
+            /* In-memory resume (TCP drop, payload still running): the entry
+             * already carries manifest_index + direct_mode, so the restore
+             * blocks below are no-ops and we go straight to reconcile.
+             *
+             * Resume AFTER a payload restart (power loss / takeover): the
+             * startup load restored only scalar fields — manifest_index is
+             * NULL and direct_mode is 0. Without restoring them, a multi-
+             * file tx would fall to the spool commit path with its shards
+             * missing (they're in tmps from the original direct run) and
+             * fail; a single-file tx would append at the wrong offset.
+             * Rebuild the direct-mode state from the ON-DISK manifest (the
+             * same builder the fresh path uses) so the resumed transfer
+             * continues on the verified direct path. */
+            if (entry->multi_file && !entry->manifest_index) {
+                char *mbuf = NULL;
+                size_t mlen = 0;
+                if (runtime_read_manifest_alloc(entry, &mbuf, &mlen) == 0) {
+                    manifest_index_entry_t *ridx = NULL;
+                    uint64_t ridx_count = 0;
+                    if (build_manifest_index(mbuf, mlen, entry->file_count,
+                                             &ridx, &ridx_count) == 0) {
+                        entry->manifest_blob        = mbuf;
+                        entry->manifest_blob_len    = mlen;
+                        entry->manifest_index       = ridx;
+                        entry->manifest_index_count = ridx_count;
+                        entry->direct_mode          = 1;
+                    } else {
+                        free(mbuf);
+                    }
+                }
+            } else if (!entry->multi_file && !entry->direct_mode &&
+                       entry->dest_root[0]) {
+                /* Single-file resume after a restart. We can't precisely map
+                 * on-disk bytes back to a shard boundary without the shard
+                 * size, so the safe move is a full re-send: restore direct
+                 * mode + tmp path, drop the partial tmp, reset the cursor.
+                 * Correct and self-healing; cost is re-uploading one file. */
+                entry->direct_mode = 1;
+                snprintf(entry->tmp_path, sizeof(entry->tmp_path),
+                         "%s.ps5up2-tmp", entry->dest_root);
+                (void)unlink(entry->tmp_path);
+                entry->shards_received = 0;
+                entry->bytes_received  = 0;
+            }
+            /* Reconcile the multi-file cursor against what's durably on disk
+             * (see reconcile_resume_cursor). A no-op when everything up to
+             * the journaled cursor is present (the in-memory case); on a
+             * restart it pulls the cursor back to the last fully-written
+             * file so the gap gets re-sent instead of skipped. */
+            if (entry->multi_file) {
+                reconcile_resume_cursor(entry);
+            }
         } else if (bmeta.kind == 1 && entry->file_count <= 1 && entry->dest_root[0]) {
             entry->direct_mode = 1;
             snprintf(entry->tmp_path, sizeof(entry->tmp_path),
@@ -14130,7 +14319,7 @@ static int handle_binary_frame(runtime_state_t *state, int client_fd,
         uint64_t failed_renames = 0;
         {
             uint64_t ta0 = now_us();
-            if (entry->direct_mode && entry->file_count <= 1) {
+            if (entry->direct_mode && !entry->multi_file) {
                 /* Drain the persistent writer + close the fd before rename.
                  * direct_writer_finish also clears direct_fd / direct_writer,
                  * so the upcoming runtime_release_tx_resources call will not
@@ -14152,23 +14341,60 @@ static int handle_binary_frame(runtime_state_t *state, int client_fd,
                             "refusing rename, destination unchanged\n",
                             entry->tx_id_hex);
                 } else {
-                    (void)unlink(entry->dest_root);
-                    if (rename(entry->tmp_path, entry->dest_root) != 0) {
+                    /* Commit-time integrity check. The shard-count gate
+                     * above proves we RECEIVED total_shards shards, but the
+                     * resume cursor (last_acked_shard) is also a COUNT, and
+                     * during streaming neither the tmp data nor the journal
+                     * is fsync'd — so a kill mid-write (PS5 rest-mode, power
+                     * loss, takeover) can leave the journaled cursor ahead
+                     * of the bytes actually on disk. A later resume then
+                     * skips those shards and we'd rename a tmp that's SHORT
+                     * of the manifest size: a file that reports "done" but
+                     * is missing interior bytes (worst on USB/exFAT, where
+                     * page-cache loss is likely). Verify the tmp is exactly
+                     * the planned size before publishing it; on a mismatch
+                     * refuse the rename and surface a retryable error so the
+                     * host shows a failure instead of a false success.
+                     * (total_bytes == 0 is the empty-file case handled in
+                     * the shard path — skip it. stat() failure is left to
+                     * the rename below, which then reports its own error.) */
+                    struct stat st_done;
+                    if (entry->total_bytes > 0 &&
+                        stat(entry->tmp_path, &st_done) == 0 &&
+                        (uint64_t)st_done.st_size != entry->total_bytes) {
                         apply_failed = 1;
-                        apply_failure_reason = "direct_rename_failed";
+                        apply_failure_reason = "size_mismatch";
                         snprintf(apply_failure_detail, sizeof(apply_failure_detail),
-                                 "rename %s -> %s failed: %s",
-                                 entry->tmp_path, entry->dest_root, strerror(errno));
-                        fprintf(stderr, "[payload2] %s (errno=%d)\n",
-                                apply_failure_detail, errno);
+                                 "destination would be %lld bytes but manifest expects %llu "
+                                 "(transfer incomplete — resume cursor outran durable data?); "
+                                 "destination preserved, partial at %s",
+                                 (long long)st_done.st_size,
+                                 (unsigned long long)entry->total_bytes,
+                                 entry->tmp_path);
+                        fprintf(stderr,
+                                "[payload2] commit size mismatch tx %s: tmp=%lld expected=%llu — "
+                                "refusing rename, destination unchanged\n",
+                                entry->tx_id_hex, (long long)st_done.st_size,
+                                (unsigned long long)entry->total_bytes);
                     } else {
-                        /* Clear tmp_path so the upcoming release_tx_resources
-                         * doesn't re-unlink a path that no longer exists. */
-                        entry->tmp_path[0] = '\0';
-                        printf("[payload2] direct apply rename -> %s\n", entry->dest_root);
+                        (void)unlink(entry->dest_root);
+                        if (rename(entry->tmp_path, entry->dest_root) != 0) {
+                            apply_failed = 1;
+                            apply_failure_reason = "direct_rename_failed";
+                            snprintf(apply_failure_detail, sizeof(apply_failure_detail),
+                                     "rename %s -> %s failed: %s",
+                                     entry->tmp_path, entry->dest_root, strerror(errno));
+                            fprintf(stderr, "[payload2] %s (errno=%d)\n",
+                                    apply_failure_detail, errno);
+                        } else {
+                            /* Clear tmp_path so the upcoming release_tx_resources
+                             * doesn't re-unlink a path that no longer exists. */
+                            entry->tmp_path[0] = '\0';
+                            printf("[payload2] direct apply rename -> %s\n", entry->dest_root);
+                        }
                     }
                 }
-            } else if (entry->direct_mode && entry->file_count > 1) {
+            } else if (entry->direct_mode && entry->multi_file) {
                 uint64_t fi = 0;
                 const manifest_index_entry_t *idx =
                     (const manifest_index_entry_t *)entry->manifest_index;
@@ -14255,8 +14481,66 @@ static int handle_binary_frame(runtime_state_t *state, int client_fd,
                                  (unsigned long long)failed_renames,
                                  (unsigned long long)entry->manifest_index_count);
                     } else {
-                        printf("[payload2] direct multi apply: %llu files renamed\n",
-                               (unsigned long long)entry->file_count);
+                        /* Commit-time integrity check (multi-file analogue
+                         * of the single-file size check above). All renames
+                         * succeeded, but the resume cursor is a shard COUNT
+                         * and streaming writes aren't fsync'd, so a kill
+                         * mid-write (rest-mode / power loss) followed by a
+                         * resume can leave a file SHORT of its manifest size
+                         * while the count-based gate still passes — a game
+                         * that lands looking complete but is silently
+                         * corrupt (the AquaHox USB/exFAT case). Re-stat each
+                         * file against the manifest size and fail loudly on
+                         * any mismatch so the host retries instead of
+                         * trusting a false "done". A bare stat on a
+                         * just-written file hits the inode cache, so this is
+                         * cheap even for a 200k-file game. (size == 0 files
+                         * ride inside packed shards and are skipped — same
+                         * as the stale-tmp guard above.) */
+                        uint64_t bad = 0;
+                        char bad_name[256] = {0};
+                        uint64_t bad_have = 0;
+                        uint64_t bad_want = 0;
+                        for (fi = 0; fi < entry->manifest_index_count; fi++) {
+                            char vpath[512];
+                            size_t vlen = idx[fi].path_len;
+                            if (vlen == 0 || vlen >= sizeof(vpath)) continue;
+                            if (idx[fi].size == 0) continue;
+                            if (json_copy_unescaped_string(
+                                    entry->manifest_blob + idx[fi].path_offset,
+                                    entry->manifest_blob + idx[fi].path_offset + vlen,
+                                    vpath, sizeof(vpath)) != 0) {
+                                continue;
+                            }
+                            struct stat vst;
+                            int have = (stat(vpath, &vst) == 0);
+                            uint64_t got = have ? (uint64_t)vst.st_size : 0;
+                            if (!have || got != idx[fi].size) {
+                                if (bad == 0) {
+                                    snprintf(bad_name, sizeof(bad_name), "%s", vpath);
+                                    bad_have = got;
+                                    bad_want = idx[fi].size;
+                                }
+                                bad += 1;
+                            }
+                        }
+                        if (bad > 0) {
+                            apply_failed = 1;
+                            apply_failure_reason = "size_mismatch";
+                            snprintf(apply_failure_detail, sizeof(apply_failure_detail),
+                                     "%llu file(s) wrong size after commit "
+                                     "(e.g. %s: have %llu, want %llu) — transfer incomplete "
+                                     "(resume cursor outran durable data?)",
+                                     (unsigned long long)bad, bad_name,
+                                     (unsigned long long)bad_have,
+                                     (unsigned long long)bad_want);
+                            fprintf(stderr,
+                                    "[payload2] commit multi size mismatch tx %s: %llu bad file(s)\n",
+                                    entry->tx_id_hex, (unsigned long long)bad);
+                        } else {
+                            printf("[payload2] direct multi apply: %llu files renamed + verified\n",
+                                   (unsigned long long)entry->file_count);
+                        }
                     }
                 }
             } else if (runtime_apply_spool(entry) == 0) {

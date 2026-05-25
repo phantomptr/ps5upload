@@ -178,6 +178,48 @@ fn transfer_dir_multi_shard_per_file() {
 }
 
 #[test]
+fn transfer_dir_single_small_file_is_packed_kind2() {
+    // Regression for the `packed_unsupported` report (Astro Bot, many tiny
+    // files): a multi-file (kind==2) folder transfer can legitimately narrow
+    // to EXACTLY ONE small file — e.g. a resume/reconcile that finds a single
+    // remaining file. The engine still PACKS that lone small file (packing
+    // keys off file SIZE, not file count), so it sends a kind==2 BEGIN_TX with
+    // file_count==1 followed by a PACKED STREAM_SHARD. The payload must accept
+    // that packed shard. The C payload previously gated packed-shard
+    // acceptance on `file_count > 1` and rejected it as `packed_unsupported`;
+    // the fix routes on the transaction's multi_file flag (kind==2) instead.
+    //
+    // This test pins the ENGINE half (a 1-file folder really does emit a
+    // kind==2 packed transfer and round-trips byte-exact through the mock).
+    // The payload-side acceptance fix lives in payload/src/runtime.c and is
+    // validated on hardware.
+    let tmp = tempdir();
+    let data: Vec<u8> = (0..777u32).map(|j| (j & 0xff) as u8).collect();
+    std::fs::write(tmp.path().join("solo.bin"), &data).unwrap();
+
+    let srv = MockServer::start();
+    let cfg = TransferConfig {
+        pack_size: 8 * 1024, // > file size → the lone small file is packed
+        ..TransferConfig::new(&srv.addr)
+    };
+    let tx_id = random_tx_id();
+
+    let result = transfer_dir(&cfg, tx_id, "/data/solo_dir", tmp.path()).unwrap();
+    assert_eq!(result.shards_sent, 1, "one small file = one packed shard");
+    assert_eq!(result.bytes_sent, 777);
+
+    let st = srv.state.lock().unwrap();
+    assert_eq!(st.txs.get(&result.tx_id_hex).unwrap().state, "committed");
+    assert_eq!(
+        st.applied
+            .get("/data/solo_dir/solo.bin")
+            .map(|v| v.as_slice()),
+        Some(data.as_slice()),
+        "lone packed file should round-trip byte-exact",
+    );
+}
+
+#[test]
 fn transfer_dir_packed_small_files() {
     // Explicit packing test: 20 × 512-byte files, pack_size=8 KiB so they all
     // fit in ONE packed shard. Verifies the packing happy path: one STREAM_SHARD
@@ -229,6 +271,78 @@ fn transfer_dir_packed_small_files() {
             "file {name} applied data mismatch"
         );
     }
+}
+
+#[test]
+fn transfer_dir_adversarial_packed_roundtrip() {
+    // A deliberately nasty game-dump-shaped folder, exercised end to end and
+    // checked BYTE-EXACT per file. This is the regression guard for the
+    // "ps5upload corrupts a game folder" class: it would catch a path/data
+    // desync in the packer, a record-framing off-by-one, a path-separator or
+    // UTF-8 encoding bug, or 0/1-byte mishandling — all of which produce a
+    // file that's the wrong size OR the right size with wrong content/path.
+    //
+    // Every file is < pack_file_max so it takes the packed path, and the
+    // pack target is tiny so the records span MANY packed shards (the
+    // multi-shard packing path, where a framing bug would surface).
+    let tmp = tempdir();
+    // (relative path, size). Mix of: nested dirs, spaces, non-ASCII, leading
+    // dots, 0-byte, 1-byte, and a size that forces a pack-boundary split.
+    let files: Vec<(&str, usize)> = vec![
+        ("eboot.bin", 1500),
+        ("sce_sys/param.json", 800),
+        ("sce_sys/icon0.png", 0),                  // 0-byte file
+        ("sce_sys/about/right.sprx", 1),           // 1-byte file
+        ("Image0/deep/nested/dir/data.dat", 2049), // spans the pack target
+        ("name with spaces.bin", 600),
+        ("unicodé_名前.bin", 700), // non-ASCII path
+        ("dots...in.name", 333),
+    ];
+    // Deterministic, file-specific byte pattern so a swap between two files
+    // (same size) is still caught.
+    let mk = |seed: usize, n: usize| -> Vec<u8> {
+        (0..n)
+            .map(|j| ((seed * 131 + j * 7) & 0xff) as u8)
+            .collect()
+    };
+    for (i, (rel, sz)) in files.iter().enumerate() {
+        let p = tmp.path().join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, mk(i + 1, *sz)).unwrap();
+    }
+
+    let srv = MockServer::start();
+    let cfg = TransferConfig {
+        pack_size: 2048, // tiny target → records span multiple packed shards
+        ..TransferConfig::new(&srv.addr)
+    };
+    let tx_id = random_tx_id();
+    let result = transfer_dir(&cfg, tx_id, "/data/game", tmp.path()).unwrap();
+
+    let expected_total: u64 = files.iter().map(|(_, s)| *s as u64).sum();
+    assert_eq!(result.bytes_sent, expected_total, "total data bytes");
+
+    let st = srv.state.lock().unwrap();
+    assert_eq!(st.txs.get(&result.tx_id_hex).unwrap().state, "committed");
+    for (i, (rel, sz)) in files.iter().enumerate() {
+        // PS5 dest paths are always forward-slash (join_ps5_path normalizes
+        // the host separator); the mock keys `applied` by the path the
+        // engine embedded in each packed record, so a wrong path here means
+        // the file would land in the wrong place on a real console.
+        let key = format!("/data/game/{}", rel.replace('\\', "/"));
+        let expected = mk(i + 1, *sz);
+        assert_eq!(
+            st.applied.get(&key).map(|v| v.as_slice()),
+            Some(expected.as_slice()),
+            "file {rel} mismatch (wrong path or wrong/corrupt content)"
+        );
+    }
+    // No stray dest_root pollution and no extra files invented.
+    assert_eq!(
+        st.applied.len(),
+        files.len(),
+        "exactly the source files should have landed, no more, no less"
+    );
 }
 
 // ─── Protocol correctness ─────────────────────────────────────────────────────

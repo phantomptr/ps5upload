@@ -411,6 +411,27 @@ jobs:
               chmod +x "$staging/PS5Upload.sh"
               (cd "$staging" && zip -9 "$dist_abs/PS5Upload.zip" PS5Upload.AppImage PS5Upload.sh)
               rm -rf "$staging"
+              # Native distro packages alongside the universal AppImage:
+              # .deb for Debian/Ubuntu, .rpm for Fedora/RHEL/Bazzite.
+              # Tauri's deb/rpm bundlers package the same binary + the
+              # bundled payload resource WITHOUT invoking linuxdeploy, so
+              # none of the FUSE / patchelf / NO_STRIP handling above
+              # applies to them. Dependency lists are auto-detected by
+              # soname (e.g. libwebkit2gtk-4.1.so.0), so a single package
+              # resolves across distro package-naming differences. Copy to
+              # stable names; the normalise step renames with version+arch.
+              deb="$(find "$bundle" -type f -name "*.deb" | head -n1)"
+              if [ -z "$deb" ]; then
+                echo "::error::no .deb produced by tauri"
+                exit 1
+              fi
+              cp -v "$deb" "$dist_abs/PS5Upload.deb"
+              rpm="$(find "$bundle" -type f -name "*.rpm" | head -n1)"
+              if [ -z "$rpm" ]; then
+                echo "::error::no .rpm produced by tauri"
+                exit 1
+              fi
+              cp -v "$rpm" "$dist_abs/PS5Upload.rpm"
               ;;
             windows)
               # Single-file portable .exe. Everything it needs — the
@@ -536,10 +557,12 @@ jobs:
         run: |
           mkdir -p release
           # Rename each artifact to include the version + arch so the
-          # release page is self-describing. Three shapes total:
+          # release page is self-describing. Shapes:
           #   macOS      : <name>-mac-<arch>.dmg       (native installer)
           #   Windows    : <name>-win-<arch>.zip       (contains portable .exe)
           #   Linux      : <name>-linux-<arch>.zip     (contains AppImage)
+          #   Linux      : <name>-linux-<arch>.deb     (Debian/Ubuntu)
+          #   Linux      : <name>-linux-<arch>.rpm     (Fedora/RHEL/Bazzite)
           shopt -s nullglob
           for f in artifacts/ps5upload-macos-*/*.dmg; do
             arch="$(basename "$(dirname "$f")" | sed 's/^ps5upload-macos-//')"
@@ -552,6 +575,14 @@ jobs:
           for f in artifacts/ps5upload-linux-*/PS5Upload.zip; do
             arch="$(basename "$(dirname "$f")" | sed 's/^ps5upload-linux-//')"
             cp -v "$f" "release/PS5Upload-${TAG_VERSION}-linux-${arch}.zip"
+          done
+          for f in artifacts/ps5upload-linux-*/PS5Upload.deb; do
+            arch="$(basename "$(dirname "$f")" | sed 's/^ps5upload-linux-//')"
+            cp -v "$f" "release/PS5Upload-${TAG_VERSION}-linux-${arch}.deb"
+          done
+          for f in artifacts/ps5upload-linux-*/PS5Upload.rpm; do
+            arch="$(basename "$(dirname "$f")" | sed 's/^ps5upload-linux-//')"
+            cp -v "$f" "release/PS5Upload-${TAG_VERSION}-linux-${arch}.rpm"
           done
           # Single payload ELF. Does transfer / mount / browse / hardware
           # / FS ops — nothing else to ship alongside it.

@@ -44,6 +44,16 @@ typedef struct {
      * `.ps5up2-tmp` sibling of the destination, rename on commit. Eliminates
      * the spool-then-apply I/O amplification. */
     int direct_mode;        /* 1 = direct write to tmp + rename on commit */
+    /* 1 = multi-file transaction (BEGIN_TX kind==2), 0 = single-file (kind==1).
+     * This is the AUTHORITATIVE single-vs-multi discriminator. Do NOT use
+     * `file_count <= 1` for that decision: a multi-file (kind==2) folder
+     * upload can legitimately carry exactly ONE file (e.g. a resume/reconcile
+     * that narrowed to a single remaining small file), and the engine still
+     * packs that lone small file into a PACKED shard. Gating packed-shard
+     * acceptance / multi-file routing on `file_count > 1` made the payload
+     * reject that shard as `packed_unsupported`. Persisted in the tx journal
+     * so a restart-resume restores the correct routing. */
+    int multi_file;
     char tmp_path[512];     /* fully-qualified `.ps5up2-tmp` path (single-file) */
     /* Parsed manifest held in memory for the lifetime of an active multi-file
      * transaction. Built once at BEGIN_TX so per-shard routing is O(log N)

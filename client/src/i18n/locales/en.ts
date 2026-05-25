@@ -141,7 +141,7 @@ activity_just_now: "just now",
 activity_minutes_ago: "{count}m ago",
 activity_hours_ago: "{count}h ago",
 activity_stop_tooltip: "Stop watching this operation (engine job may continue server-side)",
-keep_awake_hint: "Blocks display and system sleep while the app is running so long uploads don't get interrupted.",
+keep_awake_hint: "Uploads, downloads, and installs already keep the computer awake automatically. Turn this on to also block sleep while the app is open but idle.",
 keep_awake_unsupported: "Not supported on this OS yet.",
 // 2.12.0: OperationBar → ActivityBar rename (terminology consistency
 // with the existing Activity screen + activityHistory store). Old

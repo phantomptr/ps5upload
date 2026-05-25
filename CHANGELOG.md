@@ -4,6 +4,27 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.15.0
+
+- **Folders with lots of tiny files now upload reliably.** Games like Astro
+  Bot could fail with a `packed_unsupported` error — most often when resuming.
+  Fixed.
+- **Big uploads no longer die when your computer sleeps.** While an upload,
+  download, or install is running, ps5upload keeps the computer awake
+  automatically (macOS, Linux, Windows), then lets it sleep when idle. The
+  Settings → Keep Awake toggle still works on its own for idle use.
+- **Native Linux packages.** Releases now ship a `.deb` (Debian/Ubuntu) and
+  `.rpm` (Fedora/RHEL/Bazzite) alongside the AppImage. These need a recent
+  distro (glibc 2.39+: Ubuntu 24.04+, Debian 13+, Fedora 40+).
+- **Safer folder uploads.** If the PS5 dropped mid-upload (rest mode or power
+  loss), a transfer could finish "successfully" with a file that was secretly
+  incomplete. It now fails clearly instead, and Resume re-sends only what's
+  missing — even after a full power-off.
+- **Docs:** how to keep long uploads alive (the PS5's own rest-mode timer)
+  and when to use Resume.
+
+---
+
 ## 2.14.0
 
 A stability-focused release.

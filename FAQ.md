@@ -218,6 +218,27 @@ distros. Modern desktop Linux installs have most of these already;
 the explicit list covers stripped / server images and fresh
 container shells.
 
+**Q: Minimum distro version? / "GLIBC_2.39 not found" or the app installs
+but won't launch.**
+
+All three Linux artifacts (`.deb`, `.rpm`, **and** the `.AppImage`) are
+built in CI against **glibc 2.39**, so they need a distro that ships
+glibc 2.39 or newer:
+
+- **Ubuntu 24.04+**, **Debian 13 (trixie)+**, **Fedora 40+**,
+  RHEL/Rocky/Alma 10+, current openSUSE Tumbleweed, current Arch.
+- **Too old:** Ubuntu 22.04 (glibc 2.35), Debian 12 / bookworm (2.36),
+  Fedora 39 (2.38), RHEL 9 (2.34).
+
+This is a glibc floor, **not** a missing package — on an older release
+the `.deb`/`.rpm` install cleanly (their package dependencies all
+resolve) but the binary then fails at launch with `GLIBC_2.39 not
+found`, and the AppImage hits the same wall because it bundles WebKitGTK
+but still uses the host's glibc. There's no way to bundle glibc itself
+into a native package. On an older distro, build from source on that
+machine: `make install` then `make dist-linux` (it links against
+whatever glibc that box has).
+
 **Q: The keep-awake toggle says "error" on Linux.**
 
 Keep-awake uses `systemd-inhibit`, which needs `systemd` + `systemd-
@@ -409,9 +430,80 @@ delete, and Library actions (Move, Delete, Chmod, Mount,
 Unmount, Download). Click it for the full Activity tab with
 historical outcomes.
 
+**Q: My big upload dies partway through. Why, and how do I stop it?**
+A multi-hour upload holds one TCP connection open the whole time. If
+**either end goes to sleep**, that connection drops and the transfer
+fails (you'll see a network/connection error, or — on external
+USB/exFAT targets — a file that looks done but is incomplete). Two
+things go to sleep:
+
+1. **Your computer.** ps5upload now keeps the computer awake
+   **automatically** while any upload, download, or install is running
+   (macOS `caffeinate`, Linux `systemd-inhibit`, Windows
+   `SetThreadExecutionState`) and releases it when the queue goes idle.
+   You don't have to do anything. If you want the machine to also stay
+   awake while the app is open but *idle*, turn on **Settings → Keep
+   Awake**. (On non-systemd Linux that toggle is greyed out — the OS has
+   no inhibitor to call.)
+
+2. **The PS5 itself.** The console's rest-mode timer is **console-side**
+   — ps5upload can't see or stop it from your computer. For a long
+   transfer, raise or disable it first:
+   **Settings → System → Power Saving → Set Time Until PS5 Turns Off**,
+   and set **both** *During Media Playback* and *During Gameplay /
+   General Use* to a longer value (or **Don't Turn Off**). A quick
+   workaround if you'd rather not change settings: tap the controller
+   every so often during the transfer — any input resets the idle timer
+   (this is what some users do already).
+
+If a transfer does get cut off, you usually don't lose the bytes already
+sent: re-run it and pick **Resume** at the prompt (or press Start again
+on the queued row) — it size-compares what's on the PS5 and only sends
+what's missing. On external USB/exFAT, prefer **Override** + a fresh run
+if a "completed" upload looks wrong, since a console that lost power
+mid-write can leave the destination in an inconsistent state.
+
 ---
 
 ## Mount + unmount
+
+**Q: I uploaded a game *folder* (dump), but ShadowMount+ won't mount it
+— yet `.exfat` images mount fine. Why?**
+Because **ShadowMount+ mounts game *image files* (`.ffpkg` / `.exfat` /
+`.ffpfs`), not loose extracted folders.** It watches `/mnt/usb*`,
+`/mnt/ext*`, and `/data` for those image files and auto-mounts +
+registers them — so your `.exfat` uploads "just work," but a raw dump
+folder sitting in those paths is invisible to it. This is a workflow
+difference, not a corruption bug (your upload completed correctly).
+
+You have two ways forward:
+
+- **Keep the folder — register it directly in ps5upload (no ShadowMount+
+  needed).** In the **Library** tab, on the uploaded folder game (it
+  needs `eboot.bin` + `sce_sys/param.json` at its root), click
+  **Register**, then **Launch**. This installs the title into the PS5's
+  app database with a bind mount and starts it — the native,
+  hardware-validated path for folder dumps. If a PSN- or disc-extracted
+  dump fails Register with a DRM error, use **Register (patch DRM)**
+  (rewrites `applicationDrmType` to `standard`). If the home-screen tile
+  is blank after registering, enable the ShadowMount+ metadata healer in
+  ps5upload (it copies `icon0.png`/art into `/user/appmeta`).
+- **Keep using ShadowMount+ — give it an image, not a folder.** Package
+  the game as an `.exfat` (or `.ffpkg`) image and upload *that* — exactly
+  what already works for you. Don't upload the extracted folder if
+  ShadowMount+ is your launcher.
+
+On the **"old `config.ini` from a 1.xx version"**: that's *not* what's
+blocking the folder mount (the folder-vs-image distinction above is), and
+since your `.exfat` images mount fine your config is clearly functional.
+But mixing a stale ShadowMount+ config/autotune with a newer
+ShadowMount+ build is worth tidying: ShadowMount+ regenerates defaults if
+they're absent, so you can back up and delete `/data/shadowmount/config.ini`
+and `/data/shadowmount/autotune.ini` (the autotune file holds
+version-specific, learned per-game timings — least worth keeping across
+versions) and let the current build recreate them. Check
+**Library → ShadowMount+ panel → debug log** for the exact reason a given
+item didn't mount.
 
 **Q: How do I find one game in a long library?**
 The Library tab has a search bar above the games + images

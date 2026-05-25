@@ -105,7 +105,9 @@ Pre-built downloads land on the
 |---|---|---|
 | macOS (Apple Silicon / Intel) | `PS5Upload-<ver>-mac-{arm64,x64}.dmg` | Open the `.dmg`, drag PS5Upload into Applications. See **First launch on macOS** below — Gatekeeper blocks downloaded apps the first time. |
 | Windows (x64 / ARM64) | `PS5Upload-<ver>-win-{x64,arm64}.zip` | Unzip, double-click `PS5Upload.exe` — portable, no installer. See **First launch on Windows** — SmartScreen warns on first run. |
-| Linux (x64 / ARM64) | `PS5Upload-<ver>-linux-{x64,arm64}.zip` | Unzip, then `chmod +x PS5Upload.sh PS5Upload.AppImage` and run **`./PS5Upload.sh`** (the wrapper — handles the FUSE-less and WebKit white-screen cases for you). Running `./PS5Upload.AppImage` directly also works if your system has libfuse2 and a happy WebKitGTK. |
+| Linux — Debian / Ubuntu (x64 / ARM64) | `PS5Upload-<ver>-linux-{x64,arm64}.deb` | `sudo apt install ./PS5Upload-<ver>-linux-<arch>.deb` — installs a normal app with a menu entry; pulls in the WebKitGTK deps automatically. |
+| Linux — Fedora / RHEL / Bazzite (x64 / ARM64) | `PS5Upload-<ver>-linux-{x64,arm64}.rpm` | `sudo dnf install ./PS5Upload-<ver>-linux-<arch>.rpm` (Bazzite/Silverblue: `rpm-ostree install`) — menu entry + auto deps. |
+| Linux — any distro (x64 / ARM64) | `PS5Upload-<ver>-linux-{x64,arm64}.zip` | Universal fallback (no install). Unzip, then `chmod +x PS5Upload.sh PS5Upload.AppImage` and run **`./PS5Upload.sh`** (the wrapper — handles the FUSE-less and WebKit white-screen cases for you). Running `./PS5Upload.AppImage` directly also works if your system has libfuse2 and a happy WebKitGTK. |
 
 ### First-launch warnings (and why they're there)
 
@@ -141,11 +143,21 @@ only needs to be done once per install.
   installs may need
   [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/)
   installed once.
-- **Linux** needs a few system libraries that the `.AppImage` expects
-  on the host (libfuse2, gtk3, webkit2gtk 4.1, libsoup3,
-  libappindicator, librsvg2). Install commands for
+- **Linux** — the `.deb` and `.rpm` packages **pull in their
+  dependencies automatically** (WebKitGTK 4.1, gtk3, libsoup3, etc.) via
+  the package manager, so they're the easiest route on Debian/Ubuntu and
+  Fedora/RHEL/Bazzite. The universal `.AppImage` instead expects those
+  libraries already on the host (libfuse2, gtk3, webkit2gtk 4.1,
+  libsoup3, libappindicator, librsvg2); install commands for
   Debian/Ubuntu/Fedora/RHEL/Arch are in
   [the FAQ](FAQ.md#prerequisites).
+  **Minimum distro version:** all three Linux artifacts are built against
+  **glibc 2.39**, so they need a reasonably recent distro — **Ubuntu
+  24.04+, Debian 13+ (trixie), Fedora 40+**, or equivalent. (This is a
+  glibc floor, not a package dependency — the `.deb`/`.rpm` install fine
+  on older releases but the app won't launch, and the AppImage bundles
+  WebKitGTK yet still uses the host's glibc.) On an older distro, build
+  from source with `make dist-linux` on that machine.
 
 The app checks GitHub for updates once per launch (Settings → Updates)
 and downloads a fresh archive to your Downloads folder when you click

@@ -1,8 +1,14 @@
 //! Keep-OS-awake inhibitor.
 //!
-//! One toggle in Settings; when on, the OS is asked to skip idle
-//! sleep and display sleep until the app exits or the toggle flips
-//! back off. Each platform uses its native primitive:
+//! Two independent owners ask the OS to skip idle sleep + display sleep:
+//!   • the manual Settings toggle (reason `"manual"`), and
+//!   • an automatic hold while an upload/install queue is running
+//!     (reason `"transfer"`), so a long transfer never dies to the
+//!     machine idle-sleeping mid-stream — the originally-reported bug.
+//! Holds are reference-counted by name (see `Inhibitor`): the single
+//! underlying OS primitive stays engaged while ANY reason is held, so
+//! ending a transfer can't release a hold the user set in Settings, and
+//! vice versa. Each platform uses its native primitive:
 //!
 //!   macOS:   `caffeinate -disu` subprocess (kill to release)
 //!   Linux:   `systemd-inhibit --what=idle:sleep … sleep infinity`
@@ -16,15 +22,16 @@
 //! unsupported platforms (BSDs, etc.) we return `supported: false`
 //! and let the UI disable the toggle.
 
+use std::collections::HashSet;
 use std::sync::OnceLock;
 
 use tokio::sync::Mutex;
 
-/// Active inhibitor — one of the platform-specific variants, or
-/// `None` when the toggle is off. Wrapped in a Mutex because the
-/// Tauri command handler is async + could be called concurrently
-/// from the renderer (e.g. rapid on/off clicks during a glitchy
-/// touch event).
+/// Reason name owned by the manual Settings toggle.
+const MANUAL_REASON: &str = "manual";
+
+/// One live OS handle — one of the platform-specific variants — or
+/// `None` when nothing is held.
 enum Handle {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     Process(tokio::process::Child),
@@ -32,10 +39,77 @@ enum Handle {
     WinExecState,
 }
 
-static HOLDER: OnceLock<Mutex<Option<Handle>>> = OnceLock::new();
+/// Process-wide inhibitor with reference-counted reasons. The OS handle
+/// is acquired when `reasons` goes empty→non-empty and released when it
+/// goes non-empty→empty, so the manual toggle and the automatic
+/// transfer hold never clobber each other. Wrapped in a Mutex because
+/// the Tauri command handlers are async and can be called concurrently
+/// from the renderer (rapid toggle clicks) and from the queue runners.
+struct Inhibitor {
+    handle: Option<Handle>,
+    reasons: HashSet<String>,
+}
 
-fn holder() -> &'static Mutex<Option<Handle>> {
-    HOLDER.get_or_init(|| Mutex::new(None))
+static HOLDER: OnceLock<Mutex<Inhibitor>> = OnceLock::new();
+
+fn holder() -> &'static Mutex<Inhibitor> {
+    HOLDER.get_or_init(|| {
+        Mutex::new(Inhibitor {
+            handle: None,
+            reasons: HashSet::new(),
+        })
+    })
+}
+
+/// Result of an acquire attempt, shaped for the JSON the renderer reads.
+enum AcquireOutcome {
+    /// The OS inhibitor is held; `reason` is now in the active set.
+    Held,
+    /// This platform has no inhibitor primitive (BSD, non-systemd Linux).
+    Unsupported,
+    /// The spawn/syscall failed (e.g. Windows GPO); message for the UI.
+    Failed(String),
+}
+
+/// Add `reason` to the active set, acquiring the OS inhibitor if this is
+/// the first reason. Idempotent per name. The lock is held across the
+/// (synchronous, fast) spawn so two concurrent acquires can't both spawn
+/// a child — but never across the async release (see `release_reason`).
+async fn acquire_reason(reason: &str) -> AcquireOutcome {
+    let mut g = holder().lock().await;
+    if g.handle.is_some() {
+        g.reasons.insert(reason.to_string());
+        return AcquireOutcome::Held;
+    }
+    match acquire_inhibitor() {
+        Ok(Some(handle)) => {
+            g.handle = Some(handle);
+            g.reasons.insert(reason.to_string());
+            AcquireOutcome::Held
+        }
+        // Nothing to hold on this platform — don't record the reason, so
+        // a later release is a clean no-op and `active` stays false.
+        Ok(None) => AcquireOutcome::Unsupported,
+        Err(e) => AcquireOutcome::Failed(e),
+    }
+}
+
+/// Remove `reason`; release the OS inhibitor once the last reason goes.
+/// Takes the handle out under the lock, then awaits the (async) kill
+/// after dropping the guard so the mutex is never held across an await.
+async fn release_reason(reason: &str) {
+    let to_release = {
+        let mut g = holder().lock().await;
+        g.reasons.remove(reason);
+        if g.reasons.is_empty() {
+            g.handle.take()
+        } else {
+            None
+        }
+    };
+    if let Some(handle) = to_release {
+        release_inhibitor(handle).await;
+    }
 }
 
 /// True when this platform has a working keep-awake primitive
@@ -61,55 +135,83 @@ fn platform_supported() -> bool {
     }
 }
 
+/// Manual Keep-Awake toggle (the Settings checkbox). Owns the `"manual"`
+/// reason; independent of the automatic transfer hold.
 #[tauri::command]
 pub async fn keep_awake_set(enabled: bool) -> serde_json::Value {
-    let mut guard = holder().lock().await;
     if enabled {
-        if guard.is_some() {
-            return serde_json::json!({ "enabled": true, "supported": true });
-        }
-        match acquire_inhibitor() {
-            Ok(Some(handle)) => {
-                *guard = Some(handle);
-                serde_json::json!({ "enabled": true, "supported": true })
-            }
-            Ok(None) => serde_json::json!({
+        match acquire_reason(MANUAL_REASON).await {
+            AcquireOutcome::Held => serde_json::json!({ "enabled": true, "supported": true }),
+            AcquireOutcome::Unsupported => serde_json::json!({
                 "enabled": false,
                 "supported": false,
                 "error": "keep-awake not supported on this platform",
             }),
-            Err(e) => serde_json::json!({
+            AcquireOutcome::Failed(e) => serde_json::json!({
                 "enabled": false,
                 "supported": true,
                 "error": e,
             }),
         }
     } else {
-        if let Some(handle) = guard.take() {
-            release_inhibitor(handle).await;
-        }
+        release_reason(MANUAL_REASON).await;
         serde_json::json!({ "enabled": false, "supported": platform_supported() })
     }
 }
 
 #[tauri::command]
 pub async fn keep_awake_state() -> serde_json::Value {
-    let guard = holder().lock().await;
+    let g = holder().lock().await;
     serde_json::json!({
-        "enabled": guard.is_some(),
+        // `enabled` mirrors the MANUAL toggle only — the renderer's
+        // checkbox reflects the user's explicit choice, not a transient
+        // transfer hold (which can flip on/off under it without warning).
+        "enabled": g.reasons.contains(MANUAL_REASON),
         "supported": platform_supported(),
+        // Whether the OS inhibitor is actually engaged right now (manual
+        // OR an active transfer). Informational; the toggle uses `enabled`.
+        "active": g.handle.is_some(),
     })
 }
 
-/// Release any active inhibitor at app exit. `HOLDER` is a `static`, so
-/// its contents are never dropped during process teardown — without this,
-/// an enabled `caffeinate` / `systemd-inhibit` child outlives the app and
+/// Programmatic hold for an active transfer (the upload/install queue
+/// runners). Best-effort: callers ignore the result — a transfer must
+/// never fail because the OS declined to inhibit sleep. Distinct
+/// `reason` strings from different subsystems coexist; the OS inhibitor
+/// only drops when the last reason is released.
+#[tauri::command]
+pub async fn keep_awake_acquire(reason: String) -> serde_json::Value {
+    match acquire_reason(&reason).await {
+        AcquireOutcome::Held => serde_json::json!({ "active": true, "supported": true }),
+        AcquireOutcome::Unsupported => serde_json::json!({ "active": false, "supported": false }),
+        AcquireOutcome::Failed(e) => {
+            serde_json::json!({ "active": false, "supported": true, "error": e })
+        }
+    }
+}
+
+/// Release a programmatic hold acquired via `keep_awake_acquire`.
+#[tauri::command]
+pub async fn keep_awake_release(reason: String) -> serde_json::Value {
+    release_reason(&reason).await;
+    serde_json::json!({ "ok": true })
+}
+
+/// Release the inhibitor at app exit regardless of how many reasons are
+/// still held — the process is going away. `HOLDER` is a `static`, so its
+/// contents are never dropped during process teardown; without this an
+/// enabled `caffeinate` / `systemd-inhibit` child outlives the app and
 /// the machine can't idle-sleep until the user reboots or kills it by
 /// hand. Call from the `RunEvent::Exit` handler, alongside `engine::stop()`.
 /// (Windows is a no-op: its exec-state flags clear automatically when the
 /// process exits.)
 pub async fn keep_awake_release_on_exit() {
-    if let Some(handle) = holder().lock().await.take() {
+    let to_release = {
+        let mut g = holder().lock().await;
+        g.reasons.clear();
+        g.handle.take()
+    };
+    if let Some(handle) = to_release {
         release_inhibitor(handle).await;
     }
 }
