@@ -3,6 +3,7 @@
 #include <signal.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/stat.h>   /* umask() */
 #include <pthread.h>
 #include <dlfcn.h>
 #include <ps5/kernel.h>
@@ -228,6 +229,18 @@ int main(void) {
     runtime_state_t state = {0};
     g_state = &state;
     startup_trace("ENTER_MAIN");
+
+    /* umask(0) so subsequent open(..., 0777) and mkdir(0777) calls land at
+     * the literal mode bits instead of being masked back to 0755/0644 by
+     * an inherited Sony process umask. PS5's app loader needs the world-
+     * executable bit on game folder files / dirs (otherwise launch crashes
+     * with CE-107750-0 "can't start game or app" — confirmed on PPSA17221
+     * 2.16.1 hardware test). Paired with `open(..., 0777)` + `fchmod(fd,
+     * 0777)` at every user-facing write site so files land world-rwx
+     * regardless of whether they're freshly created or re-opened over an
+     * older 0644 file from a pre-2.16.1 payload run. */
+    umask(0);
+    startup_trace("UMASK_ZEROED");
 
     /* Run the elevation once at startup. May fail silently if
      * kernel R/W isn't yet available (kstuff not loaded). In

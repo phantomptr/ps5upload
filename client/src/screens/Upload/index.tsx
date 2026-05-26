@@ -212,6 +212,13 @@ export default function UploadScreen() {
   // in flight, dialog not yet open) where phase is still "idle" but
   // the button shouldn't accept a second click.
   const [preflightBusy, setPreflightBusy] = useState(false);
+  // Preflight probe can fail (engine down, PS5 unreachable, port refused);
+  // before the catch was added the button silently de-busied and nothing
+  // happened. Surface the error inline so the user knows why the upload
+  // dialog never appeared. We clear on source change (useEffect below)
+  // because otherwise a "preflight failed for /old/path" banner sticks
+  // around after the user picks a fresh source — misleading.
+  const [preflightError, setPreflightError] = useState<string | null>(null);
 
   // Live list of writable PS5 volumes for the destination dropdown.
   // Refreshed when the host changes; previously the dropdown was a
@@ -219,6 +226,13 @@ export default function UploadScreen() {
   // mount point (e.g. `/mnt/ext1`, `/mnt/usbN` for N>0, and any
   // ps5upload-mounted images).
   const [availableVolumes, setAvailableVolumes] = useState<Volume[]>([]);
+  // Clear preflight error whenever the source changes (new file/folder
+  // pick, or source cleared). The error is tied to the OLD source's
+  // destination probe and would otherwise stick around as a misleading
+  // banner over an entirely different upload.
+  useEffect(() => {
+    setPreflightError(null);
+  }, [source?.path, source?.kind]);
   useEffect(() => {
     if (!host?.trim()) {
       setAvailableVolumes([]);
@@ -306,6 +320,7 @@ export default function UploadScreen() {
       return;
     }
     setPreflightBusy(true);
+    setPreflightError(null);
     try {
       // Always probe the FINAL destination path — for folders that means
       // listing `.../<folder-name>` to see if the named subdir exists and
@@ -319,6 +334,12 @@ export default function UploadScreen() {
         entryCount: probe.exists ? probe.entryCount : 0,
         isFolder,
       });
+    } catch (e) {
+      // Network/engine failure on probe — surface inline. Without this
+      // catch the try/finally swallowed the throw and the button just
+      // de-busied with no UI feedback, so the user clicked Upload and
+      // nothing visible happened.
+      setPreflightError(e instanceof Error ? e.message : String(e));
     } finally {
       setPreflightBusy(false);
     }
@@ -369,6 +390,7 @@ export default function UploadScreen() {
           excludes={excludes}
           transferPhase={transferPhase}
           preflightBusy={preflightBusy}
+          preflightError={preflightError}
           onClear={() => {
             resetTransfer();
             reset();
@@ -470,6 +492,7 @@ function Step2Options(props: {
   excludes: { pattern: string; enabled: boolean }[];
   transferPhase: TransferPhase;
   preflightBusy: boolean;
+  preflightError: string | null;
   onClear: () => void;
   onUseWrappedHint: (path: string) => void;
   onSetMountAfterUpload: (on: boolean) => void;
@@ -495,6 +518,7 @@ function Step2Options(props: {
     excludes,
     transferPhase,
     preflightBusy,
+    preflightError,
     onClear,
     onUseWrappedHint,
     onSetMountAfterUpload,
@@ -692,6 +716,15 @@ function Step2Options(props: {
               : "Upload now"}
         </button>
       </div>
+      {preflightError && (
+        <div className="mt-2 rounded-md border border-[var(--color-bad)] bg-[var(--color-surface)] p-2 text-[11px] text-[var(--color-bad)]">
+          {tr(
+            "upload_preflight_failed",
+            { msg: preflightError },
+            `Couldn't check the destination: ${preflightError}. Make sure the PS5 is reachable, then try again.`,
+          )}
+        </div>
+      )}
       <MirrorToRosterButton
         sourceKind={source.kind}
         srcPath={source.path}
@@ -971,6 +1004,38 @@ function TransferStatus({ phase }: { phase: TransferPhase }) {
             "upload_status_checking_existing",
             "Checking what's already on your PS5…",
           )}
+        </div>
+      );
+    }
+    // Pre-byte interstitial: reconcile is done (we have the to-send file
+    // list and total bytes), but the first packed shard hasn't gone out yet.
+    // The gap is engine-side: build the manifest JSON for N files, send
+    // BEGIN_TX, then materialise the first shard (read + pack ~200 small
+    // files from disk). On large folders sourced from a slow external drive
+    // this can run minutes BEFORE any byte hits the wire, and showing
+    // "Uploading 0 B · 0 of N files" makes it look stuck. Show an explicit
+    // "Preparing N files…" so the user sees we know about the workload and
+    // are working — without lying about the bytes.
+    if (bytesSent === 0 && files.length > 0) {
+      return (
+        <div className="mb-3 flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 text-sm">
+          <Loader2
+            size={14}
+            className="animate-spin text-[var(--color-accent)]"
+          />
+          <span>
+            {tr(
+              "upload_status_preparing_files",
+              { count: files.length.toLocaleString() },
+              "Preparing transfer of {count} files…",
+            )}
+          </span>
+          <span className="text-xs text-[var(--color-muted)]">
+            {tr(
+              "upload_status_preparing_hint",
+              "(building the file list and reading the first batch — large folders or slow source disks take a minute)",
+            )}
+          </span>
         </div>
       );
     }

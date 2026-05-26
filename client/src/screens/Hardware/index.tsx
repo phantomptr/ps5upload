@@ -67,30 +67,31 @@ import {
  *  See payload/src/hw_info.c::hw_temps_get_text + shellui_rpc.c. */
 const POLL_INTERVAL_MS = 5_000;
 
-/** Minimum gap between manual sensor reads. Each read ptraces
- *  SceShellUI; back-to-back reads compound the destabilization that the
- *  old auto-poll caused, so a button-masher can't recreate it. */
-const SENSOR_READ_COOLDOWN_MS = 10_000;
+/** Auto-poll interval for live sensors (CPU temp, SoC temp, CPU freq,
+ *  power). Safe to poll now that the payload reads sensors via DIRECT
+ *  sceKernel* linkage (2.16.1+): no ptrace, no ShellUI freeze. On older
+ *  payloads the ShellUI RPC fallback was the unsafe path and the screen
+ *  blanked on every read; that path now only fires when a direct call
+ *  legitimately returns 0 (FW point where libkernel doesn't export the
+ *  symbol), which is rare. */
+const SENSOR_POLL_INTERVAL_MS = 5_000;
+
+/** Minimum gap between sensor reads (both auto-poll and manual). Mostly a
+ *  rate limit against accidentally hammering the mgmt port — each read is
+ *  a fresh TCP RPC + sensor syscalls. Was 10 s on the pre-2.16.1 ptrace-
+ *  via-ShellUI path because every read briefly froze the UI; the new
+ *  direct path is cheap enough that 2 s is fine. */
+const SENSOR_READ_COOLDOWN_MS = 2_000;
 
 /**
- * Safety gate for an on-demand live-sensor read. Returns true when a
- * fresh read should be allowed right now.
+ * Safety gate for a live-sensor read. Returns true when a fresh read
+ * should be allowed right now.
  *
- * Reading sensors is the only Hardware action that ptraces SceShellUI —
- * it momentarily SIGSTOPs the process that renders the entire PS5 UI. On
- * the old 5s auto-poll this powered consoles off when other homebrew
- * (etaHEN / shadowMOUNT / kstuff) was also manipulating processes.
- * Manual + cooldown is the compromise: the user opts into each read, and
- * the cooldown stops a rapid re-click from rebuilding the ptrace storm.
- *
- * TODO(maintainer): tune this policy — it's a pure safety knob and your
- * call. A shorter cooldown is friendlier when watching a temp climb
- * under load, but every read carries the ShellUI-freeze risk, so erring
- * long is the safe default. For a stronger guard you could also refuse
- * while a transfer/install is in flight (that's exactly when a ShellUI
- * freeze is most likely to cascade) by reading the relevant store
- * selectors here. The conservative time-only default below keeps the
- * build green until you decide.
+ * The cooldown rate-limits the manual button + the auto-poller so they
+ * can't compound when a user clicks Read while the timer also fires.
+ * On 2.16.1+ payloads sensor reads go through the DIRECT sceKernel*
+ * path (no ptrace into ShellUI, no screen freeze), so the cooldown is a
+ * thrash-prevention knob rather than a safety-critical one.
  */
 function shouldAllowSensorRead(lastReadAt: number | null, now: number): boolean {
   if (lastReadAt !== null && now - lastReadAt < SENSOR_READ_COOLDOWN_MS) {
@@ -184,13 +185,15 @@ export default function HardwareScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Live sensors (temps/clock/power) are NO LONGER on the auto-poll —
-  // they're the only read that ptraces SceShellUI, which froze consoles
-  // when polled every 5s alongside other homebrew. Read on demand via
-  // readSensors() with its own busy/loading state so a sensor read never
-  // blocks (or is blocked by) the safe info/uptime/storage poll.
+  // Live sensors (temps/clock/power) auto-poll every 5s via DIRECT
+  // sceKernel* linkage (-lkernel_sys, 2.16.1+ payloads) — no ptrace, no
+  // ShellUI freeze. sensorBusy + sensorReadAt gate the auto-tick: busy
+  // prevents overlapping reads if the PS5 is slow; readAt enforces the
+  // SENSOR_READ_COOLDOWN_MS minimum gap so manual+timer reads can't
+  // compound. The pre-2.16.1 UI surfaced a manual "Read sensors" button
+  // because the read was unsafe to poll — that button is gone now since
+  // auto-poll is safe and matches user expectations for a live panel.
   const sensorBusy = useRef(false);
-  const [sensorLoading, setSensorLoading] = useState(false);
   const [sensorReadAt, setSensorReadAt] = useState<number | null>(null);
 
   // Guard flag: if a previous refresh is still pending, skip new
@@ -272,7 +275,6 @@ export default function HardwareScreen() {
     if (sensorBusy.current) return;
     if (!shouldAllowSensorRead(sensorReadAt, Date.now())) return;
     sensorBusy.current = true;
-    setSensorLoading(true);
     setError(null);
     const probe = guard.capture();
     try {
@@ -286,7 +288,6 @@ export default function HardwareScreen() {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       sensorBusy.current = false;
-      setSensorLoading(false);
     }
   }, [host, payloadStatus, guard, sensorReadAt]);
 
@@ -294,7 +295,7 @@ export default function HardwareScreen() {
   // the window is visible. Pausing on minimize keeps idle laptops
   // from spamming the PS5's mgmt port. Resumes on visibility-change
   // with a fresh immediate refresh so the panel is up-to-date when the
-  // user looks at it again. (Temps are excluded — they're on-demand.)
+  // user looks at it again.
   const visible = useDocumentVisible();
   useEffect(() => {
     if (payloadStatus !== "up") {
@@ -307,6 +308,26 @@ export default function HardwareScreen() {
     return () => window.clearInterval(id);
   }, [payloadStatus, refresh, visible]);
 
+  // Auto-poll live sensors (temps / freq / power) alongside the
+  // static-info refresh above. Previously OFF because the read path
+  // ptraced SceShellUI (briefly froze the whole PS5 UI) and a 5s timer
+  // compounded that destabilization to the point of powering consoles
+  // off when other homebrew was active. 2.16.1+ payloads serve these
+  // via DIRECT sceKernel* linkage (no ptrace), so a 5s tick is safe and
+  // matches the cadence users expect for a live sensor panel. The
+  // cooldown in shouldAllowSensorRead prevents the auto-tick from
+  // racing a manual click into a double read.
+  useEffect(() => {
+    if (payloadStatus !== "up") return;
+    if (!visible) return;
+    // Kick one read immediately on mount so the panel isn't blank.
+    void readSensors();
+    const id = window.setInterval(() => {
+      void readSensors();
+    }, SENSOR_POLL_INTERVAL_MS);
+    return () => window.clearInterval(id);
+  }, [payloadStatus, visible, readSensors]);
+
   return (
     <div className="p-6">
       <PageHeader
@@ -316,7 +337,7 @@ export default function HardwareScreen() {
         description={tr(
           "hardware_description",
           undefined,
-          "System info, uptime, and storage for the PS5 — auto-refreshed every 5 seconds while the payload is connected. Live temperatures, clock, and power are read on demand (see below).",
+          "System info, uptime, storage, AND live temperatures / clock / power for the PS5 — auto-refreshed every 5 seconds while the payload is connected and this tab is visible. Click Read sensors for an immediate one-off read.",
         )}
         right={
           <Button
@@ -356,49 +377,6 @@ export default function HardwareScreen() {
             )}
             detail={error}
           />
-        </div>
-      )}
-
-      {payloadStatus === "up" && (
-        <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
-          <div className="flex items-start gap-2">
-            <AlertTriangle
-              size={14}
-              className="mt-0.5 shrink-0 text-amber-500"
-            />
-            <div className="flex-1 text-xs text-[var(--color-muted)]">
-              {tr(
-                "hw_sensors_manual_warning",
-                undefined,
-                "Live temperature, clock, and power readings briefly pause the PS5's system UI to take a measurement. To avoid destabilizing the console — especially with etaHEN / shadowMOUNT / kstuff also running — they are no longer read automatically. Read them on demand:",
-              )}
-            </div>
-          </div>
-          <div className="mt-2 flex flex-wrap items-center gap-3">
-            <Button
-              variant="secondary"
-              size="sm"
-              leftIcon={
-                sensorLoading ? (
-                  <Loader2 size={12} className="animate-spin" />
-                ) : (
-                  <Thermometer size={12} />
-                )
-              }
-              onClick={readSensors}
-              disabled={
-                sensorLoading || !host?.trim() || payloadStatus !== "up"
-              }
-            >
-              {tr("hw_read_sensors", undefined, "Read sensors")}
-            </Button>
-            {sensorReadAt !== null && (
-              <span className="text-xs text-[var(--color-muted)]">
-                {tr("hw_sensors_last_read", undefined, "Last read")}{" "}
-                {new Date(sensorReadAt).toLocaleTimeString()}
-              </span>
-            )}
-          </div>
         </div>
       )}
 
@@ -607,6 +585,16 @@ export default function HardwareScreen() {
             </>
           )}
         </div>
+      )}
+
+      {/* Kernel log lives OUTSIDE the sensor grid: the <pre> renders
+        * hundreds of monospace lines and would get squeezed into a 1/3-
+        * width column at xl breakpoint (the grid container above is
+        * `lg:grid-cols-2 xl:grid-cols-3`), making the log unreadable.
+        * Full-width section below the grid gives it the horizontal room
+        * it needs without disturbing the responsive sensor layout. */}
+      {host?.trim() && payloadStatus === "up" && (
+        <SystemLogSection host={host} payloadStatus={payloadStatus} />
       )}
     </div>
   );
@@ -2140,6 +2128,114 @@ function DateTimeStateCard({
 
       {error && (
         <div className="mt-2 text-[11px] text-[var(--color-bad)]">{error}</div>
+      )}
+    </section>
+  );
+}
+
+/* ─── PS5 system log (kern.msgbuf) ──────────────────────────────────────
+ * Collapsible diagnostic surface. Off by default — fetching ~128 KiB of
+ * raw kernel log every render is wasteful AND most users never need it.
+ * When expanded: one fetch on mount + a Refresh button. Auto-scrolled
+ * to the bottom so the newest output is visible immediately.
+ *
+ * Powered by sysctl kern.msgbuf on the PS5 (the same source userland
+ * `dmesg` reads). Useful for "the payload sent but no port" / "an app
+ * crash I can't see in the UI" / "why did Sony reject my register".
+ */
+type SystemLogSectionProps = {
+  host: string | null | undefined;
+  payloadStatus: ReturnType<typeof useConnectionStore.getState>["payloadStatus"];
+};
+
+function SystemLogSection({ host, payloadStatus }: SystemLogSectionProps) {
+  const tr = useTr();
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState<string>("");
+  const [busy, setBusy] = useState(false);
+  const [logErr, setLogErr] = useState<string | null>(null);
+  const fetchLog = useCallback(async () => {
+    if (!host?.trim() || payloadStatus !== "up") return;
+    setBusy(true);
+    setLogErr(null);
+    try {
+      const r = await invoke<{ text?: string }>("ps5_syslog_tail", {
+        addr: transferAddr(host),
+      });
+      setText(r.text ?? "");
+    } catch (e) {
+      setLogErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [host, payloadStatus]);
+  useEffect(() => {
+    if (!open) return;
+    void fetchLog();
+  }, [open, fetchLog]);
+  const lineCount = text ? text.split("\n").length : 0;
+  return (
+    <section className="mt-6 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)]">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-[var(--color-surface-2)]"
+        aria-expanded={open}
+      >
+        <span className="font-medium">
+          {tr("hw_syslog_title", undefined, "PS5 system log (kernel)")}
+        </span>
+        <span className="text-xs text-[var(--color-muted)]">
+          {open
+            ? tr("hw_syslog_collapse", undefined, "hide")
+            : tr(
+                "hw_syslog_expand",
+                undefined,
+                "show — read kern.msgbuf for diagnostics",
+              )}
+        </span>
+      </button>
+      {open && (
+        <div className="border-t border-[var(--color-border)] p-3">
+          <div className="mb-2 flex items-center gap-2 text-xs text-[var(--color-muted)]">
+            <Button
+              variant="secondary"
+              size="sm"
+              leftIcon={<RefreshCw size={12} />}
+              onClick={() => void fetchLog()}
+              disabled={busy || !host?.trim() || payloadStatus !== "up"}
+            >
+              {busy
+                ? tr("hw_syslog_loading", undefined, "Loading…")
+                : tr("refresh", undefined, "Refresh")}
+            </Button>
+            <span>
+              {tr(
+                "hw_syslog_meta",
+                { lines: lineCount.toLocaleString() },
+                "{lines} lines",
+              )}
+            </span>
+          </div>
+          {logErr && (
+            <div className="mb-2 text-[11px] text-[var(--color-bad)]">{logErr}</div>
+          )}
+          {text ? (
+            <pre className="max-h-[480px] overflow-auto rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] p-2 text-[11px] font-mono leading-snug whitespace-pre-wrap break-words">
+              {text}
+            </pre>
+          ) : (
+            <div className="text-xs text-[var(--color-muted)]">
+              {busy
+                ? tr("hw_syslog_loading", undefined, "Loading…")
+                : tr(
+                    "hw_syslog_empty",
+                    undefined,
+                    "No data yet — click Refresh.",
+                  )}
+            </div>
+          )}
+        </div>
       )}
     </section>
   );

@@ -297,50 +297,66 @@ int hw_temps_get_text(char *out, size_t out_cap, size_t *out_written,
         cpu_freq_mhz = g_temps_cache.cpu_freq_mhz;
         power_mw     = g_temps_cache.power_mw;
     } else {
-        /* Sony sensor APIs are now routed through the SceShellUI
-         * RPC layer — see payload/src/shellui_rpc.c. The direct
-         * calls (g_hw.cpu_temp etc.) wedge from a userland payload
-         * on FW 9.60 because Sony's stubs check the caller pid
-         * against SceShellUI; the RPC layer attaches via ptrace,
-         * runs the same call on ShellUI's stack, returns the
-         * result. ShellUI's pid IS what Sony wants, so the call
-         * returns normally.
+        /* Sensor read ordering (2.16.1+): try DIRECT first, fall back to
+         * SceShellUI RPC only if the direct call returned no usable value.
          *
-         * Init is idempotent — the first call latches the resolved
-         * addresses, subsequent calls become no-ops. The
-         * field-marked addresses on a firmware that doesn't export
-         * a particular symbol stay 0; the RPC returns -1 and the
-         * field reads as 0 in the UI. */
-        (void)shellui_rpc_init();
-        if (shellui_rpc_ready()) {
-            /* Per-call ready re-check: shellui_rpc.c's attach
-             * hardening nulls g_shellui_pid on a double-attach
-             * failure (which happens during ShellUI respawn).
-             * Without re-checking between calls, the second and
-             * third RPCs would still attempt attach + immediately
-             * fail — burning ~30 ms each on a known-dead pid.
-             * The ready() check is a cheap mutex+int read. */
-            int t = 0;
-            if (shellui_rpc_get_cpu_temp(&t) == 0 && t > 0 && t < 200) {
-                cpu_temp = t;
-            }
-            t = 0;
-            if (shellui_rpc_ready() &&
-                shellui_rpc_get_soc_temp(&t) == 0 && t > 0 && t < 200) {
-                soc_temp = t;
-            }
-            long hz = 0;
-            if (shellui_rpc_ready() &&
-                shellui_rpc_get_cpu_freq_hz(&hz) == 0 && hz > 0) {
-                cpu_freq_mhz = hz / (1000L * 1000L);
+         * Direct linkage works now because the payload links `-lkernel_sys`
+         * (Makefile, 2.16.1) so sceKernelGetCpuTemperature et al. resolve at
+         * load time via DT_NEEDED → libkernel_sys.sprx. The bare
+         * `dlsym(RTLD_DEFAULT, "sceKernelGetCpuTemperature")` path fails on
+         * FW points where libkernel exports NID-only; the link-time NID
+         * resolution covers that gap — direct calls work without any ptrace
+         * dance, which removes the ShellUI-freeze risk entirely.
+         *
+         * The SceShellUI RPC path used to be the only mechanism because the
+         * dlsym-resolved pointers wedged on FW 9.60 (Sony's caller-pid check),
+         * but the RPC ptrace-attaches to ShellUI, which destabilises the
+         * console — symptom: clicking "Read sensors" on the Hardware tab
+         * briefly blanks the screen and rare power-off. We now reach for it
+         * only when direct returns 0 / out-of-range. */
+        hw_resolve_once();
+        int t = 0;
+        if (g_hw.cpu_temp && g_hw.cpu_temp(&t) == 0 && t > 0 && t < 200) {
+            cpu_temp = t;
+        }
+        t = 0;
+        if (g_hw.soc_temp && g_hw.soc_temp(0, &t) == 0 && t > 0 && t < 200) {
+            soc_temp = t;
+        }
+        if (g_hw.cpu_freq) {
+            long hz = g_hw.cpu_freq();
+            if (hz > 0) cpu_freq_mhz = hz / (1000L * 1000L);
+        }
+
+        /* Ptrace-via-ShellUI fallback. Reached only if a direct call returned
+         * an unusable value AND the ShellUI primitive is actually available.
+         * Init is idempotent. We still re-check ready() between sub-calls —
+         * shellui_rpc.c nulls g_shellui_pid on a double-attach failure
+         * (happens during ShellUI respawn), and without the re-check the
+         * subsequent reads would each burn ~30 ms on a known-dead pid. */
+        if (cpu_temp == 0 || soc_temp == 0 || cpu_freq_mhz == 0) {
+            (void)shellui_rpc_init();
+            if (shellui_rpc_ready()) {
+                if (cpu_temp == 0) {
+                    int rt = 0;
+                    if (shellui_rpc_get_cpu_temp(&rt) == 0 && rt > 0 && rt < 200) {
+                        cpu_temp = rt;
+                    }
+                }
+                if (soc_temp == 0 && shellui_rpc_ready()) {
+                    int rt = 0;
+                    if (shellui_rpc_get_soc_temp(&rt) == 0 && rt > 0 && rt < 200) {
+                        soc_temp = rt;
+                    }
+                }
+                if (cpu_freq_mhz == 0 && shellui_rpc_ready()) {
+                    long hz = 0;
+                    if (shellui_rpc_get_cpu_freq_hz(&hz) == 0 && hz > 0) {
+                        cpu_freq_mhz = hz / (1000L * 1000L);
+                    }
+                }
             }
         }
-        /* Suppress unused-symbol warnings — these dlsym pointers
-         * remain resolved as a fallback for firmwares where direct
-         * calls would have worked. */
-        (void)g_hw.cpu_temp;
-        (void)g_hw.soc_temp;
-        (void)g_hw.cpu_freq;
         (void)g_hw.soc_power;
 
         /* CPU frequency via kernel TSC — fallback when neither RPC

@@ -2558,6 +2558,14 @@ export interface JobSnapshot {
   /** Reconcile-mode skip counts. 0 for plain uploads. */
   skipped_files?: number;
   skipped_bytes?: number;
+  /** Per-file progress (Running, multi-file uploads). Climbs as the
+   *  engine reads each source file into a pack frame (one bump per file).
+   *  Smoother than deriving file-count from bytes_sent, which jumps in
+   *  ~200-file chunks on packed-shard ACKs and looked like
+   *  "start → finished" on 46k-file game folders. `undefined` (or 0)
+   *  means the upload path doesn't report it; the UI falls back to its
+   *  size-derived estimate. */
+  files_processing?: number;
   /** Files actually sent (Done only). */
   files_sent?: number;
   shards_sent?: number;

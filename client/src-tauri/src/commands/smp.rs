@@ -134,7 +134,7 @@ fn collect_status(addr: &str) -> Result<SmpStatus, String> {
             // ENOENT-equivalent: dir doesn't exist, which is
             // "not installed", not an error.
             let s = e.to_string();
-            if s.contains("ENOENT") || s.contains("No such file") {
+            if is_payload_enoent(&s) {
                 false
             } else {
                 errors.push(format!("list /data/shadowmount: {s}"));
@@ -184,9 +184,12 @@ fn collect_status(addr: &str) -> Result<SmpStatus, String> {
             .collect(),
         Err(e) => {
             // /mnt/shadowmnt may not exist if SMP has never mounted
-            // anything; that's not an error worth surfacing.
+            // anything; that's not an error worth surfacing. See
+            // is_payload_enoent for why all three of "ENOENT", "No such
+            // file", and the payload's `_errno_2` numeric form all need
+            // to be treated as "feature not in use" here.
             let s = e.to_string();
-            if !(s.contains("ENOENT") || s.contains("No such file")) {
+            if !is_payload_enoent(&s) {
                 errors.push(format!("list /mnt/shadowmnt: {s}"));
             }
             Vec::new()
@@ -232,9 +235,21 @@ fn read_text_file_or_record(addr: &str, path: &str, errors: &mut Vec<String>) ->
 }
 
 fn is_missing_optional_file_error(message: &str) -> bool {
-    message.contains("ENOENT")
-        || message.contains("No such file")
-        || message.contains("fs_read_stat_failed")
+    is_payload_enoent(message) || message.contains("fs_read_stat_failed")
+}
+
+/// True for any error string that ultimately means "the path you asked
+/// for didn't exist." The payload + engine + std::io error chains all
+/// surface this differently — std::io::Error gives `ENOENT` or `No such
+/// file or directory`, while the payload's FS_LIST_DIR / FS_READ
+/// rejections encode errno numerically as `fs_list_dir_opendir_errno_2`
+/// or `fs_read_open_errno_2` (errno 2 = ENOENT on FreeBSD/Prospero, same
+/// as POSIX). Probe sites need to treat all of them as "not installed /
+/// not yet created" instead of pushing them into the user-visible error
+/// list. Centralised so a new probe can't drift back to the partial check
+/// that surfaced `opendir_errno_2` on the SmpPanel Probe-Errors list.
+fn is_payload_enoent(message: &str) -> bool {
+    message.contains("ENOENT") || message.contains("No such file") || message.contains("_errno_2")
 }
 
 /// Strip SMP's CRC32 hash suffix from a mount-point dir name.
@@ -303,5 +318,30 @@ mod tests {
         assert!(!is_missing_optional_file_error(
             "payload rejected FS_READ(/data/shadowmount/autotune.ini): fs_read_path_not_allowed"
         ));
+    }
+
+    #[test]
+    fn payload_enoent_detection_handles_numeric_errno_form() {
+        // FS_LIST_DIR on a non-existent path returns the numeric errno
+        // form — the Probe-Errors panel on the Library SMP card was
+        // showing this verbatim before the fix because the old check only
+        // matched the textual "ENOENT" / "No such file" forms.
+        assert!(is_payload_enoent(
+            "payload rejected FS_LIST_DIR(/mnt/shadowmnt): fs_list_dir_opendir_errno_2"
+        ));
+        // FS_READ on a non-existent path uses the same numeric encoding.
+        assert!(is_payload_enoent(
+            "payload rejected FS_READ(/data/shadowmount/missing.ini): fs_read_open_errno_2"
+        ));
+        // Textual forms still detected (engine wrapper / std::io::Error).
+        assert!(is_payload_enoent("ENOENT"));
+        assert!(is_payload_enoent("No such file or directory (os error 2)"));
+        // Non-ENOENT errnos must NOT be treated as missing — those are
+        // real failures that should reach the user.
+        assert!(!is_payload_enoent(
+            "payload rejected FS_LIST_DIR(/foo): fs_list_dir_opendir_errno_13"
+        ));
+        assert!(!is_payload_enoent("Permission denied"));
+        assert!(!is_payload_enoent("connection reset"));
     }
 }

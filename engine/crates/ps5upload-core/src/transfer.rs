@@ -99,6 +99,16 @@ pub struct TransferConfig {
     /// updates without adding a lock to the hot send loop. A `None` here
     /// keeps the single-shot legacy behavior (no progress reporting).
     pub progress_bytes: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
+    /// Optional per-file progress counter — `fetch_add(1)` once per file as
+    /// it's pulled into a pack frame (packed shards) or as its first chunk
+    /// is materialised (non-packed). Sized at one bump per *source file* so
+    /// a 5-shard non-packed file counts as 1 and an 8 MiB packed shard with
+    /// 200 records counts as 200. Lets the UI show a counter that climbs
+    /// continuously inside the read-many-small-files phase instead of
+    /// jumping per packed-shard ACK — the latter looked like
+    /// "start → finished" on 46 k-file game folders. `None` keeps legacy
+    /// callers' behaviour (no per-file tick).
+    pub progress_files: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
     /// Optional outbound bandwidth cap, in bytes per second. `None` =
     /// unlimited (current behaviour). When set, the transfer loop
     /// sleeps after each shard's wire write to bring the running
@@ -127,6 +137,7 @@ impl TransferConfig {
             pack_file_max: DEFAULT_PACK_FILE_MAX,
             excludes: Vec::new(),
             progress_bytes: None,
+            progress_files: None,
             bandwidth_cap_bps: None,
         }
     }
@@ -1086,7 +1097,10 @@ impl PackPlanner {
 /// shard, opens each source file in turn and copies its bytes into the
 /// output buffer. Total host RAM for one shard = shard body size, bounded
 /// by `pack_size` (for packed) or `shard_size` (for non-packed).
-fn materialise_body(ps: &PlannedShard) -> Result<Vec<u8>> {
+fn materialise_body(
+    ps: &PlannedShard,
+    progress_files: Option<&std::sync::atomic::AtomicU64>,
+) -> Result<Vec<u8>> {
     use std::io::{Read, Seek, SeekFrom};
     match ps {
         PlannedShard::Empty { .. } => Ok(Vec::new()),
@@ -1105,6 +1119,16 @@ fn materialise_body(ps: &PlannedShard) -> Result<Vec<u8>> {
             let mut buf = vec![0u8; *len as usize];
             f.read_exact(&mut buf)
                 .with_context(|| format!("read {} at {}+{}", source.display(), offset, len))?;
+            // Count one file-start per non-packed FIRST chunk (offset==0).
+            // Multi-shard files chunk into multiple PlannedShards but the
+            // user-meaningful unit is the source file, so only the first
+            // chunk bumps the per-file counter. Subsequent chunks advance
+            // progress_bytes (file is in flight) without re-bumping files.
+            if *offset == 0 {
+                if let Some(pf) = progress_files {
+                    pf.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
             Ok(buf)
         }
         PlannedShard::Packed { records, .. } => {
@@ -1138,6 +1162,17 @@ fn materialise_body(ps: &PlannedShard) -> Result<Vec<u8>> {
                 buf.resize(start + r.size as usize, 0);
                 f.read_exact(&mut buf[start..])
                     .with_context(|| format!("read pack record {}", r.source.display()))?;
+                // Per-record file-progress bump. Bumping HERE (inside the
+                // per-record loop) is what makes the UI's file counter
+                // climb smoothly during the pack-frame build for many-
+                // tiny-files folders, instead of jumping by ~200 every
+                // time a packed shard finally goes out. Bytes still
+                // advance per-shard via progress_bytes (the wire-truth
+                // counter); this is the user-perceived "we're working"
+                // signal.
+                if let Some(pf) = progress_files {
+                    pf.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
             }
             Ok(buf)
         }
@@ -1359,7 +1394,7 @@ pub fn transfer_dir_with_flags(
             if seq <= last_acked_shard {
                 continue;
             }
-            let body = materialise_body(ps)?;
+            let body = materialise_body(ps, cfg.progress_files.as_deref())?;
             let (record_count, flags) = planned_shard_meta(ps);
             shards_sent += 1;
             sender.send_with(seq, &body, record_count, flags)?;
@@ -1563,7 +1598,7 @@ pub fn transfer_file_list_with_flags(
             if seq <= last_acked_shard {
                 continue;
             }
-            let body = materialise_body(ps)?;
+            let body = materialise_body(ps, cfg.progress_files.as_deref())?;
             let (record_count, flags) = planned_shard_meta(ps);
             shards_sent += 1;
             sender.send_with(seq, &body, record_count, flags)?;
@@ -2701,7 +2736,7 @@ mod materialise_body_tests {
         // (e.g. `.gitkeep`). The body must be empty — non-empty would
         // confuse the payload's record parser.
         let s = PlannedShard::Empty { shard_seq: 7 };
-        let body = materialise_body(&s).expect("empty shard");
+        let body = materialise_body(&s, None).expect("empty shard");
         assert_eq!(body.len(), 0);
     }
 
@@ -2723,7 +2758,7 @@ mod materialise_body_tests {
             offset: 50,
             len: 32,
         };
-        let body = materialise_body(&s).expect("non-packed shard");
+        let body = materialise_body(&s, None).expect("non-packed shard");
         assert_eq!(body, &payload[50..82]);
         std::fs::remove_dir_all(dir).ok();
     }
@@ -2756,7 +2791,7 @@ mod materialise_body_tests {
             shard_seq: 0,
             records,
         };
-        let body = materialise_body(&s).expect("packed shard");
+        let body = materialise_body(&s, None).expect("packed shard");
 
         let mut expected: Vec<u8> = Vec::new();
         // record 1: path_len=17, size=5, "sce_sys/icon0.png", "hello"
@@ -2798,7 +2833,7 @@ mod materialise_body_tests {
                 size: u64::from(u32::MAX) + 1,
             }],
         };
-        let err = materialise_body(&s).expect_err("should reject oversize");
+        let err = materialise_body(&s, None).expect_err("should reject oversize");
         let msg = format!("{err:#}");
         assert!(
             msg.contains("exceeds u32") || msg.contains("pack record size"),

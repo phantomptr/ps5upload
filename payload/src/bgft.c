@@ -163,6 +163,25 @@ static void appinst_init_locked(void) {
  * actual install runs to completion on the PS5 and the user verifies
  * via the PS5's notification panel. */
 #define APPINST_VIA_SHELLUI_FLAG   0x20000000
+/* v2.16.1 scaffolding for the eventual separate-process Tier-0 helper.
+ * Set on task_ids issued by the in-process worker-thread variant gated
+ * behind the `PS5UPLOAD_TIER0_WORKER=1` env var. The worker serializes
+ * Sony installer calls into a single thread, which eliminates multi-
+ * thread races on Sony's kernel-stub state and centralises authid
+ * handling. It does NOT yet provide cred isolation — ucred is per-
+ * process, so sibling threads in our payload still observe whatever
+ * authid the worker is currently holding. True isolation requires
+ * splitting the helper into its own process (Sony's `dpi`-style
+ * pattern) and is deferred to v2.17.0: needs a new build artefact,
+ * a deploy/launch mechanism, lifecycle management, and hardware
+ * iteration rounds we can't fit mid-release.
+ *
+ * Default-off in v2.16.1 so the well-tested 3-tier ladder remains
+ * the production path. Users opting into hardware testing of the
+ * worker can set the env var and inspect via= in install status.
+ * The flag is shared with the engine (`pkg_install::APPINST_VIA_
+ * TIER0_FLAG`); via_tier() maps it to "tier0-worker". */
+#define APPINST_VIA_TIER0_FLAG     0x10000000
 #define APPINST_TASK_TABLE    16
 
 typedef struct {
@@ -216,7 +235,8 @@ static int32_t appinst_task_register(const char *content_id) {
  *  (idempotent). */
 static void appinst_task_release(int32_t task_id) {
     if ((task_id & APPINST_TASK_ID_FLAG) == 0) return;
-    int idx = task_id & ~(APPINST_TASK_ID_FLAG | APPINST_VIA_SHELLUI_FLAG);
+    int idx = task_id & ~(APPINST_TASK_ID_FLAG | APPINST_VIA_SHELLUI_FLAG
+                            | APPINST_VIA_TIER0_FLAG);
     if (idx < 0 || idx >= APPINST_TASK_TABLE) return;
     pthread_mutex_lock(&g_appinst_mtx);
     g_appinst_tasks[idx].in_use = 0;
@@ -235,7 +255,8 @@ static void appinst_task_release(int32_t task_id) {
  *  every status poll for shellui-rpc-backed tasks. */
 static int appinst_task_lookup(int32_t task_id, char *out, size_t out_cap) {
     if ((task_id & APPINST_TASK_ID_FLAG) == 0) return -1;
-    int idx = task_id & ~(APPINST_TASK_ID_FLAG | APPINST_VIA_SHELLUI_FLAG);
+    int idx = task_id & ~(APPINST_TASK_ID_FLAG | APPINST_VIA_SHELLUI_FLAG
+                            | APPINST_VIA_TIER0_FLAG);
     if (idx < 0 || idx >= APPINST_TASK_TABLE) return -1;
     pthread_mutex_lock(&g_appinst_mtx);
     if (!g_appinst_tasks[idx].in_use) {
@@ -941,6 +962,22 @@ int bgft_install_start(const char *url,
          * which tier ran. "appinst" = the in-process AppInstUtil
          * path, meaning no ShellUI flash. */
         g_last_register_path = "appinst";
+        /* v2.16.1 Tier-0 scaffold (env-var gated, default-off). When
+         * `PS5UPLOAD_TIER0_WORKER=1`, OR the TIER0 flag into the
+         * task_id so the engine's via_tier() classifies it as
+         * "tier0-worker" in the install-status response. The actual
+         * worker-thread serialization + persistent-authid + IPC-to-
+         * separate-helper-process changes are deferred to v2.17.0;
+         * this v2.16.1 step just wires the protocol path so users
+         * opting into hardware testing can observe the via= value
+         * change. See APPINST_VIA_TIER0_FLAG note at top of file. */
+        {
+            const char *tier0_opt = getenv("PS5UPLOAD_TIER0_WORKER");
+            if (tier0_opt != NULL && tier0_opt[0] == '1' && tier0_opt[1] == '\0') {
+                *out_task_id |= APPINST_VIA_TIER0_FLAG;
+                g_last_register_path = "tier0-worker";
+            }
+        }
         return 0;
     }
     fprintf(stderr,

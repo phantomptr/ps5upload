@@ -290,7 +290,15 @@ function protectPlaceholders(text) {
 function restorePlaceholders(text, placeholders) {
   let out = text;
   placeholders.forEach((ph, i) => {
-    out = out.replace(`__VAR${i}__`, ph);
+    // MyMemory routinely mangles the sentinel underscores: `__VAR0__`
+    // comes back as `__ VAR0 __`, `__ VAR_0 __`, `__VAR0 __`, etc.
+    // The tolerant regex matches any combination of optional whitespace
+    // + optional `_` separators inside the sentinel, case-insensitive,
+    // so the restore catches them all. Without this, half the locales
+    // ship a literal `__ VAR0 __` string to the user (regression
+    // observed during v2.16.1 audit on it/ja/ko/zh-CN/zh-TW + others).
+    const tolerant = new RegExp(`__\\s*VAR\\s*_?\\s*${i}\\s*_?\\s*__`, "gi");
+    out = out.replace(tolerant, ph);
   });
   return out;
 }

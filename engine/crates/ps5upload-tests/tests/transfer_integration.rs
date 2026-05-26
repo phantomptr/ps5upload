@@ -1237,6 +1237,193 @@ fn transfer_dir_byte_exact_100x() {
     }
 }
 
+/// Per-file progress counter ticks once per source file (regardless of how
+/// they're grouped into shards). The byte counter on its own jumped by
+/// ~200 every packed-shard ACK on 46 k-file game folders and looked like
+/// "start → finished" mid-transfer; the per-file counter is what the UI
+/// uses to keep the "N of M files" readout climbing smoothly through the
+/// pack-frame build phase.
+#[test]
+fn transfer_dir_progress_files_counter_climbs_per_file() {
+    use std::sync::atomic::Ordering;
+    use std::sync::{atomic::AtomicU64, Arc};
+
+    let tmp = tempdir();
+    let expected = build_game_folder(tmp.path());
+    let file_count = expected.len() as u64;
+
+    let srv = MockServer::start();
+    let progress_files = Arc::new(AtomicU64::new(0));
+    let mut cfg = stress_cfg(&srv.addr);
+    cfg.progress_files = Some(Arc::clone(&progress_files));
+
+    let result = transfer_dir(&cfg, random_tx_id(), "/data/game", tmp.path()).unwrap();
+
+    // Bytes still match (transport correctness unchanged).
+    let total_bytes: u64 = expected.iter().map(|(_, b)| b.len() as u64).sum();
+    assert_eq!(result.bytes_sent, total_bytes);
+
+    // Counter equals the source-file count — one bump per file, whether
+    // it rode in a packed shard or as a non-packed first chunk.
+    let observed = progress_files.load(Ordering::Relaxed);
+    assert_eq!(
+        observed, file_count,
+        "progress_files should tick once per source file (got {observed}, want {file_count})"
+    );
+}
+
+/// Hardware diagnostic: hash a file on the PS5 (via FS_HASH on the mgmt port)
+/// and compare with the local file's BLAKE3 hash. Set:
+///   REAL_PS5_MGMT=ip:9114
+///   PS5_REMOTE_PATH=/data/.../eboot.bin
+///   LOCAL_FILE_PATH=/path/to/local/eboot.bin
+/// Mismatch → the upload corrupted the file; matching → bytes are byte-exact
+/// on the PS5 and any "game won't play" issue is elsewhere (perms, missing
+/// file, etc.). Used to investigate the v2.16.0 "folder upload corrupts game"
+/// report — quickly proves whether the new fallocate+offset multi-shard path
+/// is the culprit (run against a known-large multi-shard file like eboot.bin).
+#[test]
+#[ignore = "requires REAL_PS5_MGMT + PS5_REMOTE_PATH + LOCAL_FILE_PATH"]
+fn live_ps5_hash_compare_file() {
+    use ps5upload_core::fs_ops::fs_hash;
+    let mgmt = match std::env::var("REAL_PS5_MGMT") {
+        Ok(v) => v,
+        Err(_) => {
+            eprintln!("REAL_PS5_MGMT unset → skipping");
+            return;
+        }
+    };
+    let remote = match std::env::var("PS5_REMOTE_PATH") {
+        Ok(v) => v,
+        Err(_) => {
+            eprintln!("PS5_REMOTE_PATH unset → skipping");
+            return;
+        }
+    };
+    let local = match std::env::var("LOCAL_FILE_PATH") {
+        Ok(v) => v,
+        Err(_) => {
+            eprintln!("LOCAL_FILE_PATH unset → skipping");
+            return;
+        }
+    };
+    eprintln!("→ hashing remote {remote} (PS5 {mgmt}) and local {local}");
+
+    // Compute local BLAKE3 by reading the whole file. Slow for big files but
+    // it's a one-off diagnostic.
+    let local_bytes = std::fs::read(&local).expect("read local file");
+    let local_hash = ps5upload_core::hash_shard(&local_bytes);
+    let local_hex: String = local_hash.iter().map(|b| format!("{b:02x}")).collect();
+
+    // Ask the PS5 to hash the remote file via FS_HASH.
+    let remote_result = fs_hash(&mgmt, &remote).expect("FS_HASH on remote file");
+    eprintln!(
+        "  local : size={} hash={}",
+        local_bytes.len(),
+        &local_hex[..16]
+    );
+    eprintln!(
+        "  remote: size={} hash={}",
+        remote_result.size,
+        &remote_result.hash[..16]
+    );
+    assert_eq!(
+        remote_result.size,
+        local_bytes.len() as u64,
+        "size mismatch — remote file truncated/extended"
+    );
+    assert_eq!(
+        remote_result.hash, local_hex,
+        "hash mismatch — file CONTENT corrupted (sizes match, bytes differ)"
+    );
+    eprintln!("✓ {remote} matches local byte-exact");
+}
+
+/// Hardware diagnostic: recursively chmod a path on the PS5 to a given mode.
+/// Set:
+///   REAL_PS5_MGMT=ip:9114
+///   PS5_REMOTE_PATH=/data/.../game_folder
+///   PS5_CHMOD_MODE=0777   (defaults to 0777 if unset)
+/// Used to verify whether "game won't launch" is a perms issue: chmod 0777
+/// the whole folder, retry launch. If launch succeeds → bake the chmod into
+/// the upload payload. The user explicitly asked for 0777 recursively, which
+/// is what some Sony loaders need for folder-game launches.
+#[test]
+#[ignore = "requires REAL_PS5_MGMT + PS5_REMOTE_PATH"]
+fn live_ps5_chmod_recursive() {
+    use ps5upload_core::fs_ops::fs_chmod;
+    let mgmt = match std::env::var("REAL_PS5_MGMT") {
+        Ok(v) => v,
+        Err(_) => {
+            eprintln!("REAL_PS5_MGMT unset → skipping");
+            return;
+        }
+    };
+    let remote = match std::env::var("PS5_REMOTE_PATH") {
+        Ok(v) => v,
+        Err(_) => {
+            eprintln!("PS5_REMOTE_PATH unset → skipping");
+            return;
+        }
+    };
+    let mode = std::env::var("PS5_CHMOD_MODE").unwrap_or_else(|_| "0777".to_string());
+    eprintln!("→ chmod -R {mode} {remote} (on PS5 {mgmt})");
+    let _ = fs_chmod; // keep import alive even if we use the long-timeout path below
+                      // Recursive chmod on a 46k-file folder easily exceeds the default 30 s IO
+                      // timeout — drive the connection directly with a generous (10 min) deadline.
+    use ftx2_proto::FrameType;
+    use ps5upload_core::connection::Connection;
+    let mut c = Connection::connect(&mgmt).expect("connect mgmt");
+    c.set_io_timeout(std::time::Duration::from_secs(600))
+        .expect("set timeout");
+    let body = serde_json::to_vec(&serde_json::json!({
+        "path": remote,
+        "mode": mode,
+        "recursive": 1,
+    }))
+    .expect("body");
+    let t0 = std::time::Instant::now();
+    c.send_frame(FrameType::FsChmod, &body)
+        .expect("send FsChmod");
+    let (hdr, resp) = c.recv_frame().expect("recv FsChmodAck");
+    assert_eq!(
+        hdr.frame_type().unwrap_or(FrameType::Error),
+        FrameType::FsChmodAck,
+        "expected FsChmodAck, got error: {}",
+        String::from_utf8_lossy(&resp)
+    );
+    eprintln!(
+        "✓ chmod -R {mode} {remote} OK in {:.2}s",
+        t0.elapsed().as_secs_f64()
+    );
+}
+
+/// Live PS5 hardware test for the new SYSLOG_TAIL endpoint. Set
+/// REAL_PS5_MGMT=ip:9114 to run. Prints the last few lines of the PS5
+/// kernel log returned by `sysctl kern.msgbuf` via the new frame —
+/// smoke for the round-trip + that the buffer has plausible content.
+#[test]
+#[ignore = "requires REAL_PS5_MGMT=ip:9114"]
+fn live_ps5_syslog_tail_smoke() {
+    use ps5upload_core::hw::syslog_tail;
+    let mgmt = match std::env::var("REAL_PS5_MGMT") {
+        Ok(v) => v,
+        Err(_) => {
+            eprintln!("REAL_PS5_MGMT unset → skipping");
+            return;
+        }
+    };
+    let log = syslog_tail(&mgmt).expect("syslog_tail OK");
+    let bytes = log.len();
+    let lines = log.lines().count();
+    eprintln!("✓ syslog_tail returned {bytes} bytes / {lines} lines");
+    assert!(bytes > 0, "syslog should not be empty on a running PS5");
+    let tail: Vec<&str> = log.lines().rev().take(6).collect::<Vec<_>>();
+    for line in tail.iter().rev() {
+        eprintln!("  | {line}");
+    }
+}
+
 /// Live PS5 hardware smoke test for the folder pipeline. Set
 /// `REAL_PS5_ADDR=ip:9113` to run; skipped without it. Uploads the
 /// realistic folder (build_game_folder) to `/data/ps5upload/tests/smoke_<tag>`

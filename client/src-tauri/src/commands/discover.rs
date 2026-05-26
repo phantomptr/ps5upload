@@ -16,6 +16,12 @@
 //!   - For consoles where no homebrew advertises mDNS yet, we fall
 //!     back to a TCP probe of :9021 (the universal payload-loader
 //!     port) on every host that did show up via mDNS for any reason.
+//!   - And, as a last-ditch fallback when mDNS turns up zero hosts,
+//!     a concurrent /24 sweep of the local subnet probing :9114 (our
+//!     own payload's mgmt port). Nothing else binds 9114, so a hit is
+//!     a near-certain PS5-with-our-payload signal. Keeps discovery
+//!     working when the LAN has mDNS suppressed (some routers/APs
+//!     intentionally drop multicast).
 //!
 //! What we deliberately do NOT do:
 //!   - Run a continuous mDNS browser. Discovery is a one-shot the
@@ -31,7 +37,7 @@
 //!     locked in for this phase.
 
 use std::collections::BTreeMap;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::time::{Duration, Instant};
 
 use mdns_sd::{ServiceDaemon, ServiceEvent};
@@ -281,52 +287,56 @@ pub async fn discover_ps5(timeout_secs: Option<u64>) -> serde_json::Value {
     }
     let _ = daemon.shutdown();
 
-    // Promote accumulators to candidates: TCP-probe each one for
-    // :9021 + :9114 in parallel, score them, and sort.
-    let mut candidates = Vec::with_capacity(accum.len());
-    let mut probe_tasks = Vec::with_capacity(accum.len());
+    // Promote mDNS accumulators to candidates: TCP-probe each one for
+    // :9021 + :9114 in parallel, score them, and sort. We do this BEFORE
+    // deciding whether to run the LAN sweep, because the right "should I
+    // sweep?" signal is "did mDNS find anything that's actually a PS5
+    // running our payload?" — not "did mDNS find ANYTHING" (which would
+    // pass on any printer/NAS announcement and starve the sweep when
+    // the actual PS5 is silent).
+    let mut candidates = probe_and_score_accum(accum).await;
 
-    for (host_key, acc) in accum {
-        let best_ip = match pick_best_ip(&acc.ips) {
-            Some(ip) => ip,
-            // No IPv4/IPv6 addresses at all — the announcement was
-            // hostname-only (rare, but we've seen it on misconfigured
-            // avahi). Skip — we can't probe or hand the user a
-            // typeable address.
-            None => continue,
-        };
-        let probe_ip = best_ip.to_string();
-        let task = tokio::spawn(async move {
-            let (loader_open, payload_open) = tokio::join!(
-                tcp_probe(&probe_ip, PS5_LOADER_PORT),
-                tcp_probe(&probe_ip, PS5_MGMT_PORT),
-            );
-            (loader_open, payload_open)
-        });
-        probe_tasks.push((host_key, acc, best_ip, task));
-    }
+    // LAN-sweep fallback. Runs when none of the mDNS candidates have
+    // our payload's :9114 port open — that's the only signal that
+    // unambiguously means "PS5 with our payload" (because nothing else
+    // binds 9114). The sweep targets only :9114 for the same reason;
+    // :9021 is shared across jailbreak chains and would false-positive
+    // on PS5s running competing payloads.
+    //
+    // Deliberate design: the gate is intentionally narrow. If mDNS
+    // surfaces a PS5 via :9021 (loader) but not :9114 (our payload),
+    // the sweep STILL runs — because the user might have a second PS5
+    // on the LAN that IS running our payload but isn't advertising on
+    // mDNS. The ~1 s extra wallclock for that case is worth always
+    // finding the right console; a tighter "did we find any PS5 at
+    // all?" gate would suppress the second-PS5 case.
+    let any_payload_port_open = candidates.iter().any(|c| c.payload_port_open);
+    if !any_payload_port_open {
+        let already_known: std::collections::HashSet<String> = candidates
+            .iter()
+            .flat_map(|c| c.all_ips.iter().cloned())
+            .collect();
 
-    for (host_key, acc, best_ip, task) in probe_tasks {
-        let (loader_port_open, payload_port_open) = task.await.unwrap_or((false, false));
-
-        let confidence = score(
-            &host_key,
-            &acc.services,
-            &acc.ports,
-            loader_port_open,
-            payload_port_open,
-        );
-
-        candidates.push(DiscoveredHost {
-            ip: best_ip.to_string(),
-            hostname: acc.hostname,
-            all_ips: acc.ips.iter().map(ToString::to_string).collect(),
-            services: acc.services,
-            loader_port_open,
-            payload_port_open,
-            confidence,
-            likely_ps5: confidence >= confidence::HIGH_THRESHOLD,
-        });
+        let mut sweep_accum: BTreeMap<String, CandidateAccumulator> = BTreeMap::new();
+        for (ip, hostname) in lan_sweep_for_payload_port().await {
+            let ip_str = ip.to_string();
+            if already_known.contains(&ip_str) {
+                // mDNS already surfaced this host (probe just said
+                // 9114 closed at probe time, but sweep saw it open).
+                // Re-confirming via a second probe pass below would
+                // double the wallclock for the common case where
+                // mDNS+probe is authoritative — accept the mDNS
+                // verdict and move on.
+                continue;
+            }
+            let key = hostname.clone().unwrap_or(ip_str);
+            let entry = sweep_accum.entry(key).or_default();
+            entry.hostname = hostname;
+            entry.ips.push(IpAddr::V4(ip));
+        }
+        if !sweep_accum.is_empty() {
+            candidates.extend(probe_and_score_accum(sweep_accum).await);
+        }
     }
 
     candidates.sort_by(|a, b| {
@@ -349,12 +359,149 @@ pub async fn discover_ps5(timeout_secs: Option<u64>) -> serde_json::Value {
 /// the OS accept a SYN" — which matches the existing
 /// `companions.rs::companion_probe` shape exactly. ECONNREFUSED and
 /// timeout both → false; the caller doesn't care which.
+/// Probe each accumulator's best IP for the loader + payload ports in
+/// parallel, score the result, and return a Vec<DiscoveredHost>. Used
+/// in two places: once after the mDNS browse, and (when no PS5+payload
+/// was found there) once for the LAN-sweep follow-up. Extracted so the
+/// two call sites stay in sync — silently divergent scoring would make
+/// "did sweep find a different rank?" hard to reason about.
+async fn probe_and_score_accum(
+    accum: BTreeMap<String, CandidateAccumulator>,
+) -> Vec<DiscoveredHost> {
+    let mut probe_tasks = Vec::with_capacity(accum.len());
+    for (host_key, acc) in accum {
+        let best_ip = match pick_best_ip(&acc.ips) {
+            Some(ip) => ip,
+            // No IPv4/IPv6 addresses at all — the announcement was
+            // hostname-only (rare, but we've seen it on misconfigured
+            // avahi). Skip — we can't probe or hand the user a
+            // typeable address.
+            None => continue,
+        };
+        let probe_ip = best_ip.to_string();
+        let task = tokio::spawn(async move {
+            let (loader_open, payload_open) = tokio::join!(
+                tcp_probe(&probe_ip, PS5_LOADER_PORT),
+                tcp_probe(&probe_ip, PS5_MGMT_PORT),
+            );
+            (loader_open, payload_open)
+        });
+        probe_tasks.push((host_key, acc, best_ip, task));
+    }
+
+    let mut out = Vec::with_capacity(probe_tasks.len());
+    for (host_key, acc, best_ip, task) in probe_tasks {
+        // Surface task-join failures (panic / cancel) via stderr so
+        // they show up in the engine log instead of silently coercing
+        // the host to "both ports closed" — that masking would render
+        // the PS5 invisible in the candidate list whenever the probe
+        // tokio task crashed.
+        let (loader_port_open, payload_port_open) = match task.await {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("[discover] probe task for {best_ip} panicked/cancelled: {e}");
+                (false, false)
+            }
+        };
+
+        let confidence = score(
+            &host_key,
+            &acc.services,
+            &acc.ports,
+            loader_port_open,
+            payload_port_open,
+        );
+
+        out.push(DiscoveredHost {
+            ip: best_ip.to_string(),
+            hostname: acc.hostname,
+            all_ips: acc.ips.iter().map(ToString::to_string).collect(),
+            services: acc.services,
+            loader_port_open,
+            payload_port_open,
+            confidence,
+            likely_ps5: confidence >= confidence::HIGH_THRESHOLD,
+        });
+    }
+    out
+}
+
 async fn tcp_probe(ip: &str, port: u16) -> bool {
     let addr = format!("{ip}:{port}");
     matches!(
         timeout(PROBE_TIMEOUT, TcpStream::connect(&addr)).await,
         Ok(Ok(_))
     )
+}
+
+/// Concurrent /24 sweep against PS5_MGMT_PORT (9114) on the local
+/// subnet. Used as the last-ditch fallback when mDNS finds nothing.
+///
+/// 9114 is our payload's own mgmt port — we picked the number, no
+/// off-the-shelf software binds it — so a successful connect is a
+/// near-certain "PS5 with our payload" signal. That's why the sweep
+/// here targets only this single port (not :9021, which is shared
+/// across all jailbreak chains and would false-positive on PS5s
+/// running competing payloads, fooling the confidence score).
+///
+/// Uses the same UDP-connect trick `lan_ip_for_ps5` uses to learn our
+/// outbound IPv4: the OS picks the routed interface without sending
+/// a packet. We then sweep that interface's /24. Multi-homed hosts
+/// only get one subnet swept; multi-homed discovery is a v2.17.0+
+/// concern (would need `if-addrs` crate dep and per-interface scan).
+///
+/// Returns Vec<(ip, hostname)>; hostname is reverse-DNS, best-effort.
+/// Capped at 254 concurrent connects (the /24 hostnumber range) with
+/// a short per-host timeout, so the whole sweep finishes in well under
+/// one wallclock second on a LAN.
+async fn lan_sweep_for_payload_port() -> Vec<(Ipv4Addr, Option<String>)> {
+    // Routable IPv4-detection trick. UDP `connect` doesn't send a
+    // packet — just resolves the routing table — so this is a no-op
+    // on the network. We pick a public IP we won't actually talk to
+    // (1.1.1.1) so private-net users don't get a loopback fallback.
+    let local_ipv4 = match std::net::UdpSocket::bind("0.0.0.0:0")
+        .and_then(|s| s.connect("1.1.1.1:1").and_then(|_| s.local_addr()))
+    {
+        Ok(addr) => match addr.ip() {
+            IpAddr::V4(v4) if !v4.is_loopback() && !v4.is_unspecified() => v4,
+            // IPv6-only host or no route — nothing to sweep. Quiet
+            // return; mDNS-only behavior is the right answer here.
+            _ => return Vec::new(),
+        },
+        Err(_) => return Vec::new(),
+    };
+
+    // Probe every host in the /24, skipping our own address (we're
+    // not the PS5) and the .0 / .255 network/broadcast addresses
+    // (which a TCP connect against would just fail anyway, but
+    // omitting them shaves two redundant probes).
+    let octets = local_ipv4.octets();
+    let mut tasks = Vec::with_capacity(253);
+    for host in 1u8..=254 {
+        let candidate = Ipv4Addr::new(octets[0], octets[1], octets[2], host);
+        if candidate == local_ipv4 {
+            continue;
+        }
+        tasks.push(tokio::spawn(async move {
+            if tcp_probe(&candidate.to_string(), PS5_MGMT_PORT).await {
+                Some(candidate)
+            } else {
+                None
+            }
+        }));
+    }
+
+    let mut hits = Vec::new();
+    for t in tasks {
+        if let Ok(Some(ip)) = t.await {
+            // We deliberately don't reverse-DNS — most home LANs
+            // don't have a PTR record for the PS5, and DNS timeouts
+            // would dominate the sweep wallclock. Hostname stays
+            // None for sweep-found hosts; renderer shows the IP.
+            hits.push((ip, None));
+        }
+    }
+    hits
 }
 
 /// Pick the most-useful IP from a host's announced address set:

@@ -46,7 +46,18 @@ CFLAGS := -Wall -Wextra -Werror -g $(INCLUDES)
 # Optional features (sceFsMountGamePkg, sceNetGetIfList, etc.)
 # dlopen their backing SPRX at runtime — missing SPRX → handler
 # returns "service_unavailable" instead of bricking the payload.
-LIBS := -lSceSystemService -lSceUserService -lSceAppInstUtil -lSceNotification
+#
+# `-lkernel_sys` enables compile-time NID resolution for sceKernel* symbols
+# (sceKernelGetCpuTemperature / sceKernelGetSocSensorTemperature /
+# sceKernelGetCpuFrequency / sceKernelGetSocPowerConsumption). The older path
+# used `dlsym(RTLD_DEFAULT, "sceKernelGetCpuTemperature")` which fails on FW
+# points where libkernel exports NID-only, then fell back to ptrace-into-
+# SceShellUI — which destabilises the console (screen blank, occasional
+# power-off). Direct compile-time linkage gives stable per-call sensor reads
+# with no ptrace dance. libkernel_sys.sprx is part of every supported PS5
+# firmware so adding the DT_NEEDED entry is safe.
+LIBS := -lSceSystemService -lSceUserService -lSceAppInstUtil -lSceNotification \
+        -lkernel_sys
 
 SRCS := src/main.c src/runtime.c src/takeover.c src/register.c src/hw_info.c \
         src/proc_list.c src/ptrace_remote.c src/shellui_rpc.c src/bgft.c \

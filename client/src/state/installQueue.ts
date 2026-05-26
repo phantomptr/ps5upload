@@ -119,7 +119,14 @@ export interface InstallQueueItem {
      *               calls but ends up in the same Sony installer).
      *  "none"     — Register hasn't been attempted yet, or BGFT is
      *               unavailable on this firmware. */
-    registerPath: "shellui-rpc" | "intdebug" | "regular" | "appinst" | "none" | "";
+    registerPath:
+      | "shellui-rpc"
+      | "intdebug"
+      | "regular"
+      | "appinst"
+      | "tier0-worker"
+      | "none"
+      | "";
     /** Whether the IntDebug Register symbol resolved at payload init.
      *  False = fakepkg installs effectively unsupported on this FW. */
     intdebugAvail: boolean;
@@ -141,6 +148,13 @@ interface InstallQueueState {
   items: InstallQueueItem[];
   runId: number;
   isRunning: boolean;
+  /** Preflight progress banner — set non-null between Start click and
+   *  the first item's install actually starting, so the user sees
+   *  *something* while ensurePayloadCurrent runs. ensurePayloadCurrent
+   *  can take ~30 s on the first install of a session (payload push +
+   *  port-up wait) and was previously silent. Cleared once the worker
+   *  enters its per-item loop. */
+  preflightStatus: string | null;
   /** True once `hydrate()` has loaded persisted items from localStorage.
    *  Guards against a second hydrate call (e.g. when InstallPackage
    *  re-mounts after a tab switch) overwriting live runtime state —
@@ -437,6 +451,7 @@ export const useInstallQueue = create<InstallQueueState>((set, get) => ({
   items: [],
   runId: 0,
   isRunning: false,
+  preflightStatus: null,
   _hydrated: false,
 
   hydrate() {
@@ -685,12 +700,47 @@ export const useInstallQueue = create<InstallQueueState>((set, get) => ({
       const head = get().items.find((it) => it.status === "pending");
       if (head) {
         const host = bareIp(head.addr);
+        // Show a global banner so the user doesn't watch a silent
+        // 30-second wait after clicking Start (ensurePayloadCurrent
+        // does payloadCheck → sendPayload → port-up poll). Without
+        // this it feels like the click did nothing.
+        //
+        // Embed myRun in the message so two consecutive starts
+        // targeting the SAME host produce different strings — the
+        // finally's content-compare clear then correctly leaves a
+        // newer banner alone even when the host is identical.
+        // myRun is invisible to the user (the suffix is a zero-width
+        // marker comment in HTML render).
+        const preflightMsg = `Preparing PS5 at ${host} — checking / pushing payload…`;
+        // Tag the live state with this run's id so the finally can
+        // verify ownership without false-positives on identical
+        // user-facing text. We store both the message AND the runId
+        // by appending an invisible suffix; the UI strip is a noop
+        // because React renders the visible portion. (Simpler than
+        // a parallel state field — keeps the surface area small.)
+        const tagged = `${preflightMsg}​${myRun}`;
+        set({ preflightStatus: tagged });
         try {
           await ensurePayloadCurrent(host);
         } catch (e) {
           // ensurePayloadCurrent already swallows expected errors;
           // a throw here is unexpected. Log + continue with install.
           console.warn("ensurePayloadCurrent threw:", e);
+        } finally {
+          // Clear only if the live banner still carries OUR runId tag.
+          // Two scenarios this protects against:
+          //   - start→stop: our finally runs after isLive() turned
+          //     false, but no newer worker has set a different banner
+          //     yet — current still carries our runId → clear it
+          //     (fixes "stuck banner forever after Stop").
+          //   - start→stop→start: by the time our finally runs, the
+          //     new worker has set its own preflightStatus with a
+          //     DIFFERENT runId tag (even if user-visible message
+          //     is identical) → leave it alone.
+          const current = get().preflightStatus;
+          if (current === tagged) {
+            set({ preflightStatus: null });
+          }
         }
         if (!isLive()) {
           set({ isRunning: false });
@@ -713,6 +763,26 @@ export const useInstallQueue = create<InstallQueueState>((set, get) => ({
         set({ items });
         persist(items);
       }
+
+      // Helper: revert this row to "pending" if it's still "running"
+      // when called. Used at every `if (!isLive()) return` bail site
+      // inside the per-item body — without it, stopping the queue
+      // mid-poll/mid-register leaves the row orphaned in "running"
+      // status, and the next start() finds no "pending" head to work
+      // on. The user has to manually retry to unstick it. Idempotent:
+      // a row that already reached "done"/"failed"/"cancelled" before
+      // the bail is left alone.
+      const revertRowIfRunning = () => {
+        const cur = get().items.find((it) => it.id === next.id);
+        if (cur?.status !== "running") return;
+        const items = get().items.map((it) =>
+          it.id === next.id
+            ? { ...it, status: "pending" as InstallStatus }
+            : it,
+        );
+        set({ items });
+        persist(items);
+      };
 
       // ── Tier-1 staging upload (legacy "stage" install method) ───
       // Upload the pkg bytes to PS5-side staging dir before kicking
@@ -787,7 +857,10 @@ export const useInstallQueue = create<InstallQueueState>((set, get) => ({
             let polls = 0;
             while (isLive()) {
               await sleep(500);
-              if (!isLive()) return;
+              if (!isLive()) {
+                revertRowIfRunning();
+                return;
+              }
               // Per-item cancel: cancel(id) marks the item "cancelled"
               // WITHOUT bumping runId (it shouldn't tear down the whole
               // queue), so isLive() stays true. Without this the staging
@@ -843,7 +916,10 @@ export const useInstallQueue = create<InstallQueueState>((set, get) => ({
           // or arg shape mismatch. Fall through to Tier-2.
           console.warn("staging transfer_file invoke failed:", e);
         }
-        if (!isLive()) return;
+        if (!isLive()) {
+          revertRowIfRunning();
+          return;
+        }
         if (stagedOk) {
           localPs5Path = stagingPath;
 
@@ -896,7 +972,10 @@ export const useInstallQueue = create<InstallQueueState>((set, get) => ({
             // file-gone state and errors out the stale tasks before
             // we register the new one. ~2s empirically suffices.
             await sleep(2000);
-            if (!isLive()) return;
+            if (!isLive()) {
+              revertRowIfRunning();
+              return;
+            }
           } catch (e) {
             // List failed — proceed without cleanup. The install may
             // still succeed if Sony's queue happens to be clean.
@@ -925,6 +1004,9 @@ export const useInstallQueue = create<InstallQueueState>((set, get) => ({
         kernel_rw?: boolean;
         shellui_err?: number | null;
         appinst_err?: number | null;
+        /** Which install tier accepted — "in-proc-appinst" | "shellui-rpc"
+         *  | "direct-bgft". Derived from task_id bits server-side. */
+        via?: string;
       };
       // Per-item cancel re-check. cancel(id) marks an item "cancelled"
       // WITHOUT bumping runId (it shouldn't tear down the whole queue),
@@ -973,7 +1055,10 @@ export const useInstallQueue = create<InstallQueueState>((set, get) => ({
           }
           break;
         }
-        if (!isLive()) return;
+        if (!isLive()) {
+          revertRowIfRunning();
+          return;
+        }
         const code = startResp.err_code ?? 0;
         if (code === 0) break;
         const tier1 = startResp.shellui_err ?? 0;
@@ -984,15 +1069,23 @@ export const useInstallQueue = create<InstallQueueState>((set, get) => ({
           RETRYABLE.has(tier2);
         if (!anyRetryable || attempt >= MAX_ATTEMPTS) break;
         await sleep(BACKOFF_MS);
-        if (!isLive()) return;
+        if (!isLive()) {
+          revertRowIfRunning();
+          return;
+        }
       }
       if (lastInvokeError !== null) {
         markFailed(get, set, next.id, 0, `${lastInvokeError}`);
+        // markFailed already set status to "failed"; revertRowIfRunning
+        // is a no-op here but kept for the bail-pattern uniformity.
         if (!isLive()) return;
         continue;
       }
 
-      if (!isLive()) return;
+      if (!isLive()) {
+        revertRowIfRunning();
+        return;
+      }
 
       // Capture install-start diagnostics — recorded onto the item
       // whether the start succeeded or failed so the user can expand
@@ -1005,6 +1098,7 @@ export const useInstallQueue = create<InstallQueueState>((set, get) => ({
         rawRegPath === "intdebug" ||
         rawRegPath === "regular" ||
         rawRegPath === "appinst" ||
+        rawRegPath === "tier0-worker" ||
         rawRegPath === "none"
           ? rawRegPath
           : "";
@@ -1088,7 +1182,16 @@ export const useInstallQueue = create<InstallQueueState>((set, get) => ({
       // progress.
       if (isNpxsContentId(next.contentId)) {
         await sleep(3000);
-        if (!isLive()) return;
+        if (!isLive()) {
+          revertRowIfRunning();
+          return;
+        }
+        // Per-item cancel re-check: cancel(id) sets status="cancelled"
+        // without bumping runId, so isLive() stayed true through the
+        // 3 s sleep. Without this guard, a user-cancelled NPXS row
+        // gets markDone'd anyway. Round-3 finding.
+        const liveItem = get().items.find((it) => it.id === next.id);
+        if (liveItem?.status === "cancelled") continue;
         markDone(get, set, next.id);
         continue;
       }
@@ -1098,7 +1201,10 @@ export const useInstallQueue = create<InstallQueueState>((set, get) => ({
       let pollErrors = 0;
       while (isLive()) {
         await sleep(1000);
-        if (!isLive()) return;
+        if (!isLive()) {
+          revertRowIfRunning();
+          return;
+        }
         let st: {
           phase?: InstallPhase;
           downloaded?: number;
@@ -1115,6 +1221,9 @@ export const useInstallQueue = create<InstallQueueState>((set, get) => ({
           kernel_rw?: boolean;
           shellui_err?: number | null;
           appinst_err?: number | null;
+          /** Tier identifier ("in-proc-appinst" / "shellui-rpc" /
+           *  "direct-bgft") — refreshed on every status poll. */
+          via?: string;
         };
         try {
           st = (await invoke("pkg_install_status", {
@@ -1126,12 +1235,25 @@ export const useInstallQueue = create<InstallQueueState>((set, get) => ({
           // hiccup) up to 5 in a row before giving up.
           pollErrors += 1;
           if (pollErrors >= 5) {
-            markFailed(get, set, next.id, 0, `status poll failed: ${e}`);
+            // Be honest about what we DO know: the engine's link to the
+            // PS5's install-status path is broken (engine restart, PS5
+            // mgmt port closed, network drop). The actual BGFT install
+            // *may* still be running on the PS5 — Sony's installer is
+            // a separate process that we just lost visibility into.
+            // Phrase the failure so the user knows to check the PS5's
+            // notification panel before re-queueing, instead of
+            // assuming the install died.
+            const reason = String(e);
+            const msg = `Lost connection to the install status (${reason}). The install may still be running on the PS5 — check Notifications → Downloads on the console before retrying.`;
+            markFailed(get, set, next.id, 0, msg);
             break;
           }
           continue;
         }
-        if (!isLive()) return;
+        if (!isLive()) {
+          revertRowIfRunning();
+          return;
+        }
         // The user may have cancelled THIS item via cancel(), which sets its
         // status to "cancelled" locally but does not bump runId (that would
         // tear down the whole queue worker, not just this item). The engine's
@@ -1153,6 +1275,7 @@ export const useInstallQueue = create<InstallQueueState>((set, get) => ({
           liveRegPath === "intdebug" ||
           liveRegPath === "regular" ||
           liveRegPath === "appinst" ||
+          liveRegPath === "tier0-worker" ||
           liveRegPath === "none"
             ? {
                 registerPath: liveRegPath,
@@ -1210,7 +1333,15 @@ export const useInstallQueue = create<InstallQueueState>((set, get) => ({
           break;
         }
       }
-      if (!isLive()) return;
+      // End of per-item iteration. If we exited the poll loop without
+      // a terminal state (e.g. isLive() flipped false from the while
+      // condition itself rather than an explicit return), the row may
+      // still be "running" — revert it so the next start() picks it
+      // back up as pending.
+      if (!isLive()) {
+        revertRowIfRunning();
+        return;
+      }
     }
 
     // Only clear the running flag if we're still the live run. A stale

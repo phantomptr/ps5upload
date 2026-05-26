@@ -319,6 +319,28 @@ export function humanizePs5Error(
     // path runs from ShellUI.
     return "PS5 rejected our HTTP fetch attempt for the install (0x80B22404). This isn't about the pkg's format — Sony's installer didn't read any of the file's bytes. It's a process-context issue: Sony's PlayGo whitelists ShellUI's process for install-side HTTP fetch and rejects ours. The 2.2.52 build has a new ShellUI-RPC install path that routes through ShellUI's process so the same fetch succeeds. If you're still seeing this error, the running payload is the old one — push the latest payload via Connection → Send payload, restart the install, and the diag panel should show register_path=shellui-rpc.";
   }
+  // ─── 0x80B2_116F — installer rejected (FW 9.60 + NPXS path) ────────
+  // Hardware-observed against an NPXS pkg on FW 9.60 when all 3 tiers
+  // failed. The 3 tiers each surfaced this code AND the BGFT-direct
+  // tier additionally reported "BGFT symbol missing" — that firmware
+  // point doesn't export the BGFT registers our Tier-3 fallback uses.
+  // For NPXS-prefix pkgs we route to the system-pkg-specific advice;
+  // for game pkgs the FW-incompatibility advice is more useful. MUST
+  // come before the generic 0x80B2 wildcard below, otherwise the
+  // wildcard catches it first and this branch is dead code.
+  if (/0x80B2_?116F/i.test(raw)) {
+    if (isNpxsContentId(contentId)) {
+      return "PS5 installer rejected this system pkg (0x80B2116F). Sony's installer can't complete system patches (Store updates, Settings) — use Settings → Debug Settings → Game → Package Installer on the PS5 itself for these.";
+    }
+    return "PS5 installer rejected the pkg (0x80B2116F). On FW 9.60 this firmware point is missing the BGFT registers our payload uses; try pushing the latest payload (Connection → Send payload), and if it still fails the pkg may need installing via the PS5's own Debug Settings → Game → Package Installer.";
+  }
+  // ─── 0x80B2_1401 — ShellUI install path rejected ───────────────────
+  // Tier-2 (shellui-rpc) returned this; usually paired with 0x80B2116F
+  // on the same firmware point. Distinct surface so the user knows
+  // it's the ShellUI path specifically that bailed.
+  if (/0x80B2_?1401/i.test(raw)) {
+    return "PS5's ShellUI install path rejected the request (0x80B21401). Usually paired with another tier failure on FW 9.60 when the firmware point lacks the BGFT registers we depend on. Try the latest payload from Connection → Send payload, or install via the PS5's own Debug Settings panel.";
+  }
   if (/\b0x80B2[0-9A-Fa-f]{4}\b/i.test(raw)) {
     // Other 0x80B2_xxxx — PlayGo errors, not pkg-format errors.
     // Don't blame the file.
@@ -391,6 +413,37 @@ export function humanizePs5Error(
   }
   if (/0x80990085|defrag/i.test(raw)) {
     return "Your PS5 needs defragmented free space. Settings → Storage → Free up space, then retry.";
+  }
+  if (/0x80990086/i.test(raw)) {
+    return "Leftover download in PS5 notifications. Open the PS5's notification panel (PS button → Notifications → Downloads), clear the stuck entry, then retry the install.";
+  }
+  if (/0x80990036/i.test(raw)) {
+    return "DRM mismatch — this PKG isn't valid for this console. The pkg was created for a different account or region.";
+  }
+  if (/0x80990038/i.test(raw)) {
+    return "PKG entitlement check failed. The signed-in PSN account doesn't own this title, or the region doesn't match.";
+  }
+  if (/0x80990039|0x80A30026|out of (free )?space/i.test(raw)) {
+    return "Out of free space on the PS5. Settings → Storage → Free up space, then retry.";
+  }
+  if (/0x80B22101/i.test(raw)) {
+    return "Earlier download for the same content is still queued on the PS5. Open the PS5's notification panel, clear it, then retry the install.";
+  }
+  if (/0x80B64002/i.test(raw)) {
+    return "Title blocked by PS5 parental / content controls. Adjust the user's restrictions in PS5 Settings → Users and Accounts → Family Management before retrying.";
+  }
+  if (/0x80020005/i.test(raw)) {
+    return "PS5 install daemon couldn't reach our process (ESRCH = no such process). Usually means the payload hasn't elevated yet — kstuff/etaHEN may not be loaded. Re-send the payload from Connection → Send payload, then retry.";
+  }
+  // 0x80B2116F and 0x80B21401 handled above (must precede the
+  // generic 0x80B2 wildcard at line ~322).
+
+  // ─── Generic 0x80990xxx fallback — Sony's BGFT family ──────────────
+  // We've mapped the codes seen most often; any remaining one in this
+  // namespace at least gets a clear "this is the install service
+  // saying no" framing instead of a raw hex dump.
+  if (/\b0x80990[0-9A-Fa-f]{3}\b/i.test(raw)) {
+    return `Sony's install service rejected the request with ${raw.match(/0x80990[0-9A-Fa-f]{3}/i)?.[0]}. Common causes: stuck previous install (open PS5 notifications → Downloads → clear), wrong account/region, or out of space. If none of those apply, capture the diag panel and file a bug.`;
   }
 
   // ─── Generic payload rejection — extract the reason verbatim ───────

@@ -4,6 +4,44 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.16.1
+
+- **Game folders uploaded with ps5upload now launch first try.** Previously
+  some folders would land on the PS5 but refuse to launch with `CE-107750-0`,
+  while the same folder over FTP worked. Fixed at the source: files now land
+  with the right permissions inherently, no after-the-fact step.
+- **Live sensors auto-update again.** Temperatures, clock, and power readings
+  refresh every 5 seconds on the Hardware screen via a new direct-read path
+  that no longer briefly suspends the PS5 UI. The manual "Read sensors"
+  button has been removed — it's automatic now.
+- **"Find PS5s on the network" now finds yours even when your router
+  suppresses mDNS.** A short LAN sweep runs as a fallback so the button never
+  comes back empty just because of an unfriendly access point.
+- **Hardware → PS5 system log.** Optional collapsible panel that shows the
+  PS5's kernel log (the same data underlying `dmesg`). Handy when diagnosing
+  homebrew payload issues without leaving the app.
+- **Upload preflight no longer fails silently.** If the destination probe
+  can't reach the PS5, you now see a clear inline error instead of the
+  Upload button briefly spinning and then doing nothing.
+- **Install Package: much more reliable.** The "Stream" install method now
+  actually works (a v2.16.0 regression made every streaming install 500;
+  fixed). System pkgs (NPXS-prefix) get a clear amber badge in the queue
+  before you try them. Cancelling a multi-GB install asks for confirmation
+  first. Failed installs now show actionable messages for the common Sony
+  error codes ("clear PS5 notifications", "out of space", etc.) instead of
+  raw hex. The install panel also shows which path (in-process,
+  ShellUI-RPC, or legacy BGFT) accepted your request, and the URL the PS5
+  fetches the pkg from uses the pkg's canonical content-id as the filename.
+- **First-install no longer looks frozen.** When you click Start on the
+  install queue, a banner now shows "Preparing PS5 — checking / pushing
+  payload…" while the desktop verifies / refreshes the payload, instead of
+  ~30 seconds of silent waiting.
+- **Stopping the queue mid-install no longer orphans the row.** Rows that
+  were "running" when you click Stop now correctly go back to "pending" so
+  the next Start picks them up.
+
+---
+
 ## 2.16.0
 
 - **Folder uploads survive network blips.** Multi-hundred-GB game folders that

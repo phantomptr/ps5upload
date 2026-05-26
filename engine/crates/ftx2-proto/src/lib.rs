@@ -443,6 +443,13 @@ pub enum FrameType {
     /// `running:false` with zeroed counters.
     SmpMetaStats = 142,
     SmpMetaStatsAck = 143,
+    /// Recent kernel log lines (PS5-side `dmesg` equivalent). Body: empty.
+    /// Ack body: raw text bytes from `sysctl kern.msgbuf` — the kernel
+    /// circular buffer of recent printf/printk output. Used by the desktop
+    /// to diagnose "why didn't the payload load?" / "why is the helper
+    /// silent?" without making the user dig through ssh / ftp.
+    SyslogTail = 144,
+    SyslogTailAck = 145,
 }
 
 impl FrameType {
@@ -579,6 +586,8 @@ impl FrameType {
             141 => Ok(Self::SmpMetaControlAck),
             142 => Ok(Self::SmpMetaStats),
             143 => Ok(Self::SmpMetaStatsAck),
+            144 => Ok(Self::SyslogTail),
+            145 => Ok(Self::SyslogTailAck),
             _ => Err(DecodeError::UnknownFrameType(v)),
         }
     }
@@ -1050,6 +1059,8 @@ mod tests {
             FrameType::SmpMetaControlAck,
             FrameType::SmpMetaStats,
             FrameType::SmpMetaStatsAck,
+            FrameType::SyslogTail,
+            FrameType::SyslogTailAck,
         ];
         for ft in variants {
             assert_eq!(FrameType::try_from_u16(ft as u16).unwrap(), ft);

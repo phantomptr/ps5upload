@@ -391,6 +391,29 @@ pub fn proc_list(addr: &str) -> Result<ProcList> {
     })
 }
 
+/// Recent PS5 kernel log lines (`dmesg`-style output). Returned verbatim
+/// from `sysctl kern.msgbuf` on the PS5 — the kernel's in-memory printk/
+/// printf history. Used by the desktop's "System log" panel to diagnose
+/// "why didn't the payload load" / "what error happened silently" without
+/// requiring the user to FTP/ssh into the console.
+///
+/// Up to ~1 MiB returned (payload-side HARD_CAP); can be empty if the
+/// kernel rebuilt with a smaller buffer or the sysctl reset between
+/// calls. Most firmwares surface 128 KiB – 256 KiB of recent kernel
+/// output.
+pub fn syslog_tail(addr: &str) -> Result<String> {
+    let body = round_trip(
+        addr,
+        FrameType::SyslogTail,
+        FrameType::SyslogTailAck,
+        "SYSLOG_TAIL",
+    )?;
+    // Kernel printf output is plain ASCII; lossy decode covers any stray
+    // non-UTF-8 byte (driver scribbles, raw register dumps) without
+    // failing the whole panel render.
+    Ok(String::from_utf8_lossy(&body).into_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

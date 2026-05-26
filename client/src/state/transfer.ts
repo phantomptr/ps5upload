@@ -441,12 +441,27 @@ export const useTransferStore = create<TransferState>((set) => {
           const skippedBytes = snap.skipped_bytes ?? 0;
           const accountedBytes = bytesSent + skippedBytes;
           let cum = 0;
-          let filesCompleted = 0;
+          let derivedFilesCompleted = 0;
           for (const f of files) {
             cum += f.size;
-            if (cum <= accountedBytes) filesCompleted++;
+            if (cum <= accountedBytes) derivedFilesCompleted++;
             else break;
           }
+          // Prefer the engine's per-file counter when it's reporting
+          // (climbs as each source file is pulled into a pack frame).
+          // The bytes-derived estimate jumps by ~200 every packed-shard
+          // ACK and looked frozen between bursts on 46k-file game
+          // folders. Clamp to files.length so a brief over-count (eg.
+          // engine in mid-pack-build while we just hydrated a stale
+          // snap.files) never renders ">N of N". 0 means the engine
+          // path doesn't report it (single-file uploads, plain
+          // transfer_dir without a progress_files atomic) — fall back
+          // to the derived value.
+          const engineFiles = snap.files_processing ?? 0;
+          const filesCompleted =
+            engineFiles > 0
+              ? Math.min(engineFiles, files.length)
+              : derivedFilesCompleted;
           set({
             phase: {
               kind: "running",

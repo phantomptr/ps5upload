@@ -587,6 +587,15 @@ pub async fn ps5_hw_power(addr: Option<String>) -> Result<JsonValue, String> {
     get_json(&addr_url("/api/ps5/hw/power", addr.as_deref())).await
 }
 
+/// Recent PS5 kernel log (sysctl kern.msgbuf). Returned as
+/// `{"text": "..."}` — UI renders verbatim in a scrollable monospace
+/// area for diagnosing "why did the helper fail / what silently broke"
+/// without making the user FTP/ssh into the console.
+#[tauri::command]
+pub async fn ps5_syslog_tail(addr: Option<String>) -> Result<JsonValue, String> {
+    get_json(&addr_url("/api/ps5/syslog/tail", addr.as_deref())).await
+}
+
 /// Read the PS5's current system clock. Cheap; safe to call once on
 /// the Hardware screen render and again right after a sync.
 #[tauri::command]

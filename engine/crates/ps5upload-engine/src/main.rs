@@ -58,10 +58,10 @@ use ps5upload_core::{
     connection::Connection,
     download::{download_to_local, enumerate_download_set, DownloadKind},
     fs_ops::{
-        app_launch, app_register, app_unregister, fs_chmod, fs_copy_with_op_id,
-        fs_delete_with_op_id, fs_mkdir, fs_mount, fs_move_with_timeout, fs_op_cancel, fs_op_status,
-        fs_read, fs_unmount, list_dir, reconcile, walk_local_inventory, DirListing, ListDirOptions,
-        MountResult, ReconcileFile, ReconcileMode, ReconcilePlan, RegisterResult,
+        app_launch, app_register, app_unregister, fs_copy_with_op_id, fs_delete_with_op_id,
+        fs_mkdir, fs_mount, fs_move_with_timeout, fs_op_cancel, fs_op_status, fs_read, fs_unmount,
+        list_dir, reconcile, walk_local_inventory, DirListing, ListDirOptions, MountResult,
+        ReconcileFile, ReconcileMode, ReconcilePlan, RegisterResult,
     },
     game_meta::parse_param_json_bytes,
     hw::{
@@ -194,6 +194,16 @@ enum JobState {
         /// Bytes those skipped files represent. 0 for non-reconcile.
         #[serde(default)]
         skipped_bytes: u64,
+        /// Per-file progress — climbs as each source file is read into a
+        /// pack frame or as its first chunk goes out. The shard-ACK-based
+        /// `bytes_sent` looks like "start → finished" on 46 k-file game
+        /// folders (each packed ACK completes ~200 files at once); this
+        /// counter ticks smoothly through the read-many-tiny-files phase
+        /// so the user sees the upload is alive. 0 means "not provided
+        /// by this transfer path" (e.g. single-file uploads), in which
+        /// case the UI falls back to its size-derived estimate.
+        #[serde(default)]
+        files_processing: u64,
     },
     Done {
         started_at_ms: u64,
@@ -329,6 +339,47 @@ fn mgmt_addr_or_default(addr: Option<String>, default_addr: &str) -> String {
     mgmt_addr_for(addr.as_deref().unwrap_or(default_addr))
 }
 
+/// Recursively `chmod 0777` a destination tree on the PS5.
+///
+/// **No longer called automatically after uploads** (v2.16.1+): the payload
+/// now `umask(0)`s at startup, opens game files at `0777`, and `fchmod`s
+/// after every open — so freshly-uploaded files are world-rwx already and
+/// the per-upload recursive walk (which took ~30 s on a 22k-file folder)
+/// is redundant overhead. Kept for explicit use: a future Library "Fix
+/// permissions" button, or for repairing old uploads written by pre-2.16.1
+/// payloads (which created files at `0644` → Sony loader returns CE-107750-0
+/// "can't start game or app").
+#[allow(dead_code)]
+fn auto_chmod_uploaded_tree(transfer_addr: &str, dest: &str) {
+    let mgmt = mgmt_addr_for(transfer_addr);
+    let started = std::time::Instant::now();
+    match ps5upload_core::fs_ops::fs_chmod_with_timeout(
+        &mgmt,
+        dest,
+        "0777",
+        true,
+        Some(Duration::from_secs(600)),
+    ) {
+        Ok(()) => {
+            crate::log_info!(
+                "auto-chmod 0777 -R OK on {} ({} ms)",
+                dest,
+                started.elapsed().as_millis()
+            );
+        }
+        Err(e) => {
+            crate::log_warn!(
+                "auto-chmod 0777 -R on {} failed after {} ms ({}); upload is byte-exact, \
+                 user can re-chmod manually via File System tab if Sony's loader rejects \
+                 the title with CE-107750-0",
+                dest,
+                started.elapsed().as_millis(),
+                e
+            );
+        }
+    }
+}
+
 /// Loopback guard for the API surface. Pre-2.2.52 the engine bound
 /// `127.0.0.1` only, which kept the API safe from the LAN by accident
 /// — but also broke `.pkg` install because the PS5 couldn't reach
@@ -433,6 +484,7 @@ fn spawn_progress_ticker(
     job_id: Uuid,
     ctx: TickerContext,
     progress: Arc<AtomicU64>,
+    progress_files: Arc<AtomicU64>,
 ) -> Arc<AtomicBool> {
     let stop = Arc::new(AtomicBool::new(false));
     let stop_for_tick = Arc::clone(&stop);
@@ -440,6 +492,7 @@ fn spawn_progress_ticker(
         let mut interval = tokio::time::interval(Duration::from_millis(200));
         interval.tick().await; // consume the immediate first tick
         let mut last_bytes = u64::MAX; // forces a broadcast on the first real tick
+        let mut last_files = u64::MAX;
         loop {
             interval.tick().await;
             // `Acquire` pairs with the `Release` store in
@@ -458,15 +511,22 @@ fn spawn_progress_ticker(
                 break;
             }
             let bytes_sent = progress.load(Ordering::Relaxed);
-            // Skip the HashMap mutation + SSE broadcast when the counter
-            // hasn't moved. Saves the per-tick overhead (including JSON
-            // serialization of potentially-thousands-of-files state) during
-            // pre-transfer stalls — BEGIN_TX waiting on a slow-to-ack
-            // payload, disk flush pauses mid-shard, etc.
-            if bytes_sent == last_bytes {
+            let files_processing = progress_files.load(Ordering::Relaxed);
+            // Skip the HashMap mutation + SSE broadcast when NEITHER
+            // counter has moved. Saves the per-tick overhead (including
+            // JSON serialization of potentially-thousands-of-files state)
+            // during pre-transfer stalls — BEGIN_TX waiting on a slow-to-
+            // ack payload, disk flush pauses mid-shard, etc. We
+            // intentionally broadcast on EITHER counter changing: the
+            // per-file counter ticks smoothly during pack-frame build
+            // even while bytes_sent stays put waiting for the shard ACK,
+            // and that's the whole point — many-tiny-files folders need
+            // a counter that visibly moves through the read phase.
+            if bytes_sent == last_bytes && files_processing == last_files {
                 continue;
             }
             last_bytes = bytes_sent;
+            last_files = files_processing;
             // Mutate in place so the handler's initial `files` list is
             // preserved across ticks — we no longer carry it in the ctx.
             let maybe_snapshot = {
@@ -483,6 +543,7 @@ fn spawn_progress_ticker(
                         started_at_ms: s,
                         skipped_files: sf,
                         skipped_bytes: sb,
+                        files_processing: fp,
                         ..
                     }) => {
                         *b = bytes_sent;
@@ -490,6 +551,7 @@ fn spawn_progress_ticker(
                         *s = ctx.started_at_ms;
                         *sf = ctx.skipped_files;
                         *sb = ctx.skipped_bytes;
+                        *fp = files_processing;
                         // Clone once for the SSE broadcast path; the
                         // lock-held section stays short.
                         Some(g.get(&job_id).cloned())
@@ -1350,10 +1412,23 @@ async fn ps5_fs_chmod(
     let started = std::time::Instant::now();
     crate::log_info!("fs_chmod: addr={addr} path={path} mode={mode} recursive={recursive}");
     let path_for_log = path.clone();
-    match tokio::task::spawn_blocking(move || fs_chmod(&addr, &path, &mode, recursive))
-        .await
-        .map_err(anyhow::Error::from)
-        .and_then(|r| r)
+    // Recursive chmod on a 20k-file game folder routinely runs past the
+    // default 30 s socket timeout — the payload walks the tree serially
+    // and ack-acks per directory. The Library "Fix permissions" button is
+    // the main caller and would silently fail with a "PS5 stopped
+    // responding" toast on a big folder. 600 s caps it at "user-noticeable
+    // but won't infinite-hang."
+    let io_timeout = if recursive {
+        Some(std::time::Duration::from_secs(600))
+    } else {
+        None
+    };
+    match tokio::task::spawn_blocking(move || {
+        ps5upload_core::fs_ops::fs_chmod_with_timeout(&addr, &path, &mode, recursive, io_timeout)
+    })
+    .await
+    .map_err(anyhow::Error::from)
+    .and_then(|r| r)
     {
         Ok(()) => {
             crate::log_info!(
@@ -1513,6 +1588,27 @@ async fn ps5_hw_temps(
         .and_then(|r| r);
     match r {
         Ok(v) => (StatusCode::OK, Json(v)).into_response(),
+        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
+    }
+}
+
+/// Recent PS5 kernel log (`sysctl kern.msgbuf`). Surfaces "why didn't
+/// the payload load / what silently failed" directly in the desktop's
+/// diagnostics panel — no need to FTP/ssh into the console. Body is
+/// raw text (kernel printf output); UI just shows it in a scrollable
+/// monospace area.
+async fn ps5_syslog_tail(
+    State(state): State<AppState>,
+    Query(q): Query<AddrQuery>,
+) -> impl IntoResponse {
+    let addr = mgmt_addr_or_default(q.addr, &state.default_ps5_addr);
+    let r: Result<String, anyhow::Error> =
+        tokio::task::spawn_blocking(move || ps5upload_core::hw::syslog_tail(&addr))
+            .await
+            .map_err(anyhow::Error::from)
+            .and_then(|r| r);
+    match r {
+        Ok(v) => (StatusCode::OK, Json(serde_json::json!({ "text": v }))).into_response(),
         Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
     }
 }
@@ -2052,6 +2148,7 @@ async fn transfer_file_handler(
         size: total_bytes,
     }];
     let progress = Arc::new(AtomicU64::new(0));
+    let progress_files = Arc::new(AtomicU64::new(0));
     let ctx = TickerContext {
         started_at_ms,
         total_bytes,
@@ -2069,6 +2166,7 @@ async fn transfer_file_handler(
             files: files.clone(),
             skipped_files: 0,
             skipped_bytes: 0,
+            files_processing: 0,
         },
     );
 
@@ -2080,6 +2178,7 @@ async fn transfer_file_handler(
         job_id,
         ctx,
         Arc::clone(&progress),
+        Arc::clone(&progress_files),
     );
 
     let bandwidth_cap = req.bandwidth_cap_mbps;
@@ -2097,6 +2196,7 @@ async fn transfer_file_handler(
             JobFailOnDropGuard::new(Arc::clone(&jobs), events_tx.clone(), job_id, started_at_ms);
         let mut cfg = make_transfer_config(&addr);
         cfg.progress_bytes = Some(Arc::clone(&progress));
+        cfg.progress_files = Some(Arc::clone(&progress_files));
         apply_per_request_bandwidth(&mut cfg, bandwidth_cap);
 
         // Pre-flight free-space check. Catches the most common cause
@@ -2281,6 +2381,7 @@ async fn transfer_dir_handler(
     let (total_bytes, files) = walk_plan(std::path::Path::new(&req.src_dir), &req.excludes);
     let files_sent_count = files.len() as u64;
     let progress = Arc::new(AtomicU64::new(0));
+    let progress_files = Arc::new(AtomicU64::new(0));
     let ctx = TickerContext {
         started_at_ms,
         total_bytes,
@@ -2298,6 +2399,7 @@ async fn transfer_dir_handler(
             files,
             skipped_files: 0,
             skipped_bytes: 0,
+            files_processing: 0,
         },
     );
 
@@ -2309,6 +2411,7 @@ async fn transfer_dir_handler(
         job_id,
         ctx,
         Arc::clone(&progress),
+        Arc::clone(&progress_files),
     );
 
     tokio::task::spawn_blocking(move || {
@@ -2319,6 +2422,7 @@ async fn transfer_dir_handler(
         let mut cfg = make_transfer_config(&addr);
         cfg.excludes = req.excludes;
         cfg.progress_bytes = Some(Arc::clone(&progress));
+        cfg.progress_files = Some(Arc::clone(&progress_files));
         apply_per_request_bandwidth(&mut cfg, req.bandwidth_cap_mbps);
         // 1 fresh attempt + DEFAULT_RESUME_RETRIES resumes. Folder uploads
         // previously used only 2 retries while single-file used 5, so a single
@@ -2451,6 +2555,7 @@ async fn transfer_zip_handler(
         files_sent_count
     );
     let progress = Arc::new(AtomicU64::new(0));
+    let progress_files = Arc::new(AtomicU64::new(0));
     let ctx = TickerContext {
         started_at_ms,
         total_bytes,
@@ -2468,6 +2573,7 @@ async fn transfer_zip_handler(
             files,
             skipped_files: 0,
             skipped_bytes: 0,
+            files_processing: 0,
         },
     );
 
@@ -2479,6 +2585,7 @@ async fn transfer_zip_handler(
         job_id,
         ctx,
         Arc::clone(&progress),
+        Arc::clone(&progress_files),
     );
 
     tokio::task::spawn_blocking(move || {
@@ -2488,6 +2595,7 @@ async fn transfer_zip_handler(
         let mut cfg = make_transfer_config(&addr);
         cfg.excludes = req.excludes;
         cfg.progress_bytes = Some(Arc::clone(&progress));
+        cfg.progress_files = Some(Arc::clone(&progress_files));
         apply_per_request_bandwidth(&mut cfg, req.bandwidth_cap_mbps);
         let result = transfer_zip_resumable(
             &cfg,
@@ -2617,6 +2725,7 @@ async fn transfer_file_list_handler(
     let total_bytes: u64 = files.iter().map(|f| f.size).sum();
     let files_sent_count = files.len() as u64;
     let progress = Arc::new(AtomicU64::new(0));
+    let progress_files = Arc::new(AtomicU64::new(0));
     let ctx = TickerContext {
         started_at_ms,
         total_bytes,
@@ -2634,6 +2743,7 @@ async fn transfer_file_list_handler(
             files,
             skipped_files: 0,
             skipped_bytes: 0,
+            files_processing: 0,
         },
     );
 
@@ -2645,6 +2755,7 @@ async fn transfer_file_list_handler(
         job_id,
         ctx,
         Arc::clone(&progress),
+        Arc::clone(&progress_files),
     );
 
     tokio::task::spawn_blocking(move || {
@@ -2653,6 +2764,7 @@ async fn transfer_file_list_handler(
             JobFailOnDropGuard::new(Arc::clone(&jobs), events_tx.clone(), job_id, started_at_ms);
         let mut cfg = make_transfer_config(&addr);
         cfg.progress_bytes = Some(Arc::clone(&progress));
+        cfg.progress_files = Some(Arc::clone(&progress_files));
         apply_per_request_bandwidth(&mut cfg, req.bandwidth_cap_mbps);
         // All transfer endpoints share the same 3-attempt resume policy
         // (1 fresh + 2 resumes). See `transfer_dir_handler` for rationale.
@@ -2872,6 +2984,7 @@ async fn transfer_download_handler(
     let files_count = files.len() as u64;
 
     let progress = Arc::new(AtomicU64::new(0));
+    let progress_files = Arc::new(AtomicU64::new(0));
     let ctx = TickerContext {
         started_at_ms,
         total_bytes,
@@ -2889,6 +3002,7 @@ async fn transfer_download_handler(
             files,
             skipped_files: 0,
             skipped_bytes: 0,
+            files_processing: 0,
         },
     );
 
@@ -2900,6 +3014,7 @@ async fn transfer_download_handler(
         job_id,
         ctx,
         Arc::clone(&progress),
+        Arc::clone(&progress_files),
     );
 
     tokio::task::spawn_blocking(move || {
@@ -3064,6 +3179,7 @@ async fn transfer_dir_reconcile_handler(
             files: vec![],
             skipped_files: 0,
             skipped_bytes: 0,
+            files_processing: 0,
         },
     );
 
@@ -3224,6 +3340,7 @@ async fn transfer_dir_reconcile_handler(
             })
             .collect();
         let progress = Arc::new(AtomicU64::new(0));
+        let progress_files = Arc::new(AtomicU64::new(0));
         let ctx = TickerContext {
             started_at_ms,
             total_bytes,
@@ -3241,6 +3358,7 @@ async fn transfer_dir_reconcile_handler(
                 files,
                 skipped_files: skipped_files_count,
                 skipped_bytes: skipped_bytes_count,
+                files_processing: 0,
             },
         );
         let stop_ticker = spawn_progress_ticker(
@@ -3249,6 +3367,7 @@ async fn transfer_dir_reconcile_handler(
             job_id,
             ctx,
             Arc::clone(&progress),
+            Arc::clone(&progress_files),
         );
         // Same panic-survive contract as the other transfer endpoints.
         // (fail_guard was installed at the top of this closure.)
@@ -3269,6 +3388,7 @@ async fn transfer_dir_reconcile_handler(
         let mut cfg = make_transfer_config(&addr);
         cfg.excludes = req.excludes;
         cfg.progress_bytes = Some(Arc::clone(&progress));
+        cfg.progress_files = Some(Arc::clone(&progress_files));
         apply_per_request_bandwidth(&mut cfg, req.bandwidth_cap_mbps);
         // 1 fresh attempt + DEFAULT_RESUME_RETRIES resumes. Covers several
         // payload hiccups mid-transfer (incl. the serial accept loop briefly
@@ -3582,6 +3702,7 @@ async fn main() {
         .route("/api/ps5/app/unregister", post(ps5_app_unregister))
         .route("/api/ps5/hw/info", get(ps5_hw_info))
         .route("/api/ps5/hw/temps", get(ps5_hw_temps))
+        .route("/api/ps5/syslog/tail", get(ps5_syslog_tail))
         .route("/api/ps5/time/get", get(ps5_time_get_route))
         .route("/api/ps5/time/sync", post(ps5_time_sync_route))
         .route("/api/ps5/time/state/get", get(ps5_time_state_get_route))

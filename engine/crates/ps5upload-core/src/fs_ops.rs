@@ -632,18 +632,34 @@ pub fn fs_move_with_timeout(
 /// JSON parsing doesn't alter the intended octal value). If `recursive`
 /// is true and path is a directory, walks + chmod's every entry.
 pub fn fs_chmod(addr: &str, path: &str, mode: &str, recursive: bool) -> Result<()> {
+    fs_chmod_with_timeout(addr, path, mode, recursive, None)
+}
+
+/// Like [`fs_chmod`] but with a caller-supplied per-socket I/O timeout. The
+/// default 30 s deadline easily expires on `recursive=true` chmods of a
+/// 22 k-file game folder (measured ~32 s for `chmod -R 0777` on PPSA17221).
+/// Callers driving recursive chmod on big trees should pass at least a few
+/// minutes; a `None` keeps the legacy 30 s default.
+pub fn fs_chmod_with_timeout(
+    addr: &str,
+    path: &str,
+    mode: &str,
+    recursive: bool,
+    io_timeout: Option<std::time::Duration>,
+) -> Result<()> {
     let body = serde_json::to_vec(&serde_json::json!({
         "path": path,
         "mode": mode,
         "recursive": if recursive { 1 } else { 0 },
     }))
     .context("serialize fs_chmod")?;
-    send_empty_ack_op(
+    send_empty_ack_op_with_timeout(
         addr,
         FrameType::FsChmod,
         &body,
         FrameType::FsChmodAck,
         "FS_CHMOD",
+        io_timeout,
     )
 }
 

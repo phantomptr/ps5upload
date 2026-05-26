@@ -111,7 +111,14 @@ pub fn router(state: PkgInstallStateHandle) -> Router {
         .route("/api/pkg/install/start", post(install_start_handler))
         .route("/api/pkg/install/status", get(install_status_handler))
         .route("/api/pkg/install/cancel", post(install_cancel_handler))
-        .route("/pkg-host/{session}/file.pkg", get(serve_handler))
+        // Filename component is informational only — the session UUID
+        // is the actual lookup key. We allow ANY {filename} so the URL
+        // can carry the pkg's canonical `<ContentID>.pkg` name that
+        // Sony's installer cross-checks against the pkg header. Without
+        // this Sony rejects with 0x80B21106 on user-renamed pkgs (file
+        // header says "FOO" but URL ends in "bar.pkg" — installer treats
+        // them as inconsistent).
+        .route("/pkg-host/{session}/{filename}", get(serve_handler))
         .with_state(state)
 }
 
@@ -251,6 +258,13 @@ pub struct InstallStartResponse {
     /// reached Sony, who returned X". See `PkgInstallResponse`.
     pub shellui_err: Option<u32>,
     pub appinst_err: Option<u32>,
+    /// Which install tier accepted this task — derived from the task_id
+    /// bits set by the payload's bgft.c. Surfaced to the desktop's
+    /// "Why?" diagnostic disclosure so the user (and us, during
+    /// bug reports) sees whether the in-process appinst path took it,
+    /// the SceShellUI RPC fallback did, or the legacy direct-BGFT
+    /// path. See `ps5upload_core::pkg_install::via_tier`.
+    pub via: String,
 }
 
 async fn install_start_handler(
@@ -287,7 +301,12 @@ async fn install_start_handler(
             // safe: bind a UDP socket "connected" to the PS5's mgmt
             // addr and read the local addr — that's the IP the OS
             // picked for outbound.
-            let ps5_host_only = req.ps5_addr.split(':').next().unwrap_or("").to_string();
+            //
+            // strip_host_port handles both `1.2.3.4:9114` and
+            // `[2001:db8::1]:9114` correctly; the naïve `split(':').next()`
+            // we used before truncated IPv6 to `[` because IPv6 addresses
+            // themselves contain colons.
+            let ps5_host_only = strip_host_port(&req.ps5_addr);
             let local_ip = match lan_ip_for_ps5(&ps5_host_only) {
                 Ok(ip) => ip,
                 Err(e) => {
@@ -301,7 +320,16 @@ async fn install_start_handler(
                 .ok()
                 .and_then(|s| s.parse::<u16>().ok())
                 .unwrap_or(19113);
-            format!("http://{local_ip}:{host_port}/pkg-host/{session_id}/file.pkg")
+            // Filename canonicalisation: when the pkg header carries a
+            // valid content_id we emit `<ContentID>.pkg` instead of a
+            // generic `file.pkg`. Sony's installer cross-checks the
+            // URL's filename component against the pkg header at
+            // register time; mismatched names get 0x80B21106 on some
+            // FW points, especially for user-renamed pkgs (e.g.
+            // "Cool Game.pkg" → header says IV0000-PPSAxxxxx_00-...).
+            // pkg_url_filename also sanitises against URL-meta chars.
+            let url_filename = pkg_url_filename(&head_meta.content_id);
+            format!("http://{local_ip}:{host_port}/pkg-host/{session_id}/{url_filename}")
         }
     };
 
@@ -360,7 +388,20 @@ async fn install_start_handler(
         let mut sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
         let now = now_unix();
         let aggressive_cutoff = now.saturating_sub(pkg_session_max_age_sec() / 2);
-        sessions.retain(|_, s| s.created_at_unix > aggressive_cutoff || s.staging_path.is_some());
+        // Aggressive prune: drop sessions that are clearly "done with
+        // host-side work AND old enough." `staging_path == None`
+        // *alone* doesn't qualify any more — HTTP-mode (streaming)
+        // installs always have staging_path == None for their entire
+        // lifetime, so the v2.16.0 gate `staging_path.is_some()` was
+        // evicting in-flight multi-GB downloads at the half-max-age
+        // mark.
+        //
+        // The correct "definitely done" signal is `terminal_status.is_
+        // some()` — set by the status handler the moment BGFT reaches
+        // Done or Error. Sessions in either of those states have no
+        // further polls to serve and can safely be reaped early.
+        sessions
+            .retain(|_, s| s.created_at_unix > aggressive_cutoff || s.terminal_status.is_none());
         sessions.insert(session_id.clone(), session.clone());
     }
 
@@ -510,6 +551,7 @@ async fn install_start_handler(
         kernel_rw: resp.kernel_rw,
         shellui_err: resp.shellui_err,
         appinst_err: resp.appinst_err,
+        via: ps5upload_core::pkg_install::via_tier(resp.task_id).to_string(),
     })
 }
 
@@ -543,6 +585,11 @@ pub struct StatusResponse {
     /// response, refreshed every status poll. See `InstallStartResponse`.
     pub shellui_err: Option<u32>,
     pub appinst_err: Option<u32>,
+    /// Same tier identifier surfaced from install/start — re-derived
+    /// here so the status poll's response is self-contained (the UI
+    /// can read it without correlating against the start ack). See
+    /// `ps5upload_core::pkg_install::via_tier`.
+    pub via: String,
 }
 
 /// Default maximum age (seconds) of an install session before the
@@ -618,7 +665,15 @@ async fn install_status_handler(
     // fresh PKG_INSTALL_STATUS would fail and turn a succeeded install into
     // a spurious 502 on the client's next poll.
     if let Some(status) = terminal {
-        return json_ok(&build_status_response(q.session, status, total, cancelled));
+        // For terminal responses we may not have a task_id (cancelled
+        // before BGFT register, or a Tier-3 reject). Pass 0 — via_tier()
+        // returns "direct-bgft" for 0, which is the most accurate
+        // fallback (no synthetic flags = whatever Sony BGFT returned
+        // raw, including "never got one").
+        let tid = task_id.unwrap_or(0);
+        return json_ok(&build_status_response(
+            q.session, status, total, cancelled, tid,
+        ));
     }
     let task_id = match task_id {
         Some(t) => t,
@@ -690,7 +745,9 @@ async fn install_status_handler(
         }
     }
 
-    json_ok(&build_status_response(q.session, status, total, cancelled))
+    json_ok(&build_status_response(
+        q.session, status, total, cancelled, task_id,
+    ))
 }
 
 /// Build the wire `StatusResponse` from a payload `PkgInstallStatus`.
@@ -702,6 +759,7 @@ fn build_status_response(
     status: PkgInstallStatus,
     fallback_total: u64,
     cancelled: bool,
+    task_id: i32,
 ) -> StatusResponse {
     let total = if status.total > 0 {
         status.total
@@ -722,6 +780,7 @@ fn build_status_response(
         kernel_rw: status.kernel_rw,
         shellui_err: status.shellui_err,
         appinst_err: status.appinst_err,
+        via: ps5upload_core::pkg_install::via_tier(task_id).to_string(),
     }
 }
 
@@ -801,11 +860,18 @@ async fn install_cancel_handler(
     })
 }
 
-// ─── /pkg-host/:session/file.pkg ─────────────────────────────────────
+// ─── /pkg-host/:session/:filename ────────────────────────────────────
 
 async fn serve_handler(
     State(state): State<PkgInstallStateHandle>,
-    AxumPath(session): AxumPath<String>,
+    // Two path params for the `{session}/{filename}` pattern. The
+    // `filename` is informational only — content_id canonicalisation
+    // for Sony's installer header cross-check — and never participates
+    // in authentication (session UUID is the only auth signal). It
+    // MUST be extracted here even though we discard it, or axum returns
+    // 500 ErrorMissingPathParams on every fetch and BGFT sees
+    // 0x80B22404 PlayGo HTTP 404 (caught in Round-1 v2.16.1 audit).
+    AxumPath((session, _filename)): AxumPath<(String, String)>,
     axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
 ) -> Response<Body> {
@@ -860,12 +926,12 @@ async fn serve_handler(
     // install_start time; we compare the bare IP. Loopback callers are
     // allowed because dev workflows (curl against localhost, MITM
     // proxies running on the same box) need to work for debugging.
-    let expected_ip = session
-        .ps5_mgmt_addr
-        .split(':')
-        .next()
-        .unwrap_or("")
-        .to_string();
+    // Strip the port + IPv6 brackets so the bare-IP compare against
+    // `peer.ip().to_string()` works for both IPv4 and IPv6. See
+    // strip_host_port for details — extracted so the URL-builder above
+    // and this gate stay in sync (Round 1 fixed only this site; Round 2
+    // caught the URL-builder mirror bug at the same site of truth).
+    let expected_ip = strip_host_port(&session.ps5_mgmt_addr);
     let peer_ip = peer.ip().to_string();
     if !peer.ip().is_loopback() && !expected_ip.is_empty() && peer_ip != expected_ip {
         crate::log_warn!(
@@ -1074,6 +1140,94 @@ fn plain_response(status: StatusCode, msg: &str) -> Response<Body> {
         .unwrap()
 }
 
+/// Strip port + IPv6 brackets from a `host:port` (or `[ipv6]:port`)
+/// string, returning just the bare host or IP. Centralised so the URL
+/// builder (where we feed the IP to `lan_ip_for_ps5`) and the source-IP
+/// gate (where we compare against `peer.ip().to_string()`) stay in
+/// lock-step — the v2.16.1 Round 1 audit caught one site and Round 2
+/// caught the other, with the same root cause: `split(':').next()`
+/// truncates IPv6 to `[` because IPv6 addresses contain colons.
+///
+/// rsplit_once on the LAST `:` correctly cuts off the port for both
+/// `1.2.3.4:9114` → `1.2.3.4` and `[2001:db8::1]:9114` → `[2001:db8::1]`.
+/// We then strip surrounding brackets to normalise to the bare form
+/// `peer.ip().to_string()` emits.
+///
+/// Edge cases:
+///   - input with no port (`1.2.3.4`, `::1`) → returned as-is (without
+///     brackets if present)
+///   - empty input → empty string (caller is expected to handle)
+fn strip_host_port(host_port: &str) -> String {
+    // Bracketed IPv6 with port: `[2001:db8::1]:9114` →
+    // rsplit_once on `]:` gives `[2001:db8::1` (with leading bracket).
+    if let Some((host, port)) = host_port.rsplit_once("]:") {
+        // host has leading `[` from the original; port is just digits.
+        if port.parse::<u16>().is_ok() {
+            return host.trim_start_matches('[').to_string();
+        }
+        // Empty port like `[::1]:` or non-numeric like `[::1]:foo` —
+        // strip the host's leading `[` plus the trailing `]:port`
+        // fragment, leaving the bare IPv6. Without this branch the
+        // string falls through to the multi-colon catch-all and
+        // returns unchanged, breaking the source-IP gate.
+        return host.trim_start_matches('[').to_string();
+    }
+    // Bracketed IPv6 without port: `[2001:db8::1]` → strip brackets.
+    if host_port.starts_with('[') && host_port.ends_with(']') {
+        return host_port
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .to_string();
+    }
+    // Bare IPv6 (no brackets, no port): contains multiple colons —
+    // can't reliably distinguish host from port. Assume no port and
+    // return the whole string. Callers feeding bare IPv6 with a
+    // port suffix MUST bracket the address — that's the only
+    // unambiguous form.
+    if host_port.matches(':').count() > 1 {
+        return host_port.to_string();
+    }
+    // Single colon: IPv4-with-port or hostname-with-port — split.
+    match host_port.rsplit_once(':') {
+        Some((host, port)) if port.parse::<u16>().is_ok() => host.to_string(),
+        _ => host_port.to_string(),
+    }
+}
+
+/// Derive the URL filename component for a hosted pkg, preferring the
+/// pkg's canonical content_id (Sony cross-checks the URL filename
+/// against the pkg header on register). Falls back to "file.pkg" when
+/// the header didn't carry a content_id (corrupt pkg, parse failure,
+/// or a non-Sony header). Sanitises against URL-meta chars even on
+/// the happy path — content_id is supposed to be `[A-Z0-9-_]+` per
+/// Sony's spec, but a malformed pkg could carry slashes / spaces that
+/// would re-route the request or break axum's path matcher.
+fn pkg_url_filename(content_id: &str) -> String {
+    let trimmed = content_id.trim();
+    if trimmed.is_empty() {
+        return "file.pkg".to_string();
+    }
+    // Keep only ASCII printable, no path/URL-meta. Anything else is
+    // replaced with '_' so a hostile or corrupt pkg can't escape the
+    // URL pattern. Length-cap at 64 chars (content_id spec is 36;
+    // 64 is a generous safety ceiling).
+    let safe: String = trimmed
+        .chars()
+        .take(64)
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if safe.is_empty() {
+        return "file.pkg".to_string();
+    }
+    format!("{safe}.pkg")
+}
+
 fn now_unix() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1084,6 +1238,78 @@ fn now_unix() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strip_host_port_handles_ipv4_and_ipv6() {
+        // IPv4 with port — the common case.
+        assert_eq!(strip_host_port("192.168.1.42:9114"), "192.168.1.42");
+        // IPv6 bracketed with port — the SocketAddr-emitted form.
+        assert_eq!(strip_host_port("[2001:db8::1]:9114"), "2001:db8::1");
+        assert_eq!(strip_host_port("[::1]:9114"), "::1");
+        // No port — should pass through unchanged.
+        assert_eq!(strip_host_port("192.168.1.42"), "192.168.1.42");
+        // Bare bracketless IPv6 without port — the disambiguation
+        // case. Naïve rsplit_once would split "::1" into "::" / "1"
+        // (wrong); the port-must-parse-as-u16 check rejects that.
+        assert_eq!(strip_host_port("::1"), "::1");
+        assert_eq!(strip_host_port("2001:db8::1"), "2001:db8::1");
+        // Hostname with port.
+        assert_eq!(strip_host_port("my-ps5.local:9114"), "my-ps5.local");
+        // Empty input.
+        assert_eq!(strip_host_port(""), "");
+        // Edge: bracketed IPv6 with empty/invalid port — Round 4 found
+        // these fell through unhandled. Should still strip the host.
+        assert_eq!(strip_host_port("[::1]:"), "::1");
+        assert_eq!(strip_host_port("[2001:db8::1]:foo"), "2001:db8::1");
+    }
+
+    #[test]
+    fn pkg_url_filename_uses_content_id() {
+        assert_eq!(
+            pkg_url_filename("IV0002-NPXS39041_00-STOREUPD00000000"),
+            "IV0002-NPXS39041_00-STOREUPD00000000.pkg"
+        );
+        assert_eq!(
+            pkg_url_filename("UP9000-CUSA12345_00-GAMECONTENT12345"),
+            "UP9000-CUSA12345_00-GAMECONTENT12345.pkg"
+        );
+    }
+
+    #[test]
+    fn pkg_url_filename_fallback_when_empty() {
+        assert_eq!(pkg_url_filename(""), "file.pkg");
+        assert_eq!(pkg_url_filename("   "), "file.pkg");
+    }
+
+    #[test]
+    fn pkg_url_filename_sanitises_meta_chars() {
+        // Path-traversal / URL-escape attempts in a corrupt or hostile
+        // header. Must not produce slashes, dots (other than the .pkg
+        // suffix we add), or query/fragment chars.
+        assert_eq!(pkg_url_filename("../etc/passwd"), "___etc_passwd.pkg");
+        assert_eq!(pkg_url_filename("foo bar?baz=1"), "foo_bar_baz_1.pkg");
+        assert_eq!(pkg_url_filename("a.b.c"), "a_b_c.pkg");
+    }
+
+    #[test]
+    fn pkg_url_filename_caps_length() {
+        // 200-char content_id (impossible per Sony spec but defensive)
+        // is truncated to 64 before the .pkg suffix.
+        let long = "A".repeat(200);
+        let out = pkg_url_filename(&long);
+        assert_eq!(out.len(), 64 + 4); // 64 chars + ".pkg"
+        assert!(out.ends_with(".pkg"));
+    }
+
+    #[test]
+    fn pkg_url_filename_handles_all_invalid_chars() {
+        // String that sanitises to all-underscores still produces a
+        // valid filename (not an empty one that would re-route the
+        // request).
+        let out = pkg_url_filename("...");
+        assert!(out.ends_with(".pkg"));
+        assert!(!out.starts_with('.'));
+    }
 
     fn dummy_session(parts: Vec<(PathBuf, u64)>) -> InstallSession {
         let total: u64 = parts.iter().map(|(_, s)| s).sum();

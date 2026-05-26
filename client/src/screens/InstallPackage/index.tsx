@@ -26,6 +26,8 @@ import {
 
 import { PageHeader, Button, WarningCard } from "../../components";
 import { humanizePs5Error } from "../../lib/humanizeError";
+import { isNpxsContentId } from "../../lib/npxs";
+import { useConfirm } from "../../components/ConfirmDialog";
 import {
   useConnectionStore,
   PS5_PAYLOAD_PORT,
@@ -102,6 +104,7 @@ export default function InstallPackageScreen() {
   const host = useConnectionStore((s) => s.host);
   const items = useInstallQueue((s) => s.items);
   const isRunning = useInstallQueue((s) => s.isRunning);
+  const preflightStatus = useInstallQueue((s) => s.preflightStatus);
   const hydrate = useInstallQueue((s) => s.hydrate);
   const start = useInstallQueue((s) => s.start);
   const stop = useInstallQueue((s) => s.stop);
@@ -111,6 +114,66 @@ export default function InstallPackageScreen() {
   const retryWith = useInstallQueue((s) => s.retryWith);
   const clearFinished = useInstallQueue((s) => s.clearFinished);
   const add = useInstallQueue((s) => s.add);
+  const { confirm: confirmDialog, dialog: confirmDialogNode } = useConfirm();
+
+  // Cancel-with-confirm wrapper. Two distinct scenarios:
+  //
+  //  1. Mid-flight Stream / Staged install with bytes flowing — the
+  //     PS5 may discard partial downloaded bytes and the engine drops
+  //     the streaming session. Confirm to defend against misclick.
+  //
+  //  2. shellui-rpc dispatch — the install has been HANDED OFF to
+  //     SceShellUI's process and will run to completion there. We
+  //     can't actually cancel it from outside; clicking Cancel just
+  //     hides the row locally while the PS5 keeps installing.
+  //     Different message so the user knows the install isn't
+  //     actually stopping (and where to cancel it if they want to).
+  //
+  // Skip the dialog for queued / failed items — cancelling those
+  // costs nothing.
+  const cancelWithConfirm = async (id: string) => {
+    const item = useInstallQueue.getState().items.find((x) => x.id === id);
+    if (!item) return;
+    const isShelluiDispatched =
+      item.diag?.registerPath === "shellui-rpc" &&
+      (item.status === "running" || item.status === "done");
+    if (isShelluiDispatched) {
+      const ok = await confirmDialog({
+        title: t(
+          "install.cancel_shellui_title",
+          "Already dispatched to PS5",
+        ),
+        message: t(
+          "install.cancel_shellui_body",
+          { name: item.displayName ?? "this pkg" },
+          `${item.displayName ?? "This pkg"} has already been handed off to the PS5's installer and will continue running there even if you cancel here. To actually stop it, open the PS5's Notifications → Downloads panel. Hide this row anyway?`,
+        ),
+        destructive: false,
+        confirmLabel: t("install.cancel_shellui_yes", "Hide row"),
+        cancelLabel: t("install.cancel_shellui_no", "Keep row"),
+      });
+      if (!ok) return;
+      await cancel(id);
+      return;
+    }
+    const isMidInstall =
+      item.status === "running" && (item.bytesDownloaded ?? 0) > 0;
+    if (isMidInstall) {
+      const ok = await confirmDialog({
+        title: t("install.cancel_confirm_title", "Cancel install?"),
+        message: t(
+          "install.cancel_confirm_body",
+          { name: item.displayName ?? "this pkg" },
+          `Cancel ${item.displayName ?? "this pkg"}? The PS5 may discard what's been downloaded so far and you'll need to restart from zero.`,
+        ),
+        destructive: true,
+        confirmLabel: t("install.cancel_confirm_yes", "Cancel install"),
+        cancelLabel: t("install.cancel_confirm_no", "Keep installing"),
+      });
+      if (!ok) return;
+    }
+    await cancel(id);
+  };
 
   const [pickError, setPickError] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
@@ -139,9 +202,11 @@ export default function InstallPackageScreen() {
   const [dropActive, setDropActive] = useState(false);
 
   // Subscribe to webview drag-drop. Tauri delivers paths already
-  // resolved to the host filesystem; we filter to .pkg / .ffpkg /
-  // .ffpfs and route each through addPkgPath. Non-pkg files surface
-  // a clear error rather than silently being ignored.
+  // resolved to the host filesystem; we filter to .pkg ONLY (the
+  // BGFT installer doesn't accept .ffpkg / .ffpfs — those are
+  // mountable images, not installable packages, and queuing one
+  // here would always fail at the pkg-parse step). Non-pkg files
+  // surface a clear error rather than silently being ignored.
   //
   // Cleanup mirrors Upload's pattern: a `cancelled` flag handles
   // the "promise resolves after unmount" race so the listener
@@ -162,12 +227,12 @@ export default function InstallPackageScreen() {
       } else if (e.payload.type === "drop") {
         setDropActive(false);
         const paths = e.payload.paths ?? [];
-        const pkgPaths = paths.filter((p) => /\.(pkg|ffpkg|ffpfs)$/i.test(p));
+        const pkgPaths = paths.filter((p) => /\.pkg$/i.test(p));
         if (paths.length > 0 && pkgPaths.length === 0) {
           setPickError(
             t(
               "install.error.notPkg",
-              "Dropped files aren't .pkg / .ffpkg / .ffpfs. Only PS5 package formats are supported here.",
+              "Only .pkg files are installable here. .ffpkg / .ffpfs are mountable images — open them from the File System tab instead.",
             ),
           );
           return;
@@ -296,19 +361,20 @@ export default function InstallPackageScreen() {
         )}
       />
 
-      {/* Page-level note about system pkgs. Replaces the per-row
-        * NPXS warning (2.2.58) — same information, surfaced once
-        * for the whole page instead of repeating on every NPXS row. */}
+      {/* Page-level note about system pkgs. Updated v2.16.1 after
+        * hardware testing showed that NPXS pkgs CAN install via the
+        * Staged + ShellUI-RPC path (with the screen flash), contrary
+        * to the previous "typically can't complete here" wording. */}
       <div className="mb-4 flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 text-[12px] text-[var(--color-muted)]">
         <Info size={13} className="mt-0.5 shrink-0" />
         <div>
           <span className="font-medium text-[var(--color-text)]">
-            {t("install.note.gamePkgsOnly.title", "Game pkgs only")}
+            {t("install.note.gamePkgsOnly.title", "Game pkgs work best")}
           </span>
           {" — "}
           {t(
             "install.note.gamePkgsOnly.body",
-            "this installer is built around Sony's game-pkg API. System pkgs (NPXS-prefix — Store updates, Settings patches, built-in apps) will register but typically can't complete here; for those use Settings → Debug Settings → Game → Package Installer on the PS5 itself.",
+            "this installer is built around Sony's game-pkg API. System pkgs (NPXS-prefix — Store updates, Settings, built-in apps) often need Staged mode + a brief screen flash to complete; if they still fail, install them via the PS5's own Settings → Debug Settings → Game → Package Installer.",
           )}
         </div>
       </div>
@@ -317,14 +383,31 @@ export default function InstallPackageScreen() {
         <WarningCard
           title={t(
             "install.blackScreen.title",
-            "Your PS5 screen may go black during install — that's normal.",
+            "Your PS5 screen may briefly go black during install — that's normal.",
           )}
           detail={t(
             "install.blackScreen.body",
-            "The console stays on and the install keeps running. The picture comes back when it finishes.",
+            "The flash only happens on Staged installs where we route through ShellUI's process; Sony's watchdog notices and respawns ShellUI, which looks like a screen flash. The console stays on and the install keeps running. The picture comes back when it finishes.",
           )}
         />
       </div>
+
+      {/* Preflight banner — surfaces ensurePayloadCurrent progress so
+        * the user doesn't watch a silent ~30s wait after Start.
+        * Cleared by the queue worker once the first install actually
+        * begins. */}
+      {preflightStatus && (
+        <div className="mb-4 flex items-start gap-2 rounded-md border border-blue-500/30 bg-blue-500/5 p-3 text-[12px]">
+          <Loader2 size={13} className="mt-0.5 shrink-0 animate-spin text-blue-500" />
+          {/* Strip the zero-width-space runId tag the queue worker
+            * appends for ownership tracking — see preflightStatus
+            * note in installQueue.ts. The tag is everything from the
+            * ZWSP (​) onwards. */}
+          <div className="text-[var(--color-text)]">
+            {preflightStatus.split("​")[0]}
+          </div>
+        </div>
+      )}
 
       {pickError && (
         <div className="mb-4">
@@ -476,7 +559,7 @@ export default function InstallPackageScreen() {
                 item={it}
                 t={t}
                 onRemove={() => remove(it.id)}
-                onCancel={() => cancel(it.id)}
+                onCancel={() => void cancelWithConfirm(it.id)}
                 onRetry={() => retry(it.id)}
                 onRetryAsStaged={() => retryWith(it.id, "stage")}
               />
@@ -484,6 +567,7 @@ export default function InstallPackageScreen() {
           </ul>
         )}
       </section>
+      {confirmDialogNode}
     </div>
   );
 }
@@ -728,6 +812,27 @@ function InstallRow({
                 ? t("install.tag.stream", "stream")
                 : t("install.tag.staged", "staged")}
             </Tag>
+            {/* NPXS-prefix detection — proactively flag system pkgs at
+                queue time so the user isn't surprised by the post-fail
+                explainer. The page-level info card covers the "why"
+                already; this per-row amber badge is the "this specific
+                row applies to that warning" affordance — most
+                noticeable when the queue mixes game + system pkgs. */}
+            {isNpxsContentId(item.contentId) && (
+              <span
+                title={t(
+                  "install.tag.system_pkg_tooltip",
+                  "System pkg (NPXS-prefix). Will likely register but may not complete here — use the PS5's Debug Settings → Game → Package Installer instead.",
+                )}
+                aria-label={t(
+                  "install.tag.system_pkg_aria",
+                  "System pkg — likely will not complete via this installer",
+                )}
+                className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-500"
+              >
+                {t("install.tag.system_pkg", "system pkg")}
+              </span>
+            )}
           </div>
 
           {/* content_id */}
@@ -894,7 +999,7 @@ function InstallRow({
        * register variant is unavailable). */}
       {item.status === "done" &&
         (item.diag.registerPath === "shellui-rpc" ||
-          /^[A-Z]{2}\d{4}-NPXS\d+/i.test(item.contentId)) && (
+          isNpxsContentId(item.contentId)) && (
           <div className="mt-2 flex items-start gap-2 rounded-md border border-emerald-500/40 bg-emerald-500/5 p-2 text-[11px] text-emerald-700 dark:text-emerald-400">
             <CheckCircle2 size={12} className="mt-0.5 shrink-0" />
             <div>
@@ -992,6 +1097,22 @@ function InstallRow({
                   {t(
                     "install_register_path_tier1",
                     "(Tier-1 — install routed through ShellUI's process)",
+                  )}
+                </span>
+              )}
+              {item.diag.registerPath === "tier0-worker" && (
+                <span className="ml-2 text-[var(--color-good)]">
+                  {t(
+                    "install_register_path_tier0",
+                    "(Tier-0 worker — opt-in, PS5UPLOAD_TIER0_WORKER=1)",
+                  )}
+                </span>
+              )}
+              {item.diag.registerPath === "appinst" && (
+                <span className="ml-2 text-[var(--color-good)]">
+                  {t(
+                    "install_register_path_appinst",
+                    "(in-process AppInstUtil — no ShellUI flash)",
                   )}
                 </span>
               )}

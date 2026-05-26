@@ -280,6 +280,12 @@ extern int posix_fallocate(int fd, off_t offset, off_t len);
 #define FTX2_FRAME_SMP_META_CONTROL_ACK     141u
 #define FTX2_FRAME_SMP_META_STATS           142u
 #define FTX2_FRAME_SMP_META_STATS_ACK       143u
+/* Recent PS5 kernel log (dmesg equivalent). Body: empty. Ack body:
+ * raw text from sysctl kern.msgbuf — the kernel circular buffer of
+ * recent printf/printk output. Helps diagnose "payload didn't load /
+ * something silently failed" cases from the desktop. */
+#define FTX2_FRAME_SYSLOG_TAIL              144u
+#define FTX2_FRAME_SYSLOG_TAIL_ACK          145u
 /* Where we place mount points. Scoped under /mnt/ps5upload/ so it
  * never collides with mount paths owned by other utilities. */
 #define FS_MOUNT_BASE "/mnt/ps5upload"
@@ -2167,7 +2173,8 @@ static void *pack_worker_thread(void *arg) {
              * absorbing it here keeps the small-file-heavy regime alive. */
             for (attempt = 0; attempt <= (int)PS5UPLOAD2_PACK_RETRY_MAX; attempt++) {
                 t0 = now_us();
-                fd = open(item.path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+                fd = open(item.path, O_WRONLY | O_CREAT | O_TRUNC, 0777);
+                if (fd >= 0) (void)fchmod(fd, 0777);
                 t_op += now_us() - t0;
                 if (fd >= 0) break;
                 if (!pack_errno_is_transient(errno) ||
@@ -2233,7 +2240,8 @@ static void *pack_worker_thread(void *arg) {
                          * re-pre-allocate. If reopen itself fails, give up. */
                         (void)close(fd);
                         t0 = now_us();
-                        fd = open(item.path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+                        fd = open(item.path, O_WRONLY | O_CREAT | O_TRUNC, 0777);
+                        if (fd >= 0) (void)fchmod(fd, 0777);
                         t_op += now_us() - t0;
                         if (fd < 0) {
                             fprintf(stderr,
@@ -2509,7 +2517,8 @@ static int runtime_write_shard_to_path(runtime_tx_entry_t *entry,
      * position into the (already preallocated) file. NEVER O_APPEND for the
      * multi-file path — see the function header. */
     flags = O_WRONLY | O_CREAT | (truncate ? O_TRUNC : 0);
-    fd = open(path, flags, 0666);
+    fd = open(path, flags, 0777);
+    if (fd >= 0) (void)fchmod(fd, 0777);
     if (fd < 0) {
         if (entry) entry->last_io_errno = errno;
         free(bufs[0]);
@@ -2824,7 +2833,8 @@ static int runtime_write_shard_persistent(runtime_tx_entry_t *entry,
             flags |= O_TRUNC;
         }
         uint64_t t_open_start = now_us();
-        int fd = open(entry->tmp_path, flags, 0666);
+        int fd = open(entry->tmp_path, flags, 0777);
+        if (fd >= 0) (void)fchmod(fd, 0777);
         if (fd < 0) {
             /* (2.9.0) Drain-then-FAIL — see runtime_write_shard_to_path
              * for the silent-corruption-bug context. Was returning
@@ -4050,7 +4060,8 @@ static int handle_packed_shard(runtime_state_t *state, int client_fd,
             snprintf(tmp_path, sizeof(tmp_path), "%s.ps5up2-tmp", path);
             (void)unlink(tmp_path);
 
-            fd = open(tmp_path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+            fd = open(tmp_path, O_WRONLY | O_CREAT | O_TRUNC, 0777);
+            if (fd >= 0) (void)fchmod(fd, 0777);
             if (fd < 0) {
                 (void)drain_shard_data(client_fd, (uint64_t)rec_data_len + remaining - (uint64_t)rec_data_len);
                 remaining = 0;
@@ -6015,8 +6026,18 @@ static int cp_rf_op(const char *src, const char *dst, int depth, int op_idx) {
     if (S_ISREG(st.st_mode)) {
         int sfd = open(src, O_RDONLY);
         if (sfd < 0) return -1;
-        int dfd = open(dst, O_WRONLY | O_CREAT | O_EXCL, st.st_mode & 0777);
+        /* Open with 0777 (not source mode) so the destination is launch-
+         * ready regardless of what the source file's mode bits looked
+         * like. Sony's loader rejects game files lacking world-exec with
+         * CE-107750-0 ("can't start game or app"). Copying a folder that
+         * was previously uploaded with a pre-2.16.1 payload would inherit
+         * the 0644 source modes and reproduce that loader failure on the
+         * fresh copy — exactly the bug umask(0) + per-file fchmod(0777)
+         * was added to fix for the upload path. fchmod after open keeps
+         * the bits even if the dst FS's umask handling differs. */
+        int dfd = open(dst, O_WRONLY | O_CREAT | O_EXCL, 0777);
         if (dfd < 0) { close(sfd); return -1; }
+        (void)fchmod(dfd, 0777);
         /* Tell the kernel: we'll read this file front-to-back, prefetch
          * aggressively. FreeBSD's readahead defaults to 64 KiB which is
          * what was throttling us. With the SEQUENTIAL hint the kernel
@@ -6085,8 +6106,14 @@ static int cp_rf_op(const char *src, const char *dst, int depth, int op_idx) {
 
     /* Directory: mkdir then descend. EEXIST on dst would indicate the
      * pre-check missed something — treat as error so the caller sees
-     * partial-state. */
-    if (mkdir(dst, st.st_mode & 0777) != 0) return -1;
+     * partial-state.
+     *
+     * mkdir with 0777 (not source mode) for the same reason as the
+     * regular-file open above: Sony's loader needs world-executable
+     * directories for game-folder navigation. chmod after mkdir
+     * enforces the mode even if the dst FS's umask handling differs. */
+    if (mkdir(dst, 0777) != 0) return -1;
+    (void)chmod(dst, 0777);
     d = opendir(src);
     if (!d) return -1;
     while ((e = readdir(d)) != NULL) {
@@ -13370,6 +13397,94 @@ static int handle_proc_list(runtime_state_t *state, int client_fd,
     return rc;
 }
 
+/* SYSLOG_TAIL: return the PS5 kernel-log circular buffer (dmesg
+ * equivalent). Read via `sysctl kern.msgbuf` — the kernel's in-memory
+ * printk/printf history. Used by the desktop's "PS5 system log" panel to
+ * surface "why did the payload not load / why is X silently failing"
+ * without making the user FTP / ssh in. 64 KiB cap is well above the
+ * default PS5 msgbuf size; if the kernel was rebuilt with a smaller
+ * buffer the sysctl just returns less and we ack the actual length.
+ */
+static int handle_syslog_tail(runtime_state_t *state, int client_fd,
+                              uint64_t trace_id) {
+    /* Hard cap so a freshly-rebuilt kernel with an absurd msgbuf size
+     * (or a sysctl that reports something pathological) can't OOM us. */
+    const size_t HARD_CAP = 1024u * 1024u;
+    char *buf = NULL;
+    size_t needed = 0;
+    int rc;
+    if (!state) return -1;
+    /* PS5's kernel msgbuf can be 64-256 KiB depending on firmware build,
+     * easily larger than the per-syslog-call hardcoded 64 KiB we used
+     * to allocate (which fails with ENOMEM=12). Two-pass: first call
+     * with NULL buffer to learn the real size, then malloc + read. */
+    if (sysctlbyname("kern.msgbuf", NULL, &needed, NULL, 0) != 0) {
+        int saved = errno;
+        char reason[64];
+        int rn = snprintf(reason, sizeof(reason),
+                          "syslog_tail_sysctl_size_errno_%d", saved);
+        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
+                          reason, rn > 0 ? (uint64_t)rn : 0);
+    }
+    if (needed == 0) {
+        /* Empty msgbuf is a successful read of zero bytes. */
+        return send_frame(client_fd, FTX2_FRAME_SYSLOG_TAIL_ACK, 0,
+                          trace_id, "", 0);
+    }
+    /* Cap the *allocation*, but pass the original `needed` to sysctl so
+     * the kernel knows we'd accept up to the real size. FreeBSD's sysctl
+     * truncates the copy to whatever buf size we declare via the in/out
+     * `sz` arg — but it also returns ENOMEM when the destination is
+     * smaller than the data unless we tell it "yes, please truncate."
+     * Solution: allocate min(needed, HARD_CAP), tell sysctl `sz =
+     * allocated`, and accept truncation. Also retry once on a transient
+     * ENOMEM (msgbuf grew between the size-probe and the read — the
+     * kernel printk ring is live), bumping our buffer up to HARD_CAP
+     * before giving up. */
+    size_t alloc = needed > HARD_CAP ? HARD_CAP : needed;
+    buf = (char *)malloc(alloc);
+    if (!buf) {
+        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
+                          "syslog_tail_oom", 15);
+    }
+    size_t sz = alloc;
+    int rcv = sysctlbyname("kern.msgbuf", buf, &sz, NULL, 0);
+    if (rcv != 0 && errno == ENOMEM && alloc < HARD_CAP) {
+        /* Grew between calls (or initial size-probe under-reported on
+         * some FreeBSD versions). One retry at HARD_CAP — if that's
+         * still too small, the user just sees a partial tail with the
+         * newest entries, which is what dmesg(8) does anyway. */
+        free(buf);
+        alloc = HARD_CAP;
+        buf = (char *)malloc(alloc);
+        if (!buf) {
+            return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
+                              "syslog_tail_oom", 15);
+        }
+        sz = alloc;
+        rcv = sysctlbyname("kern.msgbuf", buf, &sz, NULL, 0);
+    }
+    if (rcv != 0) {
+        int saved = errno;
+        char reason[64];
+        int rn = snprintf(reason, sizeof(reason),
+                          "syslog_tail_sysctl_errno_%d", saved);
+        free(buf);
+        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
+                          reason, rn > 0 ? (uint64_t)rn : 0);
+    }
+    /* sz holds the actual byte count written by sysctl. The buffer is
+     * plain text (kernel printf output) — let the client treat it as a
+     * sized byte slice (no NUL-termination assumption). */
+    pthread_mutex_lock(&state->state_mtx);
+    state->command_count += 1;
+    pthread_mutex_unlock(&state->state_mtx);
+    rc = send_frame(client_fd, FTX2_FRAME_SYSLOG_TAIL_ACK, 0, trace_id,
+                    buf, (uint64_t)sz);
+    free(buf);
+    return rc;
+}
+
 /* ── PKG_INSTALL handlers ─────────────────────────────────────────────────────
  *
  * The host sends PKG_INSTALL with a JSON body carrying the `.pkg` URL it
@@ -14828,6 +14943,32 @@ static int handle_binary_frame(runtime_state_t *state, int client_fd,
             memcmp(tx_ctx->tx_id, meta.tx_id, 16) == 0) {
             tx_ctx->has_tx = 0;
         }
+        /* User-visible PS5 toast on successful upload (2.16.1+). Fires a
+         * top-right Sony notification on the TV/monitor itself so the user
+         * gets confirmation even when the desktop ps5upload window is
+         * hidden behind the PS5 system chrome. dlsym in pop_notification
+         * silently no-ops on firmwares where the symbol isn't loaded, so
+         * this never breaks the commit path. */
+        {
+            const char *base = strrchr(entry->dest_root, '/');
+            base = base ? base + 1 : entry->dest_root;
+            char toast[200];
+            double mib = (double)entry->bytes_received / (1024.0 * 1024.0);
+            const char *unit = "MiB";
+            double val = mib;
+            if (mib >= 1024.0) { val = mib / 1024.0; unit = "GiB"; }
+            if (entry->file_count > 1) {
+                snprintf(toast, sizeof(toast),
+                         "PS5Upload: %s done (%.1f %s, %llu files)",
+                         base, val, unit,
+                         (unsigned long long)entry->file_count);
+            } else {
+                snprintf(toast, sizeof(toast),
+                         "PS5Upload: %s done (%.1f %s)",
+                         base, val, unit);
+            }
+            pop_notification(toast);
+        }
         rc = send_frame(client_fd, FTX2_FRAME_COMMIT_TX_ACK, 0, hdr.trace_id,
                         body, (uint64_t)len);
 commit_done:
@@ -15040,6 +15181,9 @@ abort_done:
     if (hdr.frame_type == FTX2_FRAME_PROC_LIST) {
         return handle_proc_list(state, client_fd, hdr.trace_id,
                                 request_body, hdr.body_len);
+    }
+    if (hdr.frame_type == FTX2_FRAME_SYSLOG_TAIL) {
+        return handle_syslog_tail(state, client_fd, hdr.trace_id);
     }
     if (hdr.frame_type == FTX2_FRAME_PKG_INSTALL) {
         return handle_pkg_install(state, client_fd, hdr.trace_id,
