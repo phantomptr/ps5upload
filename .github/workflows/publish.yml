@@ -1,0 +1,448 @@
+name: publish
+
+# Manual-dispatch sibling of release.yml.
+#
+# Purpose: bypass-path for when release.yml gets wedged. GitHub's
+# tag-push trigger occasionally lands a release.yml run in an
+# uncancellable pre-queue state (e.g. during a partial Actions
+# outage), and the only API answer is "wait for it to transition";
+# meanwhile new tag pushes don't fire fresh runs. publish.yml is a
+# separate file -> separate workflow_id -> separate concurrency
+# namespace -> none of the stuck-state lives here.
+#
+# How to use:
+#   gh workflow run publish.yml -f tag=v2.17.0
+# or via the Actions UI: "Run workflow" -> enter the version tag.
+#
+# Security note: every interpolation of `github.event.inputs.tag`
+# into a shell run-block goes through `env: INPUT_TAG:` indirection.
+# Action `with:` parameters and YAML-level keys (concurrency.group,
+# checkout ref) are not shell contexts and are safe by construction.
+# See https://securitylab.github.com/research/github-actions-untrusted-input/
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build & publish (e.g. v2.17.0). The tag must already exist."
+        required: true
+
+permissions:
+  contents: write
+
+# Distinct group so a publish.yml run and a release.yml run on the
+# same tag don't cancel each other. They produce identical artifacts;
+# letting both finish is wasteful but harmless, and we want publish.yml
+# to be a reliable manual override even while release.yml is still
+# trying to recover.
+concurrency:
+  group: publish-${{ github.event.inputs.tag }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-payload:
+    name: build-payload
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.tag }}
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Sync version from VERSION
+        run: node scripts/update-version.js
+
+      - name: Install payload toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang lld unzip
+
+      - name: Download PS5 Payload SDK
+        env:
+          PS5_SDK_TAG: v0.39
+        run: |
+          curl --retry 3 --retry-delay 5 --retry-connrefused \
+            --fail --location --silent --show-error \
+            -o /tmp/ps5-payload-sdk.zip \
+            "https://github.com/ps5-payload-dev/sdk/releases/download/${PS5_SDK_TAG}/ps5-payload-sdk.zip"
+          sudo unzip -q /tmp/ps5-payload-sdk.zip -d /opt
+
+      - name: Build payload ELF
+        env:
+          PS5_PAYLOAD_SDK: /opt/ps5-payload-sdk
+        run: make payload
+
+      - name: Sanity-check ELF shape
+        run: |
+          file payload/ps5upload.elf
+          test -s payload/ps5upload.elf
+
+      - name: Gzip payload for bundling
+        run: |
+          gzip -kf payload/ps5upload.elf
+          ls -la payload/ps5upload.elf payload/ps5upload.elf.gz
+
+      - name: Upload payload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: ps5upload-payload
+          path: |
+            payload/ps5upload.elf
+            payload/ps5upload.elf.gz
+          if-no-files-found: error
+
+  build-client:
+    name: build-client-${{ matrix.platform }}-${{ matrix.arch }}
+    needs: build-payload
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            platform: macos
+            arch: arm64
+            rust_target: aarch64-apple-darwin
+          - os: macos-15-intel
+            platform: macos
+            arch: x64
+            rust_target: x86_64-apple-darwin
+          - os: ubuntu-24.04
+            platform: linux
+            arch: x64
+            rust_target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+            rust_target: aarch64-unknown-linux-gnu
+          - os: windows-2022
+            platform: windows
+            arch: x64
+            rust_target: x86_64-pc-windows-msvc
+          - os: windows-11-arm
+            platform: windows
+            arch: arm64
+            rust_target: aarch64-pc-windows-msvc
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.tag }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - name: Sync version from VERSION
+        run: node scripts/update-version.js
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Cache cargo target
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            client/src-tauri/target
+          key: ${{ runner.os }}-${{ matrix.arch }}-tauri-${{ hashFiles('client/src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.arch }}-tauri-
+
+      - name: Install Linux Tauri prerequisites
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libfuse2 \
+            patchelf \
+            build-essential \
+            curl \
+            wget \
+            file
+
+      - name: Install client deps
+        working-directory: client
+        run: npm ci --no-audit --no-fund
+
+      - name: Restore payload ELF
+        uses: actions/download-artifact@v7
+        with:
+          name: ps5upload-payload
+          path: payload
+
+      - name: Verify payload resource in place
+        shell: bash
+        run: |
+          test -s payload/ps5upload.elf.gz
+          ls -la payload/ps5upload.elf.gz
+
+      - name: Build engine sidecar binary
+        working-directory: engine
+        shell: bash
+        env:
+          RUST_TARGET: ${{ matrix.rust_target }}
+        run: cargo build --release -p ps5upload-engine --target "$RUST_TARGET"
+
+      - name: Verify engine binary in place
+        shell: bash
+        env:
+          RUST_TARGET: ${{ matrix.rust_target }}
+        run: |
+          target_root="engine/target/${RUST_TARGET}/release"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            test -s "$target_root/ps5upload-engine.exe"
+            ls -la "$target_root/ps5upload-engine.exe"
+          else
+            test -s "$target_root/ps5upload-engine"
+            ls -la "$target_root/ps5upload-engine"
+          fi
+
+      - name: Diagnose linuxdeploy (Linux only)
+        if: matrix.platform == 'linux'
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set +e
+          cd "$RUNNER_TEMP"
+          url="https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous"
+          case "$ARCH" in
+            x64)   asset=linuxdeploy-x86_64.AppImage ;;
+            arm64) asset=linuxdeploy-aarch64.AppImage ;;
+          esac
+          curl --retry 3 --fail -L -o linuxdeploy "$url/$asset"
+          chmod +x linuxdeploy
+          echo "=== linuxdeploy --version (direct) ==="
+          ./linuxdeploy --version
+          rc=$?
+          echo "=== linuxdeploy exit code: $rc ==="
+          if [ $rc -ne 0 ]; then
+            echo "=== retry with extract-and-run explicit ==="
+            ./linuxdeploy --appimage-extract-and-run --version
+          fi
+          exit 0
+
+      - name: Build Tauri bundle
+        working-directory: client
+        shell: bash
+        env:
+          APPLE_SIGNING_IDENTITY: "-"
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          RUST_TARGET: ${{ matrix.rust_target }}
+          PLATFORM: ${{ matrix.platform }}
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+          NO_STRIP: "true"
+          LINUXDEPLOY_VERBOSE: "1"
+        run: |
+          if [ "$PLATFORM" = "windows" ]; then
+            npx tauri build --target "$RUST_TARGET" --ci --no-bundle
+          else
+            npx tauri build --target "$RUST_TARGET" --ci --verbose
+          fi
+
+      - name: Collect bundle artefacts
+        shell: bash
+        env:
+          RUST_TARGET: ${{ matrix.rust_target }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          dist_abs="$PWD/dist"
+          mkdir -p "$dist_abs"
+          target_root="client/src-tauri/target/${RUST_TARGET}/release"
+          bundle="$target_root/bundle"
+          echo "Scanning $bundle"
+          ls -R "$bundle" || true
+          case "$PLATFORM" in
+            macos)
+              find "$bundle" -type f -name "*.dmg" -exec cp -v {} "$dist_abs/" \;
+              ;;
+            linux)
+              app="$(find "$bundle" -type f -name "*.AppImage" | head -n1)"
+              if [ -z "$app" ]; then
+                echo "::error::no .AppImage produced by tauri"
+                exit 1
+              fi
+              staging="$(mktemp -d)"
+              cp -v "$app" "$staging/PS5Upload.AppImage"
+              chmod +x "$staging/PS5Upload.AppImage"
+              cp -v scripts/release/linux-launcher.sh "$staging/PS5Upload.sh"
+              chmod +x "$staging/PS5Upload.sh"
+              (cd "$staging" && zip -9 "$dist_abs/PS5Upload.zip" PS5Upload.AppImage PS5Upload.sh)
+              rm -rf "$staging"
+              deb="$(find "$bundle" -type f -name "*.deb" | head -n1)"
+              if [ -z "$deb" ]; then
+                echo "::error::no .deb produced by tauri"
+                exit 1
+              fi
+              cp -v "$deb" "$dist_abs/PS5Upload.deb"
+              rpm="$(find "$bundle" -type f -name "*.rpm" | head -n1)"
+              if [ -z "$rpm" ]; then
+                echo "::error::no .rpm produced by tauri"
+                exit 1
+              fi
+              cp -v "$rpm" "$dist_abs/PS5Upload.rpm"
+              ;;
+            windows)
+              raw_exe="$target_root/ps5upload-desktop.exe"
+              if [ ! -f "$raw_exe" ]; then
+                echo "::error::raw .exe not found at $raw_exe"
+                ls -la "$target_root" || true
+                exit 1
+              fi
+              staging="$dist_abs/_stage"
+              mkdir -p "$staging"
+              cp -v "$raw_exe" "$staging/PS5Upload.exe"
+              rm -f "$dist_abs/PS5Upload.zip"
+              PS5UP_EXE="$staging/PS5Upload.exe" \
+              PS5UP_ZIP="$dist_abs/PS5Upload.zip" \
+                pwsh -NoProfile -Command 'Compress-Archive -LiteralPath $env:PS5UP_EXE -DestinationPath $env:PS5UP_ZIP -CompressionLevel Optimal'
+              rm -rf "$staging"
+              ;;
+          esac
+          ls -la "$dist_abs"
+
+      - name: Upload platform bundle
+        uses: actions/upload-artifact@v6
+        with:
+          name: ps5upload-${{ matrix.platform }}-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+
+  create-release:
+    name: create-release
+    needs:
+      - build-payload
+      - build-client
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.tag }}
+
+      - name: Resolve tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          raw_tag="$INPUT_TAG"
+          if ! echo "$raw_tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-+._A-Za-z0-9]*)?$'; then
+            echo "::error::Refusing to proceed: '$raw_tag' does not look like a version tag"
+            exit 1
+          fi
+          version="${raw_tag#v}"
+          echo "tag=$raw_tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Resolved tag=$raw_tag version=$version"
+
+      - name: Sanity-check tag vs VERSION file
+        env:
+          TAG_VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          expected="$(tr -d '[:space:]' < VERSION)"
+          if [ "$expected" != "$TAG_VERSION" ]; then
+            echo "::warning::VERSION file says '$expected' but tag says '$TAG_VERSION'. Proceeding anyway, but update VERSION in a follow-up commit."
+          fi
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v7
+        with:
+          path: artifacts
+
+      - name: Normalise release assets
+        id: assets
+        env:
+          TAG_VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          mkdir -p release
+          shopt -s nullglob
+          for f in artifacts/ps5upload-macos-*/*.dmg; do
+            arch="$(basename "$(dirname "$f")" | sed 's/^ps5upload-macos-//')"
+            cp -v "$f" "release/PS5Upload-${TAG_VERSION}-mac-${arch}.dmg"
+          done
+          for f in artifacts/ps5upload-windows-*/PS5Upload.zip; do
+            arch="$(basename "$(dirname "$f")" | sed 's/^ps5upload-windows-//')"
+            cp -v "$f" "release/PS5Upload-${TAG_VERSION}-win-${arch}.zip"
+          done
+          for f in artifacts/ps5upload-linux-*/PS5Upload.zip; do
+            arch="$(basename "$(dirname "$f")" | sed 's/^ps5upload-linux-//')"
+            cp -v "$f" "release/PS5Upload-${TAG_VERSION}-linux-${arch}.zip"
+          done
+          for f in artifacts/ps5upload-linux-*/PS5Upload.deb; do
+            arch="$(basename "$(dirname "$f")" | sed 's/^ps5upload-linux-//')"
+            cp -v "$f" "release/PS5Upload-${TAG_VERSION}-linux-${arch}.deb"
+          done
+          for f in artifacts/ps5upload-linux-*/PS5Upload.rpm; do
+            arch="$(basename "$(dirname "$f")" | sed 's/^ps5upload-linux-//')"
+            cp -v "$f" "release/PS5Upload-${TAG_VERSION}-linux-${arch}.rpm"
+          done
+          if [ -f artifacts/ps5upload-payload/ps5upload.elf ]; then
+            cp -v artifacts/ps5upload-payload/ps5upload.elf \
+              "release/ps5upload-${TAG_VERSION}.elf"
+          fi
+          echo "---release/ contents---"
+          ls -la release
+          count="$(find release -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+
+      - name: Extract release notes from CHANGELOG
+        env:
+          TAG_VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          notes="release/RELEASE_NOTES.md"
+          awk -v ver="$TAG_VERSION" '
+            $0 == "## " ver { found=1; next }
+            found && $0 ~ "^## " { exit }
+            found && $0 ~ "^---$" { exit }
+            found { print }
+          ' CHANGELOG.md > "$notes"
+          if [ ! -s "$notes" ]; then
+            printf "Release %s.\n\nSee CHANGELOG.md for details.\n" "$TAG_VERSION" > "$notes"
+          fi
+          echo "---RELEASE_NOTES.md---"
+          cat "$notes"
+
+      - name: Generate latest.json updater manifest
+        env:
+          TAG_VERSION: ${{ steps.tag.outputs.version }}
+          TAG_NAME: ${{ steps.tag.outputs.tag }}
+        run: |
+          python3 scripts/gen-updater-manifest.py \
+            --release-dir release \
+            --version "$TAG_VERSION" \
+            --tag "$TAG_NAME" \
+            --repo phantomptr/ps5upload \
+            --notes release/RELEASE_NOTES.md \
+            --out release/latest.json
+          echo "---latest.json---"
+          cat release/latest.json
+
+      - name: Move release notes out of assets dir
+        run: mv release/RELEASE_NOTES.md "$RUNNER_TEMP/RELEASE_NOTES.md"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: ${{ steps.tag.outputs.tag }}
+          body_path: ${{ runner.temp }}/RELEASE_NOTES.md
+          draft: false
+          prerelease: ${{ contains(steps.tag.outputs.tag, '-') }}
+          files: release/*
