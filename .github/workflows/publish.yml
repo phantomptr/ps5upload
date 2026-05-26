@@ -10,6 +10,10 @@ name: publish
 # separate file -> separate workflow_id -> separate concurrency
 # namespace -> none of the stuck-state lives here.
 #
+# See https://github.com/orgs/community/discussions/51410 for the
+# upstream symptom + the "create+merge a PR to nudge repo activity"
+# workaround when a queued workflow_id won't accept cancel/dispatch.
+#
 # How to use:
 #   gh workflow run publish.yml -f tag=v2.17.0
 # or via the Actions UI: "Run workflow" -> enter the version tag.
