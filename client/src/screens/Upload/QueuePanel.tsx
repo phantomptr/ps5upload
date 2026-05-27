@@ -371,6 +371,21 @@ function QueueRow({
               style={{ width: `${pct}%` }}
             />
           </div>
+          {isFinalizing && (
+            // Always-visible explainer under the bar. The pill itself
+            // ("Finalizing on PS5") is short enough to fit on the
+            // progress line, but the actionable "don't close the app"
+            // sentence is what actually prevents the force-quit that
+            // started this whole bug. Tooltip-hidden hints don't get
+            // read on a Tauri desktop app — promote it.
+            <div className="mt-1 text-[11px] text-[var(--color-warn)]">
+              {tr(
+                "queue_phase_finalizing_hint",
+                undefined,
+                "All bytes are on the PS5; it's committing the file index. Large file counts (10k+) routinely take many minutes here — don't close the app.",
+              )}
+            </div>
+          )}
         </div>
       )}
 
