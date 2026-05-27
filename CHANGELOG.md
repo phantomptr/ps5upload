@@ -4,6 +4,24 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.17.7
+
+- **Uploading very large game folders no longer fails before the
+  first file leaves your computer.** Folders with tens of thousands
+  of files build a multi-megabyte "manifest" the PS5 has to receive
+  and parse before any upload bytes are sent. On real hardware that
+  parse step can take longer than the previous 30-second cap on a
+  single request — meaning the upload failed instantly with
+  "Resource temporarily unavailable." The app now waits up to 5
+  minutes for the PS5 to acknowledge that manifest before giving
+  up. Once acknowledged, normal transfer continues unchanged.
+- Verified end-to-end on a 169,401-file / 162 GB game folder upload
+  (Ghost of Yotei). Total upload time on the test rig: 3 h 13 m,
+  with 19.5 min of post-100% PS5 commit (still well within the
+  30-minute commit window we shipped in 2.17.5).
+
+---
+
 ## 2.17.6
 
 - **Upload screen now tells you how long a huge folder will take

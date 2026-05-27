@@ -297,6 +297,55 @@ fn send_and_expect(
 /// tighter — until then, this is the conservative client-side fix.
 const COMMIT_TX_ACK_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
+/// Read-timeout cap for the BeginTxAck wait.
+///
+/// The BeginTx body carries the full manifest JSON — for a multi-file
+/// transfer of an 84,216-file game folder (the user-reported Ghost of
+/// Yotei case) the manifest is ~17 MB. The payload has to receive
+/// that body, parse it, allocate tx state, write the manifest to its
+/// spool dir, and ack. On hardware-verified PS5s with healthy USB
+/// drives that round-trip ran past the default 30-second SO_RCVTIMEO
+/// during the v2.17.7 verification pass: the upload errored with
+/// "Resource temporarily unavailable" before a single shard could
+/// land. 5 minutes is the conservative cap — enough for legitimate
+/// 100k+ file manifests, short enough that a truly stuck PS5 still
+/// surfaces inside a coffee break. The connection's default 30-second
+/// timeout is restored *after* BeginTxAck so shard-level reads keep
+/// the fast-detection behaviour they had before (per-shard ACKs are
+/// tiny and should return within ms; a 30-second stall on a shard
+/// ACK is a real network problem and we want to surface it quickly).
+const BEGIN_TX_ACK_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+
+/// Match the constant baked into `connection::Connection::connect` —
+/// we restore reads to this after the BeginTxAck wait. Keeping the
+/// number here in sync with connection.rs is a manual rule; pinned
+/// by `commit_ack_timeout_outlasts_realistic_apply_phase`-style
+/// tests so a future drift surfaces in CI rather than as a silent
+/// behaviour change at runtime.
+const POST_BEGIN_DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Variant of `send_and_expect` for the BEGIN_TX → BeginTxAck round-
+/// trip. Raises the connection's read timeout to
+/// `BEGIN_TX_ACK_TIMEOUT` before sending so the engine doesn't give
+/// up on a payload that's legitimately busy parsing a 17 MB manifest
+/// (84k-file folder upload from the v2.17.7 verification run).
+/// Restores the default 30-second read timeout before returning so
+/// subsequent shard-ACK reads keep the fast-detection behaviour they
+/// had under the prior code.
+fn send_begin_and_expect_ack(c: &mut Connection, body: &[u8]) -> Result<Vec<u8>> {
+    c.set_io_timeout(BEGIN_TX_ACK_TIMEOUT)
+        .context("raise read timeout for BeginTxAck wait")?;
+    let result = send_and_expect(c, FrameType::BeginTx, body, FrameType::BeginTxAck);
+    // Restore the short timeout for shard ACKs regardless of whether
+    // the BeginTxAck succeeded — even on error, the next attempt
+    // (resumable_retry) wants the default in effect. set_io_timeout
+    // is best-effort here; if it itself fails the worst case is a
+    // shard-ack wait of up to 5 min instead of 30 s, which is no
+    // worse than not having this fix at all.
+    let _ = c.set_io_timeout(POST_BEGIN_DEFAULT_TIMEOUT);
+    result
+}
+
 /// Variant of `send_and_expect` for the COMMIT_TX → CommitTxAck round-
 /// trip. Raises the connection's read timeout to `COMMIT_TX_ACK_TIMEOUT`
 /// before sending so the engine doesn't give up on a payload that's
@@ -1409,12 +1458,8 @@ pub fn transfer_dir_with_flags(
     })?;
 
     let mut c = Connection::connect(&cfg.addr)?;
-    let begin_ack = send_and_expect(
-        &mut c,
-        FrameType::BeginTx,
-        &tx_meta_buf_flags(tx_id, 2, flags, &manifest_json),
-        FrameType::BeginTxAck,
-    )?;
+    let begin_ack =
+        send_begin_and_expect_ack(&mut c, &tx_meta_buf_flags(tx_id, 2, flags, &manifest_json))?;
     let last_acked_shard = parse_last_acked_shard(&begin_ack, flags & TX_FLAG_RESUME != 0);
     // Same ghost-commit guard as the single-file paths (the multi-file
     // paths previously lacked it). See guard_last_acked.
@@ -1611,12 +1656,8 @@ pub fn transfer_file_list_with_flags(
     })?;
 
     let mut c = Connection::connect(&cfg.addr)?;
-    let begin_ack = send_and_expect(
-        &mut c,
-        FrameType::BeginTx,
-        &tx_meta_buf_flags(tx_id, 2, flags, &manifest_json),
-        FrameType::BeginTxAck,
-    )?;
+    let begin_ack =
+        send_begin_and_expect_ack(&mut c, &tx_meta_buf_flags(tx_id, 2, flags, &manifest_json))?;
     let last_acked_shard = parse_last_acked_shard(&begin_ack, flags & TX_FLAG_RESUME != 0);
     // Same ghost-commit guard as the single-file paths. See guard_last_acked.
     guard_last_acked(last_acked_shard, total_shards)?;
@@ -2573,12 +2614,8 @@ pub fn transfer_zip_with_opts(
     })?;
 
     let mut c = Connection::connect(&cfg.addr)?;
-    let begin_ack = send_and_expect(
-        &mut c,
-        FrameType::BeginTx,
-        &tx_meta_buf_flags(tx_id, 2, flags, &manifest_json),
-        FrameType::BeginTxAck,
-    )?;
+    let begin_ack =
+        send_begin_and_expect_ack(&mut c, &tx_meta_buf_flags(tx_id, 2, flags, &manifest_json))?;
     let last_acked_shard = parse_last_acked_shard(&begin_ack, flags & TX_FLAG_RESUME != 0);
     // Same ghost-commit guard as the single-file paths. See guard_last_acked.
     guard_last_acked(last_acked_shard, total_shards)?;
@@ -2934,6 +2971,48 @@ mod retry_classification_tests {
         // already aborted. Retrying can't help.
         let e: anyhow::Error = anyhow::anyhow!("direct_tx_corrupt");
         assert!(!is_retryable_transfer_error(&e));
+    }
+
+    #[test]
+    fn begin_ack_timeout_outlasts_large_manifest_parse() {
+        // Pins the contract that motivated v2.17.7: an 84k-file
+        // manifest is ~17 MB JSON; the payload's BeginTx handler
+        // has to receive, parse, and persist it before sending
+        // BeginTxAck. The constant must be comfortably above
+        // worst-case manifest-parse time on PS5 hardware — anything
+        // tighter and the engine gives up before the first shard
+        // can land. 5 min is the cap.
+        assert!(
+            BEGIN_TX_ACK_TIMEOUT >= Duration::from_secs(2 * 60),
+            "begin-ack timeout must outlast a worst-case ~17 MB manifest \
+             parse (~5 min for safety); got {:?}",
+            BEGIN_TX_ACK_TIMEOUT,
+        );
+        // Upper-bound: keep within 10 min. Longer and a truly stuck
+        // payload at the begin-handshake stage holds the upload row
+        // open in the UI for too long without a clear failure.
+        assert!(
+            BEGIN_TX_ACK_TIMEOUT <= Duration::from_secs(10 * 60),
+            "begin-ack timeout too generous — stuck PS5 should surface \
+             within 10 min at most; got {:?}",
+            BEGIN_TX_ACK_TIMEOUT,
+        );
+    }
+
+    #[test]
+    fn post_begin_default_timeout_matches_connection_default() {
+        // Manual sync rule: this constant must match
+        // `connection::DEFAULT_IO_TIMEOUT`. Pin the value here so a
+        // drift surfaces as a test failure. If connection's default
+        // changes the test catches it and the developer has to
+        // decide intentionally how to keep the two in sync.
+        assert_eq!(
+            POST_BEGIN_DEFAULT_TIMEOUT,
+            Duration::from_secs(30),
+            "post-begin shard-ACK timeout must mirror connection's \
+             DEFAULT_IO_TIMEOUT (30 s); got {:?}",
+            POST_BEGIN_DEFAULT_TIMEOUT,
+        );
     }
 
     #[test]
