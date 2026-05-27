@@ -24,6 +24,19 @@ import {
 } from "../lib/rollingRate";
 import type { SourceKind } from "./upload";
 import { useUploadSettingsStore } from "./uploadSettings";
+import { useRecentHostMetricsStore } from "./recentHostMetrics";
+
+/** Module-level shortcut to the recent-host-metrics recorder. Pulled
+ *  out as a function (not a direct `store.record`) so future call
+ *  sites in this file — and in `uploadQueue.ts` once we wire it
+ *  there too — can share a single line without each importing the
+ *  store. Pure passthrough; no business logic added. */
+function recordHostMetrics(
+  addr: string,
+  metrics: { throughputMibps: number; commitMsPerFile?: number; measuredAtMs: number },
+): void {
+  useRecentHostMetricsStore.getState().record(addr, metrics);
+}
 
 /** For folder sources the caller picks one of these strategies at the
  *  moment the dialog is confirmed. Files/exfat images always use
@@ -397,6 +410,24 @@ export const useTransferStore = create<TransferState>((set) => {
           // eviction pressure). Forget proactively.
           if (isFolder) {
             void resumeTxidForget(host, srcPath, dest);
+          }
+          // Persist this host's measured throughput so the next upload
+          // to the same PS5 can render a sharper ETA in the pre-flight
+          // banner (lib/uploadEta). Only record on real completion —
+          // failed or stopped uploads are not representative samples.
+          // commitMsPerFile is left undefined for now; deriving it
+          // requires the per-file APPLY_PROGRESS frames coming in P3
+          // (design doc §4). Once those land, this is the natural
+          // recording site.
+          const recordedBytes = snap.bytes_sent ?? 0;
+          const recordedElapsedMs = snap.elapsed_ms ?? 0;
+          if (recordedBytes > 0 && recordedElapsedMs > 0) {
+            const throughputMibps =
+              recordedBytes / 1024 / 1024 / (recordedElapsedMs / 1000);
+            recordHostMetrics(addr, {
+              throughputMibps,
+              measuredAtMs: Date.now(),
+            });
           }
           set({
             phase: {

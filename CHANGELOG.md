@@ -4,6 +4,22 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.17.6
+
+- **Upload screen now tells you how long a huge folder will take
+  *before* you click Upload.** For folders with 10,000+ files (game
+  dumps with tens of thousands of files inside), the source-info
+  card now shows a transfer-time estimate, a PS5-commit-time
+  estimate, and a total — so the multi-minute wait after the
+  progress bar hits 100% isn't a surprise. A short hint tells you
+  Resume mode will save an hour or more on re-uploads.
+- **The estimate sharpens after your first upload to each PS5.** The
+  app remembers the throughput from your last successful upload to
+  each PS5 host and uses that figure next time, instead of a generic
+  default.
+
+---
+
 ## 2.17.5
 
 - **Huge game-folder uploads no longer fail during the "Finalizing

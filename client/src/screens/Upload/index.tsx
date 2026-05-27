@@ -46,6 +46,12 @@ import FfpkgInspectorPanel from "./FfpkgInspectorPanel";
 import FolderDiffPanel from "./FolderDiffPanel";
 import { useUploadSettingsStore } from "../../state/uploadSettings";
 import { useUploadQueueStore } from "../../state/uploadQueue";
+import { useRecentHostMetricsStore } from "../../state/recentHostMetrics";
+import {
+  computeUploadEta,
+  formatEtaSeconds,
+  pickBannerMode,
+} from "../../lib/uploadEta";
 import { resolveUploadDest } from "../../lib/uploadDest";
 import { QueuePanel } from "./QueuePanel";
 import { humanizePs5Error } from "../../lib/humanizeError";
@@ -617,6 +623,14 @@ function Step2Options(props: {
           fileCount={source.meta.file_count}
         />
       )}
+
+      {(source.kind === "folder" || source.kind === "game-folder") &&
+        source.meta && (
+          <PreflightEtaBanner
+            fileCount={source.meta.file_count}
+            totalBytes={source.meta.total_size}
+          />
+        )}
 
       {source.kind === "archive" && source.zipInfo && (
         <ZipArchiveCard info={source.zipInfo} />
@@ -1586,6 +1600,154 @@ function FolderStatsCard({
     <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4 text-sm text-[var(--color-muted)]">
       {formatBytes(totalBytes)} {tr("upload_folder_stats_across", "across")}{" "}
       {fileCount.toLocaleString()} {tr("upload_folder_stats_files", "files")}
+    </section>
+  );
+}
+
+/**
+ * Pre-flight ETA banner for medium-and-large folder uploads.
+ *
+ * Suppressed for tiny folders (<1k files). Shows a one-line "≈ N min"
+ * estimate in the 1k–10k band. Shows the full transfer + commit
+ * breakdown for ≥10k file folders — that's where the post-100%
+ * PS5 commit phase becomes the user-perceived dominant cost and
+ * users absolutely need to know about it before they kick off a
+ * 45-minute upload.
+ *
+ * Reads the per-host metrics store so the estimate gets sharper after
+ * the first successful upload to a given PS5. First-ever upload uses
+ * conservative defaults (100 MiB/s, 10 ms/file) and surfaces a
+ * "(estimated)" qualifier in the banner copy so users don't read the
+ * number as a promise.
+ *
+ * Design: `.claude/ralph-design-notes.md` §2 (gitignored).
+ */
+function PreflightEtaBanner({
+  fileCount,
+  totalBytes,
+}: {
+  fileCount: number;
+  totalBytes: number;
+}) {
+  const tr = useTr();
+  // Read host directly from the connection store rather than threading
+  // it through props — the banner only needs it for the per-host
+  // metrics lookup, and the source card it sits inside doesn't have
+  // host in scope.
+  const host = useConnectionStore((s) => s.host);
+  const mode = useMemo(() => pickBannerMode(fileCount), [fileCount]);
+  const hostMetrics = useRecentHostMetricsStore((s) =>
+    host?.trim()
+      ? s.lookup(`${host}:${PS5_PAYLOAD_PORT}`)
+      : undefined,
+  );
+  // Staleness aging (MAX_AGE_MS, 7 days) is intentionally not applied
+  // here — Date.now() in render trips the react-hooks/purity rule, and
+  // the practical impact is nil: a session typically lives minutes
+  // while the staleness cap is days. P3 (per-file apply progress) will
+  // re-introduce a freshness check via a useEffect-based pattern once
+  // commit-ms-per-file is a measurement we actively want to refresh.
+  const eta = useMemo(
+    () =>
+      computeUploadEta({
+        fileCount,
+        totalBytes,
+        throughputMibps: hostMetrics?.throughputMibps,
+        commitMsPerFile: hostMetrics?.commitMsPerFile,
+      }),
+    [fileCount, totalBytes, hostMetrics],
+  );
+
+  if (mode === "hidden") return null;
+
+  // Simplified band: medium folders just get a one-line estimate.
+  if (mode === "simplified") {
+    return (
+      <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 text-xs text-[var(--color-muted)]">
+        <span className="font-medium text-[var(--color-text)]">
+          {tr(
+            "upload_eta_simplified",
+            { eta: formatEtaSeconds(eta.totalSeconds) },
+            "Estimated upload time: {eta}",
+          )}
+        </span>
+        {eta.usedDefaults && (
+          <span className="ml-2 italic">
+            (
+            {tr(
+              "upload_eta_default_qualifier",
+              undefined,
+              "estimate — first upload to this PS5",
+            )}
+            )
+          </span>
+        )}
+      </section>
+    );
+  }
+
+  // Detailed band: huge folders get the full breakdown so the post-
+  // 100% commit phase isn't a surprise.
+  return (
+    <section className="mb-4 rounded-lg border border-[var(--color-warn)]/40 bg-[var(--color-warn)]/5 p-4 text-sm">
+      <div className="mb-1 flex items-center gap-2 font-medium text-[var(--color-warn)]">
+        <span aria-hidden>ⓘ</span>
+        {tr("upload_eta_banner_title", undefined, "This is a large folder upload.")}
+      </div>
+      <div className="mb-3 text-[var(--color-muted)]">
+        {fileCount.toLocaleString()}{" "}
+        {tr("upload_folder_stats_files", "files")} ·{" "}
+        {formatBytes(totalBytes)}
+      </div>
+      <div className="mb-2 text-xs uppercase tracking-wide text-[var(--color-muted)]">
+        {tr("upload_eta_section_title", undefined, "Estimated time")}
+        {eta.usedDefaults && (
+          <span className="ml-2 normal-case tracking-normal italic">
+            (
+            {tr(
+              "upload_eta_default_qualifier",
+              undefined,
+              "estimate — first upload to this PS5",
+            )}
+            )
+          </span>
+        )}
+      </div>
+      <table className="text-xs">
+        <tbody>
+          <tr>
+            <td className="pr-3 text-[var(--color-muted)]">
+              {tr("upload_eta_row_transfer", undefined, "Transfer")}
+            </td>
+            <td className="pr-3 tabular-nums">
+              ≈ {formatEtaSeconds(eta.transferSeconds)}
+            </td>
+          </tr>
+          <tr>
+            <td className="pr-3 text-[var(--color-muted)]">
+              {tr("upload_eta_row_commit", undefined, "PS5 commit")}
+            </td>
+            <td className="pr-3 tabular-nums">
+              ≈ {formatEtaSeconds(eta.commitSeconds)}
+            </td>
+          </tr>
+          <tr className="border-t border-[var(--color-border)]">
+            <td className="pr-3 pt-1 font-medium">
+              {tr("upload_eta_row_total", undefined, "Total")}
+            </td>
+            <td className="pr-3 pt-1 font-medium tabular-nums">
+              ≈ {formatEtaSeconds(eta.totalSeconds)}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <div className="mt-3 text-xs text-[var(--color-muted)]">
+        {tr(
+          "upload_eta_resume_hint",
+          undefined,
+          "For folders this size, Resume mode (skip files already on the PS5) saves an hour or more on repeat uploads. You'll see the choice when you click Upload.",
+        )}
+      </div>
     </section>
   );
 }

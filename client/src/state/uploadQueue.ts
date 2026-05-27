@@ -32,6 +32,7 @@ import {
 import type { SourceKind } from "./upload";
 import type { UploadStrategy } from "./transfer";
 import { useUploadSettingsStore } from "./uploadSettings";
+import { useRecentHostMetricsStore } from "./recentHostMetrics";
 import { pushNotification } from "./notifications";
 import { createRunGen } from "../lib/runGen";
 
@@ -365,6 +366,20 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
         // clock diff so a slow first poll doesn't skew the average.
         const finalBytes = snap.bytes_sent ?? 0;
         const elapsedMs = snap.elapsed_ms ?? Date.now() - startedAtMs;
+        // Persist this host's measured throughput so the next upload's
+        // pre-flight ETA banner can use a sharper number. Same shape
+        // as transfer.ts's recording site; queue uploads were the
+        // primary user-reported pain point (huge folders) so this
+        // path matters most. commitMsPerFile is left undefined until
+        // P3's APPLY_PROGRESS frames give us the apply-time signal.
+        if (finalBytes > 0 && elapsedMs > 0) {
+          const throughputMibps =
+            finalBytes / 1024 / 1024 / (elapsedMs / 1000);
+          useRecentHostMetricsStore.getState().record(item.addr, {
+            throughputMibps,
+            measuredAtMs: Date.now(),
+          });
+        }
         return {
           bytesSent: finalBytes,
           bytesPerSec: averageRate(finalBytes, elapsedMs),

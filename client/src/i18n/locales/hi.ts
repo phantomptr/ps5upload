@@ -1219,6 +1219,14 @@ install_register_path_appinst: "(इन — प्रोसेस AppInstUtil �
   upload_status_finalizing_hint: "PS5 is committing the file index. This can take a while for large file counts — don't close the app.",
   upload_file_list_windowed: "showing {shown}",
   upload_file_list_windowed_hint: "Showing a window around the current file; rendering every entry of a 50k+ folder would freeze the app.",
+  upload_eta_simplified: "Estimated upload time: {eta}",
+  upload_eta_default_qualifier: "estimate — first upload to this PS5",
+  upload_eta_banner_title: "This is a large folder upload.",
+  upload_eta_section_title: "Estimated time",
+  upload_eta_row_transfer: "Transfer",
+  upload_eta_row_commit: "PS5 commit",
+  upload_eta_row_total: "Total",
+  upload_eta_resume_hint: "For folders this size, Resume mode (skip files already on the PS5) saves an hour or more on repeat uploads. You'll see the choice when you click Upload.",
 };
 
 export default hi;
