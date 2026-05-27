@@ -4,6 +4,18 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.17.3
+
+- **Uploading a game folder with tens of thousands of files no
+  longer freezes the app.** The per-file status list was trying to
+  render every entry to the DOM on every poll tick — for a 50,000-
+  file folder that pinned the main thread until the upload finished.
+  The list now shows a moving window around the file currently
+  being sent (current row + a slice of what's coming up + a slice of
+  what just finished). Small folders are unchanged.
+
+---
+
 ## 2.17.2
 
 - **Rebooting your PS5 from the Hardware tab no longer shows a fake

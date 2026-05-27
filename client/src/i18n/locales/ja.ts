@@ -1217,6 +1217,8 @@ install_register_path_appinst: "（プロセス中のAppInstUtil — ShellUIフ�
   queue_phase_finalizing_hint: "All bytes are on the PS5; it's committing the file index. Large file counts (10k+) routinely take many minutes here — don't close the app.",
   upload_status_finalizing: "Finalizing on PS5",
   upload_status_finalizing_hint: "PS5 is committing the file index. This can take a while for large file counts — don't close the app.",
+  upload_file_list_windowed: "showing {shown}",
+  upload_file_list_windowed_hint: "Showing a window around the current file; rendering every entry of a 50k+ folder would freeze the app.",
 };
 
 export default ja;

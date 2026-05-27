@@ -1245,15 +1245,120 @@ function TransferStatus({ phase }: { phase: TransferPhase }) {
  *  share one ruleset. */
 const humanizeUploadError = humanizePs5Error;
 
+/** Maximum number of file rows we ever render to the DOM.
+ *
+ *  Below this we render the full sorted list (current → pending → done-
+ *  reversed). At or above it we render a moving window around the current
+ *  file. The cap exists because a single poll tick (~500 ms) was rendering
+ *  one `<li>` per planned file, so a 50,000-file game folder produced 50k
+ *  DOM nodes plus 3 × O(n) array.map().filter() passes every 500 ms — the
+ *  main thread saturated and the UI froze until the upload finished.
+ *  The scroll viewport is 192 px tall (~12 visible rows) so 200 is well
+ *  past the user-visible band; rows beyond it were never scrolled to.
+ *
+ *  Wins both ways: small uploads keep their full scrollable history,
+ *  large uploads stay responsive. The header counts (`completed / total`)
+ *  carry the bigger picture either way. */
+const FILE_LIST_RENDER_CAP = 200;
+
+/** Build the visible rows for the panel.
+ *
+ *  Exported (via `for-test`) so the windowing logic is unit-testable
+ *  without standing up React. The shape is intentionally narrow — just
+ *  `{ file, idx }` per row, in render order — to keep the test crisp.
+ *
+ *  Three regimes:
+ *    1. total ≤ cap:   full list in [current, pending..., done-rev...] order.
+ *    2. total >  cap:  windowed [current, pending-slice..., done-slice-rev...]
+ *                      bounded so the total row count is ≤ cap.
+ *
+ *  Pending and done slices stay in the same order as the unwindowed
+ *  version so the user's mental model ("see what's coming → scroll for
+ *  history") survives unchanged. */
+export function buildFileListRows_forTest(
+  files: PlannedFile[],
+  completed: number,
+  cap: number = FILE_LIST_RENDER_CAP,
+): Array<{ idx: number; rel_path: string; size: number }> {
+  const total = files.length;
+  if (total === 0) return [];
+
+  // Two regimes for `completed`:
+  //   - `completed < total`: there's a "current" file at index `completed`.
+  //     Pending = indices > completed, done = indices < completed.
+  //   - `completed >= total`: every file is done. No current row, no
+  //     pending. This is the finalize-phase state — engine reports the
+  //     full file count once shards are all on the wire. Done covers
+  //     the entire list.
+  // A separate `hasCurrent` flag keeps both regimes readable; without it
+  // the earlier impl clamped `completed` and then dropped the last index
+  // (because the done-loop started at clamped-1 and the current branch
+  // was gated on the raw, un-clamped value).
+  const hasCurrent = completed >= 0 && completed < total;
+  const currentIdx = hasCurrent
+    ? completed
+    : // For the all-done case the "anchor" sits past the last index so
+      // the done window walks backward from total-1 naturally.
+      total;
+  const pendingCount = hasCurrent ? total - completed - 1 : 0;
+  const doneCount = hasCurrent ? completed : total;
+  const fullSize = (hasCurrent ? 1 : 0) + pendingCount + doneCount;
+
+  if (fullSize <= cap) {
+    // Small list — render every row in a single pass. Beats the old
+    // 3 × array.map().filter() shape (3n allocations → ~n).
+    const rows: Array<{ idx: number; rel_path: string; size: number }> = [];
+    if (hasCurrent) {
+      rows.push({ idx: currentIdx, ...files[currentIdx] });
+    }
+    for (let i = currentIdx + 1; i < total; i++) {
+      rows.push({ idx: i, ...files[i] });
+    }
+    for (let i = currentIdx - 1; i >= 0; i--) {
+      rows.push({ idx: i, ...files[i] });
+    }
+    return rows;
+  }
+
+  // Windowed mode. Reserve 1 slot for the current row when present,
+  // then split the remainder between "next-up pending" and
+  // "recently-done" so the user sees both directions of context
+  // without 50k DOM nodes.
+  const currentSlot = hasCurrent ? 1 : 0;
+  const remaining = cap - currentSlot;
+  // 2:1 lean toward pending — users care more about what's *next* than
+  // what's already done. The engine's per-file completion counter is
+  // coarse (see PlannedFile docs), so deep done-history is the lower-
+  // value side to truncate first.
+  const pendingBudget = Math.min(pendingCount, Math.ceil((remaining * 2) / 3));
+  const doneBudget = Math.min(doneCount, remaining - pendingBudget);
+
+  const rows: Array<{ idx: number; rel_path: string; size: number }> = [];
+  if (hasCurrent) {
+    rows.push({ idx: currentIdx, ...files[currentIdx] });
+  }
+  for (let i = 1; i <= pendingBudget; i++) {
+    const idx = currentIdx + i;
+    rows.push({ idx, ...files[idx] });
+  }
+  for (let i = 1; i <= doneBudget; i++) {
+    const idx = currentIdx - i;
+    rows.push({ idx, ...files[idx] });
+  }
+  return rows;
+}
+
 /**
  * Scrollable per-file status panel.
  *
- * Renders every planned file in a 192-px (h-48) scroll container and
- * auto-scrolls so the currently-transferring file (▶) stays visible.
- * Done files get ✓, pending get ○. For very large trees (1000+ files)
- * rendering all DOM nodes is measurably slower but still well under a
- * frame budget; if a real perf issue emerges, swap this for a windowed
- * virtualizer later.
+ * Renders the planned file list in a 192-px (h-48) scroll container,
+ * current row pinned at the top. Done files get ✓, pending get ○.
+ *
+ * Above ~200 files we switch to a windowed slice (see
+ * `FILE_LIST_RENDER_CAP`); below, we render the full list. Both modes
+ * are memoised so the sort/window work doesn't repeat on every poll
+ * tick — only when the underlying file list or the completed index
+ * changes.
  *
  * `completed` is the engine-reported count of files whose cumulative
  * wire bytes are below `bytes_sent`. That's a *coarse* signal: for a
@@ -1270,8 +1375,15 @@ function FileListPanel({
 }) {
   const tr = useTr();
   const total = files.length;
-  // No auto-scroll needed — the ordering puts the current file at the
-  // top of the list, so it's visible without any scrolling math.
+  // Memoise the row build so a parent re-render (every 500 ms while
+  // uploading) doesn't redo the sort on 50k entries. Re-runs only when
+  // the file list changes (length proxy — engine doesn't mutate planned
+  // entries mid-upload) or the completed index moves.
+  const rows = useMemo(
+    () => buildFileListRows_forTest(files, completed),
+    [files, completed],
+  );
+  const windowed = total > FILE_LIST_RENDER_CAP;
 
   return (
     <div className="mt-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-xs">
@@ -1279,6 +1391,22 @@ function FileListPanel({
         <span>{tr("upload_file_list_files", "Files")}</span>
         <span>
           {completed.toLocaleString()} / {total.toLocaleString()}
+          {windowed && (
+            <>
+              {" · "}
+              <span title={tr(
+                "upload_file_list_windowed_hint",
+                undefined,
+                "Showing a window around the current file; rendering every entry of a 50k+ folder would freeze the app.",
+              )}>
+                {tr(
+                  "upload_file_list_windowed",
+                  { shown: rows.length },
+                  `showing {shown}`,
+                )}
+              </span>
+            </>
+          )}
         </span>
       </div>
       <ul className="max-h-48 overflow-y-auto font-mono">
@@ -1293,18 +1421,7 @@ function FileListPanel({
          *   "Current at top, older uploaded at bottom" — matches the
          *   user's ask: glance at the panel → see what's happening
          *   right now + what's coming, scroll down for history. */}
-        {[
-          ...files
-            .map((f, idx) => ({ f, idx }))
-            .filter((x) => x.idx === completed),
-          ...files
-            .map((f, idx) => ({ f, idx }))
-            .filter((x) => x.idx > completed),
-          ...files
-            .map((f, idx) => ({ f, idx }))
-            .filter((x) => x.idx < completed)
-            .reverse(),
-        ].map(({ f, idx }) => {
+        {rows.map(({ idx, rel_path, size }) => {
           const status =
             idx < completed
               ? "done"
@@ -1313,7 +1430,7 @@ function FileListPanel({
                 : "pending";
           return (
             <li
-              key={`${idx}-${f.rel_path}`}
+              key={`${idx}-${rel_path}`}
               className={
                 "flex items-center gap-2 px-1 py-0.5 " +
                 (status === "pending"
@@ -1336,9 +1453,9 @@ function FileListPanel({
               >
                 {status === "done" ? "✓" : status === "current" ? "▶" : "○"}
               </span>
-              <span className="flex-1 truncate">{f.rel_path}</span>
+              <span className="flex-1 truncate">{rel_path}</span>
               <span className="shrink-0 tabular-nums">
-                {formatBytes(f.size)}
+                {formatBytes(size)}
               </span>
             </li>
           );
