@@ -199,6 +199,13 @@ function QueueRow({
       ? Math.max(0, Math.min(100, (item.bytesSent / item.totalBytes) * 100))
       : 0;
   const isActive = item.status === "running";
+  // Finalize phase: all shards on the wire, engine waiting on PS5
+  // commit. Drives a different chip + suppresses the stale ETA — see
+  // the speed/eta render below. Gate on totalBytes > 0 so a row whose
+  // stat is still pending (totalBytes === 0 on the first tick) doesn't
+  // false-positive as finalized.
+  const isFinalizing =
+    isActive && item.totalBytes > 0 && item.bytesSent >= item.totalBytes;
   // Show ETA only when we have a real total + a real rate; otherwise
   // the readout would print "ETA Infinity" or "ETA 0s" right at the
   // start of a transfer where the smoother hasn't seen two samples yet.
@@ -308,7 +315,15 @@ function QueueRow({
           <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-3 text-[11px] text-[var(--color-muted)]">
             <span>
               {formatBytes(item.bytesSent)} / {formatBytes(item.totalBytes)}
-              {item.bytesPerSec > 0 && (
+              {/* Speed + ETA are honest signals only while bytes are
+                  still moving. Once the row pegs at 100%, the engine
+                  is waiting on the PS5's commit (drain ACKs + COMMIT
+                  ACK across potentially tens-of-thousands of inodes)
+                  and the saved bytesPerSec is a stale figure that no
+                  longer reflects reality — same pattern as the
+                  single-shot Upload banner. Replace with a
+                  Finalizing… chip instead. */}
+              {!isFinalizing && item.bytesPerSec > 0 && (
                 <>
                   {" · "}
                   <span className="tabular-nums">
@@ -326,6 +341,25 @@ function QueueRow({
                       </span>
                     </>
                   )}
+                </>
+              )}
+              {isFinalizing && (
+                <>
+                  {" · "}
+                  <span
+                    className="rounded-full bg-[var(--color-warn)]/15 px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-warn)]"
+                    title={tr(
+                      "queue_phase_finalizing_hint",
+                      undefined,
+                      "All bytes are on the PS5; it's committing the file index. Large file counts (10k+) routinely take many minutes here — don't close the app.",
+                    )}
+                  >
+                    {tr(
+                      "queue_phase_finalizing",
+                      undefined,
+                      "Finalizing on PS5",
+                    )}
+                  </span>
                 </>
               )}
             </span>

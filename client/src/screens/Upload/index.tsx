@@ -1043,6 +1043,16 @@ function TransferStatus({ phase }: { phase: TransferPhase }) {
       totalBytes > 0 ? Math.min(100, (bytesSent / totalBytes) * 100) : 0;
     const remaining = Math.max(0, totalBytes - bytesSent);
     const etaSec = bytesPerSec > 0 ? remaining / bytesPerSec : null;
+    // Finalize phase: every shard has been pushed onto the wire but the
+    // engine is still waiting for the PS5's COMMIT_TX_ACK / drain ACKs.
+    // For large file counts this round-trip waits on the PS5 fsyncing
+    // tens of thousands of inodes — many minutes is normal. Without
+    // distinct copy here the user sees "Uploading 100%" with a frozen
+    // bytes counter and force-quits, defeating the whole transfer.
+    // Gate on totalBytes > 0 so a not-yet-stat'd transfer doesn't
+    // false-positive on its first tick (the earlier 0-bytes/0-files
+    // interstitial above also catches this, but defense in depth).
+    const isFinalizing = totalBytes > 0 && bytesSent >= totalBytes;
     return (
       <div className="mb-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 text-sm">
         <div className="mb-2 flex items-center justify-between gap-2">
@@ -1052,7 +1062,12 @@ function TransferStatus({ phase }: { phase: TransferPhase }) {
               className="animate-spin text-[var(--color-accent)]"
             />
             <span className="font-medium">
-              {tr("upload_status_uploading", "Uploading")}
+              {isFinalizing
+                ? tr(
+                    "upload_status_finalizing",
+                    "Finalizing on PS5",
+                  )
+                : tr("upload_status_uploading", "Uploading")}
             </span>
             <span className="text-xs text-[var(--color-muted)]">
               {formatBytes(bytesSent)}
@@ -1077,15 +1092,22 @@ function TransferStatus({ phase }: { phase: TransferPhase }) {
             </span>
           </div>
           <div className="flex items-center gap-2 text-xs text-[var(--color-muted)]">
-            <span>
-              {bytesPerSec > 0 ? `${formatBytes(bytesPerSec)}/s` : "—"}
-              {etaSec !== null && bytesPerSec > 0 && (
-                <>
-                  {" · "}
-                  {tr("upload_status_eta", "ETA")} {formatDuration(etaSec)}
-                </>
-              )}
-            </span>
+            {!isFinalizing && (
+              // Speed + ETA are meaningless once bytes hit 100% — speed
+              // collapses to a stale prior reading (the smoother carries
+              // the last live sample) and ETA divides "remaining: 0" by
+              // a speed that may already be 0. The finalize hint below
+              // replaces this readout entirely.
+              <span>
+                {bytesPerSec > 0 ? `${formatBytes(bytesPerSec)}/s` : "—"}
+                {etaSec !== null && bytesPerSec > 0 && (
+                  <>
+                    {" · "}
+                    {tr("upload_status_eta", "ETA")} {formatDuration(etaSec)}
+                  </>
+                )}
+              </span>
+            )}
             <button
               type="button"
               onClick={() => resetTransfer()}
@@ -1099,6 +1121,19 @@ function TransferStatus({ phase }: { phase: TransferPhase }) {
             </button>
           </div>
         </div>
+        {isFinalizing && (
+          // Explanatory line so users with big multi-file uploads
+          // understand that 100% is not the end — the PS5 still has
+          // to commit the manifest, and for 80k-file folders that
+          // legitimately takes minutes (a user-reported 1h+ stall was
+          // mistaken for a hang and force-quit).
+          <div className="mb-2 text-xs text-[var(--color-warn)]">
+            {tr(
+              "upload_status_finalizing_hint",
+              "PS5 is committing the file index. This can take a while for large file counts — don't close the app.",
+            )}
+          </div>
+        )}
         {totalBytes > 0 && (
           <div className="h-1.5 overflow-hidden rounded-full bg-[var(--color-surface-3)]">
             <div

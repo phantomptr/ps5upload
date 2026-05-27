@@ -1212,6 +1212,12 @@ install_register_path_appinst: "(đang xử lý AppInstUtil — không có đèn
 "install.cancel_shellui_body": "{name} đã được bàn giao cho trình cài đặt của PS5 và sẽ tiếp tục chạy ở đó ngay cả khi bạn hủy ở đây. Để thực sự dừng nó, hãy mở bảng Thông báo → Tải xuống của PS5. Vẫn ẩn hàng này?",
 "install.cancel_shellui_yes": "Ẩn hàng",
 "install.cancel_shellui_no": "Giữ hàng",
+  activity_phase_finalizing: "Finalizing on PS5",
+  activity_phase_finalizing_hint: "All bytes are on the PS5; it's committing the file index. This can take a while for large file counts — don't close the app.",
+  queue_phase_finalizing: "Finalizing on PS5",
+  queue_phase_finalizing_hint: "All bytes are on the PS5; it's committing the file index. Large file counts (10k+) routinely take many minutes here — don't close the app.",
+  upload_status_finalizing: "Finalizing on PS5",
+  upload_status_finalizing_hint: "PS5 is committing the file index. This can take a while for large file counts — don't close the app.",
 };
 
 export default vi;

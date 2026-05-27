@@ -1210,6 +1210,12 @@ install_register_path_appinst: "(In-process AppInstUtil — কোনও ShellUI
 "install.cancel_shellui_body": "{name} ইতিমধ্যে PS5 এর ইনস্টলারকে হস্তান্তর করা হয়েছে এবং আপনি এখানে বাতিল করলেও সেখানে চলতে থাকবে । আসলে এটি বন্ধ করতে, PS5 এর বিজ্ঞপ্তি → ডাউনলোড প্যানেলটি খুলুন । যাইহোক এই সারিটি লুকান?",
 "install.cancel_shellui_yes": "সারি লুকান",
 "install.cancel_shellui_no": "সারি রাখুন",
+  activity_phase_finalizing: "Finalizing on PS5",
+  activity_phase_finalizing_hint: "All bytes are on the PS5; it's committing the file index. This can take a while for large file counts — don't close the app.",
+  queue_phase_finalizing: "Finalizing on PS5",
+  queue_phase_finalizing_hint: "All bytes are on the PS5; it's committing the file index. Large file counts (10k+) routinely take many minutes here — don't close the app.",
+  upload_status_finalizing: "Finalizing on PS5",
+  upload_status_finalizing_hint: "PS5 is committing the file index. This can take a while for large file counts — don't close the app.",
 };
 
 export default bn;

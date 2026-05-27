@@ -5,6 +5,7 @@ import { useInstallQueue } from "./installQueue";
 import {
   useActivityHistoryStore,
   type ActivityKind,
+  type ActivityPhase,
 } from "./activityHistory";
 import { setTransferKeepAwake } from "../lib/keepAwakeHold";
 
@@ -75,12 +76,24 @@ export function installActivityWiring() {
       return;
     }
     if (phase.kind === "running" && transferActivityId !== null) {
+      // "All bytes on wire, engine still working" = finalize phase.
+      // PS5 is committing the manifest / fsyncing inodes; can take
+      // many minutes for large file counts. Renderers use this to
+      // swap "Uploading 100%" for "Finalizing on PS5…". Gate on
+      // totalBytes > 0 so a not-yet-stat'd transfer (where the
+      // denominator hasn't arrived) doesn't false-positive as
+      // finalizing on its very first tick.
+      const newPhase: ActivityPhase =
+        phase.totalBytes > 0 && phase.bytesSent >= phase.totalBytes
+          ? "finalizing"
+          : "uploading";
       useActivityHistoryStore.getState().update(transferActivityId, {
         label: phase.files.length > 1
           ? `Uploading ${phase.files.length} files`
           : `Uploading ${phase.files[0]?.rel_path ?? ""}`.trim(),
         bytes: phase.bytesSent,
         totalBytes: phase.totalBytes,
+        phase: newPhase,
       });
       return;
     }
@@ -236,17 +249,34 @@ export function installActivityWiring() {
         continue;
       }
       // Still running — update byte progress so the ActivityBar
-      // shows a live byte counter.
+      // shows a live byte counter, and derive the finalize-phase
+      // signal so the row can flip to "Finalizing on PS5…" once
+      // bytes peg at 100%. Same derivation as the single-shot path
+      // above; same totalBytes > 0 gate (avoid a stat-pending false
+      // positive on the first tick).
       if (isRunning && wasRunning) {
         const activityId = uploadQueueActivityIds.get(item.id);
+        const newPhase: ActivityPhase =
+          item.totalBytes > 0 && item.bytesSent >= item.totalBytes
+            ? "finalizing"
+            : "uploading";
+        const phaseChanged = prevItem
+          ? newPhase !==
+            (prevItem.totalBytes > 0 &&
+            prevItem.bytesSent >= prevItem.totalBytes
+              ? "finalizing"
+              : "uploading")
+          : true;
         if (
           activityId &&
           (item.bytesSent !== prevItem?.bytesSent ||
-            item.totalBytes !== prevItem?.totalBytes)
+            item.totalBytes !== prevItem?.totalBytes ||
+            phaseChanged)
         ) {
           useActivityHistoryStore.getState().update(activityId, {
             bytes: item.bytesSent,
             totalBytes: item.totalBytes,
+            phase: newPhase,
           });
         }
         continue;

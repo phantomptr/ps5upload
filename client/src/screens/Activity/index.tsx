@@ -290,6 +290,24 @@ function ActivityRow({ entry }: { entry: ActivityEntry }) {
       <div className="mb-1 flex items-center gap-2">
         <OutcomeIcon outcome={entry.outcome} />
         <span className="font-medium">{entry.label}</span>
+        {entry.outcome === "running" && entry.phase === "finalizing" && (
+          // Inline pill that visibly marks the post-100% state where the
+          // engine is waiting on the PS5 to commit the manifest. Without
+          // it, the row sits at "Uploading X files 100%" silently for
+          // minutes-to-hours on big multi-file uploads (user reported a
+          // 1h+ stall on 84,216 files) and the user has no way to tell
+          // it apart from a true hang.
+          <span
+            className="rounded-full bg-[var(--color-warn)]/15 px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-warn)]"
+            title={tr(
+              "activity_phase_finalizing_hint",
+              undefined,
+              "All bytes are on the PS5; it's committing the file index. This can take a while for large file counts — don't close the app.",
+            )}
+          >
+            {tr("activity_phase_finalizing", undefined, "Finalizing on PS5")}
+          </span>
+        )}
         {entry.files !== undefined && entry.files > 1 && (
           <span className="rounded-full bg-[var(--color-surface-3)] px-1.5 py-0.5 text-[10px] text-[var(--color-muted)]">
             {tr(
@@ -359,12 +377,29 @@ function ActivityRow({ entry }: { entry: ActivityEntry }) {
             {pct !== null && ` (${pct.toFixed(0)}%)`}
           </span>
         )}
-        {speed > 0 && isRunning && <span>{formatBytes(speed)}/s</span>}
+        {speed > 0 && isRunning && entry.phase !== "finalizing" && (
+          // Hide the speed chip during the finalize phase — the byte
+          // counter is pegged at 100% so the speed math collapses to a
+          // total-average and the readout is meaningless ("0 B/s" or a
+          // stale prior value depending on which path you take). The
+          // pill at the top already tells the user what's happening.
+          <span>{formatBytes(speed)}/s</span>
+        )}
         {!isRunning && entry.bytes !== undefined && entry.bytes > 0 && speed > 0 && (
           <span>
             {tr(
               "activity_avg_speed",
-              undefined,
+              // Was previously called with `undefined` as the vars
+              // arg. tr() always looks up the key in the active
+              // locale first and only falls through to the 3rd-arg
+              // fallback if the lookup misses — every locale has
+              // this key, so the fallback never ran. Result: a
+              // literal "{speed}" rendered in every language the
+              // app supports (the user-reported "(speed)" in the
+              // bug screenshot is just curly braces blurred by a
+              // phone camera). Passing the vars now interpolates
+              // correctly in every locale.
+              { speed: formatBytes(speed) },
               `avg ${formatBytes(speed)}/s`,
             )}
           </span>

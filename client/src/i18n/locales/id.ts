@@ -1210,6 +1210,12 @@ install_register_path_appinst: "(AppInstUtil dalam proses — tanpa flash ShellU
 "install.cancel_shellui_body": "{name} telah diserahkan ke pemasang PS5 dan akan terus berjalan di sana meskipun Anda membatalkan di sini. Untuk benar - benar menghentikannya, buka panel → Unduhan Pemberitahuan PS5. Sembunyikan baris ini?",
 "install.cancel_shellui_yes": "Sembunyikan baris",
 "install.cancel_shellui_no": "Pertahankan baris",
+  activity_phase_finalizing: "Finalizing on PS5",
+  activity_phase_finalizing_hint: "All bytes are on the PS5; it's committing the file index. This can take a while for large file counts — don't close the app.",
+  queue_phase_finalizing: "Finalizing on PS5",
+  queue_phase_finalizing_hint: "All bytes are on the PS5; it's committing the file index. Large file counts (10k+) routinely take many minutes here — don't close the app.",
+  upload_status_finalizing: "Finalizing on PS5",
+  upload_status_finalizing_hint: "PS5 is committing the file index. This can take a while for large file counts — don't close the app.",
 };
 
 export default id;

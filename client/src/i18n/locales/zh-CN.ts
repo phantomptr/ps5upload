@@ -1218,6 +1218,12 @@ install_register_path_appinst: "（过程中AppInstUtil —无ShellUI闪存）",
 "install.cancel_shellui_body": "{name}已移交给PS5的安装程序，即使您在此处取消，也将继续在那里运行。要真正停止它，请打开PS5的“通知→下载”面板。是否仍要隐藏此行？",
 "install.cancel_shellui_yes": "隐藏行",
 "install.cancel_shellui_no": "保留行",
+  activity_phase_finalizing: "Finalizing on PS5",
+  activity_phase_finalizing_hint: "All bytes are on the PS5; it's committing the file index. This can take a while for large file counts — don't close the app.",
+  queue_phase_finalizing: "Finalizing on PS5",
+  queue_phase_finalizing_hint: "All bytes are on the PS5; it's committing the file index. Large file counts (10k+) routinely take many minutes here — don't close the app.",
+  upload_status_finalizing: "Finalizing on PS5",
+  upload_status_finalizing_hint: "PS5 is committing the file index. This can take a while for large file counts — don't close the app.",
 };
 
 export default zh_CN;

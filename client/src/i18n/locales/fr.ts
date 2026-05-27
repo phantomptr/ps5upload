@@ -1211,6 +1211,12 @@ install_register_path_appinst: "(en cours AppInstUtil — pas de flash ShellUI)"
 "install.cancel_shellui_body": "{name} a déjà été remis à l'installateur de la PS5 et continuera à fonctionner même si vous annulez ici. Pour l'arrêter, ouvrez le panneau Notifications → Downloads de la PS5. Cacher cette ligne quand même ?",
 "install.cancel_shellui_yes": "Masquer la rangée",
 "install.cancel_shellui_no": "Conserver la ligne",
+  activity_phase_finalizing: "Finalizing on PS5",
+  activity_phase_finalizing_hint: "All bytes are on the PS5; it's committing the file index. This can take a while for large file counts — don't close the app.",
+  queue_phase_finalizing: "Finalizing on PS5",
+  queue_phase_finalizing_hint: "All bytes are on the PS5; it's committing the file index. Large file counts (10k+) routinely take many minutes here — don't close the app.",
+  upload_status_finalizing: "Finalizing on PS5",
+  upload_status_finalizing_hint: "PS5 is committing the file index. This can take a while for large file counts — don't close the app.",
 };
 
 export default fr;

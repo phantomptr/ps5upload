@@ -45,6 +45,25 @@ export type ActivityKind =
 
 export type ActivityOutcome = "running" | "done" | "failed" | "stopped";
 
+/** Sub-state of an `outcome === "running"` entry.
+ *
+ *  - `"uploading"` (or absent): bytes are still flowing — the byte
+ *    counter ticks, the rate samplers see new data, the progress bar
+ *    moves. Standard live-transfer rendering.
+ *  - `"finalizing"`: all bytes are on the wire (`bytes >= totalBytes`)
+ *    but the engine job hasn't transitioned to `done` yet, because the
+ *    PS5 is committing the manifest / fsyncing inodes / journaling.
+ *    For large-file-count uploads (e.g. 80k+ files), this phase can
+ *    take many minutes even on healthy hardware — the user reported
+ *    1h+ at 100% on 84,216 files. Renderers branch on this to show
+ *    "Finalizing on PS5…" instead of a frozen "Uploading 100%" row.
+ *
+ *  Absent on terminal outcomes (done/failed/stopped) and on entries
+ *  from older versions of the app — both rendering paths must treat
+ *  `undefined` as "no special phase", i.e. the default uploading copy.
+ */
+export type ActivityPhase = "uploading" | "finalizing";
+
 export interface ActivityEntry {
   id: string;
   kind: ActivityKind;
@@ -78,6 +97,10 @@ export interface ActivityEntry {
    *  fired against, used to route the cancel call. */
   opId?: number;
   addr?: string;
+  /** Sub-state of a running upload — see `ActivityPhase`. Forward-
+   *  compatible (older app versions persist entries without this
+   *  field; renderers treat `undefined` as "uploading"). */
+  phase?: ActivityPhase;
 }
 
 interface ActivityHistoryState {
