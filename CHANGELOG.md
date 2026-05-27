@@ -4,6 +4,17 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.17.4
+
+- **The "kstuff-lite (EchoStretch)" entry in the Payloads catalog
+  now points at the correct repository.** It was previously linking
+  to `EchoStretch/kstuff` (the full build); the entry's display name
+  said "kstuff-lite" so the download was a different artifact than
+  the one named. Now correctly resolves to
+  `EchoStretch/kstuff-lite`.
+
+---
+
 ## 2.17.3
 
 - **Uploading a game folder with tens of thousands of files no
