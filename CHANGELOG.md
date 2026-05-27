@@ -4,6 +4,20 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.17.1
+
+- **Big multi-file uploads no longer look frozen at 100%.** When all
+  the bytes have reached the PS5 but it's still committing the file
+  index — which can take many minutes for folders with tens of
+  thousands of files — the row now shows a clear "Finalizing on PS5"
+  badge with a hint telling you not to close the app. Same signal on
+  the Upload screen, Upload Queue, and Activity tab.
+- **Average-speed readouts on past uploads now show the actual number**
+  instead of the literal text `{speed}`. Cosmetic bug across every
+  language.
+
+---
+
 ## 2.17.0
 
 The v2.16.1 release pipeline didn't make it out — an ESLint failure on the
