@@ -338,6 +338,24 @@ function ActivityRow({ entry }: { entry: ActivityEntry }) {
         )}
       </div>
 
+      {entry.outcome === "running" && entry.phase === "finalizing" && (
+        // Always-visible "don't close the app" hint. Previously this
+        // copy only lived in the pill's tooltip, which on a Tauri
+        // desktop app means almost nobody saw it (no hover discovery
+        // muscle memory on desktop chrome the way there is in browsers).
+        // The user the screenshot came from sat staring at the
+        // tooltip-hidden warning for an hour before force-quitting.
+        // Promote it to an inline line under the row's header so it's
+        // the next thing they read after seeing the pill itself.
+        <div className="mb-1 text-[11px] text-[var(--color-warn)]">
+          {tr(
+            "activity_phase_finalizing_hint",
+            undefined,
+            "All bytes are on the PS5; it's committing the file index. This can take a while for large file counts — don't close the app.",
+          )}
+        </div>
+      )}
+
       {/* From / To paths on their own lines for readability — game
           paths are long and a single break-all line wraps awkwardly
           at the end. Falls back to the legacy single `detail` line
