@@ -150,20 +150,27 @@ struct CatalogueEntry {
 ///     table to point at the variant they prefer.
 const CATALOGUE: &[CatalogueEntry] = &[
     CatalogueEntry {
+        // display_name says "kstuff-lite (EchoStretch)" so this entry
+        // must point at EchoStretch/kstuff-lite, not EchoStretch/kstuff
+        // — both repos exist on EchoStretch's account, and the catalog
+        // previously linked to the *wrong* one (kstuff, the full
+        // build), so users following the Releases / Homepage link
+        // landed on a different artifact than the one named here.
+        // Fixed 2026-05-27 after a user report.
         id: "kstuff-echostretch",
         display_name: "kstuff-lite (EchoStretch)",
         role: "Kernel exploit + R/W primitive",
         description: "Kernel patcher for the full PS5 firmware range. Resolves kernel symbols at runtime via the SDK's NID table, so the same binary covers FW 1.00 → 12.x. Required by ShadowMountPlus and most other privileged payloads. Load this first.",
         repo_host: "github.com",
         repo_owner: "EchoStretch",
-        repo_name: "kstuff",
+        repo_name: "kstuff-lite",
         asset_name_hint: "kstuff",
         on_console_marker_path: Some("/data/kstuff.elf"),
         process_name_hint: None,
         ports: &[],
         autoload_priority: 0,
         autoload_delay_ms: 3000,
-        homepage: "https://github.com/EchoStretch/kstuff",
+        homepage: "https://github.com/EchoStretch/kstuff-lite",
     },
     CatalogueEntry {
         // Same role as kstuff-echostretch (kernel R/W + ucred elevation
