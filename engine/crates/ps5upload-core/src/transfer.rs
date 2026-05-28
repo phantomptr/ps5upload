@@ -16,7 +16,7 @@ use std::collections::VecDeque;
 use std::path::{Component, Path};
 use std::time::Duration;
 
-pub const DEFAULT_SHARD_SIZE: usize = 32 * 1024 * 1024; // 32 MiB
+pub const DEFAULT_SHARD_SIZE: usize = 64 * 1024 * 1024; // 64 MiB
 pub const DEFAULT_MAX_SHARD_RETRIES: u32 = 3;
 /// Default resume-on-drop retries for whole-transfer wrappers (folder,
 /// file-list, single-file). One fresh attempt + this many RESUME retries.
@@ -34,20 +34,37 @@ pub const DEFAULT_RESUME_RETRIES: u32 = 6;
 /// Default maximum number of STREAM_SHARD frames outstanding (no ACK yet).
 /// Pipelining past 1 is what hides per-shard RTT on small-file directories.
 /// Set conservatively: 32 small shards (~128 KiB total at 4 KiB each) or a
-/// few large shards (32 MiB) never come close to kernel socket buffer size.
+/// few large shards (64 MiB) never come close to kernel socket buffer size.
 pub const DEFAULT_INFLIGHT_SHARDS: usize = 32;
 /// Default byte cap on shards outstanding at once.
 ///
-/// 64 MiB — two full 32 MiB shards in flight, enough to overlap hash+send
-/// with payload-side write. The 2026-04-17 audit suggested 4-8 MiB on the
-/// basis that the PS5's 512 KiB receive-buffer cap makes larger host send
-/// buffers bufferbloat-without-throughput. On our e1000 lab NIC that thesis
-/// didn't survive measurement: 8 MiB and 32 MiB caps each produced ~2-4%
-/// regressions on huge-file single-file throughput vs 64 MiB, with no tail
-/// latency benefit visible in the sweep. 64 MiB is the empirically-best
-/// default for this hardware class; tunable via `FTX2_INFLIGHT_BYTES` for
-/// non-e1000 networks where the audit math may pay off.
-pub const DEFAULT_INFLIGHT_BYTES: usize = 64 * 1024 * 1024;
+/// 256 MiB — four full 64 MiB shards in flight, enough headroom to keep
+/// a slow-disk PS5 (phat-class ~40 MiB/s sustained) continuously fed
+/// while the writer thread variance smooths out.
+///
+/// History:
+///   - 2026-04-17 audit: suggested 4–8 MiB on the theory that PS5's
+///     512 KiB recv-buffer cap made larger host-side caps bufferbloat.
+///     Measured: 8 MiB and 32 MiB caps regressed ~2-4% vs 64 MiB on
+///     the e1000 lab NIC (PS5 Pro). Audit was Pro-only.
+///   - 2026-05-28 phat report: same hardware ratio inverts on the phat.
+///     The slower internal SSD (~40 MiB/s sustained vs Pro ~85) means
+///     the PS5's writer thread occasionally stalls; a larger inflight
+///     reservoir keeps engine→payload feeding continuous instead of
+///     spiking-then-pausing at ACK-byte-cap. Combined with the
+///     32→64 MiB shard size bump (DEFAULT_SHARD_SIZE), 64 MiB cap
+///     would have allowed only 1 shard inflight — strictly worse.
+///
+/// Memory: only metadata is tracked in the engine's inflight queue
+/// (16 bytes per shard, not the shard payload). The actual buffering
+/// happens in the TCP socket buffer (8 MiB SNDBUF, see Connection)
+/// and in the next-shard-in-progress read buffer. Peak engine RAM is
+/// `shard_size + inflight_shards_in_flight` ≈ 64 MiB + 4 × 64 MiB
+/// shards already serialized into kernel buffers ≈ 320 MiB worst
+/// case. Acceptable on desktop; we don't ship mobile.
+///
+/// Tunable via `FTX2_INFLIGHT_BYTES` env var.
+pub const DEFAULT_INFLIGHT_BYTES: usize = 256 * 1024 * 1024;
 /// Default pack shard target size — the cap on total packed body bytes per
 /// STREAM_SHARD frame. 4 MiB trades payload-side pack-parse cost against
 /// shard-count reduction.
@@ -1109,7 +1126,7 @@ fn transfer_file_path_with_flags(
         // One shard-sized buffer reused across iterations. `send` writes to
         // the socket synchronously and the inflight queue stores only
         // `(shard_seq, len)`, so the buffer is free to reuse on the next
-        // pass. Avoids 3,200 × 32 MiB allocate/free cycles on a 100 GiB
+        // pass. Avoids ~1,600 × 64 MiB allocate/free cycles on a 100 GiB
         // upload.
         let mut buf = vec![0u8; cfg.shard_size];
         while shard_seq <= total_shards {

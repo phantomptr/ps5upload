@@ -5,7 +5,7 @@
  * UI tell apart an old payload still running from a build that includes
  * a particular fix, without having to boot the console. Keep in sync
  * with the desktop app's package.json during releases. */
-#define PS5UPLOAD2_VERSION "2.18.1"
+#define PS5UPLOAD2_VERSION "2.18.2"
 /* Author credit — embedded in the startup toast so anyone looking at
  * the console screen knows who wrote the software that just loaded.
  * Kept separate from VERSION so release scripts can bump the version
@@ -58,10 +58,19 @@
 #define PS5UPLOAD2_CLIENT_IDLE_SEC 120
 
 /* In-memory per-shard receive buffer size. Larger = fewer recv syscalls
- * and better disk-write batching. Matches the legacy payload's
- * `BUFFER_SIZE` (4 MiB) for the high-throughput bulk-upload path.
+ * and better disk-write batching.
+ *
+ * History: started at 4 MiB to match legacy payload's BUFFER_SIZE. Bumped
+ * to 8 MiB in v2.18.2 after a phat-vs-Pro disk-write regression report.
+ * On the phat (~40 MiB/s sustained internal-SSD write vs ~85 on the Pro)
+ * the 4 MiB ping-pong incurred ~70 ms producer-wait per chunk, dominating
+ * shard wall-time. Doubling the slot halves the ping-pong frequency
+ * (32 MiB shard → 4 chunks instead of 8) and doubles the per-write()
+ * syscall size, which amortises FreeBSD UFS metadata overhead.
+ * RAM cost: writer-thread allocates 2× this for the double-buffer
+ * (one per active direct-mode tx = 16 MiB resident, was 8 MiB).
  */
-#define PS5UPLOAD2_SHARD_IO_BUF (4 * 1024 * 1024)
+#define PS5UPLOAD2_SHARD_IO_BUF (8 * 1024 * 1024)
 
 /* Minimum shard size (payload bytes) for spawning the double-buffered writer
  * thread. Below this, the pthread_create/join cost — measured at ~4–6 ms per

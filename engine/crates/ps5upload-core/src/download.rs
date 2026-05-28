@@ -10,7 +10,7 @@
 //! - Single management port, single connection per FS_READ → no
 //!   pipelining. Throughput is RTT × chunk-size / second; on LAN with
 //!   2 MiB chunks, that's ~250-500 MiB/s realistic, much slower than
-//!   the FTX2 upload path's pipelined 32 MiB shards.
+//!   the FTX2 upload path's pipelined 64 MiB shards.
 //! - No resume / no per-shard digest. If the connection drops mid-
 //!   download, the partial local file is retained but the next attempt
 //!   starts over from offset 0.
