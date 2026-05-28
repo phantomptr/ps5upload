@@ -4,6 +4,26 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.18.3
+
+- **Hotfix for multi-file upload crash.** A user reported uploading a
+  large game folder (~46,000 files / ~13 GB on disk) with v2.18.2
+  consistently fails partway through with "PS5 stopped responding."
+  Reproduced and tracked down: the buffer-size bump shipped in
+  v2.18.2 (per-shard I/O buffer from 4 MiB to 8 MiB on the PS5)
+  doubled the per-shard malloc/free pressure on the multi-file
+  upload path. On folders with many non-packed files (each one
+  separately spawning the on-PS5 writer thread + 2 × 8 MiB buffer),
+  the PS5's heap fragmented faster than its allocator could
+  compact and the payload listener died after roughly 5 minutes.
+- **What changed:** the buffer is reverted to 4 MiB. v2.18.2's
+  measured speed change on the original PS5 was within run-to-run
+  noise anyway, so reverting costs you nothing observable.
+- **Reload the payload** after upgrading. The buffer-size lives in
+  the on-PS5 ELF, not in the desktop app.
+
+---
+
 ## 2.18.2
 
 - **Background:** a user reported sustained single-file upload speed

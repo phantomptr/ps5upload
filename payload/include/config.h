@@ -5,7 +5,7 @@
  * UI tell apart an old payload still running from a build that includes
  * a particular fix, without having to boot the console. Keep in sync
  * with the desktop app's package.json during releases. */
-#define PS5UPLOAD2_VERSION "2.18.2"
+#define PS5UPLOAD2_VERSION "2.18.3"
 /* Author credit — embedded in the startup toast so anyone looking at
  * the console screen knows who wrote the software that just loaded.
  * Kept separate from VERSION so release scripts can bump the version
@@ -60,17 +60,26 @@
 /* In-memory per-shard receive buffer size. Larger = fewer recv syscalls
  * and better disk-write batching.
  *
- * History: started at 4 MiB to match legacy payload's BUFFER_SIZE. Bumped
- * to 8 MiB in v2.18.2 after a phat-vs-Pro disk-write regression report.
- * On the phat (~40 MiB/s sustained internal-SSD write vs ~85 on the Pro)
- * the 4 MiB ping-pong incurred ~70 ms producer-wait per chunk, dominating
- * shard wall-time. Doubling the slot halves the ping-pong frequency
- * (32 MiB shard → 4 chunks instead of 8) and doubles the per-write()
- * syscall size, which amortises FreeBSD UFS metadata overhead.
- * RAM cost: writer-thread allocates 2× this for the double-buffer
- * (one per active direct-mode tx = 16 MiB resident, was 8 MiB).
+ * History:
+ *   - Started at 4 MiB to match legacy payload's BUFFER_SIZE.
+ *   - v2.18.2 bumped to 8 MiB chasing a phat-disk perf win. The single-
+ *     file direct-write path tolerated this fine, but the MULTI-FILE
+ *     path's per-shard `runtime_write_shard_to_path` does
+ *     malloc(SHARD_IO_BUF) × 2 + pthread_create + ... + free + join on
+ *     every non-packed shard. On a 46k-file folder (PPSA17221-app, 13
+ *     GB on disk, ~1.2 GB of logical data) that pattern crashed the
+ *     payload deterministically: with 2× 8 MiB = 16 MiB churning over
+ *     hundreds of shards, the heap fragmented faster than PS5's
+ *     allocator could pack — listener died within ~5 minutes.
+ *   - v2.18.3 reverts the constant to 4 MiB. The phat perf bump was
+ *     within run-to-run noise anyway (see v2.18.2 CHANGELOG) — there
+ *     is no benefit to keeping the larger buffer at the cost of
+ *     crashing multi-file uploads. The proper fix for the per-shard
+ *     alloc churn is to share buffers across non-packed shards (would
+ *     match the single-file persistent-writer pattern); deferred to a
+ *     later release.
  */
-#define PS5UPLOAD2_SHARD_IO_BUF (8 * 1024 * 1024)
+#define PS5UPLOAD2_SHARD_IO_BUF (4 * 1024 * 1024)
 
 /* Minimum shard size (payload bytes) for spawning the double-buffered writer
  * thread. Below this, the pthread_create/join cost — measured at ~4–6 ms per
