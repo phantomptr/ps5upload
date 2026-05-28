@@ -17,7 +17,8 @@ fn bench_hash(c: &mut Criterion) {
         (64 * 1024, "64 KB"),
         (1024 * 1024, "1 MB"),
         (8 * 1024 * 1024, "8 MB"),
-        (32 * 1024 * 1024, "32 MB"), // default shard size
+        (32 * 1024 * 1024, "32 MB"),
+        (64 * 1024 * 1024, "64 MB"), // default shard size (v2.18.2+)
     ];
 
     for &(size, label) in sizes {

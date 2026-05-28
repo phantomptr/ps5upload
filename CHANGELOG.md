@@ -4,6 +4,36 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.18.2
+
+- **Background:** a user reported sustained single-file upload speed
+  dropping from "100 MB/s before" to "30 MB/s now" after switching
+  console hardware. We measured carefully and the cause is the
+  underlying PS5 model's internal-SSD write speed — the original
+  PS5 sustains ~30 MB/s on this code path; the PS5 Pro sustains
+  meaningfully more. Both numbers are network-fast (the host pushes
+  bytes into the PS5 at gigabit line rate) but disk-bound at the
+  console end.
+- **What changed in this release:** the transfer layer was tuned
+  toward fewer/larger frames and bigger writer-thread buffers on the
+  PS5 (64 MiB shards, 256 MiB inflight, 8 MiB writer slots, up from
+  32/64/4 respectively). On a 10 GB `.exfat` over wired gigabit the
+  measured wall-clock change was within run-to-run noise — small
+  positive on the writer-wait portion, small negative on the
+  per-shard overhead, net-neutral. The changes ship anyway because
+  they are at worst neutral on every console class and are a
+  better default for any future console with a slower destination.
+- **What this release does NOT do:** there is no headline speed
+  improvement for original-PS5 single-file uploads. We are honest
+  about that. Going materially past the current ceiling needs
+  payload-side changes deeper than buffer tuning (e.g. a third
+  writer-slot for more producer headroom, or a different write
+  pattern); we'll trial that in a future release.
+- **Reload the payload** after upgrading to pick up the writer-slot
+  change. An older payload still pairs fine with this app.
+
+---
+
 ## 2.18.1
 
 - **Picking a large game folder now shows what the app is doing.**

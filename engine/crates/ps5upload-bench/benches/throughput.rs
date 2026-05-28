@@ -28,8 +28,8 @@ fn bench_transfer_file(c: &mut Criterion) {
         (64 * 1024, "64 KB"),
         (512 * 1024, "512 KB"),
         (4 * 1024 * 1024, "4 MB"),
-        (32 * 1024 * 1024, "32 MB"), // exactly one default shard
-        (64 * 1024 * 1024, "64 MB"), // two shards
+        (32 * 1024 * 1024, "32 MB"), // half a default shard
+        (64 * 1024 * 1024, "64 MB"), // exactly one default shard
     ];
 
     for &(size, label) in sizes {
@@ -61,7 +61,7 @@ fn bench_shard_size(c: &mut Criterion) {
         (64 * 1024, "64 KB shards"),
         (512 * 1024, "512 KB shards"),
         (4 * 1024 * 1024, "4 MB shards"),
-        (32 * 1024 * 1024, "32 MB shards"), // single shard
+        (32 * 1024 * 1024, "32 MB shards"), // single shard (sub-default)
     ];
 
     group.throughput(Throughput::Bytes(PAYLOAD as u64));
