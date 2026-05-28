@@ -4,6 +4,32 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.18.5
+
+- **`.zip` uploads — much faster scanning, with a live progress count.**
+  Dropping a `.zip` game dump used to show "Inspecting…" with no
+  feedback while the app walked the archive. On big dumps (60 GB+
+  with tens of thousands of files), this could take long enough to
+  trip the same "engine request failed: error sending request" timeout
+  that 2.18.4 fixed for folder deletes — the user saw a baffling error
+  even though nothing was actually broken. 2.18.5 makes the scan
+  **dramatically faster** (effectively instant once the disk is
+  awake) and the few seconds you do wait now show a live "Scanning
+  archive… N entries" counter so you can see the app is working.
+- **Clearer errors when a `.zip` can't be read.** Bad path, wrong
+  file type, unsupported compression method — the message now tells
+  you exactly what's wrong instead of a generic "engine request
+  failed."
+- **Fix: the "extracted" size in the .zip preview was sometimes
+  blank.** Archives made by some tools (notably `bsdtar` on macOS/Linux
+  and anything using libarchive) set a flag that the old code couldn't
+  read past, so the Upload card would show file count but a blank
+  "extracted" size. Now you see the real expanded size for every
+  archive.
+- No payload changes needed; this is a desktop-app-only release.
+
+---
+
 ## 2.18.4
 
 - **Hotfix for "engine request failed" on huge folder deletes/copies.**

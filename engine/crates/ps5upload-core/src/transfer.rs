@@ -2389,76 +2389,65 @@ pub struct ZipInspect {
 /// counts/sizes and, if it finds the shallowest `sce_sys/param.json`, parses
 /// it in memory for game metadata.
 pub fn inspect_zip(zip_path: &Path) -> Result<ZipInspect> {
+    inspect_zip_with_progress(zip_path, |_| {})
+}
+
+/// `inspect_zip` variant that calls `on_progress(entries_seen)` every
+/// 1,000 entries during the central-directory walk so streaming HTTP
+/// handlers can emit watchdog-resetting heartbeats. The progress is
+/// proportional to entry count, not bytes — the bytes side is bounded
+/// by central-directory size which is small. Used by
+/// `zip_inspect_handler`'s NDJSON streaming response.
+pub fn inspect_zip_with_progress(
+    zip_path: &Path,
+    on_progress: impl FnMut(u64),
+) -> Result<ZipInspect> {
     let compressed_size = std::fs::metadata(zip_path)
         .with_context(|| format!("stat zip {}", zip_path.display()))?
         .len();
-    let file = std::fs::File::open(zip_path)
-        .with_context(|| format!("open zip {}", zip_path.display()))?;
-    let mut archive = zip::ZipArchive::new(std::io::BufReader::new(file))
+
+    // Read the central directory via our own zero-seek parser
+    // (`zip_cd`) instead of `zip::ZipArchive::new`. We get per-entry
+    // (name, uncompressed_size, is_dir) for free, so total_uncompressed
+    // is computed by direct summation instead of going through
+    // `archive.decompressed_size()` — which returned `None` on any
+    // archive with general-purpose bit 3 set (bsdtar / libarchive
+    // streaming zippers; see the "Windows zip bit-3 trap" lesson). With
+    // direct summation we surface the real extracted size in the
+    // Upload card on those archives too, instead of the misleading
+    // count-only display.
+    let entries = crate::zip_cd::read_central_directory_with_progress(zip_path, on_progress)
         .with_context(|| format!("read zip central directory {}", zip_path.display()))?;
 
-    // Metadata-only pass — NO per-entry seeks. The previous version
-    // called by_index(i) for EVERY entry; each call seeks to and reads
-    // that entry's local header (zip's find_data_start). On a multi-GB
-    // game dump over an HDD array that's tens of thousands of random
-    // seeks: it pinned the disk at 100% and outran the client's request
-    // timeout, and because inspect runs in spawn_blocking the orphaned
-    // task kept seeking "until the program closed" (Constantine-HD
-    // report). decompressed_size() + file_names() read only the
-    // in-memory central directory that ZipArchive::new already parsed.
-    //
-    // It also means inspect no longer hard-fails on a deflate64/lzma
-    // archive — by_index used to build a decoder and return
-    // UnsupportedArchive, which surfaced as the baffling HTTP 400 "read
-    // zip entry 0". The clear "unsupported compression" message now
-    // comes from the transfer path (ZipMaterialiser::map_open_error),
-    // where decompression actually happens and the user is committed.
-    //
-    // total_uncompressed via decompressed_size() reads each entry's
-    // central-directory size from memory (no seeks; dirs are 0). Caveat:
-    // zip 2.4.2's decompressed_size() returns None if ANY entry sets the
-    // data-descriptor bit (general-purpose flag 3) — common with
-    // bsdtar/libarchive/streaming zippers (see the Windows-zip-bit3
-    // lesson) — even though the central directory still holds the real
-    // size. We map None to 0; the Upload card then suppresses the
-    // "extracted" figure and shows count-only rather than a
-    // contradictory "0 B". We accept that over reintroducing the
-    // per-entry local-header seeks (by_index_raw) this rewrite removed to
-    // kill the 100%-disk inspect thrash. The actual transfer total +
-    // progress denominator come from zip_plan_preview, which is correct
-    // regardless. (decompressed_size() can also include a rare zip-slip
-    // entry sanitize would drop — negligible for a preview number.)
-    let total_uncompressed = archive
-        .decompressed_size()
-        .and_then(|v| u64::try_from(v).ok())
-        .unwrap_or(0);
-
     let mut file_count = 0u64;
+    let mut total_uncompressed = 0u64;
     // Find the shallowest "<root>/sce_sys/param.json" (fewest path
     // segments) so a wrapped dump (`MyGame/sce_sys/…`) and a root dump
     // (`sce_sys/…`) both resolve to the real game root. Keep the entry's
-    // ORIGINAL name so we can look its index back up for the single
+    // ORIGINAL name so we can look it up by-name for the single
     // content read below.
     let mut param_hit: Option<(usize, String, String)> = None; // (depth, original_name, game_root)
-    for name in archive.file_names() {
+    for entry in &entries {
         // Directory entries (trailing '/') don't count as files —
-        // matches the old `is_dir()` skip. sanitize_zip_entry keeps
-        // "foo/" as "foo", so we must filter dirs by name first.
-        if name.ends_with('/') {
+        // matches the old behaviour. sanitize_zip_entry keeps "foo/"
+        // as "foo", so we must filter dirs by name first.
+        if entry.is_dir {
             continue;
         }
-        let Some(rel) = sanitize_zip_entry(name) else {
+        let Some(rel) = sanitize_zip_entry(&entry.name) else {
             continue;
         };
         file_count += 1;
+        total_uncompressed = total_uncompressed.saturating_add(entry.uncompressed_size);
         if let Some(root) = rel.strip_suffix("sce_sys/param.json") {
             let game_root = root.trim_end_matches('/').to_string();
             let depth = rel.split('/').count();
             if param_hit.as_ref().is_none_or(|(d, _, _)| depth < *d) {
-                param_hit = Some((depth, name.to_string(), game_root));
+                param_hit = Some((depth, entry.name.clone(), game_root));
             }
         }
     }
+    drop(entries);
 
     let mut inspect = ZipInspect {
         file_count,
@@ -2471,23 +2460,28 @@ pub fn inspect_zip(zip_path: &Path) -> Result<ZipInspect> {
         game_root: None,
     };
 
+    // Only open the zip-crate archive when we actually need to inflate
+    // param.json — most game dumps have one, but skipping the open for
+    // archives without one saves a redundant central-directory parse on
+    // top of our own.
     if let Some((_, original_name, game_root)) = param_hit {
-        if let Some(idx) = archive.index_for_name(&original_name) {
-            use std::io::Read;
+        use std::io::Read;
+        let file = std::fs::File::open(zip_path)
+            .with_context(|| format!("re-open zip for param.json {}", zip_path.display()))?;
+        if let Ok(mut archive) = zip::ZipArchive::new(std::io::BufReader::new(file)) {
             // Cap the inflate: a real param.json is a few KiB, but
             // inspect_zip runs on user-supplied archives just to render
             // the Upload preview, so a crafted entry named
             // sce_sys/param.json that decompresses to gigabytes (zip
             // bomb) must not OOM the engine before any upload even
-            // starts. `take` bounds the read. This is the ONLY by_index
-            // (one seek + small inflate) left in inspect.
+            // starts. `take` bounds the read.
             //
             // Everything here is non-fatal: a param.json that's itself
             // in an unsupported method, won't fit in 4 MiB, or doesn't
             // parse just falls through to the size/count-only preview —
             // the transfer path surfaces any real compression error.
             const MAX_PARAM_JSON: u64 = 4 * 1024 * 1024;
-            if let Ok(zf) = archive.by_index(idx) {
+            if let Ok(zf) = archive.by_name(&original_name) {
                 let mut bytes = Vec::new();
                 if zf.take(MAX_PARAM_JSON).read_to_end(&mut bytes).is_ok() {
                     if let Ok(meta) = crate::game_meta::parse_param_json_bytes(&bytes) {
@@ -2510,35 +2504,45 @@ pub fn inspect_zip(zip_path: &Path) -> Result<ZipInspect> {
 /// (the UI file tree). Applies the same sanitize + excludes the transfer does,
 /// reading only the central directory. Lets the HTTP engine render a zip job
 /// without taking its own dependency on the `zip` crate.
+///
+/// Backed by `zip_cd::read_central_directory` rather than the `zip`
+/// crate's `by_index_raw`: the crate API forces a per-entry seek
+/// (`find_content`) to return metadata that already lives in memory.
+/// On a 6.7 GB / 1,548-entry zip from cold-cache exFAT external the
+/// old path took 17 s (one seek per entry); the new path reads the
+/// EOCD + central directory in two bulk reads and parses linearly
+/// (~ms). For huge dumps (100k+ tiny files) the difference is even
+/// larger — the per-entry-seek path would have blown the Tauri client's
+/// 60 s deadline (the reported "engine request failed" symptom).
 pub fn zip_plan_preview(zip_path: &Path, excludes: &[String]) -> Result<(u64, Vec<(String, u64)>)> {
-    let file = std::fs::File::open(zip_path)
-        .with_context(|| format!("open zip {}", zip_path.display()))?;
-    let mut archive = zip::ZipArchive::new(std::io::BufReader::new(file))
+    zip_plan_preview_with_progress(zip_path, excludes, |_| {})
+}
+
+/// `zip_plan_preview` variant that forwards a per-N-entries callback so
+/// a streaming HTTP handler can emit progress heartbeats while the
+/// central directory is parsed. The walk itself is fast once the bulk
+/// read lands; the callback exists purely so a client-side watchdog has
+/// a continuous "engine still alive" signal during cold-cache reads of
+/// the central directory itself.
+pub fn zip_plan_preview_with_progress(
+    zip_path: &Path,
+    excludes: &[String],
+    on_progress: impl FnMut(u64),
+) -> Result<(u64, Vec<(String, u64)>)> {
+    let entries = crate::zip_cd::read_central_directory_with_progress(zip_path, on_progress)
         .with_context(|| format!("read zip central directory {}", zip_path.display()))?;
-    let mut files: Vec<(String, u64)> = Vec::new();
-    for i in 0..archive.len() {
-        let (name, size, is_dir) = {
-            // by_index_raw, not by_index: planning only needs central-
-            // directory metadata (name/size/is_dir), and the raw variant
-            // skips building a decoder, so an unsupported-compression
-            // entry doesn't fail planning here — the ZipMaterialiser
-            // raises the clear "unsupported compression" error at send
-            // time instead (one place, one message).
-            let e = archive
-                .by_index_raw(i)
-                .with_context(|| format!("read zip entry {i}"))?;
-            (e.name().to_string(), e.size(), e.is_dir())
-        };
-        if is_dir {
+    let mut files: Vec<(String, u64)> = Vec::with_capacity(entries.len());
+    for entry in entries {
+        if entry.is_dir {
             continue;
         }
-        let Some(rel) = sanitize_zip_entry(&name) else {
+        let Some(rel) = sanitize_zip_entry(&entry.name) else {
             continue;
         };
         if !excludes.is_empty() && crate::excludes::is_excluded_strings(Path::new(&rel), excludes) {
             continue;
         }
-        files.push((rel, size));
+        files.push((rel, entry.uncompressed_size));
     }
     // Collapse duplicate paths keeping the last (same rule as
     // transfer_zip_with_opts) so the preview's total + file count match

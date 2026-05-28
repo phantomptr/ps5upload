@@ -90,6 +90,7 @@ export default function UploadScreen() {
     source,
     detecting,
     detectError,
+    zipInspectEntries,
     mountAfterUpload,
     mountReadOnly,
     destinationVolume,
@@ -387,6 +388,7 @@ export default function UploadScreen() {
           source={source}
           detecting={detecting}
           detectError={detectError}
+          zipInspectEntries={zipInspectEntries}
           mountAfterUpload={mountAfterUpload}
           mountReadOnly={mountReadOnly}
           destinationVolume={destinationVolume}
@@ -489,6 +491,7 @@ function Step2Options(props: {
   source: PickedSource;
   detecting: boolean;
   detectError: string | null;
+  zipInspectEntries: number | null;
   mountAfterUpload: boolean;
   mountReadOnly: boolean;
   destinationVolume: string | null;
@@ -515,6 +518,7 @@ function Step2Options(props: {
     source,
     detecting,
     detectError,
+    zipInspectEntries,
     mountAfterUpload,
     mountReadOnly,
     destinationVolume,
@@ -591,6 +595,12 @@ function Step2Options(props: {
               // inside the source card so it's the second thing the
               // user reads after the path, and a hint line tells them
               // it's normal and what to expect.
+              //
+              // For .zip dumps the engine streams a live entry-count
+              // via the inspect SSE channel; we surface it inline so
+              // the user can see the central-directory walk is
+              // actually moving (especially valuable when the
+              // archive is on a spun-down USB HDD).
               <div className="mt-2 flex items-start gap-2 rounded-md border border-[var(--color-accent)]/40 bg-[var(--color-accent)]/5 p-2 text-xs">
                 <Loader2
                   size={14}
@@ -598,16 +608,28 @@ function Step2Options(props: {
                 />
                 <div>
                   <div className="font-medium text-[var(--color-text)]">
-                    {tr(
-                      "upload_scanning_title",
-                      "Scanning game folder…",
-                    )}
+                    {source.kind === "archive"
+                      ? zipInspectEntries !== null
+                        ? tr(
+                            "upload_scanning_archive_title_with_count",
+                            "Scanning archive… {count} entries",
+                          ).replace(
+                            "{count}",
+                            zipInspectEntries.toLocaleString(),
+                          )
+                        : tr("upload_scanning_archive_title", "Scanning archive…")
+                      : tr("upload_scanning_title", "Scanning game folder…")}
                   </div>
                   <div className="text-[var(--color-muted)]">
-                    {tr(
-                      "upload_scanning_hint",
-                      "Counting files and building the upload plan. Large folders (100k+ files) take 30 seconds or so. Upload buttons will enable when this finishes.",
-                    )}
+                    {source.kind === "archive"
+                      ? tr(
+                          "upload_scanning_archive_hint",
+                          "Reading the .zip central directory and parsing embedded game metadata. Upload buttons will enable when this finishes.",
+                        )
+                      : tr(
+                          "upload_scanning_hint",
+                          "Counting files and building the upload plan. Large folders (100k+ files) take 30 seconds or so. Upload buttons will enable when this finishes.",
+                        )}
                   </div>
                 </div>
               </div>

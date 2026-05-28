@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import {
   inspectFolder,
-  zipInspect,
+  zipInspectStream,
   type FolderInspectResult,
   type WrappedGameHint,
   type ZipInspect,
@@ -52,6 +52,12 @@ export interface UploadState {
   source: PickedSource | null;
   detecting: boolean;
   detectError: string | null;
+  /** Running CDFH-record count while `zipInspectStream` is in flight. Null
+   *  when no archive scan is happening or the engine hasn't sent its first
+   *  progress tick yet. Drives the "Scanning archive… N entries" indicator
+   *  on the Upload screen — it's how the user sees the engine is alive
+   *  during a slow cold-cache central-directory read. */
+  zipInspectEntries: number | null;
 
   mountAfterUpload: boolean;
   /** Mount the image read-only when mount-after-upload runs. Default
@@ -111,6 +117,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
   source: null,
   detecting: false,
   detectError: null,
+  zipInspectEntries: null,
   mountAfterUpload: false,
   mountReadOnly: true,
   destinationVolume: null,
@@ -141,9 +148,16 @@ export const useUploadStore = create<UploadState>((set, get) => ({
         detecting: true,
         detectError: null,
         mountAfterUpload: false,
+        zipInspectEntries: null,
       });
       try {
-        const zipInfo = await zipInspect(path);
+        const zipInfo = await zipInspectStream(path, (p) => {
+          // Stale-result guard: if the user dropped another file mid-scan,
+          // ignore late ticks from the previous one. Without this the
+          // entry count would briefly flicker between two unrelated zips.
+          if (get().source?.path !== path) return;
+          set({ zipInspectEntries: p.entries_seen });
+        });
         if (get().source?.path !== path) return;
         set({
           source: {
@@ -155,12 +169,14 @@ export const useUploadStore = create<UploadState>((set, get) => ({
           },
           detecting: false,
           detectError: null,
+          zipInspectEntries: null,
         });
       } catch (e) {
         if (get().source?.path !== path) return;
         set({
           detecting: false,
           detectError: e instanceof Error ? e.message : String(e),
+          zipInspectEntries: null,
         });
       }
       return;

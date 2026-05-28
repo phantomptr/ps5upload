@@ -238,6 +238,17 @@ pub struct TransferZipReq {
 
 /// Upload a `.zip`'s contents, decompressing on the host so files land
 /// already extracted on the PS5. Proxies the engine's `/api/transfer/zip`.
+///
+/// Uses `post_json_long` rather than `post_json` because the engine
+/// handler runs the central-directory plan synchronously **before**
+/// returning a job_id — and zip-plan time scales with entry count and
+/// disk-seek latency. A 70 GB game dump with 80–100k files on a slow
+/// USB HDD has been observed to take >60s in plan, blowing the short
+/// client timeout with the same "engine request failed: error sending
+/// request" symptom that hit the destructive trio pre-2.18.4 (see
+/// `http_client_long`'s rationale). Once plan completes the job is
+/// asynchronous, so we only need the long deadline to cover the
+/// front-loaded planning phase.
 #[tauri::command]
 pub async fn transfer_zip(req: TransferZipReq) -> Result<JsonValue, String> {
     let base = engine::url();
@@ -250,7 +261,7 @@ pub async fn transfer_zip(req: TransferZipReq) -> Result<JsonValue, String> {
         "excludes": req.excludes,
         "bandwidth_cap_mbps": req.bandwidth_cap_mbps,
     });
-    post_json(&url, &body).await
+    post_json_long(&url, &body).await
 }
 
 #[derive(Debug, Deserialize)]
@@ -260,12 +271,240 @@ pub struct ZipInspectReq {
 
 /// Preview a `.zip` (file count, compressed vs uncompressed size, embedded
 /// game metadata) without extracting it. Proxies `/api/zip/inspect`.
+///
+/// Uses `post_json_long`: inspect reads the EOCD + central directory
+/// (potentially tens of MB for a dump with 100k+ entries) from
+/// user-supplied storage that may be a cold-cache external HDD. The
+/// rare worst case is bounded by central-dir size, not by uncompressed
+/// game size — so a 1h ceiling is over-generous but matches the
+/// destructive-trio pattern (see `http_client_long`). The streaming
+/// variant `zip_inspect_stream` supersedes this for the UI path with a
+/// watchdog + progress events; this one stays for tests and any caller
+/// that doesn't want to plumb a Channel through.
 #[tauri::command]
 pub async fn zip_inspect(req: ZipInspectReq) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/zip/inspect");
     let body = serde_json::json!({ "zip_path": req.zip_path });
-    post_json(&url, &body).await
+    post_json_long(&url, &body).await
+}
+
+/// One progress tick from the engine's inspect-stream worker.
+/// Mirrors the `data:` payload of the `progress` SSE event so the
+/// renderer can show "Scanning archive… N entries" while the
+/// central-directory walk is in flight.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct ZipInspectProgress {
+    pub entries_seen: u64,
+}
+
+/// Streaming variant of `zip_inspect`: subscribes to the engine's
+/// `/api/zip/inspect/stream` SSE endpoint, forwards `progress` events
+/// through a Tauri channel for live UI feedback, and returns the final
+/// inspect result.
+///
+/// Watchdog: if no SSE chunk (including the engine's 1 s heartbeat)
+/// arrives for `INSPECT_IDLE_TIMEOUT_SECS`, the call fails with
+/// "engine stopped responding". That's the dead-man-switch the user
+/// asked for — instead of a fixed wall-clock deadline, the success
+/// criterion is *continuous forward signal*. A genuinely wedged engine
+/// (no heartbeat, no progress) fails fast; a healthy engine that's
+/// legitimately taking minutes to walk a 200 k-entry CD over a slow
+/// network mount stays alive as long as it keeps signalling.
+///
+/// The renderer creates the channel as `new Channel<ZipInspectProgress>(cb)`
+/// and passes it as `onProgress`; this Rust handler receives a typed
+/// `tauri::ipc::Channel` and `send()`s each progress event back to JS.
+#[tauri::command]
+pub async fn zip_inspect_stream(
+    req: ZipInspectReq,
+    on_progress: tauri::ipc::Channel<ZipInspectProgress>,
+) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/zip/inspect/stream");
+    let body = serde_json::json!({ "zip_path": req.zip_path });
+    post_sse_inspect_with_watchdog(&url, &body, on_progress).await
+}
+
+/// How long to wait for ANY SSE chunk (event or heartbeat) before
+/// declaring the engine wedged. The engine's `KeepAlive::interval(1s)`
+/// makes 30 s = 30× the expected heartbeat cadence, which leaves room
+/// for a momentarily-blocked tokio runtime without triggering a false
+/// "stopped responding" while still cutting off a real wedge promptly.
+const INSPECT_IDLE_TIMEOUT_SECS: u64 = 30;
+
+/// Drive the engine's `/api/zip/inspect/stream` SSE response with a
+/// per-chunk idle watchdog.
+///
+/// `reqwest`'s `bytes_stream()` is byte-level, not event-level, so we
+/// run a small SSE state machine here: accumulate bytes into a buffer,
+/// look for the spec-defined `\n\n` event-boundary, split, parse the
+/// `event:`/`data:` fields, and dispatch. Comments (`:` lines, which
+/// is what our heartbeat is) reset the watchdog without invoking any
+/// callback — that's exactly the "engine still alive" signal we need.
+async fn post_sse_inspect_with_watchdog(
+    url: &str,
+    body: &serde_json::Value,
+    on_progress: tauri::ipc::Channel<ZipInspectProgress>,
+) -> Result<JsonValue, String> {
+    use futures_util::StreamExt;
+
+    let resp = http_client_long()
+        .post(url)
+        .header("accept", "text/event-stream")
+        .json(body)
+        .send()
+        .await
+        .map_err(|e| format!("engine request failed: {e}"))?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        // The streaming endpoint sends errors as a final `event: error`
+        // line with HTTP 200, but a non-200 here means the engine
+        // rejected the request shape outright (or the local sidecar is
+        // down). Surface the body so the user sees the engine's own
+        // message instead of an opaque status code.
+        let body_text = resp
+            .text()
+            .await
+            .map_err(|e| format!("engine response body read failed: {e}"))?;
+        return Err(format!("engine HTTP {status}: {body_text}"));
+    }
+
+    let mut stream = resp.bytes_stream();
+    let idle = Duration::from_secs(INSPECT_IDLE_TIMEOUT_SECS);
+    let mut buf: Vec<u8> = Vec::with_capacity(4096);
+
+    loop {
+        let chunk = match tokio::time::timeout(idle, stream.next()).await {
+            Ok(Some(Ok(bytes))) => bytes,
+            Ok(Some(Err(e))) => return Err(format!("engine stream error: {e}")),
+            Ok(None) => {
+                return Err(
+                    "engine closed the inspect stream before sending a done/error event"
+                        .to_string(),
+                );
+            }
+            Err(_) => {
+                return Err(format!(
+                    "engine stopped responding (no SSE event for {INSPECT_IDLE_TIMEOUT_SECS}s)"
+                ));
+            }
+        };
+        buf.extend_from_slice(&chunk);
+
+        // SSE event boundary is a blank line, i.e. two consecutive
+        // newlines. Some servers (and our axum one) only emit `\n\n`,
+        // but we accept `\r\n\r\n` too for safety against any future
+        // proxy that rewrites line endings.
+        while let Some(end) = find_event_boundary(&buf) {
+            let event_bytes = buf.drain(..end.end).collect::<Vec<u8>>();
+            // Strip the boundary itself before parsing.
+            let block_bytes = &event_bytes[..end.start];
+            let block = std::str::from_utf8(block_bytes)
+                .map_err(|e| format!("engine sent non-UTF-8 SSE block: {e}"))?;
+            if let Some(parsed) = parse_sse_block(block) {
+                match parsed.event.as_deref() {
+                    Some("progress") => {
+                        if let Ok(p) = serde_json::from_str::<ZipInspectProgress>(&parsed.data) {
+                            // Channel send is fire-and-forget: if the
+                            // renderer is gone, we still let the inspect
+                            // complete so the caller's awaited future
+                            // resolves rather than dangling.
+                            let _ = on_progress.send(p);
+                        }
+                    }
+                    Some("done") => {
+                        return serde_json::from_str::<JsonValue>(&parsed.data).map_err(|e| {
+                            format!(
+                                "engine sent invalid `done` JSON: {e} — body={}",
+                                parsed.data
+                            )
+                        });
+                    }
+                    Some("error") => {
+                        // Pull the {"error": "..."} envelope; fall back
+                        // to the raw data if it doesn't parse.
+                        let msg = serde_json::from_str::<JsonValue>(&parsed.data)
+                            .ok()
+                            .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(String::from))
+                            .unwrap_or_else(|| parsed.data.clone());
+                        return Err(format!("engine reported: {msg}"));
+                    }
+                    _ => {
+                        // Unknown event type — ignore but keep the
+                        // watchdog reset (which already happened via
+                        // chunk receipt).
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Where in `buf` the next event-boundary lives, and where the boundary
+/// itself ends. `start` excludes the boundary so the caller can slice
+/// the block; `end` is past-the-end of the boundary so the caller can
+/// drain.
+struct EventBoundary {
+    start: usize,
+    end: usize,
+}
+
+fn find_event_boundary(buf: &[u8]) -> Option<EventBoundary> {
+    if let Some(i) = memchr_pair(buf, b"\n\n") {
+        return Some(EventBoundary {
+            start: i,
+            end: i + 2,
+        });
+    }
+    if let Some(i) = memchr_pair(buf, b"\r\n\r\n") {
+        return Some(EventBoundary {
+            start: i,
+            end: i + 4,
+        });
+    }
+    None
+}
+
+fn memchr_pair(buf: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || buf.len() < needle.len() {
+        return None;
+    }
+    buf.windows(needle.len()).position(|w| w == needle)
+}
+
+struct ParsedSseEvent {
+    event: Option<String>,
+    data: String,
+}
+
+/// Parse one SSE event block (everything between two blank lines).
+/// We only need `event:` and `data:` for the inspect protocol; `id:`
+/// and `retry:` aren't used. `data:` lines are joined with `\n` per
+/// spec, in case the engine ever splits a long JSON payload.
+fn parse_sse_block(block: &str) -> Option<ParsedSseEvent> {
+    let mut event_name: Option<String> = None;
+    let mut data_parts: Vec<String> = Vec::new();
+    for line in block.split('\n') {
+        // Tolerate CR left over by \r\n line endings.
+        let line = line.trim_end_matches('\r');
+        if line.is_empty() || line.starts_with(':') {
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("event:") {
+            event_name = Some(value.trim_start_matches(' ').to_string());
+        } else if let Some(value) = line.strip_prefix("data:") {
+            data_parts.push(value.trim_start_matches(' ').to_string());
+        }
+    }
+    if event_name.is_none() && data_parts.is_empty() {
+        return None;
+    }
+    Some(ParsedSseEvent {
+        event: event_name,
+        data: data_parts.join("\n"),
+    })
 }
 
 /// PS5 → host download. The engine walks the remote tree (or single

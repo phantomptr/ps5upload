@@ -582,11 +582,22 @@ DEFLATE (ZIP's method) sometimes shrinks a dump a lot and sometimes
 barely at all — the preview's "saves N%" shows the real number for your
 archive before you commit to sending it.
 
+Since 2.18.5 the scan is effectively instant on any size archive, and
+while it's reading the file you'll see a **"Scanning archive… N
+entries"** counter so you can tell the app is working — useful when
+the archive is on a slow USB drive that takes a moment to spin up.
+
 **Q: What about `.rar` / `.7z`?**
 Only `.zip` is supported. Modern scene `.rar` is usually split
 multi-part + encrypted (and no other PS5 homebrew tool handles it
 either), so unpack those on the PC and re-zip, or upload the extracted
 folder directly.
+
+If you re-zip with a tool on your phone or with 7-Zip, pick the
+**standard "Deflate"** method (Windows's built-in "Send to →
+Compressed (zipped) folder" always does the right thing). Deflate64,
+LZMA, BZip2, Zstd and AES-encrypted zips are rejected with a clear
+message because the in-app decompressor only handles standard Deflate.
 
 **Q: Why does the Library sometimes show a game twice?**
 If the same title is present both as a folder on disk and inside a

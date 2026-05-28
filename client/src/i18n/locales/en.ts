@@ -1088,6 +1088,10 @@ upload_inspecting: "Inspecting…",
 upload_scanning_title: "Scanning game folder…",
 upload_scanning_hint:
   "Counting files and building the upload plan. Large folders (100k+ files) take 30 seconds or so. Upload buttons will enable when this finishes.",
+upload_scanning_archive_title: "Scanning archive…",
+upload_scanning_archive_title_with_count: "Scanning archive… {count} entries",
+upload_scanning_archive_hint:
+  "Reading the .zip central directory and parsing embedded game metadata. Upload buttons will enable when this finishes.",
 upload_disabled_scanning:
   "Scanning game folder — wait for the scan to finish, then this button enables.",
 upload_choose_diff_source: "Choose a different source",

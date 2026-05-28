@@ -4,7 +4,7 @@
 // allowlisting, and host-local calls (folder inspection, ELF loader
 // TCP send) stay in-process.
 
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, Channel } from "@tauri-apps/api/core";
 
 export interface FolderInspectResult {
   path: string;
@@ -82,6 +82,43 @@ export interface ZipInspect {
  *  100 GB archive. Throws if the file isn't a readable zip. */
 export async function zipInspect(zipPath: string): Promise<ZipInspect> {
   return invoke<ZipInspect>("zip_inspect", { req: { zip_path: zipPath } });
+}
+
+/** A single progress tick from `zipInspectStream`. `entriesSeen` is the
+ *  running CDFH-record count while the central directory is parsed —
+ *  not the final `file_count` (which excludes directories and sanitized
+ *  rejects) but a fine-grained "still moving" signal for the UI. */
+export interface ZipInspectProgress {
+  entries_seen: number;
+}
+
+/** Streaming variant of `zipInspect`. The engine returns SSE — we forward
+ *  every `progress` event through `onProgress` so the UI can show a live
+ *  entry-count while the central directory is walked, then resolve to the
+ *  final `ZipInspect` once the engine emits `event: done`.
+ *
+ *  Unlike `zipInspect`, this call has no fixed deadline: the Tauri client
+ *  uses a **dead-man-switch watchdog** (no SSE chunk for 30 s → fail). On
+ *  a healthy engine the keep-alive sends `: heartbeat` every 1 s, so the
+ *  watchdog only fires for a genuinely wedged sidecar. This is what lets
+ *  the call survive slow cold-cache reads on user-supplied storage
+ *  (network mounts, spun-down USB HDDs, 100k+-entry dumps) without
+ *  reintroducing the "engine request failed: error sending request"
+ *  symptom that the 60 s `http_client()` timeout used to cause.
+ *
+ *  `onProgress` is fire-and-forget — if the callback throws, subsequent
+ *  events still arrive; if it dies silently (e.g. component unmounted),
+ *  the final ZipInspect still resolves. */
+export async function zipInspectStream(
+  zipPath: string,
+  onProgress: (p: ZipInspectProgress) => void,
+): Promise<ZipInspect> {
+  const channel = new Channel<ZipInspectProgress>();
+  channel.onmessage = onProgress;
+  return invoke<ZipInspect>("zip_inspect_stream", {
+    req: { zip_path: zipPath },
+    onProgress: channel,
+  });
 }
 
 /**

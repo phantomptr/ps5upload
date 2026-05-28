@@ -18,6 +18,7 @@ pub mod system_control;
 pub mod transfer;
 pub mod users;
 pub mod volumes;
+pub mod zip_cd;
 
 /// Compute the BLAKE3-256 digest of a shard's raw bytes.
 /// The result goes into `ShardHeader.shard_digest` and is verified by the payload.

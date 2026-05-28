@@ -147,8 +147,11 @@ use std::{
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use tokio::sync::broadcast;
-use tokio_stream::{wrappers::BroadcastStream, StreamExt as _};
+use tokio::sync::{broadcast, mpsc};
+use tokio_stream::{
+    wrappers::{BroadcastStream, ReceiverStream},
+    StreamExt as _,
+};
 use uuid::Uuid;
 
 // ─── Shared state ─────────────────────────────────────────────────────────────
@@ -2578,13 +2581,153 @@ async fn transfer_dir_handler(
 /// (file count, compressed vs uncompressed size, embedded game metadata).
 /// Never inflates the bulk of the archive. Used by the Upload screen so the
 /// user sees what a compressed dump expands to before sending it.
+///
+/// Pre-2.18.5 this handler logged nothing: when a user reported "engine
+/// request failed: error sending request for url (/api/zip/inspect)" we
+/// couldn't tell whether the engine had panicked, was still scanning a
+/// cold-cache HDD, or had returned successfully after the client timeout
+/// fired. Entry + outcome + duration logs make the next report trivially
+/// diagnosable from engine.log alone.
 async fn zip_inspect_handler(Json(req): Json<ZipInspectReq>) -> impl IntoResponse {
     let zip_path = req.zip_path;
-    match tokio::task::spawn_blocking(move || inspect_zip(std::path::Path::new(&zip_path))).await {
-        Ok(Ok(inspect)) => (StatusCode::OK, Json(inspect)).into_response(),
-        Ok(Err(e)) => json_err(StatusCode::BAD_REQUEST, e.to_string()).into_response(),
-        Err(e) => json_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    crate::log_info!("zip_inspect: zip={zip_path}");
+    let started = std::time::Instant::now();
+    let result = tokio::task::spawn_blocking({
+        let zp = zip_path.clone();
+        move || inspect_zip(std::path::Path::new(&zp))
+    })
+    .await;
+    let elapsed_ms = started.elapsed().as_millis();
+    match result {
+        Ok(Ok(inspect)) => {
+            crate::log_info!(
+                "zip_inspect ok: zip={zip_path} files={} compressed={} elapsed_ms={elapsed_ms}",
+                inspect.file_count,
+                inspect.compressed_size,
+            );
+            (StatusCode::OK, Json(inspect)).into_response()
+        }
+        Ok(Err(e)) => {
+            crate::log_warn!(
+                "zip_inspect failed: zip={zip_path} elapsed_ms={elapsed_ms} err={e:#}"
+            );
+            json_err(StatusCode::BAD_REQUEST, e.to_string()).into_response()
+        }
+        Err(e) => {
+            crate::log_warn!(
+                "zip_inspect panicked: zip={zip_path} elapsed_ms={elapsed_ms} err={e}"
+            );
+            json_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
+        }
     }
+}
+
+/// POST /api/zip/inspect/stream — same shape as `/api/zip/inspect` but
+/// returns an `Sse` response so the client can render progress and the
+/// connection can survive a slow cold-cache central-directory read.
+///
+/// **Why streaming instead of just the long-deadline `/api/zip/inspect`:**
+/// even after Phase 2 (zero-seek CD parser) cut warm inspect to ~35 ms,
+/// pathological cases (network mount, spun-down USB HDD, very large
+/// zips with 100k+ entries) can still take several seconds. The user
+/// reported "engine request failed: error sending request" was the
+/// short-deadline (60 s) timer firing on the old per-entry-seek
+/// pipeline; with this endpoint the client uses a dead-man-switch
+/// watchdog instead — "no chunk for N seconds" — and shows live entry
+/// counts during the wait. The handler emits three event types:
+///
+/// - `progress` — `{"entries_seen": N}` periodically while the central
+///   directory is being walked. Drives the UI "Scanning archive… N
+///   entries" indicator and resets the client watchdog.
+/// - `done` — `{...ZipInspect...}` once. Final event; client closes
+///   the connection on receipt.
+/// - `error` — `{"error": "..."}` once. Final event on a parse / IO
+///   failure. The HTTP status stays 200 because headers ship before
+///   the worker knows whether inspect will succeed; this matches
+///   `events_stream` (the existing SSE precedent in this engine).
+///
+/// `KeepAlive::interval(1s)` makes axum send an SSE comment line every
+/// second when no real event is in flight, so the client's watchdog
+/// sees forward motion even during a CD bulk-read that emits no
+/// progress callbacks. The 1 s cadence is short enough to keep the UI
+/// "Scanning…" indicator responsive without flooding the channel.
+async fn zip_inspect_stream_handler(Json(req): Json<ZipInspectReq>) -> impl IntoResponse {
+    let zip_path = req.zip_path;
+    crate::log_info!("zip_inspect (stream): zip={zip_path}");
+    let started = std::time::Instant::now();
+
+    let (tx, rx) = mpsc::channel::<InspectStreamEvent>(64);
+
+    let zip_path_for_worker = zip_path.clone();
+    tokio::task::spawn_blocking(move || {
+        let tx_progress = tx.clone();
+        let result = ps5upload_core::transfer::inspect_zip_with_progress(
+            std::path::Path::new(&zip_path_for_worker),
+            move |n| {
+                // `blocking_send` is the right primitive from inside
+                // `spawn_blocking`: it blocks the worker thread (not a
+                // tokio task) until the receiver has room. Dropped on
+                // client disconnect — the parser keeps running but its
+                // sends become no-ops, so the orphaned worker drains
+                // quickly without blocking forever.
+                let _ = tx_progress.blocking_send(InspectStreamEvent::Progress(n));
+            },
+        );
+        // Log the outcome from the worker thread so we have engine.log
+        // evidence even when the client disconnects mid-stream (curl
+        // killed by `head`, renderer-unmount, browser-tab-closed). If
+        // we logged in the SSE mapper instead, abandoned inspects would
+        // leave no trace and the next user report would again be
+        // "engine said nothing".
+        let elapsed_ms = started.elapsed().as_millis();
+        let final_event = match result {
+            Ok(inspect) => {
+                crate::log_info!(
+                    "zip_inspect (stream) ok: zip={zip_path_for_worker} files={} compressed={} elapsed_ms={elapsed_ms}",
+                    inspect.file_count,
+                    inspect.compressed_size,
+                );
+                InspectStreamEvent::Done(Box::new(inspect))
+            }
+            Err(e) => {
+                let err = format!("{e:#}");
+                crate::log_warn!(
+                    "zip_inspect (stream) failed: zip={zip_path_for_worker} elapsed_ms={elapsed_ms} err={err}"
+                );
+                InspectStreamEvent::Error(err)
+            }
+        };
+        let _ = tx.blocking_send(final_event);
+    });
+
+    let stream = ReceiverStream::new(rx).map(|event| {
+        let sse_event = match event {
+            InspectStreamEvent::Progress(n) => Event::default()
+                .event("progress")
+                .data(serde_json::json!({ "entries_seen": n }).to_string()),
+            InspectStreamEvent::Done(inspect) => Event::default()
+                .event("done")
+                .data(serde_json::to_string(&*inspect).unwrap_or_else(|_| "{}".to_string())),
+            InspectStreamEvent::Error(err) => Event::default()
+                .event("error")
+                .data(serde_json::json!({ "error": err }).to_string()),
+        };
+        Ok::<_, std::convert::Infallible>(sse_event)
+    });
+
+    Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(std::time::Duration::from_secs(1))
+            .text("heartbeat"),
+    )
+}
+
+enum InspectStreamEvent {
+    Progress(u64),
+    // Box the inspect result so the variant doesn't bloat to 200+ bytes
+    // and trigger clippy::large_enum_variant on the small Progress arm.
+    Done(Box<ps5upload_core::transfer::ZipInspect>),
+    Error(String),
 }
 
 /// POST /api/transfer/zip — start a zip-archive upload job. Mirrors
@@ -2611,11 +2754,33 @@ async fn transfer_zip_handler(
     // Central-directory-only plan: total uncompressed bytes (progress
     // denominator) + the file list (UI tree). A corrupt/missing zip fails
     // here with a clear message instead of starting a doomed job.
+    //
+    // Plan duration logged because it's the chunk of work the client
+    // blocks on before getting back a job_id: if the user reports
+    // "engine request failed: error sending request" against
+    // /api/transfer/zip, the elapsed_ms here tells us whether plan
+    // legitimately blew the client timeout (yes → bigger zip than the
+    // pipeline can plan in time) or completed quickly (no → look at
+    // BEGIN_TX / connectivity).
+    let plan_started = std::time::Instant::now();
     let (total_bytes, preview) =
         match zip_plan_preview(std::path::Path::new(&req.zip_path), &req.excludes) {
             Ok(v) => v,
-            Err(e) => return json_err(StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+            Err(e) => {
+                let elapsed_ms = plan_started.elapsed().as_millis();
+                crate::log_warn!(
+                    "transfer_zip plan failed: zip={} elapsed_ms={elapsed_ms} err={e:#}",
+                    req.zip_path,
+                );
+                return json_err(StatusCode::BAD_REQUEST, e.to_string()).into_response();
+            }
         };
+    let plan_elapsed_ms = plan_started.elapsed().as_millis();
+    crate::log_info!(
+        "transfer_zip plan: zip={} entries={} bytes={total_bytes} elapsed_ms={plan_elapsed_ms}",
+        req.zip_path,
+        preview.len(),
+    );
     let files: Vec<PlannedFile> = preview
         .into_iter()
         .map(|(rel_path, size)| PlannedFile { rel_path, size })
@@ -3878,6 +4043,7 @@ async fn main() {
         .route("/api/transfer/dir", post(transfer_dir_handler))
         .route("/api/transfer/zip", post(transfer_zip_handler))
         .route("/api/zip/inspect", post(zip_inspect_handler))
+        .route("/api/zip/inspect/stream", post(zip_inspect_stream_handler))
         .route("/api/transfer/file-list", post(transfer_file_list_handler))
         .route("/api/transfer/download", post(transfer_download_handler))
         .route(
