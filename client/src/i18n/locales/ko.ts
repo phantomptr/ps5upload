@@ -1227,6 +1227,9 @@ install_register_path_appinst: "(in-process AppInstUtil — ShellUI 플래시 �
   upload_eta_row_commit: "PS5 commit",
   upload_eta_row_total: "Total",
   upload_eta_resume_hint: "For folders this size, Resume mode (skip files already on the PS5) saves an hour or more on repeat uploads. You'll see the choice when you click Upload.",
+  activity_phase_finalizing_with_counter: "Finalizing on PS5 — {done} / {total} files",
+  upload_status_finalizing_counter: "Finalized {done} / {total} files. ",
+  queue_phase_finalizing_with_counter: "Finalizing on PS5 — {done} / {total}",
 };
 
 export default ko;

@@ -354,11 +354,20 @@ function QueueRow({
                       "All bytes are on the PS5; it's committing the file index. Large file counts (10k+) routinely take many minutes here — don't close the app.",
                     )}
                   >
-                    {tr(
-                      "queue_phase_finalizing",
-                      undefined,
-                      "Finalizing on PS5",
-                    )}
+                    {item.filesFinalizingTotal > 0
+                      ? tr(
+                          "queue_phase_finalizing_with_counter",
+                          {
+                            done: item.filesFinalized.toLocaleString(),
+                            total: item.filesFinalizingTotal.toLocaleString(),
+                          },
+                          `Finalizing on PS5 — ${item.filesFinalized.toLocaleString()} / ${item.filesFinalizingTotal.toLocaleString()}`,
+                        )
+                      : tr(
+                          "queue_phase_finalizing",
+                          undefined,
+                          "Finalizing on PS5",
+                        )}
                   </span>
                 </>
               )}

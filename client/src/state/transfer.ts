@@ -80,6 +80,12 @@ export type TransferPhase =
       /** Reconcile-mode counters. 0 for plain uploads. */
       skippedFiles: number;
       skippedBytes: number;
+      /** P3 / v2.18.0 — post-100% commit-phase counters fed by
+       *  payload's APPLY_PROGRESS frames. Zero outside the
+       *  finalize phase and on old payloads that don't emit. */
+      filesFinalized: number;
+      filesFinalizingTotal: number;
+      bytesFinalized: number;
     }
   | {
       kind: "done";
@@ -302,6 +308,9 @@ export const useTransferStore = create<TransferState>((set) => {
           filesCompleted: 0,
           skippedFiles: 0,
           skippedBytes: 0,
+          filesFinalized: 0,
+          filesFinalizingTotal: 0,
+          bytesFinalized: 0,
         },
       });
 
@@ -517,6 +526,9 @@ export const useTransferStore = create<TransferState>((set) => {
               filesCompleted,
               skippedFiles: snap.skipped_files ?? 0,
               skippedBytes: snap.skipped_bytes ?? 0,
+              filesFinalized: snap.files_finalized ?? 0,
+              filesFinalizingTotal: snap.files_finalizing_total ?? 0,
+              bytesFinalized: snap.bytes_finalized ?? 0,
             },
           });
           pollTimer = setTimeout(poll, POLL_INTERVAL_MS);

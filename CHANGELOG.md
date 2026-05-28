@@ -4,6 +4,23 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.18.0
+
+- **The "Finalizing on PS5" wait now shows a live counter.** When a
+  big folder upload reaches 100% and enters the PS5-side commit
+  phase, the row used to sit on a generic "Finalizing on PS5"
+  badge with no movement for 10–30 minutes. The PS5 now streams
+  per-file progress back to the app while it's committing, so you
+  see "Finalizing on PS5 — 12,400 / 84,216 files" climbing through
+  the wait. Same signal in the Upload screen banner, the Upload
+  Queue row, and the Activity tab.
+- **Old payloads still work.** If you haven't pushed the new PS5
+  payload yet, the upload still completes — you just see the same
+  countless "Finalizing on PS5" badge as before. New payloads
+  enable the counter automatically; nothing for users to toggle.
+
+---
+
 ## 2.17.9
 
 - Internal lab tool fix only. The `ps5upload-lab transfer-dir`

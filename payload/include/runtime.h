@@ -115,6 +115,14 @@ typedef struct {
     uint64_t pack_close_us;         /* sum of per-worker close time */
     uint64_t pack_open_retries;     /* transient open() retries absorbed */
     uint64_t pack_write_retries;    /* transient write_full() retries absorbed */
+    /* 1 if the BEGIN_TX flags carried FTX2_TX_FLAG_APPLY_PROGRESS_REQUESTED.
+     * Toggles the multi-file COMMIT_TX apply loop's emission of one-way
+     * APPLY_PROGRESS frames every ~1 sec / 1024 files so the client can
+     * surface a live "Finalized N of M files" counter instead of an
+     * indeterminate wait. Capture happens once at BEGIN_TX and survives
+     * resume (the client must set the flag again on resume BEGIN_TX or
+     * the server reverts to silent apply for the resumed attempt). */
+    int      apply_progress_enabled;
 } runtime_tx_entry_t;
 
 typedef struct {

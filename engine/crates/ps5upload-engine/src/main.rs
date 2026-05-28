@@ -204,6 +204,37 @@ enum JobState {
         /// case the UI falls back to its size-derived estimate.
         #[serde(default)]
         files_processing: u64,
+        /// P3 / v2.18.0 — files the PS5 has fully written to their
+        /// destination paths during the post-100% COMMIT_TX apply
+        /// loop. Only ticks once `bytes_sent == total_bytes`; until
+        /// then this stays at 0. The payload emits APPLY_PROGRESS
+        /// frames every ~1 sec or 1024 files during apply when the
+        /// engine sent `TX_FLAG_APPLY_PROGRESS_REQUESTED` on
+        /// BEGIN_TX (default for multi-file uploads). UI surfaces
+        /// this as "Finalized N of M files" during the finalize
+        /// phase so users see real motion through what used to be
+        /// a silent 10-30 min wait.
+        ///
+        /// 0 for single-file uploads (apply is one fsync, no
+        /// progress reporting), for old payloads that don't emit
+        /// APPLY_PROGRESS (graceful degradation — UI shows the
+        /// plain "Finalizing on PS5…" pill from v2.17.3), and
+        /// during the pre-finalize bytes-on-wire phase.
+        #[serde(default)]
+        files_finalized: u64,
+        /// Total files the payload will commit. Same value as
+        /// `files.len()` on the planned manifest, surfaced here as
+        /// a u64 so the UI doesn't have to count `files`. 0 means
+        /// "unknown" — single-file uploads or pre-FIRST-frame
+        /// (we set this on the first APPLY_PROGRESS arrival).
+        #[serde(default)]
+        files_finalizing_total: u64,
+        /// Cumulative bytes the payload has finalized so far during
+        /// apply. Lets the UI show a second progress dimension
+        /// (bytes-finalized / total-bytes) for cases where file
+        /// sizes vary wildly. 0 outside the finalize phase.
+        #[serde(default)]
+        bytes_finalized: u64,
     },
     Done {
         started_at_ms: u64,
@@ -478,6 +509,11 @@ struct TickerContext {
     skipped_bytes: u64,
 }
 
+// Eight parameters reflects the actual lifecycle data this ticker
+// needs to broadcast and the four progress sinks it reads. Bundling
+// them into a struct would just move the surface area without
+// reducing it. Allow rather than restructure.
+#[allow(clippy::too_many_arguments)]
 fn spawn_progress_ticker(
     jobs: Arc<Mutex<HashMap<Uuid, JobState>>>,
     events_tx: broadcast::Sender<String>,
@@ -485,6 +521,14 @@ fn spawn_progress_ticker(
     ctx: TickerContext,
     progress: Arc<AtomicU64>,
     progress_files: Arc<AtomicU64>,
+    // P3 / v2.18.0: apply-phase counters fed by the engine's
+    // commit-wait loop reading APPLY_PROGRESS frames from the
+    // payload. Same Arc<AtomicU64> pattern as the existing pre-
+    // commit counters so the ticker can read both with one
+    // Relaxed load each. Optional because single-file paths
+    // don't allocate these.
+    progress_files_finalized: Arc<AtomicU64>,
+    progress_bytes_finalized: Arc<AtomicU64>,
 ) -> Arc<AtomicBool> {
     let stop = Arc::new(AtomicBool::new(false));
     let stop_for_tick = Arc::clone(&stop);
@@ -493,6 +537,8 @@ fn spawn_progress_ticker(
         interval.tick().await; // consume the immediate first tick
         let mut last_bytes = u64::MAX; // forces a broadcast on the first real tick
         let mut last_files = u64::MAX;
+        let mut last_ff = u64::MAX;
+        let mut last_bf = u64::MAX;
         loop {
             interval.tick().await;
             // `Acquire` pairs with the `Release` store in
@@ -512,21 +558,27 @@ fn spawn_progress_ticker(
             }
             let bytes_sent = progress.load(Ordering::Relaxed);
             let files_processing = progress_files.load(Ordering::Relaxed);
-            // Skip the HashMap mutation + SSE broadcast when NEITHER
-            // counter has moved. Saves the per-tick overhead (including
-            // JSON serialization of potentially-thousands-of-files state)
-            // during pre-transfer stalls — BEGIN_TX waiting on a slow-to-
-            // ack payload, disk flush pauses mid-shard, etc. We
-            // intentionally broadcast on EITHER counter changing: the
-            // per-file counter ticks smoothly during pack-frame build
-            // even while bytes_sent stays put waiting for the shard ACK,
-            // and that's the whole point — many-tiny-files folders need
-            // a counter that visibly moves through the read phase.
-            if bytes_sent == last_bytes && files_processing == last_files {
+            let files_finalized = progress_files_finalized.load(Ordering::Relaxed);
+            let bytes_finalized = progress_bytes_finalized.load(Ordering::Relaxed);
+            // Skip the HashMap mutation + SSE broadcast when NONE
+            // of the counters have moved. Same rationale as the
+            // pre-2.18 path: avoid per-tick allocation + SSE
+            // serialization when nothing changed. Apply-phase
+            // counters added here keep us broadcasting during the
+            // post-100% finalize window where bytes_sent and
+            // files_processing have stopped but files_finalized is
+            // ticking up — exactly the case that motivated P3.
+            if bytes_sent == last_bytes
+                && files_processing == last_files
+                && files_finalized == last_ff
+                && bytes_finalized == last_bf
+            {
                 continue;
             }
             last_bytes = bytes_sent;
             last_files = files_processing;
+            last_ff = files_finalized;
+            last_bf = bytes_finalized;
             // Mutate in place so the handler's initial `files` list is
             // preserved across ticks — we no longer carry it in the ctx.
             let maybe_snapshot = {
@@ -544,6 +596,8 @@ fn spawn_progress_ticker(
                         skipped_files: sf,
                         skipped_bytes: sb,
                         files_processing: fp,
+                        files_finalized: ff,
+                        bytes_finalized: bf,
                         ..
                     }) => {
                         *b = bytes_sent;
@@ -552,6 +606,8 @@ fn spawn_progress_ticker(
                         *sf = ctx.skipped_files;
                         *sb = ctx.skipped_bytes;
                         *fp = files_processing;
+                        *ff = files_finalized;
+                        *bf = bytes_finalized;
                         // Clone once for the SSE broadcast path; the
                         // lock-held section stays short.
                         Some(g.get(&job_id).cloned())
@@ -2149,6 +2205,13 @@ async fn transfer_file_handler(
     }];
     let progress = Arc::new(AtomicU64::new(0));
     let progress_files = Arc::new(AtomicU64::new(0));
+    // P3 / v2.18.0 — apply-phase counters. The engine's
+    // send_commit_and_expect_ack reads APPLY_PROGRESS frames from
+    // the payload during the commit wait and stores into these.
+    // The ticker (spawn_progress_ticker) reads and writes them to
+    // JobState::Running's files_finalized / bytes_finalized fields.
+    let progress_files_finalized = Arc::new(AtomicU64::new(0));
+    let progress_bytes_finalized = Arc::new(AtomicU64::new(0));
     let ctx = TickerContext {
         started_at_ms,
         total_bytes,
@@ -2167,6 +2230,12 @@ async fn transfer_file_handler(
             skipped_files: 0,
             skipped_bytes: 0,
             files_processing: 0,
+            // P3 / v2.18.0 — apply-phase counters start at 0; the
+            // ticker fills them in once APPLY_PROGRESS frames begin
+            // arriving from the payload during commit.
+            files_finalized: 0,
+            files_finalizing_total: 0,
+            bytes_finalized: 0,
         },
     );
 
@@ -2179,6 +2248,8 @@ async fn transfer_file_handler(
         ctx,
         Arc::clone(&progress),
         Arc::clone(&progress_files),
+        Arc::clone(&progress_files_finalized),
+        Arc::clone(&progress_bytes_finalized),
     );
 
     let bandwidth_cap = req.bandwidth_cap_mbps;
@@ -2197,6 +2268,8 @@ async fn transfer_file_handler(
         let mut cfg = make_transfer_config(&addr);
         cfg.progress_bytes = Some(Arc::clone(&progress));
         cfg.progress_files = Some(Arc::clone(&progress_files));
+        cfg.progress_files_finalized = Some(Arc::clone(&progress_files_finalized));
+        cfg.progress_bytes_finalized = Some(Arc::clone(&progress_bytes_finalized));
         apply_per_request_bandwidth(&mut cfg, bandwidth_cap);
 
         // Pre-flight free-space check. Catches the most common cause
@@ -2382,6 +2455,13 @@ async fn transfer_dir_handler(
     let files_sent_count = files.len() as u64;
     let progress = Arc::new(AtomicU64::new(0));
     let progress_files = Arc::new(AtomicU64::new(0));
+    // P3 / v2.18.0 — apply-phase counters. The engine's
+    // send_commit_and_expect_ack reads APPLY_PROGRESS frames from
+    // the payload during the commit wait and stores into these.
+    // The ticker (spawn_progress_ticker) reads and writes them to
+    // JobState::Running's files_finalized / bytes_finalized fields.
+    let progress_files_finalized = Arc::new(AtomicU64::new(0));
+    let progress_bytes_finalized = Arc::new(AtomicU64::new(0));
     let ctx = TickerContext {
         started_at_ms,
         total_bytes,
@@ -2400,6 +2480,12 @@ async fn transfer_dir_handler(
             skipped_files: 0,
             skipped_bytes: 0,
             files_processing: 0,
+            // P3 / v2.18.0 — apply-phase counters start at 0; the
+            // ticker fills them in once APPLY_PROGRESS frames begin
+            // arriving from the payload during commit.
+            files_finalized: 0,
+            files_finalizing_total: 0,
+            bytes_finalized: 0,
         },
     );
 
@@ -2412,6 +2498,8 @@ async fn transfer_dir_handler(
         ctx,
         Arc::clone(&progress),
         Arc::clone(&progress_files),
+        Arc::clone(&progress_files_finalized),
+        Arc::clone(&progress_bytes_finalized),
     );
 
     tokio::task::spawn_blocking(move || {
@@ -2423,6 +2511,8 @@ async fn transfer_dir_handler(
         cfg.excludes = req.excludes;
         cfg.progress_bytes = Some(Arc::clone(&progress));
         cfg.progress_files = Some(Arc::clone(&progress_files));
+        cfg.progress_files_finalized = Some(Arc::clone(&progress_files_finalized));
+        cfg.progress_bytes_finalized = Some(Arc::clone(&progress_bytes_finalized));
         apply_per_request_bandwidth(&mut cfg, req.bandwidth_cap_mbps);
         // 1 fresh attempt + DEFAULT_RESUME_RETRIES resumes. Folder uploads
         // previously used only 2 retries while single-file used 5, so a single
@@ -2556,6 +2646,13 @@ async fn transfer_zip_handler(
     );
     let progress = Arc::new(AtomicU64::new(0));
     let progress_files = Arc::new(AtomicU64::new(0));
+    // P3 / v2.18.0 — apply-phase counters. The engine's
+    // send_commit_and_expect_ack reads APPLY_PROGRESS frames from
+    // the payload during the commit wait and stores into these.
+    // The ticker (spawn_progress_ticker) reads and writes them to
+    // JobState::Running's files_finalized / bytes_finalized fields.
+    let progress_files_finalized = Arc::new(AtomicU64::new(0));
+    let progress_bytes_finalized = Arc::new(AtomicU64::new(0));
     let ctx = TickerContext {
         started_at_ms,
         total_bytes,
@@ -2574,6 +2671,12 @@ async fn transfer_zip_handler(
             skipped_files: 0,
             skipped_bytes: 0,
             files_processing: 0,
+            // P3 / v2.18.0 — apply-phase counters start at 0; the
+            // ticker fills them in once APPLY_PROGRESS frames begin
+            // arriving from the payload during commit.
+            files_finalized: 0,
+            files_finalizing_total: 0,
+            bytes_finalized: 0,
         },
     );
 
@@ -2586,6 +2689,8 @@ async fn transfer_zip_handler(
         ctx,
         Arc::clone(&progress),
         Arc::clone(&progress_files),
+        Arc::clone(&progress_files_finalized),
+        Arc::clone(&progress_bytes_finalized),
     );
 
     tokio::task::spawn_blocking(move || {
@@ -2596,6 +2701,8 @@ async fn transfer_zip_handler(
         cfg.excludes = req.excludes;
         cfg.progress_bytes = Some(Arc::clone(&progress));
         cfg.progress_files = Some(Arc::clone(&progress_files));
+        cfg.progress_files_finalized = Some(Arc::clone(&progress_files_finalized));
+        cfg.progress_bytes_finalized = Some(Arc::clone(&progress_bytes_finalized));
         apply_per_request_bandwidth(&mut cfg, req.bandwidth_cap_mbps);
         let result = transfer_zip_resumable(
             &cfg,
@@ -2726,6 +2833,13 @@ async fn transfer_file_list_handler(
     let files_sent_count = files.len() as u64;
     let progress = Arc::new(AtomicU64::new(0));
     let progress_files = Arc::new(AtomicU64::new(0));
+    // P3 / v2.18.0 — apply-phase counters. The engine's
+    // send_commit_and_expect_ack reads APPLY_PROGRESS frames from
+    // the payload during the commit wait and stores into these.
+    // The ticker (spawn_progress_ticker) reads and writes them to
+    // JobState::Running's files_finalized / bytes_finalized fields.
+    let progress_files_finalized = Arc::new(AtomicU64::new(0));
+    let progress_bytes_finalized = Arc::new(AtomicU64::new(0));
     let ctx = TickerContext {
         started_at_ms,
         total_bytes,
@@ -2744,6 +2858,12 @@ async fn transfer_file_list_handler(
             skipped_files: 0,
             skipped_bytes: 0,
             files_processing: 0,
+            // P3 / v2.18.0 — apply-phase counters start at 0; the
+            // ticker fills them in once APPLY_PROGRESS frames begin
+            // arriving from the payload during commit.
+            files_finalized: 0,
+            files_finalizing_total: 0,
+            bytes_finalized: 0,
         },
     );
 
@@ -2756,6 +2876,8 @@ async fn transfer_file_list_handler(
         ctx,
         Arc::clone(&progress),
         Arc::clone(&progress_files),
+        Arc::clone(&progress_files_finalized),
+        Arc::clone(&progress_bytes_finalized),
     );
 
     tokio::task::spawn_blocking(move || {
@@ -2765,6 +2887,8 @@ async fn transfer_file_list_handler(
         let mut cfg = make_transfer_config(&addr);
         cfg.progress_bytes = Some(Arc::clone(&progress));
         cfg.progress_files = Some(Arc::clone(&progress_files));
+        cfg.progress_files_finalized = Some(Arc::clone(&progress_files_finalized));
+        cfg.progress_bytes_finalized = Some(Arc::clone(&progress_bytes_finalized));
         apply_per_request_bandwidth(&mut cfg, req.bandwidth_cap_mbps);
         // All transfer endpoints share the same 3-attempt resume policy
         // (1 fresh + 2 resumes). See `transfer_dir_handler` for rationale.
@@ -2985,6 +3109,13 @@ async fn transfer_download_handler(
 
     let progress = Arc::new(AtomicU64::new(0));
     let progress_files = Arc::new(AtomicU64::new(0));
+    // P3 / v2.18.0 — apply-phase counters. The engine's
+    // send_commit_and_expect_ack reads APPLY_PROGRESS frames from
+    // the payload during the commit wait and stores into these.
+    // The ticker (spawn_progress_ticker) reads and writes them to
+    // JobState::Running's files_finalized / bytes_finalized fields.
+    let progress_files_finalized = Arc::new(AtomicU64::new(0));
+    let progress_bytes_finalized = Arc::new(AtomicU64::new(0));
     let ctx = TickerContext {
         started_at_ms,
         total_bytes,
@@ -3003,6 +3134,12 @@ async fn transfer_download_handler(
             skipped_files: 0,
             skipped_bytes: 0,
             files_processing: 0,
+            // P3 / v2.18.0 — apply-phase counters start at 0; the
+            // ticker fills them in once APPLY_PROGRESS frames begin
+            // arriving from the payload during commit.
+            files_finalized: 0,
+            files_finalizing_total: 0,
+            bytes_finalized: 0,
         },
     );
 
@@ -3015,6 +3152,8 @@ async fn transfer_download_handler(
         ctx,
         Arc::clone(&progress),
         Arc::clone(&progress_files),
+        Arc::clone(&progress_files_finalized),
+        Arc::clone(&progress_bytes_finalized),
     );
 
     tokio::task::spawn_blocking(move || {
@@ -3180,6 +3319,12 @@ async fn transfer_dir_reconcile_handler(
             skipped_files: 0,
             skipped_bytes: 0,
             files_processing: 0,
+            // P3 / v2.18.0 — apply-phase counters start at 0; the
+            // ticker fills them in once APPLY_PROGRESS frames begin
+            // arriving from the payload during commit.
+            files_finalized: 0,
+            files_finalizing_total: 0,
+            bytes_finalized: 0,
         },
     );
 
@@ -3341,6 +3486,8 @@ async fn transfer_dir_reconcile_handler(
             .collect();
         let progress = Arc::new(AtomicU64::new(0));
         let progress_files = Arc::new(AtomicU64::new(0));
+        let progress_files_finalized = Arc::new(AtomicU64::new(0));
+        let progress_bytes_finalized = Arc::new(AtomicU64::new(0));
         let ctx = TickerContext {
             started_at_ms,
             total_bytes,
@@ -3359,6 +3506,9 @@ async fn transfer_dir_reconcile_handler(
                 skipped_files: skipped_files_count,
                 skipped_bytes: skipped_bytes_count,
                 files_processing: 0,
+                files_finalized: 0,
+                files_finalizing_total: 0,
+                bytes_finalized: 0,
             },
         );
         let stop_ticker = spawn_progress_ticker(
@@ -3368,6 +3518,8 @@ async fn transfer_dir_reconcile_handler(
             ctx,
             Arc::clone(&progress),
             Arc::clone(&progress_files),
+            Arc::clone(&progress_files_finalized),
+            Arc::clone(&progress_bytes_finalized),
         );
         // Same panic-survive contract as the other transfer endpoints.
         // (fail_guard was installed at the top of this closure.)
@@ -3389,6 +3541,8 @@ async fn transfer_dir_reconcile_handler(
         cfg.excludes = req.excludes;
         cfg.progress_bytes = Some(Arc::clone(&progress));
         cfg.progress_files = Some(Arc::clone(&progress_files));
+        cfg.progress_files_finalized = Some(Arc::clone(&progress_files_finalized));
+        cfg.progress_bytes_finalized = Some(Arc::clone(&progress_bytes_finalized));
         apply_per_request_bandwidth(&mut cfg, req.bandwidth_cap_mbps);
         // 1 fresh attempt + DEFAULT_RESUME_RETRIES resumes. Covers several
         // payload hiccups mid-transfer (incl. the serial accept loop briefly

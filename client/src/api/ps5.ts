@@ -2566,6 +2566,25 @@ export interface JobSnapshot {
    *  means the upload path doesn't report it; the UI falls back to its
    *  size-derived estimate. */
   files_processing?: number;
+  /** P3 / v2.18.0: files the payload has fully committed during the
+   *  post-100% COMMIT_TX apply loop. Ticks up from 0 to
+   *  `files_finalizing_total` as APPLY_PROGRESS frames arrive from
+   *  new payloads (those that recognise TX_FLAG_APPLY_PROGRESS_REQUESTED,
+   *  which the engine sets on every multi-file BEGIN_TX). UI surfaces
+   *  this as a "Finalized N of M files" counter on the running banner
+   *  so users see motion through the 10-30 min commit phase that used
+   *  to be a silent black box. `undefined` (or 0) on old payloads
+   *  that don't emit progress — UI falls back to the plain "Finalizing
+   *  on PS5…" pill from v2.17.3. */
+  files_finalized?: number;
+  /** P3 / v2.18.0: total files the payload will commit. Surfaced as a
+   *  paired denominator for `files_finalized`. 0 outside the finalize
+   *  phase. */
+  files_finalizing_total?: number;
+  /** P3 / v2.18.0: cumulative bytes finalized during commit-apply.
+   *  Second progress dimension alongside file count; useful when file
+   *  sizes vary wildly. */
+  bytes_finalized?: number;
   /** Files actually sent (Done only). */
   files_sent?: number;
   shards_sent?: number;

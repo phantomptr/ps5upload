@@ -1141,7 +1141,23 @@ function TransferStatus({ phase }: { phase: TransferPhase }) {
           // to commit the manifest, and for 80k-file folders that
           // legitimately takes minutes (a user-reported 1h+ stall was
           // mistaken for a hang and force-quit).
+          //
+          // P3 / v2.18.0 — when the payload streams APPLY_PROGRESS,
+          // we have a live counter to surface alongside the hint.
+          // Falls back to just the hint on old payloads.
           <div className="mb-2 text-xs text-[var(--color-warn)]">
+            {phase.filesFinalizingTotal > 0 ? (
+              <>
+                {tr(
+                  "upload_status_finalizing_counter",
+                  {
+                    done: phase.filesFinalized.toLocaleString(),
+                    total: phase.filesFinalizingTotal.toLocaleString(),
+                  },
+                  `Finalized ${phase.filesFinalized.toLocaleString()} / ${phase.filesFinalizingTotal.toLocaleString()} files. `,
+                )}
+              </>
+            ) : null}
             {tr(
               "upload_status_finalizing_hint",
               "PS5 is committing the file index. This can take a while for large file counts — don't close the app.",

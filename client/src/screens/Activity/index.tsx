@@ -297,6 +297,14 @@ function ActivityRow({ entry }: { entry: ActivityEntry }) {
           // minutes-to-hours on big multi-file uploads (user reported a
           // 1h+ stall on 84,216 files) and the user has no way to tell
           // it apart from a true hang.
+          //
+          // P3 / v2.18.0: when the payload streams APPLY_PROGRESS frames
+          // (new payloads + multi-file uploads), the engine populates
+          // filesFinalized / filesFinalizingTotal on the entry. We then
+          // render "Finalizing on PS5 — 12,400 / 84,216 files" so the
+          // user sees motion through the commit phase. Falls back to
+          // the legacy "Finalizing on PS5" pill (no counter) for old
+          // payloads or before the first frame lands.
           <span
             className="rounded-full bg-[var(--color-warn)]/15 px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-warn)]"
             title={tr(
@@ -305,7 +313,16 @@ function ActivityRow({ entry }: { entry: ActivityEntry }) {
               "All bytes are on the PS5; it's committing the file index. This can take a while for large file counts — don't close the app.",
             )}
           >
-            {tr("activity_phase_finalizing", undefined, "Finalizing on PS5")}
+            {entry.filesFinalizingTotal && entry.filesFinalizingTotal > 0
+              ? tr(
+                  "activity_phase_finalizing_with_counter",
+                  {
+                    done: (entry.filesFinalized ?? 0).toLocaleString(),
+                    total: entry.filesFinalizingTotal.toLocaleString(),
+                  },
+                  `Finalizing on PS5 — ${(entry.filesFinalized ?? 0).toLocaleString()} / ${entry.filesFinalizingTotal.toLocaleString()} files`,
+                )
+              : tr("activity_phase_finalizing", undefined, "Finalizing on PS5")}
           </span>
         )}
         {entry.files !== undefined && entry.files > 1 && (

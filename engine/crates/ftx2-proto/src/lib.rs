@@ -450,6 +450,20 @@ pub enum FrameType {
     /// silent?" without making the user dig through ssh / ftp.
     SyslogTail = 144,
     SyslogTailAck = 145,
+    /// One-way payload → client during the COMMIT_TX apply loop on
+    /// multi-file uploads when the client opted in via
+    /// `TX_FLAG_APPLY_PROGRESS_REQUESTED`. Body is a small JSON object
+    /// (~80 bytes) carrying `{"files_applied":N,"total_files":M,
+    /// "bytes_applied":B}`. Emitted every ~1 sec or every 1024 files
+    /// applied (whichever first); always at least once at the start
+    /// and once at the end of the apply loop. The client must keep
+    /// reading frames after CommitTx until CommitTxAck arrives —
+    /// progress frames interleave with the eventual ack.
+    ///
+    /// No ack — fire-and-forget. If a frame is dropped (TCP buffer
+    /// drain stalls), the next one carries the latest counters, so
+    /// the UI stays "eventually correct".
+    ApplyProgress = 146,
 }
 
 impl FrameType {
@@ -588,6 +602,7 @@ impl FrameType {
             143 => Ok(Self::SmpMetaStatsAck),
             144 => Ok(Self::SyslogTail),
             145 => Ok(Self::SyslogTailAck),
+            146 => Ok(Self::ApplyProgress),
             _ => Err(DecodeError::UnknownFrameType(v)),
         }
     }
@@ -678,6 +693,21 @@ impl FrameHeader {
 /// unknown or not in resumable state, the payload treats the request as a
 /// fresh BeginTx (resume flag becomes a no-op).
 pub const TX_FLAG_RESUME: u32 = 0x1;
+
+/// BeginTx only: client opts in to receive `ApplyProgress` frames from
+/// the payload during the multi-file COMMIT_TX apply loop. Payloads
+/// that don't recognise the flag ignore it and behave as before
+/// (silent apply, single CommitTxAck at the end). Payloads that do
+/// recognise it stream {"files_applied","total_files","bytes_applied"}
+/// frames every ~1 sec or every 1024 files committed, in addition to
+/// the final CommitTxAck. Engine clients use this to surface a live
+/// "Finalized N of M files" counter to the user instead of an
+/// indeterminate "Finalizing on PS5…" wait.
+///
+/// Opt-in so old clients don't choke on unknown frames mid-commit:
+/// silent payloads accept the flag harmlessly, chatty payloads stay
+/// silent for old clients.
+pub const TX_FLAG_APPLY_PROGRESS_REQUESTED: u32 = 0x4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TxMeta {

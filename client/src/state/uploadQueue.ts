@@ -101,6 +101,12 @@ export interface QueueItem {
    *  done-row average survives an app restart and stays comparable
    *  across runs. */
   bytesPerSec: number;
+  /** P3 / v2.18.0 — apply-phase counters forwarded from JobSnapshot.
+   *  Surface a "Finalized N of M files" pill on the queue row during
+   *  the post-100% commit-apply phase. Both 0 outside the finalize
+   *  phase and on pre-P3 payloads that don't emit APPLY_PROGRESS. */
+  filesFinalized: number;
+  filesFinalizingTotal: number;
   /** Mount path the runner produced when `mountAfterUpload` is true and
    *  the image upload + mount succeeded. Surfaced to the row so users
    *  see where the image landed without flipping to the Volumes tab. */
@@ -420,6 +426,13 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
           bytesSent,
           totalBytes: snap.total_bytes ?? 0,
           bytesPerSec,
+          // P3 / v2.18.0 — forward apply-phase counters so the
+          // QueueRow's finalize pill can show "Finalized N of M files"
+          // (analogous to transfer.ts's single-shot path). Defaults to
+          // 0 when the engine doesn't surface them (pre-P3 payloads
+          // OR outside the finalize phase).
+          filesFinalized: snap.files_finalized ?? 0,
+          filesFinalizingTotal: snap.files_finalizing_total ?? 0,
         }),
       }));
       await sleep(POLL_INTERVAL_MS);
@@ -475,6 +488,11 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
           // undefined and crash on `.startsWith` etc.
           if (next.errorReason === undefined) next.errorReason = null;
           if (next.errorDetail === undefined) next.errorDetail = null;
+          // Back-fill v2.18.0 apply-progress counters — pre-2.18 saves
+          // don't carry these. Default to 0 so the QueueRow's
+          // optional chain on the finalize pill stays safe.
+          if (typeof next.filesFinalized !== "number") next.filesFinalized = 0;
+          if (typeof next.filesFinalizingTotal !== "number") next.filesFinalizingTotal = 0;
           return next;
         });
         set({
@@ -508,6 +526,8 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
         bytesSent: 0,
         totalBytes: 0,
         bytesPerSec: 0,
+        filesFinalized: 0,
+        filesFinalizingTotal: 0,
         mountedAt: null,
         mountWarnings: [],
         error: null,

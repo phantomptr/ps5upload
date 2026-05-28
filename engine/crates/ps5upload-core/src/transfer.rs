@@ -8,10 +8,10 @@
 use crate::connection::Connection;
 use crate::{hash_shard, Manifest, ManifestFile};
 use anyhow::{bail, Context, Result};
-pub use ftx2_proto::TX_FLAG_RESUME;
 use ftx2_proto::{
     FrameType, ShardAck, ShardHeader, TxMeta, PACKED_RECORD_PREFIX_LEN, SHARD_FLAG_PACKED,
 };
+pub use ftx2_proto::{TX_FLAG_APPLY_PROGRESS_REQUESTED, TX_FLAG_RESUME};
 use std::collections::VecDeque;
 use std::path::{Component, Path};
 use std::time::Duration;
@@ -110,6 +110,23 @@ pub struct TransferConfig {
     /// "start → finished" on 46 k-file game folders. `None` keeps legacy
     /// callers' behaviour (no per-file tick).
     pub progress_files: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
+    /// Optional COMMIT-phase progress counters — both bumped from the
+    /// engine's commit-wait loop as APPLY_PROGRESS frames arrive from
+    /// the payload (P3, v2.18.0). `files_finalized` reports how many
+    /// files the payload has fully written to the destination so far;
+    /// `bytes_finalized` the cumulative bytes of those files. The
+    /// engine ticker on the main side reads both and surfaces a live
+    /// "Finalized N of M files" counter in JobState::Running so the
+    /// UI shows motion through the otherwise-silent commit phase.
+    /// `None` keeps the legacy single-CommitTxAck behaviour (no
+    /// post-100% counters surface to the UI). Payload-side toggle is
+    /// independent: setting these counters here also adds
+    /// `TX_FLAG_APPLY_PROGRESS_REQUESTED` to multi-file BEGIN_TX
+    /// flags so the payload knows to emit. Old payloads ignore the
+    /// flag and the counters stay at zero — the UI degrades to the
+    /// silent-finalize behaviour from before P3 cleanly.
+    pub progress_files_finalized: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
+    pub progress_bytes_finalized: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
     /// Optional outbound bandwidth cap, in bytes per second. `None` =
     /// unlimited (current behaviour). When set, the transfer loop
     /// sleeps after each shard's wire write to bring the running
@@ -139,6 +156,8 @@ impl TransferConfig {
             excludes: Vec::new(),
             progress_bytes: None,
             progress_files: None,
+            progress_files_finalized: None,
+            progress_bytes_finalized: None,
             bandwidth_cap_bps: None,
         }
     }
@@ -362,10 +381,84 @@ fn send_begin_and_expect_ack(c: &mut Connection, body: &[u8]) -> Result<Vec<u8>>
 /// The connection is dropped by every caller right after this returns
 /// (no transfer path reuses the connection post-commit), so we don't
 /// bother restoring the prior timeout.
-fn send_commit_and_expect_ack(c: &mut Connection, body: &[u8]) -> Result<Vec<u8>> {
+/// Parsed body of an APPLY_PROGRESS frame (P3, v2.18.0).
+///
+/// Emitted one-way by the payload during the multi-file COMMIT_TX
+/// apply loop when the client opted in via
+/// `TX_FLAG_APPLY_PROGRESS_REQUESTED`. The engine consumes these
+/// inside the commit-wait loop and forwards into the progress
+/// counters on `TransferConfig`, which the main-process ticker
+/// surfaces on `JobState::Running` so the UI can render a live
+/// counter through the otherwise-silent commit phase.
+#[derive(Debug, Clone, serde::Deserialize)]
+struct ApplyProgress {
+    files_applied: u64,
+    #[allow(dead_code)] // surfaced via the cfg sink, not used in this helper
+    total_files: u64,
+    bytes_applied: u64,
+}
+
+/// Send `COMMIT_TX` and wait for `CommitTxAck`, interleaving any
+/// `ApplyProgress` frames the payload emits along the way (P3,
+/// v2.18.0).
+///
+/// Each `ApplyProgress` frame is parsed and the counters fed into
+/// `cfg.progress_files_finalized` and `cfg.progress_bytes_finalized`
+/// (if present). The loop only exits on:
+///   - `CommitTxAck`: success, return the ack body
+///   - `Error`: bail with the payload's error body
+///   - any other frame type: bail (unexpected protocol drift)
+///
+/// Read timeout starts at `COMMIT_TX_ACK_TIMEOUT` (30 min, set by
+/// the existing helper) — once the first ApplyProgress arrives we
+/// tighten to `Duration::from_secs(120)` because progress frames
+/// emit at ~1 sec cadence per the payload's throttle, so 2 min of
+/// silence after we've seen one frame is a real stall worth
+/// surfacing fast (vs the 30 min fallback for payloads that never
+/// emit progress at all).
+fn send_commit_and_expect_ack(
+    c: &mut Connection,
+    body: &[u8],
+    cfg: &TransferConfig,
+) -> Result<Vec<u8>> {
     c.set_io_timeout(COMMIT_TX_ACK_TIMEOUT)
         .context("raise read timeout for CommitTxAck wait")?;
-    send_and_expect(c, FrameType::CommitTx, body, FrameType::CommitTxAck)
+    c.send_frame(FrameType::CommitTx, body)?;
+    let mut tightened = false;
+    loop {
+        let (hdr, resp) = c.recv_frame()?;
+        let ft = hdr.frame_type().unwrap_or(FrameType::Error);
+        match ft {
+            FrameType::ApplyProgress => {
+                if let Ok(p) = serde_json::from_slice::<ApplyProgress>(&resp) {
+                    if let Some(sink) = &cfg.progress_files_finalized {
+                        sink.store(p.files_applied, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    if let Some(sink) = &cfg.progress_bytes_finalized {
+                        sink.store(p.bytes_applied, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+                // First progress frame seen — tighten the inter-frame
+                // timeout. Subsequent frames are expected at ~1 sec
+                // cadence by the payload throttle; 2 min of silence
+                // means the apply loop genuinely stalled.
+                if !tightened {
+                    let _ = c.set_io_timeout(Duration::from_secs(120));
+                    tightened = true;
+                }
+            }
+            FrameType::CommitTxAck => return Ok(resp),
+            FrameType::Error => {
+                bail!(
+                    "CommitTx rejected (Error): {}",
+                    String::from_utf8_lossy(&resp)
+                );
+            }
+            other => {
+                bail!("unexpected frame during commit wait: {other:?}");
+            }
+        }
+    }
 }
 
 /// Parse `last_acked_shard` out of a BeginTxAck body. Returns 0 for both
@@ -898,7 +991,7 @@ fn transfer_file_with_flags(
         sender.drain()?;
     }
 
-    let commit_ack = send_commit_and_expect_ack(&mut c, &tx_meta_buf(tx_id, 0, b""))?;
+    let commit_ack = send_commit_and_expect_ack(&mut c, &tx_meta_buf(tx_id, 0, b""), cfg)?;
 
     Ok(TransferResult {
         tx_id_hex,
@@ -1035,7 +1128,7 @@ fn transfer_file_path_with_flags(
         sender.drain()?;
     }
 
-    let commit_ack = send_commit_and_expect_ack(&mut c, &tx_meta_buf(tx_id, 0, b""))?;
+    let commit_ack = send_commit_and_expect_ack(&mut c, &tx_meta_buf(tx_id, 0, b""), cfg)?;
 
     Ok(TransferResult {
         tx_id_hex,
@@ -1470,8 +1563,22 @@ pub fn transfer_dir_with_flags(
     })?;
 
     let mut c = Connection::connect(&cfg.addr)?;
-    let begin_ack =
-        send_begin_and_expect_ack(&mut c, &tx_meta_buf_flags(tx_id, 2, flags, &manifest_json))?;
+    let begin_ack = send_begin_and_expect_ack(
+        &mut c,
+        &tx_meta_buf_flags(
+            tx_id,
+            2,
+            // Multi-file: always opt in to APPLY_PROGRESS so the
+            // client gets a live counter through the commit-apply
+            // phase (P3 / v2.18.0). Old payloads ignore unknown
+            // flag bits, so this is back-compat-clean — they
+            // simply don't emit progress frames and the commit
+            // wait sees only the final CommitTxAck (the new
+            // helper handles both paths transparently).
+            flags | TX_FLAG_APPLY_PROGRESS_REQUESTED,
+            &manifest_json,
+        ),
+    )?;
     let last_acked_shard = parse_last_acked_shard(&begin_ack, flags & TX_FLAG_RESUME != 0);
     // Same ghost-commit guard as the single-file paths (the multi-file
     // paths previously lacked it). See guard_last_acked.
@@ -1507,7 +1614,7 @@ pub fn transfer_dir_with_flags(
         sender.drain()?;
     }
 
-    let commit_ack = send_commit_and_expect_ack(&mut c, &tx_meta_buf(tx_id, 0, b""))?;
+    let commit_ack = send_commit_and_expect_ack(&mut c, &tx_meta_buf(tx_id, 0, b""), cfg)?;
 
     // `bytes_sent` reflects the full plan, not this call's wire bytes.
     // Rationale: for packed multi-file shards, wire bytes include pack
@@ -1668,8 +1775,22 @@ pub fn transfer_file_list_with_flags(
     })?;
 
     let mut c = Connection::connect(&cfg.addr)?;
-    let begin_ack =
-        send_begin_and_expect_ack(&mut c, &tx_meta_buf_flags(tx_id, 2, flags, &manifest_json))?;
+    let begin_ack = send_begin_and_expect_ack(
+        &mut c,
+        &tx_meta_buf_flags(
+            tx_id,
+            2,
+            // Multi-file: always opt in to APPLY_PROGRESS so the
+            // client gets a live counter through the commit-apply
+            // phase (P3 / v2.18.0). Old payloads ignore unknown
+            // flag bits, so this is back-compat-clean — they
+            // simply don't emit progress frames and the commit
+            // wait sees only the final CommitTxAck (the new
+            // helper handles both paths transparently).
+            flags | TX_FLAG_APPLY_PROGRESS_REQUESTED,
+            &manifest_json,
+        ),
+    )?;
     let last_acked_shard = parse_last_acked_shard(&begin_ack, flags & TX_FLAG_RESUME != 0);
     // Same ghost-commit guard as the single-file paths. See guard_last_acked.
     guard_last_acked(last_acked_shard, total_shards)?;
@@ -1702,7 +1823,7 @@ pub fn transfer_file_list_with_flags(
         sender.drain()?;
     }
 
-    let commit_ack = send_commit_and_expect_ack(&mut c, &tx_meta_buf(tx_id, 0, b""))?;
+    let commit_ack = send_commit_and_expect_ack(&mut c, &tx_meta_buf(tx_id, 0, b""), cfg)?;
 
     Ok(TransferResult {
         tx_id_hex,
@@ -2626,8 +2747,22 @@ pub fn transfer_zip_with_opts(
     })?;
 
     let mut c = Connection::connect(&cfg.addr)?;
-    let begin_ack =
-        send_begin_and_expect_ack(&mut c, &tx_meta_buf_flags(tx_id, 2, flags, &manifest_json))?;
+    let begin_ack = send_begin_and_expect_ack(
+        &mut c,
+        &tx_meta_buf_flags(
+            tx_id,
+            2,
+            // Multi-file: always opt in to APPLY_PROGRESS so the
+            // client gets a live counter through the commit-apply
+            // phase (P3 / v2.18.0). Old payloads ignore unknown
+            // flag bits, so this is back-compat-clean — they
+            // simply don't emit progress frames and the commit
+            // wait sees only the final CommitTxAck (the new
+            // helper handles both paths transparently).
+            flags | TX_FLAG_APPLY_PROGRESS_REQUESTED,
+            &manifest_json,
+        ),
+    )?;
     let last_acked_shard = parse_last_acked_shard(&begin_ack, flags & TX_FLAG_RESUME != 0);
     // Same ghost-commit guard as the single-file paths. See guard_last_acked.
     guard_last_acked(last_acked_shard, total_shards)?;
@@ -2659,7 +2794,7 @@ pub fn transfer_zip_with_opts(
     }
     drop(mat); // evict any temp cache file before COMMIT
 
-    let commit_ack = send_commit_and_expect_ack(&mut c, &tx_meta_buf(tx_id, 0, b""))?;
+    let commit_ack = send_commit_and_expect_ack(&mut c, &tx_meta_buf(tx_id, 0, b""), cfg)?;
 
     Ok(TransferResult {
         tx_id_hex,
@@ -3024,6 +3159,49 @@ mod retry_classification_tests {
             "post-begin shard-ACK timeout must mirror connection's \
              DEFAULT_IO_TIMEOUT (30 s); got {:?}",
             POST_BEGIN_DEFAULT_TIMEOUT,
+        );
+    }
+
+    #[test]
+    fn apply_progress_body_parses() {
+        // Pin the JSON shape the payload emits during the multi-file
+        // apply loop when the client opted into APPLY_PROGRESS. Body
+        // is intentionally tiny (~80 bytes) so the throttled ~1 Hz
+        // emission doesn't pressure the wire during a long commit.
+        let body = br#"{"files_applied":12400,"total_files":84216,"bytes_applied":42949672960}"#;
+        let parsed: ApplyProgress =
+            serde_json::from_slice(body).expect("APPLY_PROGRESS body must parse");
+        assert_eq!(parsed.files_applied, 12_400);
+        assert_eq!(parsed.total_files, 84_216);
+        assert_eq!(parsed.bytes_applied, 42_949_672_960);
+    }
+
+    #[test]
+    fn apply_progress_body_tolerates_extra_fields() {
+        // Forward-compat: payload may add fields in future releases
+        // (apply-stage label, per-file rate, etc.). Engine consumer
+        // ignores unknown fields rather than failing the whole
+        // commit-wait — a robust client must handle "I see new
+        // field names from the future" cleanly.
+        let body = br#"{"files_applied":1,"total_files":2,"bytes_applied":3,"future_field":"hello","another":42}"#;
+        let parsed: ApplyProgress =
+            serde_json::from_slice(body).expect("forward-compat body must parse");
+        assert_eq!(parsed.files_applied, 1);
+        assert_eq!(parsed.total_files, 2);
+        assert_eq!(parsed.bytes_applied, 3);
+    }
+
+    #[test]
+    fn apply_progress_flag_value_is_stable() {
+        // Pin the on-wire bit position of TX_FLAG_APPLY_PROGRESS_REQUESTED.
+        // Payload-side macro FTX2_TX_FLAG_APPLY_PROGRESS_REQUESTED must
+        // mirror this; a divergence here is a wire-protocol break.
+        assert_eq!(TX_FLAG_APPLY_PROGRESS_REQUESTED, 0x4);
+        // Distinct from TX_FLAG_RESUME so they can be OR'd cleanly.
+        assert_eq!(
+            TX_FLAG_RESUME & TX_FLAG_APPLY_PROGRESS_REQUESTED,
+            0,
+            "TX_FLAG_RESUME and TX_FLAG_APPLY_PROGRESS_REQUESTED must occupy different bits"
         );
     }
 

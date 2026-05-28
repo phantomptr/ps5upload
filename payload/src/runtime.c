@@ -75,6 +75,15 @@ extern int posix_fallocate(int fd, off_t offset, off_t len);
  * allocating a fresh slot. Unknown / non-resumable tx_ids fall through to
  * fresh-BeginTx semantics (flag becomes a no-op). */
 #define FTX2_TX_FLAG_RESUME 0x1u
+/* BeginTx opt-in: client wants APPLY_PROGRESS frames during the
+ * multi-file COMMIT_TX apply loop. New in protocol version paired with
+ * ftx2_proto::TX_FLAG_APPLY_PROGRESS_REQUESTED. When set, we emit a
+ * lightweight JSON progress frame every ~1 sec or 1024 files committed
+ * so the desktop client can render a live "Finalized N of M" counter
+ * instead of an indeterminate "Finalizing on PS5…" black box. Old
+ * clients don't set the flag and we behave as before (silent apply,
+ * single CommitTxAck). */
+#define FTX2_TX_FLAG_APPLY_PROGRESS_REQUESTED 0x4u
 #define FTX2_FRAME_QUERY_TX 12u
 #define FTX2_FRAME_QUERY_TX_ACK 13u
 #define FTX2_FRAME_COMMIT_TX 14u
@@ -286,6 +295,14 @@ extern int posix_fallocate(int fd, off_t offset, off_t len);
  * something silently failed" cases from the desktop. */
 #define FTX2_FRAME_SYSLOG_TAIL              144u
 #define FTX2_FRAME_SYSLOG_TAIL_ACK          145u
+/* One-way payload → client during the multi-file COMMIT_TX apply loop
+ * when the client opted in via FTX2_TX_FLAG_APPLY_PROGRESS_REQUESTED.
+ * Body is a small JSON object (~80 bytes):
+ *   {"files_applied":N,"total_files":M,"bytes_applied":B}
+ * No ack — fire-and-forget. The client's CommitTxAck wait loop reads
+ * and forwards these to the engine's progress sink while it waits for
+ * the eventual CommitTxAck. */
+#define FTX2_FRAME_APPLY_PROGRESS           146u
 /* Where we place mount points. Scoped under /mnt/ps5upload/ so it
  * never collides with mount paths owned by other utilities. */
 #define FS_MOUNT_BASE "/mnt/ps5upload"
@@ -3598,11 +3615,75 @@ static int runtime_write_manifest(const runtime_tx_entry_t *entry,
  *
  * Parent directories are created as needed.
  */
-static int runtime_apply_spool(const runtime_tx_entry_t *entry) {
+/* Helper: throttled emission of an APPLY_PROGRESS frame.
+ *
+ * State (last_emit_us / last_emit_fi / bytes_running_total) is kept in
+ * caller-owned variables so multiple invocations share rate-limiting.
+ * Emits when:
+ *   - last emit was >= 1 sec ago, OR
+ *   - >= 1024 files have been applied since last emit, OR
+ *   - `force` is set (used at the very start + end so the client sees
+ *     motion immediately and a final "done" frame).
+ *
+ * On send failure (client disconnected mid-apply) we DO NOT propagate
+ * the error — apply must continue regardless. The client's commit-wait
+ * loop will see EOF on the connection and surface a real failure if
+ * the disconnect was genuine, but we don't want a single missed
+ * progress frame to abort an in-progress commit.
+ *
+ * Returns 0 if a frame was emitted (or skipped by throttling), -1 on
+ * encoding error. Callers ignore the return value.
+ */
+static int runtime_emit_apply_progress(int client_fd,
+                                       uint64_t trace_id,
+                                       uint64_t files_applied,
+                                       uint64_t total_files,
+                                       uint64_t bytes_applied,
+                                       uint64_t *last_emit_us,
+                                       uint64_t *last_emit_fi,
+                                       int force) {
+    if (client_fd < 0) return 0;
+    uint64_t now = now_us();
+    uint64_t since_us = (last_emit_us && *last_emit_us > 0)
+        ? (now - *last_emit_us) : (uint64_t)-1;
+    uint64_t since_fi = (last_emit_fi)
+        ? (files_applied - *last_emit_fi) : files_applied;
+    /* Throttle: at most one frame per second or per 1024 files,
+     * whichever first. Always emit on `force` (first and last). */
+    if (!force && since_us < 1000000ULL && since_fi < 1024ULL) {
+        return 0;
+    }
+    char body[160];
+    int n = snprintf(body, sizeof(body),
+        "{\"files_applied\":%llu,\"total_files\":%llu,\"bytes_applied\":%llu}",
+        (unsigned long long)files_applied,
+        (unsigned long long)total_files,
+        (unsigned long long)bytes_applied);
+    if (n <= 0 || (size_t)n >= sizeof(body)) return -1;
+    /* Best-effort send. Ignore the return — see fn-level comment. */
+    (void)send_frame(client_fd, FTX2_FRAME_APPLY_PROGRESS, 0, trace_id,
+                     body, (size_t)n);
+    if (last_emit_us) *last_emit_us = now;
+    if (last_emit_fi) *last_emit_fi = files_applied;
+    return 0;
+}
+
+static int runtime_apply_spool(const runtime_tx_entry_t *entry,
+                               int client_fd,
+                               uint64_t trace_id) {
     char spool_dir[512];
     char shard_path[512];
     char buf[65536];
     uint64_t seq = 0;
+    /* P3 progress tracking: only meaningful when the client opted in
+     * via FTX2_TX_FLAG_APPLY_PROGRESS_REQUESTED and we're in a multi-
+     * file tx. last_emit_us/fi are written by runtime_emit_apply_progress.
+     * bytes_running carries running totals for the body's bytes_applied
+     * field; we increment as each file's manifest size is committed. */
+    int progress_enabled = (entry && entry->apply_progress_enabled);
+    uint64_t last_emit_us = 0;
+    uint64_t last_emit_fi = 0;
+    uint64_t bytes_running = 0;
 
     if (!entry || entry->dest_root[0] == '\0') return -1;
 
@@ -3626,6 +3707,15 @@ static int runtime_apply_spool(const runtime_tx_entry_t *entry) {
             fprintf(stderr, "[payload2] could not read manifest for tx %s\n",
                     entry->tx_id_hex);
             return -1;
+        }
+        /* P3 emit-start: send a single APPLY_PROGRESS frame with
+         * files_applied=0 so the client immediately sees motion (the
+         * counter ticks from undefined → "0 of N"). Throttle state
+         * threads through the loop. */
+        if (progress_enabled) {
+            runtime_emit_apply_progress(client_fd, trace_id,
+                0, entry->file_count, 0,
+                &last_emit_us, &last_emit_fi, 1 /* force */);
         }
         for (fi = 0; fi < entry->file_count; fi++) {
             manifest_file_entry_t mf;
@@ -3714,6 +3804,26 @@ static int runtime_apply_spool(const runtime_tx_entry_t *entry) {
             }
             printf("[payload2] applied %llu shards -> %s\n",
                    (unsigned long long)mf.shard_count, mf.path);
+            /* P3 emit-tick: update running totals and emit a throttled
+             * progress frame. The emit helper takes care of the rate
+             * limit (>=1 sec OR >=1024 files since last emit). */
+            if (progress_enabled) {
+                bytes_running += mf.size;
+                runtime_emit_apply_progress(client_fd, trace_id,
+                    fi + 1, entry->file_count, bytes_running,
+                    &last_emit_us, &last_emit_fi, 0 /* throttle */);
+            }
+        }
+        /* P3 emit-end: force a final progress frame at completion so
+         * the client's counter lands at total/total before the
+         * CommitTxAck arrives (rather than at total-1 or wherever the
+         * last throttled tick fell). Skipped on error path — the
+         * caller's apply_failed branch sends a structured Error frame
+         * which the client treats as terminal. */
+        if (progress_enabled && rc_apply == 0) {
+            runtime_emit_apply_progress(client_fd, trace_id,
+                entry->file_count, entry->file_count, bytes_running,
+                &last_emit_us, &last_emit_fi, 1 /* force */);
         }
         free(manifest_buf);
         if (rc_apply == 0) {
@@ -13977,6 +14087,15 @@ static int handle_binary_frame(runtime_state_t *state, int client_fd,
          * resume — they'd destroy the very state we're trying to adopt. */
         int is_resume = 0;
         int want_resume = (bmeta.flags & FTX2_TX_FLAG_RESUME) != 0;
+        /* New in P3: client opts in to APPLY_PROGRESS frames during the
+         * multi-file commit apply loop. The flag is captured into the
+         * tx entry below (both FRESH and RESUME paths) so the apply
+         * loop can check entry->apply_progress_enabled when deciding
+         * whether to emit. Opt-in keeps old clients safe — they don't
+         * set the flag, so we stay silent and they see the legacy
+         * single-CommitTxAck behaviour. */
+        int want_apply_progress =
+            (bmeta.flags & FTX2_TX_FLAG_APPLY_PROGRESS_REQUESTED) != 0;
         pthread_mutex_lock(&state->state_mtx);
         {
             runtime_tx_entry_t *existing = runtime_find_tx_entry(state, bmeta.tx_id);
@@ -14087,6 +14206,13 @@ static int handle_binary_frame(runtime_state_t *state, int client_fd,
             entry->multi_file   = (bmeta.kind == 2);
             (void)runtime_write_manifest(entry, bextra, (size_t)bextra_len);
         }
+        /* P3: stamp the per-tx apply-progress opt-in from BEGIN_TX flags
+         * onto the entry. Set on every BEGIN_TX (including resume — the
+         * client can change its mind across attempts; an old client
+         * resuming a new-client tx would clear the flag, expectedly).
+         * Only meaningful for multi_file txs since single-file commits
+         * are fast and don't need progress reporting. */
+        entry->apply_progress_enabled = want_apply_progress;
         /* Enable direct-write path:
          *   - single-file (kind=1, file_count<=1): stream straight to
          *     <dest>.ps5up2-tmp, rename at commit.
@@ -14832,7 +14958,7 @@ static int handle_binary_frame(runtime_state_t *state, int client_fd,
                         }
                     }
                 }
-            } else if (runtime_apply_spool(entry) == 0) {
+            } else if (runtime_apply_spool(entry, client_fd, hdr.trace_id) == 0) {
                 (void)runtime_cleanup_spool(entry);
             } else {
                 apply_failed = 1;

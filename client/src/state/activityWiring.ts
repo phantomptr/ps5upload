@@ -94,6 +94,13 @@ export function installActivityWiring() {
         bytes: phase.bytesSent,
         totalBytes: phase.totalBytes,
         phase: newPhase,
+        // P3 / v2.18.0 — forward the apply-phase counters so the
+        // ActivityRow's finalize pill can render "Finalized N of M files".
+        // 0/0 on pre-P3 payloads and outside the finalize phase — the
+        // ActivityRow already guards on phase === "finalizing" + both
+        // values being meaningful, so this is safe to forward unconditionally.
+        filesFinalized: phase.filesFinalized,
+        filesFinalizingTotal: phase.filesFinalizingTotal,
       });
       return;
     }

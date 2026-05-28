@@ -134,6 +134,8 @@ activity_from: "From",
 activity_to: "To",
 activity_avg_speed: "avg {speed}/s",
 activity_phase_finalizing: "Finalizing on PS5",
+activity_phase_finalizing_with_counter:
+  "Finalizing on PS5 — {done} / {total} files",
 activity_phase_finalizing_hint:
   "All bytes are on the PS5; it's committing the file index. This can take a while for large file counts — don't close the app.",
 activity_outcome_running: "Running",
@@ -461,6 +463,8 @@ update_download_button: "Download v{version}",
 queue_avg_speed: "{speed}/s avg",
 queue_eta: "ETA {eta}",
 queue_phase_finalizing: "Finalizing on PS5",
+queue_phase_finalizing_with_counter:
+  "Finalizing on PS5 — {done} / {total}",
 queue_phase_finalizing_hint:
   "All bytes are on the PS5; it's committing the file index. Large file counts (10k+) routinely take many minutes here — don't close the app.",
 queue_mounted_at: "mounted at {mount}",
@@ -1090,6 +1094,8 @@ upload_dialog_cancel: "Cancel",
 upload_status_preparing: "Preparing upload…",
 upload_status_uploading: "Uploading",
 upload_status_finalizing: "Finalizing on PS5",
+upload_status_finalizing_counter:
+  "Finalized {done} / {total} files. ",
 upload_status_finalizing_hint:
   "PS5 is committing the file index. This can take a while for large file counts — don't close the app.",
 upload_status_of: "of",

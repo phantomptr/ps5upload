@@ -101,6 +101,14 @@ export interface ActivityEntry {
    *  compatible (older app versions persist entries without this
    *  field; renderers treat `undefined` as "uploading"). */
   phase?: ActivityPhase;
+  /** P3 / v2.18.0 — only meaningful when phase === "finalizing".
+   *  Surfaces the payload's "Finalized N of M files" progress
+   *  during the post-100% commit-apply phase. Both undefined on
+   *  old payloads that don't emit APPLY_PROGRESS, and the UI
+   *  degrades to the legacy "Finalizing on PS5…" pill without a
+   *  counter. */
+  filesFinalized?: number;
+  filesFinalizingTotal?: number;
 }
 
 interface ActivityHistoryState {
