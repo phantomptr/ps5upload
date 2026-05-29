@@ -19,27 +19,38 @@ import { isTauriEnv } from "./tauriEnv";
 import type { NotificationLevel } from "../state/notifications";
 
 // ── Foreground tracking ───────────────────────────────────────────────
-// Start optimistic; the first focus/blur/visibility event corrects it.
-let appForeground = true;
+// Tracked as TWO independent signals — focus and visibility — because a
+// single last-event-wins boolean is wrong: a `visibilitychange` reporting
+// the window still-visible would clobber a prior `blur`, making a
+// visible-but-unfocused window look "foreground" and wrongly suppress the
+// OS mirror. `appIsForeground()` ANDs them, matching its contract.
+let windowFocused =
+  typeof document !== "undefined" && typeof document.hasFocus === "function"
+    ? document.hasFocus()
+    : true;
+let documentVisible =
+  typeof document !== "undefined"
+    ? document.visibilityState !== "hidden"
+    : true;
 
 if (typeof window !== "undefined") {
   window.addEventListener("focus", () => {
-    appForeground = true;
+    windowFocused = true;
   });
   window.addEventListener("blur", () => {
-    appForeground = false;
+    windowFocused = false;
   });
 }
 if (typeof document !== "undefined") {
   document.addEventListener("visibilitychange", () => {
-    appForeground = !document.hidden;
+    documentVisible = document.visibilityState !== "hidden";
   });
 }
 
 /** Whether the app window currently has focus AND is visible. The OS
- *  mirror only fires when this is false. */
+ *  mirror only fires when this is false (app backgrounded/unfocused). */
 export function appIsForeground(): boolean {
-  return appForeground;
+  return windowFocused && documentVisible;
 }
 
 // ── Permission ────────────────────────────────────────────────────────

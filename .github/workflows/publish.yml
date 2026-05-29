@@ -353,6 +353,13 @@ jobs:
     name: build-android
     needs: build-payload
     runs-on: ubuntu-24.04
+    # Non-blocking: the Android port is newer/experimental, and the
+    # desktop bundles are the shipped product. If the Android pipeline
+    # flakes (NDK rotation, Gradle, signing), the release must still go
+    # out — create-release's asset step already guards the APK copy with
+    # `if [ -f … ]`, so a missing APK just means "no Android asset this
+    # release", not a failed release.
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v5
         with:
