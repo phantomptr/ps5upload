@@ -4,7 +4,15 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## 2.19.2
+## 2.19.3
+
+- **ShadowMount+ (and other zip-packaged payloads) now install.** The
+  "Set up your PS5" one-click chain and the payload catalogue failed on
+  ShadowMount+ with "downloaded asset is not an ELF" — newer ShadowMount+
+  releases ship the payload inside a `.zip` instead of as a bare `.elf`.
+  PS5 Upload now detects a zip-packaged payload, extracts the real `.elf`
+  from inside it, and sends that. Affected the recommended chain on every
+  platform (desktop and Android).
 
 - **Android: your settings now survive app updates.** Earlier Android
   builds were each signed with a throwaway key, so installing a newer

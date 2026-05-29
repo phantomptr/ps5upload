@@ -692,10 +692,91 @@ fn pick_asset(release: &GithubRelease, hint: &str) -> (String, String, u64) {
             return (a.name.clone(), a.browser_download_url.clone(), a.size);
         }
     }
+    // Archive fallback: some payloads ship ONLY a release .zip with the
+    // ELF inside (e.g. ShadowMount+ → `ShadowMountPlus_<ver>.zip`). Prefer
+    // a hint-matching .zip, then any .zip. The downloader detects the zip
+    // by magic and extracts the inner .elf.
+    if !hint.is_empty() {
+        for a in &release.assets {
+            let n = a.name.to_ascii_lowercase();
+            if n.ends_with(".zip") && n.contains(&lower_hint) {
+                return (a.name.clone(), a.browser_download_url.clone(), a.size);
+            }
+        }
+    }
+    for a in &release.assets {
+        if a.name.to_ascii_lowercase().ends_with(".zip") {
+            return (a.name.clone(), a.browser_download_url.clone(), a.size);
+        }
+    }
     // Last resort: first asset. Almost always wrong if we get here —
-    // the ELF-magic check downstream will catch it before write.
+    // the ELF/zip magic check downstream will catch it before write.
     let a = &release.assets[0];
     (a.name.clone(), a.browser_download_url.clone(), a.size)
+}
+
+/// Extract the payload ELF from a downloaded release `.zip` into `dest`.
+///
+/// Picks the best `.elf` entry: one whose name matches the catalogue
+/// `hint` wins over a generic `.elf`, and larger wins within a tier (the
+/// runnable payload, not a tiny stub). We extract to a FIXED `dest` path
+/// and never use the entry's own name as a path, so a malicious entry
+/// name can't escape the cache dir (no zip-slip). The copy is bounded by
+/// the same byte cap as the download to defuse a zip bomb regardless of
+/// the central directory's declared size.
+fn extract_payload_elf_from_zip(
+    zip_path: &std::path::Path,
+    dest: &std::path::Path,
+    hint: &str,
+) -> Result<(), String> {
+    use std::io::Read;
+    let f = std::fs::File::open(zip_path).map_err(|e| format!("open zip: {e}"))?;
+    let mut zip = zip::ZipArchive::new(f).map_err(|e| format!("read zip: {e}"))?;
+    let lower_hint = hint.to_ascii_lowercase();
+
+    // rank 0 = name contains the hint, rank 1 = any other .elf. Within a
+    // rank, prefer the largest entry.
+    let mut best: Option<(u8, u64, usize)> = None;
+    for i in 0..zip.len() {
+        let e = zip.by_index(i).map_err(|e| format!("zip entry {i}: {e}"))?;
+        if !e.is_file() {
+            continue;
+        }
+        let name = e.name().to_ascii_lowercase();
+        if !name.ends_with(".elf") {
+            continue;
+        }
+        let rank = if !lower_hint.is_empty() && name.contains(&lower_hint) {
+            0
+        } else {
+            1
+        };
+        let size = e.size();
+        let better = best.map(|(r, s, _)| rank < r || (rank == r && size > s));
+        if better.unwrap_or(true) {
+            best = Some((rank, size, i));
+        }
+    }
+    let idx = best
+        .map(|(_, _, i)| i)
+        .ok_or_else(|| "zip release contains no .elf payload".to_string())?;
+
+    let mut entry = zip.by_index(idx).map_err(|e| format!("zip entry: {e}"))?;
+    let mut out =
+        std::fs::File::create(dest).map_err(|e| format!("create {}: {e}", dest.display()))?;
+    // Cap the decompressed copy so a lying central-directory size can't
+    // fill the disk.
+    let mut limited = (&mut entry).take(PAYLOAD_DOWNLOAD_MAX_BYTES + 1);
+    let copied = std::io::copy(&mut limited, &mut out).map_err(|e| format!("extract: {e}"))?;
+    if copied > PAYLOAD_DOWNLOAD_MAX_BYTES {
+        drop(out);
+        let _ = std::fs::remove_file(dest);
+        return Err(format!(
+            "zip ELF entry exceeds {PAYLOAD_DOWNLOAD_MAX_BYTES} byte cap"
+        ));
+    }
+    out.sync_all().map_err(|e| format!("fsync extracted elf: {e}"))?;
+    Ok(())
 }
 
 /// Fetch the latest release for a payload, with cache. `force_refresh`
@@ -1015,8 +1096,16 @@ pub async fn payloads_download(
         ));
     }
 
-    // Stream to a tmp file, validate ELF magic on first chunk, atomic
-    // rename when done.
+    // Stream the asset to a tmp file (capped), then decide what it is by
+    // its magic bytes. Payloads ship in two shapes:
+    //   * a raw ELF, or
+    //   * a release .zip with the ELF inside — e.g. ShadowMount+ ships
+    //     `ShadowMountPlus_<ver>.zip` containing `shadowmountplus.elf`,
+    //     with no raw-ELF asset at all (field-reported: the chain's SMP
+    //     step failed with "downloaded asset is not an ELF").
+    // We can't ELF-check the first chunk inline anymore (a zip starts
+    // with "PK\x03\x04"), so buffer fully — assets are well under the
+    // few-MB cap — and branch on the magic.
     let asset_basename = entry
         .asset_name_hint
         .trim_matches(|c: char| !c.is_alphanumeric());
@@ -1026,54 +1115,80 @@ pub async fn payloads_download(
         format!("{asset_basename}.elf")
     };
     let final_path = dir.join(&final_name);
-    let tmp_path = final_path.with_extension("elf.tmp");
+    let dl_tmp = final_path.with_extension("download.tmp");
+    let elf_tmp = final_path.with_extension("elf.tmp");
 
     {
-        let mut tmp = std::fs::File::create(&tmp_path)
-            .map_err(|e| format!("create {}: {e}", tmp_path.display()))?;
+        let mut tmp = std::fs::File::create(&dl_tmp)
+            .map_err(|e| format!("create {}: {e}", dl_tmp.display()))?;
         let mut total_written: u64 = 0;
-        let mut magic_buf: Vec<u8> = Vec::with_capacity(4);
         while let Some(chunk) = resp.chunk().await.map_err(|e| format!("read chunk: {e}"))? {
-            if magic_buf.len() < 4 {
-                let take = (4 - magic_buf.len()).min(chunk.len());
-                magic_buf.extend_from_slice(&chunk[..take]);
-                if magic_buf.len() == 4 && magic_buf.as_slice() != b"\x7FELF" {
-                    let _ = std::fs::remove_file(&tmp_path);
-                    return Err(format!(
-                        "downloaded asset is not an ELF (first bytes {:02x?})",
-                        magic_buf
-                    ));
-                }
-            }
             total_written = total_written.saturating_add(chunk.len() as u64);
             if total_written > PAYLOAD_DOWNLOAD_MAX_BYTES {
-                let _ = std::fs::remove_file(&tmp_path);
+                let _ = std::fs::remove_file(&dl_tmp);
                 return Err(format!(
                     "downloaded {total_written} bytes exceeds {PAYLOAD_DOWNLOAD_MAX_BYTES} cap"
                 ));
             }
             tmp.write_all(&chunk)
-                .map_err(|e| format!("write {}: {e}", tmp_path.display()))?;
-        }
-        // Final tail-check: a response that delivers a total of <4 bytes
-        // (truncated download, malformed asset) would slip past the
-        // in-loop magic check because the `magic_buf.len() == 4` branch
-        // never fires. Reject the file here instead of saving a 3-byte
-        // "ELF" that fails much later when someone tries to send it.
-        if magic_buf.len() < 4 {
-            let _ = std::fs::remove_file(&tmp_path);
-            return Err(format!(
-                "downloaded asset is too short to be an ELF ({} bytes total)",
-                magic_buf.len()
-            ));
+                .map_err(|e| format!("write {}: {e}", dl_tmp.display()))?;
         }
         tmp.sync_all()
-            .map_err(|e| format!("fsync {}: {e}", tmp_path.display()))?;
+            .map_err(|e| format!("fsync {}: {e}", dl_tmp.display()))?;
     }
-    super::replace_file(&tmp_path, &final_path).map_err(|e| {
+
+    // Sniff the leading bytes to tell ELF from zip from junk (a 404 HTML
+    // page, a truncated response, …).
+    let mut head = [0u8; 4];
+    {
+        use std::io::Read;
+        let mut f = std::fs::File::open(&dl_tmp)
+            .map_err(|e| format!("reopen {}: {e}", dl_tmp.display()))?;
+        let n = f.read(&mut head).map_err(|e| format!("read head: {e}"))?;
+        if n < 4 {
+            let _ = std::fs::remove_file(&dl_tmp);
+            return Err(format!(
+                "downloaded asset is too short to be a payload ({n} bytes total)"
+            ));
+        }
+    }
+
+    if &head == b"\x7FELF" {
+        // Raw ELF asset — promote the download straight to the .elf tmp.
+        std::fs::rename(&dl_tmp, &elf_tmp)
+            .map_err(|e| format!("rename {}: {e}", dl_tmp.display()))?;
+    } else if &head[..2] == b"PK" {
+        // Zip release — extract the payload ELF from inside it.
+        let res = extract_payload_elf_from_zip(&dl_tmp, &elf_tmp, entry.asset_name_hint);
+        let _ = std::fs::remove_file(&dl_tmp);
+        res?;
+    } else {
+        let _ = std::fs::remove_file(&dl_tmp);
+        return Err(format!(
+            "downloaded asset is neither an ELF nor a zip (first bytes {head:02x?})"
+        ));
+    }
+
+    // Sanity-check whatever we ended up with really is an ELF before we
+    // cache it under the .elf name the loader will later send.
+    {
+        use std::io::Read;
+        let mut f = std::fs::File::open(&elf_tmp).map_err(|e| format!("reopen elf: {e}"))?;
+        let mut m = [0u8; 4];
+        let n = f.read(&mut m).map_err(|e| format!("read elf head: {e}"))?;
+        if n < 4 || &m != b"\x7FELF" {
+            let _ = std::fs::remove_file(&elf_tmp);
+            return Err(format!(
+                "extracted payload is not an ELF (first bytes {m:02x?})"
+            ));
+        }
+    }
+
+    super::replace_file(&elf_tmp, &final_path).map_err(|e| {
+        let _ = std::fs::remove_file(&elf_tmp);
         format!(
             "rename {} -> {}: {e}",
-            tmp_path.display(),
+            elf_tmp.display(),
             final_path.display()
         )
     })?;
@@ -1294,5 +1409,82 @@ mod tests {
             .collect();
         assert!(p0.iter().all(|e| e.id.starts_with("kstuff-")));
         assert!(p1.iter().all(|e| e.id == "shadowmountplus"));
+    }
+
+    #[test]
+    fn pick_asset_uses_zip_when_only_zip() {
+        // ShadowMount+'s actual releases ship ONLY a .zip (no raw .elf):
+        // `ShadowMountPlus_1.6test11.zip`. pick_asset must select the zip
+        // so the downloader can extract the inner ELF, instead of the
+        // old behaviour where the chain step failed with
+        // "downloaded asset is not an ELF".
+        let r = GithubRelease {
+            tag_name: "1.6test11".into(),
+            name: "".into(),
+            body: "".into(),
+            published_at: "".into(),
+            html_url: "".into(),
+            assets: vec![GithubAsset {
+                name: "ShadowMountPlus_1.6test11.zip".into(),
+                browser_download_url: "https://example/smp.zip".into(),
+                size: 760_192,
+            }],
+        };
+        let (n, _, _) = pick_asset(&r, "shadowmountplus");
+        assert_eq!(n, "ShadowMountPlus_1.6test11.zip");
+    }
+
+    #[test]
+    fn extract_payload_elf_from_zip_picks_inner_elf() {
+        use std::io::Write;
+        let elf: Vec<u8> = {
+            let mut v = b"\x7FELF".to_vec();
+            v.extend(std::iter::repeat(0u8).take(2048));
+            v
+        };
+        let zip_path =
+            std::env::temp_dir().join(format!("ps5_smp_test_{}.zip", std::process::id()));
+        let dest = std::env::temp_dir().join(format!("ps5_smp_out_{}.elf", std::process::id()));
+        {
+            let f = std::fs::File::create(&zip_path).unwrap();
+            let mut zw = zip::ZipWriter::new(f);
+            let opts = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+            // Decoys + the real payload (matches the real SMP zip layout).
+            zw.start_file("README.md", opts).unwrap();
+            zw.write_all(b"# not a payload").unwrap();
+            zw.start_file("config.ini.example", opts).unwrap();
+            zw.write_all(b"key=value").unwrap();
+            zw.start_file("shadowmountplus.elf", opts).unwrap();
+            zw.write_all(&elf).unwrap();
+            zw.finish().unwrap();
+        }
+
+        extract_payload_elf_from_zip(&zip_path, &dest, "shadowmountplus").unwrap();
+        let got = std::fs::read(&dest).unwrap();
+        assert_eq!(&got[..4], b"\x7FELF", "extracted file must be the ELF");
+        assert_eq!(got.len(), elf.len(), "full ELF entry extracted");
+
+        let _ = std::fs::remove_file(&zip_path);
+        let _ = std::fs::remove_file(&dest);
+    }
+
+    #[test]
+    fn extract_payload_elf_from_zip_rejects_no_elf() {
+        use std::io::Write;
+        let zip_path =
+            std::env::temp_dir().join(format!("ps5_noelf_test_{}.zip", std::process::id()));
+        {
+            let f = std::fs::File::create(&zip_path).unwrap();
+            let mut zw = zip::ZipWriter::new(f);
+            let opts = zip::write::SimpleFileOptions::default();
+            zw.start_file("README.md", opts).unwrap();
+            zw.write_all(b"no payload here").unwrap();
+            zw.finish().unwrap();
+        }
+        let dest = std::env::temp_dir().join(format!("ps5_noelf_out_{}.elf", std::process::id()));
+        assert!(extract_payload_elf_from_zip(&zip_path, &dest, "shadowmountplus").is_err());
+        let _ = std::fs::remove_file(&zip_path);
+        let _ = std::fs::remove_file(&dest);
     }
 }
