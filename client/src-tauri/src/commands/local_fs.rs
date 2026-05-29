@@ -115,6 +115,51 @@ pub async fn request_storage_access() -> Result<(), String> {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn local_list_dir_sorts_dirs_first_then_files_case_insensitive() {
+        let tmp = std::env::temp_dir().join(format!("ps5_lf_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("Zsub")).unwrap();
+        std::fs::create_dir_all(tmp.join("alpha")).unwrap();
+        std::fs::write(tmp.join("b.txt"), b"hello").unwrap();
+        std::fs::write(tmp.join("A.bin"), b"xy").unwrap();
+
+        let out = local_list_dir(tmp.to_string_lossy().into_owned())
+            .await
+            .unwrap();
+        let names: Vec<&str> = out.iter().map(|e| e.name.as_str()).collect();
+        // Directories first (alpha, Zsub — case-insensitive), then files
+        // (A.bin, b.txt — case-insensitive).
+        assert_eq!(names, vec!["alpha", "Zsub", "A.bin", "b.txt"]);
+        assert!(out[0].is_dir);
+        assert_eq!(out[0].size, 0);
+        let btxt = out.iter().find(|e| e.name == "b.txt").unwrap();
+        assert!(!btxt.is_dir);
+        assert_eq!(btxt.size, 5);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[tokio::test]
+    async fn local_list_dir_errors_on_missing_dir() {
+        let r = local_list_dir("/no/such/ps5upload-test-dir-xyz".into()).await;
+        assert!(r.is_err());
+    }
+
+    #[tokio::test]
+    async fn desktop_storage_helpers() {
+        // Off Android these are plain helpers: roots = home dir,
+        // access always granted, request is a no-op.
+        let roots = local_storage_roots().await.unwrap();
+        assert!(!roots.is_empty(), "expected at least the home dir");
+        assert!(storage_access_granted().await.unwrap());
+        assert!(request_storage_access().await.is_ok());
+    }
+}
+
 #[cfg(target_os = "android")]
 mod android {
     use jni::objects::{JObject, JString, JValue};

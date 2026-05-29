@@ -12,6 +12,7 @@ import {
 
 import { Button } from ".";
 import { localFs, type LocalEntry } from "../api/localFs";
+import { parentOf, fmtSize } from "../lib/pathBrowser";
 import { useLocalPickerStore } from "../state/localPicker";
 import { useTr } from "../state/lang";
 
@@ -27,26 +28,6 @@ import { useTr } from "../state/lang";
  * `local_list_dir` so the user picks a real path the engine reads
  * directly: folders and big `.zip`s included, no copying.
  */
-
-function parentOf(path: string): string | null {
-  if (!path || path === "/") return null;
-  const trimmed = path.replace(/\/+$/, "");
-  const idx = trimmed.lastIndexOf("/");
-  if (idx < 0) return null;
-  return idx === 0 ? "/" : trimmed.slice(0, idx);
-}
-
-function fmtSize(n: number): string {
-  if (n < 1024) return `${n} B`;
-  const u = ["KB", "MB", "GB", "TB"];
-  let v = n / 1024;
-  let i = 0;
-  while (v >= 1024 && i < u.length - 1) {
-    v /= 1024;
-    i++;
-  }
-  return `${v.toFixed(v >= 10 || i === 0 ? 0 : 1)} ${u[i]}`;
-}
 
 export function LocalPathPicker() {
   const tr = useTr();
