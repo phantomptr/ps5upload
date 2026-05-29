@@ -170,7 +170,7 @@ export default function Sidebar({
 
       {/* Navigation — grouped by section. The `section` on the first
           item in a group triggers a small uppercase label above it. */}
-      <nav className="flex-1 overflow-y-auto p-2">
+      <nav className="min-h-0 flex-1 overflow-y-auto p-2">
         {items.map(({ to, key, fallback, icon: Icon, section }, idx) => {
           const isLogs = to === "/logs";
           const isSettings = to === "/settings";

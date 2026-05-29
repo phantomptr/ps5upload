@@ -337,7 +337,7 @@ export default function AppShell() {
               onClick={() => setMobileNavOpen(false)}
               className="absolute inset-0 bg-black/50"
             />
-            <div className="absolute inset-y-0 left-0 max-w-[85%] shadow-xl">
+            <div className="absolute inset-y-0 left-0 flex max-w-[85%] shadow-xl">
               <Sidebar onNavigate={() => setMobileNavOpen(false)} />
             </div>
           </div>
