@@ -42,6 +42,22 @@ PAYLOAD_ELF := $(PAYLOAD_DIR)/ps5upload.elf
 ENGINE_DIR  := engine
 CLIENT_DIR  := client
 
+# Android (Tauri mobile). The engine is linked in-process (no sidecar);
+# only the PS5 payload is bundled. Needs the Android SDK (ANDROID_HOME),
+# a JDK 17, an NDK, and the aarch64-linux-android Rust target via rustup
+# (Homebrew `rust` ships only the host std and can't cross-compile).
+# JDK/NDK are auto-detected where possible — override any on the CLI.
+ANDROID_TARGET     ?= aarch64
+ANDROID_RUST_TARGET ?= aarch64-linux-android
+# macOS resolves a JDK 17 via java_home; elsewhere fall back to $JAVA_HOME.
+ANDROID_JAVA_HOME  ?= $(shell /usr/libexec/java_home -v 17 2>/dev/null || echo "$$JAVA_HOME")
+# Newest NDK installed under the SDK.
+ANDROID_NDK_HOME   ?= $(shell ls -d "$(ANDROID_HOME)"/ndk/* 2>/dev/null | sort -V | tail -1)
+ANDROID_GEN_DIR    := $(CLIENT_DIR)/src-tauri/gen/android
+ANDROID_APK        := $(ANDROID_GEN_DIR)/app/build/outputs/apk/universal/debug/app-universal-debug.apk
+# Env preamble shared by the android recipes.
+ANDROID_ENV = JAVA_HOME="$(ANDROID_JAVA_HOME)" ANDROID_HOME="$(ANDROID_HOME)" NDK_HOME="$(ANDROID_NDK_HOME)"
+
 .PHONY: all help
 .PHONY: install install-ubuntu install-macos install-windows
 .PHONY: setup setup-engine setup-payload setup-client
@@ -54,6 +70,7 @@ CLIENT_DIR  := client
 .PHONY: run-engine run-client dev start _check-tauri-system-deps
 .PHONY: install-engine uninstall-engine
 .PHONY: dist dist-win dist-win-arm dist-mac dist-mac-x64 dist-linux dist-linux-arm
+.PHONY: android-deps android-init android-build run-android
 .PHONY: send-payload gen-fixtures sweep validate validate-xl
 .PHONY: sync-version sync-version-check
 
@@ -113,6 +130,12 @@ help:
 	@echo "  make dist-win|dist-win-arm"
 	@echo "  make dist-mac|dist-mac-x64"
 	@echo "  make dist-linux|dist-linux-arm"
+	@echo ""
+	@echo "Android (Tauri mobile — needs Android SDK + JDK 17 + NDK + rustup):"
+	@echo "  make run-android      - Build + run on a connected device/emulator"
+	@echo "  make android-build    - Build a debug APK (no device needed)"
+	@echo "  make android-init     - One-time: scaffold src-tauri/gen/android"
+	@echo "  make android-deps     - Check the Android toolchain is ready"
 	@echo ""
 	@echo "Auto-launch (engine starts at OS login):"
 	@echo "  make install-engine    - Register systemd/launchd/Task Scheduler job"
@@ -387,6 +410,37 @@ dist-linux-arm: payload setup-client
 	@echo "Building Linux ARM64 distribution (Tauri)..."
 	@cd $(CLIENT_DIR) && npm run dist:linux-arm
 	@echo "✓ Linux ARM64 packages built: $(CLIENT_DIR)/src-tauri/target/aarch64-unknown-linux-gnu/release/bundle/"
+
+#──────────────────────────────────────────────────────────────────────────────
+# Android (Tauri mobile). Like the `dist` targets but produces an APK. The
+# engine is linked in-process (engine_mobile.rs) rather than spawned, and only
+# the PS5 payload is bundled — so `payload` runs first to embed a current ELF.
+# gen/ is gitignored, so the recipes auto-run `android-init` if it's missing.
+#──────────────────────────────────────────────────────────────────────────────
+
+android-deps:
+	@command -v rustup >/dev/null 2>&1 || { echo "ERROR: rustup is required for Android cross-compilation (Homebrew 'rust' ships only the host std). Install from https://rustup.rs"; exit 1; }
+	@test -n "$(ANDROID_HOME)" || { echo "ERROR: ANDROID_HOME is not set — point it at your Android SDK (e.g. ~/Library/Android/sdk)"; exit 1; }
+	@test -n "$(ANDROID_NDK_HOME)" || { echo "ERROR: no NDK under $(ANDROID_HOME)/ndk — install via Android Studio or 'sdkmanager \"ndk;28.0.12916984\"'"; exit 1; }
+	@test -n "$(ANDROID_JAVA_HOME)" || { echo "ERROR: JDK 17 not found — set JAVA_HOME or install Temurin 17"; exit 1; }
+	@rustup target list --installed 2>/dev/null | grep -qx '$(ANDROID_RUST_TARGET)' || rustup target add $(ANDROID_RUST_TARGET)
+	@echo "Android toolchain OK — JDK=$(ANDROID_JAVA_HOME) NDK=$(ANDROID_NDK_HOME) target=$(ANDROID_RUST_TARGET)"
+
+android-init: android-deps setup-client
+	@echo "Scaffolding Android project (tauri android init)..."
+	@cd $(CLIENT_DIR) && $(ANDROID_ENV) npx tauri android init
+
+android-build: android-deps payload setup-client
+	@test -d $(ANDROID_GEN_DIR) || $(MAKE) android-init
+	@echo "Building Android APK (debug, $(ANDROID_TARGET))..."
+	@cd $(CLIENT_DIR) && $(ANDROID_ENV) npx tauri android build --debug --apk --target $(ANDROID_TARGET)
+	@echo "✓ APK built: $(ANDROID_APK)"
+
+run-android: android-deps payload setup-client
+	@test -d $(ANDROID_GEN_DIR) || $(MAKE) android-init
+	@echo "Launching on a connected Android device/emulator (tauri android dev)..."
+	@echo "  Attach one first — check with: adb devices"
+	@cd $(CLIENT_DIR) && $(ANDROID_ENV) npx tauri android dev --target $(ANDROID_TARGET)
 
 #──────────────────────────────────────────────────────────────────────────────
 # Testing

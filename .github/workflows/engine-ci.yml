@@ -182,17 +182,23 @@ jobs:
       # payload (ps5upload.elf.gz) and the engine sidecar binary.
       # cargo check parses those resource paths and errors out if
       # anything is missing, long before any code compiles. Stub the
-      # payload .gz (we don't need a real ELF for type-checking, just
-      # a file at that path) and build the engine binary for real so
-      # its target path exists. The stub's bytes are a valid empty
-      # gzip stream so any runtime decompression would at least not
-      # fault — but CI only checks, never runs, so the shape is what
-      # matters.
+      # payload .gz and build the engine binary for real so its target
+      # path exists.
+      #
+      # The stub is a *fake ELF* (ELF magic + 200 KB of zeros, gzipped),
+      # not an empty gzip: `cargo test` runs probes.rs::
+      # embedded_payload_decompresses_to_elf, which gunzips the embedded
+      # payload and asserts ELF magic + >100 KB. That test guards the
+      # "Send payload" decode path (an empty stub once shipped on mobile
+      # and broke it). The real ~1 MB payload is built + embedded by the
+      # `payload` job here and by publish.yml for releases; this fake one
+      # only has to satisfy the decode plumbing.
       - name: Stub payload resource
         shell: bash
         run: |
           mkdir -p payload
-          printf '\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x03\x03\x00\x00\x00\x00\x00\x00\x00\x00\x00' > payload/ps5upload.elf.gz
+          { printf '\x7fELF'; head -c 204800 /dev/zero; } > payload/ps5upload.elf
+          gzip -nf payload/ps5upload.elf   # -> payload/ps5upload.elf.gz
 
       - name: Build engine sidecar (needed as a Tauri resource)
         working-directory: engine
@@ -378,5 +384,88 @@ jobs:
             echo "::error::payload ELF is smaller than expected — build may have failed silently"
             exit 1
           fi
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Android APK (Tauri mobile). Verifies the whole mobile pipeline builds
+  # end-to-end: the engine linked in-process, the payload embedded, the
+  # Tauri lib cross-compiled to aarch64-linux-android, and Gradle
+  # assembling an installable debug APK. Uses the same fake-ELF payload
+  # stub as rust-desktop — this is a build-verification job, not a
+  # release. publish.yml builds the real, signed APK with the actual
+  # payload. The debug APK is uploaded as an artifact for manual testing.
+  # ─────────────────────────────────────────────────────────────────────
+  android:
+    name: android (apk build)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Rust + Android target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Cache cargo target
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            client/src-tauri/target
+          key: ${{ runner.os }}-android-cargo-${{ hashFiles('client/src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-android-cargo-
+
+      - name: Install client deps
+        working-directory: client
+        run: npm ci --no-audit --no-fund
+
+      # Fake-ELF payload stub (see rust-desktop's note): satisfies the
+      # embedded-payload decode + this build without the real ~1 MB ELF.
+      - name: Stub payload resource
+        shell: bash
+        run: |
+          mkdir -p payload
+          { printf '\x7fELF'; head -c 204800 /dev/zero; } > payload/ps5upload.elf
+          gzip -nf payload/ps5upload.elf
+
+      # ubuntu-24.04 ships the Android SDK (ANDROID_HOME) + an NDK. Pick
+      # the newest installed NDK and export it the way Tauri expects.
+      - name: Resolve NDK
+        shell: bash
+        run: |
+          ndk="$(ls -d "$ANDROID_HOME"/ndk/* 2>/dev/null | sort -V | tail -1)"
+          if [ -z "$ndk" ]; then
+            echo "::error::no NDK found under $ANDROID_HOME/ndk"
+            exit 1
+          fi
+          echo "NDK_HOME=$ndk" >> "$GITHUB_ENV"
+          echo "Using NDK: $ndk"
+
+      - name: Scaffold Android project (gen/ is gitignored)
+        working-directory: client
+        run: npx tauri android init
+
+      - name: Build debug APK (aarch64)
+        working-directory: client
+        run: npx tauri android build --debug --apk --target aarch64
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v6
+        with:
+          name: ps5upload-android-debug-apk
+          path: client/src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
 
   # ─────────────────────────────────────────────────────────────────────
