@@ -107,7 +107,7 @@ ps5upload-engine = { path = "../../engine/crates/ps5upload-engine" }
 # (Environment.isExternalStorageManager + the settings intent) from Rust.
 # tauri/ndk set up ndk_context so we can reach the JavaVM + Activity.
 [target.'cfg(target_os = "android")'.dependencies]
-jni = "0.21"
+jni = "0.22"
 ndk-context = "0.1"
 
 [features]
