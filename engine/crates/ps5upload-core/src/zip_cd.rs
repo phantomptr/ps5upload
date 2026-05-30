@@ -430,7 +430,9 @@ mod tests {
         let mut buf: Vec<u8> = Vec::new();
         {
             let mut zw = zip::ZipWriter::new(Cursor::new(&mut buf));
-            zw.set_raw_comment(vec![b'X'; 5000].into_boxed_slice());
+            // zip 8 made set_raw_comment fallible (was infallible in zip 2).
+            zw.set_raw_comment(vec![b'X'; 5000].into_boxed_slice())
+                .unwrap();
             let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
                 .compression_method(zip::CompressionMethod::Stored);
             zw.start_file("only.txt", opts).unwrap();
