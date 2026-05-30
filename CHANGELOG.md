@@ -4,6 +4,16 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.21.3
+
+- **Fix: a playlist step ran off the edge on phones.** In Payloads →
+  Playlists, a step's path plus its per-step IP / port / sleep fields and
+  buttons were packed into one row that overflowed narrow screens. The
+  controls now wrap neatly underneath on small screens; desktop is
+  unchanged.
+
+---
+
 ## 2.21.2
 
 - **Fix: the Android app still crashed on launch — now fixed for real.** It
