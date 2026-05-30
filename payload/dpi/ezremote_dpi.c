@@ -22,7 +22,11 @@
  * \n or \r. The daemon replies with the decimal InstallByPackage
  * return code ("0" on accept) and closes the connection.
  */
-#undef main
+/* NOTE: no `#undef main` here (the reference had one for a different
+ * loader). The PS5 Payload SDK's crt wraps `main` to wire up the payload
+ * entry; undef'ing it bypasses that wrapper and the ELF loads but never
+ * runs (no :9040 bind) — matches our main payload, which uses plain
+ * `int main(void)` with no undef. */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -129,14 +133,24 @@ int main(void) {
             memset(&playgo_info, 0, sizeof(playgo_info));
             memset(&pkg_info, 0, sizeof(pkg_info));
 
-            metainfo.uri               = buffer;
-            metainfo.ex_uri            = "";
-            metainfo.playgo_scenario_id = "";
-            metainfo.content_id        = "";
-            metainfo.content_name      = buffer;
-            metainfo.icon_url          = "";
-
-            ret = sceAppInstUtilInstallByPackage(&metainfo, &pkg_info, &playgo_info);
+            if (buffer[0] == '/') {
+                /* Local absolute path → AppInstallPkg (elf-arsenal path).
+                 * No URI parse, no PlayGo HTTP gate — the path that works
+                 * without the 0x80B22404 reject. The caller stages the
+                 * .pkg under /user/data first. */
+                ret = sceAppInstUtilAppInstallPkg(buffer, &pkg_info);
+            } else {
+                /* http(s):// URL → InstallByPackage (ezremote-dpi path).
+                 * Kept for firmware/setups where the HTTP fetch isn't
+                 * gated. */
+                metainfo.uri                = buffer;
+                metainfo.ex_uri             = "";
+                metainfo.playgo_scenario_id = "";
+                metainfo.content_id         = "";
+                metainfo.content_name       = buffer;
+                metainfo.icon_url           = "";
+                ret = sceAppInstUtilInstallByPackage(&metainfo, &pkg_info, &playgo_info);
+            }
             if (ret != 0) {
                 notify("ezRemote DPI install failed\nError Code: 0x%08X", (unsigned)ret);
             }

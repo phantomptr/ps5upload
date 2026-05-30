@@ -44,8 +44,18 @@ typedef struct {
     unsigned char        unknown[6480];
 } PlayGoInfo;
 
+/* HTTP-URL installer (ezremote-dpi path): parses meta->uri as a URI and
+ * fetches over HTTP. Gated by Sony's PlayGo HTTP pre-flight on some FW
+ * (0x80B22404), so it's the secondary path. */
 extern int sceAppInstUtilInstallByPackage(MetaInfo *meta,
                                           SceAppInstallPkgInfo *pkg_info,
                                           PlayGoInfo *playgo);
+
+/* Local-disk installer (elf-arsenal path): takes a bare absolute path to a
+ * .pkg already on the console's disk and installs it with no URI parse and
+ * no HTTP pre-flight. This is the path that works without the PlayGo gate;
+ * pkg_info.content_id is filled from the pkg header on success. */
+extern int sceAppInstUtilAppInstallPkg(const char *path,
+                                       SceAppInstallPkgInfo *pkg_info);
 
 #endif /* PS5UPLOAD_DPI_SCE_APP_INST_UTIL_H */

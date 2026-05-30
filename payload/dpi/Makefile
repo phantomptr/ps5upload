@@ -14,10 +14,13 @@ ELF := ezremote-dpi.elf
 
 CFLAGS := -Wall -Wextra -Werror -g
 
-# sceAppInstUtilInstallByPackage lives in libSceAppInstUtil; the toast
-# helper (sceKernelSendNotificationRequest) is in libkernel, linked by
-# the prospero crt by default.
-LIBS := -lSceAppInstUtil
+# Mirror the main payload's lib set. libSceAppInstUtil has DT_NEEDED deps
+# on the other Sce libs; if they're not in our DT_NEEDED, rtld can refuse
+# to load the ELF (no run, no :9040 bind — the "silent reject" symptom).
+# Linking the same set the main payload uses (which loads cleanly on every
+# supported FW) guarantees the dependency graph resolves.
+LIBS := -lSceSystemService -lSceUserService -lSceAppInstUtil \
+        -lSceNotification -lkernel_sys
 
 SRCS := ezremote_dpi.c
 HEADERS := sceAppInstUtil.h
