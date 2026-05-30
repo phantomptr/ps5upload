@@ -595,23 +595,31 @@ function PlaylistCard({
           {playlist.steps.map((step, i) => (
             <li
               key={`${step.path}-${i}`}
-              className={`flex items-center gap-2 rounded border p-2 text-xs ${
+              className={`flex flex-col gap-2 rounded border p-2 text-xs sm:flex-row sm:items-center ${
                 i === activeStepIndex
                   ? "border-[var(--color-accent)] bg-[var(--color-surface-2)]"
                   : "border-[var(--color-border)] bg-[var(--color-surface-2)]"
               }`}
             >
-              <StepStatusIcon
-                index={i}
-                activeIndex={activeStepIndex}
-                isRunning={isThisRunning}
-              />
-              <span className="font-mono text-[11px] text-[var(--color-muted)] tabular-nums">
-                {String(i + 1).padStart(2, "0")}
-              </span>
-              <div className="min-w-0 flex-1 truncate font-mono text-[11px]">
-                {step.path}
+              {/* Status + index + path. On phones this is its own line so
+                  the fixed-width controls below can wrap underneath instead
+                  of pushing the row off-screen. */}
+              <div className="flex min-w-0 items-center gap-2 sm:flex-1">
+                <StepStatusIcon
+                  index={i}
+                  activeIndex={activeStepIndex}
+                  isRunning={isThisRunning}
+                />
+                <span className="shrink-0 font-mono text-[11px] text-[var(--color-muted)] tabular-nums">
+                  {String(i + 1).padStart(2, "0")}
+                </span>
+                <div className="min-w-0 flex-1 truncate font-mono text-[11px]">
+                  {step.path}
+                </div>
               </div>
+              {/* Per-step ip/port/sleep overrides + reorder/remove. Wraps on
+                  narrow viewports; single trailing row on sm+. */}
+              <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap sm:justify-end">
               {/* Per-step IP override. Empty = use the playlist-wide
                   IP entered above. Useful for sequences targeting
                   multiple PS5s (push a loader to dev kit, push
@@ -706,6 +714,7 @@ function PlaylistCard({
                 >
                   <X size={12} />
                 </button>
+              </div>
               </div>
             </li>
           ))}
