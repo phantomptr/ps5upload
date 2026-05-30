@@ -895,8 +895,7 @@ fn dpi_send(ps5_ip: &str, line: &str) -> std::io::Result<i32> {
         .to_socket_addrs()?
         .next()
         .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "resolve :9040 failed"))?;
-    let mut s =
-        std::net::TcpStream::connect_timeout(&sa, std::time::Duration::from_secs(5))?;
+    let mut s = std::net::TcpStream::connect_timeout(&sa, std::time::Duration::from_secs(5))?;
     s.set_write_timeout(Some(std::time::Duration::from_secs(10)))?;
     // AppInstallPkg can take a moment to ingest the pkg before replying.
     s.set_read_timeout(Some(std::time::Duration::from_secs(120)))?;
