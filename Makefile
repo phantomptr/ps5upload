@@ -39,6 +39,11 @@ endif
 
 PAYLOAD_DIR := payload
 PAYLOAD_ELF := $(PAYLOAD_DIR)/ps5upload.elf
+# Standalone DPI install daemon (FW 11+ pkg installs). Built from the
+# same SDK; the engine auto-sends it to the loader port when :9040 isn't
+# already listening. See payload/dpi/ezremote_dpi.c.
+DPI_DIR := $(PAYLOAD_DIR)/dpi
+DPI_ELF := $(DPI_DIR)/ezremote-dpi.elf
 ENGINE_DIR  := engine
 CLIENT_DIR  := client
 
@@ -273,10 +278,18 @@ sync-version:
 sync-version-check:
 	@node scripts/update-version.js --check
 
-payload: setup-payload
+payload: setup-payload dpi
 	@echo "Building PS5 payload..."
 	@$(MAKE) -C $(PAYLOAD_DIR) -j$(JOBS)
 	@echo "✓ Built $(PAYLOAD_ELF)"
+
+# Standalone DPI install daemon. Separate ELF (clean loader context is
+# what makes pkg install work on FW 11.x — see payload/dpi/ezremote_dpi.c).
+# Built alongside the main payload so the host can embed + auto-load it.
+dpi: setup-payload
+	@echo "Building DPI install daemon..."
+	@$(MAKE) -C $(DPI_DIR) -j$(JOBS)
+	@echo "✓ Built $(DPI_ELF)"
 
 send-payload: payload
 	@echo "Sending payload to $(PS5_HOST):$(PS5_LOADER_PORT) ..."
