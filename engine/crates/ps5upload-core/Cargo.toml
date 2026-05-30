@@ -17,4 +17,4 @@ serde_json.workspace = true
 # pin already vetted in client/src-tauri (save_archive.rs) — no bzip2/zstd
 # C libs. ZIP is the only archive format we support (see the "drop .rar"
 # scope decision).
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "8", default-features = false, features = ["deflate"] }
