@@ -269,6 +269,14 @@ export const usePkgLibrary = create<PkgLibraryState>((set, get) => ({
       const jobId = tx.job_id;
       if (!jobId) throw new Error("upload did not start");
       let polls = 0;
+      // No-progress watchdog: bail if bytes don't advance for a while.
+      // We key on progress rather than a fixed total cap so an honest
+      // multi-GB upload isn't killed, while a job wedged in a non-terminal
+      // state (or a silently dead transfer) can't spin forever — which
+      // would leave the row "uploading" and block every future install.
+      const STALL_LIMIT = 240; // × 500ms = 120s with zero progress
+      let lastBytes = -1;
+      let stalled = 0;
       for (;;) {
         await sleep(500);
         let js: {
@@ -286,6 +294,14 @@ export const usePkgLibrary = create<PkgLibraryState>((set, get) => ({
         polls = 0;
         if (typeof js.bytes_sent === "number") {
           patch({ bytes: js.bytes_sent, totalBytes: js.total_bytes ?? totalBytes });
+          if (js.bytes_sent > lastBytes) {
+            lastBytes = js.bytes_sent;
+            stalled = 0;
+          } else if (++stalled >= STALL_LIMIT) {
+            throw new Error("upload stalled — no progress for 2 minutes");
+          }
+        } else if (++stalled >= STALL_LIMIT) {
+          throw new Error("upload stalled — no status from the PS5");
         }
         if (js.status === "done") break;
         if (js.status === "failed") {
@@ -312,8 +328,10 @@ export const usePkgLibrary = create<PkgLibraryState>((set, get) => ({
       set({
         entries: get().entries.map((e) => (e.path === path ? { ...e, ...p } : e)),
       });
-    patch({ status: "installing", lastResult: undefined });
     try {
+      // Inside the try so any throw still hits `finally` and clears the
+      // `installing` flag — otherwise a wedged flag would lock the screen.
+      patch({ status: "installing", lastResult: undefined });
       // 1. Ensure the DPI daemon is up (reuses a live one, else sends the
       //    bundled ezremote-dpi.elf to the loader — swapping our payload out).
       const ens = (await invoke("dpi_ensure", { ip })) as {
