@@ -59,11 +59,11 @@ jobs:
     name: build-payload
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           ref: ${{ github.event.inputs.tag || github.ref_name }}
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v6
         with:
           node-version: 22
       - name: Sync version from VERSION
@@ -100,7 +100,7 @@ jobs:
           ls -la payload/ps5upload.elf payload/ps5upload.elf.gz
 
       - name: Upload payload artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ps5upload-payload
           path: |
@@ -142,12 +142,12 @@ jobs:
             rust_target: aarch64-pc-windows-msvc
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           ref: ${{ github.event.inputs.tag || github.ref_name }}
 
       - name: Setup Node
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: npm
@@ -195,7 +195,7 @@ jobs:
         run: npm ci --no-audit --no-fund
 
       - name: Restore payload ELF
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: ps5upload-payload
           path: payload
@@ -333,7 +333,7 @@ jobs:
           ls -la "$dist_abs"
 
       - name: Upload platform bundle
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ps5upload-${{ matrix.platform }}-${{ matrix.arch }}
           path: dist/*
@@ -359,11 +359,11 @@ jobs:
     # release", not a failed release.
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           ref: ${{ github.event.inputs.tag || github.ref_name }}
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: npm
@@ -373,7 +373,7 @@ jobs:
         run: node scripts/update-version.js
 
       - name: Setup JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
@@ -388,7 +388,7 @@ jobs:
         run: npm ci --no-audit --no-fund
 
       - name: Restore real payload ELF
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: ps5upload-payload
           path: payload
@@ -441,7 +441,7 @@ jobs:
         run: bash scripts/release/android-sign.sh
 
       - name: Upload signed APK
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ps5upload-android
           path: PS5Upload-android.apk
@@ -455,7 +455,7 @@ jobs:
       - build-android
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           ref: ${{ github.event.inputs.tag || github.ref_name }}
 
@@ -484,7 +484,7 @@ jobs:
           fi
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
 
