@@ -65,20 +65,16 @@
   9021 elfldr, `.js` → 50000 WebKit-stage, `.lua` → 9026, `.jar` →
   9025 BD-JB / BDJ; custom loaders may listen anywhere). Recent-sends
   history with click-to-replay and per-row success/fail badges.
-- **Install fakepkgs** — pick a `.pkg`, click Install. Default is
-  **Stream install (DPI 2.0)**: desktop serves the bytes over HTTP +
-  BGFT pulls + installs in one pass (no 2× disk space, native pause/
-  resume). The legacy "upload then install" pipeline is one click
-  away on the failure card for LANs where the PS5 can't reach the
-  desktop's HTTP port. When the legacy path runs: bytes staged on
-  PS5-local disk → install fires under
-  ShellUI's authid via ptrace RPC → register / launch from the
-  Library row. Verified end-to-end on FW 9.60. Game pkgs (CUSA /
-  PPSA / PCSA / EP / UP) install cleanly; system pkgs (NPXS-prefix —
-  Store updates, Settings) get registered fire-and-forget with
-  on-PS5 verification (Sony's API isn't designed for system patches,
-  use the on-PS5 Settings → Debug Settings → Game → Package
-  Installer for those).
+- **Install fakepkgs (package library)** — add a `.pkg` and it uploads
+  to your PS5 once and stays there. **Install Package** lists every
+  uploaded package with cover art and size; **Install**, **Reinstall**,
+  or **Delete** any of them in a click — no re-uploading to install
+  again. Installs run through the **DPI daemon** (`sceAppInstUtilAppInstallPkg`
+  from a clean loader process), the most reliable path on current
+  firmware. Verified end-to-end on FW 9.60. Game pkgs (CUSA / PPSA /
+  PCSA / EP / UP) install cleanly; for system pkgs (NPXS-prefix — Store
+  updates, Settings) use the on-PS5 Settings → Debug Settings → Game →
+  Package Installer.
 - **Register + launch** — Library row's Play button always registers
   first (idempotent if already registered), retries with DRM-type
   patch on rejection, then launches. Unmount unregisters every

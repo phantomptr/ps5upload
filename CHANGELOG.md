@@ -4,6 +4,19 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.21.0
+
+- **Install Package is now a package library.** Upload a `.pkg` to your
+  PS5 once and it stays there. The screen shows all your uploaded
+  packages with cover art and size, and you can **Install**, **Reinstall**,
+  or **Delete** any of them in a click — no need to re-upload to install
+  again. There's no install-method picker anymore: installs go through the
+  DPI daemon, the most reliable path on current firmware.
+- **Under-the-hood updates.** Refreshed the desktop and UI toolchain
+  (React, Tauri, build tooling) and dependencies to their current releases.
+
+---
+
 ## 2.20.2
 
 - **Package install now works on firmware 9.60+.** Installing a `.pkg`

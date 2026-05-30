@@ -843,30 +843,25 @@ you trigger Unmount from the Library tab or the Volumes tab.
 ## Install Package
 
 **Q: Can I install fakepkgs from the desktop?**
-Yes (2.2.55+). Open **Install Package**, click **Add .pkg**, pick
-the file, click **Start**. The pipeline:
-1. Engine uploads the bytes to `/user/data/ps5upload/pkg_temp/` on
-   the PS5 (Sony's allowlisted staging path).
-2. Sony's installer (`sceAppInstUtilInstallByPackage`) is invoked
-   under ShellUI's authid via ptrace RPC — bytes never traverse
-   the PlayGo HTTP path that rejects our process.
-3. Engine post-install cleanup deletes the staging file.
+Yes. **Install Package** is a package library: click **Add .pkg**,
+pick the file, and it uploads once to
+`/user/data/ps5upload/pkg_library/` on the PS5 and stays there. The
+screen lists every uploaded package with cover art and size, and each
+row has **Install**, **Reinstall**, and **Delete** — so you can install
+again any time without re-uploading. Installs run through the **DPI
+daemon** on `:9040`, which calls Sony's `sceAppInstUtilAppInstallPkg`
+from a clean loader process (the path that isn't gated on current
+firmware). Installing briefly swaps the ps5upload payload for the DPI
+loader and restores it when done, so the connection may blip for a few
+seconds. Hardware-validated on FW 9.60 with regular game pkgs (UP / EP /
+JP / HP / CUSA / PPSA / PCSA / etc.).
 
-Hardware-validated on FW 9.60 with regular game pkgs (UP / EP / JP
-/ HP / CUSA / PPSA / PCSA / etc.).
-
-**Q: My install said "completed" but the row says "verify on PS5".
-Why?**
-The pkg has an NPXS-prefix content_id (`IV0002-NPXS39041_…` etc.) —
-that's a system app pkg (Store update, Settings patch, built-in
-app). Sony accepts the register call but
-`sceAppInstUtilInstallByPackage` isn't designed for system patches;
-the install path tends to freeze the PS5's mgmt service mid-flight.
-We fire-and-forget the register and let the user verify on the PS5
-itself (notification panel / Settings → Notifications → Downloads).
-For system pkgs the canonical path is **on-PS5 Settings → Debug
-Settings → Game → Package Installer** — that's a privileged code
-path ps5upload can't replicate.
+**Q: A system (NPXS) pkg won't install. What do I do?**
+System app pkgs (NPXS-prefix content_id — Store updates, Settings
+patches, built-in apps) aren't what the DPI installer is built for and
+often won't complete. Install those from the console itself: **on-PS5
+Settings → Debug Settings → Game → Package Installer** — a privileged
+code path ps5upload can't replicate.
 
 **Q: Does Play in the Library register the title first?**
 Yes (2.2.55+). Always-register-first: the Play button calls
@@ -877,22 +872,17 @@ and registered as a fallback — which surfaced misleading "not
 registered" errors before registration kicked in.
 
 **Q: Can I install a split pkg (`*.0`, `*.1`, …)?**
-Yes. The engine detects split-pkg sets when you pick the lead
-file. For split sets the install runs through the Tier-2 HTTP
-host path (the engine serves the bytes; ShellUI fetches them) —
-single uploads stay on Tier-1 (raw path on PS5 disk).
+Not through Install Package — the DPI installer takes a single staged
+file, so split sets are rejected with a note when you add them. Pick
+the single lead `.pkg` only.
 
-**Q: Where does the staging file go and when does it get cleaned
-up?**
-Staging path: `/user/data/ps5upload/pkg_temp/<id>_<unix-ms>.pkg`.
-Cleanup happens on:
-- Terminal install phase (Done | Error) — engine fs_delete after
-  the status poll reports terminal.
-- Register reject — engine fs_delete immediately (Sony rejected
-  the register, the file is otherwise leaked until 24 h).
-- User cancel — engine fs_delete on the cancel path.
-- Payload startup — sweeps any `*.pkg` older than 24 h as a
-  crash-recovery safety net.
+**Q: Where do uploaded packages live, and are they cleaned up?**
+They live at `/user/data/ps5upload/pkg_library/<ContentID>.pkg` and
+**persist** — nothing auto-deletes them, so you can reinstall any time
+without re-uploading. Remove one with the **Delete** button on its row
+(or from the File System tab); that frees the PS5 disk space. (This is a
+change from older builds, where the staged file was deleted right after
+each install.)
 
 ---
 
