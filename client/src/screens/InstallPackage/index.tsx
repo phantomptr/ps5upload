@@ -59,6 +59,7 @@ function PkgRow({
   host,
   installed,
   installDisabled,
+  deleteDisabled,
   onInstall,
   onDelete,
 }: {
@@ -66,6 +67,7 @@ function PkgRow({
   host: string;
   installed: boolean;
   installDisabled: boolean;
+  deleteDisabled: boolean;
   onInstall: () => void;
   onDelete: () => void;
 }) {
@@ -118,7 +120,7 @@ function PkgRow({
                 installDisabled
                   ? tr(
                       "pkglib.install.busyHint",
-                      "Another install is in progress",
+                      "Wait for the current upload/install to finish",
                     )
                   : undefined
               }
@@ -132,6 +134,7 @@ function PkgRow({
               size="sm"
               leftIcon={<Trash2 size={13} />}
               onClick={onDelete}
+              disabled={deleteDisabled}
               title={tr("pkglib.delete", "Delete")}
             >
               {tr("pkglib.delete", "Delete")}
@@ -347,6 +350,13 @@ export default function InstallPackageScreen() {
     [entries],
   );
   const sorted = entries; // store already sorts by title
+  // Installing swaps the main payload for the DPI loader, which owns the
+  // transfer port — so an install MUST NOT run while a package is still
+  // uploading (it would tear down the in-flight transfer), and Add is
+  // blocked while installing for the same reason. Uploads themselves can
+  // run concurrently.
+  const anyUploading = entries.some((e) => e.status === "uploading");
+  const installBlocked = installing || anyUploading;
 
   return (
     <div className="p-6">
@@ -366,14 +376,19 @@ export default function InstallPackageScreen() {
             leftIcon={<Plus size={14} />}
             onClick={handlePick}
             loading={picking}
-            disabled={!hostReady}
+            disabled={!hostReady || installing}
             title={
               !hostReady
                 ? tr(
                     "install.add.disabledHint",
                     "Set a PS5 host on the Connection tab first",
                   )
-                : undefined
+                : installing
+                  ? tr(
+                      "pkglib.add.installingHint",
+                      "Wait for the current install to finish",
+                    )
+                  : undefined
             }
           >
             {tr("install.add", "Add .pkg")}
@@ -445,7 +460,8 @@ export default function InstallPackageScreen() {
                   entry={e}
                   host={host}
                   installed={installed}
-                  installDisabled={installing}
+                  installDisabled={installBlocked}
+                  deleteDisabled={installing}
                   onInstall={() => void install(e.path, host)}
                   onDelete={() => void handleDelete(e)}
                 />

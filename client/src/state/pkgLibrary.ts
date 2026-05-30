@@ -191,6 +191,12 @@ export const usePkgLibrary = create<PkgLibraryState>((set, get) => ({
 
   async addAndUpload(localPath, host) {
     if (!host?.trim()) return;
+    // An install swaps the main payload out (DPI), which kills the transfer
+    // port — never start an upload while one is running.
+    if (get().installing) {
+      set({ error: "Can't upload while an install is in progress." });
+      return;
+    }
     set({ error: null });
     // 1. Parse the local .pkg header for ContentID + title, and reject inputs
     //    DPI can't take.
