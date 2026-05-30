@@ -88,9 +88,9 @@ function PkgRow({
           <div className="flex items-center gap-2">
             <span
               className="truncate text-sm font-medium"
-              title={entry.title ?? entry.contentId}
+              title={entry.title || entry.contentId || entry.name}
             >
-              {entry.title ?? entry.contentId ?? entry.name}
+              {entry.title || entry.contentId || entry.name}
             </span>
             {installed && !busy && (
               <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-[var(--color-good)] bg-[var(--color-good-soft)] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-[var(--color-good)]">
@@ -326,11 +326,14 @@ export default function InstallPackageScreen() {
   }
 
   async function handleDelete(entry: PkgEntry) {
+    // `||` so a headerless pkg (empty contentId) shows its filename rather
+    // than a blank "Delete ?" dialog.
+    const name = entry.title || entry.contentId || entry.name;
     const ok = await confirm({
       title: tr(
         "pkglib.delete.confirmTitle",
-        { name: entry.title ?? entry.contentId },
-        `Delete ${entry.title ?? entry.contentId}?`,
+        { name },
+        `Delete ${name}?`,
       ),
       message: tr(
         "pkglib.delete.confirmBody",

@@ -141,11 +141,10 @@ function mergeListing(prev: PkgEntry[], listed: PkgEntry[]): PkgEntry[] {
     // Carry forward last install result for an idle row.
     return old?.lastResult ? { ...l, lastResult: old.lastResult } : l;
   });
-  return [...active, ...merged].sort((a, b) =>
-    (a.title ?? a.contentId ?? a.name)
-      .toLowerCase()
-      .localeCompare((b.title ?? b.contentId ?? b.name).toLowerCase()),
-  );
+  // `||` (not `??`) so an empty-string contentId (headerless pkg) falls
+  // through to the filename instead of sorting as "".
+  const label = (e: PkgEntry) => (e.title || e.contentId || e.name).toLowerCase();
+  return [...active, ...merged].sort((a, b) => label(a).localeCompare(label(b)));
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -165,8 +164,15 @@ export const usePkgLibrary = create<PkgLibraryState>((set, get) => ({
       let listed: Awaited<ReturnType<typeof fsListDir>> = [];
       try {
         listed = await fsListDir(addr, PKG_LIBRARY_DIR);
-      } catch {
-        // Dir doesn't exist yet (no uploads) → empty library, not an error.
+      } catch (err) {
+        // ONLY ENOENT (errno 2 — the library dir doesn't exist yet because
+        // nothing has been uploaded) is "empty library, not an error". Any
+        // other failure (PS5 offline, connection refused, permission denied)
+        // must surface — otherwise an unreachable console looks like an empty
+        // library and silently wipes the displayed list. Re-throw to the
+        // outer catch, which sets `error` and keeps the existing entries.
+        const msg = err instanceof Error ? err.message : String(err);
+        if (!/fs_list_dir_opendir_errno_2\b/.test(msg)) throw err;
         listed = [];
       }
       const entries: PkgEntry[] = listed
