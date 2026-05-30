@@ -113,7 +113,7 @@ Pre-built downloads land on the
 | Linux — Debian / Ubuntu (x64 / ARM64) | `PS5Upload-<ver>-linux-{x64,arm64}.deb` | `sudo apt install ./PS5Upload-<ver>-linux-<arch>.deb` — installs a normal app with a menu entry; pulls in the WebKitGTK deps automatically. |
 | Linux — Fedora / RHEL / Bazzite (x64 / ARM64) | `PS5Upload-<ver>-linux-{x64,arm64}.rpm` | `sudo dnf install ./PS5Upload-<ver>-linux-<arch>.rpm` (Bazzite/Silverblue: `rpm-ostree install`) — menu entry + auto deps. |
 | Linux — any distro (x64 / ARM64) | `PS5Upload-<ver>-linux-{x64,arm64}.zip` | Universal fallback (no install). Unzip, then `chmod +x PS5Upload.sh PS5Upload.AppImage` and run **`./PS5Upload.sh`** (the wrapper — handles the FUSE-less and WebKit white-screen cases for you). Running `./PS5Upload.AppImage` directly also works if your system has libfuse2 and a happy WebKitGTK. |
-| Android (preview) | `PS5Upload-<ver>-android.apk` | **Early access.** Enable "install unknown apps" for your browser/file manager, then open the `.apk`. Same interface, mobile-friendly; connects to and manages your PS5 over Wi-Fi. |
+| Android | `PS5Upload-<ver>-android.apk` | Enable "install unknown apps" for your browser/file manager, then open the `.apk`. Same interface, mobile-friendly; connects to and manages your PS5 over Wi-Fi. |
 
 ### First-launch warnings (and why they're there)
 
@@ -506,6 +506,15 @@ This software builds on the following open-source projects:
 **Payload (PS5):**
 * [PS5 Payload SDK](https://github.com/ps5-payload-dev/sdk) — Open-source SDK for PS5 payload development
 * [BLAKE3](https://github.com/BLAKE3-team/BLAKE3) — Fast cryptographic hashing (per-shard verification)
+
+## Thanks
+
+ps5upload stands on the shoulders of the **PS5 homebrew scene**. Huge
+thanks to everyone who makes this ecosystem possible — the exploit and
+kernel researchers, the ELF/payload loader authors, the PS5 Payload SDK
+maintainers, the homebrew tool developers whose work this lives alongside,
+and everyone in the community who tests, reports bugs, and shares
+knowledge. None of this exists without your collective effort. 🙏
 
 ## License
 
