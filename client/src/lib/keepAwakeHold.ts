@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { setScreenWakeReason } from "./androidScreenWake";
 
 // Programmatic keep-awake hold for active transfers.
 //
@@ -10,6 +11,15 @@ import { invoke } from "@tauri-apps/api/core";
 // reason, so this "transfer" hold is INDEPENDENT of the manual Settings
 // toggle ("manual") — releasing it can't turn off a hold the user set in
 // Settings, and vice versa.
+//
+// Two backends, picked by platform:
+//   • Desktop — the Rust inhibitor (`keep_awake_acquire/release`), which
+//     keeps the machine awake even while minimized.
+//   • Android — a screen wake lock (`setScreenWakeReason`); the Rust
+//     inhibitor is a no-op there, so we hold the screen on instead, which
+//     keeps the app foreground (no Doze) for the upload's duration.
+// Both are driven from the same edge below so a transfer engages whichever
+// applies; the unused one no-ops.
 //
 // Best-effort by design: a transfer must NEVER fail because the OS
 // declined to inhibit sleep (unsupported platform, Windows GPO, no
@@ -38,6 +48,10 @@ export function setTransferKeepAwake(active: boolean): void {
   // `desired`.
   if (active === desired) return;
   desired = active;
+  // Android backend (no-op on desktop): hold the screen on for the
+  // transfer. Edge-only — `desired` just changed, so this runs on the
+  // 0↔1 transition, not every progress tick.
+  setScreenWakeReason(REASON, active);
   chain = chain.then(async () => {
     if (desired === current) return;
     current = desired;

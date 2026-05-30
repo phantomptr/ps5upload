@@ -4,6 +4,17 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.22.0
+
+- **Android: the screen now stays on during transfers.** While an upload,
+  download, or install is running, your phone or tablet no longer dims or
+  sleeps and drops the transfer mid-stream. Settings → Keep Awake also works
+  on Android now, to hold the screen on while the app is open. Desktop
+  already did this; Android has caught up. Verified on-device (Pixel 9,
+  Android 16).
+
+---
+
 ## 2.21.3
 
 - **Fix: a playlist step ran off the edge on phones.** In Payloads →

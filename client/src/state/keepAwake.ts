@@ -1,7 +1,15 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
+import { isAndroid } from "../lib/platform";
+import {
+  screenWakeSupported,
+  setScreenWakeReason,
+} from "../lib/androidScreenWake";
 
 const STORAGE_KEY = "ps5upload.keep_awake";
+
+// Manual-toggle reason name, mirroring keep_awake.rs's MANUAL_REASON.
+const MANUAL_REASON = "manual";
 
 interface KeepAwakeResp {
   enabled: boolean;
@@ -32,6 +40,16 @@ export const useKeepAwakeStore = create<KeepAwakeState>((set, get) => ({
   lastError: null,
 
   async setEnabled(on) {
+    // Android: the Rust inhibitor is a no-op here (keep_awake.rs has no
+    // Android arm), so drive a screen wake lock instead — and report
+    // `supported` from the WebView API, not the backend. Kept entirely
+    // client-side so the manual toggle works the same as desktop.
+    if (isAndroid()) {
+      setScreenWakeReason(MANUAL_REASON, on);
+      window.localStorage.setItem(STORAGE_KEY, on ? "on" : "off");
+      set({ enabled: on, supported: screenWakeSupported(), lastError: null });
+      return;
+    }
     // Guard the invoke like syncFromBackend does: an IPC rejection
     // (running outside the Tauri runtime, command-resolution failure)
     // must not propagate. Two callers are fire-and-forget — the
@@ -53,6 +71,15 @@ export const useKeepAwakeStore = create<KeepAwakeState>((set, get) => ({
   },
 
   async syncFromBackend() {
+    // Android: no backend state to read. Re-apply the persisted manual
+    // preference (a screen wake lock doesn't survive an app restart) and
+    // report support from the WebView.
+    if (isAndroid()) {
+      const want = get().enabled;
+      setScreenWakeReason(MANUAL_REASON, want);
+      set({ supported: screenWakeSupported(), lastError: null });
+      return;
+    }
     try {
       const resp = await invoke<KeepAwakeResp>("keep_awake_state");
       set({
