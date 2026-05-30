@@ -87,7 +87,7 @@ zip = { version = "8", default-features = false, features = ["deflate"] }
 # Windows x64/arm64, Linux x64/arm64) stays single-toolchain. Used only
 # from `commands/discover.rs`; a discovery is a single 3-second LAN
 # browse, not a long-running daemon.
-mdns-sd = { version = "0.13", default-features = false, features = ["async"] }
+mdns-sd = { version = "0.20", default-features = false, features = ["async"] }
 
 # libc for `statvfs` in the USB autoloader's drive enumeration
 # (commands/usb_autoloader.rs). Already pulled in transitively via
