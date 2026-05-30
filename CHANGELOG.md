@@ -4,6 +4,19 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.21.2
+
+- **Fix: the Android app still crashed on launch — now fixed for real.** It
+  opened, then closed after about a second. The 2.21.1 fix turned out to
+  address an unrelated issue; the actual cause was a native crash in the
+  startup file-access permission check, which read an Android system
+  context that Tauri doesn't set up. It now obtains that context itself.
+  Verified working on-device (Pixel 9, Android 16). The app is fully
+  self-contained — it runs its own engine on the phone and talks to your
+  PS5 over Wi-Fi; it never needs the computer.
+
+---
+
 ## 2.21.1
 
 - **Fix: the Android app crashed on launch.** The 2.21.0 build shipped

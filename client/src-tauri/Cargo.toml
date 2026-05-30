@@ -1,6 +1,6 @@
 [package]
 name = "ps5upload-desktop"
-version = "2.21.1"
+version = "2.21.2"
 description = "The all-in-one PS5 companion app."
 edition = "2021"
 rust-version = "1.77"
@@ -105,10 +105,11 @@ ps5upload-engine = { path = "../../engine/crates/ps5upload-engine" }
 
 # Android-only: call the platform APIs needed for all-files storage access
 # (Environment.isExternalStorageManager + the settings intent) from Rust.
-# tauri/ndk set up ndk_context so we can reach the JavaVM + Activity.
+# We capture the JavaVM ourselves in JNI_OnLoad and get the Application
+# context via ActivityThread.currentApplication() — Tauri 2's Android
+# backend does NOT initialize the ndk_context global, so we can't use it.
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21"
-ndk-context = "0.1"
 
 [features]
 # Default: build Tauri-native (no custom features yet)
