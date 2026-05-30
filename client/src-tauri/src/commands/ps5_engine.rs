@@ -1173,6 +1173,22 @@ pub async fn pkg_install_start(
     post_json(&url, &body).await
 }
 
+/// Install a staged .pkg through the DPI daemon on :9040 (the engine
+/// POSTs the bare PS5 path; the daemon runs sceAppInstUtilAppInstallPkg).
+/// Long-deadline client — AppInstallPkg ingests the pkg before replying.
+#[tauri::command]
+pub async fn pkg_dpi_install(
+    ps5_addr: String,
+    local_ps5_path: String,
+) -> Result<JsonValue, String> {
+    let url = format!("{}/api/pkg/dpi-install", engine::url());
+    let body = serde_json::json!({
+        "ps5_addr": ps5_addr,
+        "local_ps5_path": local_ps5_path,
+    });
+    post_json_long(&url, &body).await
+}
+
 /// Poll an in-flight install for status. Cheap; called every 1-2s.
 #[tauri::command]
 pub async fn pkg_install_status(session: String) -> Result<JsonValue, String> {
