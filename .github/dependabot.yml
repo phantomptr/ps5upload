@@ -1,0 +1,51 @@
+# Dependabot configuration — version + security update PRs.
+#
+# Paths reflect the CURRENT repo layout (the dependency graph briefly
+# carried stale `desktop/src-tauri` / `core/` paths after an earlier
+# reorg; these are the real manifests):
+#   - client/src-tauri/Cargo.toml   (Tauri desktop/mobile shell)
+#   - engine/Cargo.toml             (Rust engine workspace)
+#   - client/package.json           (React frontend)
+#   - .github/workflows/*           (GitHub Actions)
+#
+# Updates are grouped per-ecosystem to keep PR volume sane; each PR is
+# gated by the same `PR gate` CI check and code-owner review as any other.
+version: 2
+updates:
+  - package-ecosystem: "cargo"
+    directory: "/client/src-tauri"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      tauri-shell:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "cargo"
+    directory: "/engine"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      engine:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "npm"
+    directory: "/client"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      frontend:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      actions:
+        patterns: ["*"]
