@@ -236,6 +236,20 @@ export const usePkgLibrary = create<PkgLibraryState>((set, get) => ({
     );
     const destPath = `${PKG_LIBRARY_DIR}/${basename}`;
 
+    // Refuse to re-add a pkg that's already uploading to the same path:
+    // two concurrent transfers to one file would corrupt it, and the two
+    // poll loops would fight over the same row's progress. (A headerless
+    // pkg gets a unique random basename each time, so this only triggers
+    // for a real ContentID being added twice mid-upload.)
+    if (
+      get().entries.some(
+        (e) => e.path === destPath && e.status === "uploading",
+      )
+    ) {
+      set({ error: `${title || contentId || basename} is already uploading.` });
+      return;
+    }
+
     // 3. Optimistic uploading row.
     const optimistic: PkgEntry = {
       name: basename,
