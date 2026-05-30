@@ -243,9 +243,13 @@ pub async fn discover_ps5(timeout_secs: Option<u64>) -> serde_json::Value {
                     if entry.hostname.is_none() && !key.is_empty() {
                         entry.hostname = Some(key);
                     }
-                    for ip in info.get_addresses() {
-                        if !entry.ips.contains(ip) {
-                            entry.ips.push(*ip);
+                    // mdns-sd 0.20 changed get_addresses() to yield
+                    // `ScopedIp` (IPv6-zone aware) rather than `IpAddr`;
+                    // flatten back to a plain IpAddr for our candidate set.
+                    for scoped in info.get_addresses() {
+                        let ip = scoped.to_ip_addr();
+                        if !entry.ips.contains(&ip) {
+                            entry.ips.push(ip);
                         }
                     }
                     let svc_clean = svc

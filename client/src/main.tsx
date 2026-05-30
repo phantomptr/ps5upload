@@ -44,12 +44,10 @@ void hydrateFromUserConfig();
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <RootErrorBoundary>
-      <BrowserRouter
-        future={{
-          v7_startTransition: true,
-          v7_relativeSplatPath: true,
-        }}
-      >
+      {/* react-router-dom 7 makes the former v7_startTransition /
+          v7_relativeSplatPath future flags the default behavior, so the
+          `future` prop is gone. */}
+      <BrowserRouter>
         <App />
       </BrowserRouter>
     </RootErrorBoundary>
