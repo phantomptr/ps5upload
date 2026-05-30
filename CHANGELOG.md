@@ -4,6 +4,18 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.21.1
+
+- **Fix: the Android app crashed on launch.** The 2.21.0 build shipped
+  modern JavaScript that older Android System WebViews couldn't run, so
+  the app opened to the first screen and then closed. Builds now target a
+  broadly-compatible JavaScript level, so it launches on those devices.
+  (Desktop was unaffected. The Android app is fully self-contained — it
+  runs its own engine on-device and talks to your PS5 over Wi-Fi; it
+  never needs the computer.)
+
+---
+
 ## 2.21.0
 
 - **Install Package is now a package library.** Upload a `.pkg` to your

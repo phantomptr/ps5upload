@@ -24,6 +24,17 @@ export default defineConfig({
   build: {
     outDir: "dist",
     emptyOutDir: true,
+    // Pin a conservative JS/CSS target. Tauri renders in a fixed WebView
+    // per platform, and the Android System WebView in particular can be
+    // an old Chromium. Without this, Vite ships its modern default
+    // (ES2020+ optional-chaining / nullish / logical-assignment that the
+    // v8/rolldown upgrade left un-lowered) and an older Android WebView
+    // renders the first screen, then crashes on `??=` / `?.` → the app
+    // "opens then terminates". safari13 (~ES2019) down-levels all of it
+    // and is safe for every WebView we ship to (Android Chromium,
+    // WebView2, WKWebView, WebKitGTK). Mirrors Tauri's recommended config.
+    target:
+      process.env.TAURI_ENV_PLATFORM === "windows" ? "chrome105" : "safari13",
     chunkSizeWarningLimit: 900,
     rollupOptions: {
       output: {
