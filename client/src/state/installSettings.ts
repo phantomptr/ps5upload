@@ -22,15 +22,18 @@ import { create } from "zustand";
  * schema ever changes (cost: one re-pick from the user).
  */
 
-/** "stream" = DPI 2.0; "stage" = legacy upload-then-install (Tier 1). */
-export type InstallMethod = "stream" | "stage";
+/** "stream" = DPI 2.0 (engine HTTP + BGFT); "stage" = upload-then-install
+ *  via our payload (Tier 1); "dpi" = upload-then-install via the
+ *  standalone DPI daemon on :9040 (sceAppInstUtilAppInstallPkg from a
+ *  clean process — installs without the PlayGo gate). */
+export type InstallMethod = "stream" | "stage" | "dpi";
 
 const KEY_INSTALL_METHOD = "ps5upload.install_method";
 
 function loadInstallMethod(): InstallMethod {
   if (typeof window === "undefined") return "stream";
   const v = window.localStorage.getItem(KEY_INSTALL_METHOD);
-  return v === "stage" ? "stage" : "stream";
+  return v === "stage" || v === "dpi" ? v : "stream";
 }
 
 interface InstallSettingsState {
