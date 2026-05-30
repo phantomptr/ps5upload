@@ -481,3 +481,42 @@ jobs:
           if-no-files-found: error
 
   # ─────────────────────────────────────────────────────────────────────
+  # Aggregate gate. One stable check that turns green only when every
+  # required job above succeeded. Branch protection on `main` requires
+  # THIS single context ("PR gate") instead of each matrix job by name,
+  # so adding/removing a matrix leg never silently drops it from the gate.
+  #
+  # `coverage` is deliberately excluded — it's continue-on-error (a
+  # reporting job, not a correctness gate), so a flaky coverage tool must
+  # not block a PR.
+  #
+  # `if: always()` is load-bearing: without it a FAILED dependency would
+  # SKIP this job, and GitHub counts a skipped required check as passing —
+  # letting a broken PR merge. With always() + the result check below, the
+  # gate runs regardless and fails when any dependency didn't succeed.
+  # ─────────────────────────────────────────────────────────────────────
+  pr-gate:
+    name: PR gate
+    if: always()
+    needs:
+      - version-sync
+      - rust-engine
+      - rust-engine-targets
+      - rust-desktop
+      - client-frontend
+      - repo-scripts
+      - payload
+      - android
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every gating job to have succeeded
+        run: |
+          results="${{ join(needs.*.result, ' ') }}"
+          echo "dependency results: $results"
+          for r in $results; do
+            if [ "$r" != "success" ]; then
+              echo "::error::a required CI job did not succeed (saw '$r') — PR is not mergeable"
+              exit 1
+            fi
+          done
+          echo "✓ all required CI jobs succeeded"
