@@ -79,7 +79,7 @@ base64 = "0.22"
 # Default features pull in bzip2/zstd C libs we don't need — opt in to
 # `deflate` only. Used from commands/save_archive.rs to zip a downloaded
 # save folder into <title_id>.zip and validate/extract restore zips.
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "8", default-features = false, features = ["deflate"] }
 
 # mDNS service discovery for the Connection screen's "Find PS5s on the
 # network" button. Pure-Rust implementation — no system avahi/bonjour
