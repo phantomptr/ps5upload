@@ -612,6 +612,14 @@ function InstallMethodPicker({
         "Upload .pkg to PS5 disk first, then install from there. Use when the PS5 can't reach this PC over HTTP.",
       ),
     },
+    {
+      value: "dpi",
+      label: t("install.method.dpi", "Upload + DPI"),
+      hint: t(
+        "install.method.dpiHint",
+        "Upload to PS5 disk, then install via the DPI daemon (:9040) — runs the install from a clean process. Auto-loads the daemon (briefly replaces the ps5upload payload, then restores it), or reuses one already running (etaHEN/ezRemote).",
+      ),
+    },
   ];
   const active = options.find((o) => o.value === method) ?? options[0];
   return (

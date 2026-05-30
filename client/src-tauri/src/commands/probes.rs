@@ -441,6 +441,146 @@ pub async fn payload_bundled_path(app: AppHandle) -> serde_json::Value {
     }
 }
 
+// ─── DPI install daemon (ezremote-dpi) auto-load ─────────────────────
+
+const DPI_DAEMON_PORT: u16 = 9040;
+
+/// DPI daemon ELF, embedded when present at build time (see build.rs's
+/// `have_dpi` gate). Absent in CI build-verification (no DPI build) —
+/// then `dpi_ensure` reports it unavailable rather than failing to link.
+#[cfg(have_dpi)]
+const EMBEDDED_DPI_GZ: &[u8] = include_bytes!(env!("PS5UPLOAD_DPI_GZ_BYTES"));
+
+/// Extract the embedded DPI daemon ELF into the app's local-data dir,
+/// blake3-stamped for reuse. Mirrors `find_bundled_payload`.
+#[cfg(have_dpi)]
+fn find_bundled_dpi(app: &AppHandle) -> Result<PathBuf, String> {
+    use std::fs;
+    use std::io::{Read, Write};
+
+    let out_dir = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| format!("app_local_data_dir: {e}"))?
+        .join("payload");
+    fs::create_dir_all(&out_dir).map_err(|e| format!("mkdir {}: {e}", out_dir.display()))?;
+    let out_path = out_dir.join("ezremote-dpi.elf");
+    let stamp_path = out_dir.join("ezremote-dpi.elf.gz.blake3");
+    let embedded_hex = blake3::hash(EMBEDDED_DPI_GZ).to_hex().to_string();
+
+    if let (Ok(stored), Ok(meta)) = (fs::read_to_string(&stamp_path), fs::metadata(&out_path)) {
+        if stored.trim() == embedded_hex && meta.len() > 0 {
+            return Ok(out_path);
+        }
+    }
+    let _guard = EXTRACT_LOCK
+        .lock()
+        .map_err(|e| format!("acquire extract lock: {e}"))?;
+    if let (Ok(stored), Ok(meta)) = (fs::read_to_string(&stamp_path), fs::metadata(&out_path)) {
+        if stored.trim() == embedded_hex && meta.len() > 0 {
+            return Ok(out_path);
+        }
+    }
+    let tmp_path = out_dir.join(format!(
+        "ezremote-dpi.elf.tmp.{}.{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    let mut decoder = flate2::read::GzDecoder::new(EMBEDDED_DPI_GZ);
+    let mut tmp =
+        fs::File::create(&tmp_path).map_err(|e| format!("create {}: {e}", tmp_path.display()))?;
+    let mut buf = [0u8; 64 * 1024];
+    let mut total = 0u64;
+    let mut magic = Vec::with_capacity(4);
+    loop {
+        let n = decoder
+            .read(&mut buf)
+            .map_err(|e| format!("gunzip dpi: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        if magic.len() < 4 {
+            let take = (4 - magic.len()).min(n);
+            magic.extend_from_slice(&buf[..take]);
+        }
+        total = total.saturating_add(n as u64);
+        if total > EMBEDDED_PAYLOAD_MAX_BYTES {
+            let _ = fs::remove_file(&tmp_path);
+            return Err("decompressed dpi.elf too large".into());
+        }
+        tmp.write_all(&buf[..n])
+            .map_err(|e| format!("write {}: {e}", tmp_path.display()))?;
+    }
+    if magic.as_slice() != b"\x7FELF" {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(format!("dpi.elf not an ELF (first bytes {magic:02x?})"));
+    }
+    let _ = tmp.sync_all();
+    drop(tmp);
+    if let Err(e) = super::replace_file(&tmp_path, &out_path) {
+        let _ = fs::remove_file(&tmp_path);
+        if let (Ok(stored), Ok(meta)) = (fs::read_to_string(&stamp_path), fs::metadata(&out_path)) {
+            if stored.trim() == embedded_hex && meta.len() > 0 {
+                return Ok(out_path);
+            }
+        }
+        return Err(format!("rename dpi.elf: {e}"));
+    }
+    let _ = fs::write(&stamp_path, &embedded_hex);
+    Ok(out_path)
+}
+
+/// Ensure the DPI install daemon is listening on `:9040`. Reuses one
+/// that's already up (ours from a prior call, or a scene daemon like
+/// etaHEN/ezRemote). Otherwise streams the bundled `ezremote-dpi.elf`
+/// to the loader (`:9021`) — which on a single-payload loader REPLACES
+/// our main payload, so the caller must re-send the main payload after
+/// the install — and waits for `:9040`.
+///
+/// Response: `{ ok, listening, sent, error? }`.
+#[tauri::command]
+pub async fn dpi_ensure(app: AppHandle, ip: String) -> serde_json::Value {
+    let addr = format!("{ip}:{DPI_DAEMON_PORT}");
+    let up = || async {
+        timeout(CONNECT_TIMEOUT, TcpStream::connect(&addr))
+            .await
+            .map(|r| r.is_ok())
+            .unwrap_or(false)
+    };
+    if up().await {
+        return serde_json::json!({ "ok": true, "listening": true, "sent": false });
+    }
+    #[cfg(have_dpi)]
+    {
+        let dpi_path = match find_bundled_dpi(&app) {
+            Ok(p) => p,
+            Err(e) => return serde_json::json!({ "ok": false, "error": e }),
+        };
+        if let Err(e) =
+            do_payload_send(&ip, &dpi_path.to_string_lossy(), PS5_LOADER_PORT).await
+        {
+            return serde_json::json!({ "ok": false, "error": format!("send dpi.elf: {e}") });
+        }
+        for _ in 0..16 {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            if up().await {
+                return serde_json::json!({ "ok": true, "listening": true, "sent": true });
+            }
+        }
+        serde_json::json!({ "ok": false, "sent": true, "listening": false,
+                            "error": "DPI daemon did not come up on :9040" })
+    }
+    #[cfg(not(have_dpi))]
+    {
+        let _ = app;
+        serde_json::json!({ "ok": false, "listening": false, "sent": false,
+                            "error": "DPI daemon is not bundled in this build" })
+    }
+}
+
 /// Probe a local payload file before sending. Response shape matches
 /// the legacy `shared/payload-file-utils.js::probePayloadFile` contract
 /// that `App.tsx PayloadProbeResult` is declared against:

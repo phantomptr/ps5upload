@@ -810,7 +810,10 @@ export const useInstallQueue = create<InstallQueueState>((set, get) => ({
       //   - Any case where the staging upload itself fails — we fall
       //     through with localPs5Path null (Tier-2 best-effort).
       let localPs5Path: string | null = null;
-      if (!next.isSplit && next.installMethod === "stage") {
+      if (
+        !next.isSplit &&
+        (next.installMethod === "stage" || next.installMethod === "dpi")
+      ) {
         // Name the staging file after the PKG's ContentID when we
         // have it. Sony's installer code paths key on basename for
         // some FW points — sonicloader's homebrew.c:436
@@ -1026,6 +1029,89 @@ export const useInstallQueue = create<InstallQueueState>((set, get) => ({
         if (!liveItem || liveItem.status === "cancelled") {
           continue;
         }
+      }
+
+      // ── DPI install path (installMethod === "dpi") ──────────────────
+      // The pkg is staged on PS5 disk (above). Route it through the DPI
+      // daemon on :9040: it runs sceAppInstUtilAppInstallPkg from a clean
+      // loader process — the path that installs without the PlayGo gate.
+      // Bringing the daemon up REPLACES our main payload on a single-
+      // payload loader, so we re-send the main payload afterwards to
+      // restore transfers/management. DPI returns only an accept/reject
+      // rc (no progress), so this is fire-and-confirm like the NPXS path.
+      if (next.installMethod === "dpi") {
+        if (!localPs5Path) {
+          markFailed(
+            get,
+            set,
+            next.id,
+            0,
+            "DPI install needs the pkg staged on the PS5 first, but staging didn't complete (check the transfer port / free space).",
+          );
+          continue;
+        }
+        const ip = bareIp(next.addr);
+        // 1. Ensure the DPI daemon is listening (reuses a live one, else
+        //    sends the bundled ezremote-dpi.elf to the loader).
+        let ens: { ok?: boolean; error?: string } = {};
+        try {
+          ens = (await invoke("dpi_ensure", { ip })) as typeof ens;
+        } catch (e) {
+          markFailed(get, set, next.id, 0, `Couldn't reach the PS5 loader to start DPI: ${e}`);
+          continue;
+        }
+        if (!isLive()) {
+          revertRowIfRunning();
+          return;
+        }
+        if (!ens.ok) {
+          markFailed(
+            get,
+            set,
+            next.id,
+            0,
+            ens.error || "The DPI daemon didn't come up on :9040.",
+          );
+          continue;
+        }
+        // 2. Install the staged pkg via DPI.
+        let dpiResp: { ok?: boolean; rc?: number; err_message?: string } = {};
+        try {
+          dpiResp = (await invoke("pkg_dpi_install", {
+            ps5Addr: next.addr,
+            localPs5Path,
+          })) as typeof dpiResp;
+        } catch (e) {
+          dpiResp = { ok: false, rc: 0, err_message: `${e}` };
+        }
+        // 3. Restore our main payload — the daemon replaced it on a
+        //    single-payload loader. Best-effort: if it fails, the user
+        //    can re-send from the Connection tab.
+        try {
+          const bp = (await invoke("payload_bundled_path")) as {
+            ok?: boolean;
+            path?: string;
+          };
+          if (bp?.ok && bp.path) {
+            await invoke("payload_send", { ip, path: bp.path, port: null });
+          }
+        } catch {
+          /* best-effort restore */
+        }
+        if (dpiResp.ok) {
+          markDone(get, set, next.id);
+        } else {
+          const rc = (dpiResp.rc ?? 0) >>> 0;
+          markFailed(
+            get,
+            set,
+            next.id,
+            rc,
+            dpiResp.err_message ||
+              `DPI install was rejected (0x${rc.toString(16)}).`,
+          );
+        }
+        continue;
       }
 
       let startResp: StartResp = {};

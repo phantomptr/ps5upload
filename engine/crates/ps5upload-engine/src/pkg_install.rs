@@ -111,6 +111,11 @@ pub fn router(state: PkgInstallStateHandle) -> Router {
         .route("/api/pkg/install/start", post(install_start_handler))
         .route("/api/pkg/install/status", get(install_status_handler))
         .route("/api/pkg/install/cancel", post(install_cancel_handler))
+        // Install a staged .pkg through the standalone DPI daemon (:9040).
+        // The daemon runs sceAppInstUtilAppInstallPkg from a clean loader
+        // process — installs without the PlayGo gate. Caller stages the
+        // pkg first and passes the bare PS5 path. See payload/dpi/.
+        .route("/api/pkg/dpi-install", post(dpi_install_handler))
         // Filename component is informational only — the session UUID
         // is the actual lookup key. We allow ANY {filename} so the URL
         // can carry the pkg's canonical `<ContentID>.pkg` name that
@@ -858,6 +863,88 @@ async fn install_cancel_handler(
         session_id: req.session,
         host_stopped: true,
     })
+}
+
+// ─── /api/pkg/dpi-install ────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct DpiInstallRequest {
+    /// Any PS5 address we hold (`ip:9114` etc.) or a bare IP — we use
+    /// only the host part and talk to the DPI daemon on `:9040`.
+    pub ps5_addr: String,
+    /// Absolute PS5-side path to the staged `.pkg` (under /user/data).
+    pub local_ps5_path: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DpiInstallResponse {
+    /// True when the daemon accepted the install (`rc == 0`).
+    pub ok: bool,
+    /// The daemon's `sceAppInstUtilAppInstallPkg` return code.
+    pub rc: i32,
+    pub err_message: Option<String>,
+}
+
+/// Connect to the PS5 DPI daemon on `:9040`, send one line (the staged
+/// local path), and read back the decimal return code. The daemon runs
+/// `sceAppInstUtilAppInstallPkg(path)` from its own clean loader process.
+fn dpi_send(ps5_ip: &str, line: &str) -> std::io::Result<i32> {
+    use std::io::{Read, Write};
+    use std::net::ToSocketAddrs;
+    let sa = format!("{ps5_ip}:9040")
+        .to_socket_addrs()?
+        .next()
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "resolve :9040 failed"))?;
+    let mut s = std::net::TcpStream::connect_timeout(&sa, std::time::Duration::from_secs(5))?;
+    s.set_write_timeout(Some(std::time::Duration::from_secs(10)))?;
+    // AppInstallPkg can take a moment to ingest the pkg before replying.
+    s.set_read_timeout(Some(std::time::Duration::from_secs(120)))?;
+    s.write_all(line.as_bytes())?;
+    s.write_all(b"\n")?;
+    let mut buf = String::new();
+    s.read_to_string(&mut buf)?;
+    let t = buf.trim();
+    t.parse::<i32>().map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("non-numeric DPI reply: {t:?}"),
+        )
+    })
+}
+
+async fn dpi_install_handler(Json(req): Json<DpiInstallRequest>) -> Response<Body> {
+    if !req.local_ps5_path.starts_with('/') {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            "local_ps5_path must be an absolute PS5 path (stage the pkg first)",
+        );
+    }
+    let ps5_ip = strip_host_port(&req.ps5_addr);
+    if ps5_ip.is_empty() {
+        return json_err(StatusCode::BAD_REQUEST, "ps5_addr is required");
+    }
+    let path = req.local_ps5_path.clone();
+    crate::log_info!("dpi-install: ps5={} path={}", ps5_ip, path);
+    let res = tokio::task::spawn_blocking(move || dpi_send(&ps5_ip, &path)).await;
+    match res {
+        Ok(Ok(rc)) => {
+            if rc == 0 {
+                crate::log_info!("dpi-install ok (rc=0)");
+            } else {
+                crate::log_warn!("dpi-install rejected rc=0x{:08x}", rc as u32);
+            }
+            json_ok(&DpiInstallResponse {
+                ok: rc == 0,
+                rc,
+                err_message: err_code_message(rc as u32).map(|s| s.to_string()),
+            })
+        }
+        Ok(Err(e)) => json_err(
+            StatusCode::BAD_GATEWAY,
+            &format!("DPI daemon (:9040) not reachable / errored: {e}"),
+        ),
+        Err(e) => json_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("task: {e}")),
+    }
 }
 
 // ─── /pkg-host/:session/:filename ────────────────────────────────────
