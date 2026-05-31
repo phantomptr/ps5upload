@@ -83,6 +83,9 @@ let wired = false;
 export function initCrashReporter(): void {
   if (wired) return;
   wired = true;
+
+  // 1. Every error-level notification — job failures, payload rejections,
+  //    FS-op failures, connection errors all surface here.
   useNotificationsStore.subscribe((state, prev) => {
     const newest = state.entries[0];
     if (!newest) return;
@@ -91,4 +94,21 @@ export function initCrashReporter(): void {
     if (newest.level !== "error") return;
     void captureCrashReport(`error: ${newest.title}`);
   });
+
+  // 2. Uncaught errors and unhandled promise rejections — the widest net.
+  //    This catches engine-proxy failures ("error sending request"), bugs in
+  //    our own code paths, and anything that never made it to a notification.
+  //    Debounced + session-capped in captureCrashReport, so a burst can't
+  //    spin the disk.
+  if (typeof window !== "undefined") {
+    window.addEventListener("error", (e) => {
+      const msg = e?.error?.message ?? e?.message ?? "uncaught error";
+      void captureCrashReport(`uncaught-error: ${msg}`);
+    });
+    window.addEventListener("unhandledrejection", (e) => {
+      const r: any = (e as PromiseRejectionEvent).reason;
+      const msg = r?.message ?? (typeof r === "string" ? r : "unhandled rejection");
+      void captureCrashReport(`unhandled-rejection: ${msg}`);
+    });
+  }
 }

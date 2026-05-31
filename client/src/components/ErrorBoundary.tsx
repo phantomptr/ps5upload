@@ -126,11 +126,25 @@ export class RootErrorBoundary extends Component<Props, State> {
               >
                 {this.tr("errorboundary_reload_window", "Reload window")}
               </button>
+              <button
+                type="button"
+                onClick={() => {
+                  // Package the auto-collected reports and open Discord so the
+                  // user can report this crash in one step. Dynamic import
+                  // keeps the reporter out of the boundary's static deps.
+                  void import("../lib/reportProblem").then((m) =>
+                    m.reportProblem(`crash-screen: ${err.name}: ${err.message}`),
+                  );
+                }}
+                className="rounded-md border border-[var(--color-accent)] px-3 py-1.5 text-sm font-medium text-[var(--color-accent)] hover:bg-[var(--color-surface)]"
+              >
+                {this.tr("errorboundary_report_crash", "Report this crash")}
+              </button>
             </div>
             <div className="mt-3 text-[11px] text-[var(--color-muted)]">
               {this.tr(
                 "errorboundary_recorded_in_logs",
-                "The error has been recorded in the Logs tab.",
+                "This was saved to a crash report automatically. Click “Report this crash” to package it and post it on Discord so we can fix it.",
               )}
             </div>
           </div>

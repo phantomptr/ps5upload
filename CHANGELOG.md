@@ -4,6 +4,23 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.23.3
+
+- **Reporting a problem is now one click.** When the app hits a hard crash,
+  the crash screen has a **"Report this crash"** button that packages the
+  auto-collected diagnostics into a `.zip` and opens our Discord support
+  channel so you can post it. The same packaging lives in Settings →
+  Diagnostics.
+- **Crash reports now capture more failures.** On top of error pop-ups and
+  render crashes, the app now auto-saves a report on any uncaught error or
+  unhandled background failure (e.g. losing contact with the engine) — so
+  whatever goes wrong, there's a detailed report ready to share.
+- Validated large uploads end-to-end on real hardware across all three
+  modes — folder, `.zip`, and `.exfat` disc-image mount — with the helper
+  staying healthy throughout.
+
+---
+
 ## 2.23.2
 
 - **New: automatic crash & error reports.** When something crashes or errors,
