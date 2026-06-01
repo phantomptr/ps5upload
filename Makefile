@@ -66,11 +66,13 @@ ANDROID_APK        := $(ANDROID_GEN_DIR)/app/build/outputs/apk/universal/debug/a
 ANDROID_ICON_SRC   := src-tauri/icons/sources/macos_squircle_1024.png
 # Env preamble shared by the android recipes.
 ANDROID_ENV = JAVA_HOME="$(ANDROID_JAVA_HOME)" ANDROID_HOME="$(ANDROID_HOME)" NDK_HOME="$(ANDROID_NDK_HOME)"
+# adb from the SDK (falls back to PATH if a device-only adb is installed).
+ADB ?= $(ANDROID_HOME)/platform-tools/adb
 
 .PHONY: all help
 .PHONY: install install-ubuntu install-macos install-windows
 .PHONY: setup setup-engine setup-payload setup-client
-.PHONY: build payload engine client _engine-release
+.PHONY: build payload engine client _engine-release _payload-if-ready _android-build-if-ready
 .PHONY: test test-root test-engine test-engine-coverage test-desktop test-payload test-client test-client-coverage
 .PHONY: lint lint-scripts lint-client audit-scripts coverage coverage-engine coverage-client
 .PHONY: quality quality-full quality-hardware ci ci-full
@@ -79,7 +81,7 @@ ANDROID_ENV = JAVA_HOME="$(ANDROID_JAVA_HOME)" ANDROID_HOME="$(ANDROID_HOME)" ND
 .PHONY: run-engine run-client dev start _check-tauri-system-deps
 .PHONY: install-engine uninstall-engine
 .PHONY: dist dist-win dist-win-arm dist-mac dist-mac-x64 dist-linux dist-linux-arm
-.PHONY: android-deps android-init android-build run-android
+.PHONY: android-deps android-init android-build android-deploy _android-install-if-device run-android
 .PHONY: send-payload gen-fixtures sweep validate validate-xl
 .PHONY: sync-version sync-version-check
 
@@ -141,7 +143,8 @@ help:
 	@echo "  make dist-linux|dist-linux-arm"
 	@echo ""
 	@echo "Android (Tauri mobile — needs Android SDK + JDK 17 + NDK + rustup):"
-	@echo "  make run-android      - Build + run on a connected device/emulator"
+	@echo "  make run-android      - Build + run on a connected device/emulator (live reload)"
+	@echo "  make android-deploy   - Build APK + install/update it on connected device(s)"
 	@echo "  make android-build    - Build a debug APK (no device needed)"
 	@echo "  make android-init     - One-time: scaffold src-tauri/gen/android"
 	@echo "  make android-deps     - Check the Android toolchain is ready"
@@ -256,7 +259,58 @@ setup-client:
 # Build
 #──────────────────────────────────────────────────────────────────────────────
 
+# Build the Android APK only when the toolchain is configured; otherwise skip
+# with a notice so `make build` still works on machines without the Android
+# SDK/NDK/JDK 17 (desktop-only contributors, CI desktop jobs). Uses the same
+# vars `android-deps` checks. `android-build` self-depends on `payload`, so the
+# embedded ELF is always current.
+_android-build-if-ready:
+	@if command -v rustup >/dev/null 2>&1 && [ -n "$(ANDROID_HOME)" ] && [ -n "$(ANDROID_NDK_HOME)" ] && [ -n "$(ANDROID_JAVA_HOME)" ]; then \
+		echo "Android toolchain detected — building/refreshing the APK..."; \
+		$(MAKE) android-build && $(MAKE) _android-install-if-device; \
+	else \
+		echo "⚠ Skipping Android APK build — toolchain not configured."; \
+		echo "  Need rustup + ANDROID_HOME + an NDK + JDK 17. Run 'make android-deps' to see what's missing."; \
+	fi
+
+# Install the freshly-built universal debug APK onto every connected device
+# (`adb install -r` updates in place, keeping app data). This is the step that
+# actually refreshes the app ON the phone after a build. No-op with a notice
+# when no device is attached — so it's safe in CI and on dev machines with no
+# phone plugged in.
+_android-install-if-device:
+	@apk="$(ANDROID_APK)"; \
+	adb="$(ADB)"; command -v "$$adb" >/dev/null 2>&1 || adb="adb"; \
+	if [ ! -f "$$apk" ]; then echo "⚠ No APK at $$apk — run 'make android-build' first."; exit 0; fi; \
+	if ! command -v "$$adb" >/dev/null 2>&1; then echo "⚠ adb not found — APK is at $$apk."; exit 0; fi; \
+	devs=$$("$$adb" devices 2>/dev/null | awk 'NR>1 && $$2=="device"{print $$1}'); \
+	if [ -z "$$devs" ]; then \
+		echo "⚠ No Android device connected — APK is at $$apk."; \
+		echo "  Plug in a device (USB debugging on), then: $$adb install -r \"$$apk\""; \
+	else \
+		for d in $$devs; do \
+			echo "Updating the app on device $$d (adb install -r)..."; \
+			"$$adb" -s "$$d" install -r "$$apk" && echo "✓ App updated on $$d"; \
+		done; \
+	fi
+
+# Build the Android APK and install/update it on the connected device(s) in
+# one step — the simplest "push my latest changes to the phone".
+android-deploy: android-build _android-install-if-device
+	@echo "✓ Android build deployed to connected device(s)."
+
+# Rebuild the payload only when the PS5 SDK is configured; otherwise skip so a
+# frontend-only `make run-client` keeps working without the SDK. The shell
+# embeds whatever ps5upload.elf.gz is on disk (build.rs re-embeds on change).
+_payload-if-ready:
+	@if [ -n "$(PS5_PAYLOAD_SDK)" ] && [ -f "$(PS5_PAYLOAD_SDK)/toolchain/prospero.mk" ]; then \
+		$(MAKE) payload; \
+	else \
+		echo "⚠ Skipping payload rebuild (PS5_PAYLOAD_SDK not set) — using existing $(PAYLOAD_ELF) if present."; \
+	fi
+
 build: sync-version-check payload engine client
+	@$(MAKE) _android-build-if-ready
 	@echo ""
 	@echo "✓ Build complete"
 	@echo ""
@@ -264,6 +318,7 @@ build: sync-version-check payload engine client
 	@echo "  - $(PAYLOAD_ELF)"
 	@echo "  - $(ENGINE_DIR)/target/"
 	@echo "  - $(CLIENT_DIR)/dist/"
+	@echo "  - $(ANDROID_APK) (when the Android toolchain is present)"
 	@echo ""
 
 # VERSION (repo root) is the canonical source of truth. `sync-version`
@@ -596,7 +651,7 @@ run-engine: setup-engine
 # to `tauri dev`, which starts Vite + the Rust main process. The Rust setup
 # hook in client/src-tauri/src/engine.rs spawns ps5upload-engine as a child
 # of the window process; killing the window tears the engine down cleanly.
-run-client: setup-client _check-tauri-system-deps _engine-release _kill-stale-client
+run-client: setup-client _payload-if-ready _check-tauri-system-deps _engine-release _kill-stale-client
 	@echo "Starting PS5 Upload client (Tauri + Rust + Vite)..."
 	@if [ -z "$$DISPLAY" ] && [ -z "$$WAYLAND_DISPLAY" ] && [ "$$(uname -s)" = "Linux" ]; then \
 		if command -v xvfb-run >/dev/null 2>&1; then \
