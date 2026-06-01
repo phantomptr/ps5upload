@@ -164,11 +164,37 @@ export function installConsoleCapture(): void {
     );
   });
   window.addEventListener("error", (e) => {
+    const msg = e.message || "";
+    // React 19 replays "continuous" native events (pointermove, mouseover,
+    // dragover, scroll) that landed on a component mid-render. The replay
+    // does `nativeEvent.target.dispatchEvent(clone)` — and WebKit nulls
+    // `event.target` once the original node is detached, so when the hovered
+    // element unmounts (e.g. a view swap as an upload starts) the target is
+    // gone and it throws `… is not an object (evaluating 'el.dispatchEvent')`
+    // (WebKit) / `Cannot read properties of null (reading 'dispatchEvent')`
+    // (Chromium). It's harmless — one stale move/hover event fails to replay
+    // — and not ours (we only ever dispatch on `window`, never null). Swallow
+    // it; log at debug so bug-reporters still see we noticed.
+    if (msg.includes("dispatchEvent")) {
+      e.preventDefault();
+      useLogsStore.getState().append(
+        "debug",
+        "react",
+        "React continuous-event replay race (target already unmounted)",
+      );
+      return;
+    }
+    // Capture where it happened. WebKit nulls `e.error` for some uncaught
+    // errors even when the message survives, so fall back to file:line:col
+    // (which pins the bundle chunk + offset) when no Error/stack is present.
+    const where = e.filename
+      ? `${e.filename}:${e.lineno ?? 0}:${e.colno ?? 0}`
+      : undefined;
     useLogsStore.getState().append(
       "error",
       "runtime",
-      e.message || "Uncaught error",
-      e.error,
+      msg || "Uncaught error",
+      e.error ?? where,
     );
   });
 }

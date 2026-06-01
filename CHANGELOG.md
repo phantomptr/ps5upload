@@ -4,6 +4,15 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.23.6
+
+- **No more phantom crash reports during uploads.** A harmless browser-engine
+  hiccup that could happen as a screen changed mid-upload was being recorded
+  as a crash. It's now ignored, and genuine errors capture more detail to make
+  them easier to track down.
+
+---
+
 ## 2.23.5
 
 - **Android build restored.** The 2.23.4 window-placement fix didn't compile

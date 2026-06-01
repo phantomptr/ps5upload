@@ -84,6 +84,7 @@ export async function captureCrashReport(
  */
 const BENIGN_SIGNATURES = [
   "handlerId", // Tauri unlisten race: listeners[eventId].handlerId
+  "dispatchEvent", // React 19 continuous-event replay onto an unmounted target
   "ResizeObserver loop", // browser-internal, never actionable
 ];
 
