@@ -4,6 +4,16 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.23.4
+
+- **Fix: the crash-report "Open folder" and "Clear" buttons (Settings →
+  Diagnostics) no longer stay greyed out.** "Open folder" now reliably opens
+  the reports folder — and if your OS blocks that (or on Android, where the
+  folder is private to the app), it shows you the exact path instead. The
+  folder location is now also shown under the report count.
+
+---
+
 ## 2.23.3
 
 - **Big uploads are much more stable.** Large game folders (thousands of
