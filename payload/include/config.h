@@ -13,9 +13,16 @@
 #define PS5UPLOAD2_AUTHOR "PhantomPtr"
 
 /* Transfer port — handles bulk-data frames (BEGIN_TX, STREAM_SHARD,
- * COMMIT_TX, ABORT_TX). Single-client at a time; a running transfer
- * blocks other callers on this port. */
+ * COMMIT_TX, ABORT_TX). Multi-stream: each accepted connection is handled
+ * on its own worker thread, so the engine may open up to
+ * PS5UPLOAD2_TRANSFER_STREAMS_ADVERTISED parallel connections (distinct
+ * tx_ids writing disjoint file sets). See docs/multistream-upload.md. */
 #define PS5UPLOAD2_RUNTIME_PORT 9113
+/* Parallel transfer streams advertised to the engine in STATUS_ACK
+ * (`max_transfer_streams`). The engine opens at most this many concurrent
+ * connections; an old engine that ignores the field opens one. Breaks the
+ * single-stream ~40 MB/s write ceiling on non-Pro consoles. */
+#define PS5UPLOAD2_TRANSFER_STREAMS_ADVERTISED 4
 /* Management port — HELLO, STATUS, FS_LIST_DIR, CLEANUP, QUERY_TX,
  * TAKEOVER_REQUEST, and FS mutation frames. Served by a separate
  * pthread so it stays responsive during an active transfer. */

@@ -14623,7 +14623,11 @@ static int handle_binary_frame(runtime_state_t *state, int client_fd,
                        "\"takeover_requested\":%d,\"started_at_unix\":%llu,"
                        "\"command_count\":%llu,\"active_transactions\":%llu,"
                        "\"last_tx_seq\":%llu,\"recovered_transactions\":%llu,"
-                       "\"ucred_elevated\":%s}",
+                       "\"ucred_elevated\":%s,"
+                       /* Multi-stream capability: how many parallel transfer
+                        * connections this payload will service concurrently.
+                        * Absent on old payloads → engine treats it as 1. */
+                       "\"max_transfer_streams\":%d}",
                        PS5UPLOAD2_VERSION,
                        kernel_version_esc,
                        (unsigned long long)snap_instance_id,
@@ -14636,7 +14640,8 @@ static int handle_binary_frame(runtime_state_t *state, int client_fd,
                        (unsigned long long)snap_active_tx,
                        (unsigned long long)snap_last_seq,
                        (unsigned long long)snap_recovered,
-                       ucred_elevated ? "true" : "false");
+                       ucred_elevated ? "true" : "false",
+                       PS5UPLOAD2_TRANSFER_STREAMS_ADVERTISED);
         /* Truncation-safe: if the fields ever grow past `body`, clamp
          * rather than emit a body_len that drives send_frame to read
          * past the stack buffer. The JSON is still valid-on-arrival
@@ -15608,7 +15613,84 @@ static void tune_accepted_client(int client_fd, int *out_last_rcvbuf) {
     }
 }
 
-/* ── Transfer server loop (main thread, port 9113) ───────────────────────────── */
+/* ── Transfer server loop (port 9113) ────────────────────────────────────────── */
+
+/* Multi-stream support: the transfer port used to be strictly single-client
+ * (accept → handle inline → close → accept next), which pinned upload throughput
+ * to one stream's single-thread write speed (~40 MB/s on non-Pro PS5s). We now
+ * dispatch each accepted connection to its own worker thread — mirroring the
+ * mgmt port — so the engine can open several connections and upload disjoint
+ * file sets concurrently. The tx table + per-file writes are already
+ * concurrency-safe (per-slot g_entry_mtx; the pack pool writes 4 files at once),
+ * so the only change needed is to stop serialising connections here.
+ *
+ * Backward compatible: an old single-stream engine opens exactly one connection
+ * and behaves as before (just handled on a worker thread instead of the accept
+ * thread). The number of streams the engine may open is advertised via STATUS
+ * (`max_transfer_streams`); old engines that don't read it stay at one. */
+
+/* Internal cap on concurrent transfer-handler threads. This is a safety
+ * backstop — the engine is told a SMALLER number (STREAMS_ADVERTISED) and never
+ * exceeds it — so the headroom here only absorbs the transient where a stream
+ * drops and reconnects (RESUME) while its old connection's thread is still
+ * draining. Kept well under any firmware's thread ceiling. */
+#define PS5UPLOAD2_MAX_TRANSFER_THREADS 8
+/* (PS5UPLOAD2_TRANSFER_STREAMS_ADVERTISED — the engine-facing limit — lives in
+ * config.h since the STATUS handler above this point reports it. The thread cap
+ * is 2x that for reconnect headroom.) */
+static pthread_mutex_t g_transfer_count_mtx = PTHREAD_MUTEX_INITIALIZER;
+static int g_transfer_thread_count = 0;
+
+static void transfer_thread_count_inc(void) {
+    pthread_mutex_lock(&g_transfer_count_mtx);
+    g_transfer_thread_count += 1;
+    pthread_mutex_unlock(&g_transfer_count_mtx);
+}
+
+static void transfer_thread_count_dec(void) {
+    pthread_mutex_lock(&g_transfer_count_mtx);
+    if (g_transfer_thread_count > 0) g_transfer_thread_count -= 1;
+    pthread_mutex_unlock(&g_transfer_count_mtx);
+}
+
+static int transfer_thread_can_spawn(void) {
+    int can;
+    pthread_mutex_lock(&g_transfer_count_mtx);
+    can = (g_transfer_thread_count < PS5UPLOAD2_MAX_TRANSFER_THREADS);
+    pthread_mutex_unlock(&g_transfer_count_mtx);
+    return can;
+}
+
+typedef struct {
+    runtime_state_t *state;
+    int              client_fd;
+} transfer_client_ctx_t;
+
+/* Run one transfer connection to completion: handle frames until the client
+ * closes it, an I/O error occurs, or shutdown is requested. Tracks the open tx
+ * so a plain TCP disconnect (which runs neither COMMIT nor ABORT) marks the
+ * journal entry "interrupted" instead of leaving an "active" orphan that a later
+ * TX_FLAG_RESUME would miss. Shared by the threaded path and the inline backstop. */
+static void transfer_handle_connection(runtime_state_t *state, int client_fd) {
+    conn_tx_ctx_t tx_ctx = {0};
+    while (!state->shutdown_requested) {
+        if (handle_binary_frame(state, client_fd, /*is_transfer_port=*/1, &tx_ctx) != 0) break;
+    }
+    if (tx_ctx.has_tx) {
+        runtime_mark_tx_interrupted_by_id(state, tx_ctx.tx_id);
+    }
+    close(client_fd);
+}
+
+static void *transfer_client_thread(void *arg) {
+    transfer_client_ctx_t *ctx = (transfer_client_ctx_t *)arg;
+    runtime_state_t *state = ctx->state;
+    int client_fd = ctx->client_fd;
+    free(ctx);
+    transfer_handle_connection(state, client_fd);
+    transfer_thread_count_dec();
+    return NULL;
+}
 
 int runtime_server_loop(runtime_state_t *state) {
     if (!state) return -1;
@@ -15631,21 +15713,54 @@ int runtime_server_loop(runtime_state_t *state) {
             perror("[payload2] accept");
             break;
         }
+        /* Tune on the accept thread (writes state->last_client_rcvbuf, which no
+         * other thread touches) BEFORE handing off, so the worker threads never
+         * race on it. */
         tune_accepted_client(client_fd, &state->last_client_rcvbuf);
-        /* Handle frames on this connection until the client closes it, an I/O
-         * error occurs, or a frame handler signals shutdown. Track the
-         * currently-open tx so we can mark it "interrupted" on drop — a
-         * plain TCP disconnect doesn't run COMMIT/ABORT and would otherwise
-         * leave an "active" orphan in the journal (causing the next
-         * TX_FLAG_RESUME begin to miss the entry). */
-        conn_tx_ctx_t tx_ctx = {0};
-        while (!state->shutdown_requested) {
-            if (handle_binary_frame(state, client_fd, /*is_transfer_port=*/1, &tx_ctx) != 0) break;
+
+        int use_thread = transfer_thread_can_spawn();
+        if (use_thread) {
+            transfer_client_ctx_t *ctx = (transfer_client_ctx_t *)malloc(sizeof(*ctx));
+            if (!ctx) {
+                fprintf(stderr, "[payload2] transfer: oom allocating client ctx; inline\n");
+                use_thread = 0;
+            } else {
+                ctx->state = state;
+                ctx->client_fd = client_fd;
+                transfer_thread_count_inc();
+                /* Detached-from-birth (see mgmt loop for the zombie rationale).
+                 * Larger stack than mgmt: the transfer path runs the manifest
+                 * parser + pack/direct writers. */
+                pthread_attr_t attr;
+                pthread_attr_t *attr_p = NULL;
+                if (pthread_attr_init(&attr) == 0) {
+                    if (pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED) == 0) {
+                        attr_p = &attr;
+                    }
+                }
+                if (attr_p) {
+                    (void)pthread_attr_setstacksize(attr_p, 1024u * 1024u);
+                }
+                pthread_t tid;
+                int rc = pthread_create(&tid, attr_p, transfer_client_thread, ctx);
+                if (attr_p) pthread_attr_destroy(attr_p);
+                if (rc != 0) {
+                    /* Roll back and fall through to inline rather than drop. */
+                    transfer_thread_count_dec();
+                    free(ctx);
+                    fprintf(stderr, "[payload2] transfer: pthread_create failed (%d); inline fallback\n", rc);
+                    use_thread = 0;
+                }
+            }
         }
-        if (tx_ctx.has_tx) {
-            runtime_mark_tx_interrupted_by_id(state, tx_ctx.tx_id);
+
+        if (!use_thread) {
+            /* Backstop: handle this connection inline on the accept thread.
+             * Blocks new accepts for this transfer's duration, but only reached
+             * at the thread cap (which the engine never drives us to) or on
+             * pthread_create failure — a rare, safe-degradation path. */
+            transfer_handle_connection(state, client_fd);
         }
-        close(client_fd);
     }
 
     if (state->listener_fd >= 0) {
