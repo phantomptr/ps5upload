@@ -18,6 +18,7 @@ import { Button } from "../../components";
 import { humanizeJobErrorReason } from "../../api/ps5";
 import { formatBytes, formatDuration } from "../../lib/format";
 import { useTr } from "../../state/lang";
+import { useConsoleLabel } from "../../state/roster";
 import {
   useUploadQueueStore,
   type QueueItem,
@@ -194,6 +195,10 @@ function QueueRow({
   onRemove: () => void;
 }) {
   const tr = useTr();
+  // Which console this job targets — every item carries an `addr`, and this
+  // maps it back to the roster's friendly name (or the bare IP). Shown so a
+  // multi-console queue makes clear which game is going to which PS5.
+  const consoleLabel = useConsoleLabel(item.addr);
   const pct =
     item.totalBytes > 0
       ? Math.max(0, Math.min(100, (item.bytesSent / item.totalBytes) * 100))
@@ -240,6 +245,15 @@ function QueueRow({
             → {item.resolvedDest}
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-[var(--color-muted)]">
+            {consoleLabel && (
+              <span
+                className="inline-flex max-w-[12rem] items-center gap-1 truncate rounded bg-[var(--color-surface-2)] px-1.5 py-0.5 font-medium text-[var(--color-text)]"
+                title={item.addr}
+              >
+                <span aria-hidden>🖥</span>
+                <span className="truncate">{consoleLabel}</span>
+              </span>
+            )}
             <span>
               {tr(
                 `queue_strategy_${item.strategy}`,

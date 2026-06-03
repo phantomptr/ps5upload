@@ -7,6 +7,7 @@ import { humanizePs5Error } from "../lib/humanizeError";
 import { stagingBasename } from "../lib/pkgStagingPath";
 import { ensurePayloadCurrent } from "../lib/ensurePayloadCurrent";
 import { transferScreenBusy } from "../lib/ps5Transfers";
+import { useInstallSettingsStore } from "./installSettings";
 
 /**
  * Package Library — the model behind the redesigned Install Package screen.
@@ -131,6 +132,19 @@ interface PkgLibraryState {
   /** Abandon an install that's still waiting its turn behind an upload. */
   cancelPendingInstall: () => void;
   remove: (path: string, host: string) => Promise<void>;
+  /** Delete (from the PS5) every staged package that has already been
+   *  installed successfully — clears the spent-package clutter without
+   *  touching anything mid-flight or not-yet-installed. */
+  clearFinished: (host: string) => Promise<void>;
+  /** Delete (from the PS5) every idle staged package — a full wipe of the
+   *  staging library. Skips rows that are uploading/installing/queued. */
+  clearAll: (host: string) => Promise<void>;
+}
+
+/** A library row is "finished" when it's settled (idle) AND its last
+ *  install succeeded — i.e. a spent staged package safe to delete. */
+export function isFinishedPkg(e: PkgEntry): boolean {
+  return e.status === "idle" && e.lastResult?.ok === true;
 }
 
 /** Merge a freshly-listed set with the current rows, preserving transient
@@ -438,6 +452,13 @@ export const usePkgLibrary = create<PkgLibraryState>((set, get) => ({
       }
       if (resp.ok) {
         patch({ status: "idle", lastResult: { ok: true, message: "Installed." } });
+        // Optional: auto-delete the spent staged .pkg so the library
+        // doesn't accumulate installed packages. Best-effort + awaited so
+        // the row vanishes deterministically; remove() swallows its own
+        // errors (surfaces via store.error, never throws here).
+        if (useInstallSettingsStore.getState().autoRemoveAfterInstall) {
+          await get().remove(path, host);
+        }
       } else {
         const rc = (resp.rc ?? 0) >>> 0;
         patch({
@@ -476,4 +497,62 @@ export const usePkgLibrary = create<PkgLibraryState>((set, get) => ({
       set({ entries: prev, error: `Delete failed: ${pkgError(e)}` });
     }
   },
+
+  async clearFinished(host) {
+    await bulkDelete(get, set, host, isFinishedPkg);
+  },
+
+  async clearAll(host) {
+    // Only idle rows — never yank a file out from under an in-flight
+    // upload/install (status uploading/installing/queued).
+    await bulkDelete(get, set, host, (e) => e.status === "idle");
+  },
 }));
+
+/** Shared optimistic bulk-delete for clearFinished/clearAll. Drops the
+ *  matching rows immediately, deletes each on the PS5 concurrently, and
+ *  restores only the ones whose delete failed (so a partial failure
+ *  leaves the list accurate). Pure-ish: takes the store's get/set so it
+ *  unit-tests against the store with a mocked fsDelete. */
+async function bulkDelete(
+  get: () => PkgLibraryState,
+  set: (
+    partial:
+      | Partial<PkgLibraryState>
+      | ((s: PkgLibraryState) => Partial<PkgLibraryState>),
+  ) => void,
+  host: string,
+  pred: (e: PkgEntry) => boolean,
+): Promise<void> {
+  if (!host?.trim()) return;
+  const prev = get().entries;
+  const targets = prev.filter(pred);
+  if (targets.length === 0) return;
+  const targetPaths = new Set(targets.map((e) => e.path));
+  // Optimistic: drop all targets up front.
+  set({ entries: prev.filter((e) => !targetPaths.has(e.path)), error: null });
+  const addr = mgmtAddr(host);
+  const failed: PkgEntry[] = [];
+  await Promise.all(
+    targets.map(async (e) => {
+      try {
+        await fsDelete(addr, e.path);
+      } catch {
+        failed.push(e);
+      }
+    }),
+  );
+  if (failed.length > 0) {
+    const failedPaths = new Set(failed.map((e) => e.path));
+    // Re-insert the rows we couldn't delete, de-duped against whatever
+    // the list looks like now (a concurrent refresh may have re-added
+    // some), and surface a single summary error.
+    set((s) => ({
+      entries: [
+        ...s.entries.filter((e) => !failedPaths.has(e.path)),
+        ...failed,
+      ],
+      error: `Failed to delete ${failed.length} file(s).`,
+    }));
+  }
+}

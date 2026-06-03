@@ -29,11 +29,17 @@ import { create } from "zustand";
 export type InstallMethod = "stream" | "stage" | "dpi";
 
 const KEY_INSTALL_METHOD = "ps5upload.install_method";
+const KEY_AUTO_REMOVE = "ps5upload.auto_remove_after_install";
 
 function loadInstallMethod(): InstallMethod {
   if (typeof window === "undefined") return "stream";
   const v = window.localStorage.getItem(KEY_INSTALL_METHOD);
   return v === "stage" || v === "dpi" ? v : "stream";
+}
+
+function loadAutoRemove(): boolean {
+  if (typeof window === "undefined") return false;
+  return window.localStorage.getItem(KEY_AUTO_REMOVE) === "1";
 }
 
 interface InstallSettingsState {
@@ -42,6 +48,14 @@ interface InstallSettingsState {
    *  by changing this. */
   installMethod: InstallMethod;
   setInstallMethod: (m: InstallMethod) => void;
+  /** When true, a staged .pkg in the library is deleted from the PS5
+   *  automatically right after it installs successfully — so the
+   *  library list doesn't accumulate spent packages. Off by default
+   *  (a user may want to re-install or keep the .pkg around). Only the
+   *  "stage"-method library is affected; streaming installs never leave
+   *  a staged file. */
+  autoRemoveAfterInstall: boolean;
+  setAutoRemoveAfterInstall: (v: boolean) => void;
 }
 
 export const useInstallSettingsStore = create<InstallSettingsState>((set) => ({
@@ -49,5 +63,15 @@ export const useInstallSettingsStore = create<InstallSettingsState>((set) => ({
   setInstallMethod: (installMethod) => {
     window.localStorage.setItem(KEY_INSTALL_METHOD, installMethod);
     set({ installMethod });
+  },
+  autoRemoveAfterInstall: loadAutoRemove(),
+  setAutoRemoveAfterInstall: (autoRemoveAfterInstall) => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(
+        KEY_AUTO_REMOVE,
+        autoRemoveAfterInstall ? "1" : "0",
+      );
+    }
+    set({ autoRemoveAfterInstall });
   },
 }));

@@ -21,6 +21,7 @@ import { useFsBulkOpStore, useFsDownloadOpStore } from "../../state/fsBulkOp";
 import { useTransferStore } from "../../state/transfer";
 import { useInstallQueue } from "../../state/installQueue";
 import { useUploadQueueStore } from "../../state/uploadQueue";
+import { useConsoleLabel } from "../../state/roster";
 
 /**
  * Cross-screen log of past + current operations. Reads from the
@@ -207,6 +208,9 @@ export default function ActivityScreen() {
 
 function ActivityRow({ entry }: { entry: ActivityEntry }) {
   const tr = useTr();
+  // Console this activity targeted (uploads/installs stash `addr`). Lets a
+  // multi-console user tell which PS5 each running/recent job belongs to.
+  const consoleLabel = useConsoleLabel(entry.addr ?? "");
   const isRunning = entry.outcome === "running";
   // For finished rows we have a fixed end timestamp (pure subtract).
   // For running rows we tick `now` every second so the elapsed
@@ -290,6 +294,15 @@ function ActivityRow({ entry }: { entry: ActivityEntry }) {
       <div className="mb-1 flex items-center gap-2">
         <OutcomeIcon outcome={entry.outcome} />
         <span className="font-medium">{entry.label}</span>
+        {consoleLabel && (
+          <span
+            className="inline-flex max-w-[10rem] items-center gap-1 truncate rounded bg-[var(--color-surface-3)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-muted)]"
+            title={entry.addr}
+          >
+            <span aria-hidden>🖥</span>
+            <span className="truncate">{consoleLabel}</span>
+          </span>
+        )}
         {entry.outcome === "running" && entry.phase === "finalizing" && (
           // Inline pill that visibly marks the post-100% state where the
           // engine is waiting on the PS5 to commit the manifest. Without

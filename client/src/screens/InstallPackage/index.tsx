@@ -23,7 +23,12 @@ import { PageHeader, Button, EmptyState, WarningCard } from "../../components";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { useConnectionStore } from "../../state/connection";
 import { useTr } from "../../state/lang";
-import { usePkgLibrary, type PkgEntry } from "../../state/pkgLibrary";
+import {
+  usePkgLibrary,
+  isFinishedPkg,
+  type PkgEntry,
+} from "../../state/pkgLibrary";
+import { useInstallSettingsStore } from "../../state/installSettings";
 import { appsInstalled, appIconUrl } from "../../api/ps5";
 import { transferAddr } from "../../lib/addr";
 import { formatBytes } from "../../lib/format";
@@ -215,6 +220,12 @@ export default function InstallPackageScreen() {
   const install = usePkgLibrary((s) => s.install);
   const cancelPendingInstall = usePkgLibrary((s) => s.cancelPendingInstall);
   const remove = usePkgLibrary((s) => s.remove);
+  const clearFinished = usePkgLibrary((s) => s.clearFinished);
+  const clearAll = usePkgLibrary((s) => s.clearAll);
+  const autoRemove = useInstallSettingsStore((s) => s.autoRemoveAfterInstall);
+  const setAutoRemove = useInstallSettingsStore(
+    (s) => s.setAutoRemoveAfterInstall,
+  );
   const { confirm, dialog } = useConfirm();
 
   const [installedIds, setInstalledIds] = useState<Set<string>>(new Set());
@@ -365,6 +376,12 @@ export default function InstallPackageScreen() {
     () => entries.reduce((a, e) => a + (e.size || 0), 0),
     [entries],
   );
+  // Count of spent (installed) packages — drives the "Clear finished (N)"
+  // button so the user can wipe just the clutter in one tap.
+  const finishedCount = useMemo(
+    () => entries.filter(isFinishedPkg).length,
+    [entries],
+  );
   const sorted = entries; // store already sorts by title
   // Installing swaps the payload out (it owns the transfer port :9113), so it
   // can't run concurrently with an upload. Rather than block the button, the
@@ -500,7 +517,7 @@ export default function InstallPackageScreen() {
             })}
           </ul>
           {entries.length > 0 && (
-            <div className="mt-3 flex items-center justify-between border-t border-[var(--color-border)] pt-3 text-[11px] text-[var(--color-muted)]">
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-[var(--color-border)] pt-3 text-[11px] text-[var(--color-muted)]">
               <span>
                 {tr(
                   "pkglib.footer.count",
@@ -508,14 +525,69 @@ export default function InstallPackageScreen() {
                   `${entries.length} package${entries.length === 1 ? "" : "s"}`,
                 )}
               </span>
-              <span className="tabular-nums">
-                {tr(
-                  "pkglib.footer.size",
-                  { size: formatBytes(totalSize) },
-                  `${formatBytes(totalSize)} on PS5`,
+              <div className="flex items-center gap-2">
+                {finishedCount > 0 && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={installing}
+                    onClick={() => void clearFinished(host)}
+                  >
+                    {tr(
+                      "pkglib.clearFinished",
+                      { n: finishedCount },
+                      `Clear finished (${finishedCount})`,
+                    )}
+                  </Button>
                 )}
-              </span>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={installing}
+                  onClick={async () => {
+                    const ok = await confirm({
+                      title: tr(
+                        "pkglib.clearAll.confirmTitle",
+                        undefined,
+                        "Delete all staged packages?",
+                      ),
+                      message: tr(
+                        "pkglib.clearAll.confirmBody",
+                        { n: entries.length },
+                        `This permanently deletes all ${entries.length} staged .pkg file(s) from the PS5. Installed games are not affected.`,
+                      ),
+                      confirmLabel: tr("pkglib.clearAll", undefined, "Clear all"),
+                      destructive: true,
+                    });
+                    if (ok) void clearAll(host);
+                  }}
+                >
+                  {tr("pkglib.clearAll", undefined, "Clear all")}
+                </Button>
+                <span className="tabular-nums">
+                  {tr(
+                    "pkglib.footer.size",
+                    { size: formatBytes(totalSize) },
+                    `${formatBytes(totalSize)} on PS5`,
+                  )}
+                </span>
+              </div>
             </div>
+          )}
+          {entries.length > 0 && (
+            <label className="mt-2 flex cursor-pointer items-center gap-2 text-[11px] text-[var(--color-muted)]">
+              <input
+                type="checkbox"
+                className="h-3.5 w-3.5"
+                checked={autoRemove}
+                onChange={(e) => setAutoRemove(e.target.checked)}
+              />
+              {tr(
+                "pkglib.autoRemove",
+                undefined,
+                "Auto-delete each package from the PS5 after it installs",
+              )}
+            </label>
           )}
         </>
       )}

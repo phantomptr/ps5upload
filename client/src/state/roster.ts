@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { useConnectionStore } from "./connection";
 import { useRunningAppsStore } from "./runningApps";
+import { hostOf } from "../lib/addr";
 
 /**
  * Multi-PS5 roster.
@@ -220,6 +221,42 @@ export const useRosterStore = create<RosterState>((set, get) => ({
     persist(next, get().active_id);
   },
 }));
+
+/**
+ * Pure: the friendly console name for a bare host/IP, given the roster.
+ * Falls back to the bare host when no profile matches or the matched
+ * profile has no name. Port-tolerant: callers may pass an `ip:port`
+ * addr and it's stripped via `hostOf`.
+ *
+ * Used to label upload/install queue rows with WHICH console each job
+ * targets — every queue item already carries an `addr`, but the roster
+ * is keyed by profile id/host, so a queue item can't show a name
+ * without this reverse lookup. Pure (roster passed in) so it unit-tests
+ * without a store or a PS5.
+ */
+export function profileNameForHost(
+  host: string,
+  profiles: PS5Profile[],
+): string {
+  const bare = hostOf(host);
+  if (!bare) return host;
+  const match = profiles.find((p) => hostOf(p.host) === bare);
+  return match?.name?.trim() || bare;
+}
+
+/** Pure: friendly console name for an `ip:port` transfer/mgmt addr. */
+export function profileNameForAddr(
+  addr: string,
+  profiles: PS5Profile[],
+): string {
+  return profileNameForHost(addr, profiles);
+}
+
+/** Reactive hook: the console label for a queue item's `addr`. Re-renders
+ *  when the roster changes (e.g. the user renames a console). */
+export function useConsoleLabel(addr: string): string {
+  return useRosterStore((s) => profileNameForAddr(addr, s.profiles));
+}
 
 /** Get the currently-active profile, or null when none exists. */
 export function useActiveProfile(): PS5Profile | null {
