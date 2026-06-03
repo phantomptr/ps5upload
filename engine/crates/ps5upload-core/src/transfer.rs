@@ -158,6 +158,13 @@ pub struct TransferConfig {
     /// so the actual rate may briefly spike above the cap by one
     /// shard's worth of bytes.
     pub bandwidth_cap_bps: Option<u64>,
+    /// Optional cooperative cancel flag. When set and flipped to `true`, the
+    /// pipelined sender stops at the next shard boundary and returns a
+    /// `transfer_cancelled` error instead of finishing the transaction. Two
+    /// uses: (1) the multi-stream orchestrator flips it so sibling streams stop
+    /// promptly once any one stream fails; (2) a user-facing Cancel button.
+    /// `None` = never cancel (legacy behaviour).
+    pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl TransferConfig {
@@ -176,6 +183,7 @@ impl TransferConfig {
             progress_files_finalized: None,
             progress_bytes_finalized: None,
             bandwidth_cap_bps: None,
+            cancel: None,
         }
     }
 
@@ -718,6 +726,9 @@ struct PipelinedSender<'a> {
     /// `Some(BandwidthThrottle)` = sleep between shards to enforce
     /// the configured bytes-per-second ceiling.
     throttle: Option<BandwidthThrottle>,
+    /// Cooperative cancel flag (see `TransferConfig::cancel`). Checked at each
+    /// shard boundary; when `true` the sender aborts with `transfer_cancelled`.
+    cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 /// Token-bucket throttle. `allowance` (in bytes) refills continuously at
@@ -805,7 +816,15 @@ impl<'a> PipelinedSender<'a> {
             tx_id,
             total_shards,
             throttle,
+            cancel: cfg.cancel.clone(),
         }
+    }
+
+    /// True once the caller has requested cancellation via `cfg.cancel`.
+    fn cancelled(&self) -> bool {
+        self.cancel
+            .as_ref()
+            .is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
     }
 
     /// Send a single shard. Blocks on prior ACKs only as needed to stay under
@@ -825,6 +844,13 @@ impl<'a> PipelinedSender<'a> {
         record_count: u32,
         flags: u32,
     ) -> Result<()> {
+        // Abort at the shard boundary if cancellation was requested. Bailing
+        // before sending the next shard leaves the transaction un-committed; the
+        // payload marks it interrupted on disconnect, so a later resume can pick
+        // it up (or the orchestrator surfaces the cancel to the user).
+        if self.cancelled() {
+            bail!("transfer_cancelled");
+        }
         while !self.inflight.is_empty()
             && (self.inflight.len() >= self.max_inflight_shards
                 || self.inflight_bytes + data.len() > self.max_inflight_bytes)
@@ -1754,6 +1780,59 @@ pub struct FileListEntry {
     pub dest: String,
 }
 
+// ─── Multi-stream distribution (see docs/multistream-upload.md) ─────────────────
+
+/// Distribute item weights (file sizes) across `buckets` streams using greedy
+/// longest-processing-time: sort items descending by weight, then assign each to
+/// the currently-lightest bucket. Returns, for each bucket, the original item
+/// indices assigned to it.
+///
+/// Why LPT: a single oversized file would otherwise make one stream the long
+/// pole while the others finish early and idle; LPT keeps total bytes-per-stream
+/// as even as a whole-file split allows (we never split a file across streams,
+/// so two streams never write the same file — the property the payload's
+/// concurrent-write safety relies on).
+///
+/// Invariants (checked by tests): every index in `0..weights.len()` appears
+/// exactly once across the returned buckets (disjoint + complete); exactly
+/// `max(buckets, 1)` inner vecs are returned (empty ones kept so callers can map
+/// bucket-index → stream-index directly).
+fn distribute_balanced(weights: &[u64], buckets: usize) -> Vec<Vec<usize>> {
+    let buckets = buckets.max(1);
+    let mut out: Vec<Vec<usize>> = vec![Vec::new(); buckets];
+    if weights.is_empty() {
+        return out;
+    }
+    // Indices sorted by weight descending; ties broken by index for determinism.
+    let mut order: Vec<usize> = (0..weights.len()).collect();
+    order.sort_by(|&a, &b| weights[b].cmp(&weights[a]).then(a.cmp(&b)));
+    // u128 load accumulator so summing many u64 sizes can't overflow.
+    let mut load = vec![0u128; buckets];
+    for idx in order {
+        // Lightest bucket wins; ties broken by lowest bucket index.
+        let mut best = 0usize;
+        for b in 1..buckets {
+            if load[b] < load[best] {
+                best = b;
+            }
+        }
+        out[best].push(idx);
+        load[best] += u128::from(weights[idx]);
+    }
+    out
+}
+
+/// Derive a per-stream `tx_id` from a base id by XOR-ing the stream index into
+/// the low byte. Distinct streams (index < 256) get distinct ids, and the
+/// mapping is deterministic so a retry of stream N reuses the same id and
+/// `TX_FLAG_RESUME` picks up where it left off. Stream 0 maps to the base id
+/// unchanged, so the single-stream path keeps its original tx_id.
+fn stream_tx_id(base: [u8; 16], stream_index: usize) -> [u8; 16] {
+    let mut id = base;
+    id[15] ^= (stream_index & 0xff) as u8;
+    id
+}
+
 /// Transfer an explicit list of `(local_src, ps5_dest)` pairs in a single
 /// FTX2 transaction. This is used when the caller already has the file list
 /// (e.g. from `app/server.js` `uploadFiles`) and wants one atomic transaction.
@@ -2059,6 +2138,156 @@ pub fn transfer_file_list_resumable(
 ) -> Result<TransferResult> {
     resumable_retry(max_retries, "transfer_file_list", initial_flags, |flags| {
         transfer_file_list_with_flags(cfg, tx_id, dest_root, entries, flags)
+    })
+}
+
+/// Hard ceiling on parallel upload streams, independent of the user setting and
+/// the payload's advertised max. Beyond ~4 the gains flatten (the small-file
+/// pack pool already saturates at 4 workers) while the risk of overrunning the
+/// payload's accept backlog grows. See `docs/multistream-upload.md`.
+pub const MAX_TRANSFER_STREAMS: usize = 4;
+
+/// Multi-stream sibling of `transfer_file_list_resumable`: split `entries` into
+/// `streams` disjoint, byte-balanced buckets and upload them concurrently, each
+/// as its own resumable FTX2 transaction over its own connection. Breaks the
+/// single-stream ~40 MB/s write ceiling on non-Pro PS5s (see
+/// `docs/multistream-upload.md`).
+///
+/// Safety: streams write disjoint file sets to the same `dest_root`; the payload
+/// already serialises per-file writes and runs a concurrent pack pool, so
+/// distinct-file concurrent writes are safe. Each stream gets a deterministic
+/// per-stream `tx_id` (`stream_tx_id`) so a retry resumes that stream exactly.
+///
+/// Falls back to the single-stream path verbatim when `streams <= 1` or there's
+/// at most one file — so callers can always route through this function and the
+/// behaviour is unchanged until they actually ask for >1 stream against a
+/// capable payload.
+///
+/// Progress: all streams share `cfg`'s `Arc<AtomicU64>` counters, so the
+/// existing per-job progress bar aggregates across streams with no change.
+pub fn transfer_file_list_multistream(
+    cfg: &TransferConfig,
+    base_tx_id: [u8; 16],
+    dest_root: &str,
+    entries: &[FileListEntry],
+    streams: usize,
+    max_retries: u32,
+    initial_flags: u32,
+) -> Result<TransferResult> {
+    let effective = streams.clamp(1, MAX_TRANSFER_STREAMS);
+    // Single-stream fast path: behave exactly like the resumable single-stream
+    // transfer. Nothing below this point runs unless we truly go parallel.
+    if effective <= 1 || entries.len() <= 1 {
+        return transfer_file_list_resumable(
+            cfg,
+            base_tx_id,
+            dest_root,
+            entries,
+            max_retries,
+            initial_flags,
+        );
+    }
+
+    // Weights for balancing = file sizes (metadata only). A stat failure here
+    // contributes weight 0; the owning stream will surface the precise error
+    // when it tries to read the file.
+    let weights: Vec<u64> = entries
+        .iter()
+        .map(|e| std::fs::metadata(&e.src).map(|m| m.len()).unwrap_or(0))
+        .collect();
+    let buckets = distribute_balanced(&weights, effective);
+
+    // Shared cancel flag so the first stream to fail stops its siblings promptly
+    // instead of letting them run a doomed transfer to completion. Reuse the
+    // caller's flag if they supplied one (e.g. a user Cancel button).
+    let cancel = cfg
+        .cancel
+        .clone()
+        .unwrap_or_else(|| std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)));
+
+    crate::core_log!(
+        "multistream: {} file(s) across {} stream(s) → {}",
+        entries.len(),
+        effective,
+        dest_root,
+    );
+
+    // Spawn one OS thread per non-empty bucket. Scoped threads let each borrow
+    // `dest_root`/`cfg` without `'static`; the scope joins them all before
+    // returning. Per-stream cfg carries the shared cancel flag.
+    let results: Vec<(usize, Result<TransferResult>)> = std::thread::scope(|scope| {
+        let mut handles = Vec::new();
+        for (stream_idx, idxs) in buckets.iter().enumerate() {
+            if idxs.is_empty() {
+                continue; // fewer files than streams — nothing for this stream
+            }
+            let sub_entries: Vec<FileListEntry> =
+                idxs.iter().map(|&i| entries[i].clone()).collect();
+            let mut stream_cfg = cfg.clone();
+            stream_cfg.cancel = Some(cancel.clone());
+            let tx_id = stream_tx_id(base_tx_id, stream_idx);
+            let cancel_on_err = cancel.clone();
+            let handle = scope.spawn(move || {
+                let r = transfer_file_list_resumable(
+                    &stream_cfg,
+                    tx_id,
+                    dest_root,
+                    &sub_entries,
+                    max_retries,
+                    initial_flags,
+                );
+                if r.is_err() {
+                    // Tell siblings to stop at their next shard boundary.
+                    cancel_on_err.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+                r
+            });
+            handles.push((stream_idx, handle));
+        }
+        handles
+            .into_iter()
+            .map(|(idx, h)| {
+                // A panicked stream thread is itself a failure; map join error
+                // into an Err so it's surfaced rather than aborting the process.
+                let r = h
+                    .join()
+                    .unwrap_or_else(|_| Err(anyhow::anyhow!("stream {idx} panicked")));
+                (idx, r)
+            })
+            .collect()
+    });
+
+    // Aggregate. Sum bytes/shards across streams; surface the first error (after
+    // all threads have joined). A failed multi-stream job is resumable: re-running
+    // re-derives the same per-stream tx_ids and each stream resumes via RESUME.
+    let mut bytes_sent = 0u64;
+    let mut shards_sent = 0u64;
+    let mut first_err: Option<anyhow::Error> = None;
+    let mut last_commit_ack = String::new();
+    for (idx, r) in results {
+        match r {
+            Ok(res) => {
+                bytes_sent += res.bytes_sent;
+                shards_sent += res.shards_sent;
+                last_commit_ack = res.commit_ack_body;
+            }
+            Err(e) => {
+                crate::core_log!("multistream: stream {} failed: {}", idx, e);
+                if first_err.is_none() {
+                    first_err = Some(e);
+                }
+            }
+        }
+    }
+    if let Some(e) = first_err {
+        return Err(e);
+    }
+    Ok(TransferResult {
+        tx_id_hex: bytes_to_hex(&base_tx_id),
+        shards_sent,
+        bytes_sent,
+        dest: dest_root.to_string(),
+        commit_ack_body: last_commit_ack,
     })
 }
 
@@ -3351,5 +3580,102 @@ mod retry_classification_tests {
              within an hour at most; got {:?}",
             COMMIT_TX_ACK_TIMEOUT,
         );
+    }
+}
+
+#[cfg(test)]
+mod multistream_tests {
+    //! Tests for the multi-stream distribution + tx_id derivation. These are
+    //! the pure pieces of the multi-stream upload (see
+    //! `docs/multistream-upload.md`); the network orchestration itself is
+    //! exercised on hardware.
+    use super::*;
+    use std::collections::BTreeSet;
+
+    /// Every index appears exactly once across all buckets (disjoint + complete)
+    /// and the bucket count is always `max(streams, 1)`.
+    fn assert_partition(weights: &[u64], buckets: &[Vec<usize>], streams: usize) {
+        assert_eq!(buckets.len(), streams.max(1), "bucket count");
+        let mut seen: BTreeSet<usize> = BTreeSet::new();
+        for b in buckets {
+            for &i in b {
+                assert!(seen.insert(i), "index {i} appears in more than one bucket");
+            }
+        }
+        let expected: BTreeSet<usize> = (0..weights.len()).collect();
+        assert_eq!(seen, expected, "every index must be assigned exactly once");
+    }
+
+    fn bucket_load(weights: &[u64], bucket: &[usize]) -> u128 {
+        bucket.iter().map(|&i| u128::from(weights[i])).sum()
+    }
+
+    #[test]
+    fn empty_input_yields_empty_buckets() {
+        let buckets = distribute_balanced(&[], 4);
+        assert_eq!(buckets.len(), 4);
+        assert!(buckets.iter().all(|b| b.is_empty()));
+    }
+
+    #[test]
+    fn fewer_files_than_streams_leaves_empty_buckets() {
+        let weights = [100, 200];
+        let buckets = distribute_balanced(&weights, 4);
+        assert_partition(&weights, &buckets, 4);
+        let non_empty = buckets.iter().filter(|b| !b.is_empty()).count();
+        assert_eq!(non_empty, 2, "two files spread over distinct streams");
+    }
+
+    #[test]
+    fn equal_weights_split_evenly() {
+        let weights = [10, 10, 10, 10];
+        let buckets = distribute_balanced(&weights, 2);
+        assert_partition(&weights, &buckets, 2);
+        for b in &buckets {
+            assert_eq!(bucket_load(&weights, b), 20, "each stream gets half");
+        }
+    }
+
+    #[test]
+    fn lpt_keeps_one_huge_file_from_skewing() {
+        // One 1 GiB file + many tiny ones across 4 streams: the big file owns a
+        // stream and the rest are balanced around it — no stream is empty and
+        // the max/min load gap stays bounded by the largest single file.
+        let mut weights = vec![1_073_741_824u64];
+        weights.extend(std::iter::repeat(1_000u64).take(40));
+        let buckets = distribute_balanced(&weights, 4);
+        assert_partition(&weights, &buckets, 4);
+        assert!(buckets.iter().all(|b| !b.is_empty()), "no idle stream");
+        let loads: Vec<u128> = buckets.iter().map(|b| bucket_load(&weights, b)).collect();
+        let max = loads.iter().max().copied().unwrap();
+        let min = loads.iter().min().copied().unwrap();
+        // The imbalance can't exceed the largest single item (greedy LPT bound).
+        assert!(
+            max - min <= 1_073_741_824,
+            "imbalance bounded by largest file"
+        );
+    }
+
+    #[test]
+    fn zero_streams_clamps_to_one() {
+        let weights = [5, 6, 7];
+        let buckets = distribute_balanced(&weights, 0);
+        assert_partition(&weights, &buckets, 1);
+        assert_eq!(buckets[0].len(), 3, "all files in the single bucket");
+    }
+
+    #[test]
+    fn stream_tx_ids_are_distinct_and_stable() {
+        let base = [0xAAu8; 16];
+        let ids: Vec<[u8; 16]> = (0..4).map(|i| stream_tx_id(base, i)).collect();
+        // Stream 0 is the base id unchanged (single-stream compatibility).
+        assert_eq!(ids[0], base);
+        // All distinct.
+        let set: BTreeSet<[u8; 16]> = ids.iter().copied().collect();
+        assert_eq!(set.len(), 4, "per-stream ids must be distinct");
+        // Deterministic / stable across calls (so retries resume the same tx).
+        assert_eq!(stream_tx_id(base, 2), ids[2]);
+        // Only the low byte differs.
+        assert_eq!(&ids[3][..15], &base[..15]);
     }
 }
