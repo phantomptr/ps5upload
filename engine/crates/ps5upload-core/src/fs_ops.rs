@@ -1280,6 +1280,15 @@ fn blake3_file(path: &std::path::Path) -> Result<String> {
 mod tests {
     use super::*;
 
+    /// Both gate tests below manipulate the process-global RECONCILE_WALK_GATE.
+    /// cargo runs tests in parallel by default, so without forcing them
+    /// sequential, one test holding the gate makes the other's "gate is free"
+    /// assertion flake under load (observed as a CI-only failure at
+    /// `try_lock().is_ok()`). This dedicated serialization lock makes the two
+    /// run one-at-a-time; poison-tolerant because a failing test would poison
+    /// it and we still want the sibling to run and report honestly.
+    static GATE_TEST_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// Regression test for the reconcile connection-storm + slow-source crash:
     /// the process-global RECONCILE_WALK_GATE must serialize whole reconciles
     /// (local walk + remote walk) so concurrent reconcile + diff-preview
@@ -1293,6 +1302,9 @@ mod tests {
     fn reconcile_walk_gate_serializes_walks() {
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
+
+        // Serialize against the sibling gate test (see GATE_TEST_SERIAL).
+        let _serial = GATE_TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
 
         // (1) A best-effort preview (try_lock) must bail while a walk holds
         //     the gate, rather than starting a second concurrent walk.
@@ -1349,6 +1361,8 @@ mod tests {
     /// gate-before-walk ordering.
     #[test]
     fn preview_bails_before_local_walk_when_gate_held() {
+        // Serialize against the sibling gate test (see GATE_TEST_SERIAL).
+        let _serial = GATE_TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let _held = RECONCILE_WALK_GATE
             .lock()
             .unwrap_or_else(|e| e.into_inner());
