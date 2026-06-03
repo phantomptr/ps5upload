@@ -144,3 +144,30 @@ detect support before opening parallel connections.
 - A/B on Fat: 1 vs 2 vs 4 streams, large-file game, wired gigabit. Expect
   aggregate throughput to climb from ~40 toward the wire (~90–110) and plateau
   when network- or write-lock-bound.
+
+## Hardware validation (2026-06-02)
+
+Tested via `bench/multistream-hw-test.mjs` against two live consoles on wired
+gigabit, source on an external volume. Workload: a synthetic 4×1 GiB folder (one
+large file per stream) — the case multi-stream targets. Each run re-sent the
+full 4 GiB; both stream counts completed cleanly with no payload crash.
+
+| Console            | streams=1   | streams=4   | speedup | streams=4 wall |
+|--------------------|-------------|-------------|---------|----------------|
+| Fat  (FW 5.10)     | 30.0 MiB/s  | 51.9 MiB/s  | 1.73×   | 79 s (vs 136 s)|
+| Pro  (FW 9.60)     | 61.8 MiB/s  | 87.9 MiB/s  | 1.42×   | 47 s (vs 66 s) |
+
+Findings:
+- **Multi-stream breaks the single-stream ceiling on both consoles.** 4 concurrent
+  connections confirmed (netstat + engine `multistream:` log). The Pro's smaller
+  multiplier is expected — its single stream (~62–85 MiB/s) already starts near
+  the ~110 MiB/s gigabit wire, leaving less headroom.
+- **Stable.** Both firmwares, sustained 4-stream concurrency, repeated abrupt
+  engine kills mid-transfer → payload stayed up, marked txs interrupted, cleaned
+  up; `active_transactions` returned to 0. A 9.7 GB single file completed at
+  29.3 MiB/s on the Fat.
+- **Not a win for tiny-file folders.** A 46k-file / 1.15 GB folder (avg 26 KB) is
+  metadata-bound, not bandwidth-bound — it crawls regardless of stream count.
+  Multi-stream helps workloads with real bytes-per-file; the small-file pack pool
+  already saturates separately.
+- Peak instantaneous samples (128–384 MiB/s) are disk-cache bursts, not sustained.
