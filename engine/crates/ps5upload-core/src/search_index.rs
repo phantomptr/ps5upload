@@ -55,6 +55,14 @@ pub struct IndexStatus {
     pub phase: String,
     /// Files counted so far (during build) or total (when ready).
     pub files: u64,
+    /// True when the walk hit the payload's hard cap (INDEX_MAX_ENTRIES /
+    /// INDEX_MAX_BYTES in runtime.c) and stopped early — the index holds
+    /// the first N files, not all of them. Bounding the index is what
+    /// keeps a walk of a huge game drive from OOM-ing the payload; the UI
+    /// should tell the user results are partial. `#[serde(default)]` so an
+    /// older payload that omits the field still deserializes (→ false).
+    #[serde(default)]
+    pub truncated: bool,
     pub started_at: i64,
     pub completed_at: i64,
 }
@@ -127,4 +135,40 @@ pub fn index_cancel(addr: &str) -> Result<()> {
         bail!("expected INDEX_CANCEL_ACK, got {ft:?}");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn index_status_parses_truncated_true() {
+        // Exactly the INDEX_STATUS body a current payload emits after the
+        // walk hits the OOM cap: phase=ready, files at the cap, truncated.
+        let body = br#"{"phase":"ready","files":200000,"truncated":true,"started_at":100,"completed_at":215}"#;
+        let s: IndexStatus = serde_json::from_slice(body).unwrap();
+        assert_eq!(s.phase, "ready");
+        assert_eq!(s.files, 200_000);
+        assert!(s.truncated, "capped index must report truncated=true");
+        assert_eq!(s.completed_at, 215);
+    }
+
+    #[test]
+    fn index_status_parses_untruncated() {
+        let body = br#"{"phase":"ready","files":1234,"truncated":false,"started_at":1,"completed_at":2}"#;
+        let s: IndexStatus = serde_json::from_slice(body).unwrap();
+        assert_eq!(s.files, 1234);
+        assert!(!s.truncated);
+    }
+
+    #[test]
+    fn index_status_back_compat_old_payload_without_truncated() {
+        // An older payload that predates the cap omits `truncated`; it must
+        // still deserialize, defaulting to false (not error out the panel).
+        let body = br#"{"phase":"building","files":50,"started_at":7,"completed_at":0}"#;
+        let s: IndexStatus = serde_json::from_slice(body).unwrap();
+        assert_eq!(s.phase, "building");
+        assert_eq!(s.files, 50);
+        assert!(!s.truncated, "missing field defaults to false");
+    }
 }

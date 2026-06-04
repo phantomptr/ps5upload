@@ -54,37 +54,27 @@ import {
  *
  *  Static info (model, serial, OS, RAM) is fetched once per mount;
  *  uptime + storage are polled every 5s. Live temps/clock/power are NOT
- *  polled — they're the one read that ptraces SceShellUI (briefly
- *  freezing the whole PS5 UI), which powered consoles off when run on a
- *  5s timer alongside other homebrew. They're now read on demand only.
+ *  polled and never auto-fire — they're the one read that can ptrace
+ *  SceShellUI on firmwares where the direct sensor call wedges (FW 9.60
+ *  PS5 Pro confirmed), which drops the payload listener. They're read on
+ *  demand only, behind an explicit "Read sensors" click.
  *  See payload/src/hw_info.c::hw_temps_get_text + shellui_rpc.c. */
 const POLL_INTERVAL_MS = 5_000;
 
-/** Auto-poll interval for live sensors (CPU temp, SoC temp, CPU freq,
- *  power). Safe to poll now that the payload reads sensors via DIRECT
- *  sceKernel* linkage (2.16.1+): no ptrace, no ShellUI freeze. On older
- *  payloads the ShellUI RPC fallback was the unsafe path and the screen
- *  blanked on every read; that path now only fires when a direct call
- *  legitimately returns 0 (FW point where libkernel doesn't export the
- *  symbol), which is rare. */
-const SENSOR_POLL_INTERVAL_MS = 5_000;
-
-/** Minimum gap between sensor reads (both auto-poll and manual). Mostly a
- *  rate limit against accidentally hammering the mgmt port — each read is
- *  a fresh TCP RPC + sensor syscalls. Was 10 s on the pre-2.16.1 ptrace-
- *  via-ShellUI path because every read briefly froze the UI; the new
- *  direct path is cheap enough that 2 s is fine. */
+/** Minimum gap between on-demand sensor reads. Rate-limits the manual
+ *  "Read sensors" button so an impatient double-click can't fire two
+ *  back-to-back ptrace round-trips on firmware that needs the ShellUI
+ *  fallback. Each read is a fresh TCP RPC + sensor syscalls. */
 const SENSOR_READ_COOLDOWN_MS = 2_000;
 
 /**
  * Safety gate for a live-sensor read. Returns true when a fresh read
  * should be allowed right now.
  *
- * The cooldown rate-limits the manual button + the auto-poller so they
- * can't compound when a user clicks Read while the timer also fires.
- * On 2.16.1+ payloads sensor reads go through the DIRECT sceKernel*
- * path (no ptrace into ShellUI, no screen freeze), so the cooldown is a
- * thrash-prevention knob rather than a safety-critical one.
+ * The cooldown rate-limits the manual "Read sensors" button so a
+ * double-click can't compound two reads. There is no auto-poller for
+ * this path anymore (it could ptrace ShellUI on FW 9.60 and drop the
+ * payload), so this is purely a button debounce.
  */
 function shouldAllowSensorRead(lastReadAt: number | null, now: number): boolean {
   if (lastReadAt !== null && now - lastReadAt < SENSOR_READ_COOLDOWN_MS) {
@@ -178,15 +168,15 @@ export default function HardwareScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Live sensors (temps/clock/power) auto-poll every 5s via DIRECT
-  // sceKernel* linkage (-lkernel_sys, 2.16.1+ payloads) — no ptrace, no
-  // ShellUI freeze. sensorBusy + sensorReadAt gate the auto-tick: busy
-  // prevents overlapping reads if the PS5 is slow; readAt enforces the
-  // SENSOR_READ_COOLDOWN_MS minimum gap so manual+timer reads can't
-  // compound. The pre-2.16.1 UI surfaced a manual "Read sensors" button
-  // because the read was unsafe to poll — that button is gone now since
-  // auto-poll is safe and matches user expectations for a live panel.
+  // Live sensors (temps/clock/power) are read ON DEMAND only, never on a
+  // timer — see the readSensors effect below for the full rationale. The
+  // payload reads them via the direct sceKernel* APIs, which can hang on
+  // some firmware; gating behind an explicit "Read sensors" click means a
+  // read never fires unattended. sensorBusy prevents overlapping reads if
+  // the PS5 is slow; sensorReadAt enforces the SENSOR_READ_COOLDOWN_MS
+  // minimum gap so an impatient double-click can't fire two back-to-back.
   const sensorBusy = useRef(false);
+  const [sensorLoading, setSensorLoading] = useState(false);
   const [sensorReadAt, setSensorReadAt] = useState<number | null>(null);
 
   // Guard flag: if a previous refresh is still pending, skip new
@@ -268,6 +258,7 @@ export default function HardwareScreen() {
     if (sensorBusy.current) return;
     if (!shouldAllowSensorRead(sensorReadAt, Date.now())) return;
     sensorBusy.current = true;
+    setSensorLoading(true);
     setError(null);
     const probe = guard.capture();
     try {
@@ -281,6 +272,7 @@ export default function HardwareScreen() {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       sensorBusy.current = false;
+      setSensorLoading(false);
     }
   }, [host, payloadStatus, guard, sensorReadAt]);
 
@@ -301,25 +293,20 @@ export default function HardwareScreen() {
     return () => window.clearInterval(id);
   }, [payloadStatus, refresh, visible]);
 
-  // Auto-poll live sensors (temps / freq / power) alongside the
-  // static-info refresh above. Previously OFF because the read path
-  // ptraced SceShellUI (briefly froze the whole PS5 UI) and a 5s timer
-  // compounded that destabilization to the point of powering consoles
-  // off when other homebrew was active. 2.16.1+ payloads serve these
-  // via DIRECT sceKernel* linkage (no ptrace), so a 5s tick is safe and
-  // matches the cadence users expect for a live sensor panel. The
-  // cooldown in shouldAllowSensorRead prevents the auto-tick from
-  // racing a manual click into a double read.
-  useEffect(() => {
-    if (payloadStatus !== "up") return;
-    if (!visible) return;
-    // Kick one read immediately on mount so the panel isn't blank.
-    void readSensors();
-    const id = window.setInterval(() => {
-      void readSensors();
-    }, SENSOR_POLL_INTERVAL_MS);
-    return () => window.clearInterval(id);
-  }, [payloadStatus, visible, readSensors]);
+  // The live-sensor read (temps / freq / power) is ON-DEMAND ONLY — it
+  // is deliberately NEVER armed on a timer and never auto-fires on
+  // mount. Rationale (regression report, FW 9.60 PS5 Pro): the 2.16.1
+  // assumption that DIRECT sceKernel* linkage made this read ptrace-free
+  // is FALSE on FW 9.60 — Sony's caller-pid check makes the direct
+  // pointers "wedge" (return 0), so hw_temps_get_text falls back to
+  // ptrace-attaching SceShellUI (see payload/src/hw_info.c:~312). An
+  // immediate-on-mount read plus a 5s tick then ptraced ShellUI
+  // repeatedly, which dropped the payload listener — symptom: "each
+  // time I open Hardware the helper disconnects." Auto-polling a read
+  // that *might* ptrace is unsafe on any firmware we can't vet ahead of
+  // time, so we gate it behind an explicit user click instead. The
+  // ptrace-free reads (power = sysctl uptime/loadavg, storage = statfs,
+  // info = in-process dlsym) keep their safe 5s auto-poll above.
 
   return (
     <div className="p-6">
@@ -330,18 +317,37 @@ export default function HardwareScreen() {
         description={tr(
           "hardware_description",
           undefined,
-          "System info, uptime, storage, AND live temperatures / clock / power for the PS5 — auto-refreshed every 5 seconds while the payload is connected and this tab is visible. Click Read sensors for an immediate one-off read.",
+          "System info, uptime and storage auto-refresh every 5 seconds while the helper is connected. Live temperatures, clock and power are read on demand — click Read sensors. (On some firmware, e.g. FW 9.60, reading sensors briefly accesses a system process and can momentarily affect the PS5 UI.)",
         )}
         right={
-          <Button
-            variant="secondary"
-            size="sm"
-            leftIcon={<RefreshCw size={12} />}
-            onClick={refresh}
-            disabled={loading || !host?.trim() || payloadStatus !== "up"}
-          >
-            {tr("refresh", undefined, "Refresh")}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              leftIcon={
+                sensorLoading ? (
+                  <Loader2 size={12} className="animate-spin" />
+                ) : (
+                  <Thermometer size={12} />
+                )
+              }
+              onClick={readSensors}
+              disabled={
+                sensorLoading || !host?.trim() || payloadStatus !== "up"
+              }
+            >
+              {tr("hardware_read_sensors", undefined, "Read sensors")}
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              leftIcon={<RefreshCw size={12} />}
+              onClick={refresh}
+              disabled={loading || !host?.trim() || payloadStatus !== "up"}
+            >
+              {tr("refresh", undefined, "Refresh")}
+            </Button>
+          </div>
         }
       />
 
@@ -383,13 +389,19 @@ export default function HardwareScreen() {
               label={tr("hardware_label_cpu", "CPU")}
               value={formatTemp(temps?.cpu_temp ?? 0)}
               hint={
-                temps && temps.cpu_temp === 0
+                !temps
                   ? tr(
-                      "hw_sensor_unavailable",
+                      "hw_sensor_on_demand",
                       undefined,
-                      "Sensor reading unavailable right now",
+                      "Click Read sensors for a live reading",
                     )
-                  : undefined
+                  : temps.cpu_temp === 0
+                    ? tr(
+                        "hw_sensor_unavailable",
+                        undefined,
+                        "Sensor reading unavailable right now",
+                      )
+                    : undefined
               }
             />
             <StatRow

@@ -270,6 +270,46 @@ async function main() {
       fail('ps5 volumes', e.message);
     }
 
+    // ── 2c. Live sensors (HW_TEMPS) — must not hang or kill the payload ──
+    // Regression guard for the "open System→Hardware and the helper
+    // disconnects" bug: a sensor read used to hang the payload (ptrace
+    // ShellUI on FW 5.10, or the direct power API on FW 9.60) and drop the
+    // connection. This check asserts the read (a) returns fast, (b) reports
+    // physically plausible values — never the old "26747 °C" garbage — and
+    // (c) leaves the payload alive afterward (status still answers).
+    try {
+      const t0 = Date.now();
+      const temps = await getJson(`${opts.engineUrl}/api/ps5/hw/temps?addr=${encodeURIComponent(ps5MgmtAddr)}`);
+      const elapsed = Date.now() - t0;
+      const inRange = (v, lo, hi) => Number.isFinite(v) && v >= lo && v <= hi;
+      const okShape = temps && typeof temps === 'object' && !temps.error;
+      // 0 = "unavailable" is allowed for every field (and expected for
+      // soc_power_mw, which the fixed payload no longer reads). Non-zero
+      // values must sit inside the physical bounds the payload/engine clamp to.
+      const tempsOk = okShape
+        && inRange(temps.cpu_temp ?? 0, 0, 150)
+        && inRange(temps.soc_temp ?? 0, 0, 150)
+        && inRange(temps.cpu_freq_mhz ?? 0, 0, 6000);
+      if (tempsOk && elapsed < 4000) {
+        pass(`ps5 hw temps (cpu ${temps.cpu_temp}°C, soc ${temps.soc_temp}°C, `
+          + `clk ${temps.cpu_freq_mhz}MHz, pwr ${temps.soc_power_mw}mW, ${elapsed}ms)`);
+      } else if (!tempsOk) {
+        fail('ps5 hw temps', `out-of-range/garbage reading: ${JSON.stringify(temps)}`);
+      } else {
+        fail('ps5 hw temps', `read took ${elapsed}ms (>4s) — sensor path may be hanging`);
+      }
+      // The real failure mode was the payload DYING on a sensor read.
+      // Confirm it's still serving requests.
+      const after = await getJson(`${opts.engineUrl}/api/ps5/status?addr=${encodeURIComponent(ps5MgmtAddr)}`);
+      if (after && typeof after === 'object' && !after.error) {
+        pass('ps5 alive after sensor read');
+      } else {
+        fail('ps5 alive after sensor read', `payload not responding: ${JSON.stringify(after)}`);
+      }
+    } catch (e) {
+      fail('ps5 hw temps', e.message);
+    }
+
     // ── 3. Single-file transfer (256 KiB) ────────────────────────────────
     const singleFile = await makeSingleFile(tmpDir, 'smoke-single.bin', 256 * 1024);
     try {

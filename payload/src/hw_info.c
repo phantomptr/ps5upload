@@ -260,7 +260,23 @@ int hw_info_get_text(char *out, size_t out_cap, size_t *out_written,
     return 0;
 }
 
-/* ── HW_TEMPS: live sensors with 1s cache + 5s throttle on power ── */
+/* ── HW_TEMPS: live sensors with a 1s read cache ────────────────── */
+
+/* Physical sanity bounds. Every sensor value is validated against these
+ * before it's reported, regardless of source. Background (FW 5.10 phat,
+ * CFI-1115A, hardware-confirmed): the Sony direct sensor APIs return
+ * nothing usable on some firmware, and the non-Sony fallbacks we reach
+ * for then (sysctl thermal zones, machdep.tsc_freq) DO exist on the
+ * underlying FreeBSD but return values that are not real PS5 sensor
+ * readings — e.g. dev.cpu.0.temperature came back as ~270202, which the
+ * tenths-of-kelvin conversion turned into "26747 °C". An out-of-range
+ * value is worse than no value (the UI happily renders "26747 °C"), so
+ * anything outside these bounds is dropped and the field reports 0 =
+ * "unavailable". A PS5 (incl. Pro, Zen 2 @ up to 3.85 GHz) never
+ * legitimately exceeds these. */
+#define HW_TEMP_MIN_C        1      /* >0; 0 already means "no reading" */
+#define HW_TEMP_MAX_C        150    /* CPUs thermal-throttle ~100 °C */
+#define HW_CPU_FREQ_MAX_MHZ  6000   /* generous ceiling over any console CPU */
 
 typedef struct {
     time_t   last_read;
@@ -273,10 +289,41 @@ typedef struct {
 
 static pthread_mutex_t g_temps_lock = PTHREAD_MUTEX_INITIALIZER;
 static hw_temps_cache_t g_temps_cache = {0};
-/* Power API is measurably heavier than the others; throttle further. */
-static time_t   g_last_power_read = 0;
-static uint32_t g_last_power_mw   = 0;
 
+/* ── Live-sensor read: DIRECT Sony APIs only, on the request thread ──
+ *
+ * History (all hardware-confirmed) that shaped this:
+ *
+ *  1. The old ptrace-via-SceShellUI fallback (reached when a direct call
+ *     returned 0) HUNG on FW 5.10 (phat, CFI-1115A). Combined with the
+ *     desktop's old 5-second sensor auto-poll, every open of the Hardware
+ *     tab fired a read that hung the mgmt connection and ultimately
+ *     dropped the payload — the reported "the helper disconnects every
+ *     time I open Hardware". That fallback is GONE; sensors are read only
+ *     via the direct sceKernel* exports below.
+ *
+ *  2. The non-Sony fallbacks the old code then reached for returned
+ *     GARBAGE on PS5: sysctl dev.cpu.0.temperature read ~270202 →
+ *     "26747 °C", and the direct cpu-freq read (guarded only by hz>0)
+ *     surfaced a ~5.2e13 MHz clock. Every value is now range-checked
+ *     against the HW_* physical bounds; anything out of range reports 0 =
+ *     "unavailable", which is honest rather than fabricated. The sysctl
+ *     thermal-zone temperature fallback is removed entirely.
+ *
+ *  3. These reads are intentionally INLINE on the mgmt request thread.
+ *     An earlier attempt moved them onto a detached helper thread (to add
+ *     a watchdog around a possibly-hanging call); on this platform the
+ *     Sony sensor APIs SIGSEGV the whole process when invoked from a
+ *     freshly-spawned pthread (even with a matched 512 KiB stack), so the
+ *     helper thread was strictly worse — it crashed the payload on the
+ *     first read of every console. Inline on the mgmt worker (which the
+ *     Sony runtime set up) is the only path that reads cleanly. The
+ *     companion desktop change makes this safe to keep simple: live
+ *     sensors are no longer auto-polled, only read on an explicit
+ *     "Read sensors" click, so a read can never fire unattended.
+ *
+ * 1-second cache so a double-click / rapid re-read coalesces into one
+ * round of syscalls. */
 int hw_temps_get_text(char *out, size_t out_cap, size_t *out_written,
                       const char **err_reason_out) {
     if (!out || out_cap < 256) {
@@ -297,118 +344,53 @@ int hw_temps_get_text(char *out, size_t out_cap, size_t *out_written,
         cpu_freq_mhz = g_temps_cache.cpu_freq_mhz;
         power_mw     = g_temps_cache.power_mw;
     } else {
-        /* Sensor read ordering (2.16.1+): try DIRECT first, fall back to
-         * SceShellUI RPC only if the direct call returned no usable value.
-         *
-         * Direct linkage works now because the payload links `-lkernel_sys`
-         * (Makefile, 2.16.1) so sceKernelGetCpuTemperature et al. resolve at
-         * load time via DT_NEEDED → libkernel_sys.sprx. The bare
-         * `dlsym(RTLD_DEFAULT, "sceKernelGetCpuTemperature")` path fails on
-         * FW points where libkernel exports NID-only; the link-time NID
-         * resolution covers that gap — direct calls work without any ptrace
-         * dance, which removes the ShellUI-freeze risk entirely.
-         *
-         * The SceShellUI RPC path used to be the only mechanism because the
-         * dlsym-resolved pointers wedged on FW 9.60 (Sony's caller-pid check),
-         * but the RPC ptrace-attaches to ShellUI, which destabilises the
-         * console — symptom: clicking "Read sensors" on the Hardware tab
-         * briefly blanks the screen and rare power-off. We now reach for it
-         * only when direct returns 0 / out-of-range. */
-        hw_resolve_once();
         int t = 0;
-        if (g_hw.cpu_temp && g_hw.cpu_temp(&t) == 0 && t > 0 && t < 200) {
+        if (g_hw.cpu_temp && g_hw.cpu_temp(&t) == 0 &&
+            t >= HW_TEMP_MIN_C && t <= HW_TEMP_MAX_C) {
             cpu_temp = t;
         }
         t = 0;
-        if (g_hw.soc_temp && g_hw.soc_temp(0, &t) == 0 && t > 0 && t < 200) {
+        if (g_hw.soc_temp && g_hw.soc_temp(0, &t) == 0 &&
+            t >= HW_TEMP_MIN_C && t <= HW_TEMP_MAX_C) {
             soc_temp = t;
         }
         if (g_hw.cpu_freq) {
             long hz = g_hw.cpu_freq();
-            if (hz > 0) cpu_freq_mhz = hz / (1000L * 1000L);
+            long mhz = (hz > 0) ? hz / (1000L * 1000L) : 0;
+            /* Upper-bound the result: on FW where the direct call returns
+             * a garbage value (FW 5.10 phat returned ~5.2e13 MHz) an
+             * `hz > 0`-only guard would let it straight through. */
+            if (mhz > 0 && mhz <= HW_CPU_FREQ_MAX_MHZ) cpu_freq_mhz = mhz;
         }
-
-        /* Ptrace-via-ShellUI fallback. Reached only if a direct call returned
-         * an unusable value AND the ShellUI primitive is actually available.
-         * Init is idempotent. We still re-check ready() between sub-calls —
-         * shellui_rpc.c nulls g_shellui_pid on a double-attach failure
-         * (happens during ShellUI respawn), and without the re-check the
-         * subsequent reads would each burn ~30 ms on a known-dead pid. */
-        if (cpu_temp == 0 || soc_temp == 0 || cpu_freq_mhz == 0) {
-            (void)shellui_rpc_init();
-            if (shellui_rpc_ready()) {
-                if (cpu_temp == 0) {
-                    int rt = 0;
-                    if (shellui_rpc_get_cpu_temp(&rt) == 0 && rt > 0 && rt < 200) {
-                        cpu_temp = rt;
-                    }
-                }
-                if (soc_temp == 0 && shellui_rpc_ready()) {
-                    int rt = 0;
-                    if (shellui_rpc_get_soc_temp(&rt) == 0 && rt > 0 && rt < 200) {
-                        soc_temp = rt;
-                    }
-                }
-                if (cpu_freq_mhz == 0 && shellui_rpc_ready()) {
-                    long hz = 0;
-                    if (shellui_rpc_get_cpu_freq_hz(&hz) == 0 && hz > 0) {
-                        cpu_freq_mhz = hz / (1000L * 1000L);
-                    }
-                }
-            }
-        }
-        (void)g_hw.soc_power;
-
-        /* CPU frequency via kernel TSC — fallback when neither RPC
-         * nor direct call returned. */
+        /* CPU frequency via kernel TSC — fallback when the direct call
+         * gave nothing sane. Pure sysctl, bounded the same way. */
         if (cpu_freq_mhz <= 0) {
             uint64_t tsc = 0;
             if (sysctl_uint64("machdep.tsc_freq", &tsc) == 0 && tsc > 0) {
-                cpu_freq_mhz = (long)(tsc / 1000000ULL);
+                long mhz = (long)(tsc / 1000000ULL);
+                if (mhz > 0 && mhz <= HW_CPU_FREQ_MAX_MHZ) cpu_freq_mhz = mhz;
             }
         }
+        /* SoC power is intentionally NOT read. The direct
+         * sceKernelGetSocPowerConsumption export HANGS on FW 9.60 (PS5
+         * Pro, CFI-7019, hardware-confirmed) — the call never returns, the
+         * mgmt thread that ran it is lost, and the payload dies ("the
+         * helper disconnects"). It happens to return on the phat FW 5.10
+         * (~18 W), but we can't tell a safe firmware from a hanging one
+         * ahead of time, and the alternative (the ptrace-via-ShellUI RPC
+         * the old code used for power) hangs on the phat instead — so
+         * NEITHER path is safe everywhere. Power draw is the least useful
+         * of the live sensors; reporting it as 0 = "unavailable" is the
+         * only option that can't take the connection down. Temps + CPU
+         * clock above come from direct calls that return cleanly on both
+         * consoles. */
+        power_mw = 0;
 
-        /* SoC power — routed through the same RPC. 5-second
-         * file-scope throttle on top of the 1-second sensor cache
-         * because each RPC call is a full ptrace attach/detach
-         * round-trip (~tens of ms) which is heavier than the temp
-         * reads. */
-        if (shellui_rpc_ready() && (now - g_last_power_read) >= 5) {
-            uint32_t pw = 0;
-            if (shellui_rpc_get_soc_power_mw(&pw) == 0 && pw < 500000u) {
-                g_last_power_mw = pw;
-            }
-            g_last_power_read = now;
-        }
-        power_mw = g_last_power_mw;
-        (void)g_hw.soc_power;
-
-        /* Sysctl-based temperature fallbacks. None of these are
-         * documented to work on PS5 specifically; if any returns
-         * non-zero we use it. Values on FreeBSD are tenths of a
-         * kelvin; we convert back to celsius. */
-        if (cpu_temp == 0) {
-            int tz = 0;
-            if (sysctl_int("dev.cpu.0.temperature", &tz) == 0 && tz > 0) {
-                cpu_temp = (tz - 2732) / 10;
-            } else if (sysctl_int("hw.acpi.thermal.tz0.temperature", &tz) == 0 && tz > 0) {
-                cpu_temp = (tz - 2732) / 10;
-            }
-        }
-        if (soc_temp == 0) {
-            int tz = 0;
-            if (sysctl_int("dev.cpu.1.temperature", &tz) == 0 && tz > 0) {
-                soc_temp = (tz - 2732) / 10;
-            } else if (sysctl_int("hw.acpi.thermal.tz1.temperature", &tz) == 0 && tz > 0) {
-                soc_temp = (tz - 2732) / 10;
-            }
-        }
-
-        g_temps_cache.last_read    = now;
         g_temps_cache.cpu_temp     = cpu_temp;
         g_temps_cache.soc_temp     = soc_temp;
         g_temps_cache.cpu_freq_mhz = cpu_freq_mhz;
         g_temps_cache.power_mw     = power_mw;
+        g_temps_cache.last_read    = now;
         g_temps_cache.valid        = 1;
     }
     pthread_mutex_unlock(&g_temps_lock);

@@ -3228,6 +3228,15 @@ static int build_manifest_index(const char *blob, size_t blob_len,
     if (expected_count == 0 || expected_count > PS5UPLOAD2_MAX_MANIFEST_FILES) {
         return -1;
     }
+    /* `expected_count` (the client's `file_count`) sizes the calloc below.
+     * The smallest possible manifest entry is several bytes of JSON, so a
+     * blob of length `blob_len` cannot describe more than `blob_len`
+     * entries — a count larger than that is malformed (or a crafted
+     * "tiny body, huge count" request aimed at reserving 40 MB). Reject it
+     * so the allocation stays proportional to data actually transmitted. */
+    if (blob_len > 0 && expected_count > (uint64_t)blob_len) {
+        return -1;
+    }
 
     p = strstr(blob, "\"files\":");
     if (!p) return -1;
@@ -9490,11 +9499,27 @@ typedef struct {
     long long size;
 } index_entry_t;
 
+/* Hard ceilings on the file-search index. The walk roots are
+ * client-supplied (INDEX_START body) and the walk stores one strdup'd
+ * path per regular file found, so on a populated game drive (the
+ * `validate-xl` profile alone is 200k files) an uncapped index would
+ * grow to hundreds of MB and OOM the payload — the one growable
+ * structure in the server that lacked a cap. We bound BOTH the entry
+ * count and the cumulative bytes (paths vary in length, so a count cap
+ * alone doesn't bound memory); whichever trips first stops the walk and
+ * marks the index truncated. ~200k entries + 32 MiB of path text is a
+ * generous ceiling for a search index while staying well within the
+ * payload's memory budget. */
+#define INDEX_MAX_ENTRIES 200000u
+#define INDEX_MAX_BYTES   (32u * 1024u * 1024u)
+
 static pthread_mutex_t g_index_lock = PTHREAD_MUTEX_INITIALIZER;
 static int g_index_phase = 0;  /* 0=idle, 1=building, 2=ready */
 static index_entry_t *g_index_entries = NULL;
 static size_t g_index_count = 0;
 static size_t g_index_cap = 0;
+static size_t g_index_bytes = 0;     /* approx heap used by entries + paths */
+static int g_index_truncated = 0;    /* hit INDEX_MAX_* and stopped early */
 static int g_index_cancel = 0;
 static time_t g_index_started_at = 0;
 static time_t g_index_completed_at = 0;
@@ -9511,30 +9536,42 @@ static void index_clear_locked(void) {
     }
     g_index_count = 0;
     g_index_cap = 0;
+    g_index_bytes = 0;
+    g_index_truncated = 0;
 }
 
+/* Returns 0 if the entry was stored, -1 if the index is full (caller
+ * stops walking). On a full index we set g_index_truncated rather than
+ * growing without limit. */
 static int index_push_locked(const char *path, long long size) {
+    if (g_index_count >= INDEX_MAX_ENTRIES || g_index_bytes >= INDEX_MAX_BYTES) {
+        g_index_truncated = 1;
+        return -1;
+    }
     if (g_index_count >= g_index_cap) {
         size_t new_cap = g_index_cap == 0 ? 4096 : g_index_cap * 2;
+        if (new_cap > INDEX_MAX_ENTRIES) new_cap = INDEX_MAX_ENTRIES;
         index_entry_t *next =
             realloc(g_index_entries, new_cap * sizeof(index_entry_t));
         if (!next) return -1;
         g_index_entries = next;
         g_index_cap = new_cap;
     }
-    g_index_entries[g_index_count].path = strdup(path);
-    if (!g_index_entries[g_index_count].path) return -1;
+    char *dup = strdup(path);
+    if (!dup) return -1;
+    g_index_entries[g_index_count].path = dup;
     g_index_entries[g_index_count].size = size;
     g_index_count++;
+    g_index_bytes += strlen(dup) + 1 + sizeof(index_entry_t);
     return 0;
 }
 
 static void index_walk(const char *root, int depth) {
     if (depth > 10) return;
     pthread_mutex_lock(&g_index_lock);
-    int cancel = g_index_cancel;
+    int stop = g_index_cancel || g_index_truncated;
     pthread_mutex_unlock(&g_index_lock);
-    if (cancel) return;
+    if (stop) return;
     DIR *dp = opendir(root);
     if (!dp) return;
     struct dirent *e;
@@ -9548,8 +9585,11 @@ static void index_walk(const char *root, int depth) {
             index_walk(path, depth + 1);
         } else if (S_ISREG(st.st_mode)) {
             pthread_mutex_lock(&g_index_lock);
-            index_push_locked(path, (long long)st.st_size);
+            int rc = index_push_locked(path, (long long)st.st_size);
             pthread_mutex_unlock(&g_index_lock);
+            /* Index full (cap or byte budget hit) — stop this directory
+             * scan; the truncated flag makes deeper recursions bail too. */
+            if (rc != 0) break;
         }
     }
     closedir(dp);
@@ -9690,11 +9730,12 @@ static int handle_index_status(runtime_state_t *state, int client_fd,
     pthread_mutex_lock(&g_index_lock);
     char body[256];
     int n = snprintf(body, sizeof(body),
-                     "{\"phase\":\"%s\",\"files\":%zu,\"started_at\":%lld,"
-                     "\"completed_at\":%lld}",
+                     "{\"phase\":\"%s\",\"files\":%zu,\"truncated\":%s,"
+                     "\"started_at\":%lld,\"completed_at\":%lld}",
                      g_index_phase == 0 ? "idle" :
                      g_index_phase == 1 ? "building" : "ready",
                      g_index_count,
+                     g_index_truncated ? "true" : "false",
                      (long long)g_index_started_at,
                      (long long)g_index_completed_at);
     pthread_mutex_unlock(&g_index_lock);

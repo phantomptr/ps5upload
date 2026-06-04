@@ -140,13 +140,62 @@ pub fn hw_info(addr: &str) -> Result<HwInfo> {
     })
 }
 
-/// Live sensor snapshot. Called every 5s from the Hardware tab's
-/// auto-refresh timer. The payload's 1s cache + 5s power throttle
-/// keeps this safe to poll even at higher rates.
+/// Physical sanity bounds for live sensor values, mirrored from the
+/// payload (`payload/src/hw_info.c`: `HW_TEMP_MIN_C` / `HW_TEMP_MAX_C` /
+/// `HW_CPU_FREQ_MAX_MHZ`, plus the `< 500000` power clamp).
+///
+/// The current payload already drops out-of-range reads, but we
+/// re-validate here as defense-in-depth: a console still running an
+/// OLDER payload can emit garbage — e.g. `cpu_temp=26747` (a raw FreeBSD
+/// thermal-zone value the old sysctl fallback mis-converted) or a
+/// `cpu_freq_mhz` near 5.2e13 (an unbounded direct read on FW 5.10) —
+/// and the UI must never render those. Out-of-range ⇒ 0 = "unavailable",
+/// matching the payload's contract that 0 means "no usable reading".
+pub const SENSOR_TEMP_MIN_C: i32 = 1;
+pub const SENSOR_TEMP_MAX_C: i32 = 150;
+pub const SENSOR_CPU_FREQ_MAX_MHZ: i64 = 6000;
+pub const SENSOR_POWER_MAX_MW: u32 = 500_000;
+
+/// Clamp each sensor field to its physical range, zeroing anything
+/// implausible. Pure — unit-tested below.
+fn sanitize_temps(mut t: HwTemps) -> HwTemps {
+    if !(SENSOR_TEMP_MIN_C..=SENSOR_TEMP_MAX_C).contains(&t.cpu_temp) {
+        t.cpu_temp = 0;
+    }
+    if !(SENSOR_TEMP_MIN_C..=SENSOR_TEMP_MAX_C).contains(&t.soc_temp) {
+        t.soc_temp = 0;
+    }
+    if !(0..=SENSOR_CPU_FREQ_MAX_MHZ).contains(&t.cpu_freq_mhz) {
+        t.cpu_freq_mhz = 0;
+    }
+    if !(0..=SENSOR_CPU_FREQ_MAX_MHZ).contains(&t.soc_clock_mhz) {
+        t.soc_clock_mhz = 0;
+    }
+    if t.soc_power_mw > SENSOR_POWER_MAX_MW {
+        t.soc_power_mw = 0;
+    }
+    t
+}
+
+/// Live sensor snapshot. Auto-polled every 5s by the Dashboard (and read
+/// on demand from the Hardware tab). The payload reads CPU/SoC temp + CPU
+/// clock via direct Sony APIs only (no ptrace, no auto-fired power read —
+/// `sceKernelGetSocPowerConsumption` hangs the payload on FW 9.60, so
+/// `soc_power_mw` is intentionally 0); see `payload/src/hw_info.c`. Every
+/// value is re-validated through [`sanitize_temps`] so a stale payload
+/// can't surface a nonsense reading.
 pub fn hw_temps(addr: &str) -> Result<HwTemps> {
     let body = round_trip(addr, FrameType::HwTemps, FrameType::HwTempsAck, "HW_TEMPS")?;
-    let get = parse_kv(&body);
-    Ok(HwTemps {
+    Ok(sanitize_temps(parse_hw_temps(&body)))
+}
+
+/// Pure parse of the `key=value` HW_TEMPS body into the typed struct,
+/// split out from [`hw_temps`] so the wire-format decode is unit-testable
+/// without a live payload. Bounds are applied separately by
+/// [`sanitize_temps`].
+fn parse_hw_temps(body: &[u8]) -> HwTemps {
+    let get = parse_kv(body);
+    HwTemps {
         cpu_temp: get("cpu_temp").and_then(|v| v.parse().ok()).unwrap_or(0),
         soc_temp: get("soc_temp").and_then(|v| v.parse().ok()).unwrap_or(0),
         cpu_freq_mhz: get("cpu_freq_mhz")
@@ -158,7 +207,7 @@ pub fn hw_temps(addr: &str) -> Result<HwTemps> {
         soc_power_mw: get("soc_power_mw")
             .and_then(|v| v.parse().ok())
             .unwrap_or(0),
-    })
+    }
 }
 
 pub fn hw_power(addr: &str) -> Result<HwPower> {
@@ -434,6 +483,80 @@ mod tests {
         let get = parse_kv(body);
         assert_eq!(get("cpu_temp"), Some("65"));
         assert_eq!(get("soc_power_mw"), Some("85000"));
+    }
+
+    #[test]
+    fn parse_hw_temps_decodes_plausible_reading() {
+        // A normal reading from a fixed payload (PS5 Pro 9.60): power is 0
+        // by design (the direct power API hangs that firmware), everything
+        // else is in range and must pass through untouched.
+        let body = b"cpu_temp=36\nsoc_temp=34\ncpu_freq_mhz=800\nsoc_clock_mhz=0\nsoc_power_mw=0\n";
+        let t = sanitize_temps(parse_hw_temps(body));
+        assert_eq!(t.cpu_temp, 36);
+        assert_eq!(t.soc_temp, 34);
+        assert_eq!(t.cpu_freq_mhz, 800);
+        assert_eq!(t.soc_power_mw, 0);
+    }
+
+    #[test]
+    fn sanitize_zeros_old_payload_garbage_temps() {
+        // The exact garbage an OLD payload emitted on FW 5.10: the sysctl
+        // thermal-zone fallback's raw value rendered as "26747 °C". Must be
+        // dropped to 0 = "unavailable", never shown to the user.
+        let body = b"cpu_temp=26747\nsoc_temp=44000\ncpu_freq_mhz=800\nsoc_clock_mhz=0\nsoc_power_mw=0\n";
+        let t = sanitize_temps(parse_hw_temps(body));
+        assert_eq!(t.cpu_temp, 0, "26747 °C must be rejected");
+        assert_eq!(t.soc_temp, 0, "44000 °C must be rejected");
+        assert_eq!(t.cpu_freq_mhz, 800, "an in-range clock survives");
+    }
+
+    #[test]
+    fn sanitize_zeros_garbage_cpu_freq() {
+        // The unbounded direct cpu-freq read on FW 5.10 surfaced ~5.2e13 MHz.
+        let body = b"cpu_temp=45\nsoc_temp=40\ncpu_freq_mhz=51874615006914\nsoc_clock_mhz=0\nsoc_power_mw=0\n";
+        let t = sanitize_temps(parse_hw_temps(body));
+        assert_eq!(t.cpu_temp, 45);
+        assert_eq!(t.cpu_freq_mhz, 0, "5.2e13 MHz must be rejected");
+    }
+
+    #[test]
+    fn sanitize_clamps_boundary_values() {
+        // Exactly-at-bound values are valid; one past is not.
+        let lo = sanitize_temps(HwTemps {
+            cpu_temp: SENSOR_TEMP_MIN_C,
+            soc_temp: SENSOR_TEMP_MAX_C,
+            cpu_freq_mhz: SENSOR_CPU_FREQ_MAX_MHZ,
+            soc_clock_mhz: 0,
+            soc_power_mw: SENSOR_POWER_MAX_MW,
+        });
+        assert_eq!(lo.cpu_temp, SENSOR_TEMP_MIN_C);
+        assert_eq!(lo.soc_temp, SENSOR_TEMP_MAX_C);
+        assert_eq!(lo.cpu_freq_mhz, SENSOR_CPU_FREQ_MAX_MHZ);
+        assert_eq!(lo.soc_power_mw, SENSOR_POWER_MAX_MW);
+
+        let hi = sanitize_temps(HwTemps {
+            cpu_temp: SENSOR_TEMP_MAX_C + 1,
+            soc_temp: 0, // 0 = "no reading"; stays 0 (it's below MIN, already unavailable)
+            cpu_freq_mhz: SENSOR_CPU_FREQ_MAX_MHZ + 1,
+            soc_clock_mhz: -1,
+            soc_power_mw: SENSOR_POWER_MAX_MW + 1,
+        });
+        assert_eq!(hi.cpu_temp, 0, "one above max temp is rejected");
+        assert_eq!(hi.soc_temp, 0);
+        assert_eq!(hi.cpu_freq_mhz, 0, "one above max freq is rejected");
+        assert_eq!(hi.soc_clock_mhz, 0, "negative clock is rejected");
+        assert_eq!(hi.soc_power_mw, 0, "one above max power is rejected");
+    }
+
+    #[test]
+    fn sanitize_passes_unavailable_zero_through() {
+        // All-zero (every sensor unavailable) is a valid state and must
+        // round-trip as zeros, not be mistaken for garbage.
+        let t = sanitize_temps(HwTemps::default());
+        assert_eq!(t.cpu_temp, 0);
+        assert_eq!(t.soc_temp, 0);
+        assert_eq!(t.cpu_freq_mhz, 0);
+        assert_eq!(t.soc_power_mw, 0);
     }
 
     #[test]

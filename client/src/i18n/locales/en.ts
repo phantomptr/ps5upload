@@ -168,8 +168,9 @@ connection_step3_title: "You're ready to upload",
 
 // Hardware screen
 hardware_title: "Hardware",
-hardware_description: "Live system info, temperatures, and uptime for the PS5. Auto-refreshes every 5 seconds while the payload is connected.",
+hardware_description: "System info, uptime and storage auto-refresh every 5 seconds while the helper is connected. Live temperatures, clock and power are read on demand — click Read sensors. (On some firmware, e.g. FW 9.60, reading sensors briefly accesses a system process and can momentarily affect the PS5 UI.)",
 hardware_read_error: "Couldn't read hardware info",
+hardware_read_sensors: "Read sensors",
 hardware_temperatures: "Temperatures",
 hardware_performance: "Performance",
 hardware_uptime: "Uptime",
@@ -248,6 +249,7 @@ connection_go_upload: "Go to Upload",
 
 // Hardware screen — sensor row labels and hints
 hw_sensor_unavailable: "Sensor reading unavailable right now",
+hw_sensor_on_demand: "Click Read sensors for a live reading",
 hw_cpu_freq: "CPU frequency",
 hw_from_kernel_tsc: "From kernel TSC",
 hw_soc_power: "SoC power draw",
