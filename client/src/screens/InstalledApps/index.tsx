@@ -133,7 +133,13 @@ function Cover({ host, title }: { host: string; title: InstalledTitle }) {
         <img
           src={appIconUrl(transferAddr(host), title.titleId)}
           alt=""
-          className="h-full w-full object-cover"
+          // `contain`, not `cover`: PS4/PS5 cover art isn't always square
+          // (some titles ship wide key-art), and `cover` was cropping the
+          // top/bottom off those — logos like "ASTRO BOT" lost their lower
+          // half. `contain` guarantees the whole image is visible; square
+          // icons still fill the square box edge-to-edge, and the neutral
+          // surface backs any letterbox margins on non-square art.
+          className="h-full w-full object-contain"
           loading="lazy"
           onError={() => setFailed(true)}
         />

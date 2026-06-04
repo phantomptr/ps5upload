@@ -878,9 +878,22 @@ pub async fn ps5_hw_info(addr: Option<String>) -> Result<JsonValue, String> {
     get_json(&addr_url("/api/ps5/hw/info", addr.as_deref())).await
 }
 
+/// `extended = Some(true)` requests the on-demand telemetry (SoC power /
+/// CPU usage / fan duty / product shape) used by the explicit "Read
+/// sensors" click. The Dashboard's auto-poll omits it (or passes false),
+/// so its 5 s tick only ever triggers the basic, always-safe read.
 #[tauri::command]
-pub async fn ps5_hw_temps(addr: Option<String>) -> Result<JsonValue, String> {
-    get_json(&addr_url("/api/ps5/hw/temps", addr.as_deref())).await
+pub async fn ps5_hw_temps(
+    addr: Option<String>,
+    extended: Option<bool>,
+) -> Result<JsonValue, String> {
+    let mut url = addr_url("/api/ps5/hw/temps", addr.as_deref());
+    if extended.unwrap_or(false) {
+        let sep = if url.contains('?') { '&' } else { '?' };
+        url.push(sep);
+        url.push_str("extended=1");
+    }
+    get_json(&url).await
 }
 
 #[tauri::command]

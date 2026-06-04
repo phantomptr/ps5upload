@@ -125,7 +125,7 @@ connection_go_upload: "前往上传",
 
 // Hardware
 hardware_title: "硬件",
-hardware_description: "PS5 的实时系统信息、温度和运行时间。Payload 连接时每 5 秒自动刷新。",
+hardware_description: "系统信息、运行时间和存储在 Payload 连接时每 5 秒自动刷新。实时温度和 CPU 频率按需读取——点击 Read sensors。部分固件不提供全部传感器；无法读取的数值会显示为短横线。",
 hardware_read_error: "无法读取硬件信息",
 hardware_temperatures: "温度",
 hardware_performance: "性能",
@@ -662,7 +662,7 @@ nanodns_not_loaded_body:
   "主机上没有 /data/nanodns/nanodns.ini——请从 Payloads 选项卡加载一次 nanoDNS（首次运行时会写入默认配置），然后返回进行编辑。",
 nanodns_dns_howto_title: "将 PS5 的 DNS 指向 nanoDNS",
 nanodns_dns_howto_body:
-  "在 PS5 上：设置 → 网络 → 设置互联网连接 → （你的连接）→ 自定义 → DNS 设置 → 手动，并将主 DNS 设为 {ip}。这需要下方的 bind=0.0.0.0（默认的 127.0.0.1 仅在本地为主机提供服务——对于这种情况，请将主 DNS 设为 127.0.0.1）。",
+  "在 PS5 上：设置 → 网络 → 设置互联网连接 → （你的连接）→ 自定义 → DNS 设置 → 手动，并将主 DNS 设为下方 /data/nanodns/nanodns.ini 中 [general] 部分 bind 设置里的地址——例如，当 bind=127.0.0.1 时，将主 DNS 设为 127.0.0.1。",
 nanodns_save_error: "无法保存",
 nanodns_saved: "已保存 nanoDNS 配置",
 nanodns_saved_body:

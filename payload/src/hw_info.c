@@ -96,7 +96,23 @@ typedef int     (*sceKernelGetCpuTemperature_fn)(int *temperature);
 typedef int     (*sceKernelGetSocSensorTemperature_fn)(int sensor_id, int *temperature);
 typedef long    (*sceKernelGetCpuFrequency_fn)(void);
 typedef size_t  (*sceKernelGetDirectMemorySize_fn)(void);
-typedef int     (*sceKernelGetSocPowerConsumption_fn)(uint32_t *power_mw);
+/* Correct ABI is (uint64_t *out, double reserved) — confirmed against a
+ * working reference impl (Elf Arsenal) that reads this successfully. Our
+ * earlier `(uint32_t *)` declaration was wrong on two counts: the out
+ * pointer is 64-bit (a uint32 target takes an 8-byte write = a 4-byte
+ * stack overflow), and the trailing double arg was missing. That UB is a
+ * strong candidate for the "hang/disconnect" we previously blamed on the
+ * API. Signature fixed; the call stays gated below (see hw_temps_get_text)
+ * pending a hardware retest. */
+typedef int     (*sceKernelGetSocPowerConsumption_fn)(uint64_t *out, double reserved);
+/* Extra telemetry getters, ABI per the Elf Arsenal reference impl. All
+ * three are resolved lazily and called ONLY from the on-demand HW_TEMPS
+ * path (never the always-on HW_INFO poll), so a wedge on an untested SKU
+ * stays a recoverable, user-triggered event rather than dropping the
+ * helper on tab-open. */
+typedef int     (*sceKernelGetBasicProductShape_fn)(int *out);
+typedef int     (*sceKernelGetCpuUsageAll_fn)(int *per_core_pct, int *count_out);
+typedef int     (*sceKernelGetCurrentFanDuty_fn)(uint16_t *out_duty, void *scratch);
 
 typedef struct {
     int   resolved;
@@ -107,6 +123,9 @@ typedef struct {
     sceKernelGetCpuFrequency_fn          cpu_freq;
     sceKernelGetDirectMemorySize_fn      direct_mem;
     sceKernelGetSocPowerConsumption_fn   soc_power;
+    sceKernelGetBasicProductShape_fn     product_shape;
+    sceKernelGetCpuUsageAll_fn           cpu_usage;
+    sceKernelGetCurrentFanDuty_fn        fan_duty;
 } hw_syms_t;
 
 static hw_syms_t g_hw = {0};
@@ -125,6 +144,9 @@ static void hw_resolve_impl(void) {
     g_hw.cpu_freq    = (sceKernelGetCpuFrequency_fn)         dlsym(RTLD_DEFAULT, "sceKernelGetCpuFrequency");
     g_hw.direct_mem  = (sceKernelGetDirectMemorySize_fn)     dlsym(RTLD_DEFAULT, "sceKernelGetDirectMemorySize");
     g_hw.soc_power   = (sceKernelGetSocPowerConsumption_fn)  dlsym(RTLD_DEFAULT, "sceKernelGetSocPowerConsumption");
+    g_hw.product_shape = (sceKernelGetBasicProductShape_fn)  dlsym(RTLD_DEFAULT, "sceKernelGetBasicProductShape");
+    g_hw.cpu_usage   = (sceKernelGetCpuUsageAll_fn)          dlsym(RTLD_DEFAULT, "sceKernelGetCpuUsageAll");
+    g_hw.fan_duty    = (sceKernelGetCurrentFanDuty_fn)       dlsym(RTLD_DEFAULT, "sceKernelGetCurrentFanDuty");
     (void)dlerror();
     g_hw.resolved = 1;
 }
@@ -217,20 +239,26 @@ int hw_info_get_text(char *out, size_t out_cap, size_t *out_written,
         }
         if (physmem == 0) physmem = 16ULL * 1024 * 1024 * 1024;
 
-        /* Precise firmware version via the SDK's kernel-R/W helper
-         * (ps5-payload-sdk 2026-05 update). Returns a packed uint32
-         * encoding Sony's internal version word — the SDK kernel R/W
-         * layer reads it from KERNEL_ADDRESS_DATA_BASE + an offset
-         * that's now maintained for FW 1.00 → 12.xx. Reports 0 when
-         * kernel R/W is unavailable (no kstuff loaded yet, payload
-         * not running with required perms), in which case the
-         * desktop falls back to its kern.version string parser.
+        /* Precise firmware version WAS read here via the SDK's kernel-R/W
+         * helper (kernel_get_fw_version → KERNEL_ADDRESS_DATA_BASE + a
+         * FW-specific offset). Disabled on the always-on Hardware-tab path:
+         * it's the only kernel-memory read in that path, and a kernel read
+         * at a wrong/unmapped offset faults hard and kills the helper —
+         * unlike a Sony-API miss, which just returns an error.
          *
-         * Why bother when we already parse kern.version: the kernel
-         * string only carries the family ("9.60"); this raw word lets
-         * Settings-equivalent precision land (e.g. "9.6010.00")
-         * without scraping psdevwiki at the desktop side. */
-        uint32_t kfw = kernel_get_fw_version();
+         * Symptom: on PS5 Slim (CFI-2000) the Hardware tab dropped the
+         * payload the instant it loaded. The disconnect fix was validated
+         * on Pro 9.60 + phat 5.10, but the Slim is a different SKU/FW the
+         * SDK's data-base offset isn't proven against; the speculative
+         * kernel read is not worth crashing the whole tab for.
+         *
+         * Cost of disabling: none functionally — the desktop already
+         * derives the firmware family from the kern.version string when
+         * this word is 0 (its documented fallback). We report 0 here. If
+         * Settings-grade precision is ever wanted back, do it behind an
+         * explicit, user-initiated read (like the on-demand sensor button),
+         * never on the auto-poll. */
+        uint32_t kfw = 0;
 
         int n = snprintf(g_hwinfo_buf, sizeof(g_hwinfo_buf),
             "model=%s\n"
@@ -278,12 +306,16 @@ int hw_info_get_text(char *out, size_t out_cap, size_t *out_written,
 #define HW_TEMP_MAX_C        150    /* CPUs thermal-throttle ~100 °C */
 #define HW_CPU_FREQ_MAX_MHZ  6000   /* generous ceiling over any console CPU */
 
+/* Cache holds ONLY the basic, auto-poll-safe sensors (CPU/SoC temp +
+ * CPU clock). The extended telemetry (power, CPU usage, fan duty, product
+ * shape) is deliberately NOT cached: it's read fresh on the explicit
+ * "Read sensors" request and must never be served to (or populated by) the
+ * Dashboard's 5 s basic poll. See hw_temps_get_text_ex. */
 typedef struct {
     time_t   last_read;
     int      cpu_temp;
     int      soc_temp;
     long     cpu_freq_mhz;
-    uint32_t power_mw;
     int      valid;
 } hw_temps_cache_t;
 
@@ -324,8 +356,18 @@ static hw_temps_cache_t g_temps_cache = {0};
  *
  * 1-second cache so a double-click / rapid re-read coalesces into one
  * round of syscalls. */
-int hw_temps_get_text(char *out, size_t out_cap, size_t *out_written,
-                      const char **err_reason_out) {
+/* `extended` selects which sensors are read:
+ *   0 = BASIC: CPU temp, SoC temp, CPU clock only. These are the calls
+ *       proven safe on every console, and the only ones the Dashboard's
+ *       5 s auto-poll is allowed to fire. Cached for 1 s.
+ *   1 = EXTENDED: additionally read SoC power, CPU usage, fan duty and
+ *       product shape. These are the newer / historically-risky Sony
+ *       getters; they run ONLY here, behind the explicit "Read sensors"
+ *       click, never on the auto-poll — so a wedge on an untested SKU is
+ *       a recoverable, user-triggered event, not a tab-open disconnect.
+ *       Read fresh every time (not cached). */
+int hw_temps_get_text_ex(int flags, char *out, size_t out_cap,
+                         size_t *out_written, const char **err_reason_out) {
     if (!out || out_cap < 256) {
         if (err_reason_out) *err_reason_out = "hw_temps_buffer_too_small";
         return -1;
@@ -335,24 +377,42 @@ int hw_temps_get_text(char *out, size_t out_cap, size_t *out_written,
     int cpu_temp = 0, soc_temp = 0;
     long cpu_freq_mhz = 0;
     uint32_t power_mw = 0;
+    int cpu_usage_pct = -1, fan_duty_pct = -1, product_shape = -1;
 
+    /* ── Basic sensors (1 s cache; auto-poll-safe) ── */
     pthread_mutex_lock(&g_temps_lock);
     time_t now = time(NULL);
     if (g_temps_cache.valid && (now - g_temps_cache.last_read) < 1) {
         cpu_temp     = g_temps_cache.cpu_temp;
         soc_temp     = g_temps_cache.soc_temp;
         cpu_freq_mhz = g_temps_cache.cpu_freq_mhz;
-        power_mw     = g_temps_cache.power_mw;
     } else {
         int t = 0;
         if (g_hw.cpu_temp && g_hw.cpu_temp(&t) == 0 &&
             t >= HW_TEMP_MIN_C && t <= HW_TEMP_MAX_C) {
             cpu_temp = t;
         }
-        t = 0;
-        if (g_hw.soc_temp && g_hw.soc_temp(0, &t) == 0 &&
-            t >= HW_TEMP_MIN_C && t <= HW_TEMP_MAX_C) {
-            soc_temp = t;
+        /* SoC thermal sensor. Sweep channels 0–7 rather than reading only
+         * channel 0: the canonical SoC junction sensor is channel 0 on the
+         * phat + Pro (hardware-confirmed), but the channel layout isn't
+         * guaranteed across SoC revisions — a Slim or other SKU may surface
+         * its usable reading on a different channel, in which case a
+         * channel-0-only read would report "unavailable" while a real value
+         * sits one channel over. Matches the 0–7 sweep the Elf Arsenal
+         * reference uses. The first in-range channel wins, so on any console
+         * where channel 0 is valid (phat/Pro) the result is byte-identical
+         * to the old code — zero regression — and other SKUs gain coverage.
+         * Same direct API we already call cleanly for channel 0; only the
+         * channel arg varies, and each value is bounds-checked. */
+        if (g_hw.soc_temp) {
+            for (int ch = 0; ch < 8; ch++) {
+                int st = 0;
+                if (g_hw.soc_temp(ch, &st) == 0 &&
+                    st >= HW_TEMP_MIN_C && st <= HW_TEMP_MAX_C) {
+                    soc_temp = st;
+                    break;
+                }
+            }
         }
         if (g_hw.cpu_freq) {
             long hz = g_hw.cpu_freq();
@@ -371,43 +431,124 @@ int hw_temps_get_text(char *out, size_t out_cap, size_t *out_written,
                 if (mhz > 0 && mhz <= HW_CPU_FREQ_MAX_MHZ) cpu_freq_mhz = mhz;
             }
         }
-        /* SoC power is intentionally NOT read. The direct
-         * sceKernelGetSocPowerConsumption export HANGS on FW 9.60 (PS5
-         * Pro, CFI-7019, hardware-confirmed) — the call never returns, the
-         * mgmt thread that ran it is lost, and the payload dies ("the
-         * helper disconnects"). It happens to return on the phat FW 5.10
-         * (~18 W), but we can't tell a safe firmware from a hanging one
-         * ahead of time, and the alternative (the ptrace-via-ShellUI RPC
-         * the old code used for power) hangs on the phat instead — so
-         * NEITHER path is safe everywhere. Power draw is the least useful
-         * of the live sensors; reporting it as 0 = "unavailable" is the
-         * only option that can't take the connection down. Temps + CPU
-         * clock above come from direct calls that return cleanly on both
-         * consoles. */
-        power_mw = 0;
 
         g_temps_cache.cpu_temp     = cpu_temp;
         g_temps_cache.soc_temp     = soc_temp;
         g_temps_cache.cpu_freq_mhz = cpu_freq_mhz;
-        g_temps_cache.power_mw     = power_mw;
         g_temps_cache.last_read    = now;
         g_temps_cache.valid        = 1;
     }
     pthread_mutex_unlock(&g_temps_lock);
+
+    /* ── Extended sensors (on-demand only, read fresh, NEVER cached) ──
+     * Reached only for an explicit "Read sensors" request (flags != 0);
+     * the Dashboard auto-poll calls with flags=0 and never trips these.
+     * Each getter is gated on its own HW_EXT_* bit so a firmware that
+     * wedges on ONE (FW 9.60 Pro hangs on SoC power, HW-confirmed) can be
+     * served the rest by excluding just that bit. */
+    if (flags) {
+        /* SoC power draw. Re-enabled with the CORRECTED ABI
+         *   int sceKernelGetSocPowerConsumption(uint64_t *out, double reserved)
+         * (was wrongly declared (uint32_t *) — a 32-bit out pointer let the
+         * kernel write 8 bytes into a 4-byte stack slot = corruption, and
+         * the missing `double` arg left a garbage register; that UB is the
+         * likely real cause of the "hang/disconnect" we'd blamed on the API
+         * on FW 9.60 Pro).
+         *
+         * Units: the reference impl labels the result a "W guess", so we
+         * normalise defensively. A plausible value <=1000 is taken as
+         * watts → mW; a larger one (<=1e6) is taken as already-mW; anything
+         * else is rejected. The engine + UI re-validate against the
+         * SENSOR_POWER_MAX_MW (=500 W) ceiling, so a wrong guess can only
+         * under-report, never render garbage. */
+        uint64_t soc_pw = 0;
+        if ((flags & HW_EXT_POWER) && g_hw.soc_power &&
+            g_hw.soc_power(&soc_pw, 0.0) == 0 && soc_pw > 0) {
+            if (soc_pw <= 1000ULL) {
+                power_mw = (uint32_t)(soc_pw * 1000ULL);     /* watts → mW */
+            } else if (soc_pw <= 1000000ULL) {
+                power_mw = (uint32_t)soc_pw;                 /* already mW */
+            }                                                /* else implausible → 0 */
+        }
+
+        /* CPU usage — average across the reported cores (0..100 %). The API
+         * fills a per-core array and writes the core count; we pass a
+         * 16-int buffer (PS5 has 8 cores; 16 is generous headroom) and
+         * average only the cores it says it filled. Each per-core value is
+         * range-checked so a stray entry can't skew the mean. */
+        if ((flags & HW_EXT_USAGE) && g_hw.cpu_usage) {
+            int per_core[16] = {0};
+            int core_count = 0;
+            if (g_hw.cpu_usage(per_core, &core_count) == 0 &&
+                core_count > 0 && core_count <= 16) {
+                long sum = 0;
+                int counted = 0;
+                for (int i = 0; i < core_count; i++) {
+                    if (per_core[i] >= 0 && per_core[i] <= 100) {
+                        sum += per_core[i];
+                        counted++;
+                    }
+                }
+                if (counted > 0) cpu_usage_pct = (int)(sum / counted);
+            }
+        }
+
+        /* Current fan duty as a percentage. `scratch` is an opaque buffer
+         * the API writes into; its required size isn't documented, so we
+         * give it a generous zeroed 256-byte buffer (the reference passes a
+         * scratch and reads cleanly — 256 is well above any plausible need).
+         * The raw duty is a uint16; PS5 fan duty is reported either as a
+         * 0..100 percentage or a 0..255 PWM value, so we map >100 down from
+         * the 0..255 scale and clamp. Approximate by design (the exact
+         * scale is the one thing to confirm on hardware). */
+        if ((flags & HW_EXT_FAN) && g_hw.fan_duty) {
+            uint16_t duty = 0;
+            unsigned char scratch[256] = {0};
+            if (g_hw.fan_duty(&duty, scratch) == 0) {
+                int pct = (duty <= 100) ? (int)duty
+                                        : (int)(((int)duty * 100 + 127) / 255);
+                if (pct < 0) pct = 0;
+                if (pct > 100) pct = 100;
+                fan_duty_pct = pct;
+            }
+        }
+
+        /* Basic product shape — a raw Sony enum that distinguishes hardware
+         * families (standard / slim / Pro / devkit …). Reported raw; the
+         * desktop maps the known codes to a label and otherwise shows the
+         * number. The model string (sceKernelGetHwModelName, CFI-xxxx) is
+         * still the primary identifier; this is a cross-check. */
+        if ((flags & HW_EXT_SHAPE) && g_hw.product_shape) {
+            int ps = 0;
+            if (g_hw.product_shape(&ps) == 0) product_shape = ps;
+        }
+    }
 
     int n = snprintf(out, out_cap,
         "cpu_temp=%d\n"
         "soc_temp=%d\n"
         "cpu_freq_mhz=%ld\n"
         "soc_clock_mhz=0\n"
-        "soc_power_mw=%u\n",
-        cpu_temp, soc_temp, cpu_freq_mhz, power_mw);
+        "soc_power_mw=%u\n"
+        "cpu_usage_pct=%d\n"
+        "fan_duty_pct=%d\n"
+        "product_shape=%d\n",
+        cpu_temp, soc_temp, cpu_freq_mhz, power_mw,
+        cpu_usage_pct, fan_duty_pct, product_shape);
     if (n < 0 || (size_t)n >= out_cap) {
         if (err_reason_out) *err_reason_out = "hw_temps_format_failed";
         return -1;
     }
     if (out_written) *out_written = (size_t)n;
     return 0;
+}
+
+/* Back-compat wrapper: the 4-arg form used by the generic
+ * handle_hw_text_op and any other caller reads BASIC sensors only
+ * (flags=0), so it can never fire the on-demand-only getters. */
+int hw_temps_get_text(char *out, size_t out_cap, size_t *out_written,
+                      const char **err_reason_out) {
+    return hw_temps_get_text_ex(0, out, out_cap, out_written, err_reason_out);
 }
 
 /* ── HW_POWER: uptime via kern.boottime (no Sony APIs) ──────────── */

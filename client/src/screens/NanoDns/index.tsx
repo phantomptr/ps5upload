@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Globe, RefreshCw, Save, RotateCcw } from "lucide-react";
 
 import { useConnectionStore } from "../../state/connection";
@@ -12,7 +12,7 @@ import {
 } from "../../components";
 import { humanizePs5Error } from "../../lib/humanizeError";
 import { useTr } from "../../state/lang";
-import { mgmtAddr, hostOf } from "../../lib/addr";
+import { mgmtAddr } from "../../lib/addr";
 import { useStaleHostGuard } from "../../lib/staleHostGuard";
 import { pushNotification } from "../../state/notifications";
 
@@ -94,11 +94,6 @@ export default function NanoDnsScreen() {
     }
   }, [host, text, guard, tr]);
 
-  // The console's own LAN IP — what the user sets as the PS5's primary DNS
-  // when nanoDNS binds 0.0.0.0. (For the default bind=127.0.0.1 it only serves
-  // the console locally, so primary DNS = 127.0.0.1.)
-  const consoleIp = useMemo(() => (host ? hostOf(host) : ""), [host]);
-
   return (
     <div className="flex flex-col gap-5 p-5">
       <PageHeader
@@ -155,8 +150,8 @@ export default function NanoDnsScreen() {
             )}
             detail={tr(
               "nanodns_dns_howto_body",
-              { ip: consoleIp || "127.0.0.1" },
-              `On the PS5: Settings → Network → Set Up Internet → (your connection) → Custom → DNS Settings → Manual, and set Primary DNS to ${consoleIp || "the console's IP"}. That requires bind=0.0.0.0 below (default 127.0.0.1 only serves the console locally — for that, set Primary DNS to 127.0.0.1).`,
+              undefined,
+              "On the PS5: Settings → Network → Set Up Internet → (your connection) → Custom → DNS Settings → Manual. Set Primary DNS to the address from the bind setting in the [general] section of /data/nanodns/nanodns.ini below — for example, with bind=127.0.0.1, set Primary DNS to 127.0.0.1.",
             )}
           />
 

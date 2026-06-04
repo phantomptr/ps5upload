@@ -155,7 +155,8 @@ mod tests {
 
     #[test]
     fn index_status_parses_untruncated() {
-        let body = br#"{"phase":"ready","files":1234,"truncated":false,"started_at":1,"completed_at":2}"#;
+        let body =
+            br#"{"phase":"ready","files":1234,"truncated":false,"started_at":1,"completed_at":2}"#;
         let s: IndexStatus = serde_json::from_slice(body).unwrap();
         assert_eq!(s.files, 1234);
         assert!(!s.truncated);

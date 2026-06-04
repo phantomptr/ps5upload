@@ -3367,7 +3367,10 @@ function LibraryThumb({
         <img
           src={gameIconUrl(`${host}:${PS5_PAYLOAD_PORT}`, entry.path)}
           alt=""
-          className="h-full w-full object-cover"
+          // `contain` so non-square cover art is shown whole rather than
+          // centre-cropped (matches the InstalledApps grid). Square icons
+          // still fill the square thumb edge-to-edge.
+          className="h-full w-full object-contain"
           onError={() => setFailed(true)}
         />
       ) : (

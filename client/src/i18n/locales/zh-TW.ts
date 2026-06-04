@@ -123,7 +123,7 @@ connection_step3_hint: "前往上傳分頁,放入遊戲資料夾、.exfat 映像
 connection_go_upload: "前往上傳",
 
 hardware_title: "硬體",
-hardware_description: "PS5 的即時系統資訊、溫度和執行時間。Payload 連接時每 5 秒自動重新整理。",
+hardware_description: "系統資訊、執行時間和儲存空間在 Payload 連接時每 5 秒自動重新整理。即時溫度和 CPU 頻率採用隨選讀取——點選 Read sensors。部分韌體不提供全部感測器；無法讀取的數值會顯示為短破折號。",
 hardware_read_error: "無法讀取硬體資訊",
 hardware_temperatures: "溫度",
 hardware_performance: "效能",
@@ -656,7 +656,7 @@ nanodns_not_loaded_body:
   "主機上沒有 /data/nanodns/nanodns.ini——請從 Payloads 分頁載入一次 nanoDNS（首次執行時會寫入預設設定），然後返回進行編輯。",
 nanodns_dns_howto_title: "將 PS5 的 DNS 指向 nanoDNS",
 nanodns_dns_howto_body:
-  "在 PS5 上：設定 → 網路 → 設定網際網路連線 → （你的連線）→ 自訂 → DNS 設定 → 手動，並將主要 DNS 設為 {ip}。這需要下方的 bind=0.0.0.0（預設的 127.0.0.1 僅在本機為主機提供服務——若是這種情況，請將主要 DNS 設為 127.0.0.1）。",
+  "在 PS5 上：設定 → 網路 → 設定網際網路連線 → （你的連線）→ 自訂 → DNS 設定 → 手動，並將主要 DNS 設為下方 /data/nanodns/nanodns.ini 中 [general] 區段 bind 設定裡的位址——例如，當 bind=127.0.0.1 時，請將主要 DNS 設為 127.0.0.1。",
 nanodns_save_error: "無法儲存",
 nanodns_saved: "已儲存 nanoDNS 設定",
 nanodns_saved_body:

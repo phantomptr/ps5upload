@@ -894,6 +894,16 @@ struct AddrQuery {
     addr: Option<String>,
 }
 
+/// Query for the HW_TEMPS endpoint. `extended=1` requests the on-demand
+/// telemetry (SoC power / CPU usage / fan duty / product shape); any other
+/// value (or absent) is the basic, auto-poll-safe read.
+#[derive(Deserialize)]
+struct HwTempsQuery {
+    addr: Option<String>,
+    #[serde(default)]
+    extended: Option<u8>,
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 fn parse_or_random_tx_id(hex: Option<&str>) -> anyhow::Result<[u8; 16]> {
@@ -1641,13 +1651,15 @@ async fn ps5_hw_info(
 
 async fn ps5_hw_temps(
     State(state): State<AppState>,
-    Query(q): Query<AddrQuery>,
+    Query(q): Query<HwTempsQuery>,
 ) -> impl IntoResponse {
     let addr = mgmt_addr_or_default(q.addr, &state.default_ps5_addr);
-    let r: Result<HwTemps, anyhow::Error> = tokio::task::spawn_blocking(move || hw_temps(&addr))
-        .await
-        .map_err(anyhow::Error::from)
-        .and_then(|r| r);
+    let extended = q.extended.unwrap_or(0) != 0;
+    let r: Result<HwTemps, anyhow::Error> =
+        tokio::task::spawn_blocking(move || hw_temps(&addr, extended))
+            .await
+            .map_err(anyhow::Error::from)
+            .and_then(|r| r);
     match r {
         Ok(v) => (StatusCode::OK, Json(v)).into_response(),
         Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
