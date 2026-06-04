@@ -901,6 +901,28 @@ function LibraryRow({
     let okOutcome = true;
     let errMsg: string | null = null;
     try {
+      // ShadowMount+ hand-off: when SMP is running it owns mount + register
+      // for images too (it auto-discovers scan folders AND its manual.lst).
+      // Hand the image off via manual.lst and skip our own LVD/MD mount so we
+      // don't race it. Early-return — the finally below still runs (clears
+      // busy + finishes the activity). Best-effort: any error falls through to
+      // our native mount.
+      try {
+        const mgmt = mgmtAddr(host);
+        const smp = await smpStatus(mgmt);
+        if (smp.running) {
+          const r = await smpManualInstall(mgmt, entry.path);
+          setMountNote(
+            r.added
+              ? `Handed "${entry.name}" to ShadowMount+ — it will mount + register it shortly (watch your PS5 for the toast).`
+              : `"${entry.name}" is already in ShadowMount+'s install list.`,
+          );
+          onChanged();
+          return;
+        }
+      } catch {
+        // SMP unreachable → mount it ourselves below.
+      }
       // First-mount-of-a-session for an image path occasionally hits
       // a transient lvd/md driver init or device-node race that
       // cleanly succeeds on the very next call (~50–500 ms later).
