@@ -9425,6 +9425,52 @@ static int handle_list_saves(runtime_state_t *state, int client_fd,
 
 /* ── Screenshot listing ──────────────────────────────────────────────── */
 
+/* A bounded set of screenshot "stems" (basename with trailing image
+ * extensions stripped) used to suppress thumbnail duplicates. Both the
+ * full-res original `<name>.jxr` and Sony's doubled-suffix thumbnail
+ * `<name>.jxr.jxr` collapse to the same stem `<name>`, so once an
+ * original is listed its thumbnail can be recognised and skipped.
+ * Backing store is a single malloc'd block; membership is a linear scan
+ * (screenshot counts are in the hundreds, bounded by the 64 KiB response
+ * buffer, so O(n²) here is trivial). If allocation fails the set degrades
+ * to empty — dedup is skipped but listing still works. */
+#define SS_STEM_MAX  64
+typedef struct {
+    char (*names)[SS_STEM_MAX];
+    int count;
+    int cap;
+} ss_seen_t;
+
+static int ss_seen_has(const ss_seen_t *s, const char *stem) {
+    for (int i = 0; i < s->count; i++) {
+        if (strcmp(s->names[i], stem) == 0) return 1;
+    }
+    return 0;
+}
+
+static void ss_seen_add(ss_seen_t *s, const char *stem) {
+    if (s->count >= s->cap) return;  /* bounded; stop recording past cap */
+    snprintf(s->names[s->count], SS_STEM_MAX, "%s", stem);
+    s->count++;
+}
+
+/* Strip trailing image extensions to get a stable identity for a shot.
+ * `<name>.jxr` and `<name>.jxr.jxr` both reduce to `<name>`. */
+static void ss_stem(const char *fname, char *out, size_t out_sz) {
+    snprintf(out, out_sz, "%s", fname);
+    for (;;) {
+        char *dot = strrchr(out, '.');
+        if (!dot) break;
+        if (strcmp(dot, ".jxr") == 0 ||
+            strcmp(dot, ".jpg") == 0 ||
+            strcmp(dot, ".jpeg") == 0) {
+            *dot = '\0';
+            continue;
+        }
+        break;
+    }
+}
+
 /* Recursively walk dir up to `depth_left` levels deep; for each image
  * file append a JSON entry to the buffer. Sony stores PS5 screenshots
  * as JPEG XR (`.jxr`) at:
@@ -9437,9 +9483,15 @@ static int handle_list_saves(runtime_state_t *state, int client_fd,
  * though the user had screenshots. We accept .jxr too now; the client
  * lists metadata only (no inline rendering) so the lack of a JXR
  * decoder in the browser doesn't matter — the user downloads the
- * original .jxr and opens it in a viewer that supports JPEG XR. */
+ * original .jxr and opens it in a viewer that supports JPEG XR.
+ *
+ * `seen` tracks stems already emitted. The full-res tree is walked first
+ * (is_thumb=0, recording every stem); the thumbnail tree second
+ * (is_thumb=1, skipping any stem already seen) so each shot appears once,
+ * with orphan thumbnails (original deleted) still surfacing as a fallback. */
 static int walk_screenshots(const char *root, int depth_left,
-                             char *body, int *n, int cap, int *wrote_one) {
+                             char *body, int *n, int cap, int *wrote_one,
+                             ss_seen_t *seen, int is_thumb) {
     if (depth_left <= 0) return 0;
     DIR *dp = opendir(root);
     if (!dp) return 0;
@@ -9452,7 +9504,8 @@ static int walk_screenshots(const char *root, int depth_left,
         struct stat st;
         if (stat(path, &st) != 0) continue;
         if (S_ISDIR(st.st_mode)) {
-            count += walk_screenshots(path, depth_left - 1, body, n, cap, wrote_one);
+            count += walk_screenshots(path, depth_left - 1, body, n, cap,
+                                      wrote_one, seen, is_thumb);
             continue;
         }
         /* Accept .jxr (Sony's native format), and legacy .jpg/.jpeg
@@ -9465,6 +9518,11 @@ static int walk_screenshots(const char *root, int depth_left,
         if (strcmp(ext, ".jxr") != 0 &&
             strcmp(ext, ".jpg") != 0 &&
             strcmp(ext, ".jpeg") != 0) continue;
+        /* Suppress a thumbnail whose full-res original was already
+         * listed; record every emitted stem so later entries dedup. */
+        char stem[SS_STEM_MAX];
+        ss_stem(e->d_name, stem, sizeof(stem));
+        if (is_thumb && ss_seen_has(seen, stem)) continue;
         char esc_path[2048];
         json_escape_into(path, esc_path, sizeof(esc_path));
         if (*n >= cap - 2300) break;
@@ -9475,6 +9533,7 @@ static int walk_screenshots(const char *root, int depth_left,
         *n += snprintf(body + *n, cap - *n,
                        "{\"path\":\"%s\",\"size\":%lld,\"mtime\":%lld}",
                        esc_path, (long long)st.st_size, (long long)st.st_mtime);
+        ss_seen_add(seen, stem);
         count++;
     }
     closedir(dp);
@@ -13594,13 +13653,20 @@ static int handle_list_screenshots(runtime_state_t *state, int client_fd,
     int n = 0;
     n += snprintf(resp + n, cap - n, "{\"items\":[");
     int wrote_one = 0;
-    /* Walk full-resolution first (originals the user actually wants
-     * to download); then thumbnails as a fallback for any orphans
-     * where the original was deleted but the thumbnail lingered. */
+    /* Walk full-resolution first (originals the user actually wants to
+     * download), recording each shot's stem; then thumbnails, skipping
+     * any whose original was already listed so each shot appears once.
+     * Orphan thumbnails (original deleted, thumbnail lingered) still
+     * surface as a fallback. */
+    ss_seen_t seen = {0};
+    seen.cap = 2048;
+    seen.names = malloc((size_t)seen.cap * SS_STEM_MAX);
+    if (!seen.names) seen.cap = 0;  /* dedup off, listing still works */
     walk_screenshots("/user/av_contents/photo", 5,
-                     resp, &n, cap, &wrote_one);
+                     resp, &n, cap, &wrote_one, &seen, 0);
     walk_screenshots("/user/av_contents/thumbnails/photo", 5,
-                     resp, &n, cap, &wrote_one);
+                     resp, &n, cap, &wrote_one, &seen, 1);
+    free(seen.names);
     if (n < cap - 2) {
         resp[n++] = ']';
         resp[n++] = '}';
