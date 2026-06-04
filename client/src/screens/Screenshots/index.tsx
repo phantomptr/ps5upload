@@ -4,6 +4,7 @@ import {
   RefreshCw,
   Loader2,
   Download,
+  FileImage,
   CheckSquare,
   Square,
 } from "lucide-react";
@@ -11,6 +12,7 @@ import {
   waitForJob,
   screenshotsList,
   startTransferDownload,
+  convertScreenshot,
   type ScreenshotEntry,
 } from "../../api/ps5";
 import { useConnectionStore, PS5_PAYLOAD_PORT } from "../../state/connection";
@@ -20,14 +22,20 @@ import { PageHeader, Button, EmptyState, ErrorCard } from "../../components";
 import { useTr } from "../../state/lang";
 import { pickPath } from "../../lib/pickPath";
 import { formatBytes } from "../../lib/format";
+import { basename } from "../../lib/uploadDest";
+import { pngNameForJxr, joinDir } from "../../lib/screenshotConvert";
+import { isMobile } from "../../lib/platform";
 
 /**
  * Screenshot manager.
  *
- * Lists every .jpg under /user/av_contents/thumbnails/photo on the
- * connected PS5. No thumbnail rendering yet — just metadata + a
- * "download to local folder" path. Future iteration: pull each .jpg
- * via FS_READ for real thumbnails.
+ * Lists each PS5 screenshot once (the payload walks the full-res
+ * `/user/av_contents/photo` tree, then dedupes the matching
+ * `/thumbnails/photo` entries). Shots are HDR JPEG XR (`.jxr`), which
+ * normal apps can't open — so each row offers:
+ *   • Download — pull the raw `.jxr` (for HDR-aware editors), and
+ *   • Convert  — download + decode + HDR→SDR tone-map to a `.png`
+ *     (desktop only; the JPEG XR codec isn't bundled on mobile).
  */
 export default function ScreenshotsScreen() {
   const tr = useTr();
@@ -42,6 +50,14 @@ export default function ScreenshotsScreen() {
   // Per-row in-flight set so a single download shows a spinner and can't be
   // double-fired (previously the row button had no busy feedback at all).
   const [busyPaths, setBusyPaths] = useState<Set<string>>(new Set());
+  // Separate in-flight set for the Convert action (download + decode +
+  // tone-map), so its spinner is independent of a plain Download.
+  const [convertingPaths, setConvertingPaths] = useState<Set<string>>(
+    new Set(),
+  );
+  // Convert (JPEG XR decode) is a desktop-only feature — the codec isn't
+  // bundled on mobile (Android/iOS) — so the button is hidden there.
+  const canConvert = !isMobile();
 
   const allSelected = useMemo(() => {
     return !!items && items.length > 0 && selected.size === items.length;
@@ -165,6 +181,47 @@ export default function ScreenshotsScreen() {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusyPaths((s) => {
+        const next = new Set(s);
+        next.delete(item.path);
+        return next;
+      });
+    }
+  }
+
+  // Download the raw .jxr into the chosen folder, then decode + HDR→SDR
+  // tone-map it to a .png alongside, removing the intermediate .jxr. The
+  // .png is what most people actually want (the .jxr won't open in normal
+  // viewers); anyone who needs the HDR original uses Download instead.
+  async function convertOne(item: ScreenshotEntry) {
+    if (!host?.trim()) return;
+    const dest = await pickPath({
+      mode: "folder",
+      title: tr(
+        "screenshots_convert_dest",
+        undefined,
+        "Pick a folder for the converted PNG",
+      ),
+    });
+    if (!dest || typeof dest !== "string") return;
+    const name = basename(item.path);
+    const localJxr = joinDir(dest, name);
+    const localPng = joinDir(dest, pngNameForJxr(name));
+    setConvertingPaths((s) => new Set(s).add(item.path));
+    setError(null);
+    try {
+      const jobId = await startTransferDownload(
+        item.path,
+        dest,
+        `${host.trim()}:${PS5_PAYLOAD_PORT}`,
+        "file",
+      );
+      await waitForJob(jobId);
+      // deleteSource=true: leave only the viewable .png behind.
+      await convertScreenshot(localJxr, localPng, true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setConvertingPaths((s) => {
         const next = new Set(s);
         next.delete(item.path);
         return next;
@@ -299,6 +356,30 @@ export default function ScreenshotsScreen() {
                     {new Date(item.mtime * 1000).toLocaleString()}
                   </div>
                 </div>
+                {canConvert && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    leftIcon={
+                      convertingPaths.has(item.path) ? (
+                        <Loader2 size={11} className="animate-spin" />
+                      ) : (
+                        <FileImage size={11} />
+                      )
+                    }
+                    onClick={() => convertOne(item)}
+                    disabled={
+                      convertingPaths.has(item.path) || busyPaths.has(item.path)
+                    }
+                    title={tr(
+                      "screenshots_convert_hint",
+                      undefined,
+                      "Download and convert this HDR screenshot to a viewable PNG",
+                    )}
+                  >
+                    {tr("screenshots_convert", undefined, "Convert to PNG")}
+                  </Button>
+                )}
                 <Button
                   variant="ghost"
                   size="sm"
@@ -310,7 +391,9 @@ export default function ScreenshotsScreen() {
                     )
                   }
                   onClick={() => downloadOne(item)}
-                  disabled={busyPaths.has(item.path)}
+                  disabled={
+                    busyPaths.has(item.path) || convertingPaths.has(item.path)
+                  }
                 >
                   {tr("screenshots_download", undefined, "Download")}
                 </Button>

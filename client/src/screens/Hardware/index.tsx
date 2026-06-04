@@ -53,18 +53,19 @@ import {
  *      flips to "down"; our refresh() early-returns on that)
  *
  *  Static info (model, serial, OS, RAM) is fetched once per mount;
- *  uptime + storage are polled every 5s. Live temps/clock/power are NOT
- *  polled and never auto-fire — they're the one read that can ptrace
- *  SceShellUI on firmwares where the direct sensor call wedges (FW 9.60
- *  PS5 Pro confirmed), which drops the payload listener. They're read on
- *  demand only, behind an explicit "Read sensors" click.
- *  See payload/src/hw_info.c::hw_temps_get_text + shellui_rpc.c. */
+ *  uptime + storage are polled every 5s. Live temps/clock are NOT
+ *  polled and never auto-fire — the payload reads them via direct
+ *  sceKernel* sensor calls, and on firmware we can't vet ahead of time
+ *  such a call can WEDGE (the SoC-power export hangs on FW 9.60 PS5 Pro,
+ *  confirmed), taking the mgmt worker — and thus the helper — down with
+ *  it. So they're read on demand only, behind an explicit "Read sensors"
+ *  click. See payload/src/hw_info.c::hw_temps_get_text. */
 const POLL_INTERVAL_MS = 5_000;
 
 /** Minimum gap between on-demand sensor reads. Rate-limits the manual
  *  "Read sensors" button so an impatient double-click can't fire two
- *  back-to-back ptrace round-trips on firmware that needs the ShellUI
- *  fallback. Each read is a fresh TCP RPC + sensor syscalls. */
+ *  back-to-back sensor reads on firmware where a direct sensor call is
+ *  slow or wedges. Each read is a fresh TCP RPC + sensor syscalls. */
 const SENSOR_READ_COOLDOWN_MS = 2_000;
 
 /**
@@ -73,8 +74,9 @@ const SENSOR_READ_COOLDOWN_MS = 2_000;
  *
  * The cooldown rate-limits the manual "Read sensors" button so a
  * double-click can't compound two reads. There is no auto-poller for
- * this path anymore (it could ptrace ShellUI on FW 9.60 and drop the
- * payload), so this is purely a button debounce.
+ * this path (a direct sensor call can wedge on firmware we can't vet
+ * ahead of time and drop the helper), so this is purely a button
+ * debounce.
  */
 function shouldAllowSensorRead(lastReadAt: number | null, now: number): boolean {
   if (lastReadAt !== null && now - lastReadAt < SENSOR_READ_COOLDOWN_MS) {
@@ -150,9 +152,23 @@ function formatFreq(mhz: number): string {
   return `${mhz} MHz`;
 }
 
-function formatPower(mw: number): string {
-  if (mw <= 0) return "—";
-  return `${(mw / 1000).toFixed(1)} W`;
+/** 0–100 percentage; `-1` (or any negative) = "unavailable" → dash. Used
+ *  for CPU usage and fan duty, which the payload reports as -1 when the
+ *  API isn't available or on a basic (non-extended) read. */
+function formatPct(n: number): string {
+  if (n < 0) return "—";
+  return `${n}%`;
+}
+
+/** Sony's raw "basic product shape" code. The numeric→family mapping
+ *  isn't officially documented and we deliberately do NOT guess a label
+ *  (mislabelling a console is worse than showing a number) — the model
+ *  string (CFI-xxxx) is the authoritative identifier; this raw code is a
+ *  secondary cross-check to calibrate against known hardware. `-1` =
+ *  unavailable. */
+function formatProductShape(n: number): string {
+  if (n < 0) return "—";
+  return `Code ${n}`;
 }
 
 export default function HardwareScreen() {
@@ -208,11 +224,12 @@ export default function HardwareScreen() {
     setError(null);
     try {
       const addr = transferAddr(probe.host);
-      // NOTE: fetchHwTemps is deliberately NOT here — it ptraces
-      // SceShellUI and must never run on a timer (the console-power-off
-      // bug). It moved to readSensors() (on-demand). Everything left in
-      // this poll is ptrace-free: power = sysctl uptime/loadavg,
-      // storage = statfs, info = in-process dlsym.
+      // NOTE: fetchHwTemps is deliberately NOT here — its direct sensor
+      // calls can wedge on untested firmware and must never run on a
+      // timer (that would drop the helper unattended). It moved to
+      // readSensors() (on-demand). Everything left in this poll is
+      // hang-free: power = sysctl uptime/loadavg, storage = statfs,
+      // info = in-process dlsym.
       const [nextPower, nextStorage] = await Promise.all([
         fetchHwPower(addr),
         // Storage is essentially static at the per-second polling rate
@@ -250,9 +267,9 @@ export default function HardwareScreen() {
   }, [host, payloadStatus, guard]);
 
   // On-demand live-sensor read. Deliberately separate from refresh()
-  // and never armed on a timer: this is the one path that ptraces
-  // SceShellUI (see shouldAllowSensorRead's safety note). A single user
-  // click → a single read, gated by the cooldown.
+  // and never armed on a timer: this is the one path whose direct sensor
+  // calls can wedge on untested firmware (see shouldAllowSensorRead's
+  // safety note). A single user click → a single read, gated by the cooldown.
   const readSensors = useCallback(async () => {
     if (!host?.trim() || payloadStatus !== "up") return;
     if (sensorBusy.current) return;
@@ -263,7 +280,11 @@ export default function HardwareScreen() {
     const probe = guard.capture();
     try {
       const addr = transferAddr(probe.host);
-      const next = await fetchHwTemps(addr);
+      // extended=true: this explicit user action is the ONLY caller allowed
+      // to trigger the on-demand telemetry (SoC power / CPU usage / fan duty
+      // / product shape) on the payload. The Dashboard's auto-poll calls
+      // fetchHwTemps without extended, so its timer never fires those.
+      const next = await fetchHwTemps(addr, true);
       if (probe.isStale()) return;
       setTemps(next);
       setSensorReadAt(Date.now());
@@ -293,20 +314,21 @@ export default function HardwareScreen() {
     return () => window.clearInterval(id);
   }, [payloadStatus, refresh, visible]);
 
-  // The live-sensor read (temps / freq / power) is ON-DEMAND ONLY — it
-  // is deliberately NEVER armed on a timer and never auto-fires on
-  // mount. Rationale (regression report, FW 9.60 PS5 Pro): the 2.16.1
-  // assumption that DIRECT sceKernel* linkage made this read ptrace-free
-  // is FALSE on FW 9.60 — Sony's caller-pid check makes the direct
-  // pointers "wedge" (return 0), so hw_temps_get_text falls back to
-  // ptrace-attaching SceShellUI (see payload/src/hw_info.c:~312). An
-  // immediate-on-mount read plus a 5s tick then ptraced ShellUI
-  // repeatedly, which dropped the payload listener — symptom: "each
-  // time I open Hardware the helper disconnects." Auto-polling a read
-  // that *might* ptrace is unsafe on any firmware we can't vet ahead of
-  // time, so we gate it behind an explicit user click instead. The
-  // ptrace-free reads (power = sysctl uptime/loadavg, storage = statfs,
-  // info = in-process dlsym) keep their safe 5s auto-poll above.
+  // The live-sensor read (temps / clock) is ON-DEMAND ONLY — it is
+  // deliberately NEVER armed on a timer and never auto-fires on mount.
+  // Rationale (regression report, FW 9.60 PS5 Pro): a direct sceKernel*
+  // sensor call can WEDGE on firmware we can't vet ahead of time — the
+  // SoC-power export hangs outright on FW 9.60, and Sony's caller-pid
+  // check can stall other sensor pointers. A wedged call never returns,
+  // so the mgmt worker servicing it is lost and the helper appears to
+  // "disconnect" — the original symptom was "each time I open Hardware
+  // the helper disconnects." The payload now calls ONLY the direct
+  // exports that return cleanly and reports anything else as 0 =
+  // unavailable (no ptrace fallback), but auto-polling a read that might
+  // wedge on an untested SKU/FW is still unsafe, so we gate it behind an
+  // explicit user click. The hang-free reads (power = sysctl
+  // uptime/loadavg, storage = statfs, info = in-process dlsym) keep
+  // their safe 5s auto-poll above.
 
   return (
     <div className="p-6">
@@ -317,7 +339,7 @@ export default function HardwareScreen() {
         description={tr(
           "hardware_description",
           undefined,
-          "System info, uptime and storage auto-refresh every 5 seconds while the helper is connected. Live temperatures, clock and power are read on demand — click Read sensors. (On some firmware, e.g. FW 9.60, reading sensors briefly accesses a system process and can momentarily affect the PS5 UI.)",
+          "System info, uptime and storage auto-refresh every 5 seconds while the helper is connected. Live temperatures and CPU clock are read on demand — click Read sensors. Some firmware doesn't expose every sensor; any unavailable reading shows as a dash.",
         )}
         right={
           <div className="flex items-center gap-2">
@@ -437,20 +459,29 @@ export default function HardwareScreen() {
               }
             />
             <StatRow
-              label={tr("hw_soc_power", undefined, "SoC power draw")}
-              value={formatPower(temps?.soc_power_mw ?? 0)}
+              label={tr("hw_cpu_usage", undefined, "CPU usage")}
+              value={formatPct(temps?.cpu_usage_pct ?? -1)}
               hint={
-                temps && temps.soc_power_mw === 0
+                !temps
                   ? tr(
-                      "hw_sensor_unavailable",
+                      "hw_sensor_on_demand",
                       undefined,
-                      "Sensor reading unavailable right now",
+                      "Click Read sensors for a live reading",
                     )
-                  : tr(
-                      "hw_sampled_5s",
-                      undefined,
-                      "Sampled at most every 5s",
-                    )
+                  : undefined
+              }
+            />
+            {/* SoC power draw is intentionally not shown: the only Sony
+                API for it (sceKernelGetSocPowerConsumption) hangs the
+                helper on FW 9.60 (Pro, HW-confirmed) and returns a useless
+                0 on FW 5.10 (phat), so the payload never reads it. */}
+            <StatRow
+              label={tr("hw_fan_duty", undefined, "Fan duty")}
+              value={formatPct(temps?.fan_duty_pct ?? -1)}
+              hint={
+                temps && temps.fan_duty_pct >= 0
+                  ? tr("hw_fan_duty_approx", undefined, "Approximate")
+                  : undefined
               }
             />
           </SensorCard>
@@ -518,6 +549,21 @@ export default function HardwareScreen() {
               label={tr("hw_cpu_cores", undefined, "CPU cores")}
               value={info?.ncpu ? String(info.ncpu) : "—"}
             />
+            {/* Raw Sony product-shape code — a secondary cross-check on the
+                hardware family (the model string above is authoritative).
+                Read on demand (Read sensors); shows "—" until then or where
+                the API isn't available. */}
+            {temps && temps.product_shape >= 0 && (
+              <StatRow
+                label={tr("hw_product_shape", undefined, "Product shape")}
+                value={formatProductShape(temps.product_shape)}
+                hint={tr(
+                  "hw_product_shape_hint",
+                  undefined,
+                  "Raw Sony code · model name is authoritative",
+                )}
+              />
+            )}
           </SensorCard>
 
           {storage && (

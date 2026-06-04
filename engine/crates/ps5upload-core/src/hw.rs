@@ -53,6 +53,25 @@ pub struct HwTemps {
     pub cpu_freq_mhz: i64,
     pub soc_clock_mhz: i64,
     pub soc_power_mw: u32,
+    /// Average CPU usage across cores, 0–100 %. `-1` = unavailable (the
+    /// API isn't exported on this firmware, or an older payload that
+    /// doesn't send the field). Read on demand only.
+    #[serde(default = "default_sensor_unavailable")]
+    pub cpu_usage_pct: i32,
+    /// Current fan duty, 0–100 % (approximate — the raw scale is
+    /// firmware-dependent). `-1` = unavailable. Read on demand only.
+    #[serde(default = "default_sensor_unavailable")]
+    pub fan_duty_pct: i32,
+    /// Raw Sony "basic product shape" code (distinguishes hardware
+    /// families). `-1` = unavailable. The desktop maps known codes to a
+    /// label and otherwise shows the number; the model string remains the
+    /// primary identifier. Read on demand only.
+    #[serde(default = "default_sensor_unavailable")]
+    pub product_shape: i32,
+}
+
+fn default_sensor_unavailable() -> i32 {
+    -1
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -102,8 +121,20 @@ fn parse_kv<'a>(body: &'a [u8]) -> impl Fn(&str) -> Option<&'a str> {
 }
 
 fn round_trip(addr: &str, req: FrameType, ack: FrameType, label: &str) -> Result<Vec<u8>> {
+    round_trip_body(addr, req, &[], ack, label)
+}
+
+/// Like [`round_trip`] but sends a request body. Used by HW_TEMPS to pass
+/// the `extended` selector ("1" = read the on-demand-only telemetry).
+fn round_trip_body(
+    addr: &str,
+    req: FrameType,
+    body: &[u8],
+    ack: FrameType,
+    label: &str,
+) -> Result<Vec<u8>> {
     let mut c = Connection::connect(addr)?;
-    c.send_frame(req, &[])?;
+    c.send_frame(req, body)?;
     let (hdr, resp) = c.recv_frame()?;
     let ft = hdr.frame_type().unwrap_or(FrameType::Error);
     if ft == FrameType::Error {
@@ -174,6 +205,16 @@ fn sanitize_temps(mut t: HwTemps) -> HwTemps {
     if t.soc_power_mw > SENSOR_POWER_MAX_MW {
         t.soc_power_mw = 0;
     }
+    // 0–100 % are the only valid percentages; anything else (incl. the -1
+    // "unavailable" sentinel) is normalised to -1 so the UI shows a dash
+    // rather than a bogus bar. product_shape is a raw code with no range to
+    // clamp — pass it through untouched (-1 already means unavailable).
+    if !(0..=100).contains(&t.cpu_usage_pct) {
+        t.cpu_usage_pct = -1;
+    }
+    if !(0..=100).contains(&t.fan_duty_pct) {
+        t.fan_duty_pct = -1;
+    }
     t
 }
 
@@ -184,8 +225,31 @@ fn sanitize_temps(mut t: HwTemps) -> HwTemps {
 /// `soc_power_mw` is intentionally 0); see `payload/src/hw_info.c`. Every
 /// value is re-validated through [`sanitize_temps`] so a stale payload
 /// can't surface a nonsense reading.
-pub fn hw_temps(addr: &str) -> Result<HwTemps> {
-    let body = round_trip(addr, FrameType::HwTemps, FrameType::HwTempsAck, "HW_TEMPS")?;
+/// `extended` selects which sensors the payload reads:
+///   - `false` (BASIC): CPU/SoC temp + CPU clock only — the auto-poll-safe
+///     calls the Dashboard's 5 s tick uses.
+///   - `true` (EXTENDED): additionally read CPU usage, fan duty and product
+///     shape (`"ufs"`). Requested only behind an explicit user action
+///     ("Read sensors"), never on a timer.
+///
+/// SoC power is DELIBERATELY EXCLUDED. Hardware probe (2026-06): of the
+/// four extended getters, `sceKernelGetSocPowerConsumption` is the ONLY one
+/// that wedges the helper on FW 9.60 (Pro) — and it does so even with the
+/// corrected ABI, so the hang is the API's, not ours; on the phat (5.10) it
+/// returns a useless 0. Dangerous and worthless, so we never request it
+/// ("p" is omitted from the selector). The payload still supports the `p`
+/// flag for a future firmware probe, but no shipping path sends it.
+pub fn hw_temps(addr: &str, extended: bool) -> Result<HwTemps> {
+    // "ufs" = usage + fan + shape (NOT power — see fn doc). Each is
+    // independently gated payload-side so this set is the verified-safe one.
+    let req_body: &[u8] = if extended { b"ufs" } else { b"" };
+    let body = round_trip_body(
+        addr,
+        FrameType::HwTemps,
+        req_body,
+        FrameType::HwTempsAck,
+        "HW_TEMPS",
+    )?;
     Ok(sanitize_temps(parse_hw_temps(&body)))
 }
 
@@ -207,6 +271,18 @@ fn parse_hw_temps(body: &[u8]) -> HwTemps {
         soc_power_mw: get("soc_power_mw")
             .and_then(|v| v.parse().ok())
             .unwrap_or(0),
+        // Missing (older payload) ⇒ -1 = "unavailable", NOT 0 — 0% usage /
+        // 0% duty are legitimate live readings and must stay distinct from
+        // "this payload doesn't report it".
+        cpu_usage_pct: get("cpu_usage_pct")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(-1),
+        fan_duty_pct: get("fan_duty_pct")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(-1),
+        product_shape: get("product_shape")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(-1),
     }
 }
 
@@ -528,11 +604,17 @@ mod tests {
             cpu_freq_mhz: SENSOR_CPU_FREQ_MAX_MHZ,
             soc_clock_mhz: 0,
             soc_power_mw: SENSOR_POWER_MAX_MW,
+            cpu_usage_pct: 0,
+            fan_duty_pct: 100,
+            product_shape: 3,
         });
         assert_eq!(lo.cpu_temp, SENSOR_TEMP_MIN_C);
         assert_eq!(lo.soc_temp, SENSOR_TEMP_MAX_C);
         assert_eq!(lo.cpu_freq_mhz, SENSOR_CPU_FREQ_MAX_MHZ);
         assert_eq!(lo.soc_power_mw, SENSOR_POWER_MAX_MW);
+        assert_eq!(lo.cpu_usage_pct, 0, "0% usage is valid");
+        assert_eq!(lo.fan_duty_pct, 100, "100% duty is valid");
+        assert_eq!(lo.product_shape, 3, "raw product shape passes through");
 
         let hi = sanitize_temps(HwTemps {
             cpu_temp: SENSOR_TEMP_MAX_C + 1,
@@ -540,12 +622,43 @@ mod tests {
             cpu_freq_mhz: SENSOR_CPU_FREQ_MAX_MHZ + 1,
             soc_clock_mhz: -1,
             soc_power_mw: SENSOR_POWER_MAX_MW + 1,
+            cpu_usage_pct: 101,
+            fan_duty_pct: -5,
+            product_shape: -1,
         });
         assert_eq!(hi.cpu_temp, 0, "one above max temp is rejected");
         assert_eq!(hi.soc_temp, 0);
         assert_eq!(hi.cpu_freq_mhz, 0, "one above max freq is rejected");
         assert_eq!(hi.soc_clock_mhz, 0, "negative clock is rejected");
         assert_eq!(hi.soc_power_mw, 0, "one above max power is rejected");
+        assert_eq!(hi.cpu_usage_pct, -1, "101% usage → unavailable");
+        assert_eq!(hi.fan_duty_pct, -1, "negative duty → unavailable");
+    }
+
+    #[test]
+    fn parse_hw_temps_extended_fields() {
+        // A new-payload reading that carries the extra telemetry. Power is
+        // now a real value, usage/duty are valid percentages, and product
+        // shape is a raw code that passes through untouched.
+        let body = b"cpu_temp=42\nsoc_temp=40\ncpu_freq_mhz=2560\nsoc_clock_mhz=0\nsoc_power_mw=18000\ncpu_usage_pct=37\nfan_duty_pct=55\nproduct_shape=2\n";
+        let t = sanitize_temps(parse_hw_temps(body));
+        assert_eq!(t.soc_power_mw, 18000);
+        assert_eq!(t.cpu_usage_pct, 37);
+        assert_eq!(t.fan_duty_pct, 55);
+        assert_eq!(t.product_shape, 2);
+    }
+
+    #[test]
+    fn parse_hw_temps_old_payload_omits_extended_fields() {
+        // An OLDER payload sends only the original five keys. The new fields
+        // must read back as -1 = "unavailable" (NOT 0, which would render as
+        // a real 0% reading), so the UI shows a dash.
+        let body = b"cpu_temp=36\nsoc_temp=34\ncpu_freq_mhz=800\nsoc_clock_mhz=0\nsoc_power_mw=0\n";
+        let t = sanitize_temps(parse_hw_temps(body));
+        assert_eq!(t.cpu_temp, 36);
+        assert_eq!(t.cpu_usage_pct, -1, "missing usage ⇒ unavailable");
+        assert_eq!(t.fan_duty_pct, -1, "missing duty ⇒ unavailable");
+        assert_eq!(t.product_shape, -1, "missing shape ⇒ unavailable");
     }
 
     #[test]

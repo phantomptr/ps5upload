@@ -127,7 +127,7 @@ connection_step3_hint: "Buka tab Upload dan letakkan folder game, gambar .exfat,
 connection_go_upload: "Buka Upload",
 
 hardware_title: "Perangkat keras",
-hardware_description: "Info sistem langsung, suhu, dan waktu aktif PS5. Diperbarui otomatis setiap 5 detik saat payload terhubung.",
+hardware_description: "Info sistem, waktu aktif, dan penyimpanan diperbarui otomatis setiap 5 detik saat payload terhubung. Suhu dan clock CPU langsung dibaca sesuai permintaan — klik Read sensors. Beberapa firmware tidak menyediakan semua sensor; pembacaan yang tidak tersedia ditampilkan sebagai tanda hubung.",
 hardware_read_error: "Gagal membaca info perangkat keras",
 hardware_temperatures: "Suhu",
 hardware_performance: "Performa",
@@ -655,7 +655,7 @@ nanodns_not_loaded_body:
   "Tidak ada /data/nanodns/nanodns.ini di konsol — muat nanoDNS sekali dari tab Payloads (ini menulis konfigurasi default saat pertama kali dijalankan), lalu kembali untuk mengeditnya.",
 nanodns_dns_howto_title: "Arahkan DNS PS5 Anda ke nanoDNS",
 nanodns_dns_howto_body:
-  "Di PS5: Pengaturan → Jaringan → Atur Koneksi Internet → (koneksi Anda) → Kustom → Pengaturan DNS → Manual, lalu setel DNS Utama ke {ip}. Itu memerlukan bind=0.0.0.0 di bawah (default 127.0.0.1 hanya melayani konsol secara lokal — untuk itu, setel DNS Utama ke 127.0.0.1).",
+  "Di PS5: Pengaturan → Jaringan → Atur Koneksi Internet → (koneksi Anda) → Kustom → Pengaturan DNS → Manual, lalu setel DNS Utama ke alamat dari pengaturan bind di bagian [general] pada /data/nanodns/nanodns.ini di bawah — misalnya, dengan bind=127.0.0.1, setel DNS Utama ke 127.0.0.1.",
 nanodns_save_error: "Tidak dapat menyimpan",
 nanodns_saved: "Konfigurasi nanoDNS disimpan",
 nanodns_saved_body:

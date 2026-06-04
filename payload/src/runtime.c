@@ -5147,8 +5147,25 @@ static int handle_fs_list_volumes(runtime_state_t *state, int client_fd,
          * cleanly without repeated mnts[i].* indexing. */
         const char *mnt_on   = mnts[i].f_mntonname;
         const char *mnt_from = mnts[i].f_mntfromname;
-        uint64_t total = (uint64_t)mnts[i].f_blocks * (uint64_t)mnts[i].f_bsize;
-        uint64_t avail = (uint64_t)mnts[i].f_bavail * (uint64_t)mnts[i].f_bsize;
+        uint64_t bs        = (uint64_t)mnts[i].f_bsize;
+        uint64_t raw_total = (uint64_t)mnts[i].f_blocks * bs;  /* full partition incl. reserve */
+        uint64_t bfree     = (uint64_t)mnts[i].f_bfree  * bs;  /* free incl. root-only reserve */
+        /* f_bavail (free usable by non-root) is signed on FreeBSD and can
+         * read <=0 on a near-full FS; fall back to bfree so we never
+         * publish a reserve bigger than the real free pool. */
+        uint64_t avail = ((int64_t)mnts[i].f_bavail > 0)
+                             ? (uint64_t)mnts[i].f_bavail * bs
+                             : bfree;
+        /* Reserve = the slice the FS keeps for root only (bfree - bavail).
+         * It's neither user-usable free nor user data, so `df` and the PS5
+         * Storage UI both fold it out: they report total = used + available.
+         * Publish that displayable total (raw - reserve) here so the
+         * Volumes "Storage drives" card matches the console's figure rather
+         * than over-stating capacity (and thus free) by the reserve (~8% of
+         * the partition). `used` is then total - avail = the real on-disk
+         * usage, keeping the card self-consistent. */
+        uint64_t reserved = (bfree > avail) ? (bfree - avail) : 0;
+        uint64_t total = (raw_total > reserved) ? (raw_total - reserved) : raw_total;
         int writable   = (mnts[i].f_flags & MNT_RDONLY) ? 0 : 1;
 
         /* Surface decision in two halves:
@@ -8221,9 +8238,47 @@ static int handle_hw_info(runtime_state_t *state, int client_fd, uint64_t trace_
                               FTX2_FRAME_HW_INFO_ACK, "hw_info_failed");
 }
 
-static int handle_hw_temps(runtime_state_t *state, int client_fd, uint64_t trace_id) {
-    return handle_hw_text_op(state, client_fd, trace_id, hw_temps_get_text,
-                              FTX2_FRAME_HW_TEMPS_ACK, "hw_temps_failed");
+/* HW_TEMPS. A request body of "1" selects the EXTENDED read (SoC power /
+ * CPU usage / fan duty / product shape) used by the explicit "Read
+ * sensors" click; an empty body (the Dashboard's 5 s auto-poll) gets the
+ * BASIC, always-safe read. Gating the risky getters on the body keeps
+ * them off every auto-poll path — see hw_temps_get_text_ex. */
+static int handle_hw_temps(runtime_state_t *state, int client_fd, uint64_t trace_id,
+                           const char *request_body, uint64_t body_len) {
+    /* Body selects the EXTENDED telemetry: "1" = all (back-compat with the
+     * engine), or any subset of the chars p/u/f/s to read just those
+     * getters — lets the desktop (or a probe) exclude a call that wedges a
+     * given firmware. Empty body = basic. */
+    int flags = 0;
+    if (request_body && body_len >= 1) {
+        if (request_body[0] == '1') {
+            flags = HW_EXT_ALL;
+        } else {
+            for (uint64_t i = 0; i < body_len; i++) {
+                switch (request_body[i]) {
+                    case 'p': flags |= HW_EXT_POWER; break;
+                    case 'u': flags |= HW_EXT_USAGE; break;
+                    case 'f': flags |= HW_EXT_FAN;   break;
+                    case 's': flags |= HW_EXT_SHAPE; break;
+                    default: break;
+                }
+            }
+        }
+    }
+    char body[2048];
+    size_t written = 0;
+    const char *err = NULL;
+    if (!state) return -1;
+    if (hw_temps_get_text_ex(flags, body, sizeof(body), &written, &err) != 0) {
+        const char *reason = err ? err : "hw_temps_failed";
+        return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
+                          reason, (uint64_t)strlen(reason));
+    }
+    pthread_mutex_lock(&state->state_mtx);
+    state->command_count += 1;
+    pthread_mutex_unlock(&state->state_mtx);
+    return send_frame(client_fd, FTX2_FRAME_HW_TEMPS_ACK, 0, trace_id,
+                      body, (uint64_t)written);
 }
 
 static int handle_hw_power(runtime_state_t *state, int client_fd, uint64_t trace_id) {
@@ -15624,7 +15679,8 @@ abort_done:
         return handle_hw_info(state, client_fd, hdr.trace_id);
     }
     if (hdr.frame_type == FTX2_FRAME_HW_TEMPS) {
-        return handle_hw_temps(state, client_fd, hdr.trace_id);
+        return handle_hw_temps(state, client_fd, hdr.trace_id,
+                               request_body, hdr.body_len);
     }
     if (hdr.frame_type == FTX2_FRAME_HW_POWER) {
         return handle_hw_power(state, client_fd, hdr.trace_id);

@@ -1,6 +1,6 @@
 [package]
 name = "ps5upload-desktop"
-version = "2.25.5"
+version = "2.26.0"
 description = "The all-in-one PS5 companion app."
 edition = "2021"
 rust-version = "1.77"
@@ -102,6 +102,23 @@ if-addrs = "0.13"
 # core's deps doesn't silently remove our access.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# Desktop-only: PS5 screenshot (.jxr / JPEG XR) -> PNG conversion.
+# `jpegxr` wraps Microsoft's BSD-licensed jxrlib C codec (decode-only)
+# and bundles the C in-tree, compiling it with `cc` + generating bindings
+# with `bindgen` (so the build host needs a C compiler + libclang —
+# every desktop CI runner already has these). `image` encodes the
+# tone-mapped pixels to PNG (png feature only — no extra format C libs).
+#
+# Gated to NON-mobile targets on purpose: this is the ONLY C-compiling
+# dependency in the desktop crate, and we keep it off the Android/iOS
+# builds so the mobile cross-compile story stays pure-Rust. Conversion
+# is a desktop action (decode a downloaded screenshot on your computer);
+# the command returns a clear "desktop only" error on mobile. Used from
+# commands/screenshot_convert.rs.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+jpegxr = "0.3"
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 # Mobile (Android/iOS): link the engine as a library and run it
 # in-process (engine_mobile.rs). Desktop spawns it as a sidecar binary

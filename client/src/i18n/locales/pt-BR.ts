@@ -127,7 +127,7 @@ connection_step3_hint: "Vá para a aba Upload e solte uma pasta de jogo, imagem 
 connection_go_upload: "Ir para Upload",
 
 hardware_title: "Hardware",
-hardware_description: "Informações ao vivo do sistema, temperaturas e tempo de atividade do PS5. Atualização automática a cada 5 segundos enquanto o payload estiver conectado.",
+hardware_description: "As informações do sistema, o tempo de atividade e o armazenamento são atualizados automaticamente a cada 5 segundos enquanto o payload está conectado. Temperaturas e clock da CPU ao vivo são lidos sob demanda — clique em Read sensors. Alguns firmwares não expõem todos os sensores; qualquer leitura indisponível aparece como um traço.",
 hardware_read_error: "Não foi possível ler informações de hardware",
 hardware_temperatures: "Temperaturas",
 hardware_performance: "Desempenho",
@@ -655,7 +655,7 @@ nanodns_not_loaded_body:
   "Não há /data/nanodns/nanodns.ini no console — carregue o nanoDNS uma vez na aba Payloads (ele grava uma configuração padrão na primeira execução) e depois volte para editá-la.",
 nanodns_dns_howto_title: "Aponte o DNS do seu PS5 para o nanoDNS",
 nanodns_dns_howto_body:
-  "No PS5: Ajustes → Rede → Configurar Conexão com a Internet → (sua conexão) → Personalizado → Ajustes de DNS → Manual e defina o DNS Primário como {ip}. Isso requer bind=0.0.0.0 abaixo (o padrão 127.0.0.1 atende apenas o console localmente — para isso, defina o DNS Primário como 127.0.0.1).",
+  "No PS5: Ajustes → Rede → Configurar Conexão com a Internet → (sua conexão) → Personalizado → Ajustes de DNS → Manual e defina o DNS Primário com o endereço da configuração bind na seção [general] de /data/nanodns/nanodns.ini abaixo — por exemplo, com bind=127.0.0.1, defina o DNS Primário como 127.0.0.1.",
 nanodns_save_error: "Não foi possível salvar",
 nanodns_saved: "Configuração do nanoDNS salva",
 nanodns_saved_body:

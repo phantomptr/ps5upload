@@ -127,7 +127,7 @@ connection_step3_hint: "Upload sekmesine gidin ve bir oyun klasörü, .exfat gö
 connection_go_upload: "Upload'a git",
 
 hardware_title: "Donanım",
-hardware_description: "PS5'in canlı sistem bilgisi, sıcaklıkları ve çalışma süresi. Payload bağlıyken her 5 saniyede bir otomatik yenilenir.",
+hardware_description: "Sistem bilgisi, çalışma süresi ve depolama, payload bağlıyken her 5 saniyede bir otomatik yenilenir. Canlı sıcaklıklar ve CPU hızı istek üzerine okunur — Read sensors düğmesine tıklayın. Bazı donanım yazılımları tüm sensörleri sunmaz; okunamayan değerler kısa çizgi olarak gösterilir.",
 hardware_read_error: "Donanım bilgisi okunamadı",
 hardware_temperatures: "Sıcaklıklar",
 hardware_performance: "Performans",
@@ -655,7 +655,7 @@ nanodns_not_loaded_body:
   "Konsolda /data/nanodns/nanodns.ini yok — nanoDNS'i Payloads sekmesinden bir kez yükleyin (ilk çalıştırmada varsayılan bir yapılandırma yazar), ardından düzenlemek için geri dönün.",
 nanodns_dns_howto_title: "PS5'inizin DNS'ini nanoDNS'e yönlendirin",
 nanodns_dns_howto_body:
-  "PS5'te: Ayarlar → Ağ → İnternet Bağlantısını Ayarla → (bağlantınız) → Özel → DNS Ayarları → Elle ve Birincil DNS'i {ip} olarak ayarlayın. Bunun için aşağıdaki bind=0.0.0.0 gerekir (varsayılan 127.0.0.1 yalnızca konsolu yerel olarak sunar — bunun için Birincil DNS'i 127.0.0.1 olarak ayarlayın).",
+  "PS5'te: Ayarlar → Ağ → İnternet Bağlantısını Ayarla → (bağlantınız) → Özel → DNS Ayarları → Elle ve Birincil DNS'i aşağıdaki /data/nanodns/nanodns.ini dosyasının [general] bölümündeki bind ayarındaki adrese ayarlayın — örneğin bind=127.0.0.1 ise Birincil DNS'i 127.0.0.1 olarak ayarlayın.",
 nanodns_save_error: "Kaydedilemedi",
 nanodns_saved: "nanoDNS yapılandırması kaydedildi",
 nanodns_saved_body:

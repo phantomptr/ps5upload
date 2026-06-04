@@ -640,13 +640,28 @@ fn handle_connection_inner(mut stream: TcpStream, state: Arc<Mutex<MockState>>) 
                 send_frame(&mut stream, FrameType::HwInfoAck, body);
             }
             FrameType::HwTemps => {
-                let mut discard = vec![0u8; hdr.body_len as usize];
-                read_exact(&mut stream, &mut discard);
-                let body = b"cpu_temp=65\n\
-                             soc_temp=72\n\
-                             cpu_freq_mhz=3500\n\
-                             soc_clock_mhz=0\n\
-                             soc_power_mw=85000\n";
+                let mut req = vec![0u8; hdr.body_len as usize];
+                read_exact(&mut stream, &mut req);
+                // Any non-empty body selects the EXTENDED read (the engine
+                // sends "ufs"); empty = basic. Mirror the payload by only
+                // emitting the on-demand telemetry keys for an extended req.
+                let extended = !req.is_empty();
+                let body: &[u8] = if extended {
+                    b"cpu_temp=65\n\
+                      soc_temp=72\n\
+                      cpu_freq_mhz=3500\n\
+                      soc_clock_mhz=0\n\
+                      soc_power_mw=85000\n\
+                      cpu_usage_pct=37\n\
+                      fan_duty_pct=55\n\
+                      product_shape=2\n"
+                } else {
+                    b"cpu_temp=65\n\
+                      soc_temp=72\n\
+                      cpu_freq_mhz=3500\n\
+                      soc_clock_mhz=0\n\
+                      soc_power_mw=85000\n"
+                };
                 send_frame(&mut stream, FrameType::HwTempsAck, body);
             }
             FrameType::HwPower => {

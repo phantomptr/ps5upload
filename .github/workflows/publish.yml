@@ -186,9 +186,51 @@ jobs:
             libfuse2 \
             patchelf \
             build-essential \
+            clang \
+            libclang-dev \
             curl \
             wget \
             file
+
+      - name: Ensure libclang for bindgen (Windows)
+        if: matrix.platform == 'windows'
+        shell: bash
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          # jpegxr's build runs bindgen, which loads libclang.dll into the
+          # HOST build process. windows-2022 ships LLVM; the leaner
+          # windows-11-arm image may not. Locate a host-arch libclang and
+          # pin LIBCLANG_PATH so clang-sys resolves it deterministically.
+          # Non-destructive: when a usable LLVM is already present we only
+          # export the path — a runner that already builds keeps working.
+          set -u
+          find_libclang() {
+            for d in \
+              "/c/Program Files/LLVM/bin" \
+              "/c/Program Files/Microsoft Visual Studio/2022/Enterprise/VC/Tools/Llvm/ARM64/bin" \
+              "/c/Program Files/Microsoft Visual Studio/2022/Enterprise/VC/Tools/Llvm/bin" \
+              "/c/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/ARM64/bin" \
+              "/c/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/bin"; do
+              if [ -f "$d/libclang.dll" ]; then echo "$d"; return 0; fi
+            done
+            return 1
+          }
+          dir="$(find_libclang || true)"
+          # Only auto-install on x64: choco's llvm is an x64 build and an
+          # x64 libclang.dll can't load into an arm64 host process, so on
+          # arm64 we rely on the image's preinstalled (arm64) LLVM above.
+          if [ -z "$dir" ] && [ "$ARCH" = "x64" ]; then
+            choco install llvm -y --no-progress
+            dir="$(find_libclang || true)"
+          fi
+          if [ -n "$dir" ]; then
+            win="$(cygpath -w "$dir")"
+            echo "LIBCLANG_PATH=$win" >> "$GITHUB_ENV"
+            echo "Using libclang at: $win"
+          else
+            echo "WARNING: no host libclang found; jpegxr/bindgen may fail" >&2
+          fi
 
       - name: Install client deps
         working-directory: client

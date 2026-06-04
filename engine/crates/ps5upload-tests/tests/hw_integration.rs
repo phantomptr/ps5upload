@@ -38,11 +38,28 @@ fn hw_info_round_trip() {
 #[test]
 fn hw_temps_round_trip() {
     let srv = MockServer::start();
-    let t = hw_temps(&srv.addr).expect("hw_temps");
+    // BASIC read (extended=false): the always-safe sensors only. The
+    // on-demand telemetry comes back as -1 = "unavailable".
+    let t = hw_temps(&srv.addr, false).expect("hw_temps");
     assert_eq!(t.cpu_temp, 65);
     assert_eq!(t.soc_temp, 72);
     assert_eq!(t.cpu_freq_mhz, 3500);
     assert_eq!(t.soc_power_mw, 85_000);
+    assert_eq!(t.cpu_usage_pct, -1, "basic read omits CPU usage");
+    assert_eq!(t.fan_duty_pct, -1, "basic read omits fan duty");
+    assert_eq!(t.product_shape, -1, "basic read omits product shape");
+}
+
+#[test]
+fn hw_temps_extended_round_trip() {
+    let srv = MockServer::start();
+    // EXTENDED read (extended=true): the on-demand telemetry is present.
+    let t = hw_temps(&srv.addr, true).expect("hw_temps extended");
+    assert_eq!(t.cpu_temp, 65);
+    assert_eq!(t.soc_power_mw, 85_000);
+    assert_eq!(t.cpu_usage_pct, 37);
+    assert_eq!(t.fan_duty_pct, 55);
+    assert_eq!(t.product_shape, 2);
 }
 
 #[test]
@@ -90,7 +107,7 @@ fn concurrent_hw_requests_dont_race() {
             // Mix up the request types so threads compete across
             // different code paths, not just the same one.
             let _ = hw_info(&s.addr);
-            let _ = hw_temps(&s.addr);
+            let _ = hw_temps(&s.addr, false);
             let _ = hw_power(&s.addr);
             let _ = app_list_registered(&s.addr);
         }));

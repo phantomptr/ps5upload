@@ -166,7 +166,9 @@ jobs:
             libsoup-3.0-dev \
             libjavascriptcoregtk-4.1-dev \
             patchelf \
-            build-essential
+            build-essential \
+            clang \
+            libclang-dev
 
       - name: Cache cargo target
         uses: actions/cache@v5

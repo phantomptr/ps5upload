@@ -128,7 +128,7 @@ connection_step3_hint: "Vào tab Tải lên và thả vào thư mục game, ản
 connection_go_upload: "Đến Tải lên",
 
 hardware_title: "Phần cứng",
-hardware_description: "Thông tin hệ thống, nhiệt độ và thời gian hoạt động trực tiếp của PS5. Tự động làm mới mỗi 5 giây khi payload được kết nối.",
+hardware_description: "Thông tin hệ thống, thời gian hoạt động và bộ nhớ tự động làm mới mỗi 5 giây khi payload được kết nối. Nhiệt độ và xung nhịp CPU trực tiếp được đọc theo yêu cầu — nhấp Read sensors. Một số firmware không cung cấp đủ cảm biến; mọi chỉ số không khả dụng sẽ hiển thị dưới dạng dấu gạch ngang.",
 hardware_read_error: "Không thể đọc thông tin phần cứng",
 hardware_temperatures: "Nhiệt độ",
 hardware_performance: "Hiệu năng",
@@ -657,7 +657,7 @@ nanodns_not_loaded_body:
   "Không có /data/nanodns/nanodns.ini trên console — hãy nạp nanoDNS một lần từ tab Payloads (nó sẽ ghi cấu hình mặc định ở lần chạy đầu), rồi quay lại để sửa.",
 nanodns_dns_howto_title: "Trỏ DNS của PS5 vào nanoDNS",
 nanodns_dns_howto_body:
-  "Trên PS5: Cài đặt → Mạng → Thiết lập Internet → (kết nối của bạn) → Tùy chỉnh → Cài đặt DNS → Thủ công, và đặt DNS chính thành {ip}. Việc đó yêu cầu bind=0.0.0.0 bên dưới (mặc định 127.0.0.1 chỉ phục vụ console cục bộ — với trường hợp đó, đặt DNS chính thành 127.0.0.1).",
+  "Trên PS5: Cài đặt → Mạng → Thiết lập Internet → (kết nối của bạn) → Tùy chỉnh → Cài đặt DNS → Thủ công, và đặt DNS chính thành địa chỉ trong thiết lập bind ở mục [general] của /data/nanodns/nanodns.ini bên dưới — ví dụ, với bind=127.0.0.1, đặt DNS chính thành 127.0.0.1.",
 nanodns_save_error: "Không thể lưu",
 nanodns_saved: "Đã lưu cấu hình nanoDNS",
 nanodns_saved_body:

@@ -128,7 +128,7 @@ connection_step3_hint: "Upload タブに移動し、ゲームフォルダ、.exf
 connection_go_upload: "Upload へ",
 
 hardware_title: "ハードウェア",
-hardware_description: "PS5 のリアルタイムシステム情報、温度、稼働時間。Payload 接続中は5秒ごとに自動更新。",
+hardware_description: "システム情報・稼働時間・ストレージは、Payload 接続中は5秒ごとに自動更新されます。リアルタイムの温度と CPU クロックはオンデマンドで読み取ります（Read sensors をクリック）。ファームウェアによっては一部のセンサーが利用できず、その場合はダッシュで表示されます。",
 hardware_read_error: "ハードウェア情報を読み取れません",
 hardware_temperatures: "温度",
 hardware_performance: "パフォーマンス",
@@ -656,7 +656,7 @@ nanodns_not_loaded_body:
   "本体に /data/nanodns/nanodns.ini がありません。Payloads タブから nanoDNS を一度読み込んでください（初回実行時にデフォルト設定が書き込まれます）。その後、戻って編集してください。",
 nanodns_dns_howto_title: "PS5 の DNS を nanoDNS に向ける",
 nanodns_dns_howto_body:
-  "PS5 で: 設定 → ネットワーク → インターネット接続を設定する → (使用する接続) → カスタム → DNS設定 → 手動 を選び、プライマリ DNS を {ip} に設定します。これには下の bind=0.0.0.0 が必要です（デフォルトの 127.0.0.1 は本体内のみに提供します。その場合はプライマリ DNS を 127.0.0.1 に設定してください）。",
+  "PS5 で: 設定 → ネットワーク → インターネット接続を設定する → (使用する接続) → カスタム → DNS設定 → 手動 を選び、下の /data/nanodns/nanodns.ini の [general] セクションにある bind 設定のアドレスをプライマリ DNS に設定します。例えば bind=127.0.0.1 の場合は、プライマリ DNS を 127.0.0.1 に設定します。",
 nanodns_save_error: "保存できませんでした",
 nanodns_saved: "nanoDNS の設定を保存しました",
 nanodns_saved_body:

@@ -967,6 +967,17 @@ export interface HwTemps {
   soc_clock_mhz: number;
   /** milliwatts */
   soc_power_mw: number;
+  /** Average CPU usage across cores, 0–100. `-1` = unavailable (basic
+   *  read, or the API isn't exported on this firmware). Populated only by
+   *  an extended ("Read sensors") read. */
+  cpu_usage_pct: number;
+  /** Current fan duty, 0–100 (approximate). `-1` = unavailable. Extended
+   *  read only. */
+  fan_duty_pct: number;
+  /** Raw Sony "basic product shape" code (distinguishes hardware
+   *  families). `-1` = unavailable. The model string stays the primary
+   *  identifier; this is a cross-check. Extended read only. */
+  product_shape: number;
 }
 
 export interface HwPower {
@@ -990,9 +1001,17 @@ export async function fetchHwInfo(transferAddr: string): Promise<HwInfo> {
   return invoke<HwInfo>("ps5_hw_info", { addr });
 }
 
-export async function fetchHwTemps(transferAddr: string): Promise<HwTemps> {
+/** Read live sensors. `extended` (default false) selects the on-demand
+ *  telemetry — SoC power, CPU usage, fan duty, product shape. Pass `true`
+ *  only from an explicit user action ("Read sensors"); the Dashboard's
+ *  auto-poll must call this WITHOUT extended so its 5s tick only ever
+ *  triggers the basic, always-safe read on the payload. */
+export async function fetchHwTemps(
+  transferAddr: string,
+  extended = false,
+): Promise<HwTemps> {
   const addr = toMgmtAddr(transferAddr);
-  return invoke<HwTemps>("ps5_hw_temps", { addr });
+  return invoke<HwTemps>("ps5_hw_temps", { addr, extended });
 }
 
 export async function fetchHwPower(transferAddr: string): Promise<HwPower> {
@@ -1453,9 +1472,28 @@ export interface ScreenshotList {
   items: ScreenshotEntry[];
 }
 
-/** List screenshots from /user/av_contents/thumbnails/photo. */
+/** List screenshots from the PS5 (full-res `/user/av_contents/photo` plus
+ *  thumbnails, deduped so each shot appears once). */
 export async function screenshotsList(addr: string): Promise<ScreenshotList> {
   return invoke<ScreenshotList>("screenshots_list", { addr });
+}
+
+/** Convert a downloaded PS5 screenshot (`.jxr` / JPEG XR — HDR, not
+ *  viewable in normal apps) into an SDR PNG. Decoding + HDR→SDR
+ *  tone-mapping happen in-process in the Rust backend (jxrlib, no external
+ *  tool). `srcPath`/`dstPath` are local host paths; `deleteSource` removes
+ *  the intermediate `.jxr` after a successful conversion. Returns the PNG
+ *  path. Desktop only — errors on mobile. */
+export async function convertScreenshot(
+  srcPath: string,
+  dstPath: string,
+  deleteSource: boolean,
+): Promise<string> {
+  return invoke<string>("screenshot_convert", {
+    srcPath,
+    dstPath,
+    deleteSource,
+  });
 }
 
 // ─── Save data .zip backup / restore ──────────────────────────────────

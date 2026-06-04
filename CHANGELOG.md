@@ -4,6 +4,25 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.26.0
+
+- **Turn PS5 screenshots into normal pictures.** The PS5 saves screenshots as
+  HDR `.jxr` files that most photo viewers and browsers can't open. The
+  Screenshots screen now has a **Convert** button on each shot that turns it into
+  a regular `.png` you can open and share anywhere — no extra apps or extensions
+  needed. (Desktop app.)
+- **Fan speed in the Hardware screen.** "Read sensors" now also shows the
+  console's current fan duty, next to temperatures and CPU clock.
+- **Reading sensors is safe on every console.** The one sensor that could freeze
+  the helper on some firmware (power draw) is no longer read, so live readings
+  can never knock the connection offline — on any PS5 model or firmware.
+- Screenshots that used to appear twice (the full-size shot and its thumbnail)
+  now show as a single row.
+- Build and packaging fixes so the app keeps building cleanly on Windows, macOS,
+  and Linux.
+
+---
+
 ## 2.25.5
 
 - **System → Hardware no longer drops the connection.** On some consoles,
