@@ -474,8 +474,10 @@ export default function InstalledAppsScreen() {
   const smpRunning = smp?.running === true;
   const discNeedsSmp = discs.length > 0 && !smpRunning;
 
+  // NOTE: `key` is passed explicitly at each call site (`<AppCard key={t.titleId}
+  // {...cardProps(t)} />`) — never spread, or React warns that a key in a
+  // spread object is ignored.
   const cardProps = (t: InstalledTitle) => ({
-    key: t.titleId,
     host,
     title: t,
     busy: busyId === t.titleId,
@@ -630,7 +632,7 @@ export default function InstalledAppsScreen() {
               count={installed.length}
             >
               {installed.map((t) => (
-                <AppCard {...cardProps(t)} />
+                <AppCard key={t.titleId} {...cardProps(t)} />
               ))}
             </Section>
           ) : null}
@@ -647,7 +649,7 @@ export default function InstalledAppsScreen() {
               count={discs.length}
             >
               {discs.map((t) => (
-                <AppCard {...cardProps(t)} />
+                <AppCard key={t.titleId} {...cardProps(t)} />
               ))}
             </Section>
           ) : null}
@@ -664,7 +666,7 @@ export default function InstalledAppsScreen() {
               count={folders.length}
             >
               {folders.map((t) => (
-                <AppCard {...cardProps(t)} />
+                <AppCard key={t.titleId} {...cardProps(t)} />
               ))}
             </Section>
           ) : null}
@@ -681,7 +683,7 @@ export default function InstalledAppsScreen() {
               count={system.length}
             >
               {system.map((t) => (
-                <AppCard {...cardProps(t)} />
+                <AppCard key={t.titleId} {...cardProps(t)} />
               ))}
             </Section>
           ) : null}
