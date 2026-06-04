@@ -4,7 +4,7 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## 2.26.0
+## 2.26.1
 
 - **Turn PS5 screenshots into normal pictures.** The PS5 saves screenshots as
   HDR `.jxr` files that most photo viewers and browsers can't open. The
