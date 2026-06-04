@@ -8,6 +8,8 @@ import {
   fsMount,
   fsUnmount,
   jobStatus,
+  smpManualInstall,
+  smpStatus,
   resumeTxidLookup,
   resumeTxidRemember,
   resumeTxidForget,
@@ -364,7 +366,28 @@ export const useTransferStore = create<TransferState>((set) => {
           // PS5 with the UI showing nothing. Skip-and-return keeps
           // user-visible state honest.
           if (isLive() && sourceKind === "image" && mountAfterUpload) {
+            // ShadowMount+ hand-off (same as the queue path, uploadQueue.ts):
+            // when SMP is running it OWNS mount + register, so hand the image
+            // off via its watched manual.lst and SKIP our own mount — no
+            // double-mount race for /user/app + app.db. Best-effort: fall back
+            // to the native mount below if SMP is unreachable.
+            const mgmt = mgmtAddr(hostFromAddr(addr));
+            let handedToSmp = false;
             try {
+              const smp = await smpStatus(mgmt);
+              if (smp.running) {
+                const r = await smpManualInstall(mgmt, finalDest);
+                handedToSmp = true;
+                mountedAt = r.added
+                  ? "handed to ShadowMount+"
+                  : "already in ShadowMount+ list";
+              }
+            } catch {
+              handedToSmp = false;
+            }
+            // Only mount it ourselves when SMP didn't take it.
+            if (!handedToSmp)
+              try {
               // Mount point lives next to the source file: strip the
               // image extension from finalDest. So an upload to
               // `/data/homebrew/MyGame.ffpkg` mounts at
