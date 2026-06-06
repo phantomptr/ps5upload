@@ -94,7 +94,7 @@ mdns-sd = { version = "0.20", default-features = false, features = ["async"] }
 # Ethernet + Wi-Fi + USB-tether simultaneously. Pure-Rust, cross-platform
 # (macOS/Windows/Linux), no system linkage; keeps the single-toolchain
 # cross-compile story intact.
-if-addrs = "0.13"
+if-addrs = "0.15"
 
 # libc for `statvfs` in the USB autoloader's drive enumeration
 # (commands/usb_autoloader.rs). Already pulled in transitively via
