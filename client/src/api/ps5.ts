@@ -4,7 +4,10 @@
 // allowlisting, and host-local calls (folder inspection, ELF loader
 // TCP send) stay in-process.
 
-import { invoke, Channel } from "@tauri-apps/api/core";
+import { Channel } from "@tauri-apps/api/core";
+// Logging wrapper: every command leaves a trace breadcrumb + logs failures at
+// warn. See lib/invokeLogged.ts. (Channel still comes straight from core.)
+import { invoke } from "../lib/invokeLogged";
 import {
   appendManualListLine,
   SMP_MANUAL_LIST_PATH,
@@ -1772,6 +1775,22 @@ export async function procModulesGet(addr: string, pid?: number): Promise<Module
     addr,
     pid: pid ?? null,
   });
+}
+
+export interface ProcEntry {
+  pid: number;
+  name: string;
+}
+export interface ProcList {
+  ok: boolean;
+  procs: ProcEntry[];
+  truncated?: boolean;
+  error?: string;
+}
+/** Full running-process list (pid + name) — the rich "what's running" used by
+ *  the bug-report snapshot. Distinct from {@link procModulesGet}. */
+export async function procListGet(addr: string): Promise<ProcList> {
+  return invoke<ProcList>("proc_list_get", { addr });
 }
 
 // ─── Shell + CRC32 + app.db + speed test ──────────────────────────────

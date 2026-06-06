@@ -1,7 +1,7 @@
 {
   "name": "ps5upload-client",
   "private": true,
-  "version": "2.26.1",
+  "version": "2.27.0",
   "description": "The all-in-one PS5 companion app.",
   "homepage": "https://github.com/phantomptr/ps5upload",
   "author": "PhantomPtr <phantomptr@gmail.com>",
@@ -32,6 +32,7 @@
     "@tauri-apps/plugin-notification": "^2.3.1",
     "@tauri-apps/plugin-shell": "^2.3.5",
     "clsx": "^2.1.1",
+    "html-to-image": "^1.11.13",
     "lucide-react": "^1.17.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",

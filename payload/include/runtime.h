@@ -173,6 +173,14 @@ typedef struct {
 int runtime_init(runtime_state_t *state);
 int runtime_write_ownership(const runtime_state_t *state);
 int runtime_clear_ownership(const runtime_state_t *state);
+/* Best-effort SIGKILL of a previous instance that crashed and lingered (the
+ * cooperative takeover only handles a healthy old instance). Call AFTER
+ * runtime_try_takeover and BEFORE runtime_write_ownership. See runtime.c. */
+void runtime_reap_prior_instance(runtime_state_t *state);
+/* Arm a detached watchdog that force-`_exit()`s the process if the graceful
+ * shutdown wedges, so a stuck shutdown can't leave an orphan. Call once when
+ * shutdown begins (after runtime_server_loop returns). */
+void runtime_arm_shutdown_watchdog(int exit_code);
 int runtime_ensure_directories(void);
 /* Post-startup cleanup: unmount `/mnt/ps5upload/` mounts whose backing
  * dev node is gone (orphans from a previous session). Called once at

@@ -73,12 +73,16 @@ pub(crate) fn record(level: &'static str, mut msg: String) {
         msg.truncate(cut);
         msg.push_str("…[truncated]");
     }
-    // Tag the stderr copy so `tauri dev` output is still readable.
-    eprintln!("[engine:{level}] {msg}");
+    let ts = now_ms();
+    // Tag the stderr copy with a level + epoch-ms so it's still readable in
+    // `tauri dev` AND time-filterable once captured. The Tauri shell tees this
+    // stderr to `<app_local_data_dir>/engine/engine.log` (see engine.rs
+    // pipe_tagged); the leading timestamp lets the bug-report bundle window it.
+    eprintln!("[engine:{level}] ts={ts} {msg}");
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     let entry = LogEntry {
         seq,
-        ts_ms: now_ms(),
+        ts_ms: ts,
         level,
         msg,
     };
@@ -121,4 +125,13 @@ macro_rules! log_warn {
 #[macro_export]
 macro_rules! log_error {
     ($($arg:tt)*) => { $crate::engine_log::record("error", format!($($arg)*)) };
+}
+
+/// Debug-level shortcut. Always recorded into the ring + engine.log (the ring
+/// has no min-level filter), but the renderer's disk sink only persists it
+/// when the user has lowered the log level to debug/trace — so per-request
+/// trace doesn't spam the default-level bug bundle's app.jsonl.
+#[macro_export]
+macro_rules! log_debug {
+    ($($arg:tt)*) => { $crate::engine_log::record("debug", format!($($arg)*)) };
 }

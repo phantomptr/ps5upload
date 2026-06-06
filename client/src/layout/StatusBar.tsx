@@ -1,6 +1,10 @@
+import { useState } from "react";
+import { Camera, Check, Loader2, AlertTriangle } from "lucide-react";
+
 import { useConnectionStore } from "../state/connection";
 import { parsePS5Firmware } from "../lib/ps5Firmware";
 import { useTr } from "../state/lang";
+import { captureAppScreenshot } from "../lib/captureScreenshot";
 
 /**
  * App-footer status strip: engine + payload liveness, plus the versions
@@ -65,6 +69,67 @@ export default function StatusBar() {
         </div>
       )}
       <div className="ml-auto">{tr("status_no_active_transfers", undefined, "no active transfers")}</div>
+      <CaptureButton />
     </div>
+  );
+}
+
+/**
+ * Global screenshot capture. Lives in the always-visible footer so a user can
+ * grab WHATEVER screen shows the problem (not just the Bug Report form), with
+ * the capture landing in the gallery the Bug Report page selects from.
+ */
+function CaptureButton() {
+  const tr = useTr();
+  const [state, setState] = useState<"idle" | "busy" | "done" | "fail">("idle");
+
+  const capture = async () => {
+    if (state === "busy") return;
+    setState("busy");
+    try {
+      // Let the button's own spinner paint before the (synchronous-ish)
+      // DOM serialization briefly blocks the main thread.
+      await new Promise((r) => setTimeout(r, 16));
+      await captureAppScreenshot();
+      setState("done");
+    } catch {
+      setState("fail");
+    }
+    setTimeout(() => setState("idle"), 1800);
+  };
+
+  const icon =
+    state === "busy" ? (
+      <Loader2 size={13} className="animate-spin" />
+    ) : state === "done" ? (
+      <Check size={13} className="text-[var(--color-good)]" />
+    ) : state === "fail" ? (
+      <AlertTriangle size={13} className="text-[var(--color-bad)]" />
+    ) : (
+      <Camera size={13} />
+    );
+
+  return (
+    <button
+      type="button"
+      onClick={capture}
+      disabled={state === "busy"}
+      title={tr(
+        "status_capture_tooltip",
+        undefined,
+        "Capture a screenshot of this screen for a bug report",
+      )}
+      aria-label={tr("status_capture", undefined, "Capture screenshot")}
+      className="flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-[var(--color-surface-3)]"
+    >
+      {icon}
+      <span className="hidden sm:inline">
+        {state === "done"
+          ? tr("status_capture_done", undefined, "Saved")
+          : state === "fail"
+            ? tr("status_capture_fail", undefined, "Failed")
+            : tr("status_capture", undefined, "Capture")}
+      </span>
+    </button>
   );
 }

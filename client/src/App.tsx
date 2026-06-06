@@ -46,6 +46,7 @@ const FAQScreen = lazy(() => import("./screens/FAQ"));
 const LogsScreen = lazy(() => import("./screens/Logs"));
 const ActivityScreen = lazy(() => import("./screens/Activity"));
 const AuditLogScreen = lazy(() => import("./screens/AuditLog"));
+const BugReportScreen = lazy(() => import("./screens/BugReport"));
 
 /**
  * Suspense fallback. Deliberately minimal — a spinner would
@@ -252,6 +253,14 @@ export default function App() {
           element={
             <Suspense fallback={<ScreenLoader />}>
               <ActivityScreen />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/bug-report"
+          element={
+            <Suspense fallback={<ScreenLoader />}>
+              <BugReportScreen />
             </Suspense>
           }
         />

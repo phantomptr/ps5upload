@@ -291,6 +291,17 @@ enum JobState {
 /// branch so the structured-field plumbing stays consistent.
 fn job_failed_from_err(started_at_ms: u64, completed_at_ms: u64, err: &anyhow::Error) -> JobState {
     let (reason, detail) = extract_payload_error(err);
+    // Central choke point for ALL async transfer-job failures (file, dir,
+    // reconcile, download). Logging here means a mid-transfer death — the
+    // "upload failed halfway through" case — shows the engine's full error
+    // chain in engine.log, instead of the handler logging only the START.
+    log_warn!(
+        "transfer job failed: {err:#}{}",
+        reason
+            .as_deref()
+            .map(|r| format!(" (reason={r})"))
+            .unwrap_or_default()
+    );
     JobState::Failed {
         started_at_ms,
         completed_at_ms,
@@ -425,6 +436,26 @@ fn auto_chmod_uploaded_tree(transfer_addr: &str, dest: &str) {
 /// uses a UUIDv4 token in the URL as the auth gate (~122 bits of
 /// entropy, rotated per install — the trust boundary is the local LAN,
 /// same as any other on-LAN homebrew installer).
+/// Log every (allowed) request: method, path, status, duration. Recorded at
+/// `debug` so it always lands in engine.log (rotated, crash-survivable) for a
+/// complete "what was the engine doing when it hung" trace, but only reaches
+/// the renderer's windowed app.jsonl when the user lowers the level to
+/// debug/trace. 5xx is bumped to `warn` so failures show at the default level.
+async fn log_requests(req: Request, next: Next) -> axum::response::Response {
+    let method = req.method().clone();
+    let path = req.uri().path().to_string();
+    let start = std::time::Instant::now();
+    let resp = next.run(req).await;
+    let ms = start.elapsed().as_millis();
+    let status = resp.status().as_u16();
+    if status >= 500 {
+        log_warn!("{method} {path} -> {status} ({ms}ms)");
+    } else {
+        log_debug!("{method} {path} -> {status} ({ms}ms)");
+    }
+    resp
+}
+
 async fn loopback_guard(
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     req: Request,
@@ -4102,6 +4133,31 @@ async fn engine_logs_tail(Query(q): Query<EngineLogsQuery>) -> impl IntoResponse
     )
 }
 
+#[derive(Deserialize)]
+struct DebugCrashQuery {
+    mode: Option<String>,
+}
+
+/// GET /api/debug/crash?mode=panic|exit — fault-injection for VALIDATING the
+/// crash-logging paths (panic hook → ring, stderr-EOF → engine-exit event).
+/// Hard-gated behind `PS5UPLOAD_ENGINE_DEBUG=1`: with the env unset (every
+/// normal app launch) it 404s, so it can never be triggered in production.
+async fn debug_crash(Query(q): Query<DebugCrashQuery>) -> axum::response::Response {
+    if std::env::var("PS5UPLOAD_ENGINE_DEBUG").ok().as_deref() != Some("1") {
+        return (StatusCode::NOT_FOUND, "disabled").into_response();
+    }
+    match q.mode.as_deref() {
+        // Unwinds the handler task; the global panic hook records the panic
+        // into the ring (the thing that reaches the bug bundle). tokio keeps
+        // the process alive, so the engine survives — this tests the HOOK.
+        Some("panic") => panic!("forced debug panic (PS5UPLOAD_ENGINE_DEBUG)"),
+        // Exits the process; the desktop parent's stderr-EOF watcher then
+        // emits ps5upload-engine-exit. Tests process-death detection.
+        Some("exit") => std::process::exit(7),
+        _ => (StatusCode::BAD_REQUEST, "mode=panic|exit").into_response(),
+    }
+}
+
 /// GET /api/version — engine self-identification.
 ///
 /// Returned shape: `{"version": "x.y.z"}`. Used by the Tauri shell
@@ -4377,6 +4433,7 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/jobs/{id}", get(get_job))
         .route("/api/events", get(events_stream))
         .route("/api/engine-logs", get(engine_logs_tail))
+        .route("/api/debug/crash", get(debug_crash))
         .with_state(state)
         // .pkg install — sessions live in their own state because the
         // HTTP-host serving handler needs Mutex-guarded session lookup
@@ -4401,6 +4458,9 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         // paths is well under 30 MiB encoded JSON) and small enough
         // that a runaway request can't blow up RAM on a 4 GB box.
         .layer(axum::extract::DefaultBodyLimit::max(64 * 1024 * 1024))
+        // Request trace — inside the loopback guard (so we don't log rejected
+        // LAN probes), wrapping the handlers so it times the full request.
+        .layer(middleware::from_fn(log_requests))
         // Loopback-guard middleware MUST be applied last so it ends
         // up the OUTERMOST layer — axum wraps each `.layer()` around
         // the one below it. Pre-2.2.52 fix-round-2 the order was
@@ -4511,7 +4571,33 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
 /// spawns the sidecar), binds `0.0.0.0`, installs the stdin parent-
 /// watcher, and uses the historic `process::exit` codes on failure.
 /// Behavior preserved verbatim from the former `main`.
+/// Install a panic hook that records the panic into the engine log ring (so it
+/// reaches the in-app Log tab + the bug bundle, not just stderr) while still
+/// running the default hook (stderr print). Desktop sidecar only — the mobile
+/// in-process path must not steal the host app's panic hook.
+fn install_panic_logger() {
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let loc = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_else(|| "<unknown>".to_string());
+        let msg = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "<non-string panic payload>".to_string());
+        let bt = std::backtrace::Backtrace::force_capture();
+        // engine_log caps + truncates the message, so a huge backtrace can't
+        // blow up the ring.
+        engine_log::record("error", format!("PANIC at {loc}: {msg}\n{bt}"));
+        default(info);
+    }));
+}
+
 pub async fn run_cli() {
+    install_panic_logger();
     // `PS5UPLOAD_ENGINE_PORT` matches the name the desktop client sets
     // when it spawns the sidecar. Previous generic `ENGINE_PORT` was too
     // easy to collide with other tools.

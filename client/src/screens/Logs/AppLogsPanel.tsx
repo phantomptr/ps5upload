@@ -8,16 +8,19 @@ import {
   Download,
 } from "lucide-react";
 
+import { invoke } from "@tauri-apps/api/core";
+
 import {
   useLogsStore,
   type LogEntry,
   type LogLevel,
 } from "../../state/logs";
+import { useDiagSettingsStore, LOG_LEVELS } from "../../state/diagSettings";
 import { EmptyState, Button } from "../../components";
 import { useTr } from "../../state/lang";
 import { writeClipboard } from "../../lib/clipboard";
 
-const LEVEL_ORDER: LogLevel[] = ["error", "warn", "info", "debug"];
+const LEVEL_ORDER: LogLevel[] = ["error", "warn", "info", "debug", "trace"];
 
 const LEVEL_META: Record<LogLevel, { label: string; tone: string; bg: string }> = {
   error: {
@@ -37,6 +40,11 @@ const LEVEL_META: Record<LogLevel, { label: string; tone: string; bg: string }> 
   },
   debug: {
     label: "DBG",
+    tone: "text-[var(--color-muted)]",
+    bg: "bg-[var(--color-surface-3)]",
+  },
+  trace: {
+    label: "TRC",
     tone: "text-[var(--color-muted)]",
     bg: "bg-[var(--color-surface-3)]",
   },
@@ -66,6 +74,8 @@ export default function AppLogsPanel() {
   const filter = useLogsStore((s) => s.filter);
   const setFilter = useLogsStore((s) => s.setFilter);
   const clearLogs = useLogsStore((s) => s.clear);
+  const logLevel = useDiagSettingsStore((s) => s.logLevel);
+  const setLogLevel = useDiagSettingsStore((s) => s.setLogLevel);
 
   // Transient button feedback. A silent success looked identical to a silent
   // failure, which is why Copy/Download read as "not working".
@@ -83,6 +93,7 @@ export default function AppLogsPanel() {
       warn: 0,
       info: 0,
       debug: 0,
+      trace: 0,
     };
     for (const e of entries) m[e.level] += 1;
     return m;
@@ -185,6 +196,38 @@ export default function AppLogsPanel() {
         >
           {tr("clear", undefined, "Clear")}
         </Button>
+      </div>
+
+      {/* Persistent disk-log controls. These logs are written to
+          ~/.ps5upload/logs/ so a bug report can package a time window; the
+          level here gates the MINIMUM severity recorded (not what's shown
+          above). */}
+      <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2 text-xs">
+        <span className="text-[var(--color-muted)]">
+          {tr(
+            "logs_disk_hint",
+            undefined,
+            "Saved to disk for bug reports. Recording level:",
+          )}
+        </span>
+        <select
+          value={logLevel}
+          onChange={(e) => setLogLevel(e.target.value as LogLevel)}
+          className="rounded border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-xs"
+        >
+          {LOG_LEVELS.map((l) => (
+            <option key={l} value={l}>
+              {tr(`log_level_${l}`, undefined, l[0].toUpperCase() + l.slice(1))}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          onClick={() => void invoke("diag_log_open_dir").catch(() => {})}
+          className="ml-auto text-[var(--color-accent)] hover:underline"
+        >
+          {tr("logs_open_folder", undefined, "Open logs folder")}
+        </button>
       </div>
 
       <div className="mb-4 flex flex-wrap items-center gap-1.5 text-xs">

@@ -2,6 +2,7 @@ import { getVersion } from "@tauri-apps/api/app";
 
 import { bundledPayloadPath, payloadCheck, sendPayload } from "../api/ps5";
 import { compareVersions } from "./semver";
+import { log } from "../state/logs";
 
 export type EnsurePayloadResult =
   | "current"
@@ -61,15 +62,21 @@ export async function ensurePayloadCurrent(
     return "current";
   }
   // Need to push. Locate the bundled ELF + send it.
+  log.info(
+    "payload",
+    `(re)deploying helper to ${host} (running=${running ?? "none"}, want=${appVersion})`,
+  );
   let elfPath: string;
   try {
     elfPath = await bundledPayloadPath();
-  } catch {
+  } catch (e) {
+    log.warn("payload", `cannot locate bundled payload ELF: ${e instanceof Error ? e.message : String(e)}`);
     return "no-push";
   }
   try {
     await sendPayload(host, elfPath);
-  } catch {
+  } catch (e) {
+    log.warn("payload", `payload send to ${host} failed: ${e instanceof Error ? e.message : String(e)}`);
     return "no-push";
   }
   // Poll up to ~30 s for the new payload to come up + report matching

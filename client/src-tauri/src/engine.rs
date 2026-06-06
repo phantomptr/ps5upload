@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::process::{Child, Command};
 use tokio::sync::OnceCell;
 use tokio::time::{sleep, Instant};
@@ -422,6 +422,11 @@ pub async fn start(app: &AppHandle) -> Result<&'static str> {
         // doesn't auto-exit when the dev pipes a file in or
         // backgrounds it).
         .env("PS5UPLOAD_PARENT_WATCH", "1")
+        // Make engine panics include a backtrace in the captured stderr /
+        // engine.log + the panic hook's ring entry (see run_cli's
+        // install_panic_logger). Without this a panic is just a one-line
+        // message with no call site, which is little help in a bug report.
+        .env("RUST_BACKTRACE", "1")
         // kill_on_drop is the GRACEFUL teardown path (Drop on the
         // Child runs when the desktop shell exits cleanly); the
         // stdin-EOF watcher above is the BACKUP for ungraceful exits
@@ -464,7 +469,27 @@ pub async fn start(app: &AppHandle) -> Result<&'static str> {
                 tokio::spawn(pipe_tagged(out, "[engine] ", log_writer.clone()));
             }
             if let Some(err) = child.stderr.take() {
-                tokio::spawn(pipe_tagged(err, "[engine:err] ", log_writer.clone()));
+                // When the engine's stderr hits EOF the process has (almost
+                // certainly) exited. Use that as the post-startup crash signal:
+                // reap, then emit an event the renderer logs + flushes into the
+                // bug bundle. Previously a mid-session engine death was
+                // invisible — it just looked like API calls timing out.
+                let app_exit = app.clone();
+                let lw = log_writer.clone();
+                tokio::spawn(async move {
+                    pipe_tagged(err, "[engine:err] ", lw).await;
+                    // Take the child out (deadlock-free: stderr EOF means it's
+                    // already exiting, so wait() returns promptly) and read its
+                    // status. If shutdown already took it, that's fine.
+                    let child_opt = { child_lock().await.lock().await.take() };
+                    let code = if let Some(mut c) = child_opt {
+                        c.wait().await.ok().and_then(|s| s.code())
+                    } else {
+                        None
+                    };
+                    eprintln!("[engine-watch] engine process exited (code {code:?})");
+                    let _ = app_exit.emit("ps5upload-engine-exit", code);
+                });
             }
         }
     }

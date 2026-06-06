@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../lib/invokeLogged";
 import { ensurePayloadCurrent } from "../lib/ensurePayloadCurrent";
 import { isNpxsContentId } from "../lib/npxs";
 import { stagingBasename } from "../lib/pkgStagingPath";

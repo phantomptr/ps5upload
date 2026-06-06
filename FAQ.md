@@ -1011,6 +1011,50 @@ timestamp in place instead of piling up new rows.
 
 ---
 
+## Reporting a bug / sending logs
+
+**Q: How do I report a bug so it actually gets fixed?**
+Open **Diagnostics → Bug report** in the sidebar. Write what happened
+(steps to reproduce, firmware, jailbreak/loader, file sizes), attach
+screenshots if you have them, then click **Create bug report (.zip)**.
+Post the `.zip` in the **#bugs-report** channel on the Discord. A zip
+with logs is worth ten "it doesn't work" messages — it usually has the
+exact error in it.
+
+**Q: What's in the bundle?**
+A single `.zip` containing only diagnostics (never your games or app
+data):
+
+- `report.json` — app version, OS, your description, and a snapshot of
+  the connected PS5 (model, firmware, storage, running processes,
+  loaded modules).
+- `logs/app.jsonl` — the app's log for the time window you pick.
+- `logs/engine.log` — the transfer engine's full log (survives a crash).
+- `crash-reports/` — anything auto-collected when something errored.
+- `ps5/klog.txt`, `ps5/syslog.txt` — the PS5 kernel logs (if a console
+  was connected).
+- `images/` — the screenshots you attached.
+
+**Q: It's intermittent / hard to reproduce. How do I capture it?**
+On the Bug report page set **Recording level** to **Debug** or
+**Trace**, reproduce the problem, then create the report. The app keeps
+a rolling on-disk log (under `~/.ps5upload/logs/`), so pick a **time
+window** (last 1–120 minutes) that covers when it happened — you don't
+have to catch it live. The level also lives on the **Logs** tab.
+
+**Q: Is it safe to post publicly?**
+Yes by default — **Redact IPs & serial** is on, which strips your PS5's
+IP address and serial number from the bundle. Untick it only if a
+maintainer asks for the raw values in a private channel.
+
+**Q: Where are the logs kept, and do they fill my disk?**
+`~/.ps5upload/logs/` (one file per day). They're capped — files older
+than a few days are dropped and the folder is size-limited — so they
+can't grow without bound. Use **Open logs folder** on the Bug report or
+Logs page to find them.
+
+---
+
 ## Advanced
 
 **Q: Can I run the engine standalone (without the desktop app)?**

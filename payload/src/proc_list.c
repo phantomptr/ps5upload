@@ -194,3 +194,31 @@ int proc_list_get_json(char *buf, size_t cap, size_t *written_out,
     *written_out = w;
     return 0;
 }
+
+int proc_name_by_pid(int pid, char *out, size_t cap) {
+    if (!out || cap == 0) return -1;
+    out[0] = '\0';
+    if (pid <= 0) return -1;
+
+    /* Query just this pid. One kinfo_proc is ~1.1 KiB on 64-bit FreeBSD;
+     * a 2 KiB staging buffer covers it with headroom. */
+    int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, pid};
+    uint8_t kbuf[2048];
+    size_t got = sizeof(kbuf);
+    if (sysctl(mib, 4, kbuf, &got, NULL, 0) != 0) {
+        return -1; /* ESRCH (gone) or ENOMEM (shouldn't happen at 2 KiB) */
+    }
+    if (got < (size_t)(KINFO_TDNAME_OFFSET + 1)) return -1;
+    int ki_structsize = *(int *)kbuf;
+    if (ki_structsize <= 0 ||
+        (size_t)ki_structsize < (size_t)(KINFO_TDNAME_OFFSET + 1) ||
+        (size_t)ki_structsize > got) {
+        return -1;
+    }
+    const char *tdname = (const char *)&kbuf[KINFO_TDNAME_OFFSET];
+    size_t name_max = (size_t)ki_structsize - KINFO_TDNAME_OFFSET;
+    size_t i = 0;
+    for (; i < name_max && i + 1 < cap && tdname[i]; ++i) out[i] = tdname[i];
+    out[i] = '\0';
+    return 0;
+}

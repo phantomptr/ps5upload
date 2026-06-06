@@ -15,8 +15,11 @@
 
 pub mod app_info;
 pub mod app_lifecycle;
+pub mod bug_report;
+pub mod bug_screenshots;
 pub mod companions;
 pub mod crash_reports;
+pub mod diag_log;
 pub mod diagnostics;
 pub mod discover;
 pub mod folder_inspect;
@@ -27,6 +30,7 @@ pub mod payloads;
 pub mod persistence;
 pub mod probes;
 pub mod ps5_engine;
+pub mod reveal;
 pub mod save_archive;
 pub mod save_text_file;
 pub mod saves_screenshots;

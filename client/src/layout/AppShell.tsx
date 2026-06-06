@@ -6,6 +6,7 @@ import StatusBar from "./StatusBar";
 import ActivityBar from "./ActivityBar";
 import { Button } from "../components/Button";
 import { useConnectionStore } from "../state/connection";
+import { log } from "../state/logs";
 import { useUpdateStore } from "../state/update";
 import { engineApi } from "../api/engine";
 import { payloadCheck } from "../api/ps5";
@@ -34,6 +35,7 @@ import { installPlayTimeAccumulator } from "../state/playTime";
 import { useTr } from "../state/lang";
 import { isAndroid } from "../lib/platform";
 import { localFs } from "../api/localFs";
+import { getVersion } from "@tauri-apps/api/app";
 
 /** Background status polling for the engine + payload dots in the
  *  status bar. Runs for the lifetime of the app so the indicators
@@ -47,6 +49,20 @@ function useStatusPolling() {
   const host = useConnectionStore((s) => s.host);
   const setStatus = useConnectionStore((s) => s.setStatus);
   const visible = useDocumentVisible();
+
+  // Proactive health warnings — logged once per distinct condition so the bug
+  // bundle flags a likely root cause (stale helper / no kernel R/W) before the
+  // user even files a report, instead of leaving them to notice a subtle pill.
+  const appVersionRef = useRef<string | null>(null);
+  const warnedMismatchRef = useRef<string | null>(null);
+  const warnedNoUcredRef = useRef<string | null>(null);
+  useEffect(() => {
+    void getVersion()
+      .then((v) => {
+        appVersionRef.current = v;
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (!visible) return;
@@ -107,6 +123,21 @@ function useStatusPolling() {
           const prev = useConnectionStore.getState();
           const carryOver =
             !s.reachable && prev.payloadStatusHost === probedHost;
+          // Log only on an up<->down TRANSITION (not every 10s poll) — a
+          // helper that drops mid-upload is the #1 thing a bug report needs
+          // to show, and it was previously invisible in the logs.
+          const newStatus = s.reachable ? "up" : "down";
+          if (
+            prev.payloadStatusHost === probedHost &&
+            prev.payloadStatus !== "unknown" &&
+            prev.payloadStatus !== newStatus
+          ) {
+            if (newStatus === "down") {
+              log.warn("connection", `helper went DOWN on ${probedHost}`);
+            } else {
+              log.info("connection", `helper came UP on ${probedHost}`);
+            }
+          }
           setStatus({
             payloadStatus: s.reachable ? "up" : "down",
             payloadStatusHost: probedHost,
@@ -135,10 +166,48 @@ function useStatusPolling() {
                 payload: s.payloadVersion,
               });
             }
+
+            // Health: stale helper. A payload older than the app is a frequent
+            // root cause of "feature X doesn't work" — flag it once.
+            const av = appVersionRef.current;
+            if (av && s.payloadVersion && s.payloadVersion !== av) {
+              const key = `${probedHost}:${s.payloadVersion}`;
+              if (warnedMismatchRef.current !== key) {
+                warnedMismatchRef.current = key;
+                log.warn(
+                  "health",
+                  `helper version ${s.payloadVersion} != app ${av} on ${probedHost} — reload the payload (Connection → Replace)`,
+                );
+              }
+            }
+
+            // Health: no kernel R/W (kstuff not loaded) — install/elevation
+            // features are degraded. Warn once per host; reset when it returns.
+            if (s.ucredElevated === false) {
+              if (warnedNoUcredRef.current !== probedHost) {
+                warnedNoUcredRef.current = probedHost;
+                log.warn(
+                  "health",
+                  `kernel R/W unavailable on ${probedHost} (kstuff not loaded) — some install/launch features degraded`,
+                );
+              }
+            } else if (s.ucredElevated === true) {
+              warnedNoUcredRef.current = null;
+            }
           }
         }
-      } catch {
+      } catch (e) {
         if (!cancelled) {
+          const prev = useConnectionStore.getState();
+          if (
+            prev.payloadStatusHost === probedHost &&
+            prev.payloadStatus === "up"
+          ) {
+            log.warn(
+              "connection",
+              `helper went DOWN on ${probedHost} (probe error: ${e instanceof Error ? e.message : String(e)})`,
+            );
+          }
           setStatus({
             payloadStatus: "down",
             payloadStatusHost: probedHost,

@@ -51,6 +51,9 @@ function routeToLogStore(entry: EngineLogEntry) {
     case "debug":
       log.debug("engine", msg);
       break;
+    case "trace":
+      log.trace("engine", msg);
+      break;
     default:
       log.info("engine", msg);
       break;

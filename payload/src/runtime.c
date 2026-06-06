@@ -1640,11 +1640,12 @@ int runtime_write_ownership(const runtime_state_t *state) {
         return -1;
     }
     fprintf(fp,
-            "instance_id=%llu\nruntime_port=%d\nstartup_reason=%d\nstarted_at_unix=%llu\n",
+            "instance_id=%llu\nruntime_port=%d\nstartup_reason=%d\nstarted_at_unix=%llu\npid=%d\n",
             (unsigned long long)state->instance_id,
             state->runtime_port,
             state->startup_reason,
-            (unsigned long long)state->started_at_unix);
+            (unsigned long long)state->started_at_unix,
+            (int)getpid());
     /* Flush + fsync before rename so the bytes are durable. Without
      * fsync the rename can promote stale (or zero) content into the
      * destination if a crash hits before writeback. */
@@ -1680,6 +1681,121 @@ int runtime_clear_ownership(const runtime_state_t *state) {
     fprintf(stderr, "[payload2] failed to remove ownership record %s\n",
             state->ownership_path);
     return -1;
+}
+
+/* Read the `pid=` line out of the PREVIOUS ownership record (before we
+ * overwrite it). Returns the pid, or -1 if absent/unreadable. */
+static int runtime_read_prior_pid(const char *ownership_path) {
+    FILE *fp = fopen(ownership_path, "r");
+    if (!fp) return -1;
+    int pid = -1;
+    char line[128];
+    while (fgets(line, sizeof(line), fp)) {
+        if (sscanf(line, "pid=%d", &pid) == 1) break;
+    }
+    fclose(fp);
+    return pid;
+}
+
+/*
+ * Best-effort reap of a previous payload instance that crashed and lingered.
+ *
+ * The cooperative takeover (runtime_try_takeover) only makes a HEALTHY old
+ * instance exit — it sends TAKEOVER_REQUEST and waits for the ports to free.
+ * A *crashed* instance can't honor that request (its listener thread is dead,
+ * or a worker is wedged), so it's left running. Every resend then starts a new
+ * instance alongside it → the "duplicate payload.elf" the user sees.
+ *
+ * Here we read the pid the previous instance recorded in the ownership file
+ * and SIGKILL it outright. Safety: we only kill a pid that (a) we recorded
+ * ourselves, (b) is alive, (c) isn't us, and (d) still has the SAME process
+ * name we do — so a recycled pid now owned by an unrelated (e.g. system)
+ * process is never touched. We deliberately do NOT kill "every process named
+ * like us": some loaders name all payloads generically (e.g. "payload.elf"),
+ * and a name-sweep could take down kstuff/SMP/etc.
+ *
+ * A process wedged in uninterruptible kernel sleep won't die even from
+ * SIGKILL — only a PS5 reboot clears those. We log that case clearly (to
+ * stderr, which the bug-report bundle captures) so the user can be told.
+ *
+ * Must be called AFTER runtime_try_takeover and BEFORE runtime_write_ownership
+ * (which overwrites the prior record with our own pid).
+ */
+void runtime_reap_prior_instance(runtime_state_t *state) {
+    if (!state) return;
+    int prior = runtime_read_prior_pid(state->ownership_path);
+    int me = (int)getpid();
+    /* Diagnostic (also exercises proc_name_by_pid on every startup so the
+     * kinfo offsets are validated on this firmware even when there's nothing
+     * to reap). Goes to stderr → stderr.log → bug bundle. */
+    {
+        char self_name[64] = {0};
+        int ok = proc_name_by_pid(me, self_name, sizeof(self_name));
+        fprintf(stderr, "[payload2] reap check: pid=%d self_name=%s prior_pid=%d\n",
+                me, ok == 0 ? self_name : "<unknown>", prior);
+    }
+    if (prior <= 0 || prior == me) return;
+    if (kill((pid_t)prior, 0) != 0) return; /* already gone */
+
+    char my_name[64] = {0};
+    char their_name[64] = {0};
+    if (proc_name_by_pid(me, my_name, sizeof(my_name)) != 0) {
+        /* Can't establish our own name → can't safely compare → don't kill. */
+        fprintf(stderr, "[payload2] reap: cannot read own process name — skipping\n");
+        return;
+    }
+    if (proc_name_by_pid(prior, their_name, sizeof(their_name)) != 0) {
+        return; /* prior pid vanished between the checks — nothing to do */
+    }
+    if (strcmp(my_name, their_name) != 0) {
+        fprintf(stderr,
+                "[payload2] reap: pid %d is '%s', not our '%s' — recycled pid, skipping\n",
+                prior, their_name, my_name);
+        return;
+    }
+
+    fprintf(stderr, "[payload2] reaping crashed prior instance pid=%d (name=%s)\n",
+            prior, their_name);
+    kill((pid_t)prior, SIGKILL);
+
+    /* Confirm it actually died (poll ~1 s). A survivor is kernel-wedged. */
+    for (int i = 0; i < 20; i++) {
+        if (kill((pid_t)prior, 0) != 0) {
+            fprintf(stderr, "[payload2] reaped prior instance pid=%d\n", prior);
+            return;
+        }
+        usleep(50000);
+    }
+    fprintf(stderr,
+            "[payload2] prior instance pid=%d survived SIGKILL (kernel-wedged) — "
+            "a PS5 reboot is required to clear it\n",
+            prior);
+}
+
+/* ── Shutdown watchdog ────────────────────────────────────────────────────── */
+
+static int g_watchdog_exit_code = 0;
+
+static void *runtime_shutdown_watchdog(void *arg) {
+    (void)arg;
+    /* Grace period for the normal close+join below. If shutdown is healthy the
+     * process exits via main()'s return long before this fires and this thread
+     * dies with it. If shutdown WEDGES (e.g. pthread_join on a mgmt thread
+     * stuck in an uninterruptible Sony API never returns), force the process
+     * out so it can't linger as an orphan the next resend would duplicate. */
+    sleep(8);
+    fprintf(stderr, "[payload2] shutdown watchdog fired — forcing _exit(%d)\n",
+            g_watchdog_exit_code);
+    _exit(g_watchdog_exit_code);
+    return NULL;
+}
+
+void runtime_arm_shutdown_watchdog(int exit_code) {
+    g_watchdog_exit_code = exit_code;
+    pthread_t t;
+    if (pthread_create(&t, NULL, runtime_shutdown_watchdog, NULL) == 0) {
+        pthread_detach(t);
+    }
 }
 
 /* ── Wire I/O ─────────────────────────────────────────────────────────────────── */
@@ -5147,25 +5263,24 @@ static int handle_fs_list_volumes(runtime_state_t *state, int client_fd,
          * cleanly without repeated mnts[i].* indexing. */
         const char *mnt_on   = mnts[i].f_mntonname;
         const char *mnt_from = mnts[i].f_mntfromname;
-        uint64_t bs        = (uint64_t)mnts[i].f_bsize;
-        uint64_t raw_total = (uint64_t)mnts[i].f_blocks * bs;  /* full partition incl. reserve */
-        uint64_t bfree     = (uint64_t)mnts[i].f_bfree  * bs;  /* free incl. root-only reserve */
+        uint64_t bs    = (uint64_t)mnts[i].f_bsize;
+        uint64_t total = (uint64_t)mnts[i].f_blocks * bs;  /* full partition size */
+        uint64_t bfree = (uint64_t)mnts[i].f_bfree  * bs;  /* free incl. root-only reserve */
         /* f_bavail (free usable by non-root) is signed on FreeBSD and can
          * read <=0 on a near-full FS; fall back to bfree so we never
          * publish a reserve bigger than the real free pool. */
         uint64_t avail = ((int64_t)mnts[i].f_bavail > 0)
                              ? (uint64_t)mnts[i].f_bavail * bs
                              : bfree;
-        /* Reserve = the slice the FS keeps for root only (bfree - bavail).
-         * It's neither user-usable free nor user data, so `df` and the PS5
-         * Storage UI both fold it out: they report total = used + available.
-         * Publish that displayable total (raw - reserve) here so the
-         * Volumes "Storage drives" card matches the console's figure rather
-         * than over-stating capacity (and thus free) by the reserve (~8% of
-         * the partition). `used` is then total - avail = the real on-disk
-         * usage, keeping the card self-consistent. */
-        uint64_t reserved = (bfree > avail) ? (bfree - avail) : 0;
-        uint64_t total = (raw_total > reserved) ? (raw_total - reserved) : raw_total;
+        /* Reserve model: total is the FULL partition (f_blocks×f_bsize) and
+         * the UFS root reserve (bfree-bavail) is left to fall into `used`
+         * (used = total - avail). This matches the PS5 Settings → Storage
+         * screen, which was confirmed against a live console to count the
+         * reserve as used rather than shaving it off the headline total.
+         * (An earlier build published total = raw - reserve here, which on a
+         * 2 TB Pro understated the /data total by ~292 GB / 15% vs Settings.)
+         * bfs/exfat report bavail≈bfree so their reserve is ~0 and this is a
+         * no-op for USB/M.2 drives. */
         int writable   = (mnts[i].f_flags & MNT_RDONLY) ? 0 : 1;
 
         /* Surface decision in two halves:

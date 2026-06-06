@@ -5,6 +5,7 @@ use ps5upload_core::diagnostics::{
     peripheral_control, pkg_direct_mount, proc_modules, shell_run, ufs_fsck, PeripheralAction,
 };
 use ps5upload_core::fs_ops::{fs_hash, fs_read_with_timeout};
+use ps5upload_core::hw::proc_list;
 use serde_json::Value as JsonValue;
 use std::time::Duration;
 
@@ -57,6 +58,18 @@ async fn invoke_periph(
         .map_err(|e| format!("periph task: {e}"))?
         .map(|v| serde_json::to_value(v).unwrap_or(serde_json::json!({})))
         .map_err(|e| format!("periph: {e}"))
+}
+
+/// Full running-process list (pid + name) for the bug-report PS5 snapshot.
+/// Distinct from `proc_modules_get` (which lists a single process's loaded
+/// modules). Read-only allproc walk; cheap.
+#[tauri::command]
+pub async fn proc_list_get(addr: String) -> Result<JsonValue, String> {
+    tokio::task::spawn_blocking(move || proc_list(&addr))
+        .await
+        .map_err(|e| format!("proc_list task: {e}"))?
+        .map(|v| serde_json::to_value(v).unwrap_or(serde_json::json!({})))
+        .map_err(|e| format!("proc_list: {e}"))
 }
 
 #[tauri::command]

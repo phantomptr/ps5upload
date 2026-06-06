@@ -1,6 +1,10 @@
 import { create } from "zustand";
 
-export type LogLevel = "info" | "warn" | "error" | "debug";
+import { invoke } from "@tauri-apps/api/core";
+
+import { LEVEL_RANK, currentMinRank } from "./diagSettings";
+
+export type LogLevel = "trace" | "debug" | "info" | "warn" | "error";
 
 export interface LogEntry {
   id: number;
@@ -74,6 +78,9 @@ export const useLogsStore = create<LogsState>((set, get) => ({
         ? [...current.slice(current.length - LOG_CAP + 1), entry]
         : [...current, entry];
     set({ entries: next });
+    // Mirror to the durable on-disk log (gated by the configured level) so a
+    // bug report can package a time window even after a crash. Best-effort.
+    recordToDisk(entry);
   },
   clear: () => set({ entries: [] }),
   setFilter: (filter) => set({ filter }),
@@ -86,6 +93,8 @@ export const useLogsStore = create<LogsState>((set, get) => ({
  * automatically.
  */
 export const log = {
+  trace: (source: string, message: string, detail?: unknown) =>
+    useLogsStore.getState().append("trace", source, message, detail),
   info: (source: string, message: string, detail?: unknown) =>
     useLogsStore.getState().append("info", source, message, detail),
   warn: (source: string, message: string, detail?: unknown) =>
@@ -95,6 +104,118 @@ export const log = {
   debug: (source: string, message: string, detail?: unknown) =>
     useLogsStore.getState().append("debug", source, message, detail),
 };
+
+// ── Durable on-disk sink ───────────────────────────────────────────────────
+//
+// The in-memory ring above is a 500-line display buffer. For bug reports we
+// also stream entries to a rotating JSONL file under ~/.ps5upload/logs/ via
+// the `diag_log_append` Tauri command, so "package the last N minutes"
+// survives a crash and isn't capped at 500 lines. This sink:
+//   - gates by the configured minimum level (diagSettings.logLevel),
+//   - batches entries and flushes every ~2s (and on tab-hide / unload),
+//   - never throws and self-disables if the backend command isn't there
+//     (e.g. a non-Tauri/test environment), so logging can never become a
+//     second failure.
+
+/** Truncate a field so one pathological entry (a console.error dumping a
+ *  multi-MB object) can't bloat the file or a single JSONL line. */
+function capField(s: string, max: number): string {
+  if (s.length <= max) return s;
+  return s.slice(0, max) + "…[truncated]";
+}
+
+const DISK_MSG_MAX = 8 * 1024;
+const DISK_DETAIL_MAX = 16 * 1024;
+/** Flush eagerly once the buffer reaches this many lines (a burst of errors
+ *  shouldn't wait the full interval). */
+const DISK_FLUSH_AT = 200;
+const DISK_FLUSH_MS = 2000;
+
+let diskEnabled = false;
+let diskBuffer: string[] = [];
+let diskFlushing = false;
+let diskFailures = 0;
+let diskTimer: ReturnType<typeof setInterval> | null = null;
+
+function recordToDisk(e: LogEntry): void {
+  if (!diskEnabled) return;
+  if (LEVEL_RANK[e.level] < currentMinRank()) return;
+  const obj: Record<string, unknown> = {
+    ts: e.timestamp,
+    level: e.level,
+    source: e.source,
+    message: capField(e.message, DISK_MSG_MAX),
+  };
+  if (e.detail) obj.detail = capField(e.detail, DISK_DETAIL_MAX);
+  try {
+    diskBuffer.push(JSON.stringify(obj));
+  } catch {
+    return; // unserializable — drop this one line, never throw
+  }
+  if (diskBuffer.length >= DISK_FLUSH_AT) void flushDisk();
+}
+
+async function flushDisk(): Promise<void> {
+  if (!diskEnabled || diskFlushing || diskBuffer.length === 0) return;
+  diskFlushing = true;
+  const batch = diskBuffer;
+  diskBuffer = [];
+  try {
+    await invoke("diag_log_append", { lines: batch });
+    diskFailures = 0;
+  } catch {
+    // Backend not present (non-Tauri/test) or transient write error. Don't
+    // re-queue (avoid unbounded growth); after a few consecutive failures,
+    // assume there's no sink and stop trying.
+    diskFailures += 1;
+    if (diskFailures >= 3) {
+      diskEnabled = false;
+      diskBuffer = [];
+      if (diskTimer) {
+        clearInterval(diskTimer);
+        diskTimer = null;
+      }
+    }
+  } finally {
+    diskFlushing = false;
+  }
+}
+
+/**
+ * Start the durable disk sink. Idempotent — safe to call twice. Wired from
+ * main.tsx at boot, right after installConsoleCapture(). No-ops gracefully
+ * outside a browser/Tauri runtime.
+ */
+let diskInstalled = false;
+export function installDiskLogSink(): void {
+  if (diskInstalled || typeof window === "undefined") return;
+  diskInstalled = true;
+  diskEnabled = true;
+  diskTimer = setInterval(() => void flushDisk(), DISK_FLUSH_MS);
+  // Flush opportunistically when the user navigates away or hides the window,
+  // so the last couple of seconds before a close are captured.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") void flushDisk();
+  });
+  window.addEventListener("beforeunload", () => void flushDisk());
+
+  // Vite HMR: tear the interval down so reloads don't stack timers.
+  const hot = (import.meta as unknown as { hot?: { dispose: (cb: () => void) => void } }).hot;
+  if (hot) {
+    hot.dispose(() => {
+      if (diskTimer) clearInterval(diskTimer);
+      diskTimer = null;
+      diskInstalled = false;
+      diskEnabled = false;
+    });
+  }
+}
+
+/** Force a flush now (e.g. just before building a bug report so the buffered
+ *  tail is on disk). Returns when the in-flight write settles. */
+export async function flushDiskLogNow(): Promise<void> {
+  await flushDisk();
+}
 
 /**
  * Patch console.error / console.warn once so uncaught errors (React

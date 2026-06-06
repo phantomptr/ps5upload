@@ -20,6 +20,7 @@ import {
   type ReconcileMode,
 } from "../api/ps5";
 import { createRunGen } from "../lib/runGen";
+import { log } from "./logs";
 import {
   computeRate,
   pushRateSample,
@@ -247,8 +248,14 @@ export const useTransferStore = create<TransferState>((set) => {
           // the engine's retry loop still fires. Log so a
           // permanent failure (corrupt store, perms) surfaces.
           console.warn("[transfer] resumeTxidRemember failed:", e);
+          log.warn("upload", "resumeTxidRemember failed (cross-session resume degraded)", e);
         }
       }
+
+      log.info(
+        "upload",
+        `start "${uploadName}" → ${dest} [${sourceKind}, ${strategy}${txId ? `, tx=${txId.slice(0, 8)}` : ""}]`,
+      );
 
       // Read bandwidth cap at the moment we start the upload — the
       // engine only honors it at start-time (per-job config). The cap
@@ -297,10 +304,12 @@ export const useTransferStore = create<TransferState>((set) => {
         }
       } catch (e) {
         if (!isLive()) return;
+        const msg = e instanceof Error ? e.message : String(e);
+        log.error("upload", `start failed for "${uploadName}": ${msg}`);
         set({
           phase: {
             kind: "failed",
-            error: e instanceof Error ? e.message : String(e),
+            error: msg,
           },
         });
         return;
@@ -347,10 +356,15 @@ export const useTransferStore = create<TransferState>((set) => {
           snap = await jobStatus(jobId);
         } catch (e) {
           if (!isLive()) return;
+          const msg = e instanceof Error ? e.message : String(e);
+          log.error(
+            "upload",
+            `transfer poll failed for "${uploadName}" (job ${jobId}): ${msg}`,
+          );
           set({
             phase: {
               kind: "failed",
-              error: e instanceof Error ? e.message : String(e),
+              error: msg,
             },
           });
           return;
@@ -511,6 +525,10 @@ export const useTransferStore = create<TransferState>((set) => {
                 mountWarnings.length > 0 ? mountWarnings : undefined,
             },
           });
+          log.info(
+            "upload",
+            `done "${uploadName}" → ${finalDest}: ${snap.files_sent ?? 0} files, ${snap.bytes_sent ?? 0} bytes in ${snap.elapsed_ms ?? 0}ms${mountedAt ? `, mounted ${mountedAt}` : ""}`,
+          );
           // Matching "complete" toast on the PS5 itself.
           if (host) {
             void toastPush(mgmtAddr(host), "Upload complete", {
@@ -518,6 +536,10 @@ export const useTransferStore = create<TransferState>((set) => {
             }).catch(() => {});
           }
         } else if (snap.status === "failed") {
+          log.error(
+            "upload",
+            `engine reported failure for "${uploadName}" (job ${jobId}): ${snap.error ?? "upload failed"}`,
+          );
           set({
             phase: {
               kind: "failed",

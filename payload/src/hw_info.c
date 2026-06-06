@@ -612,15 +612,29 @@ int hw_power_get_text(char *out, size_t out_cap, size_t *out_written,
 
 /* ── HW_STORAGE: "Console Storage" aggregate ─────────────────────
  *
- * Matches PS5 Settings → Storage → Console Storage:
- *   Total = (/user total - /user reserved) + /system_data total + /system_ex total
+ * Approximates PS5 Settings → Storage → Console Storage:
+ *   Total = /user total + /system_data total + /system_ex total
  *   Free  = /user bavail + /system_data bavail + /system_ex bavail
+ *   Used  = Total - Free
  *
  * `bavail` is what the kernel reports as "available to non-root"
  * users; `bfree` is the raw free count. The difference is the
  * "reserved" pool the filesystem keeps so root can still write
- * even when bavail hits zero. Counting reserved as displayable
- * total but not as free matches what Settings shows.
+ * even when bavail hits zero.
+ *
+ * Reserve model — confirmed against a live PS5 (FS_LIST_VOLUMES +
+ * HW_STORAGE on a 2 TB Pro): Settings COUNTS THE UFS RESERVE AS USED,
+ * it does not shave it off the headline total. For that console the
+ * raw /user partition is f_blocks×f_bsize ≈ 1.96 TB with a ~292 GB
+ * (15%) reserve; Settings shows Size ≈ 1.89 TB / Used ≈ 1.72 TB. So
+ * total must be the FULL partition (not total-reserved) and `used` =
+ * total-bavail folds the reserve into used, matching Settings to a
+ * few GB. An earlier build subtracted reserved from total; that made
+ * the headline ~292 GB too small and made `used` disagree with
+ * Settings by the whole reserve, which is what this corrects. A small
+ * residual (~70 GB) remains because Settings also hides a fixed system
+ * reserve that statfs can't see — that gap needs a Sony content-
+ * manager API to close and is out of scope here.
  *
  * Each statfs failure is non-fatal — the missing partition just
  * contributes zero. /system_ex may not be mounted on some firmware
@@ -653,11 +667,11 @@ int hw_storage_get_text(char *out, size_t out_cap, size_t *out_written,
 
     uint64_t u_total = 0, u_bfree = 0, u_bavail = 0;
     storage_read_part("/user", &u_total, &u_bfree, &u_bavail);
-    /* Reserved = bfree - bavail (the slice the FS keeps for root).
-     * Used for display: total - reserved is what Settings calls
-     * "available capacity". */
+    /* Reserved = bfree - bavail (the slice the FS keeps for root). Kept
+     * for the reserved_bytes telemetry fields below; it is NOT shaved
+     * off total — Settings counts it as used, so we let used_bytes =
+     * total - bavail absorb it (see the header comment). */
     uint64_t u_reserved = (u_bfree > u_bavail) ? (u_bfree - u_bavail) : 0;
-    uint64_t u_displayable_total = (u_total > u_reserved) ? (u_total - u_reserved) : u_total;
 
     uint64_t sd_total = 0, sd_bfree = 0, sd_bavail = 0;
     storage_read_part("/system_data", &sd_total, &sd_bfree, &sd_bavail);
@@ -665,7 +679,7 @@ int hw_storage_get_text(char *out, size_t out_cap, size_t *out_written,
     uint64_t sx_total = 0, sx_bfree = 0, sx_bavail = 0;
     storage_read_part("/system_ex", &sx_total, &sx_bfree, &sx_bavail);
 
-    uint64_t total_bytes = u_displayable_total + sd_total + sx_total;
+    uint64_t total_bytes = u_total + sd_total + sx_total;
     uint64_t free_bytes  = u_bavail + sd_bavail + sx_bavail;
     uint64_t used_bytes  = (total_bytes > free_bytes) ? (total_bytes - free_bytes) : 0;
 

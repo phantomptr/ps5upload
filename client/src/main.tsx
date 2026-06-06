@@ -13,7 +13,7 @@ import {
   installUserConfigMirror,
   hydrateFromUserConfig,
 } from "./state/userConfig";
-import { installConsoleCapture, log } from "./state/logs";
+import { installConsoleCapture, installDiskLogSink, log } from "./state/logs";
 import { installEngineLogBridge } from "./state/engineLogBridge";
 import { installEngineStartupEvents } from "./state/engineStartupEvents";
 
@@ -22,6 +22,10 @@ import { installEngineStartupEvents } from "./state/engineStartupEvents";
 // Log tab shows *everything* that happens after app boot, including
 // bugs in our own initialization code.
 installConsoleCapture();
+// Persist the unified log (frontend + engine bridge + console + payload
+// events) to ~/.ps5upload/logs/ so a bug report can package a time window
+// even after a crash. Best-effort; no-ops outside Tauri. See state/logs.ts.
+installDiskLogSink();
 log.info("app", "ps5upload client booting");
 installEngineStartupEvents();
 

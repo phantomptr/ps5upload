@@ -298,6 +298,25 @@ pub fn run() {
             commands::crash_reports::crash_reports_zip,
             commands::crash_reports::crash_reports_clear,
             commands::crash_reports::crash_reports_open_dir,
+            // ── Persistent on-disk app log (bug-report time windows) ─
+            // The renderer batches its unified log to ~/.ps5upload/logs/
+            // so "package the last N minutes" survives a crash. See
+            // commands/diag_log.rs + src/state/logs.ts.
+            commands::diag_log::diag_log_append,
+            commands::diag_log::diag_log_read_window,
+            commands::diag_log::diag_log_stats,
+            commands::diag_log::diag_log_clear,
+            commands::diag_log::diag_log_open_dir,
+            // ── Bug-report bundle (zip: logs + ps5 snapshot + images) ─
+            // Assembles the one-click bug report. See commands/bug_report.rs
+            // + src/screens/BugReport.
+            commands::bug_report::bug_report_build,
+            // ── In-app screenshot capture (bug-report gallery) ──────
+            commands::bug_screenshots::screenshot_save,
+            commands::bug_screenshots::screenshot_list,
+            commands::bug_screenshots::screenshot_delete,
+            commands::bug_screenshots::screenshot_clear,
+            commands::bug_screenshots::screenshot_open_dir,
             // ── Filesystem search index (payload-side) ──────────────
             commands::fs_index_start,
             commands::fs_index_status,
@@ -319,6 +338,7 @@ pub fn run() {
             commands::peripheral_usb_off,
             commands::peripheral_usb_on,
             commands::proc_modules_get,
+            commands::proc_list_get,
             // Shell + CRC32 + app.db query + net speed test
             commands::shell_run_cmd,
             commands::crc32_file_get,
@@ -362,7 +382,7 @@ pub fn run() {
             commands::user_config_load, // ~/.ps5upload/settings.json read
             commands::user_config_save, // ~/.ps5upload/settings.json atomic write
             commands::user_config_path_resolved, // show-the-path for the Settings UI
-            commands::app_data_reset, // factory-reset: wipe all local data/metadata
+            commands::app_data_reset,   // factory-reset: wipe all local data/metadata
             // ── Connectivity + payload lifecycle probes ─────────────
             // Used by the Connection + Send payload tabs for
             // reachability checks and payload delivery.

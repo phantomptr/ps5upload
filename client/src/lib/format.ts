@@ -27,6 +27,32 @@ export function formatBytes(n: number): string {
   return `${v.toFixed(v >= 100 ? 0 : v >= 10 ? 1 : 2)} ${units[i]}`;
 }
 
+/**
+ * Decimal (1000-based) byte formatter for storage-VOLUME capacity.
+ *
+ * Sony — like every drive vendor — labels storage in decimal units
+ * (1 GB = 10^9 bytes), so the PS5 Settings "Console Storage" screen
+ * and a USB drive's advertised size are both base-1000. `formatBytes`
+ * above is base-1024 (GiB), which is right for file sizes but renders
+ * ~7.4% smaller than Sony for the same byte count — making a volume
+ * card disagree with the console it's describing. Use THIS for volume
+ * total/free so the numbers line up with the PS5; keep `formatBytes`
+ * for file sizes where GiB is the expected convention.
+ */
+export function formatStorageBytes(n: number): string {
+  if (!isFinite(n) || n < 0) return "—";
+  if (n < 1000) return `${n} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let v = n / 1000;
+  let i = 0;
+  while (v >= 1000 && i < units.length - 1) {
+    v /= 1000;
+    i += 1;
+  }
+  // Same magnitude-proportional precision as formatBytes.
+  return `${v.toFixed(v >= 100 ? 0 : v >= 10 ? 1 : 2)} ${units[i]}`;
+}
+
 export function formatDuration(sec: number): string {
   if (!isFinite(sec) || sec < 0) return "—";
   if (sec < 60) return `${Math.ceil(sec)}s`;

@@ -4,6 +4,28 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.27.0
+
+- **Report a bug without leaving the app.** A new **Bug Report** page (under
+  Diagnostics) lets you describe what happened, attach screenshots, and bundle
+  the app's logs plus a snapshot of your PS5 into a single `.zip` to post on
+  Discord — so issues come with enough detail to actually fix. Your PS5's IP and
+  serial are stripped by default.
+- **Capture screenshots in one click.** A camera button in the status bar grabs
+  whatever screen you're on and saves it; on the Bug Report page you pick which
+  captures to include. Works on every platform.
+- **Much better logging.** The app now keeps a detailed log on disk (with an
+  adjustable detail level) that survives a crash, and it captures engine and
+  helper errors and crashes — so a bug report contains what actually went wrong
+  instead of a blank. You choose how much of the recent log to package.
+- **The helper no longer leaves a stuck copy behind.** Resending the helper
+  after it crashed could spawn a second copy that couldn't be removed; it now
+  cleans up the old one on startup. (If one is ever truly stuck, a quick PS5
+  reboot clears it.)
+- Plus connection-stability fixes for the Hardware screen and assorted polish.
+
+---
+
 ## 2.26.1
 
 - **Turn PS5 screenshots into normal pictures.** The PS5 saves screenshots as

@@ -3,7 +3,8 @@
 #include <signal.h>
 #include <time.h>
 #include <unistd.h>
-#include <sys/stat.h>   /* umask() */
+#include <sys/stat.h>   /* umask(), stat() */
+#include <fcntl.h>      /* open() for stderr capture */
 #include <pthread.h>
 #include <dlfcn.h>
 #include <ps5/kernel.h>
@@ -224,6 +225,36 @@ static void startup_trace(const char *stage) {
     fclose(fp);
 }
 
+/* Redirect the payload's stderr to a file under the runtime root so the
+ * extensive fprintf(stderr) diagnostics scattered through runtime.c (BeginTx
+ * rejections, shard-write failures, commit/apply errors, rename errno, …) are
+ * PERSISTED and fetchable via FS_READ after the fact, instead of being thrown
+ * away (the loader points the payload's stderr at nowhere useful). This is the
+ * single biggest win for debugging a helper that misbehaves or dies: the bug
+ * report's ps5/payload-logs/ now includes the helper's own error stream.
+ *
+ * Uses dup2 (async-safe, robust): if the open fails, stderr is left untouched.
+ * Unbuffered so a crash can't lose the tail. One .old generation is kept so it
+ * can't grow without bound across restarts. */
+static void redirect_stderr_to_file(void) {
+    const char *path = PS5UPLOAD2_RUNTIME_ROOT "/stderr.log";
+    struct stat st;
+    if (stat(path, &st) == 0 && st.st_size > 512 * 1024) {
+        rename(path, PS5UPLOAD2_RUNTIME_ROOT "/stderr.log.old");
+    }
+    int fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (fd < 0) return;
+    dup2(fd, STDERR_FILENO);
+    if (fd != STDERR_FILENO) close(fd);
+    setvbuf(stderr, NULL, _IONBF, 0);
+    struct timespec ts;
+    if (clock_gettime(CLOCK_REALTIME, &ts) != 0) {
+        ts.tv_sec = time(NULL);
+    }
+    fprintf(stderr, "=== ps5upload payload v%s stderr — session start %lld ===\n",
+            PS5UPLOAD2_VERSION, (long long)ts.tv_sec);
+}
+
 int main(void) {
     int rc = 0;
     runtime_state_t state = {0};
@@ -282,6 +313,11 @@ int main(void) {
     }
     startup_trace("ENSURE_DIRECTORIES_DONE");
 
+    /* Now that the runtime root exists, capture stderr to a fetchable file so
+     * the helper's own error diagnostics survive for bug reports. */
+    redirect_stderr_to_file();
+    startup_trace("STDERR_REDIRECTED");
+
     /* Sweep orphan Tier-1 staging files. Crash-recovery only;
      * the desktop-side post-install delete handles steady-state. */
     runtime_sweep_stale_pkg_temp();
@@ -321,6 +357,13 @@ int main(void) {
         return 1;
     }
     startup_trace("TAKEOVER_DONE");
+
+    /* Cooperative takeover only makes a HEALTHY prior instance exit. If the
+     * previous helper crashed and is lingering (the "duplicate payload.elf"
+     * case), SIGKILL it by the pid it recorded in the ownership file — read
+     * here, BEFORE runtime_write_ownership overwrites that record with ours. */
+    runtime_reap_prior_instance(&state);
+    startup_trace("REAP_PRIOR_DONE");
 
     if (runtime_write_ownership(&state) != 0) {
         startup_trace("WRITE_OWNERSHIP_FAILED");
@@ -373,6 +416,13 @@ int main(void) {
 
     rc = runtime_server_loop(&state);
     startup_trace("SERVER_LOOP_EXITED");
+
+    /* Arm a watchdog so that, however we shut down from here, the process
+     * cannot hang forever (e.g. pthread_join below on a mgmt thread wedged in
+     * an uninterruptible Sony API). A lingering process is exactly what the
+     * next resend would duplicate. Healthy shutdown exits via the return
+     * below long before this fires. */
+    runtime_arm_shutdown_watchdog(rc == 0 ? 0 : 1);
 
     /* Ask the mgmt thread to exit by closing its listener. accept()
      * returns with EBADF, mgmt loop sees shutdown_requested and

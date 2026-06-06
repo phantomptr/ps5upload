@@ -25,4 +25,14 @@
 int proc_list_get_json(char *buf, size_t cap, size_t *written_out,
                        const char **err_out);
 
+/*
+ * Look up the command/thread name of a single process by pid via
+ * sysctl(KERN_PROC_PID) — same FreeBSD kinfo_proc offsets as the JSON walk.
+ * Fills `out` (NUL-terminated) and returns 0 on success; returns non-zero if
+ * the process does not exist or the query fails. Used by the takeover path to
+ * verify a recorded pid still belongs to *our* payload before killing it
+ * (guards against a recycled pid now owned by an unrelated process).
+ */
+int proc_name_by_pid(int pid, char *out, size_t cap);
+
 #endif /* PS5UPLOAD2_PROC_LIST_H */

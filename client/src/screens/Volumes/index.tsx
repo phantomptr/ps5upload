@@ -13,7 +13,7 @@ import {
 import { useConfirm } from "../../components/ConfirmDialog";
 import { humanizePs5Error } from "../../lib/humanizeError";
 import { useTr } from "../../state/lang";
-import { formatBytes } from "../../lib/format";
+import { formatStorageBytes } from "../../lib/format";
 import { transferAddr } from "../../lib/addr";
 import { useStaleHostGuard } from "../../lib/staleHostGuard";
 
@@ -24,7 +24,8 @@ import { useStaleHostGuard } from "../../lib/staleHostGuard";
  *  FS_MOUNT_BASE in payload/src/runtime.c. */
 const PS5UPLOAD_MOUNT_PREFIX = "/mnt/ps5upload/";
 
-// formatBytes moved to lib/format.ts.
+// Volume cards use formatStorageBytes (decimal GB/TB) from lib/format.ts
+// so capacity matches the PS5's own base-1000 storage figures.
 
 export default function VolumesScreen() {
   const tr = useTr();
@@ -300,9 +301,9 @@ function MountedImageCard({
         <div>
           <div className="mb-1 flex items-baseline justify-between text-xs text-[var(--color-muted)]">
             <span>
-              {formatBytes(v.free_bytes)}{" "}
+              {formatStorageBytes(v.free_bytes)}{" "}
               {tr("volumes_free_of_mounted", undefined, "free of")}{" "}
-              {formatBytes(v.total_bytes)}
+              {formatStorageBytes(v.total_bytes)}
             </span>
             <span className="tabular-nums">
               {pct.toFixed(0)}
@@ -368,9 +369,9 @@ function StorageCard({ volume: v }: { volume: Volume }) {
         <div>
           <div className="mb-1 flex items-baseline justify-between text-xs text-[var(--color-muted)]">
             <span>
-              {formatBytes(v.free_bytes)}{" "}
+              {formatStorageBytes(v.free_bytes)}{" "}
               {tr("volumes_free_of_storage", undefined, "free of")}{" "}
-              {formatBytes(v.total_bytes)}
+              {formatStorageBytes(v.total_bytes)}
             </span>
             <span className="tabular-nums">
               {pct.toFixed(0)}

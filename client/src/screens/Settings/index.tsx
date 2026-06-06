@@ -15,10 +15,11 @@ import {
   MoonStar,
   Gauge,
   Bell,
-  ExternalLink,
+  Bug,
   Zap,
   Trash2,
 } from "lucide-react";
+import { Link } from "react-router-dom";
 import { useThemeStore, type Theme } from "../../state/theme";
 
 import { PageHeader } from "../../components";
@@ -455,9 +456,7 @@ export default function SettingsScreen() {
         </GroupHeading>
 
         <Section title={tr("settings_section_diagnostic", undefined, "Diagnostics")} full>
-          <BugReportButton />
-          <div className="my-4 border-t border-[var(--color-border)]" />
-          <CrashReportsButton />
+          <BugReportLink />
         </Section>
 
         <GroupHeading>
@@ -1029,337 +1028,37 @@ function ResetPanel() {
  * Lives entirely in the renderer — every store this needs is already
  * in the renderer state. No new payload calls.
  */
-function BugReportButton() {
-  const tr = useTr();
-  const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  /** Per-source counts shown next to the Save button so users can
-   *  see what's about to leave their machine. Computed lazily on the
-   *  first build click and refreshed on each subsequent click. */
-  const [summary, setSummary] = useState<{
-    logs: number;
-    activity: number;
-    notifications: number;
-    rosterPS5s: number;
-    schedules: number;
-    playTimeTitles: number;
-  } | null>(null);
-
-  async function build() {
-    setBusy(true);
-    setError(null);
-    setResult(null);
-    try {
-      const { save } = await import("@tauri-apps/plugin-dialog");
-      const { writeTextFileToPath } = await import("../../lib/saveTextFile");
-      const { getVersion } = await import("@tauri-apps/api/app");
-      const { buildDiagnosticBundle } = await import(
-        "../../lib/diagnosticBundle"
-      );
-
-      const appVersion = await getVersion().catch(() => "unknown");
-      const bundle = buildDiagnosticBundle({ appVersion, redact: true });
-      // Surface a per-source summary so the user knows what's in
-      // the bundle before sharing. Counts come straight from the
-      // bundle so the displayed numbers always match the file.
-      setSummary({
-        logs: bundle.recent_logs.length,
-        activity: bundle.recent_activity.length,
-        notifications: bundle.recent_notifications.length,
-        rosterPS5s: bundle.roster.length,
-        schedules: bundle.schedules_count,
-        playTimeTitles: bundle.play_time_titles,
-      });
-
-      const dest = await save({
-        defaultPath: `ps5upload-bug-report-${Date.now()}.json`,
-        filters: [{ name: "JSON", extensions: ["json"] }],
-      });
-      if (!dest || typeof dest !== "string") {
-        setBusy(false);
-        return;
-      }
-      await writeTextFileToPath(dest, JSON.stringify(bundle, null, 2));
-      setResult(dest);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="text-sm">
-      <div className="font-medium">
-        {tr("bug_report_title", undefined, "Save bug report bundle")}
-      </div>
-      <div className="mt-0.5 text-xs text-[var(--color-muted)]">
-        {tr(
-          "bug_report_hint",
-          undefined,
-          "One-click JSON bundle with app version, OS, recent logs, activity history, and connection state. PS5 IP is stripped — safe to attach to a public issue.",
-        )}
-      </div>
-      <button
-        type="button"
-        onClick={build}
-        disabled={busy}
-        className="mt-3 inline-flex items-center gap-1.5 rounded-md bg-[var(--color-accent)] px-3 py-1.5 text-xs text-[var(--color-accent-contrast)] disabled:opacity-50"
-      >
-        {busy ? (
-          <Loader2 size={11} className="animate-spin" />
-        ) : (
-          <Download size={11} />
-        )}
-        {busy
-          ? tr("bug_report_busy", undefined, "Building…")
-          : tr("bug_report_action", undefined, "Save bug report")}
-      </button>
-      {result && (
-        <div className="mt-2 flex items-center gap-1 text-xs text-[var(--color-good)]">
-          <CheckCircle2 size={11} />
-          {tr("bug_report_done", { path: result }, `Saved to ${result}`)}
-        </div>
-      )}
-      {error && (
-        <div className="mt-2 flex items-start gap-1 text-xs text-[var(--color-bad)]">
-          <AlertTriangle size={11} className="mt-0.5 shrink-0" />
-          {error}
-        </div>
-      )}
-      {summary && (
-        <div className="mt-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-xs">
-          <div className="mb-1 font-medium text-[var(--color-muted)]">
-            {tr("bug_report_includes", undefined, "Bundle includes")}
-          </div>
-          <ul className="grid grid-cols-2 gap-x-4 gap-y-0.5 tabular-nums text-xs">
-            <li>
-              {summary.logs} {tr("bug_report_logs", undefined, "log entries")}
-            </li>
-            <li>
-              {summary.activity}{" "}
-              {tr("bug_report_activity", undefined, "activity rows")}
-            </li>
-            <li>
-              {summary.notifications}{" "}
-              {tr("bug_report_notifs", undefined, "notifications")}
-            </li>
-            <li>
-              {summary.rosterPS5s}{" "}
-              {tr("bug_report_ps5s", undefined, "PS5 profiles (host redacted)")}
-            </li>
-            <li>
-              {summary.schedules}{" "}
-              {tr("bug_report_schedules", undefined, "schedules")}
-            </li>
-            <li>
-              {summary.playTimeTitles}{" "}
-              {tr("bug_report_playtime", undefined, "playtime entries")}
-            </li>
-          </ul>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** Discord support channel where users post packaged crash reports. */
-const DISCORD_REPORT_URL =
-  "https://discord.com/channels/1464735724434624524/1465533832953462794";
-
 /**
- * Crash/error reports are collected automatically to
- * `~/.ps5upload/crash-reports/` (see lib/crashReporter.ts). This card shows
- * how many are kept, packages them into a single `.zip`, and points the user
- * at the Discord channel to post it.
+ * Diagnostics moved to a dedicated Bug Report page (sidebar → Diagnostics →
+ * Bug report). It owns the richer flow — description, screenshots, log time
+ * window + level, PS5 snapshot, and the one-click `.zip`. Settings just points
+ * there so there's a single place to file a report.
  */
-function CrashReportsButton() {
+function BugReportLink() {
   const tr = useTr();
-  const [stats, setStats] = useState<{
-    count: number;
-    bytes: number;
-    dir: string;
-  } | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [zipPath, setZipPath] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  async function refresh() {
-    try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      setStats(
-        await invoke<{ count: number; bytes: number; dir: string }>(
-          "crash_reports_stats",
-        ),
-      );
-    } catch {
-      // non-Tauri context or command not registered yet — leave null.
-    }
-  }
-  useEffect(() => {
-    void refresh();
-  }, []);
-
-  async function packageZip() {
-    setBusy(true);
-    setError(null);
-    setZipPath(null);
-    try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      const { save } = await import("@tauri-apps/plugin-dialog");
-      const dest = await save({
-        defaultPath: `ps5upload-crash-reports-${Date.now()}.zip`,
-        filters: [{ name: "Zip", extensions: ["zip"] }],
-      });
-      if (!dest || typeof dest !== "string") {
-        setBusy(false);
-        return;
-      }
-      await invoke<number>("crash_reports_zip", { dest });
-      setZipPath(dest);
-      void refresh();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function openExternal(url: string) {
-    try {
-      const { open } = await import("@tauri-apps/plugin-shell");
-      await open(url);
-    } catch {
-      // ignore — opening the browser is best-effort.
-    }
-  }
-
-  async function clearAll() {
-    setError(null);
-    try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      await invoke("crash_reports_clear");
-      void refresh();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  }
-
-  // Open the reports folder in the OS file manager. Resolves the path fresh
-  // (creating the dir if needed) so it works even before `stats` loads, and
-  // surfaces the path on failure (e.g. the OS handoff is blocked, or on
-  // mobile where the folder is app-private and not browsable) instead of
-  // doing nothing.
-  async function openFolder() {
-    setError(null);
-    let dir = stats?.dir ?? "";
-    try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      if (!dir) dir = await invoke<string>("crash_reports_dir_resolved");
-      // Open via the backend (runs the OS file manager directly). We can't use
-      // shell.open() here — its scope only allows mailto:/tel:/https URLs and
-      // rejects a filesystem path.
-      await invoke("crash_reports_open_dir");
-    } catch (e) {
-      // Mobile (app-private storage) or any failure: show the path so the
-      // user can still find the reports themselves.
-      setError(
-        `Couldn't open the folder automatically${dir ? ` — it's at: ${dir}` : ""}. ${
-          e instanceof Error ? e.message : String(e)
-        }`,
-      );
-    }
-  }
-
-  const count = stats?.count ?? 0;
   return (
     <div className="text-sm">
       <div className="font-medium">
-        {tr("crash_reports_title", undefined, "Crash & error reports")}
+        {tr("settings_bug_report_title", undefined, "Report a bug")}
       </div>
       <div className="mt-0.5 text-xs text-[var(--color-muted)]">
         {tr(
-          "crash_reports_hint",
+          "settings_bug_report_hint",
           undefined,
-          "When something crashes or errors, a detailed report is saved automatically next to your settings. Package them into a .zip and post it on our Discord so we can debug.",
+          "Describe the issue, attach screenshots, and package logs + a PS5 snapshot into one .zip to post on Discord.",
         )}
       </div>
-      <div className="mt-1 text-xs text-[var(--color-muted)] tabular-nums">
-        {tr(
-          "crash_reports_count",
-          { count: String(count) },
-          `${count} report(s) collected automatically`,
-        )}
-      </div>
-      {stats?.dir && (
-        <div className="mt-0.5 break-all font-mono text-xs text-[var(--color-muted)]">
-          {stats.dir}
-        </div>
-      )}
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          onClick={packageZip}
-          disabled={busy || count === 0}
-          className="inline-flex items-center gap-1.5 rounded-md bg-[var(--color-accent)] px-3 py-1.5 text-xs text-[var(--color-accent-contrast)] disabled:opacity-50"
-        >
-          {busy ? (
-            <Loader2 size={11} className="animate-spin" />
-          ) : (
-            <Download size={11} />
-          )}
-          {tr("crash_reports_package", undefined, "Package reports (.zip)")}
-        </button>
-        <button
-          type="button"
-          onClick={openFolder}
-          disabled={busy}
-          className="rounded-md border border-[var(--color-border)] px-3 py-1.5 text-xs disabled:opacity-50"
-        >
-          {tr("crash_reports_open_folder", undefined, "Open folder")}
-        </button>
-        <button
-          type="button"
-          onClick={clearAll}
-          disabled={busy || count === 0}
-          className="rounded-md border border-[var(--color-border)] px-3 py-1.5 text-xs disabled:opacity-50"
-        >
-          {tr("crash_reports_clear", undefined, "Clear")}
-        </button>
-      </div>
-      {zipPath && (
-        <div className="mt-2 rounded-md border border-[var(--color-good)] bg-[var(--color-surface)] p-2 text-xs">
-          <div className="flex items-center gap-1 text-[var(--color-good)]">
-            <CheckCircle2 size={11} />
-            {tr("crash_reports_saved", { path: zipPath }, `Saved to ${zipPath}`)}
-          </div>
-          <div className="mt-1 text-[var(--color-text)]">
-            {tr(
-              "crash_reports_post",
-              undefined,
-              "Please post this .zip in our Discord support channel:",
-            )}
-          </div>
-          <button
-            type="button"
-            onClick={() => void openExternal(DISCORD_REPORT_URL)}
-            className="mt-1 inline-flex items-center gap-1 text-[var(--color-accent)] underline"
-          >
-            <ExternalLink size={11} />
-            {tr("crash_reports_open_discord", undefined, "Open Discord channel")}
-          </button>
-        </div>
-      )}
-      {error && (
-        <div className="mt-2 flex items-start gap-1 text-xs text-[var(--color-bad)]">
-          <AlertTriangle size={11} className="mt-0.5 shrink-0" />
-          {error}
-        </div>
-      )}
+      <Link
+        to="/bug-report"
+        className="mt-3 inline-flex items-center gap-1.5 rounded-md bg-[var(--color-accent)] px-3 py-1.5 text-xs text-[var(--color-accent-contrast)]"
+      >
+        <Bug size={11} />
+        {tr("settings_bug_report_open", undefined, "Open Bug Report")}
+      </Link>
     </div>
   );
 }
+
 
 /** Renders the update state + controls. Pulls straight from
  *  `useUpdateStore` so the same sidebar badge that indicates

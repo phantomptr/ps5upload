@@ -22,7 +22,7 @@ const MAX_REPORTS: usize = 60;
 
 /// Resolve `<config-base>/crash-reports`, creating it. Mirrors the path logic
 /// in `user_config.rs` so reports sit alongside `settings.json`.
-fn reports_dir(app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn reports_dir(app: &AppHandle) -> Result<PathBuf, String> {
     #[cfg(any(target_os = "android", target_os = "ios"))]
     let base = app
         .path()
@@ -41,7 +41,7 @@ fn reports_dir(app: &AppHandle) -> Result<PathBuf, String> {
 
 /// All `*.json` report files in `dir`, sorted oldest-first (the timestamped
 /// filenames sort chronologically, so a lexical sort is chronological).
-fn list_report_files(dir: &Path) -> Vec<PathBuf> {
+pub(crate) fn list_report_files(dir: &Path) -> Vec<PathBuf> {
     let mut v: Vec<PathBuf> = std::fs::read_dir(dir)
         .map(|rd| {
             rd.filter_map(|e| e.ok().map(|e| e.path()))
@@ -153,55 +153,11 @@ pub async fn crash_reports_clear(app: AppHandle) -> Result<usize, String> {
     Ok(n)
 }
 
-/// Reveal the reports directory in the OS file manager.
-///
-/// We do this from the backend rather than the renderer's `shell.open()`
-/// because the shell plugin's `open` scope only permits `mailto:`/`tel:`/
-/// `https://` URLs — a bare filesystem path fails its regex validation. This
-/// runs the platform file-manager directly, which has no such restriction.
-/// On mobile there's no browsable file manager for app-private storage, so we
-/// return an error and the UI falls back to showing the path.
+/// Reveal the reports directory in the OS file manager. Delegates to the
+/// shared `reveal` helper (see commands/reveal.rs) so the per-platform spawn
+/// logic lives in one place.
 #[tauri::command]
 pub async fn crash_reports_open_dir(app: AppHandle) -> Result<(), String> {
     let dir = reports_dir(&app)?;
-    open_in_file_manager(&dir)
-}
-
-#[cfg(target_os = "macos")]
-fn open_in_file_manager(path: &Path) -> Result<(), String> {
-    std::process::Command::new("open")
-        .arg(path)
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| format!("open failed: {e}"))
-}
-
-#[cfg(target_os = "windows")]
-fn open_in_file_manager(path: &Path) -> Result<(), String> {
-    // explorer.exe returns a non-zero exit code even on success, so we only
-    // care that the spawn itself worked.
-    std::process::Command::new("explorer")
-        .arg(path)
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| format!("explorer failed: {e}"))
-}
-
-#[cfg(all(
-    unix,
-    not(target_os = "macos"),
-    not(target_os = "android"),
-    not(target_os = "ios")
-))]
-fn open_in_file_manager(path: &Path) -> Result<(), String> {
-    std::process::Command::new("xdg-open")
-        .arg(path)
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| format!("xdg-open failed: {e}"))
-}
-
-#[cfg(any(target_os = "android", target_os = "ios"))]
-fn open_in_file_manager(_path: &Path) -> Result<(), String> {
-    Err("opening the reports folder isn't supported on this platform".into())
+    super::reveal::reveal(&dir)
 }
