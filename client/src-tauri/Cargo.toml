@@ -133,7 +133,7 @@ ps5upload-engine = { path = "../../engine/crates/ps5upload-engine" }
 # context via ActivityThread.currentApplication() — Tauri 2's Android
 # backend does NOT initialize the ndk_context global, so we can't use it.
 [target.'cfg(target_os = "android")'.dependencies]
-jni = "0.21"
+jni = "0.22"
 
 [features]
 # Default: build Tauri-native (no custom features yet)
