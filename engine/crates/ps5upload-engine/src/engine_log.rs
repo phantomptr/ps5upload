@@ -58,6 +58,39 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+/// Dedicated stderr-writer sink. `record()` is called on the tokio reactor
+/// (the per-request log middleware fires it on every HTTP request, and the
+/// inline `log_info!` at the top of each async handler), and a bare `eprintln!`
+/// does a BLOCKING write to the piped stderr. If the Tauri parent stalls
+/// draining that pipe, the write would block whatever thread called `record()`
+/// — including a reactor worker — and with up to ~12 consoles logging that can
+/// stall SSE, /pkg-host serving, and every console's requests. Hand the line to
+/// this dedicated writer thread instead; the blocking write happens off the
+/// reactor. The channel is bounded so a wedged parent can't grow the queue
+/// without bound — once full we drop the stderr MIRROR for that line (the
+/// in-memory ring + /api/engine-logs still has it), which is strictly better
+/// than blocking the engine.
+fn stderr_sink() -> &'static std::sync::mpsc::SyncSender<String> {
+    use std::sync::OnceLock;
+    static SINK: OnceLock<std::sync::mpsc::SyncSender<String>> = OnceLock::new();
+    SINK.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<String>(4096);
+        let _ = std::thread::Builder::new()
+            .name("engine-log-stderr".into())
+            .spawn(move || {
+                use std::io::Write;
+                let mut err = std::io::stderr();
+                // Single consumer → lines stay ordered among themselves. The
+                // blocking write lives HERE, never on a reactor worker.
+                for line in rx {
+                    let _ = err.write_all(line.as_bytes());
+                    let _ = err.write_all(b"\n");
+                }
+            });
+        tx
+    })
+}
+
 /// Record a log line. Cheap: one allocation for the formatted message,
 /// one mutex acquisition, bounded-time pop on overflow. Also mirrors to
 /// stderr with a `[engine]` tag so terminal watchers see it too.
@@ -78,7 +111,10 @@ pub(crate) fn record(level: &'static str, mut msg: String) {
     // `tauri dev` AND time-filterable once captured. The Tauri shell tees this
     // stderr to `<app_local_data_dir>/engine/engine.log` (see engine.rs
     // pipe_tagged); the leading timestamp lets the bug-report bundle window it.
-    eprintln!("[engine:{level}] ts={ts} {msg}");
+    // Mirror to stderr off the calling (possibly reactor) thread — see
+    // `stderr_sink`. try_send: if the parent is wedged and the queue is full,
+    // drop the stderr mirror for this line rather than block the engine.
+    let _ = stderr_sink().try_send(format!("[engine:{level}] ts={ts} {msg}"));
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     let entry = LogEntry {
         seq,

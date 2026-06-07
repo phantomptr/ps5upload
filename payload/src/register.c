@@ -29,6 +29,7 @@
 
 #include "register.h"
 #include "sony_api_lock.h"
+#include "kernel_rw_lock.h"
 
 /* Serialization mutex `sony_api_lock` and the 200µs post-call grace
  * period `SONY_API_POST_SLEEP_US` are now declared in
@@ -1521,17 +1522,27 @@ int unregister_title(const char *title_id, const char **err_reason_out) {
          * lingers. Best-effort restore; failure to restore is non-fatal
          * (the next Sony call re-swaps as needed). */
         pid_t mypid = getpid();
+        pthread_mutex_lock(&sony_api_lock);
+        /* 2.x kernel-RW-unify fix: the authid swap was previously done OUTSIDE
+         * sony_api_lock (save+swap before the lock, restore after the unlock),
+         * so it raced bgft.c's under-lock swaps and shellui/ptrace sensor-read
+         * swaps on the shared global kernel-RW window + process-global authid —
+         * a kernel-panic / stuck-authid hazard. Move the whole swap window
+         * inside sony_api_lock and hold kernel_rw_lock across it (innermost,
+         * taken after sony_api_lock) so it is mutually exclusive with every
+         * other kernel-RW swap. */
+        pthread_mutex_lock(&kernel_rw_lock);
         uint64_t saved = kernel_get_ucred_authid(mypid);
         if (saved != 0) {
             (void)kernel_set_ucred_authid(mypid, REG_SHELLCORE_AUTHID);
         }
-        pthread_mutex_lock(&sony_api_lock);
         int unrc = g_reg.app_uninstall(title_id, NULL, NULL);
-        usleep(SONY_API_POST_SLEEP_US);
-        pthread_mutex_unlock(&sony_api_lock);
         if (saved != 0) {
             (void)kernel_set_ucred_authid(mypid, saved);
         }
+        pthread_mutex_unlock(&kernel_rw_lock);
+        usleep(SONY_API_POST_SLEEP_US);
+        pthread_mutex_unlock(&sony_api_lock);
         if (unrc != 0) {
             fprintf(stderr,
                     "[register] sceAppInstUtilAppUninstall(%s) rc=0x%08X "

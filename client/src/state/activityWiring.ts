@@ -1,7 +1,6 @@
 import { useFsBulkOpStore, useFsDownloadOpStore } from "./fsBulkOp";
-import { useTransferStore } from "./transfer";
+import { useTransferStore, IDLE_PHASE } from "./transfer";
 import { useUploadQueueStore } from "./uploadQueue";
-import { useInstallQueue } from "./installQueue";
 import {
   useActivityHistoryStore,
   type ActivityKind,
@@ -41,12 +40,15 @@ export function installActivityWiring() {
   // is edge-collapsed + best-effort in `setTransferKeepAwake`, and the
   // Rust side refcounts it separately from the manual Settings toggle.
   const anyTransferActive = (): boolean => {
-    const phase = useTransferStore.getState().phase.kind;
-    if (phase === "starting" || phase === "running") return true;
+    const phases = useTransferStore.getState().phasesByHost;
+    if (
+      Object.values(phases).some(
+        (p) => p.kind === "starting" || p.kind === "running",
+      )
+    )
+      return true;
     if (useFsDownloadOpStore.getState().active) return true;
     if (useUploadQueueStore.getState().items.some((it) => it.status === "running"))
-      return true;
-    if (useInstallQueue.getState().items.some((it) => it.status === "running"))
       return true;
     return false;
   };
@@ -54,81 +56,92 @@ export function installActivityWiring() {
   useTransferStore.subscribe(reconcileKeepAwake);
   useFsDownloadOpStore.subscribe(reconcileKeepAwake);
   useUploadQueueStore.subscribe(reconcileKeepAwake);
-  useInstallQueue.subscribe(reconcileKeepAwake);
   // Subscriptions only fire on CHANGE, so reconcile once now in case a
   // transfer is already in flight when wiring installs (e.g. the upload
   // queue auto-resumed from a hydrate before this ran).
   reconcileKeepAwake();
 
   // ── Transfer (Upload screen) ──────────────────────────────────────
-  // Tracks the running activity-id across phase transitions so we
-  // can finish it correctly on done/failed/idle. `null` when no
-  // upload is in flight.
-  let transferActivityId: string | null = null;
+  // The one-shot transfer store is per-console (phasesByHost), so track the
+  // running activity-id PER host (mirrors the upload-queue subscriber's
+  // per-item map). Without this, two consoles' one-shots would share a single
+  // id and one would overwrite/misattribute the other's bytes.
+  const transferActivityIds = new Map<string, string>();
   useTransferStore.subscribe((state, prev) => {
-    if (state.phase === prev.phase) return;
-    const phase = state.phase;
-    const prevKind = prev.phase.kind;
-    if (phase.kind === "starting" && prevKind === "idle") {
-      transferActivityId = useActivityHistoryStore
-        .getState()
-        .start("upload", "Upload starting…");
-      return;
-    }
-    if (phase.kind === "running" && transferActivityId !== null) {
-      // "All bytes on wire, engine still working" = finalize phase.
-      // PS5 is committing the manifest / fsyncing inodes; can take
-      // many minutes for large file counts. Renderers use this to
-      // swap "Uploading 100%" for "Finalizing on PS5…". Gate on
-      // totalBytes > 0 so a not-yet-stat'd transfer (where the
-      // denominator hasn't arrived) doesn't false-positive as
-      // finalizing on its very first tick.
-      const newPhase: ActivityPhase =
-        phase.totalBytes > 0 && phase.bytesSent >= phase.totalBytes
-          ? "finalizing"
-          : "uploading";
-      useActivityHistoryStore.getState().update(transferActivityId, {
-        label: phase.files.length > 1
-          ? `Uploading ${phase.files.length} files`
-          : `Uploading ${phase.files[0]?.rel_path ?? ""}`.trim(),
-        bytes: phase.bytesSent,
-        totalBytes: phase.totalBytes,
-        phase: newPhase,
-        // P3 / v2.18.0 — forward the apply-phase counters so the
-        // ActivityRow's finalize pill can render "Finalized N of M files".
-        // 0/0 on pre-P3 payloads and outside the finalize phase — the
-        // ActivityRow already guards on phase === "finalizing" + both
-        // values being meaningful, so this is safe to forward unconditionally.
-        filesFinalized: phase.filesFinalized,
-        filesFinalizingTotal: phase.filesFinalizingTotal,
-      });
-      return;
-    }
-    if (phase.kind === "done" && transferActivityId !== null) {
-      useActivityHistoryStore.getState().finish(transferActivityId, "done", {
-        bytes: phase.bytesSent,
-        detail: phase.dest,
-      });
-      transferActivityId = null;
-      return;
-    }
-    if (phase.kind === "failed" && transferActivityId !== null) {
-      useActivityHistoryStore.getState().finish(transferActivityId, "failed", {
-        error: phase.error,
-      });
-      transferActivityId = null;
-      return;
-    }
-    if (phase.kind === "idle" && transferActivityId !== null) {
-      // Returned to idle without going through done/failed — the
-      // user clicked the Stop button on the running banner. The
-      // engine job continues server-side; the UI just stopped
-      // observing.
-      useActivityHistoryStore.getState().finish(transferActivityId, "stopped", {
-        error: "stopped by user (engine job may continue)",
-      });
-      transferActivityId = null;
-      return;
+    if (state.phasesByHost === prev.phasesByHost) return;
+    const hosts = new Set([
+      ...Object.keys(state.phasesByHost),
+      ...Object.keys(prev.phasesByHost),
+    ]);
+    for (const host of hosts) {
+      const phase = state.phasesByHost[host] ?? IDLE_PHASE;
+      const prevPhase = prev.phasesByHost[host] ?? IDLE_PHASE;
+      if (phase === prevPhase) continue;
+      const prevKind = prevPhase.kind;
+      const existingId = transferActivityIds.get(host) ?? null;
+      if (phase.kind === "starting" && prevKind === "idle") {
+        transferActivityIds.set(
+          host,
+          useActivityHistoryStore.getState().start("upload", "Upload starting…"),
+        );
+        continue;
+      }
+      if (phase.kind === "running" && existingId !== null) {
+        // "All bytes on wire, engine still working" = finalize phase.
+        // PS5 is committing the manifest / fsyncing inodes; can take
+        // many minutes for large file counts. Renderers use this to
+        // swap "Uploading 100%" for "Finalizing on PS5…". Gate on
+        // totalBytes > 0 so a not-yet-stat'd transfer (where the
+        // denominator hasn't arrived) doesn't false-positive as
+        // finalizing on its very first tick.
+        const newPhase: ActivityPhase =
+          phase.totalBytes > 0 && phase.bytesSent >= phase.totalBytes
+            ? "finalizing"
+            : "uploading";
+        useActivityHistoryStore.getState().update(existingId, {
+          label:
+            phase.files.length > 1
+              ? `Uploading ${phase.files.length} files`
+              : `Uploading ${phase.files[0]?.rel_path ?? ""}`.trim(),
+          bytes: phase.bytesSent,
+          totalBytes: phase.totalBytes,
+          phase: newPhase,
+          // P3 / v2.18.0 — forward the apply-phase counters so the
+          // ActivityRow's finalize pill can render "Finalized N of M files".
+          // 0/0 on pre-P3 payloads and outside the finalize phase — the
+          // ActivityRow already guards on phase === "finalizing" + both
+          // values being meaningful, so this is safe to forward unconditionally.
+          filesFinalized: phase.filesFinalized,
+          filesFinalizingTotal: phase.filesFinalizingTotal,
+        });
+        continue;
+      }
+      if (phase.kind === "done" && existingId !== null) {
+        useActivityHistoryStore.getState().finish(existingId, "done", {
+          bytes: phase.bytesSent,
+          detail: phase.dest,
+        });
+        transferActivityIds.delete(host);
+        continue;
+      }
+      if (phase.kind === "failed" && existingId !== null) {
+        useActivityHistoryStore.getState().finish(existingId, "failed", {
+          error: phase.error,
+        });
+        transferActivityIds.delete(host);
+        continue;
+      }
+      if (phase.kind === "idle" && existingId !== null) {
+        // Returned to idle without going through done/failed — the
+        // user clicked the Stop button on the running banner. The
+        // engine job continues server-side; the UI just stopped
+        // observing.
+        useActivityHistoryStore.getState().finish(existingId, "stopped", {
+          error: "stopped by user (engine job may continue)",
+        });
+        transferActivityIds.delete(host);
+        continue;
+      }
     }
   });
 
@@ -319,77 +332,6 @@ export function installActivityWiring() {
           error: "removed from queue",
         });
         uploadQueueActivityIds.delete(itemId);
-      }
-    }
-  });
-
-  // ── Install Queue (2.11.0 — was missing) ────────────────────────
-  //
-  // Same shape as Upload Queue subscription above. Different store,
-  // different item type (InstallQueueItem has bytesDownloaded vs
-  // QueueItem's bytesSent), but the begin/update/finish lifecycle is
-  // identical. A user starting an install batch with the Upload
-  // screen open never saw ActivityBar updates for the install
-  // progress — same root cause as the upload-queue gap. NPXS system
-  // installs jump immediately to `done` because their actual install
-  // happens off-app (Sony's notification panel), so they show as a
-  // brief "Install: <title>" entry in the ActivityBar that
-  // immediately finishes — which is the correct signal.
-  const installQueueActivityIds = new Map<string, string>();
-  useInstallQueue.subscribe((state, prev) => {
-    if (state.items === prev.items) return;
-    const prevById = new Map(prev.items.map((it) => [it.id, it]));
-    for (const item of state.items) {
-      const prevItem = prevById.get(item.id);
-      const wasRunning = prevItem?.status === "running";
-      const isRunning = item.status === "running";
-      if (isRunning && !wasRunning) {
-        const id = useActivityHistoryStore
-          .getState()
-          .start("install-queue", `Install: ${item.displayName}`, {
-            fromPath: item.pkgPath,
-            files: 1,
-          });
-        installQueueActivityIds.set(item.id, id);
-        continue;
-      }
-      if (isRunning && wasRunning) {
-        const activityId = installQueueActivityIds.get(item.id);
-        if (
-          activityId &&
-          (item.bytesDownloaded !== prevItem?.bytesDownloaded ||
-            item.totalBytes !== prevItem?.totalBytes)
-        ) {
-          useActivityHistoryStore.getState().update(activityId, {
-            bytes: item.bytesDownloaded,
-            totalBytes: item.totalBytes,
-          });
-        }
-        continue;
-      }
-      if (!isRunning && wasRunning) {
-        const activityId = installQueueActivityIds.get(item.id);
-        if (activityId) {
-          const outcome =
-            item.status === "done"
-              ? "done"
-              : item.status === "cancelled"
-                ? "stopped"
-                : "failed";
-          useActivityHistoryStore.getState().finish(activityId, outcome, {
-            bytes: item.bytesDownloaded,
-            error: item.errMessage ?? undefined,
-          });
-          installQueueActivityIds.delete(item.id);
-        }
-      }
-    }
-    for (const [itemId, activityId] of installQueueActivityIds) {
-      if (!state.items.some((it) => it.id === itemId)) {
-        useActivityHistoryStore.getState().finish(activityId, "stopped", {
-          error: "removed from queue",
-        });
-        installQueueActivityIds.delete(itemId);
       }
     }
   });

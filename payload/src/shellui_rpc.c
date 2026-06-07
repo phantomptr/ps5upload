@@ -37,6 +37,7 @@
 #include "ptrace_remote.h"
 #include "runtime.h"
 #include "shellui_rpc.h"
+#include "kernel_rw_lock.h"
 
 /* kinfo_proc layout from sysctl(KERN_PROC_PROC). Same as FreeBSD 11
  * mainline; PS5 hasn't changed it across the SDK-supported firmware
@@ -565,8 +566,17 @@ static void force_reresolve(void) {
      * bgft.c install path failed to restore on its way out, our
      * process authid is wrong and the pt_attach inside the next
      * resolve pass will fail too — making the symbol re-resolve
-     * itself a no-op. Restoring authid first is the prerequisite. */
+     * itself a no-op. Restoring authid first is the prerequisite.
+     *
+     * This is a process-global kernel-RW write, so serialize it on
+     * kernel_rw_lock (held only across the single set, then released BEFORE
+     * g_rpc_mtx — kernel_rw_lock is the innermost lock and must never be held
+     * while taking g_rpc_mtx). The pt_attach inside resolve_locked re-takes
+     * kernel_rw_lock per SYS_ptrace under g_rpc_mtx (g_rpc_mtx -> kernel_rw_lock),
+     * which is the consistent ordering. */
+    pthread_mutex_lock(&kernel_rw_lock);
     (void)kernel_set_ucred_authid(-1, PS5_DEBUGGER_AUTHID);
+    pthread_mutex_unlock(&kernel_rw_lock);
     pthread_mutex_lock(&g_rpc_mtx);
     (void)shellui_rpc_resolve_locked();
     pthread_mutex_unlock(&g_rpc_mtx);

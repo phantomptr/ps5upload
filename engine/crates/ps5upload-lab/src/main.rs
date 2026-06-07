@@ -24,6 +24,7 @@ use ps5upload_core::connection::Connection;
 use ps5upload_core::diagnostics::shell_run;
 use ps5upload_core::fs_ops::{app_launch, app_list_registered, app_register, app_unregister};
 use ps5upload_core::hash_shard;
+use ps5upload_core::hw::{hw_info, hw_temps};
 use ps5upload_core::saves::list_saves;
 use ps5upload_core::transfer::{
     inspect_zip, transfer_dir, transfer_file, transfer_zip, TransferConfig,
@@ -146,6 +147,18 @@ fn do_status(addr: &str) -> Result<()> {
     c.send_frame(FrameType::Status, b"")?;
     let body = expect_frame(&mut c, FrameType::StatusAck)?;
     println!("{}", String::from_utf8_lossy(&body));
+    Ok(())
+}
+
+fn do_hw_info(addr: &str) -> Result<()> {
+    let info = hw_info(addr)?;
+    println!("{info:?}");
+    Ok(())
+}
+
+fn do_hw_temps(addr: &str, extended: bool) -> Result<()> {
+    let t = hw_temps(addr, extended)?;
+    println!("{t:?}");
     Ok(())
 }
 
@@ -495,6 +508,14 @@ fn main() -> Result<()> {
             do_launch(addr, title_id)
         }
         "apps" => do_apps(addr),
+        // hw-info: mgmt-port hardware read. hw-temps / hw-temps-x: live
+        // CPU/SoC sensor read — hw-temps-x (extended) drives the ShellUI
+        // ptrace path (sys_ptrace authid swap under kernel_rw_lock), the exact
+        // kernel-R/W path that must serialize against installs. Used to stress
+        // the kernel_rw_lock concurrently from many connections.
+        "hw-info" => do_hw_info(addr),
+        "hw-temps" => do_hw_temps(addr, false),
+        "hw-temps-x" => do_hw_temps(addr, true),
         "saves" => do_saves(addr),
         "shell" => {
             let session = rest.get(1).map(|s| s.as_str()).unwrap_or_else(|| usage());

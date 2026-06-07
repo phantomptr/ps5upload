@@ -13,6 +13,7 @@
 #include "register.h"
 #include "shellui_rpc.h"
 #include "hw_guard.h"
+#include "kernel_rw_lock.h"
 
 /* Sony "debugger" / system-process authid. Setting our process's
  * ucred authid to this value grants the credentials Sony's kernel
@@ -149,10 +150,37 @@ static void handle_fatal(int sig) {
  * record it but keep going — partial elevation is better than
  * none. Result aggregated in `g_ucred_elevation_rc`
  * (0 = full success). */
+/* The frame dispatcher calls this on EVERY incoming frame from EVERY
+ * connection thread (transfer HELLO, mgmt STATUS, …); before elevation
+ * succeeds, two concurrent threads would otherwise run the full sequence of
+ * kernel R/W writes at the same time. The ps5sdk kernel-RW primitives share a
+ * global RW window and are not documented thread-safe — concurrent use can
+ * corrupt that window, and because this is kernel R/W the worst case is a
+ * kernel panic / black-screen restart, not just a helper crash.
+ *
+ * This serializes on the SHARED `kernel_rw_lock` (not a dedicated mutex) so the
+ * elevation sequence is mutually exclusive not only with another elevation but
+ * also with the authid swaps in bgft.c / register.c / shellui_rpc.c /
+ * ptrace_remote.c — all of which drive the same global kernel-RW window. The
+ * cheap volatile early-out (below) keeps this lock OFF the steady-state hot
+ * path — it's only taken in the pre-elevation window (payload loaded before
+ * kstuff). */
 void runtime_apply_ucred_jailbreak(void) {
     /* Already elevated — nothing to do. This is the steady-state
-     * branch once kernel R/W is available, so it has to be cheap. */
+     * branch once kernel R/W is available, so it has to be cheap.
+     * Lock-free volatile read keeps the hot path off the mutex. */
     if (g_ucred_elevation_rc == 0) return;
+
+    /* Pre-elevation window: serialize the kernel R/W sequence so concurrent
+     * connection threads (and concurrent authid swaps) don't drive the shared
+     * RW window simultaneously. */
+    pthread_mutex_lock(&kernel_rw_lock);
+    /* Re-check under the lock — another thread may have just elevated us
+     * while we waited, in which case there's nothing left to do. */
+    if (g_ucred_elevation_rc == 0) {
+        pthread_mutex_unlock(&kernel_rw_lock);
+        return;
+    }
 
     int rc = 0;
     rc |= kernel_set_ucred_uid(-1, 0);
@@ -197,6 +225,12 @@ void runtime_apply_ucred_jailbreak(void) {
         rc |= -1;
     }
     g_ucred_elevation_rc = rc;
+    /* Release the kernel-RW lock. This unlock was MISSING when the gate was a
+     * dedicated mutex: on a partial-elevation attempt (rc != 0 — e.g. pre-
+     * kstuff where root_vnode == 0) the function returned still holding the
+     * lock, so the next frame's retry would block forever. On the shared
+     * kernel_rw_lock that would wedge bgft/register/shellui too. Always unlock. */
+    pthread_mutex_unlock(&kernel_rw_lock);
 }
 
 /* File-based startup trace. Writes to /data/ps5upload2/startup.log

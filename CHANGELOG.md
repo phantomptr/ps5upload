@@ -4,6 +4,28 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 2.30.0
+
+- **Running several PS5s hard at once won't crash a console.** When work
+  overlapped on one console — reading its live temperature while a package was
+  installing, or registering a game on one PS5 while another was mid-install —
+  the helper's low-level kernel operations could collide and, in the worst
+  case, black-screen and restart the console. Those operations are now
+  serialized internally, so heavy concurrent use across consoles stays stable.
+  Verified on real hardware (PS5 and PS5 Pro) under a thousand-plus
+  concurrent operations.
+- **One busy console no longer freezes the app for the others.** A slow or
+  very large upload (especially from a network drive) used to be able to stall
+  the desktop engine for *every* connected console at once. Each console's
+  work is now handled independently, so a busy PS5 keeps to itself.
+- **The Upload screen always shows the right console.** Switching tabs mid-
+  upload now correctly shows each console's own progress, and the "stay awake"
+  and folder-comparison helpers follow the console you're actually uploading
+  to. Switching consoles also clears the previous console's game list
+  immediately, so an action can never land on the wrong PS5.
+
+---
+
 ## 2.29.1
 
 - **Connecting two (or more) PS5s at once is stable again.** A status-checking

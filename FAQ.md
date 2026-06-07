@@ -614,6 +614,16 @@ another — they don't wait for each other. (Switching tabs only changes what
 you're looking at; every console's work keeps running in the background.) The
 single-console layout is unchanged until you add a second PS5.
 
+**Q: Is it safe to do many things on several consoles at the same time?**
+Yes — and 2.30.0 hardened this further. The helper running on each PS5 now
+serializes its low-level kernel operations internally, so things that happen
+to overlap — reading a console's live CPU/SoC temperature while a package is
+installing, registering a game on one console while another is mid-install —
+can't collide and crash the helper or black-screen the console. On the desktop
+side, a slow or very large upload to one console no longer holds up the others:
+each console's requests are handled on their own, so one busy PS5 can't freeze
+the app for the rest.
+
 ---
 
 ## Transferring

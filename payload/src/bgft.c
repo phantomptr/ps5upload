@@ -51,6 +51,7 @@
 #include "bgft.h"
 #include "shellui_rpc.h"
 #include "sony_api_lock.h"
+#include "kernel_rw_lock.h"
 
 /* ─── AppInstUtil install path ─────────────────────────────────────
  *
@@ -426,6 +427,12 @@ static int appinst_install_start(const char *url,
      * Acquired BEFORE the swap so a concurrent caller can't observe
      * a transient ShellCore-authid state. */
     pthread_mutex_lock(&sony_api_lock);
+    /* Hold kernel_rw_lock across the whole authid swap window (acquire ->
+     * Init+Install under ShellCore authid -> restore) so a concurrent kernel-RW
+     * swap in shellui_rpc/ptrace (sensor read), register, or boot elevation
+     * — which share the global kernel-RW window — can't run at the same time.
+     * Innermost lock: taken AFTER sony_api_lock, never before. */
+    pthread_mutex_lock(&kernel_rw_lock);
     uint64_t saved_authid = authid_acquire_shellcore("InstallByPackage");
 
     /* Init Sony's installer subsystem under ShellCore authid. The
@@ -446,6 +453,7 @@ static int appinst_install_start(const char *url,
     int rc = sceAppInstUtilInstallByPackage(&meta, &pkg_info, &playgo);
 
     authid_release_shellcore(saved_authid, "InstallByPackage");
+    pthread_mutex_unlock(&kernel_rw_lock);
     usleep(SONY_API_POST_SLEEP_US);
     pthread_mutex_unlock(&sony_api_lock);
     if (rc != 0) {
@@ -529,12 +537,15 @@ static int appinst_install_start_local(const char *path,
      * call needs and regressed register success; the dedicated installer
      * shares that subsystem, so we keep the same no-cancel rule. */
     pthread_mutex_lock(&sony_api_lock);
+    /* kernel_rw_lock across the authid swap window — see appinst_install_start. */
+    pthread_mutex_lock(&kernel_rw_lock);
     uint64_t saved_authid = authid_acquire_shellcore("AppInstallPkg");
     pthread_once(&g_appinst_init_once, appinst_init_locked);
 
     int rc = app_install_pkg(path, &pkg_info);
 
     authid_release_shellcore(saved_authid, "AppInstallPkg");
+    pthread_mutex_unlock(&kernel_rw_lock);
     usleep(SONY_API_POST_SLEEP_US);
     pthread_mutex_unlock(&sony_api_lock);
     if (rc != 0) {
@@ -624,11 +635,16 @@ static int appinst_install_status(int32_t task_id,
      * realistic deadlock trigger. Pre-2.2.61 the status path raced
      * those calls against Sony's installer kernel stubs. */
     pthread_mutex_lock(&sony_api_lock);
+    /* kernel_rw_lock across the authid swap window — see appinst_install_start.
+     * Status polls fire ~1/s during an install, so this window is the most
+     * frequent concurrent partner for a sensor read's ptrace authid swap. */
+    pthread_mutex_lock(&kernel_rw_lock);
     uint64_t saved_authid = authid_acquire_shellcore("GetInstallStatus");
 
     int rc = sceAppInstUtilGetInstallStatus(content_id, &st);
 
     authid_release_shellcore(saved_authid, "GetInstallStatus");
+    pthread_mutex_unlock(&kernel_rw_lock);
     usleep(SONY_API_POST_SLEEP_US);
     pthread_mutex_unlock(&sony_api_lock);
 

@@ -10,7 +10,8 @@ import { dirDiffPreview, type DirDiffPreview } from "../../api/ps5";
 import { useTr } from "../../state/lang";
 import { formatBytes } from "../../lib/format";
 import { useUploadQueueStore } from "../../state/uploadQueue";
-import { useTransferStore } from "../../state/transfer";
+import { useTransferStore, phaseForHost } from "../../state/transfer";
+import { hostOf } from "../../lib/addr";
 
 /**
  * Pre-flight folder diff preview.
@@ -50,8 +51,14 @@ export default function FolderDiffPanel({
   // active transfer (one-shot or queue) and resume once it settles. The
   // engine also serializes reconciles, but not previewing at all here avoids
   // the wasted multi-minute walk in the first place.
-  const queueRunning = useUploadQueueStore((s) => s.running);
-  const phaseKind = useTransferStore((s) => s.phase.kind);
+  // Gate on THIS preview's target console only — a transfer to another console
+  // must not suppress this one's diff preview (consoles run in parallel). Both
+  // the queue-running flag and the one-shot phase are read per-host.
+  const targetHost = transferAddr ? hostOf(transferAddr) : null;
+  const queueRunning = useUploadQueueStore((s) =>
+    targetHost ? !!s.runningHosts[targetHost] : false,
+  );
+  const phaseKind = useTransferStore((s) => phaseForHost(s, targetHost).kind);
   const transferBusy =
     queueRunning || phaseKind === "starting" || phaseKind === "running";
 

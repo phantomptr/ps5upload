@@ -134,39 +134,72 @@ interface StartArgs {
   mountReadOnly?: boolean;
 }
 
+/** Stable idle reference — returned by `phaseForHost`/selectors when a console
+ *  has no one-shot upload. MUST be a singleton (not a fresh `{kind:"idle"}`
+ *  per call) or Zustand selectors comparing by `Object.is` would see a new
+ *  object every render and loop. */
+export const IDLE_PHASE: TransferPhase = { kind: "idle" };
+
 interface TransferState {
-  phase: TransferPhase;
+  /** One-shot Upload-screen phase PER console, keyed by host (port-stripped
+   *  via `hostOf`). Each console's one-shot upload is fully independent — a
+   *  start() on console B never clobbers console A's live phase, abandons A's
+   *  UI, or misattributes A's bytes. Absent host → idle (see `IDLE_PHASE`).
+   *  Mirrors uploadQueue.ts's per-host model so the two surfaces behave the
+   *  same with multiple consoles. */
+  phasesByHost: Record<string, TransferPhase>;
   start: (args: StartArgs) => Promise<void>;
-  reset: () => void;
+  /** Reset one console's one-shot phase to idle (pass its host), or — with no
+   *  argument — every console's (the Activity tab's global Stop, which has no
+   *  per-entry host today). */
+  reset: (host?: string) => void;
 }
 
 const POLL_INTERVAL_MS = 500;
 const POLL_INITIAL_DELAY_MS = 200;
 
+/** Read one console's phase from a store snapshot. Falls back to the shared
+ *  IDLE_PHASE singleton so selectors stay referentially stable. */
+export function phaseForHost(s: TransferState, host: string | null | undefined): TransferPhase {
+  // Empty/absent host → "" sentinel key. The Upload screen stores its
+  // "set your PS5's IP first" pre-host error under "" so it can still render
+  // when no console is selected; everything else keys by the real host.
+  const key = host?.trim() ? hostFromAddr(host) : "";
+  return s.phasesByHost[key] ?? IDLE_PHASE;
+}
+
 export const useTransferStore = create<TransferState>((set) => {
-  // Generation counter: every start() bumps it; any in-flight poll
-  // closure captures `thisRun` and pre-gates every state write on
-  // `thisRun === runId`. This kills the race where a stale poll's
-  // `await jobStatus()` resolves after a new run has started and
-  // writes stale "running" over the new "starting" state.
-  //
-  // A simple boolean `cancel` is *not* enough: the old poll could read
-  // cancel=false after start() re-armed it (cancel=true, cancel=false
-  // happen synchronously with no awaits between) and keep writing.
-  // 2.12.0: generation counter extracted to lib/runGen. The hand-
-  // rolled `let runId = 0; runId++` + `thisRun === runId` pattern is
-  // now `gen.next()` + `gen.isLive(thisRun)`. Identical semantics,
-  // single source of truth — see lib/runGen.ts for the rationale.
-  const gen = createRunGen();
-  // Handle of the most recently scheduled poll timer. `reset()` clears
-  // it so a rapid start/cancel loop doesn't accumulate pending
-  // timeouts — each orphan would fire once, hit the `isLive()` guard,
-  // and close over the entire poll scope (jobId + samples array) until
-  // the event loop processed it.
-  let pollTimer: ReturnType<typeof setTimeout> | null = null;
+  // Per-host generation counters + poll timers. Every start() for a host bumps
+  // THAT host's counter; the in-flight poll closure captures `thisRun` and
+  // pre-gates every state write on `gen.isLive(thisRun)`. This kills the race
+  // where a stale poll's `await jobStatus()` resolves after a new run started
+  // and writes stale "running" over the new "starting" — now scoped per
+  // console so consoles don't cancel each other. (Same shape as uploadQueue's
+  // per-host `hostGen` map.) Orphan timers are cleared per host on reset/restart
+  // so a rapid start/cancel loop on one console can't leak pending timeouts.
+  const gens = new Map<string, ReturnType<typeof createRunGen>>();
+  const pollTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const genFor = (key: string) => {
+    let g = gens.get(key);
+    if (!g) {
+      g = createRunGen();
+      gens.set(key, g);
+    }
+    return g;
+  };
+  const clearTimerFor = (key: string) => {
+    const t = pollTimers.get(key);
+    if (t !== undefined) {
+      clearTimeout(t);
+      pollTimers.delete(key);
+    }
+  };
+  // Write ONE host's phase, leaving every other console's untouched.
+  const setPhase = (key: string, phase: TransferPhase) =>
+    set((s) => ({ phasesByHost: { ...s.phasesByHost, [key]: phase } }));
 
   return {
-    phase: { kind: "idle" },
+    phasesByHost: {},
 
     async start({
       sourceKind,
@@ -179,8 +212,16 @@ export const useTransferStore = create<TransferState>((set) => {
       mountAfterUpload = false,
       mountReadOnly = true,
     }) {
+      // Per-console key: everything below (gen, poll timer, phase write) is
+      // scoped to this host so a concurrent one-shot on another console runs
+      // fully in parallel.
+      const key = hostFromAddr(addr);
+      const gen = genFor(key);
       const thisRun = gen.next();
-      set({ phase: { kind: "starting" } });
+      // A previous run on THIS host (rapid re-click) leaves a pending timer;
+      // clear it so it doesn't fire after the new run takes over.
+      clearTimerFor(key);
+      setPhase(key, { kind: "starting" });
 
       const isFolder = sourceKind === "folder" || sourceKind === "game-folder";
       // A zip archive is a multi-file transfer like a folder, so it carries a
@@ -306,33 +347,26 @@ export const useTransferStore = create<TransferState>((set) => {
         if (!isLive()) return;
         const msg = e instanceof Error ? e.message : String(e);
         log.error("upload", `start failed for "${uploadName}": ${msg}`);
-        set({
-          phase: {
-            kind: "failed",
-            error: msg,
-          },
-        });
+        setPhase(key, { kind: "failed", error: msg });
         return;
       }
       if (!isLive()) return;
 
       const startedAtMs = Date.now();
-      set({
-        phase: {
-          kind: "running",
-          jobId,
-          startedAtMs,
-          bytesSent: 0,
-          totalBytes: 0,
-          bytesPerSec: 0,
-          files: [],
-          filesCompleted: 0,
-          skippedFiles: 0,
-          skippedBytes: 0,
-          filesFinalized: 0,
-          filesFinalizingTotal: 0,
-          bytesFinalized: 0,
-        },
+      setPhase(key, {
+        kind: "running",
+        jobId,
+        startedAtMs,
+        bytesSent: 0,
+        totalBytes: 0,
+        bytesPerSec: 0,
+        files: [],
+        filesCompleted: 0,
+        skippedFiles: 0,
+        skippedBytes: 0,
+        filesFinalized: 0,
+        filesFinalizingTotal: 0,
+        bytesFinalized: 0,
       });
 
       // Tell the PS5 itself that an upload started — a styled toast on the
@@ -361,12 +395,7 @@ export const useTransferStore = create<TransferState>((set) => {
             "upload",
             `transfer poll failed for "${uploadName}" (job ${jobId}): ${msg}`,
           );
-          set({
-            phase: {
-              kind: "failed",
-              error: msg,
-            },
-          });
+          setPhase(key, { kind: "failed", error: msg });
           return;
         }
         if (!isLive()) return;
@@ -456,13 +485,11 @@ export const useTransferStore = create<TransferState>((set) => {
               }
             } catch (e) {
               if (!isLive()) return;
-              set({
-                phase: {
-                  kind: "failed",
-                  error: `upload completed, but mount failed: ${
-                    e instanceof Error ? e.message : String(e)
-                  }`,
-                },
+              setPhase(key, {
+                kind: "failed",
+                error: `upload completed, but mount failed: ${
+                  e instanceof Error ? e.message : String(e)
+                }`,
               });
               return;
             }
@@ -510,20 +537,17 @@ export const useTransferStore = create<TransferState>((set) => {
               measuredAtMs: Date.now(),
             });
           }
-          set({
-            phase: {
-              kind: "done",
-              jobId,
-              bytesSent: snap.bytes_sent ?? 0,
-              elapsedMs: snap.elapsed_ms ?? 0,
-              dest: finalDest,
-              filesSent: snap.files_sent ?? 0,
-              skippedFiles: snap.skipped_files ?? 0,
-              skippedBytes: snap.skipped_bytes ?? 0,
-              mountedAt,
-              mountWarnings:
-                mountWarnings.length > 0 ? mountWarnings : undefined,
-            },
+          setPhase(key, {
+            kind: "done",
+            jobId,
+            bytesSent: snap.bytes_sent ?? 0,
+            elapsedMs: snap.elapsed_ms ?? 0,
+            dest: finalDest,
+            filesSent: snap.files_sent ?? 0,
+            skippedFiles: snap.skipped_files ?? 0,
+            skippedBytes: snap.skipped_bytes ?? 0,
+            mountedAt,
+            mountWarnings: mountWarnings.length > 0 ? mountWarnings : undefined,
           });
           log.info(
             "upload",
@@ -540,12 +564,7 @@ export const useTransferStore = create<TransferState>((set) => {
             "upload",
             `engine reported failure for "${uploadName}" (job ${jobId}): ${snap.error ?? "upload failed"}`,
           );
-          set({
-            phase: {
-              kind: "failed",
-              error: snap.error ?? "upload failed",
-            },
-          });
+          setPhase(key, { kind: "failed", error: snap.error ?? "upload failed" });
         } else {
           const now = Date.now();
           const bytesSent = snap.bytes_sent ?? 0;
@@ -588,41 +607,48 @@ export const useTransferStore = create<TransferState>((set) => {
             engineFiles > 0
               ? Math.min(engineFiles, files.length)
               : derivedFilesCompleted;
-          set({
-            phase: {
-              kind: "running",
-              jobId,
-              startedAtMs,
-              bytesSent,
-              totalBytes: snap.total_bytes ?? 0,
-              bytesPerSec,
-              files,
-              filesCompleted,
-              skippedFiles: snap.skipped_files ?? 0,
-              skippedBytes: snap.skipped_bytes ?? 0,
-              filesFinalized: snap.files_finalized ?? 0,
-              filesFinalizingTotal: snap.files_finalizing_total ?? 0,
-              bytesFinalized: snap.bytes_finalized ?? 0,
-            },
+          setPhase(key, {
+            kind: "running",
+            jobId,
+            startedAtMs,
+            bytesSent,
+            totalBytes: snap.total_bytes ?? 0,
+            bytesPerSec,
+            files,
+            filesCompleted,
+            skippedFiles: snap.skipped_files ?? 0,
+            skippedBytes: snap.skipped_bytes ?? 0,
+            filesFinalized: snap.files_finalized ?? 0,
+            filesFinalizingTotal: snap.files_finalizing_total ?? 0,
+            bytesFinalized: snap.bytes_finalized ?? 0,
           });
-          pollTimer = setTimeout(poll, POLL_INTERVAL_MS);
+          pollTimers.set(key, setTimeout(poll, POLL_INTERVAL_MS));
         }
       };
-      pollTimer = setTimeout(poll, POLL_INITIAL_DELAY_MS);
+      pollTimers.set(key, setTimeout(poll, POLL_INITIAL_DELAY_MS));
     },
 
-    reset() {
-      // Bump the generation so any in-flight poll's next state write
+    reset(host) {
+      // Bump the generation(s) so any in-flight poll's next state write
       // becomes a no-op. Engine job keeps running in the background —
-      // the payload's single-client transfer port means a brand-new
-      // upload will wait until that finishes. Wiring a real ABORT_TX
-      // cancel is a separate follow-up.
-      gen.next();
-      if (pollTimer !== null) {
-        clearTimeout(pollTimer);
-        pollTimer = null;
+      // the payload's single-client transfer port (per console) means a
+      // brand-new upload to that console waits until this one finishes.
+      // Wiring a real ABORT_TX cancel is a separate follow-up.
+      if (host !== undefined) {
+        // Reset just this console's one-shot.
+        const key = hostFromAddr(host);
+        genFor(key).next();
+        clearTimerFor(key);
+        setPhase(key, { kind: "idle" });
+        return;
       }
-      set({ phase: { kind: "idle" } });
+      // No host: reset EVERY console's one-shot (Activity-tab global Stop,
+      // which has no per-entry host). Bump every live gen so all in-flight
+      // polls go no-op, clear every timer, and drop all phases to idle.
+      for (const g of gens.values()) g.next();
+      for (const t of pollTimers.values()) clearTimeout(t);
+      pollTimers.clear();
+      set({ phasesByHost: {} });
     },
   };
 });

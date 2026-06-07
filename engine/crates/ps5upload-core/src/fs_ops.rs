@@ -929,7 +929,59 @@ pub struct ReconcileFile {
 /// Gating the entire reconcile means a best-effort preview bails *before* the
 /// expensive local walk, and the console sees at most one mgmt connection at a
 /// time from this path.
-static RECONCILE_WALK_GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+///
+/// **Multi-console:** the two hazards above are per-RESOURCE — the mgmt-port
+/// storm is per-CONSOLE (addr) and the slow-source storm is per-SHARE (src
+/// root). A single process-global mutex would over-serialize: a folder upload
+/// to console A would block an unrelated folder upload to console B from a
+/// different source, defeating parallel-console operation. Instead each
+/// reconcile atomically reserves a SET of keys — `{addr:<ps5>, src:<source>}` —
+/// under one mutex; two reconciles conflict iff their key sets intersect. Same
+/// console OR same source → serialized (both protections intact); different
+/// console AND different source → fully parallel.
+static RECONCILE_KEYS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+static RECONCILE_CV: std::sync::Condvar = std::sync::Condvar::new();
+
+/// RAII reservation of a reconcile's key set. Drop releases every key and wakes
+/// any reconcile waiting on a now-free key.
+struct ReconcileGate {
+    keys: Vec<String>,
+}
+
+impl Drop for ReconcileGate {
+    fn drop(&mut self) {
+        let mut held = RECONCILE_KEYS.lock().unwrap_or_else(|e| e.into_inner());
+        held.retain(|k| !self.keys.contains(k));
+        RECONCILE_CV.notify_all();
+    }
+}
+
+/// Reserve `keys` atomically. `block=true` (real upload) waits until every key
+/// is free; `block=false` (preview) bails immediately with `reconcile_busy` if
+/// any key is contended — before the expensive local walk.
+fn acquire_reconcile_gate(keys: Vec<String>, block: bool) -> Result<ReconcileGate> {
+    let mut held = RECONCILE_KEYS.lock().unwrap_or_else(|e| e.into_inner());
+    loop {
+        let conflict = keys.iter().any(|k| held.contains(k));
+        if !conflict {
+            break;
+        }
+        if !block {
+            crate::core_log!(
+                "reconcile: a reconcile/preview sharing this console or source is already running — skipping this preview before the local walk to protect the source + mgmt port",
+            );
+            return Err(anyhow::anyhow!(
+                "reconcile_busy: another remote scan is already in progress"
+            ));
+        }
+        held = RECONCILE_CV.wait(held).unwrap_or_else(|e| e.into_inner());
+    }
+    for k in &keys {
+        held.push(k.clone());
+    }
+    drop(held);
+    Ok(ReconcileGate { keys })
+}
 
 /// Safety valve: above this many unique parent directories, skip the
 /// per-parent reconcile walk entirely (treat the destination as empty, so
@@ -939,8 +991,10 @@ static RECONCILE_WALK_GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 const MAX_RECONCILE_PARENT_DIRS: usize = 12_000;
 
 /// Build the scoped remote inventory. The caller (`reconcile`) already holds
-/// `RECONCILE_WALK_GATE`, so this runs one-at-a-time process-wide — at most one
-/// mgmt connection is open from this path at any moment.
+/// this console's `addr:` reconcile key (see RECONCILE_KEYS), so at most one
+/// scan runs against any single console at a time — at most one mgmt connection
+/// is open per console from this path. (Scans against DIFFERENT consoles may
+/// run concurrently; that's safe — the mgmt-storm hazard is per-console.)
 fn list_remote_scoped(
     addr: &str,
     dest_root: &str,
@@ -972,9 +1026,9 @@ fn list_remote_scoped(
         return Ok(RemoteInventory::new());
     }
 
-    // Note: process-wide serialization is handled by the caller via
-    // RECONCILE_WALK_GATE (held across the local walk + this remote walk), so
-    // we don't re-acquire it here.
+    // Note: per-console serialization is handled by the caller, which holds
+    // this console's reconcile key (RECONCILE_KEYS) across the local walk + this
+    // remote walk, so we don't re-acquire it here.
 
     // Probe dest_root up-front. Serves two purposes:
     //   1. Fast ENOENT path: if the destination doesn't exist at all,
@@ -1138,30 +1192,24 @@ pub fn reconcile(
     // false → best-effort preview; skip with `reconcile_busy` if a walk runs.
     block_for_gate: bool,
 ) -> Result<ReconcilePlan> {
-    // Serialize the ENTIRE reconcile (local walk + remote scan) process-wide —
-    // see RECONCILE_WALK_GATE. The local walk runs first and, on a slow network
-    // source (SMB/UNC), takes minutes; gating up-front means a best-effort
-    // preview bails BEFORE that walk instead of running several concurrent
+    // Serialize the ENTIRE reconcile (local walk + remote scan) per console +
+    // per source — see RECONCILE_KEYS. The local walk runs first and, on a slow
+    // network source (SMB/UNC), takes minutes; gating up-front means a
+    // best-effort preview bails BEFORE that walk instead of running several
+    // concurrent
     // multi-minute walks against the same share. The real upload
     // (block_for_gate=true) waits its turn; a preview (false) bails fast.
-    let _walk_gate = if block_for_gate {
-        RECONCILE_WALK_GATE
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-    } else {
-        match RECONCILE_WALK_GATE.try_lock() {
-            Ok(g) => g,
-            Err(std::sync::TryLockError::Poisoned(e)) => e.into_inner(),
-            Err(std::sync::TryLockError::WouldBlock) => {
-                crate::core_log!(
-                    "reconcile: another reconcile/preview is already running — skipping this preview before the local walk to protect the source + mgmt port",
-                );
-                return Err(anyhow::anyhow!(
-                    "reconcile_busy: another remote scan is already in progress"
-                ));
-            }
-        }
-    };
+    // Reserve this reconcile's console (addr) and source (src root) keys. A
+    // concurrent reconcile to a DIFFERENT console from a DIFFERENT source
+    // proceeds in parallel; one sharing either key serializes behind us (real
+    // upload waits, preview bails) — see RECONCILE_KEYS.
+    let _walk_gate = acquire_reconcile_gate(
+        vec![
+            format!("addr:{addr}"),
+            format!("src:{}", src.to_string_lossy()),
+        ],
+        block_for_gate,
+    )?;
 
     let t_local = std::time::Instant::now();
     crate::core_log!("reconcile: walking local {} …", src.display(),);
@@ -1280,51 +1328,47 @@ fn blake3_file(path: &std::path::Path) -> Result<String> {
 mod tests {
     use super::*;
 
-    /// Both gate tests below manipulate the process-global RECONCILE_WALK_GATE.
+    /// All gate tests below manipulate the process-global RECONCILE_KEYS set.
     /// cargo runs tests in parallel by default, so without forcing them
-    /// sequential, one test holding the gate makes the other's "gate is free"
-    /// assertion flake under load (observed as a CI-only failure at
-    /// `try_lock().is_ok()`). This dedicated serialization lock makes the two
-    /// run one-at-a-time; poison-tolerant because a failing test would poison
-    /// it and we still want the sibling to run and report honestly.
+    /// sequential, one test holding a key makes another's "free" assertion
+    /// flake under load. This dedicated serialization lock makes them run
+    /// one-at-a-time; poison-tolerant because a failing test would poison it
+    /// and we still want the siblings to run and report honestly.
     static GATE_TEST_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// Regression test for the reconcile connection-storm + slow-source crash:
-    /// the process-global RECONCILE_WALK_GATE must serialize whole reconciles
-    /// (local walk + remote walk) so concurrent reconcile + diff-preview
-    /// requests can never (a) open overlapping mgmt-port connections (crashed
-    /// the helper on large games like "it takes two", ~863 dirs) nor (b) run
-    /// several multi-minute local walks against the same slow SMB share
-    /// (crashed the helper on an 8571-file game from `\\RRD-Storage`).
-    /// Exercises the real static used in production. Single test (not split)
-    /// because the gate is global — parallel test cases would contend and flake.
+    /// a reconcile that shares a key (same console OR same source) must
+    /// serialize so concurrent reconcile + diff-preview requests can never
+    /// (a) open overlapping mgmt-port connections to ONE console (crashed the
+    /// helper on large games like "it takes two", ~863 dirs) nor (b) run
+    /// several multi-minute local walks against ONE slow SMB share (crashed
+    /// the helper on an 8571-file game from `\\RRD-Storage`). Exercises the
+    /// real static used in production.
     #[test]
-    fn reconcile_walk_gate_serializes_walks() {
+    fn reconcile_gate_serializes_same_key() {
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
 
-        // Serialize against the sibling gate test (see GATE_TEST_SERIAL).
         let _serial = GATE_TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let key = || vec!["addr:gatetest-A".to_string(), "src:/gatetest/A".to_string()];
 
-        // (1) A best-effort preview (try_lock) must bail while a walk holds
-        //     the gate, rather than starting a second concurrent walk.
+        // (1) A best-effort preview must bail while a conflicting reconcile
+        //     holds the key, rather than starting a second concurrent walk.
         {
-            let _held = RECONCILE_WALK_GATE
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
+            let _held = acquire_reconcile_gate(key(), true).unwrap();
             assert!(
-                RECONCILE_WALK_GATE.try_lock().is_err(),
-                "preview try_lock must fail while a walk holds the gate"
+                acquire_reconcile_gate(key(), false).is_err(),
+                "preview must bail while a conflicting reconcile holds the key"
             );
         }
-        // Gate is released once the guard drops.
+        // Key is released once the guard drops.
         assert!(
-            RECONCILE_WALK_GATE.try_lock().is_ok(),
-            "gate must be free after the walk completes"
+            acquire_reconcile_gate(key(), false).is_ok(),
+            "key must be free after the reconcile completes"
         );
 
-        // (2) Many concurrent walkers must never overlap — observed
-        //     concurrency stays at exactly 1.
+        // (2) Many concurrent walkers on the SAME key must never overlap —
+        //     observed concurrency stays at exactly 1.
         let max_seen = Arc::new(AtomicUsize::new(0));
         let in_flight = Arc::new(AtomicUsize::new(0));
         let mut handles = Vec::new();
@@ -1332,9 +1376,8 @@ mod tests {
             let max_seen = Arc::clone(&max_seen);
             let in_flight = Arc::clone(&in_flight);
             handles.push(std::thread::spawn(move || {
-                let _g = RECONCILE_WALK_GATE
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
+                let _g =
+                    acquire_reconcile_gate(vec!["addr:gatetest-serial".to_string()], true).unwrap();
                 let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
                 max_seen.fetch_max(now, Ordering::SeqCst);
                 std::thread::sleep(std::time::Duration::from_millis(3));
@@ -1347,25 +1390,58 @@ mod tests {
         assert_eq!(
             max_seen.load(Ordering::SeqCst),
             1,
-            "remote walks must be serialized to one at a time"
+            "reconciles sharing a key must be serialized to one at a time"
+        );
+    }
+
+    /// The multi-console win: reconciles with DISJOINT keys (different console
+    /// AND different source) must run fully in parallel — holding one must not
+    /// block the other. This is the regression guard against re-introducing a
+    /// single process-global gate that would serialize unrelated consoles.
+    #[test]
+    fn reconcile_gate_allows_disjoint_keys_in_parallel() {
+        let _serial = GATE_TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        // Console A holds its keys…
+        let _held_a = acquire_reconcile_gate(
+            vec!["addr:console-A".to_string(), "src:/share/A".to_string()],
+            true,
+        )
+        .unwrap();
+        // …console B (different addr AND source) must NOT be blocked, even in
+        // the non-blocking preview path that bails on ANY conflict.
+        let b = acquire_reconcile_gate(
+            vec!["addr:console-B".to_string(), "src:/share/B".to_string()],
+            false,
+        );
+        assert!(
+            b.is_ok(),
+            "a reconcile for a different console+source must run in parallel"
+        );
+        // But sharing JUST the source (same share, different console) still
+        // conflicts — the slow-source hazard is per-share.
+        let shared_src = acquire_reconcile_gate(
+            vec!["addr:console-C".to_string(), "src:/share/A".to_string()],
+            false,
+        );
+        assert!(
+            shared_src.is_err(),
+            "sharing the source share must still serialize (slow-source hazard)"
         );
     }
 
     /// A best-effort preview (block_for_gate=false) must bail with
-    /// `reconcile_busy` BEFORE walking the local tree when a walk is already in
-    /// flight. This is the fix for the slow-source crash: the gate now wraps the
-    /// local walk too, so a preview can't run a multi-minute SMB walk that
-    /// competes with the active upload. We point `src` at a path that does NOT
-    /// exist — if the preview tried to walk it, it would fail with a read_dir
-    /// error rather than the clean reconcile_busy, so this also pins the
-    /// gate-before-walk ordering.
+    /// `reconcile_busy` BEFORE walking the local tree when a reconcile sharing
+    /// its console key is already in flight. This is the fix for the slow-source
+    /// crash: the gate wraps the local walk too, so a preview can't run a
+    /// multi-minute SMB walk that competes with the active upload. We point
+    /// `src` at a path that does NOT exist — if the preview tried to walk it, it
+    /// would fail with a read_dir error rather than the clean reconcile_busy, so
+    /// this also pins the gate-before-walk ordering.
     #[test]
     fn preview_bails_before_local_walk_when_gate_held() {
-        // Serialize against the sibling gate test (see GATE_TEST_SERIAL).
         let _serial = GATE_TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-        let _held = RECONCILE_WALK_GATE
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        // Hold the console key the reconcile below will try to reserve.
+        let _held = acquire_reconcile_gate(vec!["addr:127.0.0.1:9114".to_string()], true).unwrap();
         let missing = std::path::Path::new("/this/path/should/not/exist/ps5upload-test");
         let err = reconcile(
             "127.0.0.1:9114",

@@ -2000,6 +2000,29 @@ typedef struct {
     int             writer_error; /* set by writer on I/O failure */
 } piped_writer_t;
 
+/* Create a JOINABLE worker thread with a bounded stack. The pack workers,
+ * piped writers, and async-copy writer run trivial recv→write/copy loops
+ * (their only stack locals are a 1 KiB scratch path at most; all real buffers
+ * are heap). The FreeBSD default thread stack is multiple MiB, and under 4
+ * concurrent packed streams there can be 16+ of these threads at once — the
+ * accumulated default-stack reservation needlessly tightens the small PS5
+ * per-process memory budget (a plausible OOM contributor at 4 streams). 512
+ * KiB matches the mgmt accept-loop thread (proven stable across firmwares) and
+ * leaves a large margin over any worker call chain. Falls back to the default
+ * stack if attr setup fails, so behavior never regresses. The detach state is
+ * left at the default (joinable) — every caller joins these threads. */
+static int create_worker_thread(pthread_t *tid, void *(*fn)(void *), void *arg) {
+    pthread_attr_t attr;
+    pthread_attr_t *attr_p = NULL;
+    if (pthread_attr_init(&attr) == 0) {
+        (void)pthread_attr_setstacksize(&attr, 512u * 1024u);
+        attr_p = &attr;
+    }
+    int rc = pthread_create(tid, attr_p, fn, arg);
+    if (attr_p) pthread_attr_destroy(attr_p);
+    return rc;
+}
+
 /*
  * Persistent writer handle attached to runtime_tx_entry_t::direct_writer.
  *
@@ -2097,7 +2120,7 @@ static int direct_writer_start(runtime_tx_entry_t *entry, int fd) {
     pthread_cond_init(&h->pw.cv_full[1], NULL);
     pthread_cond_init(&h->pw.cv_empty[0], NULL);
     pthread_cond_init(&h->pw.cv_empty[1], NULL);
-    if (pthread_create(&h->tid, NULL, piped_writer_thread, &h->pw) != 0) {
+    if (create_worker_thread(&h->tid, piped_writer_thread, &h->pw) != 0) {
         pthread_mutex_destroy(&h->pw.lock);
         pthread_cond_destroy(&h->pw.cv_full[0]);
         pthread_cond_destroy(&h->pw.cv_full[1]);
@@ -2449,7 +2472,7 @@ static int pack_pool_start(runtime_tx_entry_t *entry) {
     pthread_cond_init(&pool->cv_not_empty, NULL);
     pthread_cond_init(&pool->cv_drained, NULL);
     for (i = 0; i < (int)PS5UPLOAD2_PACK_WORKERS; i++) {
-        if (pthread_create(&pool->tid[i], NULL, pack_worker_thread, pool) != 0) {
+        if (create_worker_thread(&pool->tid[i], pack_worker_thread, pool) != 0) {
             /* Could not spawn all workers. Tear down the ones we did spawn
              * and fall back. Setting shutdown + broadcasting wakes the
              * already-running workers; they exit because queue is empty. */
@@ -2821,7 +2844,7 @@ static int runtime_write_shard_to_path(runtime_tx_entry_t *entry,
     pthread_cond_init(&pw.cv_full[1], NULL);
     pthread_cond_init(&pw.cv_empty[0], NULL);
     pthread_cond_init(&pw.cv_empty[1], NULL);
-    if (pthread_create(&writer_tid, NULL, piped_writer_thread, &pw) != 0) {
+    if (create_worker_thread(&writer_tid, piped_writer_thread, &pw) != 0) {
         /* Fall back to single-buffered in-thread writes if thread create fails. */
         pthread_mutex_destroy(&pw.lock);
         pthread_cond_destroy(&pw.cv_full[0]);
@@ -6338,7 +6361,7 @@ static int async_copy_fd(int sfd, int dfd, const char *src_path,
         pthread_mutex_destroy(&w.mtx);
         return -1;
     }
-    if (pthread_create(&w.tid, NULL, async_copy_writer_thread, &w) != 0) {
+    if (create_worker_thread(&w.tid, async_copy_writer_thread, &w) != 0) {
         free(w.bufs[0]);
         free(w.bufs[1]);
         pthread_cond_destroy(&w.cv_emptied);

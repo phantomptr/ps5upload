@@ -19,7 +19,6 @@ import { formatBytes, formatDuration } from "../../lib/format";
 import { fsOpCancel } from "../../api/ps5";
 import { useFsBulkOpStore, useFsDownloadOpStore } from "../../state/fsBulkOp";
 import { useTransferStore } from "../../state/transfer";
-import { useInstallQueue } from "../../state/installQueue";
 import { useUploadQueueStore } from "../../state/uploadQueue";
 import { useConsoleLabel } from "../../state/roster";
 
@@ -279,8 +278,6 @@ function ActivityRow({ entry }: { entry: ActivityEntry }) {
       // item to pending). Previously Stop was a no-op for these — the
       // longest-running ops had a dead button.
       useUploadQueueStore.getState().stop();
-    } else if (entry.kind === "install-queue") {
-      useInstallQueue.getState().stop();
     }
     // library-* ops are component-local; the fsOpCancel call above
     // is the only useful action — the screen's poller will see the

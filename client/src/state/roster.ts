@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { useConnectionStore } from "./connection";
 import { useRunningAppsStore } from "./runningApps";
 import { useFsClipboardStore } from "./fsClipboard";
+import { useLibraryStore } from "./library";
 import { hostOf } from "../lib/addr";
 
 /**
@@ -145,6 +146,13 @@ export const useRosterStore = create<RosterState>((set, get) => ({
     // paste after switching would target the new console with the old one's
     // paths. Clear it on switch so cut/paste stays within one console.
     useFsClipboardStore.getState().clear();
+    // The library store (entries + mountMap + pendingMounts + volumes) is a
+    // single global; without clearing it on switch, console B briefly shows
+    // console A's games and MOUNTED badges until B's first refresh lands. In
+    // that window an Unmount click would send fs_unmount to B with A's image
+    // path — a wrong-target action. Clear up front; the Library screen's
+    // stale-host guard drops any late A-refresh, and B's refresh repopulates.
+    useLibraryStore.getState().clear();
     // Sync connection store. AppShell's host-watcher kicks off
     // probes against the new host, populating
     // payloadStatus/payloadVersion/ps5Kernel naturally.

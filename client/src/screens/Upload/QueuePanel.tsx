@@ -90,8 +90,14 @@ export function QueuePanel() {
   // the socket and the UI would show two "running" things. Gate
   // the Start buttons on transferInFlight; the Upload screen's
   // Upload button does the symmetric disable on `queueRunning`.
-  const transferInFlight = useTransferStore(
-    (s) => s.phase.kind === "starting" || s.phase.kind === "running",
+  // Any one-shot upload active on ANY console. One-shots are per-console now
+  // (phasesByHost), but the queue Start button stays conservatively gated on
+  // "any one-shot in flight" — the per-console transfer-port collision is
+  // handled inside the queue runner, and this keeps the existing safe UX.
+  const transferInFlight = useTransferStore((s) =>
+    Object.values(s.phasesByHost).some(
+      (p) => p.kind === "starting" || p.kind === "running",
+    ),
   );
 
   // Hydrate once on mount. The store exposes a `loaded` flag so we

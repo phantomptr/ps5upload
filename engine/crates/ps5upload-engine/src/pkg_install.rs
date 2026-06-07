@@ -445,10 +445,17 @@ async fn install_start_handler(
         total_size,
     );
 
-    let resp: PkgInstallResponse = match pkg_install(&req.ps5_addr, &install_req) {
-        Ok(r) => r,
-        Err(e) => {
-            // Roll back the session — the install never started.
+    // Run the blocking PS5 frame exchange OFF the async reactor. `pkg_install`
+    // does synchronous TCP I/O (connect backoff + up-to-30s read timeout); the
+    // bare `#[tokio::main]` runtime has only num_cpus worker threads, so calling
+    // it inline would park a reactor thread for the whole RPC. Against a wedged
+    // or unreachable console a few concurrent installs would occupy every
+    // worker thread and stall the ENTIRE engine — SSE, /pkg-host serving, and
+    // every OTHER console's requests. spawn_blocking keeps the reactor free so
+    // 12 consoles stay independent. (Mirrors dpi_install_handler.)
+    let resp: PkgInstallResponse = {
+        let addr = req.ps5_addr.clone();
+        let rollback = |e: String| {
             state
                 .sessions
                 .lock()
@@ -460,10 +467,15 @@ async fn install_start_handler(
                 req.ps5_addr,
                 e,
             );
-            return json_err(
+            json_err(
                 StatusCode::BAD_GATEWAY,
                 &format!("payload PKG_INSTALL failed: {e}"),
-            );
+            )
+        };
+        match tokio::task::spawn_blocking(move || pkg_install(&addr, &install_req)).await {
+            Ok(Ok(r)) => r,
+            Ok(Err(e)) => return rollback(e.to_string()),
+            Err(e) => return rollback(format!("install task panicked/cancelled: {e}")),
         }
     };
 
@@ -708,13 +720,26 @@ async fn install_status_handler(
         Some(t) => t,
         None => return json_err(StatusCode::CONFLICT, "session has no BGFT task_id yet"),
     };
-    let status: PkgInstallStatus = match pkg_install_status(&ps5_addr, task_id) {
-        Ok(s) => s,
-        Err(e) => {
-            return json_err(
-                StatusCode::BAD_GATEWAY,
-                &format!("payload PKG_INSTALL_STATUS failed: {e}"),
-            )
+    // Off the reactor: this handler is polled ~1/s per active install, and the
+    // blocking STATUS frame exchange against a slow/wedged console would
+    // otherwise park a worker thread per poll — with several installs that
+    // starves the whole engine. (See install_start_handler.)
+    let status: PkgInstallStatus = {
+        let addr = ps5_addr.clone();
+        match tokio::task::spawn_blocking(move || pkg_install_status(&addr, task_id)).await {
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => {
+                return json_err(
+                    StatusCode::BAD_GATEWAY,
+                    &format!("payload PKG_INSTALL_STATUS failed: {e}"),
+                )
+            }
+            Err(e) => {
+                return json_err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("status task panicked/cancelled: {e}"),
+                )
+            }
         }
     };
 
@@ -1064,15 +1089,27 @@ async fn serve_handler(
         Err(_) => return plain_response(StatusCode::RANGE_NOT_SATISFIABLE, "invalid Range"),
     };
 
-    let chunk = match read_split_range(&session, start, end) {
-        Ok(b) => b,
-        Err(e) => {
-            return plain_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("read failed: {e}"),
-            )
-        }
-    };
+    // Read the ≤16 MiB split off the async reactor. Sony's BGFT issues
+    // parallel range fetches, and across up to 12 concurrently-installing
+    // consoles these synchronous disk reads would otherwise park reactor
+    // worker threads, stalling every console's serving. `session` isn't used
+    // past this point, so move it into the blocking task.
+    let chunk =
+        match tokio::task::spawn_blocking(move || read_split_range(&session, start, end)).await {
+            Ok(Ok(b)) => b,
+            Ok(Err(e)) => {
+                return plain_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("read failed: {e}"),
+                )
+            }
+            Err(e) => {
+                return plain_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("read task panicked/cancelled: {e}"),
+                )
+            }
+        };
 
     let len = chunk.len() as u64;
     let mut builder = Response::builder()
@@ -1107,12 +1144,24 @@ async fn serve_handler(
 async fn resolve_parts_and_meta(
     req: &InstallStartRequest,
 ) -> Result<(Vec<PathBuf>, Vec<u64>, u64, PkgMetadata), String> {
+    // The two `parse_*` calls open and read .pkg / split-part headers (and stat
+    // each split part) from disk. On a cold or network-hosted pkg that's
+    // blocking I/O; run it OFF the async reactor so concurrent install-starts
+    // across consoles can't park reactor worker threads. (Mirrors parse_handler.)
     if let Some(p) = &req.split_root {
+        let p = p.clone();
         let m: SplitPkgMetadata =
-            parse_split_pkg(std::path::Path::new(p)).map_err(|e| format!("{e}"))?;
+            tokio::task::spawn_blocking(move || parse_split_pkg(std::path::Path::new(&p)))
+                .await
+                .map_err(|e| format!("split pkg parse task panicked/cancelled: {e}"))?
+                .map_err(|e| format!("{e}"))?;
         Ok((m.parts, m.part_sizes, m.total_size, m.head))
     } else if let Some(p) = &req.path {
-        let meta = parse_pkg(std::path::Path::new(p)).map_err(|e| format!("{e}"))?;
+        let p = p.clone();
+        let meta = tokio::task::spawn_blocking(move || parse_pkg(std::path::Path::new(&p)))
+            .await
+            .map_err(|e| format!("pkg parse task panicked/cancelled: {e}"))?
+            .map_err(|e| format!("{e}"))?;
         let size = meta.size;
         Ok((vec![meta.path.clone()], vec![size], size, meta))
     } else if req

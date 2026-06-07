@@ -28,7 +28,6 @@ export type ActivityKind =
   | "upload-dir"
   | "upload-reconcile"
   | "upload-queue"
-  | "install-queue"
   | "download"
   | "fs-delete"
   | "fs-paste-copy"

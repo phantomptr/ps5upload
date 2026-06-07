@@ -248,18 +248,29 @@ const KEEP_PS5_AWAKE_TICK_MS = 2 * 60 * 1000;
 function useKeepPs5AwakeDuringUploads() {
   const enabled = useUploadSettingsStore((s) => s.keepPs5Awake);
   const queueRunning = useUploadQueueStore((s) => s.running);
-  const transferActive = useTransferStore(
-    (s) => s.phase.kind === "starting" || s.phase.kind === "running",
+  const transferActive = useTransferStore((s) =>
+    Object.values(s.phasesByHost).some(
+      (p) => p.kind === "starting" || p.kind === "running",
+    ),
   );
   const active = enabled && (queueRunning || transferActive);
   useEffect(() => {
     if (!active) return;
     const tickAll = () => {
       // Distinct hosts to keep awake: any console with a running queue item,
-      // plus the currently-connected host (covers the single-shot upload).
+      // plus any console with a one-shot upload in flight. The single-shot set
+      // is derived from the per-console phasesByHost (NOT the active tab) so an
+      // upload on console A keeps A awake even after the user switches to tab B
+      // — otherwise A could drop to rest mid-upload (the spool_apply_failed bug
+      // this exists to prevent).
       const hosts = new Set<string>();
-      const conn = useConnectionStore.getState().host.trim();
-      if (conn) hosts.add(conn);
+      for (const [h, p] of Object.entries(
+        useTransferStore.getState().phasesByHost,
+      )) {
+        if ((p.kind === "starting" || p.kind === "running") && h) {
+          hosts.add(hostOf(h));
+        }
+      }
       for (const it of useUploadQueueStore.getState().items) {
         if (it.status === "running") hosts.add(hostOf(it.addr));
       }

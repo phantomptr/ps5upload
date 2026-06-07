@@ -37,6 +37,7 @@ import {
 } from "../../api/ps5";
 import {
   useTransferStore,
+  phaseForHost,
   type TransferPhase,
   type UploadStrategy,
 } from "../../state/transfer";
@@ -191,7 +192,11 @@ export default function UploadScreen() {
   };
 
   const host = useConnectionStore((s) => s.host);
-  const transferPhase = useTransferStore((s) => s.phase);
+  // Per-console one-shot phase: bind to THIS console's slot so switching tabs
+  // shows the right upload (and a one-shot on another console never appears
+  // here). phaseForHost falls back to the shared IDLE_PHASE singleton, so the
+  // selector stays referentially stable.
+  const transferPhase = useTransferStore((s) => phaseForHost(s, host));
   const startTransfer = useTransferStore((s) => s.start);
   const resetTransfer = useTransferStore((s) => s.reset);
   const alwaysOverwrite = useUploadSettingsStore((s) => s.alwaysOverwrite);
@@ -310,12 +315,17 @@ export default function UploadScreen() {
     // archive that's `zipInfo: null`, which would fail deep in the flow.
     if (!source || detecting || preflightBusy || detectError) return;
     if (!host?.trim()) {
-      useTransferStore.setState({
-        phase: {
-          kind: "failed",
-          error: "Set your PS5's IP on the Connection tab first.",
+      // No console selected — store the error under the "" sentinel key so
+      // phaseForHost(s, "") (this screen with an empty host) renders it.
+      useTransferStore.setState((s) => ({
+        phasesByHost: {
+          ...s.phasesByHost,
+          "": {
+            kind: "failed",
+            error: "Set your PS5's IP on the Connection tab first.",
+          },
         },
-      });
+      }));
       return;
     }
     // Archives extract into a directory, so the pre-flight probe treats them
@@ -425,7 +435,7 @@ export default function UploadScreen() {
           preflightBusy={preflightBusy}
           preflightError={preflightError}
           onClear={() => {
-            resetTransfer();
+            resetTransfer(host);
             reset();
             // Also dismiss the Override/Resume dialog if it's open —
             // it refers to a source the user just cleared, and leaving
@@ -1104,6 +1114,10 @@ function ExistingDestinationDialog({
 
 function TransferStatus({ phase }: { phase: TransferPhase }) {
   const tr = useTr();
+  // The parent binds `phase` to the ACTIVE console's slot, so the Stop button
+  // resets that same console's one-shot. Read the active host here rather than
+  // thread it through the intermediate sub-component.
+  const host = useConnectionStore((s) => s.host);
   // Read settings directly — threading through Step2Options just to get
   // here would add props for something that's a rendering decision.
   const showFiles = useUploadSettingsStore((s) => s.showTransferFiles);
@@ -1253,7 +1267,7 @@ function TransferStatus({ phase }: { phase: TransferPhase }) {
             )}
             <button
               type="button"
-              onClick={() => resetTransfer()}
+              onClick={() => resetTransfer(host)}
               className="rounded-md border border-[var(--color-border)] px-2 py-0.5 text-xs text-[var(--color-text)] hover:bg-[var(--color-surface-3)]"
               title={tr(
                 "upload_status_stop_tooltip",

@@ -32,6 +32,7 @@
 #include <ps5/kernel.h>
 
 #include "ptrace_remote.h"
+#include "kernel_rw_lock.h"
 
 /* Ptrace-allowed authid. Different from the debugger authid we set
  * at boot (0x4800000000000006): that one lets us read/write kernel
@@ -48,18 +49,29 @@ static int sys_ptrace(int request, pid_t pid, caddr_t addr, int data) {
     uint64_t saved_authid;
     int ret;
 
+    /* The authid swap below mutates the PROCESS-GLOBAL ucred and drives the
+     * shared kernel-RW window. Hold kernel_rw_lock across the entire
+     * save -> swap -> SYS_ptrace -> restore window so it can't run
+     * concurrently with a bgft/register install-authid swap, a boot elevation,
+     * or another ptrace swap. Innermost lock: sys_ptrace runs with the caller
+     * holding g_rpc_mtx, and kernel_rw_lock is always taken AFTER it, never
+     * before — so no lock-order cycle can form. */
+    pthread_mutex_lock(&kernel_rw_lock);
     saved_authid = kernel_get_ucred_authid(mypid);
     if (saved_authid == 0) {
         /* Kernel R/W not available — kstuff isn't loaded or our
-         * process can't read its own ucred. Skip the elevation
-         * dance and just attempt the syscall; the kernel will
-         * reject and the caller will get the underlying error. */
+         * process can't read its own ucred. No swap to serialize: drop the
+         * lock and just attempt the syscall; the kernel will reject and the
+         * caller will get the underlying error. */
+        pthread_mutex_unlock(&kernel_rw_lock);
         return (int)syscall(SYS_ptrace, request, pid, addr, data);
     }
 
     if (kernel_set_ucred_authid(mypid, PS5_PTRACE_ALLOWED_AUTHID) != 0) {
         /* If we can't elevate, attempt the syscall anyway with our
-         * existing authid; not great but better than blanket fail. */
+         * existing authid; not great but better than blanket fail. The swap
+         * didn't take, so authid is unchanged — nothing to restore. */
+        pthread_mutex_unlock(&kernel_rw_lock);
         return (int)syscall(SYS_ptrace, request, pid, addr, data);
     }
 
@@ -91,6 +103,7 @@ static int sys_ptrace(int request, pid_t pid, caddr_t addr, int data) {
         }
     }
 
+    pthread_mutex_unlock(&kernel_rw_lock);
     return ret;
 }
 

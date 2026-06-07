@@ -364,7 +364,7 @@ const makePkgLibraryStore = () =>
     // or they collide on the port. `othersBusy` is true while any such
     // transfer holds it.
     const othersBusy = () =>
-      transferScreenBusy() ||
+      transferScreenBusy(host) ||
       get().entries.some(
         (e) => e.path !== destPath && e.status === "uploading",
       );
@@ -497,7 +497,7 @@ const makePkgLibraryStore = () =>
     // transfer, or a .pkg upload/queued here. Installing must wait for all of
     // them so it doesn't tear the payload out mid-upload.
     const transfersActive = () =>
-      transferScreenBusy() ||
+      transferScreenBusy(host) ||
       get().entries.some(
         (e) => e.status === "uploading" || e.status === "queued",
       );

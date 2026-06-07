@@ -2703,22 +2703,6 @@ async fn transfer_dir_handler(
         0
     };
 
-    // Fail fast on a missing / non-directory source. walk_plan swallows
-    // read errors (returns empty), so without this a typo'd path or a
-    // permissions problem would start a "Running → 0 bytes" job (or a fake
-    // "Done, 0 files") instead of a clear error — mirroring the up-front
-    // stat that transfer_file_handler already does for single files.
-    if !std::path::Path::new(&req.src_dir).is_dir() {
-        return json_err(
-            StatusCode::BAD_REQUEST,
-            format!(
-                "source directory not found or not a directory: {}",
-                req.src_dir
-            ),
-        )
-        .into_response();
-    }
-
     let job_id = Uuid::new_v4();
     let started_at_ms = now_ms();
     crate::log_info!(
@@ -2728,7 +2712,46 @@ async fn transfer_dir_handler(
         caller_supplied_tx_id,
         req.excludes.len()
     );
-    let (total_bytes, files) = walk_plan(std::path::Path::new(&req.src_dir), &req.excludes);
+
+    // Validate the source and build the upload plan OFF the async reactor.
+    // walk_plan does a recursive read_dir+metadata over the whole source tree
+    // (46k-file games are routine; a slow SMB/UNC share can take minutes).
+    // Running it inline on the bare #[tokio::main] runtime would park a worker
+    // thread for that entire walk, stalling SSE, /pkg-host serving, and every
+    // OTHER console's requests. The client already waits for this walk before
+    // it receives the job_id (the plan must exist to seed JobState::Running),
+    // so moving it to a blocking thread changes which thread blocks, not the
+    // client-observed latency. (Mirrors transfer_download_handler's enumeration.)
+    let (total_bytes, files) = {
+        let src_dir = req.src_dir.clone();
+        let excludes = req.excludes.clone();
+        match tokio::task::spawn_blocking(move || {
+            // Fail fast on a missing / non-directory source. walk_plan swallows
+            // read errors (returns empty), so without this a typo'd path or a
+            // permissions problem would start a "Running → 0 bytes" job (or a
+            // fake "Done, 0 files") instead of a clear error — mirroring the
+            // up-front stat that transfer_file_handler does for single files.
+            let p = std::path::Path::new(&src_dir);
+            if !p.is_dir() {
+                return Err(format!(
+                    "source directory not found or not a directory: {src_dir}"
+                ));
+            }
+            Ok(walk_plan(p, &excludes))
+        })
+        .await
+        {
+            Ok(Ok(plan)) => plan,
+            Ok(Err(msg)) => return json_err(StatusCode::BAD_REQUEST, msg).into_response(),
+            Err(e) => {
+                return json_err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("source walk task panicked/cancelled: {e}"),
+                )
+                .into_response()
+            }
+        }
+    };
     let files_sent_count = files.len() as u64;
     let progress = Arc::new(AtomicU64::new(0));
     let progress_files = Arc::new(AtomicU64::new(0));
@@ -3037,10 +3060,22 @@ async fn transfer_zip_handler(
     // pipeline can plan in time) or completed quickly (no → look at
     // BEGIN_TX / connectivity).
     let plan_started = std::time::Instant::now();
-    let (total_bytes, preview) =
-        match zip_plan_preview(std::path::Path::new(&req.zip_path), &req.excludes) {
-            Ok(v) => v,
-            Err(e) => {
+    let (total_bytes, preview) = {
+        // Central-directory read OFF the async reactor: a cold-HDD or
+        // 100k-entry zip can take seconds, and inline on the bare runtime that
+        // parks a reactor worker thread — stalling SSE, /pkg-host serving, and
+        // every OTHER console. The client already blocks on this plan for its
+        // job_id, so this only moves which thread waits. (zip_inspect_handler
+        // already runs the same parser via spawn_blocking — this was the holdout.)
+        let zip_path = req.zip_path.clone();
+        let excludes = req.excludes.clone();
+        let planned = tokio::task::spawn_blocking(move || {
+            zip_plan_preview(std::path::Path::new(&zip_path), &excludes)
+        })
+        .await;
+        match planned {
+            Ok(Ok(v)) => v,
+            Ok(Err(e)) => {
                 let elapsed_ms = plan_started.elapsed().as_millis();
                 crate::log_warn!(
                     "transfer_zip plan failed: zip={} elapsed_ms={elapsed_ms} err={e:#}",
@@ -3048,7 +3083,15 @@ async fn transfer_zip_handler(
                 );
                 return json_err(StatusCode::BAD_REQUEST, e.to_string()).into_response();
             }
-        };
+            Err(e) => {
+                return json_err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("zip planning task panicked/cancelled: {e}"),
+                )
+                .into_response()
+            }
+        }
+    };
     let plan_elapsed_ms = plan_started.elapsed().as_millis();
     crate::log_info!(
         "transfer_zip plan: zip={} entries={} bytes={total_bytes} elapsed_ms={plan_elapsed_ms}",
@@ -3226,8 +3269,15 @@ async fn transfer_file_list_handler(
             dest: f.dest,
         })
         .collect();
-    // Sum source sizes now + build the planned file list so Running
-    // has a denominator + per-file progress from the first tick.
+    // Sum source sizes + build the planned file list so Running has a
+    // denominator + per-file progress from the first tick — done OFF the async
+    // reactor. A large file-list (tens of thousands of entries) or a slow /
+    // network source would otherwise park a reactor worker thread inside
+    // std::fs::metadata and stall SSE, /pkg-host serving, and every OTHER
+    // console. The client already waits for this planning before it receives
+    // the job_id (the plan seeds JobState::Running), so moving it to a blocking
+    // thread changes only which thread blocks. `entries` (consumed by the
+    // transfer below) moves through the blocking task and back out.
     //
     // (2.9.0) Metadata failures previously fell through to `size = 0`,
     // which corrupted the `total_bytes` denominator — the user saw
@@ -3241,28 +3291,45 @@ async fn transfer_file_list_handler(
     // proceed on the files we can actually read. Metadata-but-not-
     // open is rare (only Windows ACL + macOS sandboxed apps + raced
     // delete), so the skipped set should be small or empty.
-    let mut planner_skipped: Vec<(String, String)> = Vec::new();
-    let files: Vec<PlannedFile> = entries
-        .iter()
-        .filter_map(|e| {
-            let size = match std::fs::metadata(&e.src) {
-                Ok(m) => m.len(),
-                Err(err) => {
-                    planner_skipped.push((e.src.clone(), err.to_string()));
-                    return None;
-                }
-            };
-            let rel = std::path::Path::new(&e.dest)
-                .strip_prefix(std::path::Path::new(&req.dest_root))
-                .map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or_else(|_| e.dest.clone())
-                .replace(std::path::MAIN_SEPARATOR, "/");
-            Some(PlannedFile {
-                rel_path: rel,
-                size,
-            })
+    let (entries, files, planner_skipped) = {
+        let dest_root = req.dest_root.clone();
+        match tokio::task::spawn_blocking(move || {
+            let mut planner_skipped: Vec<(String, String)> = Vec::new();
+            let files: Vec<PlannedFile> = entries
+                .iter()
+                .filter_map(|e| {
+                    let size = match std::fs::metadata(&e.src) {
+                        Ok(m) => m.len(),
+                        Err(err) => {
+                            planner_skipped.push((e.src.clone(), err.to_string()));
+                            return None;
+                        }
+                    };
+                    let rel = std::path::Path::new(&e.dest)
+                        .strip_prefix(std::path::Path::new(&dest_root))
+                        .map(|p| p.to_string_lossy().into_owned())
+                        .unwrap_or_else(|_| e.dest.clone())
+                        .replace(std::path::MAIN_SEPARATOR, "/");
+                    Some(PlannedFile {
+                        rel_path: rel,
+                        size,
+                    })
+                })
+                .collect();
+            (entries, files, planner_skipped)
         })
-        .collect();
+        .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                return json_err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("file-list planning task panicked/cancelled: {e}"),
+                )
+                .into_response()
+            }
+        }
+    };
     if !planner_skipped.is_empty() {
         for (src, err) in &planner_skipped {
             log_warn!("planner: skipped {} (metadata failed: {})", src, err);
