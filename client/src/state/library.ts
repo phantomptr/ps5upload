@@ -1,92 +1,106 @@
 import { create } from "zustand";
 import type { LibraryEntry, Volume } from "../api/ps5";
+import { hostOf } from "../lib/addr";
 
 /**
- * Library state lives in a zustand store (not `useState` in the
- * component) so entries survive navigation. When the user clicks
- * Library → Upload → Library again, they see their last-scanned list
- * immediately while a background refresh (fired by the effect in
- * LibraryScreen) updates it in place — no "blank then pop" flicker.
+ * Library state lives in a zustand store (not `useState` in the component) so
+ * entries survive navigation. When the user clicks Library → Upload → Library
+ * again, they see their last-scanned list immediately while a background
+ * refresh updates it in place — no "blank then pop" flicker.
  *
- * Also holds the image-path → mount-point map used to show the
- * MOUNTED badge on archive rows, same caching rationale: switching
- * tabs shouldn't lose the information you already had.
+ * PER-HOST (multi-console). The library is keyed by console (`byHost`), so each
+ * tab keeps its OWN last-known game list, mount map and volumes. Switching
+ * consoles shows that console's library instantly and refreshes it in the
+ * background — there's no clear-on-switch (the old single-global-slot model
+ * blanked on every switch, and worse, left a window where a stale Unmount /
+ * Delete could target the wrong PS5 because the rendered path belonged to the
+ * previous console). Reads go through `libraryForHost(s, host)`.
  */
-export interface LibraryState {
+export interface LibrarySlot {
   entries: LibraryEntry[] | null;
   /** image_path → mount_point, derived from the probe (authoritative).
    *  Empty until first refresh completes. The probe-derived map can
    *  lag the actual kernel state by a beat right after fs_mount —
    *  that's what `pendingMounts` covers. */
   mountMap: Map<string, string>;
-  /** image_path → mount_point for fs_mount calls the client just
-   *  made, kept here until the next probe surfaces them in `mountMap`
-   *  (or `removeMount` is called explicitly). The Library row reads
-   *  the *union* — `mountMap.get(p) ?? pendingMounts.get(p)` — so a
-   *  successful fs_mount immediately flips the row to MOUNTED even
-   *  if the upstream `getmntinfo` listing hasn't caught up. */
+  /** image_path → mount_point for fs_mount calls the client just made,
+   *  kept here until the next probe surfaces them in `mountMap`. The row
+   *  reads the union so a successful fs_mount immediately flips to MOUNTED. */
   pendingMounts: Map<string, string>;
-  /** Writable, non-placeholder volumes the PS5 reports — used by the
-   *  Move modal so the user picks a destination from real attached
-   *  drives. Same probe that feeds `mountMap`, kept here so move's
-   *  destination dropdown doesn't have to re-fetch on every modal open. */
+  /** Writable, non-placeholder volumes the PS5 reports — used by the Move
+   *  modal so the user picks a destination from real attached drives. */
   volumes: Volume[];
   /** When the data was last refreshed (unix ms). null = never loaded. */
   lastRefreshedAt: number | null;
-  /** True while a refresh is in flight. Used for the header spinner
-   *  without wiping the existing entries. */
+  /** True while a refresh is in flight. Used for the header spinner without
+   *  wiping the existing entries. */
   loading: boolean;
   error: string | null;
+}
 
+/** Stable idle slot returned by `libraryForHost` for a console with no data
+ *  yet. MUST be a singleton (not a fresh object/Map per call) so Zustand
+ *  selectors comparing by `Object.is` stay stable. Its Maps are never mutated —
+ *  every store action builds new Maps. */
+export const IDLE_LIBRARY: LibrarySlot = {
+  entries: null,
+  mountMap: new Map(),
+  pendingMounts: new Map(),
+  volumes: [],
+  lastRefreshedAt: null,
+  loading: false,
+  error: null,
+};
+
+interface LibraryStore {
+  /** Per-console library state, keyed by bare host (port-stripped). */
+  byHost: Record<string, LibrarySlot>;
+  /** Commit a fresh scan for one console. Prunes pending mounts the probe has
+   *  now confirmed, and — crucially — keeps the previous entries if the new
+   *  scan came back empty but we DID have entries (the "library goes blank
+   *  after mounting an image" fix). Single set() callback so the read + write
+   *  are atomic against a concurrent invalidate. */
   setData: (
+    host: string,
     entries: LibraryEntry[],
     mountMap: Map<string, string>,
     volumes: Volume[],
   ) => void;
-  setLoading: (loading: boolean) => void;
-  setError: (error: string | null) => void;
-  /** Optimistic mount add. Lets the UI flip the row to MOUNTED +
-   *  Unmount-button immediately on a successful fs_mount, before the
-   *  background rescan picks the new mount up in `getmntinfo`. The
-   *  entry lives in `pendingMounts` and the row reads the union of
-   *  the probe-derived map and the pending map. The next setData()
-   *  prunes pending entries that the probe has now confirmed. */
-  addMount: (imagePath: string, mountPoint: string) => void;
-  /** Optimistic mount remove. Counterpart to addMount; flips the row
-   *  back to NOT-mounted immediately on a successful fs_unmount.
-   *  Removes from BOTH `mountMap` and `pendingMounts`. */
-  removeMount: (imagePath: string) => void;
-  clear: () => void;
+  setLoading: (host: string, loading: boolean) => void;
+  setError: (host: string, error: string | null) => void;
+  /** Optimistic mount add — flips the row to MOUNTED before the rescan. */
+  addMount: (host: string, imagePath: string, mountPoint: string) => void;
+  /** Optimistic mount remove — flips the row back before the rescan. */
+  removeMount: (host: string, imagePath: string) => void;
 }
 
-/** Effective mount lookup — probe-derived `mountMap` is authoritative,
- *  but a not-yet-confirmed `pendingMounts` entry covers the post-
- *  fs_mount window where the probe hasn't caught up. The Library row
- *  reads through this so a freshly-mounted image flips to MOUNTED in
- *  the same render the user clicks. */
+const keyOf = (host: string | null | undefined): string =>
+  host?.trim() ? hostOf(host) : "";
+
+/** Read one console's library slot from a store snapshot. */
+export function libraryForHost(
+  s: { byHost: Record<string, LibrarySlot> },
+  host: string | null | undefined,
+): LibrarySlot {
+  return s.byHost[keyOf(host)] ?? IDLE_LIBRARY;
+}
+
+/** Effective mount lookup — probe-derived `mountMap` is authoritative, but a
+ *  not-yet-confirmed `pendingMounts` entry covers the post-fs_mount window. The
+ *  Library row reads through this so a freshly-mounted image flips to MOUNTED
+ *  in the same render the user clicks. Operates on a single console's slot. */
 export function effectiveMount(
-  s: Pick<LibraryState, "mountMap" | "pendingMounts">,
+  s: Pick<LibrarySlot, "mountMap" | "pendingMounts">,
   imagePath: string,
 ): string | null {
   return s.mountMap.get(imagePath) ?? s.pendingMounts.get(imagePath) ?? null;
 }
 
-/** Reverse lookup: given a path that lives somewhere inside one of
- *  the active mounts, return the backing image_path. Used by the
- *  Library row to render a "from disk image" badge on game folders
- *  that live inside a currently-mounted image (so the user can tell
- *  uploaded-folder games apart from games-that-disappear-on-unmount).
- *
- *  Longest mount-point match wins so nested mounts attribute
- *  correctly — i.e., a game at `/mnt/ext1/foo/bar` where both
- *  `/mnt/ext1` and `/mnt/ext1/foo` are mounted attributes the row
- *  to the deeper mount.
- *
- *  Centralised here (vs reimplementing the union loop inline) so the
- *  badge always matches the row's MOUNTED-state — both ultimately
- *  derive from the same source of truth. */
+/** Reverse lookup: given a path inside one of the active mounts, return the
+ *  backing image_path. Longest mount-point match wins so nested mounts
+ *  attribute correctly. Operates on a single console's slot. */
 export function findOwningImage(
-  s: Pick<LibraryState, "mountMap" | "pendingMounts">,
+  s: Pick<LibrarySlot, "mountMap" | "pendingMounts">,
   candidatePath: string,
 ): string | null {
   let bestImage: string | null = null;
@@ -105,65 +119,82 @@ export function findOwningImage(
   return bestImage;
 }
 
-export const useLibraryStore = create<LibraryState>((set) => ({
-  entries: null,
-  mountMap: new Map(),
-  pendingMounts: new Map(),
-  volumes: [],
-  lastRefreshedAt: null,
-  loading: false,
-  error: null,
-  setData: (entries, mountMap, volumes) =>
+export const useLibraryStore = create<LibraryStore>((set) => {
+  const patch = (host: string, partial: Partial<LibrarySlot>) =>
     set((s) => {
-      // Prune pending entries that the probe has now confirmed (or
-      // that the probe disagrees with — the probe wins because it
-      // reads getmntinfo directly). Anything still in pendingMounts
-      // after this is a mount the probe hasn't picked up yet, which
-      // we keep so the user's row doesn't flip back to "Mount".
-      const prunedPending = new Map<string, string>();
-      for (const [imagePath, mountPoint] of s.pendingMounts) {
-        if (!mountMap.has(imagePath)) {
-          prunedPending.set(imagePath, mountPoint);
+      const key = keyOf(host);
+      const cur = s.byHost[key] ?? IDLE_LIBRARY;
+      return { byHost: { ...s.byHost, [key]: { ...cur, ...partial } } };
+    });
+  return {
+    byHost: {},
+    setData: (host, entries, mountMap, volumes) =>
+      set((s) => {
+        const key = keyOf(host);
+        const cur = s.byHost[key] ?? IDLE_LIBRARY;
+        // Prune pending entries the probe has now confirmed (or disagrees
+        // with — the probe reads getmntinfo directly and wins). Anything left
+        // is a mount the probe hasn't picked up yet; keep it so the row
+        // doesn't flip back to "Mount".
+        const prunedPending = new Map<string, string>();
+        for (const [imagePath, mountPoint] of cur.pendingMounts) {
+          if (!mountMap.has(imagePath)) {
+            prunedPending.set(imagePath, mountPoint);
+          }
         }
-      }
-      return {
-        entries,
-        mountMap,
-        pendingMounts: prunedPending,
-        volumes,
-        lastRefreshedAt: Date.now(),
-        error: null,
-      };
-    }),
-  setLoading: (loading) => set({ loading }),
-  setError: (error) => set({ error }),
-  addMount: (imagePath, mountPoint) =>
-    set((s) => {
-      const next = new Map(s.pendingMounts);
-      next.set(imagePath, mountPoint);
-      return { pendingMounts: next };
-    }),
-  removeMount: (imagePath) =>
-    set((s) => {
-      const inProbe = s.mountMap.has(imagePath);
-      const inPending = s.pendingMounts.has(imagePath);
-      if (!inProbe && !inPending) return {};
-      const nextProbe = inProbe ? new Map(s.mountMap) : s.mountMap;
-      if (inProbe) (nextProbe as Map<string, string>).delete(imagePath);
-      const nextPending = inPending
-        ? new Map(s.pendingMounts)
-        : s.pendingMounts;
-      if (inPending) (nextPending as Map<string, string>).delete(imagePath);
-      return { mountMap: nextProbe, pendingMounts: nextPending };
-    }),
-  clear: () =>
-    set({
-      entries: null,
-      mountMap: new Map(),
-      pendingMounts: new Map(),
-      volumes: [],
-      lastRefreshedAt: null,
-      loading: false,
-      error: null,
-    }),
-}));
+        // Don't blank the list on an empty rescan if we had entries — keep the
+        // old ones, refresh only mountMap + volumes, and let the next scan
+        // produce a real count. (The "library goes blank after mounting"
+        // symptom.)
+        const hadEntries = (cur.entries ?? []).length > 0;
+        const nextEntries =
+          entries.length === 0 && hadEntries ? cur.entries : entries;
+        return {
+          byHost: {
+            ...s.byHost,
+            [key]: {
+              ...cur,
+              entries: nextEntries,
+              mountMap,
+              pendingMounts: prunedPending,
+              volumes,
+              lastRefreshedAt: Date.now(),
+              error: null,
+            },
+          },
+        };
+      }),
+    setLoading: (host, loading) => patch(host, { loading }),
+    setError: (host, error) => patch(host, { error }),
+    addMount: (host, imagePath, mountPoint) =>
+      set((s) => {
+        const key = keyOf(host);
+        const cur = s.byHost[key] ?? IDLE_LIBRARY;
+        const next = new Map(cur.pendingMounts);
+        next.set(imagePath, mountPoint);
+        return {
+          byHost: { ...s.byHost, [key]: { ...cur, pendingMounts: next } },
+        };
+      }),
+    removeMount: (host, imagePath) =>
+      set((s) => {
+        const key = keyOf(host);
+        const cur = s.byHost[key] ?? IDLE_LIBRARY;
+        const inProbe = cur.mountMap.has(imagePath);
+        const inPending = cur.pendingMounts.has(imagePath);
+        if (!inProbe && !inPending) return {};
+        const nextProbe = inProbe ? new Map(cur.mountMap) : cur.mountMap;
+        if (inProbe) (nextProbe as Map<string, string>).delete(imagePath);
+        const nextPending = inPending
+          ? new Map(cur.pendingMounts)
+          : cur.pendingMounts;
+        if (inPending) (nextPending as Map<string, string>).delete(imagePath);
+        return {
+          byHost: {
+            ...s.byHost,
+            [key]: { ...cur, mountMap: nextProbe, pendingMounts: nextPending },
+          },
+        };
+      }),
+  };
+});

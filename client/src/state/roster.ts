@@ -2,7 +2,6 @@ import { create } from "zustand";
 import { useConnectionStore } from "./connection";
 import { useRunningAppsStore } from "./runningApps";
 import { useFsClipboardStore } from "./fsClipboard";
-import { useLibraryStore } from "./library";
 import { useUploadStore } from "./upload";
 import { hostOf } from "../lib/addr";
 
@@ -149,17 +148,13 @@ export const useRosterStore = create<RosterState>((set, get) => ({
     // paste after switching would target the new console with the old one's
     // paths. Clear it on switch so cut/paste stays within one console.
     useFsClipboardStore.getState().clear();
-    // The library store (entries + mountMap + pendingMounts + volumes) is a
-    // single global; without clearing it on switch, console B briefly shows
-    // console A's games and MOUNTED badges until B's first refresh lands. In
-    // that window an Unmount click would send fs_unmount to B with A's image
-    // path — a wrong-target action. Clear up front; the Library screen's
-    // stale-host guard drops any late A-refresh, and B's refresh repopulates.
-    useLibraryStore.getState().clear();
+    // (Library is per-console now — `useLibraryStore` is keyed byHost, so the
+    // new console shows its own slot immediately and there's nothing to clear.
+    // The wrong-target window the old clear-on-switch guarded against is gone.)
     // The Upload screen's destination volume is a PS5-side path that only
     // exists on the previous console; clear it so the new console re-detects
     // its own volumes instead of showing a stale (possibly nonexistent) dest.
-    useUploadStore.getState().setDestination(null);
+    useUploadStore.getState().clearForHostChange();
     // Sync connection store. AppShell's host-watcher kicks off
     // probes against the new host, populating
     // payloadStatus/payloadVersion/ps5Kernel naturally.
@@ -198,8 +193,7 @@ export const useRosterStore = create<RosterState>((set, get) => ({
         // FS clipboard paths, or Library entries from the one just deleted.
         useRunningAppsStore.getState().clearForHostChange(next[0].host);
         useFsClipboardStore.getState().clear();
-        useLibraryStore.getState().clear();
-        useUploadStore.getState().setDestination(null);
+        useUploadStore.getState().clearForHostChange();
         useConnectionStore.getState().setHost(next[0].host);
       }
     }
@@ -227,8 +221,7 @@ export const useRosterStore = create<RosterState>((set, get) => ({
       // Unmount/paste could otherwise target the wrong PS5).
       useRunningAppsStore.getState().clearForHostChange(host.trim());
       useFsClipboardStore.getState().clear();
-      useLibraryStore.getState().clear();
-      useUploadStore.getState().setDestination(null);
+      useUploadStore.getState().clearForHostChange();
       useConnectionStore.getState().setHost(host.trim());
     }
   },

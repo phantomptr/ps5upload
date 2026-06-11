@@ -110,7 +110,7 @@ export function buildDiagnosticBundle(opts: {
   const conn = useConnectionStore.getState();
   const roster = useRosterStore.getState().profiles;
   const schedules = useScheduleStore.getState().schedules;
-  const playTimes = usePlayTimeStore.getState().seconds;
+  const playTimesByHost = usePlayTimeStore.getState().byHost;
   const activity = useActivityHistoryStore.getState().entries;
   const notifications = useNotificationsStore.getState().entries;
   const logs = useLogsStore.getState().entries;
@@ -154,7 +154,11 @@ export function buildDiagnosticBundle(opts: {
       notes: p.notes,
     })),
     schedules_count: schedules.length,
-    play_time_titles: Object.keys(playTimes).length,
+    // Count distinct (host, title) pairs tracked across all consoles.
+    play_time_titles: Object.values(playTimesByHost).reduce(
+      (n, titles) => n + Object.keys(titles).length,
+      0,
+    ),
     // Activity is stored newest-first (activityHistory prepends), so the
     // NEWEST 50 are slice(0, 50) — slice(-50) grabbed the OLDEST 50,
     // defeating the point of a "recent activity" diagnostic field.

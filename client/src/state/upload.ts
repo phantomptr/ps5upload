@@ -82,6 +82,11 @@ export interface UploadState {
   pickFile(path: string): Promise<void>;
   pickFolder(path: string): Promise<void>;
   reset(): void;
+  /** Switching consoles: drop the in-progress draft so a source picked +
+   *  configured for console A can't fire against console B. Clears the source,
+   *  the mount toggle and the (PS5-side) destination volume; KEEPS the
+   *  cross-console preferences (subpath, excludes, register-after-upload). */
+  clearForHostChange(): void;
 
   setMountAfterUpload(on: boolean): void;
   setMountReadOnly(on: boolean): void;
@@ -296,6 +301,18 @@ export const useUploadStore = create<UploadState>((set, get) => ({
       detecting: false,
       detectError: null,
       mountAfterUpload: false,
+    }),
+
+  clearForHostChange: () =>
+    set({
+      source: null,
+      detecting: false,
+      detectError: null,
+      zipInspectEntries: null,
+      mountAfterUpload: false,
+      // Destination volume is a PS5-side path that only exists on the previous
+      // console — clear it so the new console re-detects its own volumes.
+      destinationVolume: null,
     }),
 
   setMountAfterUpload: (mountAfterUpload) => set({ mountAfterUpload }),

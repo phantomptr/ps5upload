@@ -1,5 +1,6 @@
 import { create } from "zustand";
 
+import { hostOf } from "../lib/addr";
 import { payloadPlaylistsLoad, payloadPlaylistsSave, sendPayload } from "../api/ps5";
 import {
   appendStep,
@@ -32,6 +33,13 @@ import {
  * The runner uses generation-counted cancellation (same pattern as
  * uploadQueue): every `start()` bumps `runId`; every await re-checks
  * before mutating state. `stop()` just bumps the counter.
+ *
+ * PER-HOST (multi-console). A run is owned by the console it was launched
+ * against (`runStatusByHost`, keyed by the playlist-wide host passed to
+ * `run()`), with its OWN generation counter and sleep-abort controller. Two
+ * consoles can each run a playlist at the same time without one's Stop or
+ * completion clobbering the other's banner. The playlist *documents* stay
+ * global (they're reusable scripts); only the live run state is per-console.
  */
 
 interface PlaylistDocument {
@@ -41,10 +49,12 @@ interface PlaylistDocument {
 interface PlaylistState {
   playlists: Playlist[];
   loaded: boolean;
-  /** Live status of the currently-running playlist. The SendPayload
-   *  screen renders a banner from this so the user always knows
-   *  whether the runner is mid-step, sleeping, or settled. */
-  runStatus: PlaylistRunStatus;
+  /** Live status of each console's running playlist, keyed by bare host
+   *  (port-stripped). The SendPayload screen renders a banner from the
+   *  active console's slot so the user always knows whether that console's
+   *  runner is mid-step, sleeping, or settled. Reads go through
+   *  `runStatusForHost(s, host)`. */
+  runStatusByHost: Record<string, PlaylistRunStatus>;
 
   hydrate: () => Promise<void>;
 
@@ -65,25 +75,59 @@ interface PlaylistState {
 
   // Run control
   run: (id: string, host: string, port: number) => Promise<void>;
-  stop: () => void;
+  /** Stop the run owned by `host` (the console the run was launched against).
+   *  Other consoles' runs are untouched. */
+  stop: (host: string) => void;
 }
 
 const SAVE_DEBOUNCE_MS = 300;
+
+/** Stable idle status returned by `runStatusForHost` for a console with no
+ *  run. MUST be a singleton so Zustand selectors comparing by `Object.is`
+ *  stay stable (a fresh `{ kind: "idle" }` per render would thrash). */
+const IDLE_RUN_STATUS: PlaylistRunStatus = { kind: "idle" };
+
+const keyOf = (host: string | null | undefined): string =>
+  host?.trim() ? hostOf(host) : "";
+
+/** Read one console's playlist run status from a store snapshot. */
+export function runStatusForHost(
+  s: { runStatusByHost: Record<string, PlaylistRunStatus> },
+  host: string | null | undefined,
+): PlaylistRunStatus {
+  return s.runStatusByHost[keyOf(host)] ?? IDLE_RUN_STATUS;
+}
 
 function newId(): string {
   return crypto.randomUUID().replace(/-/g, "");
 }
 
 export const usePayloadPlaylistsStore = create<PlaylistState>((set, get) => {
-  // 2.12.0: generation counter via shared lib/runGen.
-  const gen = createRunGen();
-  // Active abort controller for the runner's sleep step. Bumped on
-  // every `run()` so a stale stop() can't cancel a fresh run; cleared
-  // when the runner exits the sleep cleanly. `stop()` aborts it so
-  // `cancellableSleep` resolves immediately and the runner notices
-  // the runId change at its next isLive() check.
-  let runAbort: AbortController | null = null;
+  // Per-console generation counters (shared lib/runGen). Lazily created per
+  // host key the first time a console runs, so each console's run() and
+  // stop() only affect that console's runner.
+  const gens = new Map<string, ReturnType<typeof createRunGen>>();
+  const genFor = (key: string) => {
+    let g = gens.get(key);
+    if (!g) {
+      g = createRunGen();
+      gens.set(key, g);
+    }
+    return g;
+  };
+  // Per-console abort controllers for the runner's sleep step. Set on every
+  // `run()` so a stale stop() can't cancel a fresh run; cleared when the
+  // runner exits the sleep cleanly. `stop(host)` aborts that console's so
+  // `cancellableSleep` resolves immediately and the runner notices the
+  // runId change at its next isLive() check.
+  const aborts = new Map<string, AbortController>();
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** Write one console's run status (merges into the byHost map). */
+  const setRunStatus = (key: string, status: PlaylistRunStatus) =>
+    set((s) => ({
+      runStatusByHost: { ...s.runStatusByHost, [key]: status },
+    }));
 
   const scheduleSave = () => {
     if (saveTimer !== null) clearTimeout(saveTimer);
@@ -103,7 +147,7 @@ export const usePayloadPlaylistsStore = create<PlaylistState>((set, get) => {
   return {
     playlists: [],
     loaded: false,
-    runStatus: { kind: "idle" },
+    runStatusByHost: {},
 
     async hydrate() {
       // Browser-only contexts: Tauri invoke unavailable. Same rationale
@@ -208,7 +252,12 @@ export const usePayloadPlaylistsStore = create<PlaylistState>((set, get) => {
     async run(id, host, port) {
       const playlist = get().playlists.find((p) => p.id === id);
       if (!playlist) return;
-      if (get().runStatus.kind === "running" || get().runStatus.kind === "sleeping") {
+      // A run is owned by the console it's launched against. Only block if
+      // THIS console is already mid-run; another console running its own
+      // playlist is fine.
+      const key = keyOf(host);
+      const cur = get().runStatusByHost[key]?.kind;
+      if (cur === "running" || cur === "sleeping") {
         return;
       }
       // Stamp "recently run" (on start, so a run that fails mid-way still
@@ -221,13 +270,15 @@ export const usePayloadPlaylistsStore = create<PlaylistState>((set, get) => {
         ),
       }));
       scheduleSave();
-      const myRun = gen.next();
-      // Fresh abort signal for this run. stop() will fire it; the
+      const g = genFor(key);
+      const myRun = g.next();
+      // Fresh abort signal for this run. stop(host) will fire it; the
       // sleep races against it so a Stop click during a long sleep
       // doesn't wait out the timer.
-      runAbort = new AbortController();
-      const myAbort = runAbort.signal;
-      const isLive = () => gen.isLive(myRun);
+      const myAbortCtl = new AbortController();
+      aborts.set(key, myAbortCtl);
+      const myAbort = myAbortCtl.signal;
+      const isLive = () => g.isLive(myRun);
 
       let successCount = 0;
       let failureCount = 0;
@@ -242,8 +293,11 @@ export const usePayloadPlaylistsStore = create<PlaylistState>((set, get) => {
         const stepHost = step.ip && step.ip.trim() ? step.ip.trim() : host;
         const stepPort =
           typeof step.port === "number" && step.port > 0 ? step.port : port;
-        set({
-          runStatus: { kind: "running", playlistId: id, stepIndex: i, host },
+        setRunStatus(key, {
+          kind: "running",
+          playlistId: id,
+          stepIndex: i,
+          host,
         });
 
         try {
@@ -255,14 +309,12 @@ export const usePayloadPlaylistsStore = create<PlaylistState>((set, get) => {
           failures.push({ stepIndex: i, error: errMsg });
           if (!playlist.continueOnFailure) {
             if (isLive()) {
-              set({
-                runStatus: {
-                  kind: "failed",
-                  playlistId: id,
-                  host,
-                  stepIndex: i,
-                  error: errMsg,
-                },
+              setRunStatus(key, {
+                kind: "failed",
+                playlistId: id,
+                host,
+                stepIndex: i,
+                error: errMsg,
               });
             }
             return;
@@ -271,15 +323,13 @@ export const usePayloadPlaylistsStore = create<PlaylistState>((set, get) => {
 
         if (!isLive()) return;
         if (step.sleepMs > 0 && i < playlist.steps.length - 1) {
-          set({
-            runStatus: {
-              kind: "sleeping",
-              playlistId: id,
-              host,
-              stepIndex: i,
-              sleepStartedAtMs: Date.now(),
-              sleepDurationMs: step.sleepMs,
-            },
+          setRunStatus(key, {
+            kind: "sleeping",
+            playlistId: id,
+            host,
+            stepIndex: i,
+            sleepStartedAtMs: Date.now(),
+            sleepDurationMs: step.sleepMs,
           });
           await cancellableSleep(step.sleepMs, myAbort);
           // After the sleep returns (whether timed out or cancelled),
@@ -290,26 +340,28 @@ export const usePayloadPlaylistsStore = create<PlaylistState>((set, get) => {
       }
 
       if (isLive()) {
-        set({
-          runStatus: {
-            kind: "done",
-            playlistId: id,
-            host,
-            successCount,
-            failureCount,
-            failures,
-          },
+        setRunStatus(key, {
+          kind: "done",
+          playlistId: id,
+          host,
+          successCount,
+          failureCount,
+          failures,
         });
       }
+      // Clean up this run's abort controller if it's still the active one
+      // (a later run() on the same host would have replaced it).
+      if (aborts.get(key) === myAbortCtl) aborts.delete(key);
     },
 
-    stop() {
-      gen.next();
-      // Abort any in-flight sleep so the runner's await resolves now
-      // instead of when the timer would have fired.
-      runAbort?.abort();
-      runAbort = null;
-      set({ runStatus: { kind: "idle" } });
+    stop(host) {
+      const key = keyOf(host);
+      genFor(key).next();
+      // Abort any in-flight sleep on this console so the runner's await
+      // resolves now instead of when the timer would have fired.
+      aborts.get(key)?.abort();
+      aborts.delete(key);
+      setRunStatus(key, { kind: "idle" });
     },
   };
 });

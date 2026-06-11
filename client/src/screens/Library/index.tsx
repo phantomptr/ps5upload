@@ -27,7 +27,11 @@ import { useConnectionStore, PS5_PAYLOAD_PORT } from "../../state/connection";
 import SmpPanel from "./SmpPanel";
 import RunningAppsPanel from "./RunningAppsPanel";
 import { useRunningAppsStore } from "../../state/runningApps";
-import { usePlayTimeStore, formatPlayTime } from "../../state/playTime";
+import {
+  usePlayTimeStore,
+  formatPlayTime,
+  playSecondsFor,
+} from "../../state/playTime";
 import {
   scanLibrary,
   fsDelete,
@@ -61,7 +65,11 @@ import {
   resolveMoveDestination,
   sourceBasename,
 } from "../../lib/moveTarget";
-import { useLibraryStore, findOwningImage } from "../../state/library";
+import {
+  useLibraryStore,
+  findOwningImage,
+  libraryForHost,
+} from "../../state/library";
 import { useElapsed } from "../../lib/useElapsed";
 import { formatBytes } from "../../lib/format";
 import { mgmtAddr, transferAddr } from "../../lib/addr";
@@ -126,15 +134,30 @@ export default function LibraryScreen() {
   const host = useConnectionStore((s) => s.host);
   const guard = useStaleHostGuard();
   const payloadStatus = useConnectionStore((s) => s.payloadStatus);
-  const entries = useLibraryStore((s) => s.entries);
-  const mountMap = useLibraryStore((s) => s.mountMap);
-  const pendingMounts = useLibraryStore((s) => s.pendingMounts);
-  const volumes = useLibraryStore((s) => s.volumes);
-  const loading = useLibraryStore((s) => s.loading);
-  const error = useLibraryStore((s) => s.error);
-  const lastRefreshedAt = useLibraryStore((s) => s.lastRefreshedAt);
-  const setLoading = useLibraryStore((s) => s.setLoading);
-  const setError = useLibraryStore((s) => s.setError);
+  // Per-console library: select THIS console's slot. Switching tabs shows the
+  // new console's last-known library instantly (no blank-on-switch) and its
+  // background refresh repopulates it — no cross-console staleness.
+  const entries = useLibraryStore((s) => libraryForHost(s, host).entries);
+  const mountMap = useLibraryStore((s) => libraryForHost(s, host).mountMap);
+  const pendingMounts = useLibraryStore(
+    (s) => libraryForHost(s, host).pendingMounts,
+  );
+  const volumes = useLibraryStore((s) => libraryForHost(s, host).volumes);
+  const loading = useLibraryStore((s) => libraryForHost(s, host).loading);
+  const error = useLibraryStore((s) => libraryForHost(s, host).error);
+  const lastRefreshedAt = useLibraryStore(
+    (s) => libraryForHost(s, host).lastRefreshedAt,
+  );
+  // Host-bound wrappers so the many call sites stay `setLoading(false)` /
+  // `setError(msg)` while the underlying store action is per-host.
+  const setLoading = useCallback(
+    (loading: boolean) => useLibraryStore.getState().setLoading(host, loading),
+    [host],
+  );
+  const setError = useCallback(
+    (e: string | null) => useLibraryStore.getState().setError(host, e),
+    [host],
+  );
 
   const refresh = useCallback(async () => {
     if (!host?.trim()) return;
@@ -199,41 +222,11 @@ export default function LibraryScreen() {
       // count. The user-visible symptom this fixes: "library goes
       // blank after mounting an image, must click Refresh manually."
       //
-      // Both branches go through a single `useLibraryStore.setState`
-      // callback so the read-of-entries and the conditional write
-      // are atomic against any concurrent setData (e.g. from a
-      // parallel `ps5upload:library:invalidate` event). Reading
-      // `getState().entries` first and then committing via a
-      // separate `setState` would TOCTOU between the two: a
-      // concurrent `clear()` could flip entries to null between
-      // the read and the write, causing us to wipe the display
-      // with the stale empty result.
-      useLibraryStore.setState((s) => {
-        const hadEntries = (s.entries ?? []).length > 0;
-        const prunedPending = new Map<string, string>();
-        for (const [imagePath, mountPoint] of s.pendingMounts) {
-          if (!next.has(imagePath)) {
-            prunedPending.set(imagePath, mountPoint);
-          }
-        }
-        if (result.length === 0 && hadEntries) {
-          return {
-            mountMap: next,
-            pendingMounts: prunedPending,
-            volumes: writable,
-            lastRefreshedAt: Date.now(),
-            error: null,
-          };
-        }
-        return {
-          entries: result,
-          mountMap: next,
-          pendingMounts: prunedPending,
-          volumes: writable,
-          lastRefreshedAt: Date.now(),
-          error: null,
-        };
-      });
+      // setData commits atomically (single set() callback) for THIS console's
+      // slot: it prunes confirmed pending mounts and keeps the old entries if
+      // the rescan came back empty but we had some (the "library goes blank
+      // after mounting" fix) — the same logic that used to live inline here.
+      useLibraryStore.getState().setData(host, result, next, writable);
     } catch (e) {
       if (isStale()) return;
       setError(e instanceof Error ? e.message : String(e));
@@ -732,8 +725,8 @@ function LibraryRow({
     !!entry.titleId &&
     runningTitleIds.has(entry.titleId);
   const playSeconds = usePlayTimeStore((s) =>
-    entry.kind === "game" && entry.titleId
-      ? s.seconds[entry.titleId]
+    entry.kind === "game"
+      ? playSecondsFor(s, host, entry.titleId)
       : undefined,
   );
   const kindLabel =
@@ -1087,7 +1080,7 @@ function LibraryRow({
       // refreshes volumes. The volumes-driven authoritative state
       // overwrites this on the next setData(), but the user gets
       // an instantly-correct UI in the meantime.
-      useLibraryStore.getState().addMount(entry.path, res.mount_point);
+      useLibraryStore.getState().addMount(host, entry.path, res.mount_point);
       // The activity entry started with toPath = opts.mountPoint
       // which is undefined on the legacy fall-through (no
       // user-chosen path — the payload picks
@@ -1718,7 +1711,7 @@ function LibraryRow({
         titleIdsToUnregister.push(entry.titleId);
       } else if (entry.kind !== "game" && imageKey) {
         const k = imageKey;
-        const libState = useLibraryStore.getState();
+        const libState = libraryForHost(useLibraryStore.getState(), host);
         const allEntries = libState.entries ?? [];
         for (const e of allEntries) {
           if (
@@ -1752,7 +1745,7 @@ function LibraryRow({
       await fsUnmount(addr, mountPointToUnmount);
       // Optimistic mountMap remove so the row flips to NOT-mounted
       // immediately; the background rescan will confirm.
-      useLibraryStore.getState().removeMount(imageKey);
+      useLibraryStore.getState().removeMount(host, imageKey);
       setMountNote(`Unmounted ${mountPointToUnmount}.`);
       // Delay the rescan slightly so the unmount fully propagates
       // through the kernel mount table before scanLibrary reads it

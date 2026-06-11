@@ -21,7 +21,10 @@ import {
 import { Button } from "../../components";
 import { ConsoleChip } from "../../components/ConsoleChip";
 import { useTr } from "../../state/lang";
-import { usePayloadPlaylistsStore } from "../../state/payloadPlaylists";
+import {
+  runStatusForHost,
+  usePayloadPlaylistsStore,
+} from "../../state/payloadPlaylists";
 import { sanitiseSleepMs, type Playlist } from "../../lib/playlistOps";
 
 /**
@@ -43,7 +46,7 @@ export function PlaylistsPanel({
   const tr = useTr();
   const playlists = usePayloadPlaylistsStore((s) => s.playlists);
   const loaded = usePayloadPlaylistsStore((s) => s.loaded);
-  const runStatus = usePayloadPlaylistsStore((s) => s.runStatus);
+  const runStatus = usePayloadPlaylistsStore((s) => runStatusForHost(s, host));
   const hydrate = usePayloadPlaylistsStore((s) => s.hydrate);
   const createPlaylist = usePayloadPlaylistsStore((s) => s.createPlaylist);
   const stop = usePayloadPlaylistsStore((s) => s.stop);
@@ -103,7 +106,7 @@ export function PlaylistsPanel({
               variant="secondary"
               size="sm"
               leftIcon={<Square size={12} />}
-              onClick={stop}
+              onClick={() => stop(host)}
             >
               {tr("playlist_stop", undefined, "Stop run")}
             </Button>
@@ -120,7 +123,7 @@ export function PlaylistsPanel({
         </div>
       </header>
 
-      <RunStatusBanner />
+      <RunStatusBanner host={host} />
 
       {recentlyRun.length > 0 && (
         <div className="mb-4">
@@ -204,9 +207,9 @@ export function PlaylistsPanel({
   );
 }
 
-function RunStatusBanner() {
+function RunStatusBanner({ host }: { host: string }) {
   const tr = useTr();
-  const runStatus = usePayloadPlaylistsStore((s) => s.runStatus);
+  const runStatus = usePayloadPlaylistsStore((s) => runStatusForHost(s, host));
   const playlists = usePayloadPlaylistsStore((s) => s.playlists);
   // Pull `now` out of state so the 250 ms tick re-renders the banner
   // without calling `Date.now()` during render (lint forbids — render
@@ -357,7 +360,7 @@ function PlaylistCard({
   const moveStepDown = usePayloadPlaylistsStore((s) => s.moveStepDown);
   const updateStep = usePayloadPlaylistsStore((s) => s.updateStep);
   const run = usePayloadPlaylistsStore((s) => s.run);
-  const runStatus = usePayloadPlaylistsStore((s) => s.runStatus);
+  const runStatus = usePayloadPlaylistsStore((s) => runStatusForHost(s, host));
 
   const isThisRunning =
     (runStatus.kind === "running" || runStatus.kind === "sleeping") &&
