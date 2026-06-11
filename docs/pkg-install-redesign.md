@@ -58,22 +58,21 @@ edge of doing this from a jailbroken context on a firmware Sony hardened.
 
 ### Mitigations (cheap → involved)
 
-1. **Prefer the clean path on FW ≥ 12 (recommended first step).** The DPI
-   daemon runs from a pristine process and doesn't ptrace ShellUI, so it's far
-   less likely to blip the UI. Add a firmware-gated policy: on FW ≥ 12.00 (or
-   whenever Tier 1 returns the "rejected from jailbroken context" code on this
-   FW), **skip Tier 2 (ShellUI-RPC) and go straight to the DPI daemon.** We
-   already have the firmware number (`parsePS5Firmware`) and the per-tier error
-   codes in the `PKG_INSTALL_ACK` (`register_path`, `shellui_err`,
-   `appinst_err`). This likely removes the 5 s blip entirely.
-2. **Warn before it happens.** When we know we're about to use a ShellUI-touch
-   path on a fragile firmware, show a one-line notice: "The PS5 screen may go
-   black for a few seconds while it hands the install to the system — this is
-   normal, don't touch the console." Removes the scare factor.
-3. **Detect + reassure after.** The status poller already maps BGFT phases
-   (`queued/download/install/done/error`). After the blip, surface "Handed to
-   the PS5 installer — finishing in the background" so the user isn't left
-   wondering whether it crashed.
+1. **~~Prefer the DPI daemon on FW ≥ 12~~ — REJECTED after the user report.**
+   The original idea was to skip the ShellUI-touch path on FW 12 by going
+   straight to the DPI daemon. But the user confirmed the **main-payload path
+   installs and *runs perfectly*** on FW 12.00 (just with the blip), whereas the
+   DPI daemon registers metadata-only on newer firmware → an **unlaunchable**
+   install. Switching tiers would trade a cosmetic blip for a broken install.
+   So we do NOT change the install path on FW 12.
+2. **Warn before it happens (IMPLEMENTED).** On FW ≥ 12 (firmware via
+   `parsePS5Firmware` from the per-host kernel), `pkgLibrary.install()` sets a
+   `busyNotice`: "the PS5 screen may go black for a few seconds — that's normal,
+   don't touch the console; the install finishes in the background." Removes the
+   scare factor without touching the working install path.
+3. **Detect + reassure after (future).** The status poller already maps BGFT
+   phases (`queued/download/install/done/error`); a post-blip "Handed to the PS5
+   installer — finishing in the background" line is a nice follow-up.
 
 ---
 

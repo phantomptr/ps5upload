@@ -13,6 +13,8 @@ import {
 import { ensurePayloadCurrent } from "../lib/ensurePayloadCurrent";
 import { transferScreenBusy } from "../lib/ps5Transfers";
 import { useInstallSettingsStore } from "./installSettings";
+import { useConnectionStore } from "./connection";
+import { parsePS5Firmware } from "../lib/ps5Firmware";
 
 /**
  * Package Library — the model behind the redesigned Install Package screen.
@@ -522,6 +524,27 @@ const makePkgLibraryStore = () =>
       // Inside the try so any throw still hits `finally` and clears the
       // `installing` flag — otherwise a wedged flag would lock the screen.
       patch({ status: "installing", lastResult: undefined });
+
+      // FW 12.xx heads-up: the main-payload InstallByPackage hands the install
+      // to Sony's installer from the jailbroken context, which briefly
+      // destabilizes SceShellUI on newer firmware — the PS5 screen goes black
+      // for a few seconds, then recovers with the install queued. It still
+      // completes + launches fine (HW-reported), so we DON'T switch to the DPI
+      // daemon (that risks an unlaunchable metadata-only install on 12.xx) —
+      // we just warn so the blip isn't alarming. Gated to FW >= 12 where it's
+      // observed; older firmware installs silently.
+      {
+        const rt =
+          useConnectionStore.getState().runtimeByHost[hostOf(host)] ?? null;
+        const fw = parsePS5Firmware(rt?.ps5Kernel ?? null);
+        const major = fw ? parseFloat(fw) : 0;
+        if (major >= 12) {
+          set({
+            busyNotice:
+              "Installing… on FW 12.x the PS5 screen may go black for a few seconds — that's normal. Don't touch the console; the install finishes in the background.",
+          });
+        }
+      }
 
       // PRIMARY (2.25.2): install via the MAIN PAYLOAD's InstallByPackage
       // (engine /api/pkg/install/start). The main payload runs in the FULL
