@@ -23,6 +23,7 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import {
   useUploadStore,
   payloadCanMountImage,
+  archiveFormat,
   type ExcludeMode,
   type PickedSource,
   type SourceKind,
@@ -241,6 +242,9 @@ export default function UploadScreen() {
       strategy,
       reconcileMode,
       excludes: activeExcludes,
+      // Capture the .rar password (if any) into the queued item; the direct
+      // startTransfer paths read it from the store instead.
+      rarPassword: source.kind === "archive" ? store.rarPassword : null,
       mountAfterUpload: source.kind === "image" && mountAfterUpload,
       mountReadOnly,
       registerAfterUpload:
@@ -787,6 +791,10 @@ function Step2Options(props: {
 
       {source.kind === "archive" && source.zipInfo && (
         <ZipArchiveCard info={source.zipInfo} />
+      )}
+
+      {source.kind === "archive" && archiveFormat(source.path) === "rar" && (
+        <RarPasswordCard />
       )}
 
       {source.kind === "archive" && (
@@ -2027,6 +2035,71 @@ function PreflightEtaBanner({
  *  PS5, the space saved, and the embedded game (if any). Reassures the user
  *  that the archive is decompressed on the host and lands extracted on the
  *  console — no extra step, no temp copy of the whole game. */
+/** Password input for an encrypted `.rar` source. The error string from the
+ *  inspect carries `rar_password_required` (encrypted, needs one) or
+ *  `rar_password_wrong`; we map those to friendly hints. Applying re-inspects
+ *  via the store, so the file tree appears once the password is right. */
+function RarPasswordCard() {
+  const tr = useTr();
+  const password = useUploadStore((s) => s.rarPassword);
+  const detecting = useUploadStore((s) => s.detecting);
+  const error = useUploadStore((s) => s.detectError);
+  const setRarPassword = useUploadStore((s) => s.setRarPassword);
+  const onApply = (pw: string) => void setRarPassword(pw);
+  const [draft, setDraft] = useState(password ?? "");
+  const needsPw = !!error && error.includes("rar_password_required");
+  const wrongPw = !!error && error.includes("rar_password_wrong");
+  return (
+    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
+      <p className="mb-1 text-sm font-medium">
+        {tr("upload.rar.title", undefined, "Encrypted archive")}
+      </p>
+      <p className="mb-3 text-xs text-[var(--color-muted)]">
+        {tr(
+          "upload.rar.hint",
+          undefined,
+          "If this .rar is password-protected, enter the password so it can be extracted. Leave blank if it isn't.",
+        )}
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          type="password"
+          value={draft}
+          autoComplete="off"
+          placeholder={tr("upload.rar.placeholder", undefined, "Password")}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") onApply(draft);
+          }}
+          className="min-w-0 flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 text-sm"
+        />
+        <Button
+          variant="secondary"
+          size="sm"
+          loading={detecting}
+          onClick={() => onApply(draft)}
+        >
+          {tr("upload.rar.apply", undefined, "Apply")}
+        </Button>
+      </div>
+      {needsPw && (
+        <p className="mt-2 text-xs text-[var(--color-warn)]">
+          {tr(
+            "upload.rar.needed",
+            undefined,
+            "This archive is encrypted — enter its password to continue.",
+          )}
+        </p>
+      )}
+      {wrongPw && (
+        <p className="mt-2 text-xs text-[var(--color-bad)]">
+          {tr("upload.rar.wrong", undefined, "Wrong password — try again.")}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function ZipArchiveCard({ info }: { info: ZipInspect }) {
   const tr = useTr();
   // Space saved by keeping the dump zipped, as a percentage. Guard against a

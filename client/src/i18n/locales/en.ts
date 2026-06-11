@@ -1790,6 +1790,16 @@ profile: "Profile",
 "profile.username.slot": "Slot {n}",
 "profile.username.activated": "active",
 "profile.username.save": "Save",
+
+// .rar upload (encrypted-archive password)
+"upload.rar.title": "Encrypted archive",
+"upload.rar.hint":
+  "If this .rar is password-protected, enter the password so it can be extracted. Leave blank if it isn't.",
+"upload.rar.placeholder": "Password",
+"upload.rar.apply": "Apply",
+"upload.rar.needed":
+  "This archive is encrypted — enter its password to continue.",
+"upload.rar.wrong": "Wrong password — try again.",
 };
 
 export default en;

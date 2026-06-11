@@ -3,6 +3,7 @@ import {
   inspectFolder,
   zipInspectStream,
   sevenzInspectStream,
+  rarInspect,
   type FolderInspectResult,
   type WrappedGameHint,
   type ZipInspect,
@@ -60,6 +61,12 @@ export interface UploadState {
    *  during a slow cold-cache central-directory read. */
   zipInspectEntries: number | null;
 
+  /** Password for an encrypted `.rar` source. Held only in memory for the
+   *  current pick — fed to both the rar inspect and the rar transfer, and
+   *  never persisted or logged. Null/empty = no password (the common case).
+   *  Ignored for non-rar sources. */
+  rarPassword: string | null;
+
   mountAfterUpload: boolean;
   /** Mount the image read-only when mount-after-upload runs. Default
    *  true — the safer choice: the PS5 can't accidentally write
@@ -88,6 +95,9 @@ export interface UploadState {
    *  cross-console preferences (subpath, excludes, register-after-upload). */
   clearForHostChange(): void;
 
+  /** Set the encrypted-`.rar` password and re-inspect the current source so
+   *  the file tree / "needs password" state updates. */
+  setRarPassword(password: string): Promise<void>;
   setMountAfterUpload(on: boolean): void;
   setMountReadOnly(on: boolean): void;
   setRegisterAfterUpload(on: boolean): void;
@@ -140,10 +150,15 @@ export function payloadCanMountImage(path: string): boolean {
  *  (LZMA2, commonly a single `.exfat` image). `.rar` is intentionally out of
  *  scope — modern scene .rar is split + encrypted. Returns null for anything
  *  else. */
-export function archiveFormat(path: string): "zip" | "7z" | null {
+export function archiveFormat(path: string): "zip" | "7z" | "rar" | null {
   const p = path.toLowerCase();
   if (p.endsWith(".zip")) return "zip";
   if (p.endsWith(".7z")) return "7z";
+  // `.rar` covers a single archive and the first volume of a multi-part set
+  // (`name.part1.rar`); UnRAR pulls in the sibling volumes automatically.
+  // Old-style `.r00`/`.r01` parts accompany a `.rar`, so the `.rar` is what
+  // the user picks. RAR is desktop-only (see engine `caps.rar`).
+  if (p.endsWith(".rar")) return "rar";
   return null;
 }
 
@@ -158,6 +173,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
   detecting: false,
   detectError: null,
   zipInspectEntries: null,
+  rarPassword: null,
   mountAfterUpload: false,
   mountReadOnly: true,
   registerAfterUpload:
@@ -178,6 +194,9 @@ export const useUploadStore = create<UploadState>((set, get) => ({
   excludes: defaultExcludes,
 
   async pickFile(path) {
+    // A new pick clears any stale .rar password. `setRarPassword` re-inspects
+    // the SAME path, so it deliberately doesn't trip this reset.
+    if (get().source?.path !== path) set({ rarPassword: null });
     // A .zip is an archive source: optimistically mark it, then inspect the
     // central directory (fast — no inflation) to show what it expands to and
     // detect an embedded game. Mirrors pickFolder's stale-result guard.
@@ -196,16 +215,25 @@ export const useUploadStore = create<UploadState>((set, get) => ({
         zipInspectEntries: null,
       });
       try {
-        // Same inspect-stream shape for both formats — pick by extension.
-        const inspect =
-          archiveFormat(path) === "7z" ? sevenzInspectStream : zipInspectStream;
-        const zipInfo = await inspect(path, (p) => {
-          // Stale-result guard: if the user dropped another file mid-scan,
-          // ignore late ticks from the previous one. Without this the
-          // entry count would briefly flicker between two unrelated archives.
-          if (get().source?.path !== path) return;
-          set({ zipInspectEntries: p.entries_seen });
-        });
+        const fmt = archiveFormat(path);
+        let zipInfo: ZipInspect;
+        if (fmt === "rar") {
+          // RAR inspect is a one-shot metadata read (no streaming progress).
+          // Pass the current password (may be null); it throws a message
+          // containing `rar_password_required` / `rar_password_wrong` which
+          // the catch surfaces so the Upload screen shows the password field.
+          zipInfo = await rarInspect(path, get().rarPassword);
+        } else {
+          // Same inspect-stream shape for zip + 7z — pick by extension.
+          const inspect = fmt === "7z" ? sevenzInspectStream : zipInspectStream;
+          zipInfo = await inspect(path, (p) => {
+            // Stale-result guard: if the user dropped another file mid-scan,
+            // ignore late ticks from the previous one. Without this the
+            // entry count would briefly flicker between two unrelated archives.
+            if (get().source?.path !== path) return;
+            set({ zipInspectEntries: p.entries_seen });
+          });
+        }
         if (get().source?.path !== path) return;
         set({
           source: {
@@ -300,6 +328,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
       source: null,
       detecting: false,
       detectError: null,
+      rarPassword: null,
       mountAfterUpload: false,
     }),
 
@@ -309,11 +338,23 @@ export const useUploadStore = create<UploadState>((set, get) => ({
       detecting: false,
       detectError: null,
       zipInspectEntries: null,
+      rarPassword: null,
       mountAfterUpload: false,
       // Destination volume is a PS5-side path that only exists on the previous
       // console — clear it so the new console re-detects its own volumes.
       destinationVolume: null,
     }),
+
+  async setRarPassword(password) {
+    set({ rarPassword: password });
+    // Re-inspect the current source with the new password so the file tree
+    // (or the "needs password" error) updates. pickFile keeps rarPassword
+    // because the path is unchanged.
+    const src = get().source;
+    if (src && archiveFormat(src.path) === "rar") {
+      await get().pickFile(src.path);
+    }
+  },
 
   setMountAfterUpload: (mountAfterUpload) => set({ mountAfterUpload }),
   setMountReadOnly: (mountReadOnly) => set({ mountReadOnly }),

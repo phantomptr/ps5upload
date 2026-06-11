@@ -12,6 +12,7 @@ import {
   startTransferFile,
   startTransferZip,
   startTransfer7z,
+  startTransferRar,
   uploadQueueLoad,
   uploadQueueSave,
   UploadJobError,
@@ -96,6 +97,11 @@ export interface QueueItem {
   strategy: UploadStrategy;
   reconcileMode: ReconcileMode;
   excludes: string[];
+  /** Archive-only (.rar): password for an encrypted archive, captured at
+   *  add time. Held in the (persisted) queue so a Resume after restart can
+   *  re-extract — acceptable for this homebrew tool, but note it does live in
+   *  the queue file. Null/absent for unencrypted archives and non-rar items. */
+  rarPassword?: string | null;
   /** Image-only: mount the uploaded image after the transfer commits. */
   mountAfterUpload: boolean;
   /** Image-only: when mounting, mount read-only (default true — RO
@@ -185,6 +191,7 @@ export type AddQueueItem = Pick<
   | "strategy"
   | "reconcileMode"
   | "excludes"
+  | "rarPassword"
   | "mountAfterUpload"
   | "mountReadOnly"
   | "registerAfterUpload"
@@ -337,18 +344,30 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
       // 7z re-decompresses from the start on resume (LZMA2 can't seek) and
       // re-sends only un-acked shards.
       const bandwidthCap = useUploadSettingsStore.getState().bandwidthCapMbps;
-      const start =
-        archiveFormat(item.sourcePath) === "7z"
-          ? startTransfer7z
-          : startTransferZip;
-      jobId = await start(
-        item.sourcePath,
-        item.resolvedDest,
-        item.addr,
-        item.txIdHex,
-        item.excludes,
-        bandwidthCap,
-      );
+      const fmt = archiveFormat(item.sourcePath);
+      if (fmt === "rar") {
+        // .rar → host UnRAR extract; carry the (optional) password captured
+        // at add time. Resume re-extracts and re-sends only un-acked shards.
+        jobId = await startTransferRar(
+          item.sourcePath,
+          item.resolvedDest,
+          item.addr,
+          item.rarPassword ?? null,
+          item.txIdHex,
+          item.excludes,
+          bandwidthCap,
+        );
+      } else {
+        const start = fmt === "7z" ? startTransfer7z : startTransferZip;
+        jobId = await start(
+          item.sourcePath,
+          item.resolvedDest,
+          item.addr,
+          item.txIdHex,
+          item.excludes,
+          bandwidthCap,
+        );
+      }
     } else if (isFolder && item.strategy === "resume") {
       // Pass the persisted tx_id so a Resume after app restart
       // picks up the payload's existing journal entry instead of
