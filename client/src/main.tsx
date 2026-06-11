@@ -16,6 +16,7 @@ import {
 import { installConsoleCapture, installDiskLogSink, log } from "./state/logs";
 import { installEngineLogBridge } from "./state/engineLogBridge";
 import { installEngineStartupEvents } from "./state/engineStartupEvents";
+import { installAccidentalReloadGuard } from "./lib/preventAccidentalReload";
 
 // Capture console.error / warn + unhandled promise rejections into
 // the in-app log store before any other module runs — that way the
@@ -50,6 +51,12 @@ installUserConfigMirror();
 // Fire-and-forget: if the Tauri command isn't registered yet (dev mode
 // first launch before compile), the inner call silently no-ops.
 void hydrateFromUserConfig();
+
+// Suppress the WebView's right-click menu (Back/Reload/Inspect) so a stray
+// click can't restart the app out from under a running transfer/install;
+// reload keyboard shortcuts are additionally blocked in production. No-op on
+// non-Tauri / Android. See preventAccidentalReload.ts for the dev/prod split.
+installAccidentalReloadGuard();
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
