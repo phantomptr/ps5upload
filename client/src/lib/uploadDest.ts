@@ -55,7 +55,7 @@ export function resolveUploadDest(
     return { destRoot, dest: destRoot };
   }
   const raw = basename(sourcePath);
-  const name = isArchive ? raw.replace(/\.zip$/i, "") : raw;
+  const name = isArchive ? raw.replace(/\.(zip|7z)$/i, "") : raw;
   const dest = name ? `${destRoot}/${name}` : destRoot;
   return { destRoot, dest };
 }

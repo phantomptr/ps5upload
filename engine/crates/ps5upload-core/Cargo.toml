@@ -15,6 +15,14 @@ serde_json.workspace = true
 # Read .zip game dumps and stream-decompress them straight into the FTX2
 # shard pipeline (transfer.rs `transfer_zip`). Deflate-only, matching the
 # pin already vetted in client/src-tauri (save_archive.rs) — no bzip2/zstd
-# C libs. ZIP is the only archive format we support (see the "drop .rar"
-# scope decision).
+# C libs.
 zip = { version = "8", default-features = false, features = ["deflate"] }
+# Read .7z game dumps (commonly a single .exfat image) the same way — host
+# decompress + stream into the shard pipeline (transfer.rs `transfer_7z`).
+# `default-features = false` keeps ONLY the always-on pure-Rust LZMA/LZMA2
+# decoder (lzma-rust2) + crc32fast, dropping the optional bzip2 (C dep), aes/
+# getrandom, ppmd, brotli and zstd defaults — so the dependency cross-compiles
+# cleanly to aarch64-linux-android with no C toolchain. LZMA2 covers the
+# overwhelming majority of real-world 7z game dumps; an archive using an
+# unsupported codec fails with a clear "re-pack with LZMA2" message.
+sevenz-rust2 = { version = "0.21", default-features = false }

@@ -130,13 +130,14 @@ fn transfer_zip_large_entry_multi_shard_ram_cache() {
     let result = transfer_zip(&cfg, random_tx_id(), "/data/g", &zip.0).unwrap();
 
     assert_eq!(result.shards_sent, data.len().div_ceil(4096) as u64);
-    // The mock concatenates non-packed shards (in seq order) under dest_root.
-    // For a single entry that equals the whole file — so a byte-exact match
-    // here proves the per-entry cache served every shard's range correctly
-    // and in order across the inflated copy.
+    // The mock maps each manifest file's non-packed shards (in seq order) to
+    // its real dest path — so the single entry "big.bin" lands at
+    // dest_root/big.bin. A byte-exact match here proves the per-entry cache
+    // served every shard's range correctly and in order across the inflated
+    // copy.
     let st = srv.state.lock().unwrap();
     assert_eq!(
-        st.applied.get("/data/g").map(|v| v.as_slice()),
+        st.applied.get("/data/g/big.bin").map(|v| v.as_slice()),
         Some(data.as_slice())
     );
 }
@@ -160,11 +161,12 @@ fn transfer_zip_large_entry_temp_spill() {
         transfer_zip_with_opts(&cfg, random_tx_id(), "/data/spill", &zip.0, 64, 0).unwrap();
 
     assert_eq!(result.bytes_sent, data.len() as u64);
-    // Single non-packed entry → assembled under dest_root by the mock. A
-    // byte-exact match proves the temp-file cache served every range right.
+    // Single non-packed entry "huge.bin" → mapped to dest_root/huge.bin by the
+    // mock. A byte-exact match proves the temp-file cache served every range
+    // right.
     let st = srv.state.lock().unwrap();
     assert_eq!(
-        st.applied.get("/data/spill").map(|v| v.as_slice()),
+        st.applied.get("/data/spill/huge.bin").map(|v| v.as_slice()),
         Some(data.as_slice())
     );
 }

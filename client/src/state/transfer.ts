@@ -5,6 +5,7 @@ import {
   startTransferDir,
   startTransferDirReconcile,
   startTransferZip,
+  startTransfer7z,
   fsMount,
   fsUnmount,
   jobStatus,
@@ -27,7 +28,7 @@ import {
   pushRateSample,
   type RateSample,
 } from "../lib/rollingRate";
-import type { SourceKind } from "./upload";
+import { archiveFormat, type SourceKind } from "./upload";
 import { useUploadSettingsStore } from "./uploadSettings";
 import { useRecentHostMetricsStore } from "./recentHostMetrics";
 import { effectiveUploadStreams } from "../lib/uploadStreams";
@@ -362,14 +363,12 @@ export const useTransferStore = create<TransferState>((set) => {
             bandwidthCap,
           );
         } else if (isArchive) {
-          jobId = await startTransferZip(
-            srcPath,
-            dest,
-            addr,
-            txId,
-            excludes,
-            bandwidthCap,
-          );
+          // .zip → host deflate; .7z → host LZMA2 (forward-only stream).
+          const start =
+            archiveFormat(srcPath) === "7z"
+              ? startTransfer7z
+              : startTransferZip;
+          jobId = await start(srcPath, dest, addr, txId, excludes, bandwidthCap);
         } else {
           jobId = await startTransferFile(srcPath, dest, addr);
         }

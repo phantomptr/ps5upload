@@ -128,6 +128,36 @@ export async function zipInspectStream(
   });
 }
 
+// ── .7z (mirror the zip helpers) ──────────────────────────────────────────
+// 7z support reuses the ZipInspect / ZipInspectProgress shapes — the engine
+// returns the same fields. The host decompresses the archive's single LZMA2
+// stream (commonly one .exfat image) forward-only and streams the files into
+// the same FTX2 shard pipeline, so they land already-extracted on the PS5.
+// Game metadata (title) is not surfaced for 7z: a 7z-of-.exfat has no
+// host-visible param.json, so `title` etc. stay null.
+
+/** Inspect a `.7z` without extracting it (file count + sizes). Fast even for a
+ *  124 GB archive — only the small header is read. Throws if unreadable. */
+export async function sevenzInspect(archivePath: string): Promise<ZipInspect> {
+  return invoke<ZipInspect>("sevenz_inspect", {
+    req: { archive_path: archivePath },
+  });
+}
+
+/** Streaming variant of `sevenzInspect` — same dead-man-switch watchdog +
+ *  progress channel as `zipInspectStream`. */
+export async function sevenzInspectStream(
+  archivePath: string,
+  onProgress: (p: ZipInspectProgress) => void,
+): Promise<ZipInspect> {
+  const channel = new Channel<ZipInspectProgress>();
+  channel.onmessage = onProgress;
+  return invoke<ZipInspect>("sevenz_inspect_stream", {
+    req: { archive_path: archivePath },
+    onProgress: channel,
+  });
+}
+
 /**
  * Send the payload ELF to the PS5's ELF loader.
  *
@@ -210,6 +240,33 @@ export async function startTransferZip(
   const res = await invoke<{ job_id: string }>("transfer_zip", {
     req: {
       zip_path: zipPath,
+      dest_root: destRoot,
+      addr,
+      tx_id: txId ?? null,
+      excludes: excludes ?? [],
+      bandwidth_cap_mbps:
+        bandwidthCapMbps && bandwidthCapMbps > 0 ? bandwidthCapMbps : null,
+    },
+  });
+  return res.job_id;
+}
+
+/** Start a `.7z`-archive upload. Same contract as `startTransferZip` — the
+ *  engine decompresses host-side and the files land already-extracted under
+ *  `destRoot`. The common case is a single `.exfat` image. Resume after a
+ *  drop re-decompresses from the start (LZMA2 can't seek) and re-sends only
+ *  un-acked shards. */
+export async function startTransfer7z(
+  archivePath: string,
+  destRoot: string,
+  addr: string,
+  txId?: string | null,
+  excludes?: string[],
+  bandwidthCapMbps?: number,
+): Promise<string> {
+  const res = await invoke<{ job_id: string }>("transfer_7z", {
+    req: {
+      archive_path: archivePath,
       dest_root: destRoot,
       addr,
       tx_id: txId ?? null,

@@ -1070,6 +1070,7 @@ fn transfer_file_list_initial_flags_resume_adopts_existing() {
                 dest_root: "/data/resume".to_string(),
                 total_shards: 0,
                 spool: std::collections::HashMap::new(),
+                manifest_files: Vec::new(),
             },
         );
     }

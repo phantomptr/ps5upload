@@ -68,10 +68,10 @@ use ps5upload_core::{
         humanize_err as sys_time_humanize, ps5_time_get, ps5_time_set, PsTime, PsTimeSetResult,
     },
     transfer::{
-        inspect_zip, transfer_dir_resumable, transfer_file_list_multistream,
-        transfer_file_list_resumable, transfer_file_path_resumable, transfer_zip_resumable,
-        zip_plan_preview, FileListEntry, TransferConfig, DEFAULT_RESUME_RETRIES,
-        DEFAULT_ZIP_ENTRY_RAM_THRESHOLD, TX_FLAG_RESUME,
+        inspect_7z, inspect_zip, sevenz_plan_preview, transfer_7z_resumable,
+        transfer_dir_resumable, transfer_file_list_multistream, transfer_file_list_resumable,
+        transfer_file_path_resumable, transfer_zip_resumable, zip_plan_preview, FileListEntry,
+        TransferConfig, DEFAULT_RESUME_RETRIES, DEFAULT_ZIP_ENTRY_RAM_THRESHOLD, TX_FLAG_RESUME,
     },
     volumes::{list_volumes, VolumeList},
 };
@@ -876,6 +876,27 @@ struct TransferZipReq {
 #[derive(Deserialize)]
 struct ZipInspectReq {
     zip_path: String,
+}
+
+/// `/api/transfer/7z` request. Mirrors `TransferZipReq` minus the per-entry
+/// RAM threshold — 7z streams forward-only with bounded memory, so there's no
+/// inflate-to-RAM-vs-temp knob.
+#[derive(Deserialize)]
+struct Transfer7zReq {
+    addr: Option<String>,
+    tx_id: Option<String>,
+    dest_root: String,
+    archive_path: String,
+    #[serde(default)]
+    excludes: Vec<String>,
+    #[serde(default)]
+    bandwidth_cap_mbps: Option<f64>,
+}
+
+/// `/api/7z/inspect[/stream]` request.
+#[derive(Deserialize)]
+struct SevenzInspectReq {
+    archive_path: String,
 }
 
 #[derive(Deserialize)]
@@ -3247,6 +3268,279 @@ async fn transfer_zip_handler(
         .into_response()
 }
 
+// ── .7z handlers ── mirror the zip handlers; see those for the rationale on
+//    spawn_blocking (header read off the reactor), the SSE watchdog, and the
+//    synchronous pre-flight plan before a job_id is returned. The only shape
+//    difference is no ram_threshold (7z streams forward-only).
+
+/// POST /api/7z/inspect — counts/sizes only (the header is tiny even for a
+/// 124 GB archive). Reuses the `ZipInspect` response shape.
+async fn sevenz_inspect_handler(Json(req): Json<SevenzInspectReq>) -> impl IntoResponse {
+    let archive_path = req.archive_path;
+    crate::log_info!("sevenz_inspect: archive={archive_path}");
+    let started = std::time::Instant::now();
+    let result = tokio::task::spawn_blocking({
+        let p = archive_path.clone();
+        move || inspect_7z(std::path::Path::new(&p))
+    })
+    .await;
+    let elapsed_ms = started.elapsed().as_millis();
+    match result {
+        Ok(Ok(inspect)) => {
+            crate::log_info!(
+                "sevenz_inspect ok: archive={archive_path} files={} compressed={} elapsed_ms={elapsed_ms}",
+                inspect.file_count,
+                inspect.compressed_size,
+            );
+            (StatusCode::OK, Json(inspect)).into_response()
+        }
+        Ok(Err(e)) => {
+            crate::log_warn!(
+                "sevenz_inspect failed: archive={archive_path} elapsed_ms={elapsed_ms} err={e:#}"
+            );
+            json_err(StatusCode::BAD_REQUEST, e.to_string()).into_response()
+        }
+        Err(e) => {
+            crate::log_warn!(
+                "sevenz_inspect panicked: archive={archive_path} elapsed_ms={elapsed_ms} err={e}"
+            );
+            json_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
+        }
+    }
+}
+
+/// POST /api/7z/inspect/stream — SSE variant; same event shapes as the zip
+/// stream (progress / done / error + heartbeat).
+async fn sevenz_inspect_stream_handler(Json(req): Json<SevenzInspectReq>) -> impl IntoResponse {
+    let archive_path = req.archive_path;
+    crate::log_info!("sevenz_inspect (stream): archive={archive_path}");
+    let started = std::time::Instant::now();
+
+    let (tx, rx) = mpsc::channel::<InspectStreamEvent>(64);
+
+    let path_for_worker = archive_path.clone();
+    tokio::task::spawn_blocking(move || {
+        let tx_progress = tx.clone();
+        let result = ps5upload_core::transfer::inspect_7z_with_progress(
+            std::path::Path::new(&path_for_worker),
+            move |n| {
+                let _ = tx_progress.blocking_send(InspectStreamEvent::Progress(n));
+            },
+        );
+        let elapsed_ms = started.elapsed().as_millis();
+        let final_event = match result {
+            Ok(inspect) => {
+                crate::log_info!(
+                    "sevenz_inspect (stream) ok: archive={path_for_worker} files={} compressed={} elapsed_ms={elapsed_ms}",
+                    inspect.file_count,
+                    inspect.compressed_size,
+                );
+                InspectStreamEvent::Done(Box::new(inspect))
+            }
+            Err(e) => {
+                let err = format!("{e:#}");
+                crate::log_warn!(
+                    "sevenz_inspect (stream) failed: archive={path_for_worker} elapsed_ms={elapsed_ms} err={err}"
+                );
+                InspectStreamEvent::Error(err)
+            }
+        };
+        let _ = tx.blocking_send(final_event);
+    });
+
+    let stream = ReceiverStream::new(rx).map(|event| {
+        let sse_event = match event {
+            InspectStreamEvent::Progress(n) => Event::default()
+                .event("progress")
+                .data(serde_json::json!({ "entries_seen": n }).to_string()),
+            InspectStreamEvent::Done(inspect) => Event::default()
+                .event("done")
+                .data(serde_json::to_string(&*inspect).unwrap_or_else(|_| "{}".to_string())),
+            InspectStreamEvent::Error(err) => Event::default()
+                .event("error")
+                .data(serde_json::json!({ "error": err }).to_string()),
+        };
+        Ok::<_, std::convert::Infallible>(sse_event)
+    });
+
+    Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(std::time::Duration::from_secs(1))
+            .text("heartbeat"),
+    )
+}
+
+/// POST /api/transfer/7z — start a 7z-archive upload job. Same job/progress/SSE
+/// plumbing and resume semantics as the zip path; the progress denominator is
+/// the total uncompressed size.
+async fn transfer_7z_handler(
+    State(state): State<AppState>,
+    Json(req): Json<Transfer7zReq>,
+) -> impl IntoResponse {
+    let addr = req.addr.unwrap_or_else(|| state.default_ps5_addr.clone());
+    let caller_supplied_tx_id = req.tx_id.is_some();
+    let tx_id = match parse_or_random_tx_id(req.tx_id.as_deref()) {
+        Ok(id) => id,
+        Err(e) => return json_err(StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    };
+    let initial_flags = if caller_supplied_tx_id {
+        TX_FLAG_RESUME
+    } else {
+        0
+    };
+
+    let plan_started = std::time::Instant::now();
+    let (total_bytes, preview) = {
+        let archive_path = req.archive_path.clone();
+        let excludes = req.excludes.clone();
+        let planned = tokio::task::spawn_blocking(move || {
+            sevenz_plan_preview(std::path::Path::new(&archive_path), &excludes)
+        })
+        .await;
+        match planned {
+            Ok(Ok(v)) => v,
+            Ok(Err(e)) => {
+                let elapsed_ms = plan_started.elapsed().as_millis();
+                crate::log_warn!(
+                    "transfer_7z plan failed: archive={} elapsed_ms={elapsed_ms} err={e:#}",
+                    req.archive_path,
+                );
+                return json_err(StatusCode::BAD_REQUEST, e.to_string()).into_response();
+            }
+            Err(e) => {
+                return json_err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("7z planning task panicked/cancelled: {e}"),
+                )
+                .into_response()
+            }
+        }
+    };
+    let plan_elapsed_ms = plan_started.elapsed().as_millis();
+    crate::log_info!(
+        "transfer_7z plan: archive={} entries={} bytes={total_bytes} elapsed_ms={plan_elapsed_ms}",
+        req.archive_path,
+        preview.len(),
+    );
+    let files: Vec<PlannedFile> = preview
+        .into_iter()
+        .map(|(rel_path, size)| PlannedFile { rel_path, size })
+        .collect();
+    let files_sent_count = files.len() as u64;
+
+    let job_id = Uuid::new_v4();
+    let started_at_ms = now_ms();
+    crate::log_info!(
+        "transfer_7z: job={job_id} addr={addr} archive={} dest_root={} resume={} files={} bytes={total_bytes}",
+        req.archive_path,
+        req.dest_root,
+        caller_supplied_tx_id,
+        files_sent_count
+    );
+    let progress = Arc::new(AtomicU64::new(0));
+    let progress_files = Arc::new(AtomicU64::new(0));
+    let progress_files_finalized = Arc::new(AtomicU64::new(0));
+    let progress_bytes_finalized = Arc::new(AtomicU64::new(0));
+    let ctx = TickerContext {
+        started_at_ms,
+        total_bytes,
+        skipped_files: 0,
+        skipped_bytes: 0,
+    };
+    set_job(
+        &state.jobs,
+        &state.events_tx,
+        job_id,
+        JobState::Running {
+            started_at_ms,
+            bytes_sent: 0,
+            total_bytes,
+            files,
+            skipped_files: 0,
+            skipped_bytes: 0,
+            files_processing: 0,
+            files_finalized: 0,
+            files_finalizing_total: 0,
+            bytes_finalized: 0,
+        },
+    );
+
+    let jobs = Arc::clone(&state.jobs);
+    let events_tx = state.events_tx.clone();
+    let stop_ticker = spawn_progress_ticker(
+        Arc::clone(&jobs),
+        events_tx.clone(),
+        job_id,
+        ctx,
+        Arc::clone(&progress),
+        Arc::clone(&progress_files),
+        Arc::clone(&progress_files_finalized),
+        Arc::clone(&progress_bytes_finalized),
+    );
+
+    tokio::task::spawn_blocking(move || {
+        let _stop_guard = TickerStopGuard::new(stop_ticker);
+        let mut fail_guard =
+            JobFailOnDropGuard::new(Arc::clone(&jobs), events_tx.clone(), job_id, started_at_ms);
+        let mut cfg = make_transfer_config(&addr);
+        cfg.excludes = req.excludes;
+        cfg.progress_bytes = Some(Arc::clone(&progress));
+        cfg.progress_files = Some(Arc::clone(&progress_files));
+        cfg.progress_files_finalized = Some(Arc::clone(&progress_files_finalized));
+        cfg.progress_bytes_finalized = Some(Arc::clone(&progress_bytes_finalized));
+        apply_per_request_bandwidth(&mut cfg, req.bandwidth_cap_mbps);
+        let result = transfer_7z_resumable(
+            &cfg,
+            tx_id,
+            &req.dest_root,
+            std::path::Path::new(&req.archive_path),
+            2,
+            initial_flags,
+        );
+        match result {
+            Ok(r) => {
+                let completed_at_ms = now_ms();
+                set_job(
+                    &jobs,
+                    &events_tx,
+                    job_id,
+                    JobState::Done {
+                        started_at_ms,
+                        completed_at_ms,
+                        elapsed_ms: completed_at_ms.saturating_sub(started_at_ms),
+                        tx_id_hex: r.tx_id_hex,
+                        shards_sent: r.shards_sent,
+                        bytes_sent: r.bytes_sent,
+                        dest: r.dest,
+                        files_sent: files_sent_count,
+                        skipped_files: 0,
+                        skipped_bytes: 0,
+                        commit_ack: serde_json::from_str(&r.commit_ack_body).ok(),
+                    },
+                )
+            }
+            Err(e) => {
+                let completed_at_ms = now_ms();
+                set_job(
+                    &jobs,
+                    &events_tx,
+                    job_id,
+                    job_failed_from_err(started_at_ms, completed_at_ms, &e),
+                )
+            }
+        }
+        fail_guard.mark_succeeded();
+    });
+
+    (
+        StatusCode::ACCEPTED,
+        Json(JobCreated {
+            job_id: job_id.to_string(),
+        }),
+    )
+        .into_response()
+}
+
 /// POST /api/transfer/file-list
 async fn transfer_file_list_handler(
     State(state): State<AppState>,
@@ -4502,6 +4796,9 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/transfer/zip", post(transfer_zip_handler))
         .route("/api/zip/inspect", post(zip_inspect_handler))
         .route("/api/zip/inspect/stream", post(zip_inspect_stream_handler))
+        .route("/api/transfer/7z", post(transfer_7z_handler))
+        .route("/api/7z/inspect", post(sevenz_inspect_handler))
+        .route("/api/7z/inspect/stream", post(sevenz_inspect_stream_handler))
         .route("/api/transfer/file-list", post(transfer_file_list_handler))
         .route("/api/transfer/download", post(transfer_download_handler))
         .route(

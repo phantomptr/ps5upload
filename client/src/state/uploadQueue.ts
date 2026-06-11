@@ -11,6 +11,7 @@ import {
   startTransferDirReconcile,
   startTransferFile,
   startTransferZip,
+  startTransfer7z,
   uploadQueueLoad,
   uploadQueueSave,
   UploadJobError,
@@ -31,7 +32,7 @@ import {
   pushRateSample,
   type RateSample,
 } from "../lib/rollingRate";
-import type { SourceKind } from "./upload";
+import { archiveFormat, type SourceKind } from "./upload";
 import type { UploadStrategy } from "./transfer";
 import { useUploadSettingsStore } from "./uploadSettings";
 import { useRecentHostMetricsStore } from "./recentHostMetrics";
@@ -330,11 +331,17 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
 
     let jobId: string;
     if (isArchive) {
-      // A .zip is decompressed host-side and streamed in (lands extracted).
-      // Carry the persisted tx_id for cross-session shard resume, just like
-      // folders; there's no reconcile mode (no local tree to diff).
+      // A .zip/.7z is decompressed host-side and streamed in (lands
+      // extracted). Carry the persisted tx_id for cross-session shard resume,
+      // just like folders; there's no reconcile mode (no local tree to diff).
+      // 7z re-decompresses from the start on resume (LZMA2 can't seek) and
+      // re-sends only un-acked shards.
       const bandwidthCap = useUploadSettingsStore.getState().bandwidthCapMbps;
-      jobId = await startTransferZip(
+      const start =
+        archiveFormat(item.sourcePath) === "7z"
+          ? startTransfer7z
+          : startTransferZip;
+      jobId = await start(
         item.sourcePath,
         item.resolvedDest,
         item.addr,

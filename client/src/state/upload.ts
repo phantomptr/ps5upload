@@ -2,6 +2,7 @@ import { create } from "zustand";
 import {
   inspectFolder,
   zipInspectStream,
+  sevenzInspectStream,
   type FolderInspectResult,
   type WrappedGameHint,
   type ZipInspect,
@@ -130,11 +131,21 @@ export function payloadCanMountImage(path: string): boolean {
   return p.endsWith(".exfat") || p.endsWith(".ffpkg") || p.endsWith(".ffpfs");
 }
 
-/** A `.zip` game dump — the engine decompresses it on the host and streams
- *  the files in. ZIP is the only archive format we support (see the
- *  "drop .rar" scope decision: modern scene .rar is split + encrypted). */
+/** Archive format we can host-decompress + stream: `.zip` (deflate) or `.7z`
+ *  (LZMA2, commonly a single `.exfat` image). `.rar` is intentionally out of
+ *  scope — modern scene .rar is split + encrypted. Returns null for anything
+ *  else. */
+export function archiveFormat(path: string): "zip" | "7z" | null {
+  const p = path.toLowerCase();
+  if (p.endsWith(".zip")) return "zip";
+  if (p.endsWith(".7z")) return "7z";
+  return null;
+}
+
+/** A `.zip` or `.7z` game dump — the engine decompresses it on the host and
+ *  streams the files in. */
 function isArchivePath(path: string): boolean {
-  return path.toLowerCase().endsWith(".zip");
+  return archiveFormat(path) !== null;
 }
 
 export const useUploadStore = create<UploadState>((set, get) => ({
@@ -180,10 +191,13 @@ export const useUploadStore = create<UploadState>((set, get) => ({
         zipInspectEntries: null,
       });
       try {
-        const zipInfo = await zipInspectStream(path, (p) => {
+        // Same inspect-stream shape for both formats — pick by extension.
+        const inspect =
+          archiveFormat(path) === "7z" ? sevenzInspectStream : zipInspectStream;
+        const zipInfo = await inspect(path, (p) => {
           // Stale-result guard: if the user dropped another file mid-scan,
           // ignore late ticks from the previous one. Without this the
-          // entry count would briefly flicker between two unrelated zips.
+          // entry count would briefly flicker between two unrelated archives.
           if (get().source?.path !== path) return;
           set({ zipInspectEntries: p.entries_seen });
         });

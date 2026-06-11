@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   PieChart,
   RefreshCw,
@@ -77,14 +77,28 @@ export default function DiskUsageScreen() {
   const [nodes, setNodes] = useState<DirNode[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Monotonic walk id — see the drop-stale guard in refresh().
+  const walkSeqRef = useRef(0);
+
+  // Reset to the volume root and drop the previous console's tree the instant
+  // the active console changes, so a switch never momentarily shows console
+  // A's directories under console B's header.
+  useEffect(() => {
+    setPath("/user");
+    setNodes(null);
+    setError(null);
+  }, [host]);
 
   const refresh = useCallback(async () => {
     if (!host?.trim() || payloadStatus !== "up") return;
-    // Drop-stale token: this walk is N+1 round trips over the LAN, so a fast
-    // drill A→B (or a host switch) could let an older walk resolve last and
-    // paint the wrong folder. Capture host+path and bail if either changed.
-    const token = `${host.trim()}::${path}`;
-    const isStale = () => `${host.trim()}::${path}` !== token;
+    // Drop-stale guard: this walk is N+1 round trips over the LAN, so a fast
+    // drill A→B (or a console switch) could let an older walk resolve last and
+    // paint the wrong folder. Every refresh() bumps a sequence counter and
+    // captures its own id; a walk bails the moment a newer one starts. (The
+    // previous `${host}::${path}` token compared a captured value to itself —
+    // always equal — so it never actually dropped a stale walk.)
+    const myWalk = ++walkSeqRef.current;
+    const isStale = () => walkSeqRef.current !== myWalk;
     const addr = mgmtAddr(host.trim());
     setLoading(true);
     setError(null);

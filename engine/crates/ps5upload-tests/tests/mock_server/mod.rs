@@ -31,6 +31,19 @@ pub(crate) struct MockTx {
     pub(crate) total_shards: u64,
     /// Spool: shard_seq → data bytes
     pub(crate) spool: HashMap<u64, Vec<u8>>,
+    /// Files from the BEGIN_TX manifest (multi-file transfers: dir/zip/7z).
+    /// Empty for single-file transfers, which carry no `files[]` array — those
+    /// fall back to concatenating the spool under `dest_root`. Lets the mock
+    /// map each non-packed file's shards to its real dest path, exactly like
+    /// the payload's manifest-driven apply.
+    pub(crate) manifest_files: Vec<MockManifestFile>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct MockManifestFile {
+    pub(crate) path: String,
+    pub(crate) shard_start: u64,
+    pub(crate) shard_count: u64,
 }
 
 #[derive(Debug)]
@@ -111,6 +124,7 @@ impl MockServer {
                 dest_root: dest_root.to_string(),
                 total_shards,
                 spool: Default::default(),
+                manifest_files: Vec::new(),
             },
         );
     }
@@ -241,6 +255,7 @@ fn handle_connection_inner(mut stream: TcpStream, state: Arc<Mutex<MockState>>) 
                 let extra_str = String::from_utf8_lossy(extra);
                 let dest_root = extract_json_str(&extra_str, "dest_root").unwrap_or_default();
                 let total_shards = extract_json_u64(&extra_str, "total_shards").unwrap_or(0);
+                let manifest_files = parse_manifest_files(&extra_str);
 
                 // RESUME semantics: if the flag is set AND an interrupted tx
                 // with the same tx_id exists, re-adopt it and report back
@@ -263,6 +278,7 @@ fn handle_connection_inner(mut stream: TcpStream, state: Arc<Mutex<MockState>>) 
                                     state: "active".to_string(),
                                     dest_root,
                                     total_shards,
+                                    manifest_files,
                                     ..Default::default()
                                 },
                             );
@@ -276,6 +292,7 @@ fn handle_connection_inner(mut stream: TcpStream, state: Arc<Mutex<MockState>>) 
                             state: "active".to_string(),
                             dest_root,
                             total_shards,
+                            manifest_files,
                             ..Default::default()
                         },
                     );
@@ -443,27 +460,48 @@ fn handle_connection_inner(mut stream: TcpStream, state: Arc<Mutex<MockState>>) 
                             CommitOutcome::Incomplete
                         }
                         Some(tx) => {
-                            // Assemble non-packed shard data in order and
-                            // insert under `dest_root`. Skip this for
-                            // packed-only transfers: the per-record
-                            // streaming path already inserted each
-                            // packed record into `applied` keyed by its
-                            // absolute dest_path, and an empty-spool
-                            // unconditional insert here would overwrite
-                            // (or create) `applied[dest_root]` with an
-                            // empty byte vec — which silently corrupts
-                            // any test asserting on packed output.
-                            let dest = tx.dest_root.clone();
                             tx.state = "committed".to_string();
+                            let dest = tx.dest_root.clone();
                             let dest_root = tx.dest_root.clone();
-                            if !tx.spool.is_empty() {
-                                let mut file_data = Vec::new();
+                            // Build the per-file results while `tx` (and thus
+                            // `st.txs`) is borrowed, then apply after the borrow
+                            // ends — `st.applied` and `st.txs` are disjoint
+                            // fields but NLL still needs the read borrow closed
+                            // before the write.
+                            let mut to_apply: Vec<(String, Vec<u8>)> = Vec::new();
+                            if !tx.manifest_files.is_empty() {
+                                // Manifest-faithful (dir/zip/7z multi-file): map
+                                // each file's NON-PACKED shards to its real dest
+                                // path, exactly as the payload does. Packed files
+                                // were already inserted per-path by the shard
+                                // handler (their shards never hit `spool`), so
+                                // their empty range is skipped here — no
+                                // double-write, no clobber.
+                                for f in &tx.manifest_files {
+                                    let mut d = Vec::new();
+                                    for seq in f.shard_start..f.shard_start + f.shard_count {
+                                        if let Some(c) = tx.spool.get(&seq) {
+                                            d.extend_from_slice(c);
+                                        }
+                                    }
+                                    if !d.is_empty() {
+                                        to_apply.push((f.path.clone(), d));
+                                    }
+                                }
+                            } else if !tx.spool.is_empty() {
+                                // Single-file transfer (no files[] manifest):
+                                // concatenate the spool under `dest_root`, which
+                                // IS the file path in the single-file case.
+                                let mut d = Vec::new();
                                 let mut seq = 1u64;
-                                while let Some(chunk) = tx.spool.get(&seq) {
-                                    file_data.extend_from_slice(chunk);
+                                while let Some(c) = tx.spool.get(&seq) {
+                                    d.extend_from_slice(c);
                                     seq += 1;
                                 }
-                                st.applied.insert(dest, file_data);
+                                to_apply.push((dest, d));
+                            }
+                            for (p, d) in to_apply {
+                                st.applied.insert(p, d);
                             }
                             CommitOutcome::Ok { dest_root }
                         }
@@ -762,6 +800,54 @@ fn handle_connection_inner(mut stream: TcpStream, state: Arc<Mutex<MockState>>) 
 // Both helpers tolerate optional whitespace after the `:` so a future
 // change from `serde_json::to_vec` (compact) to `to_string_pretty`
 // doesn't silently stop matching fields.
+
+/// Parse the manifest `"files":[{...},...]` array into (path, shard_start,
+/// shard_count) triples. Brace-depth scan so it's robust to field order and
+/// whitespace; reuses the single-field extractors on each object substring.
+fn parse_manifest_files(json: &str) -> Vec<MockManifestFile> {
+    let mut out = Vec::new();
+    let Some(arr_at) = json.find("\"files\":") else {
+        return out;
+    };
+    let Some(br) = json[arr_at..].find('[') else {
+        return out;
+    };
+    let body = &json[arr_at + br + 1..];
+    let mut depth = 0i32;
+    let mut obj_start: Option<usize> = None;
+    for (i, ch) in body.char_indices() {
+        match ch {
+            '{' => {
+                if depth == 0 {
+                    obj_start = Some(i);
+                }
+                depth += 1;
+            }
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    if let Some(s) = obj_start.take() {
+                        let obj = &body[s..=i];
+                        if let (Some(path), Some(ss), Some(sc)) = (
+                            extract_json_str(obj, "path"),
+                            extract_json_u64(obj, "shard_start"),
+                            extract_json_u64(obj, "shard_count"),
+                        ) {
+                            out.push(MockManifestFile {
+                                path,
+                                shard_start: ss,
+                                shard_count: sc,
+                            });
+                        }
+                    }
+                }
+            }
+            ']' if depth == 0 => break,
+            _ => {}
+        }
+    }
+    out
+}
 
 fn extract_json_str(json: &str, field: &str) -> Option<String> {
     let needle = format!("\"{field}\":");

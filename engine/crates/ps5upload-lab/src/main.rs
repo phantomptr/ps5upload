@@ -310,6 +310,24 @@ fn do_transfer_zip(addr: &str, tx_id_hex: &str, dest_root: &str, zip_path: &str)
     do_query_tx(&to_mgmt_addr(addr), tx_id_hex)
 }
 
+fn do_transfer_7z(addr: &str, tx_id_hex: &str, dest_root: &str, archive_path: &str) -> Result<()> {
+    let tx_id = parse_tx_id(tx_id_hex)?;
+    let cfg = TransferConfig::new(addr);
+    let ap = std::path::Path::new(archive_path);
+    let ins = ps5upload_core::transfer::inspect_7z(ap)?;
+    println!(
+        "7z: {} files, {} compressed -> {} extracted",
+        ins.file_count, ins.compressed_size, ins.total_uncompressed
+    );
+    let r = ps5upload_core::transfer::transfer_7z_with_opts(&cfg, tx_id, dest_root, ap, 0)?;
+    println!(
+        "done: shards={} bytes={} tx={}",
+        r.shards_sent, r.bytes_sent, r.tx_id_hex
+    );
+    println!("commit_ack: {}", r.commit_ack_body);
+    do_query_tx(&to_mgmt_addr(addr), tx_id_hex)
+}
+
 fn do_send_shard(addr: &str, tx_id_hex: &str, shard_seq: u64) -> Result<()> {
     let tx_id = parse_tx_id(tx_id_hex)?;
 
@@ -370,6 +388,7 @@ fn usage() -> ! {
     eprintln!("  transfer     TX_ID_HEX DEST_FILE FILE_PATH");
     eprintln!("  transfer-dir TX_ID_HEX DEST_ROOT SRC_DIR");
     eprintln!("  transfer-zip TX_ID_HEX DEST_ROOT ZIP_PATH  decompress+stream a .zip");
+    eprintln!("  transfer-7z  TX_ID_HEX DEST_ROOT 7Z_PATH   decompress+stream a .7z");
     eprintln!("  register     SRC_PATH      register a game folder");
     eprintln!("  unregister   TITLE_ID      reverse registration");
     eprintln!("  launch       TITLE_ID      sceLncUtilLaunchApp");
@@ -495,6 +514,12 @@ fn main() -> Result<()> {
             let dest_root = rest.get(2).map(|s| s.as_str()).unwrap_or_else(|| usage());
             let zip_path = rest.get(3).map(|s| s.as_str()).unwrap_or_else(|| usage());
             do_transfer_zip(addr, tx_id, dest_root, zip_path)
+        }
+        "transfer-7z" => {
+            let tx_id = rest.get(1).map(|s| s.as_str()).unwrap_or_else(|| usage());
+            let dest_root = rest.get(2).map(|s| s.as_str()).unwrap_or_else(|| usage());
+            let arc = rest.get(3).map(|s| s.as_str()).unwrap_or_else(|| usage());
+            do_transfer_7z(addr, tx_id, dest_root, arc)
         }
         "register" => {
             let src_path = rest.get(1).map(|s| s.as_str()).unwrap_or_else(|| usage());

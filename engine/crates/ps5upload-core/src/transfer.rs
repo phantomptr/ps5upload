@@ -3377,6 +3377,389 @@ pub fn transfer_zip_resumable(
     })
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// .7z archive support
+//
+// Mirrors the .zip path (decompress host-side, stream files straight into the
+// FTX2 shard pipeline so they land already-extracted on the PS5) but with a
+// FORWARD-ONLY streaming model: 7z's LZMA2 streams can't be seeked, so each
+// entry's decompressed bytes are read sequentially and emitted as shards in
+// order — no random-access materialiser, no temp-file spill. Peak host RAM is
+// one shard plus the LZMA2 decoder window, regardless of archive size (the
+// 124 GB → 205 GB .exfat case streams in bounded memory).
+//
+// Single-file (the common "PPSAxxxxx.exfat" case), multi-file, solid and
+// non-solid archives all work. Two deliberate simplifications vs zip:
+//   1. No small-file packing. 7z game dumps are a handful of large files (or
+//      one image), not the 200k-tiny-file extracted-folder shape that the zip
+//      pack optimisation targets. Every file becomes Empty or sequential
+//      NonPacked shards.
+//   2. Game metadata (sce_sys/param.json) is not extracted at inspect time —
+//      a 7z-of-.exfat has no host-visible param.json (it lives inside the
+//      image), and read_file() on a solid archive would decompress everything
+//      before it. inspect_7z reports counts/sizes; title stays None.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Normalise + validate a 7z entry path. Same zip-slip rules as
+/// `sanitize_zip_entry`, except 7z archives created on Windows legitimately use
+/// '\\' as the path separator (zip always uses '/'), so backslashes are
+/// translated to forward slashes rather than rejected.
+fn sanitize_7z_entry(name: &str) -> Option<String> {
+    sanitize_zip_entry(&name.replace('\\', "/"))
+}
+
+/// One planned 7z file. Forward-only: we record only the size and the
+/// first shard seq — bytes are pulled from the decompression stream at send
+/// time, never seeked. `src_path` is kept so the send pass can assert it stays
+/// in lock-step with the plan. (Dest path + shard count already live in the
+/// manifest; the send pass doesn't re-derive them.)
+struct SevenzPlanFile {
+    src_path: String,
+    size: u64,
+    shard_start: u64,
+}
+
+/// Reconstruct the exact order `ArchiveReader::for_each_entries` visits files:
+/// every file that belongs to a block (ordered by block index, then file
+/// index), followed by every block-less file (empties / directories). This
+/// matches `BlockDecoder`'s `start..start+count` ascending walk plus the
+/// trailing empty-file loop, using only public `Archive` fields so we never
+/// touch crate internals. O(n log n), so a non-solid archive with one block
+/// per file (n blocks) stays cheap.
+fn sevenz_visit_order(archive: &sevenz_rust2::Archive) -> Vec<usize> {
+    let fbi = &archive.stream_map.file_block_index;
+    let mut order: Vec<usize> = (0..archive.files.len()).collect();
+    order.sort_by_key(|&fi| match fbi.get(fi).copied().flatten() {
+        // Block files first, grouped by block index then ascending file index.
+        Some(block) => (0u8, block, fi),
+        // Block-less files (empties, directories) last, ascending file index.
+        None => (1u8, usize::MAX, fi),
+    });
+    order
+}
+
+/// Inspect a `.7z` without extracting it. Reads only the (tiny) header for
+/// counts + sizes — instant even on a 124 GB archive. Game metadata is left
+/// `None` (see the module note); the Upload card renders fine without it.
+pub fn inspect_7z(archive_path: &Path) -> Result<ZipInspect> {
+    inspect_7z_with_progress(archive_path, |_| {})
+}
+
+/// `inspect_7z` variant that calls `on_progress(files_seen)` so streaming HTTP
+/// handlers can emit watchdog-resetting heartbeats while a many-file header is
+/// walked.
+pub fn inspect_7z_with_progress(
+    archive_path: &Path,
+    mut on_progress: impl FnMut(u64),
+) -> Result<ZipInspect> {
+    let compressed_size = std::fs::metadata(archive_path)
+        .with_context(|| format!("stat 7z {}", archive_path.display()))?
+        .len();
+    let mut src = std::io::BufReader::new(
+        std::fs::File::open(archive_path)
+            .with_context(|| format!("open 7z {}", archive_path.display()))?,
+    );
+    let pw = sevenz_rust2::Password::from("");
+    let archive = sevenz_rust2::Archive::read(&mut src, &pw)
+        .map_err(|e| anyhow::anyhow!("read 7z header {}: {e}", archive_path.display()))?;
+
+    let mut file_count = 0u64;
+    let mut total_uncompressed = 0u64;
+    for (i, e) in archive.files.iter().enumerate() {
+        if e.is_directory() {
+            continue;
+        }
+        file_count += 1;
+        total_uncompressed += e.size();
+        if i.is_multiple_of(1000) {
+            on_progress(file_count);
+        }
+    }
+    on_progress(file_count); // always emit a final tick
+
+    Ok(ZipInspect {
+        file_count,
+        total_uncompressed,
+        compressed_size,
+        title: None,
+        title_id: None,
+        content_id: None,
+        application_category_type: None,
+        game_root: None,
+    })
+}
+
+/// Metadata-only plan preview for the HTTP handler's synchronous pre-flight:
+/// total file-data bytes + the sanitised dest paths (sorted) for the live file
+/// tree. No decompression.
+pub fn sevenz_plan_preview(
+    archive_path: &Path,
+    excludes: &[String],
+) -> Result<(u64, Vec<(String, u64)>)> {
+    sevenz_plan_preview_with_progress(archive_path, excludes, |_| {})
+}
+
+/// `sevenz_plan_preview` with a per-N-files progress callback.
+pub fn sevenz_plan_preview_with_progress(
+    archive_path: &Path,
+    excludes: &[String],
+    mut on_progress: impl FnMut(u64),
+) -> Result<(u64, Vec<(String, u64)>)> {
+    let mut src = std::io::BufReader::new(
+        std::fs::File::open(archive_path)
+            .with_context(|| format!("open 7z {}", archive_path.display()))?,
+    );
+    let pw = sevenz_rust2::Password::from("");
+    let archive = sevenz_rust2::Archive::read(&mut src, &pw)
+        .map_err(|e| anyhow::anyhow!("read 7z header {}: {e}", archive_path.display()))?;
+
+    let mut total = 0u64;
+    let mut files: Vec<(String, u64)> = Vec::new();
+    let mut seen = 0u64;
+    for &fi in &sevenz_visit_order(&archive) {
+        let e = &archive.files[fi];
+        if e.is_directory() {
+            continue;
+        }
+        let Some(rel) = sanitize_7z_entry(e.name()) else {
+            bail!("7z contains an unsafe or invalid entry path: {:?}", e.name());
+        };
+        if !excludes.is_empty()
+            && crate::excludes::is_excluded_strings(Path::new(&rel), excludes)
+        {
+            continue;
+        }
+        total += e.size();
+        files.push((rel, e.size()));
+        seen += 1;
+        if seen.is_multiple_of(1000) {
+            on_progress(seen);
+        }
+    }
+    on_progress(seen);
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok((total, files))
+}
+
+/// Transfer a `.7z`, streaming each entry's decompressed bytes into the FTX2
+/// shard pipeline. See the module note for the forward-only model. On resume
+/// (`flags & TX_FLAG_RESUME`) the archive is re-decompressed from the start and
+/// shards at or below the payload's last-acked cursor are decoded-but-not-sent
+/// (LZMA2 can't seek, so re-decompression is unavoidable — but the network
+/// re-send is skipped).
+pub fn transfer_7z_with_opts(
+    cfg: &TransferConfig,
+    tx_id: [u8; 16],
+    dest_root: &str,
+    archive_path: &Path,
+    flags: u32,
+) -> Result<TransferResult> {
+    let tx_id_hex = bytes_to_hex(&tx_id);
+    let pw = sevenz_rust2::Password::from("");
+
+    // ── Planning pass ── header metadata only, no decompression. Enumerate
+    //    files in for_each_entries order, sanitize (zip-slip), apply excludes,
+    //    assign sequential shard ranges.
+    let archive = {
+        let mut src = std::io::BufReader::new(
+            std::fs::File::open(archive_path)
+                .with_context(|| format!("open 7z {}", archive_path.display()))?,
+        );
+        sevenz_rust2::Archive::read(&mut src, &pw)
+            .map_err(|e| anyhow::anyhow!("read 7z header {}: {e}", archive_path.display()))?
+    };
+
+    let mut plan: Vec<SevenzPlanFile> = Vec::new();
+    let mut planned_files: Vec<ManifestFile> = Vec::new();
+    let mut total_bytes = 0u64;
+    let mut next_seq: u64 = 1;
+    for &fi in &sevenz_visit_order(&archive) {
+        let e = &archive.files[fi];
+        if e.is_directory() {
+            continue;
+        }
+        let Some(rel) = sanitize_7z_entry(e.name()) else {
+            bail!("7z contains an unsafe or invalid entry path: {:?}", e.name());
+        };
+        if !cfg.excludes.is_empty()
+            && crate::excludes::is_excluded_strings(Path::new(&rel), &cfg.excludes)
+        {
+            continue;
+        }
+        let size = e.size();
+        let dest_path = join_ps5_path(dest_root, Path::new(&rel));
+        let shard_start = next_seq;
+        let shard_count = if size == 0 {
+            1
+        } else {
+            size.div_ceil(cfg.shard_size as u64)
+        };
+        next_seq += shard_count;
+        total_bytes += size;
+        planned_files.push(ManifestFile {
+            path: dest_path,
+            size,
+            shard_start,
+            shard_count,
+        });
+        plan.push(SevenzPlanFile {
+            src_path: rel,
+            size,
+            shard_start,
+        });
+    }
+    if plan.is_empty() {
+        bail!(
+            "7z has no extractable files (after exclusions): {}",
+            archive_path.display()
+        );
+    }
+    let total_shards = next_seq - 1;
+    let file_count = planned_files.len() as u64;
+    ensure_manifest_paths_fit(&planned_files)?;
+    let manifest_json = serde_json::to_vec(&Manifest {
+        dest_root: dest_root.to_string(),
+        file_count,
+        total_bytes,
+        total_shards,
+        files: planned_files,
+    })?;
+
+    // ── BEGIN_TX ── tx_kind=2 (multi-file), same as zip.
+    let mut c = Connection::connect(&cfg.addr)?;
+    let begin_ack = send_begin_and_expect_ack(
+        &mut c,
+        &tx_meta_buf_flags(
+            tx_id,
+            2,
+            flags | TX_FLAG_APPLY_PROGRESS_REQUESTED,
+            &manifest_json,
+        ),
+    )?;
+    let last_acked_shard = parse_last_acked_shard(&begin_ack, flags & TX_FLAG_RESUME != 0);
+    guard_last_acked(last_acked_shard, total_shards)?;
+
+    // ── Send pass ── one forward-only decompression of the archive; emit each
+    //    entry's shards as the bytes flow. The for_each_entries closure visits
+    //    files in the SAME order the plan was built, so `pos` walks `plan` in
+    //    lock-step. Dirs/excluded entries are drained (read + discard) so a
+    //    solid block's shared stream stays aligned for the following entries.
+    let mut shards_sent = 0u64;
+    {
+        let mut reader = sevenz_rust2::ArchiveReader::new(
+            std::io::BufReader::new(
+                std::fs::File::open(archive_path)
+                    .with_context(|| format!("open 7z {}", archive_path.display()))?,
+            ),
+            pw.clone(),
+        )
+        .map_err(|e| anyhow::anyhow!("open 7z reader {}: {e}", archive_path.display()))?;
+        // Single-threaded decode keeps peak RAM bounded to one LZMA2 window —
+        // multi-threaded decode reads ahead into per-thread buffers, which a
+        // 205 GB output stream can't afford. Network is the bottleneck on LAN
+        // anyway.
+        reader.set_thread_count(1);
+
+        let mut sender = PipelinedSender::new(&mut c, cfg, tx_id, total_shards);
+        let mut buf = vec![0u8; cfg.shard_size];
+        let mut pos = 0usize;
+        // Errors from the sender (anyhow) can't cross the closure's 7z Error
+        // boundary, so capture and surface after iteration stops.
+        let mut send_err: Option<anyhow::Error> = None;
+
+        let iter = reader.for_each_entries(|entry, rd| {
+            if entry.is_directory() {
+                std::io::copy(rd, &mut std::io::sink())?; // dir = empty reader
+                return Ok(true);
+            }
+            let Some(san) = sanitize_7z_entry(entry.name()) else {
+                // Planning already bailed on unsafe paths; defensively drain.
+                std::io::copy(rd, &mut std::io::sink())?;
+                return Ok(true);
+            };
+            if !cfg.excludes.is_empty()
+                && crate::excludes::is_excluded_strings(Path::new(&san), &cfg.excludes)
+            {
+                std::io::copy(rd, &mut std::io::sink())?; // keep solid stream aligned
+                return Ok(true);
+            }
+
+            // Lock-step with the plan. A mismatch means the reconstructed visit
+            // order diverged from for_each_entries — fail loudly rather than
+            // write the wrong bytes to a dest path.
+            if pos >= plan.len() || plan[pos].src_path != san {
+                send_err = Some(anyhow::anyhow!(
+                    "7z stream desynced from plan at entry {san:?}"
+                ));
+                return Ok(false);
+            }
+            let pf = &plan[pos];
+            pos += 1;
+
+            if pf.size == 0 {
+                if pf.shard_start > last_acked_shard {
+                    if let Err(e) = sender.send_with(pf.shard_start, &[], 1, 0) {
+                        send_err = Some(e);
+                        return Ok(false);
+                    }
+                    shards_sent += 1;
+                }
+                return Ok(true);
+            }
+
+            let mut seq = pf.shard_start;
+            let mut remaining = pf.size;
+            while remaining > 0 {
+                let n = std::cmp::min(cfg.shard_size as u64, remaining) as usize;
+                rd.read_exact(&mut buf[..n])?; // io::Error → 7z Error via `?`
+                if seq > last_acked_shard {
+                    if let Err(e) = sender.send_with(seq, &buf[..n], 1, 0) {
+                        send_err = Some(e);
+                        return Ok(false);
+                    }
+                    shards_sent += 1;
+                    if let Some(p) = &cfg.progress_bytes {
+                        p.fetch_add(n as u64, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+                seq += 1;
+                remaining -= n as u64;
+            }
+            Ok(true)
+        });
+
+        if let Some(e) = send_err {
+            return Err(e);
+        }
+        iter.map_err(|e| anyhow::anyhow!("decompress 7z {}: {e}", archive_path.display()))?;
+        sender.drain()?;
+    }
+
+    let commit_ack = send_commit_and_expect_ack(&mut c, &tx_meta_buf(tx_id, 0, b""), cfg)?;
+    Ok(TransferResult {
+        tx_id_hex,
+        shards_sent,
+        bytes_sent: total_bytes,
+        dest: dest_root.to_string(),
+        commit_ack_body: String::from_utf8_lossy(&commit_ack).into_owned(),
+    })
+}
+
+/// `transfer_7z` with automatic resume-on-network-drop. Mirrors
+/// `transfer_zip_resumable`.
+pub fn transfer_7z_resumable(
+    cfg: &TransferConfig,
+    tx_id: [u8; 16],
+    dest_root: &str,
+    archive_path: &Path,
+    max_retries: u32,
+    initial_flags: u32,
+) -> Result<TransferResult> {
+    resumable_retry(max_retries, "transfer_7z", initial_flags, |flags| {
+        transfer_7z_with_opts(cfg, tx_id, dest_root, archive_path, flags)
+    })
+}
+
 #[cfg(test)]
 mod bandwidth_throttle_tests {
     use super::BandwidthThrottle;

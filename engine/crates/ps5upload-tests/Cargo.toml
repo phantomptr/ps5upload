@@ -12,3 +12,7 @@ serde.workspace = true
 serde_json.workspace = true
 # Build .zip fixtures for the zip-transfer integration tests.
 zip = { version = "8", default-features = false, features = ["deflate"] }
+# Build .7z fixtures for the 7z-transfer integration tests. The `compress`
+# feature (encoder) is test-only and pure Rust (lzma-rust2/encoder); the
+# production engine crate pins sevenz-rust2 with default-features=false.
+sevenz-rust2 = { version = "0.21", features = ["compress"] }

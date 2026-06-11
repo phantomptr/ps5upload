@@ -88,7 +88,7 @@ function detectedLabel(source: PickedSource): {
     case "game-folder":
       return { icon: Gamepad2, label: "Game folder" };
     case "archive":
-      return { icon: FileArchive, label: "Compressed dump (.zip)" };
+      return { icon: FileArchive, label: "Compressed dump (.zip / .7z)" };
   }
 }
 

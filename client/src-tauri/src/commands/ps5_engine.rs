@@ -341,6 +341,69 @@ pub async fn zip_inspect_stream(
     post_sse_inspect_with_watchdog(&url, &body, on_progress).await
 }
 
+// ── .7z proxies ── mirror the zip commands. Same long-deadline / SSE-watchdog
+//    rationale (the engine plans the archive header synchronously before
+//    returning a job_id, and the inspect-stream uses a heartbeat watchdog).
+
+#[derive(Debug, Deserialize)]
+pub struct Transfer7zReq {
+    pub archive_path: String,
+    pub dest_root: String,
+    pub addr: Option<String>,
+    pub tx_id: Option<String>,
+    #[serde(default)]
+    pub excludes: Vec<String>,
+    #[serde(default)]
+    pub bandwidth_cap_mbps: Option<f64>,
+}
+
+/// Upload a `.7z`'s contents, decompressing on the host so files land already
+/// extracted on the PS5 (commonly a single `.exfat` image). Proxies the
+/// engine's `/api/transfer/7z`.
+#[tauri::command]
+pub async fn transfer_7z(req: Transfer7zReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/transfer/7z");
+    let body = serde_json::json!({
+        "archive_path": req.archive_path,
+        "dest_root": req.dest_root,
+        "addr": req.addr,
+        "tx_id": req.tx_id,
+        "excludes": req.excludes,
+        "bandwidth_cap_mbps": req.bandwidth_cap_mbps,
+    });
+    post_json_long(&url, &body).await
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SevenzInspectReq {
+    pub archive_path: String,
+}
+
+/// Preview a `.7z` (file count, compressed vs uncompressed size) without
+/// extracting it. Proxies `/api/7z/inspect`.
+#[tauri::command]
+pub async fn sevenz_inspect(req: SevenzInspectReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/7z/inspect");
+    let body = serde_json::json!({ "archive_path": req.archive_path });
+    post_json_long(&url, &body).await
+}
+
+/// Streaming variant of `sevenz_inspect`: subscribes to the engine's
+/// `/api/7z/inspect/stream` SSE endpoint with the same watchdog + progress
+/// channel as `zip_inspect_stream` (reuses `ZipInspectProgress`).
+#[tauri::command]
+pub async fn sevenz_inspect_stream(
+    req: SevenzInspectReq,
+    on_progress: tauri::ipc::Channel<ZipInspectProgress>,
+) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = format!("{base}/api/7z/inspect/stream");
+    let body = serde_json::json!({ "archive_path": req.archive_path });
+    post_sse_inspect_with_watchdog(&url, &body, on_progress).await
+}
+
 /// How long to wait for ANY SSE chunk (event or heartbeat) before
 /// declaring the engine wedged. The engine's `KeepAlive::interval(1s)`
 /// makes 30 s = 30× the expected heartbeat cadence, which leaves room
