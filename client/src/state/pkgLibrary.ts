@@ -231,6 +231,113 @@ function mergeListing(prev: PkgEntry[], listed: PkgEntry[]): PkgEntry[] {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+export interface PkgInstallOutcome {
+  /** The install registered with Sony's installer (rc==0 or DPI ok). */
+  installed: boolean;
+  /** Installed only via the unlaunchable last-resort path (may not start on
+   *  some firmware, notably FW 12.xx). Surface a caution, not a clean OK. */
+  mayNotLaunch: boolean;
+  /** First error seen (empty when installed cleanly). */
+  errMessage: string;
+}
+
+/**
+ * The bare `.pkg` install mechanism, with NO store/UI side effects — shared by
+ * the Install Package screen's manual install (`install()`) and the upload
+ * queue's pkg finisher (`uploadQueue.runOne`). The `.pkg` must already be
+ * staged on the PS5 at `localPs5Path`.
+ *
+ * Cascade (HW-proven): the MAIN PAYLOAD's InstallByPackage first — it runs in
+ * the full jailbreak context, which is what actually installs LAUNCHABLE
+ * content into /user/app/<title>. Only if the firmware rejects that do we fall
+ * back to the standalone DPI daemon on :9040 (registers metadata, may not be
+ * launchable on newer firmware), then restore the main payload. Returns whether
+ * it installed, whether it's the unlaunchable path, and the first error.
+ *
+ * Throws only if the DPI daemon itself can't come up after a main-payload
+ * reject (a genuine dead-end) — callers should catch and treat as failure.
+ */
+export async function runPkgInstall(
+  host: string,
+  localPs5Path: string,
+  contentId: string | null,
+): Promise<PkgInstallOutcome> {
+  const ip = hostOf(host);
+  let installed = false;
+  let mainErr = "";
+  let mayNotLaunch = false;
+  try {
+    const r = (await invoke("pkg_install_start", {
+      ps5Addr: mgmtAddr(host),
+      path: null,
+      splitRoot: null,
+      packageTypeOverride: null,
+      localPs5Path,
+      contentId: contentId || null,
+    })) as {
+      err_code?: number;
+      register_path?: string;
+      err_message?: string;
+      may_not_launch?: boolean;
+    };
+    const rc = (r.err_code ?? 0) >>> 0;
+    if (rc === 0) {
+      installed = true;
+      mayNotLaunch = pkgInstallMayNotLaunch(r);
+    } else {
+      mainErr = r.err_message || `0x${rc.toString(16).padStart(8, "0")}`;
+    }
+  } catch (e) {
+    mainErr = pkgError(e);
+  }
+
+  if (!installed) {
+    // FALLBACK: the jailbroken-context install was rejected. Try the
+    // standalone DPI daemon (replaces our payload on the single-payload
+    // loader, installs, then we restore the payload).
+    const ens = (await invoke("dpi_ensure", { ip })) as {
+      ok?: boolean;
+      error?: string;
+    };
+    if (!ens.ok) {
+      throw new Error(
+        ens.error ||
+          `Main-payload install failed (${mainErr}) and the DPI daemon didn't come up on :9040`,
+      );
+    }
+    let resp: { ok?: boolean; rc?: number; err_message?: string } = {};
+    try {
+      resp = (await invoke("pkg_dpi_install", {
+        ps5Addr: mgmtAddr(host),
+        localPs5Path,
+      })) as typeof resp;
+    } catch (e) {
+      resp = { ok: false, rc: 0, err_message: pkgError(e) };
+    }
+    // Restore our main payload — the daemon replaced it. Best-effort.
+    try {
+      const bp = (await invoke("payload_bundled_path")) as {
+        ok?: boolean;
+        path?: string;
+      };
+      if (bp?.ok && bp.path) {
+        await invoke("payload_send", { ip, path: bp.path, port: null });
+      }
+    } catch {
+      /* best-effort restore */
+    }
+    installed = !!resp.ok;
+    if (!installed) {
+      const rc = (resp.rc ?? 0) >>> 0;
+      mainErr =
+        resp.err_message ||
+        mainErr ||
+        `Install was rejected (0x${rc.toString(16).padStart(8, "0")}).`;
+    }
+  }
+  return { installed, mayNotLaunch, errMessage: mainErr };
+}
+
 /**
  * One isolated PkgLibrary store per PS5 console (see the registry below). The
  * store body is unchanged from the old single-instance design — making it a
@@ -482,6 +589,16 @@ const makePkgLibraryStore = () =>
       // Settle to idle and re-sync from the dir (authoritative).
       patch({ status: "idle", bytes: undefined });
       await get().refresh(host);
+      // Hands-off flow: once the .pkg has landed, kick the install without a
+      // second manual click (opt-out via the Install Package screen). install()
+      // owns its own waiting/queueing, the FW-12 notice, and — when
+      // autoRemoveAfterInstall is on — the post-install cleanup, so "upload →
+      // installed → staged copy removed" becomes one action. It never throws
+      // (try/finally inside), so awaiting it here is safe; the caller already
+      // treats addAndUpload as fire-and-forget.
+      if (useInstallSettingsStore.getState().autoInstallAfterUpload) {
+        await get().install(destPath, host);
+      }
     } catch (e) {
       // Drop the optimistic row and surface the error.
       set({
@@ -493,7 +610,6 @@ const makePkgLibraryStore = () =>
 
   async install(path, host) {
     if (!host?.trim() || get().installing) return;
-    const ip = hostOf(host);
     set({ installing: true, busyNotice: null });
     // Any transfer that the payload swap would interrupt: an Upload-screen
     // transfer, or a .pkg upload/queued here. Installing must wait for all of
@@ -546,103 +662,14 @@ const makePkgLibraryStore = () =>
         }
       }
 
-      // PRIMARY (2.25.2): install via the MAIN PAYLOAD's InstallByPackage
-      // (engine /api/pkg/install/start). The main payload runs in the FULL
-      // jailbreak context — exactly like etaHEN's DPI — and that's what
-      // actually installs LAUNCHABLE content into /user/app/<title>. The
-      // standalone DPI daemon (the fallback below) runs from a pristine
-      // elfldr context that only registers the title's METADATA (icons/
-      // param land in /user/appmeta, but /user/app stays empty) — the title
-      // shows up but fails with "can't start the game or app". HW-confirmed
-      // on FW 5.10: main-payload path → /user/app populated; daemon path →
-      // /user/app empty. So we try the main payload FIRST and only fall back
-      // to the daemon if it's rejected (some firmware reject installs issued
-      // from the jailbroken context — the original reason the daemon existed).
-      let installed = false;
-      let mainErr = "";
-      // True when the install was accepted only via the unlaunchable
-      // last-resort path (sceAppInstUtilAppInstallPkg, register_path
-      // "appinst-local"). The title installs but may not start on some
-      // firmwares (notably FW 12.xx) — surface a caution, not a clean OK.
-      let mayNotLaunch = false;
       // The library entry carries the content id parsed at upload time —
       // pass it so the engine doesn't need to re-read a PC-side file (the
-      // pkg is already staged on the PS5).
+      // pkg is already staged on the PS5). The install cascade itself lives in
+      // the shared `runPkgInstall` helper (also used by the upload queue's pkg
+      // finisher), so the mechanism stays identical across both surfaces.
       const entry = get().entries.find((e) => e.path === path);
-      try {
-        const r = (await invoke("pkg_install_start", {
-          ps5Addr: mgmtAddr(host),
-          path: null,
-          splitRoot: null,
-          packageTypeOverride: null,
-          localPs5Path: path,
-          contentId: entry?.contentId || null,
-        })) as {
-          err_code?: number;
-          register_path?: string;
-          err_message?: string;
-          may_not_launch?: boolean;
-        };
-        const rc = (r.err_code ?? 0) >>> 0;
-        if (rc === 0) {
-          installed = true;
-          mayNotLaunch = pkgInstallMayNotLaunch(r);
-        } else {
-          mainErr =
-            r.err_message ||
-            `0x${rc.toString(16).padStart(8, "0")}`;
-        }
-      } catch (e) {
-        mainErr = pkgError(e);
-      }
-
-      if (!installed) {
-        // FALLBACK: the jailbroken-context install was rejected. Try the
-        // standalone DPI daemon (replaces our payload on the single-payload
-        // loader, installs, then we restore the payload). This may register
-        // the title without launchable content on newer firmware — better
-        // than nothing, and it surfaces the main-payload reject code so the
-        // failure is diagnosable.
-        const ens = (await invoke("dpi_ensure", { ip })) as {
-          ok?: boolean;
-          error?: string;
-        };
-        if (!ens.ok) {
-          throw new Error(
-            ens.error ||
-              `Main-payload install failed (${mainErr}) and the DPI daemon didn't come up on :9040`,
-          );
-        }
-        let resp: { ok?: boolean; rc?: number; err_message?: string } = {};
-        try {
-          resp = (await invoke("pkg_dpi_install", {
-            ps5Addr: mgmtAddr(host),
-            localPs5Path: path,
-          })) as typeof resp;
-        } catch (e) {
-          resp = { ok: false, rc: 0, err_message: pkgError(e) };
-        }
-        // Restore our main payload — the daemon replaced it. Best-effort.
-        try {
-          const bp = (await invoke("payload_bundled_path")) as {
-            ok?: boolean;
-            path?: string;
-          };
-          if (bp?.ok && bp.path) {
-            await invoke("payload_send", { ip, path: bp.path, port: null });
-          }
-        } catch {
-          /* best-effort restore */
-        }
-        installed = !!resp.ok;
-        if (!installed) {
-          const rc = (resp.rc ?? 0) >>> 0;
-          mainErr =
-            resp.err_message ||
-            mainErr ||
-            `Install was rejected (0x${rc.toString(16).padStart(8, "0")}).`;
-        }
-      }
+      const { installed, mayNotLaunch, errMessage: mainErr } =
+        await runPkgInstall(host, path, entry?.contentId || null);
 
       if (installed) {
         patch({ status: "idle", lastResult: installedLastResult(mayNotLaunch) });
@@ -715,6 +742,18 @@ export function pkgLibraryStore(host: string): PkgLibraryStore {
     pkgLibraryStores.set(key, s);
   }
   return s;
+}
+
+/**
+ * Drop the cached store for a console. Call when a roster profile is removed
+ * or re-pointed at a new IP, so a later console that REUSES that IP starts
+ * clean instead of inheriting the old console's transient state (entries are
+ * re-listed from the live PS5 on mount, but `installing` / `lastResult` /
+ * `busyNotice` would otherwise carry over). No-op if nothing is cached for the
+ * host. The next `pkgLibraryStore(host)` lazily creates a fresh instance.
+ */
+export function evictPkgLibraryStore(host: string): void {
+  pkgLibraryStores.delete(hostOf(host) || "_unset_");
 }
 
 /**

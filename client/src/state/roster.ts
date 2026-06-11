@@ -3,6 +3,7 @@ import { useConnectionStore } from "./connection";
 import { useRunningAppsStore } from "./runningApps";
 import { useFsClipboardStore } from "./fsClipboard";
 import { useUploadStore } from "./upload";
+import { evictPkgLibraryStore } from "./pkgLibrary";
 import { hostOf } from "../lib/addr";
 
 /**
@@ -182,7 +183,17 @@ export const useRosterStore = create<RosterState>((set, get) => ({
     return id;
   },
   remove: (id) => {
+    const removed = get().profiles.find((p) => p.id === id);
     const next = get().profiles.filter((p) => p.id !== id);
+    // Evict the removed console's isolated pkg-library store so a future
+    // console reusing the same IP starts clean — but only if no remaining
+    // profile still points at that bare host (two profiles can share an IP).
+    if (
+      removed &&
+      !next.some((p) => hostOf(p.host) === hostOf(removed.host))
+    ) {
+      evictPkgLibraryStore(removed.host);
+    }
     let next_active = get().active_id;
     if (next_active === id) {
       next_active = next[0]?.id ?? null;
@@ -208,9 +219,20 @@ export const useRosterStore = create<RosterState>((set, get) => ({
     persist(next, get().active_id);
   },
   updateHost: (id, host) => {
+    const oldHost = get().profiles.find((p) => p.id === id)?.host;
     const next = get().profiles.map((p) =>
       p.id === id ? { ...p, host: host.trim() } : p,
     );
+    // Re-pointing a profile at a new IP orphans the old IP's pkg-library
+    // store; evict it (unless another profile still uses that bare host) so
+    // it can't resurface stale state if that IP is reused later.
+    if (
+      oldHost &&
+      hostOf(oldHost) !== hostOf(host.trim()) &&
+      !next.some((p) => hostOf(p.host) === hostOf(oldHost))
+    ) {
+      evictPkgLibraryStore(oldHost);
+    }
     set({ profiles: next });
     persist(next, get().active_id);
     if (get().active_id === id) {

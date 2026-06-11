@@ -8,6 +8,7 @@ import {
   FileArchive,
   Loader2,
   Info,
+  Check,
   X,
   Plus,
   type LucideIcon,
@@ -63,18 +64,24 @@ import { resolveUploadDest } from "../../lib/uploadDest";
 import { QueuePanel } from "./QueuePanel";
 import { humanizePs5Error } from "../../lib/humanizeError";
 import { formatBytes } from "../../lib/format";
-import { useTr } from "../../state/lang";
+import { useTr, type Translator } from "../../state/lang";
 
 // formatBytes moved to lib/format.ts.
 
-/** Map discriminated SourceKind to its one-line "Detected: ..." string. */
-function detectedLabel(source: PickedSource): {
+/** Map discriminated SourceKind to its one-line "Detected: ..." string.
+ *  Localized (takes the screen's `tr`) and, for archives, format-aware: it
+ *  shows the actual `.zip` / `.7z` / `.rar` extension instead of a hardcoded
+ *  ".zip / .7z" that was wrong for the other two formats. */
+function detectedLabel(
+  source: PickedSource,
+  tr: Translator,
+): {
   icon: LucideIcon;
   label: string;
 } {
   switch (source.kind) {
     case "file":
-      return { icon: FileIcon, label: "Plain file" };
+      return { icon: FileIcon, label: tr("upload_kind_file", "Plain file") };
     case "image": {
       // Show the actual extension in the label so users know whether
       // it's exFAT (.exfat) or UFS2 (.ffpkg) — both are "disk images"
@@ -82,19 +89,32 @@ function detectedLabel(source: PickedSource): {
       const ext = source.path.toLowerCase().endsWith(".ffpkg")
         ? ".ffpkg"
         : ".exfat";
-      return { icon: FileArchive, label: `Disk image (${ext})` };
+      return {
+        icon: FileArchive,
+        label: tr("upload_kind_image", { ext }, "Disk image ({ext})"),
+      };
     }
     case "folder":
-      return { icon: FolderOpen, label: "Folder" };
+      return { icon: FolderOpen, label: tr("upload_kind_folder", "Folder") };
     case "game-folder":
-      return { icon: Gamepad2, label: "Game folder" };
-    case "archive":
-      return { icon: FileArchive, label: "Compressed dump (.zip / .7z)" };
+      return {
+        icon: Gamepad2,
+        label: tr("upload_kind_game_folder", "Game folder"),
+      };
+    case "archive": {
+      const fmt = archiveFormat(source.path);
+      const ext = fmt ? `.${fmt}` : "";
+      return {
+        icon: FileArchive,
+        label: tr("upload_kind_archive", { ext }, "Compressed archive ({ext})"),
+      };
+    }
   }
 }
 
 export default function UploadScreen() {
   const tr = useTr();
+  const navigate = useNavigate();
   const store = useUploadStore();
   const {
     source,
@@ -161,6 +181,11 @@ export default function UploadScreen() {
         setDropActive(false);
         const first = e.payload.paths?.[0];
         if (!first) return;
+        // A .pkg is a package to INSTALL, not a blob to drop on a volume —
+        // AppShell's app-wide drop listener routes it to /install-package, so
+        // skip it here to avoid creating a stale plain-"file" source the user
+        // never asked for (it would upload the .pkg raw and never install it).
+        if (first.toLowerCase().endsWith(".pkg")) return;
         const kind = await pathKind(first);
         if (cancelled) return;
         if (kind === "folder") await pickFolder(first);
@@ -187,7 +212,15 @@ export default function UploadScreen() {
     const selected = isAndroid()
       ? await pickLocalPath({ mode: "file" })
       : await openDialog({ directory: false, multiple: false });
-    if (typeof selected === "string") await pickFile(selected);
+    if (typeof selected !== "string") return;
+    // A .pkg picked here is a package to install — send it to the Install
+    // Package flow (same droppedPath contract AppShell uses for drops) instead
+    // of uploading it as a raw blob that never gets installed.
+    if (selected.toLowerCase().endsWith(".pkg")) {
+      navigate("/install-package", { state: { droppedPath: selected } });
+      return;
+    }
+    await pickFile(selected);
   };
 
   const handleChooseFolder = async () => {
@@ -610,7 +643,18 @@ function Step2Options(props: {
   } = props;
   const tr = useTr();
 
-  const { icon: KindIcon, label: kindLabel } = detectedLabel(source);
+  const { icon: KindIcon, label: kindLabel } = detectedLabel(source, tr);
+  // A .rar source has its own dedicated card (RarSourceCard) that owns ALL of
+  // its messaging — password prompt, wrong-password, missing-volume. So the
+  // generic detectError box below is suppressed for rar; otherwise the raw
+  // `rar_password_required` token would show in red next to the friendly card.
+  const isRarSource =
+    source.kind === "archive" && archiveFormat(source.path) === "rar";
+  // A rar whose inspect hasn't succeeded yet (needs/wrong password, missing
+  // volume, or still scanning) — the downstream extract-mode config is
+  // premature until we can actually read the archive, so lead with the rar
+  // card and hold the rest until it's readable.
+  const rarBlocked = isRarSource && !source.zipInfo;
   const showExcludes =
     source.kind === "folder" ||
     source.kind === "game-folder" ||
@@ -727,8 +771,8 @@ function Step2Options(props: {
                   <div className="text-[var(--color-muted)]">
                     {source.kind === "archive"
                       ? tr(
-                          "upload_scanning_archive_hint",
-                          "Reading the .zip central directory and parsing embedded game metadata. Upload buttons will enable when this finishes.",
+                          "upload_scanning_archive_hint_v2",
+                          "Reading the archive index and parsing embedded game metadata. Upload buttons will enable when this finishes.",
                         )
                       : tr(
                           "upload_scanning_hint",
@@ -738,9 +782,9 @@ function Step2Options(props: {
                 </div>
               </div>
             )}
-            {detectError && (
+            {detectError && !isRarSource && (
               <div className="mt-2 rounded-md border border-[var(--color-bad)] bg-[var(--color-surface-3)] p-2 text-xs text-[var(--color-bad)]">
-                {detectError}
+                {humanizePs5Error(detectError)}
               </div>
             )}
           </div>
@@ -789,15 +833,15 @@ function Step2Options(props: {
           />
         )}
 
+      {/* Lead with the RAR card (multi-part guidance + password) so a blocked
+          archive prompts first, before the extract/destination config. */}
+      {isRarSource && <RarSourceCard key={source.path} />}
+
       {source.kind === "archive" && source.zipInfo && (
         <ZipArchiveCard info={source.zipInfo} />
       )}
 
-      {source.kind === "archive" && archiveFormat(source.path) === "rar" && (
-        <RarPasswordCard />
-      )}
-
-      {source.kind === "archive" && (
+      {source.kind === "archive" && !rarBlocked && (
         <ArchiveExtractModeCard
           mode={archiveExtractMode}
           onChange={onSetArchiveExtractMode}
@@ -2035,30 +2079,62 @@ function PreflightEtaBanner({
  *  PS5, the space saved, and the embedded game (if any). Reassures the user
  *  that the archive is decompressed on the host and lands extracted on the
  *  console — no extra step, no temp copy of the whole game. */
-/** Password input for an encrypted `.rar` source. The error string from the
- *  inspect carries `rar_password_required` (encrypted, needs one) or
- *  `rar_password_wrong`; we map those to friendly hints. Applying re-inspects
- *  via the store, so the file tree appears once the password is right. */
-function RarPasswordCard() {
+/** Source card for a `.rar`: multi-volume guidance + an (optional) password
+ *  input. The inspect error string carries `rar_password_required` (encrypted,
+ *  needs one) / `rar_password_wrong` / a generic open failure; we map those to
+ *  friendly hints (full copy lives in lib/humanizeError.ts). Applying a
+ *  password re-inspects via the store, so the file tree appears once it's
+ *  right. Render with `key={source.path}` so the input resets per archive.
+ *
+ *  RAR is desktop-only (the unrar dep is excluded from the Android build); on
+ *  Android we render a friendly "not supported" notice instead of inspecting. */
+function RarSourceCard() {
   const tr = useTr();
   const password = useUploadStore((s) => s.rarPassword);
   const detecting = useUploadStore((s) => s.detecting);
   const error = useUploadStore((s) => s.detectError);
+  const inspected = useUploadStore((s) => !!s.source?.zipInfo);
   const setRarPassword = useUploadStore((s) => s.setRarPassword);
   const onApply = (pw: string) => void setRarPassword(pw);
   const [draft, setDraft] = useState(password ?? "");
   const needsPw = !!error && error.includes("rar_password_required");
   const wrongPw = !!error && error.includes("rar_password_wrong");
+  // A non-password failure (most often an incomplete multi-volume set, or the
+  // user picked a middle part). The generic open-failure copy explains it.
+  const otherErr = !!error && !needsPw && !wrongPw;
+
+  if (isAndroid()) {
+    return (
+      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
+        <p className="mb-1 text-sm font-medium">
+          {tr("upload_rar_title", "RAR archive")}
+        </p>
+        <p className="text-xs text-[var(--color-warn)]">
+          {tr("err_rar_unsupported", "RAR archives aren't supported on this build (Android uploads .zip and .7z only). Extract the .rar on a computer first, or use the desktop app.")}
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
       <p className="mb-1 text-sm font-medium">
-        {tr("upload.rar.title", undefined, "Encrypted archive")}
+        {tr("upload_rar_title", "RAR archive")}
       </p>
-      <p className="mb-3 text-xs text-[var(--color-muted)]">
+      {/* Multi-volume guidance, always shown — the #1 source of confusion. */}
+      <div className="mb-3 flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-3)]/40 p-2 text-xs text-[var(--color-muted)]">
+        <Info size={13} className="mt-0.5 shrink-0" />
+        <span>
+          {tr(
+            "upload_rar_multipart_hint",
+            "Multi-part set? Pick the FIRST part — part1.rar / part01.rar / .rar. The other volumes are found automatically as long as they're in the same folder.",
+          )}
+        </span>
+      </div>
+      <p className="mb-2 text-xs text-[var(--color-muted)]">
         {tr(
-          "upload.rar.hint",
-          undefined,
-          "If this .rar is password-protected, enter the password so it can be extracted. Leave blank if it isn't.",
+          "upload_rar_password_hint",
+          "If this archive is password-protected, enter the password so it can be extracted. Leave blank if it isn't.",
         )}
       </p>
       <div className="flex flex-wrap items-center gap-2">
@@ -2066,7 +2142,7 @@ function RarPasswordCard() {
           type="password"
           value={draft}
           autoComplete="off"
-          placeholder={tr("upload.rar.placeholder", undefined, "Password")}
+          placeholder={tr("upload_rar_password_placeholder", "Password")}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter") onApply(draft);
@@ -2079,21 +2155,28 @@ function RarPasswordCard() {
           loading={detecting}
           onClick={() => onApply(draft)}
         >
-          {tr("upload.rar.apply", undefined, "Apply")}
+          {tr("upload_rar_apply", "Apply")}
         </Button>
       </div>
       {needsPw && (
         <p className="mt-2 text-xs text-[var(--color-warn)]">
-          {tr(
-            "upload.rar.needed",
-            undefined,
-            "This archive is encrypted — enter its password to continue.",
-          )}
+          {tr("err_rar_password_required", "This RAR archive is password-protected. Enter its password below to read and upload its contents.")}
         </p>
       )}
       {wrongPw && (
         <p className="mt-2 text-xs text-[var(--color-bad)]">
-          {tr("upload.rar.wrong", undefined, "Wrong password — try again.")}
+          {tr("err_rar_password_wrong", "Wrong password for this RAR archive. Check it and try again.")}
+        </p>
+      )}
+      {otherErr && (
+        <p className="mt-2 text-xs text-[var(--color-bad)]">
+          {humanizePs5Error(error)}
+        </p>
+      )}
+      {inspected && !error && (
+        <p className="mt-2 inline-flex items-center gap-1 text-xs text-[var(--color-good)]">
+          <Check size={12} />
+          {tr("upload_rar_ready", "Archive read successfully — ready to upload.")}
         </p>
       )}
     </div>
@@ -2188,6 +2271,10 @@ function ArchiveExtractModeCard({
   sourcePath: string;
 }) {
   const tr = useTr();
+  // The archive's own extension, so the copy reads ".rar"/".7z"/".zip" instead
+  // of a hardcoded ".zip" that was wrong for the other two formats.
+  const fmt = archiveFormat(sourcePath);
+  const ext = fmt ? `.${fmt}` : tr("upload_archive_word", "archive");
   const subfolderDest = resolveUploadDest(
     destinationVolume,
     destinationSubpath,
@@ -2212,24 +2299,25 @@ function ArchiveExtractModeCard({
     {
       value: "subfolder",
       label: tr(
-        "upload_zip_extract_subfolder_label",
-        "Put everything in a new folder named after the zip",
+        "upload_archive_extract_subfolder_label",
+        "Put everything in a new folder named after the archive",
       ),
       desc: tr(
-        "upload_zip_extract_subfolder_desc",
-        "Creates that folder in the destination and extracts the files inside it. Best for a plain .zip of loose game files.",
+        "upload_archive_extract_subfolder_desc",
+        "Creates that folder in the destination and extracts the files inside it. Best for a plain archive of loose game files.",
       ),
       preview: `${subfolderDest}/…`,
     },
     {
       value: "flat",
       label: tr(
-        "upload_zip_extract_flat_label",
+        "upload_archive_extract_flat_label",
         "Extract the contents straight into the destination",
       ),
       desc: tr(
-        "upload_zip_extract_flat_desc",
-        "Drops the files directly into the destination with no wrapper folder. Choose this when the .zip already contains the game's own folder (e.g. CUSA12345/).",
+        "upload_archive_extract_flat_desc",
+        { ext },
+        "Drops the files directly into the destination with no wrapper folder. Choose this when the {ext} already contains the game's own folder (e.g. CUSA12345/).",
       ),
       preview: `${flatDest}/…`,
     },
@@ -2239,7 +2327,7 @@ function ArchiveExtractModeCard({
     <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5">
       <div className="mb-3 flex items-center gap-2 text-sm font-medium">
         <FileArchive size={16} className="text-[var(--color-muted)]" />
-        {tr("upload_zip_extract_heading", "Where should the .zip unpack?")}
+        {tr("upload_archive_extract_heading", { ext }, "Where should the {ext} unpack?")}
       </div>
       <div className="flex flex-col gap-2">
         {options.map((opt) => {

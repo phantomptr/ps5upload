@@ -358,6 +358,18 @@ export default function InstalledAppsScreen() {
     }
   }, [host, guard]);
 
+  // Drop the previous console's grid the moment the active host changes, so a
+  // Launch/Uninstall click during the switch window can't fire A's titleId at
+  // B (the handlers capture the live host but the row's titleId is from the
+  // still-rendered old list — an uninstall would then remove that title from
+  // the WRONG console). The async guard prevents stale writes; this prevents
+  // stale *clicks*. Same reset-on-[host] pattern as DiskUsage / FileSystem.
+  useEffect(() => {
+    setTitles(null);
+    setSmp(null);
+    setError(null);
+  }, [host]);
+
   useEffect(() => {
     void refresh();
   }, [refresh]);

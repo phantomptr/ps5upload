@@ -107,6 +107,20 @@ export default function SavesScreen() {
     }
   }, [host, payloadStatus, guard]);
 
+  // Reset the rendered list the instant the active console changes, BEFORE
+  // the new console's fetch resolves. The stale-host guard above already stops
+  // a late result for the old console from overwriting state, but without this
+  // the *previously rendered* rows (belonging to console A) stay on screen —
+  // and clickable — until B's list arrives. A Restore/Delete click in that
+  // window captures B's host (handleRestore reads the current host) but the
+  // row's title_id/path from A, so it would operate on B with A's entry. Going
+  // to a loading state removes that wrong-target hazard. Mirrors DiskUsage /
+  // FileSystem, which already reset on [host].
+  useEffect(() => {
+    setSaves(null);
+    setError(null);
+  }, [host]);
+
   useEffect(() => {
     refresh();
   }, [refresh]);

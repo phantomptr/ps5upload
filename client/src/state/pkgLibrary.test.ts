@@ -15,12 +15,38 @@ import { fsDelete, fsListDir } from "../api/ps5";
 import {
   titleIdFromContentId,
   pkgLibraryStore,
+  evictPkgLibraryStore,
   isFinishedPkg,
   pkgInstallMayNotLaunch,
   installedLastResult,
   PKG_MAY_NOT_LAUNCH_MESSAGE,
   type PkgEntry,
 } from "./pkgLibrary";
+
+describe("per-console store registry (eviction)", () => {
+  it("returns the SAME store instance for a host until evicted", () => {
+    const a1 = pkgLibraryStore("192.168.50.1");
+    const a2 = pkgLibraryStore("192.168.50.1:9114"); // port stripped → same key
+    expect(a2).toBe(a1);
+  });
+
+  it("hands out a FRESH store after eviction (stale state can't resurface)", () => {
+    const host = "192.168.50.2";
+    const before = pkgLibraryStore(host);
+    // Dirty the transient state that a re-listing wouldn't clear.
+    before.setState({ busyNotice: "installing…" });
+    expect(before.getState().busyNotice).toBe("installing…");
+
+    evictPkgLibraryStore(host);
+    const after = pkgLibraryStore(host);
+    expect(after).not.toBe(before);
+    expect(after.getState().busyNotice).toBeNull();
+  });
+
+  it("evicting an unknown host is a no-op (no throw)", () => {
+    expect(() => evictPkgLibraryStore("203.0.113.7")).not.toThrow();
+  });
+});
 
 describe("titleIdFromContentId", () => {
   it("extracts the title id from a standard ContentID", () => {

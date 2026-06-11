@@ -157,13 +157,29 @@ item. One mental model: "add it to the queue, it ends up playable."
 
 ### Rollout
 
-1. Land the FW-gated install-path policy (Q2 mitigation #1) + the "screen may
-   blink" notice — small, fixes the actual pain now.
-2. Lift `pkgLibrary.install()` into a shared finisher helper.
-3. Add `sourceKind:"pkg"` + the two finisher flags to the queue; wire the
-   finisher branch + auto-delete.
-4. Update the Upload UI to offer the pkg finisher inline; keep Install Package
-   as the installed-pkg library view.
+1. **DONE** — FW-gated "screen may blink" notice (Q2 mitigation #2):
+   `pkgLibrary.install()` sets a `busyNotice` on FW ≥ 12. The install path is
+   unchanged (mitigation #1 was rejected — see Q2).
+2. **DONE** — auto-install after upload (the functional core of the request).
+   Rather than lift the install into a queue finisher first, the smallest
+   correct increment hooks the existing `install()` straight into the staging
+   upload's completion path: `addAndUpload()` (`pkgLibrary.ts`), after the
+   bytes land + `refresh()`, calls `get().install(destPath, host)` when the new
+   `autoInstallAfterUpload` setting is on (default ON, opt-out, persisted in
+   `installSettings.ts`). `install()` already owns waiting-for-transfers, the
+   FW-12 notice, and — with `autoRemoveAfterInstall` — the post-install delete,
+   so "upload → installed → staged copy removed" is now one hands-off flow on
+   the existing Install Package screen. A toggle sits next to the auto-delete
+   toggle (`screens/InstallPackage/index.tsx`, i18n `pkglib.autoInstall`).
+   Tests: `installSettings.test.ts` pins the opt-out default + persistence.
+3. **PENDING (larger, needs HW install validation)** — fold this into the
+   single upload queue as `sourceKind:"pkg"` with finisher flags, so a `.pkg`
+   is a first-class queue item alongside folders/images. This is the visual
+   "one queue" unification; the *behaviour* it would deliver (auto-install +
+   auto-delete, serialized) is already achieved by step 2. Defer until the
+   maintainer wants the queue-tab merge, since it touches the critical install
+   path and warrants on-console validation that mutates console state.
 
-Each step is independently shippable; step 1 alone addresses the FW 12.00
-report.
+Steps 1–2 ship the report's actual pain points (FW-12 scare + manual second
+click) without touching the HW-verified install mechanism; step 3 is a pure UX
+reorganization on top.

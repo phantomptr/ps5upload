@@ -37,6 +37,14 @@ export default defineConfig({
       process.env.TAURI_ENV_PLATFORM === "windows" ? "chrome105" : "safari13",
     chunkSizeWarningLimit: 900,
     rollupOptions: {
+      // Silence rolldown's informational "[PLUGIN_TIMINGS] … significant time
+      // in @tailwindcss/vite:generate:build" note. Tailwind v4 scans the whole
+      // source tree to generate utilities, so its codegen is legitimately the
+      // slowest plugin — that's expected, not a problem to fix, and the note is
+      // just build noise. (rolldown input option, passed through by
+      // rolldown-vite; not in Vite's RollupOptions types yet.)
+      // @ts-expect-error checks is a rolldown passthrough not typed by Vite
+      checks: { pluginTimings: false },
       output: {
         manualChunks(id) {
           if (!id.includes("node_modules")) return;

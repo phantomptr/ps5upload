@@ -1,69 +1,55 @@
 import { create } from "zustand";
 
 /**
- * User preferences governing the Install Package flow's defaults.
+ * User preferences governing the Install Package flow.
  *
- * The only setting today is the install method — Tier-1 staging
- * (upload-then-install) vs the DPI 2.0 streaming path (BGFT pulls
- * directly from a desktop-hosted HTTP route). Streaming is faster,
- * needs no 2× disk space, and gets native pause/resume for free
- * (BGFT's own behaviour), so it's the new default. The staging path
- * remains available for users on LAN topologies where the PS5 can't
- * reach the desktop's HTTP port (segregated VLANs, host firewalls
- * that block inbound to the engine port, etc).
+ * Both settings shape the hands-off "add a .pkg → it ends up installed → the
+ * staged copy is cleaned up" flow. They are GLOBAL (one choice for all
+ * consoles): they're workflow preferences, not topology-dependent. The actual
+ * install MECHANISM is a fixed cascade (stage → main-payload InstallByPackage →
+ * DPI-daemon fallback, in `pkgLibrary.runPkgInstall`), identical per console —
+ * there is no user-selectable install "method" (an earlier stream/stage/dpi
+ * setting was removed as dead code; nothing ever read it).
  *
- * The setting is the DEFAULT applied when a new install is queued;
- * the queue item itself records the method that was used so a row
- * already in flight isn't retroactively switched if the user toggles
- * the default mid-install. Same pattern as uploadSettings.
- *
- * Persisted to localStorage so the choice survives restarts. Single
- * namespaced key — never silently migrate; bump the key if the
- * schema ever changes (cost: one re-pick from the user).
+ * Persisted to localStorage so the choices survive restarts. Namespaced keys —
+ * never silently migrate; bump a key if its schema ever changes.
  */
 
-/** "stream" = DPI 2.0 (engine HTTP + BGFT); "stage" = upload-then-install
- *  via our payload (Tier 1); "dpi" = upload-then-install via the
- *  standalone DPI daemon on :9040 (sceAppInstUtilAppInstallPkg from a
- *  clean process — installs without the PlayGo gate). */
-export type InstallMethod = "stream" | "stage" | "dpi";
-
-const KEY_INSTALL_METHOD = "ps5upload.install_method";
 const KEY_AUTO_REMOVE = "ps5upload.auto_remove_after_install";
-
-function loadInstallMethod(): InstallMethod {
-  if (typeof window === "undefined") return "stream";
-  const v = window.localStorage.getItem(KEY_INSTALL_METHOD);
-  return v === "stage" || v === "dpi" ? v : "stream";
-}
+const KEY_AUTO_INSTALL = "ps5upload.auto_install_after_upload";
 
 function loadAutoRemove(): boolean {
   if (typeof window === "undefined") return false;
   return window.localStorage.getItem(KEY_AUTO_REMOVE) === "1";
 }
 
+// Defaults ON: the whole point of staging a .pkg in the library is to
+// install it, so once the upload lands we kick the install off without a
+// second manual click. Persisted, so a user who prefers to inspect the
+// staged file first can turn it off and that sticks. Absent key → ON
+// (opt-out), the behaviour the maintainer asked for.
+function loadAutoInstall(): boolean {
+  if (typeof window === "undefined") return true;
+  return window.localStorage.getItem(KEY_AUTO_INSTALL) !== "0";
+}
+
 interface InstallSettingsState {
-  /** Default install method for newly-queued items. Per-item override
-   *  lives on the queue row, so an in-flight install isn't disturbed
-   *  by changing this. */
-  installMethod: InstallMethod;
-  setInstallMethod: (m: InstallMethod) => void;
   /** When true, a staged .pkg in the library is deleted from the PS5
    *  automatically right after it installs successfully — so the
    *  library list doesn't accumulate spent packages. Off by default
-   *  (a user may want to re-install or keep the .pkg around). Only the
-   *  "stage"-method library is affected; streaming installs never leave
-   *  a staged file. */
+   *  (a user may want to re-install or keep the .pkg around). */
   autoRemoveAfterInstall: boolean;
   setAutoRemoveAfterInstall: (v: boolean) => void;
+  /** When true, a .pkg uploaded into the staging library installs
+   *  automatically as soon as the upload finishes — no separate manual
+   *  "Install" click. On by default (staging exists to be installed).
+   *  Pairs with autoRemoveAfterInstall to make "upload → installed →
+   *  staged copy cleaned up" one hands-off flow. */
+  autoInstallAfterUpload: boolean;
+  setAutoInstallAfterUpload: (v: boolean) => void;
 }
 
 export const useInstallSettingsStore = create<InstallSettingsState>((set) => ({
-  installMethod: loadInstallMethod(),
-  setInstallMethod: (installMethod) => {
-    window.localStorage.setItem(KEY_INSTALL_METHOD, installMethod);
-    set({ installMethod });
-  },
   autoRemoveAfterInstall: loadAutoRemove(),
   setAutoRemoveAfterInstall: (autoRemoveAfterInstall) => {
     if (typeof window !== "undefined") {
@@ -73,5 +59,15 @@ export const useInstallSettingsStore = create<InstallSettingsState>((set) => ({
       );
     }
     set({ autoRemoveAfterInstall });
+  },
+  autoInstallAfterUpload: loadAutoInstall(),
+  setAutoInstallAfterUpload: (autoInstallAfterUpload) => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(
+        KEY_AUTO_INSTALL,
+        autoInstallAfterUpload ? "1" : "0",
+      );
+    }
+    set({ autoInstallAfterUpload });
   },
 }));

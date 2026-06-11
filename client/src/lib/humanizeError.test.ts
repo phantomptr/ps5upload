@@ -48,6 +48,46 @@ describe("humanizePs5Error", () => {
     });
   });
 
+  describe("RAR archive errors", () => {
+    it("maps rar_password_required → password-protected prompt", () => {
+      expect(humanizePs5Error("rar_password_required")).toMatch(
+        /password-protected/i,
+      );
+    });
+    it("maps rar_password_wrong → wrong-password copy", () => {
+      expect(humanizePs5Error("rar_password_wrong")).toMatch(/wrong password/i);
+    });
+    it("maps the Android 501 body → unsupported copy", () => {
+      expect(humanizePs5Error("RAR is not supported on this build")).toMatch(
+        /aren't supported on this build|\.zip and \.7z only/i,
+      );
+    });
+    it("maps an unsafe entry path → safety refusal copy", () => {
+      expect(
+        humanizePs5Error(
+          'rar contains an unsafe or invalid entry path: "../escape"',
+        ),
+      ).toMatch(/outside the destination|refused for safety/i);
+    });
+    it.each([
+      "open rar: archive open error",
+      "read rar header: bad data",
+      "extract rar entry: corrupt",
+      "skip rar entry: failed",
+    ])("maps generic unrar failure %s → multi-part guidance", (raw) => {
+      expect(humanizePs5Error(raw)).toMatch(
+        /FIRST part|multi-part|same folder/i,
+      );
+    });
+    it("does not let the multi-part rule swallow unrelated text", () => {
+      // 'rar' as a substring of other words must not trigger the open-failed
+      // branch — it keys on the specific "open rar:" etc. prefixes.
+      expect(humanizePs5Error("preparation already started")).toBe(
+        "preparation already started",
+      );
+    });
+  });
+
   describe("manifest_invalid (multi-file BEGIN_TX rejection)", () => {
     it("maps the raw BeginTx rejection to an actionable hint", () => {
       const raw = "BeginTx rejected (Error): manifest_invalid";

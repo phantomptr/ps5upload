@@ -97,10 +97,13 @@ export interface QueueItem {
   strategy: UploadStrategy;
   reconcileMode: ReconcileMode;
   excludes: string[];
-  /** Archive-only (.rar): password for an encrypted archive, captured at
-   *  add time. Held in the (persisted) queue so a Resume after restart can
-   *  re-extract — acceptable for this homebrew tool, but note it does live in
-   *  the queue file. Null/absent for unencrypted archives and non-rar items. */
+  /** Archive-only (.rar): password for an encrypted archive, captured at add
+   *  time and held IN MEMORY for the live run. It is deliberately REDACTED from
+   *  the persisted queue document (scheduleSave) so a secret never lands on
+   *  disk in cleartext. Consequence: a queued encrypted .rar that survives an
+   *  app restart loses its password and re-prompts (the transfer surfaces
+   *  `rar_password_required`); the user re-adds it from the Upload screen.
+   *  Null/absent for unencrypted archives and non-rar items. */
   rarPassword?: string | null;
   /** Image-only: mount the uploaded image after the transfer commits. */
   mountAfterUpload: boolean;
@@ -303,7 +306,12 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
     saveTimer = setTimeout(() => {
       saveTimer = null;
       const { items, continueOnFailure } = get();
-      const doc: QueueDocument = { items, continueOnFailure };
+      // Redact RAR passwords before persisting — they stay in the live
+      // in-memory items (so the current run can extract) but never touch disk.
+      const persistItems = items.map((it) =>
+        it.rarPassword ? { ...it, rarPassword: null } : it,
+      );
+      const doc: QueueDocument = { items: persistItems, continueOnFailure };
       void uploadQueueSave(doc).catch((e) => {
         // Persistence failure means the queue won't survive an app
         // restart. Log so it surfaces in the dev console + the

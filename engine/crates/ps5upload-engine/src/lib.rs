@@ -900,7 +900,9 @@ struct SevenzInspectReq {
 }
 
 /// `/api/transfer/rar` request. Like 7z plus an optional `password` for
-/// encrypted archives. (RAR is desktop-only — see the handler.)
+/// encrypted archives. (RAR is desktop-only — the Android build cfg's out both
+/// the real handler and this struct, so it lives behind the same gate.)
+#[cfg(not(target_os = "android"))]
 #[derive(Deserialize)]
 struct TransferRarReq {
     addr: Option<String>,
@@ -915,7 +917,8 @@ struct TransferRarReq {
     password: Option<String>,
 }
 
-/// `/api/rar/inspect` request.
+/// `/api/rar/inspect` request. Desktop-only, same gate as the handler.
+#[cfg(not(target_os = "android"))]
 #[derive(Deserialize)]
 struct RarInspectReq {
     archive_path: String,
@@ -3798,7 +3801,7 @@ async fn rar_inspect_handler(Json(req): Json<RarInspectReq>) -> impl IntoRespons
 }
 
 #[cfg(target_os = "android")]
-async fn rar_inspect_handler(Json(_req): Json<RarInspectReq>) -> impl IntoResponse {
+async fn rar_inspect_handler() -> impl IntoResponse {
     json_err(StatusCode::NOT_IMPLEMENTED, "RAR is not supported on this build").into_response()
 }
 
@@ -3971,10 +3974,7 @@ async fn transfer_rar_handler(
 }
 
 #[cfg(target_os = "android")]
-async fn transfer_rar_handler(
-    State(_state): State<AppState>,
-    Json(_req): Json<TransferRarReq>,
-) -> impl IntoResponse {
+async fn transfer_rar_handler() -> impl IntoResponse {
     json_err(StatusCode::NOT_IMPLEMENTED, "RAR is not supported on this build").into_response()
 }
 

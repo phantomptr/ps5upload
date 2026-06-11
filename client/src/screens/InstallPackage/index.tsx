@@ -20,7 +20,13 @@ import {
 import { isAndroid } from "../../lib/platform";
 import { pickPath } from "../../lib/pickPath";
 import { isTauriEnv, safeUnlisten } from "../../lib/tauriEnv";
-import { PageHeader, Button, EmptyState, WarningCard } from "../../components";
+import {
+  PageHeader,
+  Button,
+  EmptyState,
+  WarningCard,
+  ConsoleChip,
+} from "../../components";
 import { useConfirm } from "../../components/ConfirmDialog";
 import { useConnectionStore } from "../../state/connection";
 import { useTr } from "../../state/lang";
@@ -246,6 +252,10 @@ export default function InstallPackageScreen() {
   const setAutoRemove = useInstallSettingsStore(
     (s) => s.setAutoRemoveAfterInstall,
   );
+  const autoInstall = useInstallSettingsStore((s) => s.autoInstallAfterUpload);
+  const setAutoInstall = useInstallSettingsStore(
+    (s) => s.setAutoInstallAfterUpload,
+  );
   const { confirm, dialog } = useConfirm();
 
   const [installedIds, setInstalledIds] = useState<Set<string>>(new Set());
@@ -423,29 +433,35 @@ export default function InstallPackageScreen() {
           "Upload .pkg files to your PS5, then install them with one tap. Packages stay on the PS5 until you delete them, so you can reinstall any time.",
         )}
         right={
-          <Button
-            variant="primary"
-            size="sm"
-            leftIcon={<Plus size={14} />}
-            onClick={handlePick}
-            loading={picking}
-            disabled={!hostReady || installing}
-            title={
-              !hostReady
-                ? tr(
-                    "install.add.disabledHint",
-                    "Set a PS5 host on the Connection tab first",
-                  )
-                : installing
+          <div className="flex items-center gap-2">
+            {/* Which console this library + install targets. Auto-hides for
+                single-PS5 users; color-matches the console's tab so it's
+                unambiguous with multiple consoles. */}
+            <ConsoleChip addr={host} />
+            <Button
+              variant="primary"
+              size="sm"
+              leftIcon={<Plus size={14} />}
+              onClick={handlePick}
+              loading={picking}
+              disabled={!hostReady || installing}
+              title={
+                !hostReady
                   ? tr(
-                      "pkglib.add.installingHint",
-                      "Wait for the current install to finish",
+                      "install.add.disabledHint",
+                      "Set a PS5 host on the Connection tab first",
                     )
-                  : undefined
-            }
-          >
-            {tr("install.add", "Add .pkg")}
-          </Button>
+                  : installing
+                    ? tr(
+                        "pkglib.add.installingHint",
+                        "Wait for the current install to finish",
+                      )
+                    : undefined
+              }
+            >
+              {tr("install.add", "Add .pkg")}
+            </Button>
+          </div>
         }
       />
 
@@ -453,14 +469,49 @@ export default function InstallPackageScreen() {
         <Info size={13} className="mt-0.5 shrink-0" />
         <div>
           <span className="font-medium text-[var(--color-text)]">
-            {tr("pkglib.note.title", "Installs run through the DPI daemon")}
+            {tr("pkglib.installnote.title", "How installing works")}
           </span>
           {" — "}
           {tr(
-            "pkglib.note.body",
-            "the cleanest path for game pkgs. Installing briefly swaps the ps5upload payload for the DPI loader and restores it when done, so the connection may blip for a few seconds. Game pkgs work best; some system (NPXS) pkgs may still need the PS5's own Settings → Package Installer.",
+            "pkglib.installnote.body",
+            "ps5upload installs the package on the PS5 for you. It briefly takes over the payload to run the install (falling back to the DPI loader if needed) and restores it when done, so the connection may blip for a few seconds. On FW 12+ the screen can go black for a moment — that's normal. Game pkgs work best; some system (NPXS) pkgs may still need the PS5's own Settings → Package Installer.",
           )}
         </div>
+      </div>
+
+      {/* Workflow options, grouped near the top where they're set before
+          adding a package (not buried under the library list). Both govern the
+          hands-off "add → installed → cleaned up" flow, so they read together. */}
+      <div className="mb-4 flex flex-col gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3">
+        <span className="text-[11px] font-medium uppercase tracking-wide text-[var(--color-muted)]">
+          {tr("pkglib.options.heading", "Options")}
+        </span>
+        <label className="flex cursor-pointer items-center gap-2 text-xs text-[var(--color-text)]">
+          <input
+            type="checkbox"
+            className="h-3.5 w-3.5"
+            checked={autoInstall}
+            onChange={(e) => setAutoInstall(e.target.checked)}
+          />
+          {tr(
+            "pkglib.autoInstall",
+            undefined,
+            "Install automatically once the upload finishes",
+          )}
+        </label>
+        <label className="flex cursor-pointer items-center gap-2 text-xs text-[var(--color-text)]">
+          <input
+            type="checkbox"
+            className="h-3.5 w-3.5"
+            checked={autoRemove}
+            onChange={(e) => setAutoRemove(e.target.checked)}
+          />
+          {tr(
+            "pkglib.autoRemove",
+            undefined,
+            "Auto-delete each package from the PS5 after it installs",
+          )}
+        </label>
       </div>
 
       {!hostReady && (
@@ -593,21 +644,6 @@ export default function InstallPackageScreen() {
                 </span>
               </div>
             </div>
-          )}
-          {entries.length > 0 && (
-            <label className="mt-2 flex cursor-pointer items-center gap-2 text-xs text-[var(--color-muted)]">
-              <input
-                type="checkbox"
-                className="h-3.5 w-3.5"
-                checked={autoRemove}
-                onChange={(e) => setAutoRemove(e.target.checked)}
-              />
-              {tr(
-                "pkglib.autoRemove",
-                undefined,
-                "Auto-delete each package from the PS5 after it installs",
-              )}
-            </label>
           )}
         </>
       )}

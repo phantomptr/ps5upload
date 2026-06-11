@@ -124,6 +124,35 @@ export function humanizePs5Error(
     return te("err_connect_transfer");
   }
 
+  // ─── RAR archive (.rar) inspect/extract ────────────────────────────
+  // Tokens emitted by ps5upload-core's rar_support::map_rar_err and the
+  // engine's Android stub. The two password tokens are the ones the Upload
+  // screen reacts to (prompt / re-prompt); the rest get friendly copy here so
+  // a raw "open rar: …" never reaches the user. Checked early because these
+  // strings are specific and shouldn't be shadowed by the generic branches.
+  if (/rar_password_required/i.test(raw)) {
+    return te("err_rar_password_required");
+  }
+  if (/rar_password_wrong/i.test(raw)) {
+    return te("err_rar_password_wrong");
+  }
+  if (/RAR is not supported on this build/i.test(raw)) {
+    // Android (and any build without the desktop-only unrar dep). The UI
+    // should feature-gate before calling, but if a request slips through the
+    // engine returns 501 with this body.
+    return te("err_rar_unsupported");
+  }
+  if (/rar contains an unsafe or invalid entry path/i.test(raw)) {
+    return te("err_rar_unsafe_entry");
+  }
+  // Any other unrar failure surfaces as "open rar: …" / "read rar header: …" /
+  // "extract rar entry: …". The dominant real-world cause is an incomplete
+  // multi-volume set (a missing .partN, or the user picked a middle volume),
+  // so lead with that actionable guidance rather than the opaque library text.
+  if (/\b(open rar|read rar header|extract rar entry|skip rar entry)\b/i.test(raw)) {
+    return te("err_rar_open_failed");
+  }
+
   // ─── Multi-file manifest rejected at BEGIN_TX ──────────────────────
   // The payload surfaces `manifest_invalid` ("BeginTx rejected (Error):
   // manifest_invalid") when its manifest parser refuses the file list.

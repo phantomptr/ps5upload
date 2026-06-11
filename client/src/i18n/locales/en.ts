@@ -558,6 +558,9 @@ queue_will_mount: "mount after upload",
 "pkglib.add.installingHint": "Wait for the current install to finish",
 "pkglib.note.title": "Installs run through the DPI daemon",
 "pkglib.note.body": "the cleanest path for game pkgs. Installing briefly swaps the ps5upload payload for the DPI loader and restores it when done, so the connection may blip for a few seconds. Game pkgs work best; some system (NPXS) pkgs may still need the PS5's own Settings → Package Installer.",
+"pkglib.installnote.title": "How installing works",
+"pkglib.installnote.body": "ps5upload installs the package on the PS5 for you. It briefly takes over the payload to run the install (falling back to the DPI loader if needed) and restores it when done, so the connection may blip for a few seconds. On FW 12+ the screen can go black for a moment — that's normal. Game pkgs work best; some system (NPXS) pkgs may still need the PS5's own Settings → Package Installer.",
+"pkglib.options.heading": "Options",
 "pkglib.error": "Something went wrong",
 "pkglib.empty.title": "No packages uploaded yet",
 "pkglib.empty.drop": "Drop to upload",
@@ -571,6 +574,7 @@ queue_will_mount: "mount after upload",
 "pkglib.clearAll.confirmTitle": "Delete all staged packages?",
 "pkglib.clearAll.confirmBody": "This permanently deletes all {n} staged .pkg file(s) from the PS5. Installed games are not affected.",
 "pkglib.autoRemove": "Auto-delete each package from the PS5 after it installs",
+"pkglib.autoInstall": "Install automatically once the upload finishes",
 "install.pickError": "Could not add file",
 "install.error.noHost": "Set a PS5 host on the Connection tab first.",
 "install.queueTitle": "Install queue",
@@ -1189,6 +1193,35 @@ ffpkg_sce_sys_present: "present",
 ffpkg_sce_sys_missing: "missing",
 queue_raw_error: "raw error",
 upload_detected_label: "Detected:",
+// Source-kind labels (format-aware archive variant). {ext} = ".zip"/".7z"/".rar".
+upload_kind_file: "Plain file",
+upload_kind_image: "Disk image ({ext})",
+upload_kind_folder: "Folder",
+upload_kind_game_folder: "Game folder",
+upload_kind_archive: "Compressed archive ({ext})",
+upload_archive_word: "archive",
+// Generic archive scanning hint (format-neutral; replaces the .zip-specific one).
+upload_scanning_archive_hint_v2:
+  "Reading the archive index and parsing embedded game metadata. Upload buttons will enable when this finishes.",
+// Format-aware extract-mode card ({ext} = the archive's own extension).
+upload_archive_extract_heading: "Where should the {ext} unpack?",
+upload_archive_extract_subfolder_label:
+  "Put everything in a new folder named after the archive",
+upload_archive_extract_subfolder_desc:
+  "Creates that folder in the destination and extracts the files inside it. Best for a plain archive of loose game files.",
+upload_archive_extract_flat_label:
+  "Extract the contents straight into the destination",
+upload_archive_extract_flat_desc:
+  "Drops the files directly into the destination with no wrapper folder. Choose this when the {ext} already contains the game's own folder (e.g. CUSA12345/).",
+// RAR source card (multi-volume guidance + optional password).
+upload_rar_title: "RAR archive",
+upload_rar_multipart_hint:
+  "Multi-part set? Pick the FIRST part — part1.rar / part01.rar / .rar. The other volumes are found automatically as long as they're in the same folder.",
+upload_rar_password_hint:
+  "If this archive is password-protected, enter the password so it can be extracted. Leave blank if it isn't.",
+upload_rar_password_placeholder: "Password",
+upload_rar_apply: "Apply",
+upload_rar_ready: "Archive read successfully — ready to upload.",
 upload_inspecting: "Inspecting…",
 upload_scanning_title: "Scanning game folder…",
 upload_scanning_hint:
@@ -1521,6 +1554,16 @@ err_unmount_busy:
   "Can't unmount: the game inside this image is currently running on the PS5. Exit it (PS Home → close the game) and try again.",
 err_unmount_permission:
   "Can't unmount: kernel refused with EACCES/EPERM. The payload may have lost root credentials — reload it from Connection → Send payload.",
+err_rar_password_required:
+  "This RAR archive is password-protected. Enter its password below to read and upload its contents.",
+err_rar_password_wrong:
+  "Wrong password for this RAR archive. Check it and try again.",
+err_rar_unsupported:
+  "RAR archives aren't supported on this build (Android uploads .zip and .7z only). Extract the .rar on a computer first, or use the desktop app.",
+err_rar_unsafe_entry:
+  "This RAR contains a file path that points outside the destination folder, so it was refused for safety. The archive may be malformed.",
+err_rar_open_failed:
+  "Couldn't read this RAR archive. If it's a multi-part set, select the FIRST part (…part1.rar / …part01.rar / ….rar) and make sure every volume is in the same folder. If it's password-protected, enter the password.",
 err_npxs_mgmt_disconnect:
   "PS5 mgmt service stopped responding mid-install. This is the known NPXS-system-pkg failure mode: Sony accepts the register but `sceAppInstUtilInstallByPackage` isn't designed for system patches (Store updates, Settings, etc.). The PS5 typically recovers on its own in a minute or two, or after a reboot — but ps5upload can't install this pkg. Use Settings → Debug Settings → Game → Package Installer on the PS5 itself for system pkgs.",
 err_network_drop:
