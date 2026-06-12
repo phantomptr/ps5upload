@@ -4,6 +4,15 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 3.2.3
+
+- **Clearer status bar.** The strip along the bottom used to cram five
+  things together (`engine | Fat | v3.2.0 | PS5 | FW 5.10`), which was hard
+  to read. It now shows just the two things that matter at a glance — the
+  **Engine** and your **PS5** (with its firmware) — neatly separated. The
+  console name dims when it's not connected, and the helper version and
+  kernel details are tucked into the tooltip when you hover.
+
 ## 3.2.2
 
 - **New look, and a new theme.** The two main themes are now **PS5 Dark** and
