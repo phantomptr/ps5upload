@@ -4,6 +4,16 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 3.2.1
+
+- **Save Data now shows game cover art.** The save thumbnails were trying to
+  read each save's own icon, which lives inside a sealed container and always
+  failed — so every save showed a plain icon and the log filled with warnings.
+  They now use the game's cover, which actually displays.
+- **No more harmless-but-noisy errors in the log.** Opening Install Package
+  logged a string of `502` errors while checking for update/DLC folders that
+  didn't exist yet. The check is now done without those false errors.
+
 ## 3.2.0
 
 - **Install games straight from a USB or external drive.** Plug a drive with
