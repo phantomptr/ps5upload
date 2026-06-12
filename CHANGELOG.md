@@ -4,6 +4,34 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 3.2.0
+
+- **Install games straight from a USB or external drive.** Plug a drive with
+  `.pkg` files into the PS5 and install them right from the app — no uploading
+  from your computer first. A new **External Packages** section finds them
+  automatically. (The app copies the package onto the console before installing,
+  because the PS5's installer can't read a USB drive directly.)
+- **PS4 / PS5 badges on every package**, so you can tell at a glance which
+  console a `.pkg` is for.
+- **Installs are honest about whether they actually worked.** The app now
+  confirms the game really landed on the console before saying "installed" — and
+  reworked which install method it uses under the hood, so packages that used to
+  quietly fail now install correctly. (Verified end-to-end on real hardware
+  across multiple firmwares.)
+- **Base games and their updates no longer clash.** A game and its update share
+  the same ID; the app keeps them apart so one never overwrites the other, and
+  warns you if you try to install an update before its base game is on the
+  console.
+- **A friendlier, more visual interface.** Preview a screenshot before
+  downloading it, search inside a single game instead of the whole console, see
+  all your drives at the top of the File System tab, get a heads-up banner when a
+  new version is out, and reach quick actions (Open folder, Copy details) from a
+  menu on each package. Game artwork shows up in more places.
+- **Adjust the text size.** If the app renders too large (common on some Android
+  phones with a big display-size setting), Settings now has a Text size control
+  that resizes the whole interface.
+- **Now officially covers firmware up to 12.70.**
+
 ## 3.1.6
 
 - **Renaming a profile sticks now.** Renaming a console user updated the name

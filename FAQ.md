@@ -101,13 +101,20 @@ ps5upload is built against PS5 Payload SDK v0.38, which resolves
 kernel offsets at startup for every firmware it knows about. The
 same binary runs on the full range **1.00 – 12.70**.
 
-- **9.00 – 11.60** — all features validated on hardware.
-- **1.00 – 8.60** and **12.00 – 12.70** — all features run; one
-  caveat: the Hardware tab's process list shows `<pid:N>`
-  placeholders instead of real command names (the kernel struct
-  offset for `p_comm` isn't exposed by the SDK and our fallback
-  table only has validated values for 9–11). Transfer, mount, FS
-  ops, volumes, and everything else look identical.
+- **Hardware-tested:** FW 5.10 and 9.60 (in-house) and FW 12.20
+  (user-confirmed). Core features — transfer, mount, file browse,
+  hardware monitor, and `.pkg` install — work across this range.
+- **1.00 – 12.70 supported.** The same binary runs everywhere the SDK
+  has offsets. One cosmetic caveat outside 9–11: the Hardware tab's
+  process list can show `<pid:N>` placeholders instead of real command
+  names (the `p_comm` struct offset isn't SDK-exposed and our fallback
+  table only has validated values for 9–11). Everything else is
+  identical.
+- **`.pkg` install** additionally needs the console's jailbreak to have
+  live kernel patches (kstuff / fpkg-enable). Where those aren't active
+  (observed on some 9.60 setups), the installer says so honestly instead
+  of reporting a false success — it never claims a game installed when
+  the content didn't actually land.
 
 What actually gates users in practice is the PS5-side **ELF loader**
 on port 9021 — a third-party component, not part of ps5upload. Loader
@@ -129,6 +136,13 @@ browser / file manager the first time — that's normal for a sideloaded
 app. Updates install in place and keep your settings (builds are signed
 with a stable key from v2.20.0 on). If an older build refuses to
 update, uninstall it once, then install v2.20.0 or newer.
+
+**Q: The app's text/buttons are huge (or tiny) on my phone and names get
+cut off. (3.2.0+)**
+This is your phone's **Display size** (or Font size) accessibility setting
+scaling the whole app up. Open **Settings → Text size** in ps5upload and pick a
+smaller percentage — it rescales the entire interface so list rows stop getting
+clipped to "ps5-image…". It works on desktop too, and persists.
 
 **Q: I picked a game folder, a `.zip`, or a `.pkg`, but it fails — "could
 not read", "No such file or directory", "not an ELF", or it just won't
@@ -917,6 +931,30 @@ firmware). Installing briefly swaps the ps5upload payload for the DPI
 loader and restores it when done, so the connection may blip for a few
 seconds. Hardware-validated on FW 9.60 with regular game pkgs (UP / EP /
 JP / HP / CUSA / PPSA / PCSA / etc.).
+
+**Q: Can I install a package that's already on a USB / external drive? (3.2.0+)**
+Yes. Plug the drive into the PS5, open **Install Package**, and any `.pkg`
+files on connected USB / external drives show up in an **External Packages**
+section — each with a PS4/PS5 badge and an **Install** button. No upload from
+your computer needed. Under the hood the app copies the package from the drive
+to internal storage first and installs from there, because Sony's installer
+can't read the exfat USB mount directly (it accepts the request but installs
+nothing). The copy is on-console (drive-to-drive), so it's fast.
+
+**Q: I have a base game and an update — does the order matter? (3.2.0+)**
+Yes — install the **base game first**, then the update. A base game and its
+update share the same ID, so the app keeps them in separate places and never
+lets one overwrite the other (the base lands in `/user/app/<id>/`, the update in
+`/user/patch/<id>/`). If you try to install an update before its base is on the
+console, the app warns you — Sony's installer would otherwise accept it and
+silently install nothing.
+
+**Q: The app says a package is "installed but may not launch" — what's that?**
+The app confirms a game actually landed on the console before reporting success.
+If the install was accepted but the content never appeared (a firmware/jailbreak
+that lacks the kernel patches fakepkg installs need), it tells you honestly
+instead of a false "installed." If a title genuinely won't start, reinstall from
+the console: **Settings → Debug Settings → Game → Package Installer**.
 
 **Q: A system (NPXS) pkg won't install. What do I do?**
 System app pkgs (NPXS-prefix content_id — Store updates, Settings

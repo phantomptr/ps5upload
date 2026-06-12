@@ -13,7 +13,7 @@
   <a href="https://github.com/phantomptr/ps5upload/releases"><img alt="release" src="https://img.shields.io/github/v/release/phantomptr/ps5upload?display_name=tag&sort=semver&color=blue" /></a>
   <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-GPL--3-green" /></a>
   <img alt="platforms" src="https://img.shields.io/badge/platforms-macOS_·_Linux_·_Windows-lightgrey" />
-  <img alt="firmware" src="https://img.shields.io/badge/PS5_firmware-9.00_–_11.60_validated_•_others_best_effort-orange" />
+  <img alt="firmware" src="https://img.shields.io/badge/PS5_firmware-1.00_–_12.70_supported_•_9.x–12.x_tested-brightgreen" />
   <a href="https://discord.gg/fzK3xddtrM"><img alt="discord" src="https://img.shields.io/badge/discord-join-5865F2" /></a>
 </p>
 
@@ -307,8 +307,13 @@ runs on every supported firmware without per-release rebuilds.
 
 | Range | Feature coverage |
 |---|---|
-| **9.00 – 11.60** | All features validated on hardware |
-| **1.00 – 8.60** and **12.00 – 12.70** | All features run |
+| **1.00 – 12.70** | Supported — the same binary runs everywhere the SDK covers |
+| Hardware-tested | FW 5.10 and 9.60 (in-house) · FW 12.20 (user-confirmed) — core features (transfer, mount, browse, install) work across the range |
+
+> `.pkg` install depends on the console's jailbreak having live kernel
+> patches (kstuff / fpkg-enable). On builds where those aren't active the
+> installer reports it honestly rather than claiming a false success — see
+> the FAQ on install firmware support.
 
 The process-list feature (Hardware tab's process snapshot) reads
 `kinfo_proc` via `sysctl(KERN_PROC_PROC)` with field offsets that
