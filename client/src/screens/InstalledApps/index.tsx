@@ -209,8 +209,12 @@ function AppCard({
           rows of cards line their buttons up regardless of name length. */}
       <div className="flex flex-1 flex-col gap-2 p-3">
         <div className="min-w-0">
+          {/* line-clamp-2 (not truncate): a 1-line clamp turned readable
+              names like "Payload Manager" into "Payload Mana…". Two lines fit
+              the vast majority of titles in full; the title attr still covers
+              the rare overflow on hover. */}
           <div
-            className="truncate text-sm font-semibold"
+            className="line-clamp-2 text-sm font-semibold"
             title={title.titleName}
           >
             {title.titleName}
@@ -319,7 +323,12 @@ export default function InstalledAppsScreen() {
   const ucredElevated = useConnectionStore((s) => s.ucredElevated);
   const guard = useStaleHostGuard();
   const [titles, setTitles] = useState<InstalledTitle[] | null>(null);
-  const [smp, setSmp] = useState<SmpStatus | null>(null);
+  // Tri-state, NOT just SmpStatus|null. "checking" means the probe is in
+  // flight; null means it definitively failed/unreachable. The disc-image
+  // warning keys off "confirmed not running", so distinguishing "still
+  // checking" from "confirmed off" is what stops the warning from flashing
+  // for a frame on every load before the status comes back.
+  const [smp, setSmp] = useState<SmpStatus | "checking" | null>("checking");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [registeredUnavailable, setRegisteredUnavailable] = useState(false);
@@ -366,7 +375,7 @@ export default function InstalledAppsScreen() {
   // stale *clicks*. Same reset-on-[host] pattern as DiskUsage / FileSystem.
   useEffect(() => {
     setTitles(null);
-    setSmp(null);
+    setSmp("checking");
     setError(null);
   }, [host]);
 
@@ -517,8 +526,12 @@ export default function InstalledAppsScreen() {
     [all],
   );
 
-  const smpRunning = smp?.running === true;
-  const discNeedsSmp = discs.length > 0 && !smpRunning;
+  // While the probe is still in flight we know neither "running" nor "off",
+  // so the warning must stay hidden — surfacing it only once we've confirmed
+  // ShadowMount+ is actually not running.
+  const smpChecking = smp === "checking";
+  const smpRunning = smp !== null && smp !== "checking" && smp.running === true;
+  const discNeedsSmp = discs.length > 0 && !smpRunning && !smpChecking;
 
   // NOTE: `key` is passed explicitly at each call site (`<AppCard key={t.titleId}
   // {...cardProps(t)} />`) — never spread, or React warns that a key in a
@@ -528,7 +541,7 @@ export default function InstalledAppsScreen() {
     title: t,
     busy: busyId === t.titleId,
     launching: launchingId === t.titleId,
-    discNeedsSmp: kindOf(t) === "disc" && !smpRunning,
+    discNeedsSmp: kindOf(t) === "disc" && !smpRunning && !smpChecking,
     onUninstall: handleUninstall,
     onLaunch: handleLaunch,
   });

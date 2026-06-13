@@ -50,7 +50,11 @@ import {
   fetchVolumes,
   type Volume,
 } from "../../api/ps5";
-import { loadFsLastPath, saveFsLastPath } from "../../lib/fsLastPath";
+import {
+  loadFsLastPath,
+  saveFsLastPath,
+  FS_DEFAULT_PATH,
+} from "../../lib/fsLastPath";
 import { useFsNavStore } from "../../state/fsNavigation";
 import { useActivityHistoryStore } from "../../state/activityHistory";
 import { pushNotification } from "../../state/notifications";
@@ -401,6 +405,35 @@ export default function FileSystemScreen() {
       // `fs_unmount_busy`, `path_not_allowed`, etc. surface as
       // actionable copy instead of opaque snake_case codes.
       const raw = e instanceof Error ? e.message : String(e);
+      // Removable-drive safety net: a USB/external drive that was
+      // unplugged leaves its /mnt/usb* (or /mnt/ext*) mount dangling, so
+      // listing it now fails. Rather than stranding the user on a dead
+      // path behind a scary error — forcing them to manually pick a new
+      // place — fall back to the always-present internal /data root and
+      // tell them why. Guard on `!== FS_DEFAULT_PATH` so a genuine /data
+      // failure still surfaces instead of looping.
+      const onRemovable = /^\/mnt\/(usb|ext)/i.test(probedPath);
+      if (onRemovable && probedPath !== FS_DEFAULT_PATH) {
+        setError(null);
+        setEntries(null);
+        setPath(FS_DEFAULT_PATH);
+        pushNotification(
+          "info",
+          tr(
+            "fs_drive_removed",
+            undefined,
+            "Drive unavailable — returned to /data",
+          ),
+          {
+            body: tr(
+              "fs_drive_removed_body",
+              { path: probedPath },
+              `${probedPath} could not be read (the drive may have been unplugged).`,
+            ),
+          },
+        );
+        return;
+      }
       setError(humanizePs5Error(raw) || raw);
       setEntries(null);
     } finally {
@@ -410,7 +443,7 @@ export default function FileSystemScreen() {
       // "loading-spinner-stuck-forever" UX bug.
       setLoading(false);
     }
-  }, [host, path, guard]);
+  }, [host, path, guard, tr]);
 
   useEffect(() => {
     if (payloadStatus === "up") refresh();
@@ -1585,40 +1618,53 @@ export default function FileSystemScreen() {
           </div>
         )}
 
-        {/* Breadcrumbs + up-button */}
-        <div className="mb-3 flex items-center gap-1 overflow-x-auto rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-2 text-xs">
-          <button
-            type="button"
-            onClick={() => setPath(parent(path))}
-            disabled={path === "/"}
-            title={tr("fs_parent_dir", undefined, "Parent directory")}
-            className="rounded-md p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)] disabled:opacity-30"
-          >
-            <ArrowUp size={14} />
-          </button>
-          {crumbs(path).map((c, i, arr) => (
-            <span key={c.path} className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => setPath(c.path)}
-                className={
-                  "rounded px-1.5 py-0.5 font-mono " +
-                  (i === arr.length - 1
-                    ? "font-medium text-[var(--color-text)]"
-                    : "text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]")
-                }
-              >
-                {i === 0 ? (
-                  <Home size={12} className="inline -translate-y-[1px]" />
-                ) : (
-                  c.label
+        {/* Breadcrumbs + up-button.
+
+            The crumbs scroll horizontally on their own (`overflow-x-auto` on
+            the INNER row), but the Recent dropdown is a sibling OUTSIDE that
+            scroll container. Critical: a parent with `overflow-x:auto` makes
+            `overflow-y` compute to `auto` too (CSS spec), which would clip the
+            dropdown's absolutely-positioned panel to the thin breadcrumb bar
+            — the cramped/scrollbar'd overlay users saw. Keeping the dropdown
+            out of the scrolling row lets its panel open freely. */}
+        <div className="mb-3 flex items-center gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-2 text-xs">
+          <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+            <button
+              type="button"
+              onClick={() => setPath(parent(path))}
+              disabled={path === "/"}
+              title={tr("fs_parent_dir", undefined, "Parent directory")}
+              className="shrink-0 rounded-md p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)] disabled:opacity-30"
+            >
+              <ArrowUp size={14} />
+            </button>
+            {crumbs(path).map((c, i, arr) => (
+              <span key={c.path} className="flex shrink-0 items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setPath(c.path)}
+                  className={
+                    "rounded px-1.5 py-0.5 font-mono " +
+                    (i === arr.length - 1
+                      ? "font-medium text-[var(--color-text)]"
+                      : "text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]")
+                  }
+                >
+                  {i === 0 ? (
+                    <Home size={12} className="inline -translate-y-[1px]" />
+                  ) : (
+                    c.label
+                  )}
+                </button>
+                {i < arr.length - 1 && (
+                  <ChevronRight
+                    size={12}
+                    className="text-[var(--color-muted)]"
+                  />
                 )}
-              </button>
-              {i < arr.length - 1 && (
-                <ChevronRight size={12} className="text-[var(--color-muted)]" />
-              )}
-            </span>
-          ))}
+              </span>
+            ))}
+          </div>
           <RecentPathsDropdown onPick={(p) => setPath(p)} currentPath={path} />
         </div>
 

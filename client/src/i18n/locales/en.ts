@@ -341,6 +341,12 @@ update_downloading: "Downloading v{version}…",
 update_downloaded_status: "v{version} downloaded — installer opened.",
 update_download_error: "Download failed: {message}",
 update_downloaded_title: "Downloaded. Finish installing:",
+update_notif_title: "Update available — v{ver}",
+update_notif_body:
+  "A newer version of PS5Upload is ready. Open Settings → Updates to download it.",
+update_autocheck_label: "Check for updates automatically",
+update_autocheck_hint:
+  "Looks for a new release on launch (at most once a day) and notifies you if one is available.",
 update_step_quit: "Quit PS5Upload.",
 update_step_launch: "Launch the new version.",
 update_dismiss: "Dismiss",
@@ -391,6 +397,9 @@ library_confirm_delete_yes: "Yes, delete",
 library_confirm_chmod_yes: "Yes, set Permission 777",
 
 // File System screen — toolbar + clipboard banner + list
+fs_drive_removed: "Drive unavailable — returned to /data",
+fs_drive_removed_body:
+  "{path} could not be read (the drive may have been unplugged).",
 fs_parent_dir: "Parent directory",
 fs_to_move: "to move",
 fs_to_copy: "to copy",

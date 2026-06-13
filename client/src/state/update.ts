@@ -8,6 +8,9 @@ import {
   type UpdateDownload,
 } from "../api/ps5";
 import { isMobile } from "../lib/platform";
+import { t as translate } from "../i18n";
+import { useLangStore } from "./lang";
+import { pushNotification } from "./notifications";
 
 // Shared store for update check + download state.
 //
@@ -26,6 +29,81 @@ import { isMobile } from "../lib/platform";
 
 const CHECK_TTL_MS = 24 * 60 * 60 * 1000; // 1 day
 const CACHE_KEY = "ps5upload.update-check-v2";
+// Auto-check preference + notify-dedup live in localStorage (NOT the
+// sessionStorage check cache): the toggle must survive an app restart, and
+// the "already told the user about vX" marker must persist so reopening the
+// app doesn't re-fire the same update notification every launch.
+const AUTOCHECK_KEY = "ps5upload.update.autocheck";
+const NOTIFIED_KEY = "ps5upload.update.notified-version";
+
+/** Read the auto-check preference. Defaults to ON when unset (first run) —
+ *  the feature is opt-out, not opt-in. */
+function loadAutoCheck(): boolean {
+  if (typeof localStorage === "undefined") return true;
+  return localStorage.getItem(AUTOCHECK_KEY) !== "0";
+}
+
+function saveAutoCheck(enabled: boolean) {
+  if (typeof localStorage === "undefined") return;
+  try {
+    localStorage.setItem(AUTOCHECK_KEY, enabled ? "1" : "0");
+  } catch {
+    // Storage disabled — the in-memory flag still governs this session.
+  }
+}
+
+/** Non-hook translate with inline English fallback — the store runs outside
+ *  React so it can't use useTr(). Mirrors the `tr(key, vars, fallback)` shape:
+ *  returns the fallback when the active locale (and English) lack the key. */
+function trFb(
+  key: string,
+  vars: Record<string, string | number> | undefined,
+  fallback: string,
+): string {
+  const lang = useLangStore.getState().lang;
+  const out = translate(lang, key, vars);
+  return out === key ? fallback : out;
+}
+
+/** Fire a one-time "update available" notification per version. Returns
+ *  without notifying if we've already announced this exact version (across
+ *  restarts), so the user isn't pestered on every daily check or launch. */
+function notifyAvailableOnce(result: UpdateCheck) {
+  if (!result.available || !result.latest_version) return;
+  const already = (() => {
+    try {
+      return typeof localStorage !== "undefined"
+        ? localStorage.getItem(NOTIFIED_KEY)
+        : null;
+    } catch {
+      return null;
+    }
+  })();
+  if (already === result.latest_version) return;
+  pushNotification(
+    "info",
+    trFb(
+      "update_notif_title",
+      { ver: result.latest_version },
+      `Update available — v${result.latest_version}`,
+    ),
+    {
+      body: trFb(
+        "update_notif_body",
+        undefined,
+        "A newer version of PS5Upload is ready. Open Settings → Updates to download it.",
+      ),
+      link: "/settings",
+    },
+  );
+  try {
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(NOTIFIED_KEY, result.latest_version);
+    }
+  } catch {
+    // Best-effort dedup; worst case the user sees the notice twice.
+  }
+}
 
 /** Browser fallback when the manifest has no asset for this platform
  *  (mobile only — the user can grab the APK from the release page). */
@@ -51,8 +129,14 @@ interface UpdateStore {
   /** Last time we asked the endpoint. 0 when never. Refreshed after
    *  every successful check or error. */
   lastCheckedMs: number;
+  /** Whether the app checks for updates automatically on launch. Defaults
+   *  to true (opt-out). Persisted to localStorage so it survives restarts. */
+  autoCheckEnabled: boolean;
+  /** Toggle the auto-check-on-launch preference (Settings → Updates). */
+  setAutoCheckEnabled: (enabled: boolean) => void;
   /** Kick a check now if we haven't done one recently. No-op when a
-   *  recent result is cached and still inside TTL. */
+   *  recent result is cached and still inside TTL, or when the user has
+   *  turned auto-check off. */
   ensureChecked: () => Promise<void>;
   /** Force a check regardless of cache. Used by the Settings card's
    *  "Check now" button. */
@@ -125,6 +209,10 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
         phase: phaseFromResult(result),
         lastCheckedMs: Date.now(),
       });
+      // Surface a notification-center entry the first time we see a given
+      // new version — the toast bar is dismissible/session-scoped, this is
+      // the durable "you have an update" record.
+      notifyAvailableOnce(result);
     } catch (e) {
       set({
         phase: {
@@ -139,8 +227,17 @@ export const useUpdateStore = create<UpdateStore>((set, get) => {
   return {
     phase: initialPhase,
     lastCheckedMs: initialLastChecked,
+    autoCheckEnabled: loadAutoCheck(),
+
+    setAutoCheckEnabled(enabled: boolean) {
+      saveAutoCheck(enabled);
+      set({ autoCheckEnabled: enabled });
+    },
 
     async ensureChecked() {
+      // Respect the user's opt-out: the launch auto-check is the only
+      // caller of this; manual "Check now" goes through checkNow().
+      if (!get().autoCheckEnabled) return;
       // TOCTOU-safe: AppShell mounts fire this 1.5 s after paint, and
       // the user could navigate to Settings (which also calls the
       // store) in the same tick. Without this synchronous flip to

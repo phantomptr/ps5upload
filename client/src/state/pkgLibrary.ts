@@ -934,7 +934,12 @@ const makePkgLibraryStore = () =>
       //    common fresh-install path), only clear + retry when the copy
       //    actually reports the dest already exists.
       set({
-        busyNotice: `Copying ${pkg.name || pkg.contentId} from ${pkg.drive}…`,
+        // Spell out the why: Sony's installer can't read the exfat USB
+        // directly, so we stage to internal storage first — and it's removed
+        // again right after the install, so it doesn't permanently eat SSD
+        // space. (Answers the common "why is it copying / will this fill my
+        // drive" question.)
+        busyNotice: `Staging ${pkg.name || pkg.contentId} from ${pkg.drive} to internal storage — removed automatically after install…`,
       });
       await fsMkdir(transferAddr(host), PKG_TEMP_DIR).catch(() => {});
       try {

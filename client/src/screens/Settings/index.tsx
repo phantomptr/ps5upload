@@ -1201,6 +1201,8 @@ function UpdatesPanel() {
   const checkNow = useUpdateStore((s) => s.checkNow);
   const download = useUpdateStore((s) => s.download);
   const dismissDownload = useUpdateStore((s) => s.dismissDownload);
+  const autoCheckEnabled = useUpdateStore((s) => s.autoCheckEnabled);
+  const setAutoCheckEnabled = useUpdateStore((s) => s.setAutoCheckEnabled);
   // Mobile: the store's download() opens the APK URL (or the release
   // page) in the system browser instead of saving to ~/Downloads —
   // that flow can't work in Android's sandbox. Relabel the CTA so it
@@ -1281,6 +1283,32 @@ function UpdatesPanel() {
           </button>
         </div>
       )}
+      {/* Auto-check preference (default on). When off, the launch check is
+          skipped entirely — the user drives updates from the button below. */}
+      <label className="flex items-start gap-2.5 text-xs">
+        <input
+          type="checkbox"
+          checked={autoCheckEnabled}
+          onChange={(e) => setAutoCheckEnabled(e.target.checked)}
+          className="mt-0.5 h-3.5 w-3.5 accent-[var(--color-accent)]"
+        />
+        <span>
+          <span className="font-medium text-[var(--color-text)]">
+            {tr(
+              "update_autocheck_label",
+              undefined,
+              "Check for updates automatically",
+            )}
+          </span>
+          <span className="block text-[var(--color-muted)]">
+            {tr(
+              "update_autocheck_hint",
+              undefined,
+              "Looks for a new release on launch (at most once a day) and notifies you if one is available.",
+            )}
+          </span>
+        </span>
+      </label>
       <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"

@@ -38,6 +38,7 @@ import { useConfirm } from "../../components/ConfirmDialog";
 import { useTr } from "../../state/lang";
 import { startTransferDownload } from "../../api/ps5";
 import { formatBytes } from "../../lib/format";
+import { useTitleInfo } from "../../lib/useTitleInfo";
 import { mgmtAddr } from "../../lib/addr";
 import { useStaleHostGuard } from "../../lib/staleHostGuard";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
@@ -379,42 +380,12 @@ export default function SavesScreen() {
               key={title_id}
               className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4"
             >
-              <header className="mb-2 flex items-center gap-2">
-                {/* Game cover from /user/appmeta/<id>/icon0.png (readable),
-                    not the save's own icon0.png — that lives inside an
-                    unmounted PFS container, so reading it failed for every
-                    save and only spammed warnings. Falls back to a glyph when
-                    the game isn't installed. */}
-                <GameIcon
-                  host={host}
-                  titleId={title_id}
-                  size={32}
-                  rounded="rounded"
-                />
-                <h3 className="text-sm font-semibold">{title_id}</h3>
-                <span className="text-xs text-[var(--color-muted)]">
-                  {entries.length} {tr("saves_folder", undefined, "folder")}
-                  {entries.length === 1 ? "" : "s"}
-                </span>
-                {/* Jump to this title's save directory in the File System
-                    browser — quick way to inspect/manage the raw files. */}
-                {entries[0]?.path && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="ms-auto"
-                    leftIcon={<FolderOpen size={12} />}
-                    onClick={() => openInFileSystem(navigate, entries[0].path)}
-                    title={tr(
-                      "saves_open_folder_hint",
-                      undefined,
-                      "Open this save's folder in the File System browser",
-                    )}
-                  >
-                    {tr("saves_open_folder", undefined, "Open folder")}
-                  </Button>
-                )}
-              </header>
+              <SaveGroupHeader
+                host={host}
+                titleId={title_id}
+                folderCount={entries.length}
+                firstPath={entries[0]?.path}
+              />
               <ul className="space-y-1">
                 {entries.map((e) => (
                   <li
@@ -472,6 +443,76 @@ export default function SavesScreen() {
         )}
       </ConnectionGate>
     </div>
+  );
+}
+
+/**
+ * One save group's header: cover + game name + folder count + "Open folder".
+ *
+ * Extracted into its own component so it can resolve the title id to a display
+ * name and a cover via {@link useTitleInfo} — a hook can't run inside the
+ * parent's `.map()`. The name shows as "Saros (PPSA07631)" so the id stays
+ * visible (it's what the save folder is actually named) while the human title
+ * leads. The resolved cover URL is also handed to GameIcon as a last-resort
+ * source, so saves for games that aren't installed (no local appmeta art)
+ * still get a thumbnail from the cover CDN instead of a bare glyph.
+ */
+function SaveGroupHeader({
+  host,
+  titleId,
+  folderCount,
+  firstPath,
+}: {
+  host: string;
+  titleId: string;
+  folderCount: number;
+  firstPath?: string;
+}) {
+  const tr = useTr();
+  const navigate = useNavigate();
+  const info = useTitleInfo(titleId);
+  return (
+    <header className="mb-2 flex items-center gap-2">
+      {/* Game cover from /user/appmeta/<id>/icon0.png (readable), not the
+          save's own icon0.png — that lives inside an unmounted PFS container,
+          so reading it failed for every save and only spammed warnings. Falls
+          back to the external cover (info.coverImageUrl) for not-installed
+          games, then a glyph. */}
+      <GameIcon
+        host={host}
+        titleId={titleId}
+        fallbackSrc={info?.coverImageUrl}
+        size={32}
+        rounded="rounded"
+      />
+      {/* Human title leads, region id kept in parentheses so the user can
+          still tie it to the on-disk save folder name. */}
+      <h3 className="min-w-0 truncate text-sm font-semibold" title={titleId}>
+        {info?.title ? `${info.title} (${titleId})` : titleId}
+      </h3>
+      <span className="shrink-0 text-xs text-[var(--color-muted)]">
+        {folderCount} {tr("saves_folder", undefined, "folder")}
+        {folderCount === 1 ? "" : "s"}
+      </span>
+      {/* Jump to this title's save directory in the File System browser —
+          quick way to inspect/manage the raw files. */}
+      {firstPath && (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="ms-auto shrink-0"
+          leftIcon={<FolderOpen size={12} />}
+          onClick={() => openInFileSystem(navigate, firstPath)}
+          title={tr(
+            "saves_open_folder_hint",
+            undefined,
+            "Open this save's folder in the File System browser",
+          )}
+        >
+          {tr("saves_open_folder", undefined, "Open folder")}
+        </Button>
+      )}
+    </header>
   );
 }
 
