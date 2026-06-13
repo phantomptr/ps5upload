@@ -1769,6 +1769,35 @@ static int runtime_read_prior_pid(const char *ownership_path) {
     return pid;
 }
 
+/* Read the `started_at_unix` line from the prior ownership record. Returns
+ * the recorded wall-clock start time (CLOCK_REALTIME seconds), or 0 if the
+ * field is absent (older-format record) or unreadable. */
+static uint64_t runtime_read_prior_started_at(const char *ownership_path) {
+    FILE *fp = fopen(ownership_path, "r");
+    if (!fp) return 0;
+    unsigned long long started = 0;
+    char line[128];
+    while (fgets(line, sizeof(line), fp)) {
+        if (sscanf(line, "started_at_unix=%llu", &started) == 1) break;
+    }
+    fclose(fp);
+    return (uint64_t)started;
+}
+
+/* System boot wall-clock time (CLOCK_REALTIME seconds) via sysctl
+ * kern.boottime. Same clock domain as `started_at_unix`, so the two are
+ * directly comparable to tell whether an ownership record was written in
+ * the CURRENT boot session. Returns 0 if the sysctl is unavailable — callers
+ * must treat 0 as "unknown" and refuse to act on it. */
+static uint64_t runtime_system_boottime_unix(void) {
+    struct timeval bt;
+    size_t len = sizeof(bt);
+    int mib[2] = {CTL_KERN, KERN_BOOTTIME};
+    if (sysctl(mib, 2, &bt, &len, NULL, 0) != 0 || len < sizeof(bt)) return 0;
+    if (bt.tv_sec <= 0) return 0;
+    return (uint64_t)bt.tv_sec;
+}
+
 /*
  * Best-effort reap of a previous payload instance that crashed and lingered.
  *
@@ -1807,6 +1836,33 @@ void runtime_reap_prior_instance(runtime_state_t *state) {
                 me, ok == 0 ? self_name : "<unknown>", prior);
     }
     if (prior <= 0 || prior == me) return;
+
+    /* Boot-session guard (the critical safety gate). The ownership file lives
+     * on persistent /data and SURVIVES reboots. After a reboot the kernel's
+     * PID counter resets, so a stale `pid=` from a PRIOR boot is very likely
+     * now owned by UNRELATED homebrew the user autoloaded (a cheat loader,
+     * nanoDNS, ...). SIGKILLing it would take down their other tools — exactly
+     * the "my scripts died" reports. So only reap a record written during the
+     * CURRENT boot: the recorded start time must be >= this boot's wall-clock
+     * start. If either value is unknown (no sysctl, or an old-format record
+     * with no started_at), refuse to kill — the worst case is the pre-existing
+     * "restart the PS5" fallback, which is far better than killing a
+     * bystander. The name check below is kept as a second line of defense. */
+    {
+        uint64_t prior_started =
+            runtime_read_prior_started_at(state->ownership_path);
+        uint64_t boottime = runtime_system_boottime_unix();
+        if (boottime == 0 || prior_started == 0 || prior_started < boottime) {
+            fprintf(stderr,
+                    "[payload2] reap: prior record (started=%llu, boottime=%llu) "
+                    "is from a previous boot or unverifiable — pid %d may now be "
+                    "unrelated homebrew; NOT killing\n",
+                    (unsigned long long)prior_started,
+                    (unsigned long long)boottime, prior);
+            return;
+        }
+    }
+
     if (kill((pid_t)prior, 0) != 0) return; /* already gone */
 
     char my_name[64] = {0};
@@ -6013,10 +6069,36 @@ static int rm_rf_op(const char *path, int depth, int op_idx) {
 
     if (depth > 64) return -1;
     if (op_idx >= 0 && fs_op_cancel_pending(op_idx)) return -2;
-    if (lstat(path, &st) != 0) return -1;
+    if (lstat(path, &st) != 0) {
+        /* Already gone (ENOENT) is SUCCESS, not failure. A concurrent boot
+         * sweep, or the caller's own earlier delete, may have removed it —
+         * surfacing that as fs_delete_failed turned a benign race (e.g. the
+         * staged-pkg auto-delete after an install) into a scary user error. */
+        if (errno == ENOENT) return 0;
+        return -1;
+    }
     if (!S_ISDIR(st.st_mode)) {
         /* Regular file / symlink / device. unlink() works for all. */
-        if (unlink(path) != 0) return -1;
+        if (unlink(path) != 0) {
+            if (errno == ENOENT) return 0; /* already gone → ok */
+            /* EBUSY: Sony's async installer can still hold a just-installed
+             * .pkg open when auto-delete-after-install fires. Retry briefly
+             * (≤1s) before declaring failure rather than failing the click. */
+            if (errno == EBUSY) {
+                int freed = 0;
+                for (int i = 0; i < 10; i++) {
+                    usleep(100000); /* 100 ms */
+                    if (unlink(path) == 0 || errno == ENOENT) {
+                        freed = 1;
+                        break;
+                    }
+                    if (errno != EBUSY) break;
+                }
+                if (!freed) return -1;
+            } else {
+                return -1;
+            }
+        }
         if (op_idx >= 0 && S_ISREG(st.st_mode)) {
             fs_op_progress(op_idx, (uint64_t)st.st_size);
         }
@@ -6041,7 +6123,8 @@ static int rm_rf_op(const char *path, int depth, int op_idx) {
      * handle_fs_delete also relies on this: a partial tree is
      * acceptable, but the entry the user clicked Stop on stays so
      * they can see what's left. */
-    if (rc != -2 && rmdir(path) != 0) rc = -1;
+    /* ENOENT here too means the directory is already gone — treat as success. */
+    if (rc != -2 && rmdir(path) != 0 && errno != ENOENT) rc = -1;
     return rc;
 }
 
@@ -16711,8 +16794,19 @@ int runtime_server_loop(runtime_state_t *state) {
     while (!state->shutdown_requested) {
         int client_fd = accept(state->listener_fd, NULL, NULL);
         if (client_fd < 0) {
-            if (errno == EINTR) continue;
-            if (state->shutdown_requested) break;  /* listener closed from outside */
+            if (state->shutdown_requested) break; /* listener closed from outside */
+            /* Transient per-connection errors must NOT tear down the whole
+             * helper. Previously ANY non-EINTR error broke the loop and killed
+             * the payload — a single ECONNABORTED or an fd-pressure spike under
+             * a heavy Library scan dropped the helper, surfacing as "helper
+             * keeps dying randomly". Retry instead. */
+            if (errno == EINTR || errno == ECONNABORTED) continue;
+            if (errno == EMFILE || errno == ENFILE || errno == ENOBUFS ||
+                errno == ENOMEM) {
+                perror("[payload2] accept (transient resource pressure)");
+                usleep(100000); /* 100 ms back-off so we don't busy-spin */
+                continue;
+            }
             perror("[payload2] accept");
             break;
         }
@@ -16863,10 +16957,19 @@ void *runtime_mgmt_server_loop(void *state_ptr) {
     while (!state->shutdown_requested) {
         int client_fd = accept(state->mgmt_listener_fd, NULL, NULL);
         if (client_fd < 0) {
-            if (errno == EINTR) continue;
             /* When main() signals shutdown it closes mgmt_listener_fd from
              * the outside; accept() returns with EBADF and we exit cleanly. */
             if (state->shutdown_requested) break;
+            /* Keep the MGMT listener alive across transient errors — it's the
+             * port the host's liveness probe hits, so breaking here makes the
+             * app declare "Helper isn't running" even though the helper is up. */
+            if (errno == EINTR || errno == ECONNABORTED) continue;
+            if (errno == EMFILE || errno == ENFILE || errno == ENOBUFS ||
+                errno == ENOMEM) {
+                perror("[payload2] mgmt accept (transient resource pressure)");
+                usleep(100000); /* 100 ms back-off */
+                continue;
+            }
             perror("[payload2] mgmt accept");
             break;
         }

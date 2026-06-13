@@ -52,6 +52,11 @@ import { getVersion } from "@tauri-apps/api/app";
  *  - Payload: the PS5's :9113 via `payload_check`, every 10s, and only
  *    when a host is configured (no point spamming DOWN probes against
  *    the default IP if the user hasn't entered theirs). */
+/** Consecutive failed payload probes required before the UI flips a host
+ *  from "up" to "down". At a 10s poll interval, 2 means a real drop is
+ *  reflected within ~20s, while a single jittery/busy poll is absorbed. */
+const PROBE_MISS_THRESHOLD = 2;
+
 function useStatusPolling() {
   const setStatus = useConnectionStore((s) => s.setStatus);
   const setHostStatus = useConnectionStore((s) => s.setHostStatus);
@@ -78,6 +83,11 @@ function useStatusPolling() {
   const appVersionRef = useRef<string | null>(null);
   const warnedMismatchRef = useRef<Record<string, string>>({});
   const warnedNoUcredRef = useRef<Record<string, boolean>>({});
+  // Consecutive failed-probe counter per host. Used to debounce the up→down
+  // transition: a single missed 10s poll (busy mgmt thread during a Library
+  // scan, momentary network jitter) shouldn't flash "Helper isn't running"
+  // when the helper is actually alive. Require N misses in a row first.
+  const missCountRef = useRef<Record<string, number>>({});
   useEffect(() => {
     void getVersion()
       .then((v) => {
@@ -145,7 +155,21 @@ function useStatusPolling() {
         // Transient miss: keep this host's last-known version/kernel/ucred
         // rather than blanking the UI on a single dropped poll.
         const carryOver = !s.reachable;
-        const newStatus = s.reachable ? "up" : "down";
+        // Debounce up→down: a reachable probe clears the miss counter; an
+        // unreachable one only flips to "down" after MISS_THRESHOLD misses in
+        // a row, so one busy/jittery poll holds the last-known "up".
+        let newStatus: "up" | "down";
+        if (s.reachable) {
+          missCountRef.current[key] = 0;
+          newStatus = "up";
+        } else {
+          const misses = (missCountRef.current[key] ?? 0) + 1;
+          missCountRef.current[key] = misses;
+          newStatus =
+            prev.payloadStatus === "up" && misses < PROBE_MISS_THRESHOLD
+              ? "up"
+              : "down";
+        }
         // Log only on an up<->down TRANSITION (not every poll).
         if (
           prev.payloadStatus !== "unknown" &&
@@ -207,13 +231,21 @@ function useStatusPolling() {
         const prev =
           useConnectionStore.getState().runtimeByHost[key] ??
           EMPTY_HOST_RUNTIME;
-        if (prev.payloadStatus === "up") {
+        // A probe exception is also a miss — apply the same debounce so a
+        // single transient error doesn't flip a live helper to "down".
+        const misses = (missCountRef.current[key] ?? 0) + 1;
+        missCountRef.current[key] = misses;
+        const newStatus =
+          prev.payloadStatus === "up" && misses < PROBE_MISS_THRESHOLD
+            ? "up"
+            : "down";
+        if (prev.payloadStatus === "up" && newStatus === "down") {
           log.warn(
             "connection",
             `helper went DOWN on ${probedHost} (probe error: ${e instanceof Error ? e.message : String(e)})`,
           );
         }
-        setHostStatus(probedHost, { payloadStatus: "down" });
+        setHostStatus(probedHost, { payloadStatus: newStatus });
         if (isActive(key)) setStatus({ payloadProbing: false });
       }
     };
