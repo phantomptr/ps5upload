@@ -335,11 +335,15 @@ export default function SendPanel() {
 
   return (
     <div>
-      {/* Two-column layout on wide screens: form on the left, history
-          on the right. Stacks to single-column below lg (~1024px).
-          History panel grows more generously on xl to hold longer
-          paths without wrapping. */}
-      <div className="grid gap-6 lg:grid-cols-[1fr_22rem] xl:grid-cols-[1fr_26rem]">
+      {/* Form + history. Font-AWARE auto-fit: each column wants at least
+          ~24rem and the row holds as many as fit, collapsing to a single
+          stacked column the moment two don't. Critically this is driven by
+          the rendered rem widths, NOT a px breakpoint — so at a large
+          Text-size setting (where a fixed-rem side column used to balloon
+          and crush the form to a 1-char-wide sliver) it simply stacks
+          instead. `min(100%,24rem)` keeps a lone column from overflowing a
+          narrow viewport. */}
+      <div className="grid gap-6 grid-cols-[repeat(auto-fit,minmax(min(100%,24rem),1fr))]">
         <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5">
           {/* IP + port. Stacks vertically by default and only goes
               side-by-side at sm+, with a FLOORED IP column (minmax 10rem) and
