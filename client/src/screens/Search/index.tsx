@@ -283,13 +283,13 @@ export default function SearchScreen() {
 
       <ConnectionGate require="payload">
         <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <input
               value={pattern}
               onChange={(e) => setPattern(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && run()}
               placeholder="*.pkg  /  eboot.bin  /  PPSA*"
-              className="flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm outline-none focus:border-[var(--color-accent)]"
+              className="min-w-[12rem] flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm outline-none focus:border-[var(--color-accent)]"
             />
             <select
               value={minSize}
@@ -445,10 +445,22 @@ export default function SearchScreen() {
         {result && result.hits.length === 0 && !loading && (
           <div className="rounded-md border border-dashed border-[var(--color-border)] p-6 text-center text-sm text-[var(--color-muted)]">
             {result.cancelled
-              ? `Search stopped. Scanned ${result.scanned.toLocaleString()} entries before you cancelled.`
-              : `No matches. Scanned ${result.scanned.toLocaleString()} entries.`}
+              ? tr(
+                  "search_stopped_summary",
+                  { n: result.scanned.toLocaleString() },
+                  `Search stopped. Scanned ${result.scanned.toLocaleString()} entries before you cancelled.`,
+                )
+              : tr(
+                  "search_no_matches_summary",
+                  { n: result.scanned.toLocaleString() },
+                  `No matches. Scanned ${result.scanned.toLocaleString()} entries.`,
+                )}
             {result.truncated &&
-              " Stopped at 100,000 entries — try a narrower pattern."}
+              ` ${tr(
+                "search_truncated_hint",
+                undefined,
+                "Stopped at 100,000 entries — try a narrower pattern.",
+              )}`}
           </div>
         )}
 
@@ -461,8 +473,10 @@ export default function SearchScreen() {
                 {tr("search_scanned_result", undefined, "· scanned")}{" "}
                 {result.scanned.toLocaleString()}{" "}
                 {tr("search_entries_result", undefined, "entries")}
-                {result.cancelled && " · you stopped the search"}
-                {result.truncated && " · stopped at 100k"}
+                {result.cancelled &&
+                  ` · ${tr("search_you_stopped", undefined, "you stopped the search")}`}
+                {result.truncated &&
+                  ` · ${tr("search_stopped_100k", undefined, "stopped at 100k")}`}
               </span>
               <button
                 type="button"

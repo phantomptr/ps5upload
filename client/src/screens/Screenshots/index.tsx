@@ -538,7 +538,7 @@ export default function ScreenshotsScreen() {
       {/* Preview lightbox — click the backdrop or press Esc to close. */}
       {preview && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-6"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-scrim)] p-6"
           onClick={closePreview}
           role="dialog"
           aria-modal="true"

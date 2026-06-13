@@ -1548,7 +1548,7 @@ installed_section_registered: "Mounted & registered by PS5Upload",
 installed_section_registered_hint:
   "Registered from a game folder, .exfat/.ffpkg disc image, or upload. Uninstalling unmounts them; your source files are kept.",
 installed_badge_system: "System",
-installed_badge_image: "Disc image",
+installed_badge_image: "Disk image",
 installed_badge_folder: "Folder",
 installed_badge_pkg: "Package",
 installed_badge_installed: "Installed",
@@ -1566,7 +1566,7 @@ installed_kstuff_off_body:
 installed_kstuff_on:
   "kstuff active (kernel R/W) — installs and launches are good to go.",
 installed_smp_off_title:
-  "{count} disc image(s) need ShadowMount+ running",
+  "{count} disk image(s) need ShadowMount+ running",
 installed_smp_off_body:
   "Disc-image titles are mounted from /mnt/shadowmnt by ShadowMount+. It doesn't look like it's running, so those titles won't mount or launch. Send it to the console, wait a few seconds, then Refresh.",
 installed_smp_send: "Send ShadowMount+",
@@ -1577,7 +1577,7 @@ installed_smp_send_failed: "Couldn't send ShadowMount+.",
 installed_section_installed: "Games & apps",
 installed_section_installed_hint:
   "Installed via Sony's installer from a .pkg (or shipped with the console). No source path.",
-installed_section_disc: "Disc images",
+installed_section_disc: "Disk images",
 installed_section_disc_hint:
   "Mounted from /mnt/shadowmnt by ShadowMount+. They only mount + launch while ShadowMount+ is running.",
 installed_section_folder: "Folder homebrew",

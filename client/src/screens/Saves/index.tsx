@@ -414,8 +414,13 @@ export default function SavesScreen() {
                     >
                       {tr("saves_download", undefined, "Backup")}
                     </Button>
+                    {/* danger (red-bordered), NOT ghost like Backup: Restore
+                        overwrites — wipes — the live PS5 save. It sat visually
+                        identical to the harmless Backup button next to it,
+                        giving no at-a-glance signal which of the two is
+                        destructive. The confirm dialog still guards the click. */}
                     <Button
-                      variant="ghost"
+                      variant="danger"
                       size="sm"
                       leftIcon={<UploadIcon size={11} />}
                       onClick={() => handleRestore(e)}

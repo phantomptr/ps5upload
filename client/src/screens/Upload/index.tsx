@@ -117,7 +117,10 @@ function detectedLabel(
       };
     }
     case "pkg":
-      return { icon: Package, label: tr("upload_kind_pkg", "PS5 package (.pkg)") };
+      return {
+        icon: Package,
+        label: tr("upload_kind_pkg", "PS5 package (.pkg)"),
+      };
   }
 }
 
@@ -323,8 +326,7 @@ export default function UploadScreen() {
       rarPassword: source.kind === "archive" ? store.rarPassword : null,
       mountAfterUpload: source.kind === "image" && mountAfterUpload,
       mountReadOnly,
-      registerAfterUpload:
-        source.kind === "game-folder" && registerAfterUpload,
+      registerAfterUpload: source.kind === "game-folder" && registerAfterUpload,
     });
   };
 
@@ -402,8 +404,7 @@ export default function UploadScreen() {
       excludes: activeExcludes,
       mountAfterUpload: source.kind === "image" && mountAfterUpload,
       mountReadOnly,
-      registerAfterUpload:
-        source.kind === "game-folder" && registerAfterUpload,
+      registerAfterUpload: source.kind === "game-folder" && registerAfterUpload,
     });
   };
 
@@ -1237,7 +1238,7 @@ function ExistingDestinationDialog({
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-scrim)] backdrop-blur-sm">
       <div className="w-full max-w-md rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5 shadow-2xl">
         <h2 className="mb-1 text-base font-semibold">{title}</h2>
         <p className="mb-4 text-sm text-[var(--color-muted)]">{subtitle}</p>
@@ -2171,7 +2172,10 @@ function RarSourceCard() {
           {tr("upload_rar_title", "RAR archive")}
         </p>
         <p className="text-xs text-[var(--color-warn)]">
-          {tr("err_rar_unsupported", "RAR archives aren't supported on this build (Android uploads .zip and .7z only). Extract the .rar on a computer first, or use the desktop app.")}
+          {tr(
+            "err_rar_unsupported",
+            "RAR archives aren't supported on this build (Android uploads .zip and .7z only). Extract the .rar on a computer first, or use the desktop app.",
+          )}
         </p>
       </div>
     );
@@ -2221,12 +2225,18 @@ function RarSourceCard() {
       </div>
       {needsPw && (
         <p className="mt-2 text-xs text-[var(--color-warn)]">
-          {tr("err_rar_password_required", "This RAR archive is password-protected. Enter its password below to read and upload its contents.")}
+          {tr(
+            "err_rar_password_required",
+            "This RAR archive is password-protected. Enter its password below to read and upload its contents.",
+          )}
         </p>
       )}
       {wrongPw && (
         <p className="mt-2 text-xs text-[var(--color-bad)]">
-          {tr("err_rar_password_wrong", "Wrong password for this RAR archive. Check it and try again.")}
+          {tr(
+            "err_rar_password_wrong",
+            "Wrong password for this RAR archive. Check it and try again.",
+          )}
         </p>
       )}
       {otherErr && (
@@ -2237,7 +2247,10 @@ function RarSourceCard() {
       {inspected && !error && (
         <p className="mt-2 inline-flex items-center gap-1 text-xs text-[var(--color-good)]">
           <Check size={12} />
-          {tr("upload_rar_ready", "Archive read successfully — ready to upload.")}
+          {tr(
+            "upload_rar_ready",
+            "Archive read successfully — ready to upload.",
+          )}
         </p>
       )}
     </div>
@@ -2460,7 +2473,11 @@ function ArchiveExtractModeCard({
     <section className="mb-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-5">
       <div className="mb-3 flex items-center gap-2 text-sm font-medium">
         <FileArchive size={16} className="text-[var(--color-muted)]" />
-        {tr("upload_archive_extract_heading", { ext }, "Where should the {ext} unpack?")}
+        {tr(
+          "upload_archive_extract_heading",
+          { ext },
+          "Where should the {ext} unpack?",
+        )}
       </div>
       <div className="flex flex-col gap-2">
         {options.map((opt) => {
@@ -2975,14 +2992,26 @@ function PayloadReadinessBanner() {
   const status = useConnectionStore((s) => s.payloadStatus);
   const navigate = useNavigate();
   if (status === "up") return null;
+  // "Helper" (not "payload") — the ps5upload ELF is called the Helper
+  // everywhere on Connection/Dashboard; "payload" here meant the same
+  // thing but collided with the separate Payloads catalog. And these were
+  // raw English in an otherwise fully-translated screen.
   const title =
     status === "down"
-      ? "PS5 payload isn't reachable"
-      : "PS5 payload status unknown";
+      ? tr("upload_helper_down", undefined, "PS5 helper isn't reachable")
+      : tr("upload_helper_unknown", undefined, "PS5 helper status unknown");
   const detail =
     status === "down"
-      ? "Uploads will fail until the payload is running. Head back to Connection, press Send, and wait for the third step to turn green."
-      : "We haven't confirmed your PS5 is running the payload yet. Set your IP and send the payload on the Connection tab first.";
+      ? tr(
+          "upload_helper_down_detail",
+          undefined,
+          "Uploads will fail until the helper is running. Head back to Connection, press Send, and wait for the third step to turn green.",
+        )
+      : tr(
+          "upload_helper_unknown_detail",
+          undefined,
+          "We haven't confirmed your PS5 is running the helper yet. Set your IP and send the helper on the Connection screen first.",
+        );
   return (
     <div className="mb-4">
       <WarningCard

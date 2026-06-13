@@ -110,7 +110,7 @@ export default function UsbAutoloaderModal({
   // Modal renders into an overlay layer; backdrop click closes.
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-scrim)] p-4"
       onClick={onClose}
     >
       <div

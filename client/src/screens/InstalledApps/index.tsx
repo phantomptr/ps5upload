@@ -113,7 +113,7 @@ function KindBadge({ title }: { title: InstalledTitle }) {
     return (
       <span className={base}>
         <Disc3 size={11} />
-        {tr("installed_badge_image", undefined, "Disc image")}
+        {tr("installed_badge_image", undefined, "Disk image")}
       </span>
     );
   if (k === "folder")
@@ -239,15 +239,29 @@ function AppCard({
               leftIcon={<Play size={15} />}
               className="flex-1"
               onClick={() => onLaunch(title)}
-              title={tr(
-                "installed_play_tooltip",
-                undefined,
-                "Launch this title on the PS5",
-              )}
+              // A disc-image title can't launch until ShadowMount+ mounts it.
+              // Disabling + relabeling here is honest — previously Play stayed
+              // enabled and just produced a failure toast on click.
+              disabled={discNeedsSmp}
+              title={
+                discNeedsSmp
+                  ? tr(
+                      "installed_play_needs_smp",
+                      undefined,
+                      "Needs ShadowMount+ running to mount and launch",
+                    )
+                  : tr(
+                      "installed_play_tooltip",
+                      undefined,
+                      "Launch this title on the PS5",
+                    )
+              }
             >
-              {launching
-                ? tr("installed_launching", undefined, "Launching…")
-                : tr("installed_play", undefined, "Play")}
+              {discNeedsSmp
+                ? tr("installed_needs_smp", undefined, "Needs ShadowMount+")
+                : launching
+                  ? tr("installed_launching", undefined, "Launching…")
+                  : tr("installed_play", undefined, "Play")}
             </Button>
           ) : (
             <span className="flex-1 truncate text-xs text-[var(--color-muted)]">
@@ -605,7 +619,7 @@ export default function InstalledAppsScreen() {
             title={tr(
               "installed_smp_off_title",
               { count: discs.length },
-              `${discs.length} disc image${discs.length === 1 ? "" : "s"} need ShadowMount+ running`,
+              `${discs.length} disk image${discs.length === 1 ? "" : "s"} need ShadowMount+ running`,
             )}
             detail={tr(
               "installed_smp_off_body",
@@ -711,7 +725,7 @@ export default function InstalledAppsScreen() {
             {discs.length > 0 ? (
               <Section
                 icon={Disc3}
-                title={tr("installed_section_disc", undefined, "Disc images")}
+                title={tr("installed_section_disc", undefined, "Disk images")}
                 hint={tr(
                   "installed_section_disc_hint",
                   undefined,
