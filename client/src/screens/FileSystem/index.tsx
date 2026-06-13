@@ -20,6 +20,7 @@ import {
   X,
   HardDrive,
   Usb,
+  PackagePlus,
 } from "lucide-react";
 import { pickPath } from "../../lib/pickPath";
 import {
@@ -58,6 +59,7 @@ import {
 import { useFsNavStore } from "../../state/fsNavigation";
 import { useActivityHistoryStore } from "../../state/activityHistory";
 import { pushNotification } from "../../state/notifications";
+import { usePkgLibrary } from "../../state/pkgLibrary";
 import { useRecentPathsStore } from "../../state/recentPaths";
 import {
   useFsClipboardStore,
@@ -235,6 +237,16 @@ export default function FileSystemScreen() {
   const guard = useStaleHostGuard();
   const payloadStatus = useConnectionStore((s) => s.payloadStatus);
   const clipboard = useFsClipboardStore();
+  // Install a .pkg straight from where it sits in the browser — saves the
+  // round-trip through the Install Package screen's drive scan.
+  const installFromConsolePath = usePkgLibrary(
+    host,
+    (s) => s.installFromConsolePath,
+  );
+  const pkgInstalling = usePkgLibrary(host, (s) => s.installing);
+  const [installingPkgName, setInstallingPkgName] = useState<string | null>(
+    null,
+  );
   // Restore the user's last-browsed path for THIS host. The lazy
   // initializer reads from localStorage once on mount; later host
   // changes (the user typing a new IP into the Connection screen)
@@ -539,6 +551,62 @@ export default function FileSystemScreen() {
     () => (entries ? entries.filter((e) => selected.has(e.name)) : []),
     [entries, selected],
   );
+
+  const runInstallPkg = async (entry: DirEntry) => {
+    const fullPath = joinPath(path, entry.name);
+    const removable = /^\/mnt\/(usb|ext)/i.test(fullPath);
+    const ok = await confirmDialog({
+      title: tr(
+        "fs_install_confirm_title",
+        { name: entry.name },
+        `Install "${entry.name}"?`,
+      ),
+      message: removable
+        ? tr(
+            "fs_install_confirm_body_usb",
+            undefined,
+            "This stages the package to internal storage (the console can't install off USB directly), installs it, then removes the staged copy. The original on your drive is untouched.",
+          )
+        : tr(
+            "fs_install_confirm_body",
+            undefined,
+            "This installs the package on your PS5 via Sony's installer.",
+          ),
+      confirmLabel: tr("fs_install_action", undefined, "Install"),
+    });
+    if (!ok) return;
+    setInstallingPkgName(entry.name);
+    try {
+      const r = await installFromConsolePath(fullPath, host);
+      if (r.ok) {
+        pushNotification(
+          r.mayNotLaunch ? "warning" : "success",
+          tr(
+            "fs_install_done",
+            { name: entry.name },
+            `Installed ${entry.name}`,
+          ),
+          r.mayNotLaunch
+            ? {
+                body: tr(
+                  "fs_install_may_not_launch",
+                  undefined,
+                  "The install registered, but the title may not launch — check Installed Apps.",
+                ),
+              }
+            : undefined,
+        );
+      } else {
+        pushNotification(
+          "error",
+          tr("fs_install_failed", { name: entry.name }, `Install failed`),
+          { body: r.message },
+        );
+      }
+    } finally {
+      setInstallingPkgName(null);
+    }
+  };
 
   const runDelete = async (name: string) => {
     const ok = await confirmDialog({
@@ -2100,6 +2168,25 @@ export default function FileSystemScreen() {
                       className="rounded-md border border-[var(--color-border)] p-1 text-xs font-mono hover:bg-[var(--color-surface-3)]"
                     >
                       ✓
+                    </button>
+                  )}
+                  {!isDir && e.name.toLowerCase().endsWith(".pkg") && (
+                    <button
+                      type="button"
+                      onClick={() => void runInstallPkg(e)}
+                      disabled={pkgInstalling}
+                      title={tr(
+                        "fs_install_pkg_tooltip",
+                        undefined,
+                        "Install this package on your PS5",
+                      )}
+                      className="rounded-md border border-[var(--color-accent)] p-1 text-[var(--color-accent)] hover:bg-[var(--color-surface-3)] disabled:opacity-30"
+                    >
+                      {installingPkgName === e.name ? (
+                        <Loader2 size={12} className="animate-spin" />
+                      ) : (
+                        <PackagePlus size={12} />
+                      )}
                     </button>
                   )}
                   <button

@@ -422,6 +422,22 @@ pub fn derive_platform(magic: u32, content_id: &str, title_id: &str) -> String {
     }
 }
 
+/// Recover a PS4/PS5 title id (`CUSA#####` / `PPSA#####`) embedded in a
+/// package's filename, e.g. `[SPSX]-Bloodborne…-CUSA00900-USA-Game-PS4.pkg`
+/// → `CUSA00900`. Scene release names almost always carry the id, so this
+/// lets a drive scan classify a package's platform from the name alone —
+/// no per-file header read over the (slow) console RPC. Returns the first
+/// token shaped `AAAA#####` (4 uppercase letters + 5 digits).
+pub fn title_id_from_filename(name: &str) -> Option<String> {
+    name.split(|c: char| !c.is_ascii_alphanumeric())
+        .find(|tok| {
+            tok.len() == 9
+                && tok.as_bytes()[..4].iter().all(u8::is_ascii_uppercase)
+                && tok.as_bytes()[4..].iter().all(u8::is_ascii_digit)
+        })
+        .map(|s| s.to_string())
+}
+
 /// PARAM.SFO entry id inside a PKG.
 const ENTRY_PARAM_SFO: u32 = 0x1000;
 /// ICON0.PNG entry id inside a PKG.
@@ -840,6 +856,29 @@ mod tests {
         // Unknown prefixes (NPXS system, homebrew) → no badge.
         assert_eq!(derive_platform(PKG_MAGIC, "", "NPXS40047"), "");
         assert_eq!(derive_platform(PKG_MAGIC, "", ""), "");
+    }
+
+    #[test]
+    fn title_id_recovered_from_scene_filenames() {
+        // The exact PS4 case a user hit — a Bloodborne scene release whose
+        // platform must be classifiable from the name alone (no header read).
+        assert_eq!(
+            title_id_from_filename("[SPSX]-Bloodborne.Complete.Edition-CUSA00900-USA-Game-PS4.pkg")
+                .as_deref(),
+            Some("CUSA00900")
+        );
+        assert_eq!(
+            title_id_from_filename("PS5_PPSA01650_v1.03.pkg").as_deref(),
+            Some("PPSA01650")
+        );
+        // …and that derived id badges the right platform end-to-end.
+        assert_eq!(derive_platform(PKG_MAGIC, "", "CUSA00900"), "ps4");
+        // No id in the name → None (caller falls back to a header read).
+        assert_eq!(title_id_from_filename("update.pkg"), None);
+        assert_eq!(title_id_from_filename("game-v1.02.pkg"), None);
+        // Must be exactly 4 letters + 5 digits — near-misses are rejected.
+        assert_eq!(title_id_from_filename("CUSA0090.pkg"), None);
+        assert_eq!(title_id_from_filename("CUSA009000.pkg"), None);
     }
 
     #[test]

@@ -245,6 +245,16 @@ interface PkgLibraryState {
     pkg: ExternalPkg,
     host: string,
   ) => Promise<{ ok: boolean; message?: string; mayNotLaunch?: boolean }>;
+  /** Install a `.pkg` the user found while browsing the File System, at an
+   *  arbitrary on-console path. Removable mounts (`/mnt/usb*`, `/mnt/ext*`)
+   *  route through the copy-to-internal `installExternal` flow (Sony can't
+   *  read exfat directly); anything already on internal storage installs in
+   *  place with no copy. Lets users install straight from where a package
+   *  sits instead of going through the External Packages scan. */
+  installFromConsolePath: (
+    path: string,
+    host: string,
+  ) => Promise<{ ok: boolean; message?: string; mayNotLaunch?: boolean }>;
   /** Delete (from the PS5) every staged package that has already been
    *  installed successfully — clears the spent-package clutter without
    *  touching anything mid-flight or not-yet-installed. */
@@ -969,6 +979,59 @@ const makePkgLibraryStore = () =>
         : { ok: false, message: errMessage || "Install was rejected." };
     } catch (e) {
       await fsDelete(mgmtAddr(host), internalPath).catch(() => {});
+      return { ok: false, message: pkgError(e) };
+    } finally {
+      set({ installing: false, busyNotice: null, installPending: false });
+    }
+  },
+
+  async installFromConsolePath(path, host) {
+    const name = path.split("/").pop() || path;
+    // Removable mounts can't be installed off directly (exfat + Sony's
+    // installer) — reuse the staged copy-then-install path. Derive the
+    // mount root so the staging notice names the right drive.
+    const mountRoot = path.match(/^(\/mnt\/(?:usb|ext)[^/]*)/i)?.[1];
+    if (mountRoot) {
+      return get().installExternal(
+        {
+          path,
+          drive: mountRoot,
+          name,
+          size: 0,
+          contentId: "",
+          titleId: "",
+          platform: "",
+        },
+        host,
+      );
+    }
+    // Already on internal storage (/data, /user, …): Sony can read it in
+    // place, so install directly with no wasteful copy.
+    if (!host?.trim() || get().installing) {
+      return { ok: false, message: "Another install is in progress." };
+    }
+    set({ installing: true, busyNotice: null, installPending: false });
+    try {
+      if (transferScreenBusy(host)) {
+        set({
+          busyNotice:
+            "Waiting for the current upload to finish before installing…",
+        });
+        while (transferScreenBusy(host)) {
+          if (!get().installing) return { ok: false, message: "Cancelled." };
+          await sleep(400);
+        }
+      }
+      set({ busyNotice: `Installing ${name}…` });
+      const { installed, mayNotLaunch, errMessage } = await runPkgInstall(
+        host,
+        path,
+        null,
+      );
+      return installed
+        ? { ok: true, mayNotLaunch }
+        : { ok: false, message: errMessage || "Install was rejected." };
+    } catch (e) {
       return { ok: false, message: pkgError(e) };
     } finally {
       set({ installing: false, busyNotice: null, installPending: false });

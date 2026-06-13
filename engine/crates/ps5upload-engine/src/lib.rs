@@ -2553,10 +2553,30 @@ pub fn scan_external_pkgs(addr: &str) -> anyhow::Result<Vec<ExternalPkg>> {
                         break;
                     }
                     let path = join(&dir, &e.name);
-                    let (content_id, title_id, platform) = match fs_read(addr, &path, 0, 0xA0) {
-                        Ok(bytes) => external_pkg_header(&bytes),
-                        Err(_) => (String::new(), String::new(), String::new()),
-                    };
+                    // Fast path: scene/store names almost always carry the
+                    // title id (CUSA#####/PPSA#####), which is enough to badge
+                    // the platform. Deriving it from the name avoids a
+                    // per-file header read — the dominant cost of the scan was
+                    // one blocking ~160-byte console RPC PER package, which on
+                    // a drive of dozens of pkgs made the scan crawl. Only fall
+                    // back to reading the header when the filename tells us
+                    // nothing (content_id stays empty; the install path reads
+                    // it from the package itself anyway).
+                    let (content_id, title_id, platform) =
+                        match ps5upload_pkg::title_id_from_filename(&e.name) {
+                            Some(tid) => {
+                                let platform = ps5upload_pkg::derive_platform(
+                                    ps5upload_pkg::PKG_MAGIC,
+                                    "",
+                                    &tid,
+                                );
+                                (String::new(), tid, platform)
+                            }
+                            None => match fs_read(addr, &path, 0, 0xA0) {
+                                Ok(bytes) => external_pkg_header(&bytes),
+                                Err(_) => (String::new(), String::new(), String::new()),
+                            },
+                        };
                     out.push(ExternalPkg {
                         path,
                         drive: v.path.clone(),
