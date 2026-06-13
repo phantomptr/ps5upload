@@ -475,7 +475,7 @@ export default function ConnectionScreen() {
             tr(
               "connection_payload_timeout",
               { tail },
-              "Payload didn't come up within 20s.{tail} Common causes: kstuff isn't loaded yet (run First Run, or send kstuff first via Send payload), the ELF crashed on boot, or the PS5 is unreachable. Try sending again.",
+              "Payload didn't come up within 20s.{tail} Just send it again — a fresh send now force-evicts any stuck previous instance on its own, so you usually don't need to restart the PS5. If it still fails: kstuff may not be loaded yet (run First Run, or send kstuff first), the ELF crashed on boot, or the PS5 is unreachable.",
             ),
           );
         }

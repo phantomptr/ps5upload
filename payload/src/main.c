@@ -418,18 +418,36 @@ int main(void) {
 
     startup_trace("BEFORE_TAKEOVER");
     if (runtime_try_takeover(&state) != 0) {
-        startup_trace("TAKEOVER_FAILED");
-        fprintf(stderr, "runtime_takeover failed — another instance may still own the port\n");
-        pop_notification("PS5Upload failed: a previous instance still holds the port — restart the PS5");
-        return 1;
+        /* Cooperative shutdown didn't free the ports within the window: the
+         * prior instance is wedged or unresponsive (kernel-deadlocked Sony
+         * APIs are a documented failure mode). Before surrendering to a
+         * "restart the PS5" — which is what forced users to open Payload
+         * Manager and kill payload.elf by hand — escalate to the bigger
+         * hammer we already have: SIGKILL the recorded prior pid, then
+         * re-probe. The reap reads the pid from the ownership file, which
+         * runtime_write_ownership hasn't overwritten yet. */
+        startup_trace("TAKEOVER_FAILED_ESCALATING");
+        fprintf(stderr,
+                "takeover failed — escalating to SIGKILL of the prior instance\n");
+        runtime_reap_prior_instance(&state);
+        if (runtime_try_takeover(&state) != 0) {
+            /* Ports STILL held after a SIGKILL means the old process is
+             * kernel-wedged (un-killable) — only a reboot clears that. */
+            startup_trace("TAKEOVER_FAILED");
+            fprintf(stderr,
+                    "takeover failed even after reaping the prior instance — ports still held\n");
+            pop_notification(
+                "PS5Upload: a previous instance is stuck and can't be cleared — please restart the PS5");
+            return 1;
+        }
+        startup_trace("TAKEOVER_DONE_AFTER_REAP");
+    } else {
+        startup_trace("TAKEOVER_DONE");
+        /* Healthy cooperative takeover. Still reap in case a SEPARATE crashed
+         * instance lingered with a stale pid record (the "duplicate
+         * payload.elf" case) — harmless no-op when the pid is already gone. */
+        runtime_reap_prior_instance(&state);
     }
-    startup_trace("TAKEOVER_DONE");
-
-    /* Cooperative takeover only makes a HEALTHY prior instance exit. If the
-     * previous helper crashed and is lingering (the "duplicate payload.elf"
-     * case), SIGKILL it by the pid it recorded in the ownership file — read
-     * here, BEFORE runtime_write_ownership overwrites that record with ours. */
-    runtime_reap_prior_instance(&state);
     startup_trace("REAP_PRIOR_DONE");
 
     if (runtime_write_ownership(&state) != 0) {
