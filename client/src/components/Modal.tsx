@@ -102,6 +102,10 @@ export function Modal({
   if (!open) return null;
 
   return (
+    // z-50 is the modal layer. The confirm/alert/prompt dialogs (ConfirmDialog)
+    // sit at z-[60] so a confirm opened from WITHIN a Modal (e.g. the Manage
+    // PS5s delete) paints ON TOP of the panel instead of being hidden behind
+    // it — previously both were z-50 and the wider panel occluded the confirm.
     <div
       className="anim-scrim fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-scrim)] p-4"
       onClick={closeOnScrim ? onClose : undefined}

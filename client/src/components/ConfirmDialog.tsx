@@ -114,7 +114,7 @@ export function useConfirm(): {
 
   const dialog = pending ? (
     <div
-      className="anim-scrim fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-scrim)] p-4"
+      className="anim-scrim fixed inset-0 z-[60] flex items-center justify-center bg-[var(--overlay-scrim)] p-4"
       onClick={() => settle(false)}
     >
       <div
@@ -237,7 +237,7 @@ export function useAlert(): {
 
   const dialog = pending ? (
     <div
-      className="anim-scrim fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-scrim)] p-4"
+      className="anim-scrim fixed inset-0 z-[60] flex items-center justify-center bg-[var(--overlay-scrim)] p-4"
       onClick={settle}
     >
       <div
@@ -344,7 +344,7 @@ export function usePrompt(): {
 
   const dialog = pending ? (
     <div
-      className="anim-scrim fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay-scrim)] p-4"
+      className="anim-scrim fixed inset-0 z-[60] flex items-center justify-center bg-[var(--overlay-scrim)] p-4"
       onClick={() => settle(null)}
     >
       <div

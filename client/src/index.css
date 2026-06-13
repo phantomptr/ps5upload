@@ -440,7 +440,9 @@ button {
     var(--color-surface-2) 60%
   );
   background-size: 200% 100%;
-  animation: ps-shimmer 1.6s linear infinite;
+  /* 2.2s (was 1.6s) — a slower, gentler sweep reads as "loading" rather than
+   * a fast strobe across a tall stack of placeholder rows. */
+  animation: ps-shimmer 2.2s linear infinite;
 }
 
 /* Gentle status pulse — calmer than Tailwind's animate-pulse, for live

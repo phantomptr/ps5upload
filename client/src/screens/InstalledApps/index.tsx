@@ -14,6 +14,8 @@ import {
   ShieldCheck,
 } from "lucide-react";
 
+import { useNavigate } from "react-router-dom";
+import { openInFileSystem } from "../../state/fsNavigation";
 import { useConnectionStore } from "../../state/connection";
 import {
   appsInstalled,
@@ -163,7 +165,12 @@ function AppCard({
   onLaunch: (t: InstalledTitle) => void;
 }) {
   const tr = useTr();
+  const navigate = useNavigate();
   const canPlay = !title.system;
+  // On-console folder this title lives in — only folder/disc kinds carry a
+  // source path (pkg-installed/system titles don't), so the open-folder
+  // affordance only appears when there's actually a folder to open.
+  const sourceFolder = title.source || null;
   return (
     <div className="group flex flex-col overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-2)]">
       {/* Cover with corner overlays: platform (top-left), SMP warning
@@ -250,6 +257,23 @@ function AppCard({
             <span className="flex-1 truncate text-xs text-[var(--color-muted)]">
               {tr("installed_badge_system", undefined, "System")}
             </span>
+          )}
+          {/* Open this title's on-console folder in the File System browser
+              (only when the title has a source path — folder/disc kinds). */}
+          {sourceFolder && (
+            <button
+              type="button"
+              onClick={() => openInFileSystem(navigate, sourceFolder)}
+              title={tr(
+                "installed_open_folder",
+                undefined,
+                "Open this app's folder in the File System browser",
+              )}
+              aria-label={tr("installed_open_folder", undefined, "Open folder")}
+              className="shrink-0 rounded-md border border-[var(--color-border)] p-2.5 text-[var(--color-muted)] transition-colors hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
+            >
+              <FolderOpen size={15} />
+            </button>
           )}
           {/* Uninstall — de-emphasized icon button (destructive action stays
               out of the way; turns red on hover). */}
