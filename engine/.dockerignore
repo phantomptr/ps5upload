@@ -1,0 +1,4 @@
+# Keep the build context small; target/ is rebuilt inside the image.
+target/
+Dockerfile
+.dockerignore
