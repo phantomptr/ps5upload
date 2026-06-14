@@ -4,6 +4,21 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 3.3.1
+
+A polish + fixes release.
+
+- **Hardware temperatures now show °F as well as °C** (e.g. `62°C / 144°F`).
+- **Bigger checkboxes.** Checkboxes everywhere (Settings included) were tiny;
+  they're now comfortably sized and accent-coloured, and larger still on touch.
+- **File System drive list is consistent.** `/data` used to look dimmer than
+  your USB/external drives; now every drive reads equally clearly, with just the
+  border + icon marking which is active/external/internal.
+- **Quieter PS5 kernel log.** The Hardware screen used to query `hw.physmem`,
+  which the PS5 rejects and logs as an error on every read. It now uses only
+  approved sources for the same RAM figure — no more log spam.
+- Fixed a handful of UI strings that weren't translatable.
+
 ## 3.3.0
 
 A big feature release.
