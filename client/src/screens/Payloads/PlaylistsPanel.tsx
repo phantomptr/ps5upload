@@ -434,6 +434,34 @@ function AutoLoaderCard() {
           </label>
         </div>
       </div>
+      {/* Bring-up playlist: the PRE-helper chain (kernel-R/W payload, SMP, …)
+          that "Quick bring-up" (Connection screen) runs before sending the
+          helper. Separate from the auto-loader's post-helper playlist above. */}
+      <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+        <span className="text-[var(--color-muted)]">
+          {tr(
+            "autoloader_bringup_label",
+            undefined,
+            "Bring-up playlist (kernel R/W, SMP):",
+          )}
+        </span>
+        <select
+          value={autoLoader.bringUpPlaylistId ?? ""}
+          onChange={(e) =>
+            setAutoLoader({ bringUpPlaylistId: e.target.value || null })
+          }
+          className="min-w-[min(100%,10rem)] rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1 text-xs"
+        >
+          <option value="">
+            {tr("autoloader_bringup_none", undefined, "None (send helper only)")}
+          </option>
+          {playlists.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+            </option>
+          ))}
+        </select>
+      </div>
       {warn && (
         <div className="mt-2 text-xs text-[var(--color-warn)]">
           {!selected

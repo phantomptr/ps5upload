@@ -35,6 +35,7 @@ import {
 import { PageHeader, Button } from "../../components";
 import { useTr } from "../../state/lang";
 import PowerControl from "./PowerControl";
+import { BringUpPanel } from "./BringUpPanel";
 
 type StepState = "idle" | "busy" | "ok" | "fail";
 
@@ -669,6 +670,11 @@ export default function ConnectionScreen() {
         )}
 
         {host.trim() && <CompanionStrip host={host.trim()} />}
+
+        {/* Quick bring-up — the one-tap fast path that chains the bring-up
+            playlist → helper → auto-loader. Shown once an address is set so a
+            cold boot is one button instead of the manual step sequence above. */}
+        {host.trim() && <BringUpPanel />}
 
         {/* Power control — only render once payload is up since the
             destructive actions need a working mgmt-port connection. */}

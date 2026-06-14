@@ -173,6 +173,10 @@ describe("isPayloadPath", () => {
 
 describe("DEFAULT_AUTO_LOADER", () => {
   it("is opt-in (disabled, no playlist) so it never auto-sends unasked", () => {
-    expect(DEFAULT_AUTO_LOADER).toEqual({ enabled: false, playlistId: null });
+    expect(DEFAULT_AUTO_LOADER).toEqual({
+      enabled: false,
+      playlistId: null,
+      bringUpPlaylistId: null,
+    });
   });
 });

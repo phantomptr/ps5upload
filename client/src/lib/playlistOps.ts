@@ -60,15 +60,19 @@ export interface Playlist {
  */
 export interface AutoLoaderConfig {
   enabled: boolean;
-  /** Id of the playlist to auto-run. Null = none chosen; the toggle is
-   *  inert until a playlist is picked. If the referenced playlist is
-   *  later deleted, the runner no-ops and the UI falls back to "none". */
+  /** Id of the playlist to auto-run when the helper becomes ready (the
+   *  POST-helper chain — your usual apps/payloads). Null = none chosen. */
   playlistId: string | null;
+  /** Id of the PRE-helper bring-up playlist (kernel-R/W payload, SMP, etc.)
+   *  that "Quick bring-up" runs against the loader before sending the helper.
+   *  Null = bring-up sends only the helper (no pre-helper chain). */
+  bringUpPlaylistId: string | null;
 }
 
 export const DEFAULT_AUTO_LOADER: AutoLoaderConfig = {
   enabled: false,
   playlistId: null,
+  bringUpPlaylistId: null,
 };
 
 /** Payload file extensions the loaders accept: .elf/.bin are the common
