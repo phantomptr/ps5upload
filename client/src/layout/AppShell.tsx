@@ -439,9 +439,13 @@ function usePkgAutoRoute() {
     const p = getCurrentWebview().onDragDropEvent((e) => {
       if (cancelled) return;
       if (e.payload.type !== "drop") return;
-      const first = e.payload.paths?.[0];
-      if (!first) return;
-      if (!first.toLowerCase().endsWith(".pkg")) return;
+      // Find the FIRST .pkg ANYWHERE in the drop, not just paths[0] — a mixed
+      // or reordered drop like [game.elf, patch.pkg] should still route the
+      // pkg to Install Package instead of being missed.
+      const pkg = (e.payload.paths ?? []).find((p) =>
+        p.toLowerCase().endsWith(".pkg"),
+      );
+      if (!pkg) return;
       // Screens that own their own drag-drop opt out of the app-wide pkg
       // auto-route, so a drop meant for them doesn't also yank the user to
       // Install Package: /install-package itself, and /payloads (the playlist
@@ -454,7 +458,7 @@ function usePkgAutoRoute() {
         return;
       // Pass the picked path via navigation state — InstallPackage
       // can pick it up and pre-fill its source field.
-      navigate("/install-package", { state: { droppedPath: first } });
+      navigate("/install-package", { state: { droppedPath: pkg } });
     });
     p.then((fn) => {
       // (2.11.0) Use safeUnlisten — was bare try/catch inline. Upload

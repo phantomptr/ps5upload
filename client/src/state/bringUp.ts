@@ -98,6 +98,25 @@ export const useBringUpStore = create<BringUpState>((set, get) => ({
       }
       if (!ready) throw new Error("helper did not report ready in time");
 
+      // Run the post-helper auto-loader playlist OURSELVES. We can't rely on
+      // AppShell's auto-loader edge here: it only fires on a down→up
+      // transition, but on a COLD console the helper comes up as the first
+      // known state (prev = "unknown"), so that edge is suppressed — the exact
+      // case bring-up is for. The playlist store's per-host run() guard makes
+      // this safe even if the edge somehow also fires (it won't double-run).
+      const plg = usePayloadPlaylistsStore.getState();
+      const auto = plg.autoLoader;
+      const post = auto.playlistId
+        ? plg.playlists.find((p) => p.id === auto.playlistId)
+        : undefined;
+      if (auto.enabled && post && post.steps.length > 0) {
+        log.info(
+          "connection",
+          `bring-up: running auto-loader "${post.name}" on ${h}`,
+        );
+        void plg.run(post.id, h, PS5_LOADER_PORT);
+      }
+
       set({ status: { kind: "done", host: bare } });
       log.info("connection", `bring-up complete on ${h}`);
     } catch (e) {
