@@ -180,6 +180,122 @@ describe("runPkgInstall — forwards deleteStaging to the engine", () => {
   });
 });
 
+// ── progress-tracked completion (the large-pkg / Bloodborne data-loss fix) ──
+//
+// runPkgInstall must report `installed:true` ONLY when the engine confirms the
+// install actually completed — never on a timer. A stall or async failure must
+// leave `installed:false` (so callers KEEP the pkg) and carry the right copy.
+// We drive the poll loop with fake timers so the 2.5s interval doesn't slow the
+// suite.
+describe("runPkgInstall — tracks the install to genuine completion", () => {
+  const mockedInvoke = vi.mocked(invoke);
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockedInvoke.mockReset();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const START_OK = {
+    err_code: 0,
+    register_path: "shellui-rpc",
+    session_id: "s1",
+  };
+
+  it("reports completed only after the engine says 'done' — and surfaces live %", async () => {
+    // Two "still installing" polls (growing bytes) then a confirmed done. The
+    // old fixed-window code would have declared success on the FIRST poll.
+    let n = 0;
+    mockedInvoke.mockImplementation(async (cmd: unknown) => {
+      if (cmd === "pkg_install_start") return START_OK;
+      if (cmd === "pkg_install_status") {
+        n += 1;
+        if (n < 3)
+          return { phase: "install", installed_bytes: n * 1000, total: 3000 };
+        return {
+          phase: "done",
+          launchable: true,
+          installed_bytes: 3000,
+          total: 3000,
+        };
+      }
+      return {};
+    });
+    const progress: Array<[number, number]> = [];
+    const promise = runPkgInstall(
+      "192.168.1.50",
+      "/user/data/x.pkg",
+      "CID",
+      true,
+      (b, t) => progress.push([b, t]),
+    );
+    await vi.advanceTimersByTimeAsync(2600 * 4);
+    const r = await promise;
+    expect(r.installed).toBe(true);
+    expect(r.stalled).toBeFalsy();
+    // The live % was surfaced for the UI, ending at 100%-equivalent bytes.
+    expect(progress.length).toBeGreaterThan(0);
+    expect(progress[progress.length - 1]).toEqual([3000, 3000]);
+  });
+
+  it("a STALL keeps the pkg: installed=false, stalled=true, retry copy", async () => {
+    mockedInvoke.mockImplementation(async (cmd: unknown) => {
+      if (cmd === "pkg_install_start") return START_OK;
+      if (cmd === "pkg_install_status")
+        return {
+          phase: "error",
+          stalled: true,
+          installed_bytes: 5_000_000_000,
+          total: 25_000_000_000,
+        };
+      return {};
+    });
+    const promise = runPkgInstall("192.168.1.50", "/user/data/x.pkg", "CID", true);
+    await vi.advanceTimersByTimeAsync(2600);
+    const r = await promise;
+    expect(r.installed).toBe(false); // ⇒ callers KEEP the pkg
+    expect(r.stalled).toBe(true);
+    expect(r.errMessage).toMatch(/kept on the PS5/i);
+  });
+
+  it("a Sony async failure is a (non-stall) failure, pkg kept", async () => {
+    mockedInvoke.mockImplementation(async (cmd: unknown) => {
+      if (cmd === "pkg_install_start") return START_OK;
+      if (cmd === "pkg_install_status")
+        return { phase: "error", err_code: 0x80b21106, total: 25_000_000_000 };
+      return {};
+    });
+    const promise = runPkgInstall("192.168.1.50", "/user/data/x.pkg", "CID", true);
+    await vi.advanceTimersByTimeAsync(2600);
+    const r = await promise;
+    expect(r.installed).toBe(false);
+    expect(r.stalled).toBeFalsy();
+    expect(r.errMessage).toMatch(/Package Installer/);
+  });
+
+  it("keeps polling across a transient status blip instead of giving up", async () => {
+    // A single failed poll must NOT end tracking (it once would have, and an
+    // engine-GC'd-mid-large-install would falsely resolve). Recover → done.
+    let n = 0;
+    mockedInvoke.mockImplementation(async (cmd: unknown) => {
+      if (cmd === "pkg_install_start") return START_OK;
+      if (cmd === "pkg_install_status") {
+        n += 1;
+        if (n === 1) throw new Error("transient socket blip");
+        if (n === 2) return { phase: "install", installed_bytes: 1, total: 2 };
+        return { phase: "done", launchable: null };
+      }
+      return {};
+    });
+    const promise = runPkgInstall("192.168.1.50", "/user/data/x.pkg", "CID", true);
+    await vi.advanceTimersByTimeAsync(2600 * 4);
+    const r = await promise;
+    expect(r.installed).toBe(true);
+  });
+});
+
 describe("installedLastResult", () => {
   it("plain green success when launchable", () => {
     expect(installedLastResult(false)).toEqual({ ok: true, message: "Installed." });

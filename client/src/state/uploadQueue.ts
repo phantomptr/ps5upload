@@ -635,6 +635,19 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
               finalDest,
               item.contentId ?? null,
               item.deletePkgAfterInstall !== false,
+              // Surface the live install % on this console's pkg screen while a
+              // large queued title installs in the background.
+              (installedBytes, total) => {
+                if (total > 0) {
+                  const pct = Math.min(
+                    99,
+                    Math.floor((installedBytes / total) * 100),
+                  );
+                  pkgStore.setState({
+                    busyNotice: `Installing "${item.displayName}" on the PS5… ${pct}%`,
+                  });
+                }
+              },
             );
             if (r.installed) {
               installPhase = r.mayNotLaunch ? "warn" : "done";
@@ -656,9 +669,17 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
               }
             } else {
               // The bytes landed but the install — the point of a pkg — did
-              // not. Fail the row so the user notices (the message routes
-              // through the queue's humanizer).
+              // not COMPLETE. The staged pkg was KEPT on the PS5 (never deleted
+              // on a non-confirmed install), so the user can retry. Fail the row
+              // so they notice; the message (stall vs reject) routes through the
+              // queue's humanizer.
               installPhase = "error";
+              log.info(
+                "install",
+                r.stalled
+                  ? `pkg "${item.displayName}" install stalled — staged pkg KEPT for retry: ${finalDest}`
+                  : `pkg "${item.displayName}" install not confirmed — staged pkg KEPT: ${finalDest}`,
+              );
               throw new Error(r.errMessage || "Install was rejected.");
             }
           } finally {

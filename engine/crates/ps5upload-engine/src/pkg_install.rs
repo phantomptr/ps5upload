@@ -79,12 +79,6 @@ pub struct InstallSession {
     /// poll. We snapshot the terminal status here and replay it for any
     /// later poll instead of hitting the (now-gone) task.
     pub terminal_status: Option<PkgInstallStatus>,
-    /// Unix time the engine first observed phase=Done and began the
-    /// app.db launchability verification (elf-arsenal `wait_for_install_row`
-    /// analogue). `None` until the first Done poll. Used to bound how long
-    /// we keep the client polling while the title is still promoting before
-    /// declaring it "installed but not launchable".
-    pub verify_started_unix: Option<u64>,
     /// Resolved launchability once verification concludes: `Some(true)` =
     /// the title_id appeared in app.db (definitively launchable),
     /// `Some(false)` = it never appeared within the verification window,
@@ -92,6 +86,21 @@ pub struct InstallSession {
     /// FW, or no real title_id) — the legacy optimistic behavior. Cached
     /// alongside `terminal_status` so replayed polls stay consistent.
     pub launchable: Option<bool>,
+    /// Free bytes on the data volume at the first status poll — the baseline
+    /// the progress tracker measures "bytes consumed" against. `None` until the
+    /// first poll captures it (or if volumes couldn't be listed). See
+    /// `observe_consumed` / `install_verdict`.
+    pub install_start_free_bytes: Option<u64>,
+    /// Max bytes the install has consumed so far (monotonic) — `max(free-space
+    /// drop, title-dir size)`. Drives the live progress % and the stall clock.
+    pub progress_consumed_bytes: u64,
+    /// Unix time `progress_consumed_bytes` last increased. Resets the stall
+    /// clock on every observed bit of progress, so a slow-but-advancing install
+    /// never trips the adaptive stall deadline. `None` until the first poll.
+    pub last_progress_unix: Option<u64>,
+    /// Cached "the install stalled (no disk progress)" verdict, so replayed
+    /// terminal polls keep reporting the stall (and the UI keeps the pkg).
+    pub stalled: bool,
 }
 
 #[derive(Default)]
@@ -420,8 +429,11 @@ async fn install_start_handler(
         // honouring "Auto Delete after installation" = off. See staging_path_for.
         staging_path: staging_path_for(&req.local_ps5_path, req.delete_staging),
         terminal_status: None,
-        verify_started_unix: None,
         launchable: None,
+        install_start_free_bytes: None,
+        progress_consumed_bytes: 0,
+        last_progress_unix: None,
+        stalled: false,
     };
 
     // Insert *before* sending the install frame so the HTTP listener
@@ -686,7 +698,20 @@ pub struct StatusResponse {
     /// can read it without correlating against the start ack). See
     /// `ps5upload_core::pkg_install::via_tier`.
     pub via: String,
-    /// True when this install was accepted via the unlaunchable last-resort
+    /// Bytes the progress tracker has observed the install consume so far
+    /// (`max(free-space drop, title-dir size)`). Drives the client's live
+    /// install % (`installed_bytes / total`) for large titles where Sony's
+    /// BGFT progress isn't meaningful (the file:// staging path). 0 until the
+    /// first post-accept poll. See `install_verdict` / `observe_consumed`.
+    #[serde(default)]
+    pub installed_bytes: u64,
+    /// True when the install was declared *stalled* — no disk progress past the
+    /// adaptive deadline. Terminal like an error, but the staged pkg is KEPT so
+    /// the user can retry. The client shows a "stalled — package kept" message
+    /// instead of a generic failure, and must NOT delete the pkg. See
+    /// `InstallVerdict::Stalled`.
+    #[serde(default)]
+    pub stalled: bool,
     /// path (`register_path == "appinst-local"`) — re-derived every poll so
     /// the status response is self-contained. The title installs but may not
     /// start on some firmwares (notably FW 12.xx). See
@@ -735,24 +760,203 @@ fn pkg_session_max_age_sec() -> u64 {
         .unwrap_or(PKG_SESSION_MAX_AGE_SEC_DEFAULT)
 }
 
-/// How long (seconds) the engine keeps polling app.db for the installed
-/// title to register before declaring it "installed but not launchable".
-/// Matches elf-arsenal's 90s `wait_for_install_row` budget: Sony's
-/// installer copies + promotes content asynchronously after BGFT /
-/// AppInstUtil returns, so the title row can take tens of seconds to
-/// appear — especially for the synthetic-DONE tiers (shellui-rpc /
-/// appinst-local) that report Done the instant Sony accepts the request.
-///
-/// Override via `PS5UPLOAD_PKG_VERIFY_WINDOW_SEC` (e.g. shrink to seconds
-/// in tests, or extend for very large titles on slow storage). 0 disables
-/// the wait entirely — a single app.db check per Done poll, then resolve.
-const PKG_VERIFY_WINDOW_SEC_DEFAULT: u64 = 90;
+// ─── progress-driven install tracker ──────────────────────────────────
+//
+// The fixed `pkg_verify_window_sec` window is *size-blind*: it gives up
+// after ~90s and (historically) let the staging cleanup delete the uploaded
+// pkg — fatal for a large title, because Sony's installer reads the pkg from
+// that staged file for the *entire* install (a 25 GB game takes minutes, a
+// 200 GB game far longer). Deleting it mid-install kills the install and
+// leaves no game and no pkg (the reported Bloodborne data-loss).
+//
+// Instead of *assuming* completion after a timer, we *observe* it. Two
+// physical signals the console already reports (no new payload frames):
+//   • DONE  — `/user/app/<title_id>/app.pkg` appears (LaunchCheck::Registered).
+//             Sony renames it into place at completion, so this is authoritative.
+//   • ALIVE — bytes are landing: free space on the data volume drops
+//             (FS_LIST_VOLUMES) and/or the title dir grows (FS_LIST_DIR sizes).
+// We know the *expected* size up front (the pkg we just uploaded), so every
+// decision is evidence-based against the real target instead of a guess.
+//
+// The stall deadline is *adaptive* and resets on any progress, so a slow but
+// advancing install never false-fails; only a genuine flatline trips it, and
+// only when both signals are flat (we track `max(free-drop, dir-size)`).
 
-fn pkg_verify_window_sec() -> u64 {
-    std::env::var("PS5UPLOAD_PKG_VERIFY_WINDOW_SEC")
+/// Seconds of zero disk progress before a *not-yet-writing* install (no bytes
+/// consumed at all) is declared stalled — gives Sony time to even begin.
+const INSTALL_STALL_STARTUP_SEC_DEFAULT: u64 = 120;
+/// Seconds of zero progress before a *mid-install* flatline (some bytes landed,
+/// but well short of the target) is declared stalled — abnormal, so stricter.
+const INSTALL_STALL_MID_SEC_DEFAULT: u64 = 240;
+/// Seconds of zero progress tolerated once *near done* — the final commit /
+/// registration phase writes almost nothing, so we wait patiently for the
+/// title to register rather than crying stall.
+const INSTALL_STALL_NEARDONE_SEC_DEFAULT: u64 = 600;
+/// consumed/expected past which we consider the install "near done" and switch
+/// to the patient deadline.
+const INSTALL_NEARDONE_FRACTION: f64 = 0.90;
+/// On firmware where launchability can't be verified (no derivable title_id,
+/// both app.db and the /user/app scan unreadable), byte-accounting IS the
+/// completion signal: this fraction of expected bytes consumed …
+const INSTALL_SETTLE_FRACTION: f64 = 0.97;
+/// … AND this many seconds of no further writes ⇒ treat as complete.
+const INSTALL_SETTLE_SEC_DEFAULT: u64 = 60;
+
+fn env_sec_or(name: &str, default: u64) -> u64 {
+    std::env::var(name)
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
-        .unwrap_or(PKG_VERIFY_WINDOW_SEC_DEFAULT)
+        .unwrap_or(default)
+}
+fn install_stall_startup_sec() -> u64 {
+    env_sec_or(
+        "PS5UPLOAD_INSTALL_STALL_STARTUP_SEC",
+        INSTALL_STALL_STARTUP_SEC_DEFAULT,
+    )
+}
+fn install_stall_mid_sec() -> u64 {
+    env_sec_or(
+        "PS5UPLOAD_INSTALL_STALL_MID_SEC",
+        INSTALL_STALL_MID_SEC_DEFAULT,
+    )
+}
+fn install_stall_neardone_sec() -> u64 {
+    env_sec_or(
+        "PS5UPLOAD_INSTALL_STALL_NEARDONE_SEC",
+        INSTALL_STALL_NEARDONE_SEC_DEFAULT,
+    )
+}
+fn install_settle_sec() -> u64 {
+    env_sec_or("PS5UPLOAD_INSTALL_SETTLE_SEC", INSTALL_SETTLE_SEC_DEFAULT)
+}
+
+/// Launchability check, normalized for the tracker:
+/// `Some(true)` = Registered (title on disk, definitively done),
+/// `Some(false)` = Absent (reachable, title not yet there),
+/// `None` = Unsupported (can't verify on this firmware).
+type RegisteredObs = Option<bool>;
+
+/// One poll's worth of observations, fed to the pure [`install_verdict`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct TrackerObs {
+    registered: RegisteredObs,
+    /// Max bytes observed consumed so far (monotonic) — `max(free-space drop,
+    /// title-dir size)`. Monotonic so a noisy free-space blip up can't look
+    /// like a regression.
+    consumed: u64,
+    /// Expected install size (the pkg size we uploaded). 0 ⇒ unknown.
+    expected: u64,
+    /// Seconds since `consumed` last increased (the stall clock).
+    idle_sec: u64,
+    /// Tuning, pulled from env once by the caller so the function stays pure.
+    startup_sec: u64,
+    mid_sec: u64,
+    neardone_sec: u64,
+    settle_sec: u64,
+}
+
+/// What the tracker decides on a single poll.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InstallVerdict {
+    /// Confirmed complete — the ONLY state in which the staging pkg may be
+    /// deleted. (`registered == Some(true)`, or unverifiable-FW byte-settle.)
+    Complete,
+    /// Still progressing, or in the final commit window — keep polling, KEEP
+    /// the staging pkg (the install may still be reading from it).
+    Installing,
+    /// No disk progress past the adaptive deadline — terminal, but KEEP the
+    /// staging pkg so the user can retry.
+    Stalled,
+}
+
+/// Pure completion/stall decision — no I/O, fully unit-testable. This is the
+/// brain of the tracker; the handler only feeds it observations and acts on
+/// the verdict.
+fn install_verdict(obs: &TrackerObs) -> InstallVerdict {
+    // Authoritative: the title's app.pkg landed on disk. Always wins, instantly
+    // — independent of the byte math, which can only ever be an estimate.
+    if obs.registered == Some(true) {
+        return InstallVerdict::Complete;
+    }
+    let fraction = if obs.expected > 0 {
+        obs.consumed as f64 / obs.expected as f64
+    } else {
+        0.0
+    };
+    // Unverifiable firmware: byte-accounting is all we have. If essentially all
+    // expected bytes landed AND writing has settled, the install is done — safe
+    // to delete. (On verifiable FW we never reach here; `registered` is Some.)
+    if obs.registered.is_none()
+        && fraction >= INSTALL_SETTLE_FRACTION
+        && obs.idle_sec >= obs.settle_sec
+    {
+        return InstallVerdict::Complete;
+    }
+    // Adaptive stall deadline by how far along we are. Near the end the install
+    // writes little (commit/register), so we're patient; an early/mid flatline
+    // is abnormal, so we're stricter; before any byte lands we allow startup.
+    let deadline = if fraction >= INSTALL_NEARDONE_FRACTION {
+        obs.neardone_sec
+    } else if obs.consumed == 0 {
+        obs.startup_sec
+    } else {
+        obs.mid_sec
+    };
+    if obs.idle_sec >= deadline {
+        InstallVerdict::Stalled
+    } else {
+        InstallVerdict::Installing
+    }
+}
+
+/// Observe how many bytes the install has consumed so far, from the two
+/// physical signals. Returns the larger of (free-space drop on the data
+/// volume since the baseline) and (sum of the title dir's file sizes). Both
+/// are best-effort: an unreadable signal contributes 0, not an error — the
+/// tracker degrades to whichever signal is available.
+fn observe_consumed(addr: &str, title_id: &str, baseline_free: Option<u64>) -> u64 {
+    // Signal A — global free-space drop on the volume hosting /user/app. Noisy
+    // (other writes move it) but available from the first poll, before Sony
+    // even creates the title dir.
+    let free_drop = match (baseline_free, current_free_bytes(addr)) {
+        (Some(base), Some(now)) => base.saturating_sub(now),
+        _ => 0,
+    };
+    // Signal B — the title dir's own size. Clean (only THIS install writes
+    // there) but only exists once Sony creates /user/app/<title_id>/.
+    let dir_size = title_dir_size(addr, title_id);
+    free_drop.max(dir_size)
+}
+
+/// Free bytes on the volume that hosts `/user/app` (the install target).
+/// `None` if volumes can't be listed or no volume covers the path.
+fn current_free_bytes(addr: &str) -> Option<u64> {
+    let vols = ps5upload_core::volumes::list_volumes(addr).ok()?;
+    vols.find_for_path("/user/app")
+        .or_else(|| vols.find_for_path("/user"))
+        .map(|v| v.free_bytes)
+}
+
+/// Sum of immediate file sizes under `/user/app/<title_id>/` (the dominant
+/// being `app.pkg`). 0 if the dir doesn't exist yet or can't be read.
+fn title_dir_size(addr: &str, title_id: &str) -> u64 {
+    if title_id.is_empty() {
+        return 0;
+    }
+    let path = format!("/user/app/{title_id}");
+    match ps5upload_core::fs_ops::list_dir(
+        addr,
+        &path,
+        ps5upload_core::fs_ops::ListDirOptions::default(),
+    ) {
+        Ok(listing) => listing
+            .entries
+            .iter()
+            .filter(|e| e.kind == "file")
+            .map(|e| e.size)
+            .sum(),
+        Err(_) => 0,
+    }
 }
 
 /// Drop sessions older than the configured GC threshold. Called as a
@@ -779,7 +983,17 @@ async fn install_status_handler(
     Query(q): Query<StatusQuery>,
 ) -> Response<Body> {
     gc_old_sessions(&state);
-    let (ps5_addr, task_id, total, cancelled, terminal, content_id, cached_launchable) = {
+    let (
+        ps5_addr,
+        task_id,
+        total,
+        cancelled,
+        terminal,
+        content_id,
+        cached_launchable,
+        cached_consumed,
+        cached_stalled,
+    ) = {
         let sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
         match sessions.get(&q.session) {
             None => {
@@ -796,6 +1010,8 @@ async fn install_status_handler(
                 s.terminal_status.clone(),
                 s.content_id.clone(),
                 s.launchable,
+                s.progress_consumed_bytes,
+                s.stalled,
             ),
         }
     };
@@ -817,6 +1033,8 @@ async fn install_status_handler(
             cancelled,
             tid,
             cached_launchable,
+            cached_consumed,
+            cached_stalled,
         ));
     }
     let task_id = match task_id {
@@ -850,19 +1068,22 @@ async fn install_status_handler(
     // which prefers the BGFT-reported size when non-zero — BGFT reports 0
     // before the download starts.)
 
-    // ── elf-arsenal-style launchability verification ────────────────────
-    // When the payload reports Done, confirm the title actually registered
-    // on the PS5 before treating the install as terminal. The synthetic-DONE
-    // tiers (shellui-rpc, appinst-local) report Done the instant Sony
-    // *accepts* the request — long before the content is promoted to a
-    // launchable title — so historically a "Done" there was an optimistic
-    // guess (the "may not launch" caveat). We now check that the title_id
-    // derived from the content_id is registered, exactly as elf-arsenal's
-    // wait_for_install_row polls tbl_contentinfo — but via the all-firmware
-    // /user/app filesystem scan rather than sqlite (hardware-confirmed on FW
-    // 9.60, where the sqlite app.db is unreadable; see verify_launchable).
-    // See ps5upload_core::pkg_install::verify_launchable.
+    // ── progress-driven completion tracking ────────────────────────────
+    // The payload reports a *synthetic* Done the instant Sony *accepts* the
+    // task (shellui-rpc / appinst-local) — long before a large title is
+    // actually written. So on Done we don't trust the timer; we OBSERVE the
+    // install to completion: poll the on-disk launch check (authoritative
+    // "done") AND the bytes landing (free-space drop / title-dir growth), and
+    // only declare the install *complete* — the sole state that lets the
+    // staging cleanup below delete the uploaded pkg — when the title genuinely
+    // registered (or, on unverifiable FW, when ~all expected bytes settled).
+    // A flatline past the adaptive deadline is a *stall*: terminal, but the
+    // pkg is KEPT so the user can retry. See `install_verdict`.
     let mut launchable: Option<bool> = None;
+    // True only on confirmed completion — gates BOTH the staging cleanup and
+    // the terminal-status cache. Stalls/errors are terminal but NOT complete.
+    let mut terminal_complete = false;
+    let mut stalled = false;
     if matches!(status.phase, InstallPhase::Done) {
         let addr = ps5_addr.clone();
         let cid = content_id.clone();
@@ -872,49 +1093,134 @@ async fn install_status_handler(
         .await
         .unwrap_or(ps5upload_core::pkg_install::LaunchCheck::Unsupported);
 
-        match check {
-            // Title row present — definitively launchable. Overrides the
-            // register_path heuristic, so even an appinst-local install
-            // that genuinely booted now reports a clean success.
-            ps5upload_core::pkg_install::LaunchCheck::Registered => launchable = Some(true),
-            // Verification not applicable (sqlite unavailable on this FW, no
-            // real title_id, or RPC error) — keep the legacy optimistic
-            // behavior: terminal Done, fall back to the may_not_launch
-            // heuristic. No regression vs. pre-verification builds.
-            ps5upload_core::pkg_install::LaunchCheck::Unsupported => launchable = None,
-            // app.db readable but the title isn't registered yet. Inside the
-            // promotion window, keep the client polling (the title is still
-            // being written); past it, declare it unlaunchable.
-            ps5upload_core::pkg_install::LaunchCheck::Absent => {
-                let window = pkg_verify_window_sec();
-                let now = now_unix();
-                let started = {
-                    let mut sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
-                    match sessions.get_mut(&q.session) {
-                        Some(s) => *s.verify_started_unix.get_or_insert(now),
-                        None => now,
+        // Normalize to the tracker's registered-observation.
+        let registered: RegisteredObs = match check {
+            ps5upload_core::pkg_install::LaunchCheck::Registered => Some(true),
+            ps5upload_core::pkg_install::LaunchCheck::Absent => Some(false),
+            ps5upload_core::pkg_install::LaunchCheck::Unsupported => None,
+        };
+
+        // Observe bytes consumed this poll (off-reactor: two blocking FS
+        // frames). Best-effort — an unreadable signal contributes 0.
+        let title_id =
+            ps5upload_core::pkg_install::title_id_from_content_id(&content_id).unwrap_or_default();
+        let baseline = {
+            let sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
+            sessions
+                .get(&q.session)
+                .and_then(|s| s.install_start_free_bytes)
+        };
+        let (consumed_now, baseline_free) = {
+            let addr = ps5_addr.clone();
+            let tid = title_id.clone();
+            tokio::task::spawn_blocking(move || {
+                // Capture the free-space baseline on the first poll, then
+                // measure drop against it on every subsequent poll.
+                let base = baseline.or_else(|| current_free_bytes(&addr));
+                let consumed = observe_consumed(&addr, &tid, base);
+                (consumed, base)
+            })
+            .await
+            .unwrap_or((0, baseline))
+        };
+
+        let now = now_unix();
+        // Update the session's monotonic progress + stall clock, and read back
+        // the values the verdict needs.
+        let (consumed, idle_sec) = {
+            let mut sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
+            match sessions.get_mut(&q.session) {
+                Some(s) => {
+                    if s.install_start_free_bytes.is_none() {
+                        s.install_start_free_bytes = baseline_free;
                     }
-                };
-                if now.saturating_sub(started) < window {
-                    // Downgrade the reported phase to Install: keeps the UI
-                    // in "installing" AND skips the terminal-cache / staging-
-                    // cleanup blocks below (both guard on Done|Error), so the
-                    // next poll re-verifies instead of replaying a premature
-                    // terminal.
-                    status.phase = InstallPhase::Install;
-                } else {
-                    launchable = Some(false);
+                    // Monotonic: a noisy free-space blip up can't look like a
+                    // regression and falsely advance/reset anything.
+                    if consumed_now > s.progress_consumed_bytes {
+                        s.progress_consumed_bytes = consumed_now;
+                        s.last_progress_unix = Some(now);
+                    }
+                    let started = *s.last_progress_unix.get_or_insert(now);
+                    (s.progress_consumed_bytes, now.saturating_sub(started))
                 }
+                None => (consumed_now, 0),
+            }
+        };
+
+        let obs = TrackerObs {
+            registered,
+            consumed,
+            expected: total,
+            idle_sec,
+            startup_sec: install_stall_startup_sec(),
+            mid_sec: install_stall_mid_sec(),
+            neardone_sec: install_stall_neardone_sec(),
+            settle_sec: install_settle_sec(),
+        };
+        match install_verdict(&obs) {
+            InstallVerdict::Complete => {
+                // Confirmed done. `Some(true)` when the title registered;
+                // `None` on unverifiable FW that settled by byte-accounting
+                // (fall back to the may_not_launch heuristic, as before).
+                launchable = if registered == Some(true) {
+                    Some(true)
+                } else {
+                    None
+                };
+                terminal_complete = true;
+                // Always log completion (even when auto-delete is off and the
+                // "staging cleaned" line won't fire) so a bug bundle shows the
+                // install ran to genuine completion, by which signal, and how
+                // many bytes it took — the timeline the old code never recorded.
+                crate::log_info!(
+                    "install complete: session={} content_id={} via={} consumed={} expected={} idle_sec={}",
+                    q.session,
+                    content_id,
+                    if registered == Some(true) { "registered" } else { "byte-settle" },
+                    consumed,
+                    total,
+                    idle_sec
+                );
+            }
+            InstallVerdict::Installing => {
+                // Downgrade to Install: keeps the UI in "installing", surfaces
+                // the live % (installed_bytes/total), and skips the terminal/
+                // cleanup blocks so the next poll re-observes. The staging pkg
+                // is left in place — Sony's installer is still reading it.
+                status.phase = InstallPhase::Install;
+            }
+            InstallVerdict::Stalled => {
+                // No disk progress past the adaptive deadline. Terminal, but
+                // NOT complete: report an error AND KEEP the pkg (retry path).
+                status.phase = InstallPhase::Error;
+                stalled = true;
+                launchable = Some(false);
+                if status.detail.is_empty() {
+                    status.detail = format!(
+                        "install stalled: no disk progress for {}s ({} of {} bytes written)",
+                        idle_sec, consumed, total
+                    );
+                }
+                crate::log_warn!(
+                    "install stalled (pkg KEPT): session={} content_id={} consumed={} expected={} idle_sec={}",
+                    q.session,
+                    content_id,
+                    consumed,
+                    total,
+                    idle_sec
+                );
             }
         }
     }
 
-    // 2.2.52 Tier-1 staging cleanup. On terminal phase (Done | Error),
-    // delete the staging file the desktop uploaded pre-install. We
-    // `take()` the path so we never re-issue a delete on subsequent
-    // polls. Best-effort: fs_delete failure is logged but not
-    // propagated — the payload's 24h sweep is the safety net.
-    if matches!(status.phase, InstallPhase::Done | InstallPhase::Error) {
+    // Tier-1 staging cleanup — delete the uploaded pkg ONLY on confirmed
+    // completion (`terminal_complete`). Previously this fired on any terminal
+    // phase (Done|Error), which deleted the pkg mid-install for large titles
+    // (Sony reads it for the whole install) AND deleted it on a failed install
+    // — the reported data-loss. Now a stall / error / not-yet-confirmed Done
+    // KEEPS the pkg; only a genuine "the title registered" deletes it. We
+    // `take()` the path so we never re-issue a delete on later polls.
+    if terminal_complete {
         let path_to_clean = {
             let mut sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
             sessions
@@ -953,17 +1259,38 @@ async fn install_status_handler(
 
     // Snapshot the terminal status so later polls replay it instead of
     // re-hitting the (soon-to-be-reaped) BGFT task — see the short-circuit
-    // at the top of this handler.
-    if matches!(status.phase, InstallPhase::Done | InstallPhase::Error) {
+    // at the top of this handler. Terminal = a confirmed-complete Done, a
+    // stall (phase forced to Error above), or a genuine BGFT error. A Done
+    // that the tracker downgraded to Install is NOT terminal — keep polling.
+    let installed_bytes = if matches!(status.phase, InstallPhase::Done | InstallPhase::Error) {
         let mut sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(s) = sessions.get_mut(&q.session) {
             s.terminal_status = Some(status.clone());
             s.launchable = launchable;
+            s.stalled = stalled;
+            s.progress_consumed_bytes
+        } else {
+            cached_consumed
         }
-    }
+    } else {
+        // Live in-progress poll: surface the running consumed total for the
+        // client's live % (installed_bytes / total).
+        let sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
+        sessions
+            .get(&q.session)
+            .map(|s| s.progress_consumed_bytes)
+            .unwrap_or(cached_consumed)
+    };
 
     json_ok(&build_status_response(
-        q.session, status, total, cancelled, task_id, launchable,
+        q.session,
+        status,
+        total,
+        cancelled,
+        task_id,
+        launchable,
+        installed_bytes,
+        stalled,
     ))
 }
 
@@ -971,6 +1298,7 @@ async fn install_status_handler(
 /// `fallback_total` is our own known size, used when BGFT reports 0
 /// (which it does before the download starts). Shared by the live path
 /// and the cached-terminal replay so both render identically.
+#[allow(clippy::too_many_arguments)] // flat builder for the wire struct's fields
 fn build_status_response(
     session_id: String,
     status: PkgInstallStatus,
@@ -978,6 +1306,8 @@ fn build_status_response(
     cancelled: bool,
     task_id: i32,
     launchable: Option<bool>,
+    installed_bytes: u64,
+    stalled: bool,
 ) -> StatusResponse {
     let total = if status.total > 0 {
         status.total
@@ -1001,6 +1331,8 @@ fn build_status_response(
         shellui_err: status.shellui_err,
         appinst_err: status.appinst_err,
         via: ps5upload_core::pkg_install::via_tier(task_id).to_string(),
+        installed_bytes,
+        stalled,
     }
 }
 
@@ -1613,6 +1945,127 @@ fn now_unix() -> u64 {
 mod tests {
     use super::*;
 
+    // ── progress-driven install tracker (the large-pkg data-loss fix) ──
+    //
+    // These pin the brain of the tracker — the pure `install_verdict`. The
+    // failure they guard against: a 25 GB / 200 GB install reported "done"
+    // after a fixed timer, deleting the staged pkg WHILE Sony was still
+    // installing from it. The cure is "Complete only on observed completion".
+
+    /// Build a TrackerObs with sane defaults (1 GB GB expected, idle 0), so
+    /// each test sets only the dimension it exercises.
+    fn obs(registered: RegisteredObs, consumed: u64, expected: u64, idle_sec: u64) -> TrackerObs {
+        TrackerObs {
+            registered,
+            consumed,
+            expected,
+            idle_sec,
+            startup_sec: 120,
+            mid_sec: 240,
+            neardone_sec: 600,
+            settle_sec: 60,
+        }
+    }
+
+    #[test]
+    fn verdict_registered_is_complete_regardless_of_bytes_or_idle() {
+        // The authoritative signal wins instantly — even with zero observed
+        // bytes (the dir/free-space signals can lag the rename-into-place) and
+        // a long idle. This is the ONLY path that deletes a verified pkg.
+        assert_eq!(
+            install_verdict(&obs(Some(true), 0, 25_000_000_000, 9_999)),
+            InstallVerdict::Complete
+        );
+    }
+
+    #[test]
+    fn verdict_large_install_in_progress_is_never_complete() {
+        // The exact Bloodborne shape: 25 GB expected, title not yet registered,
+        // a few GB written, progress recent (idle 8s). MUST be Installing — the
+        // old code returned "done" here and deleted the pkg mid-install.
+        let v = install_verdict(&obs(Some(false), 3_000_000_000, 25_000_000_000, 8));
+        assert_eq!(v, InstallVerdict::Installing);
+    }
+
+    #[test]
+    fn verdict_progress_resets_stall_for_slow_but_advancing_install() {
+        // Even a 200 GB install that's only 10% done stays Installing as long
+        // as bytes keep landing (idle below the mid deadline). Size-agnostic.
+        let v = install_verdict(&obs(Some(false), 20_000_000_000, 200_000_000_000, 200));
+        assert_eq!(v, InstallVerdict::Installing);
+    }
+
+    #[test]
+    fn verdict_mid_install_flatline_stalls() {
+        // Some bytes landed but well short of target, and NO progress past the
+        // mid deadline → genuinely stuck → Stalled (terminal, but pkg kept).
+        let v = install_verdict(&obs(Some(false), 5_000_000_000, 25_000_000_000, 241));
+        assert_eq!(v, InstallVerdict::Stalled);
+        // One second earlier it must still be Installing (boundary).
+        let v = install_verdict(&obs(Some(false), 5_000_000_000, 25_000_000_000, 239));
+        assert_eq!(v, InstallVerdict::Installing);
+    }
+
+    #[test]
+    fn verdict_near_done_is_patient_past_the_mid_deadline() {
+        // ≥90% consumed → the final commit/register phase writes ~nothing, so a
+        // flatline that WOULD trip the mid deadline (241s) must NOT stall yet —
+        // we wait out the longer near-done window for the title to register.
+        let v = install_verdict(&obs(Some(false), 24_000_000_000, 25_000_000_000, 300));
+        assert_eq!(v, InstallVerdict::Installing);
+        // …but a flatline past the near-done window is still a stall.
+        let v = install_verdict(&obs(Some(false), 24_000_000_000, 25_000_000_000, 601));
+        assert_eq!(v, InstallVerdict::Stalled);
+    }
+
+    #[test]
+    fn verdict_startup_grace_before_any_bytes() {
+        // Zero bytes consumed (Sony hasn't begun writing) gets the startup
+        // grace, not the stricter mid deadline.
+        assert_eq!(
+            install_verdict(&obs(Some(false), 0, 25_000_000_000, 119)),
+            InstallVerdict::Installing
+        );
+        assert_eq!(
+            install_verdict(&obs(Some(false), 0, 25_000_000_000, 121)),
+            InstallVerdict::Stalled
+        );
+    }
+
+    #[test]
+    fn verdict_unsupported_fw_completes_on_byte_settle() {
+        // No launch verification possible (None). Byte-accounting is the signal:
+        // ~all expected bytes landed AND writing settled ⇒ Complete (delete ok).
+        let v = install_verdict(&obs(None, 24_500_000_000, 25_000_000_000, 60));
+        assert_eq!(v, InstallVerdict::Complete);
+        // Settled but well short of expected ⇒ NOT complete (don't delete).
+        let v = install_verdict(&obs(None, 10_000_000_000, 25_000_000_000, 300));
+        assert_eq!(v, InstallVerdict::Stalled);
+        // ~all bytes but not yet settled ⇒ still Installing (let it settle).
+        let v = install_verdict(&obs(None, 24_800_000_000, 25_000_000_000, 30));
+        assert_eq!(v, InstallVerdict::Installing);
+    }
+
+    #[test]
+    fn verdict_unknown_size_never_false_completes() {
+        // expected == 0 (size unknown) ⇒ fraction 0, so the settle/near-done
+        // shortcuts can't fire. It can only ever be Installing or, on a true
+        // flatline, Stalled — never a spurious Complete that deletes the pkg.
+        assert_eq!(
+            install_verdict(&obs(None, 9_999, 0, 10)),
+            InstallVerdict::Installing
+        );
+        assert_eq!(
+            install_verdict(&obs(None, 9_999, 0, 999)),
+            InstallVerdict::Stalled
+        );
+        // …unless the title actually registers.
+        assert_eq!(
+            install_verdict(&obs(Some(true), 0, 0, 0)),
+            InstallVerdict::Complete
+        );
+    }
+
     // ── delete_staging / staging cleanup (the Auto-Delete data-loss fix) ──
 
     #[test]
@@ -1757,8 +2210,11 @@ mod tests {
             created_at_unix: 0,
             staging_path: None,
             terminal_status: None,
-            verify_started_unix: None,
             launchable: None,
+            install_start_free_bytes: None,
+            progress_consumed_bytes: 0,
+            last_progress_unix: None,
+            stalled: false,
         }
     }
 

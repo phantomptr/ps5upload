@@ -298,84 +298,132 @@ function mergeListing(prev: PkgEntry[], listed: PkgEntry[]): PkgEntry[] {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export interface PkgInstallOutcome {
-  /** The install registered with Sony's installer (rc==0 or DPI ok). */
+  /** The install COMPLETED — Sony's installer accepted it AND the engine's
+   *  progress tracker confirmed the title actually landed (or DPI ok). This is
+   *  the ONLY state in which the staged pkg may be deleted. A stall or an async
+   *  failure leaves this false so the pkg is KEPT. */
   installed: boolean;
   /** Installed only via the unlaunchable last-resort path (may not start on
    *  some firmware, notably FW 12.xx). Surface a caution, not a clean OK. */
   mayNotLaunch: boolean;
   /** First error seen (empty when installed cleanly). */
   errMessage: string;
+  /** The install STALLED — accepted, but disk progress flatlined before the
+   *  title registered (e.g. a wedged large install). The staged pkg is KEPT so
+   *  the user can retry; the UI shows a "stalled — package kept" message rather
+   *  than a generic failure. `installed` is false. */
+  stalled?: boolean;
 }
 
 /**
- * How long to wait for the async install to reach a terminal phase after the
- * payload *accepts* the task. `pkg_install_start` returning rc==0 only means
- * "Sony's installer accepted the task" — the actual decrypt+write runs
- * asynchronously and can still fail (the FW-12.xx "installs but the tile is
- * corrupted" symptom). We poll the real status so a Sony-reported failure
- * surfaces as a failure instead of a false success. A genuine reject arrives
- * fast; a large legitimate install may still be writing when this elapses, so
- * on timeout we stay optimistic (no regression vs. the old accept==success).
- *
- * The window must comfortably exceed the engine's app.db verification budget
- * (PKG_VERIFY_WINDOW_SEC, default 90s) so we actually observe the definitive
- * `launchable` verdict the engine resolves to — Sony promotes content
- * asynchronously after accepting the task, and the synthetic-DONE tiers
- * (shellui-rpc / appinst-local) only become provably launchable once the
- * title row appears in app.db. The common cases stay fast: a quick register →
- * `done` + launchable arrives in seconds, and firmwares where app.db isn't
- * readable resolve to `done` on the first poll (engine returns launchable
- * null). Only the genuine "accepted but never registered" failure case waits
- * out the window — which is exactly when waiting is worth it.
+ * How often to poll `pkg_install_status` while tracking an install to
+ * completion. The engine, not a client-side timer, decides when the install is
+ * terminal: it polls the on-disk launch check + bytes-landing and reports
+ * `done` (confirmed), `error`/`stalled` (terminal failure, pkg kept), or
+ * `install` (still progressing — keep polling). So there is NO fixed client
+ * deadline that could declare a large install "done" prematurely (the old
+ * 100s-then-optimistic window is exactly what deleted the 25 GB Bloodborne pkg
+ * mid-install). We poll until the engine says terminal, scaling to any size.
  */
-const PKG_VERIFY_WINDOW_MS = 100_000;
-const PKG_VERIFY_POLL_MS = 1_500;
-/** Give up verifying (stay optimistic) after this many consecutive poll
- *  errors — e.g. the engine GC'd the session, or a transient socket blip. */
-const PKG_VERIFY_MAX_POLL_ERRORS = 3;
+const PKG_VERIFY_POLL_MS = 2_500;
+/** Give up tracking after this many consecutive poll errors (e.g. the engine
+ *  GC'd the session, or a sustained socket failure). On give-up we do NOT
+ *  assume success — `completed` stays false so the pkg is KEPT (never delete on
+ *  uncertainty). */
+const PKG_VERIFY_MAX_POLL_ERRORS = 5;
+/** Absolute backstop so a pathological engine that keeps returning "install"
+ *  forever can't block the queue indefinitely. Generously past the engine's
+ *  own 2h session GC — under normal operation the engine reaches a terminal
+ *  verdict (done/stalled) long before this. On hitting it we KEEP the pkg. */
+const PKG_VERIFY_SAFETY_CAP_MS = 3 * 60 * 60 * 1000;
 
 /** Re-install guidance appended when Sony fails the async install — mirrors the
  *  may-not-launch copy so the user has a concrete next step. */
 const PKG_ASYNC_FAILED_HINT =
   'the PS5 reported the install didn’t complete (the tile may show "Can’t start the game or app. The data is corrupted."). Re-install from the PS5: Settings → System → Debug Settings → Game → Package Installer.';
 
+/** Stall guidance — the install accepted but disk progress flatlined. The
+ *  staged pkg was KEPT, so the user can simply retry. */
+const PKG_STALL_HINT =
+  "the install stopped making progress on the PS5 before it finished. The package was kept on the PS5 — try installing it again (and check the console has enough free space).";
+
+/** What the install tracker concludes. */
+interface VerifyOutcome {
+  /** Confirmed complete — the title registered (or byte-settled on
+   *  unverifiable FW). The ONLY state that permits deleting the staged pkg. */
+  completed: boolean;
+  /** Terminal failure or stall — `completed` is false and the pkg is KEPT. */
+  failed: boolean;
+  /** Specifically a stall (flatlined), as opposed to a Sony-reported error. */
+  stalled: boolean;
+  message: string;
+  launchable?: boolean | null;
+}
+
 /**
- * Poll `pkg_install_status` until the install reaches a terminal phase, to
- * catch an install the payload accepted but Sony's installer then failed
- * asynchronously. Returns `{ failed: true, message }` only on a definitive
- * `error` phase; every other outcome (done, timeout, un-pollable session, or
- * an engine too old to report a `phase`) returns `{ failed: false }` so we
- * never downgrade a real success.
+ * Track an install to a genuine terminal state by polling `pkg_install_status`.
+ *
+ * Unlike the old fixed-window verify, this NEVER assumes success on a timeout —
+ * the engine's progress tracker observes the install (on-disk launch check +
+ * bytes landing) and tells us `done` (confirmed), `error`/`stalled` (terminal,
+ * pkg kept), or keeps reporting `install` while bytes are still landing. We
+ * poll until terminal, so a 25 GB or 200 GB install is tracked to actual
+ * completion instead of being declared done after 100s and deleted mid-write.
+ *
+ * `onProgress(installedBytes, total)` is called each poll so callers can render
+ * a live install % for large titles.
  */
 async function verifyInstallCompleted(
   session: string | undefined,
-): Promise<{ failed: boolean; message: string; launchable?: boolean | null }> {
+  onProgress?: (installedBytes: number, total: number) => void,
+): Promise<VerifyOutcome> {
   // No session id ⇒ older engine (or a test harness) that can't report status.
-  // Can't verify — preserve the pre-fix optimistic behavior.
-  if (!session) return { failed: false, message: "" };
-  const deadline = Date.now() + PKG_VERIFY_WINDOW_MS;
+  // Can't verify — preserve the pre-fix optimistic behavior (treat as done).
+  if (!session)
+    return { completed: true, failed: false, stalled: false, message: "" };
+  const safetyDeadline = Date.now() + PKG_VERIFY_SAFETY_CAP_MS;
   let pollErrors = 0;
-  while (Date.now() < deadline) {
+  while (Date.now() < safetyDeadline) {
     await sleep(PKG_VERIFY_POLL_MS);
     try {
       const s = (await invoke("pkg_install_status", { session })) as {
         phase?: string;
         err_code?: number;
         err_message?: string;
-        // Engine's definitive app.db launchability verdict, present once the
-        // install reaches a terminal phase. null/absent = not applicable.
         launchable?: boolean | null;
+        // Progress-tracker fields (engine ≥ this release). Absent on older
+        // engines (serde default) — then we just don't render a live %.
+        installed_bytes?: number;
+        total?: number;
+        stalled?: boolean;
       };
       // An engine that doesn't speak status returns no `phase` — treat as
-      // "can't verify" and stop (stay optimistic) rather than spin to timeout.
-      if (typeof s?.phase !== "string") return { failed: false, message: "" };
+      // "can't verify" and resolve done (stay optimistic), no infinite spin.
+      if (typeof s?.phase !== "string")
+        return { completed: true, failed: false, stalled: false, message: "" };
+      if (typeof s.installed_bytes === "number" && typeof s.total === "number") {
+        onProgress?.(s.installed_bytes, s.total);
+      }
       if (s.phase === "error") {
+        // Distinguish a stall (flatlined, pkg kept, retry) from a Sony-reported
+        // async failure — both are terminal and both KEEP the pkg.
+        if (s.stalled) {
+          return {
+            completed: false,
+            failed: true,
+            stalled: true,
+            message: PKG_STALL_HINT,
+            launchable: s.launchable,
+          };
+        }
         const code = (s.err_code ?? 0) >>> 0;
         const sony =
           s.err_message ||
           (code ? `0x${code.toString(16).padStart(8, "0")}` : "");
         return {
+          completed: false,
           failed: true,
+          stalled: false,
           message: sony
             ? `${sony} — ${PKG_ASYNC_FAILED_HINT}`
             : PKG_ASYNC_FAILED_HINT,
@@ -383,21 +431,33 @@ async function verifyInstallCompleted(
         };
       }
       if (s.phase === "done") {
-        // Terminal success — carry the engine's launchability verdict back so
-        // the caller can show a definitive result instead of the heuristic.
-        return { failed: false, message: "", launchable: s.launchable };
+        // Confirmed terminal success — the engine only reports `done` once the
+        // title actually registered (or byte-settled). Safe to delete.
+        return {
+          completed: true,
+          failed: false,
+          stalled: false,
+          message: "",
+          launchable: s.launchable,
+        };
       }
       pollErrors = 0; // a clean in-progress poll resets the error streak
     } catch {
-      // Session GC'd or a transient blip: don't fail the install on polling
-      // trouble — give up verifying after a few and stay optimistic.
+      // Session GC'd or a sustained blip: after a few, give up tracking — but
+      // do NOT assume success. `completed:false` keeps the pkg (never delete on
+      // uncertainty); the install may well have finished, so don't shout error.
       if (++pollErrors >= PKG_VERIFY_MAX_POLL_ERRORS) {
-        return { failed: false, message: "" };
+        return {
+          completed: false,
+          failed: false,
+          stalled: false,
+          message: "",
+        };
       }
     }
   }
-  // Still installing when the window elapsed (large title): stay optimistic.
-  return { failed: false, message: "" };
+  // Safety cap hit (pathological): keep the pkg, don't claim success.
+  return { completed: false, failed: false, stalled: false, message: "" };
 }
 
 /**
@@ -425,9 +485,16 @@ export async function runPkgInstall(
   // the single source of truth for staging deletion now — previously the engine
   // always deleted, ignoring the setting (the reported data-loss bug).
   deleteStaging: boolean,
+  // Called each status poll with the install's live byte progress, so the UI
+  // can render a real % for large titles (Sony's BGFT progress isn't
+  // meaningful on the file:// staging path). Optional — no-op if omitted.
+  onProgress?: (installedBytes: number, total: number) => void,
 ): Promise<PkgInstallOutcome> {
   const ip = hostOf(host);
   let installed = false;
+  // True when the install accepted but stalled (flatlined) before completing —
+  // the pkg is KEPT and the caller shows a retry message, not a hard failure.
+  let stalled = false;
   // Whether the payload *rejected* the install at register time (rc != 0 or an
   // RPC error). Only a genuine start rejection should trigger the DPI fallback
   // — an install that was ACCEPTED but then failed Sony's async install must
@@ -455,24 +522,27 @@ export async function runPkgInstall(
     };
     const rc = (r.err_code ?? 0) >>> 0;
     if (rc === 0) {
-      // Accept != complete. Verify the async install actually finished before
-      // reporting success — this is what catches the FW-12.xx case where the
-      // in-process InstallByPackage tier accepts the task, then Sony's
-      // installer fails the write and leaves an unlaunchable tile.
-      const verdict = await verifyInstallCompleted(r.session_id);
-      if (verdict.failed) {
-        mainErr = verdict.message;
-        // installed stays false, startRejected stays false → no DPI fallback.
-      } else {
+      // Accept != complete. TRACK the async install to a genuine terminal state
+      // before reporting success — the engine observes it to completion (no
+      // size-blind timer), so a large install isn't declared done early and its
+      // staged pkg deleted mid-write (the Bloodborne data-loss).
+      const verdict = await verifyInstallCompleted(r.session_id, onProgress);
+      if (verdict.completed) {
         installed = true;
         // Prefer the engine's definitive app.db verdict captured during
         // verification; fall back to the register_path heuristic when the
-        // status poll didn't carry one (older engine, app.db unreadable, or
-        // the window elapsed while still promoting).
+        // status poll didn't carry one (older engine, or app.db unreadable).
         mayNotLaunch = pkgInstallMayNotLaunch({
           ...r,
           launchable: verdict.launchable,
         });
+      } else {
+        // Stall, async failure, or unconfirmed. `installed` stays false → the
+        // pkg is KEPT (never deleted on a non-confirmed install). startRejected
+        // stays false → NO DPI fallback (the task was accepted; DPI's
+        // metadata-only install would just produce the corrupted tile).
+        mainErr = verdict.message;
+        stalled = verdict.stalled;
       }
     } else {
       startRejected = true;
@@ -527,7 +597,7 @@ export async function runPkgInstall(
         `Install was rejected (0x${rc.toString(16).padStart(8, "0")}).`;
     }
   }
-  return { installed, mayNotLaunch, errMessage: mainErr };
+  return { installed, mayNotLaunch, errMessage: mainErr, stalled };
 }
 
 /**
@@ -909,8 +979,24 @@ const makePkgLibraryStore = () =>
       // below is also gated on the same setting, so OFF means truly kept).
       const autoRemove =
         useInstallSettingsStore.getState().autoRemoveAfterInstall;
-      const { installed, mayNotLaunch, errMessage: mainErr } =
-        await runPkgInstall(host, path, entry?.contentId || null, autoRemove);
+      const { installed, mayNotLaunch, errMessage: mainErr, stalled } =
+        await runPkgInstall(
+          host,
+          path,
+          entry?.contentId || null,
+          autoRemove,
+          // Live install %: a large title installs over minutes — show progress
+          // instead of a frozen spinner. Guarded so a 0 total can't divide.
+          (installedBytes, total) => {
+            if (total > 0) {
+              const pct = Math.min(
+                99,
+                Math.floor((installedBytes / total) * 100),
+              );
+              set({ busyNotice: `Installing on the PS5… ${pct}%` });
+            }
+          },
+        );
 
       if (installed) {
         patch({ status: "idle", lastResult: installedLastResult(mayNotLaunch) });
@@ -930,6 +1016,16 @@ const makePkgLibraryStore = () =>
           );
         }
       } else {
+        // Not completed → the pkg was KEPT on the PS5 (never deleted on a
+        // non-confirmed install). A stall gets the retry-oriented copy; a hard
+        // failure gets the reject copy. Either way the staged pkg is still
+        // there, so re-running the install is the natural next step.
+        log.info(
+          "install",
+          stalled
+            ? `install stalled — staged pkg KEPT for retry: ${path}`
+            : `install not confirmed — staged pkg KEPT: ${path}`,
+        );
         patch({
           status: "idle",
           lastResult: { ok: false, message: mainErr || "Install was rejected." },

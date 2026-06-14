@@ -4,6 +4,31 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 3.3.3
+
+A big-install data-loss fix, plus the in-app updater.
+
+- **Large PKGs (25 GB, 100 GB, 200 GB+) install reliably now.** The tool used to
+  decide an install was "done" after a fixed ~100-second timer, then delete the
+  uploaded PKG — but Sony's installer reads that PKG for the *entire* install,
+  which for a big game takes many minutes. So a 25 GB game would upload, get
+  deleted mid-install, and leave you with no game and no PKG (the reported
+  Bloodborne case on FW 12.20). The tool now **watches the install actually
+  finish** instead of guessing: it tracks the title landing on the console and
+  the bytes writing to disk, with no size limit, and only deletes the staged PKG
+  once the install is genuinely complete. A live install **percentage** shows
+  while a big title installs in the background.
+- **Stalled installs keep your PKG.** If an install stops making progress before
+  it finishes, the tool now says so and **keeps the PKG on the PS5** so you can
+  retry — it never deletes a package for an install that didn't complete.
+- **In-app update works on Android (and everywhere).** "Download update" used to
+  fail on Android (it tried to launch a desktop-style opener); it now opens the
+  release via the proper system handler on every platform, with OS/arch detected
+  automatically.
+- **Processes screen won't offer to kill the tool itself.** The helper's own
+  process is now marked and its Kill/Restart actions disabled — no more
+  confusing "Operation not permitted" when trying to kill it.
+
 ## 3.3.2
 
 A data-loss fix.
