@@ -979,6 +979,11 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
           // UI doesn't show NaN MiB/s on the first render after
           // upgrade.
           if (typeof next.bytesPerSec !== "number") next.bytesPerSec = 0;
+          // Back-fill reconcileMode — a pre-reconcile persisted "resume" item
+          // would otherwise pass undefined to startTransferDirReconcile (whose
+          // engine arg is non-optional ReconcileMode). "fast" matches the
+          // current add-time default.
+          if (next.reconcileMode == null) next.reconcileMode = "fast";
           // Back-fill the mountWarnings field added in 2.2.52 — older
           // persisted docs don't carry it. Default to empty so the UI
           // can blindly read .mountWarnings.length without optional-
