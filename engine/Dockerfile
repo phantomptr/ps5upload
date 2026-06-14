@@ -2,7 +2,7 @@
 #   docker build -t ps5upload-engine engine/
 #   docker run --rm -p 19113:19113 -e PS5_ADDR=192.168.1.50:9113 ps5upload-engine
 # Env: PS5UPLOAD_ENGINE_PORT (19113), PS5_ADDR (192.168.137.2:9113),
-#      PS5UPLOAD_ALLOW_IP (one extra IP allowed past the loopback guard).
+#      PS5UPLOAD_ALLOW_IP (comma-separated IPs allowed past the loopback guard).
 
 FROM rust:alpine AS builder
 
