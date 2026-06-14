@@ -4,6 +4,34 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 3.3.0
+
+A big feature release.
+
+- **Process manager (new Processes tab).** A live task-manager for your PS5:
+  see every running process with its memory and thread count, **Kill** anything,
+  or **Restart** a game (closes + relaunches it). User payloads and games show by
+  default; a toggle reveals system processes, and killing a system or game
+  process asks first. Hardware-verified.
+- **Quick bring-up.** One tap on the Connection screen runs your bring-up
+  payloads (kernel R/W, SMP), sends the helper, and waits until the PS5 is ready
+  — instead of sending each one by hand every boot. Configure the chain in
+  Payloads → Playlists.
+- **Auto-loader.** Pick a playlist that runs by itself whenever a PS5's helper
+  becomes ready (after first-time setup or a reconnect).
+- **Drag-and-drop payloads into a playlist.** Drag one or more payloads onto the
+  Playlists panel to build a playlist in one gesture (or "From files…").
+- **Unified file/folder picker.** The Upload screen's two buttons are now one
+  **Browse** menu, and drag-drop auto-detects file vs folder.
+- **Game art on the upload queue.** Queue rows now show the game's cover, name,
+  and PS4/PS5 badge so you can tell what's what at a glance.
+- **Faster Library.** Big libraries no longer lag on search and refresh —
+  rows are memoized, the list reconciles in place, search is debounced, and
+  thumbnails load as you scroll.
+- Plus a sweep of bug, logging, performance, and cross-platform fixes from a
+  multi-perspective review (kill/playlist failures now leave a trace in bug
+  reports, drag-drop hit-testing, process-poll throttling, and more).
+
 ## 3.2.9
 
 - **Shutdown now fully powers off the PS5.** The Shutdown button was putting the
