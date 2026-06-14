@@ -184,7 +184,7 @@ volumes_empty_title: "표시되는 볼륨 없음",
 volumes_empty_message: "Payload가 쓰기 가능한 드라이브를 반환하지 않았습니다. 로드되었고 PS5에 스토리지가 연결되어 있는지 확인하세요.",
 
 status_engine: "엔진",
-status_engine_tooltip: "localhost:19113의 ps5upload-engine 사이드카",
+status_engine_tooltip: "{url}의 ps5upload-engine 사이드카",
 status_payload: "도우미",
 status_payload_tooltip: ":9113의 PS5Upload 도우미",
 status_kernel_ok: "kernel OK",

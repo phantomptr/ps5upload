@@ -6,6 +6,7 @@ import { useLangStore } from "./lang";
 import { useKeepAwakeStore } from "./keepAwake";
 import { useUploadSettingsStore } from "./uploadSettings";
 import { useConnectionStore } from "./connection";
+import { useEngineStore, normalizeEngineUrl } from "./engine";
 
 /**
  * Mirror all persisted user settings to `~/.ps5upload/settings.json`.
@@ -32,6 +33,9 @@ interface SettingsSnapshot {
   /** PS5 IP address the Connection screen probes + sends payload to.
    *  Survives relaunch so users don't re-type it every session. */
   ps5_host?: string;
+  /** Base URL of the engine the UI talks to. Default is the local
+   *  sidecar; can point at a remote/self-hosted engine. */
+  engine_url?: string;
   keep_awake?: boolean;
   upload?: {
     always_overwrite?: boolean;
@@ -46,6 +50,7 @@ function snapshotCurrent(): SettingsSnapshot {
     theme: useThemeStore.getState().theme,
     lang: useLangStore.getState().lang,
     ps5_host: useConnectionStore.getState().host,
+    engine_url: useEngineStore.getState().engineUrl,
     keep_awake: useKeepAwakeStore.getState().enabled,
     upload: {
       always_overwrite: useUploadSettingsStore.getState().alwaysOverwrite,
@@ -99,6 +104,21 @@ export function installUserConfigMirror() {
   // connection-store update; the debounce coalesces those into a
   // single write.
   useConnectionStore.subscribe(schedulePersist);
+  // Engine URL: persist to disk AND push to the Rust shell so its command
+  // proxies follow the change live (the spawn-mode switch still needs a
+  // restart). Fires on any engine-store change.
+  useEngineStore.subscribe((s) => {
+    schedulePersist();
+    pushEngineUrl(s.engineUrl);
+  });
+}
+
+/** Tell the Rust shell which engine URL its proxies should hit. */
+function pushEngineUrl(url: string): void {
+  if (!isTauriEnv()) return;
+  invoke("engine_url_set", { url }).catch((e) => {
+    console.warn("[settings-mirror] engine_url_set failed:", e);
+  });
 }
 
 /** Force an immediate (non-debounced) write of the current snapshot.
@@ -166,6 +186,18 @@ export async function hydrateFromUserConfig(): Promise<void> {
   ) {
     useConnectionStore.getState().setHost(data.ps5_host);
   }
+  const liveEngineUrl = useEngineStore.getState().engineUrl;
+  if (
+    typeof data.engine_url === "string" &&
+    data.engine_url.trim() &&
+    normalizeEngineUrl(data.engine_url) !== liveEngineUrl
+  ) {
+    useEngineStore.getState().setEngineUrl(data.engine_url);
+  }
+  // Push the resolved engine URL to the Rust shell regardless of whether
+  // it changed here — the shell read settings.json at startup, but a
+  // localStorage-only value (no file) wouldn't have reached it.
+  pushEngineUrl(useEngineStore.getState().engineUrl);
   const liveKeepAwake = useKeepAwakeStore.getState().enabled;
   if (typeof data.keep_awake === "boolean" && data.keep_awake !== liveKeepAwake) {
     await useKeepAwakeStore.getState().setEnabled(data.keep_awake);

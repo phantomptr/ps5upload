@@ -183,7 +183,7 @@ volumes_empty_title: "Томов не видно",
 volumes_empty_message: "Payload не вернул записываемых дисков. Убедитесь, что он загружен и к PS5 подключено хранилище.",
 
 status_engine: "engine",
-status_engine_tooltip: "сайдкар ps5upload-engine на localhost:19113",
+status_engine_tooltip: "сайдкар ps5upload-engine на {url}",
 status_payload: "помощник",
 status_payload_tooltip: "Помощник PS5Upload на :9113",
 status_kernel_ok: "kernel OK",

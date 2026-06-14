@@ -185,7 +185,7 @@ volumes_empty_message: "Payload 未返回任何可写驱动器。请确保它已
 
 // Status bar
 status_engine: "引擎",
-status_engine_tooltip: "localhost:19113 上的 ps5upload-engine 边车进程",
+status_engine_tooltip: "{url} 上的 ps5upload-engine 边车进程",
 status_payload: "助手",
 status_payload_tooltip: ":9113 上的 PS5Upload 助手",
 status_kernel_ok: "内核正常",

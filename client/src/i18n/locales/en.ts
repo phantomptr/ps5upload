@@ -337,8 +337,7 @@ logs_filter_all: "All",
 
 // Status bar
 status_engine: "Engine",
-status_engine_tooltip:
-  "ps5upload-engine — the app's local backend (localhost:19113)",
+status_engine_tooltip: "ps5upload-engine — the app's backend ({url})",
 status_payload: "helper",
 status_payload_tooltip: "PS5Upload helper on :9113",
 status_kernel_ok: "kernel OK",
@@ -1052,6 +1051,11 @@ settings_group_uploads: "Uploads",
 search_idle: "Enter a filename pattern above and hit Search to scan every writable drive on your PS5.",
 settings_card_upload_behavior: "Behavior",
 settings_card_upload_speed: "Speed",
+settings_card_engine: "Engine",
+engine_url_label: "Engine URL",
+engine_url_reset: "Reset",
+engine_url_hint:
+  "Where the app reaches the ps5upload-engine. Leave as the default local sidecar, or point at a remote/self-hosted engine. Restart the app after switching between local and remote.",
 settings_group_updates: "Updates",
 settings_group_data: "Data & reset",
 settings_group_automation: "Automation",

@@ -9,7 +9,7 @@
 //! diagnostic endpoints that don't.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
@@ -336,7 +336,32 @@ fn open_engine_log(path: &Path) -> Option<Arc<Mutex<std::fs::File>>> {
 /// Start the engine child process and wait for HTTP readiness.
 ///
 /// Idempotent: a second call is a no-op if the engine is already up.
-pub async fn start(app: &AppHandle) -> Result<&'static str> {
+pub async fn start(app: &AppHandle) -> Result<String> {
+    // Seed the configured URL from settings.json before the spawn
+    // decision — renderer hydration runs too late to gate it here.
+    if let Some(saved) = crate::commands::user_config::load_engine_url(app) {
+        set_url(saved);
+    }
+    let configured = url();
+
+    // Remote engine: don't spawn the bundled sidecar, just probe the
+    // remote API for readiness and hand back its URL.
+    if !is_loopback_url(&configured) {
+        eprintln!("[engine] remote engine configured ({configured}); skipping local sidecar");
+        let client = reqwest::Client::new();
+        let deadline = Instant::now() + READINESS_TIMEOUT;
+        while Instant::now() < deadline {
+            if probe(&configured, &client).await {
+                return Ok(configured);
+            }
+            sleep(READINESS_POLL).await;
+        }
+        return Err(anyhow!(
+            "remote engine at {configured}{READINESS_PROBE} did not respond within {:?}",
+            READINESS_TIMEOUT
+        ));
+    }
+
     // Fast-path: already running. We HOLD the child_lock across the
     // probe await so a concurrent start() can't both observe the
     // existing-child state, race past, and end up double-spawning.
@@ -362,7 +387,7 @@ pub async fn start(app: &AppHandle) -> Result<&'static str> {
             // shell's expectation; if not, kill it and respawn
             // from the bundled bytes.
             if engine_version_matches(DEFAULT_ENGINE_URL, &client).await {
-                return Ok(DEFAULT_ENGINE_URL);
+                return Ok(DEFAULT_ENGINE_URL.to_string());
             }
             eprintln!(
                 "[engine] stale-version sibling engine detected on {DEFAULT_ENGINE_URL} — killing and respawning",
@@ -509,7 +534,7 @@ pub async fn start(app: &AppHandle) -> Result<&'static str> {
     let client = reqwest::Client::new();
     while Instant::now() < deadline {
         if probe(DEFAULT_ENGINE_URL, &client).await {
-            return Ok(DEFAULT_ENGINE_URL);
+            return Ok(DEFAULT_ENGINE_URL.to_string());
         }
         // Detect early exit so we surface crashes rather than waiting out
         // the full 30s deadline.
@@ -637,8 +662,49 @@ where
     }
 }
 
-/// The URL the renderer should use. Currently fixed, but centralised here
-/// so we can later negotiate a port if 19113 is taken.
-pub fn url() -> &'static str {
-    DEFAULT_ENGINE_URL
+/// Runtime-configurable engine base URL. Seeded from settings.json at
+/// startup and overridden by the `engine_url_set` command.
+static ENGINE_URL: OnceLock<RwLock<String>> = OnceLock::new();
+
+fn engine_url_cell() -> &'static RwLock<String> {
+    ENGINE_URL.get_or_init(|| RwLock::new(DEFAULT_ENGINE_URL.to_string()))
+}
+
+/// The base URL the renderer's command proxies should hit.
+pub fn url() -> String {
+    engine_url_cell().read().unwrap().clone()
+}
+
+/// Override the engine base URL (Settings → Engine URL). Empty/blank
+/// resets to the bundled-sidecar default.
+pub fn set_url(url: String) {
+    let url = url.trim();
+    let next = if url.is_empty() {
+        DEFAULT_ENGINE_URL.to_string()
+    } else {
+        url.to_string()
+    };
+    *engine_url_cell().write().unwrap() = next;
+}
+
+/// True when `url` points at loopback — i.e. we should spawn the bundled
+/// sidecar. A remote/LAN engine (false) is one we only talk to.
+fn is_loopback_url(url: &str) -> bool {
+    let authority = url
+        .split("://")
+        .nth(1)
+        .unwrap_or(url)
+        .split('/')
+        .next()
+        .unwrap_or("");
+    let host = if let Some(rest) = authority.strip_prefix('[') {
+        rest.split(']').next().unwrap_or("") // IPv6 literal
+    } else {
+        authority.split(':').next().unwrap_or("")
+    };
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .map(|ip| ip.is_loopback())
+            .unwrap_or(false)
 }

@@ -183,7 +183,7 @@ volumes_empty_title: "ไม่เห็นไดรฟ์",
 volumes_empty_message: "เพย์โหลดไม่ได้คืนค่าไดรฟ์ที่เขียนได้ ตรวจสอบให้แน่ใจว่าโหลดแล้วและมีพื้นที่เก็บข้อมูลแนบกับ PS5 ของคุณ",
 
 status_engine: "engine",
-status_engine_tooltip: "ps5upload-engine sidecar บน localhost:19113",
+status_engine_tooltip: "ps5upload-engine sidecar บน {url}",
 status_payload: "ตัวช่วย",
 status_payload_tooltip: "ตัวช่วย PS5Upload บน :9113",
 status_kernel_ok: "kernel OK",

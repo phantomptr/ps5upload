@@ -166,6 +166,7 @@ pub fn run() {
             // Thin wrappers over the ps5upload-engine HTTP API
             // (localhost:19113). Used by the Upload/Library/Volumes/
             // FileSystem/Hardware surfaces.
+            commands::engine_url_set,
             commands::ps5_volumes,
             commands::pkg_scan_external,
             commands::ps5_list_dir,

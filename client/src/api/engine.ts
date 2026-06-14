@@ -5,7 +5,7 @@
 // `volumes` exports here were unused; the renderer goes through the
 // Tauri IPC surface in `api/ps5.ts` for everything except this probe.
 
-const BASE = "http://127.0.0.1:19113";
+import { getEngineUrl } from "../state/engine";
 
 export const engineApi = {
   /** Lightweight engine liveness probe. Unlike `/api/ps5/status` (which
@@ -22,7 +22,9 @@ export const engineApi = {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 2000);
     try {
-      const res = await fetch(`${BASE}/api/jobs`, { signal: controller.signal });
+      const res = await fetch(`${getEngineUrl()}/api/jobs`, {
+        signal: controller.signal,
+      });
       return res.ok;
     } catch {
       return false;

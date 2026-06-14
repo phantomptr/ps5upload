@@ -184,7 +184,7 @@ volumes_empty_title: "Keine Datenträger sichtbar",
 volumes_empty_message: "Der Payload hat keine beschreibbaren Laufwerke zurückgegeben. Stellen Sie sicher, dass er geladen ist und Ihre PS5 Speicher angeschlossen hat.",
 
 status_engine: "Engine",
-status_engine_tooltip: "ps5upload-engine-Sidecar auf localhost:19113",
+status_engine_tooltip: "ps5upload-engine-Sidecar auf {url}",
 status_payload: "Helfer",
 status_payload_tooltip: "PS5Upload-Helfer auf :9113",
 status_kernel_ok: "Kernel OK",

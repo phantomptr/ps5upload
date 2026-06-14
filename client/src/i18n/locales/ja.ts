@@ -184,7 +184,7 @@ volumes_empty_title: "ボリュームが見えません",
 volumes_empty_message: "Payload は書き込み可能なドライブを返しませんでした。ロード済みで PS5 にストレージが接続されていることを確認してください。",
 
 status_engine: "エンジン",
-status_engine_tooltip: "localhost:19113 の ps5upload-engine サイドカー",
+status_engine_tooltip: "{url} の ps5upload-engine サイドカー",
 status_payload: "ヘルパー",
 status_payload_tooltip: ":9113 上の PS5Upload ヘルパー",
 status_kernel_ok: "kernel OK",

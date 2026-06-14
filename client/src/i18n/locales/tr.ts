@@ -183,7 +183,7 @@ volumes_empty_title: "Görünür birim yok",
 volumes_empty_message: "Payload yazılabilir bir sürücü döndürmedi. Yüklü olduğundan ve PS5'inize depolama bağlı olduğundan emin olun.",
 
 status_engine: "engine",
-status_engine_tooltip: "localhost:19113 üzerinde ps5upload-engine sidecar",
+status_engine_tooltip: "{url} üzerinde ps5upload-engine sidecar",
 status_payload: "yardımcı",
 status_payload_tooltip: "PS5Upload yardımcısı :9113'te",
 status_kernel_ok: "kernel OK",

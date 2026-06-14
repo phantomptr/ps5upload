@@ -183,7 +183,7 @@ volumes_empty_title: "Nessun volume visibile",
 volumes_empty_message: "Il payload non ha restituito unità scrivibili. Assicurati che sia caricato e che la PS5 abbia uno storage collegato.",
 
 status_engine: "engine",
-status_engine_tooltip: "sidecar ps5upload-engine su localhost:19113",
+status_engine_tooltip: "sidecar ps5upload-engine su {url}",
 status_payload: "assistente",
 status_payload_tooltip: "Assistente PS5Upload su :9113",
 status_kernel_ok: "kernel OK",

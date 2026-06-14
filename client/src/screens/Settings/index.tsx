@@ -41,6 +41,7 @@ import {
   MAX_UPLOAD_STREAMS,
 } from "../../state/uploadSettings";
 import { useConnectionStore } from "../../state/connection";
+import { useEngineStore, DEFAULT_ENGINE_URL } from "../../state/engine";
 import { userConfigPath, resetAllAppData } from "../../state/userConfig";
 import { useUpdateStore, type UpdatePhase } from "../../state/update";
 import { isMobile } from "../../lib/platform";
@@ -94,6 +95,57 @@ function Section({
       </h2>
       {children}
     </section>
+  );
+}
+
+/** Engine base URL field. Defaults to the bundled local sidecar; a power
+ *  user can point it at a remote/self-hosted engine (e.g. the Docker
+ *  image). Edits commit on blur so trailing-slash normalisation doesn't
+ *  fight typing. */
+function EngineUrlSection() {
+  const tr = useTr();
+  const engineUrl = useEngineStore((s) => s.engineUrl);
+  const setEngineUrl = useEngineStore((s) => s.setEngineUrl);
+  const [draft, setDraft] = useState(engineUrl);
+
+  return (
+    <Section title={tr("settings_card_engine", undefined, "Engine")}>
+      <label className="grid gap-1.5 text-sm">
+        <span className="font-medium">
+          {tr("engine_url_label", undefined, "Engine URL")}
+        </span>
+        <div className="flex items-center gap-2">
+          <input
+            type="text"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={() => setEngineUrl(draft)}
+            placeholder={DEFAULT_ENGINE_URL}
+            spellCheck={false}
+            className="flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-sm"
+          />
+          {engineUrl !== DEFAULT_ENGINE_URL && (
+            <button
+              type="button"
+              onClick={() => {
+                setDraft(DEFAULT_ENGINE_URL);
+                setEngineUrl(DEFAULT_ENGINE_URL);
+              }}
+              className="text-xs text-[var(--color-muted)] hover:text-[var(--color-text)]"
+            >
+              {tr("engine_url_reset", undefined, "Reset")}
+            </button>
+          )}
+        </div>
+        <span className="text-xs text-[var(--color-muted)]">
+          {tr(
+            "engine_url_hint",
+            undefined,
+            "Where the app reaches the ps5upload-engine. Leave as the default local sidecar, or point at a remote/self-hosted engine. Restart the app after switching between local and remote.",
+          )}
+        </span>
+      </label>
+    </Section>
   );
 }
 
@@ -257,6 +309,8 @@ export default function SettingsScreen() {
             </div>
           </label>
         </Section>
+
+        <EngineUrlSection />
 
         <GroupHeading>
           {tr("settings_group_uploads", undefined, "Uploads")}

@@ -183,7 +183,7 @@ volumes_empty_title: "Nenhum volume visível",
 volumes_empty_message: "O payload não retornou drives graváveis. Verifique se ele está carregado e se há armazenamento conectado ao PS5.",
 
 status_engine: "engine",
-status_engine_tooltip: "sidecar ps5upload-engine em localhost:19113",
+status_engine_tooltip: "sidecar ps5upload-engine em {url}",
 status_payload: "auxiliar",
 status_payload_tooltip: "Auxiliar PS5Upload em :9113",
 status_kernel_ok: "kernel OK",

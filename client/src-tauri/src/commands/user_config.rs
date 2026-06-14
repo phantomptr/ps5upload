@@ -66,6 +66,17 @@ fn ensure_parent(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Read the `engine_url` field from settings.json, if present and non-blank.
+/// Sync (no `await`) so `engine::start` can seed its URL before deciding
+/// whether to spawn the bundled sidecar.
+pub(crate) fn load_engine_url(app: &AppHandle) -> Option<String> {
+    let path = user_config_path(app).ok()?;
+    let bytes = std::fs::read(&path).ok()?;
+    let json: JsonValue = serde_json::from_slice(&bytes).ok()?;
+    let url = json.get("engine_url")?.as_str()?.trim();
+    (!url.is_empty()).then(|| url.to_string())
+}
+
 /// Return the absolute path the mirror writes to. Handy for the UI to
 /// show in the Settings screen so users know where to look.
 #[tauri::command]

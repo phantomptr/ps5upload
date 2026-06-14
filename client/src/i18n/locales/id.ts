@@ -183,7 +183,7 @@ volumes_empty_title: "Tidak ada volume terlihat",
 volumes_empty_message: "Payload tidak mengembalikan drive yang dapat ditulis. Pastikan dimuat dan penyimpanan terpasang ke PS5 Anda.",
 
 status_engine: "engine",
-status_engine_tooltip: "sidecar ps5upload-engine di localhost:19113",
+status_engine_tooltip: "sidecar ps5upload-engine di {url}",
 status_payload: "pembantu",
 status_payload_tooltip: "Pembantu PS5Upload pada :9113",
 status_kernel_ok: "kernel OK",

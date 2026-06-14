@@ -142,6 +142,16 @@ async fn post_json_with_client(
         .map_err(|e| format!("engine returned invalid JSON: {e}"))
 }
 
+/// Update the engine base URL the command proxies hit. The renderer
+/// calls this on hydrate and whenever the Settings field changes so the
+/// Rust side follows the setting live (switching the spawn mode still
+/// needs an app restart).
+#[tauri::command]
+pub async fn engine_url_set(url: String) -> Result<(), String> {
+    engine::set_url(url);
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn ps5_volumes(addr: Option<String>) -> Result<JsonValue, String> {
     let base = engine::url();

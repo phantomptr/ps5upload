@@ -178,7 +178,7 @@ volumes_empty_title: "لا توجد أحجام مرئية",
 volumes_empty_message: "لم يُرجع الحمل أي محرك أقراص قابل للكتابة. تأكد من تحميله ومن توصيل التخزين بـ PS5 الخاص بك.",
 
 status_engine: "engine",
-status_engine_tooltip: "ps5upload-engine sidecar على localhost:19113",
+status_engine_tooltip: "ps5upload-engine sidecar على {url}",
 status_payload: "مساعد",
 status_payload_tooltip: "مساعد PS5Upload على ‎:9113",
 status_kernel_ok: "النواة OK",

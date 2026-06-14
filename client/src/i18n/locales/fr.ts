@@ -178,7 +178,7 @@ volumes_empty_title: "Aucun volume visible",
 volumes_empty_message: "Le payload n'a renvoyé aucun disque accessible en écriture. Vérifiez qu'il est chargé et qu'un stockage est connecté à votre PS5.",
 
 status_engine: "moteur",
-status_engine_tooltip: "sidecar ps5upload-engine sur localhost:19113",
+status_engine_tooltip: "sidecar ps5upload-engine sur {url}",
 status_payload: "aide",
 status_payload_tooltip: "Aide PS5Upload sur :9113",
 status_kernel_ok: "kernel OK",

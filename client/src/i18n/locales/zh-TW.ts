@@ -179,7 +179,7 @@ volumes_empty_title: "未發現磁碟區",
 volumes_empty_message: "Payload 未傳回任何可寫入磁碟機。請確保它已載入且您的 PS5 已連接儲存裝置。",
 
 status_engine: "引擎",
-status_engine_tooltip: "localhost:19113 上的 ps5upload-engine 邊車程序",
+status_engine_tooltip: "{url} 上的 ps5upload-engine 邊車程序",
 status_payload: "協助",
 status_payload_tooltip: ":9113 上的 PS5Upload 協助",
 status_kernel_ok: "核心正常",

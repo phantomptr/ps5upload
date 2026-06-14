@@ -12,6 +12,7 @@ import {
 } from "../state/roster";
 import { useActivityHistoryStore } from "../state/activityHistory";
 import { useUploadSettingsStore } from "../state/uploadSettings";
+import { getEngineUrl } from "../state/engine";
 import { hostOf } from "../lib/addr";
 
 /**
@@ -106,8 +107,8 @@ export default function StatusBar() {
           engineError ??
           tr(
             "status_engine_tooltip",
-            undefined,
-            "ps5upload-engine — the app's local backend (localhost:19113)",
+            { url: getEngineUrl() },
+            `ps5upload-engine — the app's backend (${getEngineUrl()})`,
           )
         }
       >

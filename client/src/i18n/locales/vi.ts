@@ -184,7 +184,7 @@ volumes_empty_title: "Không có ổ đĩa nào hiển thị",
 volumes_empty_message: "Payload không trả về ổ đĩa có thể ghi nào. Đảm bảo nó đã được tải và PS5 có ổ lưu trữ đính kèm.",
 
 status_engine: "engine",
-status_engine_tooltip: "ps5upload-engine sidecar trên localhost:19113",
+status_engine_tooltip: "ps5upload-engine sidecar trên {url}",
 status_payload: "trợ giúp",
 status_payload_tooltip: "Trợ giúp PS5Upload trên :9113",
 status_kernel_ok: "kernel OK",

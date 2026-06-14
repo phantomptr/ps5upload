@@ -5,6 +5,7 @@
 // TCP send) stay in-process.
 
 import { Channel } from "@tauri-apps/api/core";
+import { getEngineUrl } from "../state/engine";
 // Logging wrapper: every command leaves a trace breadcrumb + logs failures at
 // warn. See lib/invokeLogged.ts. (Channel still comes straight from core.)
 import { invoke } from "../lib/invokeLogged";
@@ -2748,11 +2749,10 @@ export interface GameMeta {
   has_icon: boolean;
 }
 
-/** Base URL of the local engine sidecar. Matches `api/engine.ts::BASE`
- *  and the engine's startup bind address. Duplicated here so the Library
- *  screen can compute icon URLs for `<img src>` without a round-trip to
- *  `commands::engine_url` per row. */
-const ENGINE_BASE = "http://127.0.0.1:19113";
+/** Configured engine base URL — usually the local sidecar, but may be a
+ *  remote/self-hosted engine. Read per-call so a Settings change takes
+ *  effect without a reload (used for `<img src>` icon URLs + game-meta). */
+const engineBase = getEngineUrl;
 
 /** Fetch title + cover info for a game folder on the PS5. Backing is the
  *  engine's `/api/ps5/game-meta` endpoint which in turn uses FS_READ to
@@ -2765,7 +2765,7 @@ export async function fetchGameMeta(
   path: string
 ): Promise<GameMeta> {
   const mgmt = toMgmtAddr(transferAddr);
-  const url = `${ENGINE_BASE}/api/ps5/game-meta?addr=${encodeURIComponent(
+  const url = `${engineBase()}/api/ps5/game-meta?addr=${encodeURIComponent(
     mgmt
   )}&path=${encodeURIComponent(path)}`;
   const empty: GameMeta = {
@@ -2799,7 +2799,7 @@ export async function fetchGameMeta(
  *  (or 404 if no icon). Browser caches the response for 5 minutes. */
 export function gameIconUrl(transferAddr: string, path: string): string {
   const mgmt = toMgmtAddr(transferAddr);
-  return `${ENGINE_BASE}/api/ps5/game-icon?addr=${encodeURIComponent(
+  return `${engineBase()}/api/ps5/game-icon?addr=${encodeURIComponent(
     mgmt
   )}&path=${encodeURIComponent(path)}`;
 }
@@ -2916,7 +2916,7 @@ export async function pkgScanExternal(transferAddr: string): Promise<ExternalPkg
  *  on the same loopback port; CSP allows 127.0.0.1:19113 for img-src). */
 export function appIconUrl(transferAddr: string, titleId: string): string {
   const mgmt = toMgmtAddr(transferAddr);
-  return `${ENGINE_BASE}/api/ps5/app-icon?addr=${encodeURIComponent(
+  return `${engineBase()}/api/ps5/app-icon?addr=${encodeURIComponent(
     mgmt
   )}&title_id=${encodeURIComponent(titleId)}`;
 }
