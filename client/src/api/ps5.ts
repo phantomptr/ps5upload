@@ -1612,6 +1612,9 @@ export interface ProcessInfo {
   memory_mib: number;
   threads: number;
   kind: "app" | "payload" | "system";
+  /** True for the PS5Upload helper's own process — it can't be killed (doing so
+   *  would sever the tool's connection), so the UI disables Kill/Restart on it. */
+  is_self?: boolean;
 }
 
 export interface ProcessListResult {

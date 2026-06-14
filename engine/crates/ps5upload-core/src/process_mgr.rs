@@ -45,6 +45,10 @@ pub struct ProcessInfo {
     /// "app" | "payload" | "system" — drives the UI's filter + kill guard.
     #[serde(default)]
     pub kind: String,
+    /// True for the helper's OWN process. proc_kill refuses to kill it
+    /// (pid == getpid() → EPERM), so the UI disables Kill/Restart for it.
+    #[serde(default)]
+    pub is_self: bool,
     /// Set only on the synthetic last element when the payload truncated
     /// the list to fit its buffer. Split out by `process_list`.
     #[serde(default)]
@@ -134,4 +138,42 @@ pub fn process_kill(addr: &str, pid: i32) -> Result<ProcessKillAck> {
         bail!("PROCESS_KILL failed for pid {pid}: {why}");
     }
     Ok(ack)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn process_info_is_self_defaults_false_and_round_trips() {
+        // Old payloads omit is_self → must default false (no row wrongly marked
+        // as the helper). New payloads send it; true must survive.
+        let without: ProcessInfo =
+            serde_json::from_str(r#"{"pid":42,"name":"x","kind":"payload"}"#).unwrap();
+        assert!(!without.is_self);
+        let with: ProcessInfo = serde_json::from_str(
+            r#"{"pid":101,"name":"payload.elf","kind":"payload","is_self":true}"#,
+        )
+        .unwrap();
+        assert!(with.is_self);
+        assert_eq!(with.pid, 101);
+    }
+
+    #[test]
+    fn raw_process_list_splits_truncation_sentinel_and_keeps_self_flag() {
+        // The truncated sentinel (pid 0) is dropped; real rows (incl. the
+        // is_self helper) are kept.
+        let raw: RawProcessList = serde_json::from_str(
+            r#"{"procs":[
+                {"pid":101,"name":"payload.elf","kind":"payload","is_self":true},
+                {"pid":0,"truncated":true}
+            ]}"#,
+        )
+        .unwrap();
+        let truncated = raw.procs.iter().any(|p| p.truncated);
+        let processes: Vec<_> = raw.procs.into_iter().filter(|p| p.pid > 0).collect();
+        assert!(truncated);
+        assert_eq!(processes.len(), 1);
+        assert!(processes[0].is_self);
+    }
 }

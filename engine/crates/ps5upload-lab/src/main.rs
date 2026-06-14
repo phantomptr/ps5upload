@@ -559,7 +559,7 @@ fn do_processes(addr: &str) -> Result<()> {
     );
     for p in &res.processes {
         println!(
-            "{:>6} {:<6} {:<20.20} {:<14} {:>8.1} {:>4}  {}",
+            "{:>6} {:<6} {:<20.20} {:<14} {:>8.1} {:>4}  {}{}",
             p.pid,
             p.kind,
             p.comm,
@@ -571,6 +571,7 @@ fn do_processes(addr: &str) -> Result<()> {
             p.memory_mib,
             p.threads,
             p.name,
+            if p.is_self { "  <-- SELF (helper)" } else { "" },
         );
     }
     println!(

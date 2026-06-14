@@ -243,16 +243,24 @@ static int proc_list_build(char *buf, size_t cap, size_t *written_out,
              * value (PS5 is 16 KiB pages, not the amd64-default 4 KiB). */
             double mem_mib =
                 ((double)ki->ki_rssize * (double)getpagesize()) / (1024.0 * 1024.0);
+            /* Flag the helper's OWN process. proc_kill refuses to kill it
+             * (pid == getpid() → EPERM), so without this the UI would offer a
+             * Kill button that always fails with a confusing "Operation not
+             * permitted" — the user reported exactly that. The UI disables
+             * Kill/Restart for is_self and explains why. */
+            int is_self = (pid == getpid());
             entry_len = snprintf(entry, sizeof(entry),
                                  "%s{\"pid\":%d,\"name\":\"%.*s\",\"comm\":\"%.*s\","
                                  "\"title_id\":\"%s\",\"app_id\":%u,"
-                                 "\"memory_mib\":%.1f,\"threads\":%d,\"kind\":\"%s\"}",
+                                 "\"memory_mib\":%.1f,\"threads\":%d,\"kind\":\"%s\","
+                                 "\"is_self\":%s}",
                                  emitted ? "," : "",
                                  (int)pid,
                                  (int)esc_len, esc,
                                  (int)comm_len, comm_esc,
                                  tid_esc, appinfo.app_id,
-                                 mem_mib, (int)ki->ki_numthreads, kind);
+                                 mem_mib, (int)ki->ki_numthreads, kind,
+                                 is_self ? "true" : "false");
         }
         if (entry_len <= 0 || (size_t)entry_len >= sizeof(entry)) {
             p += ki_structsize;

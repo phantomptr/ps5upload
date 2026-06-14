@@ -163,6 +163,9 @@ export default function ProcessesScreen() {
   // restartable, so it's killed immediately.
   const requestKill = useCallback(
     (p: ProcessInfo) => {
+      // The helper's own process can't be killed (the payload guards it); the
+      // button is disabled, but guard here too so nothing slips through.
+      if (p.is_self) return;
       if (p.kind === "system" || p.kind === "app") setConfirmKill(p);
       else void doKill(p);
     },
@@ -443,6 +446,7 @@ const ProcessRow = memo(
     a.onRestart === b.onRestart &&
     a.proc.pid === b.proc.pid &&
     a.proc.kind === b.proc.kind &&
+    a.proc.is_self === b.proc.is_self &&
     a.proc.title_id === b.proc.title_id &&
     a.proc.threads === b.proc.threads &&
     a.proc.memory_mib === b.proc.memory_mib &&
@@ -465,6 +469,7 @@ function ProcessRowImpl({
   const tr = useTr();
   const platform = platformForTitleId(proc.title_id);
   const isApp = proc.kind === "app";
+  const isSelf = !!proc.is_self;
   const label = proc.comm || proc.name;
 
   return (
@@ -484,6 +489,11 @@ function ProcessRowImpl({
           <span className="truncate font-medium">{label}</span>
           <KindBadge kind={proc.kind} />
           {platform && <PlatformBadge platform={platform} />}
+          {isSelf && (
+            <span className="shrink-0 rounded-full border border-[var(--color-accent)] px-1.5 py-px text-[10px] font-medium text-[var(--color-accent)]">
+              {tr("processes_this_tool", undefined, "this tool")}
+            </span>
+          )}
         </div>
         <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 font-mono text-xs text-[var(--color-muted)] tabular-nums">
           <span>{tr("processes_pid", { pid: proc.pid }, "pid {pid}")}</span>
@@ -514,8 +524,16 @@ function ProcessRowImpl({
           size="sm"
           leftIcon={<Skull size={12} />}
           onClick={() => onKill(proc)}
-          disabled={busy}
-          title={tr("processes_kill_tooltip", undefined, "Send SIGKILL")}
+          disabled={busy || isSelf}
+          title={
+            isSelf
+              ? tr(
+                  "processes_kill_self_tooltip",
+                  undefined,
+                  "This is the PS5Upload helper — killing it would disconnect the tool.",
+                )
+              : tr("processes_kill_tooltip", undefined, "Send SIGKILL")
+          }
         >
           {tr("processes_kill", undefined, "Kill")}
         </Button>
