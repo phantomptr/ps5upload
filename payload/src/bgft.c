@@ -1568,6 +1568,7 @@ int bgft_install_start(const char *url,
     return 0;
 
 try_appinst_local_last_resort:
+    (void)0; /* a label may not directly precede a declaration in C */
     /* ─── Last resort: local-disk AppInstallPkg (may not launch) ──────────
      * Reached only after EVERY launchable path failed: in-process
      * InstallByPackage, shellui-rpc, and legacy BGFT IntDebug. As a final
@@ -1582,8 +1583,30 @@ try_appinst_local_last_resort:
      * HTTP-sourced installs have nothing staged on local disk (url is an
      * http(s):// URL, not a bare path), so this is skipped for them and we
      * surface the launchable-tier failure code set by whichever path jumped
-     * here. */
-    if (url[0] == '/') {
+     * here.
+     *
+     * CRITICAL — package-type gate: AppInstallPkg installs the pkg as a FRESH
+     * APP. For a base game (…GD) that's a recoverable "may not launch" tile, but
+     * for a PATCH (…DP) or DLC/add-on (…AC) it OVERWRITES and WIPES the base
+     * game instead of applying on top (HW-proven: a Bloodborne patch deleted the
+     * installed 26 GB base on FW 9.60). A patch/DLC must NEVER be installed this
+     * way — better to fail cleanly (base intact, user retries) than destroy a
+     * game. So this last resort is restricted to full-app packages. */
+    int last_resort_destructive_for_type = 0;
+    {
+        size_t pt_len = package_type ? strlen(package_type) : 0;
+        const char *pt_suffix = pt_len >= 2 ? package_type + pt_len - 2 : "";
+        /* …DP = (delta) patch, …AC = additional content / DLC. */
+        last_resort_destructive_for_type =
+            (strcmp(pt_suffix, "DP") == 0 || strcmp(pt_suffix, "AC") == 0);
+    }
+    if (url[0] == '/' && last_resort_destructive_for_type) {
+        fprintf(stderr,
+                "[bgft] NOT using appinst-local last-resort for package_type=%s "
+                "(it installs as a fresh app and would WIPE the base game) — "
+                "failing cleanly, base left intact\n",
+                package_type ? package_type : "?");
+    } else if (url[0] == '/') {
         int32_t local_tid = -1;
         uint32_t local_err = 0;
         int local_rc = appinst_install_start_local(url, content_id,
