@@ -965,6 +965,16 @@ confirms the install by the actual data written to *any* drive, so extended-stor
 installs are recognized correctly. If you saw this on an older version, the game was
 fine all along — just launch it.
 
+**Q: I'm installing a game update (patch) — is my installed game safe? (3.3.6)**
+Yes. A game's update carries the *same ID* as the game, so an older build could end
+up re-installing that ID and wiping the game instead of patching it. As of 3.3.6 an
+update only installs via the safe path that applies it *on top* of your game; if
+that path can't apply it on your firmware, the update **fails harmlessly and your
+installed game is left completely intact** — never overwritten or deleted. If an
+update won't go through the app, install it from the PS5's own **Package Installer**
+(Settings → Debug Settings → Game → Package Installer) — your base game is safe
+either way. Always install the **base game first**, then the update.
+
 **Q: A system (NPXS) pkg won't install. What do I do?**
 System app pkgs (NPXS-prefix content_id — Store updates, Settings
 patches, built-in apps) aren't what the DPI installer is built for and

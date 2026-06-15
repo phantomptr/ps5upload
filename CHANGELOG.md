@@ -4,6 +4,20 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 3.3.6
+
+A data-loss fix: installing a game's update can no longer delete the game.
+
+- **Installing an update (patch) can never overwrite or delete your base game.**
+  A game's update shares the same ID as the game itself, so the installer could
+  end up *re-installing that ID* — wiping the installed game instead of patching
+  it (hardware-confirmed: a 26 GB game was deleted by installing its update). An
+  update now installs **only** via the safe path that applies it on top; if that
+  can't apply it, the update **fails harmlessly and your game stays completely
+  intact** — never replaced or removed. Base games and DLC are unaffected.
+  *(If an update won't install through the app on your firmware, install it from
+  the PS5's own Package Installer — your game is safe either way.)*
+
 ## 3.3.5
 
 USB install fixes — no more stuck "downloading" tile, and a copy that survives a flaky connection.
