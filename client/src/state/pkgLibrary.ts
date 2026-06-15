@@ -461,32 +461,6 @@ async function verifyInstallCompleted(
 }
 
 /**
- * Client-side "did the title actually land on disk?" check — the same
- * discriminator the engine's `verify_launchable` uses (`/user/app/<title_id>/
- * app.pkg` at non-zero size). We need it because the **DPI** install path
- * doesn't create a tracker session to poll, yet its `rc==0` is NOT trustworthy
- * (the "hollow install" trap — Sony returns success but writes nothing,
- * especially off an exFAT USB mount). So after a DPI install we confirm the
- * title really registered before believing it.
- */
-async function titleRegisteredOnDisk(
-  host: string,
-  contentId: string | null,
-): Promise<boolean> {
-  const titleId = contentId ? titleIdFromContentId(contentId) : null;
-  if (!titleId) return false;
-  try {
-    const entries = await fsListDir(mgmtAddr(host), `/user/app/${titleId}`);
-    return entries.some(
-      (e) => e.name === "app.pkg" && e.kind === "file" && e.size > 0,
-    );
-  } catch {
-    // ENOENT (title dir absent) or any read error ⇒ not registered.
-    return false;
-  }
-}
-
-/**
  * Install a staged/-on-disk `.pkg` via the standalone DPI daemon (:9040): bring
  * the daemon up (it replaces our payload on the single-payload loader), install,
  * then restore our payload. This is the path elf-arsenal uses to install
@@ -573,11 +547,6 @@ export async function runPkgInstall(
   // can render a real % for large titles (Sony's BGFT progress isn't
   // meaningful on the file:// staging path). Optional — no-op if omitted.
   onProgress?: (installedBytes: number, total: number) => void,
-  // When `skipDpiFallback` is set, a main-payload reject does NOT trigger the
-  // inline DPI daemon fallback. The USB direct-install flow uses this so it can
-  // run DPI itself, separately and VERIFIED (DPI's rc==0 isn't trustworthy off
-  // an exFAT mount), instead of this path trusting DPI's bare rc.
-  opts?: { skipDpiFallback?: boolean },
 ): Promise<PkgInstallOutcome> {
   let installed = false;
   // True when the install accepted but stalled (flatlined) before completing —
@@ -641,7 +610,7 @@ export async function runPkgInstall(
     mainErr = pkgError(e);
   }
 
-  if (!installed && startRejected && !opts?.skipDpiFallback) {
+  if (!installed && startRejected) {
     // FALLBACK: the jailbroken-context install was rejected. Try the
     // standalone DPI daemon (replaces our payload on the single-payload
     // loader, installs, then we restore the payload).
@@ -1133,64 +1102,16 @@ const makePkgLibraryStore = () =>
         set({ busyNotice: null });
       }
 
-      // ── 1. ELF-ARSENAL WAY: install DIRECTLY from the USB path — NO 25 GB ──
-      //    copy. The blocking USB→internal copy used to be unconditional and is
-      //    what times out / dies on a 25 GB game (the reported hours-long
-      //    "staging" that then installed nothing). elf-arsenal never copies: it
-      //    hands the USB path straight to Sony's installer. We try that first,
-      //    VERIFIED — our memory's "hollow exfat install" trap is exactly what
-      //    the install tracker / on-disk check now CATCH, so trying direct is
-      //    safe: if it doesn't really land, we fall through to the copy.
-      //
-      //  1a. The main-payload cascade from the USB path (tracker-verified: a
-      //      hollow install never confirms, so `installed` stays false).
+      // Copy USB → internal, then install from there. We do NOT install
+      // directly from the USB path: handing Sony's installer a `/mnt/usb…`
+      // package registers it as a BGFT *download task* that streams the pkg off
+      // USB at a crawl — a 25 GB game shows "Downloading… 50 hours left" and
+      // leaves a broken, undeletable tile (HW-observed on Bloodborne, 3.3.4).
+      // The internal copy is a TRANSIENT staging file (the USB original is
+      // untouched) → clean it after.
       log.info(
         "install",
-        `install-from-usb: trying DIRECT install (no copy) from ${pkg.path}`,
-      );
-      set({ busyNotice: `Installing ${label} directly from ${pkg.drive}…` });
-      const direct = await runPkgInstall(
-        host,
-        pkg.path,
-        pkg.contentId || null,
-        false, // never delete the user's USB original
-        onProgress,
-        { skipDpiFallback: true }, // 1b runs DPI itself, verified
-      );
-      if (direct.installed) {
-        log.info(
-          "install",
-          `install-from-usb: DIRECT install confirmed — no copy needed: ${pkg.path}`,
-        );
-        return { ok: true, mayNotLaunch: direct.mayNotLaunch };
-      }
-
-      //  1b. The DPI daemon directly from the USB path (the exact path
-      //      elf-arsenal uses), then CONFIRM the title actually registered on
-      //      disk — DPI's rc==0 alone is the classic hollow-install lie.
-      log.info(
-        "install",
-        `install-from-usb: cascade didn't confirm (${
-          direct.errMessage || "hollow/stalled"
-        }); trying DPI directly from USB`,
-      );
-      set({ busyNotice: `Installing ${label} from ${pkg.drive} (DPI)…` });
-      const dpi = await runDpiInstall(host, pkg.path);
-      if (dpi.ok && (await titleRegisteredOnDisk(host, pkg.contentId || null))) {
-        log.info(
-          "install",
-          `install-from-usb: DPI-from-USB confirmed registered — no copy needed: ${pkg.path}`,
-        );
-        return { ok: true, mayNotLaunch: false };
-      }
-
-      // ── 2. FALLBACK: the proven copy→internal→install path. Reached only when
-      //    BOTH direct attempts failed to confirm (e.g. a firmware where Sony
-      //    genuinely can't install off the exfat mount). The internal copy is a
-      //    TRANSIENT staging file (the USB original is untouched) → clean it.
-      log.info(
-        "install",
-        `install-from-usb: direct paths didn't land (dpi.ok=${dpi.ok}); falling back to copy→internal for ${pkg.path}`,
+        `install-from-usb: copy→internal then install for ${pkg.path}`,
       );
       set({
         busyNotice: `Staging ${label} from ${pkg.drive} to internal storage — removed automatically after install…`,

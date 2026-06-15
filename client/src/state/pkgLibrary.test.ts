@@ -299,13 +299,14 @@ describe("runPkgInstall — tracks the install to genuine completion", () => {
   });
 });
 
-// ── install-from-USB: direct-first, copy-only-as-fallback (elf-arsenal) ──────
+// ── install-from-USB: copy USB→internal, then install ───────────────────────
 //
-// The 25 GB Bloodborne failure was the unconditional USB→internal copy timing
-// out. The fix installs DIRECTLY from the USB path (no copy) and only copies if
-// BOTH direct paths fail to CONFIRM. These pin that the copy is skipped on the
-// happy path and is reached on the fallback path.
-describe("installExternal — installs direct from USB, copy only as fallback", () => {
+// We do NOT install directly from the USB path: handing Sony's installer a
+// /mnt/usb… package registers it as a BGFT download task that streams the pkg
+// off USB at a crawl (a 25 GB game showed "Downloading… 50 hours" + a broken
+// tile — Bloodborne, 3.3.4). So we always copy to internal first, then install
+// from there. This pins that copy-then-install path.
+describe("installExternal — copies USB→internal, then installs", () => {
   const mockedInvoke = vi.mocked(invoke);
   const mockedCopy = vi.mocked(fsCopy);
   const mockedList = vi.mocked(fsListDir);
@@ -332,10 +333,15 @@ describe("installExternal — installs direct from USB, copy only as fallback", 
     evictPkgLibraryStore(USBHOST);
   });
 
-  it("confirmed DIRECT install from USB never calls the 25 GB copy", async () => {
-    mockedInvoke.mockImplementation(async (cmd: unknown) => {
-      if (cmd === "pkg_install_start")
+  it("copies USB→internal and installs from there (never installs off /mnt/usb)", async () => {
+    // The install must run against the INTERNAL staging path, never the USB
+    // path — installing off /mnt/usb is what registers the broken download tile.
+    const startPaths: string[] = [];
+    mockedInvoke.mockImplementation(async (cmd: unknown, args: unknown) => {
+      if (cmd === "pkg_install_start") {
+        startPaths.push((args as { localPs5Path?: string })?.localPs5Path ?? "");
         return { err_code: 0, register_path: "shellui-rpc", session_id: "s1" };
+      }
       if (cmd === "pkg_install_status")
         return { phase: "done", launchable: true, installed_bytes: 1, total: 1 };
       return {};
@@ -346,43 +352,16 @@ describe("installExternal — installs direct from USB, copy only as fallback", 
     await vi.advanceTimersByTimeAsync(2600 * 2);
     const r = await p;
     expect(r.ok).toBe(true);
-    expect(mockedCopy).not.toHaveBeenCalled(); // ← the whole point: no copy
-  });
-
-  it("falls back to the copy only when BOTH direct paths fail to confirm", async () => {
-    // Direct cascade (s1) stalls; DPI returns ok but the title never registers
-    // on disk (hollow); copy install (s2) then succeeds.
-    mockedInvoke.mockImplementation(async (cmd: unknown, args: unknown) => {
-      if (cmd === "pkg_install_start") {
-        const path = (args as { localPs5Path?: string })?.localPs5Path ?? "";
-        return path.startsWith("/mnt/usb")
-          ? { err_code: 0, register_path: "shellui-rpc", session_id: "s1" }
-          : { err_code: 0, register_path: "shellui-rpc", session_id: "s2" };
-      }
-      if (cmd === "pkg_install_status") {
-        const s = (args as { session?: string })?.session;
-        if (s === "s1") return { phase: "error", stalled: true }; // direct hollow
-        return { phase: "done", launchable: true }; // copy install lands
-      }
-      if (cmd === "dpi_ensure") return { ok: true };
-      if (cmd === "pkg_dpi_install") return { ok: true }; // rc ok but…
-      if (cmd === "payload_bundled_path") return { ok: false };
-      return {};
-    });
-    // titleRegisteredOnDisk → not present ⇒ DPI was hollow.
-    mockedList.mockResolvedValue([]);
-    const p = pkgLibraryStore(USBHOST)
-      .getState()
-      .installExternal(usbPkg, USBHOST);
-    await vi.advanceTimersByTimeAsync(2600 * 4);
-    const r = await p;
-    expect(r.ok).toBe(true);
-    expect(mockedCopy).toHaveBeenCalledTimes(1); // fell back to the copy
+    // The copy ran, USB → internal pkg_temp.
+    expect(mockedCopy).toHaveBeenCalledTimes(1);
     expect(mockedCopy).toHaveBeenCalledWith(
       expect.any(String),
       usbPkg.path,
       expect.stringContaining("/pkg_temp/"),
     );
+    // The install targeted the internal copy, NOT the /mnt/usb path.
+    expect(startPaths.every((p) => p.includes("/pkg_temp/"))).toBe(true);
+    expect(startPaths.some((p) => p.startsWith("/mnt/usb"))).toBe(false);
   });
 });
 
