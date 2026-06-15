@@ -425,7 +425,16 @@ static int appinst_install_start(const char *url,
                                   uint32_t *out_err_code) {
     AppInstMetaInfo meta;
     memset(&meta, 0, sizeof(meta));
-    meta.uri          = url;
+    /* A bare local path ("/user/data/.../x.pkg") must be passed to
+     * InstallByPackage as a `file://` URI — a bare path is rejected with
+     * 0x80B2116F. Already-schemed URLs (http://, file://) pass through. */
+    char file_uri[1024];
+    const char *install_uri = url;
+    if (url && url[0] == '/') {
+        snprintf(file_uri, sizeof(file_uri), "file://%s", url);
+        install_uri = file_uri;
+    }
+    meta.uri          = install_uri;
     meta.ex_uri       = "";
     meta.playgo_scenario_id = "";
     meta.content_id   = "";
