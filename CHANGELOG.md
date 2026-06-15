@@ -4,6 +4,24 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 3.3.5
+
+USB install fixes — no more stuck "downloading" tile, and a copy that survives a flaky connection.
+
+- **Installing a big game from USB no longer leaves a broken "Downloading…"
+  tile.** 3.3.4 tried to install straight off the USB drive, which made the PS5
+  register the game as a download it then streamed off USB at a crawl (a 25 GB
+  game showed *"Downloading… 50 hours left"* and left an undeletable tile eating
+  space). Installs now always copy to internal storage first and never trigger
+  that. *(If you have a stuck Bloodborne/other tile from 3.3.4: delete it from
+  the PS5 to reclaim the space — your PKG on the USB drive is untouched.)*
+- **The USB→internal copy survives connection drops.** A 25 GB copy used to die
+  the instant the PS5 connection blipped — even though the console was still
+  copying fine. The copy is now tracked by how much data has actually landed, so
+  a dropped connection (or Wi-Fi hiccup) no longer aborts a healthy copy, and a
+  **live percentage** shows throughout. *(For very large games, uploading from a
+  PC is still the most reliable path — that transfer is fully resumable.)*
+
 ## 3.3.4
 
 Install verification + extended-storage fixes.
