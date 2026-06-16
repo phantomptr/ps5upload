@@ -2,7 +2,14 @@ import { useStore } from "zustand";
 import { createStore } from "zustand/vanilla";
 import { invoke } from "@tauri-apps/api/core";
 
-import { fsListDir, fsDelete, fsMkdir, fsCopy, fsOpStatus } from "../api/ps5";
+import {
+  fsListDir,
+  fsDelete,
+  fsMkdir,
+  fsCopy,
+  fsOpStatus,
+  pkgMetadataConsole,
+} from "../api/ps5";
 import type { ExternalPkg } from "../api/ps5";
 import { hostOf, mgmtAddr, transferAddr } from "../lib/addr";
 import { removableMountRoot } from "../lib/mountPaths";
@@ -246,6 +253,9 @@ interface PkgPathMeta {
   name?: string;
   /** PARAM.SFO `APP_VER`, e.g. `01.04` — the authoritative package version. */
   appVer?: string;
+  /** PARAM.SFO `CATEGORY` (`gd`/`gp`/`ac`) — authoritative, vs. the directory
+   *  inference. Populated when we read the staged pkg off the console. */
+  category?: string;
 }
 
 function loadPathMetaCache(): Record<string, PkgPathMeta> {
@@ -833,7 +843,9 @@ const makePkgLibraryStore = () =>
             originalName: pathMeta[path]?.name,
             appVer: pathMeta[path]?.appVer,
             titleId: titleIdFromContentId(contentId) ?? undefined,
-            category: categoryForSubdir(subdir),
+            // Authoritative category (read off the console) when we have it,
+            // else the directory inference (updates/ → gp, dlc/ → ac).
+            category: pathMeta[path]?.category ?? categoryForSubdir(subdir),
             platform: platformFromTitleId(titleIdFromContentId(contentId)),
             status: "idle" as PkgStatus,
           });
@@ -859,6 +871,11 @@ const makePkgLibraryStore = () =>
         addFrom(await listOne(dir, false), subdir, dir);
       }
       set({ entries: mergeListing(get().entries, entries), loading: false });
+      // Fill in the authoritative version/category/title for rows the
+      // upload-time cache didn't capture (e.g. pkgs staged before this
+      // existed) by reading each staged pkg off the console. Fire-and-forget
+      // so the list shows immediately and rows upgrade in place.
+      void enrichStagedMetadata(get, set, host);
     } catch (e) {
       set({ error: pkgError(e), loading: false });
     }
@@ -1482,6 +1499,62 @@ export function usePkgLibrary<T>(
   selector: (s: PkgLibraryState) => T,
 ): T {
   return useStore(pkgLibraryStore(host), selector);
+}
+
+/** Per-session dedupe for on-console metadata enrichment, keyed by
+ *  `host:path`, so repeated refreshes don't re-read the same staged pkg. */
+const metaEnrichAttempted = new Set<string>();
+
+/**
+ * Fill in each staged pkg's authoritative version / category / title by
+ * reading it off the console — for rows the upload-time cache didn't capture
+ * (notably pkgs staged before that cache existed, which otherwise never show a
+ * version). Reads one pkg at a time (gentle on the FS RPC), skips rows already
+ * known or already tried this session, and bails the moment an install starts
+ * (the payload is swapped then, so a read would be unsafe). Results are cached
+ * by path so a later session — and `mergeListing` — keep them without re-reading.
+ */
+async function enrichStagedMetadata(
+  get: () => PkgLibraryState,
+  set: (
+    partial:
+      | Partial<PkgLibraryState>
+      | ((s: PkgLibraryState) => Partial<PkgLibraryState>),
+  ) => void,
+  host: string,
+): Promise<void> {
+  if (!host?.trim()) return;
+  // Snapshot the paths to enrich; the entries array is replaced as we go.
+  const targets = get().entries.filter(
+    (e) =>
+      e.status === "idle" &&
+      !e.appVer &&
+      !metaEnrichAttempted.has(`${hostOf(host)}:${e.path}`),
+  );
+  for (const t of targets) {
+    if (get().installing) return; // never read while the payload is swapped
+    const key = `${hostOf(host)}:${t.path}`;
+    metaEnrichAttempted.add(key);
+    const m = await pkgMetadataConsole(transferAddr(host), t.path);
+    if (!m || (!m.appVer && !m.category && !m.title)) continue;
+    // Persist so a restart (and mergeListing) keep it without re-reading.
+    cachePathMeta(t.path, {
+      appVer: m.appVer || undefined,
+      category: m.category || undefined,
+    });
+    set((s) => ({
+      entries: s.entries.map((x) =>
+        x.path === t.path
+          ? {
+              ...x,
+              appVer: x.appVer || m.appVer || undefined,
+              category: m.category || x.category,
+              title: x.title || m.title || undefined,
+            }
+          : x,
+      ),
+    }));
+  }
 }
 
 /** Shared optimistic bulk-delete for clearFinished/clearAll. Drops the

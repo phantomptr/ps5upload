@@ -11,12 +11,15 @@ vi.mock("../api/ps5", () => ({
   fsMkdir: vi.fn(async () => {}),
   fsCopy: vi.fn(async () => {}),
   fsOpStatus: vi.fn(async () => ({ total_bytes: 0, bytes_copied: 0 })),
+  // Refresh kicks off background metadata enrichment; default to "no data" so
+  // store tests don't need a console. Individual tests can override.
+  pkgMetadataConsole: vi.fn(async () => null),
 }));
 // No active transfer in tests → installs proceed immediately.
 vi.mock("../lib/ps5Transfers", () => ({ transferScreenBusy: () => false }));
 
 import { invoke } from "@tauri-apps/api/core";
-import { fsDelete, fsListDir, fsCopy } from "../api/ps5";
+import { fsDelete, fsListDir, fsCopy, pkgMetadataConsole } from "../api/ps5";
 import {
   titleIdFromContentId,
   platformFromTitleId,
@@ -666,5 +669,33 @@ describe("refresh — base + update coexistence and badging", () => {
     // existing list preserved, error surfaced
     expect(pkgLibraryStore(HOST).getState().entries).toHaveLength(1);
     expect(pkgLibraryStore(HOST).getState().error).toBeTruthy();
+  });
+
+  it("enriches a staged row's version + category by reading the pkg off the console", async () => {
+    // A unique host so the module-level enrich dedupe can't collide with other
+    // tests. (No localStorage in this node env, so the path cache is always
+    // empty here — nothing short-circuits the enrichment.)
+    const ENRICH_HOST = "192.168.7.7";
+    vi.mocked(pkgMetadataConsole).mockResolvedValueOnce({
+      contentId: CID,
+      title: "Bloodborne",
+      titleId: "CUSA00207",
+      category: "gp",
+      appVer: "01.09",
+      platform: "ps4",
+    });
+    mockedList.mockImplementation(async (_addr: string, d: string) => {
+      if (d.endsWith("/updates") || d.endsWith("/dlc")) return [];
+      return [file(`${CID}.pkg`, 100)];
+    });
+
+    await pkgLibraryStore(ENRICH_HOST).getState().refresh(ENRICH_HOST);
+    // Enrichment is fire-and-forget after refresh; let its microtasks flush.
+    await new Promise((r) => setTimeout(r, 0));
+
+    const e = pkgLibraryStore(ENRICH_HOST).getState().entries[0];
+    expect(e.appVer).toBe("01.09");
+    expect(e.category).toBe("gp");
+    expect(vi.mocked(pkgMetadataConsole)).toHaveBeenCalled();
   });
 });
