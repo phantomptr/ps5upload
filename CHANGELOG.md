@@ -4,6 +4,22 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 3.3.10
+
+Smoother installs and a few UI fixes.
+
+- **Installs no longer cry failure while the PS5 is still installing.** On newer
+  firmware the PS5 registers a game and then downloads/extracts it in the
+  background (its own "Downloading…" tile). ps5upload used to give up after two
+  minutes and show a scary "nothing was installed" error even though the install
+  was fine. It now waits much longer for the console to finish, the message
+  (if it ever does time out) explains the background install instead of alarming
+  you, and you get a notification when a title finishes and is ready to play.
+- **The Install Package screen no longer flashes "Install" on every package**
+  for a split second when you open it — it remembers which titles are installed.
+- **Fixed the Play button on disc-image titles** being squeezed and clipped to
+  "Pla" on wide windows.
+
 ## 3.3.9
 
 A clearer, more helpful "Install from USB / external drive" section.
