@@ -1998,6 +1998,28 @@ shortcuts_activate: "Open / activate",
   autoloader_enable: "Enable",
   autoloader_warn_none: "Pick a playlist for the auto-loader to run.",
   autoloader_warn_empty: "The chosen playlist has no steps yet.",
+
+  // Install-from-USB / external-drive section (added 3.3.16; new keys, English
+  // source for translators to pick up).
+  "pkglib.external.title": "Install from USB / external drive",
+  "pkglib.external.count": "{n} found",
+  "pkglib.external.scan": "Scan",
+  "pkglib.external.scanning": "Scanning…",
+  "pkglib.external.rescan": "Refresh",
+  "pkglib.external.hint":
+    "Plug a USB stick or external drive with .pkg files into the PS5 and they show up here — no upload needed. Installing copies the file onto the console first (your drive's copy is left untouched), then installs it. Use Scan after connecting a drive.",
+  "pkglib.external.autoScan":
+    "Automatically scan USB / external drives when this tab opens",
+  "pkglib.external.scanningDrives": "Scanning connected drives…",
+  "pkglib.external.notScanned":
+    "Auto-scan is off. Connect a USB or external drive with .pkg files, then click Scan.",
+  "pkglib.external.empty":
+    "No .pkg files found on connected USB or external drives. Connect a drive that has .pkg files on it, then click Scan.",
+  "pkglib.external.install": "Install",
+  "pkglib.external.installed": "installed",
+  "pkglib.external.installedWarn": "installed (may not launch)",
+  "pkglib.external.installingThis": "Installing…",
+  "pkglib.external.failed": "install failed",
 };
 
 export default en;

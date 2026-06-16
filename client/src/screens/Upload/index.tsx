@@ -48,6 +48,7 @@ import {
 import { useConnectionStore, PS5_PAYLOAD_PORT } from "../../state/connection";
 import { log } from "../../state/logs";
 import { hostOf } from "../../lib/addr";
+import { useScrollLock } from "../../lib/useScrollLock";
 import { pushNotification } from "../../state/notifications";
 import { useRosterStore } from "../../state/roster";
 import { useNavigate } from "react-router-dom";
@@ -1254,6 +1255,8 @@ function ExistingDestinationDialog({
   onCancel: () => void;
 }) {
   const tr = useTr();
+  // This dialog mounts only while shown — lock background scroll for its life.
+  useScrollLock();
   // Clean destination → simple Start/Cancel confirm.
   // Existing content → three-way Override/Resume/Cancel for folders,
   // two-way Override/Cancel for single files (no resume concept on a
