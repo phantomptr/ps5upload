@@ -10,8 +10,10 @@ import {
   fsOpStatus,
   pkgMetadataConsole,
   toastPush,
+  installFreeBytes,
 } from "../api/ps5";
 import type { ExternalPkg } from "../api/ps5";
+import { formatBytes } from "../lib/format";
 import { hostOf, mgmtAddr, transferAddr } from "../lib/addr";
 import { removableMountRoot } from "../lib/mountPaths";
 import { humanizePs5Error } from "../lib/humanizeError";
@@ -100,6 +102,27 @@ export function installedLastResult(mayNotLaunch: boolean): {
   return mayNotLaunch
     ? { ok: true, warn: true, message: PKG_MAY_NOT_LAUNCH_MESSAGE }
     : { ok: true, message: "Installed." };
+}
+
+/** A warning when a pkg likely won't fit, else null. `neededBytes` is the pkg
+ *  size (a lower bound on the installed size — PS5-native pkgs decompress
+ *  larger, PS4 backports install ~1:1); `freeBytes` is free space across
+ *  installable volumes, or null when it couldn't be read (then we never block —
+ *  return null). Surfaced BEFORE the install so the user isn't left waiting
+ *  through a doomed install only to hit a late out-of-space error (issue #115).
+ *  Exported for unit testing. */
+export function installSpaceWarning(
+  label: string,
+  neededBytes: number,
+  freeBytes: number | null,
+): string | null {
+  if (freeBytes == null || neededBytes <= 0) return null;
+  if (neededBytes <= freeBytes) return null;
+  return `Not enough free space to install ${label}: it needs about ${formatBytes(
+    neededBytes,
+  )}, but only ${formatBytes(
+    freeBytes,
+  )} is free on the PS5. Free up space (uninstall a game, or clear staged packages) and try again. Note: this is an estimate — the installed size can be a bit larger.`;
 }
 
 export type PkgStatus = "idle" | "queued" | "uploading" | "installing";
@@ -401,6 +424,25 @@ function mergeListing(prev: PkgEntry[], listed: PkgEntry[]): PkgEntry[] {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Delete a staged pkg with a few retries on a transient payload failure. Right
+ *  after an install the staged file can be momentarily busy (Sony's installer
+ *  is still releasing it), and a single attempt then surfaces a scary
+ *  "fs_delete_failed". Retry a couple of times with a short backoff; throws the
+ *  last error only if every attempt fails. */
+async function fsDeleteWithRetry(addr: string, path: string): Promise<void> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await sleep(700);
+    try {
+      await fsDelete(addr, path);
+      return;
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr;
+}
 
 export interface PkgInstallOutcome {
   /** The install COMPLETED — Sony's installer accepted it AND the engine's
@@ -1205,6 +1247,24 @@ const makePkgLibraryStore = () =>
       // finisher), so the mechanism stays identical across both surfaces.
       const entry = get().entries.find((e) => e.path === path);
       const label = entry?.title || entry?.contentId || basenameOf(path);
+
+      // Pre-flight free-space check (#115): if the pkg clearly won't fit, warn
+      // NOW instead of letting the user wait through a doomed install that ends
+      // in a late out-of-space error. Best-effort — if free space can't be read
+      // it returns null and we never block.
+      const spaceWarn = installSpaceWarning(
+        label,
+        entry?.size ?? 0,
+        await installFreeBytes(transferAddr(host)),
+      );
+      if (spaceWarn) {
+        patch({ status: "idle", lastResult: { ok: false, message: spaceWarn } });
+        pushNotification("warning", `Not enough space for ${label}`, {
+          body: spaceWarn,
+        });
+        return;
+      }
+
       // delete_staging = the user's Auto Delete preference: the engine keeps
       // the uploaded pkg when this is off (the separate client-side remove()
       // below is also gated on the same setting, so OFF means truly kept).
@@ -1268,15 +1328,27 @@ const makePkgLibraryStore = () =>
             ? "Installed — may need the PS5’s Package Installer to launch"
             : "Ready to play",
         }).catch(() => {});
-        // Optional: auto-delete the spent staged .pkg so the library
-        // doesn't accumulate installed packages. Best-effort + awaited so
-        // the row vanishes deterministically; remove() swallows its own
-        // errors (surfaces via store.error, never throws here). The ENGINE
-        // already cleaned the staged file (delete_staging=autoRemove), so this
-        // mainly drops the library ROW; logged so the deletion is traceable.
+        // Optional: auto-delete the spent staged .pkg so the library doesn't
+        // accumulate installed packages. The ENGINE usually already removed the
+        // staged file (delete_staging=autoRemove), so this mainly drops the
+        // library ROW. Make it a QUIET best-effort: a brief settle lets Sony's
+        // installer release the file (it can still hold it for a beat after the
+        // title registers — the cause of the reported "Delete failed:
+        // fs_delete_failed" toast), then a retrying delete; if it STILL fails,
+        // we log and drop the row anyway rather than alarm the user mid-success
+        // (the leftover is harmless staging that "Clear finished" sweeps).
         if (autoRemove) {
           log.info("install", `auto-deleting staged pkg after install: ${path}`);
-          await get().remove(path, host);
+          await sleep(800);
+          try {
+            await fsDeleteWithRetry(mgmtAddr(host), path);
+          } catch (e) {
+            log.info(
+              "install",
+              `post-install staged-pkg cleanup deferred (${pkgError(e)}): ${path}`,
+            );
+          }
+          set({ entries: get().entries.filter((e) => e.path !== path) });
         } else {
           log.info(
             "install",
@@ -1515,7 +1587,7 @@ const makePkgLibraryStore = () =>
     const prev = get().entries;
     set({ entries: prev.filter((e) => e.path !== path), error: null });
     try {
-      await fsDelete(mgmtAddr(host), path);
+      await fsDeleteWithRetry(mgmtAddr(host), path);
     } catch (e) {
       set({ entries: prev, error: `Delete failed: ${pkgError(e)}` });
     }

@@ -309,6 +309,7 @@ export default function UploadScreen() {
         reconcileMode,
         excludes: [],
         contentId: cid,
+        category: pkgInfo?.category ?? null,
         installAfterUpload: settings.autoInstallAfterUpload,
         deletePkgAfterInstall: settings.autoRemoveAfterInstall,
         mountAfterUpload: false,

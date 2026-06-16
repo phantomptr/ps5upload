@@ -44,6 +44,8 @@ import { useRecentHostMetricsStore } from "./recentHostMetrics";
 import { pushNotification } from "./notifications";
 import { withConsolePrefix } from "./roster";
 import { hostOf, mgmtAddr } from "../lib/addr";
+import { useConnectionStore } from "./connection";
+import { parsePS5Firmware } from "../lib/ps5Firmware";
 import { log } from "./logs";
 import { ensurePayloadCurrent } from "../lib/ensurePayloadCurrent";
 import { effectiveUploadStreams } from "../lib/uploadStreams";
@@ -133,6 +135,12 @@ export interface QueueItem {
    *  is already on the PS5). Empty string for a headerless pkg (install still
    *  accepts it). Null/absent for non-pkg items. */
   contentId?: string | null;
+  /** Pkg-only: PARAM.SFO category (`gd` base / `gp` update / `ac` DLC), parsed
+   *  at add time. Drives install ORDER — a base game must install before its
+   *  update before its DLC (an add-on installed before its base wastes the
+   *  upload + space and can't apply). Null/absent for non-pkg or headerless
+   *  items; the runner then falls back to the staged dest path. */
+  category?: string | null;
   /** Pkg-only: run the installer once the .pkg upload commits (default on —
    *  staging a pkg exists to install it). Mirrors installSettings, captured at
    *  add time so toggling the default mid-queue doesn't disturb queued rows. */
@@ -228,6 +236,7 @@ export type AddQueueItem = Pick<
   | "mountReadOnly"
   | "registerAfterUpload"
   | "contentId"
+  | "category"
   | "installAfterUpload"
   | "deletePkgAfterInstall"
 >;
@@ -300,17 +309,49 @@ export function distinctPendingHosts(items: QueueItem[]): string[] {
   return out;
 }
 
-/** First pending item targeting `host` (port-stripped match), or null. The
- *  per-console runner's `pickNext`; stable array order = run order, same
- *  contract as `nextPending`. Pure — exported for tests. */
+/** Install-order priority for a queued item. A base game must install before
+ *  its update, which must install before its DLC — an add-on uploaded+installed
+ *  before its base wastes the transfer + storage and can't apply (and the
+ *  reported bug: a Far Cry UPDATE queued ahead of its base). Lower runs sooner.
+ *
+ *  Uses the parsed PARAM.SFO category when present (`gd` base → 0, `gp` update →
+ *  1, `ac` DLC → 2); falls back to the staged dest path (which
+ *  `stagingSubdirForCategory` routes to `/updates/` or `/dlc/`) for older
+ *  persisted items that predate the `category` field. Non-pkg items and base
+ *  games share priority 0 and keep their add-order. Exported for tests. */
+export function installOrderPriority(it: QueueItem): number {
+  if (it.sourceKind !== "pkg") return 0;
+  const cat = it.category;
+  if (cat === "gp") return 1;
+  if (cat === "ac") return 2;
+  if (cat === "gd") return 0;
+  // No category (headerless or pre-field item) → infer from the dest path.
+  if (/\/updates\/[^/]*$/.test(it.resolvedDest)) return 1;
+  if (/\/dlc\/[^/]*$/.test(it.resolvedDest)) return 2;
+  return 0;
+}
+
+/** The next pending item to run for `host` (port-stripped match), or null.
+ *  Picks the lowest install-order priority (base → update → DLC), breaking ties
+ *  by add-order (the first such pending item wins, so a user's manual reorder
+ *  within a category is preserved). Pure — exported for tests. */
 export function nextPendingForHost(
   items: QueueItem[],
   host: string,
 ): QueueItem | null {
-  return (
-    items.find((it) => it.status === "pending" && hostOf(it.addr) === host) ??
-    null
-  );
+  let best: QueueItem | null = null;
+  let bestPrio = Number.POSITIVE_INFINITY;
+  for (const it of items) {
+    if (it.status !== "pending" || hostOf(it.addr) !== host) continue;
+    const prio = installOrderPriority(it);
+    // Strict `<` keeps the FIRST item at a given priority (add-order stable).
+    if (prio < bestPrio) {
+      bestPrio = prio;
+      best = it;
+      if (prio === 0) break; // 0 is the minimum — first base/non-pkg wins
+    }
+  }
+  return best;
 }
 
 export const useUploadQueueStore = create<QueueState>((set, get) => {
@@ -663,14 +704,30 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
                 );
               }
               // Free the staging copy on success (default on). Best-effort —
-              // a leftover staged pkg isn't a transfer failure.
+              // a leftover staged pkg isn't a transfer failure. Let Sony's
+              // installer release the file first (it can hold it for a beat
+              // after the title registers — the cause of "fs_delete_failed"),
+              // then retry a couple of times instead of a single attempt.
               if (item.deletePkgAfterInstall !== false) {
-                try {
-                  await fsDelete(mgmtAddr(hostOf(item.addr)), finalDest);
-                } catch {
-                  /* leftover staged pkg is harmless */
+                await sleep(800);
+                for (let attempt = 0; attempt < 3; attempt++) {
+                  try {
+                    await fsDelete(mgmtAddr(hostOf(item.addr)), finalDest);
+                    break;
+                  } catch {
+                    if (attempt < 2) await sleep(700);
+                    /* leftover staged pkg is harmless */
+                  }
                 }
               }
+              // FW12+ install settle: the main-payload install briefly
+              // destabilises SceShellUI (the "screen goes black" blip), and on a
+              // multi-item queue (base + small updates/DLC) the NEXT item's
+              // upload could start before the payload/connection fully recovers
+              // — which the user saw as the queue stalling mid-DLC. Give the
+              // console a moment to come back before runOne returns to the drain
+              // loop. Gated to FW >= 12 where the blip is observed.
+              await fw12InstallSettle(hostOf(item.addr));
             } else {
               // The bytes landed but the install — the point of a pkg — did
               // not COMPLETE. The staged pkg was KEPT on the PS5 (never deleted
@@ -1248,6 +1305,18 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
     },
   };
 });
+
+/** Extra post-install settle on FW12+, where the main-payload install briefly
+ *  destabilises SceShellUI (the screen-black blip) and the connection recovers
+ *  a beat later. Without it, the next queued item's upload can start before the
+ *  payload is back and stall the queue (reported on multi small DLC/updates).
+ *  No-op below FW12, where the blip isn't observed. Env-free, host-scoped. */
+async function fw12InstallSettle(host: string): Promise<void> {
+  const rt = useConnectionStore.getState().runtimeByHost[host] ?? null;
+  const fw = parsePS5Firmware(rt?.ps5Kernel ?? null);
+  const major = fw ? parseFloat(fw) : 0;
+  if (major >= 12) await sleep(3000);
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));

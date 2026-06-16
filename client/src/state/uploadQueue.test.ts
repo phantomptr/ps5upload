@@ -36,6 +36,7 @@ import {
   useUploadQueueStore,
   distinctPendingHosts,
   nextPendingForHost,
+  installOrderPriority,
   type QueueItem,
   type AddQueueItem,
 } from "./uploadQueue";
@@ -112,6 +113,70 @@ describe("nextPendingForHost", () => {
       "10.0.0.1:9113pending",
     );
     expect(nextPendingForHost(items, "10.0.0.9")).toBeNull();
+  });
+});
+
+describe("install ordering (base → update → DLC)", () => {
+  const pkg = (
+    id: string,
+    addr: string,
+    category: string | null,
+    dest = "/data/pkg_library/x.pkg",
+  ): QueueItem =>
+    ({
+      id,
+      addr,
+      status: "pending",
+      sourceKind: "pkg",
+      category,
+      resolvedDest: dest,
+    }) as QueueItem;
+
+  it("prioritises by category gd(0) < gp(1) < ac(2)", () => {
+    expect(installOrderPriority(pkg("a", "h:9113", "gd"))).toBe(0);
+    expect(installOrderPriority(pkg("b", "h:9113", "gp"))).toBe(1);
+    expect(installOrderPriority(pkg("c", "h:9113", "ac"))).toBe(2);
+  });
+
+  it("falls back to the staged dest path when category is absent", () => {
+    expect(
+      installOrderPriority(
+        pkg("u", "h:9113", null, "/data/pkg_library/updates/x.pkg"),
+      ),
+    ).toBe(1);
+    expect(
+      installOrderPriority(
+        pkg("d", "h:9113", null, "/data/pkg_library/dlc/x.pkg"),
+      ),
+    ).toBe(2);
+    expect(
+      installOrderPriority(pkg("b", "h:9113", null, "/data/pkg_library/x.pkg")),
+    ).toBe(0);
+  });
+
+  it("treats non-pkg items as priority 0", () => {
+    expect(
+      installOrderPriority({ id: "f", sourceKind: "folder" } as QueueItem),
+    ).toBe(0);
+  });
+
+  it("picks base before update before DLC regardless of add order", () => {
+    // The reported bug: a DLC + update queued AHEAD of the base.
+    const items = [
+      pkg("dlc", "h:9113", "ac"),
+      pkg("update", "h:9113", "gp"),
+      pkg("base", "h:9113", "gd"),
+    ];
+    expect(nextPendingForHost(items, "h")?.id).toBe("base");
+  });
+
+  it("keeps add-order within the same category (manual reorder preserved)", () => {
+    const items = [
+      pkg("dlc2", "h:9113", "ac"),
+      pkg("dlc1", "h:9113", "ac"),
+    ];
+    // Both DLC (prio 2) → the first-added one wins, not re-sorted.
+    expect(nextPendingForHost(items, "h")?.id).toBe("dlc2");
   });
 });
 

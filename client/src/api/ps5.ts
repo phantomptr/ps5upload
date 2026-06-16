@@ -667,6 +667,50 @@ export interface Volume {
   source_image?: string;
 }
 
+/** Enumerate the PS5's mounted storage volumes (internal + extended), with
+ *  total/free bytes. Thin wrapper over the `ps5_volumes` command. */
+export async function listVolumes(transferAddr: string): Promise<Volume[]> {
+  const addr = toMgmtAddr(transferAddr);
+  const res = await invoke<{ volumes?: Volume[] }>("ps5_volumes", { addr });
+  return res?.volumes ?? [];
+}
+
+/** Bytes free across the volumes a game install can land on — the internal
+ *  storage plus every extended-storage `/mnt/ext*` mount. Best-effort: returns
+ *  null if volumes can't be read (so a check that can't run never blocks the
+ *  install).
+ *
+ *  Internal is reported as `/user` on some consoles and `/data` on others (both
+ *  are the one main data partition where `/user/app` lives) — we pick ONE of
+ *  them (prefer `/user`) so overlapping mounts aren't double-counted. */
+export async function installFreeBytes(
+  transferAddr: string,
+): Promise<number | null> {
+  try {
+    const vols = await listVolumes(transferAddr);
+    if (vols.length === 0) return null;
+    const real = vols.filter((v) => !v.is_placeholder);
+    let free = 0;
+    let counted = false;
+    const internal =
+      real.find((v) => v.path === "/user") ??
+      real.find((v) => v.path === "/data");
+    if (internal) {
+      free += Math.max(0, internal.free_bytes);
+      counted = true;
+    }
+    for (const v of real) {
+      if (v.path.startsWith("/mnt/ext")) {
+        free += Math.max(0, v.free_bytes);
+        counted = true;
+      }
+    }
+    return counted ? free : null;
+  } catch {
+    return null;
+  }
+}
+
 export interface SearchHit {
   path: string;
   name: string;

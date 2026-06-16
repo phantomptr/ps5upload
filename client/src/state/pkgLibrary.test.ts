@@ -17,6 +17,9 @@ vi.mock("../api/ps5", () => ({
   // Install fires a best-effort PS5 toast; stub it so store tests don't reach a
   // console.
   toastPush: vi.fn(async () => ({ ok: true })),
+  // Pre-install space check; default to "plenty free" so store tests aren't
+  // blocked. (null would also be fine — it means "couldn't read, don't block".)
+  installFreeBytes: vi.fn(async () => 1_000_000_000_000),
 }));
 // No active transfer in tests → installs proceed immediately.
 vi.mock("../lib/ps5Transfers", () => ({ transferScreenBusy: () => false }));
@@ -32,6 +35,7 @@ import {
   pkgInstallMayNotLaunch,
   pkgTypeForCategory,
   pkgRowInstalled,
+  installSpaceWarning,
   installedLastResult,
   runPkgInstall,
   PKG_MAY_NOT_LAUNCH_MESSAGE,
@@ -131,6 +135,23 @@ describe("pkgTypeForCategory (patch data-loss guard input)", () => {
     expect(pkgTypeForCategory(null)).toBeNull();
     expect(pkgTypeForCategory("")).toBeNull();
     expect(pkgTypeForCategory("zz")).toBeNull();
+  });
+});
+
+describe("installSpaceWarning (#115 pre-install free-space check)", () => {
+  it("warns when the pkg is larger than free space", () => {
+    const w = installSpaceWarning("Big Game", 50_000_000_000, 10_000_000_000);
+    expect(w).toMatch(/Not enough free space/);
+    expect(w).toMatch(/Big Game/);
+  });
+  it("does not warn when it fits", () => {
+    expect(installSpaceWarning("Game", 5_000_000_000, 50_000_000_000)).toBeNull();
+  });
+  it("never blocks when free space is unknown (null)", () => {
+    expect(installSpaceWarning("Game", 50_000_000_000, null)).toBeNull();
+  });
+  it("ignores a zero/unknown pkg size", () => {
+    expect(installSpaceWarning("Game", 0, 1)).toBeNull();
   });
 });
 
