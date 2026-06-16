@@ -4,6 +4,15 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 3.3.16
+
+- **You control when USB / external drives are scanned.** The "Install from USB
+  / external drive" section has a new **"Automatically scan when this tab
+  opens"** checkbox. Leave it on (the default) and it works as before; turn it
+  off and nothing is scanned until you click **Scan** — handy when no drive is
+  plugged in, or to skip the check each time you open the tab. The Scan button
+  is always there for an on-demand look.
+
 ## 3.3.15
 
 - **An installed update or DLC now shows "Reinstall."** After you install a

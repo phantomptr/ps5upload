@@ -804,6 +804,8 @@ function ExternalPackages({ host }: { host: string }) {
   const tr = useTr();
   const installExternal = usePkgLibrary(host, (s) => s.installExternal);
   const installing = usePkgLibrary(host, (s) => s.installing);
+  const autoScan = useInstallSettingsStore((s) => s.autoScanExternal);
+  const setAutoScan = useInstallSettingsStore((s) => s.setAutoScanExternal);
   const [pkgs, setPkgs] = useState<ExternalPkg[]>([]);
   const [scanning, setScanning] = useState(false);
   const [scanned, setScanned] = useState(false);
@@ -832,13 +834,14 @@ function ExternalPackages({ host }: { host: string }) {
     }
   }
 
-  // Scan once when the host becomes ready (and on manual Rescan). The pkg
-  // stays on the drive after install, so the list itself doesn't change; the
-  // per-row result line reflects the outcome.
+  // Scan once when the host becomes ready — but only if auto-scan is on. With
+  // it off, nothing is scanned until the user clicks Scan (the manual button is
+  // always available). The pkg stays on the drive after install, so the list
+  // itself doesn't change; the per-row result line reflects the outcome.
   useEffect(() => {
-    void scan();
+    if (autoScan) void scan();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [host]);
+  }, [host, autoScan]);
 
   // Background enrichment: walk the scanned packages one at a time (gentle on
   // the console's FS RPC) and pull each one's real title / version / category.
@@ -911,15 +914,29 @@ function ExternalPackages({ host }: { host: string }) {
         >
           {scanning
             ? tr("pkglib.external.scanning", "Scanning…")
-            : tr("pkglib.external.rescan", "Refresh")}
+            : scanned
+              ? tr("pkglib.external.rescan", "Refresh")
+              : tr("pkglib.external.scan", "Scan")}
         </Button>
       </div>
       <div className="mb-2 text-[11px] leading-relaxed text-[var(--color-muted)]">
         {tr(
           "pkglib.external.hint",
-          "Plug a USB stick or external drive with .pkg files into the PS5 and they show up here — no upload needed. Installing copies the file onto the console first (your drive's copy is left untouched), then installs it. Use Refresh after connecting a drive.",
+          "Plug a USB stick or external drive with .pkg files into the PS5 and they show up here — no upload needed. Installing copies the file onto the console first (your drive's copy is left untouched), then installs it. Use Scan after connecting a drive.",
         )}
       </div>
+      <label className="mb-2 flex cursor-pointer items-center gap-2 text-[11px] text-[var(--color-muted)]">
+        <input
+          type="checkbox"
+          className="h-3.5 w-3.5"
+          checked={autoScan}
+          onChange={(e) => setAutoScan(e.target.checked)}
+        />
+        {tr(
+          "pkglib.external.autoScan",
+          "Automatically scan USB / external drives when this tab opens",
+        )}
+      </label>
 
       {firstScan ? (
         // Stable scanning state — no more "suddenly appears" pop-in.
@@ -927,12 +944,21 @@ function ExternalPackages({ host }: { host: string }) {
           <Loader2 size={14} className="animate-spin" />
           {tr("pkglib.external.scanningDrives", "Scanning connected drives…")}
         </div>
+      ) : !scanned ? (
+        // Auto-scan is off and we haven't scanned yet — prompt rather than
+        // claiming "nothing found" (we haven't looked).
+        <div className="rounded-md border border-dashed border-[var(--color-border)] px-3 py-4 text-xs text-[var(--color-muted)]">
+          {tr(
+            "pkglib.external.notScanned",
+            "Auto-scan is off. Connect a USB or external drive with .pkg files, then click Scan.",
+          )}
+        </div>
       ) : pkgs.length === 0 ? (
-        // Empty state — informative, and the Refresh button above stays put.
+        // Empty state — informative, and the Scan button above stays put.
         <div className="rounded-md border border-dashed border-[var(--color-border)] px-3 py-4 text-xs text-[var(--color-muted)]">
           {tr(
             "pkglib.external.empty",
-            "No .pkg files found on connected USB or external drives. Connect a drive that has .pkg files on it, then click Refresh.",
+            "No .pkg files found on connected USB or external drives. Connect a drive that has .pkg files on it, then click Scan.",
           )}
         </div>
       ) : (

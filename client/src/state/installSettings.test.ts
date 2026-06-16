@@ -73,3 +73,44 @@ describe("installSettings — autoInstallAfterUpload", () => {
     );
   });
 });
+
+const SCAN_KEY = "ps5upload.auto_scan_external";
+
+describe("installSettings — autoScanExternal", () => {
+  beforeEach(() => {
+    installWindowStub();
+  });
+
+  afterEach(() => {
+    delete (globalThis as { window?: unknown }).window;
+    vi.resetModules();
+  });
+
+  it("setter persists '1' when on and '0' when off, and mirrors state", () => {
+    const s = useInstallSettingsStore.getState();
+    s.setAutoScanExternal(false);
+    expect(window.localStorage.getItem(SCAN_KEY)).toBe("0");
+    expect(useInstallSettingsStore.getState().autoScanExternal).toBe(false);
+
+    s.setAutoScanExternal(true);
+    expect(window.localStorage.getItem(SCAN_KEY)).toBe("1");
+    expect(useInstallSettingsStore.getState().autoScanExternal).toBe(true);
+  });
+
+  // Opt-out: a fresh user (no stored key) keeps the prior behaviour — the
+  // USB/external section auto-scans when the tab opens. Only an explicit "0"
+  // turns it off.
+  it("defaults ON when the key is absent (opt-out)", async () => {
+    installWindowStub(); // no seeded key
+    vi.resetModules();
+    const mod = await import("./installSettings");
+    expect(mod.useInstallSettingsStore.getState().autoScanExternal).toBe(true);
+  });
+
+  it("loads OFF only for an explicit '0'", async () => {
+    installWindowStub({ [SCAN_KEY]: "0" });
+    vi.resetModules();
+    const mod = await import("./installSettings");
+    expect(mod.useInstallSettingsStore.getState().autoScanExternal).toBe(false);
+  });
+});

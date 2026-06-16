@@ -17,10 +17,21 @@ import { create } from "zustand";
 
 const KEY_AUTO_REMOVE = "ps5upload.auto_remove_after_install";
 const KEY_AUTO_INSTALL = "ps5upload.auto_install_after_upload";
+const KEY_AUTO_SCAN_EXTERNAL = "ps5upload.auto_scan_external";
 
 function loadAutoRemove(): boolean {
   if (typeof window === "undefined") return false;
   return window.localStorage.getItem(KEY_AUTO_REMOVE) === "1";
+}
+
+// Defaults ON to preserve the prior behaviour (the USB/external section scanned
+// automatically when the Install Package tab opened). Persisted, so a user who
+// finds the auto-scan unwanted — it pokes the console's FS RPC on every visit,
+// and a drive may not be plugged in — can turn it off and rely on the Scan
+// button instead. Absent key → ON (opt-out).
+function loadAutoScanExternal(): boolean {
+  if (typeof window === "undefined") return true;
+  return window.localStorage.getItem(KEY_AUTO_SCAN_EXTERNAL) !== "0";
 }
 
 // Defaults ON: the whole point of staging a .pkg in the library is to
@@ -47,6 +58,12 @@ interface InstallSettingsState {
    *  staged copy cleaned up" one hands-off flow. */
   autoInstallAfterUpload: boolean;
   setAutoInstallAfterUpload: (v: boolean) => void;
+  /** When true, the "Install from USB / external drive" section scans the
+   *  connected drives automatically each time the Install Package tab opens.
+   *  When false, nothing is scanned until the user clicks Scan — useful when
+   *  no drive is attached or to avoid the per-visit FS poll. On by default. */
+  autoScanExternal: boolean;
+  setAutoScanExternal: (v: boolean) => void;
 }
 
 export const useInstallSettingsStore = create<InstallSettingsState>((set) => ({
@@ -69,5 +86,15 @@ export const useInstallSettingsStore = create<InstallSettingsState>((set) => ({
       );
     }
     set({ autoInstallAfterUpload });
+  },
+  autoScanExternal: loadAutoScanExternal(),
+  setAutoScanExternal: (autoScanExternal) => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(
+        KEY_AUTO_SCAN_EXTERNAL,
+        autoScanExternal ? "1" : "0",
+      );
+    }
+    set({ autoScanExternal });
   },
 }));
