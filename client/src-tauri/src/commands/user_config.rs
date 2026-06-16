@@ -69,6 +69,12 @@ fn ensure_parent(path: &Path) -> Result<(), String> {
 /// Read the `engine_url` field from settings.json, if present and non-blank.
 /// Sync (no `await`) so `engine::start` can seed its URL before deciding
 /// whether to spawn the bundled sidecar.
+///
+/// Desktop-only: its sole caller is the desktop `engine::start` (engine.rs).
+/// The mobile build links the engine in-process (engine_mobile.rs) and has no
+/// configurable URL, so without this `cfg` the function is dead code on the
+/// Android/iOS target and trips `-D warnings`.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(crate) fn load_engine_url(app: &AppHandle) -> Option<String> {
     let path = user_config_path(app).ok()?;
     let bytes = std::fs::read(&path).ok()?;

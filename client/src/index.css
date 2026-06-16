@@ -566,7 +566,7 @@ button {
 /* Checkboxes & radios render at the browser's tiny intrinsic size, which
  * looks cramped at the app's 18px root — and many call sites don't set an
  * explicit size. Bump them a bit and theme the check to the accent colour.
- * A plain attribute selector outweighs Tailwind's h-*/w-* utility classes,
+ * A plain attribute selector outweighs Tailwind's h-* / w-* utility classes,
  * so this uniformly resizes EVERY checkbox/radio (settings + everywhere).
  * On touch they grow a touch more for comfortable tapping. */
 input[type="checkbox"],
