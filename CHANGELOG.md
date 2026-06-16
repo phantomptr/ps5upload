@@ -4,6 +4,23 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 3.3.11
+
+Installs you can watch from anywhere, plus a few handy touches.
+
+- **Installs now show in the activity bar at the bottom, with a live %.** Start
+  an install and it appears in the bottom activity strip just like uploads and
+  downloads do — so you can browse the rest of the app and still see what's
+  progressing and how far along it is.
+- **A toast pops on the PS5 itself when an install finishes** (in addition to
+  the in-app notification), so you get the "done" confirmation on the console
+  screen even when the app isn't in front of you.
+- **Drag a payload file onto the Send file screen** to fill in its path — no
+  need to click Choose every time.
+- **The File System returns to /data when a folder no longer exists.** Land on a
+  remembered path that's since been deleted (or an unplugged drive) and it now
+  drops you back to /data with a note, instead of a stuck error.
+
 ## 3.3.10
 
 Smoother installs and a few UI fixes.
