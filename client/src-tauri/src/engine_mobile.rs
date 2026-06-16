@@ -56,3 +56,11 @@ pub async fn stop() {}
 pub fn url() -> &'static str {
     DEFAULT_ENGINE_URL
 }
+
+/// No-op on mobile. The desktop build made the engine URL runtime-configurable
+/// (point the app at a remote/self-hosted engine), but mobile links the engine
+/// in-process — there is no sidecar and no remote-engine story here, so the
+/// `engine_url_set` command is inert. Defined so the shared command module
+/// (`commands::ps5_engine`) compiles for the Android/iOS target. The renderer
+/// may still store an Engine URL setting; mobile simply ignores it.
+pub fn set_url(_url: String) {}

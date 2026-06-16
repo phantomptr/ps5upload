@@ -847,7 +847,10 @@ where
         return None;
     }
     let sfo_bytes = read_at(off as u64, sz as u64)?;
-    parse_sfo_string_keys(&sfo_bytes).ok()?.get("CATEGORY").cloned()
+    parse_sfo_string_keys(&sfo_bytes)
+        .ok()?
+        .get("CATEGORY")
+        .cloned()
 }
 
 /// Tiny base64 encoder so we don't pull in a crate just for icon
