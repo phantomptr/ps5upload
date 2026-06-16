@@ -617,8 +617,10 @@ person uploading, another browsing"), no coordination is needed.
 self-hosted engine)? (3.3.7)**
 Yes. The app normally launches its transfer engine as a bundled background
 process on `127.0.0.1:19113`, but you can run that engine somewhere else — a
-home server, a NAS, or the tiny Docker image in `engine/` — and point the app at
-it in **Settings → Engine URL**. When the URL isn't loopback, the app skips the
+home server, a NAS — and point the app at it in **Settings → Engine URL**.
+An official multi-arch image (`linux/amd64` + `linux/arm64`) is published at
+`ghcr.io/phantomptr/ps5upload-engine` — use `:latest` for the newest release
+or `:<version>` to pin (e.g. `docker pull ghcr.io/phantomptr/ps5upload-engine:3.3.16`). When the URL isn't loopback, the app skips the
 bundled engine and talks to your remote one (cover art included). Two things to
 know: (1) the engine's API has **no password**, so to let a remote machine reach
 it you set `PS5UPLOAD_ALLOW_IP` to that machine's IP — do this **only on a

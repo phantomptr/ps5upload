@@ -1,4 +1,5 @@
 # Minimal scratch image for ps5upload-engine. Build context is engine/.
+# Official multi-arch image: docker pull ghcr.io/phantomptr/ps5upload-engine:latest
 #   docker build -t ps5upload-engine engine/
 #   docker run --rm -p 19113:19113 -e PS5_ADDR=192.168.1.50:9113 ps5upload-engine
 # Env: PS5UPLOAD_ENGINE_PORT (19113), PS5_ADDR (192.168.137.2:9113),

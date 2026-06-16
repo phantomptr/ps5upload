@@ -444,13 +444,13 @@ below 4.x is obscure and above 12.70 is future work.
   opening the desktop client.
 
 **Q: Can the engine run on a different machine (remote / self-hosted)?**
-* Yes (3.3.7+). Host the engine elsewhere — including the tiny scratch
-  image in `engine/Dockerfile` — and point the desktop app at it via
-  **Settings → Engine URL**; the app then talks to your engine instead of
-  the bundled one. To let a remote box reach it, set `PS5UPLOAD_ALLOW_IP`
-  to that box's IP. **Security:** the engine's API is unauthenticated (it
-  can read/write/delete PS5 files), so only do this on a trusted LAN —
-  never expose the engine to the internet.
+* Yes (3.3.7+). Host the engine elsewhere and point the desktop app at it via
+  **Settings → Engine URL**. An official multi-arch image is published at
+  `ghcr.io/phantomptr/ps5upload-engine` (`:latest` or `:<version>`); you can
+  also build from `engine/Dockerfile`. To let a remote box reach it, set
+  `PS5UPLOAD_ALLOW_IP` to that box's IP. **Security:** the engine's API is
+  unauthenticated (it can read/write/delete PS5 files), so only do this on a
+  trusted LAN — never expose the engine to the internet.
 
 ## Contributing
 
