@@ -345,11 +345,68 @@ async fn install_start_handler(
         Err(e) => return json_err(StatusCode::BAD_REQUEST, &e),
     };
 
-    let package_type = req
+    let mut package_type = req
         .package_type_override
         .clone()
         .or_else(|| head_meta.package_type.clone())
         .unwrap_or_else(|| "PS4GD".to_string());
+
+    // ── Data-loss guard (engine layer) ──────────────────────────────────
+    // The payload refuses to fall back to a DESTRUCTIVE install tier
+    // (shellui-rpc / BGFT) for a patch — but it only recognises a patch by
+    // package_type ending in "DP". The Library path carries the type the
+    // client parsed at upload, but the USB-scan / File-System / upload-queue
+    // paths have NO PARAM.SFO category, so they default to "PS4GD": a PS4
+    // patch (which shares its base game's content_id) then looked like a full
+    // game and slipped past the guard, re-registering the shared content_id
+    // and WIPING the installed base (hardware-confirmed: a Jak X patch deleted
+    // its 3.8 GB base). Fix: when the caller didn't declare a type, read the
+    // category straight from the STAGED pkg's PARAM.SFO (three small ranged
+    // reads) and derive the real type. This arms the guard for an ACTUAL patch
+    // (`gp` → PS4DP) while leaving a full-game re-install (`gd` → PS4GD)
+    // alone — an earlier "is it already installed?" heuristic wrongly blocked
+    // legitimate base re-installs, which this avoids. Bounded + fail-soft: a
+    // slow/unreadable pkg just leaves the default type, never hangs the start.
+    let is_local = req
+        .local_ps5_path
+        .as_deref()
+        .map(|p| !p.is_empty())
+        .unwrap_or(false);
+    let type_declared = req.package_type_override.is_some() || head_meta.package_type.is_some();
+    if is_local && !type_declared {
+        if let Some(local_path) = req.local_ps5_path.clone() {
+            let addr = req.ps5_addr.clone();
+            let parsed = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                tokio::task::spawn_blocking(move || {
+                    ps5upload_pkg::category_from_reader(|off, len| {
+                        ps5upload_core::fs_ops::fs_read(&addr, &local_path, off, len).ok()
+                    })
+                    .and_then(|cat| {
+                        ps5upload_pkg::package_type_for_category(&cat).map(|pt| (cat, pt))
+                    })
+                }),
+            )
+            .await;
+            if let Ok(Ok(Some((cat, pt)))) = parsed {
+                if pt != package_type {
+                    crate::log_info!(
+                        "install guard: staged pkg category '{}' → package_type {} \
+                         (was {}); {}",
+                        cat,
+                        pt,
+                        package_type,
+                        if pt.ends_with("DP") {
+                            "arms the patch guard so a fallback tier can't wipe the base"
+                        } else {
+                            "full game — normal install cascade"
+                        }
+                    );
+                    package_type = pt;
+                }
+            }
+        }
+    }
 
     // URL strategy: raw path when caller staged the pkg on PS5 disk
     // (Tier 1). On FW 9.60+ Sony's installer accepts a bare absolute

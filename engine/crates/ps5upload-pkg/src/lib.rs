@@ -802,6 +802,54 @@ fn derive_package_type(category: &str) -> Option<String> {
     }
 }
 
+/// Public wrapper over the category → BGFT `package_type` map.
+pub fn package_type_for_category(category: &str) -> Option<String> {
+    derive_package_type(category)
+}
+
+/// Extract the PARAM.SFO `CATEGORY` from a `.pkg` using a ranged-read closure
+/// instead of a local `File`. `read_at(offset, len)` returns the bytes (or
+/// `None` on failure), so this works against a pkg that lives on the PS5 (via
+/// `fs_read`) — letting the engine learn whether a STAGED pkg is a patch
+/// (`gp`) or a full game (`gd`) for the data-loss guard, without re-parsing the
+/// whole file. Only three small reads: header (0x40), the entry table, and the
+/// SFO itself. Returns `None` for a non-`\x7FCNT` pkg / unreadable / no SFO.
+pub fn category_from_reader<F>(read_at: F) -> Option<String>
+where
+    F: Fn(u64, u64) -> Option<Vec<u8>>,
+{
+    let head = read_at(0, 0x40)?;
+    if head.len() < 0x1C {
+        return None;
+    }
+    let magic = u32::from_be_bytes([head[0], head[1], head[2], head[3]]);
+    if magic != PKG_MAGIC {
+        return None; // FIH / unknown magic carries no PS4 PARAM.SFO here
+    }
+    let entry_count = u32::from_be_bytes([head[0x10], head[0x11], head[0x12], head[0x13]]);
+    let table_offset = u32::from_be_bytes([head[0x18], head[0x19], head[0x1A], head[0x1B]]);
+    if entry_count == 0 || entry_count > 1024 {
+        return None;
+    }
+    let table = read_at(table_offset as u64, entry_count as u64 * 0x20)?;
+    let mut sfo: Option<(u32, u32)> = None;
+    for i in 0..entry_count as usize {
+        let e = table.get(i * 0x20..(i + 1) * 0x20)?;
+        if u32::from_be_bytes([e[0], e[1], e[2], e[3]]) == ENTRY_PARAM_SFO {
+            let off = u32::from_be_bytes([e[0x10], e[0x11], e[0x12], e[0x13]]);
+            let sz = u32::from_be_bytes([e[0x14], e[0x15], e[0x16], e[0x17]]);
+            sfo = Some((off, sz));
+            break;
+        }
+    }
+    let (off, sz) = sfo?;
+    if sz == 0 || sz > MAX_SFO_BYTES {
+        return None;
+    }
+    let sfo_bytes = read_at(off as u64, sz as u64)?;
+    parse_sfo_string_keys(&sfo_bytes).ok()?.get("CATEGORY").cloned()
+}
+
 /// Tiny base64 encoder so we don't pull in a crate just for icon
 /// transport. Standard alphabet, no line breaks. ~30 lines.
 fn b64_encode(input: &[u8]) -> String {
@@ -856,6 +904,71 @@ mod tests {
         // Unknown prefixes (NPXS system, homebrew) → no badge.
         assert_eq!(derive_platform(PKG_MAGIC, "", "NPXS40047"), "");
         assert_eq!(derive_platform(PKG_MAGIC, "", ""), "");
+    }
+
+    // Build a minimal PARAM.SFO carrying one CATEGORY string key.
+    fn build_sfo(category: &str) -> Vec<u8> {
+        let key = b"CATEGORY\0";
+        let val = format!("{category}\0");
+        let key_table_off = 0x14usize + 16; // header + 1 entry
+        let data_table_off = key_table_off + key.len();
+        let mut sfo = Vec::new();
+        sfo.extend_from_slice(b"\x00PSF");
+        sfo.extend_from_slice(&[1, 1, 0, 0]); // version
+        sfo.extend_from_slice(&(key_table_off as u32).to_le_bytes()); // 0x08
+        sfo.extend_from_slice(&(data_table_off as u32).to_le_bytes()); // 0x0C
+        sfo.extend_from_slice(&1u32.to_le_bytes()); // 0x10 entry count
+        sfo.extend_from_slice(&0u16.to_le_bytes()); // key_off
+        sfo.extend_from_slice(&0x0204u16.to_le_bytes()); // fmt = utf8
+        sfo.extend_from_slice(&(val.len() as u32).to_le_bytes()); // len
+        sfo.extend_from_slice(&(val.len() as u32).to_le_bytes()); // max
+        sfo.extend_from_slice(&0u32.to_le_bytes()); // data_off
+        sfo.extend_from_slice(key);
+        sfo.extend_from_slice(val.as_bytes());
+        sfo
+    }
+
+    // Build a minimal \x7FCNT pkg whose only entry is PARAM.SFO.
+    fn build_pkg(category: &str) -> Vec<u8> {
+        let sfo = build_sfo(category);
+        let table_offset = 0x40u32;
+        let entry_count = 1u32;
+        let sfo_off = table_offset + entry_count * 0x20;
+        let mut pkg = vec![0u8; sfo_off as usize];
+        pkg[0..4].copy_from_slice(&PKG_MAGIC.to_be_bytes());
+        pkg[0x10..0x14].copy_from_slice(&entry_count.to_be_bytes());
+        pkg[0x18..0x1C].copy_from_slice(&table_offset.to_be_bytes());
+        let e = table_offset as usize;
+        pkg[e..e + 4].copy_from_slice(&ENTRY_PARAM_SFO.to_be_bytes());
+        pkg[e + 0x10..e + 0x14].copy_from_slice(&sfo_off.to_be_bytes());
+        pkg[e + 0x14..e + 0x18].copy_from_slice(&(sfo.len() as u32).to_be_bytes());
+        pkg.extend_from_slice(&sfo);
+        pkg
+    }
+
+    #[test]
+    fn category_from_reader_distinguishes_patch_from_game() {
+        let read = |pkg: Vec<u8>| {
+            move |off: u64, len: u64| {
+                let (o, l) = (off as usize, len as usize);
+                pkg.get(o..(o + l).min(pkg.len())).map(|s| s.to_vec())
+            }
+        };
+        // The load-bearing case: a patch ("gp") must derive a "…DP" type so the
+        // payload guard fires and can't wipe the base; a full game ("gd") must
+        // NOT, so a legitimate re-install still uses the normal cascade.
+        for (cat, want) in [("gp", "PS4DP"), ("gd", "PS4GD"), ("ac", "PS4AC")] {
+            let got = category_from_reader(read(build_pkg(cat)));
+            assert_eq!(got.as_deref(), Some(cat), "category for {cat}");
+            assert_eq!(
+                package_type_for_category(got.as_deref().unwrap()).as_deref(),
+                Some(want)
+            );
+        }
+        // Corrupt/non-\x7FCNT magic ⇒ None (caller keeps its default).
+        let mut bad = build_pkg("gp");
+        bad[0] = 0;
+        assert_eq!(category_from_reader(read(bad)), None);
     }
 
     #[test]

@@ -24,6 +24,7 @@ import {
   evictPkgLibraryStore,
   isFinishedPkg,
   pkgInstallMayNotLaunch,
+  pkgTypeForCategory,
   installedLastResult,
   runPkgInstall,
   PKG_MAY_NOT_LAUNCH_MESSAGE,
@@ -102,6 +103,29 @@ describe("titleIdFromContentId", () => {
 
 // ── may-not-launch surfacing (the 2.27.x FW-12 install fix) ─────────────────
 
+describe("pkgTypeForCategory (patch data-loss guard input)", () => {
+  it("maps a patch ('gp') to a …DP type that arms the payload guard", () => {
+    // THE load-bearing case: a patch shares its base game's content_id, so it
+    // MUST be tagged "…DP" or a fallback tier re-registers the id and wipes the
+    // base (hardware-confirmed: a Jak X patch deleted its 3.8 GB base).
+    expect(pkgTypeForCategory("gp")).toBe("PS4DP");
+    expect(pkgTypeForCategory("gp")?.endsWith("DP")).toBe(true);
+  });
+  it("maps a full game ('gd') to PS4GD (not a …DP type)", () => {
+    expect(pkgTypeForCategory("gd")).toBe("PS4GD");
+    expect(pkgTypeForCategory("gd")?.endsWith("DP")).toBe(false);
+  });
+  it("maps DLC ('ac' — its own content_id) to PS4AC, not …DP", () => {
+    expect(pkgTypeForCategory("ac")).toBe("PS4AC");
+  });
+  it("returns null for unknown/absent category (payload keeps its default)", () => {
+    expect(pkgTypeForCategory(undefined)).toBeNull();
+    expect(pkgTypeForCategory(null)).toBeNull();
+    expect(pkgTypeForCategory("")).toBeNull();
+    expect(pkgTypeForCategory("zz")).toBeNull();
+  });
+});
+
 describe("pkgInstallMayNotLaunch", () => {
   it("trusts the engine's explicit may_not_launch flag", () => {
     expect(pkgInstallMayNotLaunch({ may_not_launch: true })).toBe(true);
@@ -173,13 +197,13 @@ describe("runPkgInstall — forwards deleteStaging to the engine", () => {
       | undefined;
 
   it("passes deleteStaging=false → engine KEEPS the pkg (Auto Delete off)", async () => {
-    const r = await runPkgInstall("192.168.1.50", "/user/data/x.pkg", "CID", false);
+    const r = await runPkgInstall("192.168.1.50", "/user/data/x.pkg", "CID", null, false);
     expect(r.installed).toBe(true);
     expect(startArgs()?.deleteStaging).toBe(false);
   });
 
   it("passes deleteStaging=true → engine cleans the pkg (Auto Delete on)", async () => {
-    await runPkgInstall("192.168.1.50", "/user/data/x.pkg", "CID", true);
+    await runPkgInstall("192.168.1.50", "/user/data/x.pkg", "CID", null, true);
     expect(startArgs()?.deleteStaging).toBe(true);
   });
 });
@@ -232,6 +256,7 @@ describe("runPkgInstall — tracks the install to genuine completion", () => {
       "192.168.1.50",
       "/user/data/x.pkg",
       "CID",
+      null,
       true,
       (b, t) => progress.push([b, t]),
     );
@@ -256,7 +281,7 @@ describe("runPkgInstall — tracks the install to genuine completion", () => {
         };
       return {};
     });
-    const promise = runPkgInstall("192.168.1.50", "/user/data/x.pkg", "CID", true);
+    const promise = runPkgInstall("192.168.1.50", "/user/data/x.pkg", "CID", null, true);
     await vi.advanceTimersByTimeAsync(2600);
     const r = await promise;
     expect(r.installed).toBe(false); // ⇒ callers KEEP the pkg
@@ -271,7 +296,7 @@ describe("runPkgInstall — tracks the install to genuine completion", () => {
         return { phase: "error", err_code: 0x80b21106, total: 25_000_000_000 };
       return {};
     });
-    const promise = runPkgInstall("192.168.1.50", "/user/data/x.pkg", "CID", true);
+    const promise = runPkgInstall("192.168.1.50", "/user/data/x.pkg", "CID", null, true);
     await vi.advanceTimersByTimeAsync(2600);
     const r = await promise;
     expect(r.installed).toBe(false);
@@ -293,7 +318,7 @@ describe("runPkgInstall — tracks the install to genuine completion", () => {
       }
       return {};
     });
-    const promise = runPkgInstall("192.168.1.50", "/user/data/x.pkg", "CID", true);
+    const promise = runPkgInstall("192.168.1.50", "/user/data/x.pkg", "CID", null, true);
     await vi.advanceTimersByTimeAsync(2600 * 4);
     const r = await promise;
     expect(r.installed).toBe(true);

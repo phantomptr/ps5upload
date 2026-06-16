@@ -634,6 +634,10 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
               item.addr,
               finalDest,
               item.contentId ?? null,
+              // Upload-queue items don't carry the PARAM.SFO category; the
+              // engine reads it from the staged pkg to detect a patch and arm
+              // the data-loss guard.
+              null,
               item.deletePkgAfterInstall !== false,
               // Surface the live install % on this console's pkg screen while a
               // large queued title installs in the background.

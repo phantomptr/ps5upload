@@ -536,10 +536,41 @@ async function runDpiInstall(
  * Throws only if the DPI daemon itself can't come up after a main-payload
  * reject (a genuine dead-end) — callers should catch and treat as failure.
  */
+/** Map a PARAM.SFO CATEGORY to BGFT's package_type string. MUST mirror the
+ *  engine's `derive_package_type` (ps5upload-pkg). The "…DP" suffix is what
+ *  arms the payload's patch guard — a patch (`gp`) shares the base game's
+ *  content_id, so re-registering it via the shellui-rpc / BGFT fallbacks WIPES
+ *  the base. For a staged/local install the engine does NOT re-parse the pkg
+ *  (the bytes are on the PS5), so this is the ONLY place the patch-ness reaches
+ *  the payload: passing `null` (the old behaviour) made every patch look like a
+ *  full game (PS4GD) and defeated the guard — a hardware-confirmed data-loss
+ *  bug (a Jak X patch deleted the installed base). Returns null for unknown
+ *  categories so the payload keeps its own default. */
+export function pkgTypeForCategory(category?: string | null): string | null {
+  switch (category) {
+    case "gd":
+      return "PS4GD"; // full game
+    case "gp":
+      return "PS4DP"; // patch (shares the base content_id — guarded)
+    case "ac":
+      return "PS4AC"; // add-on / DLC
+    case "gde":
+      return "PS4GDE";
+    case "la":
+      return "PS4LA";
+    default:
+      return null;
+  }
+}
+
 export async function runPkgInstall(
   host: string,
   localPs5Path: string,
   contentId: string | null,
+  /** BGFT package_type for the staged pkg, derived from its PARAM.SFO category
+   *  (see `pkgTypeForCategory`). Passed straight through to the payload so a
+   *  patch ("…DP") arms the data-loss guard. Null ⇒ payload default. */
+  packageType: string | null,
   // The user's "Auto Delete after installation" preference. When false, the
   // engine KEEPS the staged pkg after install instead of deleting it. This is
   // the single source of truth for staging deletion now — previously the engine
@@ -568,7 +599,7 @@ export async function runPkgInstall(
       ps5Addr: mgmtAddr(host),
       path: null,
       splitRoot: null,
-      packageTypeOverride: null,
+      packageTypeOverride: packageType,
       localPs5Path,
       contentId: contentId || null,
       deleteStaging,
@@ -1014,6 +1045,7 @@ const makePkgLibraryStore = () =>
           host,
           path,
           entry?.contentId || null,
+          pkgTypeForCategory(entry?.category),
           autoRemove,
           // Live install %: a large title installs over minutes — show progress
           // instead of a frozen spinner. Guarded so a 0 total can't divide.
@@ -1166,6 +1198,10 @@ const makePkgLibraryStore = () =>
         host,
         internalPath,
         pkg.contentId || null,
+        // External scan (USB/exFAT) carries no PARAM.SFO category, so the
+        // package_type is unknown here. The engine reads the category straight
+        // from the staged pkg to detect a patch and arm the data-loss guard.
+        null,
         true, // the internal copy is transient — always clean it
         onProgress,
       );
@@ -1228,6 +1264,10 @@ const makePkgLibraryStore = () =>
       const { installed, mayNotLaunch, errMessage } = await runPkgInstall(
         host,
         path,
+        null,
+        // In-place install of a user-pointed path: we never parsed this pkg, so
+        // the package_type is unknown. The engine reads the category from the
+        // staged pkg itself to detect a patch and arm the data-loss guard.
         null,
         false,
       );
