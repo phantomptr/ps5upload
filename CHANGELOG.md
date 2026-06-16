@@ -28,6 +28,10 @@ messaging when an install fails.
 - **The Library no longer flickers.** When nothing was running, the "Running
   apps" panel flashed in and out every few seconds as it refreshed; it now stays
   hidden until there's actually something to show.
+- **The Avatar changer shows the selected user's current avatar.** The picture
+  box now loads the chosen user's existing avatar by default (instead of a blank
+  placeholder), so you can see what's there before replacing it. (Picking
+  different users was already supported.)
 
 ## 3.3.6
 

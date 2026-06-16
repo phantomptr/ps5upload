@@ -490,6 +490,13 @@ pub struct ProfileAddrReq {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct ProfileAvatarCurrentReq {
+    #[serde(default)]
+    pub addr: Option<String>,
+    pub uid: u32,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct ProfileUsernameReq {
     #[serde(default)]
     pub addr: Option<String>,
@@ -549,6 +556,22 @@ pub async fn profile_info(req: ProfileAddrReq) -> Result<JsonValue, String> {
     let url = match req.addr {
         Some(a) => format!("{base}/api/profile/info?addr={}", urlencoding(&a)),
         None => format!("{base}/api/profile/info"),
+    };
+    get_json(&url).await
+}
+
+/// Read a user's CURRENT avatar image. Proxies `/api/profile/avatar/current`.
+/// Returns `{ data_url: string | null }` — null when no readable avatar exists.
+#[tauri::command]
+pub async fn profile_avatar_current(req: ProfileAvatarCurrentReq) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let url = match req.addr {
+        Some(a) => format!(
+            "{base}/api/profile/avatar/current?addr={}&uid={}",
+            urlencoding(&a),
+            req.uid
+        ),
+        None => format!("{base}/api/profile/avatar/current?uid={}", req.uid),
     };
     get_json(&url).await
 }

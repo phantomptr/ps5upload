@@ -3806,6 +3806,53 @@ async fn profile_avatar_preview_handler(Json(req): Json<ProfilePreviewReq>) -> i
     }
 }
 
+#[derive(Deserialize)]
+struct AvatarCurrentQuery {
+    addr: Option<String>,
+    uid: u32,
+}
+
+/// GET /api/profile/avatar/current?addr&uid — read the user's CURRENT avatar
+/// image from Sony's profile cache so the UI can show it before a change. The
+/// cache dir is `/system_data/priv/cache/profile/0x<UID>/` — UPPERCASE hex, to
+/// match the payload's `0x%08X`; `avatar.png` (fall back to `picture.png`) is
+/// the squared source our apply (and offact) writes there. 117 KB-ish, well
+/// under the 2 MiB FS_READ cap, so one read suffices. A user who never set a
+/// custom avatar may have no PNG there — then `data_url` is null and the UI
+/// falls back to its placeholder.
+async fn profile_avatar_current_handler(
+    State(state): State<AppState>,
+    Query(q): Query<AvatarCurrentQuery>,
+) -> impl IntoResponse {
+    let addr = mgmt_addr_or_default(q.addr, &state.default_ps5_addr);
+    let uid = q.uid;
+    let png: Option<Vec<u8>> = tokio::task::spawn_blocking(move || {
+        let dir = format!("/system_data/priv/cache/profile/0x{uid:08X}");
+        for name in ["avatar.png", "picture.png"] {
+            let path = format!("{dir}/{name}");
+            if let Ok(bytes) = ps5upload_core::fs_ops::fs_read(&addr, &path, 0, 2 * 1024 * 1024) {
+                // Only trust a real PNG (the cache also holds .dds we can't show).
+                if bytes.starts_with(b"\x89PNG") {
+                    return Some(bytes);
+                }
+            }
+        }
+        None
+    })
+    .await
+    .unwrap_or(None);
+    let data_url = png.map(|bytes| {
+        use base64::Engine as _;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+        format!("data:image/png;base64,{b64}")
+    });
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "data_url": data_url })),
+    )
+        .into_response()
+}
+
 async fn profile_avatar_handler(
     State(state): State<AppState>,
     Json(req): Json<ProfileAvatarReq>,
@@ -5540,6 +5587,10 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/profile/activate", post(profile_activate_handler))
         .route("/api/profile/clear-slot", post(profile_clear_slot_handler))
         .route("/api/profile/avatar", post(profile_avatar_handler))
+        .route(
+            "/api/profile/avatar/current",
+            get(profile_avatar_current_handler),
+        )
         .route(
             "/api/profile/avatar/preview",
             post(profile_avatar_preview_handler),

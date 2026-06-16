@@ -248,6 +248,21 @@ export async function profileAvatarPreview(
   return res.data_url;
 }
 
+/** Read a user's CURRENT avatar from the PS5 (the squared PNG in Sony's
+ *  profile cache), so the picture box can show it by default before a change.
+ *  Returns a PNG data URL, or null when the user has no readable custom avatar
+ *  (e.g. a stock PSN avatar) — the caller then shows its placeholder. */
+export async function profileAvatarCurrent(
+  uid: number,
+  addr?: string,
+): Promise<string | null> {
+  const res = await invoke<{ data_url: string | null }>(
+    "profile_avatar_current",
+    { req: { addr: addr ?? null, uid } },
+  );
+  return res.data_url;
+}
+
 /** Result of an avatar apply: which user it landed on + how many files. */
 export interface AvatarApplied {
   uid: number;

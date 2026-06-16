@@ -7109,6 +7109,23 @@ static int handle_fs_mkdir(runtime_state_t *state, int client_fd,
     return send_frame(client_fd, FTX2_FRAME_FS_MKDIR_ACK, 0, trace_id, NULL, 0);
 }
 
+/* READ-ONLY exception to the FS_READ allowlist: the per-user avatar image in
+ * Sony's profile cache, so the UI can show the CURRENT avatar before a change.
+ * The cache lives under /system_data (outside the writable-root allowlist), but
+ * exposing JUST these two PNGs for reading is safe — they're images, the path
+ * is fixed-shape (/system_data/priv/cache/profile/0x<HEX>/{avatar,picture}.png),
+ * traversal is rejected, and nothing else in the cache (online.json, .dds) is
+ * reachable. This does NOT touch is_path_allowed, so writes/copies/deletes to
+ * /system_data stay forbidden. */
+static int is_profile_avatar_read_path(const char *p) {
+    static const char PRE[] = "/system_data/priv/cache/profile/0x";
+    if (strncmp(p, PRE, sizeof(PRE) - 1) != 0) return 0;
+    if (strstr(p, "..") != NULL) return 0;
+    size_t n = strlen(p);
+    return (n >= 11 && strcmp(p + n - 11, "/avatar.png") == 0) ||
+           (n >= 12 && strcmp(p + n - 12, "/picture.png") == 0);
+}
+
 /* ── FS_READ handler ─────────────────────────────────────────────────────
  *
  * Bounded file-read for metadata fetches (param.json, icon0.png). The
@@ -7142,7 +7159,7 @@ static int handle_fs_read(runtime_state_t *state, int client_fd,
         if (req_offset > 0) offset = req_offset;
         if (req_limit > 0 && req_limit < limit) limit = req_limit;
     }
-    if (!is_path_allowed(path)) {
+    if (!is_path_allowed(path) && !is_profile_avatar_read_path(path)) {
         return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
                           "fs_read_path_not_allowed", 24);
     }

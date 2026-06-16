@@ -187,6 +187,7 @@ pub fn run() {
             commands::profile_activate,
             commands::profile_clear_slot,
             commands::profile_avatar_preview,
+            commands::profile_avatar_current,
             commands::profile_apply_avatar,
             commands::transfer_dir_reconcile,
             commands::transfer_dir_diff_preview,

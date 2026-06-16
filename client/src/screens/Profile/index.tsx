@@ -27,6 +27,7 @@ import {
   profileInfo,
   profileApplyAvatar,
   profileAvatarPreview,
+  profileAvatarCurrent,
   profileSetUsername,
   profileRenameUser,
   type ProfileInfo,
@@ -119,6 +120,9 @@ function AvatarSection({
   const [preview, setPreview] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [targetUid, setTargetUid] = useState<number | null>(null);
+  // The selected user's CURRENT avatar (PNG data URL), shown in the picture box
+  // by default until the user picks a new image. null = none / not yet loaded.
+  const [currentAvatar, setCurrentAvatar] = useState<string | null>(null);
   const [applying, setApplying] = useState(false);
   const [applyOk, setApplyOk] = useState<string | null>(null);
   const [applyError, setApplyError] = useState<string | null>(null);
@@ -135,6 +139,27 @@ function AvatarSection({
     if (targetUid != null || !info) return;
     setTargetUid(foreground ?? users[0]?.uid ?? null);
   }, [info, foreground, users, targetUid]);
+
+  // Load the selected user's CURRENT avatar into the picture box whenever the
+  // target user (or console) changes. Best-effort: a user with a stock PSN
+  // avatar has no readable PNG, so we just clear to the placeholder.
+  useEffect(() => {
+    if (targetUid == null) {
+      setCurrentAvatar(null);
+      return;
+    }
+    let cancelled = false;
+    profileAvatarCurrent(targetUid, addr)
+      .then((url) => {
+        if (!cancelled) setCurrentAvatar(url);
+      })
+      .catch(() => {
+        if (!cancelled) setCurrentAvatar(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [targetUid, addr]);
 
   // Regenerate the crop/fit preview whenever the image or mode changes.
   useEffect(() => {
@@ -244,9 +269,11 @@ function AvatarSection({
         {/* Preview */}
         <div className="flex shrink-0 flex-col items-center gap-2">
           <div className="grid h-44 w-44 place-items-center overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)]">
-            {preview ? (
+            {/* A picked image's preview wins; otherwise show the selected
+                user's CURRENT avatar; otherwise the placeholder. */}
+            {preview || currentAvatar ? (
               <img
-                src={preview}
+                src={preview ?? currentAvatar ?? ""}
                 alt={tr("profile.avatar.previewAlt", "Avatar preview")}
                 className="h-full w-full object-cover"
               />
