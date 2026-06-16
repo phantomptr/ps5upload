@@ -17,9 +17,11 @@ on:
         description: "Release tag to publish (e.g. v3.3.16). Must already exist."
         required: true
 
+# Least privilege at the top: read-only by default. Only the jobs that actually
+# push to GHCR (build, merge) opt into packages:write below — the PR `verify`
+# job inherits read-only and never gets a write-capable token.
 permissions:
   contents: read
-  packages: write
 
 concurrency:
   group: docker-engine-${{ github.event.inputs.tag || github.ref }}
@@ -44,26 +46,65 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  # ── Resolve + validate the tag ONCE, hand the trusted values to build/merge ─
+  # Centralizing this means the tag is regex-validated before it ever reaches a
+  # checkout `ref:` (no ref injection from a hand-typed workflow_dispatch input),
+  # and the lowercased image name is computed once via the safe env pattern
+  # instead of interpolating ${{ github.repository_owner }} into shell.
+  resolve:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.t.outputs.tag }}
+      version: ${{ steps.t.outputs.version }}
+      major_minor: ${{ steps.t.outputs.major_minor }}
+      image: ${{ steps.t.outputs.image }}
+    steps:
+      - name: Validate tag + derive image name
+        id: t
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          raw_tag="$INPUT_TAG"
+          if ! printf '%s' "$raw_tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-+._A-Za-z0-9]*)?$'; then
+            echo "::error::Refusing to proceed: '$raw_tag' is not a valid version tag"
+            exit 1
+          fi
+          version="${raw_tag#v}"
+          owner_lc="$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')"
+          {
+            echo "tag=$raw_tag"
+            echo "version=$version"
+            echo "major_minor=${version%.*}"
+            echo "image=ghcr.io/${owner_lc}/ps5upload-engine"
+          } >> "$GITHUB_OUTPUT"
+
   # ── Per-arch native build, push by digest (no tag yet) ─────────────────────
   build:
+    needs: resolve
     if: github.event_name != 'pull_request'
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
       matrix:
         include:
           - { os: ubuntu-24.04,     platform: linux/amd64 }
           - { os: ubuntu-24.04-arm, platform: linux/arm64 }
+    env:
+      IMAGE: ${{ needs.resolve.outputs.image }}
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.inputs.tag || github.ref_name }}
+          ref: ${{ needs.resolve.outputs.tag }}
 
       - name: Prepare environment
-        run: |
-          owner="${{ github.repository_owner }}"
-          echo "IMAGE=ghcr.io/${owner,,}/ps5upload-engine" >> "$GITHUB_ENV"
-          echo "PLATFORM_PAIR=$(echo '${{ matrix.platform }}' | tr '/' '-')" >> "$GITHUB_ENV"
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: echo "PLATFORM_PAIR=$(printf '%s' "$PLATFORM" | tr '/' '-')" >> "$GITHUB_ENV"
 
       - uses: docker/setup-buildx-action@v3
 
@@ -91,10 +132,11 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ env.PLATFORM_PAIR }}
 
       - name: Export digest
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
         run: |
           mkdir -p /tmp/digests
-          digest="${{ steps.push.outputs.digest }}"
-          touch "/tmp/digests/${digest#sha256:}"
+          touch "/tmp/digests/${DIGEST#sha256:}"
 
       - uses: actions/upload-artifact@v7
         with:
@@ -105,29 +147,17 @@ jobs:
 
   # ── Merge per-arch digests into a multi-arch manifest ──────────────────────
   merge:
-    needs: build
+    needs: [resolve, build]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ${{ needs.resolve.outputs.image }}
+      VERSION: ${{ needs.resolve.outputs.version }}
+      MAJOR_MINOR: ${{ needs.resolve.outputs.major_minor }}
     steps:
-      - name: Resolve tag
-        id: tag
-        env:
-          INPUT_TAG: ${{ github.event.inputs.tag || github.ref_name }}
-        run: |
-          raw_tag="$INPUT_TAG"
-          if ! echo "$raw_tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-+._A-Za-z0-9]*)?$'; then
-            echo "::error::Refusing to proceed: '$raw_tag' is not a valid version tag"
-            exit 1
-          fi
-          version="${raw_tag#v}"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "major_minor=${version%.*}" >> "$GITHUB_OUTPUT"
-
-      - name: Set image name
-        run: |
-          owner="${{ github.repository_owner }}"
-          echo "IMAGE=ghcr.io/${owner,,}/ps5upload-engine" >> "$GITHUB_ENV"
-
       - uses: actions/download-artifact@v8
         with:
           path: /tmp/digests
@@ -147,16 +177,22 @@ jobs:
         with:
           images: ${{ env.IMAGE }}
           tags: |
-            type=raw,value=${{ steps.tag.outputs.version }}
-            type=raw,value=${{ steps.tag.outputs.major_minor }}
+            type=raw,value=${{ env.VERSION }}
+            type=raw,value=${{ env.MAJOR_MINOR }}
             type=raw,value=latest
 
       - name: Create and push multi-arch manifest
         working-directory: /tmp/digests
+        env:
+          META_JSON: ${{ steps.meta.outputs.json }}
         run: |
+          # Word-splitting here is intentional: the jq output expands to
+          # `-t tagA -t tagB ...` and the printf to space-separated
+          # `image@sha256:<digest>` operands, each a distinct argv entry.
+          # shellcheck disable=SC2046
           docker buildx imagetools create \
-            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< '${{ steps.meta.outputs.json }}') \
-            $(printf '${{ env.IMAGE }}@sha256:%s ' *)
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$META_JSON") \
+            $(printf "${IMAGE}@sha256:%s " *)
 
       - name: Inspect manifest
-        run: docker buildx imagetools inspect ${{ env.IMAGE }}:${{ steps.tag.outputs.version }}
+        run: docker buildx imagetools inspect "${IMAGE}:${VERSION}"

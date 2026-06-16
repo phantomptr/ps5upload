@@ -93,6 +93,7 @@ ADB ?= $(ANDROID_HOME)/platform-tools/adb
 .PHONY: android-deps android-init android-build android-deploy _android-install-if-device run-android
 .PHONY: send-payload gen-fixtures sweep validate validate-xl
 .PHONY: sync-version sync-version-check
+.PHONY: docker-engine docker-engine-run
 
 # Default target
 all: build
@@ -161,6 +162,10 @@ help:
 	@echo "Auto-launch (engine starts at OS login):"
 	@echo "  make install-engine    - Register systemd/launchd/Task Scheduler job"
 	@echo "  make uninstall-engine  - Remove the auto-launch registration"
+	@echo ""
+	@echo "Docker (self-hosted engine; CI publishes the same image to GHCR):"
+	@echo "  make docker-engine      - Build the engine image locally (scratch + static binary)"
+	@echo "  make docker-engine-run  - Run it (PS5_HOST=$(PS5_HOST)); exposes :19113"
 	@echo ""
 	@echo "Environment overrides (defaults shown):"
 	@echo "  PS5_HOST=$(PS5_HOST)          PS5 IP address"
@@ -541,6 +546,32 @@ run-android: android-deps payload setup-client
 	@echo "Launching on a connected Android device/emulator (tauri android dev)..."
 	@echo "  Attach one first — check with: adb devices"
 	@cd $(CLIENT_DIR) && $(ANDROID_ENV) npx tauri android dev
+
+#──────────────────────────────────────────────────────────────────────────────
+# Docker — self-hosted engine image. Mirrors what .github/workflows/
+# docker-engine.yml publishes to ghcr.io/<owner>/ps5upload-engine on each
+# release tag (multi-arch there; single-arch host build here). `engine/` is the
+# build context; the Dockerfile is a scratch image wrapping the static binary.
+#
+# SECURITY: the engine API is unauthenticated. Bind to a LAN interface and set
+# PS5UPLOAD_ALLOW_IP only on a trusted network — never expose it to the
+# internet. See the header of engine/Dockerfile.
+#──────────────────────────────────────────────────────────────────────────────
+
+DOCKER ?= docker
+DOCKER_ENGINE_IMAGE ?= ps5upload-engine
+
+docker-engine:
+	@command -v $(DOCKER) >/dev/null 2>&1 || { echo "ERROR: docker not found on PATH."; exit 1; }
+	@echo "Building $(DOCKER_ENGINE_IMAGE) image (context: $(ENGINE_DIR)/)..."
+	@$(DOCKER) build -t $(DOCKER_ENGINE_IMAGE) $(ENGINE_DIR)
+	@echo "✓ Built image $(DOCKER_ENGINE_IMAGE) — run with: make docker-engine-run"
+
+# Run the locally-built engine image. Binds the published port and points it at
+# the PS5's transfer port. Override PS5_HOST / the bind address as needed.
+docker-engine-run: docker-engine
+	@echo "Running $(DOCKER_ENGINE_IMAGE) — engine on :19113, PS5 at $(PS5_HOST):9113 ..."
+	@$(DOCKER) run --rm -p 19113:19113 -e PS5_ADDR=$(PS5_HOST):9113 $(DOCKER_ENGINE_IMAGE)
 
 #──────────────────────────────────────────────────────────────────────────────
 # Testing
