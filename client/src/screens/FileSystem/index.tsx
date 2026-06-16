@@ -78,6 +78,7 @@ import {
   fsDownloadOpHandle,
 } from "../../state/fsBulkOp";
 import { useElapsed } from "../../lib/useElapsed";
+import { useScrollLock } from "../../lib/useScrollLock";
 import { runBulkDelete as runBulkDeleteLoop } from "../../lib/bulkDelete";
 import { formatBytes } from "../../lib/format";
 import { humanizePs5Error } from "../../lib/humanizeError";
@@ -1317,6 +1318,8 @@ export default function FileSystemScreen() {
     body: string;
     size: number;
   } | null>(null);
+  // Lock background scroll while the (inline) file preview is open.
+  useScrollLock(!!preview);
 
   /** Preview a small file inline. Text decodes as UTF-8; .png/.jpg
    *  show as a data URL. Capped at 256 KB; bigger files surface a

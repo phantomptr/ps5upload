@@ -22,6 +22,7 @@ import {
 } from "../../api/ps5";
 import { useConnectionStore, PS5_PAYLOAD_PORT } from "../../state/connection";
 import { mgmtAddr } from "../../lib/addr";
+import { useScrollLock } from "../../lib/useScrollLock";
 import { useStaleHostGuard } from "../../lib/staleHostGuard";
 import { PageHeader, Button, EmptyState, ErrorCard } from "../../components";
 import { useTr } from "../../state/lang";
@@ -399,6 +400,8 @@ export default function ScreenshotsScreen() {
     loading: boolean;
     error: string | null;
   } | null>(null);
+  // Lock background scroll while the (inline) screenshot preview is open.
+  useScrollLock(!!preview);
 
   async function openPreview(item: ScreenshotEntry) {
     if (!host?.trim() || !canConvert) return;

@@ -4,6 +4,22 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 3.3.17
+
+UI polish pass — tighter on phones and small windows.
+
+- **"More actions" menus never run off the bottom of the screen.** A row's ⋮
+  menu now opens upward when it's near the bottom edge and scrolls inside itself
+  if it's very long, instead of spilling past the window.
+- **No more scrolling the page behind a dialog.** When a pop-up (a file/image
+  preview, an upload prompt, any modal) is open, the content behind it stays
+  put — especially noticeable on touchscreens.
+- **More of the app is ready for translation.** The new "Install from USB /
+  external drive" labels are now in the translation catalog, and a check was
+  added so future text can't quietly go missing from it.
+- Verified the whole app stays clean with no cut-off or off-edge content across
+  phone, tablet, and desktop widths.
+
 ## 3.3.16
 
 - **You control when USB / external drives are scanned.** The "Install from USB

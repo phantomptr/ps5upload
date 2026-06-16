@@ -76,7 +76,38 @@ export function OverflowMenu({
   triggerVariant?: ButtonVariant;
 }) {
   const [open, setOpen] = useState(false);
+  // Vertical flip + clamp: a menu anchored `top: 100%` can run off the bottom
+  // of the viewport when its trigger sits low on screen (a Library row near the
+  // bottom, a short mobile window). On open we measure the trigger and flip the
+  // menu above it when there's more room there, and cap its height so a long
+  // list scrolls internally instead of spilling past the edge.
+  const [placement, setPlacement] = useState<{
+    dropUp: boolean;
+    maxHeight: number;
+  }>({ dropUp: false, maxHeight: 0 });
   const wrapperRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open || !wrapperRef.current) return;
+    const measure = () => {
+      const el = wrapperRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      const margin = 8;
+      const vh = window.innerHeight;
+      const below = vh - rect.bottom - margin;
+      const above = rect.top - margin;
+      // Flip up only when below is genuinely cramped and above has more room.
+      const dropUp = below < 220 && above > below;
+      setPlacement({
+        dropUp,
+        maxHeight: Math.max(120, Math.floor(dropUp ? above : below)),
+      });
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [open]);
 
   // Close on outside click + Escape. Both wired only when the menu
   // is open so we don't pay the listener cost for every closed menu
@@ -137,8 +168,12 @@ export function OverflowMenu({
       {open && (
         <div
           role="menu"
-          className="anim-rise elev-2 absolute z-30 mt-1 min-w-[200px] overflow-hidden rounded-md border border-[var(--color-border)] bg-[var(--color-surface)]"
-          style={{ ...menuPositionStyle, top: "100%" }}
+          className="anim-rise elev-2 absolute z-30 my-1 min-w-[200px] max-w-[calc(100vw-1rem)] overflow-y-auto overflow-x-hidden rounded-md border border-[var(--color-border)] bg-[var(--color-surface)]"
+          style={{
+            ...menuPositionStyle,
+            ...(placement.dropUp ? { bottom: "100%" } : { top: "100%" }),
+            maxHeight: placement.maxHeight || undefined,
+          }}
         >
           {items.map((item, i) => (
             <button

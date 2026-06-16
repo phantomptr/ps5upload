@@ -810,6 +810,7 @@ export default function AppShell() {
               switches inside a screen don't re-animate. */}
           <div
             key={location.pathname}
+            data-scroll-root
             className="anim-screen flex-1 overflow-y-auto overflow-x-hidden"
           >
             <Outlet />

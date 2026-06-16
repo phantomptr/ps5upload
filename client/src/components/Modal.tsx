@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, type ReactNode } from "react";
 import { X } from "lucide-react";
 
 import { useTr } from "../state/lang";
+import { useScrollLock } from "../lib/useScrollLock";
 
 /**
  * Shared modal chrome — scrim + centered panel, Escape-to-close,
@@ -63,6 +64,11 @@ export function Modal({
   const titleId = useId();
   const panelRef = useRef<HTMLDivElement | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
+
+  // Lock background scroll while open so a wheel/touch over the scrim can't
+  // scroll the page behind it (this modal renders inline, so its scrim's
+  // ancestor is the scrollable screen container).
+  useScrollLock(open);
 
   // Escape-to-close + focus capture/restore. Both gated on `open` so a
   // closed modal adds no listeners and doesn't fight for focus.
