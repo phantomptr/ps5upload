@@ -849,7 +849,16 @@ fn pkg_session_max_age_sec() -> u64 {
 
 /// Seconds of zero disk progress before a *not-yet-writing* install (no bytes
 /// consumed at all) is declared stalled — gives Sony time to even begin.
-const INSTALL_STALL_STARTUP_SEC_DEFAULT: u64 = 120;
+///
+/// Generous (10 min) because on newer firmware (FW 12.x, hardware-observed) an
+/// install registers and then the PS5 downloads/extracts the content in the
+/// BACKGROUND — it can sit queued for minutes before it begins writing where we
+/// can see it (free-space drop / title-dir growth). Giving up at the old 120s
+/// false-stalled a perfectly good install while the console's own "Downloading…"
+/// tile was still ticking. This only delays a *stall* verdict: completion is
+/// still driven by the on-disk launch check (`registered`), never a timer, so a
+/// longer wait can't manufacture a false success. Env-tunable.
+const INSTALL_STALL_STARTUP_SEC_DEFAULT: u64 = 600;
 /// Seconds of zero progress before a *mid-install* flatline (some bytes landed,
 /// but well short of the target) is declared stalled — abnormal, so stricter.
 const INSTALL_STALL_MID_SEC_DEFAULT: u64 = 240;

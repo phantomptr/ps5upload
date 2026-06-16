@@ -52,7 +52,7 @@ import {
   type ExternalPkg,
   type PkgConsoleMetadata,
 } from "../../api/ps5";
-import { transferAddr } from "../../lib/addr";
+import { transferAddr, hostOf } from "../../lib/addr";
 import { formatBytes } from "../../lib/format";
 
 /* ─── Cover art ────────────────────────────────────────────────────────
@@ -282,6 +282,12 @@ function PkgRow({
   );
 }
 
+/** Last-known installed-title set per console (port-stripped host). Seeds the
+ *  Install/Reinstall labels on (re)mount so the screen doesn't flash "Install"
+ *  on every row for the split second before the async `appsInstalled` fetch
+ *  returns. Best-effort cache; refreshed on every fetch. */
+const installedIdsCache = new Map<string, Set<string>>();
+
 /* ─── Screen ──────────────────────────────────────────────────────────── */
 export default function InstallPackageScreen() {
   const tr = useTr();
@@ -314,7 +320,9 @@ export default function InstallPackageScreen() {
   );
   const { confirm, dialog } = useConfirm();
 
-  const [installedIds, setInstalledIds] = useState<Set<string>>(new Set());
+  const [installedIds, setInstalledIds] = useState<Set<string>>(
+    () => installedIdsCache.get(hostOf(host)) ?? new Set(),
+  );
   const [pickError, setPickError] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
   const [dropActive, setDropActive] = useState(false);
@@ -342,9 +350,9 @@ export default function InstallPackageScreen() {
     let cancelled = false;
     appsInstalled(transferAddr(host))
       .then((res) => {
-        if (!cancelled) {
-          setInstalledIds(new Set(res.titles.map((t) => t.titleId)));
-        }
+        const ids = new Set(res.titles.map((t) => t.titleId));
+        installedIdsCache.set(hostOf(host), ids);
+        if (!cancelled) setInstalledIds(ids);
       })
       .catch(() => {
         /* badge is best-effort */

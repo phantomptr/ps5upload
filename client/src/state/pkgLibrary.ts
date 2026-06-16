@@ -25,6 +25,7 @@ import { transferScreenBusy } from "../lib/ps5Transfers";
 import { useInstallSettingsStore } from "./installSettings";
 import { useConnectionStore } from "./connection";
 import { log } from "./logs";
+import { pushNotification } from "./notifications";
 import { parsePS5Firmware } from "../lib/ps5Firmware";
 
 /**
@@ -449,7 +450,7 @@ const PKG_ASYNC_FAILED_HINT =
  *  blame free space (a stall has many causes, and users with plenty of space
  *  found that misleading) and we tell them the empty tile is safe to delete. */
 const PKG_STALL_HINT =
-  'the install stopped making progress before it finished, so nothing was actually installed. Your package was kept on the PS5 — you can simply try again. If a tile appeared that won’t open ("Can’t start the game or app"), it’s empty and safe to delete. For stubborn .pkg files (often PS4 backports), the PS5’s own Package Installer (Settings → System → Debug Settings → Game → Package Installer) is the most reliable.';
+  'ps5upload couldn’t confirm the install finished. On newer firmware the PS5 often keeps installing in the background — if a tile appeared on your PS5 and it’s downloading or shows progress, let it finish; it becomes playable when that completes (check the PS5 home screen, or its Notifications / Downloads). Your package was kept on the PS5, so if nothing appeared — or a tile appeared that won’t open ("Can’t start the game or app", which is empty and safe to delete) — you can simply try again. For stubborn .pkg files (often PS4 backports), the PS5’s own Package Installer (Settings → System → Debug Settings → Game → Package Installer) is the most reliable.';
 
 /** Guidance when a PATCH/UPDATE (a "…DP" package) can't be applied even after
  *  the DPI fallback. ps5upload applies updates through Sony's safe installer
@@ -1228,6 +1229,20 @@ const makePkgLibraryStore = () =>
 
       if (installed) {
         patch({ status: "idle", lastResult: installedLastResult(mayNotLaunch) });
+        // Notify on confirmed completion (the engine only reports installed
+        // once the title actually registered on disk — i.e. it's ready to
+        // play). Surfaces in the bell even if the user navigated away while a
+        // large title finished, which is exactly when a heads-up is wanted.
+        const label = entry?.title || entry?.contentId || "Package";
+        pushNotification(
+          mayNotLaunch ? "warning" : "success",
+          `${label} installed`,
+          {
+            body: mayNotLaunch
+              ? PKG_MAY_NOT_LAUNCH_MESSAGE
+              : "Installed on the PS5 and ready to play.",
+          },
+        );
         // Optional: auto-delete the spent staged .pkg so the library
         // doesn't accumulate installed packages. Best-effort + awaited so
         // the row vanishes deterministically; remove() swallows its own

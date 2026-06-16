@@ -223,14 +223,19 @@ function AppCard({
           </div>
         </div>
 
-        <div className="mt-auto flex items-center gap-2 pt-1">
+        <div className="mt-auto flex flex-wrap items-center gap-2 pt-1">
           {canPlay ? (
             <Button
               variant="primary"
               size="md"
               loading={launching}
               leftIcon={<Play size={15} />}
-              className="flex-1"
+              // `min-w-fit` overrides the global `min-width:0` so the button
+              // never shrinks below its own label — on a disc-image card (which
+              // adds an "Open folder" button) the Play button used to get
+              // squeezed and clip "Play" → "Pla". `flex-wrap` on the row lets the
+              // icon buttons drop to a second line instead, before that happens.
+              className="flex-1 min-w-fit"
               onClick={() => onLaunch(title)}
               // A disc-image title can't launch until ShadowMount+ mounts it.
               // Disabling + relabeling here is honest — previously Play stayed
