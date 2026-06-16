@@ -594,6 +594,10 @@ export async function runPkgInstall(
   let startRejected = false;
   let mainErr = "";
   let mayNotLaunch = false;
+  // The package_type the install actually ran with — the engine resolves it
+  // from the staged pkg when we didn't send one, so this is authoritative for
+  // "was this treated as a patch" even on the USB/queue/File-System paths.
+  let resolvedType = packageType ?? "";
   try {
     const r = (await invoke("pkg_install_start", {
       ps5Addr: mgmtAddr(host),
@@ -609,7 +613,9 @@ export async function runPkgInstall(
       err_message?: string;
       may_not_launch?: boolean;
       session_id?: string;
+      package_type?: string;
     };
+    if (r.package_type) resolvedType = r.package_type;
     const rc = (r.err_code ?? 0) >>> 0;
     if (rc === 0) {
       // Accept != complete. TRACK the async install to a genuine terminal state
@@ -641,6 +647,17 @@ export async function runPkgInstall(
   } catch (e) {
     startRejected = true;
     mainErr = pkgError(e);
+  }
+
+  // A patch ("…DP") the payload guard rejected can NEVER be rescued by the DPI
+  // fallback: DPI installs via the SAME sceAppInstUtilInstallByPackage that just
+  // failed, on the same firmware — so it's guaranteed to fail again, only slower
+  // (it swaps our payload out and back). Skipping it surfaces the clean "can't
+  // apply on top — base is safe" result immediately instead of after a wasted
+  // payload swap. `resolvedType` is the engine's post-parse type, so this holds
+  // for USB/queue/File-System patches too, where the client sent no type.
+  if (!installed && startRejected && resolvedType.endsWith("DP")) {
+    return { installed: false, mayNotLaunch, errMessage: mainErr, stalled };
   }
 
   if (!installed && startRejected) {

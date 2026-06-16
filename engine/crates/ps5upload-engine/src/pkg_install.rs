@@ -334,6 +334,13 @@ pub struct InstallStartResponse {
     /// PS5's Settings → Package Installer to re-install if it won't boot.
     /// See `ps5upload_core::pkg_install::install_may_not_launch`.
     pub may_not_launch: bool,
+    /// The package_type the install actually ran with, AFTER the engine's
+    /// staged-pkg category parse (so a "…DP" here means "this was treated as a
+    /// patch"). Lets the client recognise a guarded-patch rejection even on the
+    /// USB/queue/File-System paths where it sent no type — and skip the pointless
+    /// DPI fallback (DPI can't rescue a patch the same InstallByPackage rejected).
+    #[serde(default)]
+    pub package_type: String,
 }
 
 async fn install_start_handler(
@@ -557,7 +564,7 @@ async fn install_start_handler(
         content_id: session.content_id.clone(),
         size: session.total_size,
         title: session.title.clone(),
-        package_type,
+        package_type: package_type.clone(),
         method: None,
     };
 
@@ -717,6 +724,7 @@ async fn install_start_handler(
         shellui_err: resp.shellui_err,
         appinst_err: resp.appinst_err,
         via: ps5upload_core::pkg_install::via_tier(resp.task_id).to_string(),
+        package_type,
     })
 }
 
