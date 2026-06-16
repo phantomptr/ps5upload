@@ -196,6 +196,38 @@ describe("pkgRowInstalled (installed/Reinstall badge)", () => {
       pkgRowInstalled({ titleId: undefined, category: "gd" }, installed),
     ).toBe(false);
   });
+
+  // The follow-up bug: once we install THIS update/DLC ourselves it must read
+  // "Reinstall". `installedHere` is our per-package record (app_list can't
+  // confirm an add-on), so it wins regardless of category or app_list state.
+  it("marks an UPDATE installed once we've installed it here", () => {
+    expect(
+      pkgRowInstalled(
+        { titleId: "CUSA07842", category: "gp", installedHere: true },
+        installed,
+      ),
+    ).toBe(true);
+  });
+
+  it("marks DLC installed once we've installed it here", () => {
+    expect(
+      pkgRowInstalled(
+        { titleId: "CUSA07842", category: "ac", installedHere: true },
+        installed,
+      ),
+    ).toBe(true);
+  });
+
+  it("honours installedHere even when the base isn't in app_list", () => {
+    // e.g. a standalone update staged on a console where the base was removed —
+    // we still installed this package, so it reads "Reinstall".
+    expect(
+      pkgRowInstalled(
+        { titleId: "CUSA99999", category: "gp", installedHere: true },
+        installed,
+      ),
+    ).toBe(true);
+  });
 });
 
 describe("pkgInstallMayNotLaunch", () => {

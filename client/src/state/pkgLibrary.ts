@@ -154,6 +154,11 @@ export interface PkgEntry {
    *  definitive "which update is this", since updates share a ContentID and a
    *  title. Best-effort, same caveats as `originalName`. */
   appVer?: string;
+  /** True once THIS staged package has been installed via the app (persisted
+   *  per path). Lets an update/DLC row show "Reinstall" — the console's
+   *  app_list can't confirm a specific update/DLC was applied (it only tracks
+   *  the base title id), so this per-package flag is how we track them. */
+  installedHere?: boolean;
   /** Title id (PPSA/CUSA…) derived from the ContentID. Drives cover art and
    *  the "installed" badge. Undefined when it can't be derived. */
   titleId?: string;
@@ -217,9 +222,17 @@ export function platformFromTitleId(titleId: string | null | undefined): string 
  * installable. Exported for unit testing.
  */
 export function pkgRowInstalled(
-  entry: Pick<PkgEntry, "titleId" | "category">,
+  entry: Pick<PkgEntry, "titleId" | "category" | "installedHere">,
   installedTitleIds: Set<string>,
 ): boolean {
+  // We installed THIS exact package via the app → it's installed, whatever its
+  // category. This is the ONLY reliable signal for an update/DLC (the console's
+  // app_list is keyed on the base title id and can't confirm a specific
+  // update/DLC was applied).
+  if (entry.installedHere) return true;
+  // Otherwise only a base game can be confirmed from app_list — an add-on
+  // shares the base's title id, so a present base must NOT make a
+  // never-installed update/DLC read as installed (the 3.3.8 fix).
   return (
     !!entry.titleId &&
     installedTitleIds.has(entry.titleId) &&
@@ -282,6 +295,11 @@ interface PkgPathMeta {
   /** PARAM.SFO `CATEGORY` (`gd`/`gp`/`ac`) — authoritative, vs. the directory
    *  inference. Populated when we read the staged pkg off the console. */
   category?: string;
+  /** True once we've installed THIS exact staged package via the app. Lets an
+   *  update/DLC row show "Reinstall" after it's installed — the console's
+   *  app_list only tracks the base title id, so it can't tell us a specific
+   *  update/DLC was applied; this per-package record can. Survives restarts. */
+  installed?: boolean;
 }
 
 function loadPathMetaCache(): Record<string, PkgPathMeta> {
@@ -305,6 +323,16 @@ function cachePathMeta(path: string, meta: PkgPathMeta): void {
   } catch {
     /* best-effort */
   }
+}
+
+/** Persistently mark the staged package at `path` as having been installed via
+ *  the app, so its library row reads "Reinstall" instead of "Install". This is
+ *  the only reliable per-package signal for an update/DLC — the console's
+ *  app_list is keyed on the base title id and can't confirm a specific add-on.
+ *  Called from both install paths (the library tab and the upload-queue
+ *  finisher). Best-effort and survives restarts. */
+export function recordPkgInstalled(path: string): void {
+  cachePathMeta(path, { installed: true });
 }
 
 /** The trailing path component of a local file path (handles both `/` and
@@ -912,6 +940,7 @@ const makePkgLibraryStore = () =>
             title: titles[contentId],
             originalName: pathMeta[path]?.name,
             appVer: pathMeta[path]?.appVer,
+            installedHere: pathMeta[path]?.installed,
             titleId: titleIdFromContentId(contentId) ?? undefined,
             // Authoritative category (read off the console) when we have it,
             // else the directory inference (updates/ → gp, dlc/ → ac).
@@ -1306,7 +1335,15 @@ const makePkgLibraryStore = () =>
         .finish(actId, installed ? "done" : stalled ? "stopped" : "failed");
 
       if (installed) {
-        patch({ status: "idle", lastResult: installedLastResult(mayNotLaunch) });
+        // Record THIS package as installed (per-path, persisted) and reflect it
+        // on the row, so an update/DLC that's been installed shows "Reinstall"
+        // — not "Install" — even though app_list can't confirm an add-on.
+        cachePathMeta(path, { installed: true });
+        patch({
+          status: "idle",
+          installedHere: true,
+          lastResult: installedLastResult(mayNotLaunch),
+        });
         // Notify on confirmed completion (the engine only reports installed
         // once the title actually registered on disk — i.e. it's ready to
         // play). Surfaces in the bell even if the user navigated away while a

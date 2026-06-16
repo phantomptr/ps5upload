@@ -4,6 +4,16 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 3.3.15
+
+- **An installed update or DLC now shows "Reinstall."** After you install a
+  patch or add-on from the Install Package tab (or via the upload queue), its
+  row correctly reads "Installed · Reinstall" instead of still offering
+  "Install." Base game, update, and DLC are each tracked on their own — the
+  console can only confirm the base game is present, so ps5upload now remembers
+  the specific updates and DLC you've installed itself (and remembers across
+  restarts).
+
 ## 3.3.14
 
 - **Upload progress no longer overshoots the file size.** If an upload's

@@ -37,7 +37,7 @@ import {
   type RateSample,
 } from "../lib/rollingRate";
 import { archiveFormat, type SourceKind } from "./upload";
-import { runPkgInstall, pkgLibraryStore } from "./pkgLibrary";
+import { runPkgInstall, pkgLibraryStore, recordPkgInstalled } from "./pkgLibrary";
 import type { UploadStrategy } from "./transfer";
 import { useUploadSettingsStore } from "./uploadSettings";
 import { useRecentHostMetricsStore } from "./recentHostMetrics";
@@ -698,6 +698,11 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
               installPhase = r.mayNotLaunch ? "warn" : "done";
               installedTitle =
                 item.installedTitle ?? item.contentId ?? item.displayName ?? null;
+              // Persist this exact package as installed (per staged path) so its
+              // library row shows "Reinstall" — works for an update/DLC, which
+              // the console's app_list can't confirm. Survives auto-delete being
+              // off (the staged file then reappears in the library).
+              recordPkgInstalled(finalDest);
               if (r.mayNotLaunch) {
                 mountWarnings.push(
                   "Installed, but it may not launch on this firmware — re-install from the Install Package tab if it won't start.",
