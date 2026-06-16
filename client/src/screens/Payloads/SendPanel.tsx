@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { pickPath } from "../../lib/pickPath";
 import {
   Send,
@@ -247,6 +248,48 @@ export default function SendPanel() {
     await probeFile(picked);
   };
 
+  // Drag-and-drop: dropping a file anywhere on the window fills the payload
+  // path (same effect as Choose) — the text input stays the source of truth.
+  const [dropActive, setDropActive] = useState(false);
+  const applyPathRef = useRef<(p: string) => void>(() => {});
+  useEffect(() => {
+    applyPathRef.current = (picked: string) => {
+      setElfPath(picked);
+      setElfPathText(picked);
+      if (!portManuallyEdited) {
+        const mapped = loaderPortForExt(picked);
+        if (mapped !== null) setPortText(String(mapped));
+      }
+      void probeFile(picked);
+    };
+  });
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    getCurrentWebview()
+      .onDragDropEvent((e) => {
+        if (cancelled) return;
+        if (e.payload.type === "enter" || e.payload.type === "over") {
+          setDropActive(true);
+        } else if (e.payload.type === "leave") {
+          setDropActive(false);
+        } else if (e.payload.type === "drop") {
+          setDropActive(false);
+          const first = (e.payload.paths ?? [])[0];
+          if (first) applyPathRef.current(first);
+        }
+      })
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      if (unlisten) unlisten();
+    };
+  }, []);
+
   /** Probe an already-selected path. Extracted so both the file picker
    *  and history-replay can trigger it. History-replayed paths may no
    *  longer exist on disk — in that case the probe surfaces the
@@ -477,9 +520,17 @@ export default function SendPanel() {
               onBlur={() => {
                 if (elfPath && elfPath.length > 0) probeFile(elfPath);
               }}
-              placeholder="/path/to/payload.elf (or .bin / .js / .lua / .jar)"
+              placeholder={
+                dropActive
+                  ? "Drop the payload file…"
+                  : "/path/to/payload.elf — or drag a file onto the window"
+              }
               spellCheck={false}
-              className="flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 font-mono text-xs outline-none focus:border-[var(--color-accent)]"
+              className={`flex-1 rounded-md border bg-[var(--color-surface)] px-3 py-2 font-mono text-xs outline-none focus:border-[var(--color-accent)] ${
+                dropActive
+                  ? "border-[var(--color-accent)] bg-[var(--color-accent-soft,transparent)]"
+                  : "border-[var(--color-border)]"
+              }`}
             />
           </div>
 

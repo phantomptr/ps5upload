@@ -14,6 +14,9 @@ vi.mock("../api/ps5", () => ({
   // Refresh kicks off background metadata enrichment; default to "no data" so
   // store tests don't need a console. Individual tests can override.
   pkgMetadataConsole: vi.fn(async () => null),
+  // Install fires a best-effort PS5 toast; stub it so store tests don't reach a
+  // console.
+  toastPush: vi.fn(async () => ({ ok: true })),
 }));
 // No active transfer in tests → installs proceed immediately.
 vi.mock("../lib/ps5Transfers", () => ({ transferScreenBusy: () => false }));

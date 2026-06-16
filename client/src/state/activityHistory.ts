@@ -40,7 +40,8 @@ export type ActivityKind =
   | "library-launch"
   | "library-register"
   | "library-unregister"
-  | "library-download";
+  | "library-download"
+  | "library-install";
 
 export type ActivityOutcome = "running" | "done" | "failed" | "stopped";
 

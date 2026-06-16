@@ -9,6 +9,7 @@ import {
   fsCopy,
   fsOpStatus,
   pkgMetadataConsole,
+  toastPush,
 } from "../api/ps5";
 import type { ExternalPkg } from "../api/ps5";
 import { hostOf, mgmtAddr, transferAddr } from "../lib/addr";
@@ -26,6 +27,7 @@ import { useInstallSettingsStore } from "./installSettings";
 import { useConnectionStore } from "./connection";
 import { log } from "./logs";
 import { pushNotification } from "./notifications";
+import { useActivityHistoryStore } from "./activityHistory";
 import { parsePS5Firmware } from "../lib/ps5Firmware";
 
 /**
@@ -1202,11 +1204,20 @@ const makePkgLibraryStore = () =>
       // the shared `runPkgInstall` helper (also used by the upload queue's pkg
       // finisher), so the mechanism stays identical across both surfaces.
       const entry = get().entries.find((e) => e.path === path);
+      const label = entry?.title || entry?.contentId || basenameOf(path);
       // delete_staging = the user's Auto Delete preference: the engine keeps
       // the uploaded pkg when this is off (the separate client-side remove()
       // below is also gated on the same setting, so OFF means truly kept).
       const autoRemove =
         useInstallSettingsStore.getState().autoRemoveAfterInstall;
+      // Surface the install in the global Activity bar at the bottom of the app
+      // (with a live %), so it stays visible while the user browses other
+      // screens — same treatment uploads/downloads already get.
+      const actId = useActivityHistoryStore
+        .getState()
+        .start("library-install", `Installing ${label}`, {
+          addr: mgmtAddr(host),
+        });
       const { installed, mayNotLaunch, errMessage: mainErr, stalled } =
         await runPkgInstall(
           host,
@@ -1214,9 +1225,13 @@ const makePkgLibraryStore = () =>
           entry?.contentId || null,
           pkgTypeForCategory(entry?.category),
           autoRemove,
-          // Live install %: a large title installs over minutes — show progress
-          // instead of a frozen spinner. Guarded so a 0 total can't divide.
+          // Live install %: a large title installs over minutes — feed both the
+          // inline notice and the global Activity bar so progress shows
+          // everywhere. Guarded so a 0 total can't divide.
           (installedBytes, total) => {
+            useActivityHistoryStore
+              .getState()
+              .update(actId, { bytes: installedBytes, totalBytes: total });
             if (total > 0) {
               const pct = Math.min(
                 99,
@@ -1226,6 +1241,9 @@ const makePkgLibraryStore = () =>
             }
           },
         );
+      useActivityHistoryStore
+        .getState()
+        .finish(actId, installed ? "done" : stalled ? "stopped" : "failed");
 
       if (installed) {
         patch({ status: "idle", lastResult: installedLastResult(mayNotLaunch) });
@@ -1233,7 +1251,6 @@ const makePkgLibraryStore = () =>
         // once the title actually registered on disk — i.e. it's ready to
         // play). Surfaces in the bell even if the user navigated away while a
         // large title finished, which is exactly when a heads-up is wanted.
-        const label = entry?.title || entry?.contentId || "Package";
         pushNotification(
           mayNotLaunch ? "warning" : "success",
           `${label} installed`,
@@ -1243,6 +1260,14 @@ const makePkgLibraryStore = () =>
               : "Installed on the PS5 and ready to play.",
           },
         );
+        // Flash a toast on the PS5 itself (sceNotificationSend) so the
+        // confirmation shows on the console screen too — handy when the desktop
+        // app isn't focused. Fire-and-forget; never let it affect the install.
+        void toastPush(mgmtAddr(host), `${label} installed`, {
+          subtitle: mayNotLaunch
+            ? "Installed — may need the PS5’s Package Installer to launch"
+            : "Ready to play",
+        }).catch(() => {});
         // Optional: auto-delete the spent staged .pkg so the library
         // doesn't accumulate installed packages. Best-effort + awaited so
         // the row vanishes deterministically; remove() swallows its own

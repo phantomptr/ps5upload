@@ -416,31 +416,48 @@ export default function FileSystemScreen() {
       // `fs_unmount_busy`, `path_not_allowed`, etc. surface as
       // actionable copy instead of opaque snake_case codes.
       const raw = e instanceof Error ? e.message : String(e);
-      // Removable-drive safety net: a USB/external drive that was
-      // unplugged leaves its /mnt/usb* (or /mnt/ext*) mount dangling, so
-      // listing it now fails. Rather than stranding the user on a dead
-      // path behind a scary error — forcing them to manually pick a new
-      // place — fall back to the always-present internal /data root and
-      // tell them why. Guard on `!== FS_DEFAULT_PATH` so a genuine /data
-      // failure still surfaces instead of looping.
+      // Dead-path safety net: rather than strand the user on a path that
+      // can't be read — behind a scary error, forcing them to manually pick a
+      // new place — fall back to the always-present internal /data root and
+      // tell them why. Two cases:
+      //   • a USB/external drive that was unplugged (its /mnt/usb*|/mnt/ext*
+      //     mount is now dangling), and
+      //   • a folder that no longer exists (e.g. a remembered path that was
+      //     since deleted) — the payload reports `…opendir_errno_2` (ENOENT).
+      // Guard on `!== FS_DEFAULT_PATH` so a genuine /data failure still
+      // surfaces instead of looping.
       const onRemovable = isRemovableMount(probedPath);
-      if (onRemovable && probedPath !== FS_DEFAULT_PATH) {
+      const pathGone = /opendir_errno_2\b/i.test(raw);
+      if ((onRemovable || pathGone) && probedPath !== FS_DEFAULT_PATH) {
         setError(null);
         setEntries(null);
         setPath(FS_DEFAULT_PATH);
         pushNotification(
           "info",
-          tr(
-            "fs_drive_removed",
-            undefined,
-            "Drive unavailable — returned to /data",
-          ),
+          pathGone && !onRemovable
+            ? tr(
+                "fs_path_gone",
+                undefined,
+                "That folder no longer exists — returned to /data",
+              )
+            : tr(
+                "fs_drive_removed",
+                undefined,
+                "Drive unavailable — returned to /data",
+              ),
           {
-            body: tr(
-              "fs_drive_removed_body",
-              { path: probedPath },
-              `${probedPath} could not be read (the drive may have been unplugged).`,
-            ),
+            body:
+              pathGone && !onRemovable
+                ? tr(
+                    "fs_path_gone_body",
+                    { path: probedPath },
+                    `${probedPath} no longer exists on the PS5.`,
+                  )
+                : tr(
+                    "fs_drive_removed_body",
+                    { path: probedPath },
+                    `${probedPath} could not be read (the drive may have been unplugged).`,
+                  ),
           },
         );
         return;
