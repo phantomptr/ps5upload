@@ -4,6 +4,41 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 3.3.9
+
+A clearer, more helpful "Install from USB / external drive" section.
+
+- **The USB / external drive section is redesigned.** It used to hide itself
+  whenever a scan found nothing — so it "popped in" only after results arrived,
+  and when a drive was empty the whole thing (Refresh button included)
+  disappeared, leaving no way to look again. It's now always present with clear
+  **Scanning…**, **nothing found**, and **list** states, a refresh that's always
+  available, and a short explanation of what it does (it copies the package onto
+  the console first — your drive's copy is left untouched — then installs it).
+- **External packages now show real details.** Each one is read on demand for
+  its cover art, real game title, version (e.g. `v01.02`), and an Update/DLC
+  badge — so two packages for the same game (a base and its update) are finally
+  distinguishable instead of both just showing a code. The list still appears
+  instantly; the details fill in as it reads each package. (PS5-native packages
+  that can't be read keep their filename.)
+- **Your uploaded packages show their version too.** The package version (and
+  whether it's a base game, update, or DLC) now appears on packages already in
+  your library, read straight from the package on the console — so it shows even
+  for packages you added before this update, with no need to re-upload them.
+- **PS4 game updates now install.** Applying a game's update (its patch) used
+  to fail on some firmware with a confusing "PKG header — corrupt or wrongly
+  named" — the update shares the base game's ID, and the usual install path
+  couldn't apply it. ps5upload now routes updates through the PS5's own update
+  installer, which applies the update on top of your game **without touching the
+  base** (hardware-confirmed: a Jak X update applied with the 3.8 GB base game
+  fully intact). If an update still can't apply — usually because it doesn't
+  match your installed version — you get a clear message instead of a scary one,
+  and your base game is never at risk.
+- **Installing some USB / external packages no longer fails to register.**
+  Packages whose name already includes the game's ID were staged under the wrong
+  filename and rejected by the PS5; ps5upload now reads the real ID from the
+  package first and stages it correctly.
+
 ## 3.3.8
 
 Tell a game's updates apart at a glance — and stop an update from looking
