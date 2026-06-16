@@ -36,6 +36,12 @@ messaging when an install fails.
   shot instead of a generic icon. Previews decode lazily as you scroll (PS5
   screenshots are HDR JPEG XR, so this is desktop-only — same as Convert/Preview)
   and are cached so each decodes once.
+- **Run the engine separately / point the app at a remote engine.** You can now
+  host the transfer engine elsewhere (including a tiny Docker image) and set its
+  URL in Settings; the app talks to it instead of the bundled one. Game/app
+  cover art now loads from a remote engine too. Thanks @Twice6804. *(Security:
+  the engine's API has no password — only use the "allow extra IP" option on a
+  trusted home network, never expose the engine to the internet.)*
 
 ## 3.3.6
 

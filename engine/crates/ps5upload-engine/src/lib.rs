@@ -5790,6 +5790,26 @@ pub async fn run_cli() {
     // clients reaching a self-hosted engine). Comma-separated; unparseable
     // entries are dropped, unset → empty.
     let allow_ips = parse_allow_ips(&std::env::var("PS5UPLOAD_ALLOW_IP").unwrap_or_default());
+    if !allow_ips.is_empty() {
+        // The `/api/*` surface has NO authentication — it can install/uninstall
+        // titles and read/write/delete files on the PS5. The loopback guard is
+        // the only thing in front of it; PS5UPLOAD_ALLOW_IP punches a hole for
+        // these IPs. That's fine on a trusted home LAN (the intended use), but
+        // an IP allowlist is spoofable and grants any process on those hosts
+        // full control — so make the open surface loud, and never expose the
+        // engine to an untrusted network or the internet.
+        eprintln!(
+            "[ps5upload-engine] WARNING: PS5UPLOAD_ALLOW_IP grants UNAUTHENTICATED \
+             /api/* access (full PS5 + file control) to {} extra IP(s): {}. \
+             Use only on a trusted LAN; never expose this engine to the internet.",
+            allow_ips.len(),
+            allow_ips
+                .iter()
+                .map(|ip| ip.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
     // `run` calls `process::exit` directly on failure here
     // (exit_on_error = true), so the returned Result is only `Ok(())`
     // on normal graceful shutdown.
