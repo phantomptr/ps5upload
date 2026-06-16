@@ -2649,6 +2649,40 @@ async fn ps5_pkg_scan_external(
     }
 }
 
+#[derive(Deserialize)]
+struct PkgMetadataQuery {
+    addr: Option<String>,
+    /// Absolute on-console pkg path, e.g. `/mnt/usb0/games/foo.pkg`. Subject to
+    /// the same `fs_read` allowlist as every other read (so it can only reach
+    /// the readable mounts — `/mnt/usb*`, `/mnt/ext*`, `/user`, `/data`, …).
+    path: String,
+}
+
+/// GET /api/ps5/pkg/metadata?addr=IP:PORT&path=/mnt/usb0/foo.pkg
+///
+/// Parse one on-console pkg's content id + PARAM.SFO fields (title, category,
+/// APP_VER) via a few ranged `fs_read`s. This lazily enriches the External
+/// Packages listing — the bulk scan stays filename-fast; the client calls this
+/// per row, in the background, only for what's on screen. Returns an empty
+/// object for a non-`\x7FCNT` / unreadable pkg (the row keeps its scan data).
+async fn ps5_pkg_metadata(
+    State(state): State<AppState>,
+    Query(q): Query<PkgMetadataQuery>,
+) -> impl IntoResponse {
+    let addr = mgmt_addr_or_default(q.addr, &state.default_ps5_addr);
+    let path = q.path;
+    let result = tokio::task::spawn_blocking(move || {
+        ps5upload_pkg::metadata_from_reader(|off, len| {
+            ps5upload_core::fs_ops::fs_read(&addr, &path, off, len).ok()
+        })
+    })
+    .await;
+    match result {
+        Ok(meta) => (StatusCode::OK, Json(meta.unwrap_or_default())).into_response(),
+        Err(e) => json_err(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+    }
+}
+
 /// GET /api/ps5/volumes?addr=IP:PORT — enumerate mounted PS5 storage volumes.
 async fn ps5_volumes(
     State(state): State<AppState>,
@@ -5530,6 +5564,7 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/ps5/cleanup", post(ps5_cleanup))
         .route("/api/ps5/volumes", get(ps5_volumes))
         .route("/api/ps5/pkg/scan-external", get(ps5_pkg_scan_external))
+        .route("/api/ps5/pkg/metadata", get(ps5_pkg_metadata))
         .route("/api/ps5/list-dir", get(ps5_list_dir))
         .route("/api/ps5/fs/delete", post(ps5_fs_delete))
         .route("/api/ps5/fs/move", post(ps5_fs_move))

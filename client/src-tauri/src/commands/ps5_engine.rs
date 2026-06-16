@@ -175,6 +175,23 @@ pub async fn pkg_scan_external(addr: Option<String>) -> Result<JsonValue, String
     get_json(&url).await
 }
 
+/// Parse one on-console pkg's content id + PARAM.SFO (title, category,
+/// APP_VER) via ranged reads. Lazily enriches the External Packages listing
+/// (the bulk scan stays filename-fast). Proxies GET /api/ps5/pkg/metadata.
+#[tauri::command]
+pub async fn pkg_metadata_console(
+    addr: Option<String>,
+    path: String,
+) -> Result<JsonValue, String> {
+    let base = engine::url();
+    let p = urlencoding(&path);
+    let url = match addr {
+        Some(a) => format!("{base}/api/ps5/pkg/metadata?addr={}&path={}", urlencoding(&a), p),
+        None => format!("{base}/api/ps5/pkg/metadata?path={}", p),
+    };
+    get_json(&url).await
+}
+
 /// List every installed title on the PS5, tagged by origin (registered/
 /// mounted by us vs installed from a .pkg) with a system flag. Proxies
 /// GET /api/ps5/apps/installed. Cover art is fetched separately by the

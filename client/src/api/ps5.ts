@@ -2925,6 +2925,51 @@ export async function pkgScanExternal(transferAddr: string): Promise<ExternalPkg
     }));
 }
 
+/** Authoritative metadata for one on-console pkg, parsed from its PARAM.SFO.
+ *  Fields are best-effort — empty when the SFO is missing or the pkg uses the
+ *  unreadable `\x7FFIH` header. */
+export interface PkgConsoleMetadata {
+  contentId: string;
+  title: string;
+  titleId: string;
+  /** PARAM.SFO CATEGORY: "gd" (base) / "gp" (update) / "ac" (DLC) / …. */
+  category: string;
+  /** PARAM.SFO APP_VER, e.g. "01.04". */
+  appVer: string;
+  platform: string;
+}
+
+/** Parse one on-console pkg (e.g. on `/mnt/usb0`) for its title, version
+ *  (APP_VER), category, and content id — via a few ranged reads on the engine.
+ *  Lazily enriches the External Packages rows the fast scan leaves sparse.
+ *  Returns null on error so callers can simply skip enrichment for that row. */
+export async function pkgMetadataConsole(
+  transferAddr: string,
+  path: string,
+): Promise<PkgConsoleMetadata | null> {
+  const addr = toMgmtAddr(transferAddr);
+  try {
+    const m = await invoke<{
+      content_id?: string;
+      title?: string;
+      title_id?: string;
+      category?: string;
+      app_ver?: string;
+      platform?: string;
+    }>("pkg_metadata_console", { addr, path });
+    return {
+      contentId: m?.content_id ?? "",
+      title: m?.title ?? "",
+      titleId: m?.title_id ?? "",
+      category: m?.category ?? "",
+      appVer: m?.app_ver ?? "",
+      platform: m?.platform ?? "",
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** Stable `<img src=...>` URL for an installed title's cover art
  *  (/user/appmeta/<titleId>/icon0.png), streamed back as `image/png` by
  *  the engine. Works identically on desktop and Android (in-process engine

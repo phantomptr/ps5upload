@@ -861,6 +861,110 @@ where
         .cloned()
 }
 
+/// The subset of [`PkgMetadata`] recoverable from ranged reads — enough to
+/// enrich a listing row without parsing the whole file.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ReaderMetadata {
+    pub content_id: String,
+    pub title: String,
+    pub title_id: String,
+    /// PARAM.SFO CATEGORY (`gd`/`gp`/`ac`…).
+    pub category: String,
+    /// PARAM.SFO APP_VER (`01.04`).
+    pub app_ver: String,
+    /// `"ps4"` | `"ps5"` | `""`.
+    pub platform: String,
+}
+
+/// Title id from a content id's second dash segment, e.g.
+/// `UP9000-CUSA07842_00-…` → `CUSA07842`. Self-contained fallback for when the
+/// SFO has no `TITLE_ID` (kept here so the pkg crate needn't depend on core).
+fn title_id_from_content_id_str(content_id: &str) -> String {
+    content_id
+        .split('-')
+        .nth(1)
+        .and_then(|seg| seg.split('_').next())
+        .filter(|id| {
+            id.len() == 9
+                && id[..4].bytes().all(|b| b.is_ascii_uppercase())
+                && id[4..].bytes().all(|b| b.is_ascii_digit())
+        })
+        .unwrap_or("")
+        .to_string()
+}
+
+/// Parse a pkg's content id + PARAM.SFO fields (title, category, APP_VER) from
+/// ranged reads. Like [`category_from_reader`] this works against a pkg that
+/// lives on the PS5 (via `fs_read`) — used to lazily enrich the External
+/// Packages listing with the authoritative title/version/category the fast,
+/// filename-based scan deliberately skips. A few small reads only: header
+/// (0xA0), the entry table, and the SFO. Returns `None` for a non-`\x7FCNT` /
+/// unreadable pkg; SFO-derived fields are best-effort (empty when absent).
+pub fn metadata_from_reader<F>(read_at: F) -> Option<ReaderMetadata>
+where
+    F: Fn(u64, u64) -> Option<Vec<u8>>,
+{
+    let head = read_at(0, 0xA0)?;
+    if head.len() < 0x1C {
+        return None;
+    }
+    let magic = u32::from_be_bytes([head[0], head[1], head[2], head[3]]);
+    if magic != PKG_MAGIC {
+        return None; // FIH / unknown magic carries no PS4 PARAM.SFO here
+    }
+    let content_id = if head.len() >= 0x40 + 36 {
+        let raw = &head[0x40..0x40 + 36];
+        let end = raw.iter().position(|&b| b == 0).unwrap_or(36);
+        String::from_utf8_lossy(&raw[..end]).trim().to_string()
+    } else {
+        String::new()
+    };
+
+    let entry_count = u32::from_be_bytes([head[0x10], head[0x11], head[0x12], head[0x13]]);
+    let table_offset = u32::from_be_bytes([head[0x18], head[0x19], head[0x1A], head[0x1B]]);
+    let (mut title, mut title_id, mut category, mut app_ver) =
+        (String::new(), String::new(), String::new(), String::new());
+    if entry_count > 0 && entry_count <= 1024 {
+        if let Some(table) = read_at(table_offset as u64, entry_count as u64 * 0x20) {
+            let mut sfo: Option<(u32, u32)> = None;
+            for i in 0..entry_count as usize {
+                if let Some(e) = table.get(i * 0x20..(i + 1) * 0x20) {
+                    if u32::from_be_bytes([e[0], e[1], e[2], e[3]]) == ENTRY_PARAM_SFO {
+                        let off = u32::from_be_bytes([e[0x10], e[0x11], e[0x12], e[0x13]]);
+                        let sz = u32::from_be_bytes([e[0x14], e[0x15], e[0x16], e[0x17]]);
+                        sfo = Some((off, sz));
+                        break;
+                    }
+                }
+            }
+            if let Some((off, sz)) = sfo {
+                if sz > 0 && sz <= MAX_SFO_BYTES {
+                    if let Some(sfo_bytes) = read_at(off as u64, sz as u64) {
+                        if let Ok(kv) = parse_sfo_string_keys(&sfo_bytes) {
+                            title = kv.get("TITLE").cloned().unwrap_or_default();
+                            title_id = kv.get("TITLE_ID").cloned().unwrap_or_default();
+                            category = kv.get("CATEGORY").cloned().unwrap_or_default();
+                            app_ver = kv.get("APP_VER").cloned().unwrap_or_default();
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if title_id.is_empty() {
+        title_id = title_id_from_content_id_str(&content_id);
+    }
+    let platform = derive_platform(magic, &content_id, &title_id);
+    Some(ReaderMetadata {
+        content_id,
+        title,
+        title_id,
+        category,
+        app_ver,
+        platform,
+    })
+}
+
 /// Tiny base64 encoder so we don't pull in a crate just for icon
 /// transport. Standard alphabet, no line breaks. ~30 lines.
 fn b64_encode(input: &[u8]) -> String {
@@ -997,6 +1101,67 @@ mod tests {
         sfo.extend_from_slice(&keys);
         sfo.extend_from_slice(&data);
         sfo
+    }
+
+    // A \x7FCNT pkg carrying a content id in the header and a multi-key SFO.
+    fn build_pkg_multi(content_id: &str, pairs: &[(&str, &str)]) -> Vec<u8> {
+        let sfo = build_sfo_multi(pairs);
+        let table_offset = 0x80u32; // past the 0x40-byte content_id field
+        let entry_count = 1u32;
+        let sfo_off = table_offset + entry_count * 0x20;
+        let mut pkg = vec![0u8; sfo_off as usize];
+        pkg[0..4].copy_from_slice(&PKG_MAGIC.to_be_bytes());
+        pkg[0x10..0x14].copy_from_slice(&entry_count.to_be_bytes());
+        pkg[0x18..0x1C].copy_from_slice(&table_offset.to_be_bytes());
+        let cid = content_id.as_bytes();
+        let n = cid.len().min(36);
+        pkg[0x40..0x40 + n].copy_from_slice(&cid[..n]);
+        let e = table_offset as usize;
+        pkg[e..e + 4].copy_from_slice(&ENTRY_PARAM_SFO.to_be_bytes());
+        pkg[e + 0x10..e + 0x14].copy_from_slice(&sfo_off.to_be_bytes());
+        pkg[e + 0x14..e + 0x18].copy_from_slice(&(sfo.len() as u32).to_be_bytes());
+        pkg.extend_from_slice(&sfo);
+        pkg
+    }
+
+    #[test]
+    fn metadata_from_reader_recovers_title_category_version() {
+        let pkg = build_pkg_multi(
+            "UP9000-CUSA07842_00-SCUS974290000001",
+            &[
+                ("APP_VER", "01.04"),
+                ("CATEGORY", "gp"),
+                ("TITLE", "Jak X: Combat Racing"),
+                ("TITLE_ID", "CUSA07842"),
+            ],
+        );
+        let read = move |off: u64, len: u64| {
+            let (o, l) = (off as usize, len as usize);
+            pkg.get(o..(o + l).min(pkg.len())).map(|s| s.to_vec())
+        };
+        let m = metadata_from_reader(read).expect("should parse");
+        assert_eq!(m.content_id, "UP9000-CUSA07842_00-SCUS974290000001");
+        assert_eq!(m.title, "Jak X: Combat Racing");
+        assert_eq!(m.title_id, "CUSA07842");
+        assert_eq!(m.category, "gp");
+        assert_eq!(m.app_ver, "01.04");
+        assert_eq!(m.platform, "ps4");
+    }
+
+    #[test]
+    fn metadata_from_reader_derives_title_id_from_content_when_sfo_lacks_it() {
+        // No TITLE_ID key — must fall back to the content id's second segment.
+        let pkg = build_pkg_multi(
+            "EP4293-CUSA32097_00-ASTNCPS4SIEE0000",
+            &[("CATEGORY", "gd")],
+        );
+        let read = move |off: u64, len: u64| {
+            let (o, l) = (off as usize, len as usize);
+            pkg.get(o..(o + l).min(pkg.len())).map(|s| s.to_vec())
+        };
+        let m = metadata_from_reader(read).expect("should parse");
+        assert_eq!(m.title_id, "CUSA32097");
+        assert_eq!(m.platform, "ps4");
     }
 
     #[test]

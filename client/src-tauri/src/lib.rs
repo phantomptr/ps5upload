@@ -169,6 +169,7 @@ pub fn run() {
             commands::engine_url_set,
             commands::ps5_volumes,
             commands::pkg_scan_external,
+            commands::pkg_metadata_console,
             commands::ps5_list_dir,
             commands::ps5_apps_installed,
             commands::transfer_file,

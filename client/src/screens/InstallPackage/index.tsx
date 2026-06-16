@@ -48,7 +48,9 @@ import { pkgCategoryLabel, isAddonCategory } from "../../lib/pkgStagingPath";
 import {
   appsInstalled,
   pkgScanExternal,
+  pkgMetadataConsole,
   type ExternalPkg,
+  type PkgConsoleMetadata,
 } from "../../api/ps5";
 import { transferAddr } from "../../lib/addr";
 import { formatBytes } from "../../lib/format";
@@ -801,6 +803,12 @@ function ExternalPackages({ host }: { host: string }) {
   const [results, setResults] = useState<
     Record<string, { ok: boolean; message?: string; mayNotLaunch?: boolean }>
   >({});
+  // Lazily-fetched authoritative metadata (title, version, category), keyed by
+  // path. The bulk scan is filename-fast and skips these; we fill them in per
+  // row in the background so the list still appears instantly. `enrichedRef`
+  // dedupes so a re-render / rescan doesn't re-fetch what we already have.
+  const [meta, setMeta] = useState<Record<string, PkgConsoleMetadata>>({});
+  const enrichedRef = useRef<Set<string>>(new Set());
 
   async function scan() {
     setScanning(true);
@@ -824,6 +832,28 @@ function ExternalPackages({ host }: { host: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [host]);
 
+  // Background enrichment: walk the scanned packages one at a time (gentle on
+  // the console's FS RPC) and pull each one's real title / version / category.
+  // Rows render immediately with scan data and upgrade in place as this fills.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      for (const p of pkgs) {
+        if (cancelled) return;
+        if (enrichedRef.current.has(p.path)) continue;
+        enrichedRef.current.add(p.path);
+        const m = await pkgMetadataConsole(transferAddr(host), p.path);
+        if (cancelled) return;
+        if (m && (m.title || m.appVer || m.category)) {
+          setMeta((prev) => ({ ...prev, [p.path]: m }));
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [pkgs, host]);
+
   async function onInstall(pkg: ExternalPkg) {
     setInstallingPath(pkg.path);
     try {
@@ -834,26 +864,26 @@ function ExternalPackages({ host }: { host: string }) {
     }
   }
 
-  // Show only when there are external packages, or during a manual rescan of a
-  // section that already had some. This keeps the screen clean for users with
-  // no external drives — no "External Packages" header flashing in and out
-  // during the initial (fast) scan.
-  if (pkgs.length === 0 && !(scanning && scanned)) return null;
+  // Always render once a console is connected — previously the whole section
+  // (Rescan button included) vanished whenever a scan found nothing, so it both
+  // "popped in" when results arrived and left no way to refresh when empty.
+  // Now it's a stable panel with explicit scanning / empty / list states.
+  const firstScan = scanning && !scanned;
 
   return (
     <div className="mb-4 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3">
-      <div className="mb-2 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <HardDrive size={14} className="text-[var(--color-accent)]" />
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <HardDrive size={14} className="shrink-0 text-[var(--color-accent)]" />
           <span className="text-sm font-semibold">
-            {tr("pkglib.external.title", "External Packages")}
+            {tr("pkglib.external.title", "Install from USB / external drive")}
           </span>
           {pkgs.length > 0 && (
             <span className="text-xs text-[var(--color-muted)]">
               {tr(
                 "pkglib.external.count",
                 { n: pkgs.length },
-                `${pkgs.length} on connected drives`,
+                `${pkgs.length} found`,
               )}
             </span>
           )}
@@ -871,94 +901,146 @@ function ExternalPackages({ host }: { host: string }) {
           disabled={scanning || installing}
           onClick={() => void scan()}
         >
-          {tr("pkglib.external.rescan", "Rescan")}
+          {scanning
+            ? tr("pkglib.external.scanning", "Scanning…")
+            : tr("pkglib.external.rescan", "Refresh")}
         </Button>
       </div>
-      <div className="mb-2 text-[11px] text-[var(--color-muted)]">
+      <div className="mb-2 text-[11px] leading-relaxed text-[var(--color-muted)]">
         {tr(
           "pkglib.external.hint",
-          "Packages on USB / external drives. Installing copies the file to the console first (no upload needed), then installs it.",
+          "Plug a USB stick or external drive with .pkg files into the PS5 and they show up here — no upload needed. Installing copies the file onto the console first (your drive's copy is left untouched), then installs it. Use Refresh after connecting a drive.",
         )}
       </div>
-      <ul className="grid gap-2">
-        {pkgs.map((p) => {
-          const r = results[p.path];
-          return (
-            <li
-              key={p.path}
-              className="flex items-center gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-2"
-            >
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <PlatformBadge platform={p.platform} />
-                  <span className="truncate text-sm font-medium" title={p.path}>
-                    {p.titleId || p.name}
-                  </span>
-                </div>
-                <div className="mt-0.5 truncate font-mono text-xs text-[var(--color-muted)]">
-                  {p.drive}
-                  <span className="px-1 opacity-60">·</span>
-                  <span className="tabular-nums">{formatBytes(p.size)}</span>
-                </div>
-                {/* Install result on its own line with an icon — the
-                    "may not launch" FW-12 warning was previously the least
-                    visible thing on the row, tucked into the grey metadata
-                    text. Mirrors the library rows' result treatment. */}
-                {r && (
-                  <div
-                    className="mt-1 flex items-center gap-1.5 text-xs font-medium"
-                    style={{
-                      color: r.ok
-                        ? r.mayNotLaunch
-                          ? "var(--color-warn)"
-                          : "var(--color-good)"
-                        : "var(--color-bad)",
-                    }}
-                  >
-                    {r.ok ? (
-                      r.mayNotLaunch ? (
-                        <AlertTriangle size={13} className="shrink-0" />
-                      ) : (
-                        <CheckCircle2 size={13} className="shrink-0" />
-                      )
-                    ) : (
-                      <XCircle size={13} className="shrink-0" />
-                    )}
-                    <span className="min-w-0">
-                      {r.ok
-                        ? r.mayNotLaunch
-                          ? tr(
-                              "pkglib.external.installedWarn",
-                              "installed (may not launch)",
-                            )
-                          : tr("pkglib.external.installed", "installed")
-                        : r.message ||
-                          tr("pkglib.external.failed", "install failed")}
-                    </span>
-                  </div>
-                )}
-              </div>
-              <Button
-                variant="primary"
-                size="sm"
-                leftIcon={
-                  installingPath === p.path ? (
-                    <Loader2 size={13} className="animate-spin" />
-                  ) : (
-                    <Download size={13} />
-                  )
-                }
-                disabled={installing}
-                onClick={() => void onInstall(p)}
+
+      {firstScan ? (
+        // Stable scanning state — no more "suddenly appears" pop-in.
+        <div className="flex items-center gap-2 rounded-md border border-dashed border-[var(--color-border)] px-3 py-4 text-xs text-[var(--color-muted)]">
+          <Loader2 size={14} className="animate-spin" />
+          {tr("pkglib.external.scanningDrives", "Scanning connected drives…")}
+        </div>
+      ) : pkgs.length === 0 ? (
+        // Empty state — informative, and the Refresh button above stays put.
+        <div className="rounded-md border border-dashed border-[var(--color-border)] px-3 py-4 text-xs text-[var(--color-muted)]">
+          {tr(
+            "pkglib.external.empty",
+            "No .pkg files found on connected USB or external drives. Connect a drive that has .pkg files on it, then click Refresh.",
+          )}
+        </div>
+      ) : (
+        <ul className="grid gap-2">
+          {pkgs.map((p) => {
+            const r = results[p.path];
+            const m = meta[p.path];
+            // Prefer the authoritative title; fall back to the title id, then
+            // the filename. The filename is shown on its own line below.
+            const heading = m?.title || p.titleId || p.name;
+            const platform = m?.platform || p.platform;
+            const titleId = m?.titleId || p.titleId;
+            const catLabel = pkgCategoryLabel(m?.category);
+            return (
+              <li
+                key={p.path}
+                className="flex items-center gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-2"
               >
-                {installingPath === p.path
-                  ? tr("pkglib.external.installingThis", "Installing…")
-                  : tr("pkglib.external.install", "Install")}
-              </Button>
-            </li>
-          );
-        })}
-      </ul>
+                <GameIcon host={host} titleId={titleId} size={44} />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <PlatformBadge platform={platform} />
+                    <span
+                      className="truncate text-sm font-medium"
+                      title={p.path}
+                    >
+                      {heading}
+                    </span>
+                    {catLabel && catLabel !== "Base" && (
+                      <span className="inline-flex shrink-0 items-center rounded-full border border-[var(--color-accent)] px-1.5 py-0.5 text-xs font-medium uppercase tracking-wide text-[var(--color-accent)]">
+                        {catLabel === "Update"
+                          ? tr("pkglib.badge.update", "update")
+                          : tr("pkglib.badge.dlc", "DLC")}
+                      </span>
+                    )}
+                    {m?.appVer && (
+                      <span className="inline-flex shrink-0 items-center rounded-full border border-[var(--color-border)] px-1.5 py-0.5 font-mono text-xs font-medium tabular-nums text-[var(--color-muted)]">
+                        v{m.appVer}
+                      </span>
+                    )}
+                  </div>
+                  {/* Filename — often the clearest identifier (carries the
+                      game name + version), and distinct from the heading. */}
+                  {p.name && p.name !== heading && (
+                    <div
+                      className="mt-0.5 flex items-center gap-1 truncate text-xs text-[var(--color-muted)]"
+                      title={p.name}
+                    >
+                      <FileText size={11} className="shrink-0 opacity-70" />
+                      <span className="truncate">{p.name}</span>
+                    </div>
+                  )}
+                  <div className="mt-0.5 truncate font-mono text-xs text-[var(--color-muted)]">
+                    {p.drive}
+                    <span className="px-1 opacity-60">·</span>
+                    <span className="tabular-nums">{formatBytes(p.size)}</span>
+                  </div>
+                  {/* Install result on its own line with an icon — the
+                      "may not launch" FW-12 warning was previously the least
+                      visible thing on the row. Mirrors the library rows. */}
+                  {r && (
+                    <div
+                      className="mt-1 flex items-center gap-1.5 text-xs font-medium"
+                      style={{
+                        color: r.ok
+                          ? r.mayNotLaunch
+                            ? "var(--color-warn)"
+                            : "var(--color-good)"
+                          : "var(--color-bad)",
+                      }}
+                    >
+                      {r.ok ? (
+                        r.mayNotLaunch ? (
+                          <AlertTriangle size={13} className="shrink-0" />
+                        ) : (
+                          <CheckCircle2 size={13} className="shrink-0" />
+                        )
+                      ) : (
+                        <XCircle size={13} className="shrink-0" />
+                      )}
+                      <span className="min-w-0">
+                        {r.ok
+                          ? r.mayNotLaunch
+                            ? tr(
+                                "pkglib.external.installedWarn",
+                                "installed (may not launch)",
+                              )
+                            : tr("pkglib.external.installed", "installed")
+                          : r.message ||
+                            tr("pkglib.external.failed", "install failed")}
+                      </span>
+                    </div>
+                  )}
+                </div>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  leftIcon={
+                    installingPath === p.path ? (
+                      <Loader2 size={13} className="animate-spin" />
+                    ) : (
+                      <Download size={13} />
+                    )
+                  }
+                  disabled={installing}
+                  onClick={() => void onInstall(p)}
+                >
+                  {installingPath === p.path
+                    ? tr("pkglib.external.installingThis", "Installing…")
+                    : tr("pkglib.external.install", "Install")}
+                </Button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </div>
   );
 }
