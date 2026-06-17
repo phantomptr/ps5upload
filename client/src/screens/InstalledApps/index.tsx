@@ -12,6 +12,8 @@ import {
   Loader2,
   Download,
   ShieldCheck,
+  Square,
+  CircleDot,
 } from "lucide-react";
 
 import { useNavigate } from "react-router-dom";
@@ -22,10 +24,16 @@ import {
   appUnregister,
   appLaunch,
   appIconUrl,
+  appKill,
+  processKill,
   smpStatus,
   type InstalledTitle,
   type SmpStatus,
 } from "../../api/ps5";
+import {
+  fetchRunningGames,
+  type RunningGame,
+} from "../../lib/runningGames";
 import {
   PageHeader,
   EmptyState,
@@ -144,6 +152,14 @@ function Cover({ host, title }: { host: string; title: InstalledTitle }) {
   );
 }
 
+// How long to keep a just-launched title in the patient "Starting…" state
+// while we watch for its process to appear, and how often to check. A first
+// launch (just-installed, cold cache, disc image) can be slow, so this is
+// generous — it never fails the launch or touches the game, it just stops
+// reporting "Starting…" after this and tells the user it may still be coming up.
+const LAUNCH_CONFIRM_TIMEOUT_MS = 90_000;
+const LAUNCH_CONFIRM_POLL_MS = 2_000;
+
 // ── App card ─────────────────────────────────────────────────────────────────
 
 function AppCard({
@@ -151,18 +167,26 @@ function AppCard({
   title,
   busy,
   launching,
+  running,
+  stopping,
   discNeedsSmp,
   onUninstall,
   onLaunch,
+  onStop,
 }: {
   host: string;
   title: InstalledTitle;
   busy: boolean;
   launching: boolean;
+  /** True while this title is running on the console (show Stop + "Playing"). */
+  running: boolean;
+  /** True while a Stop request for this title is in flight. */
+  stopping: boolean;
   /** True for a disc-image title while ShadowMount+ isn't running. */
   discNeedsSmp: boolean;
   onUninstall: (t: InstalledTitle) => void;
   onLaunch: (t: InstalledTitle) => void;
+  onStop: (t: InstalledTitle) => void;
 }) {
   const tr = useTr();
   const navigate = useNavigate();
@@ -191,6 +215,15 @@ function AppCard({
           >
             <AlertTriangle size={11} />
             {tr("installed_badge_smp_needed", undefined, "SMP")}
+          </span>
+        ) : null}
+        {running ? (
+          <span
+            className="absolute bottom-2 right-2 inline-flex items-center gap-1 rounded bg-[var(--color-good)] px-1.5 py-0.5 text-xs font-semibold text-black drop-shadow"
+            title={tr("installed_now_playing", undefined, "Now playing")}
+          >
+            <CircleDot size={11} className="animate-pulse" />
+            {tr("installed_badge_playing", undefined, "Playing")}
           </span>
         ) : null}
       </div>
@@ -225,42 +258,66 @@ function AppCard({
 
         <div className="mt-auto flex flex-wrap items-center gap-2 pt-1">
           {canPlay ? (
-            <Button
-              variant="primary"
-              size="md"
-              loading={launching}
-              leftIcon={<Play size={15} />}
-              // `min-w-fit` overrides the global `min-width:0` so the button
-              // never shrinks below its own label — on a disc-image card (which
-              // adds an "Open folder" button) the Play button used to get
-              // squeezed and clip "Play" → "Pla". `flex-wrap` on the row lets the
-              // icon buttons drop to a second line instead, before that happens.
-              className="flex-1 min-w-fit"
-              onClick={() => onLaunch(title)}
-              // A disc-image title can't launch until ShadowMount+ mounts it.
-              // Disabling + relabeling here is honest — previously Play stayed
-              // enabled and just produced a failure toast on click.
-              disabled={discNeedsSmp}
-              title={
-                discNeedsSmp
-                  ? tr(
-                      "installed_play_needs_smp",
-                      undefined,
-                      "Needs ShadowMount+ running to mount and launch",
-                    )
-                  : tr(
-                      "installed_play_tooltip",
-                      undefined,
-                      "Launch this title on the PS5",
-                    )
-              }
-            >
-              {discNeedsSmp
-                ? tr("installed_needs_smp", undefined, "Needs ShadowMount+")
-                : launching
-                  ? tr("installed_launching", undefined, "Launching…")
-                  : tr("installed_play", undefined, "Play")}
-            </Button>
+            running && !launching ? (
+              // The title is running → offer Stop (close the game) instead of
+              // Play. Stop is the ONLY thing that ends a game, and it's always
+              // explicit + confirmed — we never auto-close a running or
+              // starting title.
+              <Button
+                variant="danger"
+                size="md"
+                loading={stopping}
+                leftIcon={<Square size={15} />}
+                className="flex-1 min-w-fit"
+                onClick={() => onStop(title)}
+                title={tr(
+                  "installed_stop_tooltip",
+                  undefined,
+                  "Close this running game on the PS5",
+                )}
+              >
+                {stopping
+                  ? tr("installed_stopping", undefined, "Closing…")
+                  : tr("installed_stop", undefined, "Close game")}
+              </Button>
+            ) : (
+              <Button
+                variant="primary"
+                size="md"
+                loading={launching}
+                leftIcon={<Play size={15} />}
+                // `min-w-fit` overrides the global `min-width:0` so the button
+                // never shrinks below its own label — on a disc-image card (which
+                // adds an "Open folder" button) the Play button used to get
+                // squeezed and clip "Play" → "Pla". `flex-wrap` on the row lets the
+                // icon buttons drop to a second line instead, before that happens.
+                className="flex-1 min-w-fit"
+                onClick={() => onLaunch(title)}
+                // A disc-image title can't launch until ShadowMount+ mounts it.
+                // Also disabled while starting so a second click can't fire a
+                // launch into a game that's still coming up (which kills it).
+                disabled={discNeedsSmp || launching}
+                title={
+                  discNeedsSmp
+                    ? tr(
+                        "installed_play_needs_smp",
+                        undefined,
+                        "Needs ShadowMount+ running to mount and launch",
+                      )
+                    : tr(
+                        "installed_play_tooltip",
+                        undefined,
+                        "Launch this title on the PS5",
+                      )
+                }
+              >
+                {discNeedsSmp
+                  ? tr("installed_needs_smp", undefined, "Needs ShadowMount+")
+                  : launching
+                    ? tr("installed_starting", undefined, "Starting…")
+                    : tr("installed_play", undefined, "Play")}
+              </Button>
+            )
           ) : (
             <span className="flex-1 truncate text-xs text-[var(--color-muted)]">
               {tr("installed_badge_system", undefined, "System")}
@@ -363,6 +420,10 @@ export default function InstalledAppsScreen() {
   const [registeredUnavailable, setRegisteredUnavailable] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [launchingId, setLaunchingId] = useState<string | null>(null);
+  // Games currently running on the console (title_id → handle), refreshed on a
+  // poll while this screen is open. Drives the "Playing" badge + Stop button.
+  const [running, setRunning] = useState<Map<string, RunningGame>>(new Map());
+  const [stoppingId, setStoppingId] = useState<string | null>(null);
   const [smpSending, setSmpSending] = useState(false);
   const [smpMsg, setSmpMsg] = useState<string | null>(null);
   // Native window.confirm() is a no-op in Tauri's webview; use the in-tree
@@ -406,28 +467,90 @@ export default function InstalledAppsScreen() {
     setTitles(null);
     setSmp("checking");
     setError(null);
+    setRunning(new Map());
   }, [host]);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
 
+  // Poll which games are running so cards can show "Playing" + a Stop button,
+  // and a just-launched title flips from "Starting…" to "Playing" on its own.
+  // Read-only (process list) — it never touches a running game, so it can't
+  // disturb a title that's still coming up. Runs only while the screen is open.
+  useEffect(() => {
+    if (!host?.trim()) return;
+    let cancelled = false;
+    const addr = mgmtAddr(host);
+    const tick = async () => {
+      try {
+        const r = await fetchRunningGames(addr);
+        if (!cancelled) setRunning(r);
+      } catch {
+        // Transient (console busy/offline) — keep the last known set rather
+        // than flicker every card's state on one failed poll.
+      }
+    };
+    void tick();
+    const id = setInterval(() => void tick(), 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [host]);
+
   const handleLaunch = useCallback(
     async (t: InstalledTitle) => {
       if (!host?.trim()) return;
       const probe = guard.capture();
+      // Hold the "Starting…" state for the whole come-up window (not just the
+      // launch RPC) so Play stays disabled and the user can't fire a second
+      // launch into a game that's still starting — re-launching a half-started
+      // title is exactly how it gets killed. We only watch (read-only) for the
+      // game's process to appear; we never act on a starting game.
       setLaunchingId(t.titleId);
       try {
         await appLaunch(transferAddr(probe.host), t.titleId);
         if (probe.isStale()) return;
-        // Toast (not inline) so the card grid stays a uniform height.
-        pushNotification("info", withConsolePrefix(probe.host, t.titleName), {
-          body: tr(
-            "installed_launch_sent",
-            undefined,
-            "Launch sent — check your PS5",
-          ),
-        });
+        // Patiently wait for the title to actually come up. A first launch
+        // (just-installed, cold cache, disc image) can take a while; the launch
+        // RPC only means "Sony accepted it," not "it's running." Poll the
+        // process list until the title appears, then the card shows "Playing".
+        const addr = mgmtAddr(probe.host);
+        const deadline = Date.now() + LAUNCH_CONFIRM_TIMEOUT_MS;
+        let confirmed = false;
+        while (Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, LAUNCH_CONFIRM_POLL_MS));
+          if (probe.isStale()) return;
+          try {
+            const r = await fetchRunningGames(addr);
+            if (probe.isStale()) return;
+            setRunning(r);
+            if (r.has(t.titleId)) {
+              confirmed = true;
+              break;
+            }
+          } catch {
+            // Console momentarily busy/recovering while the game spins up —
+            // keep waiting rather than giving up.
+          }
+        }
+        if (confirmed) {
+          pushNotification("success", withConsolePrefix(probe.host, t.titleName), {
+            body: tr("installed_now_playing", undefined, "Now playing"),
+          });
+        } else {
+          // Not seen yet — do NOT treat this as a failure (and never kill it).
+          // The launch was accepted; a slow first start just hasn't surfaced in
+          // the process list yet.
+          pushNotification("info", withConsolePrefix(probe.host, t.titleName), {
+            body: tr(
+              "installed_launch_slow",
+              undefined,
+              "Launch sent — first starts can take a while. Give it a moment and check your PS5.",
+            ),
+          });
+        }
       } catch (e) {
         if (probe.isStale()) return;
         const raw = e instanceof Error ? e.message : String(e);
@@ -439,6 +562,71 @@ export default function InstalledAppsScreen() {
       }
     },
     [host, guard, tr],
+  );
+
+  const handleStop = useCallback(
+    async (t: InstalledTitle) => {
+      if (!host?.trim()) return;
+      const game = running.get(t.titleId);
+      if (!game) return;
+      const probe = guard.capture();
+      const ok = await confirmDialog({
+        title: tr(
+          "installed_stop_confirm_title",
+          { name: t.titleName },
+          `Close ${t.titleName}?`,
+        ),
+        message: tr(
+          "installed_stop_confirm_body",
+          undefined,
+          "This closes the running game on the PS5. Any unsaved progress will be lost — the same as quitting from the console.",
+        ),
+        confirmLabel: tr("installed_stop", undefined, "Close game"),
+        destructive: true,
+      });
+      if (!ok || probe.isStale()) return;
+      setStoppingId(t.titleId);
+      try {
+        // Prefer Sony's clean app-kill (by app id); fall back to SIGKILL of a
+        // pid for the title when no app id was reported.
+        const addr = mgmtAddr(probe.host);
+        let ack = game.appId ? await appKill(addr, game.appId) : { ok: false };
+        if (!ack.ok && game.pid) {
+          const k = await processKill(addr, game.pid);
+          ack = { ok: k.ok };
+        }
+        if (probe.isStale()) return;
+        if (ack.ok) {
+          // Drop it from the running set immediately so the card flips back to
+          // Play without waiting for the next poll.
+          setRunning((cur) => {
+            const next = new Map(cur);
+            next.delete(t.titleId);
+            return next;
+          });
+          pushNotification("info", withConsolePrefix(probe.host, t.titleName), {
+            body: tr("installed_stopped", undefined, "Game closed"),
+          });
+        } else {
+          pushNotification("error", withConsolePrefix(probe.host, t.titleName), {
+            body: tr(
+              "installed_stop_failed",
+              undefined,
+              "Couldn't close the game — it may have already exited.",
+            ),
+          });
+        }
+      } catch (e) {
+        if (probe.isStale()) return;
+        const raw = e instanceof Error ? e.message : String(e);
+        pushNotification("error", withConsolePrefix(probe.host, t.titleName), {
+          body: humanizePs5Error(raw),
+        });
+      } finally {
+        setStoppingId(null);
+      }
+    },
+    [host, guard, running, confirmDialog, tr],
   );
 
   const handleUninstall = useCallback(
@@ -570,9 +758,12 @@ export default function InstalledAppsScreen() {
     title: t,
     busy: busyId === t.titleId,
     launching: launchingId === t.titleId,
+    running: running.has(t.titleId),
+    stopping: stoppingId === t.titleId,
     discNeedsSmp: kindOf(t) === "disc" && !smpRunning && !smpChecking,
     onUninstall: handleUninstall,
     onLaunch: handleLaunch,
+    onStop: handleStop,
   });
 
   return (

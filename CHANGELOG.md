@@ -4,6 +4,19 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 3.3.22
+
+- **See what's playing, and stop it.** Installed Apps now shows a "Playing" badge
+  on whatever game is currently running, and the Play button turns into **Close
+  game** so you can stop it right from the app (with a confirm — it's the same
+  as quitting on the console).
+- **More patience when launching a game.** A first launch (just-installed, or a
+  cold start) can take a while to come up. Pressing Play now shows "Starting…"
+  and waits for the game to actually appear before saying it's playing — and it
+  won't let you fire a second launch into a game that's still starting (which is
+  what could knock it back down). If it's taking a while, you get a calm "give
+  it a moment" note rather than an error.
+
 ## 3.3.21
 
 - **Fixed: moving files from USB to the internal SSD crashed the console.** Cut
