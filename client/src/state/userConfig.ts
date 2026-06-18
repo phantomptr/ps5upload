@@ -7,6 +7,7 @@ import { useKeepAwakeStore } from "./keepAwake";
 import { useUploadSettingsStore } from "./uploadSettings";
 import { useConnectionStore } from "./connection";
 import { useEngineStore, normalizeEngineUrl } from "./engine";
+import { useSaveSettingsStore, normalizeSavePath } from "./saveSettings";
 
 /**
  * Mirror all persisted user settings to `~/.ps5upload/settings.json`.
@@ -36,6 +37,9 @@ interface SettingsSnapshot {
   /** Base URL of the engine the UI talks to. Default is the local
    *  sidecar; can point at a remote/self-hosted engine. */
   engine_url?: string;
+  /** PS5-side base directory "Save to USB storage" backs up into —
+   *  e.g. a USB stick plugged into the console. Default /mnt/usb0/savedata. */
+  save_path?: string;
   keep_awake?: boolean;
   upload?: {
     always_overwrite?: boolean;
@@ -51,6 +55,7 @@ function snapshotCurrent(): SettingsSnapshot {
     lang: useLangStore.getState().lang,
     ps5_host: useConnectionStore.getState().host,
     engine_url: useEngineStore.getState().engineUrl,
+    save_path: useSaveSettingsStore.getState().savePath,
     keep_awake: useKeepAwakeStore.getState().enabled,
     upload: {
       always_overwrite: useUploadSettingsStore.getState().alwaysOverwrite,
@@ -111,6 +116,7 @@ export function installUserConfigMirror() {
     schedulePersist();
     pushEngineUrl(s.engineUrl);
   });
+  useSaveSettingsStore.subscribe(schedulePersist);
 }
 
 /** Tell the Rust shell which engine URL its proxies should hit. */
@@ -198,6 +204,14 @@ export async function hydrateFromUserConfig(): Promise<void> {
   // it changed here — the shell read settings.json at startup, but a
   // localStorage-only value (no file) wouldn't have reached it.
   pushEngineUrl(useEngineStore.getState().engineUrl);
+  const liveSavePath = useSaveSettingsStore.getState().savePath;
+  if (
+    typeof data.save_path === "string" &&
+    data.save_path.trim() &&
+    normalizeSavePath(data.save_path) !== liveSavePath
+  ) {
+    useSaveSettingsStore.getState().setSavePath(data.save_path);
+  }
   const liveKeepAwake = useKeepAwakeStore.getState().enabled;
   if (typeof data.keep_awake === "boolean" && data.keep_awake !== liveKeepAwake) {
     await useKeepAwakeStore.getState().setEnabled(data.keep_awake);
