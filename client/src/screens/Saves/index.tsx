@@ -8,11 +8,14 @@ import {
   Download,
   Upload as UploadIcon,
   FolderOpen,
+  HardDrive,
 } from "lucide-react";
 import { openInFileSystem } from "../../state/fsNavigation";
 import {
   savesList,
   startTransferDir,
+  startTransferFile,
+  checkDestinationFreeSpace,
   fsDelete,
   fsListDir,
   waitForJob,
@@ -24,7 +27,10 @@ import {
   saveArchiveRestorePrepare,
   type SaveEntry,
 } from "../../api/ps5";
+import { localFs } from "../../api/localFs";
 import { useConnectionStore, PS5_PAYLOAD_PORT } from "../../state/connection";
+import { getSavePath } from "../../state/saveSettings";
+import { backupTimestamp } from "../../lib/backupTimestamp";
 import {
   PageHeader,
   Button,
@@ -73,6 +79,9 @@ export default function SavesScreen() {
   // two ops over the same PS5 save path (which would deletes-and-
   // uploads in undefined order and leave the live save corrupt).
   const [busy, setBusy] = useState<Set<string>>(() => new Set());
+  // "Back up all to USB" is a single sequential run across every save, so
+  // its busy flag is global rather than per-path like `busy` above.
+  const [bulkBackupBusy, setBulkBackupBusy] = useState(false);
   const isBusy = useCallback((path: string) => busy.has(path), [busy]);
   const markBusy = useCallback((path: string, on: boolean) => {
     setBusy((prev) => {
@@ -322,6 +331,161 @@ export default function SavesScreen() {
     }
   }
 
+  /**
+   * Core "Save to USB storage" flow: pull the save off the PS5 (same
+   * download/finalize/zip steps as handleDownload), but instead of a
+   * host file-save dialog, push the resulting zip BACK onto the PS5 at
+   * `<savePath>/<title_id>/<timestamp>/<title_id>.zip` — typically a USB
+   * stick or extended-storage drive plugged into the console itself.
+   *
+   * `skipPreflight` lets the bulk "Back up all to USB" button validate
+   * the USB mount once up front instead of once per title.
+   */
+  async function backupOneToUsb(
+    entry: SaveEntry,
+    opts?: { skipPreflight?: boolean },
+  ) {
+    if (!host?.trim()) return;
+    if (isBusy(entry.path)) return;
+    const backupHost = host.trim();
+    const addr = `${backupHost}:${PS5_PAYLOAD_PORT}`;
+    const base = getSavePath();
+    markBusy(entry.path, true);
+    let tempDir: string | null = null;
+    try {
+      if (!opts?.skipPreflight) {
+        const preflight = await checkDestinationFreeSpace(addr, base, 0);
+        if (!preflight.volume || !preflight.volume.writable || preflight.volume.is_placeholder) {
+          throw new Error(
+            tr(
+              "saves_backup_usb_no_volume",
+              { path: base },
+              `No writable USB/external drive found at ${base}. Plug it into the PS5 and try again.`,
+            ),
+          );
+        }
+      }
+      // 1) Scratch dir + pull the PS5 save folder, same as handleDownload.
+      tempDir = await saveArchiveMakeTemp(entry.title_id);
+      const jobId = await startTransferDownload(entry.path, tempDir, addr, "folder");
+      await waitForJob(jobId);
+      // 2) Format-aware cleanup (strip sdimg_ prefix, drop emulator
+      // bookkeeping subdirs) — identical to handleDownload.
+      await saveArchiveBackupFinalize(tempDir, entry.title_id);
+      // 3) Zip into the scratch dir itself (no host file-save dialog —
+      // the zip never needs to leave the temp dir before it's uploaded).
+      const zipName = `${entry.title_id}.zip`;
+      const hostZip = `${tempDir}/${zipName}`;
+      await saveArchiveZip(tempDir, entry.title_id, hostZip, zipName);
+      // 4) Size the zip (via the scratch dir listing) and confirm the USB
+      // target has room for it. Best-effort: an unreadable size or an
+      // unmatched volume just skips the check rather than blocking.
+      const remoteDir = `${base}/${entry.title_id}/${backupTimestamp()}`;
+      const remoteZip = `${remoteDir}/${zipName}`;
+      const tempEntries = await localFs.listDir(tempDir).catch(() => []);
+      const zipSize = tempEntries.find((e) => e.name === zipName)?.size ?? 0;
+      if (zipSize > 0) {
+        const spaceCheck = await checkDestinationFreeSpace(addr, remoteZip, zipSize);
+        if (spaceCheck.insufficient) {
+          throw new Error(
+            tr(
+              "saves_backup_usb_low_space",
+              { path: base },
+              `Not enough free space at ${base} for this backup.`,
+            ),
+          );
+        }
+      }
+      // 5) Stale-host re-check, same reasoning as handleRestore: the
+      // download+zip steps above can run for many seconds, and the user
+      // may have switched PS5 in the roster sidebar meanwhile. Refuse to
+      // upload to the wrong console.
+      const currentHost = useConnectionStore.getState().host?.trim();
+      if (currentHost !== backupHost) {
+        throw new Error(
+          `Host changed during backup (was ${backupHost}, now ${currentHost || "(none)"}). ` +
+            "Aborted before upload — your other console's USB drive is untouched.",
+        );
+      }
+      // 6) Upload the zip to the PS5's USB path. The payload's
+      // ensure_parent_dir auto-creates <title_id>/<timestamp>/ — no
+      // manual mkdir needed.
+      const jobId2 = await startTransferFile(hostZip, remoteZip, addr, null);
+      await waitForJob(jobId2);
+      pushNotification(
+        "success",
+        withConsolePrefix(backupHost, `Backed up ${entry.title_id} to USB`),
+        { body: `Saved to ${remoteZip}` },
+      );
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      pushNotification(
+        "error",
+        withConsolePrefix(backupHost, `USB backup failed: ${entry.title_id}`),
+        { body: msg },
+      );
+      throw e; // let the bulk handler count this as a failure
+    } finally {
+      if (tempDir) await saveArchiveCleanupTemp(tempDir).catch(() => {});
+      markBusy(entry.path, false);
+    }
+  }
+
+  function handleBackupToUsb(entry: SaveEntry) {
+    backupOneToUsb(entry).catch(() => {
+      // Already surfaced via setError + pushNotification above.
+    });
+  }
+
+  async function handleBackupAllToUsb() {
+    if (!host?.trim() || !saves || saves.length === 0 || bulkBackupBusy) return;
+    const backupHost = host.trim();
+    const addr = `${backupHost}:${PS5_PAYLOAD_PORT}`;
+    const base = getSavePath();
+    setBulkBackupBusy(true);
+    try {
+      const preflight = await checkDestinationFreeSpace(addr, base, 0);
+      if (!preflight.volume || !preflight.volume.writable || preflight.volume.is_placeholder) {
+        const msg = tr(
+          "saves_backup_usb_no_volume",
+          { path: base },
+          `No writable USB/external drive found at ${base}. Plug it into the PS5 and try again.`,
+        );
+        setError(msg);
+        pushNotification("error", withConsolePrefix(backupHost, "USB backup failed"), {
+          body: msg,
+        });
+        return;
+      }
+      let ok = 0;
+      let failed = 0;
+      for (const entry of saves) {
+        try {
+          await backupOneToUsb(entry, { skipPreflight: true });
+          ok++;
+        } catch {
+          failed++;
+        }
+      }
+      pushNotification(
+        failed === 0 ? "success" : "error",
+        withConsolePrefix(
+          backupHost,
+          failed === 0
+            ? tr("saves_backup_usb_summary", { ok, total: saves.length }, `Backed up ${ok}/${saves.length} to USB`)
+            : tr(
+                "saves_backup_usb_summary_failed",
+                { ok, total: saves.length, failed },
+                `Backed up ${ok}/${saves.length} to USB; ${failed} failed`,
+              ),
+        ),
+      );
+    } finally {
+      setBulkBackupBusy(false);
+    }
+  }
+
   return (
     <div className="p-6">
       {confirmDialogNode}
@@ -336,15 +500,39 @@ export default function SavesScreen() {
           "Per-game save folders on the PS5. PS5 saves under savedata_prospero/, PS4 legacy saves under savedata/. Backup writes a portable <title-id>.zip; restore expects the same shape.",
         )}
         right={
-          <Button
-            variant="secondary"
-            size="sm"
-            leftIcon={<RefreshCw size={12} />}
-            onClick={refresh}
-            disabled={loading || !host?.trim() || payloadStatus !== "up"}
-          >
-            {tr("refresh", undefined, "Refresh")}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              leftIcon={
+                bulkBackupBusy ? (
+                  <Loader2 size={12} className="animate-spin" />
+                ) : (
+                  <HardDrive size={12} />
+                )
+              }
+              onClick={handleBackupAllToUsb}
+              disabled={
+                bulkBackupBusy ||
+                loading ||
+                !host?.trim() ||
+                payloadStatus !== "up" ||
+                !saves ||
+                saves.length === 0
+              }
+            >
+              {tr("saves_backup_usb_all", undefined, "Back up all to USB")}
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              leftIcon={<RefreshCw size={12} />}
+              onClick={refresh}
+              disabled={loading || !host?.trim() || payloadStatus !== "up"}
+            >
+              {tr("refresh", undefined, "Refresh")}
+            </Button>
+          </div>
         }
       />
 
@@ -413,6 +601,20 @@ export default function SavesScreen() {
                       disabled={isBusy(e.path)}
                     >
                       {tr("saves_download", undefined, "Backup")}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      leftIcon={<HardDrive size={11} />}
+                      onClick={() => handleBackupToUsb(e)}
+                      disabled={isBusy(e.path) || bulkBackupBusy}
+                      title={tr(
+                        "saves_backup_usb_tooltip",
+                        undefined,
+                        "Back this save up to the USB save path configured in Settings, without leaving the PS5.",
+                      )}
+                    >
+                      {tr("saves_backup_usb", undefined, "Save to USB")}
                     </Button>
                     {/* danger (red-bordered), NOT ghost like Backup: Restore
                         overwrites — wipes — the live PS5 save. It sat visually

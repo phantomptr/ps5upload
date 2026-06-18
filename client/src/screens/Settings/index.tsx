@@ -42,6 +42,7 @@ import {
 } from "../../state/uploadSettings";
 import { useConnectionStore } from "../../state/connection";
 import { useEngineStore, DEFAULT_ENGINE_URL } from "../../state/engine";
+import { useSaveSettingsStore, DEFAULT_SAVE_PATH } from "../../state/saveSettings";
 import { userConfigPath, resetAllAppData } from "../../state/userConfig";
 import { useUpdateStore, type UpdatePhase } from "../../state/update";
 import { isMobile } from "../../lib/platform";
@@ -142,6 +143,58 @@ function EngineUrlSection() {
             "engine_url_hint",
             undefined,
             "Where the app reaches the ps5upload-engine. Leave as the default local sidecar, or point at a remote/self-hosted engine. Restart the app after switching between local and remote.",
+          )}
+        </span>
+      </label>
+    </Section>
+  );
+}
+
+/** Save-to-USB base path field. Where the Saves screen's "Save to USB
+ *  storage" button writes backups on the PS5 itself (e.g. a USB stick
+ *  plugged into the console) — full layout is `<path>/<title_id>/
+ *  <timestamp>/<title_id>.zip`. Edits commit on blur, same as the
+ *  Engine URL field above. */
+function SavePathSection() {
+  const tr = useTr();
+  const savePath = useSaveSettingsStore((s) => s.savePath);
+  const setSavePath = useSaveSettingsStore((s) => s.setSavePath);
+  const [draft, setDraft] = useState(savePath);
+
+  return (
+    <Section title={tr("settings_card_save_path", undefined, "Save backups")}>
+      <label className="grid gap-1.5 text-sm">
+        <span className="font-medium">
+          {tr("save_path_label", undefined, "USB save path")}
+        </span>
+        <div className="flex items-center gap-2">
+          <input
+            type="text"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={() => setSavePath(draft)}
+            placeholder={DEFAULT_SAVE_PATH}
+            spellCheck={false}
+            className="flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-sm"
+          />
+          {savePath !== DEFAULT_SAVE_PATH && (
+            <button
+              type="button"
+              onClick={() => {
+                setDraft(DEFAULT_SAVE_PATH);
+                setSavePath(DEFAULT_SAVE_PATH);
+              }}
+              className="text-xs text-[var(--color-muted)] hover:text-[var(--color-text)]"
+            >
+              {tr("save_path_reset", undefined, "Reset")}
+            </button>
+          )}
+        </div>
+        <span className="text-xs text-[var(--color-muted)]">
+          {tr(
+            "save_path_hint",
+            undefined,
+            "PS5-side base folder for \"Save to USB storage\" backups (e.g. a USB stick plugged into the console). Each backup lands at <path>/<title id>/<timestamp>/<title id>.zip.",
           )}
         </span>
       </label>
@@ -311,6 +364,8 @@ export default function SettingsScreen() {
         </Section>
 
         <EngineUrlSection />
+
+        <SavePathSection />
 
         <GroupHeading>
           {tr("settings_group_uploads", undefined, "Uploads")}
