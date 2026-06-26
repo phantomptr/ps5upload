@@ -494,7 +494,7 @@ dependencies = [
 
 [[package]]
 name = "ftx2-proto"
-version = "3.3.22"
+version = "3.3.23"
 dependencies = [
  "serde",
  "thiserror",
@@ -954,7 +954,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-bench"
-version = "3.3.22"
+version = "3.3.23"
 dependencies = [
  "criterion",
  "ftx2-proto",
@@ -964,7 +964,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-core"
-version = "3.3.22"
+version = "3.3.23"
 dependencies = [
  "anyhow",
  "base64",
@@ -981,7 +981,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-engine"
-version = "3.3.22"
+version = "3.3.23"
 dependencies = [
  "anyhow",
  "axum",
@@ -999,7 +999,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-lab"
-version = "3.3.22"
+version = "3.3.23"
 dependencies = [
  "anyhow",
  "ftx2-proto",
@@ -1008,7 +1008,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-pkg"
-version = "3.3.22"
+version = "3.3.23"
 dependencies = [
  "serde",
  "serde_json",
@@ -1017,7 +1017,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-tests"
-version = "3.3.22"
+version = "3.3.23"
 dependencies = [
  "anyhow",
  "ftx2-proto",
@@ -1386,13 +1386,14 @@ dependencies = [
 
 [[package]]
 name = "tower-http"
-version = "0.6.11"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4cfcf7e2740e6fc6d4d688b4ef00650406bb94adf4731e43c096c3a19fe40840"
+checksum = "b11f75e912b0c2be01b63d8cf8057b8c3f97cf34abb3d431a3a4c8675498e233"
 dependencies = [
  "bitflags",
  "bytes",
  "http",
+ "percent-encoding",
  "pin-project-lite",
  "tower-layer",
  "tower-service",
