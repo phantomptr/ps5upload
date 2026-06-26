@@ -25,6 +25,7 @@ import { pushNotification } from "../../state/notifications";
 import { withConsolePrefix } from "../../state/roster";
 import { useRunningAppsStore } from "../../state/runningApps";
 import { useDocumentVisible } from "../../lib/visibility";
+import { transferScreenBusy } from "../../lib/ps5Transfers";
 
 interface RunningJoined {
   app_id: number;
@@ -146,9 +147,16 @@ export default function RunningAppsPanel({ mgmtAddr }: { mgmtAddr: string }) {
   useEffect(() => {
     if (!visible) return;
     refresh();
-    const id = window.setInterval(refresh, 5000);
+    const id = window.setInterval(() => {
+      // Skip the auto-poll while an upload to this console is running: the 5s
+      // appListRunning + appdb query hit the same mgmt port a folder reconcile
+      // is bursting per-file finalize calls on, and the contention can collapse
+      // a many-file upload's throughput. Resumes the moment the upload ends.
+      if (transferScreenBusy(mgmtAddr)) return;
+      refresh();
+    }, 5000);
     return () => window.clearInterval(id);
-  }, [refresh, visible]);
+  }, [refresh, visible, mgmtAddr]);
 
   async function doAction(
     appId: number,
