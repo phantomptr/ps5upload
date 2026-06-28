@@ -308,7 +308,10 @@ const CATALOGUE: &[CatalogueEntry] = &[
         role: "Dump installed apps to USB",
         description: "Dumps installed PS5 apps to USB or internal storage in fakepkg/folder format. Reads config from /data/ps5-app-dumper/config.ini.",
         repo_host: "github.com",
-        repo_owner: "ps5-payload-dev",
+        // The releases live under EchoStretch, not ps5-payload-dev (the old
+        // owner 404s — GitHub issue #82). EchoStretch/ps5-app-dumper ships
+        // ps5-app-dumper.elf on each tag.
+        repo_owner: "EchoStretch",
         repo_name: "ps5-app-dumper",
         asset_name_hint: "dumper",
         on_console_marker_path: None,
@@ -316,7 +319,7 @@ const CATALOGUE: &[CatalogueEntry] = &[
         ports: &[],
         autoload_priority: 4,
         autoload_delay_ms: 200,
-        homepage: "https://github.com/ps5-payload-dev/ps5-app-dumper",
+        homepage: "https://github.com/EchoStretch/ps5-app-dumper",
     },
     CatalogueEntry {
         id: "itemzflow",
@@ -324,15 +327,19 @@ const CATALOGUE: &[CatalogueEntry] = &[
         role: "PS5 native homebrew launcher UI",
         description: "Full-screen native PS5 launcher for homebrew, fpkg games, and FTP browsing. Heavyweight (~50 MB) but the most polished launcher in the scene.",
         repo_host: "github.com",
+        // The repo is LightningMods/Itemzflow — "itemzflow_PS5" 404s (GitHub
+        // issue #82). Note Itemzflow is distributed as a .pkg app, so its GitHub
+        // releases may not always carry a downloadable payload asset; resolving
+        // the repo at least replaces the hard 404 with the real release list.
         repo_owner: "LightningMods",
-        repo_name: "itemzflow_PS5",
+        repo_name: "Itemzflow",
         asset_name_hint: "itemzflow",
         on_console_marker_path: None,
         process_name_hint: Some("itemzflow"),
         ports: &[],
         autoload_priority: 5,
         autoload_delay_ms: 200,
-        homepage: "https://github.com/LightningMods/itemzflow_PS5",
+        homepage: "https://github.com/LightningMods/Itemzflow",
     },
     CatalogueEntry {
         // Requested by users. Loads game cheats on-console; pairs with
