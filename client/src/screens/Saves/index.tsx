@@ -82,6 +82,8 @@ export default function SavesScreen() {
   // "Back up all to USB" is a single sequential run across every save, so
   // its busy flag is global rather than per-path like `busy` above.
   const [bulkBackupBusy, setBulkBackupBusy] = useState(false);
+  // Same pattern for "Restore all from USB".
+  const [bulkRestoreBusy, setBulkRestoreBusy] = useState(false);
   const isBusy = useCallback((path: string) => busy.has(path), [busy]);
   const markBusy = useCallback((path: string, on: boolean) => {
     setBusy((prev) => {
@@ -438,6 +440,255 @@ export default function SavesScreen() {
     });
   }
 
+  /**
+   * Finds the lexically-latest timestamped backup directory for a given
+   * title under `<base>/<title_id>/`. The backupTimestamp() format
+   * (YYYY-MM-DD_HHMMSS) is documented as lexically sortable, so the
+   * greatest string name == the newest backup — no mtime parsing needed.
+   *
+   * Returns null if the title dir is absent, unreadable, or has never
+   * been backed up (no subdirs).
+   */
+  async function resolveLatestUsbBackup(
+    addr: string,
+    base: string,
+    title_id: string,
+  ): Promise<string | null> {
+    try {
+      const entries = await fsListDir(addr, `${base}/${title_id}`);
+      const dirs = entries
+        .filter((e) => e.kind === "dir")
+        .map((e) => e.name)
+        .sort()
+        .reverse();
+      return dirs[0] ?? null;
+    } catch {
+      // Dir absent or unreadable — no backup has ever been written.
+      return null;
+    }
+  }
+
+  /**
+   * Core "Restore from USB" flow: the reverse of backupOneToUsb.
+   *
+   * Finds the latest timestamped zip for the title on the USB save path,
+   * pulls it to a host temp dir, validates + unzips it, then wipes and
+   * re-uploads the live PS5 save — exactly as handleRestore does, but
+   * sourcing the zip from the PS5's USB drive rather than a host file dialog.
+   *
+   * Returns "no-backup" if no USB backup exists for the title (so the bulk
+   * handler can skip rather than fail). Throws on genuine errors.
+   *
+   * `skipPreflight` / `skipConfirm` let handleRestoreAllFromUsb validate
+   * the USB volume and confirm once across all games instead of per-title.
+   */
+  async function restoreOneFromUsb(
+    entry: SaveEntry,
+    opts?: { skipPreflight?: boolean; skipConfirm?: boolean },
+  ): Promise<"ok" | "no-backup"> {
+    if (!host?.trim()) return "no-backup";
+    if (isBusy(entry.path)) return "no-backup";
+    const restoreHost = host.trim();
+    const addr = `${restoreHost}:${PS5_PAYLOAD_PORT}`;
+    const base = getSavePath();
+    // Claim before any async work — same reasoning as handleRestore.
+    markBusy(entry.path, true);
+    let tempDir: string | null = null;
+    try {
+      if (!opts?.skipPreflight) {
+        // Only require the volume to exist and not be a placeholder;
+        // restore reads from USB so we don't require `writable`.
+        const preflight = await checkDestinationFreeSpace(addr, base, 0);
+        if (!preflight.volume || preflight.volume.is_placeholder) {
+          throw new Error(
+            tr(
+              "saves_backup_usb_no_volume",
+              { path: base },
+              `No USB/external drive found at ${base}. Plug it into the PS5 and try again.`,
+            ),
+          );
+        }
+      }
+      // Resolve the newest backup. Return "no-backup" rather than
+      // throwing so the bulk handler can skip quietly without incrementing
+      // the failure count.
+      const latest = await resolveLatestUsbBackup(addr, base, entry.title_id);
+      if (!latest) return "no-backup";
+      const zipName = `${entry.title_id}.zip`;
+      const remoteZip = `${base}/${entry.title_id}/${latest}/${zipName}`;
+      if (!opts?.skipConfirm) {
+        const ok = await confirmDialog({
+          title: tr(
+            "saves_restore_usb_confirm_title",
+            { title: entry.title_id, timestamp: latest },
+            `Restore ${entry.title_id} from USB backup ${latest}?`,
+          ),
+          message: tr(
+            "saves_restore_usb_confirm_body",
+            { title: entry.title_id, timestamp: latest },
+            `This WIPES the current PS5 save for ${entry.title_id} and replaces it with the backup from ${latest}. ` +
+              "There is no automatic rollback if the upload is interrupted. Back up the existing save first if it matters.",
+          ),
+          destructive: true,
+          confirmLabel: tr(
+            "saves_restore_usb_confirm_label",
+            undefined,
+            "Restore from USB",
+          ),
+        });
+        if (!ok) return "ok"; // user cancelled — not an error or a skip
+      }
+      // 1) Scratch dir + pull the zip off the USB drive (single-file download).
+      tempDir = await saveArchiveMakeTemp(entry.title_id);
+      const jobId = await startTransferDownload(remoteZip, tempDir, addr, "file");
+      await waitForJob(jobId);
+      // 2) Strict layout validation: abort before touching the live save
+      // if the zip doesn't contain exactly one top-level folder named
+      // after the title_id (same guard as handleRestore).
+      const hostZip = `${tempDir}/${zipName}`;
+      await saveArchiveUnzip(hostZip, tempDir, entry.title_id);
+      // 3) Format-aware prep: re-add sdimg_ prefix stripped during backup
+      // finalization (PS4-style saves). PS5-native / .bin / sce_sys/ pass through.
+      await saveArchiveRestorePrepare(tempDir, entry.title_id);
+      // 4) Stale-host guard before the destructive wipe. The download +
+      // unzip steps above can run for many seconds on large saves, and
+      // the user may have switched PS5 in the roster sidebar. Same guard
+      // as handleRestore — compare against the live store value, not the
+      // closure-captured `host` ref.
+      const currentHost = useConnectionStore.getState().host?.trim();
+      if (currentHost !== restoreHost) {
+        throw new Error(
+          `Host changed during USB restore (was ${restoreHost}, now ${currentHost || "(none)"}). ` +
+            "Aborted before wipe — your other console's saves are untouched.",
+        );
+      }
+      // 5) Wipe live save contents but keep the title_id folder itself —
+      // see handleRestore lines 269-275 for why we can't mkdir it fresh.
+      const children = await fsListDir(addr, entry.path, { limit: 4096 });
+      for (const child of children) {
+        const childPath = entry.path.endsWith("/")
+          ? `${entry.path}${child.name}`
+          : `${entry.path}/${child.name}`;
+        await fsDelete(addr, childPath);
+      }
+      // 6) Upload the unpacked save back to the live PS5 path.
+      const extractedRoot = `${tempDir}/${entry.title_id}`;
+      const jobId2 = await startTransferDir(extractedRoot, entry.path, addr, null, []);
+      await waitForJob(jobId2);
+      pushNotification(
+        "success",
+        withConsolePrefix(restoreHost, `Restored ${entry.title_id} from USB`),
+        { body: `Restored from ${remoteZip} → ${entry.path}` },
+      );
+      return "ok";
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      pushNotification(
+        "error",
+        withConsolePrefix(restoreHost, `USB restore failed: ${entry.title_id}`),
+        { body: msg },
+      );
+      throw e; // let the bulk handler count this as a failure
+    } finally {
+      if (tempDir) await saveArchiveCleanupTemp(tempDir).catch(() => {});
+      markBusy(entry.path, false);
+    }
+  }
+
+  function handleRestoreFromUsb(entry: SaveEntry) {
+    restoreOneFromUsb(entry).catch(() => {
+      // Already surfaced via setError + pushNotification above.
+    });
+  }
+
+  async function handleRestoreAllFromUsb() {
+    if (!host?.trim() || !saves || saves.length === 0 || bulkRestoreBusy) return;
+    const restoreHost = host.trim();
+    const addr = `${restoreHost}:${PS5_PAYLOAD_PORT}`;
+    const base = getSavePath();
+    setBulkRestoreBusy(true);
+    try {
+      // Single up-front confirm covering all games — the user only has to
+      // approve once rather than per-title like the per-row button.
+      const confirmed = await confirmDialog({
+        title: tr(
+          "saves_restore_usb_all_confirm_title",
+          undefined,
+          "Restore all saves from USB?",
+        ),
+        message: tr(
+          "saves_restore_usb_all_confirm_body",
+          undefined,
+          "This will WIPE the current PS5 save for each game and replace it with its latest USB backup. " +
+            "Games with no backup on the USB drive are skipped. There is no automatic rollback if an upload is interrupted.",
+        ),
+        destructive: true,
+        confirmLabel: tr(
+          "saves_restore_usb_all_confirm_label",
+          undefined,
+          "Restore all",
+        ),
+      });
+      if (!confirmed) return;
+      // Volume check once up front (same as handleBackupAllToUsb).
+      const preflight = await checkDestinationFreeSpace(addr, base, 0);
+      if (!preflight.volume || preflight.volume.is_placeholder) {
+        const msg = tr(
+          "saves_backup_usb_no_volume",
+          { path: base },
+          `No USB/external drive found at ${base}. Plug it into the PS5 and try again.`,
+        );
+        setError(msg);
+        pushNotification("error", withConsolePrefix(restoreHost, "USB restore failed"), {
+          body: msg,
+        });
+        return;
+      }
+      let ok = 0;
+      let failed = 0;
+      let skipped = 0;
+      for (const entry of saves) {
+        try {
+          const result = await restoreOneFromUsb(entry, {
+            skipPreflight: true,
+            skipConfirm: true,
+          });
+          if (result === "no-backup") skipped++;
+          else ok++;
+        } catch {
+          failed++;
+        }
+      }
+      const hasSideEffects = failed > 0 || skipped > 0;
+      pushNotification(
+        failed === 0 ? "success" : "error",
+        withConsolePrefix(
+          restoreHost,
+          !hasSideEffects
+            ? tr(
+                "saves_restore_usb_summary",
+                { ok, total: saves.length },
+                `Restored ${ok}/${saves.length} from USB`,
+              )
+            : tr(
+                "saves_restore_usb_summary_partial",
+                { ok, total: saves.length, failed, skipped },
+                [
+                  `Restored ${ok}/${saves.length} from USB`,
+                  failed > 0 ? `${failed} failed` : "",
+                  skipped > 0 ? `${skipped} skipped` : "",
+                ]
+                  .filter(Boolean)
+                  .join("; "),
+              ),
+        ),
+      );
+    } finally {
+      setBulkRestoreBusy(false);
+    }
+  }
+
   async function handleBackupAllToUsb() {
     if (!host?.trim() || !saves || saves.length === 0 || bulkBackupBusy) return;
     const backupHost = host.trim();
@@ -514,6 +765,7 @@ export default function SavesScreen() {
               onClick={handleBackupAllToUsb}
               disabled={
                 bulkBackupBusy ||
+                bulkRestoreBusy ||
                 loading ||
                 !host?.trim() ||
                 payloadStatus !== "up" ||
@@ -522,6 +774,29 @@ export default function SavesScreen() {
               }
             >
               {tr("saves_backup_usb_all", undefined, "Back up all to USB")}
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              leftIcon={
+                bulkRestoreBusy ? (
+                  <Loader2 size={12} className="animate-spin" />
+                ) : (
+                  <UploadIcon size={12} />
+                )
+              }
+              onClick={handleRestoreAllFromUsb}
+              disabled={
+                bulkRestoreBusy ||
+                bulkBackupBusy ||
+                loading ||
+                !host?.trim() ||
+                payloadStatus !== "up" ||
+                !saves ||
+                saves.length === 0
+              }
+            >
+              {tr("saves_restore_usb_all", undefined, "Restore all from USB")}
             </Button>
             <Button
               variant="secondary"
@@ -634,6 +909,20 @@ export default function SavesScreen() {
                       )}
                     >
                       {tr("saves_restore", undefined, "Restore")}
+                    </Button>
+                    <Button
+                      variant="danger"
+                      size="sm"
+                      leftIcon={<HardDrive size={11} />}
+                      onClick={() => handleRestoreFromUsb(e)}
+                      disabled={isBusy(e.path) || bulkRestoreBusy}
+                      title={tr(
+                        "saves_restore_usb_tooltip",
+                        undefined,
+                        "Restore this save from its latest USB backup at the path configured in Settings, without leaving the PS5. Overwrites the live save.",
+                      )}
+                    >
+                      {tr("saves_restore_usb", undefined, "Restore from USB")}
                     </Button>
                   </li>
                 ))}
