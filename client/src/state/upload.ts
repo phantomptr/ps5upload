@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../lib/invokeLogged";
 import {
   inspectFolder,
   zipInspectStream,

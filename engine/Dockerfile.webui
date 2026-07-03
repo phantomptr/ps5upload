@@ -1,0 +1,52 @@
+# Full-stack web UI image for ps5upload-engine.
+# Serves the complete React frontend at http://<host>:19113 so any browser
+# on an allowlisted IP can manage a PS5 — no native client required.
+#
+# Build (from the repo root, NOT engine/):
+#   docker build -f engine/Dockerfile.webui -t ps5upload-engine-webui .
+#
+# Run:
+#   docker run --rm -p 19113:19113 \
+#     -e PS5_ADDR=192.168.1.50:9113 \
+#     -e PS5UPLOAD_ALLOW_IP=192.168.1.20 \
+#     ps5upload-engine-webui
+#
+# Then open http://192.168.1.<host>:19113 in a browser on the machine whose
+# IP you set in PS5UPLOAD_ALLOW_IP.
+#
+# SECURITY: the web UI is UNAUTHENTICATED.  Anyone whose IP is in
+# PS5UPLOAD_ALLOW_IP gets full control over your PS5.  Only add IPs from
+# your own trusted LAN.  Never expose port 19113 to the internet.
+
+# ── Stage 1: build the React frontend ────────────────────────────────────────
+FROM node:22-alpine AS frontend
+
+WORKDIR /src
+# Copy only the client package files first so npm ci is cached
+COPY client/package.json client/package-lock.json ./
+RUN npm ci --silent
+
+# Now copy the rest of the client source and build
+COPY client/ .
+RUN npm run build:vite
+
+# ── Stage 2: build the Rust engine with embedded web UI ──────────────────────
+FROM rust:alpine AS builder
+
+# g++ compiles unrar's bundled C++ against musl; musl target links static.
+RUN apk add --no-cache musl-dev g++ make
+
+WORKDIR /build
+COPY engine/ .
+
+# Populate the webui/ embed directory from the frontend build output.
+# rust-embed will bake every file in this directory into the binary.
+COPY --from=frontend /src/dist/ ./crates/ps5upload-engine/webui/
+
+RUN cargo build --release -p ps5upload-engine --features webui
+
+# ── Stage 3: minimal scratch image ───────────────────────────────────────────
+FROM scratch
+COPY --from=builder /build/target/release/ps5upload-engine /ps5upload-engine
+EXPOSE 19113
+ENTRYPOINT ["/ps5upload-engine"]

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/invokeLogged";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { pickPath } from "../../lib/pickPath";
 import {

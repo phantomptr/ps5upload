@@ -5,6 +5,9 @@ import { searchPS5 } from "./ps5";
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
 }));
+// invokeLogged branches on isTauriEnv() to route to browserInvoke instead of
+// the mocked Tauri invoke above; force the Tauri path so this mock is used.
+vi.mock("../lib/tauriEnv", () => ({ isTauriEnv: () => true }));
 
 const mockedInvoke = vi.mocked(invoke);
 

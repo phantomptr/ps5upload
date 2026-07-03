@@ -12,13 +12,22 @@ path = "src/lib.rs"
 name = "ps5upload-engine"
 path = "src/main.rs"
 
+[features]
+## Embed the Vite-built React bundle so the engine serves the full web UI
+## when accessed from a browser. Build requires a pre-populated `webui/`
+## directory next to this Cargo.toml (populated from `client/dist` by the
+## Docker multi-stage build or manually with `cp -r client/dist/* engine/crates/ps5upload-engine/webui/`).
+webui = ["dep:rust-embed", "dep:mime_guess"]
+
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
 base64 = "0.22"
 ftx2-proto = { path = "../ftx2-proto" }
+mime_guess = { version = "2", optional = true }
 ps5upload-core = { path = "../ps5upload-core" }
 ps5upload-pkg = { path = "../ps5upload-pkg" }
+rust-embed = { version = "8", optional = true }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

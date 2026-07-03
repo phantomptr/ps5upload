@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/invokeLogged";
 import { HelpCircle, Search, X } from "lucide-react";
 
 import {

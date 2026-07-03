@@ -35,6 +35,8 @@
 
 mod engine_log;
 mod pkg_install;
+#[cfg(feature = "webui")]
+mod webui;
 
 use axum::{
     extract::{ConnectInfo, Path, Query, Request, State},
@@ -1094,12 +1096,21 @@ fn json_err(code: StatusCode, msg: impl Into<String>) -> impl IntoResponse {
 
 // ─── Handlers ─────────────────────────────────────────────────────────────────
 
-/// GET / — dashboard UI
+/// GET / — full React SPA when the `webui` feature is compiled in; otherwise
+/// the minimal transfer-and-jobs dashboard baked into `static/index.html`.
 async fn ui_handler() -> impl IntoResponse {
-    (
-        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
-        include_str!("../static/index.html"),
-    )
+    #[cfg(feature = "webui")]
+    {
+        webui::spa_response("index.html")
+    }
+    #[cfg(not(feature = "webui"))]
+    {
+        (
+            [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+            include_str!("../static/index.html"),
+        )
+            .into_response()
+    }
 }
 
 /// GET /api/events — SSE stream of job state changes
@@ -5883,7 +5894,16 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/events", get(events_stream))
         .route("/api/engine-logs", get(engine_logs_tail))
         .route("/api/debug/crash", get(debug_crash))
-        .with_state(state)
+        .with_state(state);
+
+    // SPA fallback: serve the embedded React bundle for every path that doesn't
+    // match an explicit /api/* route above.  Only compiled when the `webui`
+    // feature is on (Docker / self-hosted image); the regular build keeps the
+    // simple `GET /` dashboard handler above.
+    #[cfg(feature = "webui")]
+    let app = app.fallback(webui::spa_fallback);
+
+    let app = app
         // .pkg install — sessions live in their own state because the
         // HTTP-host serving handler needs Mutex-guarded session lookup
         // independent of the main engine state. Merged at this point

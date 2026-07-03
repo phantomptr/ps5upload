@@ -1,5 +1,5 @@
 import { toPng } from "html-to-image";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./invokeLogged";
 
 import { log } from "../state/logs";
 

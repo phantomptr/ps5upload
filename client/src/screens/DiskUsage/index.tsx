@@ -6,7 +6,7 @@ import {
   ChevronUp,
   AlertTriangle,
 } from "lucide-react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/invokeLogged";
 
 type RawEntry = { name?: string; kind?: string; size?: number };
 interface DirListResult {

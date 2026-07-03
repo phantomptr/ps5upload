@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./invokeLogged";
 
 import { useConnectionStore } from "../state/connection";
 import { mgmtAddr, transferAddr } from "./addr";

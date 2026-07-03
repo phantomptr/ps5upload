@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../../lib/invokeLogged";
 import { Sparkles, ExternalLink } from "lucide-react";
 import { openExternalUrl as openExternal } from "../../lib/openExternalUrl";
 

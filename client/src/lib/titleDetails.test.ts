@@ -22,6 +22,9 @@ let invokeImpl: (cmd: string, args?: unknown) => Promise<unknown> = async () => 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: (cmd: string, args?: unknown) => invokeImpl(cmd, args),
 }));
+// invokeLogged branches on isTauriEnv() to route to browserInvoke instead of
+// the mocked Tauri invoke above; force the Tauri path so this mock is used.
+vi.mock("./tauriEnv", () => ({ isTauriEnv: () => true }));
 
 function installInvokeStub(impl: typeof invokeImpl) {
   invokeImpl = impl;

@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./invokeLogged";
 import { setScreenWakeReason } from "./androidScreenWake";
 
 // Programmatic keep-awake hold for active transfers.

@@ -27,7 +27,7 @@
 // fetch on every modal open, short enough that a corrected title
 // shows up within a week.
 
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "./invokeLogged";
 
 const CACHE_KEY = "ps5upload.titleinfo.cache";
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;

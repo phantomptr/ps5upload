@@ -5,6 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // (Hoisted by vitest above the imports below — affects this whole file,
 // but the pure titleIdFromContentId tests don't care.)
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+// invokeLogged branches on isTauriEnv() to route to browserInvoke instead of
+// the mocked Tauri invoke above; force the Tauri path so this mock is used.
+vi.mock("../lib/tauriEnv", () => ({ isTauriEnv: () => true }));
 vi.mock("../api/ps5", () => ({
   fsListDir: vi.fn(async () => []),
   fsDelete: vi.fn(async () => {}),

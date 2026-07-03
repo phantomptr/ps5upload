@@ -1,6 +1,6 @@
 import { useStore } from "zustand";
 import { createStore } from "zustand/vanilla";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../lib/invokeLogged";
 
 import {
   fsListDir,

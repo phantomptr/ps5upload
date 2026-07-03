@@ -10,6 +10,9 @@ vi.mock("@tauri-apps/api/core", () => ({
     return Promise.resolve();
   },
 }));
+// invokeLogged branches on isTauriEnv() to route to browserInvoke instead of
+// the mocked Tauri invoke above; force the Tauri path so this mock is used.
+vi.mock("./tauriEnv", () => ({ isTauriEnv: () => true }));
 
 import { setTransferKeepAwake } from "./keepAwakeHold";
 
