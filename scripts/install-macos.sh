@@ -9,7 +9,7 @@
 #     (llvm@18 is the only Homebrew llvm shipped with `ld.lld`, which prospero-clang needs;
 #      the root Makefile pins LLVM_CONFIG to llvm@18 on macOS — keep them aligned)
 #   - Rust toolchain (rustup, stable, default profile)
-#   - PS5 Payload SDK v0.38 → $PS5_PAYLOAD_SDK (default $HOME/ps5-payload-sdk)
+#   - PS5 Payload SDK v0.40 → $PS5_PAYLOAD_SDK (default $HOME/ps5-payload-sdk)
 #
 # After it finishes the script prints the env exports you need to add to ~/.zshrc
 # (or ~/.bash_profile) so `make build` and `make run-client` work in any new shell.
@@ -23,7 +23,7 @@ set -euo pipefail
 # it to /opt/ps5-payload-sdk (root-only). Override the install location with
 # PS5_SDK_INSTALL_DIR if you want somewhere else.
 SDK_DIR="${PS5_SDK_INSTALL_DIR:-$HOME/ps5-payload-sdk}"
-SDK_TAG="v0.38"
+SDK_TAG="v0.40"
 SDK_URL="https://github.com/ps5-payload-dev/sdk/releases/download/${SDK_TAG}/ps5-payload-sdk.zip"
 
 BREW_DEPS=(

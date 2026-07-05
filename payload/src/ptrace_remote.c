@@ -126,6 +126,14 @@ int pt_attach(pid_t pid) {
     /* Block until the child reports the SIGSTOP. Without this the
      * subsequent PT_GETREGS races the kernel and returns ESRCH. */
     if (waitpid(pid, 0, 0) == -1) {
+        /* PT_ATTACH already succeeded: we are still the tracer and the
+         * target is stopped. Returning without detaching leaks a frozen
+         * SceShellUI and leaves the next pt_attach EBUSY under our own
+         * tracer. waitpid realistically only fails here on EINTR (one
+         * of our signal handlers firing mid-wait), so a clean detach
+         * restores the target to running and frees the slot. Best-effort
+         * — if detach also fails there is nothing left to try. */
+        (void)pt_detach(pid, 0);
         return -1;
     }
     return 0;
@@ -312,14 +320,27 @@ long pt_syscall(pid_t pid, int sysno, ...) {
     jmp_reg.r_r9  = va_arg(ap, uint64_t);
     va_end(ap);
 
-    if (pt_setregs(pid, &jmp_reg) != 0) return -1;
+    if (pt_setregs(pid, &jmp_reg) != 0) {
+        /* Mirror pt_call: best-effort restore of the original regs in
+         * case the failed PT_SETREGS partially applied, and so a later
+         * PT_DETACH doesn't resume the target at the syscall site with
+         * junk argument registers. */
+        (void)pt_setregs(pid, &bak_reg);
+        return -1;
+    }
 
     /* Single-step until we land back on the syscall site after
      * sysret. Bound to 1k steps because syscalls are fast. */
     int step_budget = 1000;
     while (jmp_reg.r_rsp <= bak_reg.r_rsp && step_budget > 0) {
-        if (pt_step(pid) != 0) return -1;
-        if (pt_getregs(pid, &jmp_reg) != 0) return -1;
+        if (pt_step(pid) != 0) {
+            (void)pt_setregs(pid, &bak_reg);
+            return -1;
+        }
+        if (pt_getregs(pid, &jmp_reg) != 0) {
+            (void)pt_setregs(pid, &bak_reg);
+            return -1;
+        }
         step_budget--;
     }
     if (step_budget == 0) {
@@ -333,7 +354,17 @@ long pt_syscall(pid_t pid, int sysno, ...) {
 
 intptr_t pt_mmap(pid_t pid, intptr_t addr, size_t len, int prot,
                   int flags, int fd, off_t off) {
-    return pt_syscall(pid, SYS_mmap, addr, len, prot, flags, fd, off);
+    long r = pt_syscall(pid, SYS_mmap, addr, len, prot, flags, fd, off);
+    /* On syscall failure the kernel writes -errno into rax (e.g.
+     * -ENOMEM under memory pressure, -EINVAL, -EACCES). Every caller
+     * checks `scratch == -1 || scratch == 0`, so a -12 (0xFFFFFFFFFFFFFFF4)
+     * sails past as a "valid pointer" and the next pt_copyin/pt_call
+     * dereferences it inside SceShellUI → ShellUI crash, and Sony's
+     * watchdog can cascade into our payload. Collapse the whole errno
+     * range here so every caller is fixed in one place. Valid mmap
+     * results are page-aligned and >= 0x1000, never in [-4095,-1]. */
+    if ((unsigned long)r >= (unsigned long)-4095) return -1;
+    return r;
 }
 
 int pt_munmap(pid_t pid, intptr_t addr, size_t len) {

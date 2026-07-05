@@ -1388,7 +1388,7 @@ void runtime_reconcile_mounts(void) {
          * the mount was created, keep the mount — users may have
          * intentionally moved the file and we don't own cleanup of
          * that. Log only; don't clean up. */
-        char src[256];
+        char src[512];
         int have_src = mount_tracker_read(mnt_on, src, sizeof(src));
         if (have_src) {
             struct stat src_st;
@@ -8068,8 +8068,19 @@ static int handle_fs_mount(runtime_state_t *state, int client_fd,
          * from the image filename. */
         if (mount_name[0] == '\0') {
             fs_mount_derive_name(image_path, mount_name, sizeof(mount_name));
-        } else if (strchr(mount_name, '/') != NULL ||
-                   strstr(mount_name, "..") != NULL) {
+        }
+        /* Validate whether the name was caller-supplied or just derived
+         * from the image filename: reject path separators, "..", and a
+         * lone ".". The "." case matters because snprintf below then
+         * builds /mnt/ps5upload/. which the kernel normalises to
+         * FS_MOUNT_BASE itself — shadowing every existing mount in the
+         * namespace. That is the same footgun the strcmp(mount_point,
+         * FS_MOUNT_BASE) guard blocks for caller-supplied mount_points
+         * above, but this derived path bypasses it. fs_mount_derive_name
+         * can also yield "." for image names like "..exfat" or ".". */
+        if (strchr(mount_name, '/') != NULL ||
+            strstr(mount_name, "..") != NULL ||
+            strcmp(mount_name, ".") == 0) {
             return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
                               "fs_mount_bad_name", 17);
         }

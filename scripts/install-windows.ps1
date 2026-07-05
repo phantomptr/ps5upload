@@ -8,7 +8,7 @@
 #   - Visual Studio 2022 Build Tools w/ C++ workload (MSVC + Windows SDK)
 #   - 7zip (used to extract the PS5 SDK zip in CI-clean way)
 #   - Microsoft Edge WebView2 Runtime (preinstalled on Win11; verified)
-#   - PS5 Payload SDK v0.38 → $env:USERPROFILE\ps5-payload-sdk
+#   - PS5 Payload SDK v0.40 → $env:USERPROFILE\ps5-payload-sdk
 #
 # Run from an elevated PowerShell:
 #   PS> Set-ExecutionPolicy -Scope Process Bypass -Force
@@ -27,7 +27,7 @@ param(
   # *build-time* SDK path and may point at somewhere the current user can't
   # write to. Pass -SdkDir or set $env:PS5_SDK_INSTALL_DIR to change.
   [string]$SdkDir = $(if ($env:PS5_SDK_INSTALL_DIR) { $env:PS5_SDK_INSTALL_DIR } else { Join-Path $env:USERPROFILE 'ps5-payload-sdk' }),
-  [string]$SdkTag = 'v0.38'
+  [string]$SdkTag = 'v0.40'
 )
 
 $ErrorActionPreference = 'Stop'
