@@ -2111,6 +2111,99 @@ shortcuts_activate: "Open / activate",
   "pkglib.external.installedWarn": "installed (may not launch)",
   "pkglib.external.installingThis": "Installing…",
   "pkglib.external.failed": "install failed",
+
+  // ── Keys that previously existed ONLY as inline tr() fallbacks ──────────
+  // These render correctly in English via the call-site fallback, but were
+  // never in en.ts — so the i18n coverage gate couldn't see them and they'd
+  // show English to non-English users forever. Adding them here makes them
+  // translatable (they're allowlisted per-locale in i18n-known-missing.json
+  // pending translation, same as every other new key).
+  dashboard_loading_sensors: "Reading sensors…",
+  fs_crc32: "CRC32 checksum",
+  fs_drives_label: "Drives",
+  fs_install_action: "Install",
+  fs_install_failed: "Install failed",
+  fs_listing: "Reading directory…",
+  fs_preview: "Preview",
+  fs_verify: "Verify (BLAKE3)",
+  fs_download_zip_tooltip: "Download as .zip",
+  installed_needs_smp: "Needs ShadowMount+",
+  payloads_search: "Search payloads",
+  "pkglib.addon.dlc": "DLC",
+  "pkglib.addon.update": "update",
+  "pkglib.menu.copyDetails": "Copy details",
+  "pkglib.menu.openFolder": "Open folder",
+  "pkglib.stream": "Stream (beta)",
+  "pkglib.version.title": "Package version (PARAM.SFO APP_VER)",
+  "profile.username.loading": "Reading console users…",
+  rose_mode: "Rose",
+  roster_edit: "Edit PS5",
+  screenshots_preview: "Preview",
+  screenshots_preview_close: "Close",
+  search_stopped_100k: "stopped at 100k",
+  search_you_stopped: "you stopped the search",
+  settings_section_text_size: "Text size",
+  settings_text_size_default: "default",
+  theme_rose: "Rose",
+  update_toast_details: "Details",
+  update_toast_dismiss: "Dismiss",
+  update_toast_download: "Download",
+  update_toast_downloaded: "Update downloaded",
+  update_toast_downloading: "Downloading…",
+  update_toast_failed: "Update download failed",
+  update_toast_retry: "Retry",
+  update_toast_title: "Update available",
+  upload_helper_down: "PS5 helper isn't reachable",
+  upload_helper_unknown: "PS5 helper status unknown",
+
+  // ── More inline-only keys, incl. ones used in MULTI-LINE tr() calls (which
+  // the single-line extractor missed). Placeholders match the vars object each
+  // call site passes: {n},{name},{path},{query},{id},{kind},{time}. ──────────
+  dashboard_running_apps: "Running apps ({n})",
+  fs_download_zip_dialog_title: 'Save "{name}" as a .zip',
+  fs_install_confirm_body:
+    "This installs the package on your PS5 via Sony's installer.",
+  fs_install_confirm_body_usb:
+    "This stages the package to internal storage (the console can't install off USB directly), installs it, then removes the staged copy. The original on your drive is untouched.",
+  fs_install_confirm_title: 'Install "{name}"?',
+  fs_install_done: "Installed {name}",
+  fs_install_may_not_launch:
+    "The install registered, but the title may not launch — check Installed Apps.",
+  fs_install_pkg_tooltip: "Install this package on your PS5",
+  fs_path_gone: "That folder no longer exists — returned to /data",
+  fs_path_gone_body: "{path} no longer exists on the PS5.",
+  installed_play_needs_smp: "Needs ShadowMount+ running to mount and launch",
+  payloads_search_no_match: 'No payloads match "{query}".',
+  payloads_search_placeholder: "Search payloads…",
+  payloads_source_unreachable:
+    "Couldn't reach this source right now — try Refresh later.",
+  "pkglib.baseMissing.body":
+    "This {kind} is for {id}, but its base game isn't installed on the PS5. Sony's installer will accept it, but nothing installs until the base game is on the console — install the base first.",
+  "pkglib.baseMissing.bodyInLib":
+    "This {kind} is for {id}, whose base game isn't installed on the PS5 yet — but it's here in your library. Install the base game first, then this {kind}. Installing the {kind} now will be accepted but won't actually apply.",
+  "pkglib.baseMissing.installAnyway": "Install anyway",
+  "pkglib.baseMissing.title": "Base game isn't installed",
+  "pkglib.stream.hint":
+    "Install a .pkg straight from this PC over HTTP — no staging upload (beta)",
+  roster_remove_aria: "Remove {name}",
+  schedule_daily_at: "daily at {time}",
+  schedule_once_at: "once at {time}",
+  schedule_weekly_at: "weekly at {time}",
+  screenshots_preview_hint: "Preview this screenshot",
+  screenshots_preview_loading:
+    "Downloading + converting (HDR screenshots take a few seconds)…",
+  search_no_matches_summary: "No matches. Scanned {n} entries.",
+  search_stopped_summary:
+    "Search stopped. Scanned {n} entries before you cancelled.",
+  search_truncated_hint: "Stopped at 100,000 entries — try a narrower pattern.",
+  settings_text_size_hint:
+    "Resize the whole app. Pick a smaller size if text is cut off (“ps5-image…”) on your phone.",
+  theme_rose_hint: "Warm, bright, and soft — built around a bold rose accent.",
+  update_toast_downloaded_hint: "open Settings to install",
+  upload_helper_down_detail:
+    "Uploads will fail until the helper is running. Head back to Connection, press Send, and wait for the third step to turn green.",
+  upload_helper_unknown_detail:
+    "We haven't confirmed your PS5 is running the helper yet. Set your IP and send the helper on the Connection screen first.",
 };
 
 export default en;
