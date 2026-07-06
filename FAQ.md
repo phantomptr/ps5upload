@@ -97,7 +97,7 @@ Game pkgs (UP / EP / JP / HP / CUSA / PPSA / PCSA / etc.) work fine.
   setup, permissions, and uploading from your phone.
 
 **Q: Which PS5 firmware works?**
-ps5upload is built against PS5 Payload SDK v0.38, which resolves
+ps5upload is built against PS5 Payload SDK v0.40, which resolves
 kernel offsets at startup for every firmware it knows about. The
 same binary runs on the full range **1.00 – 12.70**.
 

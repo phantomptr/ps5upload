@@ -515,7 +515,15 @@ static int copy_dir_recursive(const char *src, const char *dst) {
         n = snprintf(dp, sizeof(dp), "%s/%s", dst, e->d_name);
         if (n < 0 || (size_t)n >= sizeof(dp)) { rc = -1; break; }
         struct stat st;
-        if (stat(sp, &st) != 0) { rc = -1; break; }
+        /* lstat, not stat: stat() follows a symlink and resolves it to
+         * the link *target*'s mode, so a symlink to a regular file
+         * (e.g. a hostile dump's sce_sys/leak -> /system_data/priv/mms/
+         * app.db) would match S_ISREG and get its target copied into
+         * user-accessible /user/app/<id>/sce_sys/, and a dangling
+         * symlink would abort the whole sce_sys copy. lstat() lets
+         * symlinks fall through to "skipped" as the comment below
+         * already documents as the intent. */
+        if (lstat(sp, &st) != 0) { rc = -1; break; }
         if (S_ISDIR(st.st_mode)) {
             if (copy_dir_recursive(sp, dp) != 0) { rc = -1; break; }
         } else if (S_ISREG(st.st_mode)) {

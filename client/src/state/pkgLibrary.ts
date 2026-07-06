@@ -1520,6 +1520,14 @@ const makePkgLibraryStore = () =>
           status: "idle",
           lastResult: { ok: false, message: mainErr || "Install was rejected." },
         });
+        // Surface failures in the bell too (success already notifies above).
+        // Without this a failed item — an update or DLC especially — was silent
+        // if the user navigated away from the Library tab mid-install.
+        pushNotification(
+          stalled ? "warning" : "error",
+          `${label} install ${stalled ? "didn’t finish" : "failed"}`,
+          { body: mainErr || "The PS5 didn’t confirm the install. Try again." },
+        );
       }
     } catch (e) {
       patch({ status: "idle", lastResult: { ok: false, message: pkgError(e) } });

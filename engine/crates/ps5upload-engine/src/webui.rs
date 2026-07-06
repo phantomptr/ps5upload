@@ -37,13 +37,7 @@ fn asset_response(path: &str) -> Option<Response> {
         .first_raw()
         .unwrap_or("application/octet-stream");
     let body: Vec<u8> = file.data.into_owned();
-    Some(
-        (
-            [(header::CONTENT_TYPE, mime)],
-            body,
-        )
-            .into_response(),
-    )
+    Some(([(header::CONTENT_TYPE, mime)], body).into_response())
 }
 
 /// Return a response for `path` inside the embedded bundle.  If the path is
@@ -84,4 +78,3 @@ pub async fn spa_fallback(req: Request) -> Response {
     // directly to e.g. `/library`.
     spa_response("index.html")
 }
-

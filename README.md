@@ -186,7 +186,7 @@ make run-client    # launch the Tauri dev app
   (`libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `librsvg2-dev`,
   `libayatana-appindicator3-dev`, `libxdo-dev`, `libssl-dev`,
   `build-essential`), Node.js 22 LTS via NodeSource (only if missing),
-  Rust via rustup, and PS5 Payload SDK v0.38 → `~/ps5-payload-sdk`.
+  Rust via rustup, and PS5 Payload SDK v0.40 → `~/ps5-payload-sdk`.
 - **`make install-macos`** — macOS: Xcode CLT, Homebrew, `node`, `llvm@18`
   (the only Homebrew llvm shipped with `ld.lld` — required by
   `prospero-clang`), Rust via rustup, and PS5 Payload SDK.
@@ -301,7 +301,7 @@ cross-platform, and live-PS5 validation workflow.
 **PS5 payload** — every firmware the PS5 Payload SDK supports,
 currently **1.00 through 12.70** on every console model (original
 CFI-1xxx, Slim CFI-2xxx, Pro CFI-7xxx, Digital). Built against SDK
-v0.38, which ships per-firmware kernel offsets and resolves them at
+v0.40, which ships per-firmware kernel offsets and resolves them at
 payload startup via `kernel_get_fw_version()` — the same binary
 runs on every supported firmware without per-release rebuilds.
 
