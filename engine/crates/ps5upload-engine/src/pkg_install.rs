@@ -1789,8 +1789,10 @@ fn dpi_send(ps5_ip: &str, line: &str) -> std::io::Result<DpiReply> {
         .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "resolve :9040 failed"))?;
     let mut s = std::net::TcpStream::connect_timeout(&sa, std::time::Duration::from_secs(5))?;
     s.set_write_timeout(Some(std::time::Duration::from_secs(10)))?;
-    // InstallByPackage can take a moment to ingest the pkg before replying.
-    s.set_read_timeout(Some(std::time::Duration::from_secs(120)))?;
+    // InstallByPackage blocks until the full download completes — a 3.6 GB
+    // game over LAN at ~100 MB/s takes ~40 s, but slower links, USB serves,
+    // or large multi-part pkgs can take 10+ minutes. Use a generous cap.
+    s.set_read_timeout(Some(std::time::Duration::from_secs(900)))?;
     s.write_all(line.as_bytes())?;
     s.write_all(b"\n")?;
     let mut buf = String::new();

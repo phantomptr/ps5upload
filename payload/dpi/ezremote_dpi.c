@@ -82,12 +82,19 @@
 #include "sceAppInstUtil.h"
 
 /* The SYSTEM_AUTHID Sony's BGFT download manager requires before it will
- * queue an InstallByPackage task. Without this, on FW 9.60+ BGFT rejects
- * the task before downloading a single byte (0x80431068 / 0x80B22404).
- * This is the same constant elf-arsenal's jb.c uses (JB_AUTHID) and the
- * same one our main payload's bgft.c uses for the FW>=11 install path
- * (PS5_SYSTEM_INSTALL_AUTHID). */
+ * initialise (sceAppInstUtilInitialize). This is the same constant
+ * elf-arsenal's jb.c uses (JB_AUTHID) and the same one our main payload's
+ * bgft.c uses for the FW>=11 install path (PS5_SYSTEM_INSTALL_AUTHID). */
 #define DPI_JB_AUTHID 0x4801000000000013ULL
+
+/* ShellCore's authid — required by sceAppInstUtilInstallByPackage on
+ * FW < 11. The ucred auth_id must equal ShellCore's identifier
+ * (0x3800000000000010) for InstallByPackage's URL pre-flight. Without
+ * it, InstallByPackage returns 0x80431068 (BGFT download error) for
+ * http:// URLs and 0x80B21106 for file:// URLs. We self-escalate to
+ * SYSTEM_AUTHID for init (above), then swap to ShellCore just for the
+ * InstallByPackage call. Mirrors bgft.c:authid_acquire_shellcore(). */
+#define DPI_SHELLCORE_AUTHID 0x3800000000000010ULL
 
 /* ── jb_escalate_pid (ported from elf-arsenal's jb.c) ──────────────────
  * Rewrites the target pid's ucred to full root + SYSTEM_AUTHID + all
@@ -402,7 +409,24 @@ int main(void) {
             metainfo.content_id         = "";
             metainfo.content_name       = fixed;
             metainfo.icon_url           = "";
+
+            /* Swap to ShellCore authid for the InstallByPackage call.
+             * init() runs under SYSTEM_AUTHID (set at boot), but
+             * InstallByPackage's URL pre-flight requires ShellCore's
+             * authid (0x3800000000000010) on FW < 11. Without the swap,
+             * InstallByPackage returns 0x80431068 (BGFT download error).
+             * After the call we restore SYSTEM_AUTHID so subsequent
+             * inits/calls stay in the privileged context. This mirrors
+             * bgft.c:authid_acquire_shellcore() exactly. */
+            pid_t me = getpid();
+            uint64_t saved_authid = kernel_get_ucred_authid(me);
+            if (saved_authid != 0) {
+                kernel_set_ucred_authid(me, DPI_SHELLCORE_AUTHID);
+            }
             ret = sceAppInstUtilInstallByPackage(&metainfo, &pkg_info, &playgo_info);
+            if (saved_authid != 0) {
+                kernel_set_ucred_authid(me, saved_authid);
+            }
             if (ret != 0) {
                 fprintf(stderr, "[dpi] InstallByPackage rc=0x%08X\n", (unsigned)ret);
                 notify("ezRemote DPI install failed\nError Code: 0x%08X",
