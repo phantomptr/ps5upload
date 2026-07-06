@@ -98,7 +98,7 @@ struct CatalogueEntry {
     /// `https://api.github.com/repos/...`; any other host becomes
     /// `https://{host}/api/v1/repos/...`. 2.13.0 added this to
     /// unlock the earthonion-hosted PS5 payloads (garlic-worker,
-    /// np-fake-signin, lapyjb) that aren't mirrored on GitHub.
+    /// np-fake-signin) that aren't mirrored on GitHub.
     repo_host: &'static str,
     repo_owner: &'static str,
     repo_name: &'static str,
@@ -385,32 +385,13 @@ const CATALOGUE: &[CatalogueEntry] = &[
         autoload_delay_ms: 200,
         homepage: "https://github.com/ps5-payload-dev/shsrv",
     },
-    CatalogueEntry {
-        // Lapy JB Daemon (voidwhisper) — per-pid jailbreak
-        // daemon that replaces etaHEN's HijackerCommand IPC.
-        // Lets Itemzflow, xplorer, and other apps using the
-        // universalps5 PRX run without etaHEN running. Same
-        // user benefit as etaHEN's app-jb side with a much
-        // smaller payload. Sonic Loader bundles this as
-        // /payloads/lapyjb.elf and starts it at boot; here we
-        // just reference the upstream release. NB: hosted on
-        // git.etawen.dev (Forgejo), not github — uses our
-        // 2.13.0 catalog Forgejo support.
-        id: "lapyjb",
-        display_name: "Lapy JB Daemon (voidwhisper)",
-        role: "Per-PID jailbreak daemon — drops etaHEN dependency",
-        description: "Standalone PID-jailbreak daemon that handles app escalation directly. Apps that previously needed etaHEN's HijackerCommand IPC (Itemzflow, xplorer, anything using universalps5 PRX) just work with lapyjb running. Smaller, simpler than etaHEN — recommended over etaHEN if you only need the app-jb side.",
-        repo_host: "git.etawen.dev",
-        repo_owner: "voidwhisper",
-        repo_name: "lapy-jb-daemon",
-        asset_name_hint: "lapyjb",
-        on_console_marker_path: None,
-        process_name_hint: Some("lapyjb.elf"),
-        ports: &[],
-        autoload_priority: 3,
-        autoload_delay_ms: 500,
-        homepage: "https://git.etawen.dev/voidwhisper/lapy-jb-daemon",
-    },
+    // NOTE: the "lapyjb" (Lapy JB Daemon, voidwhisper) entry was removed in
+    // 3.3.25 — its upstream `git.etawen.dev/voidwhisper/lapy-jb-daemon` 404s
+    // (repo gone), and no live replacement exists (the community fork
+    // `ArkSama/PS5-Lapy-JB-Daemon` ships zero releases). It was the only dead
+    // source in the catalogue — the other git.etawen.dev entries
+    // (np-fake-signin, garlic-worker, garlic-savemgr) resolve fine. Re-add it
+    // if a maintained release home reappears. See GitHub issue #82.
     CatalogueEntry {
         // Offline account activation — registers user slots in
         // the PS5 settings registry without signing into PSN.
