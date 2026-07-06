@@ -298,11 +298,13 @@ export default function InstallPackageScreen() {
   const loading = usePkgLibrary(host, (s) => s.loading);
   const error = usePkgLibrary(host, (s) => s.error);
   const installing = usePkgLibrary(host, (s) => s.installing);
+  const installingAll = usePkgLibrary(host, (s) => s.installingAll);
   const busyNotice = usePkgLibrary(host, (s) => s.busyNotice);
   const installPending = usePkgLibrary(host, (s) => s.installPending);
   const refresh = usePkgLibrary(host, (s) => s.refresh);
   const addAndUpload = usePkgLibrary(host, (s) => s.addAndUpload);
   const install = usePkgLibrary(host, (s) => s.install);
+  const installAll = usePkgLibrary(host, (s) => s.installAll);
   const cancelPendingInstall = usePkgLibrary(
     host,
     (s) => s.cancelPendingInstall,
@@ -530,6 +532,13 @@ export default function InstallPackageScreen() {
     () => entries.filter(isFinishedPkg).length,
     [entries],
   );
+  // Count of not-yet-installed, idle rows — drives the "Install all (N)"
+  // button. Mirrors installAll's own target filter in the store so the count
+  // and the action agree. >1 so the button only appears when it saves taps.
+  const installableCount = useMemo(
+    () => entries.filter((e) => e.status === "idle" && !e.installedHere).length,
+    [entries],
+  );
   const sorted = entries; // store already sorts by title
   // Installing swaps the payload out (it owns the transfer port :9113), so it
   // can't run concurrently with an upload. Rather than block the button, the
@@ -556,13 +565,46 @@ export default function InstallPackageScreen() {
                 single-PS5 users; color-matches the console's tab so it's
                 unambiguous with multiple consoles. */}
             <ConsoleChip addr={host} />
+            {/* Install every staged, not-yet-installed package in one tap,
+                base → update → DLC order. Only shown when it saves taps
+                (>1 installable row — a single row has its own Install button).
+                Disabled while any install runs; the store queues behind an
+                active upload rather than failing. */}
+            {installableCount > 1 && (
+              <Button
+                variant="secondary"
+                size="sm"
+                leftIcon={<Download size={14} />}
+                onClick={() => void installAll(host)}
+                loading={installingAll}
+                disabled={!hostReady || installing || installingAll}
+                title={
+                  !hostReady
+                    ? tr(
+                        "install.add.disabledHint",
+                        "Set a PS5 host on the Connection tab first",
+                      )
+                    : installing
+                      ? tr(
+                          "pkglib.add.installingHint",
+                          "Wait for the current install to finish",
+                        )
+                      : tr(
+                          "pkglib.installAll.hint",
+                          "Install every staged package, base games before updates and DLC",
+                        )
+                }
+              >
+                {tr("pkglib.installAll", undefined, "Install all")} ({installableCount})
+              </Button>
+            )}
             <Button
               variant="primary"
               size="sm"
               leftIcon={<Plus size={14} />}
               onClick={handlePick}
               loading={picking}
-              disabled={!hostReady || installing}
+              disabled={!hostReady || installing || installingAll}
               title={
                 !hostReady
                   ? tr(

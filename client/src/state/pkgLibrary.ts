@@ -210,6 +210,22 @@ export function platformFromTitleId(titleId: string | null | undefined): string 
   return "";
 }
 
+/** Install ordering for a staged library row: base (0) → update (1) → DLC (2).
+ *  Mirrors `uploadQueue.installOrderPriority` but reads a `PkgEntry` (PARAM.SFO
+ *  category `gd`/`gp`/`ac`, falling back to a `/updates/` or `/dlc/` path hint
+ *  for headerless rows). `installAll` sorts by this so an add-on never installs
+ *  before its base — Sony's installer accepts an update/DLC whose base isn't
+ *  present yet but then lands nothing. Exported for unit testing. */
+export function pkgEntryInstallOrder(e: Pick<PkgEntry, "category" | "path">): number {
+  const cat = e.category;
+  if (cat === "gp") return 1;
+  if (cat === "ac") return 2;
+  if (cat === "gd") return 0;
+  if (/\/updates\/[^/]*$/.test(e.path)) return 1;
+  if (/\/dlc\/[^/]*$/.test(e.path)) return 2;
+  return 0;
+}
+
 /**
  * Whether a library row should get the "installed"/"Reinstall" treatment
  * (badge + secondary button) for a given set of installed title ids.
@@ -418,9 +434,20 @@ interface PkgLibraryState {
    *  mid-swap and leave a half-loaded payload. */
   installPending: boolean;
 
+  /** True while `installAll` is driving a sequential batch. Cosmetic — it
+   *  disables the Install-all button and shows batch progress; it does NOT
+   *  gate the inner per-pkg `install()`, which self-serializes on `installing`. */
+  installingAll: boolean;
+
   refresh: (host: string) => Promise<void>;
   addAndUpload: (localPath: string, host: string) => Promise<void>;
   install: (path: string, host: string) => Promise<void>;
+  /** Install every staged, not-yet-installed, idle row sequentially, in
+   *  base → update → DLC order (`pkgEntryInstallOrder`). Each item runs the
+   *  full readiness-gated `install()` cascade; one failure doesn't abort the
+   *  rest. Ends with a single summary bell. No-op if a single install is
+   *  already running. */
+  installAll: (host: string) => Promise<void>;
   /** Abandon an install that's still waiting its turn behind an upload. */
   cancelPendingInstall: () => void;
   remove: (path: string, host: string) => Promise<void>;
@@ -1002,6 +1029,7 @@ const makePkgLibraryStore = () =>
   installing: false,
   busyNotice: null,
   installPending: false,
+  installingAll: false,
 
   async refresh(host) {
     if (!host?.trim() || get().installing) return;
@@ -1534,6 +1562,73 @@ const makePkgLibraryStore = () =>
     } finally {
       set({ installing: false, busyNotice: null, installPending: false });
     }
+  },
+
+  async installAll(host) {
+    if (!host?.trim()) return;
+    // Don't start a batch on top of a single in-flight install (or another
+    // batch) — the inner install() would early-return and we'd silently skip
+    // rows. The button is disabled in this state too; this is the guard.
+    if (get().installing || get().installingAll) return;
+
+    // Snapshot the not-yet-installed, idle rows and order them base → update →
+    // DLC so an add-on never installs before its base. `installedHere` is the
+    // authoritative per-package signal (see pkgRowInstalled); a row mid-upload
+    // or queued is skipped — installAll only drives ready staged packages.
+    const targets = get()
+      .entries.filter((e) => e.status === "idle" && !e.installedHere)
+      .slice()
+      .sort((a, b) => {
+        const d = pkgEntryInstallOrder(a) - pkgEntryInstallOrder(b);
+        // Stable within a tier: preserve listing order (base games in the
+        // order they were staged), matching uploadQueue's install ordering.
+        return d;
+      });
+
+    if (targets.length === 0) {
+      pushNotification("info", "Nothing to install", {
+        body: "Every staged package is already installed on this console.",
+      });
+      return;
+    }
+
+    set({ installingAll: true });
+    let ok = 0;
+    let failed = 0;
+    try {
+      for (const target of targets) {
+        // Re-read the row: an earlier item in the batch (or an outside action)
+        // may have changed its state. Skip if it's no longer an idle, not-yet-
+        // installed row.
+        const cur = get().entries.find((e) => e.path === target.path);
+        if (!cur || cur.status !== "idle" || cur.installedHere) continue;
+        // install() self-serializes on `installing` and awaits the full
+        // readiness-gated cascade; it sets the row's lastResult. It never
+        // throws (it catches internally), so a single failure can't abort the
+        // batch — we just count the outcome and move on.
+        await get().install(target.path, host);
+        const after = get().entries.find((e) => e.path === target.path);
+        if (after?.lastResult?.ok) ok++;
+        else failed++;
+      }
+    } finally {
+      set({ installingAll: false });
+    }
+
+    // One summary bell for the whole batch (each item's own success/failure
+    // bell still fires inside install(), matching the single-install UX).
+    pushNotification(
+      failed === 0 ? "success" : "warning",
+      failed === 0
+        ? `Installed ${ok} package${ok === 1 ? "" : "s"}`
+        : `Installed ${ok} of ${ok + failed}; ${failed} failed`,
+      {
+        body:
+          failed === 0
+            ? "All staged packages installed."
+            : "Some packages didn't install — check the rows marked failed and retry them.",
+      },
+    );
   },
 
   async installExternal(pkg, host) {
