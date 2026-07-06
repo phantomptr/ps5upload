@@ -1,8 +1,16 @@
 name: docker-engine
 
-# Builds and publishes the ps5upload-engine Docker image to GHCR.
-# Tag pushes (v*) publish a multi-arch (amd64 + arm64) manifest.
-# PRs that touch engine/ get a build-only smoke-check (no push).
+# Builds and publishes two GHCR images from the engine crate:
+#   - ps5upload-engine        (engine/Dockerfile)       — minimal, no UI
+#   - ps5upload-engine-webui  (engine/Dockerfile.webui) — engine + the full
+#     React app served over HTTP, for browser/NAS/headless use (no Tauri
+#     client needed). Its build context is the REPO ROOT, not engine/, since
+#     it needs to `npm ci && npm run build:vite` in client/ before the Rust
+#     build embeds the output.
+#
+# Tag pushes (v*) publish multi-arch (amd64 + arm64) manifests for both
+# images, in lockstep — one release cuts both. PRs that touch engine/ or
+# client/ get a build-only smoke-check of both Dockerfiles (no push).
 #
 # Manual re-run (e.g. after an Actions outage wedges a tag-push run):
 #   gh workflow run docker-engine.yml -f tag=v3.3.16
@@ -10,7 +18,7 @@ on:
   push:
     tags: ['v*']
   pull_request:
-    paths: ['engine/**', '.github/workflows/docker-engine.yml']
+    paths: ['engine/**', 'client/**', '.github/workflows/docker-engine.yml']
   workflow_dispatch:
     inputs:
       tag:
@@ -18,8 +26,9 @@ on:
         required: true
 
 # Least privilege at the top: read-only by default. Only the jobs that actually
-# push to GHCR (build, merge) opt into packages:write below — the PR `verify`
-# job inherits read-only and never gets a write-capable token.
+# push to GHCR (build*, merge*) opt into packages:write below — the PR
+# `verify`/`verify-webui` jobs inherit read-only and never get a write-capable
+# token.
 permissions:
   contents: read
 
@@ -46,10 +55,28 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  # ── PR gate for the webui image: same idea, root context + Dockerfile.webui ─
+  verify-webui:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: engine/Dockerfile.webui
+          platforms: linux/amd64
+          push: false
+          cache-from: type=gha,scope=webui
+          cache-to: type=gha,mode=max,scope=webui
+
   # ── Resolve + validate the tag ONCE, hand the trusted values to build/merge ─
   # Centralizing this means the tag is regex-validated before it ever reaches a
   # checkout `ref:` (no ref injection from a hand-typed workflow_dispatch input),
-  # and the lowercased image name is computed once via the safe env pattern
+  # and the lowercased image names are computed once via the safe env pattern
   # instead of interpolating ${{ github.repository_owner }} into shell.
   resolve:
     if: github.event_name != 'pull_request'
@@ -59,8 +86,9 @@ jobs:
       version: ${{ steps.t.outputs.version }}
       major_minor: ${{ steps.t.outputs.major_minor }}
       image: ${{ steps.t.outputs.image }}
+      image_webui: ${{ steps.t.outputs.image_webui }}
     steps:
-      - name: Validate tag + derive image name
+      - name: Validate tag + derive image names
         id: t
         env:
           INPUT_TAG: ${{ github.event.inputs.tag || github.ref_name }}
@@ -78,6 +106,7 @@ jobs:
             echo "version=$version"
             echo "major_minor=${version%.*}"
             echo "image=ghcr.io/${owner_lc}/ps5upload-engine"
+            echo "image_webui=ghcr.io/${owner_lc}/ps5upload-engine-webui"
           } >> "$GITHUB_OUTPUT"
 
   # ── Per-arch native build, push by digest (no tag yet) ─────────────────────
@@ -145,6 +174,79 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  # ── Per-arch native build of the webui image, push by digest ───────────────
+  # Mirrors `build` above; only the context/file/image/artifact-name/cache-
+  # scope differ. Kept as a separate job (not a matrix dimension on `build`)
+  # so a webui-only failure doesn't need `fail-fast: false` gymnastics to
+  # keep the plain engine image publishing on time.
+  build-webui:
+    needs: resolve
+    if: github.event_name != 'pull_request'
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04,     platform: linux/amd64 }
+          - { os: ubuntu-24.04-arm, platform: linux/arm64 }
+    env:
+      IMAGE: ${{ needs.resolve.outputs.image_webui }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+
+      - name: Prepare environment
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: echo "PLATFORM_PAIR=$(printf '%s' "$PLATFORM" | tr '/' '-')" >> "$GITHUB_ENV"
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/metadata-action@v6
+        id: meta
+        with:
+          images: ${{ env.IMAGE }}
+
+      - name: Build and push by digest
+        id: push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: engine/Dockerfile.webui
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=webui-${{ env.PLATFORM_PAIR }}
+          cache-to: type=gha,mode=max,scope=webui-${{ env.PLATFORM_PAIR }}
+
+      - name: Export digest
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${DIGEST#sha256:}"
+
+      # Distinct "webui-digests-" prefix (not just a "webui-" infix) so the
+      # plain engine `merge` job's `pattern: digests-*` can't glob-match
+      # these artifacts and fold a webui digest into the minimal image's
+      # manifest.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: webui-digests-${{ env.PLATFORM_PAIR }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
   # ── Merge per-arch digests into a multi-arch manifest ──────────────────────
   merge:
     needs: [resolve, build]
@@ -189,6 +291,55 @@ jobs:
           # Word-splitting here is intentional: the jq output expands to
           # `-t tagA -t tagB ...` and the printf to space-separated
           # `image@sha256:<digest>` operands, each a distinct argv entry.
+          # shellcheck disable=SC2046
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$META_JSON") \
+            $(printf "${IMAGE}@sha256:%s " *)
+
+      - name: Inspect manifest
+        run: docker buildx imagetools inspect "${IMAGE}:${VERSION}"
+
+  # ── Merge the webui image's per-arch digests ────────────────────────────────
+  merge-webui:
+    needs: [resolve, build-webui]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ${{ needs.resolve.outputs.image_webui }}
+      VERSION: ${{ needs.resolve.outputs.version }}
+      MAJOR_MINOR: ${{ needs.resolve.outputs.major_minor }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: /tmp/digests
+          pattern: webui-digests-*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/metadata-action@v6
+        id: meta
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=${{ env.VERSION }}
+            type=raw,value=${{ env.MAJOR_MINOR }}
+            type=raw,value=latest
+
+      - name: Create and push multi-arch manifest
+        working-directory: /tmp/digests
+        env:
+          META_JSON: ${{ steps.meta.outputs.json }}
+        run: |
           # shellcheck disable=SC2046
           docker buildx imagetools create \
             $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$META_JSON") \
