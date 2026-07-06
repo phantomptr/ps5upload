@@ -41,6 +41,7 @@ import {
 import {
   titleIdFromContentId,
   platformFromTitleId,
+  pkgEntryInstallOrder,
   pkgLibraryStore,
   evictPkgLibraryStore,
   isFinishedPkg,
@@ -68,6 +69,45 @@ describe("platformFromTitleId", () => {
     expect(platformFromTitleId(null)).toBe("");
     expect(platformFromTitleId(undefined)).toBe("");
     expect(platformFromTitleId("")).toBe("");
+  });
+});
+
+describe("pkgEntryInstallOrder", () => {
+  it("orders by PARAM.SFO category: base(0) < update(1) < DLC(2)", () => {
+    expect(pkgEntryInstallOrder({ category: "gd", path: "/x.pkg" })).toBe(0);
+    expect(pkgEntryInstallOrder({ category: "gp", path: "/x.pkg" })).toBe(1);
+    expect(pkgEntryInstallOrder({ category: "ac", path: "/x.pkg" })).toBe(2);
+  });
+  it("falls back to a path hint when category is absent (headerless rows)", () => {
+    expect(
+      pkgEntryInstallOrder({ category: undefined, path: "/data/updates/p.pkg" }),
+    ).toBe(1);
+    expect(
+      pkgEntryInstallOrder({ category: undefined, path: "/data/dlc/p.pkg" }),
+    ).toBe(2);
+  });
+  it("defaults an unknown/base-shaped row to 0", () => {
+    expect(pkgEntryInstallOrder({ category: undefined, path: "/data/game.pkg" })).toBe(0);
+    expect(pkgEntryInstallOrder({ category: "xx", path: "/data/game.pkg" })).toBe(0);
+  });
+  it("prefers the category over a misleading path hint", () => {
+    // A base game that happens to live under an /updates/ dir must still be 0.
+    expect(
+      pkgEntryInstallOrder({ category: "gd", path: "/data/updates/base.pkg" }),
+    ).toBe(0);
+  });
+  it("sorts a mixed batch base → update → DLC (stable within a tier)", () => {
+    const rows = [
+      { category: "ac", path: "/dlc1.pkg" },
+      { category: "gp", path: "/upd.pkg" },
+      { category: "gd", path: "/base2.pkg" },
+      { category: "gd", path: "/base1.pkg" },
+    ];
+    const sorted = rows
+      .slice()
+      .sort((a, b) => pkgEntryInstallOrder(a) - pkgEntryInstallOrder(b))
+      .map((r) => r.path);
+    expect(sorted).toEqual(["/base2.pkg", "/base1.pkg", "/upd.pkg", "/dlc1.pkg"]);
   });
 });
 
