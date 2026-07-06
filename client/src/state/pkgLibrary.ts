@@ -767,10 +767,23 @@ async function runDpiInstall(
   onStatus?: (msg: string) => void,
 ): Promise<{ ok: boolean; errMessage: string; daemonFailed: boolean; rc: number }> {
   const ip = hostOf(host);
+  // dpi_ensure sends the DPI ELF to the loader port (:9021), which REPLACES the
+  // running main payload with the clean DPI process. Log around it: this is the
+  // exact moment the main helper is torn down, and issue #152's "helper dies
+  // ~4s after a rejected update" reports land right here — the next bundle will
+  // show whether dpi_ensure succeeded, timed out, or never returned.
+  log.info("install", `DPI ensure: bringing up daemon on ${ip}:9040 (loads via :9021)`);
   const ens = (await invoke("dpi_ensure", { ip })) as {
     ok?: boolean;
     error?: string;
+    listening?: boolean;
+    sent?: boolean;
   };
+  log.info(
+    "install",
+    `DPI ensure result: ok=${ens.ok} listening=${ens.listening ?? "?"} sent=${ens.sent ?? "?"}` +
+      (ens.error ? ` error="${ens.error}"` : ""),
+  );
   if (!ens.ok) {
     return {
       ok: false,
@@ -984,7 +997,24 @@ export async function runPkgInstall(
     // it's safe for patches. HW-proven on the Phat — a Jak X v01.04 patch landed
     // in /user/patch/CUSA07842/patch.pkg with the 3.8 GB base in
     // /user/app/CUSA07842/app.pkg fully intact.
+    // Instrument the whole DPI cascade at info level. Before this, the fallback
+    // ran entirely through busyNotice/onStatus (UI-only, never logged), so a
+    // bug bundle at the default `info` level showed the in-process rejection and
+    // then the payload dying with NO trace of whether DPI was even attempted —
+    // which made the "updates crash the helper" reports (issue #152) impossible
+    // to pin down from logs alone. Now the bundle shows the exact cascade.
+    log.info(
+      "install",
+      `in-process install rejected (${mainErr}) for type=${resolvedType || "?"} — ` +
+        `handing off to DPI daemon (:9040)`,
+    );
     const dpi = await runDpiInstall(host, localPs5Path, onStatus);
+    log.info(
+      "install",
+      `DPI fallback result: ok=${dpi.ok} daemonFailed=${dpi.daemonFailed} ` +
+        `rc=0x${(dpi.rc >>> 0).toString(16).padStart(8, "0")}` +
+        (dpi.errMessage ? ` err="${dpi.errMessage}"` : ""),
+    );
     if (dpi.daemonFailed) {
       // DPI couldn't even come up. For a patch, give update-specific guidance
       // (base is safe; try the PS5's Package Installer) rather than a raw
