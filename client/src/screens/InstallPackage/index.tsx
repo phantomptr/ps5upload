@@ -53,6 +53,7 @@ import {
   type PkgConsoleMetadata,
 } from "../../api/ps5";
 import { transferAddr, hostOf } from "../../lib/addr";
+import { firmwareMajor } from "../../lib/ps5Firmware";
 import { formatBytes } from "../../lib/format";
 
 /* ─── Cover art ────────────────────────────────────────────────────────
@@ -292,6 +293,9 @@ const installedIdsCache = new Map<string, Set<string>>();
 export default function InstallPackageScreen() {
   const tr = useTr();
   const host = useConnectionStore((s) => s.host);
+  // This console's runtime (kernel string → firmware major for the Stream
+  // FW-11 guard). Scoped to the active host like every other selector.
+  const runtime = useConnectionStore((s) => s.runtimeByHost[hostOf(host)]);
   // Per-console store: every selector is scoped to THIS console's host, so the
   // Install Package view is fully isolated per PS5 (parallel installs).
   const entries = usePkgLibrary(host, (s) => s.entries);
@@ -466,6 +470,32 @@ export default function InstallPackageScreen() {
         ),
       );
       return;
+    }
+    // FW-11 authority cliff: the Stream (beta) path installs via the standalone
+    // DPI daemon, which can't acquire the SYSTEM install authid that FW 11+
+    // requires for the content-copy — so a stream install there registers a
+    // hollow tile with no content. Steer the user to the normal
+    // upload-then-install (whose in-process installer DOES escalate) before we
+    // waste a transfer on an install that won't land. Only a hard block when we
+    // KNOW it's FW 11+; unknown/<11 proceeds.
+    const fwMajor = firmwareMajor(runtime?.ps5Kernel);
+    if (fwMajor !== null && fwMajor >= 11) {
+      const proceed = await confirm({
+        title: tr(
+          "pkglib.stream.fw11.title",
+          undefined,
+          "Stream install isn't reliable on this firmware",
+        ),
+        message: tr(
+          "pkglib.stream.fw11.body",
+          { fw: String(fwMajor) },
+          `Your PS5 is on firmware ${fwMajor}.x. Stream (beta) installs through a path that can't get the credentials firmware 11 and up require, so it may register the game but install no data (a "hollow" tile that won't launch). Use the normal Upload → Install instead — it handles firmware ${fwMajor} correctly. Continue with Stream anyway?`,
+        ),
+        confirmLabel: tr("pkglib.stream.fw11.confirm", undefined, "Stream anyway"),
+        cancelLabel: tr("cancel", undefined, "Cancel"),
+        destructive: true,
+      });
+      if (!proceed) return;
     }
     setStreaming(true);
     try {

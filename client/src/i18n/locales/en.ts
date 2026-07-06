@@ -2185,6 +2185,10 @@ shortcuts_activate: "Open / activate",
   "pkglib.baseMissing.title": "Base game isn't installed",
   "pkglib.stream.hint":
     "Install a .pkg straight from this PC over HTTP — no staging upload (beta)",
+  "pkglib.stream.fw11.title": "Stream install isn't reliable on this firmware",
+  "pkglib.stream.fw11.body":
+    'Your PS5 is on firmware {fw}.x. Stream (beta) installs through a path that can\'t get the credentials firmware 11 and up require, so it may register the game but install no data (a "hollow" tile that won\'t launch). Use the normal Upload → Install instead — it handles firmware {fw} correctly. Continue with Stream anyway?',
+  "pkglib.stream.fw11.confirm": "Stream anyway",
   roster_remove_aria: "Remove {name}",
   schedule_daily_at: "daily at {time}",
   schedule_once_at: "once at {time}",

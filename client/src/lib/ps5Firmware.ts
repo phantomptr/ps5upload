@@ -35,3 +35,19 @@ export function parsePS5Firmware(kernel: string | null | undefined): string | nu
   }
   return null;
 }
+
+/**
+ * The firmware MAJOR number (9, 10, 11, 12, …) from the kernel string, or
+ * null when it can't be parsed. Used for the FW-11 "authority cliff": at and
+ * above FW 11, Sony gates the package content-copy behind the SYSTEM install
+ * authid, which the standalone DPI daemon (Stream beta) can't acquire — so a
+ * stream install there registers a hollow tile with no content. The reliable
+ * path on FW 11+ is the normal upload-then-install (its in-process installer
+ * DOES escalate). Callers use `firmwareMajor(kernel) >= 11` to steer users.
+ */
+export function firmwareMajor(kernel: string | null | undefined): number | null {
+  const fw = parsePS5Firmware(kernel);
+  if (!fw) return null;
+  const major = Number(fw.split(".")[0]);
+  return Number.isFinite(major) ? major : null;
+}

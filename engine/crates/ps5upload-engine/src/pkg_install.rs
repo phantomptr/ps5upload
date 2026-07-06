@@ -1307,31 +1307,51 @@ async fn install_status_handler(
             cached_stalled,
         ));
     }
-    let task_id = match task_id {
-        Some(t) => t,
-        None => return json_err(StatusCode::CONFLICT, "session has no BGFT task_id yet"),
-    };
     // Off the reactor: this handler is polled ~1/s per active install, and the
     // blocking STATUS frame exchange against a slow/wedged console would
     // otherwise park a worker thread per poll — with several installs that
     // starves the whole engine. (See install_start_handler.)
-    let mut status: PkgInstallStatus = {
-        let addr = ps5_addr.clone();
-        match tokio::task::spawn_blocking(move || pkg_install_status(&addr, task_id)).await {
-            Ok(Ok(s)) => s,
-            Ok(Err(e)) => {
-                return json_err(
-                    StatusCode::BAD_GATEWAY,
-                    &format!("payload PKG_INSTALL_STATUS failed: {e}"),
-                )
-            }
-            Err(e) => {
-                return json_err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    &format!("status task panicked/cancelled: {e}"),
-                )
+    //
+    // A serve-only (Stream beta) session has NO BGFT task_id — the in-process
+    // installer never ran; the DPI daemon did, in its own process. We can't
+    // query BGFT phase, but completion is verifiable the SAME way the normal
+    // path verifies a Done: the on-disk launch-check (`verify_launchable`) plus
+    // byte observation, both filesystem-based and task_id-free. Synthesize a
+    // Done phase so the progress-driven tracker below runs (Registered ⇒
+    // complete, Absent ⇒ still installing, flatline ⇒ stall). This replaces the
+    // old CONFLICT that made the client's stream-install verify a silent no-op
+    // (and thus couldn't catch a FW-11+ hollow tile).
+    let mut status: PkgInstallStatus = match task_id {
+        Some(task_id) => {
+            let addr = ps5_addr.clone();
+            match tokio::task::spawn_blocking(move || pkg_install_status(&addr, task_id)).await {
+                Ok(Ok(s)) => s,
+                Ok(Err(e)) => {
+                    return json_err(
+                        StatusCode::BAD_GATEWAY,
+                        &format!("payload PKG_INSTALL_STATUS failed: {e}"),
+                    )
+                }
+                Err(e) => {
+                    return json_err(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        &format!("status task panicked/cancelled: {e}"),
+                    )
+                }
             }
         }
+        None => PkgInstallStatus {
+            phase: InstallPhase::Done,
+            downloaded: 0,
+            total,
+            err_code: 0,
+            detail: String::new(),
+            register_path: String::new(),
+            intdebug_avail: false,
+            kernel_rw: false,
+            shellui_err: None,
+            appinst_err: None,
+        },
     };
 
     // (`total` from the session is the fallback for build_status_response,
@@ -1546,7 +1566,9 @@ async fn install_status_handler(
         status,
         total,
         cancelled,
-        task_id,
+        // Serve-only sessions have no BGFT task_id; 0 makes via_tier() report
+        // "direct-bgft", the honest "no synthetic tier flags" fallback.
+        task_id.unwrap_or(0),
         launchable,
         installed_bytes,
         stalled,
