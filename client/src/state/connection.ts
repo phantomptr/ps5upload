@@ -87,6 +87,13 @@ export interface HostRuntime {
   ps5Kernel: string | null;
   ucredElevated: boolean | null;
   maxTransferStreams: number | null;
+  /** Whether the FTX2 transfer listener (:9113) accepts TCP. Probed
+   *  alongside the mgmt STATUS frame so the UI can flag the wedge
+   *  state where mgmt (:9114) is up but the transfer port is dead —
+   *  uploads will fail with "connection refused" until the payload is
+   *  redeployed, but the status pill would otherwise show green.
+   *  null = host not yet probed or transfer-port check not run. */
+  transferAlive: boolean | null;
 }
 
 export const EMPTY_HOST_RUNTIME: HostRuntime = {
@@ -95,6 +102,7 @@ export const EMPTY_HOST_RUNTIME: HostRuntime = {
   ps5Kernel: null,
   ucredElevated: null,
   maxTransferStreams: null,
+  transferAlive: null,
 };
 
 export interface ConnectionState {
@@ -136,6 +144,11 @@ export interface ConnectionState {
    *  yet); the Upload path treats null as 1. The effective stream count is
    *  min(this, the user's upload-streams setting). */
   maxTransferStreams: number | null;
+  /** Mirror of the active console's transfer-port (:9113) liveness.
+   *  True = TCP connect to :9113 succeeded; false = refused/timeout;
+   *  null = host not yet probed. See HostRuntime.transferAlive for
+   *  why this is tracked separately from the mgmt-port STATUS. */
+  transferAlive: boolean | null;
   /** True when a fresh payload-info probe is in flight and the
    *  currently-displayed payloadVersion / ps5Kernel may be stale.
    *  Set by Connection's handleSend on entry (the user just kicked
@@ -167,6 +180,7 @@ export interface ConnectionState {
         | "ucredElevated"
         | "maxTransferStreams"
         | "payloadProbing"
+        | "transferAlive"
       >
     >
   ) => void;
@@ -187,6 +201,7 @@ function mirrorRuntime(host: string, rt: HostRuntime) {
     ps5Kernel: rt.ps5Kernel,
     ucredElevated: rt.ucredElevated,
     maxTransferStreams: rt.maxTransferStreams,
+    transferAlive: rt.transferAlive,
   };
 }
 
@@ -201,6 +216,7 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   ps5Kernel: null,
   ucredElevated: null,
   maxTransferStreams: null,
+  transferAlive: null,
   payloadProbing: false,
   step1: "idle",
   step1Msg: "Enter your PS5's address and check",

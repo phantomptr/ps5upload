@@ -32,6 +32,7 @@ export type AuditKind =
   | "peripheral_eject"
   | "peripheral_bd_off"
   | "pkg_install_start"
+  | "pkg_dpi_direct_install"
   | "lwfs_mount"
   | "pkg_direct_mount";
 

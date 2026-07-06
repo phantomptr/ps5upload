@@ -68,6 +68,7 @@ describe("effectiveUploadStreams", () => {
           ps5Kernel: null,
           ucredElevated: true,
           maxTransferStreams: 1,
+          transferAlive: null,
         },
         "192.168.86.100": {
           payloadStatus: "up",
@@ -75,6 +76,7 @@ describe("effectiveUploadStreams", () => {
           ps5Kernel: null,
           ucredElevated: true,
           maxTransferStreams: 4,
+          transferAlive: null,
         },
       },
     });

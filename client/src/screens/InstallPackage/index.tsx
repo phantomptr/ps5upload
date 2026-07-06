@@ -305,6 +305,7 @@ export default function InstallPackageScreen() {
   const addAndUpload = usePkgLibrary(host, (s) => s.addAndUpload);
   const install = usePkgLibrary(host, (s) => s.install);
   const installAll = usePkgLibrary(host, (s) => s.installAll);
+  const installStream = usePkgLibrary(host, (s) => s.installStream);
   const cancelPendingInstall = usePkgLibrary(
     host,
     (s) => s.cancelPendingInstall,
@@ -327,6 +328,7 @@ export default function InstallPackageScreen() {
   );
   const [pickError, setPickError] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
+  const [streaming, setStreaming] = useState(false);
   const [dropActive, setDropActive] = useState(false);
 
   const hostReady = !!host?.trim();
@@ -445,6 +447,45 @@ export default function InstallPackageScreen() {
       setPickError(`${e}`);
     } finally {
       setPicking(false);
+    }
+  }
+
+  // Stream-install (beta, #81): pick a single PC-side .pkg and install it
+  // WITHOUT staging it on the PS5 first — the engine serves the file over
+  // HTTP and the DPI daemon pulls it directly. Useful for a quick one-shot
+  // install when you don't want to wait out the staging upload (or don't
+  // have the disk space for it). Shares the `installing` lock with the
+  // regular install flow.
+  async function handleStreamPick() {
+    setPickError(null);
+    if (!host?.trim()) {
+      setPickError(
+        tr(
+          "install.error.noHost",
+          "Set a PS5 host on the Connection tab first.",
+        ),
+      );
+      return;
+    }
+    setStreaming(true);
+    try {
+      const sel = isAndroid()
+        ? await pickPath({
+            mode: "file",
+            filters: [{ name: "PS5 Package", extensions: ["pkg"] }],
+          })
+        : await openDialog({
+            multiple: false,
+            filters: [{ name: "PS5 Package", extensions: ["pkg"] }],
+          });
+      const p = Array.isArray(sel) ? sel[0] : sel;
+      if (!p) return;
+      const r = await installStream(p as string, host);
+      if (!r.ok && r.message) setPickError(r.message);
+    } catch (e) {
+      setPickError(`${e}`);
+    } finally {
+      setStreaming(false);
     }
   }
 
@@ -620,6 +661,33 @@ export default function InstallPackageScreen() {
               }
             >
               {tr("install.add", "Add .pkg")}
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              leftIcon={
+                streaming ? (
+                  <Loader2 size={14} className="animate-spin" />
+                ) : (
+                  <Download size={14} />
+                )
+              }
+              onClick={handleStreamPick}
+              loading={streaming}
+              disabled={!hostReady || installing || installingAll}
+              title={
+                !hostReady
+                  ? tr(
+                      "install.add.disabledHint",
+                      "Set a PS5 host on the Connection tab first",
+                    )
+                  : tr(
+                      "pkglib.stream.hint",
+                      "Install a .pkg straight from this PC over HTTP — no staging upload (beta)",
+                    )
+              }
+            >
+              {tr("pkglib.stream", undefined, "Stream (beta)")}
             </Button>
           </div>
         }

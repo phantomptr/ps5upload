@@ -19,8 +19,10 @@ CFLAGS := -Wall -Wextra -Werror -g
 # to load the ELF (no run, no :9040 bind — the "silent reject" symptom).
 # Linking the same set the main payload uses (which loads cleanly on every
 # supported FW) guarantees the dependency graph resolves.
+# -lpthread is needed for the timed_init thread (boot-timing fix for the
+# FW-10.40 helper-death symptom, issue #152).
 LIBS := -lSceSystemService -lSceUserService -lSceAppInstUtil \
-        -lSceNotification -lkernel_sys
+        -lSceNotification -lkernel_sys -lpthread
 
 SRCS := ezremote_dpi.c
 HEADERS := sceAppInstUtil.h

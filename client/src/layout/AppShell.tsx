@@ -11,12 +11,13 @@ import {
   useConnectionStore,
   EMPTY_HOST_RUNTIME,
   PS5_LOADER_PORT,
+  PS5_PAYLOAD_PORT,
 } from "../state/connection";
 import { usePayloadPlaylistsStore } from "../state/payloadPlaylists";
 import { log } from "../state/logs";
 import { useUpdateStore } from "../state/update";
 import { engineApi } from "../api/engine";
-import { payloadCheck } from "../api/ps5";
+import { payloadCheck, portCheck } from "../api/ps5";
 import { installActivityWiring } from "../state/activityWiring";
 import {
   ensureRosterMigrated,
@@ -100,6 +101,12 @@ function useStatusPolling() {
   // scan, momentary network jitter) shouldn't flash "Helper isn't running"
   // when the helper is actually alive. Require N misses in a row first.
   const missCountRef = useRef<Record<string, number>>({});
+  // Last transfer-port (:9113) liveness result per host. Used to log the
+  // up→down TRANSITION only (not every poll) when the transfer listener
+  // dies while mgmt stays up — the "uploads fail but the dot is green"
+  // wedge state. See HostRuntime.transferAlive for why this is tracked
+  // separately from the mgmt-port STATUS probe.
+  const transferAliveRef = useRef<Record<string, boolean>>({});
   // Auto-loader: last wall-clock ms we auto-ran the playlist for a host, used
   // to suppress re-triggering. The playlist itself sends ELFs to the loader,
   // which momentarily drops the helper (down→up flap) — without a cooldown
@@ -167,6 +174,7 @@ function useStatusPolling() {
     for (const ref of [
       autoLoaderFiredAtRef,
       missCountRef,
+      transferAliveRef,
       warnedMismatchRef,
       warnedNoUcredRef,
     ]) {
@@ -257,6 +265,43 @@ function useStatusPolling() {
         });
         // Clear the active console's "rechecking…" flag once its probe lands.
         if (isActive(key)) setStatus({ payloadProbing: false });
+        // Transfer-port (:9113) liveness — only worth probing when the
+        // mgmt probe says the helper is up. A refused/timeout here while
+        // mgmt answers is the "uploads fail but the dot is green" wedge:
+        // the transfer listener died (or never came up) while the mgmt
+        // thread is still serving STATUS. Log the up→down TRANSITION so
+        // the bug bundle has a smoking gun before the user files an
+        // "upload refused" issue. Skipped entirely when mgmt is down —
+        // no point probing :9113 when :9114 is already dark.
+        if (s.reachable && newStatus === "up") {
+          try {
+            const alive = await portCheck(probedHost, PS5_PAYLOAD_PORT);
+            if (cancelled) return;
+            const was = transferAliveRef.current[key];
+            transferAliveRef.current[key] = alive;
+            setHostStatus(probedHost, { transferAlive: alive });
+            if (!alive && was !== false) {
+              log.warn(
+                "connection",
+                `transfer port :${PS5_PAYLOAD_PORT} DOWN on ${probedHost} (mgmt still up) — uploads will fail until the payload is redeployed`,
+              );
+            } else if (alive && was === false) {
+              log.info(
+                "connection",
+                `transfer port :${PS5_PAYLOAD_PORT} recovered on ${probedHost}`,
+              );
+            }
+          } catch {
+            // portCheck best-effort — leave transferAlive unchanged.
+          }
+        } else if (!s.reachable) {
+          // mgmt down ⇒ transfer port state unknown; clear so the next
+          // reachable poll reports a fresh transition.
+          if (transferAliveRef.current[key] !== undefined) {
+            delete transferAliveRef.current[key];
+          }
+          setHostStatus(probedHost, { transferAlive: null });
+        }
         if (s.reachable) {
           // Update the matching roster row's cached firmware/payload.
           const roster = useRosterStore.getState();
@@ -314,6 +359,12 @@ function useStatusPolling() {
         }
         setHostStatus(probedHost, { payloadStatus: newStatus });
         if (isActive(key)) setStatus({ payloadProbing: false });
+        // mgmt probe threw — transfer port state is unknown. Clear so a
+        // subsequent successful poll re-establishes the baseline.
+        if (transferAliveRef.current[key] !== undefined) {
+          delete transferAliveRef.current[key];
+        }
+        setHostStatus(probedHost, { transferAlive: null });
       }
     };
     const tick = () => {

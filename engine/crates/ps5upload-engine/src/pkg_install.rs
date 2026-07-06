@@ -139,6 +139,15 @@ pub fn router(state: PkgInstallStateHandle) -> Router {
         // process — installs without the PlayGo gate. Caller stages the
         // pkg first and passes the bare PS5 path. See payload/dpi/.
         .route("/api/pkg/dpi-install", post(dpi_install_handler))
+        // Direct/streaming install (beta, #81): skip the staging upload
+        // entirely — the engine serves the pkg at /pkg-host/ and the DPI
+        // daemon pulls it straight over HTTP. Useful when PS5 disk space
+        // is tight or for a quick one-shot install from a machine that
+        // already has the pkg mounted.
+        .route(
+            "/api/pkg/dpi-direct-install",
+            post(dpi_direct_install_handler),
+        )
         // Filename component is informational only — the session UUID
         // is the actual lookup key. We allow ANY {filename} so the URL
         // can carry the pkg's canonical `<ContentID>.pkg` name that
@@ -295,6 +304,98 @@ fn staging_path_for(local_ps5_path: &Option<String>, delete_staging: bool) -> Op
     }
 }
 
+/// Maximum number of attempts when retrying a staging cleanup that the
+/// payload rejected with `fs_delete_failed`. Sony's in-process installer
+/// briefly holds the staged `.pkg` file open (EBUSY / EBUSY-equivalent)
+/// right after `terminal_complete` and on a register-reject; a single-shot
+/// `fs_delete` races that window and surfaces as a scary "staging cleanup
+/// failed" log even though the file would vanish a second later. We retry
+/// a bounded number of times with a short backoff so the common case
+/// (installer releasing the handle) succeeds without burning a slot.
+const STAGING_DELETE_MAX_ATTEMPTS: u32 = 3;
+
+/// Per-attempt sleep between staging-delete retries. Long enough for
+/// Sony's installer to release its file handle on the staged pkg, short
+/// enough that the spawn_blocking worker doesn't park the pool.
+const STAGING_DELETE_BACKOFF: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Whether a staging-delete error is worth retrying. Only the bare
+/// `fs_delete_failed` token (Sony's installer still holding the file
+/// open) qualifies — path-not-allowed, too-many-inflight, socket
+/// timeout, or cancellation won't resolve on retry and should surface
+/// immediately so the user sees the real cause. Exported as a pure fn
+/// so the decision can be unit-tested without a live PS5 socket.
+fn is_retryable_delete_error(err_str: &str) -> bool {
+    err_str.contains("fs_delete_failed")
+}
+
+/// Delete a staged `.pkg` with a bounded retry on `fs_delete_failed`.
+/// The payload sends that bare token when `rm_rf` returns non-zero — on
+/// FW 10.40+ this is almost always Sony's installer still holding the
+/// file open moments after the install completed (or was rejected), not
+/// a genuine filesystem error. Retrying mirrors elf-arsenal's
+/// `wait_for_install_row` settle window.
+///
+/// Returns Ok(()) if the file is gone (either deleted or already absent)
+/// or the last error if all attempts failed. Logs each retry at warn so
+/// a wedged console is still visible. The `label` is included in logs to
+/// distinguish the three call sites (register-reject / terminal / cancel).
+fn delete_staging_with_retry(addr: &str, path: &str, label: &str) -> Result<(), String> {
+    let mut last_err: Option<String> = None;
+    for attempt in 1..=STAGING_DELETE_MAX_ATTEMPTS {
+        match ps5upload_core::fs_ops::fs_delete_with_timeout(
+            addr,
+            path,
+            Some(std::time::Duration::from_secs(10)),
+        ) {
+            Ok(()) => {
+                if attempt > 1 {
+                    crate::log_info!(
+                        "staging cleaned after retry: label={} addr={} path={} attempts={}",
+                        label,
+                        addr,
+                        path,
+                        attempt
+                    );
+                }
+                return Ok(());
+            }
+            Err(e) => {
+                let err_str = format!("{e:#}");
+                // Only retry on the bare `fs_delete_failed` token — a
+                // genuine path-not-allowed, too-many-inflight, or socket
+                // timeout won't resolve on retry and should surface
+                // immediately so the user sees the real cause.
+                let retryable = is_retryable_delete_error(&err_str);
+                last_err = Some(err_str);
+                if !retryable || attempt == STAGING_DELETE_MAX_ATTEMPTS {
+                    crate::log_warn!(
+                        "staging cleanup failed: label={} addr={} path={} attempt={}/{} err={}",
+                        label,
+                        addr,
+                        path,
+                        attempt,
+                        STAGING_DELETE_MAX_ATTEMPTS,
+                        e
+                    );
+                    break;
+                }
+                crate::log_warn!(
+                    "staging cleanup retrying: label={} addr={} path={} attempt={}/{} (installer may still hold the file) err={}",
+                    label,
+                    addr,
+                    path,
+                    attempt,
+                    STAGING_DELETE_MAX_ATTEMPTS,
+                    e
+                );
+                std::thread::sleep(STAGING_DELETE_BACKOFF);
+            }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| "unknown error".to_string()))
+}
+
 #[derive(Debug, Serialize)]
 pub struct InstallStartResponse {
     pub session_id: String,
@@ -430,39 +531,22 @@ async fn install_start_handler(
             p.to_string()
         }
         _ => {
-            // Pick the LAN IP this host presents to the PS5. Multi-NIC
-            // safe: bind a UDP socket "connected" to the PS5's mgmt
-            // addr and read the local addr — that's the IP the OS
-            // picked for outbound.
-            //
-            // strip_host_port handles both `1.2.3.4:9114` and
-            // `[2001:db8::1]:9114` correctly; the naïve `split(':').next()`
-            // we used before truncated IPv6 to `[` because IPv6 addresses
-            // themselves contain colons.
-            let ps5_host_only = strip_host_port(&req.ps5_addr);
-            let local_ip = match lan_ip_for_ps5(&ps5_host_only) {
-                Ok(ip) => ip,
+            // Pick the LAN IP this host presents to the PS5 and build the
+            // /pkg-host/ URL Sony's installer will fetch. Centralised in
+            // pkg_host_url_for so the direct-install (DPI) path constructs
+            // an identical URL — a divergence would silently break the
+            // installer's header cross-check (0x80B21106).
+            let url = match pkg_host_url_for(&req.ps5_addr, &session_id, &head_meta.content_id) {
+                Ok(u) => u,
                 Err(e) => {
+                    let ps5_host_only = strip_host_port(&req.ps5_addr);
                     return json_err(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         &format!("could not determine local LAN IP for PS5 {ps5_host_only}: {e}"),
-                    )
+                    );
                 }
             };
-            let host_port = std::env::var("PS5UPLOAD_ENGINE_PORT")
-                .ok()
-                .and_then(|s| s.parse::<u16>().ok())
-                .unwrap_or(19113);
-            // Filename canonicalisation: when the pkg header carries a
-            // valid content_id we emit `<ContentID>.pkg` instead of a
-            // generic `file.pkg`. Sony's installer cross-checks the
-            // URL's filename component against the pkg header at
-            // register time; mismatched names get 0x80B21106 on some
-            // FW points, especially for user-renamed pkgs (e.g.
-            // "Cool Game.pkg" → header says IV0000-PPSAxxxxx_00-...).
-            // pkg_url_filename also sanitises against URL-meta chars.
-            let url_filename = pkg_url_filename(&head_meta.content_id);
-            format!("http://{local_ip}:{host_port}/pkg-host/{session_id}/{url_filename}")
+            url
         }
     };
 
@@ -703,34 +787,23 @@ async fn install_start_handler(
             let addr = req.ps5_addr.clone();
             let sid = session_id.clone();
             tokio::task::spawn_blocking(move || {
-                // 10s cap (2.9.0). Bare fs_delete inherits Connection's
-                // 30s socket timeout and additionally waits for FS_DELETE_ACK
-                // — a wedged PS5 (kernel hang, payload crashed during cleanup,
-                // unreachable LAN) parks a blocking-pool worker AND a TCP
-                // socket for the full duration. Repeated register-rejects
-                // or cancels could stack against a wedged console and
-                // exhaust the default 512-thread blocking pool. A single-
-                // file staging .pkg cleanup completes in &lt;1s normally;
-                // 10s is generous enough that healthy paths never trip it.
-                if let Err(e) = ps5upload_core::fs_ops::fs_delete_with_timeout(
-                    &addr,
-                    &path,
-                    Some(std::time::Duration::from_secs(10)),
-                ) {
-                    crate::log_warn!(
+                // Retry on `fs_delete_failed` — Sony's installer briefly
+                // holds the staged pkg open after a register-reject on
+                // FW 10.40+; see delete_staging_with_retry.
+                match delete_staging_with_retry(&addr, &path, "register-reject") {
+                    Ok(()) => crate::log_info!(
+                        "register-reject staging cleaned: session={} addr={} path={}",
+                        sid,
+                        addr,
+                        path
+                    ),
+                    Err(e) => crate::log_warn!(
                         "register-reject staging cleanup failed: session={} addr={} path={} err={}",
                         sid,
                         addr,
                         path,
                         e
-                    );
-                } else {
-                    crate::log_info!(
-                        "register-reject staging cleaned: session={} addr={} path={}",
-                        sid,
-                        addr,
-                        path
-                    );
+                    ),
                 }
             });
         }
@@ -1377,28 +1450,17 @@ async fn install_status_handler(
         if let Some(path) = path_to_clean {
             let addr = ps5_addr.clone();
             tokio::task::spawn_blocking(move || {
-                // 10s cap (2.9.0). Bare fs_delete inherits Connection's
-                // 30s socket timeout and additionally waits for FS_DELETE_ACK
-                // — a wedged PS5 (kernel hang, payload crashed during cleanup,
-                // unreachable LAN) parks a blocking-pool worker AND a TCP
-                // socket for the full duration. Repeated register-rejects
-                // or cancels could stack against a wedged console and
-                // exhaust the default 512-thread blocking pool. A single-
-                // file staging .pkg cleanup completes in &lt;1s normally;
-                // 10s is generous enough that healthy paths never trip it.
-                if let Err(e) = ps5upload_core::fs_ops::fs_delete_with_timeout(
-                    &addr,
-                    &path,
-                    Some(std::time::Duration::from_secs(10)),
-                ) {
-                    crate::log_warn!(
+                // Retry on `fs_delete_failed` — Sony's installer briefly
+                // holds the staged pkg open right after terminal_complete
+                // on FW 10.40+; see delete_staging_with_retry.
+                match delete_staging_with_retry(&addr, &path, "terminal") {
+                    Ok(()) => crate::log_info!("staging cleaned: addr={} path={}", addr, path),
+                    Err(e) => crate::log_warn!(
                         "staging cleanup failed: addr={} path={} err={}",
                         addr,
                         path,
                         e
-                    );
-                } else {
-                    crate::log_info!("staging cleaned: addr={} path={}", addr, path);
+                    ),
                 }
             });
         }
@@ -1529,26 +1591,23 @@ async fn install_cancel_handler(
     if let Some(path) = path_to_clean {
         let sid = req.session.clone();
         tokio::task::spawn_blocking(move || {
-            // 10s cap — see staging cleanup comment above for rationale.
-            if let Err(e) = ps5upload_core::fs_ops::fs_delete_with_timeout(
-                &ps5_addr,
-                &path,
-                Some(std::time::Duration::from_secs(10)),
-            ) {
-                crate::log_warn!(
+            // Retry on `fs_delete_failed` — Sony's installer may briefly
+            // hold the staged pkg open when a cancel lands mid-install;
+            // see delete_staging_with_retry.
+            match delete_staging_with_retry(&ps5_addr, &path, "cancel") {
+                Ok(()) => crate::log_info!(
+                    "cancel staging cleaned: session={} addr={} path={}",
+                    sid,
+                    ps5_addr,
+                    path
+                ),
+                Err(e) => crate::log_warn!(
                     "cancel staging cleanup failed: session={} addr={} path={} err={}",
                     sid,
                     ps5_addr,
                     path,
                     e
-                );
-            } else {
-                crate::log_info!(
-                    "cancel staging cleaned: session={} addr={} path={}",
-                    sid,
-                    ps5_addr,
-                    path
-                );
+                ),
             }
         });
     }
@@ -1572,17 +1631,84 @@ pub struct DpiInstallRequest {
 
 #[derive(Debug, Serialize)]
 pub struct DpiInstallResponse {
-    /// True when the daemon accepted the install (`rc == 0`).
+    /// True when the daemon accepted the install (`ok` reply).
     pub ok: bool,
-    /// The daemon's `sceAppInstUtilAppInstallPkg` return code.
+    /// The daemon's `sceAppInstUtilInstallByPackage` return code, or -1
+    /// when the daemon never reached the install call (init/recv/badpath).
     pub rc: i32,
+    /// True when the daemon could not initialize AppInstUtil. Distinct
+    /// from a Sony-side reject: an init failure means the daemon is in
+    /// fallback mode and retrying will likely fail the same way until
+    /// the underlying IPMI/kstuff issue resolves.
+    pub init_failed: bool,
     pub err_message: Option<String>,
 }
 
+/// One parsed reply from the DPI daemon. The daemon replies in the
+/// reference's ok/error form (elf-arsenal payloads-src/dpi/main.c):
+///   "ok"                  — InstallByPackage accepted
+///   "error:0x%08X"        — InstallByPackage rejected with rc
+///   "error:init:0x%08X"   — sceAppInstUtilInitialize failed with rc
+///   "error:init:timeout"  — sceAppInstUtilInitialize timed out
+///   "error:badpath"       — path rejected by the daemon's safety check
+///   "error:recv"          — daemon saw no valid input on the socket
+/// The old decimal-only form ("0", "-2147003130") is still accepted for
+/// backward compatibility with older daemons still deployed on a console.
+enum DpiReply {
+    Ok,
+    InstallReject(i32),
+    InitFailed(Option<i32>), // None = timeout
+    BadPath,
+    RecvError,
+    Unknown(String),
+}
+
+fn parse_dpi_reply(s: &str) -> DpiReply {
+    let t = s.trim();
+    if t == "ok" || t == "0" {
+        return DpiReply::Ok;
+    }
+    if let Some(rest) = t.strip_prefix("error:init:") {
+        if rest == "timeout" {
+            return DpiReply::InitFailed(None);
+        }
+        // Sony error codes have the high bit set (e.g. 0x80B21106) and
+        // overflow i32 — parse as u32 then cast so the negative i32
+        // representation matches what InstallByPackage actually returns.
+        if let Ok(rc) = u32::from_str_radix(rest.trim_start_matches("0x"), 16) {
+            return DpiReply::InitFailed(Some(rc as i32));
+        }
+        return DpiReply::Unknown(t.to_string());
+    }
+    if let Some(rest) = t.strip_prefix("error:0x") {
+        if let Ok(rc) = u32::from_str_radix(rest, 16) {
+            return DpiReply::InstallReject(rc as i32);
+        }
+        return DpiReply::Unknown(t.to_string());
+    }
+    if t == "error:badpath" {
+        return DpiReply::BadPath;
+    }
+    if t == "error:recv" {
+        return DpiReply::RecvError;
+    }
+    // Backward-compat: old daemon replied with a bare decimal rc.
+    if let Ok(rc) = t.parse::<i32>() {
+        return if rc == 0 {
+            DpiReply::Ok
+        } else {
+            DpiReply::InstallReject(rc)
+        };
+    }
+    DpiReply::Unknown(t.to_string())
+}
+
 /// Connect to the PS5 DPI daemon on `:9040`, send one line (the staged
-/// local path), and read back the decimal return code. The daemon runs
-/// `sceAppInstUtilAppInstallPkg(path)` from its own clean loader process.
-fn dpi_send(ps5_ip: &str, line: &str) -> std::io::Result<i32> {
+/// local path or an http(s):// URL), and read back the daemon's reply.
+/// The daemon runs `sceAppInstUtilInstallByPackage(uri)` from its own
+/// clean loader process, with a timed sceAppInstUtilInitialize + retry
+/// so a cold install can never wedge IPMI (issue #152 root cause).
+fn dpi_send(ps5_ip: &str, line: &str) -> std::io::Result<DpiReply> {
     use std::io::{Read, Write};
     use std::net::ToSocketAddrs;
     let sa = format!("{ps5_ip}:9040")
@@ -1591,19 +1717,13 @@ fn dpi_send(ps5_ip: &str, line: &str) -> std::io::Result<i32> {
         .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "resolve :9040 failed"))?;
     let mut s = std::net::TcpStream::connect_timeout(&sa, std::time::Duration::from_secs(5))?;
     s.set_write_timeout(Some(std::time::Duration::from_secs(10)))?;
-    // AppInstallPkg can take a moment to ingest the pkg before replying.
+    // InstallByPackage can take a moment to ingest the pkg before replying.
     s.set_read_timeout(Some(std::time::Duration::from_secs(120)))?;
     s.write_all(line.as_bytes())?;
     s.write_all(b"\n")?;
     let mut buf = String::new();
     s.read_to_string(&mut buf)?;
-    let t = buf.trim();
-    t.parse::<i32>().map_err(|_| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("non-numeric DPI reply: {t:?}"),
-        )
-    })
+    Ok(parse_dpi_reply(&buf))
 }
 
 async fn dpi_install_handler(Json(req): Json<DpiInstallRequest>) -> Response<Body> {
@@ -1621,16 +1741,78 @@ async fn dpi_install_handler(Json(req): Json<DpiInstallRequest>) -> Response<Bod
     crate::log_info!("dpi-install: ps5={} path={}", ps5_ip, path);
     let res = tokio::task::spawn_blocking(move || dpi_send(&ps5_ip, &path)).await;
     match res {
-        Ok(Ok(rc)) => {
-            if rc == 0 {
-                crate::log_info!("dpi-install ok (rc=0)");
-            } else {
-                crate::log_warn!("dpi-install rejected rc=0x{:08x}", rc as u32);
+        Ok(Ok(reply)) => {
+            let (ok, rc, init_failed, err_message) = match reply {
+                DpiReply::Ok => (true, 0, false, None),
+                DpiReply::InstallReject(rc) => {
+                    crate::log_warn!("dpi-install rejected rc=0x{:08x}", rc as u32);
+                    (
+                        false,
+                        rc,
+                        false,
+                        err_code_message(rc as u32).map(|s| s.to_string()),
+                    )
+                }
+                DpiReply::InitFailed(Some(rc)) => {
+                    crate::log_warn!("dpi-install init failed rc=0x{:08x}", rc as u32);
+                    (
+                        false,
+                        -1,
+                        true,
+                        Some(format!(
+                            "sceAppInstUtilInitialize failed: 0x{:08X}",
+                            rc as u32
+                        )),
+                    )
+                }
+                DpiReply::InitFailed(None) => {
+                    crate::log_warn!("dpi-install init timed out");
+                    (
+                        false,
+                        -1,
+                        true,
+                        Some(
+                            "sceAppInstUtilInitialize timed out (IPMI backend not ready)"
+                                .to_string(),
+                        ),
+                    )
+                }
+                DpiReply::BadPath => {
+                    crate::log_warn!("dpi-install daemon rejected path");
+                    (
+                        false,
+                        -1,
+                        false,
+                        Some("daemon rejected the path (unsafe)".to_string()),
+                    )
+                }
+                DpiReply::RecvError => {
+                    crate::log_warn!("dpi-install daemon saw no valid input");
+                    (
+                        false,
+                        -1,
+                        false,
+                        Some("daemon received no valid input".to_string()),
+                    )
+                }
+                DpiReply::Unknown(s) => {
+                    crate::log_warn!("dpi-install unknown reply: {:?}", s);
+                    (
+                        false,
+                        -1,
+                        false,
+                        Some(format!("unexpected daemon reply: {s}")),
+                    )
+                }
+            };
+            if ok {
+                crate::log_info!("dpi-install ok");
             }
             json_ok(&DpiInstallResponse {
-                ok: rc == 0,
+                ok,
                 rc,
-                err_message: err_code_message(rc as u32).map(|s| s.to_string()),
+                init_failed,
+                err_message,
             })
         }
         Ok(Err(e)) => json_err(
@@ -1641,7 +1823,152 @@ async fn dpi_install_handler(Json(req): Json<DpiInstallRequest>) -> Response<Bod
     }
 }
 
-// ─── /pkg-host/:session/:filename ────────────────────────────────────
+// ─── /api/pkg/dpi-direct-install (streaming install beta, #81) ───────
+
+/// Request body for `/api/pkg/dpi-direct-install`. Unlike
+/// [`DpiInstallRequest`], this takes a `session_id` (from a prior
+/// `/api/pkg/install/start` or the parsed-parts session) instead of a
+/// staged PS5 path. The engine serves the pkg at `/pkg-host/{session}/`
+/// and hands the DPI daemon that HTTP URL — the daemon pulls the bytes
+/// straight off the engine, so no staging copy is uploaded to the PS5's
+/// disk first. Saves disk space and one full transfer for the
+/// quick-install case.
+#[derive(Debug, Deserialize)]
+pub struct DpiDirectInstallRequest {
+    pub ps5_addr: String,
+    pub session_id: String,
+}
+
+/// Send the pkg-host URL to the DPI daemon, returning the same
+/// [`DpiInstallResponse`] shape as the staged-path route so the client
+/// can handle both with identical logic. The daemon pulls the pkg over
+/// HTTP; the engine's `/pkg-host/` handler satisfies Range requests so
+/// Sony's PlayGo HTTP client works unchanged.
+async fn dpi_direct_install_handler(
+    State(state): State<PkgInstallStateHandle>,
+    Json(req): Json<DpiDirectInstallRequest>,
+) -> Response<Body> {
+    let ps5_ip = strip_host_port(&req.ps5_addr);
+    if ps5_ip.is_empty() {
+        return json_err(StatusCode::BAD_REQUEST, "ps5_addr is required");
+    }
+
+    // Look up the session to get the content_id (for the canonical
+    // pkg-host filename). Hold the lock only long enough to clone what
+    // we need — the DPI send below is blocking and must not hold the
+    // sessions mutex.
+    let content_id = {
+        let sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
+        match sessions.get(&req.session_id) {
+            Some(s) => s.content_id.clone(),
+            None => {
+                return json_err(
+                    StatusCode::NOT_FOUND,
+                    &format!("no pkg-host session {}", req.session_id),
+                )
+            }
+        }
+    };
+
+    let url = match pkg_host_url_for(&req.ps5_addr, &req.session_id, &content_id) {
+        Ok(u) => u,
+        Err(e) => {
+            return json_err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("could not build pkg-host URL for PS5 {ps5_ip}: {e}"),
+            )
+        }
+    };
+
+    crate::log_info!(
+        "dpi-direct-install: ps5={} session={} url={}",
+        ps5_ip,
+        req.session_id,
+        url
+    );
+    let res = tokio::task::spawn_blocking(move || dpi_send(&ps5_ip, &url)).await;
+    match res {
+        Ok(Ok(reply)) => {
+            let (ok, rc, init_failed, err_message) = match reply {
+                DpiReply::Ok => (true, 0, false, None),
+                DpiReply::InstallReject(rc) => {
+                    crate::log_warn!("dpi-direct-install rejected rc=0x{:08x}", rc as u32);
+                    (
+                        false,
+                        rc,
+                        false,
+                        err_code_message(rc as u32).map(|s| s.to_string()),
+                    )
+                }
+                DpiReply::InitFailed(Some(rc)) => {
+                    crate::log_warn!("dpi-direct-install init failed rc=0x{:08x}", rc as u32);
+                    (
+                        false,
+                        -1,
+                        true,
+                        Some(format!(
+                            "sceAppInstUtilInitialize failed: 0x{:08X}",
+                            rc as u32
+                        )),
+                    )
+                }
+                DpiReply::InitFailed(None) => {
+                    crate::log_warn!("dpi-direct-install init timed out");
+                    (
+                        false,
+                        -1,
+                        true,
+                        Some(
+                            "sceAppInstUtilInitialize timed out (IPMI backend not ready)"
+                                .to_string(),
+                        ),
+                    )
+                }
+                DpiReply::BadPath => {
+                    crate::log_warn!("dpi-direct-install daemon rejected URL");
+                    (
+                        false,
+                        -1,
+                        false,
+                        Some("daemon rejected the URL (unsafe)".to_string()),
+                    )
+                }
+                DpiReply::RecvError => {
+                    crate::log_warn!("dpi-direct-install daemon saw no valid input");
+                    (
+                        false,
+                        -1,
+                        false,
+                        Some("daemon received no valid input".to_string()),
+                    )
+                }
+                DpiReply::Unknown(s) => {
+                    crate::log_warn!("dpi-direct-install unknown reply: {:?}", s);
+                    (
+                        false,
+                        -1,
+                        false,
+                        Some(format!("unexpected daemon reply: {s}")),
+                    )
+                }
+            };
+            if ok {
+                crate::log_info!("dpi-direct-install ok");
+            }
+            json_ok(&DpiInstallResponse {
+                ok,
+                rc,
+                init_failed,
+                err_message,
+            })
+        }
+        Ok(Err(e)) => json_err(
+            StatusCode::BAD_GATEWAY,
+            &format!("DPI daemon (:9040) not reachable / errored: {e}"),
+        ),
+        Err(e) => json_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("task: {e}")),
+    }
+}
 
 async fn serve_handler(
     State(state): State<PkgInstallStateHandle>,
@@ -1957,6 +2284,29 @@ pub fn lan_ip_for_ps5(ps5_host: &str) -> std::io::Result<IpAddr> {
     Ok(sock.local_addr()?.ip())
 }
 
+/// Build the engine's `/pkg-host/{session}/{filename}` URL as the PS5
+/// will fetch it. Picks the LAN IP this host presents to the PS5 (multi-
+/// NIC safe), stamps the engine port, and canonicalises the filename
+/// from the pkg's content_id so Sony's installer header cross-check
+/// passes. Returns an Err with a human-readable cause when the LAN IP
+/// can't be determined (e.g. PS5 host unresolvable).
+///
+/// Shared by the regular install-start flow (which embeds the URL in
+/// the BGFT register request) and the direct/streaming install flow
+/// (which hands the URL to the DPI daemon instead of a local path).
+fn pkg_host_url_for(ps5_addr: &str, session_id: &str, content_id: &str) -> std::io::Result<String> {
+    let ps5_host_only = strip_host_port(ps5_addr);
+    let local_ip = lan_ip_for_ps5(&ps5_host_only)?;
+    let host_port = std::env::var("PS5UPLOAD_ENGINE_PORT")
+        .ok()
+        .and_then(|s| s.parse::<u16>().ok())
+        .unwrap_or(19113);
+    let url_filename = pkg_url_filename(content_id);
+    Ok(format!(
+        "http://{local_ip}:{host_port}/pkg-host/{session_id}/{url_filename}"
+    ))
+}
+
 /// Last-ditch fallback when a `Response::builder()` chain fails. The
 /// builders in this file only set statically valid headers, so this is
 /// unreachable in practice — but one engine process serves every
@@ -2260,6 +2610,53 @@ mod tests {
         assert_eq!(staging_path_for(&None, false), None);
     }
 
+    // ── is_retryable_delete_error (the fs_delete_failed retry decision) ──
+
+    #[test]
+    fn retryable_delete_error_on_fs_delete_failed_token() {
+        // The bare token the payload sends when rm_rf returns non-zero
+        // (Sony's installer still holding the staged pkg open). This is
+        // the ONLY case we retry — it resolves on its own in ~1-2s.
+        assert!(is_retryable_delete_error(
+            "payload rejected FS_DELETE: fs_delete_failed"
+        ));
+    }
+
+    #[test]
+    fn retryable_delete_error_not_on_path_not_allowed() {
+        // A genuine allowlist rejection — won't resolve on retry.
+        assert!(!is_retryable_delete_error(
+            "payload rejected FS_DELETE: fs_delete_path_not_allowed"
+        ));
+    }
+
+    #[test]
+    fn retryable_delete_error_not_on_too_many_inflight() {
+        // All MAX_FS_OPS slots busy — retrying immediately won't help.
+        assert!(!is_retryable_delete_error(
+            "payload rejected FS_DELETE: fs_delete_too_many_inflight"
+        ));
+    }
+
+    #[test]
+    fn retryable_delete_error_not_on_socket_timeout() {
+        // A wedged console / network error — surfacing immediately is
+        // more useful than silently retrying for 6s.
+        assert!(!is_retryable_delete_error(
+            "read frame header: Resource temporarily unavailable (os error 11)"
+        ));
+        assert!(!is_retryable_delete_error("connection reset by peer"));
+    }
+
+    #[test]
+    fn retryable_delete_error_not_on_cancellation() {
+        // User hit Stop — cancellation is intentional, not retryable.
+        assert!(!is_retryable_delete_error("cancelled"));
+        assert!(!is_retryable_delete_error(
+            "payload rejected FS_DELETE: fs_delete_cancelled"
+        ));
+    }
+
     #[test]
     fn install_start_request_delete_staging_defaults_true() {
         // Back-compat: an older client that omits delete_staging must keep the
@@ -2319,6 +2716,43 @@ mod tests {
         assert_eq!(
             pkg_url_filename("UP9000-CUSA12345_00-GAMECONTENT12345"),
             "UP9000-CUSA12345_00-GAMECONTENT12345.pkg"
+        );
+    }
+
+    #[test]
+    fn pkg_host_url_for_builds_canonical_url() {
+        // Loopback always resolves — exercises the full URL assembly
+        // (LAN IP lookup, port stamping, filename canonicalisation, path
+        // pattern) that both install-start and dpi-direct-install share.
+        // Pin the shape so a divergence between the two routes would
+        // break Sony's installer header cross-check visibly here.
+        let url = pkg_host_url_for(
+            "127.0.0.1:9114",
+            "abc-123",
+            "UP9000-CUSA12345_00-GAMECONTENT12345",
+        )
+        .expect("loopback should resolve");
+        assert!(
+            url.starts_with("http://127.0.0.1:"),
+            "URL should target loopback: {url}"
+        );
+        assert!(
+            url.ends_with("/pkg-host/abc-123/UP9000-CUSA12345_00-GAMECONTENT12345.pkg"),
+            "URL should carry session + canonical filename: {url}"
+        );
+    }
+
+    #[test]
+    fn pkg_host_url_for_uses_env_port_when_set() {
+        // The engine port is overridable via PS5UPLOAD_ENGINE_PORT; the
+        // direct-install URL must honour it so the daemon fetches from
+        // the same port the engine is actually listening on.
+        std::env::set_var("PS5UPLOAD_ENGINE_PORT", "29113");
+        let url = pkg_host_url_for("127.0.0.1:9114", "s", "IV0001-X").expect("loopback");
+        std::env::remove_var("PS5UPLOAD_ENGINE_PORT");
+        assert!(
+            url.starts_with("http://127.0.0.1:29113/"),
+            "URL should use env-overridden port: {url}"
         );
     }
 
@@ -2555,5 +2989,90 @@ mod tests {
             "data inserted before the panic must still be reachable"
         );
         assert!(sessions.contains_key("before-panic"));
+    }
+
+    // ── DPI daemon reply parser (the FW-10.40 helper-death fix, #152) ──
+    //
+    // The daemon now replies in the reference's ok/error form so the
+    // engine can tell accept from reject from init-failure. These pin
+    // every branch of the parser so a future daemon change can't
+    // silently regress to "treat init-failure as install-success".
+
+    #[test]
+    fn dpi_parse_ok() {
+        assert!(matches!(parse_dpi_reply("ok"), DpiReply::Ok));
+        // trailing whitespace / newline tolerated
+        assert!(matches!(parse_dpi_reply("ok\n"), DpiReply::Ok));
+        assert!(matches!(parse_dpi_reply(" ok\r\n"), DpiReply::Ok));
+    }
+
+    #[test]
+    fn dpi_parse_install_reject() {
+        // 0x80B21106 — the FW-11/12 authid gate (the expected first-attempt
+        // rejection that triggers the DPI fallback in the first place).
+        assert!(matches!(
+            parse_dpi_reply("error:0x80B21106"),
+            DpiReply::InstallReject(rc) if rc as u32 == 0x80B21106
+        ));
+        assert!(matches!(
+            parse_dpi_reply("error:0x80b21106\n"),
+            DpiReply::InstallReject(rc) if rc as u32 == 0x80B21106
+        ));
+    }
+
+    #[test]
+    fn dpi_parse_init_failed_with_rc() {
+        // sceAppInstUtilInitialize returned a Sony error — daemon is in
+        // fallback mode and retrying will likely fail the same way.
+        assert!(matches!(
+            parse_dpi_reply("error:init:0x80B21106"),
+            DpiReply::InitFailed(Some(rc)) if rc as u32 == 0x80B21106
+        ));
+    }
+
+    #[test]
+    fn dpi_parse_init_timeout() {
+        // timed_init returned the -0xDEAD sentinel. Distinct from a Sony
+        // error code — IPMI backend never came up.
+        assert!(matches!(
+            parse_dpi_reply("error:init:timeout"),
+            DpiReply::InitFailed(None)
+        ));
+    }
+
+    #[test]
+    fn dpi_parse_badpath_and_recv() {
+        assert!(matches!(
+            parse_dpi_reply("error:badpath"),
+            DpiReply::BadPath
+        ));
+        assert!(matches!(parse_dpi_reply("error:recv"), DpiReply::RecvError));
+    }
+
+    #[test]
+    fn dpi_parse_legacy_decimal_ok() {
+        // Backward compat: an older daemon still deployed on a console
+        // replies with a bare decimal rc. "0" must map to Ok.
+        assert!(matches!(parse_dpi_reply("0"), DpiReply::Ok));
+        assert!(matches!(parse_dpi_reply("0\n"), DpiReply::Ok));
+    }
+
+    #[test]
+    fn dpi_parse_legacy_decimal_reject() {
+        // Legacy decimal reject: 0x80B21106 reinterpreted as i32 is
+        // -2135813882 (i32::MIN + 0x7F8AAFAE + ... — two's complement).
+        let expected: i32 = 0x80B21106_u32 as i32;
+        assert!(matches!(
+            parse_dpi_reply(&expected.to_string()),
+            DpiReply::InstallReject(rc) if rc as u32 == 0x80B21106
+        ));
+    }
+
+    #[test]
+    fn dpi_parse_unknown_is_not_ok() {
+        // An unrecognised reply must NEVER parse as Ok (would mask a
+        // real failure as success) — it falls through to Unknown.
+        assert!(matches!(parse_dpi_reply("error:???"), DpiReply::Unknown(_)));
+        assert!(matches!(parse_dpi_reply(""), DpiReply::Unknown(_)));
     }
 }

@@ -1580,6 +1580,25 @@ pub async fn pkg_dpi_install(
     post_json_long(&url, &body).await
 }
 
+/// Direct/streaming install (beta, #81): hand the DPI daemon the engine's
+/// /pkg-host/ URL for an existing session instead of a staged PS5 path.
+/// The daemon pulls the pkg over HTTP — no staging copy uploaded to the
+/// PS5 first. The session must already be registered with the engine via
+/// a prior `pkg_install_start` (which creates the pkg-host listener).
+/// Long-deadline client — the installer ingests the pkg before replying.
+#[tauri::command]
+pub async fn pkg_dpi_direct_install(
+    ps5_addr: String,
+    session_id: String,
+) -> Result<JsonValue, String> {
+    let url = format!("{}/api/pkg/dpi-direct-install", engine::url());
+    let body = serde_json::json!({
+        "ps5_addr": ps5_addr,
+        "session_id": session_id,
+    });
+    post_json_long(&url, &body).await
+}
+
 /// Poll an in-flight install for status. Cheap; called every 1-2s.
 #[tauri::command]
 pub async fn pkg_install_status(session: String) -> Result<JsonValue, String> {

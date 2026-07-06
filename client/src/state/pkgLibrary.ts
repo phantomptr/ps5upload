@@ -442,6 +442,17 @@ interface PkgLibraryState {
   refresh: (host: string) => Promise<void>;
   addAndUpload: (localPath: string, host: string) => Promise<void>;
   install: (path: string, host: string) => Promise<void>;
+  /** Stream-install (beta, #81) a local PC-side `.pkg` WITHOUT uploading it
+   *  to PS5 staging first. The engine serves the file over HTTP at
+   *  `/pkg-host/{session}/` and the DPI daemon pulls it directly. Saves the
+   *  staging upload (and the disk space) for the quick-install case. The
+   *  pkg is NOT retained on the PS5 afterwards — nothing was staged.
+   *  Shares the `installing` lock with `install()`.
+   *  Returns `{ ok, message?, mayNotLaunch? }`. */
+  installStream: (
+    localPcPath: string,
+    host: string,
+  ) => Promise<{ ok: boolean; message?: string; mayNotLaunch?: boolean }>;
   /** Install every staged, not-yet-installed, idle row sequentially, in
    *  base → update → DLC order (`pkgEntryInstallOrder`). Each item runs the
    *  full readiness-gated `install()` cascade; one failure doesn't abort the
@@ -818,6 +829,96 @@ async function runDpiInstall(
     });
   }
   // Restore our main payload — the daemon replaced it. Best-effort.
+  try {
+    const bp = (await invoke("payload_bundled_path")) as {
+      ok?: boolean;
+      path?: string;
+    };
+    if (bp?.ok && bp.path) {
+      await invoke("payload_send", { ip, path: bp.path, port: null });
+    }
+  } catch {
+    /* best-effort restore */
+  }
+  const ok = !!resp.ok;
+  const rc = (resp.rc ?? 0) >>> 0;
+  return {
+    ok,
+    daemonFailed: false,
+    rc,
+    errMessage: ok
+      ? ""
+      : resp.err_message ||
+        `Install was rejected (0x${rc.toString(16).padStart(8, "0")}).`,
+  };
+}
+
+/**
+ * Streaming/direct install (beta, #81): hand the DPI daemon the engine's
+ * `/pkg-host/` URL for an existing session instead of a staged PS5 path.
+ * The daemon pulls the pkg over HTTP — no staging copy is uploaded to
+ * the PS5 first. Mirrors `runDpiInstall`'s daemon-bring-up + restore
+ * dance (the DPI ELF still replaces the main payload on the loader), but
+ * sends a session_id rather than a local path.
+ *
+ * The caller MUST have already registered the session with the engine
+ * (via `pkg_install_start` with `localPs5Path: null` and a PC-side file
+ * path) so `/pkg-host/{session}/` is serving bytes when the daemon comes
+ * asking. Returns `daemonFailed:true` distinctly so callers can treat a
+ * "daemon never came up" dead-end separately from a Sony-side reject.
+ *
+ * Like `runDpiInstall`, `ok:true` here is the daemon's word that
+ * `InstallByPackage` accepted — callers should confirm with
+ * `titleRegisteredOnDisk` before claiming a real install.
+ */
+async function runDpiDirectInstall(
+  host: string,
+  sessionId: string,
+  onStatus?: (msg: string) => void,
+): Promise<{ ok: boolean; errMessage: string; daemonFailed: boolean; rc: number }> {
+  const ip = hostOf(host);
+  log.info("install", `DPI ensure (direct): bringing up daemon on ${ip}:9040 (loads via :9021)`);
+  const ens = (await invoke("dpi_ensure", { ip })) as {
+    ok?: boolean;
+    error?: string;
+    listening?: boolean;
+    sent?: boolean;
+  };
+  log.info(
+    "install",
+    `DPI ensure (direct) result: ok=${ens.ok} listening=${ens.listening ?? "?"} sent=${ens.sent ?? "?"}` +
+      (ens.error ? ` error="${ens.error}"` : ""),
+  );
+  if (!ens.ok) {
+    return {
+      ok: false,
+      daemonFailed: true,
+      rc: 0,
+      errMessage: ens.error || "the DPI daemon didn't come up on :9040",
+    };
+  }
+  let resp: { ok?: boolean; rc?: number; err_message?: string } = {};
+  for (let attempt = 1; attempt <= DPI_MAX_ATTEMPTS; attempt++) {
+    try {
+      resp = (await invoke("pkg_dpi_direct_install", {
+        ps5Addr: mgmtAddr(host),
+        sessionId,
+      })) as typeof resp;
+    } catch (e) {
+      resp = { ok: false, rc: 0, err_message: pkgError(e) };
+    }
+    const rcNow = (resp.rc ?? 0) >>> 0;
+    if (resp.ok || rcNow !== DPI_TRANSIENT_BUSY_RC || attempt === DPI_MAX_ATTEMPTS) {
+      break;
+    }
+    onStatus?.(
+      `PS5 is busy finishing the last install — waiting for it to be ready (attempt ${attempt}/${DPI_MAX_ATTEMPTS})…`,
+    );
+    await waitForConsoleReady(host, {
+      onWait: () => onStatus?.("Waiting for the PS5 to be ready…"),
+    });
+  }
+  // Restore the main payload — the daemon replaced it. Best-effort.
   try {
     const bp = (await invoke("payload_bundled_path")) as {
       ok?: boolean;
@@ -1659,6 +1760,133 @@ const makePkgLibraryStore = () =>
             : "Some packages didn't install — check the rows marked failed and retry them.",
       },
     );
+  },
+
+  async installStream(localPcPath, host) {
+    if (!host?.trim()) {
+      return { ok: false, message: "No PS5 host selected." };
+    }
+    if (get().installing) {
+      return { ok: false, message: "Another install is in progress." };
+    }
+    set({ installing: true, busyNotice: null, installPending: false });
+    const clearBusy = () =>
+      set({ installing: false, busyNotice: null, installPending: false });
+    try {
+      // Wait behind any active transfer — the DPI payload swap would kill
+      // the transfer port mid-upload, same as install()/installExternal().
+      const transfersActive = () =>
+        transferScreenBusy(host) ||
+        get().entries.some(
+          (e) => e.status === "uploading" || e.status === "queued",
+        );
+      if (transfersActive()) {
+        set({
+          installPending: true,
+          busyNotice:
+            "Waiting for the current upload to finish before installing…",
+        });
+        while (transfersActive()) {
+          if (!get().installing) return { ok: false, message: "Cancelled." };
+          await sleep(400);
+        }
+        set({ installPending: false, busyNotice: null });
+      }
+      set({ installPending: false });
+
+      // 1. Parse the PC-side pkg header for content_id + category. The
+      //    engine needs the content_id to canonicalise the pkg-host URL
+      //    filename (Sony's installer cross-checks it against the header).
+      let meta: SplitParseResponse;
+      try {
+        meta = (await invoke("pkg_metadata_split", {
+          path: localPcPath,
+        })) as SplitParseResponse;
+      } catch (e) {
+        return { ok: false, message: `Couldn't read .pkg header: ${pkgError(e)}` };
+      }
+      if ((meta.parts?.length ?? 1) > 1) {
+        return {
+          ok: false,
+          message:
+            "Split .pkg sets aren't supported by the streaming installer — pick the single lead .pkg.",
+        };
+      }
+      const contentId = meta.head?.content_id ?? "";
+      const label = meta.head?.title || contentId || basenameOf(localPcPath);
+
+      set({
+        busyNotice: `Stream-installing ${label} (beta) — the PS5 pulls the pkg directly over HTTP, no staging upload…`,
+      });
+
+      // 2. Register the session with the engine. Passing `localPs5Path:
+      //    null` + a PC `path` makes the engine create a pkg-host serving
+      //    session WITHOUT expecting a staged file on the PS5. The URL
+      //    the engine builds is what the DPI daemon will fetch.
+      const onStatus = (msg: string) => set({ busyNotice: msg });
+      const startResp = (await invoke("pkg_install_start", {
+        ps5Addr: mgmtAddr(host),
+        path: localPcPath,
+        splitRoot: null,
+        packageTypeOverride: pkgTypeForCategory(meta.head?.category),
+        localPs5Path: null,
+        contentId: contentId || null,
+        // No staging file is created, so deleteStaging is moot — pass
+        // false so the engine doesn't record a staging_path to clean up.
+        deleteStaging: false,
+      })) as {
+        err_code?: number;
+        session_id?: string;
+        err_message?: string;
+        may_not_launch?: boolean;
+      };
+
+      const rc = (startResp.err_code ?? 0) >>> 0;
+      const sessionId = startResp.session_id;
+      // The engine creates a pkg-host session even when BGFT register
+      // rejects (rc != 0) — but without a session_id there's nothing for
+      // the daemon to fetch, so this is a hard fail.
+      if (!sessionId) {
+        return {
+          ok: false,
+          message:
+            startResp.err_message ||
+            `The engine wouldn't start a serving session (0x${rc.toString(16).padStart(8, "0")}).`,
+        };
+      }
+
+      // 3. Hand the session's pkg-host URL to the DPI daemon. The daemon
+      //    pulls the pkg over HTTP; no staging copy lands on the PS5.
+      const dpi = await runDpiDirectInstall(host, sessionId, onStatus);
+      if (dpi.daemonFailed) {
+        return { ok: false, message: dpi.errMessage };
+      }
+      if (!dpi.ok) {
+        return { ok: false, message: dpi.errMessage };
+      }
+
+      // 4. Verify the title actually landed (DPI's `ok` alone isn't
+      //    proof — the daemon reports InstallByPackage's rc, not the
+      //    async install result). The pkg-host session is still alive
+      //    for this, then the engine GCs it.
+      const verdict = await verifyInstallCompleted(sessionId);
+      if (verdict.completed) {
+        pushNotification("success", `Installed ${label}`, {
+          body: "Stream-install complete. The pkg was fetched over HTTP — nothing was staged on the PS5.",
+        });
+        return { ok: true, mayNotLaunch: false };
+      }
+      // Stall / async failure. Nothing was staged on the PS5 so there's
+      // no pkg to keep — the pkg-host session is engine-side only.
+      return {
+        ok: false,
+        message: verdict.message || "The install didn't complete.",
+      };
+    } catch (e) {
+      return { ok: false, message: pkgError(e) };
+    } finally {
+      clearBusy();
+    }
   },
 
   async installExternal(pkg, host) {

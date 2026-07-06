@@ -44,6 +44,13 @@ typedef struct {
     unsigned char        unknown[6480];
 } PlayGoInfo;
 
+/* One-time initialization of the AppInstUtil/IPMI backend. Must be
+ * called at least once before InstallByPackage/AppInstallPkg; calling
+ * InstallByPackage cold (without init) leaves IPMI half-wedged and
+ * trips Sony's watchdog a few seconds later. The daemon wraps this in
+ * a timed_init with a 10s timeout + per-request retry. */
+extern int sceAppInstUtilInitialize(void);
+
 /* HTTP-URL installer (ezremote-dpi path): parses meta->uri as a URI and
  * fetches over HTTP. Gated by Sony's PlayGo HTTP pre-flight on some FW
  * (0x80B22404), so it's the secondary path. */

@@ -435,6 +435,20 @@ export async function browserInvoke<T>(cmd: string, args: AnyArgs = {}): Promise
         /*long=*/ true,
       );
 
+    case "pkg_dpi_direct_install":
+      // TS caller: { ps5Addr, sessionId } (Tauri 2 camelCase).
+      // Direct/streaming install (beta, #81): the engine serves the pkg
+      // at /pkg-host/{session}/ and the DPI daemon pulls it over HTTP —
+      // no staging copy uploaded to the PS5 first.
+      return postJson<T>(
+        "/api/pkg/dpi-direct-install",
+        {
+          ps5_addr: args["ps5Addr"],
+          session_id: args["sessionId"],
+        },
+        /*long=*/ true,
+      );
+
     // ── Payload probe ────────────────────────────────────────────────────────
 
     case "payload_check": {

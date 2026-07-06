@@ -234,6 +234,7 @@ pub fn run() {
             commands::ffpkg_extract,
             commands::pkg_install_start,
             commands::pkg_dpi_install,
+            commands::pkg_dpi_direct_install,
             commands::dpi_ensure,
             commands::pkg_install_status,
             commands::pkg_install_cancel,
