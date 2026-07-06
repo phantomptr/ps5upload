@@ -1714,6 +1714,14 @@ installed_smp_not_downloaded:
 installed_smp_sent: "Sent ShadowMount+ — give it a few seconds, then Refresh.",
 installed_smp_send_failed: "Couldn't send ShadowMount+.",
 installed_section_installed: "Games & apps",
+installed_sort_playtime: "Sort by play time",
+installed_only_unplayed: "Only not-seen-playing",
+installed_playtime_line: "{time} · last seen {seen}",
+installed_playtime_never: "not seen playing",
+installed_playtime_tooltip:
+  "Play time and last-seen are tracked only while ps5upload is open and watching — not the console's own records.",
+installed_all_played:
+  "Every installed title has been seen playing while ps5upload was open — nothing flagged as unused.",
 installed_section_installed_hint:
   "Installed via Sony's installer from a .pkg (or shipped with the console). No source path.",
 installed_section_disc: "Disk images",

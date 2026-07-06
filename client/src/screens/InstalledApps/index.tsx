@@ -14,6 +14,7 @@ import {
   ShieldCheck,
   Square,
   CircleDot,
+  Clock,
 } from "lucide-react";
 
 import { useNavigate } from "react-router-dom";
@@ -34,6 +35,13 @@ import {
   fetchRunningGames,
   type RunningGame,
 } from "../../lib/runningGames";
+import {
+  usePlayTimeStore,
+  playSecondsFor,
+  lastSeenPlayingFor,
+  formatPlayTime,
+  formatLastSeen,
+} from "../../state/playTime";
 import {
   PageHeader,
   EmptyState,
@@ -171,6 +179,8 @@ function AppCard({
   running,
   stopping,
   discNeedsSmp,
+  playSeconds,
+  lastSeenMs,
   onUninstall,
   onLaunch,
   onStop,
@@ -185,6 +195,10 @@ function AppCard({
   stopping: boolean;
   /** True for a disc-image title while ShadowMount+ isn't running. */
   discNeedsSmp: boolean;
+  /** ps5upload-observed cumulative play seconds for this title (#116). */
+  playSeconds: number | undefined;
+  /** Wall-clock ms ps5upload last saw this title running; undefined = never. */
+  lastSeenMs: number | undefined;
   onUninstall: (t: InstalledTitle) => void;
   onLaunch: (t: InstalledTitle) => void;
   onStop: (t: InstalledTitle) => void;
@@ -253,6 +267,34 @@ function AppCard({
             <KindBadge title={title} />
             <span className="truncate font-mono text-xs text-[var(--color-muted)]">
               {title.titleId}
+            </span>
+          </div>
+          {/* Play-time + last-seen-playing (#116). Only ps5upload-observed
+              play (app open + watching), so "never" means "not seen by this
+              app", not necessarily "never played on the console". A neutral
+              muted line for played titles; a subtle warning tint for
+              never-seen ones so unused games are scannable at a glance. */}
+          <div
+            className={`mt-1 flex items-center gap-1.5 text-[11px] ${
+              lastSeenMs === undefined
+                ? "text-[var(--color-warning)]"
+                : "text-[var(--color-muted)]"
+            }`}
+            title={tr(
+              "installed_playtime_tooltip",
+              undefined,
+              "Play time and last-seen are tracked only while ps5upload is open and watching — not the console's own records.",
+            )}
+          >
+            <Clock size={11} className="shrink-0" />
+            <span className="truncate">
+              {playSeconds && playSeconds > 0
+                ? tr(
+                    "installed_playtime_line",
+                    { time: formatPlayTime(playSeconds), seen: formatLastSeen(lastSeenMs) },
+                    `${formatPlayTime(playSeconds)} · last seen ${formatLastSeen(lastSeenMs)}`,
+                  )
+                : tr("installed_playtime_never", undefined, "not seen playing")}
             </span>
           </div>
         </div>
@@ -371,26 +413,33 @@ function Section({
   hint,
   count,
   children,
+  controls,
 }: {
   icon: React.ComponentType<{ size?: number; className?: string }>;
   title: string;
   hint: string;
   count: number;
   children: React.ReactNode;
+  /** Optional right-aligned controls in the section header (e.g. the #116
+   *  sort/filter toggles on the Games & apps group). */
+  controls?: React.ReactNode;
 }) {
   return (
     <section className="flex flex-col gap-3">
-      <div className="flex items-start gap-2">
-        <Icon size={16} className="mt-0.5 shrink-0 text-[var(--color-muted)]" />
-        <div className="min-w-0">
-          <h2 className="text-sm font-semibold">
-            {title}{" "}
-            <span className="font-normal text-[var(--color-muted)]">
-              ({count})
-            </span>
-          </h2>
-          <p className="text-xs text-[var(--color-muted)]">{hint}</p>
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="flex items-start gap-2">
+          <Icon size={16} className="mt-0.5 shrink-0 text-[var(--color-muted)]" />
+          <div className="min-w-0">
+            <h2 className="text-sm font-semibold">
+              {title}{" "}
+              <span className="font-normal text-[var(--color-muted)]">
+                ({count})
+              </span>
+            </h2>
+            <p className="text-xs text-[var(--color-muted)]">{hint}</p>
+          </div>
         </div>
+        {controls}
       </div>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
         {children}
@@ -427,6 +476,15 @@ export default function InstalledAppsScreen() {
   const [stoppingId, setStoppingId] = useState<string | null>(null);
   const [smpSending, setSmpSending] = useState(false);
   const [smpMsg, setSmpMsg] = useState<string | null>(null);
+  // #116: sort the Installed group by play-time (least-played first) and,
+  // optionally, show ONLY titles ps5upload has never observed running — the
+  // "find games to remove" surface. Off by default so the default view is
+  // unchanged (name order, everything shown).
+  const [sortByPlaytime, setSortByPlaytime] = useState(false);
+  const [onlyUnplayed, setOnlyUnplayed] = useState(false);
+  // Per-title play stats for THIS console (cumulative seconds + last-seen ms).
+  const playByHost = usePlayTimeStore((s) => s.byHost);
+  const lastSeenByHost = usePlayTimeStore((s) => s.lastSeenByHost);
   // Native window.confirm() is a no-op in Tauri's webview; use the in-tree
   // modal instead (see ConfirmDialog.tsx).
   const { confirm: confirmDialog, dialog: confirmDialogNode } = useConfirm();
@@ -788,10 +846,30 @@ export default function InstalledAppsScreen() {
     running: running.has(t.titleId),
     stopping: stoppingId === t.titleId,
     discNeedsSmp: kindOf(t) === "disc" && !smpRunning && !smpChecking,
+    playSeconds: playSecondsFor({ byHost: playByHost }, host, t.titleId),
+    lastSeenMs: lastSeenPlayingFor({ lastSeenByHost }, host, t.titleId),
     onUninstall: handleUninstall,
     onLaunch: handleLaunch,
     onStop: handleStop,
   });
+
+  // #116: order/filter the Installed group. Least-played first when sorting
+  // by play-time (never-seen titles sort to the very top — 0 seconds — which
+  // is exactly the "candidates to remove" list). `onlyUnplayed` narrows to
+  // titles never observed running. Pure derivation over the already-grouped
+  // `installed` array; other groups (disc/folder/system) are left as-is.
+  const installedView = useMemo(() => {
+    const secs = (t: InstalledTitle) =>
+      playSecondsFor({ byHost: playByHost }, host, t.titleId) ?? 0;
+    let rows = installed;
+    if (onlyUnplayed) {
+      rows = rows.filter((t) => secs(t) === 0);
+    }
+    if (sortByPlaytime) {
+      rows = [...rows].sort((a, b) => secs(a) - secs(b));
+    }
+    return rows;
+  }, [installed, onlyUnplayed, sortByPlaytime, playByHost, host]);
 
   return (
     <div className="flex flex-col gap-5 p-6">
@@ -947,11 +1025,46 @@ export default function InstalledAppsScreen() {
                   undefined,
                   "Installed via Sony's installer from a .pkg (or shipped with the console). No source path.",
                 )}
-                count={installed.length}
+                count={onlyUnplayed ? installedView.length : installed.length}
+                controls={
+                  // #116: find-unused controls. Sort least-played first (never-
+                  // seen titles float to the top) and optionally hide everything
+                  // you HAVE played, so removal candidates are all that's left.
+                  <div className="flex flex-wrap items-center gap-3 text-xs">
+                    <label className="flex cursor-pointer items-center gap-1.5 text-[var(--color-muted)]">
+                      <input
+                        type="checkbox"
+                        className="h-3.5 w-3.5"
+                        checked={sortByPlaytime}
+                        onChange={(e) => setSortByPlaytime(e.target.checked)}
+                      />
+                      {tr("installed_sort_playtime", undefined, "Sort by play time")}
+                    </label>
+                    <label className="flex cursor-pointer items-center gap-1.5 text-[var(--color-muted)]">
+                      <input
+                        type="checkbox"
+                        className="h-3.5 w-3.5"
+                        checked={onlyUnplayed}
+                        onChange={(e) => setOnlyUnplayed(e.target.checked)}
+                      />
+                      {tr("installed_only_unplayed", undefined, "Only not-seen-playing")}
+                    </label>
+                  </div>
+                }
               >
-                {installed.map((t) => (
-                  <AppCard key={t.titleId} {...cardProps(t)} />
-                ))}
+                {installedView.length > 0 ? (
+                  installedView.map((t) => (
+                    <AppCard key={t.titleId} {...cardProps(t)} />
+                  ))
+                ) : (
+                  <p className="col-span-full text-xs text-[var(--color-muted)]">
+                    {tr(
+                      "installed_all_played",
+                      undefined,
+                      "Every installed title has been seen playing while ps5upload was open — nothing flagged as unused.",
+                    )}
+                  </p>
+                )}
               </Section>
             ) : null}
 
