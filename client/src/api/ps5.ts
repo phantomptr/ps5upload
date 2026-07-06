@@ -1425,6 +1425,9 @@ export interface PayloadInfo {
   autoload_priority: number;
   autoload_delay_ms: number;
   homepage: string;
+  /** True for a user-added custom repo (#93) — the UI badges it and shows a
+   *  Remove control. Undefined/false for curated catalogue entries. */
+  is_custom?: boolean;
 }
 
 export interface PayloadReleaseInfo {
@@ -1491,6 +1494,32 @@ export async function payloadsReleases(
 
 export async function payloadsLocalInventory(): Promise<PayloadLocalEntry[]> {
   return invoke<PayloadLocalEntry[]>("payloads_local_inventory");
+}
+
+/** Add a user's own GitHub/Gitea repo to the Payloads catalogue (#93). The
+ *  backend validates host/owner/name, mints a stable `custom-<hex>` id, and
+ *  persists. Idempotent — re-adding the same repo returns the existing entry.
+ *  Returns the added (or existing) catalogue row. */
+export async function payloadsAddCustomRepo(args: {
+  host: string;
+  owner: string;
+  name: string;
+  displayName?: string;
+  assetHint?: string;
+}): Promise<PayloadInfo> {
+  return invoke<PayloadInfo>("payloads_add_custom_repo", {
+    host: args.host,
+    owner: args.owner,
+    name: args.name,
+    displayName: args.displayName ?? null,
+    assetHint: args.assetHint ?? null,
+  });
+}
+
+/** Remove a user-added custom repo by id (#93). No-op for a catalogue id.
+ *  Returns true if something was removed. */
+export async function payloadsRemoveCustomRepo(id: string): Promise<boolean> {
+  return invoke<boolean>("payloads_remove_custom_repo", { id });
 }
 
 export async function payloadsLocalPath(id: string): Promise<string | null> {
