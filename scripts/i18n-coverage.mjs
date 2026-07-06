@@ -199,7 +199,65 @@ function computeAllForLang(translations) {
   return result;
 }
 
+/**
+ * Scan `client/src` for i18n keys referenced via `tr("literal", …)` (and
+ * `t(lang, "literal", …)`) and return the set of those NOT present in en.ts.
+ *
+ * Why this matters: the per-language coverage check above only validates
+ * translations OF en.ts keys. A key used at a call site with an inline
+ * fallback — `tr("foo", undefined, "Foo")` — but never added to en.ts is
+ * INVISIBLE to that check, yet it renders the English fallback for every
+ * user (including non-English locales) and can never be translated. This
+ * catches that class (fixed a batch of 70 such keys in the PR that added
+ * this guard). Multi-line `tr(\n  "key"…)` calls are matched too.
+ *
+ * Only LITERAL first-arg keys are checked; dynamically-built keys
+ * (`tr(\`x.${k}\`)`) can't be statically resolved and are skipped — same
+ * limitation find-orphan-i18n.mjs documents. `foo`/`x` are the doc-comment
+ * example keys in i18n.ts / lang.ts and are ignored.
+ */
+function findUsedButMissing(enKeys) {
+  const SRC_DIR = path.join(repoRoot, "client/src");
+  const IGNORE = new Set(["foo", "x"]);
+  const used = new Set();
+  // tr( <ws/nl> "key"   — and   t( <ws> ident/"lang", <ws/nl> "key"
+  const trPat = /\btr\(\s*"([a-zA-Z0-9_.]+)"/g;
+  const walk = (dir) => {
+    for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+      const fp = path.join(dir, ent.name);
+      if (ent.isDirectory()) {
+        if (ent.name === "i18n" && dir.endsWith("/src")) continue; // skip locale defs
+        walk(fp);
+      } else if (/\.tsx?$/.test(ent.name)) {
+        const txt = fs.readFileSync(fp, "utf8");
+        let m;
+        while ((m = trPat.exec(txt)) !== null) used.add(m[1]);
+      }
+    }
+  };
+  walk(SRC_DIR);
+  return [...used]
+    .filter((k) => !IGNORE.has(k) && !enKeys.has(k))
+    .sort();
+}
+
 const translations = loadTranslations();
+
+// Gate: any key USED at a call site but absent from en.ts. Runs before the
+// per-language coverage check (and is skipped in --update-allowlist bootstrap).
+if (!updateAllowlist) {
+  const enKeys = new Set(Object.keys(translations.en ?? {}));
+  const usedButMissing = findUsedButMissing(enKeys);
+  if (usedButMissing.length > 0) {
+    process.stderr.write(
+      `[i18n-coverage] failed: ${usedButMissing.length} key(s) used via tr("…") but NOT in en.ts.\n` +
+        "These render their English fallback for EVERY locale and can never be translated.\n" +
+        "Add each to client/src/i18n/locales/en.ts (then allowlist for other locales):\n",
+    );
+    for (const k of usedButMissing) process.stderr.write(`      ${k}\n`);
+    process.exit(1);
+  }
+}
 
 if (updateAllowlist) {
   const all = computeAllForLang(translations);
