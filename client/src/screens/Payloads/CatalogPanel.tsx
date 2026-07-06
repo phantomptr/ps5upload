@@ -9,6 +9,9 @@ import {
   HardDrive,
   AlertTriangle,
   Activity as ActivityIcon,
+  Plus,
+  Trash2,
+  X,
 } from "lucide-react";
 import { openExternalUrl as openExternal } from "../../lib/openExternalUrl";
 import { useConnectionStore } from "../../state/connection";
@@ -19,6 +22,8 @@ import {
   payloadsReleases,
   payloadsLocalInventory,
   payloadsDownload,
+  payloadsAddCustomRepo,
+  payloadsRemoveCustomRepo,
   sendPayload,
   type PayloadInfo,
   type PayloadReleaseInfo,
@@ -103,6 +108,92 @@ export default function CatalogPanel() {
       setErrors((prev) => ({ ...prev, _inventory: String(e) }));
     }
   }, []);
+
+  const reloadCatalog = useCallback(async () => {
+    try {
+      setCatalog(await payloadsCatalog());
+    } catch (e) {
+      setErrors((prev) => ({ ...prev, _global: String(e) }));
+    }
+  }, []);
+
+  // ── Add-a-custom-repo form (#93) ────────────────────────────────────
+  const [addOpen, setAddOpen] = useState(false);
+  const [addRepo, setAddRepo] = useState(""); // "owner/name" or a full URL
+  const [addHost, setAddHost] = useState("github.com");
+  const [addBusy, setAddBusy] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
+
+  /** Parse "owner/name", "github.com/owner/name", or a full repo URL into
+   *  { host, owner, name }. Returns null if it doesn't look like a repo ref. */
+  function parseRepoRef(
+    raw: string,
+    fallbackHost: string,
+  ): { host: string; owner: string; name: string } | null {
+    let s = raw.trim();
+    if (!s) return null;
+    s = s.replace(/^https?:\/\//i, "").replace(/\.git$/i, "").replace(/\/+$/, "");
+    const parts = s.split("/").filter(Boolean);
+    if (parts.length >= 3) {
+      // host/owner/name (extra path segments like /releases are ignored)
+      return { host: parts[0].toLowerCase(), owner: parts[1], name: parts[2] };
+    }
+    if (parts.length === 2) {
+      // owner/name — use the chosen host field
+      return { host: fallbackHost.trim().toLowerCase(), owner: parts[0], name: parts[1] };
+    }
+    return null;
+  }
+
+  async function handleAddCustomRepo() {
+    const ref = parseRepoRef(addRepo, addHost);
+    if (!ref) {
+      setAddError(
+        tr(
+          "payloads_custom_parse_error",
+          undefined,
+          "Enter owner/name (e.g. EchoStretch/kstuff-lite) or a full repo URL.",
+        ),
+      );
+      return;
+    }
+    setAddBusy(true);
+    setAddError(null);
+    try {
+      const info = await payloadsAddCustomRepo({
+        host: ref.host,
+        owner: ref.owner,
+        name: ref.name,
+      });
+      await reloadCatalog();
+      await refreshInventory();
+      setAddRepo("");
+      setAddOpen(false);
+      pushNotification(
+        "success",
+        tr("payloads_custom_added", { name: info.display_name }, `Added ${info.display_name}`),
+        { body: tr("payloads_custom_added_body", undefined, "Check its releases and send it like any other payload.") },
+      );
+    } catch (e) {
+      setAddError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAddBusy(false);
+    }
+  }
+
+  async function handleRemoveCustomRepo(id: string, name: string) {
+    try {
+      await payloadsRemoveCustomRepo(id);
+      await reloadCatalog();
+      await refreshInventory();
+      pushNotification(
+        "info",
+        tr("payloads_custom_removed", { name }, `Removed ${name}`),
+      );
+    } catch (e) {
+      setErrors((prev) => ({ ...prev, [id]: String(e) }));
+    }
+  }
 
   const inventoryById = useMemo(() => {
     const m: Record<string, PayloadLocalEntry> = {};
@@ -267,6 +358,17 @@ export default function CatalogPanel() {
             <Button
               variant="secondary"
               size="sm"
+              leftIcon={<Plus size={12} />}
+              onClick={() => {
+                setAddOpen((v) => !v);
+                setAddError(null);
+              }}
+            >
+              {tr("payloads_add_repo", undefined, "Add repo")}
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
               leftIcon={<HardDrive size={12} />}
               onClick={() => setUsbWizardOpen(true)}
             >
@@ -278,6 +380,74 @@ export default function CatalogPanel() {
             </Button>
           </div>
         </div>
+        {addOpen && (
+          <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-xs font-medium text-[var(--color-text)]">
+                {tr("payloads_add_repo_title", undefined, "Track a custom payload repo")}
+              </span>
+              <button
+                type="button"
+                onClick={() => setAddOpen(false)}
+                className="text-[var(--color-muted)] hover:text-[var(--color-text)]"
+                aria-label={tr("close", undefined, "Close")}
+              >
+                <X size={14} />
+              </button>
+            </div>
+            <p className="mb-2 text-[11px] text-[var(--color-muted)]">
+              {tr(
+                "payloads_add_repo_hint",
+                undefined,
+                "Paste owner/name (e.g. EchoStretch/kstuff-lite) or a full repo URL. Releases are fetched the same way as the curated list; the same ELF/zip checks apply on download. Only add repos you trust — ps5upload doesn't vet what a custom repo ships.",
+              )}
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                type="text"
+                value={addRepo}
+                onChange={(e) => setAddRepo(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !addBusy) void handleAddCustomRepo();
+                }}
+                placeholder={tr(
+                  "payloads_add_repo_placeholder",
+                  undefined,
+                  "owner/name or https://github.com/owner/name",
+                )}
+                spellCheck={false}
+                className="min-w-[260px] flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 py-1.5 text-xs outline-none focus:border-[var(--color-accent)]"
+              />
+              <label className="flex items-center gap-1 text-[11px] text-[var(--color-muted)]">
+                {tr("payloads_add_repo_host", undefined, "Host")}
+                <input
+                  type="text"
+                  value={addHost}
+                  onChange={(e) => setAddHost(e.target.value)}
+                  spellCheck={false}
+                  title={tr(
+                    "payloads_add_repo_host_hint",
+                    undefined,
+                    "Used only when you enter a bare owner/name. GitHub or a Gitea/Forgejo host.",
+                  )}
+                  className="w-36 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1.5 text-xs outline-none focus:border-[var(--color-accent)]"
+                />
+              </label>
+              <Button
+                variant="primary"
+                size="sm"
+                loading={addBusy}
+                disabled={addBusy || !addRepo.trim()}
+                onClick={() => void handleAddCustomRepo()}
+              >
+                {tr("payloads_add_repo_submit", undefined, "Add")}
+              </Button>
+            </div>
+            {addError && (
+              <div className="mt-2 text-[11px] text-[var(--color-danger)]">{addError}</div>
+            )}
+          </div>
+        )}
         {errors._global && (
           <ErrorCard
             title={tr(
@@ -329,6 +499,11 @@ export default function CatalogPanel() {
             onOpenHomepage={() => {
               void openExternal(p.homepage);
             }}
+            onRemove={
+              p.is_custom
+                ? () => void handleRemoveCustomRepo(p.id, p.display_name)
+                : undefined
+            }
           />
         ))}
       </div>
@@ -356,6 +531,7 @@ function PayloadCard({
   onDownload,
   onSend,
   onOpenHomepage,
+  onRemove,
 }: {
   info: PayloadInfo;
   release: PayloadReleaseInfo | undefined;
@@ -369,6 +545,9 @@ function PayloadCard({
   onDownload: () => void;
   onSend: () => void;
   onOpenHomepage: () => void;
+  /** Present only for a user-added custom repo (#93) — renders a Remove
+   *  control. Undefined for curated catalogue entries. */
+  onRemove?: () => void;
 }) {
   const tr = useTr();
   // Versions the picker offers (only those with a downloadable asset).
@@ -393,6 +572,11 @@ function PayloadCard({
         <div className="min-w-[min(100%,16rem)] flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="text-sm font-semibold">{info.display_name}</h3>
+            {info.is_custom && (
+              <span className="rounded-full border border-[var(--color-border)] px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-[var(--color-muted)]">
+                {tr("payloads_custom_badge", undefined, "Custom")}
+              </span>
+            )}
             <button
               type="button"
               onClick={onOpenHomepage}
@@ -402,6 +586,17 @@ function PayloadCard({
               <ExternalLink size={11} />
               {info.repo_owner}/{info.repo_name}
             </button>
+            {onRemove && (
+              <button
+                type="button"
+                onClick={onRemove}
+                className="inline-flex items-center gap-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-danger)]"
+                title={tr("payloads_custom_remove", undefined, "Remove this custom repo")}
+              >
+                <Trash2 size={11} />
+                {tr("payloads_custom_remove_short", undefined, "Remove")}
+              </button>
+            )}
           </div>
           <div className="mt-0.5 text-xs text-[var(--color-muted)]">
             {info.role}

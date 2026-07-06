@@ -557,6 +557,10 @@ pub struct PayloadInfo {
     autoload_priority: u8,
     autoload_delay_ms: u32,
     homepage: String,
+    /// True for a user-added custom repo (#93) — the UI badges it and shows a
+    /// Remove affordance. Absent/false for curated catalogue entries.
+    #[serde(default)]
+    is_custom: bool,
 }
 
 impl From<&CatalogueEntry> for PayloadInfo {
@@ -574,6 +578,38 @@ impl From<&CatalogueEntry> for PayloadInfo {
             autoload_priority: e.autoload_priority,
             autoload_delay_ms: e.autoload_delay_ms,
             homepage: e.homepage.to_string(),
+            is_custom: false,
+        }
+    }
+}
+
+impl From<&CustomRepo> for PayloadInfo {
+    fn from(r: &CustomRepo) -> Self {
+        let homepage = if r.repo_host == "github.com" {
+            format!("https://github.com/{}/{}", r.repo_owner, r.repo_name)
+        } else {
+            format!("https://{}/{}/{}", r.repo_host, r.repo_owner, r.repo_name)
+        };
+        Self {
+            id: r.id.clone(),
+            display_name: r.display_name.clone(),
+            role: "Custom repo".to_string(),
+            description: format!(
+                "User-added repo. Releases are fetched from {}/{}/{} and sent like any \
+                 other payload — the same ELF/zip checks apply. ps5upload doesn't vet \
+                 what this repo ships; only add repos you trust.",
+                r.repo_host, r.repo_owner, r.repo_name
+            ),
+            repo_owner: r.repo_owner.clone(),
+            repo_name: r.repo_name.clone(),
+            on_console_marker_path: None,
+            process_name_hint: None,
+            ports: Vec::new(),
+            // Custom repos sort after every curated entry in the autoloader.
+            autoload_priority: u8::MAX,
+            autoload_delay_ms: 200,
+            homepage,
+            is_custom: true,
         }
     }
 }
@@ -584,6 +620,184 @@ fn find_entry(id: &str) -> Option<&'static CatalogueEntry> {
     CATALOGUE.iter().find(|e| e.id == id)
 }
 
+// ─── User-added custom payload repos (#93) ──────────────────────────
+//
+// The curated CATALOGUE is a `const` — hand-picked, code-reviewed. Users
+// asked to track their OWN repos (a fork, a niche payload not in the
+// catalogue). Those live in a user-writable JSON file and flow through the
+// SAME release-fetch + download pipeline as catalogue entries, so every
+// download guard (https-only pin, ELF/zip magic check, byte cap, zip-slip
+// protection) applies identically. The only relaxation is the const
+// catalogue's `ALLOWED_HOSTS` runtime guard: a user entry's host is one the
+// USER typed and approved, not something a malicious PR injected — so it's
+// validated at add-time (github.com or a plausible Gitea/Forgejo hostname)
+// instead of against the fixed allowlist. Custom ids are always
+// `custom-<12 hex>` so they can never collide with a catalogue id nor
+// traverse the per-payload cache dir.
+
+/// A user-added repo. Serialized to `payloads/custom-repos.json` in
+/// app-local data. `id` is minted at add-time (`custom-<hex>`); the rest is
+/// what the user supplied. Kept intentionally minimal — no marker/port/
+/// autoload fields (those are catalogue-curation concerns; a custom repo is
+/// just "fetch releases from here and let me send the ELF").
+#[derive(Clone, Deserialize, Serialize)]
+struct CustomRepo {
+    id: String,
+    display_name: String,
+    repo_host: String,
+    repo_owner: String,
+    repo_name: String,
+    #[serde(default)]
+    asset_name_hint: String,
+}
+
+/// An entry resolved for the network path — either a borrowed catalogue
+/// entry or an owned custom repo. Only the fields the release-fetch and
+/// download functions actually read. Lets those functions treat both
+/// sources uniformly without duplicating the fetch/guard logic.
+struct ResolvedEntry {
+    id: String,
+    repo_host: String,
+    repo_owner: String,
+    repo_name: String,
+    asset_name_hint: String,
+    /// True for a user-added repo — its host was user-approved at add time,
+    /// so the const-catalogue `ALLOWED_HOSTS` guard doesn't apply.
+    is_custom: bool,
+}
+
+impl From<&CatalogueEntry> for ResolvedEntry {
+    fn from(e: &CatalogueEntry) -> Self {
+        Self {
+            id: e.id.to_string(),
+            repo_host: e.repo_host.to_string(),
+            repo_owner: e.repo_owner.to_string(),
+            repo_name: e.repo_name.to_string(),
+            asset_name_hint: e.asset_name_hint.to_string(),
+            is_custom: false,
+        }
+    }
+}
+
+impl From<&CustomRepo> for ResolvedEntry {
+    fn from(r: &CustomRepo) -> Self {
+        Self {
+            id: r.id.clone(),
+            repo_host: r.repo_host.clone(),
+            repo_owner: r.repo_owner.clone(),
+            repo_name: r.repo_name.clone(),
+            asset_name_hint: r.asset_name_hint.clone(),
+            is_custom: true,
+        }
+    }
+}
+
+/// A `custom-<id>` is well-formed iff it's exactly "custom-" + 1..=32 lowercase
+/// hex chars. Enforced everywhere a custom id is used as a cache DIRECTORY
+/// name, so a renderer-supplied id can never escape `payloads/` via `..` or a
+/// slash (the same footgun `payloads_local_path` guards for catalogue ids).
+fn is_valid_custom_id(id: &str) -> bool {
+    let Some(rest) = id.strip_prefix("custom-") else {
+        return false;
+    };
+    !rest.is_empty()
+        && rest.len() <= 32
+        && rest.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+}
+
+fn custom_repos_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let root = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| format!("app_local_data_dir: {e}"))?;
+    let dir = root.join("payloads");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
+    Ok(dir.join("custom-repos.json"))
+}
+
+fn load_custom_repos(app: &AppHandle) -> Vec<CustomRepo> {
+    let Ok(path) = custom_repos_path(app) else {
+        return Vec::new();
+    };
+    let Ok(bytes) = std::fs::read(&path) else {
+        return Vec::new();
+    };
+    // Drop any malformed/legacy entries silently — a corrupt id must never
+    // reach the cache-dir path. Belt-and-suspenders over the add-time check.
+    serde_json::from_slice::<Vec<CustomRepo>>(&bytes)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|r| is_valid_custom_id(&r.id))
+        .collect()
+}
+
+fn save_custom_repos(app: &AppHandle, repos: &[CustomRepo]) -> Result<(), String> {
+    let path = custom_repos_path(app)?;
+    let tmp = path.with_extension("json.tmp");
+    let body = serde_json::to_vec_pretty(repos).map_err(|e| format!("serialize: {e}"))?;
+    std::fs::write(&tmp, &body).map_err(|e| format!("write custom repos: {e}"))?;
+    super::replace_file(&tmp, &path).map_err(|e| format!("rename custom repos: {e}"))
+}
+
+fn find_custom_repo(app: &AppHandle, id: &str) -> Option<CustomRepo> {
+    load_custom_repos(app).into_iter().find(|r| r.id == id)
+}
+
+/// Resolve an id to a network entry, checking user repos first, then the
+/// const catalogue. None = unknown id.
+fn resolve_entry(app: &AppHandle, id: &str) -> Option<ResolvedEntry> {
+    if let Some(c) = find_custom_repo(app, id) {
+        return Some((&c).into());
+    }
+    find_entry(id).map(ResolvedEntry::from)
+}
+
+/// Hosts a custom repo may target. GitHub + a light structural check for
+/// Gitea/Forgejo hostnames (the catalogue already speaks that API shape).
+/// Not an allowlist of specific servers (that's the point of "custom") — a
+/// sanity gate so an obviously-bad host (a bare IP, localhost, an
+/// unresolvable string) is rejected before it hits the network path.
+fn is_plausible_repo_host(host: &str) -> bool {
+    if host == "github.com" {
+        return true;
+    }
+    // A real registrable hostname: at least one dot, labels of
+    // [a-z0-9-] (not leading/trailing '-'), no scheme/path/port/creds.
+    if host.len() > 253
+        || host.contains('/')
+        || host.contains(':')
+        || host.contains('@')
+        || host.contains(' ')
+    {
+        return false;
+    }
+    let labels: Vec<&str> = host.split('.').collect();
+    if labels.len() < 2 {
+        return false;
+    }
+    labels.iter().all(|l| {
+        !l.is_empty()
+            && l.len() <= 63
+            && !l.starts_with('-')
+            && !l.ends_with('-')
+            && l.chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    })
+}
+
+/// A repo owner/name segment is a single GitHub/Gitea path component:
+/// non-empty, <=100 chars, `[A-Za-z0-9._-]`, no slashes/dots-only. Keeps a
+/// user typo from injecting extra path segments into the API URL.
+fn is_valid_repo_segment(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 100
+        && s != "."
+        && s != ".."
+        && s
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-')
+}
+
 /// Cross-module accessor so `usb_autoloader.rs` can resolve a payload
 /// id to its `(id, autoload_priority, autoload_delay_ms)` tuple
 /// without re-parsing the catalogue. Returns None for unknown ids.
@@ -591,11 +805,107 @@ pub(crate) fn autoload_meta_for(id: &str) -> Option<(&'static str, u8, u32)> {
     find_entry(id).map(|e| (e.id, e.autoload_priority, e.autoload_delay_ms))
 }
 
-/// List the full catalogue. Tauri command — invoked by the Payloads
-/// screen on mount.
+/// List the full catalogue — curated entries first, then the user's own
+/// custom repos (#93). Tauri command — invoked by the Payloads screen on
+/// mount.
 #[tauri::command]
-pub async fn payloads_catalog() -> Vec<PayloadInfo> {
-    CATALOGUE.iter().map(PayloadInfo::from).collect()
+pub async fn payloads_catalog(app: AppHandle) -> Vec<PayloadInfo> {
+    let mut out: Vec<PayloadInfo> = CATALOGUE.iter().map(PayloadInfo::from).collect();
+    out.extend(load_custom_repos(&app).iter().map(PayloadInfo::from));
+    out
+}
+
+/// Add a user's own repo to the Payloads catalogue (#93). Validates the
+/// host/owner/name, mints a stable `custom-<hex>` id, dedupes on
+/// host+owner+name, and persists. The id is derived from host/owner/name so
+/// re-adding the same repo is idempotent (same id → same cache dir). Returns
+/// the added (or existing) entry.
+#[tauri::command]
+pub async fn payloads_add_custom_repo(
+    app: AppHandle,
+    host: String,
+    owner: String,
+    name: String,
+    display_name: Option<String>,
+    asset_hint: Option<String>,
+) -> Result<PayloadInfo, String> {
+    let host = host.trim().trim_start_matches("https://").trim_end_matches('/');
+    // Accept a pasted "github.com/owner/repo" or full URL in the owner field
+    // by NOT parsing it here — the UI splits before calling. We only validate.
+    let host = host.to_ascii_lowercase();
+    let owner = owner.trim().to_string();
+    let name = name.trim().trim_end_matches(".git").to_string();
+
+    if !is_plausible_repo_host(&host) {
+        return Err(format!(
+            "\"{host}\" doesn't look like a repo host — use github.com or a Gitea/Forgejo domain."
+        ));
+    }
+    if !is_valid_repo_segment(&owner) {
+        return Err("The owner/org name has invalid characters.".to_string());
+    }
+    if !is_valid_repo_segment(&name) {
+        return Err("The repository name has invalid characters.".to_string());
+    }
+
+    // Deterministic id from the identity triple: FNV-1a over "host/owner/name",
+    // 48 bits hex → "custom-<12 hex>". Stable across adds (idempotent cache).
+    let key = format!("{host}/{owner}/{name}");
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in key.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    let id = format!("custom-{:012x}", h & 0xffff_ffff_ffff);
+    debug_assert!(is_valid_custom_id(&id));
+
+    let display_name = display_name
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| format!("{owner}/{name}"));
+    let asset_name_hint = asset_hint.map(|s| s.trim().to_string()).unwrap_or_default();
+
+    let mut repos = load_custom_repos(&app);
+    if let Some(existing) = repos.iter().find(|r| r.id == id) {
+        return Ok(PayloadInfo::from(existing));
+    }
+    let repo = CustomRepo {
+        id,
+        display_name,
+        repo_host: host,
+        repo_owner: owner,
+        repo_name: name,
+        asset_name_hint,
+    };
+    let info = PayloadInfo::from(&repo);
+    repos.push(repo);
+    save_custom_repos(&app, &repos)?;
+    Ok(info)
+}
+
+/// Remove a user-added custom repo by id (#93). No-op if the id isn't a
+/// custom repo (a catalogue id can't be removed). Also drops its cached
+/// release manifests + downloaded binary so a removed repo leaves nothing
+/// behind. Returns true if something was removed.
+#[tauri::command]
+pub async fn payloads_remove_custom_repo(app: AppHandle, id: String) -> Result<bool, String> {
+    if !is_valid_custom_id(&id) {
+        return Ok(false);
+    }
+    let mut repos = load_custom_repos(&app);
+    let before = repos.len();
+    repos.retain(|r| r.id != id);
+    if repos.len() == before {
+        return Ok(false);
+    }
+    save_custom_repos(&app, &repos)?;
+    // Best-effort cache cleanup: the per-payload dir is named by id, guarded
+    // valid above, so this can't escape payloads/.
+    if let Ok(root) = app.path().app_local_data_dir() {
+        let dir = root.join("payloads").join(&id);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    Ok(true)
 }
 
 // ─── GitHub releases ────────────────────────────────────────────────
@@ -860,26 +1170,25 @@ pub async fn payloads_release(
     id: String,
     force_refresh: Option<bool>,
 ) -> Result<ReleaseInfo, String> {
-    let entry = find_entry(&id).ok_or_else(|| format!("unknown payload id: {id}"))?;
+    let entry = resolve_entry(&app, &id).ok_or_else(|| format!("unknown payload id: {id}"))?;
     let cache_path = cache_release_path(&app, &id)?;
     let force = force_refresh.unwrap_or(false);
 
     // Cache-hit fast path.
     if !force {
         if let Some((release, age)) = read_cached_release(&cache_path) {
-            return Ok(release_to_info(entry, &release, age));
+            return Ok(release_to_info(&entry, &release, age));
         }
     }
 
-    // Allowlist guard. The catalog is a `const` baked into the
-    // binary at build time, so the only way an entry can carry a
-    // hostile `repo_host` is a malicious PR. Code review is the
-    // primary defense, but a static allowlist enforced at runtime
-    // makes that PR fail fast in dev + CI and removes the foot-gun
-    // of `repo_host` being silently treated as authoritative. New
-    // hosts go through both a code-review PR AND an allowlist edit.
+    // Allowlist guard for CATALOGUE entries only. The catalog is a `const`
+    // baked into the binary, so the only way a catalogue entry can carry a
+    // hostile `repo_host` is a malicious PR — the static allowlist makes that
+    // fail fast. A CUSTOM repo's host was typed + approved by the user at
+    // add-time (validated by `is_plausible_repo_host`), so it isn't subject to
+    // this fixed list — that's the whole point of "custom".
     const ALLOWED_HOSTS: &[&str] = &["github.com", "git.etawen.dev"];
-    if !ALLOWED_HOSTS.contains(&entry.repo_host) {
+    if !entry.is_custom && !ALLOWED_HOSTS.contains(&entry.repo_host.as_str()) {
         return Err(format!(
             "catalog entry {} declares repo_host={:?} which is not in the allowlist",
             entry.id, entry.repo_host
@@ -915,7 +1224,7 @@ pub async fn payloads_release(
     let fallback_to_stale = |reason: String| -> Result<ReleaseInfo, String> {
         if let Some((release, age)) = read_stale_cached_release(&cache_path) {
             return Ok(release_to_info_with_refresh_error(
-                entry,
+                &entry,
                 &release,
                 age,
                 Some(reason),
@@ -969,7 +1278,7 @@ pub async fn payloads_release(
     std::fs::write(&tmp, &body).map_err(|e| format!("write cache: {e}"))?;
     super::replace_file(&tmp, &cache_path).map_err(|e| format!("rename cache: {e}"))?;
 
-    Ok(release_to_info(entry, &release, 0))
+    Ok(release_to_info(&entry, &release, 0))
 }
 
 /// Cache file for a payload's FULL release list — distinct from the
@@ -1017,7 +1326,7 @@ pub async fn payloads_releases(
     id: String,
     force_refresh: Option<bool>,
 ) -> Result<Vec<ReleaseInfo>, String> {
-    let entry = find_entry(&id).ok_or_else(|| format!("unknown payload id: {id}"))?;
+    let entry = resolve_entry(&app, &id).ok_or_else(|| format!("unknown payload id: {id}"))?;
     let cache_path = cache_releases_list_path(&app, &id)?;
     let force = force_refresh.unwrap_or(false);
 
@@ -1025,13 +1334,14 @@ pub async fn payloads_releases(
         if let Some((releases, age)) = read_cached_releases(&cache_path, true) {
             return Ok(releases
                 .iter()
-                .map(|r| release_to_info(entry, r, age))
+                .map(|r| release_to_info(&entry, r, age))
                 .collect());
         }
     }
 
+    // Allowlist guard for catalogue entries only — see payloads_release.
     const ALLOWED_HOSTS: &[&str] = &["github.com", "git.etawen.dev"];
-    if !ALLOWED_HOSTS.contains(&entry.repo_host) {
+    if !entry.is_custom && !ALLOWED_HOSTS.contains(&entry.repo_host.as_str()) {
         return Err(format!(
             "catalog entry {} declares repo_host={:?} which is not in the allowlist",
             entry.id, entry.repo_host
@@ -1061,7 +1371,7 @@ pub async fn payloads_releases(
         if let Some((releases, age)) = read_cached_releases(&cache_path, false) {
             return Ok(releases
                 .iter()
-                .map(|r| release_to_info_with_refresh_error(entry, r, age, Some(reason.clone())))
+                .map(|r| release_to_info_with_refresh_error(&entry, r, age, Some(reason.clone())))
                 .collect());
         }
         Err(reason)
@@ -1099,12 +1409,12 @@ pub async fn payloads_releases(
 
     Ok(releases
         .iter()
-        .map(|r| release_to_info(entry, r, 0))
+        .map(|r| release_to_info(&entry, r, 0))
         .collect())
 }
 
 fn release_to_info(
-    entry: &CatalogueEntry,
+    entry: &ResolvedEntry,
     release: &GithubRelease,
     cached_age_secs: u64,
 ) -> ReleaseInfo {
@@ -1117,12 +1427,12 @@ fn release_to_info(
 /// render a "couldn't refresh — showing cached" banner without
 /// hiding the cached data behind a hard error.
 fn release_to_info_with_refresh_error(
-    entry: &CatalogueEntry,
+    entry: &ResolvedEntry,
     release: &GithubRelease,
     cached_age_secs: u64,
     refresh_error: Option<String>,
 ) -> ReleaseInfo {
-    let (name, url, size) = pick_asset(release, entry.asset_name_hint);
+    let (name, url, size) = pick_asset(release, &entry.asset_name_hint);
     ReleaseInfo {
         payload_id: entry.id.to_string(),
         tag: release.tag_name.clone(),
@@ -1191,48 +1501,53 @@ fn payload_cache_dir(app: &AppHandle, id: &str) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-/// List all locally-cached payload binaries. The Payloads screen uses
-/// this to decide whether to show a "Download" or "Send" affordance.
+/// Scan one payload's cache dir for its downloaded .elf and build an
+/// inventory entry, or None if nothing is cached. Shared by catalogue and
+/// custom-repo listing.
+fn local_inventory_for(app: &AppHandle, id: &str) -> Option<LocalInventoryEntry> {
+    let dir = payload_cache_dir(app, id).ok()?;
+    let read = std::fs::read_dir(&dir).ok()?;
+    for f in read.flatten() {
+        let p = f.path();
+        if p.extension().and_then(|e| e.to_str()) != Some("elf") {
+            continue;
+        }
+        let meta = std::fs::metadata(&p).ok()?;
+        let mtime = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let version = std::fs::read_to_string(dir.join("VERSION"))
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        return Some(LocalInventoryEntry {
+            payload_id: id.to_string(),
+            version,
+            path: p.to_string_lossy().to_string(),
+            size: meta.len(),
+            mtime,
+        });
+    }
+    None
+}
+
+/// List all locally-cached payload binaries — catalogue entries and the
+/// user's custom repos (#93). The Payloads screen uses this to decide
+/// whether to show a "Download" or "Send" affordance.
 #[tauri::command]
 pub async fn payloads_local_inventory(app: AppHandle) -> Vec<LocalInventoryEntry> {
     let mut out = Vec::new();
     for entry in CATALOGUE {
-        let dir = match payload_cache_dir(&app, entry.id) {
-            Ok(d) => d,
-            Err(_) => continue,
-        };
-        // Find the first .elf in the dir.
-        let read = match std::fs::read_dir(&dir) {
-            Ok(r) => r,
-            Err(_) => continue,
-        };
-        for f in read.flatten() {
-            let p = f.path();
-            if p.extension().and_then(|e| e.to_str()) != Some("elf") {
-                continue;
-            }
-            let meta = match std::fs::metadata(&p) {
-                Ok(m) => m,
-                Err(_) => continue,
-            };
-            let mtime = meta
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0);
-            let version = std::fs::read_to_string(dir.join("VERSION"))
-                .unwrap_or_default()
-                .trim()
-                .to_string();
-            out.push(LocalInventoryEntry {
-                payload_id: entry.id.to_string(),
-                version,
-                path: p.to_string_lossy().to_string(),
-                size: meta.len(),
-                mtime,
-            });
-            break; // one per payload
+        if let Some(e) = local_inventory_for(&app, entry.id) {
+            out.push(e);
+        }
+    }
+    for repo in load_custom_repos(&app) {
+        if let Some(e) = local_inventory_for(&app, &repo.id) {
+            out.push(e);
         }
     }
     out
@@ -1251,7 +1566,7 @@ pub async fn payloads_download(
     asset_url: String,
     version: String,
 ) -> Result<LocalInventoryEntry, String> {
-    let entry = find_entry(&id).ok_or_else(|| format!("unknown payload id: {id}"))?;
+    let entry = resolve_entry(&app, &id).ok_or_else(|| format!("unknown payload id: {id}"))?;
     if asset_url.is_empty() {
         return Err("no asset url".to_string());
     }
@@ -1263,8 +1578,11 @@ pub async fn payloads_download(
     // asset, and reqwest still follows GitHub's internal 302 to its asset
     // CDN because we only pin the URL we actually request. Without it, a
     // renderer-supplied asset_url could aim our GET at an arbitrary host.
+    // For a custom repo `repo_host` is the user-approved host, so this pin
+    // still constrains the download to exactly where the user pointed us —
+    // and github.com release assets 302 to their CDN as usual.
     match reqwest::Url::parse(&asset_url) {
-        Ok(u) if u.scheme() == "https" && u.host_str() == Some(entry.repo_host) => {}
+        Ok(u) if u.scheme() == "https" && u.host_str() == Some(entry.repo_host.as_str()) => {}
         _ => {
             return Err(format!(
                 "asset url for {} must be https on {}",
@@ -1272,7 +1590,7 @@ pub async fn payloads_download(
             ));
         }
     }
-    let dir = payload_cache_dir(&app, entry.id)?;
+    let dir = payload_cache_dir(&app, &entry.id)?;
 
     let client = reqwest::Client::builder()
         .timeout(ASSET_DOWNLOAD_TIMEOUT)
@@ -1360,7 +1678,7 @@ pub async fn payloads_download(
             .map_err(|e| format!("rename {}: {e}", dl_tmp.display()))?;
     } else if &head[..2] == b"PK" {
         // Zip release — extract the payload ELF from inside it.
-        let res = extract_payload_elf_from_zip(&dl_tmp, &elf_tmp, entry.asset_name_hint);
+        let res = extract_payload_elf_from_zip(&dl_tmp, &elf_tmp, &entry.asset_name_hint);
         let _ = std::fs::remove_file(&dl_tmp);
         res?;
     } else {
@@ -1417,14 +1735,22 @@ pub async fn payloads_download(
 /// by Phase 4 (USB autoloader writer) so it can copy from cache
 /// without re-downloading.
 ///
-/// Validates `id` against the static catalogue first — without this,
-/// a renderer-supplied `id = "../foo"` would let `payload_cache_dir`
-/// (which calls `create_dir_all`) materialise attacker-named
-/// directories anywhere under `app_local_data_dir`.
+/// Validates `id` against the static catalogue OR the `custom-<hex>` shape
+/// first — without this, a renderer-supplied `id = "../foo"` would let
+/// `payload_cache_dir` (which calls `create_dir_all`) materialise
+/// attacker-named directories anywhere under `app_local_data_dir`.
 #[tauri::command]
 pub async fn payloads_local_path(app: AppHandle, id: String) -> Option<String> {
-    let entry = find_entry(&id)?;
-    let dir = payload_cache_dir(&app, entry.id).ok()?;
+    // Accept a catalogue id or a well-formed custom id; both are safe as a
+    // cache-dir component. Anything else is rejected before touching the FS.
+    let safe_id: String = if let Some(e) = find_entry(&id) {
+        e.id.to_string()
+    } else if is_valid_custom_id(&id) {
+        id.clone()
+    } else {
+        return None;
+    };
+    let dir = payload_cache_dir(&app, &safe_id).ok()?;
     let read = std::fs::read_dir(&dir).ok()?;
     for f in read.flatten() {
         let p = f.path();
@@ -1461,6 +1787,80 @@ mod tests {
                 entry.id
             );
         }
+    }
+
+    #[test]
+    fn custom_id_validation_blocks_traversal() {
+        // Valid shapes.
+        assert!(is_valid_custom_id("custom-0"));
+        assert!(is_valid_custom_id("custom-deadbeef1234"));
+        assert!(is_valid_custom_id(&format!("custom-{:012x}", 0xabcu64)));
+        // Invalid: wrong prefix, empty tail, non-hex, uppercase, traversal,
+        // and — critically — no path components can slip in.
+        assert!(!is_valid_custom_id("custom-"));
+        assert!(!is_valid_custom_id("kstuff-echostretch")); // a catalogue id
+        assert!(!is_valid_custom_id("custom-../etc"));
+        assert!(!is_valid_custom_id("custom-ab/cd"));
+        assert!(!is_valid_custom_id("custom-DEADBEEF")); // uppercase
+        assert!(!is_valid_custom_id("custom-xyz")); // non-hex
+        assert!(!is_valid_custom_id("../custom-ab"));
+        assert!(!is_valid_custom_id(&format!("custom-{}", "a".repeat(33)))); // too long
+    }
+
+    #[test]
+    fn plausible_repo_host_gate() {
+        assert!(is_plausible_repo_host("github.com"));
+        assert!(is_plausible_repo_host("git.etawen.dev"));
+        assert!(is_plausible_repo_host("codeberg.org"));
+        assert!(is_plausible_repo_host("gitea.example.co.uk"));
+        // Rejected: schemes, paths, ports, creds, spaces, bad labels, bare hosts.
+        assert!(!is_plausible_repo_host("localhost")); // no dot
+        assert!(!is_plausible_repo_host("github")); // no dot
+        assert!(!is_plausible_repo_host("evil.com/path"));
+        assert!(!is_plausible_repo_host("evil.com:22"));
+        assert!(!is_plausible_repo_host("user@evil.com"));
+        assert!(!is_plausible_repo_host("has space.com"));
+        assert!(!is_plausible_repo_host("-bad.com"));
+        assert!(!is_plausible_repo_host(""));
+        // A bare IP is structurally dotted so it passes this coarse gate — the
+        // https-only + host-pin download guard is what actually constrains
+        // where bytes come from, so we don't try to perfectly reject IPs here.
+        assert!(is_plausible_repo_host("192.168.1.1"));
+    }
+
+    #[test]
+    fn repo_segment_validation() {
+        assert!(is_valid_repo_segment("EchoStretch"));
+        assert!(is_valid_repo_segment("kstuff-lite"));
+        assert!(is_valid_repo_segment("my.repo_2"));
+        assert!(!is_valid_repo_segment(""));
+        assert!(!is_valid_repo_segment("."));
+        assert!(!is_valid_repo_segment(".."));
+        assert!(!is_valid_repo_segment("has/slash"));
+        assert!(!is_valid_repo_segment("has space"));
+        assert!(!is_valid_repo_segment(&"a".repeat(101)));
+    }
+
+    #[test]
+    fn custom_repo_maps_to_payload_info() {
+        let r = CustomRepo {
+            id: "custom-abc123".into(),
+            display_name: "My Fork".into(),
+            repo_host: "github.com".into(),
+            repo_owner: "me".into(),
+            repo_name: "my-payload".into(),
+            asset_name_hint: "".into(),
+        };
+        let info = PayloadInfo::from(&r);
+        assert_eq!(info.id, "custom-abc123");
+        assert_eq!(info.display_name, "My Fork");
+        assert!(info.is_custom);
+        assert_eq!(info.homepage, "https://github.com/me/my-payload");
+        // A resolved entry from a custom repo is flagged is_custom (skips the
+        // catalogue host allowlist).
+        let re: ResolvedEntry = (&r).into();
+        assert!(re.is_custom);
+        assert_eq!(re.repo_host, "github.com");
     }
 
     #[test]
@@ -1605,7 +2005,9 @@ mod tests {
     fn release_to_info_carries_tag_and_prerelease() {
         // The version picker relies on `tag` + `prerelease` flowing through
         // release_to_info untouched (a stable build vs a fast-moving rc).
-        let entry = find_entry("shadowmountplus").expect("catalog entry");
+        let entry: ResolvedEntry = find_entry("shadowmountplus")
+            .expect("catalog entry")
+            .into();
         let mk = |tag: &str, pre: bool| GithubRelease {
             tag_name: tag.into(),
             name: "".into(),
@@ -1615,8 +2017,8 @@ mod tests {
             prerelease: pre,
             assets: vec![],
         };
-        let stable = release_to_info(entry, &mk("v2.0", false), 0);
-        let pre = release_to_info(entry, &mk("v2.1-rc1", true), 0);
+        let stable = release_to_info(&entry, &mk("v2.0", false), 0);
+        let pre = release_to_info(&entry, &mk("v2.1-rc1", true), 0);
         assert_eq!(stable.tag, "v2.0");
         assert!(!stable.prerelease);
         assert_eq!(pre.tag, "v2.1-rc1");

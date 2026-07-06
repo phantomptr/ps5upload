@@ -260,6 +260,8 @@ pub fn run() {
             commands::payloads_local_inventory,
             commands::payloads_local_path,
             commands::payloads_download,
+            commands::payloads_add_custom_repo,
+            commands::payloads_remove_custom_repo,
             // ── ShadowMount+ awareness (read-only) ──────────────────
             // `smp_status` collects the on-console SMP state — config,
             // autotune, mounted images, debug-log tail — so the
