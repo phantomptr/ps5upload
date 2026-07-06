@@ -43,9 +43,16 @@ const keyOf = (host: string | null | undefined): string =>
 interface PlayTimeState {
   /** Accumulated seconds keyed by bare host, then by title_id (CUSAxxxxx). */
   byHost: Record<string, Record<string, number>>;
+  /** Wall-clock ms of the last time ps5upload OBSERVED each title running,
+   *  keyed by bare host then title_id. Distinct from `byHost` (cumulative
+   *  seconds) — this is "when did we last see it playing", which drives the
+   *  Installed-Apps "not played recently" surface (#116). Only reflects play
+   *  ps5upload actually saw; a game played with the app closed isn't counted
+   *  (there's no honest console-side last-played the app can read cheaply). */
+  lastSeenByHost: Record<string, Record<string, number>>;
   /** Last sample timestamp (ms). */
   lastSampleMs: number;
-  /** Add a delta to the named titles on one console. */
+  /** Add a delta to the named titles on one console (and stamp last-seen). */
   credit: (host: string, titleIds: string[], deltaSec: number) => void;
   /** Reset a single title's count on one console (manual override). */
   reset: (host: string, titleId: string) => void;
@@ -63,33 +70,54 @@ export function playSecondsFor(
   return s.byHost[keyOf(host)]?.[titleId];
 }
 
-function loadStored(): {
+/** Read one console's last-observed-playing timestamp (ms) for a title.
+ *  `undefined` = ps5upload has never seen this title running (a strong
+ *  "you haven't played this while using the app" signal for #116). */
+export function lastSeenPlayingFor(
+  s: { lastSeenByHost: Record<string, Record<string, number>> },
+  host: string | null | undefined,
+  titleId: string | null | undefined,
+): number | undefined {
+  if (!titleId) return undefined;
+  return s.lastSeenByHost[keyOf(host)]?.[titleId];
+}
+
+interface StoredPlayTime {
   byHost: Record<string, Record<string, number>>;
+  lastSeenByHost: Record<string, Record<string, number>>;
   lastSampleMs: number;
-} {
-  if (typeof window === "undefined") return { byHost: {}, lastSampleMs: 0 };
+}
+
+function loadStored(): StoredPlayTime {
+  const empty: StoredPlayTime = {
+    byHost: {},
+    lastSeenByHost: {},
+    lastSampleMs: 0,
+  };
+  if (typeof window === "undefined") return empty;
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { byHost: {}, lastSampleMs: 0 };
-    const parsed = JSON.parse(raw) as {
-      byHost?: Record<string, Record<string, number>>;
-      lastSampleMs?: number;
-    };
+    if (!raw) return empty;
+    const parsed = JSON.parse(raw) as Partial<StoredPlayTime>;
     return {
       byHost:
         parsed.byHost && typeof parsed.byHost === "object" ? parsed.byHost : {},
+      // `lastSeenByHost` is additive over v2 (old payloads lack it) — default
+      // to empty so a pre-#116 stored blob upgrades cleanly. Never-seen titles
+      // simply have no timestamp until observed running once.
+      lastSeenByHost:
+        parsed.lastSeenByHost && typeof parsed.lastSeenByHost === "object"
+          ? parsed.lastSeenByHost
+          : {},
       lastSampleMs:
         typeof parsed.lastSampleMs === "number" ? parsed.lastSampleMs : 0,
     };
   } catch {
-    return { byHost: {}, lastSampleMs: 0 };
+    return empty;
   }
 }
 
-function persist(state: {
-  byHost: Record<string, Record<string, number>>;
-  lastSampleMs: number;
-}) {
+function persist(state: StoredPlayTime) {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -102,37 +130,46 @@ const initial = loadStored();
 
 export const usePlayTimeStore = create<PlayTimeState>((set, get) => ({
   byHost: initial.byHost,
+  lastSeenByHost: initial.lastSeenByHost,
   lastSampleMs: initial.lastSampleMs,
   credit: (host, titleIds, deltaSec) => {
     if (titleIds.length === 0 || deltaSec <= 0) return;
     const key = keyOf(host);
-    const byHost = get().byHost;
-    const next = { ...(byHost[key] ?? {}) };
+    const now = Date.now();
+    const { byHost, lastSeenByHost } = get();
+    const nextSeconds = { ...(byHost[key] ?? {}) };
+    const nextSeen = { ...(lastSeenByHost[key] ?? {}) };
     for (const t of titleIds) {
-      next[t] = (next[t] ?? 0) + deltaSec;
+      nextSeconds[t] = (nextSeconds[t] ?? 0) + deltaSec;
+      // Stamp "last observed running" for each currently-running title.
+      nextSeen[t] = now;
     }
     const newState = {
-      byHost: { ...byHost, [key]: next },
-      lastSampleMs: Date.now(),
+      byHost: { ...byHost, [key]: nextSeconds },
+      lastSeenByHost: { ...lastSeenByHost, [key]: nextSeen },
+      lastSampleMs: now,
     };
     set(newState);
     persist(newState);
   },
   reset: (host, titleId) => {
     const key = keyOf(host);
-    const byHost = get().byHost;
-    if (!byHost[key]?.[titleId]) return;
-    const next = { ...byHost[key] };
-    delete next[titleId];
+    const { byHost, lastSeenByHost, lastSampleMs } = get();
+    if (!byHost[key]?.[titleId] && !lastSeenByHost[key]?.[titleId]) return;
+    const nextSeconds = { ...(byHost[key] ?? {}) };
+    delete nextSeconds[titleId];
+    const nextSeen = { ...(lastSeenByHost[key] ?? {}) };
+    delete nextSeen[titleId];
     const newState = {
-      byHost: { ...byHost, [key]: next },
-      lastSampleMs: get().lastSampleMs,
+      byHost: { ...byHost, [key]: nextSeconds },
+      lastSeenByHost: { ...lastSeenByHost, [key]: nextSeen },
+      lastSampleMs,
     };
     set(newState);
     persist(newState);
   },
   resetAll: () => {
-    const newState = { byHost: {}, lastSampleMs: 0 };
+    const newState = { byHost: {}, lastSeenByHost: {}, lastSampleMs: 0 };
     set(newState);
     persist(newState);
   },
@@ -192,4 +229,27 @@ export function formatPlayTime(sec: number | undefined): string {
   if (h > 0) return `${h}h ${m}m`;
   if (m > 0) return `${m}m ${s}s`;
   return `${s}s`;
+}
+
+/** Number of whole days between `ms` and now (>= 0). `undefined` in → null
+ *  ("never observed"). Pure + `now`-injectable for tests. */
+export function daysSinceLastSeen(
+  ms: number | undefined,
+  now = Date.now(),
+): number | null {
+  if (!ms || ms <= 0) return null;
+  return Math.max(0, Math.floor((now - ms) / (24 * 60 * 60 * 1000)));
+}
+
+/** Human "last seen playing" label: "never", "today", "yesterday", or
+ *  "N days ago". Drives the Installed-Apps not-played surface (#116). The
+ *  honest phrasing is "seen" — it's when ps5upload last observed the title
+ *  running, not Sony's console-side last-played (which the app can't read
+ *  cheaply). `now` injectable for tests. */
+export function formatLastSeen(ms: number | undefined, now = Date.now()): string {
+  const d = daysSinceLastSeen(ms, now);
+  if (d === null) return "never";
+  if (d === 0) return "today";
+  if (d === 1) return "yesterday";
+  return `${d} days ago`;
 }

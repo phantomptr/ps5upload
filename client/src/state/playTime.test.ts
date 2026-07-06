@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { usePlayTimeStore, playSecondsFor } from "./playTime";
+import {
+  usePlayTimeStore,
+  playSecondsFor,
+  lastSeenPlayingFor,
+  daysSinceLastSeen,
+  formatLastSeen,
+  formatPlayTime,
+} from "./playTime";
 
 /**
  * Play-time accumulation is partitioned PER-HOST (multi-console): the same
@@ -11,7 +18,11 @@ import { usePlayTimeStore, playSecondsFor } from "./playTime";
  */
 describe("usePlayTimeStore (per-host)", () => {
   const reset = () =>
-    usePlayTimeStore.setState({ byHost: {}, lastSampleMs: 0 });
+    usePlayTimeStore.setState({
+      byHost: {},
+      lastSeenByHost: {},
+      lastSampleMs: 0,
+    });
   beforeEach(reset);
   afterEach(reset);
 
@@ -81,5 +92,83 @@ describe("usePlayTimeStore (per-host)", () => {
     st.credit("1.2.3.4", ["CUSA00001"], 0);
     st.credit("1.2.3.4", ["CUSA00001"], -5);
     expect(usePlayTimeStore.getState().byHost).toEqual({});
+  });
+});
+
+describe("last-seen-playing (#116)", () => {
+  const reset = () =>
+    usePlayTimeStore.setState({
+      byHost: {},
+      lastSeenByHost: {},
+      lastSampleMs: 0,
+    });
+  beforeEach(reset);
+  afterEach(reset);
+
+  it("credit() stamps a last-seen timestamp for each running title", () => {
+    const before = Date.now();
+    usePlayTimeStore.getState().credit("1.2.3.4", ["CUSA00001"], 60);
+    const s = usePlayTimeStore.getState();
+    const seen = lastSeenPlayingFor(s, "1.2.3.4", "CUSA00001");
+    expect(seen).toBeGreaterThanOrEqual(before);
+  });
+
+  it("returns undefined for a never-seen title (the removal candidate signal)", () => {
+    usePlayTimeStore.getState().credit("1.2.3.4", ["CUSA00001"], 60);
+    const s = usePlayTimeStore.getState();
+    expect(lastSeenPlayingFor(s, "1.2.3.4", "CUSA99999")).toBeUndefined();
+  });
+
+  it("keeps last-seen partitioned per console", () => {
+    usePlayTimeStore.getState().credit("1.1.1.1", ["CUSA00001"], 30);
+    const s = usePlayTimeStore.getState();
+    expect(lastSeenPlayingFor(s, "1.1.1.1", "CUSA00001")).toBeGreaterThan(0);
+    expect(lastSeenPlayingFor(s, "2.2.2.2", "CUSA00001")).toBeUndefined();
+  });
+
+  it("reset() clears both seconds and last-seen for the title", () => {
+    usePlayTimeStore.getState().credit("1.2.3.4", ["CUSA00001"], 60);
+    usePlayTimeStore.getState().reset("1.2.3.4", "CUSA00001");
+    const s = usePlayTimeStore.getState();
+    expect(playSecondsFor(s, "1.2.3.4", "CUSA00001")).toBeUndefined();
+    expect(lastSeenPlayingFor(s, "1.2.3.4", "CUSA00001")).toBeUndefined();
+  });
+});
+
+describe("daysSinceLastSeen", () => {
+  const now = 1_000_000_000_000;
+  const DAY = 24 * 60 * 60 * 1000;
+  it("null for undefined / zero (never seen)", () => {
+    expect(daysSinceLastSeen(undefined, now)).toBeNull();
+    expect(daysSinceLastSeen(0, now)).toBeNull();
+  });
+  it("0 for today, 1 for yesterday, N for N days", () => {
+    expect(daysSinceLastSeen(now, now)).toBe(0);
+    expect(daysSinceLastSeen(now - DAY, now)).toBe(1);
+    expect(daysSinceLastSeen(now - 10 * DAY, now)).toBe(10);
+  });
+  it("never negative (clock skew / future ts)", () => {
+    expect(daysSinceLastSeen(now + DAY, now)).toBe(0);
+  });
+});
+
+describe("formatLastSeen", () => {
+  const now = 1_000_000_000_000;
+  const DAY = 24 * 60 * 60 * 1000;
+  it("labels never / today / yesterday / N days ago", () => {
+    expect(formatLastSeen(undefined, now)).toBe("never");
+    expect(formatLastSeen(now, now)).toBe("today");
+    expect(formatLastSeen(now - DAY, now)).toBe("yesterday");
+    expect(formatLastSeen(now - 5 * DAY, now)).toBe("5 days ago");
+  });
+});
+
+describe("formatPlayTime", () => {
+  it("formats hours/minutes/seconds and — for zero", () => {
+    expect(formatPlayTime(undefined)).toBe("—");
+    expect(formatPlayTime(0)).toBe("—");
+    expect(formatPlayTime(45)).toBe("45s");
+    expect(formatPlayTime(90)).toBe("1m 30s");
+    expect(formatPlayTime(3661)).toBe("1h 1m");
   });
 });
