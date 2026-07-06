@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   appendStep,
   DEFAULT_AUTO_LOADER,
   isPayloadPath,
+  isRepoStep,
   movePlaylistDown,
   movePlaylistUp,
   moveStepDown,
@@ -10,9 +11,11 @@ import {
   patchPlaylist,
   removePlaylist,
   removeStep,
+  resolveRepoStepPath,
   sanitiseSleepMs,
   type Playlist,
   type PlaylistStep,
+  type RepoResolveDeps,
 } from "./playlistOps";
 
 const step = (path: string, sleepMs = 0): PlaylistStep => ({ path, sleepMs });
@@ -178,5 +181,100 @@ describe("DEFAULT_AUTO_LOADER", () => {
       playlistId: null,
       bringUpPlaylistId: null,
     });
+  });
+});
+
+describe("isRepoStep", () => {
+  it("is true only when payloadId is a non-empty string", () => {
+    expect(isRepoStep({ payloadId: "kstuff-echostretch" })).toBe(true);
+    expect(isRepoStep({ payloadId: "custom-abc123" })).toBe(true);
+    expect(isRepoStep({ payloadId: "" })).toBe(false);
+    expect(isRepoStep({ payloadId: "   " })).toBe(false);
+    expect(isRepoStep({ payloadId: undefined })).toBe(false);
+  });
+});
+
+describe("resolveRepoStepPath", () => {
+  const mkDeps = (over: Partial<RepoResolveDeps> = {}): RepoResolveDeps => ({
+    localInventory: async () => [],
+    latestRelease: async () => ({ tag: "v1", picked_asset_url: "https://x/p.elf" }),
+    download: async () => ({ path: "/cache/p.elf" }),
+    ...over,
+  });
+
+  it("uses the cached copy when present and preferCached (no network)", async () => {
+    const latestRelease = vi.fn();
+    const download = vi.fn();
+    const deps = mkDeps({
+      localInventory: async () => [
+        { payload_id: "kstuff", path: "/cache/kstuff.elf", version: "v1" },
+      ],
+      latestRelease,
+      download,
+    });
+    const path = await resolveRepoStepPath("kstuff", deps, true);
+    expect(path).toBe("/cache/kstuff.elf");
+    expect(latestRelease).not.toHaveBeenCalled();
+    expect(download).not.toHaveBeenCalled();
+  });
+
+  it("fetches + downloads on a cache miss", async () => {
+    const download = vi.fn(async () => ({ path: "/cache/new.elf" }));
+    const deps = mkDeps({
+      localInventory: async () => [],
+      latestRelease: async () => ({ tag: "v2", picked_asset_url: "https://x/new.elf" }),
+      download,
+    });
+    const path = await resolveRepoStepPath("kstuff", deps, true);
+    expect(path).toBe("/cache/new.elf");
+    expect(download).toHaveBeenCalledWith("kstuff", "https://x/new.elf", "v2");
+  });
+
+  it("skips re-download when the cached version matches the latest tag", async () => {
+    const download = vi.fn();
+    const deps = mkDeps({
+      localInventory: async () => [
+        { payload_id: "k", path: "/cache/k.elf", version: "v3" },
+      ],
+      latestRelease: async () => ({ tag: "v3", picked_asset_url: "https://x/k.elf" }),
+      download,
+    });
+    // preferCached=false forces the release check, but same version → no download.
+    const path = await resolveRepoStepPath("k", deps, false);
+    expect(path).toBe("/cache/k.elf");
+    expect(download).not.toHaveBeenCalled();
+  });
+
+  it("falls back to a cached copy when the network fetch throws", async () => {
+    const deps = mkDeps({
+      localInventory: async () => [
+        { payload_id: "k", path: "/cache/k.elf", version: "v1" },
+      ],
+      latestRelease: async () => {
+        throw new Error("rate limited");
+      },
+    });
+    const path = await resolveRepoStepPath("k", deps, false);
+    expect(path).toBe("/cache/k.elf");
+  });
+
+  it("throws when there's no asset AND no cached copy", async () => {
+    const deps = mkDeps({
+      localInventory: async () => [],
+      latestRelease: async () => ({ tag: "v1", picked_asset_url: "" }),
+    });
+    await expect(resolveRepoStepPath("k", deps, false)).rejects.toThrow(
+      /no downloadable payload asset/,
+    );
+  });
+
+  it("throws when the fetch fails AND nothing is cached", async () => {
+    const deps = mkDeps({
+      localInventory: async () => [],
+      latestRelease: async () => {
+        throw new Error("offline");
+      },
+    });
+    await expect(resolveRepoStepPath("k", deps, true)).rejects.toThrow(/offline/);
   });
 });

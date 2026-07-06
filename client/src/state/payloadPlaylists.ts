@@ -1,11 +1,19 @@
 import { create } from "zustand";
 
 import { hostOf } from "../lib/addr";
-import { payloadPlaylistsLoad, payloadPlaylistsSave, sendPayload } from "../api/ps5";
+import {
+  payloadPlaylistsLoad,
+  payloadPlaylistsSave,
+  payloadsDownload,
+  payloadsLocalInventory,
+  payloadsRelease,
+  sendPayload,
+} from "../api/ps5";
 import { log } from "./logs";
 import {
   appendStep,
   DEFAULT_AUTO_LOADER,
+  isRepoStep,
   movePlaylistDown,
   movePlaylistUp,
   moveStepDown,
@@ -13,11 +21,21 @@ import {
   patchPlaylist,
   removePlaylist,
   removeStep,
+  resolveRepoStepPath,
   type AutoLoaderConfig,
   type Playlist,
   type PlaylistRunStatus,
   type PlaylistStep,
 } from "../lib/playlistOps";
+
+/** Catalogue-API deps for `resolveRepoStepPath`, wired to the real Tauri
+ *  commands (#93). Extracted so the run loop stays readable. */
+const REPO_RESOLVE_DEPS = {
+  localInventory: () => payloadsLocalInventory(),
+  latestRelease: (id: string) => payloadsRelease(id, false),
+  download: (id: string, assetUrl: string, version: string) =>
+    payloadsDownload(id, assetUrl, version),
+};
 
 /**
  * Persisted payload-playlist store.
@@ -320,7 +338,36 @@ export const usePayloadPlaylistsStore = create<PlaylistState>((set, get) => {
         });
 
         try {
-          await sendPayload(stepHost, step.path, stepPort);
+          // Repo-sourced step (#129): resolve the payload id to a cached ELF
+          // — using the cached copy if present, else fetching the latest
+          // release + downloading it. This is what lets a playlist reference
+          // repos instead of local files: the user keeps no ELFs on their PC.
+          // A freshly-resolved path is cached back onto the step so a later
+          // OFFLINE run (or the auto-loader on next boot) can still find it.
+          let sendPath = step.path;
+          if (isRepoStep(step)) {
+            sendPath = await resolveRepoStepPath(
+              step.payloadId as string,
+              REPO_RESOLVE_DEPS,
+            );
+            if (isLive() && sendPath && sendPath !== step.path) {
+              set((s) => ({
+                playlists: s.playlists.map((p) =>
+                  p.id === id
+                    ? {
+                        ...p,
+                        steps: p.steps.map((st, idx) =>
+                          idx === i ? { ...st, path: sendPath } : st,
+                        ),
+                      }
+                    : p,
+                ),
+              }));
+              scheduleSave();
+            }
+          }
+          if (!isLive()) return;
+          await sendPayload(stepHost, sendPath, stepPort);
           successCount++;
         } catch (e) {
           const errMsg = e instanceof Error ? e.message : String(e);
@@ -330,7 +377,9 @@ export const usePayloadPlaylistsStore = create<PlaylistState>((set, get) => {
           // the time a user files a bug report), so this is the only durable
           // trace of "my playlist / auto-loader didn't run". Includes the step
           // file + target so a maintainer can see exactly what failed where.
-          const stepName = step.path.split(/[\\/]/).pop() ?? step.path;
+          const stepName =
+            step.payloadLabel ||
+            (step.path.split(/[\\/]/).pop() ?? step.payloadId ?? step.path);
           log.warn(
             "playlist",
             `step ${i + 1} (${stepName}) failed on ${stepHost}:${stepPort} — ${errMsg}`,

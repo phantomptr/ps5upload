@@ -7,8 +7,26 @@
 
 export interface PlaylistStep {
   /** Absolute path on the host to a payload file
-   *  (.elf/.bin/.js/.lua/.jar — whatever your loader accepts). */
+   *  (.elf/.bin/.js/.lua/.jar — whatever your loader accepts).
+   *
+   *  For a REPO-SOURCED step (#129) this may be empty at rest: the
+   *  runner resolves `payloadId` to a cached ELF at send time (fetching
+   *  the latest release + downloading if not already cached), so a
+   *  playlist can reference repos instead of pinning local files. A
+   *  resolved path is cached back onto the step after a successful
+   *  resolve so a later offline run can still find it. */
   path: string;
+  /** Repo source for this step (#129). When set, the runner resolves it
+   *  to a cached payload ELF at run time via the Payloads catalogue
+   *  (`payloadsRelease` + `payloadsDownload` from #93) rather than using
+   *  a fixed host path — so the user doesn't have to keep the ELF on
+   *  their PC. This is a catalogue id ("kstuff-echostretch") or a custom
+   *  repo id ("custom-<hex>"). Undefined = a plain local-file step. */
+  payloadId?: string;
+  /** Display name for a repo-sourced step (the payload's display_name at
+   *  add time), so the UI can label the row without re-fetching the
+   *  catalogue. Ignored for local-file steps. */
+  payloadLabel?: string;
   /** Milliseconds to sleep after this step's send completes (success
    *  OR failure, whichever happens). 0 = no sleep. The runner uses
    *  this as a fixed delay; "wait for ready" is a separate future
@@ -92,6 +110,78 @@ export function isPayloadPath(path: string): boolean {
   return (PAYLOAD_EXTENSIONS as readonly string[]).includes(
     m[1].toLowerCase(),
   );
+}
+
+/** True when a step is repo-sourced (#129) — the runner resolves its
+ *  `payloadId` to a cached ELF at send time instead of using `path`. */
+export function isRepoStep(step: Pick<PlaylistStep, "payloadId">): boolean {
+  return !!step.payloadId && step.payloadId.trim().length > 0;
+}
+
+/** Minimal view of the catalogue APIs the resolver needs — injected so
+ *  `resolveRepoStepPath` is unit-testable without Tauri. */
+export interface RepoResolveDeps {
+  /** Local inventory: payload_id → cached ELF path (from #93). */
+  localInventory: () => Promise<{ payload_id: string; path: string; version: string }[]>;
+  /** Latest release for a payload id: its picked asset + tag (from #93). */
+  latestRelease: (
+    id: string,
+  ) => Promise<{ tag: string; picked_asset_url: string }>;
+  /** Download an asset to the local cache, returning the cached path. */
+  download: (id: string, assetUrl: string, version: string) => Promise<{ path: string }>;
+}
+
+/**
+ * Resolve a repo-sourced step to a local cached payload path (#129).
+ *
+ * Order:
+ *   1. If a specific `version` isn't pinned and the payload is already in
+ *      the local cache, use the cached path (fast, offline-friendly).
+ *   2. Otherwise fetch the latest release and download it (cache miss), then
+ *      use the freshly-cached path.
+ *   3. If the network fetch fails but SOME cached copy exists, fall back to
+ *      it (stale is better than a failed boot sequence) — the catalogue's
+ *      own stale-cache handling already applies to the release metadata.
+ *
+ * `preferCached` (default true) short-circuits at step 1 so a routine
+ * auto-loader run doesn't hit GitHub every boot; the UI's explicit
+ * "update" affordance passes false to force a fresh fetch. Throws only
+ * when there's neither a usable release nor any cached copy.
+ */
+export async function resolveRepoStepPath(
+  payloadId: string,
+  deps: RepoResolveDeps,
+  preferCached = true,
+): Promise<string> {
+  const inv = await deps.localInventory().catch(() => []);
+  const cached = inv.find((e) => e.payload_id === payloadId);
+
+  if (preferCached && cached?.path) {
+    return cached.path;
+  }
+
+  try {
+    const rel = await deps.latestRelease(payloadId);
+    if (!rel.picked_asset_url) {
+      // Release exists but has no downloadable asset — fall back to a
+      // cached copy if we have one, else it's a hard error.
+      if (cached?.path) return cached.path;
+      throw new Error(
+        `no downloadable payload asset in the latest release of "${payloadId}"`,
+      );
+    }
+    // Already cached at this exact version? Skip the re-download.
+    if (cached?.path && cached.version === rel.tag) {
+      return cached.path;
+    }
+    const dl = await deps.download(payloadId, rel.picked_asset_url, rel.tag);
+    return dl.path;
+  } catch (e) {
+    // Network / rate-limit / parse failure: a cached copy keeps the run
+    // going; otherwise surface the error so the step fails loudly.
+    if (cached?.path) return cached.path;
+    throw e instanceof Error ? e : new Error(String(e));
+  }
 }
 
 export type PlaylistRunStatus =
