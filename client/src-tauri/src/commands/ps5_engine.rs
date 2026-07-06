@@ -1549,6 +1549,10 @@ pub async fn pkg_install_start(
     // engine keeps the staged pkg instead of deleting it post-install. Optional
     // so any caller that omits it gets the safe default (true) via serde.
     delete_staging: Option<bool>,
+    // Serve-only (Stream beta): create the /pkg-host/ serving session but skip
+    // the in-process install — the caller finishes via dpi-direct-install. See
+    // InstallStartRequest::serve_only. Optional; defaults false (normal install).
+    serve_only: Option<bool>,
 ) -> Result<JsonValue, String> {
     let url = format!("{}/api/pkg/install/start", engine::url());
     let body = serde_json::json!({
@@ -1559,6 +1563,7 @@ pub async fn pkg_install_start(
         "local_ps5_path": local_ps5_path,
         "content_id": content_id,
         "delete_staging": delete_staging.unwrap_or(true),
+        "serve_only": serve_only.unwrap_or(false),
     });
     post_json(&url, &body).await
 }

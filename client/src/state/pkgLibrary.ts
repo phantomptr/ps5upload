@@ -1834,6 +1834,12 @@ const makePkgLibraryStore = () =>
         // No staging file is created, so deleteStaging is moot — pass
         // false so the engine doesn't record a staging_path to clean up.
         deleteStaging: false,
+        // Serve-only: create the /pkg-host/ session but DON'T run the
+        // in-process InstallByPackage. That call, handed our http:// URL,
+        // hangs the FW<11 payload until its watchdog kills the helper — the
+        // 3.3.25 "stream install crashed my PS5" bug. The DPI daemon does the
+        // real install in step 3 (runDpiDirectInstall).
+        serveOnly: true,
       })) as {
         err_code?: number;
         session_id?: string;
