@@ -284,6 +284,24 @@ pub struct InstallStartRequest {
     /// instead of the engine silently deleting it regardless.
     #[serde(default = "default_true")]
     pub delete_staging: bool,
+    /// Serve-only mode for the streaming-install (Stream beta) path.
+    ///
+    /// When true, create + register the /pkg-host/ serving session and
+    /// return its `session_id`, but DO NOT run the in-process
+    /// `sceAppInstUtilInstallByPackage` frame. The caller then hands the
+    /// session to `/api/pkg/dpi-direct-install`, which installs via the
+    /// DPI daemon (a separate loader process) pulling bytes over HTTP.
+    ///
+    /// This exists because the in-process installer, handed an `http://`
+    /// pkg-host URL on FW < 11, triggers Sony's PlayGo HTTP preflight and
+    /// HANGS the payload's RPC thread until the helper's watchdog kills it
+    /// (30 s read-timeout → console unreachable). `installStream`'s whole
+    /// premise is "register the session, let the DPI daemon do the actual
+    /// install" — so the in-process install must be skipped here, not just
+    /// as an optimisation but to avoid crashing the helper. Defaults false
+    /// so the staged/normal install path is completely unchanged.
+    #[serde(default)]
+    pub serve_only: bool,
 }
 
 fn default_true() -> bool {
@@ -641,6 +659,38 @@ async fn install_start_handler(
             s.created_at_unix > aggressive_cutoff || s.terminal_status.is_none()
         });
         sessions.insert(session_id.clone(), session.clone());
+    }
+
+    // Serve-only (Stream beta): the session + its /pkg-host/ listener are now
+    // live, so the DPI daemon can pull bytes. Return WITHOUT running the
+    // in-process InstallByPackage — on FW < 11 that call against an http:// URL
+    // hangs the payload until the watchdog kills the helper. The client's next
+    // step (`/api/pkg/dpi-direct-install`) performs the real install.
+    if req.serve_only {
+        crate::log_info!(
+            "pkg_install serve-only: addr={} session={} url={} content_id={} title={:?} — skipping in-process install; DPI daemon will pull",
+            req.ps5_addr,
+            session_id,
+            url,
+            session.content_id,
+            session.title,
+        );
+        return json_ok(&InstallStartResponse {
+            session_id,
+            url,
+            task_id: 0,
+            err_code: 0,
+            err_message: None,
+            detail: String::new(),
+            may_not_launch: false,
+            register_path: "serve-only".to_string(),
+            intdebug_avail: false,
+            kernel_rw: false,
+            shellui_err: None,
+            appinst_err: None,
+            via: "serve-only".to_string(),
+            package_type,
+        });
     }
 
     let install_req = PkgInstallRequest {
@@ -3074,5 +3124,34 @@ mod tests {
         // real failure as success) — it falls through to Unknown.
         assert!(matches!(parse_dpi_reply("error:???"), DpiReply::Unknown(_)));
         assert!(matches!(parse_dpi_reply(""), DpiReply::Unknown(_)));
+    }
+
+    #[test]
+    fn install_start_request_serve_only_defaults_false() {
+        // A normal install request (no serve_only key) must default to a
+        // real install — serve_only=false — so the staged/normal path is
+        // untouched. This is the safety default: any caller that forgets the
+        // field gets the install, not a silent no-op.
+        let req: InstallStartRequest = serde_json::from_str(
+            r#"{"ps5_addr":"1.2.3.4:9114","path":"/x.pkg","delete_staging":true}"#,
+        )
+        .expect("parse");
+        assert!(!req.serve_only);
+        assert!(req.delete_staging);
+    }
+
+    #[test]
+    fn install_start_request_serve_only_true_parses() {
+        // The Stream-beta client sends serve_only=true to register the
+        // pkg-host session WITHOUT the in-process InstallByPackage (which
+        // hangs the FW<11 helper). Pin that the field round-trips so the
+        // client↔engine contract can't silently regress to the crashing path.
+        let req: InstallStartRequest = serde_json::from_str(
+            r#"{"ps5_addr":"1.2.3.4:9114","path":"/x.pkg","serve_only":true}"#,
+        )
+        .expect("parse");
+        assert!(req.serve_only);
+        // delete_staging still defaults true even when omitted here.
+        assert!(req.delete_staging);
     }
 }
