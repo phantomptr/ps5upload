@@ -425,16 +425,12 @@ static int appinst_install_start(const char *url,
                                   uint32_t *out_err_code) {
     AppInstMetaInfo meta;
     memset(&meta, 0, sizeof(meta));
-    /* A bare local path ("/user/data/.../x.pkg") must be passed to
-     * InstallByPackage as a `file://` URI — a bare path is rejected with
-     * 0x80B2116F. Already-schemed URLs (http://, file://) pass through. */
-    char file_uri[1024];
-    const char *install_uri = url;
-    if (url && url[0] == '/') {
-        snprintf(file_uri, sizeof(file_uri), "file://%s", url);
-        install_uri = file_uri;
-    }
-    meta.uri          = install_uri;
+    /* A bare local path ("/user/data/.../x.pkg") is passed as-is — the
+     * DPI daemon (ezremote_dpi.c) uses the bare path directly and it
+     * works on FW 9.60. Wrapping with `file://` causes 0x80B21106
+     * (parser error) on FW < 11. Already-schemed URLs (http://, file://)
+     * pass through unchanged. */
+    meta.uri          = url ? url : "";
     meta.ex_uri       = "";
     meta.playgo_scenario_id = "";
     meta.content_id   = "";
@@ -1390,26 +1386,27 @@ int bgft_install_start(const char *url,
             (unsigned)app_err);
 
     /* ─── PATCH guard: never fall past InstallByPackage for a patch ───────
-     * A patch (…DP) carries the SAME content_id as its base game, so the
-     * fallback tiers below — shellui-rpc and legacy BGFT — re-install that
-     * content_id and WIPE the installed base instead of applying the patch on
-     * top (HW-proven on FW 9.60: a Bloodborne patch deleted the 26 GB base via
-     * shellui-rpc). Only the in-process InstallByPackage above can apply a patch
-     * non-destructively; if it couldn't, FAIL CLEANLY here with that error and
-     * leave the base intact, rather than letting a fallback destroy the game.
-     * (DLC …AC carries its OWN content_id, so it doesn't collide with the base
-     * and may still use the fallbacks — only the title-id-keyed appinst-local
-     * last resort is gated for it, below.) */
+     * A patch (…DP) carries the SAME content_id as its base game. The
+     * shellui-rpc tier calls sceAppInstUtilInstallByPackage inside ShellUI,
+     * which RE-REGISTERS the content_id and WIPES the installed base
+     * (HW-reconfirmed 3.3.26: a Jak X patch via shellui-rpc deleted the 3.6GB
+     * base, even with the bare-path URI fix). Only the in-process
+     * InstallByPackage above (and the DPI daemon) apply patches safely.
+     * If in-process InstallByPackage failed for a patch, FAIL CLEANLY here
+     * with that error and leave the base intact — the caller should fall
+     * through to the DPI daemon (pkg_dpi_install) which also works safely.
+     * (DLC …AC carries its OWN content_id, so it doesn't collide with the
+     * base and may still use the fallbacks.) */
     {
         size_t pt_len = package_type ? strlen(package_type) : 0;
         const char *pt_suffix = pt_len >= 2 ? package_type + pt_len - 2 : "";
         if (strcmp(pt_suffix, "DP") == 0) {
             fprintf(stderr,
-                    "[bgft] patch (package_type=%s) failed InstallByPackage — "
-                    "NOT trying shellui-rpc/BGFT (they share the base content_id "
-                    "and would WIPE the base game); failing cleanly, base intact "
-                    "(install patches from the PS5 Package Installer if needed)\n",
-                    package_type);
+                    "[bgft] patch (package_type=%s) failed in-process "
+                    "InstallByPackage (rc=0x%08X) — NOT trying shellui-rpc "
+                    "(it re-registers the content_id and WIPES the base). "
+                    "Failing cleanly; caller should use DPI install.\n",
+                    package_type, (unsigned)app_err);
             *out_err_code = app_err ? app_err : BGFT_ERR_REGISTER_FAILED;
             return -1;
         }
