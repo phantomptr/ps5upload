@@ -1,0 +1,350 @@
+//! ShadowMount+ integration — read-only awareness.
+//!
+//! Detects whether ShadowMountPlus is installed/running on the
+//! connected PS5, surfaces its config + state, lists its mounted
+//! image dirs. Strictly read-only: we never write SMP's config,
+//! never restart it through anything other than the same payload-send
+//! flow the user could trigger themselves.
+//!
+//! Why integrate at all when SMP runs autonomously: the PS5-side
+//! state (which images are mounted, which scan paths are configured,
+//! what the auto-tuned kstuff delays look like) lives behind a
+//! filesystem the user can only browse via FTP today. Lifting it
+//! into the Library tab makes the tool stack behave like one product
+//! instead of three.
+//!
+//! Detection signals (any one is sufficient):
+//!   1. `/data/shadowmount/debug.log` exists (SMP writes this on
+//!      first run). Strongest signal — the file is unique to SMP and
+//!      survives across reboots.
+//!   2. A process named `shadowmountplus` appears in PROC_LIST.
+//!      Definitive proof it's currently running.
+//!
+//! All Sony API calls go through the engine's existing FTX2 RPCs
+//! (FS_LIST_DIR, PROC_LIST, FS_READ); nothing here speaks the wire
+//! directly.
+//!
+//! Lives in `ps5upload-core` (not the Tauri shell) so both the
+//! desktop Tauri command and the engine's browser-facing HTTP route
+//! can call the same snapshot logic.
+
+use std::time::Duration;
+
+use anyhow::Result;
+use serde::Serialize;
+
+use crate::fs_ops::{fs_read_with_timeout, list_dir_with_timeout, ListDirOptions};
+use crate::hw::proc_list;
+
+/// Per-call deadline for any single FTX2 RPC. SMP's config is small,
+/// the directory listings are small, the proc list is small. 5s is
+/// generous and bounds the whole snapshot if any one call hangs.
+const RPC_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Hard cap on file bytes we'll pull back. SMP's config files are
+/// typically <8 KiB; debug.log can be larger but we only show the
+/// tail. 256 KiB matches the engine's game_meta param.json limit —
+/// same "small text file" use case.
+const READ_LIMIT_BYTES: u64 = 256 * 1024;
+
+/// Canonical paths SMP writes/reads. Hardcoded because they're
+/// burned into SMP's source (sm_config_mount.c) — not user-configurable.
+const SMP_DATA_DIR: &str = "/data/shadowmount";
+const SMP_CONFIG_PATH: &str = "/data/shadowmount/config.ini";
+const SMP_AUTOTUNE_PATH: &str = "/data/shadowmount/autotune.ini";
+const SMP_DEBUG_LOG_PATH: &str = "/data/shadowmount/debug.log";
+const SMP_MOUNT_POINT: &str = "/mnt/shadowmnt";
+/// Name SMP processes appear under in `ps`. Stable since the project's
+/// inception (the binary is shadowmountplus.elf and the kernel-side
+/// process inherits that basename).
+const SMP_PROCESS_NAME_HINT: &str = "shadowmountplus";
+
+/// One mounted-image row, surfaced in the Library tab's SMP panel.
+#[derive(Serialize)]
+pub struct SmpMountedImage {
+    /// Mount point under /mnt/shadowmnt (hashed name SMP picks per
+    /// image — `<image_name>_<crc32hex>`).
+    pub mount_point: String,
+    /// Best-effort image source filename, derived from the mount
+    /// point name. SMP doesn't expose the original .ffpkg path
+    /// through any read-only surface, so we strip the trailing
+    /// "_<8-hex>" hash. Empty if the mount point doesn't match the
+    /// expected pattern.
+    pub derived_name: String,
+}
+
+/// Full SMP status snapshot. Every field is null/empty when SMP
+/// isn't present — UI checks `installed` and `running` to decide
+/// what to show.
+#[derive(Serialize)]
+pub struct SmpStatus {
+    /// True when `/data/shadowmount/debug.log` exists. Implies SMP
+    /// has been loaded at least once on this console.
+    pub installed: bool,
+    /// True when a process matching `shadowmountplus` is in PROC_LIST.
+    /// Independent of `installed`: SMP can be installed but not
+    /// currently running (e.g. user removed it from autoload).
+    pub running: bool,
+    /// Raw config.ini contents (truncated to READ_LIMIT_BYTES).
+    /// Renderer parses + displays as a key/value table; we don't
+    /// parse here so the renderer can show the raw file too.
+    pub config_ini: Option<String>,
+    /// Raw autotune.ini — kstuff per-game delays SMP learned from
+    /// crash patterns + per-image sector-size overrides.
+    pub autotune_ini: Option<String>,
+    /// Tail of debug.log (last READ_LIMIT_BYTES). Useful for "why
+    /// didn't my game mount?" troubleshooting without making the
+    /// user FTP into the console.
+    pub debug_log_tail: Option<String>,
+    /// Images currently mounted under /mnt/shadowmnt/. Empty list
+    /// when no mounts (or when SMP isn't running). UI shows count.
+    pub mounted_images: Vec<SmpMountedImage>,
+    /// Per-call error captures. Always present so the renderer can
+    /// surface "config.ini exists but couldn't be read" without
+    /// inferring from null fields.
+    pub errors: Vec<String>,
+}
+
+/// Collect a full SMP status snapshot for the PS5 at `addr`
+/// (management-port address, "ip:9114").
+///
+/// Sync — run this on a `spawn_blocking` task from an async caller.
+/// Never fails outright: individual probe failures are recorded in
+/// `SmpStatus::errors` instead of aborting the whole snapshot.
+pub fn collect_status(addr: &str) -> Result<SmpStatus> {
+    let mut errors: Vec<String> = Vec::new();
+
+    // Probe SMP's data dir. Existence ≈ "installed at least once."
+    let data_dir_listing = list_dir_with_timeout(
+        addr,
+        SMP_DATA_DIR,
+        ListDirOptions::default(),
+        Some(RPC_TIMEOUT),
+    );
+    let installed = match &data_dir_listing {
+        Ok(_) => true,
+        Err(e) => {
+            // ENOENT-equivalent: dir doesn't exist, which is
+            // "not installed", not an error.
+            let s = e.to_string();
+            if is_payload_enoent(&s) {
+                false
+            } else {
+                errors.push(format!("list /data/shadowmount: {s}"));
+                false
+            }
+        }
+    };
+
+    // PROC_LIST → look for shadowmountplus process. Match is
+    // substring on lowercased name to handle "shadowmountplus.elf"
+    // vs "shadowmountplus" depending on how the kernel records it.
+    let running = match proc_list(addr) {
+        Ok(list) => {
+            let needle = SMP_PROCESS_NAME_HINT.to_ascii_lowercase();
+            list.procs
+                .iter()
+                .any(|p| p.name.to_ascii_lowercase().contains(&needle))
+        }
+        Err(e) => {
+            errors.push(format!("proc list: {e}"));
+            false
+        }
+    };
+
+    // Read config.ini + autotune.ini + debug.log tail. Each is
+    // best-effort — if any fails we still return the others.
+    let config_ini = read_text_file_or_record(addr, SMP_CONFIG_PATH, &mut errors);
+    let autotune_ini = read_text_file_or_record(addr, SMP_AUTOTUNE_PATH, &mut errors);
+    let debug_log_tail = read_text_file_or_record(addr, SMP_DEBUG_LOG_PATH, &mut errors);
+
+    // List mounted images. SMP creates one subdir per mounted image
+    // under /mnt/shadowmnt/. Empty list when nothing is mounted.
+    let mounted_images = match list_dir_with_timeout(
+        addr,
+        SMP_MOUNT_POINT,
+        ListDirOptions::default(),
+        Some(RPC_TIMEOUT),
+    ) {
+        Ok(listing) => listing
+            .entries
+            .iter()
+            .filter(|e| e.kind == "dir")
+            .map(|e| SmpMountedImage {
+                mount_point: format!("{SMP_MOUNT_POINT}/{}", e.name),
+                derived_name: derive_image_name(&e.name),
+            })
+            .collect(),
+        Err(e) => {
+            // /mnt/shadowmnt may not exist if SMP has never mounted
+            // anything; that's not an error worth surfacing. See
+            // is_payload_enoent for why all three of "ENOENT", "No such
+            // file", and the payload's `_errno_2` numeric form all need
+            // to be treated as "feature not in use" here.
+            let s = e.to_string();
+            if !is_payload_enoent(&s) {
+                errors.push(format!("list /mnt/shadowmnt: {s}"));
+            }
+            Vec::new()
+        }
+    };
+
+    Ok(SmpStatus {
+        installed,
+        running,
+        config_ini,
+        autotune_ini,
+        debug_log_tail,
+        mounted_images,
+        errors,
+    })
+}
+
+/// Helper: try to read a small text file, recording errors but never
+/// failing the whole call. None when the file doesn't exist; Some
+/// when readable; None + errors entry when something else went wrong.
+fn read_text_file_or_record(addr: &str, path: &str, errors: &mut Vec<String>) -> Option<String> {
+    match fs_read_with_timeout(addr, path, 0, READ_LIMIT_BYTES, Some(RPC_TIMEOUT)) {
+        Ok(bytes) => {
+            // Files we read here are config files / log tails. UTF-8
+            // is overwhelmingly the case; lossy decode is the right
+            // fallback for the rare debug-log line with non-UTF-8
+            // bytes (kernel printf output).
+            Some(String::from_utf8_lossy(&bytes).into_owned())
+        }
+        Err(e) => {
+            let s = e.to_string();
+            if is_missing_optional_file_error(&s) {
+                // Not an error — file just hasn't been written yet
+                // (e.g. autotune.ini is created lazily on first
+                // tuning event).
+                None
+            } else {
+                errors.push(format!("read {path}: {s}"));
+                None
+            }
+        }
+    }
+}
+
+fn is_missing_optional_file_error(message: &str) -> bool {
+    is_payload_enoent(message) || message.contains("fs_read_stat_failed")
+}
+
+/// True for any error string that ultimately means "the path you asked
+/// for didn't exist." The payload + engine + std::io error chains all
+/// surface this differently — std::io::Error gives `ENOENT` or `No such
+/// file or directory`, while the payload's FS_LIST_DIR / FS_READ
+/// rejections encode errno numerically as `fs_list_dir_opendir_errno_2`
+/// or `fs_read_open_errno_2` (errno 2 = ENOENT on FreeBSD/Prospero, same
+/// as POSIX). Probe sites need to treat all of them as "not installed /
+/// not yet created" instead of pushing them into the user-visible error
+/// list. Centralised so a new probe can't drift back to the partial check
+/// that surfaced `opendir_errno_2` on the SmpPanel Probe-Errors list.
+fn is_payload_enoent(message: &str) -> bool {
+    if message.contains("ENOENT") || message.contains("No such file") {
+        return true;
+    }
+    // The payload encodes errno as a trailing integer, e.g. `..._errno_2`.
+    // Match the number EXACTLY so `_errno_20`..`_errno_29` (ENOTDIR, EISDIR,
+    // EMFILE, ENOSPC, …) are not mis-classified as ENOENT (2) and silently
+    // swallowed as "not installed / not yet created".
+    message.split("_errno_").skip(1).any(|rest| {
+        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        digits == "2"
+    })
+}
+
+/// Strip SMP's CRC32 hash suffix from a mount-point dir name.
+/// "Outlast2_a3c3fd8b" → "Outlast2".
+///
+/// SMP's hash suffix is exactly 8 lowercase hex chars (CRC32 in hex).
+/// If the name doesn't match that pattern we return it unchanged —
+/// future SMP versions might use a different scheme.
+fn derive_image_name(dir_name: &str) -> String {
+    // Operate on chars, not bytes: the suffix is always 9 ASCII chars
+    // ("_" + 8 hex) but the head can be any UTF-8 (game/image names often
+    // contain non-ASCII). The old byte-based `split_at(len - 9)` panicked
+    // when a multi-byte codepoint sat within the last 9 bytes, taking down
+    // the whole SMP-status snapshot for that one mount.
+    let chars: Vec<char> = dir_name.chars().collect();
+    if chars.len() < 10 {
+        return dir_name.to_string();
+    }
+    let split = chars.len() - 9;
+    if chars[split] != '_' {
+        return dir_name.to_string();
+    }
+    if !chars[split + 1..].iter().all(|c| c.is_ascii_hexdigit()) {
+        return dir_name.to_string();
+    }
+    chars[..split].iter().collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn derive_strips_hex_suffix() {
+        assert_eq!(derive_image_name("Outlast2_a3c3fd8b"), "Outlast2");
+        assert_eq!(derive_image_name("My Game_deadbeef"), "My Game");
+    }
+
+    #[test]
+    fn derive_handles_non_ascii_without_panicking() {
+        // Byte-based split_at(len - 9) used to panic when a multi-byte
+        // codepoint landed in the last 9 bytes. char-based logic is safe.
+        assert_eq!(derive_image_name("x日a3c3fd8"), "x日a3c3fd8"); // < 10 chars → unchanged
+        assert_eq!(derive_image_name("日本_a3c3fd8b"), "日本"); // strips ASCII suffix off a UTF-8 head
+        assert_eq!(derive_image_name("日本語ゲーム_deadbeef"), "日本語ゲーム");
+    }
+
+    #[test]
+    fn derive_keeps_name_without_suffix() {
+        assert_eq!(derive_image_name("plainname"), "plainname");
+        assert_eq!(derive_image_name("foo_notmatching"), "foo_notmatching");
+    }
+
+    #[test]
+    fn derive_handles_short_names() {
+        assert_eq!(derive_image_name("a"), "a");
+        assert_eq!(derive_image_name(""), "");
+    }
+
+    #[test]
+    fn optional_file_missing_detection_handles_payload_stat_failure() {
+        assert!(is_missing_optional_file_error(
+            "payload rejected FS_READ(/data/shadowmount/autotune.ini): fs_read_stat_failed"
+        ));
+        assert!(is_missing_optional_file_error("No such file or directory"));
+        assert!(!is_missing_optional_file_error(
+            "payload rejected FS_READ(/data/shadowmount/autotune.ini): fs_read_path_not_allowed"
+        ));
+    }
+
+    #[test]
+    fn payload_enoent_detection_handles_numeric_errno_form() {
+        // FS_LIST_DIR on a non-existent path returns the numeric errno
+        // form — the Probe-Errors panel on the Library SMP card was
+        // showing this verbatim before the fix because the old check only
+        // matched the textual "ENOENT" / "No such file" forms.
+        assert!(is_payload_enoent(
+            "payload rejected FS_LIST_DIR(/mnt/shadowmnt): fs_list_dir_opendir_errno_2"
+        ));
+        // FS_READ on a non-existent path uses the same numeric encoding.
+        assert!(is_payload_enoent(
+            "payload rejected FS_READ(/data/shadowmount/missing.ini): fs_read_open_errno_2"
+        ));
+        // Textual forms still detected (engine wrapper / std::io::Error).
+        assert!(is_payload_enoent("ENOENT"));
+        assert!(is_payload_enoent("No such file or directory (os error 2)"));
+        // Non-ENOENT errnos must NOT be treated as missing — those are
+        // real failures that should reach the user.
+        assert!(!is_payload_enoent(
+            "payload rejected FS_LIST_DIR(/foo): fs_list_dir_opendir_errno_13"
+        ));
+        assert!(!is_payload_enoent("Permission denied"));
+        assert!(!is_payload_enoent("connection reset"));
+    }
+}

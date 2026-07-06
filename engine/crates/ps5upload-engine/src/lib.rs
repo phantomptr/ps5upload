@@ -67,8 +67,14 @@ use ps5upload_core::{
         hw_info, hw_power, hw_set_fan_threshold, hw_storage, hw_temps, proc_list, HwInfo, HwPower,
         HwStorage, HwTemps, ProcList,
     },
+    process_mgr::{process_kill, process_list, ProcessKillAck, ProcessListResult},
+    saves::{list_saves, list_screenshots, list_videos, SaveList, ScreenshotList},
+    smp::{collect_status as smp_collect_status, SmpStatus},
     sys_time::{
         humanize_err as sys_time_humanize, ps5_time_get, ps5_time_set, PsTime, PsTimeSetResult,
+    },
+    system_control::{
+        power_telemetry, system_control, PowerAction, PowerTelemetry, SystemControlAck,
     },
     transfer::{
         inspect_7z, inspect_zip, sevenz_plan_preview, transfer_7z_resumable,
@@ -76,6 +82,7 @@ use ps5upload_core::{
         transfer_file_path_resumable, transfer_zip_resumable, zip_plan_preview, FileListEntry,
         TransferConfig, DEFAULT_RESUME_RETRIES, DEFAULT_ZIP_ENTRY_RAM_THRESHOLD, TX_FLAG_RESUME,
     },
+    users::{user_list, UserList},
     volumes::{list_volumes, VolumeList},
 };
 
@@ -2092,6 +2099,209 @@ async fn ps5_proc_list(
         .await
         .map_err(anyhow::Error::from)
         .and_then(|r| r);
+    match r {
+        Ok(v) => (StatusCode::OK, Json(v)).into_response(),
+        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
+    }
+}
+
+// ── Process manager (Processes screen — distinct from PROC_LIST above:
+// this is process_mgr's detailed pid/name/title_id/memory/kind view with
+// kill support, not hw's lightweight snapshot) ──────────────────────────
+
+/// GET /api/ps5/process/list — detailed process enumeration + kill support.
+async fn ps5_process_list(
+    State(state): State<AppState>,
+    Query(q): Query<AddrQuery>,
+) -> impl IntoResponse {
+    let addr = mgmt_addr_or_default(q.addr, &state.default_ps5_addr);
+    let r: Result<ProcessListResult, anyhow::Error> =
+        tokio::task::spawn_blocking(move || process_list(&addr))
+            .await
+            .map_err(anyhow::Error::from)
+            .and_then(|r| r);
+    match r {
+        Ok(v) => (StatusCode::OK, Json(v)).into_response(),
+        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ProcessKillReq {
+    addr: Option<String>,
+    pid: i32,
+}
+
+/// POST /api/ps5/process/kill — SIGKILL a pid. Body: `{ addr, pid }`.
+async fn ps5_process_kill(
+    State(state): State<AppState>,
+    Json(req): Json<ProcessKillReq>,
+) -> impl IntoResponse {
+    let addr = mgmt_addr_or_default(req.addr, &state.default_ps5_addr);
+    let pid = req.pid;
+    let r: Result<ProcessKillAck, anyhow::Error> =
+        tokio::task::spawn_blocking(move || process_kill(&addr, pid))
+            .await
+            .map_err(anyhow::Error::from)
+            .and_then(|r| r);
+    match r {
+        Ok(v) => (StatusCode::OK, Json(v)).into_response(),
+        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
+    }
+}
+
+// ── Power control + telemetry ───────────────────────────────────────────
+
+#[derive(Debug, serde::Deserialize)]
+struct PowerControlReq {
+    addr: Option<String>,
+    /// One of "reboot" | "shutdown" | "standby" | "tick".
+    action: String,
+}
+
+/// POST /api/ps5/power/control — Body: `{ addr, action }`.
+async fn ps5_power_control(
+    State(state): State<AppState>,
+    Json(req): Json<PowerControlReq>,
+) -> impl IntoResponse {
+    let addr = mgmt_addr_or_default(req.addr, &state.default_ps5_addr);
+    let action = match req.action.as_str() {
+        "reboot" => PowerAction::Reboot,
+        "shutdown" => PowerAction::Shutdown,
+        "standby" => PowerAction::Standby,
+        "tick" => PowerAction::Tick,
+        other => {
+            return json_err(
+                StatusCode::BAD_REQUEST,
+                format!("unknown power action: {other}"),
+            )
+            .into_response()
+        }
+    };
+    let r: Result<SystemControlAck, anyhow::Error> =
+        tokio::task::spawn_blocking(move || system_control(&addr, action))
+            .await
+            .map_err(anyhow::Error::from)
+            .and_then(|r| r);
+    match r {
+        Ok(v) => (StatusCode::OK, Json(v)).into_response(),
+        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
+    }
+}
+
+/// GET /api/ps5/power/telemetry — lifetime ICC telemetry (operating
+/// seconds, boot cycles, thermal alerts, power-up cause).
+async fn ps5_power_telemetry(
+    State(state): State<AppState>,
+    Query(q): Query<AddrQuery>,
+) -> impl IntoResponse {
+    let addr = mgmt_addr_or_default(q.addr, &state.default_ps5_addr);
+    let r: Result<PowerTelemetry, anyhow::Error> =
+        tokio::task::spawn_blocking(move || power_telemetry(&addr))
+            .await
+            .map_err(anyhow::Error::from)
+            .and_then(|r| r);
+    match r {
+        Ok(v) => (StatusCode::OK, Json(v)).into_response(),
+        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
+    }
+}
+
+// ── User accounts ────────────────────────────────────────────────────────
+
+/// GET /api/ps5/users/list — enumerate logged-in user accounts.
+async fn ps5_users_list(
+    State(state): State<AppState>,
+    Query(q): Query<AddrQuery>,
+) -> impl IntoResponse {
+    let addr = mgmt_addr_or_default(q.addr, &state.default_ps5_addr);
+    let r: Result<UserList, anyhow::Error> = tokio::task::spawn_blocking(move || user_list(&addr))
+        .await
+        .map_err(anyhow::Error::from)
+        .and_then(|r| r);
+    match r {
+        Ok(v) => (StatusCode::OK, Json(v)).into_response(),
+        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
+    }
+}
+
+// ── Saves / screenshots / videos ────────────────────────────────────────
+
+#[derive(Debug, serde::Deserialize)]
+struct SavesListQuery {
+    addr: Option<String>,
+    #[serde(default)]
+    user_id: Option<i32>,
+}
+
+/// GET /api/ps5/saves/list?addr=&user_id= — user_id=0 (or absent) lists
+/// every user's saves.
+async fn ps5_saves_list(
+    State(state): State<AppState>,
+    Query(q): Query<SavesListQuery>,
+) -> impl IntoResponse {
+    let addr = mgmt_addr_or_default(q.addr, &state.default_ps5_addr);
+    let uid = q.user_id.unwrap_or(0);
+    let r: Result<SaveList, anyhow::Error> =
+        tokio::task::spawn_blocking(move || list_saves(&addr, uid))
+            .await
+            .map_err(anyhow::Error::from)
+            .and_then(|r| r);
+    match r {
+        Ok(v) => (StatusCode::OK, Json(v)).into_response(),
+        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
+    }
+}
+
+/// GET /api/ps5/screenshots/list?addr=
+async fn ps5_screenshots_list(
+    State(state): State<AppState>,
+    Query(q): Query<AddrQuery>,
+) -> impl IntoResponse {
+    let addr = mgmt_addr_or_default(q.addr, &state.default_ps5_addr);
+    let r: Result<ScreenshotList, anyhow::Error> =
+        tokio::task::spawn_blocking(move || list_screenshots(&addr))
+            .await
+            .map_err(anyhow::Error::from)
+            .and_then(|r| r);
+    match r {
+        Ok(v) => (StatusCode::OK, Json(v)).into_response(),
+        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
+    }
+}
+
+/// GET /api/ps5/videos/list?addr= — same `{path,size,mtime}` shape as
+/// screenshots (payload walks `/user/av_contents/video` instead).
+async fn ps5_videos_list(
+    State(state): State<AppState>,
+    Query(q): Query<AddrQuery>,
+) -> impl IntoResponse {
+    let addr = mgmt_addr_or_default(q.addr, &state.default_ps5_addr);
+    let r: Result<ScreenshotList, anyhow::Error> =
+        tokio::task::spawn_blocking(move || list_videos(&addr))
+            .await
+            .map_err(anyhow::Error::from)
+            .and_then(|r| r);
+    match r {
+        Ok(v) => (StatusCode::OK, Json(v)).into_response(),
+        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
+    }
+}
+
+// ── ShadowMount+ status ──────────────────────────────────────────────────
+
+/// GET /api/ps5/smp/status?addr= — read-only ShadowMount+ snapshot
+/// (installed/running + config/autotune/debug.log + mounted images).
+async fn ps5_smp_status(
+    State(state): State<AppState>,
+    Query(q): Query<AddrQuery>,
+) -> impl IntoResponse {
+    let addr = mgmt_addr_or_default(q.addr, &state.default_ps5_addr);
+    let r: Result<SmpStatus, anyhow::Error> =
+        tokio::task::spawn_blocking(move || smp_collect_status(&addr))
+            .await
+            .map_err(anyhow::Error::from)
+            .and_then(|r| r);
     match r {
         Ok(v) => (StatusCode::OK, Json(v)).into_response(),
         Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
@@ -5832,6 +6042,15 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/ps5/hw/power", get(ps5_hw_power))
         .route("/api/ps5/hw/storage", get(ps5_hw_storage))
         .route("/api/ps5/proc/list", get(ps5_proc_list))
+        .route("/api/ps5/process/list", get(ps5_process_list))
+        .route("/api/ps5/process/kill", post(ps5_process_kill))
+        .route("/api/ps5/power/control", post(ps5_power_control))
+        .route("/api/ps5/power/telemetry", get(ps5_power_telemetry))
+        .route("/api/ps5/users/list", get(ps5_users_list))
+        .route("/api/ps5/saves/list", get(ps5_saves_list))
+        .route("/api/ps5/screenshots/list", get(ps5_screenshots_list))
+        .route("/api/ps5/videos/list", get(ps5_videos_list))
+        .route("/api/ps5/smp/status", get(ps5_smp_status))
         .route("/api/ps5/hw/fan-threshold", post(ps5_hw_set_fan_threshold))
         .route("/api/ps5/fs/chmod", post(ps5_fs_chmod))
         .route("/api/ps5/fs/mkdir", post(ps5_fs_mkdir))
