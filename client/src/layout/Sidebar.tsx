@@ -17,6 +17,7 @@ import {
   Globe,
   Save,
   Image as ImageIcon,
+  Video as VideoIcon,
   Settings as SettingsIcon,
   Info,
   Sun,
@@ -144,6 +145,7 @@ const items: NavItem[] = [
     fallback: "Screenshots",
     icon: ImageIcon,
   },
+  { to: "/videos", key: "videos", fallback: "Video clips", icon: VideoIcon },
 
   // ─ Browse PS5: navigate what's on the console ─
   {

@@ -79,3 +79,25 @@ pub fn list_screenshots(addr: &str) -> Result<ScreenshotList> {
     let parsed: ScreenshotList = serde_json::from_slice(&resp)?;
     Ok(parsed)
 }
+
+/// List gameplay video clips on the console. Same wire/JSON shape as
+/// `list_screenshots` (path/size/mtime) so the client reuses the row
+/// renderer and the generic transfer-download path — the only difference
+/// is the payload walks `/user/av_contents/video` for `.webm`/`.mp4`.
+pub fn list_videos(addr: &str) -> Result<ScreenshotList> {
+    let mut c = Connection::connect(addr)?;
+    c.send_frame(FrameType::ListVideos, &[])?;
+    let (hdr, resp) = c.recv_frame()?;
+    let ft = hdr.frame_type().unwrap_or(FrameType::Error);
+    if ft == FrameType::Error {
+        bail!(
+            "payload rejected LIST_VIDEOS: {}",
+            String::from_utf8_lossy(&resp)
+        );
+    }
+    if ft != FrameType::ListVideosAck {
+        bail!("expected LIST_VIDEOS_ACK, got {ft:?}");
+    }
+    let parsed: ScreenshotList = serde_json::from_slice(&resp)?;
+    Ok(parsed)
+}

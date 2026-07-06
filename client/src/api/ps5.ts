@@ -1823,6 +1823,15 @@ export async function screenshotsList(addr: string): Promise<ScreenshotList> {
   return invoke<ScreenshotList>("screenshots_list", { addr });
 }
 
+/** List gameplay video clips from the PS5 (`/user/av_contents/video`,
+ *  `.webm`/`.mp4`). Same `{path,size,mtime}` shape as screenshots so the
+ *  Videos screen reuses the row + generic download path. Video clips
+ *  don't need the `.jxr → PNG` conversion screenshots do — they download
+ *  as-is and play in any modern player. */
+export async function videosList(addr: string): Promise<ScreenshotList> {
+  return invoke<ScreenshotList>("videos_list", { addr });
+}
+
 /** Convert a downloaded PS5 screenshot (`.jxr` / JPEG XR — HDR, not
  *  viewable in normal apps) into an SDR PNG. Decoding + HDR→SDR
  *  tone-mapping happen in-process in the Rust backend (jxrlib, no external

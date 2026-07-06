@@ -510,6 +510,12 @@ pub enum FrameType {
     ProcessListAck = 163,
     ProcessKill = 164,
     ProcessKillAck = 165,
+    /// List gameplay video clips stored on the console. Body empty. ACK
+    /// body: JSON `{"items":[{"path":"...","size":N,"mtime":<i64>}, …]}`,
+    /// same shape as ListScreenshotsAck, where path is a `.webm`/`.mp4`
+    /// under `/user/av_contents/video` (recursive, 5 levels deep).
+    ListVideos = 166,
+    ListVideosAck = 167,
 }
 
 impl FrameType {
@@ -665,6 +671,8 @@ impl FrameType {
             163 => Ok(Self::ProcessListAck),
             164 => Ok(Self::ProcessKill),
             165 => Ok(Self::ProcessKillAck),
+            166 => Ok(Self::ListVideos),
+            167 => Ok(Self::ListVideosAck),
             _ => Err(DecodeError::UnknownFrameType(v)),
         }
     }

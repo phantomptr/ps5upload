@@ -1,6 +1,6 @@
-//! Tauri command wrappers for save data + screenshot listing.
+//! Tauri command wrappers for save data + screenshot + video-clip listing.
 
-use ps5upload_core::saves::{list_saves, list_screenshots};
+use ps5upload_core::saves::{list_saves, list_screenshots, list_videos};
 use serde_json::Value as JsonValue;
 
 #[tauri::command]
@@ -20,4 +20,13 @@ pub async fn screenshots_list(addr: String) -> Result<JsonValue, String> {
         .map_err(|e| format!("screenshots task: {e}"))?
         .map(|s| serde_json::to_value(s).unwrap_or(serde_json::json!({})))
         .map_err(|e| format!("screenshots: {e}"))
+}
+
+#[tauri::command]
+pub async fn videos_list(addr: String) -> Result<JsonValue, String> {
+    tokio::task::spawn_blocking(move || list_videos(&addr))
+        .await
+        .map_err(|e| format!("videos task: {e}"))?
+        .map(|s| serde_json::to_value(s).unwrap_or(serde_json::json!({})))
+        .map_err(|e| format!("videos: {e}"))
 }

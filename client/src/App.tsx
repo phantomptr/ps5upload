@@ -40,6 +40,7 @@ const FirstRunScreen = lazy(() => import("./screens/FirstRun"));
 const SavesScreen = lazy(() => import("./screens/Saves"));
 const ProcessesScreen = lazy(() => import("./screens/Processes"));
 const ScreenshotsScreen = lazy(() => import("./screens/Screenshots"));
+const VideosScreen = lazy(() => import("./screens/Videos"));
 const StatsScreen = lazy(() => import("./screens/Stats"));
 const ShellScreen = lazy(() => import("./screens/Shell"));
 const DiskUsageScreen = lazy(() => import("./screens/DiskUsage"));
@@ -209,6 +210,14 @@ export default function App() {
           element={
             <Suspense fallback={<ScreenLoader />}>
               <ScreenshotsScreen />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/videos"
+          element={
+            <Suspense fallback={<ScreenLoader />}>
+              <VideosScreen />
             </Suspense>
           }
         />

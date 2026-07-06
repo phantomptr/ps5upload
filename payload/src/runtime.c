@@ -349,6 +349,9 @@ extern int posix_fallocate(int fd, off_t offset, off_t len);
 #define FTX2_FRAME_PROCESS_LIST_ACK  163u
 #define FTX2_FRAME_PROCESS_KILL      164u
 #define FTX2_FRAME_PROCESS_KILL_ACK  165u
+/* Video-clip listing (parallels screenshot listing at 94/95). */
+#define FTX2_FRAME_LIST_VIDEOS       166u
+#define FTX2_FRAME_LIST_VIDEOS_ACK   167u
 /* Where we place mount points. Scoped under /mnt/ps5upload/ so it
  * never collides with mount paths owned by other utilities. */
 #define FS_MOUNT_BASE "/mnt/ps5upload"
@@ -10086,6 +10089,59 @@ static int walk_screenshots(const char *root, int depth_left,
     return count;
 }
 
+/* Recursively walk `root` up to `depth_left` levels; append a JSON entry
+ * for each video-clip file found. PS5 stores gameplay video clips under
+ *   /user/av_contents/video/<userId>/<userId>/<batch>/<file>.webm
+ * (WebM is the native container on current firmware; older/imported
+ * clips may be .mp4). Unlike screenshots there is no separate thumbnail
+ * tree to dedup, so this is a plain flat walk — same JSON shape
+ * (path/size/mtime) as walk_screenshots so the client reuses the row
+ * renderer and the generic transfer-download path.
+ *
+ * NB (needs FW confirmation): the exact av_contents/video path + the
+ * .webm/.mp4 extension set are the documented layout but haven't been
+ * verified against a live console in-house — mirror of the screenshot
+ * bug where a wrong extension listed 0 files. If the Clips tab shows
+ * empty on hardware with clips present, adjust the extension filter /
+ * root here. */
+static int walk_videos(const char *root, int depth_left,
+                       char *body, int *n, int cap, int *wrote_one) {
+    if (depth_left <= 0) return 0;
+    DIR *dp = opendir(root);
+    if (!dp) return 0;
+    int count = 0;
+    struct dirent *e;
+    while ((e = readdir(dp)) != NULL) {
+        if (e->d_name[0] == '.') continue;
+        char path[1024];
+        snprintf(path, sizeof(path), "%s/%s", root, e->d_name);
+        struct stat st;
+        if (stat(path, &st) != 0) continue;
+        if (S_ISDIR(st.st_mode)) {
+            count += walk_videos(path, depth_left - 1, body, n, cap, wrote_one);
+            continue;
+        }
+        const char *ext = strrchr(e->d_name, '.');
+        if (!ext) continue;
+        if (strcmp(ext, ".webm") != 0 &&
+            strcmp(ext, ".mp4") != 0 &&
+            strcmp(ext, ".mov") != 0) continue;
+        char esc_path[2048];
+        json_escape_into(path, esc_path, sizeof(esc_path));
+        if (*n >= cap - 2300) break;
+        if (*wrote_one) {
+            body[(*n)++] = ',';
+        }
+        *wrote_one = 1;
+        *n += snprintf(body + *n, cap - *n,
+                       "{\"path\":\"%s\",\"size\":%lld,\"mtime\":%lld}",
+                       esc_path, (long long)st.st_size, (long long)st.st_mtime);
+        count++;
+    }
+    closedir(dp);
+    return count;
+}
+
 /* ── Filesystem search index ──────────────────────────────────────────
  *
  * Build an in-memory index of every regular file under a set of roots,
@@ -14258,6 +14314,35 @@ static int handle_list_screenshots(runtime_state_t *state, int client_fd,
     return rc;
 }
 
+/* List gameplay video clips (parallels handle_list_screenshots). No
+ * thumbnail tree to dedup — a single flat walk of av_contents/video. */
+static int handle_list_videos(runtime_state_t *state, int client_fd,
+                              uint64_t trace_id) {
+    if (!state) return -1;
+    char *resp = malloc(64 * 1024);
+    if (!resp) {
+        const char *err = "{\"err\":\"oom\"}";
+        return send_frame(client_fd, FTX2_FRAME_LIST_VIDEOS_ACK, 0,
+                          trace_id, err, strlen(err));
+    }
+    int cap = 64 * 1024;
+    int n = 0;
+    n += snprintf(resp + n, cap - n, "{\"items\":[");
+    int wrote_one = 0;
+    walk_videos("/user/av_contents/video", 5, resp, &n, cap, &wrote_one);
+    if (n < cap - 2) {
+        resp[n++] = ']';
+        resp[n++] = '}';
+    }
+    int rc = send_frame(client_fd, FTX2_FRAME_LIST_VIDEOS_ACK, 0,
+                        trace_id, resp, (uint64_t)n);
+    free(resp);
+    pthread_mutex_lock(&state->state_mtx);
+    state->command_count += 1;
+    pthread_mutex_unlock(&state->state_mtx);
+    return rc;
+}
+
 static int handle_hw_storage(runtime_state_t *state, int client_fd, uint64_t trace_id) {
     return handle_hw_text_op(state, client_fd, trace_id, hw_storage_get_text,
                               FTX2_FRAME_HW_STORAGE_ACK, "hw_storage_failed");
@@ -16682,6 +16767,9 @@ abort_done:
     }
     if (hdr.frame_type == FTX2_FRAME_LIST_SCREENSHOTS) {
         return handle_list_screenshots(state, client_fd, hdr.trace_id);
+    }
+    if (hdr.frame_type == FTX2_FRAME_LIST_VIDEOS) {
+        return handle_list_videos(state, client_fd, hdr.trace_id);
     }
     if (hdr.frame_type == FTX2_FRAME_INDEX_START) {
         return handle_index_start(state, client_fd, hdr.trace_id,

@@ -294,6 +294,7 @@ pub fn run() {
             // ── Save data + screenshot listing ──────────────────────
             commands::saves_list,
             commands::screenshots_list,
+            commands::videos_list,
             commands::screenshot_convert,
             // ── Save data .zip backup/restore ───────────────────────
             // The Saves screen uses these to wrap a downloaded save
