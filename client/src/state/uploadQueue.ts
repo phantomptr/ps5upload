@@ -19,8 +19,10 @@ import {
   uploadQueueLoad,
   uploadQueueSave,
   UploadJobError,
+  powerStandby,
   type ReconcileMode,
 } from "../api/ps5";
+import { restAfterUploadEnabled } from "./restAfterUpload";
 import {
   moveItemDownWithinGroup,
   moveItemUpWithinGroup,
@@ -1284,6 +1286,48 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
             delete rh[h];
             return { runningHosts: rh, running: anyRunning(rh) };
           });
+          // Opt-in "rest mode after uploads finish" (#165). Fire only when
+          // the drain completed NATURALLY (isLive — not a Stop, which
+          // re-stamps the generation), the user enabled it, this console
+          // has no more pending work, AND at least one item actually
+          // reached "done" (don't sleep a console whose queue was entirely
+          // cancelled/failed — that wasn't a successful upload session).
+          // Fire-and-forget + guarded: a standby rejection (unsupported FW)
+          // must never surface as an unhandledrejection from the drain loop.
+          if (restAfterUploadEnabled() && !nextPendingForHost(get().items, h)) {
+            const didWork = get().items.some(
+              (it) => hostOf(it.addr) === h && it.status === "done",
+            );
+            if (didWork) {
+              void powerStandby(mgmtAddr(h))
+                .then((ack) => {
+                  pushNotification(
+                    ack.ok ? "info" : "warning",
+                    withConsolePrefix(
+                      h,
+                      ack.ok
+                        ? "Uploads done — entering rest mode"
+                        : "Uploads done — couldn't enter rest mode",
+                    ),
+                    ack.ok
+                      ? undefined
+                      : {
+                          body:
+                            ack.err ||
+                            "The PS5 declined standby (may be unavailable on this firmware).",
+                        },
+                  );
+                })
+                .catch((e) => {
+                  log.warn(
+                    "queue",
+                    `rest-after-upload standby failed for ${h}: ${
+                      e instanceof Error ? e.message : String(e)
+                    }`,
+                  );
+                });
+            }
+          }
         }
       }
     },

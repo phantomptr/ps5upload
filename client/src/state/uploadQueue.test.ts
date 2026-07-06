@@ -21,6 +21,7 @@ vi.mock("../api/ps5", async (importOriginal) => {
     fsMount: vi.fn(async () => ({ mount_point: "/mnt/x", layout_valid: true })),
     smpStatus: vi.fn(async () => ({ running: false })),
     smpManualInstall: vi.fn(async () => ({ added: true })),
+    powerStandby: vi.fn(async () => ({ ok: true })),
   };
 });
 
@@ -30,7 +31,9 @@ import {
   fsMount,
   smpStatus,
   smpManualInstall,
+  powerStandby,
 } from "../api/ps5";
+import { useRestAfterUploadStore } from "./restAfterUpload";
 import { ensurePayloadCurrent } from "../lib/ensurePayloadCurrent";
 import {
   useUploadQueueStore,
@@ -45,6 +48,7 @@ import { useUploadSettingsStore } from "./uploadSettings";
 const mockedJobStatus = vi.mocked(jobStatus);
 const mockedStartFile = vi.mocked(startTransferFile);
 const mockedEnsurePayload = vi.mocked(ensurePayloadCurrent);
+const mockedStandby = vi.mocked(powerStandby);
 
 function installLocalStorageStub() {
   const store = new Map<string, string>();
@@ -292,6 +296,86 @@ describe("upload runner concurrency (per-console, parallel)", () => {
     expect(itemsByStatus("done")).toHaveLength(2);
     expect(useUploadQueueStore.getState().running).toBe(false);
     expect(useUploadQueueStore.getState().runningHosts).toEqual({});
+  });
+});
+
+// ── Rest mode after upload (#165) ────────────────────────────────────────────
+
+describe("rest mode after upload", () => {
+  beforeEach(() => {
+    installLocalStorageStub();
+    vi.useFakeTimers();
+    mockedStandby.mockReset().mockResolvedValue({ ok: true } as Awaited<
+      ReturnType<typeof powerStandby>
+    >);
+    // Every job reports done on the first poll so a drain completes fast.
+    mockedJobStatus.mockReset().mockResolvedValue({
+      status: "done",
+      bytes_sent: 100,
+      elapsed_ms: 10,
+    } as Awaited<ReturnType<typeof jobStatus>>);
+    mockedStartFile.mockReset().mockResolvedValue("job");
+    useUploadQueueStore.setState({
+      items: [],
+      running: false,
+      runningHosts: {},
+      continueOnFailure: true,
+      loaded: true,
+    });
+    useRestAfterUploadStore.setState({ enabled: false });
+  });
+  afterEach(() => {
+    useUploadQueueStore.getState().stop();
+    useRestAfterUploadStore.setState({ enabled: false });
+    vi.useRealTimers();
+  });
+
+  it("does NOT enter rest mode when the setting is off (default)", async () => {
+    addItem("192.168.1.10:9113", "A1");
+    const p = useUploadQueueStore.getState().start();
+    await vi.advanceTimersByTimeAsync(5000);
+    await p;
+    expect(itemsByStatus("done")).toHaveLength(1);
+    expect(mockedStandby).not.toHaveBeenCalled();
+  });
+
+  it("enters rest mode on the drained console when enabled", async () => {
+    useRestAfterUploadStore.setState({ enabled: true });
+    addItem("192.168.1.10:9113", "A1");
+    const p = useUploadQueueStore.getState().start();
+    await vi.advanceTimersByTimeAsync(5000);
+    await p;
+    expect(itemsByStatus("done")).toHaveLength(1);
+    // Standby targets the mgmt addr of the drained host.
+    expect(mockedStandby).toHaveBeenCalledTimes(1);
+    expect(mockedStandby).toHaveBeenCalledWith("192.168.1.10:9114");
+  });
+
+  it("sleeps EACH console that drains, independently", async () => {
+    useRestAfterUploadStore.setState({ enabled: true });
+    addItem("192.168.1.10:9113", "A1");
+    addItem("192.168.1.20:9113", "B1");
+    const p = useUploadQueueStore.getState().start();
+    await vi.advanceTimersByTimeAsync(5000);
+    await p;
+    const called = mockedStandby.mock.calls.map((c) => c[0]).sort();
+    expect(called).toEqual(["192.168.1.10:9114", "192.168.1.20:9114"]);
+  });
+
+  it("does NOT sleep a console that was Stopped mid-drain", async () => {
+    useRestAfterUploadStore.setState({ enabled: true });
+    // Keep the job running so the item never reaches "done".
+    mockedJobStatus.mockResolvedValue({
+      status: "running",
+    } as Awaited<ReturnType<typeof jobStatus>>);
+    addItem("192.168.1.10:9113", "A1");
+    void useUploadQueueStore.getState().start();
+    await vi.advanceTimersByTimeAsync(50);
+    useUploadQueueStore.getState().stopHost("192.168.1.10");
+    await vi.advanceTimersByTimeAsync(200);
+    // Stop re-stamps the generation, so the drain's finally block skips the
+    // hook (isLive() is false) and nothing completed anyway.
+    expect(mockedStandby).not.toHaveBeenCalled();
   });
 });
 

@@ -43,6 +43,7 @@ import {
 import { useConnectionStore } from "../../state/connection";
 import { useEngineStore, DEFAULT_ENGINE_URL } from "../../state/engine";
 import { useSaveSettingsStore, DEFAULT_SAVE_PATH } from "../../state/saveSettings";
+import { useRestAfterUploadStore } from "../../state/restAfterUpload";
 import { userConfigPath, resetAllAppData } from "../../state/userConfig";
 import { useUpdateStore, type UpdatePhase } from "../../state/update";
 import { isMobile } from "../../lib/platform";
@@ -225,6 +226,8 @@ export default function SettingsScreen() {
     setBandwidthCapMbps,
   } = useUploadSettingsStore();
   const payloadMaxStreams = useConnectionStore((s) => s.maxTransferStreams);
+  const restAfterUpload = useRestAfterUploadStore((s) => s.enabled);
+  const setRestAfterUpload = useRestAfterUploadStore((s) => s.setEnabled);
   // UA-based, stable for the whole session — safe to read during render.
   const mobile = isMobile();
 
@@ -485,6 +488,31 @@ export default function SettingsScreen() {
                 )}
               </div>
             </div>
+
+            <label className="flex cursor-pointer items-start gap-3 text-sm">
+              <input
+                type="checkbox"
+                className="mt-0.5 h-4 w-4"
+                checked={restAfterUpload}
+                onChange={(e) => setRestAfterUpload(e.target.checked)}
+              />
+              <div>
+                <div className="font-medium">
+                  {tr(
+                    "upload_rest_after",
+                    undefined,
+                    "Put the PS5 in rest mode after uploads finish",
+                  )}
+                </div>
+                <div className="mt-0.5 text-xs text-[var(--color-muted)]">
+                  {tr(
+                    "upload_rest_after_hint",
+                    undefined,
+                    "When a console's upload queue finishes, ask it to enter rest mode — handy for an overnight queue. Only fires when at least one upload actually completed (not after a Stop or an all-failed run). Off by default. Standby may be unavailable on some firmware; you'll get a notice if it's declined.",
+                  )}
+                </div>
+              </div>
+            </label>
           </div>
         </Section>
 

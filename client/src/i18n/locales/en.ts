@@ -367,6 +367,9 @@ upload_streams_unstable: "Faster, but use with caution: more than 1 stream runs 
 upload_auto_resume: "Auto-resume uploads after a failure",
 upload_auto_resume_hint:
   "If an upload drops mid-transfer — most often because the PS5 payload crashed — automatically re-send the payload and resume from where it left off, retrying a few times before giving up. Fatal problems like the PS5 running out of space still stop right away. On by default.",
+upload_rest_after: "Put the PS5 in rest mode after uploads finish",
+upload_rest_after_hint:
+  "When a console's upload queue finishes, ask it to enter rest mode — handy for an overnight queue. Only fires when at least one upload actually completed (not after a Stop or an all-failed run). Off by default. Standby may be unavailable on some firmware; you'll get a notice if it's declined.",
 settings_file: "Settings file",
 settings_file_hint: "Your preferences live in this JSON file — safe to back up, copy to another machine, or edit by hand (edits take effect next time you launch the app).",
 resolving: "resolving…",
