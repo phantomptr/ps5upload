@@ -1537,6 +1537,10 @@ pub async fn ffpkg_extract(
 /// Kick off an install. Returns the session_id, the HTTP URL the PS5
 /// will fetch from, and the BGFT task_id. Caller polls `pkg_install_status`
 /// until phase=done|error.
+// Tauri command: the parameter list mirrors the JS call site (each becomes a
+// key in the invoke args object), so the count is dictated by the install API
+// surface, not Rust ergonomics — the standard exception to too_many_arguments.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn pkg_install_start(
     ps5_addr: String,
