@@ -14,6 +14,7 @@ pub mod process_mgr;
 pub mod profile;
 pub mod saves;
 pub mod search_index;
+pub mod smp;
 pub mod smp_meta;
 pub mod sys_time;
 pub mod system_control;

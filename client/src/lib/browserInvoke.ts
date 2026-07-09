@@ -478,6 +478,73 @@ export async function browserInvoke<T>(cmd: string, args: AnyArgs = {}): Promise
       }
     }
 
+    // ── Process manager ─────────────────────────────────────────────────────
+
+    case "process_list_get":
+      return getJson<T>(addrUrl("/api/ps5/process/list", args["addr"]));
+
+    case "process_kill_pid": {
+      const { addr, pid } = args as { addr?: string | null; pid: number };
+      return postJson<T>("/api/ps5/process/kill", { addr, pid });
+    }
+
+    // ── Power control + telemetry ───────────────────────────────────────────
+
+    case "power_reboot":
+      return postJson<T>("/api/ps5/power/control", {
+        addr: args["addr"],
+        action: "reboot",
+      });
+
+    case "power_shutdown":
+      return postJson<T>("/api/ps5/power/control", {
+        addr: args["addr"],
+        action: "shutdown",
+      });
+
+    case "power_standby":
+      return postJson<T>("/api/ps5/power/control", {
+        addr: args["addr"],
+        action: "standby",
+      });
+
+    case "power_tick":
+      return postJson<T>("/api/ps5/power/control", {
+        addr: args["addr"],
+        action: "tick",
+      });
+
+    case "power_telemetry_get":
+      return getJson<T>(addrUrl("/api/ps5/power/telemetry", args["addr"]));
+
+    // ── User accounts ────────────────────────────────────────────────────────
+
+    case "user_list_get":
+      return getJson<T>(addrUrl("/api/ps5/users/list", args["addr"]));
+
+    // ── Saves / screenshots / videos ────────────────────────────────────────
+
+    case "saves_list": {
+      // TS caller: { addr, userId } (Tauri 2 camelCases user_id → userId)
+      const { addr, userId } = args as { addr?: string | null; userId?: number | null };
+      let url = addrUrl("/api/ps5/saves/list", addr);
+      if (userId != null) {
+        url += `${url.includes("?") ? "&" : "?"}user_id=${userId}`;
+      }
+      return getJson<T>(url);
+    }
+
+    case "screenshots_list":
+      return getJson<T>(addrUrl("/api/ps5/screenshots/list", args["addr"]));
+
+    case "videos_list":
+      return getJson<T>(addrUrl("/api/ps5/videos/list", args["addr"]));
+
+    // ── ShadowMount+ status ──────────────────────────────────────────────────
+
+    case "smp_status":
+      return getJson<T>(addrUrl("/api/ps5/smp/status", args["addr"]));
+
     // ── Native-only / unsupported ────────────────────────────────────────────
 
     default:
