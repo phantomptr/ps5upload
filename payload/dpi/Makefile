@@ -12,7 +12,7 @@ endif
 # :9040 isn't already listening, then POSTs an http(s):// .pkg URL to it.
 ELF := ezremote-dpi.elf
 
-CFLAGS := -Wall -Wextra -Werror -g
+CFLAGS := -Wall -Wextra -Werror -g -I../include
 
 # Mirror the main payload's lib set. libSceAppInstUtil has DT_NEEDED deps
 # on the other Sce libs; if they're not in our DT_NEEDED, rtld can refuse
@@ -25,7 +25,7 @@ LIBS := -lSceSystemService -lSceUserService -lSceAppInstUtil \
         -lSceNotification -lkernel_sys -lpthread
 
 SRCS := ezremote_dpi.c
-HEADERS := sceAppInstUtil.h
+HEADERS := sceAppInstUtil.h ../include/authid.h
 
 all: $(ELF) $(ELF).gz
 

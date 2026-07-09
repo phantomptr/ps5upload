@@ -27,6 +27,7 @@
 #include <sys/uio.h>
 #include <sys/sysctl.h>
 
+#include "authid.h"
 #include "register.h"
 #include "sony_api_lock.h"
 #include "kernel_rw_lock.h"
@@ -163,71 +164,15 @@ static pthread_once_t g_reg_once = PTHREAD_ONCE_INIT;
 
 /* -- Firmware-major parse ---------------------------------------------- */
 
-/* Extract the leading NN of NN.MM from `kern.version`. We keep this
- * minimal because the only consumer here is the firmware-12 gate on
- * sceAppInstUtilAppInstallTitleDir.
- *
- * Two parse tiers:
- *   1. "releases/NN" -- the canonical build-branch tag on production
- *      firmwares. Preferred because it's unambiguous.
- *   2. Bare NN.NN substring -- covers firmware strings that omit the
- *      "releases/" prefix (some sandboxed debug configurations). We
- *      skip any leading "11.0" since FreeBSD's OS major (11) would
- *      otherwise be mistaken for PS5 firmware 11.x.
- *
- * Returns 0 if neither matches, which errs toward "attempt the install"
- * -- a real 12+ console will fail at dlsym anyway and surface a clean
- * error. Matches the shape of the client-side parsePS5Firmware tiers. */
-static int parse_firmware_major_from_kern_version(const char *kv) {
-    if (!kv) return 0;
-    const char *p = strstr(kv, "releases/");
-    if (p) {
-        p += strlen("releases/");
-        int major = 0;
-        int consumed = 0;
-        while (*p >= '0' && *p <= '9') {
-            major = major * 10 + (*p - '0');
-            consumed++;
-            p++;
-        }
-        if (consumed > 0) return major;
-    }
-    /* Fallback: first NN.NN after the FreeBSD "11.0" prefix. */
-    const char *scan = kv;
-    if (strncmp(scan, "FreeBSD 11.0", 12) == 0) scan += 12;
-    while (*scan) {
-        if (scan[0] >= '0' && scan[0] <= '9') {
-            int major = 0;
-            int consumed = 0;
-            const char *q = scan;
-            while (*q >= '0' && *q <= '9') {
-                major = major * 10 + (*q - '0');
-                consumed++;
-                q++;
-            }
-            /* Require NN.NN shape to avoid matching an arbitrary number. */
-            if (consumed > 0 && *q == '.' &&
-                q[1] >= '0' && q[1] <= '9' && q[2] >= '0' && q[2] <= '9' &&
-                (q[3] < '0' || q[3] > '9')) {
-                return major;
-            }
-            scan = q;
-        }
-        scan++;
-    }
-    return 0;
-}
+/* detect_firmware_major() is now provided by authid.h as
+ * ps5_detect_firmware_major() (static inline). We keep the legacy
+ * non-static symbol for any TU that extern-declares it (bgft.c's
+ * pre-authid.h code path), delegating to the shared implementation.
+ * parse_firmware_major_from_kern_version is similarly provided by
+ * authid.h as ps5_parse_firmware_major(). */
 
-/* Non-static: also consumed by bgft.c's install-authid firmware gate (the
- * FW-11 "authority cliff" — InstallByPackage runs under ShellCore authid
- * below it, SYSTEM authid at/above it, matching elf-arsenal). Safe sysctl
- * read — NOT the faulting kernel_get_fw_version offset read. */
 int detect_firmware_major(void) {
-    char buf[256];
-    size_t sz = sizeof(buf);
-    if (sysctlbyname("kern.version", buf, &sz, NULL, 0) != 0) return 0;
-    buf[sizeof(buf) - 1] = '\0';
-    return parse_firmware_major_from_kern_version(buf);
+    return ps5_detect_firmware_major();
 }
 
 /* -- dlopen / dlsym helpers --------------------------------------------
@@ -1492,15 +1437,12 @@ int register_title_from_path(const char *src_path,
     return 0;
 }
 
-/* ShellCore authid + kernel ucred helpers — defined in main.c, also
- * extern'd in bgft.c. sceAppInstUtilAppUninstall is gated on the same
- * ShellCore-authid check as the install APIs (same installer subsystem),
- * so an uninstall called under the default debugger authid would be
- * rejected on FW 9.60+ exactly like InstallByPackage is. Swap for the
- * call window, then restore. */
-#define REG_SHELLCORE_AUTHID 0x3800000000000010ull
-extern uint64_t kernel_get_ucred_authid(pid_t pid);
-extern int kernel_set_ucred_authid(pid_t pid, uint64_t authid);
+/* ShellCore authid + kernel ucred helpers — the constant, extern
+ * declarations, and swap/restore logic all come from authid.h.
+ * sceAppInstUtilAppUninstall is gated on the same ShellCore-authid check
+ * as the install APIs (same installer subsystem), so an uninstall called
+ * under the default debugger authid would be rejected on FW 9.60+ exactly
+ * like InstallByPackage is. Swap for the call window, then restore. */
 
 int unregister_title(const char *title_id, const char **err_reason_out) {
     register_module_init();
@@ -1559,7 +1501,7 @@ int unregister_title(const char *title_id, const char **err_reason_out) {
          * returns successfully when the title exists.
          *
          * 2.20.2-fix: swap to ShellCore authid for the call (same gate
-         * as install — see REG_SHELLCORE_AUTHID). Without it, uninstall
+         * as install — see PS5_SHELLCORE_AUTHID in authid.h). Without it, uninstall
          * of a Sony-managed install is rejected on FW 9.60+ and the tile
          * lingers. Best-effort restore; failure to restore is non-fatal
          * (the next Sony call re-swaps as needed). */
@@ -1576,15 +1518,16 @@ int unregister_title(const char *title_id, const char **err_reason_out) {
         pthread_mutex_lock(&kernel_rw_lock);
         uint64_t saved = kernel_get_ucred_authid(mypid);
         if (saved != 0) {
-            (void)kernel_set_ucred_authid(mypid, REG_SHELLCORE_AUTHID);
+            (void)kernel_set_ucred_authid(mypid, PS5_SHELLCORE_AUTHID);
         }
         int unrc = g_reg.app_uninstall(title_id, NULL, NULL);
         /* Restore the prior authid with retry-and-verify (3 attempts),
-         * matching bgft.c's authid_release_shellcore(). A single unverified
+         * matching authid.h's ps5_authid_release(). A single unverified
          * set could silently fail and leave this pid holding the ShellCore
          * authid — and a non-ShellCore pid carrying ShellCore authid is the
-         * exact kernel-watchdog hazard documented in main.c. The helper there
-         * is static to bgft.c, so the loop is inlined here. */
+         * exact kernel-watchdog hazard documented in main.c. The loop is
+         * inlined here (not calling ps5_authid_release) because the swap
+         * window must stay inside kernel_rw_lock. */
         if (saved != 0) {
             for (int attempt = 0; attempt < 3; attempt++) {
                 (void)kernel_set_ucred_authid(mypid, saved);

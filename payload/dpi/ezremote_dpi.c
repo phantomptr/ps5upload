@@ -80,52 +80,15 @@
 
 #include <ps5/kernel.h>
 
+#include "authid.h"
 #include "sceAppInstUtil.h"
 
-/* The SYSTEM_AUTHID Sony's BGFT download manager requires before it will
- * initialise (sceAppInstUtilInitialize). This is the same constant
- * elf-arsenal's jb.c uses (JB_AUTHID) and the same one our main payload's
- * bgft.c uses for the FW>=11 install path (PS5_SYSTEM_INSTALL_AUTHID). */
-#define DPI_JB_AUTHID 0x4801000000000013ULL
-
-/* ShellCore's authid — required by sceAppInstUtilInstallByPackage on
- * FW < 11. The ucred auth_id must equal ShellCore's identifier
- * (0x3800000000000010) for InstallByPackage's URL pre-flight. Without
- * it, InstallByPackage returns 0x80431068 (BGFT download error) for
- * http:// URLs and 0x80B21106 for file:// URLs. We self-escalate to
- * SYSTEM_AUTHID for init (above), then swap to ShellCore just for the
- * InstallByPackage call ON FW < 11. On FW 11+ the content-copy step
- * is gated behind SYSTEM_AUTHID — swapping down to ShellCore registers
- * the title but lands NO content (the "hollow dead-tile" bug). This
- * mirrors bgft.c's firmware gate exactly. */
-#define DPI_SHELLCORE_AUTHID 0x3800000000000010ULL
-
-/* ── Firmware detection (mirrors register.c::detect_firmware_major) ──────
- * The DPI daemon is a standalone process that doesn't link against
- * register.c, so we inline a minimal sysctl-based version. Returns the
- * PS5 firmware major (e.g. 12 for 12.40) or 0 if unknown. 0 errs
- * toward ShellCore — the proven default for FW < 11 where most DPI
- * installs happen. */
-static int dpi_detect_firmware_major(void) {
-    char buf[256];
-    size_t sz = sizeof(buf);
-    if (sysctlbyname("kern.version", buf, &sz, NULL, 0) != 0)
-        return 0;
-    buf[sizeof(buf) - 1] = '\0';
-    const char *p = strstr(buf, "releases/");
-    if (p) {
-        p += strlen("releases/");
-        int major = 0;
-        int consumed = 0;
-        while (*p >= '0' && *p <= '9') {
-            major = major * 10 + (*p - '0');
-            consumed++;
-            p++;
-        }
-        if (consumed > 0) return major;
-    }
-    return 0;
-}
+/* Authid constants (PS5_JB_AUTHID, PS5_SHELLCORE_AUTHID) and firmware
+ * detection (ps5_detect_firmware_major) now come from authid.h, shared
+ * with bgft.c and register.c. The legacy DPI-local names are thin shims
+ * for the existing call sites. */
+#define DPI_JB_AUTHID       PS5_JB_AUTHID
+#define DPI_SHELLCORE_AUTHID PS5_SHELLCORE_AUTHID
 
 /* ── jb_escalate_pid (ported from elf-arsenal's jb.c) ──────────────────
  * Rewrites the target pid's ucred to full root + SYSTEM_AUTHID + all
@@ -452,7 +415,7 @@ int main(void) {
              * STAY at SYSTEM_AUTHID (set at boot escalation) and
              * don't swap. fw==0 (unknown) → ShellCore, the proven
              * default for the FW < 11 regime where DPI is most used. */
-            int fw_major = dpi_detect_firmware_major();
+            int fw_major = ps5_detect_firmware_major();
             int need_swap = (fw_major < 11);
             pid_t me = getpid();
             uint64_t saved_authid = 0;

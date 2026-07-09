@@ -49,6 +49,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "authid.h"
 #include "bgft.h"
 #include "shellui_rpc.h"
 #include "sony_api_lock.h"
@@ -322,96 +323,14 @@ static int appinst_task_lookup(int32_t task_id, char *out, size_t out_cap) {
     return 0;
 }
 
-/* ShellCore's authid — required by sceAppInstUtilInstallByPackage and
- * sceAppInstUtilGetInstallStatus on PS5. The ucred authentication
- * info's auth_id must equal ShellCore's identifier
- * (0x3800000000000010) for these calls. Without this the call returns
- * 0x80B22404 (PlayGo HTTP_404 — Sony rejects the URL pre-flight from
- * non-ShellCore authids on FW 9.60+) for HTTP URLs, or 0x80B21106
- * (parser/parameter rejection) for file:// URLs. The default
- * jailbreak elevation sets us to 0x4800000000000006 (debugger
- * authid) which is right for ptrace + kernel R/W but wrong for
- * Sony's install API gates. */
-#define PS5_SHELLCORE_AUTHID 0x3800000000000010ull
-
-/* SYSTEM authid — what elf-arsenal's jb_escalate_pid (JB_AUTHID) and the
- * install-service reference doc use to drive sceAppInstUtilAppInstallPkg so
- * the CONTENT (not just the appmeta/title record) actually lands. ShellCore's
- * authid is enough to register the title but the content-copy step is gated
- * behind this SYSTEM token; running AppInstallPkg under ShellCore produced
- * the "appmeta present, /user/app empty → dead tile" signature on FW 9.60.
- * InstallByPackage's URL pre-flight still needs ShellCore (0x80B22404 from
- * other authids — see note above), so the two local/URL paths use different
- * tokens deliberately. */
-#define PS5_SYSTEM_INSTALL_AUTHID 0x4801000000000013ull
-
-/* External — defined in main.c, exposed via runtime.h. We re-declare
- * here rather than pulling kernel.h into bgft.c. */
-extern uint64_t kernel_get_ucred_authid(pid_t pid);
-extern int kernel_set_ucred_authid(pid_t pid, uint64_t authid);
-
-/* Firmware major (9, 11, 12, …) via the SAFE kern.version sysctl — defined in
- * register.c. NOT the faulting kernel_get_fw_version offset read. Used to gate
- * the InstallByPackage authid at the FW-11 "authority cliff" (see the install
- * site). Returns 0 if unknown → falls back to the proven ShellCore path. */
-extern int detect_firmware_major(void);
-
-/** Swap process authid to ShellCore for one Sony API call. Returns
- *  the saved authid on success, or 0 if the swap didn't happen (no
- *  kernel R/W or write failure). Pass that return value to
- *  `authid_release_shellcore()` to undo the swap.
- *
- *  Centralises the swap pattern that was previously duplicated across
- *  `appinst_install_start` and `appinst_install_status` — same retry-
- *  on-restore semantics, single source of truth for the log format,
- *  no risk of the two sites drifting on a future fix.
- *
- *  `site_tag` is a short identifier (e.g. "InstallByPackage") used
- *  only in the warn log line so multi-call traces are diagnosable. */
-static uint64_t authid_acquire(const char *site_tag, uint64_t target_authid) {
-    pid_t mypid = getpid();
-    uint64_t saved = kernel_get_ucred_authid(mypid);
-    if (saved == 0) {
-        /* Kernel R/W unavailable — caller's call will run with
-         * whatever authid the process currently has. Better than
-         * aborting the install when the only failure mode is "no
-         * jailbreak elevation yet." */
-        return 0;
-    }
-    if (kernel_set_ucred_authid(mypid, target_authid) != 0) {
-        fprintf(stderr,
-                "[bgft.%s] WARN: failed to swap to authid 0x%llx; "
-                "Sony call will run with current authid (0x%llx)\n",
-                site_tag, (unsigned long long)target_authid,
-                (unsigned long long)saved);
-        return 0;
-    }
-    return saved;
-}
-
-/** Convenience wrapper: swap to ShellCore's authid (the InstallByPackage /
- *  GetInstallStatus URL gate). The local AppInstallPkg path uses
- *  PS5_SYSTEM_INSTALL_AUTHID instead — see authid_acquire callers. */
-static uint64_t authid_acquire_shellcore(const char *site_tag) {
-    return authid_acquire(site_tag, PS5_SHELLCORE_AUTHID);
-}
-
-/** Restore prior authid with retry-and-verify (3 attempts). No-op if
- *  `saved == 0` (acquire didn't actually swap). On persistent restore
- *  failure the shellui_rpc sensor path's `force_reresolve_locked` re-
- *  arms debugger authid as a final safety net. */
-static void authid_release_shellcore(uint64_t saved, const char *site_tag) {
-    if (saved == 0) return;
-    pid_t mypid = getpid();
-    for (int attempt = 0; attempt < 3; attempt++) {
-        (void)kernel_set_ucred_authid(mypid, saved);
-        if (kernel_get_ucred_authid(mypid) == saved) return;
-    }
-    fprintf(stderr,
-            "[bgft.%s] WARN: failed to restore authid 0x%llx after "
-            "Sony call (3 attempts); shellui_rpc will rearm.\n",
-            site_tag, (unsigned long long)saved);
-}
+/* Authid constants (PS5_SHELLCORE_AUTHID, PS5_SYSTEM_INSTALL_AUTHID),
+ * kernel ucred extern declarations, swap helpers (ps5_authid_acquire,
+ * ps5_authid_release), and firmware detection (ps5_detect_firmware_major)
+ * all come from authid.h. Legacy bgft-local name shims so existing call
+ * sites don't need a mass rename: */
+#define authid_acquire_shellcore(tag) ps5_authid_acquire((tag), PS5_SHELLCORE_AUTHID)
+#define authid_release_shellcore(saved, tag) ps5_authid_release((saved), (tag))
+#define detect_firmware_major() ps5_detect_firmware_major()
 
 /** Try the AppInstUtil install path. Returns 0 + sets *out_task_id
  *  on success; -1 + sets *out_err_code on failure (caller may then
@@ -511,7 +430,7 @@ static int appinst_install_start(const char *url,
     uint64_t install_authid = (fw_major >= 11)
                                   ? PS5_SYSTEM_INSTALL_AUTHID
                                   : PS5_SHELLCORE_AUTHID;
-    uint64_t saved_authid = authid_acquire("InstallByPackage", install_authid);
+    uint64_t saved_authid = ps5_authid_acquire("InstallByPackage", install_authid);
     fprintf(stderr,
             "[bgft] InstallByPackage: fw_major=%d authid=0x%llx (%s)\n",
             fw_major, (unsigned long long)install_authid,
@@ -655,7 +574,7 @@ static int appinst_install_start_local(const char *path,
      * the install service captures the caller credential at request time, so
      * restoring after the synchronous return is fine — the async content copy
      * proceeds with the SYSTEM-authorised request it already accepted. */
-    uint64_t saved_authid = authid_acquire("AppInstallPkg", PS5_SYSTEM_INSTALL_AUTHID);
+    uint64_t saved_authid = ps5_authid_acquire("AppInstallPkg", PS5_SYSTEM_INSTALL_AUTHID);
     pthread_once(&g_appinst_init_once, appinst_init_locked);
 
     int rc = app_install_pkg(path, &pkg_info);
