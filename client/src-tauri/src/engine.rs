@@ -672,7 +672,10 @@ fn engine_url_cell() -> &'static RwLock<String> {
 
 /// The base URL the renderer's command proxies should hit.
 pub fn url() -> String {
-    engine_url_cell().read().unwrap().clone()
+    engine_url_cell()
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
 }
 
 /// Override the engine base URL (Settings → Engine URL). Empty/blank
@@ -684,7 +687,9 @@ pub fn set_url(url: String) {
     } else {
         url.to_string()
     };
-    *engine_url_cell().write().unwrap() = next;
+    *engine_url_cell()
+        .write()
+        .unwrap_or_else(|e| e.into_inner()) = next;
 }
 
 /// True when `url` points at loopback — i.e. we should spawn the bundled
