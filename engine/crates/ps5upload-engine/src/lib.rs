@@ -6427,16 +6427,32 @@ mod cancel_registry_tests {
 
     #[test]
     fn register_prunes_finished_entries() {
-        // A "finished" transfer is one whose only remaining ref is the
-        // registry's (strong_count == 1, i.e. the cfg clone was dropped).
+        // A "finished" transfer is one whose strong Arc has been dropped.
+        // The registry holds only a Weak, so after the Arc drops,
+        // weak.upgrade() returns None and the entry is pruned on the next
+        // register call.
         let finished = Uuid::new_v4();
-        drop(register_transfer_cancel(finished)); // we drop our returned Arc → count 1
+        drop(register_transfer_cancel(finished)); // we drop our returned Arc
                                                   // Registering any new job prunes the finished one.
         let live = register_transfer_cancel(Uuid::new_v4());
-        let _hold = Arc::clone(&live); // keep the live one's count > 1
+        let _hold = Arc::clone(&live); // keep the live one's Arc alive
         assert!(
             !signal_transfer_cancel(finished),
             "finished entry was pruned on the next register",
+        );
+    }
+
+    #[test]
+    fn signal_for_dead_weak_is_false() {
+        // Regression: after the Arc is dropped, signal_transfer_cancel must
+        // return false (not panic) because the Weak can no longer upgrade.
+        let id = Uuid::new_v4();
+        let flag = register_transfer_cancel(id);
+        assert!(signal_transfer_cancel(id), "live transfer is signalable");
+        drop(flag);
+        assert!(
+            !signal_transfer_cancel(id),
+            "dead weak returns false, not panic",
         );
     }
 }

@@ -3196,4 +3196,79 @@ mod tests {
         // delete_staging still defaults true even when omitted here.
         assert!(req.delete_staging);
     }
+
+    // ── parse_range_header ─────────────────────────────────────────────
+    //
+    // Pin the RFC 9110 range-header parser so a regression in the suffix-
+    // range support or the open-end handling is caught immediately.
+
+    fn range_headers(spec: &str) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert(
+            header::RANGE,
+            axum::http::HeaderValue::from_str(spec).unwrap(),
+        );
+        h
+    }
+
+    #[test]
+    fn range_no_header_returns_prefix_capped() {
+        let total = 100_000_000u64;
+        let (start, end) = parse_range_header(&HeaderMap::new(), total).unwrap();
+        assert_eq!(start, 0);
+        assert!(end < total, "end must be capped below total");
+    }
+
+    #[test]
+    fn range_start_end() {
+        let (start, end) =
+            parse_range_header(&range_headers("bytes=100-199"), 1000).unwrap();
+        assert_eq!(start, 100);
+        assert_eq!(end, 199);
+    }
+
+    #[test]
+    fn range_open_end() {
+        // bytes=500- → start=500, end=total-1
+        let (start, end) =
+            parse_range_header(&range_headers("bytes=500-"), 1000).unwrap();
+        assert_eq!(start, 500);
+        assert_eq!(end, 999);
+    }
+
+    #[test]
+    fn range_suffix() {
+        // bytes=-200 → last 200 bytes of a 1000-byte file
+        let (start, end) =
+            parse_range_header(&range_headers("bytes=-200"), 1000).unwrap();
+        assert_eq!(start, 800);
+        assert_eq!(end, 999);
+    }
+
+    #[test]
+    fn range_suffix_larger_than_total() {
+        // bytes=-2000 on a 1000-byte file → saturating_sub gives 0
+        let (start, end) =
+            parse_range_header(&range_headers("bytes=-2000"), 1000).unwrap();
+        assert_eq!(start, 0);
+        assert_eq!(end, 999);
+    }
+
+    #[test]
+    fn range_invalid_missing_bytes_prefix() {
+        let result = parse_range_header(&range_headers("0-99"), 1000);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn range_invalid_no_dash() {
+        let result = parse_range_header(&range_headers("bytes=100"), 1000);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn range_start_after_end_rejected() {
+        let result = parse_range_header(&range_headers("bytes=200-100"), 1000);
+        assert!(result.is_err());
+    }
 }
