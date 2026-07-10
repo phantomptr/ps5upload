@@ -632,14 +632,27 @@ all-in-one mode.
 **Q: Can I use ps5upload from a web browser (no desktop app)? (3.3.25)**
 Yes. A `webui` build of the engine serves the **full app over HTTP**, so you
 can manage your PS5 from any browser on your LAN — useful on a NAS or headless
-box where you don't want to install the desktop app. Build the browser image
-with `docker build -f engine/Dockerfile.webui -t ps5upload-engine-webui .`,
-run it, and open `http://<host>:19113`. Same security rules as the self-hosted
-engine above: it's **unauthenticated**, so only reach it from IPs you add to
+box where you don't want to install the desktop app. An official multi-arch
+image is published at `ghcr.io/phantomptr/ps5upload-engine-webui` (`:latest`
+or `:<version>`); or build it yourself with
+`docker build -f engine/Dockerfile.webui -t ps5upload-engine-webui .` (run
+that from the **repo root**, not `engine/` — the build needs `client/` to
+compile the frontend first). Run it the same way as the plain engine image
+and open `http://<host>:19113`. Same security rules as the self-hosted engine
+above: it's **unauthenticated**, so only reach it from IPs you add to
 `PS5UPLOAD_ALLOW_IP`, and only on a trusted LAN — never expose port 19113 to
-the internet. (Host-side actions that need your PC's own filesystem — picking a
-local file to upload — are desktop-only; everything that operates on the PS5
-works in the browser.)
+the internet.
+
+Actions that need your PC's own filesystem are desktop-only and hidden in the
+browser UI: Upload and Payloads (both require picking a local file) are
+hidden from the sidebar entirely; on other screens, only the specific
+affordance that needs a local file is hidden — installing a `.pkg` you pick
+from your PC, saving a save-data backup to your computer (even the
+"back up to USB" flow round-trips through a local scratch file), downloading
+a file/screenshot/video clip, and attaching a file to a bug report. Everything
+that operates on the PS5 itself — browse, transfer, install from a
+PS5-connected USB drive, hardware monitor, saves list, profile — works the
+same as the desktop app.
 
 **Q: What is "Stream (beta)" on the Install Package screen? (3.3.25)**
 It installs a `.pkg` **straight from your PC over HTTP** — the PS5 pulls the

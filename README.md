@@ -467,6 +467,26 @@ below 4.x is obscure and above 12.70 is future work.
   unauthenticated (it can read/write/delete PS5 files), so only do this on a
   trusted LAN — never expose the engine to the internet.
 
+**Q: Can I run ps5upload from a browser, with no desktop app at all (self-hosted web UI)?**
+* Yes (3.3.25+). A separate `webui` build of the engine serves the **full
+  React app over HTTP**, so you can manage your PS5 from any browser on the
+  LAN — handy for a NAS or headless box you don't want to install the desktop
+  client on. An official multi-arch image is published at
+  `ghcr.io/phantomptr/ps5upload-engine-webui` (`:latest` or `:<version>`); or
+  build it yourself with
+  `docker build -f engine/Dockerfile.webui -t ps5upload-engine-webui .`
+  (build context is the **repo root**, not `engine/` — it needs `client/` to
+  build the frontend first). Run it the same way as the plain engine image
+  (`PS5_ADDR`, `PS5UPLOAD_ALLOW_IP`) and open `http://<host>:19113` in a
+  browser on an allowlisted IP. Same security model as the remote engine
+  above: **unauthenticated**, LAN-only, never expose it to the internet.
+  Actions that need your PC's own filesystem — picking a local file to
+  upload or install, sending a payload from disk, saving a save-data backup
+  to your computer — are desktop-only and hidden in the browser UI;
+  everything that operates on the PS5 itself (browse, transfer, install from
+  a PS5-connected USB drive, hardware monitor, saves list, …) works the same
+  as the desktop app.
+
 ## Contributing
 
 - Report bugs:
