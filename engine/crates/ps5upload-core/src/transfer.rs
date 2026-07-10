@@ -4071,7 +4071,15 @@ mod rar_support {
             .map(Path::to_path_buf)
             .unwrap_or_else(std::env::temp_dir);
         let stage = base.join(format!(".ps5upload-rar-{tx_hex}"));
-        let _ = std::fs::remove_dir_all(&stage); // clear any stale staging
+        if let Err(e) = std::fs::remove_dir_all(&stage) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                crate::core_log!(
+                    "rar staging: failed to clear stale {}: {}",
+                    stage.display(),
+                    e
+                );
+            }
+        }
         std::fs::create_dir_all(&stage)
             .with_context(|| format!("create rar staging dir {}", stage.display()))?;
 
@@ -4081,7 +4089,11 @@ mod rar_support {
             extract_rar_to_dir(archive_path, password, &stage, &cfg.excludes)?;
             transfer_dir_resumable(cfg, tx_id, dest_root, &stage, max_retries, initial_flags)
         })();
-        let _ = std::fs::remove_dir_all(&stage);
+        if let Err(e) = std::fs::remove_dir_all(&stage) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                crate::core_log!("rar staging: failed to clean up {}: {}", stage.display(), e);
+            }
+        }
         result
     }
 

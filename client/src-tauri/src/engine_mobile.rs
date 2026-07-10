@@ -14,10 +14,7 @@
 use anyhow::Result;
 use tauri::{AppHandle, Emitter};
 
-/// Fixed loopback URL the renderer talks to — identical to desktop, so
-/// the entire `api/` layer is unchanged. Only one app process exists on
-/// mobile, so binding the fixed port can't collide with a sibling.
-const DEFAULT_ENGINE_URL: &str = "http://127.0.0.1:19113";
+use crate::DEFAULT_ENGINE_URL;
 
 /// Default PS5 transfer address. The renderer passes `?addr=...` on
 /// every call, so this only matters for the few diagnostic endpoints

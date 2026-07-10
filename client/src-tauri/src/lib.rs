@@ -18,6 +18,11 @@
 //! `ps5upload-core` directly and remove the HTTP hop entirely;
 //! nothing in the command contract needs to change for that.
 
+/// Fixed loopback URL the renderer talks to. Both the desktop sidecar
+/// (`engine.rs`) and the mobile in-process server (`engine_mobile.rs`)
+/// serve here.
+pub(crate) const DEFAULT_ENGINE_URL: &str = "http://127.0.0.1:19113";
+
 mod commands;
 // The engine runs as a spawned sidecar binary on desktop, but in-process
 // (linked library) on mobile, where Tauri has no sidecar model. Same

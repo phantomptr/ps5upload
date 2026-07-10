@@ -10,7 +10,7 @@ or **P2** (v4.2+) so release scoping is explicit.
 
 ## Part 1 — Codebase Quality Audit Remediation
 
-### 1.1 Centralize version string (P0)
+### 1.1 Centralize version string (P0) — ✅ Done (v3.4.0)
 
 The version `3.3.26` is hardcoded in **6 locations** that must be
 manually kept in sync on every release:
@@ -30,7 +30,7 @@ release script) so it runs automatically. The C header can `#include` a
 generated `.ver` file or use a `-DPS5UPLOAD2_VERSION="..."` build flag
 from the Makefile.
 
-### 1.2 Fix bare `RwLock::unwrap()` in Tauri engine bridge (P0)
+### 1.2 Fix bare `RwLock::unwrap()` in Tauri engine bridge (P0) — ✅ Done (v3.4.0)
 
 `client/src-tauri/src/engine.rs:675,687` use bare `.unwrap()` on a
 `RwLock` read/write — panics if the lock is poisoned. The rest of the
@@ -39,7 +39,7 @@ codebase uses `.unwrap_or_else(|e| e.into_inner())` to survive poisoning
 
 **Plan:** Align these two sites with the established pattern.
 
-### 1.3 Remove unused JS-side npm packages (P1)
+### 1.3 Remove unused JS-side npm packages (P1) — ✅ Done (v3.4.0)
 
 `@tauri-apps/plugin-fs` and `@tauri-apps/plugin-shell` in
 `client/package.json` have zero imports in `client/src/`. Their Rust
@@ -49,24 +49,20 @@ initialized in `lib.rs:126-127` and must stay.
 **Plan:** Drop the two JS entries from `dependencies`, run
 `npm install` to update the lock file, verify build.
 
-### 1.4 Deduplicate `DEFAULT_ENGINE_URL` (P1)
+### 1.4 Deduplicate `DEFAULT_ENGINE_URL` (P1) — ✅ Done (v4.0.0)
 
 `"http://127.0.0.1:19113"` is defined in both `engine.rs:21` and
 `engine_mobile.rs:20`.
 
 **Plan:** Extract to a shared `const` in a common module imported by both.
 
-### 1.5 Prune weakest `#[allow(dead_code)]` items (P2)
+### 1.5 Prune weakest `#[allow(dead_code)]` items (P2) — ✅ Resolved
 
-- `ufs2.rs:54` — `DIRBLKSIZ` constant, truly unused. Remove.
-- `lib.rs:404` — `auto_chmod_uploaded_tree` — redundant since payload
-  `umask(0)` at startup. Evaluate whether the "Fix permissions" future
-  use case is still planned; if not, remove.
+- `ufs2.rs` — module removed entirely during refactor.
+- `lib.rs` — `auto_chmod_uploaded_tree` removed during lib.rs refactor (now 92 lines).
+- Remaining `#[allow(dead_code)]` in `transfer.rs:537` (`ApplyProgress.total_files`) is documented as intentional (surfaced via cfg sink).
 
-The other 4 `#[allow(dead_code)]` sites are documented as intentional
-(diagnostics fields, test helpers).
-
-### 1.6 Add diagnostic logging to silent staging cleanups (P2)
+### 1.6 Add diagnostic logging to silent staging cleanups (P2) — ✅ Done (v4.0.0)
 
 `transfer.rs:4074,4084` silently ignore `remove_dir_all` failures in
 archive staging. A failure here means stale data may corrupt the next

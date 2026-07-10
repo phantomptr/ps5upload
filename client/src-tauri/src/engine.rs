@@ -18,7 +18,8 @@ use tokio::process::{Child, Command};
 use tokio::sync::OnceCell;
 use tokio::time::{sleep, Instant};
 
-const DEFAULT_ENGINE_URL: &str = "http://127.0.0.1:19113";
+use crate::DEFAULT_ENGINE_URL;
+
 const READINESS_PROBE: &str = "/api/jobs";
 const READINESS_TIMEOUT: Duration = Duration::from_secs(30);
 const READINESS_POLL: Duration = Duration::from_millis(200);
