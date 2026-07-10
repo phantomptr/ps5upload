@@ -13,6 +13,7 @@ import { PageHeader, Button } from "../../components";
 import { useTr } from "../../state/lang";
 import { formatBytes } from "../../lib/format";
 import { pushNotification } from "../../state/notifications";
+import { isTauriEnv } from "../../lib/tauriEnv";
 
 /**
  * Activity stats dashboard.
@@ -39,18 +40,23 @@ export default function StatsScreen() {
   async function exportCsv() {
     if (entries.length === 0) return;
     const fileName = `ps5upload-activity-${Date.now()}.csv`;
+    const csv = activityToCsv(entries);
     // Surface write failures instead of swallowing them — a failed export must
     // not silently look like it succeeded.
     try {
-      const { save } = await import("@tauri-apps/plugin-dialog");
-      const { writeTextFileToPath } = await import("../../lib/saveTextFile");
-      const dest = await save({
-        defaultPath: fileName,
-        filters: [{ name: "CSV", extensions: ["csv"] }],
-      });
-      if (!dest || typeof dest !== "string") return;
-      const csv = activityToCsv(entries);
-      await writeTextFileToPath(dest, csv, fileName);
+      if (!isTauriEnv()) {
+        const { browserDownloadText } = await import("../../lib/browserDownload");
+        browserDownloadText(fileName, csv, "text/csv");
+      } else {
+        const { save } = await import("@tauri-apps/plugin-dialog");
+        const { writeTextFileToPath } = await import("../../lib/saveTextFile");
+        const dest = await save({
+          defaultPath: fileName,
+          filters: [{ name: "CSV", extensions: ["csv"] }],
+        });
+        if (!dest || typeof dest !== "string") return;
+        await writeTextFileToPath(dest, csv, fileName);
+      }
       pushNotification("success", "Activity exported", {
         body: `Saved ${entries.length.toLocaleString()} rows.`,
       });

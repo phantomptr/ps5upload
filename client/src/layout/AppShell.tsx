@@ -49,7 +49,7 @@ import { installPlayTimeAccumulator } from "../state/playTime";
 import { useTr } from "../state/lang";
 import { isAndroid } from "../lib/platform";
 import { localFs } from "../api/localFs";
-import { getVersion } from "@tauri-apps/api/app";
+import { getAppVersion } from "../lib/appVersion";
 
 /** Background status polling for the engine + payload dots in the
  *  status bar. Runs for the lifetime of the app so the indicators
@@ -115,7 +115,7 @@ function useStatusPolling() {
   // window per host; a genuine later reconnect (past the window) fires again.
   const autoLoaderFiredAtRef = useRef<Record<string, number>>({});
   useEffect(() => {
-    void getVersion()
+    void getAppVersion()
       .then((v) => {
         appVersionRef.current = v;
       })

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { getVersion } from "@tauri-apps/api/app";
+import { getAppVersion } from "../../lib/appVersion";
+import { isTauriEnv } from "../../lib/tauriEnv";
 import {
   useConnectionStore,
   PS5_LOADER_PORT,
@@ -620,23 +621,35 @@ export default function ConnectionScreen() {
                 `The PS5Upload helper is a small program your PS5 runs in memory to accept uploads. Sent over port ${PS5_LOADER_PORT}; it takes a few seconds for the PS5 to respond once the bytes arrive.`,
               )}
             </p>
-            <BundledPayloadBanner />
-            <Button
-              variant="primary"
-              size="md"
-              leftIcon={<Send size={14} />}
-              onClick={() => void handleSend()}
-              disabled={step2 === "busy"}
-              loading={step2 === "busy"}
-            >
-              {sendButtonLabel(step2, sendPhase, elapsedMs, tr)}
-            </Button>
-            {step2 === "busy" && (
-              <p className="mt-3 text-xs text-[var(--color-muted)]">
+            {isTauriEnv() ? (
+              <>
+                <BundledPayloadBanner />
+                <Button
+                  variant="primary"
+                  size="md"
+                  leftIcon={<Send size={14} />}
+                  onClick={() => void handleSend()}
+                  disabled={step2 === "busy"}
+                  loading={step2 === "busy"}
+                >
+                  {sendButtonLabel(step2, sendPhase, elapsedMs, tr)}
+                </Button>
+                {step2 === "busy" && (
+                  <p className="mt-3 text-xs text-[var(--color-muted)]">
+                    {tr(
+                      "connection_step2_busy_hint",
+                      undefined,
+                      "The PS5 typically boots the helper within 3-5 seconds. We keep polling for up to 20 seconds before giving up — if it times out, send it again.",
+                    )}
+                  </p>
+                )}
+              </>
+            ) : (
+              <p className="text-xs text-[var(--color-muted)]">
                 {tr(
-                  "connection_step2_busy_hint",
+                  "connection_step2_browser_unsupported",
                   undefined,
-                  "The PS5 typically boots the helper within 3-5 seconds. We keep polling for up to 20 seconds before giving up — if it times out, send it again.",
+                  "The browser can't read a local helper file to send. Load the helper from the desktop app or a USB autoloader first, then this page will detect it automatically.",
                 )}
               </p>
             )}
@@ -1250,7 +1263,7 @@ function VersionBlock({ onResend }: { onResend?: () => void }) {
   // construction.
   const [appVersion, setAppVersion] = useState<string | null>(null);
   useEffect(() => {
-    getVersion()
+    getAppVersion()
       .then(setAppVersion)
       .catch((e) => {
         // Without an app version we can't compare against the
@@ -1442,7 +1455,7 @@ function VersionBlock({ onResend }: { onResend?: () => void }) {
               )}
             </p>
           </div>
-          {onResend && (
+          {onResend && isTauriEnv() && (
             <Button
               variant="secondary"
               size="sm"

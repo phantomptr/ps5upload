@@ -23,6 +23,7 @@ import {
 import { useTr } from "../../state/lang";
 import { useConnectionStore } from "../../state/connection";
 import { mgmtAddr } from "../../lib/addr";
+import { isTauriEnv } from "../../lib/tauriEnv";
 import {
   profileInfo,
   profileApplyAvatar,
@@ -294,9 +295,11 @@ function AvatarSection({
         {/* Controls */}
         <div className="flex min-w-0 flex-1 flex-col gap-3">
           <div className="flex flex-wrap items-center gap-2">
-            <Button variant="secondary" size="sm" onClick={pickImage}>
-              {tr("profile.avatar.pick", "Choose image…")}
-            </Button>
+            {isTauriEnv() && (
+              <Button variant="secondary" size="sm" onClick={pickImage}>
+                {tr("profile.avatar.pick", "Choose image…")}
+              </Button>
+            )}
             {fileName && (
               <span className="truncate text-xs text-[var(--color-muted)]">
                 {fileName}

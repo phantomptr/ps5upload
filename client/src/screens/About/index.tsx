@@ -10,7 +10,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { openExternalUrl as openExternal } from "../../lib/openExternalUrl";
-import { getVersion } from "@tauri-apps/api/app";
+import { getAppVersion } from "../../lib/appVersion";
 
 import { useTr } from "../../state/lang";
 import { Button, Card } from "../../components";
@@ -80,7 +80,7 @@ export default function AboutScreen() {
   const [version, setVersion] = useState<string>("");
 
   useEffect(() => {
-    getVersion()
+    getAppVersion()
       .then(setVersion)
       .catch(() => setVersion(""));
   }, []);

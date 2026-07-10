@@ -2,6 +2,7 @@ import { Component, type ErrorInfo, type ReactNode } from "react";
 import { log } from "../state/logs";
 import { useLangStore } from "../state/lang";
 import { t as translate } from "../i18n";
+import { isTauriEnv } from "../lib/tauriEnv";
 
 interface Props {
   children: ReactNode;
@@ -132,9 +133,17 @@ export class RootErrorBoundary extends Component<Props, State> {
                   // Package the auto-collected reports and open Discord so the
                   // user can report this crash in one step. Dynamic import
                   // keeps the reporter out of the boundary's static deps.
-                  void import("../lib/reportProblem").then((m) =>
-                    m.reportProblem(`crash-screen: ${err.name}: ${err.message}`),
-                  );
+                  // Browser: there's no host filesystem to zip a report onto
+                  // (crash reports themselves are never written outside
+                  // Tauri — see crashReporter.ts), so just open the channel
+                  // instead of silently failing the zip step.
+                  void import("../lib/reportProblem").then(async (m) => {
+                    if (isTauriEnv()) {
+                      await m.reportProblem(`crash-screen: ${err.name}: ${err.message}`);
+                    } else {
+                      await m.openReportChannel();
+                    }
+                  });
                 }}
                 className="rounded-md border border-[var(--color-accent)] px-3 py-1.5 text-sm font-medium text-[var(--color-accent)] hover:bg-[var(--color-surface)]"
               >

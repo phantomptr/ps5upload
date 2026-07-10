@@ -26,6 +26,7 @@ import { flushDiskLogNow } from "../../state/logs";
 import { openReportChannel } from "../../lib/reportProblem";
 import type { SavedShot } from "../../lib/captureScreenshot";
 import type { LogLevel } from "../../state/logs";
+import { isTauriEnv } from "../../lib/tauriEnv";
 
 /** Time windows offered for the log slice, in minutes. Mirrors the user's
  *  request: last 1 / 5 / 10 / 30 / 60 / 120 minutes. */
@@ -212,8 +213,8 @@ export default function BugReportScreen() {
       // Make sure the buffered tail of the log is on disk before we window it.
       await flushDiskLogNow();
 
-      const { getVersion } = await import("@tauri-apps/api/app");
-      const appVersion = await getVersion().catch(() => "unknown");
+      const { getAppVersion } = await import("../../lib/appVersion");
+      const appVersion = await getAppVersion().catch(() => "unknown");
 
       const bundle = buildDiagnosticBundle({
         appVersion,
@@ -341,14 +342,16 @@ export default function BugReportScreen() {
                 >
                   {tr("refresh", undefined, "Refresh")}
                 </Button>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  leftIcon={<ImagePlus size={12} />}
-                  onClick={attachImages}
-                >
-                  {tr("bug_report_images_add", undefined, "Attach file")}
-                </Button>
+                {isTauriEnv() && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    leftIcon={<ImagePlus size={12} />}
+                    onClick={attachImages}
+                  >
+                    {tr("bug_report_images_add", undefined, "Attach file")}
+                  </Button>
+                )}
               </div>
             </div>
             <p className="mb-2 flex items-center gap-1 text-xs text-[var(--color-muted)]">
@@ -589,27 +592,37 @@ export default function BugReportScreen() {
             </span>
           </label>
 
-          <div className="mt-4 flex items-center gap-2">
-            <Button
-              variant="primary"
-              leftIcon={
-                busy ? <Loader2 size={14} className="animate-spin" /> : <FileArchive size={14} />
-              }
-              onClick={createReport}
-              disabled={busy}
-            >
-              {busy
-                ? tr("bug_report_building", undefined, "Building…")
-                : tr("bug_report_create", undefined, "Create bug report (.zip)")}
-            </Button>
-            <button
-              type="button"
-              onClick={openLogsFolder}
-              className="text-xs text-[var(--color-accent)] hover:underline"
-            >
-              {tr("logs_open_folder", undefined, "Open logs folder")}
-            </button>
-          </div>
+          {isTauriEnv() ? (
+            <div className="mt-4 flex items-center gap-2">
+              <Button
+                variant="primary"
+                leftIcon={
+                  busy ? <Loader2 size={14} className="animate-spin" /> : <FileArchive size={14} />
+                }
+                onClick={createReport}
+                disabled={busy}
+              >
+                {busy
+                  ? tr("bug_report_building", undefined, "Building…")
+                  : tr("bug_report_create", undefined, "Create bug report (.zip)")}
+              </Button>
+              <button
+                type="button"
+                onClick={openLogsFolder}
+                className="text-xs text-[var(--color-accent)] hover:underline"
+              >
+                {tr("logs_open_folder", undefined, "Open logs folder")}
+              </button>
+            </div>
+          ) : (
+            <p className="mt-4 text-xs text-[var(--color-muted)]">
+              {tr(
+                "bug_report_browser_unsupported",
+                undefined,
+                "Building a bug report zip requires the desktop app — it saves to your computer's filesystem.",
+              )}
+            </p>
+          )}
         </Card>
 
         {/* ── Result / errors span both columns ── */}
@@ -658,14 +671,16 @@ export default function BugReportScreen() {
                 >
                   {tr("bug_report_open_discord", undefined, "Open Discord channel")}
                 </Button>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  leftIcon={<FolderOpen size={12} />}
-                  onClick={() => void openLogsFolder()}
-                >
-                  {tr("bug_report_open_folder", undefined, "Open logs folder")}
-                </Button>
+                {isTauriEnv() && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    leftIcon={<FolderOpen size={12} />}
+                    onClick={() => void openLogsFolder()}
+                  >
+                    {tr("bug_report_open_folder", undefined, "Open logs folder")}
+                  </Button>
+                )}
               </div>
             </Card>
           </div>

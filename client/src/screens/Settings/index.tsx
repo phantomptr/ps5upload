@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Settings as SettingsIcon,
   Moon as SleepIcon,
@@ -31,6 +31,7 @@ import {
 } from "../../state/uiScale";
 
 import { PageHeader } from "../../components";
+import { isTauriEnv } from "../../lib/tauriEnv";
 import { useConfirm } from "../../components/ConfirmDialog";
 
 import { useKeepAwakeStore } from "../../state/keepAwake";
@@ -911,6 +912,7 @@ function BackupRestorePanel() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Backup captures EVERY persisted key in the app's `ps5upload.` namespace via
   // a prefix scan, rather than a hand-maintained allowlist. The old allowlist
@@ -927,8 +929,6 @@ function BackupRestorePanel() {
     setError(null);
     setInfo(null);
     try {
-      const { save } = await import("@tauri-apps/plugin-dialog");
-      const { writeTextFileToPath } = await import("../../lib/saveTextFile");
       const bundle: Record<string, unknown> = {
         meta: {
           generated_at_ms: Date.now(),
@@ -944,16 +944,21 @@ function BackupRestorePanel() {
         }
       }
       const fileName = `ps5upload-settings-${Date.now()}.json`;
+      const json = JSON.stringify(bundle, null, 2);
+      if (!isTauriEnv()) {
+        const { browserDownloadText } = await import("../../lib/browserDownload");
+        browserDownloadText(fileName, json, "application/json");
+        setInfo(`Downloaded ${fileName}`);
+        return;
+      }
+      const { save } = await import("@tauri-apps/plugin-dialog");
+      const { writeTextFileToPath } = await import("../../lib/saveTextFile");
       const dest = await save({
         defaultPath: fileName,
         filters: [{ name: "JSON", extensions: ["json"] }],
       });
       if (!dest || typeof dest !== "string") return;
-      await writeTextFileToPath(
-        dest,
-        JSON.stringify(bundle, null, 2),
-        fileName,
-      );
+      await writeTextFileToPath(dest, json, fileName);
       setInfo(`Saved to ${dest}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -962,7 +967,45 @@ function BackupRestorePanel() {
     }
   }
 
+  /** Shared validate-and-apply step for an import bundle's raw JSON text —
+   *  used by both the native (file-path) and browser (`<input type=file>`)
+   *  read paths below. */
+  function applyBundleText(text: string): number {
+    const parsed = JSON.parse(text);
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      typeof parsed.local_storage !== "object"
+    ) {
+      throw new Error("file is not a ps5upload settings bundle");
+    }
+    const ls = parsed.local_storage as Record<string, unknown>;
+    const actions: Array<{ key: string; value: string | null }> = [];
+    for (const k of Object.keys(ls)) {
+      // Safety: only ever touch our own namespace, so a hand-edited or
+      // malicious bundle can't write arbitrary localStorage keys.
+      if (!k.startsWith(NS_PREFIX)) continue;
+      const v = ls[k];
+      if (typeof v === "string") {
+        actions.push({ key: k, value: v });
+      } else if (v === null) {
+        actions.push({ key: k, value: null });
+      } else if (v !== undefined) {
+        throw new Error(`invalid value for ${k}`);
+      }
+    }
+    for (const { key, value } of actions) {
+      if (value === null) window.localStorage.removeItem(key);
+      else window.localStorage.setItem(key, value);
+    }
+    return actions.length;
+  }
+
   async function importBundle() {
+    if (!isTauriEnv()) {
+      fileInputRef.current?.click();
+      return;
+    }
     setBusy(true);
     setError(null);
     setInfo(null);
@@ -975,39 +1018,34 @@ function BackupRestorePanel() {
       });
       if (!src || typeof src !== "string") return;
       const text = await readTextFileFromPath(src);
-      const parsed = JSON.parse(text);
-      if (
-        !parsed ||
-        typeof parsed !== "object" ||
-        typeof parsed.local_storage !== "object"
-      ) {
-        throw new Error("file is not a ps5upload settings bundle");
-      }
-      const ls = parsed.local_storage as Record<string, unknown>;
-      const actions: Array<{ key: string; value: string | null }> = [];
-      for (const k of Object.keys(ls)) {
-        // Safety: only ever touch our own namespace, so a hand-edited or
-        // malicious bundle can't write arbitrary localStorage keys.
-        if (!k.startsWith(NS_PREFIX)) continue;
-        const v = ls[k];
-        if (typeof v === "string") {
-          actions.push({ key: k, value: v });
-        } else if (v === null) {
-          actions.push({ key: k, value: null });
-        } else if (v !== undefined) {
-          throw new Error(`invalid value for ${k}`);
-        }
-      }
-      for (const { key, value } of actions) {
-        if (value === null) window.localStorage.removeItem(key);
-        else window.localStorage.setItem(key, value);
-      }
-      const restored = actions.length;
+      const restored = applyBundleText(text);
       setInfo(
         `Restored ${restored} key${restored === 1 ? "" : "s"}. Restart the app for all changes to take effect.`,
       );
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleBrowserFileInput(
+    e: React.ChangeEvent<HTMLInputElement>,
+  ) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-picking the same file name later
+    if (!file) return;
+    setBusy(true);
+    setError(null);
+    setInfo(null);
+    try {
+      const text = await file.text();
+      const restored = applyBundleText(text);
+      setInfo(
+        `Restored ${restored} key${restored === 1 ? "" : "s"}. Restart the app for all changes to take effect.`,
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }
@@ -1044,6 +1082,16 @@ function BackupRestorePanel() {
         >
           {tr("settings_backup_import", undefined, "Import bundle…")}
         </button>
+        {/* Hidden — the browser's own file picker, triggered programmatically
+            by importBundle() when !isTauriEnv(). Desktop uses the native
+            dialog instead (see importBundle). */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".json,application/json"
+          className="hidden"
+          onChange={(e) => void handleBrowserFileInput(e)}
+        />
       </div>
       {info && (
         <div className="flex items-center gap-1 text-xs text-[var(--color-good)]">

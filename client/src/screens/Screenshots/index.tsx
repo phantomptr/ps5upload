@@ -35,6 +35,7 @@ import {
   isJxrScreenshot,
 } from "../../lib/screenshotConvert";
 import { isMobile } from "../../lib/platform";
+import { isTauriEnv } from "../../lib/tauriEnv";
 
 /** Map a full-res shot path to its (smaller) PS5 thumbnail path. The console
  *  stores `/user/av_contents/photo/.../X.jxr` and a thumbnail at
@@ -199,8 +200,10 @@ export default function ScreenshotsScreen() {
     new Set(),
   );
   // Convert (JPEG XR decode) is a desktop-only feature — the codec isn't
-  // bundled on mobile (Android/iOS) — so the button is hidden there.
-  const canConvert = !isMobile();
+  // bundled on mobile (Android/iOS) — so the button is hidden there. Also
+  // gated on isTauriEnv(): thumbnails/previews stage a local temp dir + use
+  // convertFileSrc, neither of which exists in a browser session.
+  const canConvert = !isMobile() && isTauriEnv();
 
   const allSelected = useMemo(() => {
     return !!items && items.length > 0 && selected.size === items.length;
@@ -518,7 +521,7 @@ export default function ScreenshotsScreen() {
         )}
         right={
           <div className="flex items-center gap-2">
-            {selected.size > 0 && (
+            {selected.size > 0 && isTauriEnv() && (
               <Button
                 variant="primary"
                 size="sm"
@@ -678,23 +681,25 @@ export default function ScreenshotsScreen() {
                     {tr("screenshots_convert", undefined, "Convert to PNG")}
                   </Button>
                 )}
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  leftIcon={
-                    busyPaths.has(item.path) ? (
-                      <Loader2 size={11} className="animate-spin" />
-                    ) : (
-                      <Download size={11} />
-                    )
-                  }
-                  onClick={() => downloadOne(item)}
-                  disabled={
-                    busyPaths.has(item.path) || convertingPaths.has(item.path)
-                  }
-                >
-                  {tr("screenshots_download", undefined, "Download")}
-                </Button>
+                {isTauriEnv() && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    leftIcon={
+                      busyPaths.has(item.path) ? (
+                        <Loader2 size={11} className="animate-spin" />
+                      ) : (
+                        <Download size={11} />
+                      )
+                    }
+                    onClick={() => downloadOne(item)}
+                    disabled={
+                      busyPaths.has(item.path) || convertingPaths.has(item.path)
+                    }
+                  >
+                    {tr("screenshots_download", undefined, "Download")}
+                  </Button>
+                )}
               </li>
             );
           })}
@@ -725,6 +730,7 @@ export default function ScreenshotsScreen() {
                 {preview.item.path.split("/").pop()}
               </span>
               <div className="flex shrink-0 items-center gap-2">
+                {isTauriEnv() && (
                 <Button
                   variant="secondary"
                   size="sm"
@@ -740,6 +746,7 @@ export default function ScreenshotsScreen() {
                 >
                   {tr("screenshots_download", undefined, "Download")}
                 </Button>
+                )}
                 <button
                   type="button"
                   onClick={closePreview}

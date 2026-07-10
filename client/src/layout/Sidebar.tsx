@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { NavLink } from "react-router-dom";
-import { getVersion } from "@tauri-apps/api/app";
+import { getAppVersion } from "../lib/appVersion";
+import { isTauriEnv } from "../lib/tauriEnv";
 import {
   Cable,
   Upload,
@@ -79,6 +80,11 @@ interface NavItem {
    *  {key, fallback} pair so the section label translates alongside
    *  the nav items. */
   section?: { key: string; fallback: string };
+  /** True for screens with no browser-functional path at all (e.g. Upload
+   *  requires a host OS file/folder picker with zero web equivalent) — the
+   *  nav entry is hidden entirely in a browser session rather than linking
+   *  to a screen that can't do anything there. */
+  hideInBrowser?: boolean;
 }
 
 // 2.12.0 sidebar regroup. Previously: 3 sections (Overview / Workflow /
@@ -113,7 +119,17 @@ const items: NavItem[] = [
   // people actually work (orient → connect → send payload → check
   // status) instead of burying it under System as a "manage what's
   // running" tool.
-  { to: "/payloads", key: "payloads", fallback: "Payloads", icon: Boxes },
+  {
+    to: "/payloads",
+    key: "payloads",
+    fallback: "Payloads",
+    icon: Boxes,
+    // Both tabs (Catalog, Send) download/read a payload file on the HOST
+    // filesystem before pushing it to the PS5's loader port — no browser
+    // equivalent. Distinct from Connection's own "send the ps5upload
+    // helper" step (already gated separately), which stays available.
+    hideInBrowser: true,
+  },
   // Dashboard lives with Setup, not System: it's the "am I connected,
   // what's running?" morning check — the thing you look at right after
   // (or instead of) the Connection screen, not a hardware tool.
@@ -131,6 +147,7 @@ const items: NavItem[] = [
     fallback: "Upload",
     icon: Upload,
     section: { key: "nav_section_files", fallback: "Files" },
+    hideInBrowser: true,
   },
   {
     to: "/install-package",
@@ -250,7 +267,7 @@ export default function Sidebar({
   const updateAvailable = useUpdateStore((s) => s.phase.kind === "available");
   const [version, setVersion] = useState<string>("");
   useEffect(() => {
-    getVersion()
+    getAppVersion()
       .then(setVersion)
       .catch(() => setVersion(""));
   }, []);
@@ -286,7 +303,9 @@ export default function Sidebar({
       {/* Navigation — grouped by section. The `section` on the first
           item in a group triggers a small uppercase label above it. */}
       <nav className="min-h-0 flex-1 overflow-y-auto p-2">
-        {items.map(({ to, key, fallback, icon: Icon, section }, idx) => {
+        {items
+          .filter((item) => !item.hideInBrowser || isTauriEnv())
+          .map(({ to, key, fallback, icon: Icon, section }, idx) => {
           const isLogs = to === "/logs";
           const isSettings = to === "/settings";
           return (

@@ -51,6 +51,7 @@ import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { pickPath } from "../../lib/pickPath";
 import { pushNotification } from "../../state/notifications";
 import { withConsolePrefix } from "../../state/roster";
+import { isTauriEnv } from "../../lib/tauriEnv";
 
 /**
  * Save data manager.
@@ -752,52 +753,56 @@ export default function SavesScreen() {
         )}
         right={
           <div className="flex items-center gap-2">
-            <Button
-              variant="secondary"
-              size="sm"
-              leftIcon={
-                bulkBackupBusy ? (
-                  <Loader2 size={12} className="animate-spin" />
-                ) : (
-                  <HardDrive size={12} />
-                )
-              }
-              onClick={handleBackupAllToUsb}
-              disabled={
-                bulkBackupBusy ||
-                bulkRestoreBusy ||
-                loading ||
-                !host?.trim() ||
-                payloadStatus !== "up" ||
-                !saves ||
-                saves.length === 0
-              }
-            >
-              {tr("saves_backup_usb_all", undefined, "Back up all to USB")}
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              leftIcon={
-                bulkRestoreBusy ? (
-                  <Loader2 size={12} className="animate-spin" />
-                ) : (
-                  <UploadIcon size={12} />
-                )
-              }
-              onClick={handleRestoreAllFromUsb}
-              disabled={
-                bulkRestoreBusy ||
-                bulkBackupBusy ||
-                loading ||
-                !host?.trim() ||
-                payloadStatus !== "up" ||
-                !saves ||
-                saves.length === 0
-              }
-            >
-              {tr("saves_restore_usb_all", undefined, "Restore all from USB")}
-            </Button>
+            {isTauriEnv() && (
+              <>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  leftIcon={
+                    bulkBackupBusy ? (
+                      <Loader2 size={12} className="animate-spin" />
+                    ) : (
+                      <HardDrive size={12} />
+                    )
+                  }
+                  onClick={handleBackupAllToUsb}
+                  disabled={
+                    bulkBackupBusy ||
+                    bulkRestoreBusy ||
+                    loading ||
+                    !host?.trim() ||
+                    payloadStatus !== "up" ||
+                    !saves ||
+                    saves.length === 0
+                  }
+                >
+                  {tr("saves_backup_usb_all", undefined, "Back up all to USB")}
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  leftIcon={
+                    bulkRestoreBusy ? (
+                      <Loader2 size={12} className="animate-spin" />
+                    ) : (
+                      <UploadIcon size={12} />
+                    )
+                  }
+                  onClick={handleRestoreAllFromUsb}
+                  disabled={
+                    bulkRestoreBusy ||
+                    bulkBackupBusy ||
+                    loading ||
+                    !host?.trim() ||
+                    payloadStatus !== "up" ||
+                    !saves ||
+                    saves.length === 0
+                  }
+                >
+                  {tr("saves_restore_usb_all", undefined, "Restore all from USB")}
+                </Button>
+              </>
+            )}
             <Button
               variant="secondary"
               size="sm"
@@ -868,62 +873,66 @@ export default function SavesScreen() {
                         {new Date(e.mtime * 1000).toLocaleDateString()}
                       </div>
                     </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      leftIcon={<Download size={11} />}
-                      onClick={() => handleDownload(e)}
-                      disabled={isBusy(e.path)}
-                    >
-                      {tr("saves_download", undefined, "Backup")}
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      leftIcon={<HardDrive size={11} />}
-                      onClick={() => handleBackupToUsb(e)}
-                      disabled={isBusy(e.path) || bulkBackupBusy}
-                      title={tr(
-                        "saves_backup_usb_tooltip",
-                        undefined,
-                        "Back this save up to the USB save path configured in Settings, without leaving the PS5.",
-                      )}
-                    >
-                      {tr("saves_backup_usb", undefined, "Save to USB")}
-                    </Button>
-                    {/* danger (red-bordered), NOT ghost like Backup: Restore
-                        overwrites — wipes — the live PS5 save. It sat visually
-                        identical to the harmless Backup button next to it,
-                        giving no at-a-glance signal which of the two is
-                        destructive. The confirm dialog still guards the click. */}
-                    <Button
-                      variant="danger"
-                      size="sm"
-                      leftIcon={<UploadIcon size={11} />}
-                      onClick={() => handleRestore(e)}
-                      disabled={isBusy(e.path)}
-                      title={tr(
-                        "saves_restore_tooltip",
-                        undefined,
-                        "Pick a .zip backup and upload its contents back to this save's PS5 path. Overwrites the live save.",
-                      )}
-                    >
-                      {tr("saves_restore", undefined, "Restore")}
-                    </Button>
-                    <Button
-                      variant="danger"
-                      size="sm"
-                      leftIcon={<HardDrive size={11} />}
-                      onClick={() => handleRestoreFromUsb(e)}
-                      disabled={isBusy(e.path) || bulkRestoreBusy}
-                      title={tr(
-                        "saves_restore_usb_tooltip",
-                        undefined,
-                        "Restore this save from its latest USB backup at the path configured in Settings, without leaving the PS5. Overwrites the live save.",
-                      )}
-                    >
-                      {tr("saves_restore_usb", undefined, "Restore from USB")}
-                    </Button>
+                    {isTauriEnv() && (
+                      <>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          leftIcon={<Download size={11} />}
+                          onClick={() => handleDownload(e)}
+                          disabled={isBusy(e.path)}
+                        >
+                          {tr("saves_download", undefined, "Backup")}
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          leftIcon={<HardDrive size={11} />}
+                          onClick={() => handleBackupToUsb(e)}
+                          disabled={isBusy(e.path) || bulkBackupBusy}
+                          title={tr(
+                            "saves_backup_usb_tooltip",
+                            undefined,
+                            "Back this save up to the USB save path configured in Settings, without leaving the PS5.",
+                          )}
+                        >
+                          {tr("saves_backup_usb", undefined, "Save to USB")}
+                        </Button>
+                        {/* danger (red-bordered), NOT ghost like Backup: Restore
+                            overwrites — wipes — the live PS5 save. It sat visually
+                            identical to the harmless Backup button next to it,
+                            giving no at-a-glance signal which of the two is
+                            destructive. The confirm dialog still guards the click. */}
+                        <Button
+                          variant="danger"
+                          size="sm"
+                          leftIcon={<UploadIcon size={11} />}
+                          onClick={() => handleRestore(e)}
+                          disabled={isBusy(e.path)}
+                          title={tr(
+                            "saves_restore_tooltip",
+                            undefined,
+                            "Pick a .zip backup and upload its contents back to this save's PS5 path. Overwrites the live save.",
+                          )}
+                        >
+                          {tr("saves_restore", undefined, "Restore")}
+                        </Button>
+                        <Button
+                          variant="danger"
+                          size="sm"
+                          leftIcon={<HardDrive size={11} />}
+                          onClick={() => handleRestoreFromUsb(e)}
+                          disabled={isBusy(e.path) || bulkRestoreBusy}
+                          title={tr(
+                            "saves_restore_usb_tooltip",
+                            undefined,
+                            "Restore this save from its latest USB backup at the path configured in Settings, without leaving the PS5. Overwrites the live save.",
+                          )}
+                        >
+                          {tr("saves_restore_usb", undefined, "Restore from USB")}
+                        </Button>
+                      </>
+                    )}
                   </li>
                 ))}
               </ul>

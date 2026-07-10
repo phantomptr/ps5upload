@@ -28,6 +28,7 @@ import { pickPath } from "../../lib/pickPath";
 import { formatBytes } from "../../lib/format";
 import { basename } from "../../lib/uploadDest";
 import { isMobile } from "../../lib/platform";
+import { isTauriEnv } from "../../lib/tauriEnv";
 
 /** Join a dir + name the same way the screenshot flow does (mirrors
  *  lib/screenshotConvert.joinDir, kept local so Videos has no dependency on
@@ -62,8 +63,9 @@ export default function VideosScreen() {
   const [bulkBusy, setBulkBusy] = useState(false);
   const [busyPaths, setBusyPaths] = useState<Set<string>>(new Set());
   // Inline <video> preview is desktop-only (streams a downloaded copy from a
-  // scratch dir via convertFileSrc — no mobile file-serving equivalent).
-  const canPreview = !isMobile();
+  // scratch dir via convertFileSrc — no mobile file-serving equivalent, and
+  // no browser equivalent either since there's no host temp dir there).
+  const canPreview = !isMobile() && isTauriEnv();
 
   const allSelected = useMemo(
     () => !!items && items.length > 0 && selected.size === items.length,
@@ -281,7 +283,7 @@ export default function VideosScreen() {
         )}
         right={
           <div className="flex items-center gap-2">
-            {selected.size > 0 && (
+            {selected.size > 0 && isTauriEnv() && (
               <Button
                 variant="primary"
                 size="sm"
@@ -395,19 +397,21 @@ export default function VideosScreen() {
                     <Eye size={13} />
                   </button>
                 )}
-                <button
-                  type="button"
-                  onClick={() => void downloadOne(item)}
-                  disabled={rowBusy}
-                  className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-text)] disabled:opacity-50"
-                  aria-label={tr("videos_download", undefined, "Download")}
-                >
-                  {rowBusy ? (
-                    <Loader2 size={13} className="animate-spin" />
-                  ) : (
-                    <Download size={13} />
-                  )}
-                </button>
+                {isTauriEnv() && (
+                  <button
+                    type="button"
+                    onClick={() => void downloadOne(item)}
+                    disabled={rowBusy}
+                    className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-[var(--color-muted)] hover:text-[var(--color-text)] disabled:opacity-50"
+                    aria-label={tr("videos_download", undefined, "Download")}
+                  >
+                    {rowBusy ? (
+                      <Loader2 size={13} className="animate-spin" />
+                    ) : (
+                      <Download size={13} />
+                    )}
+                  </button>
+                )}
               </li>
             );
           })}

@@ -28,6 +28,7 @@ import {
 } from "lucide-react";
 import { pickPath } from "../../lib/pickPath";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { isTauriEnv } from "../../lib/tauriEnv";
 import { PageHeader, Button, ConnectionGate } from "../../components";
 // Direct import to avoid the barrel's circular-dep warning at build.
 import {
@@ -2154,39 +2155,43 @@ export default function FileSystemScreen() {
                   {isDir ? "—" : formatBytes(e.size)}
                 </span>
                 <div className="ml-2 flex shrink-0 items-center gap-1">
-                  <button
-                    type="button"
-                    onClick={() => runDownload(e)}
-                    disabled={downloadOp.active}
-                    title={tr(
-                      "fs_download_tooltip",
-                      undefined,
-                      "Save a copy of this entry to a folder on this computer",
-                    )}
-                    className="rounded-md border border-[var(--color-border)] p-1 hover:bg-[var(--color-surface-3)] disabled:opacity-30"
-                  >
-                    {downloadHere && downloadOp.rootName === e.name ? (
-                      <Loader2
-                        size={12}
-                        className="animate-spin text-[var(--color-accent)]"
-                      />
-                    ) : (
-                      <Download size={12} />
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => runDownload(e, true)}
-                    disabled={downloadOp.active}
-                    title={tr(
-                      "fs_download_zip_tooltip",
-                      undefined,
-                      "Download to this computer as a .zip (streamed — no temp copy)",
-                    )}
-                    className="rounded-md border border-[var(--color-border)] p-1 hover:bg-[var(--color-surface-3)] disabled:opacity-30"
-                  >
-                    <FileArchive size={12} />
-                  </button>
+                  {isTauriEnv() && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => runDownload(e)}
+                        disabled={downloadOp.active}
+                        title={tr(
+                          "fs_download_tooltip",
+                          undefined,
+                          "Save a copy of this entry to a folder on this computer",
+                        )}
+                        className="rounded-md border border-[var(--color-border)] p-1 hover:bg-[var(--color-surface-3)] disabled:opacity-30"
+                      >
+                        {downloadHere && downloadOp.rootName === e.name ? (
+                          <Loader2
+                            size={12}
+                            className="animate-spin text-[var(--color-accent)]"
+                          />
+                        ) : (
+                          <Download size={12} />
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => runDownload(e, true)}
+                        disabled={downloadOp.active}
+                        title={tr(
+                          "fs_download_zip_tooltip",
+                          undefined,
+                          "Download to this computer as a .zip (streamed — no temp copy)",
+                        )}
+                        className="rounded-md border border-[var(--color-border)] p-1 hover:bg-[var(--color-surface-3)] disabled:opacity-30"
+                      >
+                        <FileArchive size={12} />
+                      </button>
+                    </>
+                  )}
                   <button
                     type="button"
                     onClick={() => {

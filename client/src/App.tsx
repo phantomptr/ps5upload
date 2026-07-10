@@ -1,7 +1,8 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, type ReactNode } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import AppShell from "./layout/AppShell";
 import { useRosterStore } from "./state/roster";
+import { isTauriEnv } from "./lib/tauriEnv";
 
 /**
  * Code-splitting strategy:
@@ -76,6 +77,15 @@ function LandingRedirect() {
   return <Navigate to={hasConsole ? "/whats-new" : "/connection"} replace />;
 }
 
+/** Guards a route whose screen has NO browser-functional path at all (see
+ *  the matching `hideInBrowser` nav entry in Sidebar.tsx) — redirects a
+ *  direct/typed navigation there in a browser session rather than rendering
+ *  a screen with no working affordances. */
+function NativeOnlyRoute({ children }: { children: ReactNode }) {
+  if (!isTauriEnv()) return <Navigate to="/connection" replace />;
+  return <>{children}</>;
+}
+
 export default function App() {
   return (
     <Routes>
@@ -89,9 +99,11 @@ export default function App() {
         <Route
           path="/upload"
           element={
-            <Suspense fallback={<ScreenLoader />}>
-              <UploadScreen />
-            </Suspense>
+            <NativeOnlyRoute>
+              <Suspense fallback={<ScreenLoader />}>
+                <UploadScreen />
+              </Suspense>
+            </NativeOnlyRoute>
           }
         />
         <Route
@@ -168,9 +180,11 @@ export default function App() {
         <Route
           path="/payloads"
           element={
-            <Suspense fallback={<ScreenLoader />}>
-              <PayloadsScreen />
-            </Suspense>
+            <NativeOnlyRoute>
+              <Suspense fallback={<ScreenLoader />}>
+                <PayloadsScreen />
+              </Suspense>
+            </NativeOnlyRoute>
           }
         />
         <Route

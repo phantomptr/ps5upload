@@ -691,64 +691,68 @@ export default function InstallPackageScreen() {
                 {tr("pkglib.installAll", undefined, "Install all")} ({installableCount})
               </Button>
             )}
-            <Button
-              variant="primary"
-              size="sm"
-              leftIcon={<Plus size={14} />}
-              onClick={handlePick}
-              loading={picking}
-              disabled={!hostReady || installing || installingAll}
-              title={
-                !hostReady
-                  ? tr(
-                      "install.add.disabledHint",
-                      "Set a PS5 host on the Connection tab first",
+            {isTauriEnv() && (
+              <>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  leftIcon={<Plus size={14} />}
+                  onClick={handlePick}
+                  loading={picking}
+                  disabled={!hostReady || installing || installingAll}
+                  title={
+                    !hostReady
+                      ? tr(
+                          "install.add.disabledHint",
+                          "Set a PS5 host on the Connection tab first",
+                        )
+                      : installing
+                        ? tr(
+                            "pkglib.add.installingHint",
+                            "Wait for the current install to finish",
+                          )
+                        : undefined
+                  }
+                >
+                  {tr("install.add", "Add .pkg")}
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  leftIcon={
+                    streaming ? (
+                      <Loader2 size={14} className="animate-spin" />
+                    ) : (
+                      <Download size={14} />
                     )
-                  : installing
-                    ? tr(
-                        "pkglib.add.installingHint",
-                        "Wait for the current install to finish",
-                      )
-                    : undefined
-              }
-            >
-              {tr("install.add", "Add .pkg")}
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              leftIcon={
-                streaming ? (
-                  <Loader2 size={14} className="animate-spin" />
-                ) : (
-                  <Download size={14} />
-                )
-              }
-              onClick={handleStreamPick}
-              loading={streaming}
-              disabled={
-                !hostReady || installing || installingAll || streamBlocked
-              }
-              title={
-                !hostReady
-                  ? tr(
-                      "install.add.disabledHint",
-                      "Set a PS5 host on the Connection tab first",
-                    )
-                  : streamBlocked
-                    ? tr(
-                        "pkglib.stream.fwLow.hint",
-                        { fw: String(fwMajor) },
-                        `Stream install needs firmware 11+ — yours is ${fwMajor}.x. The HTTP path hangs on older firmware. Use Upload → Install (staged) instead.`,
-                      )
-                    : tr(
-                        "pkglib.stream.hint",
-                        "Install a .pkg straight from this PC over HTTP — no staging upload (beta)",
-                      )
-              }
-            >
-              {tr("pkglib.stream", undefined, "Stream (beta)")}
-            </Button>
+                  }
+                  onClick={handleStreamPick}
+                  loading={streaming}
+                  disabled={
+                    !hostReady || installing || installingAll || streamBlocked
+                  }
+                  title={
+                    !hostReady
+                      ? tr(
+                          "install.add.disabledHint",
+                          "Set a PS5 host on the Connection tab first",
+                        )
+                      : streamBlocked
+                        ? tr(
+                            "pkglib.stream.fwLow.hint",
+                            { fw: String(fwMajor) },
+                            `Stream install needs firmware 11+ — yours is ${fwMajor}.x. The HTTP path hangs on older firmware. Use Upload → Install (staged) instead.`,
+                          )
+                        : tr(
+                            "pkglib.stream.hint",
+                            "Install a .pkg straight from this PC over HTTP — no staging upload (beta)",
+                          )
+                  }
+                >
+                  {tr("pkglib.stream", undefined, "Stream (beta)")}
+                </Button>
+              </>
+            )}
           </div>
         }
       />

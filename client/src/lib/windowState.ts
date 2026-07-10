@@ -5,6 +5,7 @@ import {
   LogicalSize,
 } from "@tauri-apps/api/window";
 import { isMobile } from "./platform";
+import { isTauriEnv } from "./tauriEnv";
 
 /**
  * Persist + restore window size/position across launches. Cross-
@@ -79,7 +80,8 @@ export function useWindowStatePersistence() {
     // size/position to persist, and the desktop-only window APIs below
     // (outerSize/setPosition/onResized…) just throw. Gate inside the
     // effect (not before the hook call) to respect React hooks rules.
-    if (isMobile()) return;
+    // Browser: same window APIs don't exist there either.
+    if (isMobile() || !isTauriEnv()) return;
     let cancelled = false;
     let cleanupResize: (() => void) | null = null;
     let cleanupMove: (() => void) | null = null;

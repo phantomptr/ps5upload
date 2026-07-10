@@ -28,6 +28,7 @@ import { usePrompt } from "../../components/ConfirmDialog";
 import { pushNotification } from "../../state/notifications";
 import { useTr } from "../../state/lang";
 import { formatBytes } from "../../lib/format";
+import { isTauriEnv } from "../../lib/tauriEnv";
 
 /** Size filter options. `labelKey` resolves through `tr()` at render
  *  time; `labelFallback` is the English text used when the lang file
@@ -529,32 +530,43 @@ export default function SearchScreen() {
  *  RFC 4180 quoting (double-quote both wrappers and embedded quotes);
  *  JSON serializes the entire SearchHit shape. */
 async function exportSearchResults(hits: SearchHit[], format: "csv" | "json") {
-  const { save } = await import("@tauri-apps/plugin-dialog");
-  const { writeTextFileToPath } = await import("../../lib/saveTextFile");
   const fileName = `ps5upload-search-${Date.now()}.${format}`;
+  let text: string;
+  if (format === "json") {
+    text = JSON.stringify(hits, null, 2);
+  } else {
+    // CSV
+    const esc = (v: string | number) => {
+      const s = String(v);
+      if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+      return s;
+    };
+    const rows = ["path,name,size,kind"];
+    for (const h of hits) {
+      rows.push([h.path, h.name, h.size, h.kind].map(esc).join(","));
+    }
+    text = rows.join("\n");
+  }
   // Surface write failures (e.g. a read-only dest, disk full, Android SAF
   // error) instead of swallowing them — a failed export must not look like a
   // successful one.
   try {
-    const dest = await save({
-      defaultPath: fileName,
-      filters: [{ name: format.toUpperCase(), extensions: [format] }],
-    });
-    if (!dest || typeof dest !== "string") return;
-    if (format === "json") {
-      await writeTextFileToPath(dest, JSON.stringify(hits, null, 2), fileName);
+    if (!isTauriEnv()) {
+      const { browserDownloadText } = await import("../../lib/browserDownload");
+      browserDownloadText(
+        fileName,
+        text,
+        format === "json" ? "application/json" : "text/csv",
+      );
     } else {
-      // CSV
-      const esc = (v: string | number) => {
-        const s = String(v);
-        if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-        return s;
-      };
-      const rows = ["path,name,size,kind"];
-      for (const h of hits) {
-        rows.push([h.path, h.name, h.size, h.kind].map(esc).join(","));
-      }
-      await writeTextFileToPath(dest, rows.join("\n"), fileName);
+      const { save } = await import("@tauri-apps/plugin-dialog");
+      const { writeTextFileToPath } = await import("../../lib/saveTextFile");
+      const dest = await save({
+        defaultPath: fileName,
+        filters: [{ name: format.toUpperCase(), extensions: [format] }],
+      });
+      if (!dest || typeof dest !== "string") return;
+      await writeTextFileToPath(dest, text, fileName);
     }
     pushNotification("success", "Search results exported", {
       body: `Saved ${hits.length.toLocaleString()} ${format.toUpperCase()} rows.`,

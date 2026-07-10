@@ -19,6 +19,8 @@ import { useDiagSettingsStore, LOG_LEVELS } from "../../state/diagSettings";
 import { EmptyState, Button } from "../../components";
 import { useTr } from "../../state/lang";
 import { writeClipboard } from "../../lib/clipboard";
+import { isTauriEnv } from "../../lib/tauriEnv";
+import { browserDownloadText } from "../../lib/browserDownload";
 
 const LEVEL_ORDER: LogLevel[] = ["error", "warn", "info", "debug", "trace"];
 
@@ -122,18 +124,27 @@ export default function AppLogsPanel() {
           }`,
       )
       .join("\n");
-    // Save via the native dialog + backend `save_text_file` command rather
-    // than a Blob/anchor `download`. In the Tauri webview an anchor download
-    // is routed to `plugin:fs|write_text_file`, which the capability ACL
-    // blocks ("Command plugin:fs|write_text_file not allowed by ACL") — the
-    // exact error users hit trying to save logs. The backend command writes
-    // from trusted Rust and isn't fs-scope-gated. Mirrors Stats/Settings.
+    const fileName = `ps5upload-logs-${new Date()
+      .toISOString()
+      .replace(/[:.]/g, "-")}.txt`;
     try {
+      if (!isTauriEnv()) {
+        // Plain Blob + anchor download — safe here since the Tauri-webview
+        // ACL interception (see the native branch below) doesn't apply in a
+        // real browser.
+        browserDownloadText(fileName, text);
+        setSaveState("done");
+        setTimeout(() => setSaveState("idle"), 1600);
+        return;
+      }
+      // Save via the native dialog + backend `save_text_file` command rather
+      // than a Blob/anchor `download`. In the Tauri webview an anchor download
+      // is routed to `plugin:fs|write_text_file`, which the capability ACL
+      // blocks ("Command plugin:fs|write_text_file not allowed by ACL") — the
+      // exact error users hit trying to save logs. The backend command writes
+      // from trusted Rust and isn't fs-scope-gated. Mirrors Stats/Settings.
       const { save } = await import("@tauri-apps/plugin-dialog");
       const { writeTextFileToPath } = await import("../../lib/saveTextFile");
-      const fileName = `ps5upload-logs-${new Date()
-        .toISOString()
-        .replace(/[:.]/g, "-")}.txt`;
       const dest = await save({
         defaultPath: fileName,
         filters: [{ name: "Text", extensions: ["txt"] }],
@@ -222,13 +233,15 @@ export default function AppLogsPanel() {
             </option>
           ))}
         </select>
-        <button
-          type="button"
-          onClick={() => void invoke("diag_log_open_dir").catch(() => {})}
-          className="ml-auto text-[var(--color-accent)] hover:underline"
-        >
-          {tr("logs_open_folder", undefined, "Open logs folder")}
-        </button>
+        {isTauriEnv() && (
+          <button
+            type="button"
+            onClick={() => void invoke("diag_log_open_dir").catch(() => {})}
+            className="ml-auto text-[var(--color-accent)] hover:underline"
+          >
+            {tr("logs_open_folder", undefined, "Open logs folder")}
+          </button>
+        )}
       </div>
 
       <div className="mb-4 flex flex-wrap items-center gap-1.5 text-xs">
