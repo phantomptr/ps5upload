@@ -127,7 +127,6 @@ const items: NavItem[] = [
     fallback: "Upload",
     icon: Upload,
     section: { key: "nav_section_files", fallback: "Files" },
-    hideInBrowser: true,
   },
   {
     to: "/install-package",

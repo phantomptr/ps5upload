@@ -545,6 +545,47 @@ export async function browserInvoke<T>(cmd: string, args: AnyArgs = {}): Promise
     case "smp_status":
       return getJson<T>(addrUrl("/api/ps5/smp/status", args["addr"]));
 
+    // ── Local (engine host) filesystem browse ───────────────────────────────
+    // Browser-mode counterpart to the Tauri file/folder dialog: browses the
+    // ENGINE's own filesystem (e.g. a Docker container's mounted volumes),
+    // backing the same in-app picker (LocalPathPicker) Android already uses.
+
+    case "local_list_dir":
+      return getJson<T>(`/api/local/list-dir?path=${uenc(args["path"] as string)}`);
+
+    case "local_storage_roots":
+      return getJson<T>("/api/local/storage-roots");
+
+    case "storage_access_granted":
+      // No scoped-storage concept in a browser — always granted, matching
+      // the Tauri command's own non-Android ("desktop") behavior.
+      return true as unknown as T;
+
+    case "request_storage_access":
+      // No permission to request in a browser — no-op, matching the Tauri
+      // command's own non-Android behavior.
+      return undefined as unknown as T;
+
+    // ── Transfer jobs (Upload screen) ───────────────────────────────────────
+    // These take a plain local path the ENGINE reads via std::fs — same
+    // contract whether that's the Tauri desktop's bundled engine or a
+    // Dockerized one. The TS wrapper's `req` already carries the exact
+    // snake_case body the engine handler deserializes, so it's forwarded
+    // verbatim (no field remapping, unlike some older hand-written cases).
+
+    case "transfer_file":
+      return postJson<T>("/api/transfer/file", args["req"], /*long=*/ true);
+
+    case "transfer_dir":
+      return postJson<T>("/api/transfer/dir", args["req"], /*long=*/ true);
+
+    case "transfer_dir_reconcile":
+      return postJson<T>(
+        "/api/transfer/dir-reconcile",
+        args["req"],
+        /*long=*/ true,
+      );
+
     // ── Native-only / unsupported ────────────────────────────────────────────
 
     default:

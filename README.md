@@ -480,12 +480,20 @@ below 4.x is obscure and above 12.70 is future work.
   (`PS5_ADDR`, `PS5UPLOAD_ALLOW_IP`) and open `http://<host>:19113` in a
   browser on an allowlisted IP. Same security model as the remote engine
   above: **unauthenticated**, LAN-only, never expose it to the internet.
-  Actions that need your PC's own filesystem — picking a local file to
-  upload or install, sending a payload from disk, saving a save-data backup
-  to your computer — are desktop-only and hidden in the browser UI;
-  everything that operates on the PS5 itself (browse, transfer, install from
-  a PS5-connected USB drive, hardware monitor, saves list, …) works the same
-  as the desktop app.
+  **Upload works in the browser** too, operating on files already
+  present on the **engine's own machine** — e.g. mount a folder into the
+  container with `-v /host/games:/data/games`, then browse to `/data/games`
+  in the in-app file picker. That picker browses the *engine's* filesystem,
+  not the browser's own machine — a browser tab has no way to reach a
+  remote engine's disk except through what the engine itself can already
+  read. A few things are still desktop-only and hidden in the browser UI:
+  archive uploads (`.zip`/`.7z`/`.rar`), Payloads (sending a `.elf`/etc. from
+  disk), installing a `.pkg` you pick from your PC, and saving a save-data
+  backup to your computer — everything else that operates on the PS5 itself
+  (browse, transfer, install from a PS5-connected USB drive, hardware
+  monitor, saves list, …) works the same as the desktop app. The upload
+  queue also doesn't persist across a full page reload in browser mode
+  (queue persistence is desktop-only).
 
 ## Contributing
 

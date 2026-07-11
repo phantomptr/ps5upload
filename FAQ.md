@@ -643,8 +643,21 @@ above: it's **unauthenticated**, so only reach it from IPs you add to
 `PS5UPLOAD_ALLOW_IP`, and only on a trusted LAN — never expose port 19113 to
 the internet.
 
-Actions that need your PC's own filesystem are desktop-only and hidden in the
-browser UI: Upload and Payloads (both require picking a local file) are
+**Upload works in the browser** — but it picks files from the **engine's
+own filesystem**, not the browser machine's. There's no way for a browser
+tab to read files off a *different* computer's disk (the one running the
+engine), so the in-app file/folder picker instead browses whatever the
+engine process can see — e.g. mount a folder into the Docker container
+with `-v /host/games:/data/games` and browse to `/data/games`. Plain files
+and folders upload the same as desktop; **archive uploads (`.zip`/`.7z`/
+`.rar`) are still desktop-only** for now (the archive-inspect step streams
+progress in a way the browser shim doesn't support yet — picking one shows
+a clear "not available in the browser yet" message instead of failing
+silently). The upload **queue also doesn't persist across a full page
+reload** in browser mode (queue persistence is desktop-only).
+
+Other actions that need your PC's own filesystem are still desktop-only and
+hidden in the browser UI: **Payloads** (sending a `.elf`/etc. from disk) is
 hidden from the sidebar entirely; on other screens, only the specific
 affordance that needs a local file is hidden — installing a `.pkg` you pick
 from your PC, saving a save-data backup to your computer (even the

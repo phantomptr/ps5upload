@@ -3,8 +3,12 @@
 // dialog returns content:// URIs the engine can't read, so we browse the
 // real filesystem here instead. Commands live in
 // client/src-tauri/src/commands/local_fs.rs.
+//
+// In a browser session (no Tauri) this instead browses the ENGINE's own
+// filesystem via `invokeLogged` → `browserInvoke` → the engine's
+// /api/local/* routes (see engine/crates/ps5upload-engine/src/local_fs.rs).
 
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "../lib/invokeLogged";
 
 export interface LocalEntry {
   name: string;
