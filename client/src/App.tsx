@@ -103,11 +103,9 @@ export default function App() {
         <Route
           path="/upload"
           element={
-            <NativeOnlyRoute>
-              <Suspense fallback={<ScreenLoader />}>
-                <UploadScreen />
-              </Suspense>
-            </NativeOnlyRoute>
+            <Suspense fallback={<ScreenLoader />}>
+              <UploadScreen />
+            </Suspense>
           }
         />
         <Route

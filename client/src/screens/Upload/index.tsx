@@ -250,8 +250,12 @@ export default function UploadScreen() {
   const handleChooseFile = async () => {
     try {
       // Android: the native dialog returns content:// URIs the engine
-      // can't read, so browse the real filesystem in-app instead.
-      const selected = isAndroid()
+      // can't read, so browse the real filesystem in-app instead. Browser
+      // (no Tauri): there's no native dialog at all, and it would browse
+      // the wrong machine anyway (the browser's, not the engine's) — same
+      // in-app browser, pointed at the engine's filesystem instead (see
+      // api/localFs.ts).
+      const selected = isAndroid() || !isTauriEnv()
         ? await pickLocalPath({ mode: "file" })
         : await openDialog({ directory: false, multiple: false });
       if (typeof selected !== "string") return;
@@ -271,8 +275,10 @@ export default function UploadScreen() {
   const handleChooseFolder = async () => {
     try {
       // Android: directory:true is a no-op in plugin-dialog; use the
-      // in-app real-path browser so folder upload works.
-      const selected = isAndroid()
+      // in-app real-path browser so folder upload works. Browser (no
+      // Tauri): same in-app browser, pointed at the engine's own
+      // filesystem instead — see handleChooseFile above.
+      const selected = isAndroid() || !isTauriEnv()
         ? await pickLocalPath({ mode: "folder" })
         : await openDialog({ directory: true, multiple: false });
       if (typeof selected === "string") await pickFolder(selected);

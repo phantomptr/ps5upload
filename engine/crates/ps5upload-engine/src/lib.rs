@@ -34,6 +34,7 @@
 //!   GET  /api/ps5/list-dir?path=...   → list immediate children of a directory on PS5
 
 mod engine_log;
+mod local_fs;
 mod pkg_install;
 #[cfg(feature = "webui")]
 mod webui;
@@ -1207,6 +1208,39 @@ async fn ps5_list_dir(
         Ok(v) => (StatusCode::OK, Json(v)).into_response(),
         Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
     }
+}
+
+// ─── Local (engine host) filesystem browse ─────────────────────────────────
+//
+// Browser-mode counterpart to the Tauri desktop app's native file dialog —
+// browses the ENGINE's own filesystem (e.g. a Docker container's mounted
+// volumes), not the PS5's (see `ps5_list_dir` above) and not the browser's
+// own machine (impossible for a remote client). See `local_fs` module doc
+// for why this doesn't expand what the engine can already be asked to read
+// (the transfer routes already accept any caller-supplied local path).
+
+#[derive(Deserialize)]
+struct LocalListDirQuery {
+    path: String,
+}
+
+/// GET /api/local/list-dir?path=/data/games
+async fn local_list_dir_handler(Query(q): Query<LocalListDirQuery>) -> impl IntoResponse {
+    let path = q.path;
+    let result: Result<Vec<local_fs::LocalEntry>, anyhow::Error> =
+        tokio::task::spawn_blocking(move || local_fs::list_dir(&path))
+            .await
+            .map_err(anyhow::Error::from)
+            .and_then(|inner| inner);
+    match result {
+        Ok(v) => (StatusCode::OK, Json(v)).into_response(),
+        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
+    }
+}
+
+/// GET /api/local/storage-roots
+async fn local_storage_roots_handler() -> impl IntoResponse {
+    (StatusCode::OK, Json(local_fs::storage_roots())).into_response()
 }
 
 // ─── Destructive FS ops ─────────────────────────────────────────────────────
@@ -6378,6 +6412,8 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/ps5/pkg/scan-external", get(ps5_pkg_scan_external))
         .route("/api/ps5/pkg/metadata", get(ps5_pkg_metadata))
         .route("/api/ps5/list-dir", get(ps5_list_dir))
+        .route("/api/local/list-dir", get(local_list_dir_handler))
+        .route("/api/local/storage-roots", get(local_storage_roots_handler))
         .route("/api/ps5/fs/delete", post(ps5_fs_delete))
         .route("/api/ps5/fs/move", post(ps5_fs_move))
         .route("/api/ps5/fs/copy", post(ps5_fs_copy))
