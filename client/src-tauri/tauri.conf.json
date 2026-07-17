@@ -57,7 +57,7 @@
     "shortDescription": "The all-in-one PS5 companion app.",
     "longDescription": "The all-in-one PS5 companion app.",
     "copyright": "© PhantomPtr, GPL-3.0",
-    "license": "GPL-3.0-only",
+    "license": "GPL-3.0-or-later",
     "publisher": "PhantomPtr",
     "homepage": "https://github.com/phantomptr/ps5upload",
     "linux": {

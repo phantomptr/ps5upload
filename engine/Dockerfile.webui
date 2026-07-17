@@ -49,4 +49,10 @@ RUN cargo build --release -p ps5upload-engine --features webui
 FROM scratch
 COPY --from=builder /build/target/release/ps5upload-engine /ps5upload-engine
 EXPOSE 19113
+# Run as an unprivileged user (65532 = nobody in distroless convention).
+# See engine/Dockerfile for rationale on numeric UID in scratch.
+USER 65532:65532
+# Health: GET /api/jobs returns 200 once the HTTP server is live (no PS5
+# contact needed). scratch has no shell/wget, so no in-image HEALTHCHECK;
+# use an external probe (see engine/Dockerfile).
 ENTRYPOINT ["/ps5upload-engine"]

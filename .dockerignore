@@ -1,0 +1,49 @@
+# Root-level .dockerignore. Applies to builds whose context is the repo
+# root — i.e. `docker build -f engine/Dockerfile.webui` (the full-stack
+# web UI image). The engine-only Dockerfile uses engine/ as its context
+# and has its own engine/.dockerignore.
+#
+# Keeping the context small speeds up the `COPY client/ .` and `COPY
+# engine/ .` steps (the build context is sent to the Docker daemon in
+# full on every build) and avoids leaking local artifacts, caches, and
+# development-only files into the image layer cache.
+
+# Build outputs (rebuilt inside the image)
+engine/target/
+client/dist/
+client/src-tauri/target/
+client/src-tauri/gen/
+payload/ps5upload.elf
+payload/ps5upload.elf.gz
+
+# Node (installed fresh in the frontend stage)
+client/node_modules/
+
+# Version control + CI (not needed in the image)
+.git/
+.github/
+
+# Docs, tests, scripts (not needed at runtime)
+docs/
+*.md
+LICENSE*
+tests/
+coverage/
+client/coverage/
+
+# IDE + OS files
+.vscode/
+.idea/
+.DS_Store
+*.swp
+*.swo
+
+# Docker files themselves
+Dockerfile*
+.dockerignore
+
+# Local env / config that should never leak into an image
+.env
+.env.*
+*.pem
+*.key

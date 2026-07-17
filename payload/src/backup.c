@@ -6,6 +6,7 @@
  * and copies each file back to its original path. */
 
 #include "backup.h"
+#include "runtime.h"
 
 #include <ctype.h>
 #include <dirent.h>
@@ -48,6 +49,12 @@ static int mkpath_p(const char *path) {
 }
 
 static int copy_file(const char *src, const char *dst) {
+    /* Defense-in-depth: every write destination must be inside the
+     * writable-roots allowlist. The restore path already validates the
+     * manifest's "original" field before calling us, but this catches
+     * any future caller that forgets. Backup snapshot dirs are always
+     * under /data/ps5upload/backups/ which passes is_path_allowed. */
+    if (!is_path_allowed(dst)) return -1;
     int sfd = open(src, O_RDONLY);
     if (sfd < 0) return -1;
     struct stat st;
@@ -326,6 +333,13 @@ static int restore_from_manifest(const char *snap_dir, int *restored) {
         *tab = 0;
         const char *snap_basename = line;
         const char *original = tab + 1;
+        /* CWE-59 path traversal guard: reject manifests whose "original"
+         * field escapes the writable-roots allowlist. A hostile or hand-
+         * edited manifest could name e.g. /system_ex/something or use
+         * ../ components to write outside the intended game-data area.
+         * is_path_allowed checks both the lexical form and the realpath()
+         * resolved form (symlink-escape). */
+        if (!is_path_allowed(original)) continue;
         char src[1024];
         snprintf(src, sizeof(src), "%s/%s", snap_dir, snap_basename);
         if (copy_file(src, original) == 0) n++;

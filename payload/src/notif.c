@@ -133,6 +133,12 @@ void notif_init(void) {
         entry->timestamp = (uint64_t)ts;
         entry->level = valid_level(level) ? level : NOTIF_LEVEL_INFO;
         size_t rd = fread(entry->message, 1, mlen, f);
+        /* Short read: the file ended before mlen bytes. If we just NUL-
+         * terminate at rd and continue, the subsequent fgetc/fscanf would
+         * be reading from the wrong offset (mid-message or past EOF),
+         * corrupting every remaining entry. Best-effort: keep what we
+         * read (truncated message is still useful), but stop parsing
+         * further entries — the file is truncated/corrupt past here. */
         entry->message[rd] = '\0';
         entry->used = 1;
         /* Consume the newline that terminates the body line. */
@@ -142,6 +148,11 @@ void notif_init(void) {
         s_write_idx = (s_write_idx + 1) % NOTIF_RING_SIZE;
         if (s_count < NOTIF_RING_SIZE) s_count++;
         if ((uint64_t)seq > s_seq_counter) s_seq_counter = (uint64_t)seq;
+
+        /* If fread got fewer bytes than the header promised, the rest
+         * of the file is unreliable — stop here rather than feed garbage
+         * to the next fscanf iteration. */
+        if (rd < mlen) break;
     }
 
     pthread_mutex_unlock(&s_ring_mtx);

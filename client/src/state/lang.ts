@@ -6,6 +6,7 @@ import {
   subscribeLocaleLoaded,
   type LanguageCode,
 } from "../i18n";
+import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 
 const STORAGE_KEY = "ps5upload.lang";
 
@@ -39,7 +40,7 @@ const RTL_LANGS: Set<LanguageCode> = new Set(["ar"]);
 
 function initialLang(): LanguageCode {
   if (typeof window === "undefined") return "en";
-  const stored = window.localStorage.getItem(STORAGE_KEY);
+  const stored = safeGetItem(STORAGE_KEY);
   if (stored && LANGUAGES.some((l) => l.code === stored)) {
     return stored as LanguageCode;
   }
@@ -70,7 +71,7 @@ interface LangState {
 export const useLangStore = create<LangState>((set) => ({
   lang: initialLang(),
   setLang: (lang) => {
-    window.localStorage.setItem(STORAGE_KEY, lang);
+    safeSetItem(STORAGE_KEY, lang);
     applyLang(lang);
     set({ lang });
     // Kick off the lazy chunk fetch for the newly selected locale.

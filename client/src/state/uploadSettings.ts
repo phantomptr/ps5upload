@@ -1,5 +1,10 @@
 import { create } from "zustand";
 import type { ReconcileMode } from "../api/ps5";
+import {
+  safeGetItem,
+  safeSetItem,
+  safeRemoveItem,
+} from "../lib/safeStorage";
 
 /**
  * User preferences that govern the upload flow's defaults — what to do
@@ -26,7 +31,7 @@ export const MAX_UPLOAD_STREAMS = 4;
 
 function loadAlwaysOverwrite(): boolean {
   if (typeof window === "undefined") return false;
-  return window.localStorage.getItem(KEY_ALWAYS_OVERWRITE) === "true";
+  return safeGetItem(KEY_ALWAYS_OVERWRITE) === "true";
 }
 
 function loadReconcileMode(): ReconcileMode {
@@ -40,14 +45,14 @@ function loadReconcileMode(): ReconcileMode {
 
 function loadShowFiles(): boolean {
   if (typeof window === "undefined") return true;
-  const v = window.localStorage.getItem(KEY_SHOW_FILES);
+  const v = safeGetItem(KEY_SHOW_FILES);
   // Default ON — most users want to see what's happening.
   return v === null ? true : v === "true";
 }
 
 function loadBandwidthCap(): number {
   if (typeof window === "undefined") return 0;
-  const v = window.localStorage.getItem(KEY_BANDWIDTH_CAP);
+  const v = safeGetItem(KEY_BANDWIDTH_CAP);
   if (!v) return 0;
   const n = parseFloat(v);
   return isFinite(n) && n > 0 ? n : 0;
@@ -80,7 +85,7 @@ function loadUploadStreams(): number {
   // max_transfer_streams), so an older payload that predates multi-stream still
   // clamps to 1 regardless of this setting.
   if (typeof window === "undefined") return DEFAULT_UPLOAD_STREAMS;
-  const v = window.localStorage.getItem(KEY_UPLOAD_STREAMS);
+  const v = safeGetItem(KEY_UPLOAD_STREAMS);
   if (!v) return DEFAULT_UPLOAD_STREAMS;
   const n = parseInt(v, 10);
   if (!Number.isFinite(n)) return DEFAULT_UPLOAD_STREAMS;
@@ -110,11 +115,11 @@ const KEY_KEEP_PS5_AWAKE_MODE = "ps5upload.keep_ps5_awake_mode";
 
 function loadKeepPs5AwakeMode(): KeepPs5AwakeMode {
   if (typeof window === "undefined") return "transfers";
-  const v = window.localStorage.getItem(KEY_KEEP_PS5_AWAKE_MODE);
+  const v = safeGetItem(KEY_KEEP_PS5_AWAKE_MODE);
   if (v === "off" || v === "transfers" || v === "always") return v;
   // Legacy boolean: "false" meant disabled; absent/true meant
   // tick-during-transfers.
-  return window.localStorage.getItem(KEY_KEEP_PS5_AWAKE) === "false"
+  return safeGetItem(KEY_KEEP_PS5_AWAKE) === "false"
     ? "off"
     : "transfers";
 }
@@ -127,7 +132,7 @@ function loadKeepPs5AwakeMode(): KeepPs5AwakeMode {
  *  of the key (fresh install) means ON. */
 function loadAutoResume(): boolean {
   if (typeof window === "undefined") return true;
-  return window.localStorage.getItem(KEY_AUTO_RESUME) !== "false";
+  return safeGetItem(KEY_AUTO_RESUME) !== "false";
 }
 
 /** Auto-redeploy the helper when a console goes offline and the app is
@@ -145,7 +150,7 @@ function loadAutoResume(): boolean {
  *  (the browser has no bundled ELF to push). */
 function loadAutoRedeployOnWake(): boolean {
   if (typeof window === "undefined") return true;
-  return window.localStorage.getItem(KEY_AUTO_REDEPLOY_ON_WAKE) !== "false";
+  return safeGetItem(KEY_AUTO_REDEPLOY_ON_WAKE) !== "false";
 }
 
 interface UploadSettingsState {
@@ -198,14 +203,14 @@ export const useUploadSettingsStore = create<UploadSettingsState>((set) => ({
   keepPs5AwakeMode: loadKeepPs5AwakeMode(),
   autoRedeployOnWake: loadAutoRedeployOnWake(),
   setAlwaysOverwrite: (alwaysOverwrite) => {
-    window.localStorage.setItem(
+    safeSetItem(
       KEY_ALWAYS_OVERWRITE,
       alwaysOverwrite ? "true" : "false",
     );
     set({ alwaysOverwrite });
   },
   setShowTransferFiles: (showTransferFiles) => {
-    window.localStorage.setItem(
+    safeSetItem(
       KEY_SHOW_FILES,
       showTransferFiles ? "true" : "false",
     );
@@ -213,36 +218,36 @@ export const useUploadSettingsStore = create<UploadSettingsState>((set) => ({
   },
   setBandwidthCapMbps: (bandwidthCapMbps) => {
     if (bandwidthCapMbps > 0) {
-      window.localStorage.setItem(
+      safeSetItem(
         KEY_BANDWIDTH_CAP,
         bandwidthCapMbps.toString(),
       );
     } else {
-      window.localStorage.removeItem(KEY_BANDWIDTH_CAP);
+      safeRemoveItem(KEY_BANDWIDTH_CAP);
     }
     set({ bandwidthCapMbps });
   },
   setUploadStreams: (n) => {
     const clamped = clampUploadStreams(n);
-    window.localStorage.setItem(KEY_UPLOAD_STREAMS, clamped.toString());
+    safeSetItem(KEY_UPLOAD_STREAMS, clamped.toString());
     set({ uploadStreams: clamped });
   },
   setAutoResume: (autoResume) => {
-    window.localStorage.setItem(KEY_AUTO_RESUME, autoResume ? "true" : "false");
+    safeSetItem(KEY_AUTO_RESUME, autoResume ? "true" : "false");
     set({ autoResume });
   },
   setKeepPs5AwakeMode: (keepPs5AwakeMode) => {
-    window.localStorage.setItem(KEY_KEEP_PS5_AWAKE_MODE, keepPs5AwakeMode);
+    safeSetItem(KEY_KEEP_PS5_AWAKE_MODE, keepPs5AwakeMode);
     // Mirror into the legacy boolean so a downgrade to an older build
     // still respects an explicit "off".
-    window.localStorage.setItem(
+    safeSetItem(
       KEY_KEEP_PS5_AWAKE,
       keepPs5AwakeMode === "off" ? "false" : "true",
     );
     set({ keepPs5AwakeMode });
   },
   setAutoRedeployOnWake: (autoRedeployOnWake) => {
-    window.localStorage.setItem(
+    safeSetItem(
       KEY_AUTO_REDEPLOY_ON_WAKE,
       autoRedeployOnWake ? "true" : "false",
     );

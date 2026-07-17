@@ -30,15 +30,16 @@
   walk away. Every running row shows live MiB/s and ETA; done
   rows show the wall-clock-average rate so you can spot a slow
   destination. Queue state survives app restarts.
-- **Compressed `.zip` uploads** — keep a game dump as a single `.zip`
-  on your PC (less disk, easier to move) and upload it directly.
-  ps5upload decompresses on the host and streams the files into the
-  same FTX2 pipeline, so they land **already extracted** on the PS5 —
-  no manual unzip, no temp copy of the whole game. The Upload screen
-  previews the expansion (`zipped → extracted`, file count, space
-  saved) and detects the embedded game. Decompresses one file at a
-  time (large files spill to a temp file), so a 100 GB archive doesn't
-  need 100 GB of RAM. ZIP and RAR supported.
+- **Compressed archive uploads (`.zip` / `.7z` / `.rar`)** — keep a game
+  dump as a single archive on your PC (less disk, easier to move) and
+  upload it directly. ps5upload decompresses on the host and streams
+  the files into the same FTX2 pipeline, so they land **already
+  extracted** on the PS5 — no manual unpack, no temp copy of the whole
+  game. The Upload screen previews the expansion (`zipped → extracted`,
+  file count, space saved) and detects the embedded game. Decompresses
+  one file at a time (large files spill to a temp file), so a 100 GB
+  archive doesn't need 100 GB of RAM. `.rar` is desktop-only (the UnRAR
+  C dep is excluded from the Android build).
 - **Native image mount** — attach `.exfat` and `.ffpkg` images on
   the PS5 (MDIOCATTACH + nmount) with no third-party helper. Every
   mount survives payload restarts and auto-reconciles on startup.
@@ -108,10 +109,9 @@
   app patches) register but the install path freezes Sony's mgmt
   service mid-flight on most firmwares. Use the on-PS5 Settings →
   Debug Settings → Game → Package Installer for those.
-- **`.rar` archives.** Only `.zip` is supported for compressed uploads.
-  Modern scene `.rar` is typically split multi-part + encrypted, which
-  isn't worth the unrar maintenance/licensing tax — and no other PS5
-  homebrew tool supports it either. Unpack `.rar` on the PC first.
+- **Insecure pkg signing keys.** The engine only installs pkgs signed
+  with keys already in the PS5's trust store. It does not generate or
+  inject fake signing keys.
 
 ## A quick look
 

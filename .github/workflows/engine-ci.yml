@@ -82,6 +82,16 @@ jobs:
         working-directory: engine
         run: cargo clippy --workspace -- -D warnings
 
+      # The webui feature (rust-embed + static serving) is only enabled
+      # in the Docker webui build, not the default workspace clippy/test
+      # above. Compile-check it here so a broken #[cfg(feature = "webui")]
+      # branch doesn't slip through CI and only surface at Docker build
+      # time (as happened in 4.1.0). Full test/lint of the feature isn't
+      # needed — a type-check catches the class of bug we're guarding.
+      - name: cargo check (webui feature)
+        working-directory: engine
+        run: cargo check -p ps5upload-engine --features webui
+
       - name: cargo test
         working-directory: engine
         env:
