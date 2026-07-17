@@ -4,7 +4,10 @@ What's new in ps5upload, written for humans.
 
 ---
 
-## Unreleased
+## 4.1.0
+
+A reliability release. The desktop app now recovers on its own when the PS5's
+helper goes offline, and PS4-format saves get a clear restore warning.
 
 - **New: automatic reconnection after rest mode and network drops.** When the
   PS5's helper goes offline — rest mode wake, a WiFi switch, a payload crash —
