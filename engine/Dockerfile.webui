@@ -19,7 +19,7 @@
 # your own trusted LAN.  Never expose port 19113 to the internet.
 
 # ── Stage 1: build the React frontend ────────────────────────────────────────
-FROM node:22-alpine AS frontend
+FROM node:26-alpine AS frontend
 
 WORKDIR /src
 # Copy only the client package files first so npm ci is cached
