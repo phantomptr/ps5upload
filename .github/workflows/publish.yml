@@ -63,7 +63,7 @@ jobs:
         with:
           ref: ${{ github.event.inputs.tag || github.ref_name }}
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - name: Sync version from VERSION
@@ -152,7 +152,7 @@ jobs:
           ref: ${{ github.event.inputs.tag || github.ref_name }}
 
       - name: Setup Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -420,7 +420,7 @@ jobs:
         with:
           ref: ${{ github.event.inputs.tag || github.ref_name }}
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
