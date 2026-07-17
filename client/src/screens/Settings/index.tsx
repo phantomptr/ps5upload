@@ -218,6 +218,7 @@ export default function SettingsScreen() {
     uploadStreams,
     autoResume,
     keepPs5AwakeMode,
+    autoRedeployOnWake,
     bandwidthCapMbps,
     setAlwaysOverwrite,
     setShowTransferFiles,
@@ -225,6 +226,7 @@ export default function SettingsScreen() {
     setAutoResume,
     setKeepPs5AwakeMode,
     setBandwidthCapMbps,
+    setAutoRedeployOnWake,
   } = useUploadSettingsStore();
   const payloadMaxStreams = useConnectionStore((s) => s.maxTransferStreams);
   const restAfterUpload = useRestAfterUploadStore((s) => s.enabled);
@@ -450,6 +452,31 @@ export default function SettingsScreen() {
                     "upload_auto_resume_hint",
                     undefined,
                     "If an upload drops mid-transfer — most often because the PS5 payload crashed — automatically re-send the payload and resume from where it left off, retrying a few times before giving up. Fatal problems like the PS5 running out of space still stop right away. On by default.",
+                  )}
+                </div>
+              </div>
+            </label>
+
+            <label className="flex cursor-pointer items-start gap-3 text-sm">
+              <input
+                type="checkbox"
+                className="mt-0.5 h-4 w-4"
+                checked={autoRedeployOnWake}
+                onChange={(e) => setAutoRedeployOnWake(e.target.checked)}
+              />
+              <div>
+                <div className="font-medium">
+                  {tr(
+                    "upload_auto_redeploy_on_wake",
+                    undefined,
+                    "Reconnect automatically after rest mode / network drops",
+                  )}
+                </div>
+                <div className="mt-0.5 text-xs text-[var(--color-muted)]">
+                  {tr(
+                    "upload_auto_redeploy_on_wake_hint",
+                    undefined,
+                    "When the PS5's helper goes offline (rest mode, a WiFi switch, or a payload crash), keep trying to re-send it in the background — so the helper, your fan threshold, and the upload port come back by themselves once the console is reachable again, without clicking Connect. On by default.",
                   )}
                 </div>
               </div>

@@ -17,6 +17,7 @@ const KEY_BANDWIDTH_CAP = "ps5upload.bandwidth_cap_mbps";
 const KEY_UPLOAD_STREAMS = "ps5upload.upload_streams";
 const KEY_AUTO_RESUME = "ps5upload.auto_resume";
 const KEY_KEEP_PS5_AWAKE = "ps5upload.keep_ps5_awake";
+const KEY_AUTO_REDEPLOY_ON_WAKE = "ps5upload.auto_redeploy_on_wake";
 
 /** Upper bound on the user-selectable stream count, mirroring the engine's
  *  MAX_TRANSFER_STREAMS. The effective count is further clamped to whatever
@@ -129,6 +130,24 @@ function loadAutoResume(): boolean {
   return window.localStorage.getItem(KEY_AUTO_RESUME) !== "false";
 }
 
+/** Auto-redeploy the helper when a console goes offline and the app is
+ *  open. Default ON: the PS5's payload dies every time the console rests
+ *  (Sony tears down userspace on suspend), and without re-deploying it the
+ *  user has to click Connect → Send again after every wake — and the fan
+ *  threshold resets to default in the meantime (the pinned value only
+ *  takes effect again once the helper is back and its watcher re-arms).
+ *  With this on, the app periodically tries to push the bundled ELF to a
+ *  console it has lost touch with, so the helper (and the fan setting)
+ *  come back by themselves after rest mode or a network blip.
+ *
+ *  Stored as the string "false" only when the user disables it, so a
+ *  fresh install gets the resilient behavior. No-op in a browser session
+ *  (the browser has no bundled ELF to push). */
+function loadAutoRedeployOnWake(): boolean {
+  if (typeof window === "undefined") return true;
+  return window.localStorage.getItem(KEY_AUTO_REDEPLOY_ON_WAKE) !== "false";
+}
+
 interface UploadSettingsState {
   /** When true, the Upload flow skips the Override/Resume/Cancel
    *  dialog and always overwrites the destination. Useful for
@@ -155,12 +174,18 @@ interface UploadSettingsState {
   autoResume: boolean;
   /** Keep-PS5-awake policy — see KeepPs5AwakeMode. */
   keepPs5AwakeMode: KeepPs5AwakeMode;
+  /** Auto-redeploy the bundled helper to a console after it goes offline
+   *  (rest-mode wake, network change, payload crash). Restores the fan
+   *  threshold and the upload port without a manual click. See
+   *  loadAutoRedeployOnWake. */
+  autoRedeployOnWake: boolean;
   setAlwaysOverwrite: (on: boolean) => void;
   setShowTransferFiles: (on: boolean) => void;
   setBandwidthCapMbps: (n: number) => void;
   setUploadStreams: (n: number) => void;
   setAutoResume: (on: boolean) => void;
   setKeepPs5AwakeMode: (mode: KeepPs5AwakeMode) => void;
+  setAutoRedeployOnWake: (on: boolean) => void;
 }
 
 export const useUploadSettingsStore = create<UploadSettingsState>((set) => ({
@@ -171,6 +196,7 @@ export const useUploadSettingsStore = create<UploadSettingsState>((set) => ({
   uploadStreams: loadUploadStreams(),
   autoResume: loadAutoResume(),
   keepPs5AwakeMode: loadKeepPs5AwakeMode(),
+  autoRedeployOnWake: loadAutoRedeployOnWake(),
   setAlwaysOverwrite: (alwaysOverwrite) => {
     window.localStorage.setItem(
       KEY_ALWAYS_OVERWRITE,
@@ -214,5 +240,12 @@ export const useUploadSettingsStore = create<UploadSettingsState>((set) => ({
       keepPs5AwakeMode === "off" ? "false" : "true",
     );
     set({ keepPs5AwakeMode });
+  },
+  setAutoRedeployOnWake: (autoRedeployOnWake) => {
+    window.localStorage.setItem(
+      KEY_AUTO_REDEPLOY_ON_WAKE,
+      autoRedeployOnWake ? "true" : "false",
+    );
+    set({ autoRedeployOnWake });
   },
 }));

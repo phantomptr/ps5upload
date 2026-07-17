@@ -4,6 +4,20 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## Unreleased
+
+- **New: automatic reconnection after rest mode and network drops.** When the
+  PS5's helper goes offline — rest mode wake, a WiFi switch, a payload crash —
+  the desktop app now periodically tries to re-send it in the background. The
+  helper, your pinned fan threshold, and the upload port come back by
+  themselves once the console is reachable again, without clicking Connect. On
+  by default (Settings → "Reconnect automatically after rest mode / network
+  drops"). Browser sessions are unaffected (no bundled ELF to push). Includes
+  an immediate re-probe on the browser `online` event for fast recovery after a
+  network change.
+
+---
+
 ## 4.0.0
 
 A major release. Four new PS5 features, a self-hosted browser web UI, and a
