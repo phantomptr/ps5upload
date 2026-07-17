@@ -28,6 +28,11 @@ target/
 **/*.rs.bk
 Cargo.lock.bak
 
+# rust-embed webui stub — created by engine-ci.yml and Dockerfile.webui
+# before building with --features webui. Real content is Vite output
+# (client/dist/) copied in at build time; this is a type-check stub only.
+engine/crates/ps5upload-engine/webui/
+
 # ─── Python ──────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]

@@ -88,6 +88,16 @@ jobs:
       # branch doesn't slip through CI and only surface at Docker build
       # time (as happened in 4.1.0). Full test/lint of the feature isn't
       # needed — a type-check catches the class of bug we're guarding.
+      #
+      # rust-embed's #[derive(RustEmbed)] #[folder = "webui/"] requires
+      # the directory to exist at compile time — without it the macro
+      # generates no impl and WebAssets::get fails (E0599). The real
+      # content is the Vite build output (client/dist/) and is only
+      # copied in by Dockerfile.webui; here we create a stub with a
+      # dummy index.html so the derive macro is satisfied.
+      - name: create webui stub for rust-embed
+        working-directory: engine/crates/ps5upload-engine
+        run: mkdir -p webui && echo '<!DOCTYPE html><title>stub</title>' > webui/index.html
       - name: cargo check (webui feature)
         working-directory: engine
         run: cargo check -p ps5upload-engine --features webui
