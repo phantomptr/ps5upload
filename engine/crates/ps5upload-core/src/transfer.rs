@@ -2783,6 +2783,11 @@ impl ZipMaterialiser {
     /// inflated length is checked against the central-directory size we
     /// planned with — a mismatch means a corrupt/lying zip and fails loudly
     /// rather than silently truncating the file delivered to the PS5.
+    /// Decompress zip entry `index` into the cache if not already cached.
+    ///
+    /// **Contract:** on `Ok(())`, `self.cache` is guaranteed to be `Some`
+    /// with entry `index`. Callers may rely on this (e.g. the
+    /// `self.cache.as_mut().expect(...)` in `read_shard`).
     fn ensure_entry(&mut self, index: usize, expected: u64) -> Result<()> {
         if self.cache.as_ref().map(ZipEntryCache::index) == Some(index) {
             return Ok(());

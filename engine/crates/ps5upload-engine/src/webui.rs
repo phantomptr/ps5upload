@@ -46,8 +46,19 @@ pub fn spa_response(path: &str) -> Response {
     asset_response(path).unwrap_or_else(|| {
         // Serve index.html as the SPA shell for any path the router doesn't
         // recognise.  The React app's client-side router takes over from here.
-        let index = WebAssets::get("index.html")
-            .expect("webui/index.html must be embedded (run the client build first)");
+        let index = WebAssets::get("index.html").unwrap_or_else(|| {
+            // index.html is embedded at build time when the webui feature is
+            // enabled. If we hit this path the binary was misbuilt (webui
+            // feature on but no client build output). Return a clear error
+            // instead of panicking so the engine stays up for API use.
+            return (
+                [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+                "webui index.html not found — rebuild with the client assets bundled."
+                    .to_string()
+                    .into_bytes(),
+            )
+                .into_response();
+        });
         (
             [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
             index.data.into_owned(),
