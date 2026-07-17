@@ -45,6 +45,7 @@ import { mgmtAddr, hostOf } from "../lib/addr";
 import { useUploadQueueStore } from "../state/uploadQueue";
 import { useTransferStore } from "../state/transfer";
 import { useUploadSettingsStore } from "../state/uploadSettings";
+import { ensurePayloadCurrent } from "../lib/ensurePayloadCurrent";
 import { installPlayTimeAccumulator } from "../state/playTime";
 import { useTr } from "../state/lang";
 import { isAndroid } from "../lib/platform";
@@ -70,6 +71,14 @@ const PROBE_MISS_THRESHOLD = 2;
  *  auto-loader can't re-trigger itself. A genuine reconnect past the window
  *  fires again. Comfortably longer than a typical short playlist. */
 const AUTO_LOADER_COOLDOWN_MS = 90_000;
+
+/** How often to re-attempt a helper redeploy on a console that's been
+ *  observed DOWN. The poll itself runs every 10s, but the redeploy send
+ *  is gated to this cadence so we don't spam :9021 on a console that's
+ *  genuinely in rest mode (where every connect would hang to its
+ *  timeout). ~30s is quick enough to feel instant after a wake, slow
+ *  enough to be cheap while the PS5 is asleep. */
+const AUTO_REDEPLOY_INTERVAL_MS = 30_000;
 
 function useStatusPolling() {
   const setStatus = useConnectionStore((s) => s.setStatus);
@@ -386,6 +395,106 @@ function useStatusPolling() {
       clearInterval(h);
     };
   }, [hostsKey, activeHost, setHostStatus, setStatus, visible]);
+}
+
+/** Auto-redeploy the bundled helper to a console that's gone DOWN.
+ *
+ *  Why this exists: the PS5's payload is torn down every time the console
+ *  rests (Sony kills userspace on suspend), and after a wake the helper is
+ *  simply gone — no `down→up` edge fires to bring it back, because nothing
+ *  re-sends it. The user had to click Connect → Send again after every rest,
+ *  and in the meantime the fan threshold reset to default (the pinned value
+ *  only takes effect once the helper is back and its watcher re-arms from
+ *  fan_threshold.conf). Same after a network blip that dropped the TCP probe
+ *  long enough to flip DOWN.
+ *
+ *  So while the app is open and a console we care about is DOWN, we
+ *  periodically push the bundled ELF to :9021. While the PS5 is asleep the
+ *  connect just fails (cheap); the moment it wakes, one of these sends lands,
+ *  the helper boots, the boot-time fan restore re-applies the threshold, and
+ *  the next poll sees it UP — at which point this loop skips it. No user
+ *  action needed.
+ *
+ *  - Native-only: a browser session has no bundled ELF to push.
+ *  - Honors the `autoRedeployOnWake` setting (default ON).
+ *  - One in-flight redeploy per host (no pile-up if a 9021 connect hangs).
+ *  - Gated to AUTO_REDEPLOY_INTERVAL_MS per host so a sleeping PS5 isn't
+ *    bombarded with connect attempts.
+ *  - Pauses when the window is hidden (matches the poller). */
+function useAutoRedeployDownHelpers() {
+  const visible = useDocumentVisible();
+  // Per-host bookkeeping: last wall-clock send attempt + whether a send is
+  // currently in flight. Kept in refs so the interval closure always sees
+  // fresh values without re-arming the effect.
+  const lastAttemptRef = useRef<Record<string, number>>({});
+  const inFlightRef = useRef<Record<string, boolean>>({});
+  useEffect(() => {
+    if (!visible) return;
+    if (!isTauriEnv()) return;
+    let cancelled = false;
+
+    const tryRedeploy = async (host: string) => {
+      const key = hostOf(host) || host;
+      if (inFlightRef.current[key]) return;
+      const now = Date.now();
+      if (now - (lastAttemptRef.current[key] ?? 0) < AUTO_REDEPLOY_INTERVAL_MS)
+        return;
+      lastAttemptRef.current[key] = now;
+      inFlightRef.current[key] = true;
+      try {
+        // ensurePayloadCurrent(force=true) probes, then sends + polls up to
+        // ~30s. While the PS5 is in rest mode the probe/send fails fast; once
+        // awake it lands and boots. Either way it never throws.
+        log.info("connection", `auto-redeploy: attempting helper restore on ${host}`);
+        await ensurePayloadCurrent(host, () => cancelled, true);
+      } finally {
+        inFlightRef.current[key] = false;
+      }
+    };
+
+    const tick = () => {
+      if (cancelled) return;
+      if (!useUploadSettingsStore.getState().autoRedeployOnWake) return;
+      const { runtimeByHost } = useConnectionStore.getState();
+      const roster = useRosterStore.getState();
+      for (const p of roster.profiles) {
+        const h = (p.host ?? "").trim();
+        if (!h) continue;
+        const key = hostOf(h) || h;
+        const rt = runtimeByHost[key];
+        // Only redeploy when we've LOST the helper (status down). Once it's
+        // back up, the normal poller tracks it and the boot-time fan restore
+        // handles the threshold. "unknown" (never seen) is left to the manual
+        // Connect flow / bringUp so we don't push to a console the user just
+        // typed in but hasn't deliberately connected to yet.
+        if (rt?.payloadStatus === "down") {
+          void tryRedeploy(h);
+        }
+      }
+    };
+    // Stagger the first tick off the poller so the redeploy check reads the
+    // poller's freshest DOWN verdict (poller runs at t=0 and every 10s; we
+    // run at t=15s and every 15s — interleaved rather than aligned).
+    const firstId = window.setTimeout(tick, 15_000);
+    const id = window.setInterval(tick, 15_000);
+    // Browser online event: when the network comes back (WiFi reconnects,
+    // laptop wakes from sleep and NIC reassociates), skip the wait and try
+    // a redeploy right now for any console we'd been trying to reach. This
+    // is the "I switched networks and had to re-run the app" complaint —
+    // now it recovers within ~one connect timeout instead of up to 15s.
+    const onOnline = () => {
+      if (cancelled) return;
+      log.info("connection", "network online event — immediate redeploy sweep");
+      tick();
+    };
+    window.addEventListener("online", onOnline);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(firstId);
+      window.clearInterval(id);
+      window.removeEventListener("online", onOnline);
+    };
+  }, [visible]);
 }
 
 /** Fire a TTL-gated update check on mount. The store debounces to
@@ -715,6 +824,7 @@ function AndroidStorageAccessBanner() {
 
 export default function AppShell() {
   useStatusPolling();
+  useAutoRedeployDownHelpers();
   useUpdateCheckOnMount();
   useKeepPs5Awake();
   useRoutePersistence();

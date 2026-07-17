@@ -243,7 +243,10 @@ export default function SavesScreen() {
         message: tr(
           "saves_restore_confirm_body",
           undefined,
-          "Pick a .zip whose top-level folder is named the same as the title ID. This WIPES the current PS5 save first, then uploads the backup — if the upload is interrupted (network drop, disk full), the save can be left empty with no automatic rollback. Back up the existing save first if it matters.",
+          "Pick a .zip whose top-level folder is named the same as the title ID. This WIPES the current PS5 save first, then uploads the backup — if the upload is interrupted (network drop, disk full), the save can be left empty with no automatic rollback. Back up the existing save first if it matters." +
+            (entry.kind === "ps4"
+              ? "\n\n⚠ PS4-format save: the PS4 emulator may not pick up the restored data immediately. If the save doesn't appear in-game after restore, close and reopen the game or restart the console."
+              : ""),
         ),
         destructive: true,
         confirmLabel: tr("saves_restore_confirm_label", undefined, "Restore"),
@@ -315,7 +318,11 @@ export default function SavesScreen() {
         "success",
         withConsolePrefix(restoreHost, `Restored ${entry.title_id}`),
         {
-          body: `Uploaded ${entry.title_id}.zip back to ${entry.path}.`,
+          body:
+            `Uploaded ${entry.title_id}.zip back to ${entry.path}.` +
+            (entry.kind === "ps4"
+              ? " (PS4 save — if it doesn't appear in-game, close and reopen the game or restart the console.)"
+              : ""),
         },
       );
     } catch (e) {
@@ -843,6 +850,18 @@ export default function SavesScreen() {
         )}
 
         <div className="mx-auto max-w-4xl space-y-3">
+          {saves?.some((e) => e.kind === "ps4") && (
+            <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-200">
+              <strong>
+                {tr("saves_ps4_warning_title", undefined, "PS4-format saves:")}
+              </strong>{" "}
+              {tr(
+                "saves_ps4_warning_body",
+                undefined,
+                "backup and restore of PS4 legacy saves (like PS4 games running via backward compatibility) may not work reliably — the PS4 emulator caches save data internally and a raw file copy back to the console doesn't always trigger a remount. If a restored PS4 save doesn't appear in-game, try closing and reopening the game, or restarting the console. This is a known limitation tracked in issue #198.",
+              )}
+            </div>
+          )}
           {grouped.map(({ title_id, entries }) => (
             <section
               key={title_id}

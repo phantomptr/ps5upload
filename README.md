@@ -38,7 +38,7 @@
   previews the expansion (`zipped → extracted`, file count, space
   saved) and detects the embedded game. Decompresses one file at a
   time (large files spill to a temp file), so a 100 GB archive doesn't
-  need 100 GB of RAM. ZIP only — unpack `.rar` on the PC first.
+  need 100 GB of RAM. ZIP and RAR supported.
 - **Native image mount** — attach `.exfat` and `.ffpkg` images on
   the PS5 (MDIOCATTACH + nmount) with no third-party helper. Every
   mount survives payload restarts and auto-reconciles on startup.

@@ -4,6 +4,28 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## Unreleased
+
+- **New: automatic reconnection after rest mode and network drops.** When the
+  PS5's helper goes offline — rest mode wake, a WiFi switch, a payload crash —
+  the desktop app now periodically tries to re-send it in the background. The
+  helper, your pinned fan threshold, and the upload port come back by
+  themselves once the console is reachable again, without clicking Connect. On
+  by default (Settings → "Reconnect automatically after rest mode / network
+  drops"). Browser sessions are unaffected (no bundled ELF to push). Includes
+  an immediate re-probe on the browser `online` event for fast recovery after a
+  network change.
+- **Fixed: PS4 save restore warning.** PS4-format saves (PS4 games running via
+  backward compatibility on PS5) use sealed PFS images. The PS4 emulator caches
+  save data internally, so a raw file copy back to the console doesn't always
+  trigger a remount — a restored PS4 save may not appear in-game until the game
+  is closed/reopened or the console is restarted. The Saves screen now shows a
+  warning banner for PS4 saves, the restore confirmation dialog includes a
+  PS4-specific note, and the post-restore notification hints about the
+  workaround. *(Issue #198.)*
+
+---
+
 ## 4.0.0
 
 A major release. Four new PS5 features, a self-hosted browser web UI, and a
