@@ -1,6 +1,7 @@
 import { create } from "zustand";
 
 import { appIsForeground, sendOsNotification } from "../lib/osNotify";
+import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 
 /**
  * Persistent notification inbox.
@@ -64,13 +65,13 @@ const OS_NOTIFY_KEY = "ps5upload.osNotify.v1";
 function loadOsNotifyEnabled(): boolean {
   if (typeof window === "undefined") return true;
   // Default ON; only an explicit "0" disables it.
-  return window.localStorage.getItem(OS_NOTIFY_KEY) !== "0";
+  return safeGetItem(OS_NOTIFY_KEY) !== "0";
 }
 
 function loadInitial(): Notification[] {
   if (typeof window === "undefined") return [];
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = safeGetItem(STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
@@ -89,7 +90,7 @@ function loadInitial(): Notification[] {
 function persist(entries: Notification[]) {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
+    safeSetItem(STORAGE_KEY, JSON.stringify(entries));
   } catch {
     // Quota exceeded — best-effort. We've already capped at
     // MAX_ENTRIES so this should be near-impossible in practice.
@@ -146,7 +147,7 @@ export const useNotificationsStore = create<NotificationsState>((set, get) => ({
   osNotifyEnabled: loadOsNotifyEnabled(),
   setOsNotifyEnabled: (enabled) => {
     if (typeof window !== "undefined") {
-      window.localStorage.setItem(OS_NOTIFY_KEY, enabled ? "1" : "0");
+      safeSetItem(OS_NOTIFY_KEY, enabled ? "1" : "0");
     }
     set({ osNotifyEnabled: enabled });
   },
@@ -179,7 +180,7 @@ const DEFAULT_PRUNE_DAYS = 30;
 export function getNotifPruneDays(): number {
   if (typeof window === "undefined") return DEFAULT_PRUNE_DAYS;
   try {
-    const raw = window.localStorage.getItem(PRUNE_DAYS_KEY);
+    const raw = safeGetItem(PRUNE_DAYS_KEY);
     if (raw === null) return DEFAULT_PRUNE_DAYS;
     const n = parseInt(raw, 10);
     if (!Number.isFinite(n) || n < 0) return DEFAULT_PRUNE_DAYS;
@@ -193,7 +194,7 @@ export function setNotifPruneDays(days: number) {
   if (typeof window === "undefined") return;
   const clamped = Math.max(0, Math.min(365, Math.floor(days)));
   try {
-    window.localStorage.setItem(PRUNE_DAYS_KEY, String(clamped));
+    safeSetItem(PRUNE_DAYS_KEY, String(clamped));
   } catch {
     // best-effort
   }

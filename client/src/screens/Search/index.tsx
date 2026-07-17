@@ -16,6 +16,7 @@ import {
   type InstalledTitle,
 } from "../../api/ps5";
 import { transferAddr } from "../../lib/addr";
+import { safeGetItem, safeSetItem } from "../../lib/safeStorage";
 import {
   PageHeader,
   ErrorCard,
@@ -73,7 +74,7 @@ const SAVED_SEARCHES_KEY = "ps5upload.saved_searches.v1";
 function loadSavedSearches(): SavedSearch[] {
   if (typeof window === "undefined") return [];
   try {
-    const raw = window.localStorage.getItem(SAVED_SEARCHES_KEY);
+    const raw = safeGetItem(SAVED_SEARCHES_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
@@ -91,7 +92,7 @@ function loadSavedSearches(): SavedSearch[] {
 function persistSavedSearches(s: SavedSearch[]) {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(SAVED_SEARCHES_KEY, JSON.stringify(s));
+    safeSetItem(SAVED_SEARCHES_KEY, JSON.stringify(s));
   } catch {
     // best-effort
   }

@@ -32,6 +32,7 @@ import {
 
 import { PageHeader } from "../../components";
 import { isTauriEnv } from "../../lib/tauriEnv";
+import { safeGetItem, safeRemoveItem, safeSetItem } from "../../lib/safeStorage";
 import { useConfirm } from "../../components/ConfirmDialog";
 
 import { useKeepAwakeStore } from "../../state/keepAwake";
@@ -967,7 +968,7 @@ function BackupRestorePanel() {
       for (let i = 0; i < window.localStorage.length; i++) {
         const k = window.localStorage.key(i);
         if (k && k.startsWith(NS_PREFIX)) {
-          ls[k] = window.localStorage.getItem(k);
+          ls[k] = safeGetItem(k);
         }
       }
       const fileName = `ps5upload-settings-${Date.now()}.json`;
@@ -1022,8 +1023,8 @@ function BackupRestorePanel() {
       }
     }
     for (const { key, value } of actions) {
-      if (value === null) window.localStorage.removeItem(key);
-      else window.localStorage.setItem(key, value);
+      if (value === null) safeRemoveItem(key);
+      else safeSetItem(key, value);
     }
     return actions.length;
   }

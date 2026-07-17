@@ -122,7 +122,11 @@ fs_usage_for_device(const char *devpath, uint64_t *total,
 }
 
 /* Append a JSON object for one drive to the output buffer.
-   Returns the number of bytes written, or 0 if nothing appended. */
+   Returns the new buffer position, or the original position if nothing
+   was appended (not enough room).
+   NOTE: snprintf returns the number of chars that *would have been
+   written*. We clamp after each call so pos never exceeds cap, and
+   we stop appending once truncation begins. */
 static size_t
 append_drive_json(char *buf, size_t cap, size_t pos, int first,
                   const char *devpath, off_t media_size,
@@ -131,29 +135,33 @@ append_drive_json(char *buf, size_t cap, size_t pos, int first,
                   uint64_t fs_free, const char *mount_point)
 {
     /* Worst case: all fields populated ≈ 350 chars. Check once. */
-    if (pos + 400 > cap) return 0;
+    if (pos + 400 > cap) return pos;
 
-    int n;
-    if (!first) {
+    if (!first && pos + 1 < cap) {
         buf[pos++] = ',';
     }
 
+    int n;
     n = snprintf(buf + pos, cap - pos,
-        "%s{\"device\":\"%s\",\"sizeBytes\":%lld",
-        "", devpath, (long long)media_size);
-    pos += n;
+        "{\"device\":\"%s\",\"sizeBytes\":%lld",
+        devpath, (long long)media_size);
+    if ((size_t)n >= cap - pos) { pos = cap - 1; goto close_obj; }
+    pos += (size_t)n;
 
     if (ident && ident[0]) {
         n = snprintf(buf + pos, cap - pos, ",\"ident\":\"%s\"", ident);
-        pos += n;
+        if ((size_t)n >= cap - pos) { pos = cap - 1; goto close_obj; }
+        pos += (size_t)n;
     }
 
     if (temp >= 0) {
         n = snprintf(buf + pos, cap - pos, ",\"tempC\":%d", temp);
-        pos += n;
+        if ((size_t)n >= cap - pos) { pos = cap - 1; goto close_obj; }
+        pos += (size_t)n;
     } else if (temp_err != 0) {
         n = snprintf(buf + pos, cap - pos, ",\"tempErr\":%d", temp_err);
-        pos += n;
+        if ((size_t)n >= cap - pos) { pos = cap - 1; goto close_obj; }
+        pos += (size_t)n;
     }
 
     if (has_fs) {
@@ -162,16 +170,19 @@ append_drive_json(char *buf, size_t cap, size_t pos, int first,
             (unsigned long long)fs_total,
             (unsigned long long)fs_used,
             (unsigned long long)fs_free);
-        pos += n;
+        if ((size_t)n >= cap - pos) { pos = cap - 1; goto close_obj; }
+        pos += (size_t)n;
 
         if (mount_point && mount_point[0]) {
             n = snprintf(buf + pos, cap - pos,
                 ",\"mountPoint\":\"%s\"", mount_point);
-            pos += n;
+            if ((size_t)n >= cap - pos) { pos = cap - 1; goto close_obj; }
+            pos += (size_t)n;
         }
     }
 
-    buf[pos++] = '}';
+close_obj:
+    if (pos < cap) buf[pos++] = '}';
     return pos;
 }
 
@@ -182,15 +193,15 @@ append_fixed_json(char *buf, size_t cap, size_t pos, int first,
                   uint64_t used, uint64_t freeb)
 {
     if (pos + 200 > cap) return pos;
-    int n;
-    if (!first) buf[pos++] = ',';
-    n = snprintf(buf + pos, cap - pos,
+    if (!first && pos + 1 < cap) buf[pos++] = ',';
+    int n = snprintf(buf + pos, cap - pos,
         "{\"label\":\"%s\",\"fsTotalBytes\":%llu,\"fsUsedBytes\":%llu,\"fsFreeBytes\":%llu}",
         label,
         (unsigned long long)total,
         (unsigned long long)used,
         (unsigned long long)freeb);
-    pos += n;
+    if ((size_t)n >= cap - pos) return cap - 1;
+    pos += (size_t)n;
     return pos;
 }
 
@@ -215,9 +226,11 @@ drive_sensors_get_json(char *out, size_t out_cap, size_t *out_written,
         if (fd < 0) {
             if (errno != ENOENT) {
                 /* Device node exists but access denied — report it. */
-                if (drive_count > 0) out[pos++] = ',';
-                pos += snprintf(out + pos, out_cap - pos,
+                if (drive_count > 0 && pos < out_cap) out[pos++] = ',';
+                int dn = snprintf(out + pos, out_cap - pos,
                     "{\"device\":\"%s\",\"accessDenied\":true}", devpath);
+                if ((size_t)dn >= out_cap - pos) { pos = out_cap - 1; break; }
+                pos += (size_t)dn;
                 drive_count++;
             }
             continue;
@@ -250,7 +263,8 @@ drive_sensors_get_json(char *out, size_t out_cap, size_t *out_written,
 
         size_t new_pos = append_drive_json(out, out_cap, pos,
             drive_count == 0, devpath, media_size, ident_str,
-            temp, temp, has_fs, fs_total, fs_used, fs_free, mount_point);
+            temp, (temp < 0) ? temp : 0, has_fs,
+            fs_total, fs_used, fs_free, mount_point);
         if (new_pos > pos) {
             pos = new_pos;
             drive_count++;
@@ -272,7 +286,7 @@ drive_sensors_get_json(char *out, size_t out_cap, size_t *out_written,
         if (statvfs(fixed[j].path, &sv) != 0 || sv.f_blocks == 0) continue;
         uint64_t total = (uint64_t)sv.f_blocks * sv.f_frsize;
         uint64_t freeb = (uint64_t)sv.f_bfree  * sv.f_frsize;
-        uint64_t used  = total - freeb;
+        uint64_t used  = (total > freeb) ? (total - freeb) : 0;
         pos = append_fixed_json(out, out_cap, pos, storage_count == 0,
                                 fixed[j].label, total, used, freeb);
         storage_count++;

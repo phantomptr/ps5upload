@@ -41,6 +41,7 @@ jobs:
   version-sync:
     name: version sync (VERSION is canonical)
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -56,6 +57,7 @@ jobs:
   rust-engine:
     name: rust (engine workspace)
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
 
@@ -138,6 +140,7 @@ jobs:
           - os: windows-2022
             target: aarch64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
 
@@ -166,6 +169,7 @@ jobs:
       matrix:
         os: [ubuntu-24.04, macos-14, windows-2022]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
 
@@ -246,6 +250,7 @@ jobs:
   client-frontend:
     name: client (ts + vite)
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
 
@@ -288,6 +293,7 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────
   repo-scripts:
     name: repo scripts
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -318,6 +324,7 @@ jobs:
   coverage:
     name: coverage reports
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     # Reporting job — not a gate. cargo-llvm-cov occasionally trails
     # rustc's profraw format version (we hit "raw profile version
     # mismatch: ... expected version = 9" when rustc bumped to v10),
@@ -356,6 +363,7 @@ jobs:
           path: |
             coverage/
             client/coverage/
+          retention-days: 14
 
   # ─────────────────────────────────────────────────────────────────────
   # Payload ELF — compile against the ps5-payload-sdk so we catch any
@@ -365,6 +373,7 @@ jobs:
   payload:
     name: payload (ELF)
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
 
@@ -424,6 +433,7 @@ jobs:
   android:
     name: android (apk build)
     runs-on: ubuntu-24.04
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
 
@@ -506,6 +516,7 @@ jobs:
           name: ps5upload-android-debug-apk
           path: client/src-tauri/gen/android/app/build/outputs/apk/**/*.apk
           if-no-files-found: error
+          retention-days: 7
 
   # ─────────────────────────────────────────────────────────────────────
   # Aggregate gate. One stable check that turns green only when every
@@ -535,6 +546,7 @@ jobs:
       - payload
       - android
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - name: Require every gating job to have succeeded
         run: |

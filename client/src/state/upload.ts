@@ -12,6 +12,7 @@ import {
 import { useConnectionStore } from "./connection";
 import { hostOf } from "../lib/addr";
 import { isTauriEnv } from "../lib/tauriEnv";
+import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 
 /**
  * Detected source kind. Drives which options the Upload screen shows.
@@ -240,8 +241,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
   registerAfterUpload:
     typeof window === "undefined"
       ? true
-      : window.localStorage.getItem("ps5upload.register_after_upload") !==
-        "false",
+      : safeGetItem("ps5upload.register_after_upload") !== "false",
   destinationVolume: null,
   // Default to /data/homebrew/ — the community-standard scan path
   // that third-party PS5 game scanners typically walk. Files landed
@@ -517,7 +517,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
     // Sticky across sessions — this is a workflow preference, not a
     // per-upload decision (unlike mountAfterUpload, which resets with
     // the picked source).
-    window.localStorage.setItem(
+    safeSetItem(
       "ps5upload.register_after_upload",
       registerAfterUpload ? "true" : "false",
     );

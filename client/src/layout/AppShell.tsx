@@ -42,6 +42,7 @@ import { ShortcutsOverlay } from "../components/ShortcutsOverlay";
 import { LocalPathPicker } from "../components/LocalPathPicker";
 import { useWindowStatePersistence } from "../lib/windowState";
 import { mgmtAddr, hostOf } from "../lib/addr";
+import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 import { useUploadQueueStore } from "../state/uploadQueue";
 import { useTransferStore } from "../state/transfer";
 import { useUploadSettingsStore } from "../state/uploadSettings";
@@ -676,7 +677,7 @@ function useRoutePersistence() {
     if (!SKIP_RESTORE_ROUTES.has(location.pathname)) return;
     let stored: string | null;
     try {
-      stored = window.localStorage.getItem(LAST_ROUTE_KEY);
+      stored = safeGetItem(LAST_ROUTE_KEY);
     } catch {
       return;
     }
@@ -692,7 +693,7 @@ function useRoutePersistence() {
     if (SKIP_RESTORE_ROUTES.has(location.pathname)) return;
     const id = window.setTimeout(() => {
       try {
-        window.localStorage.setItem(LAST_ROUTE_KEY, location.pathname);
+        safeSetItem(LAST_ROUTE_KEY, location.pathname);
       } catch {
         // best-effort
       }
@@ -708,7 +709,7 @@ function AndroidStorageAccessBanner() {
 
   const markDismissed = () => {
     try {
-      window.localStorage.setItem(ANDROID_STORAGE_PROMPT_DISMISSED_KEY, "1");
+      safeSetItem(ANDROID_STORAGE_PROMPT_DISMISSED_KEY, "1");
     } catch {
       // localStorage can be blocked; still dismiss for this session.
     }
@@ -732,7 +733,7 @@ function AndroidStorageAccessBanner() {
     if (!isAndroid()) return;
     try {
       if (
-        window.localStorage.getItem(ANDROID_STORAGE_PROMPT_DISMISSED_KEY) ===
+        safeGetItem(ANDROID_STORAGE_PROMPT_DISMISSED_KEY) ===
         "1"
       ) {
         return;

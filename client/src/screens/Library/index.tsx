@@ -31,6 +31,7 @@ import {
 } from "lucide-react";
 import { pickPath } from "../../lib/pickPath";
 import { openExternalUrl as openExternal } from "../../lib/openExternalUrl";
+import { safeGetItem, safeSetItem } from "../../lib/safeStorage";
 
 import { useConnectionStore, PS5_PAYLOAD_PORT } from "../../state/connection";
 import SmpPanel from "./SmpPanel";
@@ -310,7 +311,7 @@ export default function LibraryScreen() {
   type SortKey = "recent" | "oldest" | "name-asc" | "name-desc";
   const [sortKey, setSortKey] = useState<SortKey>(() => {
     if (typeof window === "undefined") return "recent";
-    const saved = window.localStorage.getItem("ps5upload.library.sort");
+    const saved = safeGetItem("ps5upload.library.sort");
     return saved === "recent" ||
       saved === "oldest" ||
       saved === "name-asc" ||
@@ -320,7 +321,7 @@ export default function LibraryScreen() {
   });
   useEffect(() => {
     if (typeof window !== "undefined") {
-      window.localStorage.setItem("ps5upload.library.sort", sortKey);
+      safeSetItem("ps5upload.library.sort", sortKey);
     }
   }, [sortKey]);
 
@@ -3726,7 +3727,7 @@ function FpkgKstuffTip() {
     if (typeof window === "undefined") return false;
     try {
       return (
-        window.localStorage.getItem("ps5upload.fpkg-kstuff-tip.dismissed") ===
+        safeGetItem("ps5upload.fpkg-kstuff-tip.dismissed") ===
         "1"
       );
     } catch {
@@ -3736,7 +3737,7 @@ function FpkgKstuffTip() {
   if (dismissed) return null;
   const dismiss = () => {
     try {
-      window.localStorage.setItem("ps5upload.fpkg-kstuff-tip.dismissed", "1");
+      safeSetItem("ps5upload.fpkg-kstuff-tip.dismissed", "1");
     } catch {
       // best-effort persistence
     }

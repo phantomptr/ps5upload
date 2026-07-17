@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 
 /** In-app UI scale (text + layout). Every size in the app is rem-based off a
  *  single root font-size, so one multiplier proportionally resizes the WHOLE
@@ -44,7 +45,7 @@ export function clampUiScale(scale: number): UiScale {
 /** Read the persisted scale synchronously so the first paint is correct. */
 function initialScale(): UiScale {
   if (typeof window === "undefined") return 1.0;
-  const raw = window.localStorage.getItem(STORAGE_KEY);
+  const raw = safeGetItem(STORAGE_KEY);
   if (raw == null) return 1.0;
   const n = Number.parseFloat(raw);
   return Number.isFinite(n) ? clampUiScale(n) : 1.0;
@@ -70,12 +71,12 @@ export const useUiScaleStore = create<UiScaleState>((set) => ({
   scale: initialScale(),
   setScale: (scale) => {
     const next = clampUiScale(scale);
-    window.localStorage.setItem(STORAGE_KEY, String(next));
+    safeSetItem(STORAGE_KEY, String(next));
     applyScale(next);
     set({ scale: next });
   },
   reset: () => {
-    window.localStorage.setItem(STORAGE_KEY, "1");
+    safeSetItem(STORAGE_KEY, "1");
     applyScale(1.0);
     set({ scale: 1.0 });
   },

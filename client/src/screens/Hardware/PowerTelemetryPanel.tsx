@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Battery, RefreshCw, Loader2 } from "lucide-react";
 import { powerTelemetryGet, type PowerTelemetry } from "../../api/ps5";
 import { Button } from "../../components";
@@ -16,17 +16,32 @@ export default function PowerTelemetryPanel({ mgmtAddr }: { mgmtAddr: string }) 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Token-guard so a slow in-flight fetch that completes after the
+  // addr changes (console switch) or the panel unmounts cannot write
+  // stale data over fresh data, or setState on an unmounted component.
+  const reqIdRef = useRef(0);
+
+  useEffect(() => {
+    return () => {
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      reqIdRef.current++;
+    };
+  }, []);
+
   async function refresh() {
     if (!mgmtAddr) return;
+    const myId = ++reqIdRef.current;
     setLoading(true);
     setError(null);
     try {
       const t = await powerTelemetryGet(mgmtAddr);
+      if (myId !== reqIdRef.current) return;
       setData(t);
     } catch (e) {
+      if (myId !== reqIdRef.current) return;
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setLoading(false);
+      if (myId === reqIdRef.current) setLoading(false);
     }
   }
 

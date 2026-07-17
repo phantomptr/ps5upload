@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Network, RefreshCw, Loader2 } from "lucide-react";
 import { netInterfacesGet, type NetInterfaceList } from "../../api/ps5";
 import { Button } from "../../components";
@@ -10,15 +10,33 @@ export default function NetworkPanel({ mgmtAddr }: { mgmtAddr: string }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Token-guard so a slow in-flight fetch that completes after the
+  // addr changes (console switch) or the panel unmounts cannot write
+  // stale data over fresh data, or setState on an unmounted component.
+  // Each refresh call bumps the token; only the latest call's result
+  // is applied.
+  const reqIdRef = useRef(0);
+
+  useEffect(() => {
+    return () => {
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      reqIdRef.current++;
+    };
+  }, []);
+
   async function refresh() {
+    const myId = ++reqIdRef.current;
     setLoading(true);
     setError(null);
     try {
-      setData(await netInterfacesGet(mgmtAddr));
+      const d = await netInterfacesGet(mgmtAddr);
+      if (myId !== reqIdRef.current) return;
+      setData(d);
     } catch (e) {
+      if (myId !== reqIdRef.current) return;
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setLoading(false);
+      if (myId === reqIdRef.current) setLoading(false);
     }
   }
 

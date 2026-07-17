@@ -6,6 +6,7 @@ import {
 } from "@tauri-apps/api/window";
 import { isMobile } from "./platform";
 import { isTauriEnv } from "./tauriEnv";
+import { safeGetItem, safeSetItem } from "./safeStorage";
 
 /**
  * Persist + restore window size/position across launches. Cross-
@@ -44,7 +45,7 @@ interface StoredWindowState {
 function loadStored(): StoredWindowState | null {
   if (typeof window === "undefined") return null;
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = safeGetItem(STORAGE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as StoredWindowState;
     // Validate; reject if any field is missing or non-finite. A bad
@@ -66,7 +67,7 @@ function loadStored(): StoredWindowState | null {
 function persist(state: StoredWindowState) {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    safeSetItem(STORAGE_KEY, JSON.stringify(state));
   } catch {
     // best-effort
   }

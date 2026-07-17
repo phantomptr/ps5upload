@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 
 /**
  * MRU list of remote PS5 filesystem paths the user has navigated to
@@ -27,7 +28,7 @@ interface RecentPathsState {
 function loadStored(): string[] {
   if (typeof window === "undefined") return [];
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = safeGetItem(STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
@@ -40,7 +41,7 @@ function loadStored(): string[] {
 function persist(paths: string[]) {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(paths));
+    safeSetItem(STORAGE_KEY, JSON.stringify(paths));
   } catch {
     // best-effort
   }

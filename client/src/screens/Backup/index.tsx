@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Archive,
   RefreshCw,
@@ -53,18 +53,34 @@ export default function BackupScreen() {
   const [busy, setBusy] = useState(false);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
 
+  // Token-guard so a slow in-flight list fetch that completes after
+  // `addr`/`payloadStatus` changes (console switch) or the screen
+  // unmounts cannot write stale entries over fresh ones, or setState
+  // on an unmounted component.
+  const reqIdRef = useRef(0);
+
+  useEffect(() => {
+    return () => {
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      reqIdRef.current++;
+    };
+  }, []);
+
   const refresh = useCallback(async () => {
     if (!addr) return;
     if (payloadStatus !== "up") return;
+    const myId = ++reqIdRef.current;
     setLoading(true);
     setError(null);
     try {
       const list = await backupList(addr);
+      if (myId !== reqIdRef.current) return;
       setEntries(list.snapshots);
     } catch (e) {
+      if (myId !== reqIdRef.current) return;
       setError(humanizePs5Error(String(e)));
     } finally {
-      setLoading(false);
+      if (myId === reqIdRef.current) setLoading(false);
     }
   }, [addr, payloadStatus]);
 

@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 
 /**
  * "Put the PS5 into rest mode after all uploads finish" — an opt-in
@@ -17,7 +18,7 @@ const STORAGE_KEY = "ps5upload.rest_after_upload";
 
 function loadPersisted(): boolean {
   if (typeof window === "undefined") return false;
-  return window.localStorage.getItem(STORAGE_KEY) === "on";
+  return safeGetItem(STORAGE_KEY) === "on";
 }
 
 interface RestAfterUploadState {
@@ -29,7 +30,7 @@ export const useRestAfterUploadStore = create<RestAfterUploadState>((set) => ({
   enabled: loadPersisted(),
   setEnabled: (on) => {
     if (typeof window !== "undefined") {
-      window.localStorage.setItem(STORAGE_KEY, on ? "on" : "off");
+      safeSetItem(STORAGE_KEY, on ? "on" : "off");
     }
     set({ enabled: on });
   },

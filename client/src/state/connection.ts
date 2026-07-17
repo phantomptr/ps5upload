@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { hostOf } from "../lib/addr";
+import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 
 /** TCP port of the PS5 ELF loader. Constant — every common PS5
  *  homebrew loader binds this port, so it's not a user-configurable
@@ -26,7 +27,7 @@ const DEFAULT_HOST = "";
 function loadStoredHost(): string {
   if (typeof window === "undefined") return DEFAULT_HOST;
   try {
-    const stored = window.localStorage.getItem(HOST_STORAGE_KEY);
+    const stored = safeGetItem(HOST_STORAGE_KEY);
     return stored && stored.trim() ? stored : DEFAULT_HOST;
   } catch {
     // localStorage unavailable (private mode, sandboxed iframe).
@@ -39,7 +40,7 @@ function loadStoredHost(): string {
 function persistHost(host: string) {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(HOST_STORAGE_KEY, host);
+    safeSetItem(HOST_STORAGE_KEY, host);
   } catch {
     // Best-effort — host persistence is nice-to-have.
   }

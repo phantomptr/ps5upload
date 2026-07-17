@@ -9,6 +9,8 @@
 // than carrying state across mismatched volume layouts (the dev unit
 // might mount /mnt/ext1 that the other console doesn't have).
 
+import { safeGetItem, safeSetItem } from "./safeStorage";
+
 const STORAGE_KEY = "ps5upload.fs.lastPath";
 /** Hardcoded fallback when no localStorage entry exists for this host
  *  (first-time use of the app, or first-time use of a new IP).
@@ -21,7 +23,7 @@ type Map = Record<string, string>;
 function load(): Map {
   if (typeof window === "undefined") return {};
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = safeGetItem(STORAGE_KEY);
     if (!raw) return {};
     const parsed = JSON.parse(raw);
     // Defensive: a malformed entry (manually edited, schema bump,
@@ -44,7 +46,7 @@ function load(): Map {
 function save(map: Map) {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(map));
+    safeSetItem(STORAGE_KEY, JSON.stringify(map));
   } catch {
     // localStorage write can fail (quota exceeded, private mode).
     // Last-path memory is nice-to-have; swallow.

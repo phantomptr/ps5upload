@@ -58,6 +58,7 @@ jobs:
   build-payload:
     name: build-payload
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
         with:
@@ -117,6 +118,7 @@ jobs:
     name: build-client-${{ matrix.platform }}-${{ matrix.arch }}
     needs: build-payload
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -408,6 +410,7 @@ jobs:
     name: build-android
     needs: build-payload
     runs-on: ubuntu-24.04
+    timeout-minutes: 40
     # Non-blocking: the Android port is newer/experimental, and the
     # desktop bundles are the shipped product. If the Android pipeline
     # flakes (NDK rotation, Gradle, signing), the release must still go
@@ -511,6 +514,7 @@ jobs:
       - build-client
       - build-android
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
         with:

@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { useEffect, useRef } from "react";
+import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 
 /**
  * Browser-side scheduled operations.
@@ -63,7 +64,7 @@ interface ScheduleState {
 function loadInitial(): Schedule[] {
   if (typeof window === "undefined") return [];
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = safeGetItem(STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
@@ -76,7 +77,7 @@ function loadInitial(): Schedule[] {
 function persist(schedules: Schedule[]) {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(schedules));
+    safeSetItem(STORAGE_KEY, JSON.stringify(schedules));
   } catch {
     // best-effort
   }
