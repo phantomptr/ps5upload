@@ -23,7 +23,8 @@
     "dist:mac": "tauri build --target aarch64-apple-darwin",
     "dist:mac-x64": "tauri build --target x86_64-apple-darwin",
     "dist:linux": "tauri build --target x86_64-unknown-linux-gnu",
-    "dist:linux-arm": "tauri build --target aarch64-unknown-linux-gnu"
+    "dist:linux-arm": "tauri build --target aarch64-unknown-linux-gnu",
+    "dist:android": "tauri android build --apk --target aarch64 --target armv7"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",

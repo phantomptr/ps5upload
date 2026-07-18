@@ -449,10 +449,10 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Install Rust + Android target
+      - name: Install Rust + Android targets
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android
+          targets: aarch64-linux-android,armv7-linux-androideabi
 
       - name: Cache cargo target
         uses: actions/cache@v6
@@ -477,16 +477,35 @@ jobs:
           { printf '\x7fELF'; head -c 204800 /dev/zero; } > payload/ps5upload.elf
           gzip -nf payload/ps5upload.elf
 
-      # ubuntu-24.04 ships the Android SDK (ANDROID_HOME) + an NDK. Pick
-      # the newest installed NDK and export it the way Tauri expects.
+      # Pin the NDK to a known-good major version rather than blindly
+      # taking whatever the runner image ships. An NDK rotation on the
+      # runner image can silently break the build (new clang warnings →
+      # errors, libc symbol changes, etc.). If the pinned major is absent
+      # we fall back to the newest available and warn.
       - name: Resolve NDK
         shell: bash
         run: |
-          ndk="$(ls -d "$ANDROID_HOME"/ndk/* 2>/dev/null | sort -V | tail -1)"
+          # Preferred NDK major (r27 = NDK 27.x). Update when CI is
+          # validated against a newer one.
+          PREFERRED_MAJOR="27"
+          ndk=""
+          for candidate in \
+            "$ANDROID_HOME/ndk/${PREFERRED_MAJOR}."* \
+            "$ANDROID_HOME/ndk/"*; do
+            if [ -d "$candidate" ]; then
+              ndk="$candidate"
+              break
+            fi
+          done
           if [ -z "$ndk" ]; then
             echo "::error::no NDK found under $ANDROID_HOME/ndk"
             exit 1
           fi
+          # Warn if we couldn't get the preferred major.
+          case "$(basename "$ndk")" in
+            "${PREFERRED_MAJOR}"*) ;;
+            *) echo "::warning::preferred NDK r${PREFERRED_MAJOR} not found, using $(basename "$ndk")" ;;
+          esac
           echo "NDK_HOME=$ndk" >> "$GITHUB_ENV"
           echo "Using NDK: $ndk"
 
@@ -506,9 +525,9 @@ jobs:
       - name: Patch manifest (loopback cleartext + backup rules)
         run: bash scripts/release/android-postinit-patch.sh
 
-      - name: Build debug APK (aarch64)
+      - name: Build debug APK (arm64 + armv7)
         working-directory: client
-        run: npx tauri android build --debug --apk --target aarch64
+        run: npx tauri android build --debug --apk --target aarch64 --target armv7
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v7

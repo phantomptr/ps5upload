@@ -140,6 +140,35 @@ pub async fn request_storage_access() -> Result<(), String> {
     }
 }
 
+/// Acquire a Wi-Fi MulticastLock so mDNS discovery receives multicast
+/// frames. Android-only; no-op on desktop. Called by discover_ps5 before
+/// starting the mDNS browse.
+#[tauri::command]
+pub async fn acquire_multicast_lock() -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        android::acquire_multicast_lock()
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        Ok(())
+    }
+}
+
+/// Release the MulticastLock acquired by `acquire_multicast_lock`.
+/// Android-only; no-op on desktop.
+#[tauri::command]
+pub async fn release_multicast_lock() -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        android::release_multicast_lock()
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,10 +216,10 @@ mod tests {
 
 #[cfg(target_os = "android")]
 mod android {
-    use jni::objects::{JObject, JString, JValue};
+    use jni::objects::{GlobalRef, JObject, JString, JValue};
     use jni::{JNIEnv, JavaVM};
     use std::ffi::c_void;
-    use std::sync::OnceLock;
+    use std::sync::{Mutex, OnceLock};
 
     /// JavaVM captured at native-library load.
     ///
@@ -367,6 +396,101 @@ mod android {
         let _ = env.exception_clear();
         result.unwrap_or_default()
     }
+
+    /// Acquire a `WifiManager.MulticastLock` so the Wi-Fi driver delivers
+    /// multicast frames (224.0.0.251:5353 for mDNS) to our sockets. Without
+    /// it, most handsets silently filter multicast at the Wi-Fi firmware
+    /// level to save power, and mDNS-based PS5 discovery finds nothing even
+    /// though the PS5 is right there on the same LAN.
+    ///
+    /// The lock is held until `release_multicast_lock` is called or the
+    /// process exits. The permission (`CHANGE_WIFI_MULTICAST_STATE`) is
+    /// declared by android-postinit-patch.sh.
+    ///
+    /// Best-effort: returns Ok(()) on any failure — mDNS may still work via
+    /// unicast fallback on some devices, and the LAN-sweep fallback in
+    /// discover.rs catches what mDNS misses.
+    pub fn acquire_multicast_lock() -> Result<(), String> {
+        // If already holding a lock, nothing to do.
+        if MULTICAST_LOCK.lock().unwrap().is_some() {
+            return Ok(());
+        }
+        let vm = vm()?;
+        let mut env = vm
+            .attach_current_thread()
+            .map_err(|e| format!("attach: {e}"))?;
+        let context = app_context(&mut env)?;
+        let result = acquire_lock_inner(&mut env, &context);
+        let _ = env.exception_clear();
+        result.map_err(|e| format!("multicast lock: {e}"))
+    }
+
+    fn acquire_lock_inner(
+        env: &mut jni::JNIEnv,
+        context: &JObject,
+    ) -> Result<(), jni::errors::Error> {
+        // wifi = context.getSystemService(Context.WIFI_SERVICE)
+        let svc = env.new_string("wifi")?;
+        let wifi = env
+            .call_method(
+                context,
+                "getSystemService",
+                "(Ljava/lang/String;)Ljava/lang/Object;",
+                &[JValue::Object(&svc)],
+            )?
+            .l()?;
+
+        // lock = wifi.createMulticastLock("ps5upload-mdns")
+        let tag = env.new_string("ps5upload-mdns")?;
+        let lock = env
+            .call_method(
+                &wifi,
+                "createMulticastLock",
+                "(Ljava/lang/String;)Landroid/net/wifi/WifiManager$MulticastLock;",
+                &[JValue::Object(&tag)],
+            )?
+            .l()?;
+
+        // lock.setReferenceCounted(false) — so a single release() tears it
+        // down regardless of how many times we re-acquire.
+        env.call_method(&lock, "setReferenceCounted", "(Z)V", &[JValue::Bool(0)])?;
+
+        // lock.acquire()
+        env.call_method(&lock, "acquire", "()V", &[])?;
+
+        // Promote to a global reference so it survives across JNI calls
+        // from different attach/detach cycles.
+        let global = env.new_global_ref(lock)?;
+        *MULTICAST_LOCK.lock().unwrap() = Some(global);
+
+        Ok(())
+    }
+
+    /// Release a previously-acquired MulticastLock. Safe to call when no
+    /// lock is held (no-op).
+    pub fn release_multicast_lock() -> Result<(), String> {
+        // Take out of the Mutex; if it was never set, we're done.
+        let lock = match MULTICAST_LOCK.lock().unwrap().take() {
+            Some(l) => l,
+            None => return Ok(()),
+        };
+        let vm = vm()?;
+        let mut env = vm
+            .attach_current_thread()
+            .map_err(|e| format!("attach: {e}"))?;
+        let result = env.call_method(&lock, "release", "()V", &[]);
+        let _ = env.exception_clear();
+        drop(lock); // drops the GlobalRef, freeing the JNI global ref
+        result.map_err(|e| format!("multicast lock release: {e}"))?;
+        Ok(())
+    }
+
+    /// Global reference to the acquired MulticastLock (if any).
+    /// `GlobalRef` is `Send + Sync` (it wraps a `'static` JObject + JavaVM).
+    /// A `Mutex<Option<_>>` (rather than `OnceLock`) lets `release` take
+    /// the value out — `OnceLock::take` needs `&mut self`, unavailable for
+    /// a `static`.
+    static MULTICAST_LOCK: Mutex<Option<GlobalRef>> = Mutex::new(None);
 
     fn collect_volume_dirs(
         env: &mut jni::JNIEnv,

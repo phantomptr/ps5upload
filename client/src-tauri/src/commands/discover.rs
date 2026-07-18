@@ -194,6 +194,30 @@ pub async fn discover_ps5(timeout_secs: Option<u64>) -> serde_json::Value {
         .clamp(1, MAX_TIMEOUT_SECS);
     let budget = Duration::from_secs(budget_secs);
 
+    // On Android, acquire a MulticastLock before starting mDNS so the Wi-Fi
+    // driver delivers multicast frames (224.0.0.251:5353) to our sockets.
+    // Without it, many handsets silently filter multicast and discovery
+    // finds nothing. Best-effort — the LAN sweep fallback still works.
+    #[cfg(target_os = "android")]
+    {
+        if let Err(e) = crate::commands::acquire_multicast_lock().await {
+            eprintln!("[discover] multicast lock acquire failed: {e}");
+        }
+    }
+
+    let result = discover_ps5_inner(started, budget).await;
+
+    #[cfg(target_os = "android")]
+    {
+        if let Err(e) = crate::commands::release_multicast_lock().await {
+            eprintln!("[discover] multicast lock release failed: {e}");
+        }
+    }
+
+    result
+}
+
+async fn discover_ps5_inner(started: Instant, budget: Duration) -> serde_json::Value {
     let daemon = match ServiceDaemon::new() {
         Ok(d) => d,
         Err(e) => {
