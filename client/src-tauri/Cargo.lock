@@ -1246,7 +1246,7 @@ dependencies = [
 
 [[package]]
 name = "ftx2-proto"
-version = "4.1.0"
+version = "4.1.1"
 dependencies = [
  "serde",
  "thiserror 2.0.18",
@@ -3321,7 +3321,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-core"
-version = "4.1.0"
+version = "4.1.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3338,7 +3338,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-desktop"
-version = "4.1.0"
+version = "4.1.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3371,7 +3371,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-engine"
-version = "4.1.0"
+version = "4.1.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -3389,7 +3389,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-pkg"
-version = "4.1.0"
+version = "4.1.1"
 dependencies = [
  "serde",
  "thiserror 2.0.18",

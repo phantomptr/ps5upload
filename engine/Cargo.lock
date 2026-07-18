@@ -494,7 +494,7 @@ dependencies = [
 
 [[package]]
 name = "ftx2-proto"
-version = "4.1.0"
+version = "4.1.1"
 dependencies = [
  "serde",
  "thiserror",
@@ -964,7 +964,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-bench"
-version = "4.1.0"
+version = "4.1.1"
 dependencies = [
  "criterion",
  "ftx2-proto",
@@ -974,7 +974,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-core"
-version = "4.1.0"
+version = "4.1.1"
 dependencies = [
  "anyhow",
  "base64",
@@ -991,7 +991,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-engine"
-version = "4.1.0"
+version = "4.1.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -1011,7 +1011,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-lab"
-version = "4.1.0"
+version = "4.1.1"
 dependencies = [
  "anyhow",
  "ftx2-proto",
@@ -1020,7 +1020,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-pkg"
-version = "4.1.0"
+version = "4.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -1029,7 +1029,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-tests"
-version = "4.1.0"
+version = "4.1.1"
 dependencies = [
  "anyhow",
  "ftx2-proto",
