@@ -468,6 +468,8 @@ pub fn run() {
             commands::local_storage_roots,
             commands::storage_access_granted,
             commands::request_storage_access,
+            commands::acquire_multicast_lock,
+            commands::release_multicast_lock,
         ])
         .build(tauri::generate_context!())
         .expect("tauri runtime failed to build");
