@@ -1,7 +1,7 @@
 // Auto-extracted from src/i18n.ts by scripts/split-i18n.mjs.
 // Locale: pl. Lazy-loaded via dynamic import in src/i18n.ts.
 import type { Translations } from "../types";
-/* INFO Everything that might need refinement will have INFO at the beginning of the comment */
+
 const pl: Translations = {
 
 // Console tabs (multi-console)
@@ -89,7 +89,7 @@ connection_payload_timeout:
 connection_built: "zbudowano: {date}",
 connection_ps5_firmware: "Oprogramowanie PS5",
 connection_kernel: "Kernel",
-connection_scene_probing: "Uzyskiwanie narzędzi sceny…", /* INFO No idea what probing means lol (obtaining/preparing maybe?) */
+connection_scene_probing: "Uzyskiwanie narzędzi sceny…",
 connection_scene_idle: "Narzędzia sceny: —",
 connection_scene_header: "Narzędzia sceny na {host}",
 connection_scene_refreshing: "odświeżanie",
