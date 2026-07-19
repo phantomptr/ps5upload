@@ -601,7 +601,10 @@ pub fn err_code_message(code: u32) -> Option<&'static str> {
         // most often because the pkg is a system patch (NPXS-prefix)
         // and the API isn't designed for them, OR because the firmware
         // doesn't expose the BGFT symbols our payload depends on.
-        // Hardware-observed on FW 9.60 when all 3 tiers fail.
+        // Hardware-observed on FW 9.60 when all 3 tiers fail, and on
+        // FW 10.00+ when an outdated payload inits Sony's installer
+        // under the wrong authid (issue #152: the install returns
+        // 0x80B2116F and Sony's watchdog kills the helper ~5s later).
         0x80B2_116F => Some(
             "PS5 installer rejected the request — pkg may be a system patch (use Settings → Debug Settings → Game → Package Installer) or the firmware lacks the BGFT entry points we need",
         ),

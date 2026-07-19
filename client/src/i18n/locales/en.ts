@@ -226,7 +226,7 @@ activity_bar_toggle: "Toggle activity panel",
 
 // Connection screen
 connection_title: "Connect to your PS5",
-connection_description: "Three quick steps before your first upload. You only need to do this once per PS5 boot — the helper stays loaded until the console reboots or goes into rest mode.",
+connection_description: "Three quick steps before your first upload. You only need to do this once per PS5 boot — the helper stays loaded until the console reboots. After rest mode or a network drop the app reconnects on its own (Settings → Upload → “Reconnect automatically after rest mode / network drops”, on by default).",
 connection_step1_title: "Tell the app where your PS5 is",
 connection_step2_title: "Send the PS5Upload helper to your PS5",
 connection_step3_title: "You're ready to upload",
@@ -1841,7 +1841,7 @@ err_install_http_fetch:
 err_install_116f_npxs:
   "PS5 installer rejected this system pkg (0x80B2116F). Sony's installer can't complete system patches (Store updates, Settings) — use Settings → Debug Settings → Game → Package Installer on the PS5 itself for these.",
 err_install_116f_game:
-  "PS5 installer rejected the pkg (0x80B2116F). On FW 9.60 this firmware point is missing the BGFT registers our payload uses; try pushing the latest payload (Connection → Send payload), and if it still fails the pkg may need installing via the PS5's own Debug Settings → Game → Package Installer.",
+  "PS5 installer rejected the pkg (0x80B2116F). On FW 9.60 this firmware point is missing the BGFT registers our payload uses; on FW 10.00+ this is a process-authid mismatch that the latest payload fixes (older payloads init Sony's installer under the wrong authid, leaving it half-wedged — Sony's watchdog then kills the helper ~5s after the reject). Try pushing the latest payload (Connection → Send payload). If it still fails after that, the pkg may need installing via the PS5's own Debug Settings → Game → Package Installer.",
 err_install_1401:
   "PS5's ShellUI install path rejected the request (0x80B21401). Usually paired with another tier failure on FW 9.60 when the firmware point lacks the BGFT registers we depend on. Try the latest payload from Connection → Send payload, or install via the PS5's own Debug Settings panel.",
 err_install_2101:
