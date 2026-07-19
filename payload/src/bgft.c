@@ -416,18 +416,24 @@ static int appinst_install_start(const char *url,
      * — which share the global kernel-RW window — can't run at the same time.
      * Innermost lock: taken AFTER sony_api_lock, never before. */
     pthread_mutex_lock(&kernel_rw_lock);
-    /* Firmware-gated install authid — the FW-11 "authority cliff" (matches
-     * elf-arsenal's per-FW method). BELOW FW 11 (5.10/9.60, HW-proven):
-     * ShellCore authid is the gate InstallByPackage's URL pre-flight requires
-     * (other authids → 0x80B22404 for http / 0x80B21106 for file://). AT/ABOVE
-     * FW 11: the content-copy step is gated behind the SYSTEM authid
-     * (== elf-arsenal's JB_AUTHID 0x4801…013); running InstallByPackage under
-     * ShellCore there registers the title but lands NO content — the "hollow"
-     * dead-tile (appmeta present, /user/app empty). fw==0 (unknown) → ShellCore,
-     * the proven default. Both Init and InstallByPackage run under this one
+    /* Firmware-gated install authid — the FW-10 "authority cliff". BELOW
+     * FW 10 (5.10/9.60, HW-proven): ShellCore authid is the gate
+     * InstallByPackage's URL pre-flight requires (other authids →
+     * 0x80B22404 for http / 0x80B21106 for file://). AT/ABOVE FW 10: the
+     * content-copy step AND the IPMI init handshake are gated behind the
+     * SYSTEM authid (== elf-arsenal's JB_AUTHID 0x4801…013); running
+     * sceAppInstUtilInitialize + InstallByPackage under ShellCore on FW 10+
+     * leaves Sony's installer daemon (IPMI) half-wedged — the immediate
+     * InstallByPackage call returns 0x80B2116F, and Sony's installer
+     * watchdog SIGKILLs our process ~5 s later (issue #152: helper dies
+     * after install rejection on FW 10.40). The DPI daemon
+     * (payload/dpi/ezremote_dpi.c) already escalates to SYSTEM_AUTHID
+     * before sceAppInstUtilInitialize on ALL FWs — this matches that.
+     * fw==0 (unknown) → ShellCore, the proven default for the broadest
+     * installed base. Both Init and InstallByPackage run under this one
      * swap window so Sony's IPC handle setup sees the right authid. */
     int fw_major = detect_firmware_major();
-    uint64_t install_authid = (fw_major >= 11)
+    uint64_t install_authid = (fw_major >= 10)
                                   ? PS5_SYSTEM_INSTALL_AUTHID
                                   : PS5_SHELLCORE_AUTHID;
     uint64_t saved_authid = ps5_authid_acquire("InstallByPackage", install_authid);
@@ -439,7 +445,7 @@ static int appinst_install_start(const char *url,
     /* Init Sony's installer subsystem under the chosen authid. The
      * pthread_once guard makes this idempotent across installs; the
      * FIRST install's pthread_once-controlled invocation sets up
-     * Sony's IPC handles correctly (under SYSTEM on FW 11+, exactly as
+     * Sony's IPC handles correctly (under SYSTEM on FW 10+, exactly as
      * elf-arsenal inits from its escalated process). */
     pthread_once(&g_appinst_init_once, appinst_init_locked);
 
