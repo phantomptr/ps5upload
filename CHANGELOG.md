@@ -4,6 +4,30 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 4.1.2
+
+A payload reliability patch. Fixes a helper crash ~5 seconds after install
+rejection on firmware 10.xx, and adds Polish language support.
+
+- **Fixed: helper dies after install rejection on FW 10.00+ (issue #152).**
+  The payload's install-init authid threshold was `fw_major >= 11` — use the
+  `SYSTEM` authid only on FW 11+, `ShellCore` everywhere below. But FW 10.xx
+  has the same `SYSTEM`-authid gate for `sceAppInstUtilInitialize`: calling it
+  under `ShellCore` leaves Sony's installer daemon (IPMI) half-wedged. The
+  immediate `InstallByPackage` returns `0x80B2116F`, and roughly 5 seconds
+  later Sony's installer watchdog `SIGKILL`s our process — exactly the
+  "helper dies after I click install" symptom in the bug bundle. The threshold
+  is now `fw_major >= 10`, matching what the standalone DPI daemon already
+  does on all firmwares. Users on FW 10.xx+ who push the updated payload from
+  `Connection → Send payload` will stop seeing the post-reject crash.
+- **Fixed: outdated "Connect to your PS5" description (issue #208).** The
+  connection-screen blurb still said the helper stays loaded only until rest
+  mode — which was true before the 4.1.0 auto-reconnect release but reads as
+  stale now. Rewritten to point at the auto-reconnect toggle (on by default).
+- **New: Polish (Polski) language support.** Thanks @heni0xyz for the
+  contribution. Selectable from the language picker; the completeness test
+  now covers `pl` alongside the other 18 locales.
+
 ## 4.1.1
 
 A security and reliability patch. Path-traversal and buffer-overflow fixes,
