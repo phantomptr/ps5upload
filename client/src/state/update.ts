@@ -8,6 +8,7 @@ import {
   type UpdateDownload,
 } from "../api/ps5";
 import { isMobile } from "../lib/platform";
+import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 import { t as translate } from "../i18n";
 import { useLangStore } from "./lang";
 import { pushNotification } from "./notifications";
@@ -40,16 +41,12 @@ const NOTIFIED_KEY = "ps5upload.update.notified-version";
  *  the feature is opt-out, not opt-in. */
 function loadAutoCheck(): boolean {
   if (typeof localStorage === "undefined") return true;
-  return localStorage.getItem(AUTOCHECK_KEY) !== "0";
+  return safeGetItem(AUTOCHECK_KEY) !== "0";
 }
 
 function saveAutoCheck(enabled: boolean) {
   if (typeof localStorage === "undefined") return;
-  try {
-    localStorage.setItem(AUTOCHECK_KEY, enabled ? "1" : "0");
-  } catch {
-    // Storage disabled — the in-memory flag still governs this session.
-  }
+  safeSetItem(AUTOCHECK_KEY, enabled ? "1" : "0");
 }
 
 /** Non-hook translate with inline English fallback — the store runs outside
@@ -73,7 +70,7 @@ function notifyAvailableOnce(result: UpdateCheck) {
   const already = (() => {
     try {
       return typeof localStorage !== "undefined"
-        ? localStorage.getItem(NOTIFIED_KEY)
+        ? safeGetItem(NOTIFIED_KEY)
         : null;
     } catch {
       return null;
@@ -98,7 +95,7 @@ function notifyAvailableOnce(result: UpdateCheck) {
   );
   try {
     if (typeof localStorage !== "undefined") {
-      localStorage.setItem(NOTIFIED_KEY, result.latest_version);
+      safeSetItem(NOTIFIED_KEY, result.latest_version);
     }
   } catch {
     // Best-effort dedup; worst case the user sees the notice twice.

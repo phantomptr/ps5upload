@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { hostOf } from "../lib/addr";
+import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 import { useRunningAppsStore } from "./runningApps";
 
 /**
@@ -96,7 +97,7 @@ function loadStored(): StoredPlayTime {
   };
   if (typeof window === "undefined") return empty;
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = safeGetItem(STORAGE_KEY);
     if (!raw) return empty;
     const parsed = JSON.parse(raw) as Partial<StoredPlayTime>;
     return {
@@ -120,7 +121,7 @@ function loadStored(): StoredPlayTime {
 function persist(state: StoredPlayTime) {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    safeSetItem(STORAGE_KEY, JSON.stringify(state));
   } catch {
     // best-effort
   }

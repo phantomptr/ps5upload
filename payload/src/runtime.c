@@ -579,11 +579,12 @@ static int path_has_dotdot_component(const char *p);
 /* Writable-roots allowlist. Used by every destructive FS handler and
  * the BEGIN_TX/STREAM_SHARD ingestion path so a hostile manifest can
  * not write outside the allowlisted roots. See is_path_allowed for
- * the exact set. */
-static int is_path_allowed(const char *p);
+ * the exact set. Also used by backup.c's restore path so a crafted
+ * manifest can't write outside the allowlist. Declared in runtime.h. */
+int is_path_allowed(const char *p);
 /* JSON-escape helper. Used by ACK builders that embed user-controlled
  * paths/strings into JSON bodies. Defined alongside FS_LIST_VOLUMES. */
-static void json_escape_into(const char *src, char *dst, size_t dst_cap);
+static size_t json_escape_into(const char *src, char *dst, size_t dst_cap);
 static const char *json_string_end(const char *start, const char *limit);
 static int json_copy_unescaped_string(const char *start, const char *end,
                                       char *out, size_t out_len);
@@ -758,7 +759,15 @@ static uint64_t extract_json_uint64_field(const char *json, const char *field) {
     pos = strstr(json, needle);
     if (!pos) return 0;
     pos += strlen(needle);
-    return (uint64_t)strtoull(pos, NULL, 10);
+    errno = 0;
+    uint64_t val = strtoull(pos, NULL, 10);
+    /* On overflow, strtoull returns ULLONG_MAX and sets ERANGE.
+     * A hostile or buggy manifest could send a 40-digit "file_size";
+     * returning ULLONG_MAX would make the payload try to allocate
+     * or pre-allocate an absurd amount. Clamp to 0 so the caller's
+     * "no value" path is taken instead. */
+    if (errno == ERANGE) return 0;
+    return val;
 }
 
 /* ── TX ID helpers ───────────────────────────────────────────────────────────── */
@@ -5318,10 +5327,13 @@ static void read_ps5_kernel_version(char *dst, size_t dst_cap) {
 }
 
 /* JSON-escape path/device names. PS5 mount names are ASCII but defend
- * anyway — tamper-resistant for anything we feed into a JSON context. */
-static void json_escape_into(const char *src, char *dst, size_t dst_cap) {
+ * anyway — tamper-resistant for anything we feed into a JSON context.
+ * Returns the number of bytes written (excluding the NUL). Callers
+ * can detect truncation by comparing the return value against the
+ * source strlen — if every source char was consumed, no truncation. */
+static size_t json_escape_into(const char *src, char *dst, size_t dst_cap) {
     size_t ei = 0, ni = 0;
-    if (!dst || dst_cap == 0) return;
+    if (!dst || dst_cap == 0) return 0;
     while (src && src[ni] && ei + 2 < dst_cap) {
         unsigned char c = (unsigned char)src[ni];
         if (c == '"' || c == '\\') {
@@ -5335,6 +5347,7 @@ static void json_escape_into(const char *src, char *dst, size_t dst_cap) {
         ni++;
     }
     dst[ei] = '\0';
+    return ei;
 }
 
 static const char *json_string_end(const char *start, const char *limit) {
@@ -6061,7 +6074,7 @@ static int is_path_lexically_allowed(const char *p) {
     return 0;
 }
 
-static int is_path_allowed(const char *p) {
+int is_path_allowed(const char *p) {
     if (!is_path_lexically_allowed(p)) return 0;
     /* (2.9.0) Symlink-escape guard. The lexical check above confirms
      * the path STARTS with an allowed root, but if any component

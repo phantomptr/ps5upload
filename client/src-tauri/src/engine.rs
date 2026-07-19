@@ -793,10 +793,7 @@ pub fn set_url(url: String) {
     // the child is marked running, so the fallback URL still takes hold.
     // `self::url()` — the local `url` param shadows the module fn by bare name.
     let current = self::url();
-    if LOCAL_CHILD_RUNNING.load(Ordering::SeqCst)
-        && is_loopback_url(&next)
-        && next != current
-    {
+    if LOCAL_CHILD_RUNNING.load(Ordering::SeqCst) && is_loopback_url(&next) && next != current {
         eprintln!(
             "[engine] ignoring engine-URL change to {next} — a local sidecar is running on {current} (moving it needs a restart)",
         );

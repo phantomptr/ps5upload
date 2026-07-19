@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 
 /**
  * User preferences governing the Install Package flow.
@@ -21,7 +22,7 @@ const KEY_AUTO_SCAN_EXTERNAL = "ps5upload.auto_scan_external";
 
 function loadAutoRemove(): boolean {
   if (typeof window === "undefined") return false;
-  return window.localStorage.getItem(KEY_AUTO_REMOVE) === "1";
+  return safeGetItem(KEY_AUTO_REMOVE) === "1";
 }
 
 // Defaults ON to preserve the prior behaviour (the USB/external section scanned
@@ -31,7 +32,7 @@ function loadAutoRemove(): boolean {
 // button instead. Absent key → ON (opt-out).
 function loadAutoScanExternal(): boolean {
   if (typeof window === "undefined") return true;
-  return window.localStorage.getItem(KEY_AUTO_SCAN_EXTERNAL) !== "0";
+  return safeGetItem(KEY_AUTO_SCAN_EXTERNAL) !== "0";
 }
 
 // Defaults ON: the whole point of staging a .pkg in the library is to
@@ -41,7 +42,7 @@ function loadAutoScanExternal(): boolean {
 // (opt-out), the behaviour the maintainer asked for.
 function loadAutoInstall(): boolean {
   if (typeof window === "undefined") return true;
-  return window.localStorage.getItem(KEY_AUTO_INSTALL) !== "0";
+  return safeGetItem(KEY_AUTO_INSTALL) !== "0";
 }
 
 interface InstallSettingsState {
@@ -70,7 +71,7 @@ export const useInstallSettingsStore = create<InstallSettingsState>((set) => ({
   autoRemoveAfterInstall: loadAutoRemove(),
   setAutoRemoveAfterInstall: (autoRemoveAfterInstall) => {
     if (typeof window !== "undefined") {
-      window.localStorage.setItem(
+      safeSetItem(
         KEY_AUTO_REMOVE,
         autoRemoveAfterInstall ? "1" : "0",
       );
@@ -80,7 +81,7 @@ export const useInstallSettingsStore = create<InstallSettingsState>((set) => ({
   autoInstallAfterUpload: loadAutoInstall(),
   setAutoInstallAfterUpload: (autoInstallAfterUpload) => {
     if (typeof window !== "undefined") {
-      window.localStorage.setItem(
+      safeSetItem(
         KEY_AUTO_INSTALL,
         autoInstallAfterUpload ? "1" : "0",
       );
@@ -90,7 +91,7 @@ export const useInstallSettingsStore = create<InstallSettingsState>((set) => ({
   autoScanExternal: loadAutoScanExternal(),
   setAutoScanExternal: (autoScanExternal) => {
     if (typeof window !== "undefined") {
-      window.localStorage.setItem(
+      safeSetItem(
         KEY_AUTO_SCAN_EXTERNAL,
         autoScanExternal ? "1" : "0",
       );

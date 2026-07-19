@@ -234,4 +234,14 @@ void runtime_apply_ucred_jailbreak(void);
  * call sites. */
 extern volatile int g_ucred_elevation_rc;
 
+/* Writable-roots allowlist check. Returns 1 if the path starts with an
+ * allowed root (/data, /user, /mnt/extN, /mnt/usbN, /mnt/ps5upload/<name>,
+ * /mnt/shadowmnt) and contains no ".."/"." components that escape it.
+ * Also resolves symlinks via realpath() and re-validates the canonical
+ * form. Used by every destructive FS handler and backup.c's restore
+ * path. NOTE: realpath() fails for not-yet-existing paths (write/mkdir
+ * targets) — in that case the lexical check result is returned as-is
+ * (there's no symlink to follow yet). */
+int is_path_allowed(const char *p);
+
 #endif

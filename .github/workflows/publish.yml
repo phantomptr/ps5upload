@@ -58,6 +58,7 @@ jobs:
   build-payload:
     name: build-payload
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
         with:
@@ -117,6 +118,7 @@ jobs:
     name: build-client-${{ matrix.platform }}-${{ matrix.arch }}
     needs: build-payload
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -408,17 +410,26 @@ jobs:
     name: build-android
     needs: build-payload
     runs-on: ubuntu-24.04
-    # Non-blocking: the Android port is newer/experimental, and the
-    # desktop bundles are the shipped product. If the Android pipeline
-    # flakes (NDK rotation, Gradle, signing), the release must still go
-    # out — create-release's asset step already guards the APK copy with
-    # `if [ -f … ]`, so a missing APK just means "no Android asset this
-    # release", not a failed release.
+    timeout-minutes: 40
+    # The Android port is newer than the desktop builds, and the desktop
+    # bundles are the shipped product. If the Android pipeline flakes (NDK
+    # rotation, Gradle, signing), the release must still go out — create-
+    # release's asset step already guards the APK copy with `if [ -f … ]`,
+    # so a missing APK just means "no Android asset this release".
+    #
+    # We keep continue-on-error so a flaky Android build doesn't block the
+    # release, but we emit a prominent warning annotation so the failure
+    # is never silent.
     continue-on-error: true
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.inputs.tag || github.ref_name }}
+
+      - name: Warn if Android build fails
+        if: failure()
+        run: |
+          echo "::warning::Android APK build failed — release will ship without an Android artifact. Check the build-android job logs."
 
       - uses: actions/setup-node@v7
         with:
@@ -459,11 +470,24 @@ jobs:
       - name: Resolve NDK
         shell: bash
         run: |
-          ndk="$(ls -d "$ANDROID_HOME"/ndk/* 2>/dev/null | sort -V | tail -1)"
+          PREFERRED_MAJOR="27"
+          ndk=""
+          for candidate in \
+            "$ANDROID_HOME/ndk/${PREFERRED_MAJOR}."* \
+            "$ANDROID_HOME/ndk/"*; do
+            if [ -d "$candidate" ]; then
+              ndk="$candidate"
+              break
+            fi
+          done
           if [ -z "$ndk" ]; then
             echo "::error::no NDK found under $ANDROID_HOME/ndk"
             exit 1
           fi
+          case "$(basename "$ndk")" in
+            "${PREFERRED_MAJOR}"*) ;;
+            *) echo "::warning::preferred NDK r${PREFERRED_MAJOR} not found, using $(basename "$ndk")" ;;
+          esac
           echo "NDK_HOME=$ndk" >> "$GITHUB_ENV"
           echo "Using NDK: $ndk"
 
@@ -511,6 +535,7 @@ jobs:
       - build-client
       - build-android
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
         with:

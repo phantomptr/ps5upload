@@ -4,6 +4,66 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 4.1.1
+
+A security and reliability patch. Path-traversal and buffer-overflow fixes,
+Android mDNS discovery that actually works, and a hardened CI pipeline.
+
+- **Fixed: path traversal in payload runtime.** The PS5 payload's
+  `is_path_allowed()` validation had edge cases that could allow crafted
+  paths to escape the writable-roots allowlist. Tightened the validation
+  logic to prevent directory traversal via `..` sequences and symlink-style
+  overrides.
+- **Fixed: buffer overflow in `drive_sensors.c` (CRITICAL).** A fixed-size
+  buffer in the drive-sensors path could overflow when parsing SMART
+  responses with unexpectedly long model/serial fields. Capped the copy
+  length to prevent stack corruption on the PS5 side.
+- **Fixed: `fan_curve.c` truncation.** Fan-curve duty-cycle values could be
+  truncated when converting between integer formats, potentially applying a
+  slightly wrong fan speed at certain temperature points. Added proper
+  bounds checking on the conversion path.
+- **Fixed: async unmount cleanup.** An unmount initiated while a transfer
+  was still winding down could leave stale state, blocking the next mount.
+  The unmount path now properly awaits async cleanup before signaling
+  completion.
+- **Fixed: localStorage credentials sweep.** 57 call sites storing sensitive
+  data (engine URL, tokens) in `localStorage` were audited and migrated to
+  Electron/Tauri `safeStorage` (encrypted at rest with OS keychain) where
+  applicable, or cleared after use.
+- **New: Android mDNS discovery via MulticastLock.** Most Android handsets
+  silently filter Wi-Fi multicast frames at the firmware level to save
+  power, so mDNS-based PS5 discovery found nothing even though the console
+  was right there on the same LAN. The app now acquires a
+  `WifiManager.MulticastLock` around the mDNS browse via JNI, so multicast
+  frames (224.0.0.251:5353) are delivered reliably. The LAN-sweep fallback
+  still catches what mDNS misses.
+- **Improved: Android CI now builds both arm64 and armv7.** The release
+  pipeline ships an armv7 APK, but CI only ever built arm64 — so an armv7
+  breakage could ship undetected. Both ABIs are now compiled on every PR.
+- **Improved: NDK version pinned in CI.** The Android NDK version was
+  picked by taking the newest installed on the runner image, which meant a
+  runner-image rotation could silently break the build (new clang warnings
+  → errors, libc symbol changes). The NDK is now pinned to a known-good
+  major version (r27) with a fallback + warning.
+- **Improved: Android release failures are no longer silent.** The
+  `build-android` release job kept `continue-on-error` (a flaky APK build
+  shouldn't block the desktop release) but now emits a prominent warning
+  annotation so the failure is never missed.
+- **Security: dependency updates.** `@babel/core` 7.29.0 → 7.29.7 (CVE
+  fix), `tokio` 1.52 → 1.53 (engine + client), `lucide-react` 1.24 → 1.25,
+  Docker build stage `node` 22 → 26-alpine.
+- **Improved: Docker hardening.** The engine Docker image now runs as a
+  non-root user with a read-only filesystem and minimal capabilities.
+- **Improved: SPDX license identifiers.** All source files now carry
+  proper SPDX license identifiers for clarity and license-scanning tools.
+- **Improved: CI webui existence check.** A CI step now verifies the
+  `webui/` folder exists (rust-embed v8 requires it at compile time) before
+  building, with a clear error message instead of a cryptic compile failure.
+- **New: `npm run dist:android` script.** Convenience script to build a
+  dual-ABI (arm64 + armv7) debug APK locally.
+
+---
+
 ## 4.1.0
 
 A reliability release. The desktop app now recovers on its own when the PS5's

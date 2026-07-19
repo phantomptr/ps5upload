@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 
 /** Three-way theme:
  *    dark — original default; balanced colours, slight elevation
@@ -31,7 +32,7 @@ export function nextTheme(current: Theme): Theme {
  *  look for users who've never toggled. */
 function initialTheme(): Theme {
   if (typeof window === "undefined") return "dark";
-  const stored = window.localStorage.getItem(STORAGE_KEY) as Theme | null;
+  const stored = safeGetItem(STORAGE_KEY) as Theme | null;
   return stored && VALID_THEMES.includes(stored) ? stored : "dark";
 }
 
@@ -60,13 +61,13 @@ interface ThemeState {
 export const useThemeStore = create<ThemeState>((set, get) => ({
   theme: initialTheme(),
   setTheme: (theme) => {
-    window.localStorage.setItem(STORAGE_KEY, theme);
+    safeSetItem(STORAGE_KEY, theme);
     applyTheme(theme);
     set({ theme });
   },
   toggleTheme: () => {
     const next = nextTheme(get().theme);
-    window.localStorage.setItem(STORAGE_KEY, next);
+    safeSetItem(STORAGE_KEY, next);
     applyTheme(next);
     set({ theme: next });
   },

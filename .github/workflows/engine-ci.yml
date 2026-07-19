@@ -41,6 +41,7 @@ jobs:
   version-sync:
     name: version sync (VERSION is canonical)
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -56,6 +57,7 @@ jobs:
   rust-engine:
     name: rust (engine workspace)
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
 
@@ -81,6 +83,26 @@ jobs:
       - name: cargo clippy
         working-directory: engine
         run: cargo clippy --workspace -- -D warnings
+
+      # The webui feature (rust-embed + static serving) is only enabled
+      # in the Docker webui build, not the default workspace clippy/test
+      # above. Compile-check it here so a broken #[cfg(feature = "webui")]
+      # branch doesn't slip through CI and only surface at Docker build
+      # time (as happened in 4.1.0). Full test/lint of the feature isn't
+      # needed — a type-check catches the class of bug we're guarding.
+      #
+      # rust-embed's #[derive(RustEmbed)] #[folder = "webui/"] requires
+      # the directory to exist at compile time — without it the macro
+      # generates no impl and WebAssets::get fails (E0599). The real
+      # content is the Vite build output (client/dist/) and is only
+      # copied in by Dockerfile.webui; here we create a stub with a
+      # dummy index.html so the derive macro is satisfied.
+      - name: create webui stub for rust-embed
+        working-directory: engine/crates/ps5upload-engine
+        run: mkdir -p webui && echo '<!DOCTYPE html><title>stub</title>' > webui/index.html
+      - name: cargo check (webui feature)
+        working-directory: engine
+        run: cargo check -p ps5upload-engine --features webui
 
       - name: cargo test
         working-directory: engine
@@ -118,6 +140,7 @@ jobs:
           - os: windows-2022
             target: aarch64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
 
@@ -146,6 +169,7 @@ jobs:
       matrix:
         os: [ubuntu-24.04, macos-14, windows-2022]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
 
@@ -226,6 +250,7 @@ jobs:
   client-frontend:
     name: client (ts + vite)
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
 
@@ -268,6 +293,7 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────
   repo-scripts:
     name: repo scripts
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -298,6 +324,7 @@ jobs:
   coverage:
     name: coverage reports
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     # Reporting job — not a gate. cargo-llvm-cov occasionally trails
     # rustc's profraw format version (we hit "raw profile version
     # mismatch: ... expected version = 9" when rustc bumped to v10),
@@ -336,6 +363,7 @@ jobs:
           path: |
             coverage/
             client/coverage/
+          retention-days: 14
 
   # ─────────────────────────────────────────────────────────────────────
   # Payload ELF — compile against the ps5-payload-sdk so we catch any
@@ -345,6 +373,7 @@ jobs:
   payload:
     name: payload (ELF)
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
 
@@ -404,6 +433,7 @@ jobs:
   android:
     name: android (apk build)
     runs-on: ubuntu-24.04
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
 
@@ -419,10 +449,10 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Install Rust + Android target
+      - name: Install Rust + Android targets
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android
+          targets: aarch64-linux-android,armv7-linux-androideabi
 
       - name: Cache cargo target
         uses: actions/cache@v6
@@ -447,16 +477,35 @@ jobs:
           { printf '\x7fELF'; head -c 204800 /dev/zero; } > payload/ps5upload.elf
           gzip -nf payload/ps5upload.elf
 
-      # ubuntu-24.04 ships the Android SDK (ANDROID_HOME) + an NDK. Pick
-      # the newest installed NDK and export it the way Tauri expects.
+      # Pin the NDK to a known-good major version rather than blindly
+      # taking whatever the runner image ships. An NDK rotation on the
+      # runner image can silently break the build (new clang warnings →
+      # errors, libc symbol changes, etc.). If the pinned major is absent
+      # we fall back to the newest available and warn.
       - name: Resolve NDK
         shell: bash
         run: |
-          ndk="$(ls -d "$ANDROID_HOME"/ndk/* 2>/dev/null | sort -V | tail -1)"
+          # Preferred NDK major (r27 = NDK 27.x). Update when CI is
+          # validated against a newer one.
+          PREFERRED_MAJOR="27"
+          ndk=""
+          for candidate in \
+            "$ANDROID_HOME/ndk/${PREFERRED_MAJOR}."* \
+            "$ANDROID_HOME/ndk/"*; do
+            if [ -d "$candidate" ]; then
+              ndk="$candidate"
+              break
+            fi
+          done
           if [ -z "$ndk" ]; then
             echo "::error::no NDK found under $ANDROID_HOME/ndk"
             exit 1
           fi
+          # Warn if we couldn't get the preferred major.
+          case "$(basename "$ndk")" in
+            "${PREFERRED_MAJOR}"*) ;;
+            *) echo "::warning::preferred NDK r${PREFERRED_MAJOR} not found, using $(basename "$ndk")" ;;
+          esac
           echo "NDK_HOME=$ndk" >> "$GITHUB_ENV"
           echo "Using NDK: $ndk"
 
@@ -476,9 +525,9 @@ jobs:
       - name: Patch manifest (loopback cleartext + backup rules)
         run: bash scripts/release/android-postinit-patch.sh
 
-      - name: Build debug APK (aarch64)
+      - name: Build debug APK (arm64 + armv7)
         working-directory: client
-        run: npx tauri android build --debug --apk --target aarch64
+        run: npx tauri android build --debug --apk --target aarch64 --target armv7
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v7
@@ -486,6 +535,7 @@ jobs:
           name: ps5upload-android-debug-apk
           path: client/src-tauri/gen/android/app/build/outputs/apk/**/*.apk
           if-no-files-found: error
+          retention-days: 7
 
   # ─────────────────────────────────────────────────────────────────────
   # Aggregate gate. One stable check that turns green only when every
@@ -515,6 +565,7 @@ jobs:
       - payload
       - android
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - name: Require every gating job to have succeeded
         run: |

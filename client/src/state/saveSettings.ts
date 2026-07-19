@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 
 /**
  * Where "Save to USB storage" writes save backups on the PS5 itself —
@@ -22,7 +23,7 @@ export function normalizeSavePath(raw: string): string {
 
 function loadSavePath(): string {
   if (typeof window === "undefined") return DEFAULT_SAVE_PATH;
-  const v = window.localStorage.getItem(KEY_SAVE_PATH);
+  const v = safeGetItem(KEY_SAVE_PATH);
   return v ? normalizeSavePath(v) : DEFAULT_SAVE_PATH;
 }
 
@@ -36,7 +37,7 @@ export const useSaveSettingsStore = create<SaveSettingsState>((set) => ({
   setSavePath: (path) => {
     const savePath = normalizeSavePath(path);
     if (typeof window !== "undefined") {
-      window.localStorage.setItem(KEY_SAVE_PATH, savePath);
+      safeSetItem(KEY_SAVE_PATH, savePath);
     }
     set({ savePath });
   },

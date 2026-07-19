@@ -5,6 +5,7 @@ import {
   screenWakeSupported,
   setScreenWakeReason,
 } from "../lib/androidScreenWake";
+import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 
 const STORAGE_KEY = "ps5upload.keep_awake";
 
@@ -31,7 +32,7 @@ interface KeepAwakeState {
  *  checkbox preference. */
 function loadPersisted(): boolean {
   if (typeof window === "undefined") return false;
-  return window.localStorage.getItem(STORAGE_KEY) === "on";
+  return safeGetItem(STORAGE_KEY) === "on";
 }
 
 export const useKeepAwakeStore = create<KeepAwakeState>((set, get) => ({
@@ -46,7 +47,7 @@ export const useKeepAwakeStore = create<KeepAwakeState>((set, get) => ({
     // client-side so the manual toggle works the same as desktop.
     if (isAndroid()) {
       setScreenWakeReason(MANUAL_REASON, on);
-      window.localStorage.setItem(STORAGE_KEY, on ? "on" : "off");
+      safeSetItem(STORAGE_KEY, on ? "on" : "off");
       set({ enabled: on, supported: screenWakeSupported(), lastError: null });
       return;
     }
@@ -59,7 +60,7 @@ export const useKeepAwakeStore = create<KeepAwakeState>((set, get) => ({
     // to lastError and return normally.
     try {
       const resp = await invoke<KeepAwakeResp>("keep_awake_set", { enabled: on });
-      window.localStorage.setItem(STORAGE_KEY, resp.enabled ? "on" : "off");
+      safeSetItem(STORAGE_KEY, resp.enabled ? "on" : "off");
       set({
         enabled: resp.enabled,
         supported: resp.supported,

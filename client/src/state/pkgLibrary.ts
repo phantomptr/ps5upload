@@ -1,6 +1,7 @@
 import { useStore } from "zustand";
 import { createStore } from "zustand/vanilla";
 import { invoke } from "../lib/invokeLogged";
+import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 
 import {
   fsListDir,
@@ -272,7 +273,7 @@ const TITLE_CACHE_KEY = "ps5upload.pkg_library.titles.v1";
 function loadTitleCache(): Record<string, string> {
   if (typeof window === "undefined") return {};
   try {
-    const raw = window.localStorage.getItem(TITLE_CACHE_KEY);
+    const raw = safeGetItem(TITLE_CACHE_KEY);
     const parsed = raw ? JSON.parse(raw) : {};
     return parsed && typeof parsed === "object" ? parsed : {};
   } catch {
@@ -285,7 +286,7 @@ function cacheTitle(contentId: string, title: string): void {
   try {
     const c = loadTitleCache();
     c[contentId] = title;
-    window.localStorage.setItem(TITLE_CACHE_KEY, JSON.stringify(c));
+    safeSetItem(TITLE_CACHE_KEY, JSON.stringify(c));
   } catch {
     /* best-effort */
   }
@@ -317,7 +318,7 @@ interface PkgPathMeta {
 function loadPathMetaCache(): Record<string, PkgPathMeta> {
   if (typeof window === "undefined") return {};
   try {
-    const raw = window.localStorage.getItem(PATH_META_CACHE_KEY);
+    const raw = safeGetItem(PATH_META_CACHE_KEY);
     const parsed = raw ? JSON.parse(raw) : {};
     return parsed && typeof parsed === "object" ? parsed : {};
   } catch {
@@ -331,7 +332,7 @@ function cachePathMeta(path: string, meta: PkgPathMeta): void {
     const c = loadPathMetaCache();
     // Merge so a later partial write doesn't drop a previously-cached field.
     c[path] = { ...c[path], ...meta };
-    window.localStorage.setItem(PATH_META_CACHE_KEY, JSON.stringify(c));
+    safeSetItem(PATH_META_CACHE_KEY, JSON.stringify(c));
   } catch {
     /* best-effort */
   }
@@ -350,7 +351,7 @@ const INSTALLED_CACHE_KEY = "ps5upload.pkg_library.installed.v1";
 function loadInstalledCache(): Record<string, string[]> {
   if (typeof window === "undefined") return {};
   try {
-    const raw = window.localStorage.getItem(INSTALLED_CACHE_KEY);
+    const raw = safeGetItem(INSTALLED_CACHE_KEY);
     const parsed = raw ? JSON.parse(raw) : {};
     return parsed && typeof parsed === "object" ? parsed : {};
   } catch {
@@ -370,7 +371,7 @@ export function recordPkgInstalled(host: string, path: string): void {
     const set = new Set(c[h] ?? []);
     set.add(path);
     c[h] = [...set];
-    window.localStorage.setItem(INSTALLED_CACHE_KEY, JSON.stringify(c));
+    safeSetItem(INSTALLED_CACHE_KEY, JSON.stringify(c));
   } catch {
     /* best-effort */
   }

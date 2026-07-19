@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 
 /**
  * Persistent audit log for destructive actions.
@@ -62,7 +63,7 @@ interface AuditState {
 function loadInitial(): AuditEntry[] {
   if (typeof window === "undefined") return [];
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = safeGetItem(STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
@@ -81,7 +82,7 @@ function loadInitial(): AuditEntry[] {
 function persist(entries: AuditEntry[]) {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
+    safeSetItem(STORAGE_KEY, JSON.stringify(entries));
   } catch {
     // Quota exceeded — best-effort. Already capped at MAX_ENTRIES.
   }

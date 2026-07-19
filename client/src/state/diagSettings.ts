@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { LogLevel } from "./logs";
+import { safeGetItem, safeRemoveItem, safeSetItem } from "../lib/safeStorage";
 
 /**
  * Diagnostics preferences — currently just the minimum log level that gets
@@ -41,7 +42,7 @@ function isLevel(v: string | null): v is LogLevel {
 
 function loadLogLevel(): LogLevel {
   if (typeof window === "undefined") return DEFAULT_LOG_LEVEL;
-  const v = window.localStorage.getItem(KEY_LOG_LEVEL);
+  const v = safeGetItem(KEY_LOG_LEVEL);
   return isLevel(v) ? v : DEFAULT_LOG_LEVEL;
 }
 
@@ -56,9 +57,9 @@ export const useDiagSettingsStore = create<DiagSettingsState>((set) => ({
   setLogLevel: (logLevel) => {
     if (typeof window !== "undefined") {
       if (logLevel === DEFAULT_LOG_LEVEL) {
-        window.localStorage.removeItem(KEY_LOG_LEVEL);
+        safeRemoveItem(KEY_LOG_LEVEL);
       } else {
-        window.localStorage.setItem(KEY_LOG_LEVEL, logLevel);
+        safeSetItem(KEY_LOG_LEVEL, logLevel);
       }
     }
     set({ logLevel });

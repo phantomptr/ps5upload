@@ -28,6 +28,7 @@
 // shows up within a week.
 
 import { invoke } from "./invokeLogged";
+import { safeGetItem, safeSetItem } from "./safeStorage";
 
 const CACHE_KEY = "ps5upload.titleinfo.cache";
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -105,7 +106,7 @@ type CacheMap = Record<string, CacheEntry>;
 function loadCache(): CacheMap {
   if (typeof window === "undefined") return {};
   try {
-    const raw = window.localStorage.getItem(CACHE_KEY);
+    const raw = safeGetItem(CACHE_KEY);
     if (!raw) return {};
     const parsed = JSON.parse(raw) as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
@@ -120,7 +121,7 @@ function loadCache(): CacheMap {
 function saveCache(map: CacheMap): void {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(CACHE_KEY, JSON.stringify(map));
+    safeSetItem(CACHE_KEY, JSON.stringify(map));
   } catch {
     // localStorage write can fail (quota, private mode). Title cache
     // is purely an optimisation; swallow.

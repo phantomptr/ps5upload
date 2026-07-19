@@ -76,7 +76,16 @@ fi
 # ─── 3. Commit (only if update-version.js changed anything) ──────────────
 
 if ! git diff --quiet || ! git diff --cached --quiet; then
-  git add -A
+  # Stage only the files update-version.js touches, not `git add -A`
+  # which could sweep in editor swap files, .DS_Store, etc.
+  git add \
+    VERSION \
+    client/package.json \
+    client/package-lock.json \
+    client/src-tauri/tauri.conf.json \
+    client/src-tauri/Cargo.toml \
+    payload/include/config.h \
+    engine/Cargo.toml
   git commit -m "Release ${tag}"
 fi
 

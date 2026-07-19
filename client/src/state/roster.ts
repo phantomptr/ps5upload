@@ -5,6 +5,7 @@ import { useFsClipboardStore, evictFsClipboard } from "./fsClipboard";
 import { useUploadStore, evictUploadDraft } from "./upload";
 import { evictPkgLibraryStore } from "./pkgLibrary";
 import { hostOf } from "../lib/addr";
+import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 
 /**
  * Multi-PS5 roster.
@@ -89,7 +90,7 @@ interface RosterState {
 function loadStored(): { profiles: PS5Profile[]; active_id: string | null } {
   if (typeof window === "undefined") return { profiles: [], active_id: null };
   try {
-    const raw = window.localStorage.getItem(ROSTER_STORAGE_KEY);
+    const raw = safeGetItem(ROSTER_STORAGE_KEY);
     if (!raw) return { profiles: [], active_id: null };
     const parsed = JSON.parse(raw) as {
       profiles?: PS5Profile[];
@@ -107,7 +108,7 @@ function loadStored(): { profiles: PS5Profile[]; active_id: string | null } {
 function persist(profiles: PS5Profile[], active_id: string | null) {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(
+    safeSetItem(
       ROSTER_STORAGE_KEY,
       JSON.stringify({ profiles, active_id }),
     );

@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { isTauriEnv } from "../lib/tauriEnv";
+import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 
 /**
  * Base URL of the ps5upload-engine the UI talks to. Default is the
@@ -26,7 +27,7 @@ function loadEngineUrl(): string {
   // In the browser build the UI is served from the engine origin, so use
   // window.location.origin rather than a persisted 127.0.0.1 address.
   if (!isTauriEnv()) return window.location.origin;
-  const v = window.localStorage.getItem(KEY_ENGINE_URL);
+  const v = safeGetItem(KEY_ENGINE_URL);
   return v ? normalizeEngineUrl(v) : DEFAULT_ENGINE_URL;
 }
 
@@ -39,7 +40,7 @@ export const useEngineStore = create<EngineState>((set) => ({
   engineUrl: loadEngineUrl(),
   setEngineUrl: (url) => {
     const engineUrl = normalizeEngineUrl(url);
-    window.localStorage.setItem(KEY_ENGINE_URL, engineUrl);
+    safeSetItem(KEY_ENGINE_URL, engineUrl);
     set({ engineUrl });
     // A deliberate user/settings change of the engine URL supersedes any
     // transient sidecar-fallback override (see setLiveEngineUrl).

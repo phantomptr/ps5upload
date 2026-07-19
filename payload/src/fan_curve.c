@@ -120,6 +120,16 @@ int fan_curve_get(char *buf, size_t cap) {
         pthread_mutex_unlock(&g_fan_curve_mtx);
         return -1;
     }
+    /* If the file is larger than our buffer, the read was truncated.
+     * Persisting this truncated version on the next fan_curve_set would
+     * silently destroy curve data. Return an error instead. */
+    if (n == (ssize_t)(cap - 1)) {
+        struct stat st;
+        if (stat(FAN_CURVE_FILE, &st) == 0 && (size_t)st.st_size > cap - 1) {
+            pthread_mutex_unlock(&g_fan_curve_mtx);
+            return -1;
+        }
+    }
     buf[n] = '\0';
 
     pthread_mutex_unlock(&g_fan_curve_mtx);

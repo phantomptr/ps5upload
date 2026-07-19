@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ScrollText,
   Trash2,
@@ -84,6 +84,24 @@ export default function AppLogsPanel() {
   const [copyState, setCopyState] = useState<"idle" | "done" | "fail">("idle");
   const [saveState, setSaveState] = useState<"idle" | "done" | "fail">("idle");
 
+  // Track the reset timers so we can clear them on unmount. Without
+  // this, a Copy/Download click followed by a quick tab switch fires
+  // setState on an unmounted component.
+  const timersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  useEffect(() => {
+    const timers = timersRef.current;
+    return () => {
+      for (const t of timers) clearTimeout(t);
+    };
+  }, []);
+  const scheduleReset = (
+    setter: (s: "idle") => void,
+    ms: number,
+  ) => {
+    const id = setTimeout(() => setter("idle"), ms);
+    timersRef.current.push(id);
+  };
+
   const visible = useMemo(() => {
     if (filter === "all") return entries;
     return entries.filter((e) => e.level === filter);
@@ -112,7 +130,7 @@ export default function AppLogsPanel() {
       .join("\n");
     const ok = await writeClipboard(text);
     setCopyState(ok ? "done" : "fail");
-    setTimeout(() => setCopyState("idle"), 1600);
+    scheduleReset(setCopyState, 1600);
   };
 
   const downloadAll = async () => {
@@ -134,7 +152,7 @@ export default function AppLogsPanel() {
         // real browser.
         browserDownloadText(fileName, text);
         setSaveState("done");
-        setTimeout(() => setSaveState("idle"), 1600);
+        scheduleReset(setSaveState, 1600);
         return;
       }
       // Save via the native dialog + backend `save_text_file` command rather
@@ -152,14 +170,14 @@ export default function AppLogsPanel() {
       if (!dest) return; // user cancelled
       await writeTextFileToPath(dest, text, fileName);
       setSaveState("done");
-      setTimeout(() => setSaveState("idle"), 1600);
+      scheduleReset(setSaveState, 1600);
     } catch (e) {
       // Surface to the in-app log so a save failure isn't silent.
       console.error(
         `Saving logs failed: ${e instanceof Error ? e.message : String(e)}`,
       );
       setSaveState("fail");
-      setTimeout(() => setSaveState("idle"), 2400);
+      scheduleReset(setSaveState, 2400);
     }
   };
 

@@ -10,6 +10,7 @@
 // wrong console.
 
 import { compareVersions } from "./semver";
+import { safeGetItem, safeSetItem } from "./safeStorage";
 
 const STORAGE_KEY = "ps5upload.mount.lastDest";
 
@@ -46,7 +47,7 @@ type Map = Record<string, MountDest>;
 function load(): Map {
   if (typeof window === "undefined") return {};
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = safeGetItem(STORAGE_KEY);
     if (!raw) return {};
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
@@ -74,7 +75,7 @@ function load(): Map {
 function save(map: Map) {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(map));
+    safeSetItem(STORAGE_KEY, JSON.stringify(map));
   } catch {
     // localStorage write can fail (quota, private mode). Mount-dest
     // persistence is nice-to-have; swallow.

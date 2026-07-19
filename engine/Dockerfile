@@ -26,4 +26,13 @@ RUN cargo build --release -p ps5upload-engine
 FROM scratch
 COPY --from=builder /build/target/release/ps5upload-engine /ps5upload-engine
 EXPOSE 19113
+# Run as an unprivileged user (65532 = nobody in distroless convention).
+# scratch has no /etc/passwd, so we use a raw numeric UID — the kernel
+# doesn't need a passwd entry to run a process. Port 19113 > 1024 so
+# no CAP_NET_BIND_SERVICE needed.
+USER 65532:65532
+# Health: GET /api/jobs returns 200 once the HTTP server is live (no PS5
+# contact needed). scratch has no shell/wget, so no in-image HEALTHCHECK;
+# use an external probe (Docker Compose healthcheck with wget sidecar,
+# Kubernetes liveness/readiness probe hitting /api/jobs).
 ENTRYPOINT ["/ps5upload-engine"]

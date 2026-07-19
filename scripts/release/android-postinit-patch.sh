@@ -26,8 +26,9 @@
 #
 # Plus <uses-permission> injection: all-files storage access for the
 # in-app picker, and Wi-Fi multicast/state permissions so mDNS console
-# discovery can receive 224.0.0.251:5353 (see the perms list below;
-# acquiring the MulticastLock via JNI is still TODO for full reliability).
+# discovery can receive 224.0.0.251:5353 (see the perms list below).
+# The MulticastLock itself is acquired via JNI at runtime — see
+# local_fs.rs::acquire_multicast_lock, called from discover_ps5.
 #
 # 3) Pin WebView textZoom to 100% in MainActivity. Android WebView scales
 #    every font by the device's system **Font size** accessibility setting,
@@ -135,10 +136,8 @@ perms = [
     # requires CHANGE_WIFI_MULTICAST_STATE; without it the Wi-Fi stack
     # filters multicast frames and discovery silently finds nothing.
     # ACCESS_NETWORK_STATE / ACCESS_WIFI_STATE let the engine pick the
-    # right interface. NOTE: the permission alone helps some devices,
-    # but full reliability also needs a WifiManager.MulticastLock
-    # acquired via JNI while browsing — still TODO (the lock is the
-    # complete fix; many handsets drop multicast until it's held).
+    # right interface. The MulticastLock is acquired at runtime via JNI
+    # (see local_fs.rs::acquire_multicast_lock, called from discover_ps5).
     '<uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />',
     '<uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />',
     '<uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />',

@@ -21,6 +21,7 @@ import {
 import { pollUntilReady, type PollHandle } from "../../lib/pollUntilReady";
 import { parsePS5Firmware } from "../../lib/ps5Firmware";
 import { compareVersions } from "../../lib/semver";
+import { safeGetItem, safeSetItem } from "../../lib/safeStorage";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -1154,7 +1155,7 @@ function CompanionSuggestion() {
   const [dismissed, setDismissed] = useState<boolean>(() => {
     if (typeof window === "undefined") return false;
     try {
-      return window.localStorage.getItem("ps5upload.companion-suggestion.dismissed") === "1";
+      return safeGetItem("ps5upload.companion-suggestion.dismissed") === "1";
     } catch {
       return false;
     }
@@ -1162,7 +1163,7 @@ function CompanionSuggestion() {
   if (dismissed) return null;
   const dismiss = () => {
     try {
-      window.localStorage.setItem("ps5upload.companion-suggestion.dismissed", "1");
+      safeSetItem("ps5upload.companion-suggestion.dismissed", "1");
     } catch {
       // best-effort persistence
     }

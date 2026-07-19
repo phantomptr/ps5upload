@@ -1,6 +1,7 @@
 import { create } from "zustand";
 
 import { hostOf } from "../lib/addr";
+import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 
 /**
  * Per-host upload performance history.
@@ -85,7 +86,7 @@ export const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 function loadInitial(): Record<string, HostMetrics> {
   if (typeof window === "undefined") return {};
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = safeGetItem(STORAGE_KEY);
     if (!raw) return {};
     const parsed = JSON.parse(raw);
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
@@ -125,7 +126,7 @@ function loadInitial(): Record<string, HostMetrics> {
 function persist(entries: Record<string, HostMetrics>): void {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
+    safeSetItem(STORAGE_KEY, JSON.stringify(entries));
   } catch {
     // localStorage write can fail under quota / private mode. The
     // store is a nice-to-have (ETA estimator already handles

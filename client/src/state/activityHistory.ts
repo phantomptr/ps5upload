@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { safeGetItem, safeSetItem } from "../lib/safeStorage";
 
 /**
  * Cross-screen log of every operation the user has triggered: uploads,
@@ -156,7 +157,7 @@ interface ActivityHistoryState {
 function loadInitial(): ActivityEntry[] {
   if (typeof window === "undefined") return [];
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = safeGetItem(STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
@@ -201,7 +202,7 @@ let pendingEntries: ActivityEntry[] | null = null;
 function persistNow(entries: ActivityEntry[]) {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
+    safeSetItem(STORAGE_KEY, JSON.stringify(entries));
   } catch {
     // localStorage write can fail (quota exceeded, private mode).
     // Activity history is nice-to-have; swallow rather than crash.
