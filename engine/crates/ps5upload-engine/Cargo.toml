@@ -22,7 +22,7 @@ webui = ["dep:rust-embed", "dep:mime_guess"]
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
-base64 = "0.22"
+base64 = "0.23"
 ftx2-proto = { path = "../ftx2-proto" }
 mime_guess = { version = "2", optional = true }
 ps5upload-core = { path = "../ps5upload-core" }
