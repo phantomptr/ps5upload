@@ -72,7 +72,7 @@ blake3 = "1"
 # `commands/diagnostics.rs::fs_read_preview` returns the file bytes
 # as base64 so the renderer can use them as a `data:` URL for image
 # previews. Pure-Rust, no system deps.
-base64 = "0.22"
+base64 = "0.23"
 
 # Save-data backup/restore as .zip archives. Pure-Rust deflate backend
 # (no system zlib linkage) so cross-compilation stays single-toolchain.
