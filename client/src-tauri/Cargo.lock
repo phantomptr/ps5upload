@@ -3330,7 +3330,7 @@ name = "ps5upload-core"
 version = "4.1.2"
 dependencies = [
  "anyhow",
- "base64 0.22.1",
+ "base64 0.23.0",
  "blake3",
  "ftx2-proto",
  "image",
@@ -3381,7 +3381,7 @@ version = "4.1.2"
 dependencies = [
  "anyhow",
  "axum",
- "base64 0.22.1",
+ "base64 0.23.0",
  "ftx2-proto",
  "ps5upload-core",
  "ps5upload-pkg",

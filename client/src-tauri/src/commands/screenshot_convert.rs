@@ -91,6 +91,30 @@ mod desktop {
 
     /// Decode a JPEG XR byte buffer and return PNG-encoded bytes (RGB8).
     pub fn convert_jxr_to_png(jxr: &[u8]) -> Result<Vec<u8>, String> {
+        // Validate the JPEG XR file signature before handing the buffer to
+        // the C codec (jxrlib). A truncated or corrupted .jxr — common for
+        // PS5 thumbnail variants that are still being written, or a
+        // download that was cut short — can cause the native `copy_all` to
+        // read past the buffer and SIGSEGV, taking the whole app down.
+        // Rejecting non-JXR bytes here turns a hard crash into a clean
+        // error the UI can surface. The signature is the 4-byte TIFF-style
+        // marker: `II\xBC\x01` (little-endian) or `MM\xBC\x01` (big-endian).
+        if jxr.len() < 8 {
+            return Err(format!(
+                "jxr too small ({} bytes) — likely a truncated download",
+                jxr.len()
+            ));
+        }
+        let is_jxr = (jxr[0] == 0x49 && jxr[1] == 0x49 && jxr[2] == 0xBC && jxr[3] == 0x01)
+            || (jxr[0] == 0x4D && jxr[1] == 0x4D && jxr[2] == 0xBC && jxr[3] == 0x01);
+        if !is_jxr {
+            return Err(format!(
+                "not a JPEG XR file (magic: {:02x?}) — the first 4 bytes \
+                 don't match the JXR signature. This may be a regular JPEG \
+                 or PNG mislabeled .jxr.",
+                &jxr[..4]
+            ));
+        }
         let (width, height, rgb8) = decode_to_rgb8(jxr)?;
         let mut out = Vec::new();
         image::codecs::png::PngEncoder::new(Cursor::new(&mut out))

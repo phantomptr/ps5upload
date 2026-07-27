@@ -16,6 +16,12 @@ pub struct RemotePlayStatus {
     pub account_id: String,
     #[serde(default)]
     pub seconds_left: i32,
+    /// Diagnostic the payload writes when entering a FAILED/TIMEOUT state
+    /// (e.g. "sceRemoteplayInitialize failed: 0x8094xxxx"). Surfaced to the
+    /// UI so the user sees *why* the PIN couldn't be generated, not just
+    /// the bare word "failed".
+    #[serde(default)]
+    pub err: String,
 }
 
 pub fn remoteplay_request(addr: &str, manual_account_id: Option<&str>) -> Result<()> {
@@ -29,6 +35,22 @@ pub fn remoteplay_request(addr: &str, manual_account_id: Option<&str>) -> Result
             "payload rejected REMOTEPLAY_REQUEST: {}",
             String::from_utf8_lossy(&resp)
         );
+    }
+    // The payload acks with frame type RemotePlayStatus (189) and body
+    // {"ok":true|false}. A non-Error frame was previously treated as success
+    // without inspecting the body — so a genuine on-console failure
+    // (libSceRemoteplay absent, Initialize returned non-zero, no foreground
+    // user, …) was silently swallowed and the user only saw "failed" on the
+    // next status poll. Parse the ack and bail when the payload says !ok.
+    #[derive(Deserialize)]
+    struct RequestAck {
+        #[serde(default)]
+        ok: bool,
+    }
+    let ack: RequestAck = serde_json::from_slice(&resp)
+        .map_err(|e| anyhow::anyhow!("bad REMOTEPLAY_REQUEST ack: {e}"))?;
+    if !ack.ok {
+        bail!("payload reports the Remote Play request failed on-console");
     }
     Ok(())
 }

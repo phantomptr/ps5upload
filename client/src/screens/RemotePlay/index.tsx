@@ -261,6 +261,13 @@ export default function RemotePlayScreen() {
                 {status.seconds_left > 0 ? status.seconds_left : "—"}
               </dd>
             </dl>
+            {status.err && (
+              <div className="mt-3 rounded-md border border-[var(--color-error)] bg-[var(--color-error-bg,transparent)] p-3">
+                <p className="text-xs text-[var(--color-error)]">
+                  {status.err}
+                </p>
+              </div>
+            )}
           </div>
         )}
       </ConnectionGate>

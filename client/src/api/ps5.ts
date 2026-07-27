@@ -3762,6 +3762,10 @@ export interface RemotePlayStatus {
   pin: string;
   account_id: string;
   seconds_left: number;
+  /** Diagnostic from the payload when state is "failed" or "timeout"
+   *  (e.g. "sceRemoteplayInitialize failed: 0x8094xxxx"). Empty when the
+   *  request succeeded. */
+  err?: string;
 }
 
 export async function remoteplayRequest(
