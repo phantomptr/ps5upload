@@ -200,8 +200,8 @@ pub fn pkg_install_status(addr: &str, task_id: i32) -> Result<PkgInstallStatus> 
 /// from the task_id alone — no protocol/frame change required, so older
 /// payloads work too. We just classify what tier number their task_id
 /// shape implies.
-const APPINST_TASK_ID_FLAG: i32 = 0x40000000;
-const APPINST_VIA_SHELLUI_FLAG: i32 = 0x20000000;
+pub const APPINST_TASK_ID_FLAG: i32 = 0x40000000;
+pub const APPINST_VIA_SHELLUI_FLAG: i32 = 0x20000000;
 /// v2.16.1 scaffolding for the eventual separate-process Tier-0 helper.
 /// Set on task_ids issued by the in-process worker-thread variant gated
 /// behind `PS5UPLOAD_TIER0_WORKER=1`. The worker serializes Sony
@@ -213,7 +213,13 @@ const APPINST_VIA_SHELLUI_FLAG: i32 = 0x20000000;
 /// is deferred to v2.17.0 because it needs a new build artefact,
 /// deploy mechanism, lifecycle management, and hardware iteration
 /// rounds we can't do mid-release.
-const APPINST_VIA_TIER0_FLAG: i32 = 0x10000000;
+pub const APPINST_VIA_TIER0_FLAG: i32 = 0x10000000;
+
+/// Set on task_ids for the local-disk install path
+/// (`sceAppInstUtilAppInstallPkg` with a `file://`/local path).
+/// Mirrors the payload's `APPINST_VIA_LOCAL_FLAG` in bgft.c.
+/// These paths report synthetic DONE and can't be real-polled.
+pub const APPINST_VIA_LOCAL_FLAG: i32 = 0x08000000;
 
 /// Human-readable tier identifier for an in-flight install. Surfaced
 /// alongside `task_id` so the desktop's "Why?" diagnostic disclosure

@@ -6144,6 +6144,43 @@ static void fs_op_progress(int idx, uint64_t delta);
  * existing engine + UI plumbing renders delete progress without
  * changes (total_bytes from recursive_size, bytes_copied from this
  * accumulator). */
+/* Force-flush the parent directory's metadata after a delete.
+ * exFAT (used for USB external storage on PS5) caches directory
+ * entries and the FAT allocation bitmap in kernel buffers. After
+ * unlink(), the freed clusters may not be reflected in statfs()
+ * free-space until the volume is lazily flushed — which can take
+ * minutes or require a remount. On large files (multi-GiB game
+ * images) this surfaces as "file is gone but space is still used,"
+ * confusing users into thinking the delete failed.
+ *
+ * fsync() on a directory fd is the POSIX-recommended way to force
+ * the metadata flush. On UFS2 (internal SSD) this is a cheap no-op
+ * beyond the normal journal commit; on exFAT it forces the bitmap
+ * update so free space is immediately reclaimable.
+ *
+ * Best-effort: failure is non-fatal because the delete itself
+ * already succeeded — the space WILL be reclaimed eventually
+ * regardless. */
+static void fsync_parent_dir(const char *path) {
+    char parent[1024];
+    const char *slash = strrchr(path, '/');
+    if (!slash) return;
+    size_t plen;
+    if (slash == path) {
+        plen = 1;
+    } else {
+        plen = (size_t)(slash - path);
+    }
+    if (plen >= sizeof(parent)) plen = sizeof(parent) - 1;
+    memcpy(parent, path, plen);
+    parent[plen] = '\0';
+    int dfd = open(parent, O_RDONLY);
+    if (dfd >= 0) {
+        (void)fsync(dfd);
+        close(dfd);
+    }
+}
+
 static int rm_rf_op(const char *path, int depth, int op_idx) {
     struct stat st;
     DIR *d;
@@ -6186,6 +6223,15 @@ static int rm_rf_op(const char *path, int depth, int op_idx) {
         if (op_idx >= 0 && S_ISREG(st.st_mode)) {
             fs_op_progress(op_idx, (uint64_t)st.st_size);
         }
+        /* Flush the parent directory so exFAT reclaims the freed
+         * clusters immediately rather than lazily. Without this, a
+         * multi-GiB delete (e.g. moving a 116 GB game image off USB)
+         * leaves the space marked "used" until the volume is remounted
+         * or the kernel's lazy flush runs — confusing the user into
+         * thinking the delete failed. See fsync_parent_dir for details. */
+        if (st.st_size >= (off_t)(100 * 1024 * 1024)) {
+            fsync_parent_dir(path);
+        }
         return 0;
     }
     d = opendir(path);
@@ -6209,6 +6255,9 @@ static int rm_rf_op(const char *path, int depth, int op_idx) {
      * they can see what's left. */
     /* ENOENT here too means the directory is already gone — treat as success. */
     if (rc != -2 && rmdir(path) != 0 && errno != ENOENT) rc = -1;
+    /* Flush the parent dir after rmdir for the same exFAT reason as
+     * the file-unlink path above. */
+    if (rc == 0) fsync_parent_dir(path);
     return rc;
 }
 

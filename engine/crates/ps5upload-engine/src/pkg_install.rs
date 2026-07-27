@@ -28,7 +28,7 @@ use axum::{
 };
 use ps5upload_core::pkg_install::{
     err_code_message, pkg_install, pkg_install_status, InstallPhase, PkgInstallRequest,
-    PkgInstallResponse, PkgInstallStatus,
+    PkgInstallResponse, PkgInstallStatus, APPINST_VIA_LOCAL_FLAG, APPINST_VIA_SHELLUI_FLAG,
 };
 use ps5upload_pkg::{
     extract_from_ffpkg, inspect_ffpkg, parse_pkg, parse_split_pkg, PkgKind, PkgMetadata,
@@ -1031,6 +1031,39 @@ const INSTALL_SETTLE_FRACTION: f64 = 0.99;
 /// … AND this many seconds of no further writes ⇒ treat as complete.
 const INSTALL_SETTLE_SEC_DEFAULT: u64 = 60;
 
+/// For synthetic-DONE installs (shellui-rpc and appinst-local tiers),
+/// the payload reports Done the instant Sony accepts the task — long
+/// before the title is actually written. The tracker then verifies
+/// completion via the on-disk launch check. But on some firmware/IO
+/// combinations, `verify_launchable` can't see the title even after
+/// the PS5 notification says "ready" (extended storage installs,
+/// stale mount views, sqlite unreadable + FS probe race). Rather than
+/// spin until the stall deadline (10+ minutes of "installing" after
+/// the user already sees the game on their XMB), trust the payload's
+/// synthetic DONE after this grace period. The install DID start
+/// (Sony returned 0); the user verifies completion via the PS5's own
+/// notification panel. Env-tunable.
+const INSTALL_SYNTHETIC_DONE_GRACE_SEC_DEFAULT: u64 = 180;
+
+fn install_synthetic_done_grace_sec() -> u64 {
+    env_sec_or(
+        "PS5UPLOAD_INSTALL_SYNTHETIC_DONE_GRACE_SEC",
+        INSTALL_SYNTHETIC_DONE_GRACE_SEC_DEFAULT,
+    )
+}
+
+/// Whether this task_id indicates a synthetic-DONE tier — one where
+/// the payload reports Done immediately (shellui-rpc, appinst-local)
+/// rather than real-polling Sony's install status.
+fn is_synthetic_done_tier(task_id: Option<i32>) -> bool {
+    match task_id {
+        Some(tid) if tid >= 0 => {
+            (tid & APPINST_VIA_SHELLUI_FLAG) != 0 || (tid & APPINST_VIA_LOCAL_FLAG) != 0
+        }
+        _ => false,
+    }
+}
+
 fn env_sec_or(name: &str, default: u64) -> u64 {
     std::env::var(name)
         .ok()
@@ -1082,6 +1115,10 @@ struct TrackerObs {
     mid_sec: u64,
     neardone_sec: u64,
     settle_sec: u64,
+    /// For synthetic-DONE tiers (shellui-rpc / appinst-local), `Some(grace_sec)`
+    /// — after this many seconds of idle since the payload first reported Done,
+    /// trust it as complete. `None` for real-polled installs.
+    synthetic_done_grace_sec: Option<u64>,
 }
 
 /// What the tracker decides on a single poll.
@@ -1129,6 +1166,19 @@ fn install_verdict(obs: &TrackerObs) -> InstallVerdict {
         && obs.idle_sec >= obs.settle_sec
     {
         return InstallVerdict::Complete;
+    }
+    // Synthetic-DONE grace: for installs where the payload reported Done
+    // immediately (shellui-rpc / appinst-local tiers), trust the payload's
+    // signal after a grace period. These tiers fire-and-forget — Sony handles
+    // completion in the background, and the user verifies via the PS5's
+    // notification panel. The byte-settle check above may never trip for
+    // local-disk installs (pkg already on disk, no further free-space drop).
+    // We still require the grace period so a genuine install failure (Sony
+    // returns error shortly after accept) is caught by the stall deadline.
+    if let Some(grace) = obs.synthetic_done_grace_sec {
+        if obs.registered == Some(false) && obs.idle_sec >= grace {
+            return InstallVerdict::Complete;
+        }
     }
     // Adaptive stall deadline by how far along we are. Near the end the install
     // writes little (commit/register), so we're patient; an early/mid flatline
@@ -1450,12 +1500,30 @@ async fn install_status_handler(
             mid_sec: install_stall_mid_sec(),
             neardone_sec: install_stall_neardone_sec(),
             settle_sec: install_settle_sec(),
+            synthetic_done_grace_sec: {
+                let tid = {
+                    let sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
+                    sessions.get(&q.session).and_then(|s| s.task_id)
+                };
+                if is_synthetic_done_tier(tid) {
+                    Some(install_synthetic_done_grace_sec())
+                } else {
+                    None
+                }
+            },
         };
         match install_verdict(&obs) {
             InstallVerdict::Complete => {
                 // Confirmed done. `Some(true)` when the title registered;
                 // `None` on unverifiable FW that settled by byte-accounting
                 // (fall back to the may_not_launch heuristic, as before).
+                let via = if registered == Some(true) {
+                    "registered"
+                } else if obs.synthetic_done_grace_sec.is_some() {
+                    "synthetic-done-grace"
+                } else {
+                    "byte-settle"
+                };
                 launchable = if registered == Some(true) {
                     Some(true)
                 } else {
@@ -1470,7 +1538,7 @@ async fn install_status_handler(
                     "install complete: session={} content_id={} via={} consumed={} expected={} idle_sec={}",
                     q.session,
                     content_id,
-                    if registered == Some(true) { "registered" } else { "byte-settle" },
+                    via,
                     consumed,
                     total,
                     idle_sec
@@ -2552,6 +2620,7 @@ mod tests {
             mid_sec: 240,
             neardone_sec: 600,
             settle_sec: 60,
+            synthetic_done_grace_sec: None,
         }
     }
 
@@ -2672,6 +2741,71 @@ mod tests {
             install_verdict(&obs(Some(true), 0, 0, 0)),
             InstallVerdict::Complete
         );
+    }
+
+    #[test]
+    fn verdict_synthetic_done_grace_completes_when_unverifiable() {
+        // Synthetic-DONE tier (shellui-rpc / appinst-local): the payload
+        // reported Done immediately, but verify_launchable can't see the
+        // title (Some(false) = Absent). Without the grace path, this would
+        // spin until the stall deadline (10+ min of "installing" after the
+        // PS5 already shows the game). With grace=180, it completes.
+        let mut o = obs(Some(false), 0, 25_000_000_000, 180);
+        o.synthetic_done_grace_sec = Some(180);
+        assert_eq!(install_verdict(&o), InstallVerdict::Complete);
+    }
+
+    #[test]
+    fn verdict_synthetic_done_grace_not_yet_elapsed_stays_installing() {
+        // Before the grace period elapses, a synthetic-DONE install that
+        // hasn't registered and hasn't settled should stay Installing —
+        // don't declare victory too early, Sony might still error out.
+        // (idle=100 is below the startup stall deadline of 120 AND below
+        // the grace period of 180.)
+        let mut o = obs(Some(false), 0, 25_000_000_000, 100);
+        o.synthetic_done_grace_sec = Some(180);
+        assert_eq!(install_verdict(&o), InstallVerdict::Installing);
+    }
+
+    #[test]
+    fn verdict_synthetic_done_grace_inapplicable_when_registered_unsupported() {
+        // If verify_launchable returned Unsupported (None), the grace path
+        // doesn't apply — that's the unverifiable-FW byte-settle path, not
+        // the synthetic-DONE path. With no bytes and idle past startup,
+        // it stalls (byte-settle would complete if fraction >= 0.99).
+        let mut o = obs(None, 0, 25_000_000_000, 180);
+        o.synthetic_done_grace_sec = Some(180);
+        assert_eq!(install_verdict(&o), InstallVerdict::Stalled);
+    }
+
+    #[test]
+    fn verdict_synthetic_done_grace_not_set_for_real_polled_installs() {
+        // Real-polled (direct-bgft) installs: synthetic_done_grace_sec is
+        // None. verify_launchable == Absent + no byte progress → stalls.
+        let o = obs(Some(false), 0, 25_000_000_000, 999);
+        assert_eq!(install_verdict(&o), InstallVerdict::Stalled);
+    }
+
+    #[test]
+    fn is_synthetic_done_tier_classification() {
+        // Direct BGFT (no synthetic flags): not synthetic-done.
+        assert!(!is_synthetic_done_tier(Some(0x0000_1234)));
+        // shellui-rpc flag set: synthetic-done.
+        assert!(is_synthetic_done_tier(Some(
+            APPINST_VIA_SHELLUI_FLAG | 0x1234
+        )));
+        // appinst-local flag set: synthetic-done.
+        assert!(is_synthetic_done_tier(Some(
+            APPINST_VIA_LOCAL_FLAG | 0x1234
+        )));
+        // Both the base task-id flag + local: still synthetic-done.
+        assert!(is_synthetic_done_tier(Some(
+            ps5upload_core::pkg_install::APPINST_TASK_ID_FLAG | APPINST_VIA_LOCAL_FLAG | 0x1234
+        )));
+        // Failure sentinel (-1): not synthetic-done (it's "no tier reached").
+        assert!(!is_synthetic_done_tier(Some(-1)));
+        // No task_id yet: not synthetic-done.
+        assert!(!is_synthetic_done_tier(None));
     }
 
     // ── delete_staging / staging cleanup (the Auto-Delete data-loss fix) ──
