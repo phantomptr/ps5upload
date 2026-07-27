@@ -15,9 +15,7 @@
 //!
 //! 2. `sce_sys/param.sfo` — legacy Sony SFO binary. Used by PS4 games and
 //!    older PS5 homebrew PKGs. Binary format (20B header + index + key
-//!    table + data table). Parser stubbed here: the 2.1 target is PS5
-//!    games, which ship param.json; SFO support can be added when real
-//!    user reports demand it.
+//!    table + data table). Parsed by [`parse_sfo_string_keys`].
 //!
 //! Neither parser fails hard on missing fields — the client is happy to
 //! show a card with just a title-id if that's all we can extract.
@@ -71,9 +69,7 @@ pub fn inspect_folder(path: &Path) -> Result<FolderInspectResult> {
     let (meta_source, mut result) = if param_json_path.is_file() {
         ("param.json", parse_param_json(&param_json_path)?)
     } else if param_sfo_path.is_file() {
-        // Stub: SFO is a binary format we don't parse yet. Return just the
-        // disk-footprint bits and let the UI show a fallback card.
-        ("param.sfo", FolderInspectResult::empty_at(path))
+        ("param.sfo", parse_param_sfo_file(&param_sfo_path)?)
     } else {
         ("none", FolderInspectResult::empty_at(path))
     };
@@ -114,6 +110,107 @@ impl FolderInspectResult {
 fn parse_param_json(path: &Path) -> Result<FolderInspectResult> {
     let bytes = fs::read(path)?;
     parse_param_json_bytes(&bytes)
+}
+
+/// Parse a `param.sfo` file from local disk (PS4 / legacy PS5 homebrew).
+fn parse_param_sfo_file(path: &Path) -> Result<FolderInspectResult> {
+    let bytes = fs::read(path)?;
+    parse_param_sfo_bytes(&bytes)
+}
+
+/// Parse a `param.sfo` byte slice into a [`FolderInspectResult`].
+///
+/// Extracts `TITLE`, `TITLE_ID`, `CONTENT_ID`, `APP_VER`, and `CATEGORY`
+/// from the binary PSF key/value table. Non-string fields are ignored.
+pub fn parse_param_sfo_bytes(bytes: &[u8]) -> Result<FolderInspectResult> {
+    let kv = parse_sfo_string_keys(bytes).map_err(|e| anyhow::anyhow!("SFO parse error: {e}"))?;
+    Ok(FolderInspectResult {
+        path: String::new(),
+        title: kv
+            .get("TITLE")
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
+        title_id: kv.get("TITLE_ID").cloned(),
+        content_id: kv.get("CONTENT_ID").cloned(),
+        content_version: kv.get("APP_VER").cloned(),
+        application_category_type: None,
+        icon0_path: None,
+        total_size: 0,
+        file_count: 0,
+        skipped_paths: Vec::new(),
+        meta_source: "param.sfo",
+    })
+}
+
+/// Parse the string keys from a PARAM.SFO blob.
+///
+/// PSF layout: 20-byte header (magic `\x00PSF`, version, key-table offset,
+/// data-table offset, entry count) followed by `entry_count` 16-byte index
+/// entries, then the key table (NUL-terminated strings), then the data table.
+///
+/// Returns a flat `HashMap` of key → string value for string-typed entries
+/// (PSF format `0x0004` utf-8 special and `0x0204` utf-8 normal). Non-string
+/// entries (`PARENTAL_LEVEL` uint32, etc.) are silently skipped.
+///
+/// All offset arithmetic uses checked math to prevent integer-overflow panics
+/// on truncated / malicious SFO blobs.
+pub fn parse_sfo_string_keys(
+    bytes: &[u8],
+) -> std::result::Result<std::collections::HashMap<String, String>, String> {
+    if bytes.len() < 20 {
+        return Err("SFO too small".into());
+    }
+    if &bytes[0..4] != b"\x00PSF" {
+        return Err("SFO magic mismatch".into());
+    }
+    let key_table_off = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]) as usize;
+    let data_table_off = u32::from_le_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]) as usize;
+    let entry_count = u32::from_le_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]) as usize;
+    let mut out = std::collections::HashMap::new();
+    let table_off: usize = 20;
+    for i in 0..entry_count {
+        let e = match i.checked_mul(16).and_then(|m| table_off.checked_add(m)) {
+            Some(e) => e,
+            None => break,
+        };
+        match e.checked_add(16) {
+            Some(end) if end <= bytes.len() => {}
+            _ => break,
+        }
+        let key_off = u16::from_le_bytes([bytes[e], bytes[e + 1]]) as usize;
+        let format = u16::from_le_bytes([bytes[e + 2], bytes[e + 3]]);
+        let data_len =
+            u32::from_le_bytes([bytes[e + 4], bytes[e + 5], bytes[e + 6], bytes[e + 7]]) as usize;
+        let data_off =
+            u32::from_le_bytes([bytes[e + 12], bytes[e + 13], bytes[e + 14], bytes[e + 15]])
+                as usize;
+        let key_abs = match key_table_off.checked_add(key_off) {
+            Some(v) => v,
+            None => continue,
+        };
+        let data_abs = match data_table_off.checked_add(data_off) {
+            Some(v) => v,
+            None => continue,
+        };
+        let data_end = match data_abs.checked_add(data_len) {
+            Some(v) => v,
+            None => continue,
+        };
+        if data_end > bytes.len() || key_abs >= bytes.len() {
+            continue;
+        }
+        let key_end = (key_abs..bytes.len())
+            .find(|i| bytes[*i] == 0)
+            .unwrap_or(bytes.len());
+        let key = String::from_utf8_lossy(&bytes[key_abs..key_end]).into_owned();
+        if format == 0x0004 || format == 0x0204 {
+            let value = String::from_utf8_lossy(&bytes[data_abs..data_end])
+                .trim_end_matches('\0')
+                .to_string();
+            out.insert(key, value);
+        }
+    }
+    Ok(out)
 }
 
 /// Parse a `param.json` payload directly from bytes. Used by the
@@ -382,5 +479,188 @@ mod tests {
         );
 
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // ── SFO parser tests ────────────────────────────────────────────────
+
+    /// Build a minimal valid PSF binary with the given key→string-value
+    /// pairs. The layout matches what Sony's tools produce: 20-byte header,
+    /// index entries (16 bytes each), key table (NUL-terminated), data
+    /// table (NUL-padded to entry length).
+    fn build_sfo(entries: &[(&str, &str)]) -> Vec<u8> {
+        let header_len = 20usize;
+        let index_len = entries.len() * 16;
+        // Key table: all keys concatenated with trailing NUL.
+        let key_table: Vec<u8> = {
+            let mut kt = Vec::new();
+            for (k, _) in entries {
+                kt.extend_from_slice(k.as_bytes());
+                kt.push(0);
+            }
+            kt
+        };
+        // Data offsets are relative to data_table start; each value is
+        // padded to include its NUL terminator, matching Sony's format.
+        let data_entries: Vec<(usize, usize)> = entries
+            .iter()
+            .scan(0usize, |off, (_, v)| {
+                let start = *off;
+                let len = v.len() + 1; // include NUL
+                *off += len;
+                Some((start, len))
+            })
+            .collect();
+        let data_table_len: usize = data_entries.iter().map(|(_, l)| *l).sum();
+        let key_table_off = header_len + index_len;
+        let data_table_off = key_table_off + key_table.len();
+
+        let mut buf = Vec::with_capacity(data_table_off + data_table_len);
+        // Header.
+        buf.extend_from_slice(b"\x00PSF"); // magic
+        buf.extend_from_slice(&0x00000101u32.to_le_bytes()); // version 1.1 (4 bytes)
+        buf.extend_from_slice(&(key_table_off as u32).to_le_bytes());
+        buf.extend_from_slice(&(data_table_off as u32).to_le_bytes());
+        buf.extend_from_slice(&(entries.len() as u32).to_le_bytes());
+        // Index entries.
+        let mut key_off = 0u16;
+        for (i, (k, v)) in entries.iter().enumerate() {
+            let (data_off, data_len) = data_entries[i];
+            buf.extend_from_slice(&key_off.to_le_bytes()); // key offset
+            buf.extend_from_slice(&0x0204u16.to_le_bytes()); // format: utf-8 normal
+            buf.extend_from_slice(&(data_len as u32).to_le_bytes()); // data length
+            buf.extend_from_slice(&(data_len as u32).to_le_bytes()); // max length
+            buf.extend_from_slice(&(data_off as u32).to_le_bytes()); // data offset
+            key_off += k.len() as u16 + 1; // advance past key + NUL
+        }
+        // Key table.
+        buf.extend_from_slice(&key_table);
+        // Data table.
+        for (_, v) in entries {
+            buf.extend_from_slice(v.as_bytes());
+            buf.push(0);
+        }
+        buf
+    }
+
+    #[test]
+    fn parse_sfo_extracts_title_and_title_id() {
+        let sfo = build_sfo(&[
+            ("TITLE", "Test Game"),
+            ("TITLE_ID", "CUSA00001"),
+            ("CONTENT_ID", "EP0000-CUSA00001_00-TESTGAME0000000"),
+            ("APP_VER", "01.00"),
+        ]);
+        let kv = parse_sfo_string_keys(&sfo).unwrap();
+        assert_eq!(kv.get("TITLE").unwrap(), "Test Game");
+        assert_eq!(kv.get("TITLE_ID").unwrap(), "CUSA00001");
+        assert_eq!(kv.get("APP_VER").unwrap(), "01.00");
+    }
+
+    #[test]
+    fn parse_sfo_bytes_returns_folder_inspect_result() {
+        let sfo = build_sfo(&[
+            ("TITLE", "My PS4 Game"),
+            ("TITLE_ID", "CUSA12345"),
+            ("CONTENT_ID", "EP0000-CUSA12345_00-MYPS4GAME0000001"),
+            ("APP_VER", "01.02"),
+        ]);
+        let r = parse_param_sfo_bytes(&sfo).unwrap();
+        assert_eq!(r.meta_source, "param.sfo");
+        assert_eq!(r.title.as_deref(), Some("My PS4 Game"));
+        assert_eq!(r.title_id.as_deref(), Some("CUSA12345"));
+        assert_eq!(
+            r.content_id.as_deref(),
+            Some("EP0000-CUSA12345_00-MYPS4GAME0000001")
+        );
+        assert_eq!(r.content_version.as_deref(), Some("01.02"));
+    }
+
+    #[test]
+    fn parse_sfo_rejects_bad_magic() {
+        let mut bad = build_sfo(&[("TITLE", "x")]);
+        bad[0] = b'X';
+        assert!(parse_sfo_string_keys(&bad).is_err());
+    }
+
+    #[test]
+    fn parse_sfo_rejects_truncated_blob() {
+        let sfo = build_sfo(&[("TITLE", "x")]);
+        let truncated = &sfo[..10];
+        assert!(parse_sfo_string_keys(truncated).is_err());
+    }
+
+    #[test]
+    fn parse_sfo_skips_non_string_entries() {
+        // PARENTAL_LEVEL is a uint32 (format 0x0404), not utf-8.
+        // We build a hybrid SFO manually since build_sfo only does strings.
+        let header_len = 20usize;
+        let entries: [(u16, &[u8]); 2] = [
+            (0x0204, b"Test\0"),                 // TITLE, utf-8 string
+            (0x0404, &[0x01, 0x00, 0x00, 0x00]), // PARENTAL_LEVEL, uint32 = 1
+        ];
+        let index_len = entries.len() * 16;
+        let key_table: Vec<u8> = {
+            let mut kt = Vec::new();
+            kt.extend_from_slice(b"TITLE\0");
+            kt.extend_from_slice(b"PARENTAL_LEVEL\0");
+            kt
+        };
+        let key_table_off = header_len + index_len;
+        let data_table_off = key_table_off + key_table.len();
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"\x00PSF");
+        buf.extend_from_slice(&0x00000101u32.to_le_bytes()); // version 1.1 (4 bytes)
+        buf.extend_from_slice(&(key_table_off as u32).to_le_bytes());
+        buf.extend_from_slice(&(data_table_off as u32).to_le_bytes());
+        buf.extend_from_slice(&(entries.len() as u32).to_le_bytes());
+        // Index: TITLE at key_off 0, data_off 0, len 5
+        buf.extend_from_slice(&0u16.to_le_bytes());
+        buf.extend_from_slice(&0x0204u16.to_le_bytes());
+        buf.extend_from_slice(&5u32.to_le_bytes());
+        buf.extend_from_slice(&5u32.to_le_bytes());
+        buf.extend_from_slice(&0u32.to_le_bytes());
+        // Index: PARENTAL_LEVEL at key_off 6, data_off 5, len 4
+        buf.extend_from_slice(&6u16.to_le_bytes());
+        buf.extend_from_slice(&0x0404u16.to_le_bytes());
+        buf.extend_from_slice(&4u32.to_le_bytes());
+        buf.extend_from_slice(&4u32.to_le_bytes());
+        buf.extend_from_slice(&5u32.to_le_bytes());
+        buf.extend_from_slice(&key_table);
+        for (_, data) in &entries {
+            buf.extend_from_slice(data);
+        }
+        let kv = parse_sfo_string_keys(&buf).unwrap();
+        assert_eq!(kv.get("TITLE").unwrap(), "Test");
+        assert!(!kv.contains_key("PARENTAL_LEVEL"));
+    }
+
+    #[test]
+    fn inspect_folder_with_param_sfo_extracts_title() {
+        let dir = tmpdir("paramsfo");
+        let sce_sys = dir.join("sce_sys");
+        fs::create_dir_all(&sce_sys).unwrap();
+        let sfo = build_sfo(&[("TITLE", "PS4 Homebrew Game"), ("TITLE_ID", "CUSA99999")]);
+        fs::write(sce_sys.join("param.sfo"), &sfo).unwrap();
+        fs::write(dir.join("eboot.bin"), vec![0u8; 512]).unwrap();
+
+        let r = inspect_folder(&dir).unwrap();
+        assert_eq!(r.meta_source, "param.sfo");
+        assert_eq!(r.title.as_deref(), Some("PS4 Homebrew Game"));
+        assert_eq!(r.title_id.as_deref(), Some("CUSA99999"));
+        assert_eq!(r.file_count, 2); // param.sfo + eboot.bin
+        assert_eq!(r.total_size, sfo.len() as u64 + 512);
+
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn parse_sfo_strips_trailing_nul_from_title() {
+        // Sony tools always include the NUL in the data_len field.
+        // The parser must strip it so titles don't render with a trailing
+        // invisible byte.
+        let sfo = build_sfo(&[("TITLE", "Hello")]);
+        let kv = parse_sfo_string_keys(&sfo).unwrap();
+        assert_eq!(kv.get("TITLE").unwrap(), "Hello");
+        assert!(!kv.get("TITLE").unwrap().contains('\0'));
     }
 }

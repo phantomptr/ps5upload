@@ -63,7 +63,7 @@ use ps5upload_core::{
         fs_read, fs_unmount, list_dir, reconcile, walk_local_inventory, DirListing, ListDirOptions,
         MountResult, ReconcileFile, ReconcileMode, ReconcilePlan, RegisterResult,
     },
-    game_meta::parse_param_json_bytes,
+    game_meta::{parse_param_json_bytes, parse_param_sfo_bytes},
     hw::{
         drive_sensors, hw_info, hw_power, hw_set_fan_threshold, hw_storage, hw_temps, proc_list,
         DriveSensorList, HwInfo, HwPower, HwStorage, HwTemps, ProcList,
@@ -2418,12 +2418,12 @@ async fn ps5_hw_set_fan_threshold(
 
 /// GET /api/ps5/game-meta?addr=IP:MGMT_PORT&path=/mnt/ext1/homebrew/FooBar
 ///
-/// Reads `sce_sys/param.json` via FS_READ on the PS5 and returns the
-/// localized title, title-id, content-id, and version fields. Used by
-/// the Library screen to upgrade plain folder names into
-/// "My Title · PPSA00000" style labels without needing a local
-/// copy of the game. Failures (no param.json, bad JSON, path denied)
-/// return 404 so the UI can fall back to the folder name cleanly.
+/// Reads `sce_sys/param.json` (PS5) or `sce_sys/param.sfo` (PS4 / legacy)
+/// via FS_READ on the PS5 and returns the localized title, title-id,
+/// content-id, and version fields. Used by the Library screen to upgrade
+/// plain folder names into "My Title · PPSA00000" style labels without
+/// needing a local copy of the game. Failures (no metadata, bad format,
+/// path denied) return 404 so the UI can fall back to the folder name.
 #[derive(Debug, serde::Deserialize)]
 struct GameMetaQuery {
     addr: Option<String>,
@@ -2502,6 +2502,48 @@ async fn ps5_game_meta(
                     Err(_) => (None, None, None, None, None),
                 },
                 _ => (None, None, None, None, None),
+            };
+        // If param.json didn't yield a title, try param.sfo (PS4 games and
+        // legacy PS5 homebrew ship SFO, not JSON). Falls through cleanly
+        // if the SFO file also doesn't exist.
+        let (title, title_id, content_id, content_version, application_category_type) =
+            if title.is_none() {
+                let sfo_path = format!("{}/sce_sys/param.sfo", path.trim_end_matches('/'));
+                if let Ok(sfo_bytes) = fs_read(&addr, &sfo_path, 0, 256 * 1024) {
+                    if let Ok(r) = parse_param_sfo_bytes(&sfo_bytes) {
+                        (
+                            r.title,
+                            r.title_id,
+                            r.content_id,
+                            r.content_version,
+                            None, // SFO doesn't expose applicationCategoryType
+                        )
+                    } else {
+                        (
+                            title,
+                            title_id,
+                            content_id,
+                            content_version,
+                            application_category_type,
+                        )
+                    }
+                } else {
+                    (
+                        title,
+                        title_id,
+                        content_id,
+                        content_version,
+                        application_category_type,
+                    )
+                }
+            } else {
+                (
+                    title,
+                    title_id,
+                    content_id,
+                    content_version,
+                    application_category_type,
+                )
             };
         // icon0.png probe — read the first byte to confirm it exists.
         // Avoids pulling the full image just to know whether to set
@@ -2628,13 +2670,24 @@ fn looks_like_title_id(name: &str) -> bool {
         && b[4..].iter().all(|c| c.is_ascii_digit())
 }
 
-/// Best-effort title name from /user/appmeta/<title_id>/param.json. Returns
-/// None on any failure (no param.json — common for system apps — bad JSON,
-/// path denied); the caller falls back to the bare title_id.
+/// Best-effort title name from `/user/appmeta/<title_id>/`. Tries PS5
+/// `param.json` first, then falls back to PS4 `param.sfo`. Returns None
+/// on any failure (no metadata file — common for system apps — bad JSON,
+/// bad SFO, path denied); the caller falls back to the bare title_id.
 fn appmeta_title_name(addr: &str, title_id: &str) -> Option<String> {
-    let path = format!("/user/appmeta/{title_id}/param.json");
-    let bytes = fs_read(addr, &path, 0, 256 * 1024).ok()?;
-    let meta = parse_param_json_bytes(&bytes).ok()?;
+    // PS5 param.json.
+    let json_path = format!("/user/appmeta/{title_id}/param.json");
+    if let Ok(bytes) = fs_read(addr, &json_path, 0, 256 * 1024) {
+        if let Ok(meta) = parse_param_json_bytes(&bytes) {
+            if let Some(t) = meta.title.filter(|t| !t.trim().is_empty()) {
+                return Some(t);
+            }
+        }
+    }
+    // PS4 / legacy param.sfo.
+    let sfo_path = format!("/user/appmeta/{title_id}/param.sfo");
+    let bytes = fs_read(addr, &sfo_path, 0, 256 * 1024).ok()?;
+    let meta = parse_param_sfo_bytes(&bytes).ok()?;
     meta.title.filter(|t| !t.trim().is_empty())
 }
 
