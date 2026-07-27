@@ -315,7 +315,12 @@ jobs:
           LINUXDEPLOY_VERBOSE: "1"
         run: |
           if [ "$PLATFORM" = "windows" ]; then
+            # Build the raw exe (--no-bundle) AND the NSIS installer. The
+            # NSIS installer bundles the WebView2 bootstrapper, which is
+            # essential on Windows 10 where WebView2 is not pre-installed
+            # (issue #221: app shows in Task Manager but no window appears).
             npx tauri build --target "$RUST_TARGET" --ci --no-bundle
+            npx tauri build --target "$RUST_TARGET" --ci --bundles nsis
           else
             npx tauri build --target "$RUST_TARGET" --ci --verbose
           fi
@@ -378,6 +383,14 @@ jobs:
               PS5UP_ZIP="$dist_abs/PS5Upload.zip" \
                 pwsh -NoProfile -Command 'Compress-Archive -LiteralPath $env:PS5UP_EXE -DestinationPath $env:PS5UP_ZIP -CompressionLevel Optimal'
               rm -rf "$staging"
+              # Also ship the NSIS installer (includes WebView2 bootstrapper
+              # for Windows 10 users who don't have Edge/WebView2 installed).
+              nsis_setup="$(find "$bundle" -type f -name "*-setup.exe" 2>/dev/null | head -n1)"
+              if [ -n "$nsis_setup" ] && [ -f "$nsis_setup" ]; then
+                cp -v "$nsis_setup" "$dist_abs/PS5Upload-setup.exe"
+              else
+                echo "::warning::NSIS installer not found (WebView2 bootstrapper not bundled)"
+              fi
               ;;
           esac
           # Ship the engine sidecar binary standalone too (it's also bundled
@@ -584,6 +597,11 @@ jobs:
           for f in artifacts/ps5upload-windows-*/PS5Upload.zip; do
             arch="$(basename "$(dirname "$f")" | sed 's/^ps5upload-windows-//')"
             cp -v "$f" "release/PS5Upload-${TAG_VERSION}-win-${arch}.zip"
+          done
+          # NSIS installer (includes WebView2 bootstrapper for Win10 users).
+          for f in artifacts/ps5upload-windows-*/PS5Upload-setup.exe; do
+            arch="$(basename "$(dirname "$f")" | sed 's/^ps5upload-windows-//')"
+            cp -v "$f" "release/PS5Upload-${TAG_VERSION}-win-${arch}-setup.exe"
           done
           for f in artifacts/ps5upload-linux-*/PS5Upload.zip; do
             arch="$(basename "$(dirname "$f")" | sed 's/^ps5upload-linux-//')"
