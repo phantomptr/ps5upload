@@ -14206,10 +14206,14 @@ static int appdb_raw_scan(runtime_state_t *state, int client_fd,
                 continue;
             }
 
-            /* Trim trailing non-printable from best_title */
-            while (best_len > 0 &&
-                   (best_title[best_len-1] < 0x20 || best_title[best_len-1] >= 0x7f) &&
-                   best_title[best_len-1] != 0xC3 && best_title[best_len-1] != 0xC2) {
+            /* Trim trailing non-printable from best_title. Cast to unsigned
+             * char before comparing with UTF-8 lead bytes (0xC2/0xC3) to
+             * avoid tautological-compare warnings on platforms where char
+             * is signed. */
+            while (best_len > 0) {
+                unsigned char c = (unsigned char)best_title[best_len-1];
+                if ((c >= 0x20 && c < 0x7f) || c == 0xC3 || c == 0xC2)
+                    break;
                 best_title[--best_len] = '\0';
             }
 
