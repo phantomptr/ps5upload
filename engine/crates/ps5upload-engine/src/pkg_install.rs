@@ -1058,8 +1058,7 @@ fn install_synthetic_done_grace_sec() -> u64 {
 fn is_synthetic_done_tier(task_id: Option<i32>) -> bool {
     match task_id {
         Some(tid) if tid >= 0 => {
-            (tid & APPINST_VIA_SHELLUI_FLAG) != 0
-                || (tid & APPINST_VIA_LOCAL_FLAG) != 0
+            (tid & APPINST_VIA_SHELLUI_FLAG) != 0 || (tid & APPINST_VIA_LOCAL_FLAG) != 0
         }
         _ => false,
     }
@@ -2792,9 +2791,13 @@ mod tests {
         // Direct BGFT (no synthetic flags): not synthetic-done.
         assert!(!is_synthetic_done_tier(Some(0x0000_1234)));
         // shellui-rpc flag set: synthetic-done.
-        assert!(is_synthetic_done_tier(Some(APPINST_VIA_SHELLUI_FLAG | 0x1234)));
+        assert!(is_synthetic_done_tier(Some(
+            APPINST_VIA_SHELLUI_FLAG | 0x1234
+        )));
         // appinst-local flag set: synthetic-done.
-        assert!(is_synthetic_done_tier(Some(APPINST_VIA_LOCAL_FLAG | 0x1234)));
+        assert!(is_synthetic_done_tier(Some(
+            APPINST_VIA_LOCAL_FLAG | 0x1234
+        )));
         // Both the base task-id flag + local: still synthetic-done.
         assert!(is_synthetic_done_tier(Some(
             ps5upload_core::pkg_install::APPINST_TASK_ID_FLAG | APPINST_VIA_LOCAL_FLAG | 0x1234
