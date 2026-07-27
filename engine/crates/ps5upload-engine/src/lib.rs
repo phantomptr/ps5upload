@@ -54,6 +54,7 @@ use ftx2_proto::FrameType;
 use ps5upload_core::{
     cleanup::{cleanup_path, CleanupResult},
     connection::Connection,
+    diagnostics::appdb_query,
     download::{
         download_to_local_multistream, enumerate_download_set, DownloadKind, MAX_DOWNLOAD_STREAMS,
     },
@@ -2671,8 +2672,9 @@ fn looks_like_title_id(name: &str) -> bool {
 }
 
 /// Best-effort title name from `/user/appmeta/<title_id>/`. Tries PS5
-/// `param.json` first, then falls back to PS4 `param.sfo`. Returns None
-/// on any failure (no metadata file — common for system apps — bad JSON,
+/// `param.json` first, then falls back to PS4 `param.sfo`, then queries
+/// `app.db` (raw file scan when sqlite is unavailable). Returns None on
+/// any failure (no metadata file — common for system apps — bad JSON,
 /// bad SFO, path denied); the caller falls back to the bare title_id.
 fn appmeta_title_name(addr: &str, title_id: &str) -> Option<String> {
     // PS5 param.json.
@@ -2686,9 +2688,31 @@ fn appmeta_title_name(addr: &str, title_id: &str) -> Option<String> {
     }
     // PS4 / legacy param.sfo.
     let sfo_path = format!("/user/appmeta/{title_id}/param.sfo");
-    let bytes = fs_read(addr, &sfo_path, 0, 256 * 1024).ok()?;
-    let meta = parse_param_sfo_bytes(&bytes).ok()?;
-    meta.title.filter(|t| !t.trim().is_empty())
+    if let Ok(bytes) = fs_read(addr, &sfo_path, 0, 256 * 1024) {
+        if let Ok(meta) = parse_param_sfo_bytes(&bytes) {
+            if let Some(t) = meta.title.filter(|t| !t.trim().is_empty()) {
+                return Some(t);
+            }
+        }
+    }
+    // Third fallback: query app.db via the payload's AppDbQuery RPC.
+    // On FW where sqlite symbols are unavailable via dlsym (5.10, 9.60),
+    // the payload falls back to a raw file scan that reads app.db
+    // directly and extracts title names by scanning SQLite B-tree pages.
+    // This is the only way to resolve PS4 BC titles (CUSA IDs) whose
+    // metadata lives solely in app.db — their appmeta dirs have no
+    // param.sfo or param.json.
+    if let Ok(appdb) = appdb_query(addr) {
+        for app in &appdb.apps {
+            if app.title_id == title_id {
+                let name = app.name.trim();
+                if !name.is_empty() && name != title_id {
+                    return Some(name.to_string());
+                }
+            }
+        }
+    }
+    None
 }
 
 /// GET /api/ps5/apps/installed?addr=IP:MGMT_PORT
