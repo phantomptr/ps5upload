@@ -133,7 +133,7 @@ processes: "Procesy",
 processes_title: "Procesy",
 processes_subtitle:
   "Żywa lista procesów połączonego PS5. Zabij lub zrestartuj procesy.",
-processes_offline_title: "PS5 helper not running",
+processes_offline_title: "Helper nie działa na PS5",
 processes_offline_desc:
   "Połącz się z PS5 i załaduj payload helpera aby zarządzać procesami.",
 processes_show_system: "Pokaż procesy systemowe",
