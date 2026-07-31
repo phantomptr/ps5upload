@@ -4,6 +4,24 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 4.1.4
+
+New: optional system-file read access for the File Browser.
+
+- **New: download system files from read-only partitions (issue #241).**
+  A new toggle in Settings → **Allow downloading system files** (OFF by
+  default) lifts the writable-root allowlist for FS_READ/FS_HASH
+  operations only. When enabled, the File Browser can download files
+  from `/system/common/lib`, `/system_data/priv`, `/system_ex`, and
+  other read-only system partitions — useful for dumping `.sprx`
+  modules, fonts, and other system assets. This is strictly read-only:
+  destructive operations (delete, move, chmod, mkdir, copy, write,
+  mount) ignore the flag entirely and always enforce the full
+  allowlist. Path traversal (`..`) guards still apply even in unsafe
+  mode. When the toggle is off and a system path is requested, the
+  error message points the user to the Settings toggle rather than
+  giving a generic access-denied error.
+
 ## 4.1.3
 
 Fixes for PS4 backward-compat title resolution, Windows installer deps, and
