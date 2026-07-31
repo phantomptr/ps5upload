@@ -582,6 +582,12 @@ static int path_has_dotdot_component(const char *p);
  * the exact set. Also used by backup.c's restore path so a crafted
  * manifest can't write outside the allowlist. Declared in runtime.h. */
 int is_path_allowed(const char *p);
+/* Unsafe-read opt-in: when the request body contains "unsafe":true,
+ * FS_READ/FS_HASH bypass the writable-root allowlist for read-only
+ * access to system partitions. Destructive ops never honor it.
+ * Defined alongside handle_fs_read. */
+static int is_unsafe_read_request(const char *request_body);
+static int is_safe_unsafe_read_path(const char *p);
 /* JSON-escape helper. Used by ACK builders that embed user-controlled
  * paths/strings into JSON bodies. Defined alongside FS_LIST_VOLUMES. */
 static size_t json_escape_into(const char *src, char *dst, size_t dst_cap);
@@ -7274,11 +7280,11 @@ static int is_profile_avatar_read_path(const char *p) {
 
 /* Check whether a read request includes the `"unsafe":true` opt-in flag.
  * When set, FS_READ and FS_HASH bypass the writable-root allowlist so the
- * user can read system files (/system/common/lib/*.sprx, /system_data/priv/...,
- * /system_ex/...). This is READ-ONLY — destructive ops (delete/move/chmod/
- * mkdir/copy/write/mount) ignore this flag entirely and always enforce the
- * full allowlist. The dotdot guard still applies, so traversal attacks are
- * still rejected even in unsafe mode. */
+ * user can read system files (e.g. .sprx modules under /system/common/lib,
+ * /system_data/priv, /system_ex). This is READ-ONLY — destructive ops
+ * (delete, move, chmod, mkdir, copy, write, mount) ignore this flag
+ * entirely and always enforce the full allowlist. The dotdot guard still
+ * applies, so traversal attacks are still rejected even in unsafe mode. */
 static int is_unsafe_read_request(const char *request_body) {
     if (!request_body) return 0;
     return strstr(request_body, "\"unsafe\":true") != NULL;

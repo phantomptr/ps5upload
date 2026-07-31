@@ -74,6 +74,14 @@ describe("humanizeJobErrorReason", () => {
     }
   });
 
+  it("recognizes system-file-read-blocked and suggests the toggle", () => {
+    // The read path is distinct from the destructive path-denied case:
+    // the fix is to enable the Settings toggle, not to change the path.
+    const msg = humanizeJobErrorReason("fs_read_path_not_allowed");
+    expect(msg).not.toBeNull();
+    expect(msg).toMatch(/system partition|Allow downloading/i);
+  });
+
   it("recognizes the protocol-corruption case", () => {
     const msg = humanizeJobErrorReason("direct_tx_corrupt");
     expect(msg).toMatch(/protocol|corruption|restart/i);

@@ -73,7 +73,13 @@ fn fs_read_send(conn: &mut Connection, path: &str, offset: u64, limit: u64) -> R
 
 /// Extended version that supports the `unsafe_read` flag for reading
 /// system files outside the writable-root allowlist.
-fn fs_read_send_ex(conn: &mut Connection, path: &str, offset: u64, limit: u64, unsafe_read: bool) -> Result<()> {
+fn fs_read_send_ex(
+    conn: &mut Connection,
+    path: &str,
+    offset: u64,
+    limit: u64,
+    unsafe_read: bool,
+) -> Result<()> {
     let body = serde_json::to_vec(&serde_json::json!({
         "path": path,
         "offset": offset,
@@ -1246,6 +1252,102 @@ mod pipeline_tests {
                 );
             }
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Fake payload variant that records whether each received FS_READ
+    /// request body contained `"unsafe":true`. Used to verify the
+    /// unsafe_read flag is correctly threaded through the download path.
+    fn spawn_fake_payload_recording_unsafe() -> (String, std::sync::Arc<std::sync::Mutex<Vec<bool>>>)
+    {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let flags = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let flags_clone = std::sync::Arc::clone(&flags);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut s) = stream else { break };
+                let flags_inner = std::sync::Arc::clone(&flags_clone);
+                std::thread::spawn(move || loop {
+                    let mut hbuf = [0u8; FRAME_HEADER_LEN];
+                    if s.read_exact(&mut hbuf).is_err() {
+                        break;
+                    }
+                    let hdr = FrameHeader::decode(&hbuf).unwrap();
+                    let mut body = vec![0u8; hdr.body_len as usize];
+                    if hdr.body_len > 0 {
+                        s.read_exact(&mut body).unwrap();
+                    }
+                    let body_str = String::from_utf8_lossy(&body);
+                    let is_unsafe = body_str.contains("\"unsafe\":true");
+                    flags_inner.lock().unwrap().push(is_unsafe);
+                    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                    let offset = v["offset"].as_u64().unwrap_or(0);
+                    let limit = v["limit"].as_u64().unwrap_or(DOWNLOAD_CHUNK_SIZE);
+                    let data: Vec<u8> = (offset..offset + limit).map(pattern_byte).collect();
+                    let rh = FrameHeader::new(FrameType::FsReadAck, 0, limit, 0);
+                    if s.write_all(&rh.encode()).is_err() || s.write_all(&data).is_err() {
+                        break;
+                    }
+                });
+            }
+        });
+        (addr, flags)
+    }
+
+    #[test]
+    fn unsafe_download_sends_unsafe_flag_in_request_body() {
+        let (addr, flags) = spawn_fake_payload_recording_unsafe();
+        let size = DOWNLOAD_CHUNK_SIZE + 100;
+        let dir = std::env::temp_dir().join(format!("ps5dl-unsafe-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let manifest = vec![DownloadEntry {
+            remote_path: "/system/common/lib/libkernel.sprx".into(),
+            rel_path: "libkernel.sprx".into(),
+            size,
+        }];
+        let res = download_to_local_ex(&addr, &dir, &manifest, None, true);
+        assert!(res.is_ok(), "unsafe download failed: {:?}", res.err());
+
+        let recorded = flags.lock().unwrap();
+        assert!(
+            !recorded.is_empty(),
+            "fake payload should have received at least one FS_READ request"
+        );
+        assert!(
+            recorded.iter().all(|&f| f),
+            "every FS_READ request should have had unsafe=true, got: {:?}",
+            recorded
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn safe_download_does_not_send_unsafe_flag() {
+        let (addr, flags) = spawn_fake_payload_recording_unsafe();
+        let size = DOWNLOAD_CHUNK_SIZE + 100;
+        let dir = std::env::temp_dir().join(format!("ps5dl-safe-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let manifest = vec![DownloadEntry {
+            remote_path: "/data/game/eboot.bin".into(),
+            rel_path: "eboot.bin".into(),
+            size,
+        }];
+        let res = download_to_local_ex(&addr, &dir, &manifest, None, false);
+        assert!(res.is_ok(), "safe download failed: {:?}", res.err());
+
+        let recorded = flags.lock().unwrap();
+        assert!(
+            !recorded.is_empty(),
+            "fake payload should have received at least one FS_READ request"
+        );
+        assert!(
+            recorded.iter().all(|&f| !f),
+            "no FS_READ request should have had unsafe=true, got: {:?}",
+            recorded
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

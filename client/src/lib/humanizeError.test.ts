@@ -235,6 +235,21 @@ describe("humanizePs5Error", () => {
     });
   });
 
+  describe("System file read blocked by allowlist", () => {
+    it("maps fs_read_path_not_allowed to the settings toggle hint", () => {
+      expect(humanizePs5Error("fs_read_path_not_allowed")).toMatch(
+        /Allow downloading system files/i,
+      );
+    });
+    it("matches the token embedded in a longer error string", () => {
+      expect(
+        humanizePs5Error(
+          "payload rejected FS_READ(/system/common/lib/libkernel.sprx): fs_read_path_not_allowed",
+        ),
+      ).toMatch(/system partition/i);
+    });
+  });
+
   describe("BGFT install error codes (added 2.2.32)", () => {
     it("0x80990088 → already installed", () => {
       expect(humanizePs5Error("BGFT err 0x80990088 already installed")).toMatch(
