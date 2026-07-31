@@ -161,7 +161,7 @@ fn run_heal(addr: &str, title_id: &str, source_path: &str) -> Result<HealResult,
         // Probe the source via fs_read with limit=1 — cheaper than
         // listing the parent dir per file, gives us "exists?" in one
         // round-trip.
-        if fs_read_with_timeout(addr, &src, 0, 1, Some(RPC_TIMEOUT)).is_err() {
+        if fs_read_with_timeout(addr, &src, 0, 1, Some(RPC_TIMEOUT), false).is_err() {
             outcomes.push(HealOutcome {
                 file: (*file).to_string(),
                 status: "missing_from_source".into(),

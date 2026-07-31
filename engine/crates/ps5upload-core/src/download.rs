@@ -66,11 +66,19 @@ const DOWNLOAD_MAX_RECONNECTS: u32 = 6;
 
 /// Send one FS_READ request on an existing connection WITHOUT reading the
 /// response — the producer half of the pipeline.
+#[allow(dead_code)]
 fn fs_read_send(conn: &mut Connection, path: &str, offset: u64, limit: u64) -> Result<()> {
+    fs_read_send_ex(conn, path, offset, limit, false)
+}
+
+/// Extended version that supports the `unsafe_read` flag for reading
+/// system files outside the writable-root allowlist.
+fn fs_read_send_ex(conn: &mut Connection, path: &str, offset: u64, limit: u64, unsafe_read: bool) -> Result<()> {
     let body = serde_json::to_vec(&serde_json::json!({
         "path": path,
         "offset": offset,
         "limit": limit,
+        "unsafe": unsafe_read,
     }))
     .context("serialize fs_read body")?;
     conn.send_frame(FrameType::FsRead, &body)
@@ -128,6 +136,7 @@ fn fs_read_recv_into(conn: &mut Connection, buf: &mut [u8], path: &str) -> Resul
 /// mid-pull: the outstanding pipelined requests are now misaligned, so we
 /// bail. That's a non-retryable protocol error (re-reading gets the same
 /// short file), distinct from a connection drop the caller retries.
+#[allow(clippy::too_many_arguments)]
 fn download_file_range(
     conn: &mut Connection,
     path: &str,
@@ -142,6 +151,7 @@ fn download_file_range(
     offset: &mut u64,
     total_written: &mut u64,
     progress: Option<&Arc<AtomicU64>>,
+    unsafe_read: bool,
 ) -> Result<()> {
     let mut next_req = *offset;
     // Requested lengths, in send order — responses arrive in the same order
@@ -152,7 +162,7 @@ fn download_file_range(
         // Top up the in-flight window.
         while inflight.len() < DOWNLOAD_PIPELINE_DEPTH && next_req < expected {
             let want = std::cmp::min(DOWNLOAD_CHUNK_SIZE, expected - next_req);
-            fs_read_send(conn, path, next_req, want)?;
+            fs_read_send_ex(conn, path, next_req, want, unsafe_read)?;
             inflight.push_back(want);
             next_req += want;
         }
@@ -421,6 +431,18 @@ pub fn download_to_local(
     manifest: &[DownloadEntry],
     progress_bytes: Option<&Arc<AtomicU64>>,
 ) -> Result<u64> {
+    download_to_local_ex(addr, dest_dir, manifest, progress_bytes, false)
+}
+
+/// Extended version with `unsafe_read` flag for downloading system files
+/// outside the writable-root allowlist.
+pub fn download_to_local_ex(
+    addr: &str,
+    dest_dir: &Path,
+    manifest: &[DownloadEntry],
+    progress_bytes: Option<&Arc<AtomicU64>>,
+    unsafe_read: bool,
+) -> Result<u64> {
     use std::fs;
     use std::io::Seek;
 
@@ -525,6 +547,7 @@ pub fn download_to_local(
                 &mut offset,
                 &mut total_written,
                 progress_bytes,
+                unsafe_read,
             ) {
                 Ok(()) => break,
                 Err(e) => {
@@ -653,6 +676,18 @@ pub fn download_to_zip(
     manifest: &[DownloadEntry],
     progress_bytes: Option<&Arc<AtomicU64>>,
 ) -> Result<u64> {
+    download_to_zip_ex(addr, dest_zip, manifest, progress_bytes, false)
+}
+
+/// Extended version with `unsafe_read` flag for downloading system files
+/// outside the writable-root allowlist into a zip archive.
+pub fn download_to_zip_ex(
+    addr: &str,
+    dest_zip: &Path,
+    manifest: &[DownloadEntry],
+    progress_bytes: Option<&Arc<AtomicU64>>,
+    unsafe_read: bool,
+) -> Result<u64> {
     use std::io::BufWriter;
     use zip::write::SimpleFileOptions;
 
@@ -699,6 +734,7 @@ pub fn download_to_zip(
                 &mut offset,
                 &mut total,
                 progress_bytes,
+                unsafe_read,
             ) {
                 Ok(()) => break,
                 Err(e) => {
@@ -742,9 +778,21 @@ pub fn download_to_local_multistream(
     streams: usize,
     progress_bytes: Option<&Arc<AtomicU64>>,
 ) -> Result<u64> {
+    download_to_local_multistream_ex(addr, dest_dir, manifest, streams, progress_bytes, false)
+}
+
+/// Extended version with `unsafe_read` for downloading system files.
+pub fn download_to_local_multistream_ex(
+    addr: &str,
+    dest_dir: &Path,
+    manifest: &[DownloadEntry],
+    streams: usize,
+    progress_bytes: Option<&Arc<AtomicU64>>,
+    unsafe_read: bool,
+) -> Result<u64> {
     let effective = streams.clamp(1, MAX_DOWNLOAD_STREAMS);
     if effective <= 1 || manifest.len() <= 1 {
-        return download_to_local(addr, dest_dir, manifest, progress_bytes);
+        return download_to_local_ex(addr, dest_dir, manifest, progress_bytes, unsafe_read);
     }
     let weights: Vec<u64> = manifest.iter().map(|e| e.size).collect();
     let buckets = crate::transfer::distribute_balanced(&weights, effective);
@@ -759,7 +807,9 @@ pub fn download_to_local_multistream(
             let addr = addr.to_string();
             let dest = dest_dir.to_path_buf();
             let prog = progress_bytes.cloned();
-            handles.push(scope.spawn(move || download_to_local(&addr, &dest, &sub, prog.as_ref())));
+            handles.push(scope.spawn(move || {
+                download_to_local_ex(&addr, &dest, &sub, prog.as_ref(), unsafe_read)
+            }));
         }
         handles
             .into_iter()

@@ -56,7 +56,7 @@ use ps5upload_core::{
     connection::Connection,
     diagnostics::appdb_query,
     download::{
-        download_to_local_multistream, enumerate_download_set, DownloadKind, MAX_DOWNLOAD_STREAMS,
+        download_to_local_multistream_ex, enumerate_download_set, DownloadKind, MAX_DOWNLOAD_STREAMS,
     },
     fs_ops::{
         app_launch, app_list_registered, app_register, app_unregister, fs_copy_robust,
@@ -5286,6 +5286,11 @@ struct TransferDownloadReq {
     /// `MAX_DOWNLOAD_STREAMS`. Ignored for single-file downloads.
     #[serde(default)]
     streams: Option<usize>,
+    /// When true, bypasses the payload's writable-root allowlist so system
+    /// files (/system/, /system_data/, /system_ex/) can be downloaded.
+    /// Read-only — the payload ignores this flag for destructive ops.
+    #[serde(default)]
+    unsafe_read: bool,
 }
 
 /// POST /api/transfer/download — PS5 → host file/folder pull.
@@ -5302,6 +5307,7 @@ async fn transfer_download_handler(
     // files automatically (single-file pulls fall back to one stream inside
     // download_to_local_multistream). Capture before req.addr is moved below.
     let download_streams = req.streams.unwrap_or(MAX_DOWNLOAD_STREAMS);
+    let req_unsafe = req.unsafe_read;
     let mgmt_addr = mgmt_addr_or_default(req.addr, &state.default_ps5_addr);
     crate::log_info!(
         "transfer_download: addr={mgmt_addr} src_path={} dest_dir={} kind={}",
@@ -5497,12 +5503,13 @@ async fn transfer_download_handler(
         // Write root is `dest_dir` (NOT dest_root) — rel_paths already carry
         // the basename prefix; see the dest_root comment above. Multi-stream
         // for folders (parallel files); single-file falls back internally.
-        let result = download_to_local_multistream(
+        let result = download_to_local_multistream_ex(
             &mgmt_addr,
             &dest_dir,
             &manifest,
             download_streams,
             Some(&progress),
+            req_unsafe,
         );
         match result {
             Ok(bytes_written) => {
@@ -5557,6 +5564,10 @@ struct TransferDownloadZipReq {
     kind: String,
     /// Absolute host path of the `.zip` to create (the user-picked save path).
     dest_zip: String,
+    /// When true, allows reading files outside the normal payload path
+    /// allow-list (e.g. /system, /system_data). Read-only. Default false.
+    #[serde(default)]
+    unsafe_read: bool,
 }
 
 /// POST /api/transfer/download-zip — pull a PS5 file/folder straight into a
@@ -5594,6 +5605,7 @@ async fn transfer_download_zip_handler(
         return json_err(StatusCode::BAD_REQUEST, "dest_zip cannot be empty").into_response();
     }
     let dest_zip = std::path::PathBuf::from(&req.dest_zip);
+    let req_unsafe_zip = req.unsafe_read;
     // The save dialog hands us a path inside an existing dir, but verify the
     // parent is a real directory (off-reactor — it may be a network mount) so a
     // bad path fails fast with a clear message instead of mid-stream.
@@ -5687,11 +5699,12 @@ async fn transfer_download_zip_handler(
         let _stop_guard = TickerStopGuard::new(stop_ticker);
         let mut fail_guard =
             JobFailOnDropGuard::new(Arc::clone(&jobs), events_tx.clone(), job_id, started_at_ms);
-        match ps5upload_core::download::download_to_zip(
+        match ps5upload_core::download::download_to_zip_ex(
             &mgmt_addr,
             &dest_zip,
             &manifest,
             Some(&progress),
+            req_unsafe_zip,
         ) {
             Ok(bytes_written) => {
                 let completed_at_ms = now_ms();

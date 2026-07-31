@@ -23,6 +23,7 @@ const KEY_UPLOAD_STREAMS = "ps5upload.upload_streams";
 const KEY_AUTO_RESUME = "ps5upload.auto_resume";
 const KEY_KEEP_PS5_AWAKE = "ps5upload.keep_ps5_awake";
 const KEY_AUTO_REDEPLOY_ON_WAKE = "ps5upload.auto_redeploy_on_wake";
+const KEY_SYSTEM_FILE_READ = "ps5upload.system_file_read";
 
 /** Upper bound on the user-selectable stream count, mirroring the engine's
  *  MAX_TRANSFER_STREAMS. The effective count is further clamped to whatever
@@ -153,6 +154,19 @@ function loadAutoRedeployOnWake(): boolean {
   return safeGetItem(KEY_AUTO_REDEPLOY_ON_WAKE) !== "false";
 }
 
+/** Allow reading/downloading system files outside the normal allow-list
+ *  (/data, /user, /mnt). Default OFF: reading /system, /system_data, etc.
+ *  is useful for power users (dumping fonts, examining configs) but
+ *  surfaces Sony-critical paths the user should be cautious around.
+ *  When enabled, the download path sends an "unsafe_read" flag that the
+ *  engine and payload honor for read-only operations only. Destructive
+ *  ops (delete, move, chmod, etc.) are never affected by this toggle.
+ *  Stored as "true" only when the user opts in. */
+function loadSystemFileRead(): boolean {
+  if (typeof window === "undefined") return false;
+  return safeGetItem(KEY_SYSTEM_FILE_READ) === "true";
+}
+
 interface UploadSettingsState {
   /** When true, the Upload flow skips the Override/Resume/Cancel
    *  dialog and always overwrites the destination. Useful for
@@ -184,6 +198,11 @@ interface UploadSettingsState {
    *  threshold and the upload port without a manual click. See
    *  loadAutoRedeployOnWake. */
   autoRedeployOnWake: boolean;
+  /** Allow reading/downloading system files (/system, /system_data, etc.)
+   *  that are normally outside the payload's path allow-list. Opt-in,
+   *  read-only — destructive operations are never affected. See
+   *  loadSystemFileRead. */
+  systemFileRead: boolean;
   setAlwaysOverwrite: (on: boolean) => void;
   setShowTransferFiles: (on: boolean) => void;
   setBandwidthCapMbps: (n: number) => void;
@@ -191,6 +210,7 @@ interface UploadSettingsState {
   setAutoResume: (on: boolean) => void;
   setKeepPs5AwakeMode: (mode: KeepPs5AwakeMode) => void;
   setAutoRedeployOnWake: (on: boolean) => void;
+  setSystemFileRead: (on: boolean) => void;
 }
 
 export const useUploadSettingsStore = create<UploadSettingsState>((set) => ({
@@ -202,6 +222,7 @@ export const useUploadSettingsStore = create<UploadSettingsState>((set) => ({
   autoResume: loadAutoResume(),
   keepPs5AwakeMode: loadKeepPs5AwakeMode(),
   autoRedeployOnWake: loadAutoRedeployOnWake(),
+  systemFileRead: loadSystemFileRead(),
   setAlwaysOverwrite: (alwaysOverwrite) => {
     safeSetItem(
       KEY_ALWAYS_OVERWRITE,
@@ -252,5 +273,12 @@ export const useUploadSettingsStore = create<UploadSettingsState>((set) => ({
       autoRedeployOnWake ? "true" : "false",
     );
     set({ autoRedeployOnWake });
+  },
+  setSystemFileRead: (systemFileRead) => {
+    safeSetItem(
+      KEY_SYSTEM_FILE_READ,
+      systemFileRead ? "true" : "false",
+    );
+    set({ systemFileRead });
   },
 }));

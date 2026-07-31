@@ -64,6 +64,7 @@ import { pushNotification } from "../../state/notifications";
 import { usePkgLibrary } from "../../state/pkgLibrary";
 import { isRemovableMount } from "../../lib/mountPaths";
 import { useRecentPathsStore } from "../../state/recentPaths";
+import { useUploadSettingsStore } from "../../state/uploadSettings";
 import {
   useFsClipboardStore,
   type ClipboardItem,
@@ -243,6 +244,7 @@ export default function FileSystemScreen() {
   const guard = useStaleHostGuard();
   const payloadStatus = useConnectionStore((s) => s.payloadStatus);
   const clipboard = useFsClipboardStore();
+  const systemFileRead = useUploadSettingsStore((s) => s.systemFileRead);
   // Install a .pkg straight from where it sits in the browser — saves the
   // round-trip through the Install Package screen's drive scan.
   const installFromConsolePath = usePkgLibrary(
@@ -1500,7 +1502,7 @@ export default function FileSystemScreen() {
       if (!destZip || typeof destZip !== "string") return;
       dest = destZip;
       rootName = destZip.split(/[\\/]/).pop() || `${entry.name}.zip`;
-      start = () => startTransferDownloadZip(remote, destZip, addr, kind);
+      start = () => startTransferDownloadZip(remote, destZip, addr, kind, systemFileRead);
     } else {
       const picked = await pickPath({
         mode: "folder",
@@ -1513,7 +1515,7 @@ export default function FileSystemScreen() {
       if (typeof picked !== "string") return;
       dest = picked;
       rootName = entry.name;
-      start = () => startTransferDownload(remote, picked, addr, kind);
+      start = () => startTransferDownload(remote, picked, addr, kind, systemFileRead);
     }
     setError(null);
     let jobId: string;

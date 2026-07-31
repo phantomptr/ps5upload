@@ -180,7 +180,15 @@ pub fn fs_hash_with_timeout(
 /// requests are silently truncated — callers that need exact-size reads
 /// should chunk with updated `offset` values.
 pub fn fs_read(addr: &str, path: &str, offset: u64, limit: u64) -> Result<Vec<u8>> {
-    fs_read_with_timeout(addr, path, offset, limit, None)
+    fs_read_with_timeout(addr, path, offset, limit, None, false)
+}
+
+/// Like [`fs_read`] but with `unsafe_read = true`, which tells the payload
+/// to bypass the writable-root allowlist so system files (under `/system/`,
+/// `/system_data/`, `/system_ex/`) can be read. Read-only — the payload
+/// ignores the flag for all destructive ops.
+pub fn fs_read_unsafe(addr: &str, path: &str, offset: u64, limit: u64) -> Result<Vec<u8>> {
+    fs_read_with_timeout(addr, path, offset, limit, None, true)
 }
 
 /// Like [`fs_read`] but with a caller-supplied per-socket I/O timeout.
@@ -193,6 +201,7 @@ pub fn fs_read_with_timeout(
     offset: u64,
     limit: u64,
     io_timeout: Option<std::time::Duration>,
+    unsafe_read: bool,
 ) -> Result<Vec<u8>> {
     let mut c = Connection::connect(addr)?;
     if let Some(t) = io_timeout {
@@ -203,6 +212,7 @@ pub fn fs_read_with_timeout(
         "path": path,
         "offset": offset,
         "limit": limit,
+        "unsafe": unsafe_read,
     }))
     .context("serialize fs_read body")?;
     c.send_frame(FrameType::FsRead, &body)?;

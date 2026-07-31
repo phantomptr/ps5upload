@@ -1809,6 +1809,8 @@ err_mount_source_unstable:
   "PS5 sees the file is still being written. Wait 5 seconds for the upload to finish, then click Mount again.",
 err_mount_path_not_allowed:
   "PS5 doesn't allow mounts at that path. Use /data, /user, /mnt/ext*, /mnt/usb*, or /mnt/ps5upload.",
+err_fs_read_path_not_allowed:
+  "This file is in a read-only system partition that's normally blocked. Enable Settings → \"Allow downloading system files\" to read from /system, /system_data, and other protected paths. This only affects downloads — delete, move, and write are never allowed there.",
 err_mount_attach_failed:
   "PS5 couldn't attach the image to a block device (LVD or md). Image may be corrupt — try re-uploading or rebuild it.",
 err_mount_dev_node_missing:
@@ -1999,6 +2001,8 @@ keep_awake_mode_always: "Always while connected",
 keep_ps5_awake_mode_hint: "Periodically resets the PS5's auto-standby timer so it can't drop into rest mode. “During transfers” protects long uploads (a common cause of failed uploads; default). “Always while connected” keeps every console with a running helper out of rest mode for as long as the app is open. Putting the PS5 to rest manually still works in every mode.",
 upload_auto_redeploy_on_wake: "Reconnect automatically after rest mode / network drops",
 upload_auto_redeploy_on_wake_hint: "When the PS5's helper goes offline (rest mode, a WiFi switch, or a payload crash), keep trying to re-send it in the background — so the helper, your fan threshold, and the upload port come back by themselves once the console is reachable again, without clicking Connect. On by default.",
+upload_system_file_read: "Allow downloading system files (/system, /system_data)",
+upload_system_file_read_hint: "Lets the FileSystem browser download files from read-only system partitions that are normally blocked (e.g. /system/common/lib, /system_data/priv). Read-only — never affects delete, move, or write. Off by default; turn on only if you know what you're doing.",
 upload_pick_here_mobile: "Pick a file or folder to upload",
 upload_register_after_title: "Add to PS5 home screen when done",
 upload_register_after_desc: "Registers the game with the PS5 right after the upload finishes, so it's ready to launch — no Library visit needed. If this step fails the upload itself is unaffected and you can still add it from the Library.",

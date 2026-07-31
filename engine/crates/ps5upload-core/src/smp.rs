@@ -204,7 +204,7 @@ pub fn collect_status(addr: &str) -> Result<SmpStatus> {
 /// failing the whole call. None when the file doesn't exist; Some
 /// when readable; None + errors entry when something else went wrong.
 fn read_text_file_or_record(addr: &str, path: &str, errors: &mut Vec<String>) -> Option<String> {
-    match fs_read_with_timeout(addr, path, 0, READ_LIMIT_BYTES, Some(RPC_TIMEOUT)) {
+    match fs_read_with_timeout(addr, path, 0, READ_LIMIT_BYTES, Some(RPC_TIMEOUT), false) {
         Ok(bytes) => {
             // Files we read here are config files / log tails. UTF-8
             // is overwhelmingly the case; lossy decode is the right

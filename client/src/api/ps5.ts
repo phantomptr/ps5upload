@@ -646,6 +646,7 @@ export async function startTransferDownload(
   destDir: string,
   transferAddr: string,
   kind: "file" | "folder",
+  unsafeRead: boolean = false,
 ): Promise<string> {
   const res = await invoke<{ job_id: string }>("transfer_download", {
     req: {
@@ -653,6 +654,7 @@ export async function startTransferDownload(
       dest_dir: destDir,
       addr: transferAddr,
       kind,
+      unsafe_read: unsafeRead,
     },
   });
   return res.job_id;
@@ -666,6 +668,7 @@ export async function startTransferDownloadZip(
   destZip: string,
   transferAddr: string,
   kind: "file" | "folder",
+  unsafeRead: boolean = false,
 ): Promise<string> {
   const res = await invoke<{ job_id: string }>("transfer_download_zip", {
     req: {
@@ -673,6 +676,7 @@ export async function startTransferDownloadZip(
       dest_zip: destZip,
       addr: transferAddr,
       kind,
+      unsafe_read: unsafeRead,
     },
   });
   return res.job_id;
@@ -3507,6 +3511,8 @@ export function humanizeJobErrorReason(reason: string | undefined): string | nul
     case "fs_mkdir_path_not_allowed":
     case "fs_list_dir_path_denied":
       return "PS5 refused access to that path. Use /data/, /user/, or a mounted /mnt/ext*, /mnt/usb* path.";
+    case "fs_read_path_not_allowed":
+      return "This file is in a read-only system partition that's normally blocked. Enable Settings → \"Allow downloading system files\" to download from /system, /system_data, and other protected paths.";
     case "tx_table_full":
       return "Too many simultaneous transfers in flight on the PS5. Wait for some to finish or restart the payload.";
     default:

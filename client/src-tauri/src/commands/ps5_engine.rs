@@ -1084,6 +1084,11 @@ pub struct TransferDownloadReq {
     pub dest_dir: String,
     pub addr: Option<String>,
     pub kind: String,
+    /// When true, allows reading files outside the normal payload path
+    /// allow-list (e.g. /system, /system_data). Read-only; destructive
+    /// ops never honor this flag. Default false.
+    #[serde(default)]
+    pub unsafe_read: bool,
 }
 
 /// PS5 → host download streamed straight into a `.zip` (one pass, no scratch
@@ -1095,6 +1100,10 @@ pub struct TransferDownloadZipReq {
     pub dest_zip: String,
     pub addr: Option<String>,
     pub kind: String,
+    /// When true, allows reading files outside the normal payload path
+    /// allow-list (e.g. /system, /system_data). Read-only. Default false.
+    #[serde(default)]
+    pub unsafe_read: bool,
 }
 
 #[tauri::command]
@@ -1106,6 +1115,7 @@ pub async fn transfer_download_zip(req: TransferDownloadZipReq) -> Result<JsonVa
         "dest_zip": req.dest_zip,
         "addr": req.addr,
         "kind": req.kind,
+        "unsafe_read": req.unsafe_read,
     });
     post_json(&url, &body).await
 }
@@ -1119,6 +1129,7 @@ pub async fn transfer_download(req: TransferDownloadReq) -> Result<JsonValue, St
         "dest_dir": req.dest_dir,
         "addr": req.addr,
         "kind": req.kind,
+        "unsafe_read": req.unsafe_read,
     });
     post_json(&url, &body).await
 }

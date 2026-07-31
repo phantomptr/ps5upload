@@ -220,6 +220,7 @@ export default function SettingsScreen() {
     autoResume,
     keepPs5AwakeMode,
     autoRedeployOnWake,
+    systemFileRead,
     bandwidthCapMbps,
     setAlwaysOverwrite,
     setShowTransferFiles,
@@ -228,6 +229,7 @@ export default function SettingsScreen() {
     setKeepPs5AwakeMode,
     setBandwidthCapMbps,
     setAutoRedeployOnWake,
+    setSystemFileRead,
   } = useUploadSettingsStore();
   const payloadMaxStreams = useConnectionStore((s) => s.maxTransferStreams);
   const restAfterUpload = useRestAfterUploadStore((s) => s.enabled);
@@ -478,6 +480,31 @@ export default function SettingsScreen() {
                     "upload_auto_redeploy_on_wake_hint",
                     undefined,
                     "When the PS5's helper goes offline (rest mode, a WiFi switch, or a payload crash), keep trying to re-send it in the background — so the helper, your fan threshold, and the upload port come back by themselves once the console is reachable again, without clicking Connect. On by default.",
+                  )}
+                </div>
+              </div>
+            </label>
+
+            <label className="flex cursor-pointer items-start gap-3 text-sm">
+              <input
+                type="checkbox"
+                className="mt-0.5 h-4 w-4"
+                checked={systemFileRead}
+                onChange={(e) => setSystemFileRead(e.target.checked)}
+              />
+              <div>
+                <div className="font-medium">
+                  {tr(
+                    "upload_system_file_read",
+                    undefined,
+                    "Allow downloading system files (/system, /system_data)",
+                  )}
+                </div>
+                <div className="mt-0.5 text-xs text-[var(--color-muted)]">
+                  {tr(
+                    "upload_system_file_read_hint",
+                    undefined,
+                    "Lets the FileSystem browser download files from read-only system partitions that are normally blocked (e.g. /system/common/lib, /system_data/priv). Read-only — never affects delete, move, or write. Off by default; turn on only if you know what you're doing.",
                   )}
                 </div>
               </div>

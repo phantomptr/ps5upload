@@ -176,7 +176,7 @@ pub async fn fs_read_preview(
 ) -> Result<JsonValue, String> {
     let cap = max_bytes.unwrap_or(256 * 1024).min(256 * 1024);
     let bytes = tokio::task::spawn_blocking(move || {
-        fs_read_with_timeout(&addr, &path, 0, cap, Some(Duration::from_secs(10)))
+        fs_read_with_timeout(&addr, &path, 0, cap, Some(Duration::from_secs(10)), false)
     })
     .await
     .map_err(|e| format!("fs_read task: {e}"))?

@@ -517,6 +517,15 @@ export function humanizePs5Error(
     });
   }
 
+  // ─── System file read blocked by allowlist ─────────────────────────
+  // Payload returns `fs_read_path_not_allowed` when the user tries to
+  // read a path outside the writable-root allowlist (/system, /system_data,
+  // /system_ex). The fix is to enable the "Allow downloading system files"
+  // toggle in Settings — without it the payload (by design) refuses.
+  if (/fs_read_path_not_allowed/i.test(raw)) {
+    return te("err_fs_read_path_not_allowed");
+  }
+
   // ─── Generic payload rejection — extract the reason verbatim ───────
   // "payload rejected FS_LIST_DIR(/foo): fs_list_dir_opendir_errno_13"
   // The `errno_N` tail is opaque — strip the frame-name prefix so the

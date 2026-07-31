@@ -5932,7 +5932,9 @@ static int handle_fs_hash(runtime_state_t *state, int client_fd,
      * substring rejected those by mistake. is_path_allowed already
      * uses the same component check internally — wraps with the
      * writable-roots allowlist for consistency with other handlers. */
-    if (!path[0] || !is_path_allowed(path)) {
+    int unsafe = is_unsafe_read_request(request_body);
+    if (!path[0] || (!is_path_allowed(path) &&
+                      !(unsafe && is_safe_unsafe_read_path(path)))) {
         return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
                           "fs_hash_bad_path", 16);
     }
@@ -7270,6 +7272,27 @@ static int is_profile_avatar_read_path(const char *p) {
            (n >= 12 && strcmp(p + n - 12, "/picture.png") == 0);
 }
 
+/* Check whether a read request includes the `"unsafe":true` opt-in flag.
+ * When set, FS_READ and FS_HASH bypass the writable-root allowlist so the
+ * user can read system files (/system/common/lib/*.sprx, /system_data/priv/...,
+ * /system_ex/...). This is READ-ONLY — destructive ops (delete/move/chmod/
+ * mkdir/copy/write/mount) ignore this flag entirely and always enforce the
+ * full allowlist. The dotdot guard still applies, so traversal attacks are
+ * still rejected even in unsafe mode. */
+static int is_unsafe_read_request(const char *request_body) {
+    if (!request_body) return 0;
+    return strstr(request_body, "\"unsafe\":true") != NULL;
+}
+
+/* Validate a path for unsafe read mode: must be absolute, no dotdot
+ * components, no relative segments. This is the safety net that stays
+ * in place even when the writable-root allowlist is bypassed. */
+static int is_safe_unsafe_read_path(const char *p) {
+    if (!p || p[0] != '/') return 0;
+    if (path_has_dotdot_component(p)) return 0;
+    return 1;
+}
+
 /* ── FS_READ handler ─────────────────────────────────────────────────────
  *
  * Bounded file-read for metadata fetches (param.json, icon0.png). The
@@ -7303,7 +7326,15 @@ static int handle_fs_read(runtime_state_t *state, int client_fd,
         if (req_offset > 0) offset = req_offset;
         if (req_limit > 0 && req_limit < limit) limit = req_limit;
     }
-    if (!is_path_allowed(path) && !is_profile_avatar_read_path(path)) {
+    /* Path policy: is_path_allowed covers the writable-root allowlist +
+     * symlink-escape guard. is_profile_avatar_read_path is a narrow
+     * read-only carve-out for avatar PNGs. is_unsafe_read_request
+     * (opt-in via "unsafe":true in the JSON body) opens reads to system
+     * paths — but is_safe_unsafe_read_path still rejects dotdot/relative
+     * paths so traversal attacks don't work even in unsafe mode. */
+    int unsafe = is_unsafe_read_request(request_body);
+    if (!is_path_allowed(path) && !is_profile_avatar_read_path(path) &&
+        !(unsafe && is_safe_unsafe_read_path(path))) {
         return send_frame(client_fd, FTX2_FRAME_ERROR, 0, trace_id,
                           "fs_read_path_not_allowed", 24);
     }
