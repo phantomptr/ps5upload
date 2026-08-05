@@ -78,8 +78,8 @@ export default function MoreScreen() {
 
       {/* Sticky zone: console switcher + search. Sticks inside <main>'s
           scroll context — this screen adds no scroller of its own. */}
-      <div className="sticky top-0 z-10 -mx-4 px-4 pb-0 pt-1">
-        <div className="absolute inset-0 -z-10 backdrop-blur-[3px]" />
+      <div className="sticky top-0 z-10 -mx-4 px-4 pb-0 pt-0">
+        <div className="absolute inset-0 -z-10" />
         <div className="bg-[var(--color-surface)]">
           <RosterPicker />
         </div>
