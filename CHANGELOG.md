@@ -4,6 +4,20 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## Unreleased
+
+**Install PKG completes sooner after the PS5 says it's ready.**
+
+Synthetic-DONE installs (shellui-rpc / appinst-local / tier0) used to leave
+the UI on "installing" for about a minute — or up to three — after the
+console notification already said the title was ready. The grace period that
+unblocks those installs is now **15 seconds** of idle disk activity instead
+of 180, so the row finishes shortly after the PS5 does. Large local installs
+that show no byte progress still keep the longer 180s fallback so staging is
+not deleted while Sony is still promoting the title.
+
+---
+
 ## 5.1.3
 
 Same contents as 5.1.2, re-cut. The 5.1.2 tag itself was left in a

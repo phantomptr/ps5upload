@@ -1044,13 +1044,40 @@ const INSTALL_SETTLE_SEC_DEFAULT: u64 = 60;
 /// synthetic DONE after this grace period. The install DID start
 /// (Sony returned 0); the user verifies completion via the PS5's own
 /// notification panel. Env-tunable.
-const INSTALL_SYNTHETIC_DONE_GRACE_SEC_DEFAULT: u64 = 180;
+///
+/// Kept short (15s) so the UI unblocks soon after the PS5 notification
+/// for typical installs — the idle clock still resets while bytes are
+/// writing, so mid-download installs are not declared complete early.
+/// See [`effective_synthetic_done_grace_sec`] for the large no-progress
+/// fallback that preserves the old 180s patience.
+const INSTALL_SYNTHETIC_DONE_GRACE_SEC_DEFAULT: u64 = 15;
+/// Long fallback when a large synthetic-DONE install shows zero byte
+/// progress (appinst-local: pkg already on disk, free-space does not
+/// drop). A 15s grace there could Complete and delete staging while
+/// Sony is still promoting the title.
+const INSTALL_SYNTHETIC_DONE_GRACE_LARGE_FALLBACK_SEC: u64 = 180;
+/// Expected size above which zero observed progress triggers the long
+/// synthetic-DONE grace fallback (500 MiB).
+const INSTALL_SYNTHETIC_DONE_LARGE_NO_PROGRESS_BYTES: u64 = 500 * 1024 * 1024;
 
 fn install_synthetic_done_grace_sec() -> u64 {
     env_sec_or(
         "PS5UPLOAD_INSTALL_SYNTHETIC_DONE_GRACE_SEC",
         INSTALL_SYNTHETIC_DONE_GRACE_SEC_DEFAULT,
     )
+}
+
+/// Effective grace for a synthetic-DONE tier given observed progress.
+/// Short configured default for typical installs; long fallback when a
+/// large title shows zero byte progress (local-disk path with no
+/// free-space signal).
+fn effective_synthetic_done_grace_sec(consumed: u64, expected: u64) -> u64 {
+    let configured = install_synthetic_done_grace_sec();
+    if consumed == 0 && expected > INSTALL_SYNTHETIC_DONE_LARGE_NO_PROGRESS_BYTES {
+        configured.max(INSTALL_SYNTHETIC_DONE_GRACE_LARGE_FALLBACK_SEC)
+    } else {
+        configured
+    }
 }
 
 /// Whether this task_id indicates a synthetic-DONE tier — one where
@@ -1065,6 +1092,24 @@ fn is_synthetic_done_tier(task_id: Option<i32>) -> bool {
         }
         _ => false,
     }
+}
+
+/// Which completion signal `install_verdict` would have used for a
+/// `Complete` observation — mirrors the verdict's check order so logs
+/// stay accurate when both settle and grace thresholds are met.
+fn install_complete_via(obs: &TrackerObs) -> &'static str {
+    if obs.registered == Some(true) {
+        return "registered";
+    }
+    let fraction = if obs.expected > 0 {
+        obs.consumed as f64 / obs.expected as f64
+    } else {
+        0.0
+    };
+    if fraction >= INSTALL_SETTLE_FRACTION && obs.idle_sec >= obs.settle_sec {
+        return "byte-settle";
+    }
+    "synthetic-done-grace"
 }
 
 fn env_sec_or(name: &str, default: u64) -> u64 {
@@ -1518,7 +1563,7 @@ async fn install_status_handler(
                     sessions.get(&q.session).and_then(|s| s.task_id)
                 };
                 if is_synthetic_done_tier(tid) {
-                    Some(install_synthetic_done_grace_sec())
+                    Some(effective_synthetic_done_grace_sec(consumed, total))
                 } else {
                     None
                 }
@@ -1529,13 +1574,9 @@ async fn install_status_handler(
                 // Confirmed done. `Some(true)` when the title registered;
                 // `None` on unverifiable FW that settled by byte-accounting
                 // (fall back to the may_not_launch heuristic, as before).
-                let via = if registered == Some(true) {
-                    "registered"
-                } else if obs.synthetic_done_grace_sec.is_some() {
-                    "synthetic-done-grace"
-                } else {
-                    "byte-settle"
-                };
+                // Attribution mirrors install_verdict's check order so a
+                // settle-path Complete is not mislabeled as grace.
+                let via = install_complete_via(&obs);
                 launchable = if registered == Some(true) {
                     Some(true)
                 } else {
@@ -2772,9 +2813,9 @@ mod tests {
         // reported Done immediately, but verify_launchable can't see the
         // title (Some(false) = Absent). Without the grace path, this would
         // spin until the stall deadline (10+ min of "installing" after the
-        // PS5 already shows the game). With grace=180, it completes.
-        let mut o = obs(Some(false), 0, 25_000_000_000, 180);
-        o.synthetic_done_grace_sec = Some(180);
+        // PS5 already shows the game). Short grace (15s) completes promptly.
+        let mut o = obs(Some(false), 0, 50_000_000, 15);
+        o.synthetic_done_grace_sec = Some(15);
         assert_eq!(install_verdict(&o), InstallVerdict::Complete);
     }
 
@@ -2785,8 +2826,8 @@ mod tests {
         // grace path must STILL fire for synthetic-DONE tiers. Previously
         // only Some(false) was accepted, causing installs on unverifiable
         // FW to stall forever ("stuck on installing").
-        let mut o = obs(None, 0, 25_000_000_000, 180);
-        o.synthetic_done_grace_sec = Some(180);
+        let mut o = obs(None, 0, 50_000_000, 15);
+        o.synthetic_done_grace_sec = Some(15);
         assert_eq!(install_verdict(&o), InstallVerdict::Complete);
     }
 
@@ -2795,10 +2836,9 @@ mod tests {
         // Before the grace period elapses, a synthetic-DONE install that
         // hasn't registered and hasn't settled should stay Installing —
         // don't declare victory too early, Sony might still error out.
-        // (idle=100 is below the startup stall deadline of 120 AND below
-        // the grace period of 180.)
-        let mut o = obs(Some(false), 0, 25_000_000_000, 100);
-        o.synthetic_done_grace_sec = Some(180);
+        // (idle=10 is below the short grace of 15 and below startup stall.)
+        let mut o = obs(Some(false), 0, 50_000_000, 10);
+        o.synthetic_done_grace_sec = Some(15);
         assert_eq!(install_verdict(&o), InstallVerdict::Installing);
     }
 
@@ -2809,7 +2849,7 @@ mod tests {
         // path is never reached. This test documents that the grace condition
         // explicitly excludes Some(true) via `registered != Some(true)`.
         let mut o = obs(Some(true), 0, 0, 0);
-        o.synthetic_done_grace_sec = Some(180);
+        o.synthetic_done_grace_sec = Some(15);
         assert_eq!(install_verdict(&o), InstallVerdict::Complete);
     }
 
@@ -2819,6 +2859,60 @@ mod tests {
         // None. verify_launchable == Absent + no byte progress → stalls.
         let o = obs(Some(false), 0, 25_000_000_000, 999);
         assert_eq!(install_verdict(&o), InstallVerdict::Stalled);
+    }
+
+    #[test]
+    fn verdict_synthetic_done_short_grace_beats_byte_settle() {
+        // Typical post-notification lag: bytes already at ≥99%, settle is
+        // still 60s, but short synthetic grace (15s) should Complete first
+        // so the UI does not wait a full minute after the PS5 is ready.
+        let mut o = obs(Some(false), 24_800_000_000, 25_000_000_000, 15);
+        o.synthetic_done_grace_sec = Some(15);
+        assert_eq!(install_verdict(&o), InstallVerdict::Complete);
+        assert_eq!(install_complete_via(&o), "synthetic-done-grace");
+    }
+
+    #[test]
+    fn verdict_synthetic_done_large_zero_progress_needs_long_fallback() {
+        // Large local install with no free-space signal: short grace must
+        // NOT complete at idle=15 (would delete staging mid-promote). The
+        // long fallback (180s) is required.
+        let mut o = obs(Some(false), 0, 25_000_000_000, 15);
+        o.synthetic_done_grace_sec = Some(180);
+        assert_eq!(install_verdict(&o), InstallVerdict::Installing);
+        o.idle_sec = 180;
+        assert_eq!(install_verdict(&o), InstallVerdict::Complete);
+    }
+
+    #[test]
+    fn effective_synthetic_done_grace_scales_for_large_no_progress() {
+        // Small / progressed installs keep the short default.
+        assert_eq!(
+            effective_synthetic_done_grace_sec(0, 50_000_000),
+            INSTALL_SYNTHETIC_DONE_GRACE_SEC_DEFAULT
+        );
+        assert_eq!(
+            effective_synthetic_done_grace_sec(1_000_000, 25_000_000_000),
+            INSTALL_SYNTHETIC_DONE_GRACE_SEC_DEFAULT
+        );
+        // Large + zero progress → long fallback.
+        assert_eq!(
+            effective_synthetic_done_grace_sec(0, 25_000_000_000),
+            INSTALL_SYNTHETIC_DONE_GRACE_LARGE_FALLBACK_SEC
+        );
+    }
+
+    #[test]
+    fn install_complete_via_prefers_byte_settle_over_grace_label() {
+        // When settle thresholds are met, via must say byte-settle even if
+        // a synthetic grace is also configured (old bug: always labeled grace).
+        let mut o = obs(Some(false), 24_800_000_000, 25_000_000_000, 60);
+        o.synthetic_done_grace_sec = Some(15);
+        assert_eq!(install_complete_via(&o), "byte-settle");
+        assert_eq!(
+            install_complete_via(&obs(Some(true), 0, 0, 0)),
+            "registered"
+        );
     }
 
     #[test]
