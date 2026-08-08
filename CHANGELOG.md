@@ -4,6 +4,64 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.1.4
+
+**A stability hotfix for the 5.1 navigation, console freezes, telemetry, and
+package installation regressions.**
+
+### A timed-out install can no longer leave the console frozen
+
+The payload's remote ShellUI call already had a timeout, but the timeout path
+could try to restore registers while the process was still running. That could
+resume Sony's UI process in the injected call context and leave the whole
+console unresponsive. Timeout recovery now stops and waits for the process
+before restoring it. If safe restoration cannot be proved, the supervised UI
+process is terminated so the PS5 can restart it; injected registers are never
+detached back into execution. A host-side recovery self-test now ships with the
+payload test suite.
+
+### Package install results are honest and staging is protected
+
+An immediate `DONE` or a successful DPI return code only proves that Sony
+accepted an install request. Earlier releases could turn that acknowledgement
+into “Installed,” then delete the staged package before a large asynchronous
+install had finished. 5.1.4 only reports success after title registration or
+the existing near-complete byte-settle proof. Anything else ends as **accepted,
+not verified**, tells you where to check on the PS5, and keeps the package.
+
+The same deletion rule now covers Library installs, upload-queue installs,
+stream installs, old engines without status sessions, and the temporary
+internal copy used for USB packages. Long-running installs also appear in the
+global Tasks view, whose retained history is now bounded without ever evicting
+active work.
+
+Registration rejects now keep staging for every package type until the DPI
+fallback has used it; previously a rejected base game or DLC could be deleted
+immediately before that fallback tried to open the same path.
+
+### Desktop navigation has labels again
+
+The icon-only desktop rail made common screens harder to find and pushed Install
+Package behind More. Desktop now opens with the full labeled, grouped navigation
+and a direct Install Package entry. The compact icon layout is still available
+as an explicit, remembered collapse choice. More's pinned console/search header
+also has a solid background, so content no longer shows through it while
+scrolling.
+
+### Telemetry no longer fights transfers or mixes consoles
+
+Sensor polling now reads the selected console's own connection state instead of
+borrowing the active console's status, and pauses while that console is
+transferring data. Temperature and power readings are retained independently,
+so firmware that lacks one endpoint can still show the other. Unsupported or
+zero readings display as unavailable rather than as plausible values, and the
+critical temperature band is reachable again.
+
+Also included: the fully-green SMB, frontend, and Docker login dependency
+updates from PRs #253–#255.
+
+---
+
 ## 5.1.3
 
 Same contents as 5.1.2, re-cut. The 5.1.2 tag itself was left in a

@@ -4,6 +4,8 @@ import { useEffect, useMemo } from "react";
 import { hostOf, transferAddr } from "../lib/addr";
 import { fetchHwTemps, fetchHwPower, type HwTemps, type HwPower } from "../api/ps5";
 import { useConnectionStore } from "./connection";
+import { transferScreenBusy } from "../lib/ps5Transfers";
+import { isTerminal, useTaskStore } from "./tasks";
 
 /**
  * v5 §11 — Telemetry store.
@@ -39,7 +41,9 @@ import { useConnectionStore } from "./connection";
  * • Skips when `document.hidden` (tab not visible — no point burning
  *   the network and payload CPU).
  * • `inFlight` flag prevents pile-up on slow networks.
- * • Pauses when `payloadStatus !== "up"`.
+ * • Pauses when THIS host's payload is not up.
+ * • Pauses while a transfer/install owns this host's payload. This guard
+ *   existed in v4 after #164 and must not be dropped when polling moves.
  */
 
 const POLL_MS = 5000;
@@ -48,8 +52,10 @@ const MAX_SAMPLES = 120;
 export interface SensorSample {
   /** ms-since-epoch when the sample was taken. */
   ts: number;
-  temps: HwTemps;
-  power: HwPower;
+  /** A poll is intentionally partial: one endpoint may work while the other
+   *  is unavailable on a firmware. Never throw away the successful half. */
+  temps: HwTemps | null;
+  power: HwPower | null;
 }
 
 interface HostBucket {
@@ -138,6 +144,39 @@ interface PollHandle {
 
 const handles = new Map<string, PollHandle>();
 
+/** Resolve connection state for the host being polled, not whichever console
+ * happens to be selected in the UI. The flat fields are only a compatibility
+ * mirror for the active console; background subscribers can target another
+ * roster entry. */
+function payloadIsUpForHost(host: string): boolean {
+  const state = useConnectionStore.getState();
+  const key = hostOf(host) || "_";
+  const runtime = state.runtimeByHost[key];
+  if (runtime) return runtime.payloadStatus === "up";
+
+  // Compatibility fallback for startup/tests before the fan-out poller has
+  // populated runtimeByHost. Never borrow a status from another console.
+  const activeKey = hostOf(state.host) || "_";
+  if (key !== activeKey || state.payloadStatus !== "up") return false;
+  const statusKey = state.payloadStatusHost
+    ? hostOf(state.payloadStatusHost) || "_"
+    : activeKey;
+  return statusKey === key;
+}
+
+/** A package install can ptrace/restart ShellUI and may replace the payload for
+ * the DPI fallback. Sensor RPCs add pressure to exactly that recovery window,
+ * so keep them off the console until the install task reaches a terminal state. */
+function packageInstallIsActiveForHost(host: string): boolean {
+  const key = hostOf(host) || "_";
+  return useTaskStore.getState().tasks.some(
+    (task) =>
+      task.kind === "pkg-install" &&
+      (hostOf(task.consoleId) || "_") === key &&
+      !isTerminal(task.status),
+  );
+}
+
 /**
  * Subscribe to sensor updates for a host. Idempotent — multiple
  * components on the same host share one poll loop. Must be paired
@@ -185,9 +224,8 @@ function startPoll(host: string, handle: PollHandle): void {
     if (handle.cancelled) return;
     if (handle.inFlight) return;
     if (typeof document !== "undefined" && document.hidden) return;
-
-    const payloadStatus = useConnectionStore.getState().payloadStatus;
-    if (payloadStatus !== "up") return;
+    if (!payloadIsUpForHost(host)) return;
+    if (transferScreenBusy(host) || packageInstallIsActiveForHost(host)) return;
 
     handle.inFlight = true;
     const addr = transferAddr(host.trim());
@@ -197,7 +235,7 @@ function startPoll(host: string, handle: PollHandle): void {
         fetchHwPower(addr).catch(() => null),
       ]);
       if (handle.cancelled) return;
-      if (t && p) {
+      if (t || p) {
         useSensorsStore.getState().record(host, { ts: Date.now(), temps: t, power: p });
       }
     } catch {

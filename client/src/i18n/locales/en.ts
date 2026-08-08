@@ -122,6 +122,8 @@ nav_section_files: "Files",
 nav_section_browse: "Browse PS5",
 nav_section_system: "System",
 nav_section_diagnostics: "Diagnostics",
+sidebar_collapse: "Collapse navigation",
+sidebar_expand: "Expand navigation",
 // Sidebar label for the newly-promoted audit log screen
 // (was buried as a Settings card).
 audit_log: "Audit log",
@@ -1416,6 +1418,7 @@ upload_pkg_fw12_note:
 queue_will_install: "install after upload",
 queue_installed: "installed",
 queue_installed_warn: "installed (may not launch)",
+queue_install_unverified: "install accepted; verify on PS5 (package kept)",
 // Generic archive scanning hint (format-neutral; replaces the .zip-specific one).
 upload_scanning_archive_hint_v2:
   "Reading the archive index and parsing embedded game metadata. Upload buttons will enable when this finishes.",
@@ -2231,6 +2234,7 @@ shortcuts_activate: "Open / activate",
   fs_install_done: "Installed {name}",
   fs_install_may_not_launch:
     "The install registered, but the title may not launch — check Installed Apps.",
+  fs_install_unverified: "Install accepted; verify {name} on the PS5",
   fs_install_pkg_tooltip: "Install this package on your PS5",
   fs_path_gone: "That folder no longer exists — returned to /data",
   fs_path_gone_body: "{path} no longer exists on the PS5.",

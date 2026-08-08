@@ -82,9 +82,20 @@ long pt_call(pid_t pid, intptr_t addr, ...);
  *     back to a parallel in-process call would race a running launch
  *     and produce a misleading "all strategies failed" error.
  *
- * Thread-local — each ptrace caller has its own state, no shared
- * variable to race over. Read this immediately after `pt_call`. */
+ * The ShellUI RPC mutex serializes this process-global state (TLS is avoided
+ * because the PS5 loader cannot resolve the SDK's emutls symbols). Read this
+ * immediately after `pt_call`. */
 int pt_call_was_dispatched(void);
+
+/* True when the most recent pt_call timed out after dispatch. A dispatched
+ * timeout is NOT a soft success: the call was interrupted and its outcome is
+ * unknown. Callers must not claim an install/launch completed from it. */
+int pt_call_timed_out(void);
+
+/* True when timeout cleanup could not safely restore this tracee and requested
+ * its termination. State is keyed by pid so a lost ShellUI tracee cannot
+ * poison an unrelated game-process attach used by the cheats engine. */
+int pt_tracee_was_lost(pid_t pid);
 
 /* Issue a syscall in the target process. The trampoline is the
  * `syscall` instruction inside libkernel.sprx, located via the

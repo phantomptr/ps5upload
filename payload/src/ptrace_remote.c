@@ -18,6 +18,8 @@
  */
 
 #include <errno.h>
+#include <signal.h>
+#include <stdatomic.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -32,6 +34,7 @@
 #include <ps5/kernel.h>
 
 #include "ptrace_remote.h"
+#include "ptrace_recovery.h"
 #include "kernel_rw_lock.h"
 
 /* Ptrace-allowed authid. Different from the debugger authid we set
@@ -64,6 +67,20 @@
  * still bounding the worst case to an annoyance rather than a reboot. */
 #define PT_WAIT_TIMEOUT_MS   10000
 #define PT_WAIT_POLL_US      1000
+
+/* PID whose injected context could not be restored. This must be tracee-keyed:
+ * the cheats watcher ptraces a game process independently of ShellUI, and a
+ * process-global boolean could make one thread skip the other tracee's detach.
+ * Atomic access keeps those independent threads from racing on the marker. */
+static _Atomic pid_t g_pt_tracee_lost_pid = 0;
+
+static int tracee_is_lost(pid_t pid) {
+    return ptrace_lost_pid_matches(atomic_load(&g_pt_tracee_lost_pid), pid);
+}
+
+static void mark_tracee_lost(pid_t pid) {
+    if (pid > 0) atomic_store(&g_pt_tracee_lost_pid, pid);
+}
 
 /*
  * Bounded replacement for `waitpid(pid, status, 0)`.
@@ -160,6 +177,82 @@ static int sys_ptrace(int request, pid_t pid, caddr_t addr, int data) {
     return ret;
 }
 
+typedef struct timeout_recovery_ctx {
+    pid_t pid;
+    const struct reg *saved_regs;
+} timeout_recovery_ctx_t;
+
+static int recovery_request_stop(void *opaque) {
+    timeout_recovery_ctx_t *ctx = (timeout_recovery_ctx_t *)opaque;
+    return kill(ctx->pid, SIGSTOP) == 0 ? 0 : -1;
+}
+
+static int recovery_wait_stopped(void *opaque) {
+    timeout_recovery_ctx_t *ctx = (timeout_recovery_ctx_t *)opaque;
+    int status = 0;
+    if (pt_waitpid_bounded(ctx->pid, &status) < 0) return -1;
+    return WIFSTOPPED(status) ? 0 : -1;
+}
+
+static int recovery_restore_registers(void *opaque) {
+    timeout_recovery_ctx_t *ctx = (timeout_recovery_ctx_t *)opaque;
+    if (!ctx->saved_regs) return 0;
+    return pt_setregs(ctx->pid, ctx->saved_regs) == 0 ? 0 : -1;
+}
+
+static int recovery_terminate(void *opaque) {
+    timeout_recovery_ctx_t *ctx = (timeout_recovery_ctx_t *)opaque;
+    /* A tracee whose injected context cannot be restored must never be
+     * detached/resumed. ShellUI is supervised by the OS and can respawn; a
+     * process running with our fake stack/return address can freeze the whole
+     * console. */
+    if (kill(ctx->pid, SIGKILL) == 0) return 0;
+    /* A traced process can reject the ordinary signal path on some firmware.
+     * PT_KILL is the last fail-closed option while we still own the tracee. */
+    return sys_ptrace(PT_KILL, ctx->pid, 0, 0) == 0 ? 0 : -1;
+}
+
+/* Stop a running remote call, wait until ptrace confirms the stop, then restore
+ * its original registers. If any link in that chain fails, terminate the
+ * damaged tracee instead of detaching injected state back into execution. */
+static int recover_after_remote_timeout(pid_t pid, const struct reg *saved_regs) {
+    timeout_recovery_ctx_t ctx = { pid, saved_regs };
+    ptrace_recovery_ops_t ops = {
+        recovery_request_stop,
+        recovery_wait_stopped,
+        saved_regs ? recovery_restore_registers : NULL,
+        recovery_terminate,
+    };
+    ptrace_recovery_result_t result = ptrace_recover_timed_out_tracee(&ops, &ctx);
+    if (result == PTRACE_RECOVERY_RESTORED) {
+        fprintf(stderr,
+                "[ptrace_remote] remote call timed out; tracee %d stopped and registers restored\n",
+                pid);
+        return 0;
+    }
+    mark_tracee_lost(pid);
+    fprintf(stderr,
+            "[ptrace_remote] CRITICAL: tracee %d could not be safely restored; "
+            "termination %s\n",
+            pid,
+            result == PTRACE_RECOVERY_TERMINATED ? "requested" : "FAILED");
+    return -1;
+}
+
+/* The target is already stopped. Register restore must succeed before detach;
+ * otherwise kill it so it cannot resume at the injected instruction/stack. */
+static int restore_stopped_or_terminate(pid_t pid, const struct reg *saved_regs) {
+    if (pt_setregs(pid, saved_regs) == 0) return 0;
+    timeout_recovery_ctx_t ctx = { pid, saved_regs };
+    (void)recovery_terminate(&ctx);
+    mark_tracee_lost(pid);
+    fprintf(stderr,
+            "[ptrace_remote] CRITICAL: register restore failed for tracee %d; "
+            "termination requested\n",
+            pid);
+    return -1;
+}
+
 intptr_t pt_resolve(pid_t pid, const char *nid) {
     intptr_t addr;
     /* libkernel handle = 0x1; libkernel_sys handle = 0x2001. Most
@@ -173,6 +266,12 @@ intptr_t pt_resolve(pid_t pid, const char *nid) {
 }
 
 int pt_attach(pid_t pid) {
+    /* Never reattach a pid whose injected state could not be recovered. A
+     * freshly respawned ShellUI has a different pid and starts normally. */
+    if (tracee_is_lost(pid)) {
+        errno = ESRCH;
+        return -1;
+    }
     if (sys_ptrace(PT_ATTACH, pid, 0, 0) == -1) {
         return -1;
     }
@@ -187,13 +286,21 @@ int pt_attach(pid_t pid) {
          * park us in a blocking waitpid() forever with ShellUI held
          * stopped, which is a frozen console. Best-effort: if detach
          * also fails there is nothing left to try. */
-        (void)pt_detach(pid, 0);
+        int saved_errno = errno;
+        if (recover_after_remote_timeout(pid, NULL) == 0) {
+            (void)pt_detach(pid, 0);
+        }
+        errno = saved_errno;
         return -1;
     }
     return 0;
 }
 
 int pt_detach(pid_t pid, int sig) {
+    if (tracee_is_lost(pid)) {
+        errno = ESRCH;
+        return -1;
+    }
     return (sys_ptrace(PT_DETACH, pid, 0, sig) == -1) ? -1 : 0;
 }
 
@@ -205,6 +312,9 @@ int pt_step(pid_t pid) {
      * hold ShellUI stopped indefinitely. The caller unwinds and the
      * RPC layer's detach runs. */
     if (pt_waitpid_bounded(pid, 0) < 0) {
+        int saved_errno = errno;
+        (void)recover_after_remote_timeout(pid, NULL);
+        errno = saved_errno;
         return -1;
     }
     return 0;
@@ -278,9 +388,18 @@ int pt_copyout(pid_t pid, intptr_t addr, void *buf, size_t len) {
  * failed and pt_call returned -1, the call itself made it into the
  * target. Read via pt_call_was_dispatched(). */
 static int g_pt_call_dispatched = 0;
+static int g_pt_call_timed_out = 0;
 
 int pt_call_was_dispatched(void) {
     return g_pt_call_dispatched;
+}
+
+int pt_call_timed_out(void) {
+    return g_pt_call_timed_out;
+}
+
+int pt_tracee_was_lost(pid_t pid) {
+    return tracee_is_lost(pid);
 }
 
 long pt_call(pid_t pid, intptr_t addr, ...) {
@@ -289,6 +408,11 @@ long pt_call(pid_t pid, intptr_t addr, ...) {
     va_list ap;
 
     g_pt_call_dispatched = 0;
+    g_pt_call_timed_out = 0;
+    if (tracee_is_lost(pid)) {
+        errno = ESRCH;
+        return -1;
+    }
     if (pt_getregs(pid, &bak_reg) != 0) return -1;
 
     memcpy(&jmp_reg, &bak_reg, sizeof(jmp_reg));
@@ -318,12 +442,12 @@ long pt_call(pid_t pid, intptr_t addr, ...) {
          * failed PT_SETREGS partially applied — keeps this path
          * consistent with every other failure branch below, which all
          * restore bak_reg before returning. */
-        (void)pt_setregs(pid, &bak_reg);
+        (void)restore_stopped_or_terminate(pid, &bak_reg);
         return -1;
     }
 
     if (pt_continue(pid, 0) != 0) {
-        (void)pt_setregs(pid, &bak_reg);
+        (void)restore_stopped_or_terminate(pid, &bak_reg);
         return -1;
     }
     /* Past this point the remote function call has been dispatched
@@ -340,17 +464,22 @@ long pt_call(pid_t pid, intptr_t addr, ...) {
      * the saved registers and unwind so the RPC layer's detach runs and
      * ShellUI resumes, even though the call's outcome is unknown. */
     if (pt_waitpid_bounded(pid, &wstatus) < 0) {
-        (void)pt_setregs(pid, &bak_reg);
+        int saved_errno = errno;
+        if (saved_errno == ETIMEDOUT) g_pt_call_timed_out = 1;
+        (void)recover_after_remote_timeout(pid, &bak_reg);
+        errno = saved_errno;
         return -1;
     }
     if (!WIFSTOPPED(wstatus)) {
-        (void)pt_setregs(pid, &bak_reg);
+        /* Exited/signalled targets have no registers to restore and must not be
+         * detached using a potentially-reused cached pid. */
+        mark_tracee_lost(pid);
         return -1;
     }
 
     long rax = -1;
     if (pt_getregs(pid, &jmp_reg) == 0) rax = jmp_reg.r_rax;
-    (void)pt_setregs(pid, &bak_reg);
+    if (restore_stopped_or_terminate(pid, &bak_reg) != 0) return -1;
     return rax;
 }
 
@@ -358,6 +487,11 @@ long pt_syscall(pid_t pid, int sysno, ...) {
     struct reg jmp_reg;
     struct reg bak_reg;
     va_list ap;
+
+    if (tracee_is_lost(pid)) {
+        errno = ESRCH;
+        return -1;
+    }
 
     /* The `syscall` instruction lives at a known offset inside the
      * libkernel symbol with NID `HoLVWNanBBc`. Adding 0xa lands on
@@ -389,7 +523,7 @@ long pt_syscall(pid_t pid, int sysno, ...) {
          * case the failed PT_SETREGS partially applied, and so a later
          * PT_DETACH doesn't resume the target at the syscall site with
          * junk argument registers. */
-        (void)pt_setregs(pid, &bak_reg);
+        (void)restore_stopped_or_terminate(pid, &bak_reg);
         return -1;
     }
 
@@ -398,21 +532,23 @@ long pt_syscall(pid_t pid, int sysno, ...) {
     int step_budget = 1000;
     while (jmp_reg.r_rsp <= bak_reg.r_rsp && step_budget > 0) {
         if (pt_step(pid) != 0) {
-            (void)pt_setregs(pid, &bak_reg);
+            if (!tracee_is_lost(pid)) {
+                (void)restore_stopped_or_terminate(pid, &bak_reg);
+            }
             return -1;
         }
         if (pt_getregs(pid, &jmp_reg) != 0) {
-            (void)pt_setregs(pid, &bak_reg);
+            (void)restore_stopped_or_terminate(pid, &bak_reg);
             return -1;
         }
         step_budget--;
     }
     if (step_budget == 0) {
-        (void)pt_setregs(pid, &bak_reg);
+        (void)restore_stopped_or_terminate(pid, &bak_reg);
         return -1;
     }
 
-    if (pt_setregs(pid, &bak_reg) != 0) return -1;
+    if (restore_stopped_or_terminate(pid, &bak_reg) != 0) return -1;
     return jmp_reg.r_rax;
 }
 

@@ -258,9 +258,8 @@ function PkgRow({
         </div>
       )}
 
-      {/* Last install result. `warn` is a soft-success: installed, but via
-          the unlaunchable last-resort path — amber, with a triangle, so the
-          user knows it may not boot (the FW-12 "can't start the game" case). */}
+      {/* Amber covers both a may-not-launch success and an accepted request
+          whose asynchronous completion could not be verified. */}
       {!busy && entry.lastResult && (
         <div
           className={`flex items-start gap-1.5 text-xs ${
@@ -980,7 +979,15 @@ function ExternalPackages({ host }: { host: string }) {
   const [scanned, setScanned] = useState(false);
   const [installingPath, setInstallingPath] = useState<string | null>(null);
   const [results, setResults] = useState<
-    Record<string, { ok: boolean; message?: string; mayNotLaunch?: boolean }>
+    Record<
+      string,
+      {
+        ok: boolean;
+        message?: string;
+        mayNotLaunch?: boolean;
+        acceptedUnverified?: boolean;
+      }
+    >
   >({});
   // Lazily-fetched authoritative metadata (title, version, category), keyed by
   // path. The bulk scan is filename-fast and skips these; we fill them in per
@@ -1182,9 +1189,8 @@ function ExternalPackages({ host }: { host: string }) {
                     <span className="px-1 opacity-60">·</span>
                     <span className="tabular-nums">{formatBytes(p.size)}</span>
                   </div>
-                  {/* Install result on its own line with an icon — the
-                      "may not launch" FW-12 warning was previously the least
-                      visible thing on the row. Mirrors the library rows. */}
+                  {/* Install result on its own line with an icon, including
+                      accepted-but-unverified outcomes. Mirrors library rows. */}
                   {r && (
                     <div
                       className="mt-1 flex items-center gap-1.5 text-xs font-medium"
@@ -1193,6 +1199,8 @@ function ExternalPackages({ host }: { host: string }) {
                           ? r.mayNotLaunch
                             ? "var(--color-warn)"
                             : "var(--color-good)"
+                          : r.acceptedUnverified
+                            ? "var(--color-warn)"
                           : "var(--color-bad)",
                       }}
                     >
@@ -1202,6 +1210,8 @@ function ExternalPackages({ host }: { host: string }) {
                         ) : (
                           <CheckCircle2 size={13} className="shrink-0" />
                         )
+                      ) : r.acceptedUnverified ? (
+                        <AlertTriangle size={13} className="shrink-0" />
                       ) : (
                         <XCircle size={13} className="shrink-0" />
                       )}

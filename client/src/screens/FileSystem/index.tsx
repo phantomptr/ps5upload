@@ -621,8 +621,14 @@ export default function FileSystemScreen() {
         );
       } else {
         pushNotification(
-          "error",
-          tr("fs_install_failed", { name: entry.name }, `Install failed`),
+          r.acceptedUnverified ? "warning" : "error",
+          r.acceptedUnverified
+            ? tr(
+                "fs_install_unverified",
+                { name: entry.name },
+                `Install accepted; verify ${entry.name} on the PS5`,
+              )
+            : tr("fs_install_failed", { name: entry.name }, `Install failed`),
           { body: r.message },
         );
       }

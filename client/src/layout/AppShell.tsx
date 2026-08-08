@@ -43,7 +43,8 @@ import { LocalPathPicker } from "../components/LocalPathPicker";
 import { Toaster } from "../components/Toaster";
 import { LiveRegion } from "../components/LiveRegion";
 import { SkipNav } from "../components/SkipNav";
-import { TabRail, TabBottomNav } from "./TabNav";
+import { TabBottomNav } from "./TabNav";
+import Sidebar from "./Sidebar";
 import { useWindowStatePersistence } from "../lib/windowState";
 import { mgmtAddr, hostOf } from "../lib/addr";
 import { safeGetItem, safeSetItem } from "../lib/safeStorage";
@@ -934,9 +935,9 @@ export default function AppShell() {
       <AndroidStorageAccessBanner />
 
       <div className="flex min-h-0 flex-1">
-        {/* v5 desktop: 5-tab left rail. The legacy 40-item Sidebar is
-            reachable via the "More" button at the bottom of the rail. */}
-        <TabRail />
+        {/* Desktop defaults to labeled navigation again. Users who prefer the
+            compact v5 rail can collapse it explicitly; that choice persists. */}
+        <Sidebar />
 
         <main
           id="main"
@@ -974,9 +975,7 @@ export default function AppShell() {
       <StatusBar />
       <CommandPalette />
       <ShortcutsOverlay />
-      {/* v5 mobile bottom nav — replaces the hamburger drawer. Renders
-          only below md; the TabRail handles desktop. The "More" tab
-          opens the full v4 Sidebar as a bottom sheet. */}
+      {/* v5 mobile bottom nav — labels stay visible and More is a full route. */}
       <TabBottomNav />
       {/* v5 Toaster — critical-toast overlay. Mounted last so it
           sits above all other chrome in DOM order. */}

@@ -55,9 +55,11 @@ import {
   recordPkgInstalled,
   isPkgInstalledHere,
   PKG_MAY_NOT_LAUNCH_MESSAGE,
+  PKG_ACCEPTED_UNVERIFIED_HINT,
   PKG_PATCH_REJECTED_HINT,
   type PkgEntry,
 } from "./pkgLibrary";
+import { useTaskStore } from "./tasks";
 
 describe("platformFromTitleId", () => {
   it("maps CUSA → ps4 and PPSA → ps5", () => {
@@ -421,8 +423,8 @@ describe("pkgInstallMayNotLaunch", () => {
 // runPkgInstall MUST forward the caller's delete-staging intent to the engine
 // (pkg_install_start). Before the fix the engine always deleted the uploaded
 // pkg regardless; the regression we're guarding is "Auto Delete off but the pkg
-// was deleted anyway". We make pkg_install_start return no session_id so the
-// post-install verify short-circuits (no polling), keeping the test fast.
+// was deleted anyway". A response without a status session is deliberately
+// unverified (never installed), which also keeps this test fast.
 describe("runPkgInstall — forwards deleteStaging to the engine", () => {
   const mockedInvoke = vi.mocked(invoke);
 
@@ -430,7 +432,7 @@ describe("runPkgInstall — forwards deleteStaging to the engine", () => {
     mockedInvoke.mockReset();
     mockedInvoke.mockImplementation(async (cmd: unknown) => {
       if (cmd === "pkg_install_start") {
-        // err_code 0 + no session_id ⇒ accepted, verify skipped → installed.
+        // err_code 0 + no session_id ⇒ accepted, but completion unverified.
         return { err_code: 0, register_path: "shellui-rpc" };
       }
       return {};
@@ -444,16 +446,17 @@ describe("runPkgInstall — forwards deleteStaging to the engine", () => {
 
   it("passes deleteStaging=false → engine KEEPS the pkg (Auto Delete off)", async () => {
     const r = await runPkgInstall("192.168.1.50", "/user/data/x.pkg", "CID", null, false);
-    expect(r.installed).toBe(true);
+    expect(r.installed).toBe(false);
+    expect(r.acceptedUnverified).toBe(true);
     expect(startArgs()?.deleteStaging).toBe(false);
   });
 
-  it("passes deleteStaging=true → engine cleans the pkg (Auto Delete on)", async () => {
+  it("passes deleteStaging=true as a confirmed-completion cleanup preference", async () => {
     await runPkgInstall("192.168.1.50", "/user/data/x.pkg", "CID", null, true);
     expect(startArgs()?.deleteStaging).toBe(true);
   });
 
-  it("a rejected patch (…DP) is rescued by the DPI fallback (safe appinst)", async () => {
+  it("a rejected patch (…DP) reaches DPI but is not called installed on rc=0 alone", async () => {
     // The user-reported case: a Jak X update rejected in-process with 0x80B21106
     // (a firmware authid gate; the base game itself lands via shellui-rpc, which
     // a patch can't use). The DPI daemon runs Sony's appinst in a separate
@@ -481,10 +484,46 @@ describe("runPkgInstall — forwards deleteStaging to the engine", () => {
       "PS4DP",
       false,
     );
-    expect(r.installed).toBe(true);
+    expect(r.installed).toBe(false);
+    expect(r.acceptedUnverified).toBe(true);
+    expect(r.errMessage).toBe(PKG_ACCEPTED_UNVERIFIED_HINT);
     expect(mockedInvoke.mock.calls.some((c) => c[0] === "pkg_dpi_install")).toBe(
       true,
     );
+  });
+
+  it("a rejected base game also reaches DPI with its staging path intact", async () => {
+    mockedInvoke.mockReset();
+    mockedInvoke.mockImplementation(async (cmd: unknown) => {
+      if (cmd === "pkg_install_start") {
+        return {
+          err_code: 0x80b21106,
+          register_path: "none",
+          package_type: "PS4GD",
+        };
+      }
+      if (cmd === "dpi_ensure") return { ok: true };
+      if (cmd === "pkg_dpi_install") return { ok: true, rc: 0 };
+      if (cmd === "payload_bundled_path") {
+        return { ok: true, path: "/tmp/p.elf" };
+      }
+      return {};
+    });
+
+    const localPs5Path = "/user/data/ps5upload/pkg_library/CID.pkg";
+    const r = await runPkgInstall(
+      "192.168.1.50",
+      localPs5Path,
+      "CID",
+      "PS4GD",
+      true,
+    );
+
+    expect(r.acceptedUnverified).toBe(true);
+    const dpiArgs = mockedInvoke.mock.calls.find(
+      (call) => call[0] === "pkg_dpi_install",
+    )?.[1] as { localPs5Path?: string } | undefined;
+    expect(dpiArgs?.localPs5Path).toBe(localPs5Path);
   });
 
   it("a patch DPI can't apply gets update-specific guidance, not the raw error", async () => {
@@ -523,6 +562,7 @@ describe("runPkgInstall — tracks the install to genuine completion", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     mockedInvoke.mockReset();
+    useTaskStore.setState({ tasks: [] });
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -569,6 +609,11 @@ describe("runPkgInstall — tracks the install to genuine completion", () => {
     // The live % was surfaced for the UI, ending at 100%-equivalent bytes.
     expect(progress.length).toBeGreaterThan(0);
     expect(progress[progress.length - 1]).toEqual([3000, 3000]);
+    expect(useTaskStore.getState().tasks[0]).toMatchObject({
+      kind: "pkg-install",
+      status: "done",
+      consoleId: "192.168.1.50",
+    });
   });
 
   it("a STALL keeps the pkg: installed=false, stalled=true, retry copy", async () => {
@@ -625,6 +670,38 @@ describe("runPkgInstall — tracks the install to genuine completion", () => {
     const r = await promise;
     expect(r.installed).toBe(true);
   });
+
+  it("treats the engine's accepted_unverified terminal state as a warning", async () => {
+    mockedInvoke.mockImplementation(async (cmd: unknown) => {
+      if (cmd === "pkg_install_start") return START_OK;
+      if (cmd === "pkg_install_status") {
+        return {
+          phase: "done",
+          accepted_unverified: true,
+          installed_bytes: 1_000_000,
+          total: 25_000_000_000,
+        };
+      }
+      return {};
+    });
+    const promise = runPkgInstall(
+      "192.168.1.50",
+      "/user/data/x.pkg",
+      "CID",
+      null,
+      true,
+    );
+    await vi.advanceTimersByTimeAsync(2600);
+    const r = await promise;
+    expect(r.installed).toBe(false);
+    expect(r.acceptedUnverified).toBe(true);
+    expect(r.errMessage).toBe(PKG_ACCEPTED_UNVERIFIED_HINT);
+    expect(useTaskStore.getState().tasks[0]).toMatchObject({
+      kind: "pkg-install",
+      status: "failed",
+      lastError: { code: "INSTALL_UNVERIFIED", recoverable: true },
+    });
+  });
 });
 
 // ── install-from-USB: copy USB→internal, then install ───────────────────────
@@ -638,6 +715,7 @@ describe("installExternal — copies USB→internal, then installs", () => {
   const mockedInvoke = vi.mocked(invoke);
   const mockedCopy = vi.mocked(fsCopy);
   const mockedList = vi.mocked(fsListDir);
+  const mockedDeleteUsb = vi.mocked(fsDelete);
   const USBHOST = "192.168.9.9";
   const usbPkg = {
     path: "/mnt/usb0/Bloodborne.pkg",
@@ -653,6 +731,7 @@ describe("installExternal — copies USB→internal, then installs", () => {
     vi.useFakeTimers();
     mockedInvoke.mockReset();
     mockedCopy.mockClear();
+    mockedDeleteUsb.mockClear();
     mockedList.mockReset();
     mockedList.mockResolvedValue([]);
   });
@@ -691,6 +770,32 @@ describe("installExternal — copies USB→internal, then installs", () => {
     // The install targeted the internal copy, NOT the /mnt/usb path.
     expect(startPaths.every((p) => p.includes("/pkg_temp/"))).toBe(true);
     expect(startPaths.some((p) => p.startsWith("/mnt/usb"))).toBe(false);
+  });
+
+  it("keeps the internal copy when install acceptance is unverified", async () => {
+    mockedInvoke.mockImplementation(async (cmd: unknown) => {
+      if (cmd === "pkg_install_start") {
+        return { err_code: 0, register_path: "shellui-rpc", session_id: "s1" };
+      }
+      if (cmd === "pkg_install_status") {
+        return {
+          phase: "done",
+          accepted_unverified: true,
+          installed_bytes: 1_000_000,
+          total: 25_000_000_000,
+        };
+      }
+      return {};
+    });
+    const p = pkgLibraryStore(USBHOST)
+      .getState()
+      .installExternal(usbPkg, USBHOST);
+    await vi.advanceTimersByTimeAsync(2600 * 2);
+    const r = await p;
+    expect(r.ok).toBe(false);
+    expect(r.acceptedUnverified).toBe(true);
+    expect(r.message).toMatch(/staging was kept/i);
+    expect(mockedDeleteUsb).not.toHaveBeenCalled();
   });
 });
 

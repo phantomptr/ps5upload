@@ -18,10 +18,23 @@ vi.mock("../api/ps5", async (importOriginal) => {
     startTransferDirReconcile: vi.fn(async () => "job"),
     startTransferZip: vi.fn(async () => "job"),
     jobStatus: vi.fn(async () => ({ status: "running" })),
+    fsMkdir: vi.fn(async () => {}),
+    fsDelete: vi.fn(async () => {}),
     fsMount: vi.fn(async () => ({ mount_point: "/mnt/x", layout_valid: true })),
     smpStatus: vi.fn(async () => ({ running: false })),
     smpManualInstall: vi.fn(async () => ({ added: true })),
     powerStandby: vi.fn(async () => ({ ok: true })),
+  };
+});
+vi.mock("./pkgLibrary", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./pkgLibrary")>();
+  return {
+    ...actual,
+    runPkgInstall: vi.fn(async () => ({
+      installed: true,
+      mayNotLaunch: false,
+      errMessage: "",
+    })),
   };
 });
 
@@ -32,6 +45,7 @@ import {
   smpStatus,
   smpManualInstall,
   powerStandby,
+  fsDelete,
 } from "../api/ps5";
 import { useRestAfterUploadStore } from "./restAfterUpload";
 import { ensurePayloadCurrent } from "../lib/ensurePayloadCurrent";
@@ -44,11 +58,14 @@ import {
   type AddQueueItem,
 } from "./uploadQueue";
 import { useUploadSettingsStore } from "./uploadSettings";
+import { runPkgInstall } from "./pkgLibrary";
 
 const mockedJobStatus = vi.mocked(jobStatus);
 const mockedStartFile = vi.mocked(startTransferFile);
 const mockedEnsurePayload = vi.mocked(ensurePayloadCurrent);
 const mockedStandby = vi.mocked(powerStandby);
+const mockedPkgInstall = vi.mocked(runPkgInstall);
+const mockedFsDelete = vi.mocked(fsDelete);
 
 function installLocalStorageStub() {
   const store = new Map<string, string>();
@@ -656,6 +673,72 @@ describe("upload runner auto-resume", () => {
     expect(itemsByStatus("failed")).toHaveLength(1);
     // 1 original + 3 recovery retries = 4 transfer starts.
     expect(mockedStartFile).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe("upload runner — unverified PKG install", () => {
+  const ADDR = "192.168.1.10:9113";
+
+  beforeEach(() => {
+    installLocalStorageStub();
+    vi.useFakeTimers();
+    mockedJobStatus.mockReset().mockResolvedValue({
+      status: "done",
+      bytes_sent: 100,
+      elapsed_ms: 10,
+      dest: "/user/data/ps5upload/pkg_library/Game.pkg",
+    } as Awaited<ReturnType<typeof jobStatus>>);
+    mockedStartFile.mockReset().mockResolvedValue("job");
+    mockedFsDelete.mockClear();
+    mockedPkgInstall.mockReset().mockResolvedValue({
+      installed: false,
+      mayNotLaunch: false,
+      acceptedUnverified: true,
+      errMessage: "Accepted, but completion was not verified.",
+    });
+    useUploadQueueStore.setState({
+      items: [],
+      running: false,
+      runningHosts: {},
+      continueOnFailure: true,
+      loaded: true,
+    });
+  });
+
+  afterEach(() => {
+    useUploadQueueStore.getState().stop();
+    vi.useRealTimers();
+  });
+
+  it("finishes the upload with a warning and keeps staging", async () => {
+    useUploadQueueStore.getState().add({
+      sourceKind: "pkg",
+      sourcePath: "/src/Game.pkg",
+      displayName: "Game.pkg",
+      resolvedDest: "/user/data/ps5upload/pkg_library/Game.pkg",
+      addr: ADDR,
+      strategy: "overwrite",
+      reconcileMode: "fast",
+      excludes: [],
+      mountAfterUpload: false,
+      mountReadOnly: false,
+      registerAfterUpload: false,
+      installAfterUpload: true,
+      deletePkgAfterInstall: true,
+      contentId: "UP0000-CUSA00001_00-GAME000000000000",
+    });
+
+    const run = useUploadQueueStore.getState().start();
+    await vi.advanceTimersByTimeAsync(5_000);
+    await run;
+
+    const item = useUploadQueueStore.getState().items[0];
+    expect(item.status).toBe("done");
+    expect(item.installPhase).toBe("unverified");
+    expect(item.mountWarnings).toContain(
+      "Accepted, but completion was not verified.",
+    );
+    expect(mockedFsDelete).not.toHaveBeenCalled();
   });
 });
 

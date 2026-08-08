@@ -279,20 +279,17 @@ pub fn install_may_not_launch(register_path: &str) -> bool {
     register_path == "appinst-local"
 }
 
-/// Whether to PRESERVE the staged .pkg after an in-process register-reject,
-/// instead of auto-deleting it.
+/// Whether to PRESERVE the staged .pkg after an in-process register reject.
 ///
-/// A guarded patch ("…DP") that the in-process `InstallByPackage` rejects
-/// (typically `0x80B21106`, the FW 11/12 authid gate) is the EXPECTED first
-/// step: the client then retries the SAME staged file through the standalone
-/// DPI daemon — a separate, properly-authid'd loader process that is HW-proven
-/// to land patches the in-process path can't. Deleting the file on reject pulls
-/// it out from under that fallback and the update can never apply (HW bug
-/// bundle, FW 12.70). For every other type the auto-clean stands: it keeps a
-/// failed register idempotent and stops a stale pkg polluting Sony's installer
-/// queue. The client owns cleanup of its transient copy after the full cascade.
-pub fn preserve_staging_on_reject(package_type: &str) -> bool {
-    package_type.ends_with("DP")
+/// Every package type can continue through the client's standalone DPI
+/// fallback after a rejected start. That fallback installs the SAME local PS5
+/// path, so deleting a base game or DLC here is just as destructive as deleting
+/// a patch: DPI receives a path that no longer exists and `Install Package`
+/// cannot recover. A register rejection is not a completed installation, so it
+/// must never satisfy the user's "Auto Delete after installation" preference.
+/// The client/terminal tracker owns cleanup after the full cascade.
+pub fn preserve_staging_on_reject(_package_type: &str) -> bool {
+    true
 }
 
 /// Whether `s` has the shape of a PS5 title_id: four uppercase letters
@@ -709,20 +706,15 @@ mod tests {
     }
 
     #[test]
-    fn preserve_staging_on_reject_only_for_patches() {
-        // A patch (…DP) must KEEP its staged pkg on a register-reject so the
-        // client's DPI-daemon fallback can install the same file. Both PS4 and
-        // PS5 patch types end in "DP" (PS4DP / the PS5 patch category).
-        assert!(preserve_staging_on_reject("PS4DP"));
-        assert!(preserve_staging_on_reject("PS5DP"));
-        // Base games and DLC auto-clean as before (idempotent retry, no
-        // installer-queue pollution). A DLC ("…AC") carries its OWN content_id,
-        // so a stale staged copy is exactly the residue the cleanup prevents.
-        assert!(!preserve_staging_on_reject("PS4GD"));
-        assert!(!preserve_staging_on_reject("PS5GD"));
-        assert!(!preserve_staging_on_reject("PS4AC"));
-        assert!(!preserve_staging_on_reject("PS5AC"));
-        assert!(!preserve_staging_on_reject(""));
+    fn preserve_staging_on_reject_for_every_dpi_fallback_type() {
+        // The client can send every rejected start through DPI using this exact
+        // path. None may be removed before that fallback gets its turn.
+        for package_type in ["PS4DP", "PS5DP", "PS4GD", "PS5GD", "PS4AC", "PS5AC", ""] {
+            assert!(
+                preserve_staging_on_reject(package_type),
+                "register reject must preserve {package_type:?} staging"
+            );
+        }
     }
 
     #[test]

@@ -65,7 +65,12 @@ export default function HomeScreen() {
 
   // CPU temp sparkline data — last 30 samples (~2.5 min at 5s cadence).
   const cpuHistory = useMemo(
-    () => history.slice(-30).map((s) => s.temps.cpu_temp),
+    () =>
+      history
+        .flatMap((s) =>
+          s.temps && s.temps.cpu_temp > 0 ? [s.temps.cpu_temp] : [],
+        )
+        .slice(-30),
     [history],
   );
 

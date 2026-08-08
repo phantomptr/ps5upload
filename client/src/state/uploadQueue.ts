@@ -155,7 +155,7 @@ export interface QueueItem {
   deletePkgAfterInstall?: boolean;
   /** Pkg-only runtime state: the install phase after the upload commits.
    *  null until the finisher runs (or for non-pkg items). */
-  installPhase?: "installing" | "done" | "warn" | "error" | null;
+  installPhase?: "installing" | "done" | "warn" | "unverified" | "error" | null;
   /** Pkg-only: the installed title (or content id) the finisher resolved,
    *  shown on the done row. Null otherwise. */
   installedTitle?: string | null;
@@ -747,6 +747,17 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
               // console a moment to come back before runOne returns to the drain
               // loop. Gated to FW >= 12 where the blip is observed.
               await fw12InstallSettle(hostOf(item.addr));
+            } else if (r.acceptedUnverified) {
+              // The upload is committed, but Sony's acknowledgement did not
+              // prove the asynchronous install finished. End the queue item as
+              // a visible warning and KEEP staging; retrying the upload would
+              // waste bandwidth and deleting it could race the live install.
+              installPhase = "unverified";
+              mountWarnings.push(r.errMessage);
+              log.info(
+                "install",
+                `pkg "${item.displayName}" accepted but completion unverified — staged pkg KEPT: ${finalDest}`,
+              );
             } else {
               // The bytes landed but the install — the point of a pkg — did
               // not COMPLETE. The staged pkg was KEPT on the PS5 (never deleted

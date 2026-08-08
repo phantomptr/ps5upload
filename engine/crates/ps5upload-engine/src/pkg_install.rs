@@ -102,6 +102,10 @@ pub struct InstallSession {
     /// Cached "the install stalled (no disk progress)" verdict, so replayed
     /// terminal polls keep reporting the stall (and the UI keeps the pkg).
     pub stalled: bool,
+    /// Sony accepted a synthetic-DONE install, but neither registration nor
+    /// byte-settle proved completion. Terminal for UI purposes, but never
+    /// eligible for staging deletion or a green "installed" result.
+    pub accepted_unverified: bool,
 }
 
 #[derive(Default)]
@@ -326,7 +330,7 @@ fn staging_path_for(local_ps5_path: &Option<String>, delete_staging: bool) -> Op
 /// Maximum number of attempts when retrying a staging cleanup that the
 /// payload rejected with `fs_delete_failed`. Sony's in-process installer
 /// briefly holds the staged `.pkg` file open (EBUSY / EBUSY-equivalent)
-/// right after `terminal_complete` and on a register-reject; a single-shot
+/// right after `terminal_complete` or cancellation; a single-shot
 /// `fs_delete` races that window and surfaces as a scary "staging cleanup
 /// failed" log even though the file would vanish a second later. We retry
 /// a bounded number of times with a short backoff so the common case
@@ -358,7 +362,7 @@ fn is_retryable_delete_error(err_str: &str) -> bool {
 /// Returns Ok(()) if the file is gone (either deleted or already absent)
 /// or the last error if all attempts failed. Logs each retry at warn so
 /// a wedged console is still visible. The `label` is included in logs to
-/// distinguish the three call sites (register-reject / terminal / cancel).
+/// distinguish the terminal and cancellation call sites.
 fn delete_staging_with_retry(addr: &str, path: &str, label: &str) -> Result<(), String> {
     let mut last_err: Option<String> = None;
     for attempt in 1..=STAGING_DELETE_MAX_ATTEMPTS {
@@ -601,6 +605,7 @@ async fn install_start_handler(
         progress_consumed_bytes: 0,
         last_progress_unix: None,
         stalled: false,
+        accepted_unverified: false,
     };
 
     // Insert *before* sending the install frame so the HTTP listener
@@ -614,8 +619,8 @@ async fn install_start_handler(
     //   1. (here, install_start) Drop sessions whose staging_path is
     //      already None AND that are older than ~half the
     //      configured max-age. staging_path == None is a strong
-    //      "we already cleaned up" signal — set by the terminal,
-    //      register-reject, and cancel paths. Aggressive prune of
+    //      "we already cleaned up" signal — set by the terminal and cancel
+    //      paths. Aggressive prune of
     //      definitely-done sessions, while still keeping recent
     //      rows the UI may poll.
     //   2. (gc_old_sessions, status_handler) Pure age-based prune at
@@ -787,77 +792,21 @@ async fn install_start_handler(
             resp.shellui_err.map_or("null".to_string(), |e| format!("0x{e:08x}")),
             resp.appinst_err.map_or("null".to_string(), |e| format!("0x{e:08x}")),
         );
-        // 2.2.55: best-effort staging cleanup on register-reject.
-        // If Sony rejected the register call (e.g. duplicate
-        // content_id, bad authid, FW gate), the install never
-        // entered the BGFT phase machine, so the terminal-phase
-        // cleanup at status-poll time will never fire — and the
-        // staging file would otherwise leak on PS5 disk until the
-        // payload's 24h sweep, polluting Sony's installer queue
-        // and surfacing as 0x80B21106 on the user's NEXT attempt
-        // with the same content_id. Cleaning here makes a failed
-        // register idempotent: retry-after-fix works without
-        // residue. Take() so we don't double-delete if status
-        // somehow runs later. Spawn-blocking because fs_delete
-        // does sync I/O over the mgmt socket.
-        //
-        // EXCEPTION — a guarded patch ("…DP"). The in-process
-        // InstallByPackage hitting 0x80B21106 is the EXPECTED first
-        // step for a PS4 update on FW 11/12: the client then retries
-        // through the standalone DPI daemon (a separate, properly-
-        // authid'd loader process — HW-proven to land patches the
-        // in-process path can't). That fallback installs the SAME
-        // staged pkg by its on-disk path, so deleting it here pulls
-        // the file out from under DPI and the update can never apply
-        // (HW bug bundle, FW 12.70: "register-reject staging cleaned"
-        // fired right after 0x80B21106, leaving DPI nothing to install).
-        // The client owns cleanup of its transient copy after the FULL
-        // cascade (the USB path fs_deletes it unconditionally; the
-        // queue keeps it for retry on failure / deletes on success),
-        // so skipping the auto-clean for a patch doesn't leak.
-        let is_guarded_patch =
-            ps5upload_core::pkg_install::preserve_staging_on_reject(&package_type);
-        let path_to_clean = if is_guarded_patch {
-            // Leave staging_path in the session ref untouched — the client's
-            // DPI fallback needs the file. Don't auto-delete.
-            None
-        } else {
-            let mut sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
-            sessions
-                .get_mut(&session_id)
-                .and_then(|s| s.staging_path.take())
-        };
-        if is_guarded_patch {
-            crate::log_info!(
-                "register-reject staging PRESERVED for DPI fallback: session={} package_type={}",
-                session_id,
-                package_type,
-            );
-        }
-        if let Some(path) = path_to_clean {
-            let addr = req.ps5_addr.clone();
-            let sid = session_id.clone();
-            tokio::task::spawn_blocking(move || {
-                // Retry on `fs_delete_failed` — Sony's installer briefly
-                // holds the staged pkg open after a register-reject on
-                // FW 10.40+; see delete_staging_with_retry.
-                match delete_staging_with_retry(&addr, &path, "register-reject") {
-                    Ok(()) => crate::log_info!(
-                        "register-reject staging cleaned: session={} addr={} path={}",
-                        sid,
-                        addr,
-                        path
-                    ),
-                    Err(e) => crate::log_warn!(
-                        "register-reject staging cleanup failed: session={} addr={} path={} err={}",
-                        sid,
-                        addr,
-                        path,
-                        e
-                    ),
-                }
-            });
-        }
+        // A rejected start can still continue through the standalone DPI
+        // daemon for every package type. DPI consumes this SAME on-console
+        // path, so register rejection must never take()/delete it first. This
+        // also matches the setting's promise: "Auto Delete after installation"
+        // cannot fire when no installation has completed. The client keeps the
+        // package for retry and terminal confirmed-complete cleanup remains the
+        // sole deletion authority.
+        debug_assert!(ps5upload_core::pkg_install::preserve_staging_on_reject(
+            &package_type
+        ));
+        crate::log_info!(
+            "register-reject staging PRESERVED for DPI fallback: session={} package_type={}",
+            session_id,
+            package_type,
+        );
     }
 
     json_ok(&InstallStartResponse {
@@ -929,6 +878,11 @@ pub struct StatusResponse {
     /// `InstallVerdict::Stalled`.
     #[serde(default)]
     pub stalled: bool,
+    /// True when Sony accepted a synthetic-DONE request but host-side
+    /// registration/byte signals could not prove it finished. The client
+    /// surfaces a warning and keeps the package.
+    #[serde(default)]
+    pub accepted_unverified: bool,
     /// path (`register_path == "appinst-local"`) — re-derived every poll so
     /// the status response is self-contained. The title installs but may not
     /// start on some firmwares (notably FW 12.xx). See
@@ -1040,10 +994,9 @@ const INSTALL_SETTLE_SEC_DEFAULT: u64 = 60;
 /// the PS5 notification says "ready" (extended storage installs,
 /// stale mount views, sqlite unreadable + FS probe race). Rather than
 /// spin until the stall deadline (10+ minutes of "installing" after
-/// the user already sees the game on their XMB), trust the payload's
-/// synthetic DONE after this grace period. The install DID start
-/// (Sony returned 0); the user verifies completion via the PS5's own
-/// notification panel. Env-tunable.
+/// the user already sees the game on their XMB), stop polling after this
+/// grace period as AcceptedUnverified. This NEVER means Complete and NEVER
+/// permits deleting the staged pkg. Env-tunable.
 const INSTALL_SYNTHETIC_DONE_GRACE_SEC_DEFAULT: u64 = 180;
 
 fn install_synthetic_done_grace_sec() -> u64 {
@@ -1120,7 +1073,7 @@ struct TrackerObs {
     settle_sec: u64,
     /// For synthetic-DONE tiers (shellui-rpc / appinst-local), `Some(grace_sec)`
     /// — after this many seconds of idle since the payload first reported Done,
-    /// trust it as complete. `None` for real-polled installs.
+    /// stop polling as AcceptedUnverified. `None` for real-polled installs.
     synthetic_done_grace_sec: Option<u64>,
 }
 
@@ -1130,6 +1083,9 @@ enum InstallVerdict {
     /// Confirmed complete — the ONLY state in which the staging pkg may be
     /// deleted. (`registered == Some(true)`, or unverifiable-FW byte-settle.)
     Complete,
+    /// Sony accepted a fire-and-forget tier but host-side signals could not
+    /// prove completion. Stop polling and KEEP the staged pkg.
+    AcceptedUnverified,
     /// Still progressing, or in the final commit window — keep polling, KEEP
     /// the staging pkg (the install may still be reading from it).
     Installing,
@@ -1170,13 +1126,10 @@ fn install_verdict(obs: &TrackerObs) -> InstallVerdict {
     {
         return InstallVerdict::Complete;
     }
-    // Synthetic-DONE grace: for installs where the payload reported Done
-    // immediately (shellui-rpc / appinst-local / tier0-worker tiers), trust
-    // the payload's signal after a grace period. These tiers fire-and-forget
-    // — Sony handles completion in the background, and the user verifies via
-    // the PS5's notification panel. The byte-settle check above may never
-    // trip for local-disk installs (pkg already on disk, no further
-    // free-space drop).
+    // Synthetic-DONE grace: these tiers only prove Sony accepted the request.
+    // After the grace, end polling as AcceptedUnverified so the UI unblocks,
+    // but never manufacture Complete or delete the source package. The
+    // byte-settle/registration checks above remain the only success signals.
     //
     // We accept the grace on BOTH `Some(false)` (verified Absent — common on
     // extended-storage installs where the mount is namespaced away from our
@@ -1189,7 +1142,7 @@ fn install_verdict(obs: &TrackerObs) -> InstallVerdict {
     // returns error shortly after accept) is caught by the stall deadline.
     if let Some(grace) = obs.synthetic_done_grace_sec {
         if obs.registered != Some(true) && obs.idle_sec >= grace {
-            return InstallVerdict::Complete;
+            return InstallVerdict::AcceptedUnverified;
         }
     }
     // Adaptive stall deadline by how far along we are. Near the end the install
@@ -1329,6 +1282,7 @@ async fn install_status_handler(
         cached_launchable,
         cached_consumed,
         cached_stalled,
+        cached_accepted_unverified,
     ) = {
         let sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
         match sessions.get(&q.session) {
@@ -1348,6 +1302,7 @@ async fn install_status_handler(
                 s.launchable,
                 s.progress_consumed_bytes,
                 s.stalled,
+                s.accepted_unverified,
             ),
         }
     };
@@ -1371,6 +1326,7 @@ async fn install_status_handler(
             cached_launchable,
             cached_consumed,
             cached_stalled,
+            cached_accepted_unverified,
         ));
     }
     // Off the reactor: this handler is polled ~1/s per active install, and the
@@ -1436,10 +1392,12 @@ async fn install_status_handler(
     // A flatline past the adaptive deadline is a *stall*: terminal, but the
     // pkg is KEPT so the user can retry. See `install_verdict`.
     let mut launchable: Option<bool> = None;
-    // True only on confirmed completion — gates BOTH the staging cleanup and
-    // the terminal-status cache. Stalls/errors are terminal but NOT complete.
+    // True only on confirmed completion — gates staging cleanup. Stalls,
+    // errors, and accepted-but-unverified outcomes are terminal but not safe
+    // to delete.
     let mut terminal_complete = false;
     let mut stalled = false;
+    let mut accepted_unverified = false;
     if matches!(status.phase, InstallPhase::Done) {
         let addr = ps5_addr.clone();
         let cid = content_id.clone();
@@ -1531,8 +1489,6 @@ async fn install_status_handler(
                 // (fall back to the may_not_launch heuristic, as before).
                 let via = if registered == Some(true) {
                     "registered"
-                } else if obs.synthetic_done_grace_sec.is_some() {
-                    "synthetic-done-grace"
                 } else {
                     "byte-settle"
                 };
@@ -1551,6 +1507,25 @@ async fn install_status_handler(
                     q.session,
                     content_id,
                     via,
+                    consumed,
+                    total,
+                    idle_sec
+                );
+            }
+            InstallVerdict::AcceptedUnverified => {
+                // Synthetic DONE proves only that Sony accepted the request.
+                // End the spinner but keep the source package and avoid a
+                // green success until registration or byte-settle proves it.
+                status.phase = InstallPhase::Done;
+                accepted_unverified = true;
+                launchable = None;
+                status.detail =
+                    "PS5 accepted the install, but completion could not be verified; staged package kept"
+                        .to_string();
+                crate::log_warn!(
+                    "install accepted but unverified (pkg KEPT): session={} content_id={} consumed={} expected={} idle_sec={}",
+                    q.session,
+                    content_id,
                     consumed,
                     total,
                     idle_sec
@@ -1631,6 +1606,7 @@ async fn install_status_handler(
             s.terminal_status = Some(status.clone());
             s.launchable = launchable;
             s.stalled = stalled;
+            s.accepted_unverified = accepted_unverified;
             s.progress_consumed_bytes
         } else {
             cached_consumed
@@ -1656,6 +1632,7 @@ async fn install_status_handler(
         launchable,
         installed_bytes,
         stalled,
+        accepted_unverified,
     ))
 }
 
@@ -1673,6 +1650,7 @@ fn build_status_response(
     launchable: Option<bool>,
     installed_bytes: u64,
     stalled: bool,
+    accepted_unverified: bool,
 ) -> StatusResponse {
     let total = if status.total > 0 {
         status.total
@@ -1698,6 +1676,7 @@ fn build_status_response(
         via: ps5upload_core::pkg_install::via_tier(task_id).to_string(),
         installed_bytes,
         stalled,
+        accepted_unverified,
     }
 }
 
@@ -1723,8 +1702,8 @@ async fn install_cancel_handler(
 ) -> Response<Body> {
     // 2.2.55: also take() the staging path so we can delete it after
     // releasing the lock. Pre-fix the cancel path left the file on
-    // PS5 disk forever — same Sony-queue-pollution failure mode as
-    // the register-reject leak. Pull both fields under a single
+    // PS5 disk forever and polluted Sony's installer queue. Pull both fields
+    // under a single
     // lock acquisition so we never race with status_handler taking
     // the path first.
     let (cancel_ack, path_to_clean, ps5_addr) = {
@@ -2767,25 +2746,44 @@ mod tests {
     }
 
     #[test]
-    fn verdict_synthetic_done_grace_completes_when_unverifiable() {
+    fn verdict_synthetic_done_grace_ends_unverified_when_absent() {
         // Synthetic-DONE tier (shellui-rpc / appinst-local): the payload
         // reported Done immediately, but verify_launchable can't see the
         // title (Some(false) = Absent). Without the grace path, this would
         // spin until the stall deadline (10+ min of "installing" after the
-        // PS5 already shows the game). With grace=180, it completes.
+        // PS5 accepted the request). The grace period ends polling, but must
+        // not claim success or authorize deletion of the staged package.
         let mut o = obs(Some(false), 0, 25_000_000_000, 180);
         o.synthetic_done_grace_sec = Some(180);
-        assert_eq!(install_verdict(&o), InstallVerdict::Complete);
+        assert_eq!(install_verdict(&o), InstallVerdict::AcceptedUnverified);
     }
 
     #[test]
-    fn verdict_synthetic_done_grace_completes_on_unverifiable_fw() {
+    fn verdict_synthetic_done_grace_ends_unverified_on_unsupported_fw() {
         // Issue #230: on firmware where verify_launchable returns None
         // (Unsupported — e.g. FW 12.20 where app.db is unreadable), the
-        // grace path must STILL fire for synthetic-DONE tiers. Previously
-        // only Some(false) was accepted, causing installs on unverifiable
-        // FW to stall forever ("stuck on installing").
+        // grace path must STILL fire for synthetic-DONE tiers. It reports an
+        // explicit unverified terminal state rather than either hanging or
+        // inventing a successful installation.
         let mut o = obs(None, 0, 25_000_000_000, 180);
+        o.synthetic_done_grace_sec = Some(180);
+        assert_eq!(install_verdict(&o), InstallVerdict::AcceptedUnverified);
+    }
+
+    #[test]
+    fn verdict_synthetic_done_tiny_progress_never_false_completes() {
+        // Regression: a synthetic acknowledgement plus a few bytes of
+        // progress is not evidence that a large package finished installing.
+        let mut o = obs(Some(false), 1_000_000, 25_000_000_000, 180);
+        o.synthetic_done_grace_sec = Some(180);
+        assert_eq!(install_verdict(&o), InstallVerdict::AcceptedUnverified);
+    }
+
+    #[test]
+    fn verdict_synthetic_done_near_complete_settle_is_still_confirmed() {
+        // The existing byte-settle proof remains stronger than the synthetic
+        // acknowledgement grace and may still confirm a completed install.
+        let mut o = obs(Some(false), 24_900_000_000, 25_000_000_000, 180);
         o.synthetic_done_grace_sec = Some(180);
         assert_eq!(install_verdict(&o), InstallVerdict::Complete);
     }
@@ -2803,7 +2801,7 @@ mod tests {
     }
 
     #[test]
-    fn verdict_synthetic_done_grace_stalls_when_not_registered_true() {
+    fn verdict_registered_title_still_completes_with_synthetic_grace() {
         // If verify_launchable returned Some(true), the install is already
         // confirmed Complete via the registered check at the top — the grace
         // path is never reached. This test documents that the grace condition
@@ -3080,6 +3078,7 @@ mod tests {
             progress_consumed_bytes: 0,
             last_progress_unix: None,
             stalled: false,
+            accepted_unverified: false,
         }
     }
 

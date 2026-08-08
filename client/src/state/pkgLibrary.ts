@@ -32,6 +32,7 @@ import { useConnectionStore } from "./connection";
 import { log } from "./logs";
 import { pushNotification } from "./notifications";
 import { useActivityHistoryStore } from "./activityHistory";
+import { useTaskStore } from "./tasks";
 import { parsePS5Firmware } from "../lib/ps5Firmware";
 
 /**
@@ -68,6 +69,12 @@ export const PKG_TEMP_DIR = "/user/data/ps5upload/pkg_temp";
  *  path (register_path "appinst-local"); see `pkgInstallMayNotLaunch`. */
 export const PKG_MAY_NOT_LAUNCH_MESSAGE =
   "Installed, but via a fallback that may not launch on this firmware. If the game won't start (“can't start the game or app”), re-install it from the PS5: Settings → System → Debug Settings → Game → Package Installer.";
+
+/** Sony accepted the request, but none of the signals we trust proved that the
+ *  asynchronous install finished. This is deliberately a warning rather than
+ *  success: callers must keep the source package and must not mark it installed. */
+export const PKG_ACCEPTED_UNVERIFIED_HINT =
+  "The PS5 accepted the install request, but ps5upload couldn’t verify that installation completed. Check the PS5 home screen and Notifications / Downloads. The staged package was kept so you can retry, or use Settings → System → Debug Settings → Game → Package Installer.";
 
 /** Whether an install response indicates the title may not launch.
  *
@@ -181,11 +188,8 @@ export interface PkgEntry {
   /** Total bytes for the active upload. */
   totalBytes?: number;
   /** Outcome of the last install attempt this session, for inline feedback.
-   *  `warn` marks a soft-success: the install was accepted but via the
-   *  unlaunchable last-resort path (`register_path === "appinst-local"`), so
-   *  the title may not start on some firmwares (notably FW 12.xx). Rendered
-   *  amber rather than green so the user knows to re-install via the PS5's
-   *  Settings → Package Installer if it won't boot. */
+   *  `warn` renders amber for either a may-not-launch success or an accepted
+   *  request whose asynchronous completion could not be verified. */
   lastResult?: { ok: boolean; message: string; warn?: boolean };
 }
 
@@ -453,7 +457,12 @@ interface PkgLibraryState {
   installStream: (
     localPcPath: string,
     host: string,
-  ) => Promise<{ ok: boolean; message?: string; mayNotLaunch?: boolean }>;
+  ) => Promise<{
+    ok: boolean;
+    message?: string;
+    mayNotLaunch?: boolean;
+    acceptedUnverified?: boolean;
+  }>;
   /** Install every staged, not-yet-installed, idle row sequentially, in
    *  base → update → DLC order (`pkgEntryInstallOrder`). Each item runs the
    *  full readiness-gated `install()` cascade; one failure doesn't abort the
@@ -472,7 +481,12 @@ interface PkgLibraryState {
   installExternal: (
     pkg: ExternalPkg,
     host: string,
-  ) => Promise<{ ok: boolean; message?: string; mayNotLaunch?: boolean }>;
+  ) => Promise<{
+    ok: boolean;
+    message?: string;
+    mayNotLaunch?: boolean;
+    acceptedUnverified?: boolean;
+  }>;
   /** Install a `.pkg` the user found while browsing the File System, at an
    *  arbitrary on-console path. Removable mounts (`/mnt/usb*`, `/mnt/ext*`)
    *  route through the copy-to-internal `installExternal` flow (Sony can't
@@ -482,7 +496,12 @@ interface PkgLibraryState {
   installFromConsolePath: (
     path: string,
     host: string,
-  ) => Promise<{ ok: boolean; message?: string; mayNotLaunch?: boolean }>;
+  ) => Promise<{
+    ok: boolean;
+    message?: string;
+    mayNotLaunch?: boolean;
+    acceptedUnverified?: boolean;
+  }>;
   /** Delete (from the PS5) every staged package that has already been
    *  installed successfully — clears the spent-package clutter without
    *  touching anything mid-flight or not-yet-installed. */
@@ -544,7 +563,7 @@ async function fsDeleteWithRetry(addr: string, path: string): Promise<void> {
 
 export interface PkgInstallOutcome {
   /** The install COMPLETED — Sony's installer accepted it AND the engine's
-   *  progress tracker confirmed the title actually landed (or DPI ok). This is
+   *  progress tracker confirmed the title actually landed. This is
    *  the ONLY state in which the staged pkg may be deleted. A stall or an async
    *  failure leaves this false so the pkg is KEPT. */
   installed: boolean;
@@ -558,6 +577,9 @@ export interface PkgInstallOutcome {
    *  the user can retry; the UI shows a "stalled — package kept" message rather
    *  than a generic failure. `installed` is false. */
   stalled?: boolean;
+  /** Sony accepted the request, but completion could not be proven. This is a
+   *  terminal warning, never success, and the staged package must be kept. */
+  acceptedUnverified?: boolean;
 }
 
 /**
@@ -660,6 +682,8 @@ interface VerifyOutcome {
   failed: boolean;
   /** Specifically a stall (flatlined), as opposed to a Sony-reported error. */
   stalled: boolean;
+  /** The request was accepted but completion could not be proven. */
+  acceptedUnverified: boolean;
   message: string;
   launchable?: boolean | null;
 }
@@ -681,10 +705,16 @@ async function verifyInstallCompleted(
   session: string | undefined,
   onProgress?: (installedBytes: number, total: number) => void,
 ): Promise<VerifyOutcome> {
+  const unverified = (): VerifyOutcome => ({
+    completed: false,
+    failed: false,
+    stalled: false,
+    acceptedUnverified: true,
+    message: PKG_ACCEPTED_UNVERIFIED_HINT,
+  });
   // No session id ⇒ older engine (or a test harness) that can't report status.
-  // Can't verify — preserve the pre-fix optimistic behavior (treat as done).
-  if (!session)
-    return { completed: true, failed: false, stalled: false, message: "" };
+  // Acceptance without a status session is not proof of completion.
+  if (!session) return unverified();
   const safetyDeadline = Date.now() + PKG_VERIFY_SAFETY_CAP_MS;
   let pollErrors = 0;
   while (Date.now() < safetyDeadline) {
@@ -700,12 +730,15 @@ async function verifyInstallCompleted(
         installed_bytes?: number;
         total?: number;
         stalled?: boolean;
+        accepted_unverified?: boolean;
       };
       // An engine that doesn't speak status returns no `phase` — treat as
-      // "can't verify" and resolve done (stay optimistic), no infinite spin.
-      if (typeof s?.phase !== "string")
-        return { completed: true, failed: false, stalled: false, message: "" };
-      if (typeof s.installed_bytes === "number" && typeof s.total === "number") {
+      // accepted-but-unverified, not as a manufactured success.
+      if (typeof s?.phase !== "string") return unverified();
+      if (
+        typeof s.installed_bytes === "number" &&
+        typeof s.total === "number"
+      ) {
         onProgress?.(s.installed_bytes, s.total);
       }
       if (s.phase === "error") {
@@ -716,6 +749,7 @@ async function verifyInstallCompleted(
             completed: false,
             failed: true,
             stalled: true,
+            acceptedUnverified: false,
             message: PKG_STALL_HINT,
             launchable: s.launchable,
           };
@@ -728,6 +762,7 @@ async function verifyInstallCompleted(
           completed: false,
           failed: true,
           stalled: false,
+          acceptedUnverified: false,
           message: sony
             ? `${sony} — ${PKG_ASYNC_FAILED_HINT}`
             : PKG_ASYNC_FAILED_HINT,
@@ -735,12 +770,19 @@ async function verifyInstallCompleted(
         };
       }
       if (s.phase === "done") {
+        if (s.accepted_unverified) {
+          return {
+            ...unverified(),
+            launchable: s.launchable,
+          };
+        }
         // Confirmed terminal success — the engine only reports `done` once the
         // title actually registered (or byte-settled). Safe to delete.
         return {
           completed: true,
           failed: false,
           stalled: false,
+          acceptedUnverified: false,
           message: "",
           launchable: s.launchable,
         };
@@ -751,17 +793,12 @@ async function verifyInstallCompleted(
       // do NOT assume success. `completed:false` keeps the pkg (never delete on
       // uncertainty); the install may well have finished, so don't shout error.
       if (++pollErrors >= PKG_VERIFY_MAX_POLL_ERRORS) {
-        return {
-          completed: false,
-          failed: false,
-          stalled: false,
-          message: "",
-        };
+        return unverified();
       }
     }
   }
   // Safety cap hit (pathological): keep the pkg, don't claim success.
-  return { completed: false, failed: false, stalled: false, message: "" };
+  return unverified();
 }
 
 /**
@@ -771,7 +808,7 @@ async function verifyInstallCompleted(
  * directly from a USB/exFAT path. Returns `daemonFailed:true` distinctly so a
  * caller that needs the cascade semantics (runPkgInstall) can still throw on a
  * genuine "daemon never came up" dead-end. The `rc==0`/`ok` here is NOT proof
- * of a real install — callers should confirm with `titleRegisteredOnDisk`.
+ * of a real install — callers must rely on registration/byte-settle proof.
  */
 async function runDpiInstall(
   host: string,
@@ -870,7 +907,7 @@ async function runDpiInstall(
  *
  * Like `runDpiInstall`, `ok:true` here is the daemon's word that
  * `InstallByPackage` accepted — callers should confirm with
- * `titleRegisteredOnDisk` before claiming a real install.
+ * the engine's registration/byte-settle tracker before claiming a real install.
  */
 async function runDpiDirectInstall(
   host: string,
@@ -954,8 +991,9 @@ async function runDpiDirectInstall(
  * the full jailbreak context, which is what actually installs LAUNCHABLE
  * content into /user/app/<title>. Only if the firmware rejects that do we fall
  * back to the standalone DPI daemon on :9040 (registers metadata, may not be
- * launchable on newer firmware), then restore the main payload. Returns whether
- * it installed, whether it's the unlaunchable path, and the first error.
+ * launchable on newer firmware), then restore the main payload. A DPI rc=0 is
+ * only acceptance and returns `acceptedUnverified`; `installed` is reserved for
+ * registration/byte-settle proof from the main engine's status session.
  *
  * Throws only if the DPI daemon itself can't come up after a main-payload
  * reject (a genuine dead-end) — callers should catch and treat as failure.
@@ -987,7 +1025,7 @@ export function pkgTypeForCategory(category?: string | null): string | null {
   }
 }
 
-export async function runPkgInstall(
+async function runPkgInstallCore(
   host: string,
   localPs5Path: string,
   contentId: string | null,
@@ -1022,6 +1060,7 @@ export async function runPkgInstall(
   // True when the install accepted but stalled (flatlined) before completing —
   // the pkg is KEPT and the caller shows a retry message, not a hard failure.
   let stalled = false;
+  let acceptedUnverified = false;
   // Whether the payload *rejected* the install at register time (rc != 0 or an
   // RPC error). Only a genuine start rejection should trigger the DPI fallback
   // — an install that was ACCEPTED but then failed Sony's async install must
@@ -1076,6 +1115,7 @@ export async function runPkgInstall(
         // metadata-only install would just produce the corrupted tile).
         mainErr = verdict.message;
         stalled = verdict.stalled;
+        acceptedUnverified = verdict.acceptedUnverified;
       }
     } else {
       startRejected = true;
@@ -1133,8 +1173,15 @@ export async function runPkgInstall(
         `Main-payload install failed (${mainErr}) and ${dpi.errMessage}`,
       );
     }
-    installed = dpi.ok;
-    if (!installed) {
+    if (dpi.ok) {
+      // DPI's rc=0 only proves Sony accepted InstallByPackage. It exposes no
+      // asynchronous completion signal, so treating it as installed would let
+      // callers delete the only staged copy while the install is still pending
+      // (or after Sony silently rejected it). Keep the pkg and ask the user to
+      // verify on-console.
+      acceptedUnverified = true;
+      mainErr = PKG_ACCEPTED_UNVERIFIED_HINT;
+    } else {
       // DPI ran but the PS5 declined the install. An update that can't apply
       // (wrong base version, or no base) gets the update-specific guidance;
       // everything else keeps DPI's own error.
@@ -1143,7 +1190,98 @@ export async function runPkgInstall(
         : dpi.errMessage || mainErr;
     }
   }
-  return { installed, mayNotLaunch, errMessage: mainErr, stalled };
+  return {
+    installed,
+    mayNotLaunch,
+    errMessage: mainErr,
+    stalled,
+    acceptedUnverified,
+  };
+}
+
+/**
+ * Public install entrypoint. In addition to running the safety-gated install
+ * cascade, mirror its lifecycle into the unified Tasks surface so a long PKG
+ * install remains visible after the user navigates away from its source page.
+ */
+export async function runPkgInstall(
+  host: string,
+  localPs5Path: string,
+  contentId: string | null,
+  packageType: string | null,
+  deleteStaging: boolean,
+  onProgress?: (installedBytes: number, total: number) => void,
+  onStatus?: (msg: string) => void,
+): Promise<PkgInstallOutcome> {
+  const name = basenameOf(localPs5Path) || contentId || "package";
+  const tasks = useTaskStore.getState();
+  const taskId = tasks.registerTask({
+    kind: "pkg-install",
+    origin: "pkg.install",
+    label: `Installing ${name}`,
+    detail: localPs5Path,
+    consoleId: host,
+    payload: { localPs5Path, contentId, packageType, deleteStaging },
+    status: "running",
+  });
+  let latestProgress:
+    { current: number; total: number; unit: "bytes" } | undefined;
+  try {
+    const result = await runPkgInstallCore(
+      host,
+      localPs5Path,
+      contentId,
+      packageType,
+      deleteStaging,
+      (installedBytes, total) => {
+        latestProgress = { current: installedBytes, total, unit: "bytes" };
+        useTaskStore
+          .getState()
+          .updateTask(taskId, { progress: latestProgress });
+        onProgress?.(installedBytes, total);
+      },
+      (message) => {
+        useTaskStore.getState().updateTask(taskId, { detail: message });
+        onStatus?.(message);
+      },
+    );
+
+    if (result.installed) {
+      useTaskStore.getState().finishTask(taskId, "done", {
+        progress: latestProgress
+          ? { ...latestProgress, current: latestProgress.total }
+          : undefined,
+        detail: localPs5Path,
+      });
+    } else {
+      const code = result.acceptedUnverified
+        ? "INSTALL_UNVERIFIED"
+        : result.stalled
+          ? "INSTALL_STALLED"
+          : "INSTALL_FAILED";
+      useTaskStore.getState().finishTask(taskId, "failed", {
+        progress: latestProgress,
+        detail: localPs5Path,
+        lastError: {
+          code,
+          message: result.errMessage || "Install was not confirmed.",
+          recoverable: true,
+        },
+      });
+    }
+    return result;
+  } catch (error) {
+    useTaskStore.getState().finishTask(taskId, "failed", {
+      progress: latestProgress,
+      detail: localPs5Path,
+      lastError: {
+        code: "INSTALL_ERROR",
+        message: pkgError(error),
+        recoverable: true,
+      },
+    });
+    throw error;
+  }
 }
 
 /**
@@ -1576,34 +1714,42 @@ const makePkgLibraryStore = () =>
         .start("library-install", `Installing ${label}`, {
           addr: mgmtAddr(host),
         });
-      const { installed, mayNotLaunch, errMessage: mainErr, stalled } =
-        await runPkgInstall(
-          host,
-          path,
-          entry?.contentId || null,
-          pkgTypeForCategory(entry?.category),
-          autoRemove,
-          // Live install %: a large title installs over minutes — feed both the
-          // inline notice and the global Activity bar so progress shows
-          // everywhere. Guarded so a 0 total can't divide.
-          (installedBytes, total) => {
-            useActivityHistoryStore
-              .getState()
-              .update(actId, { bytes: installedBytes, totalBytes: total });
-            if (total > 0) {
-              const pct = Math.min(
-                99,
-                Math.floor((installedBytes / total) * 100),
-              );
-              set({ busyNotice: `Installing on the PS5… ${pct}%` });
-            }
-          },
-          // Readiness-gate status (pre-install wait / DPI transient retry).
-          (msg) => set({ busyNotice: msg }),
-        );
+      const {
+        installed,
+        mayNotLaunch,
+        errMessage: mainErr,
+        stalled,
+        acceptedUnverified,
+      } = await runPkgInstall(
+        host,
+        path,
+        entry?.contentId || null,
+        pkgTypeForCategory(entry?.category),
+        autoRemove,
+        // Live install %: a large title installs over minutes — feed both the
+        // inline notice and the global Activity bar so progress shows
+        // everywhere. Guarded so a 0 total can't divide.
+        (installedBytes, total) => {
+          useActivityHistoryStore
+            .getState()
+            .update(actId, { bytes: installedBytes, totalBytes: total });
+          if (total > 0) {
+            const pct = Math.min(
+              99,
+              Math.floor((installedBytes / total) * 100),
+            );
+            set({ busyNotice: `Installing on the PS5… ${pct}%` });
+          }
+        },
+        // Readiness-gate status (pre-install wait / DPI transient retry).
+        (msg) => set({ busyNotice: msg }),
+      );
       useActivityHistoryStore
         .getState()
-        .finish(actId, installed ? "done" : stalled ? "stopped" : "failed");
+        .finish(
+          actId,
+          installed ? "done" : acceptedUnverified || stalled ? "stopped" : "failed",
+        );
 
       if (installed) {
         // Record THIS package as installed ON THIS CONSOLE (persisted) and
@@ -1678,14 +1824,20 @@ const makePkgLibraryStore = () =>
         );
         patch({
           status: "idle",
-          lastResult: { ok: false, message: mainErr || "Install was rejected." },
+          lastResult: {
+            ok: false,
+            warn: acceptedUnverified,
+            message: mainErr || "Install was rejected.",
+          },
         });
         // Surface failures in the bell too (success already notifies above).
         // Without this a failed item — an update or DLC especially — was silent
         // if the user navigated away from the Library tab mid-install.
         pushNotification(
-          stalled ? "warning" : "error",
-          `${label} install ${stalled ? "didn’t finish" : "failed"}`,
+          stalled || acceptedUnverified ? "warning" : "error",
+          acceptedUnverified
+            ? `${label} install accepted; verify on PS5`
+            : `${label} install ${stalled ? "didn’t finish" : "failed"}`,
           { body: mainErr || "The PS5 didn’t confirm the install. Try again." },
         );
       }
@@ -1887,7 +2039,10 @@ const makePkgLibraryStore = () =>
       // no pkg to keep — the pkg-host session is engine-side only.
       return {
         ok: false,
-        message: verdict.message || "The install didn't complete.",
+        acceptedUnverified: verdict.acceptedUnverified,
+        message: verdict.acceptedUnverified
+          ? "The PS5 accepted the stream-install request, but ps5upload couldn’t verify completion. Check the PS5 home screen and Notifications / Downloads; the original package on your computer is unchanged."
+          : verdict.message || "The install didn't complete.",
       };
     } catch (e) {
       return { ok: false, message: pkgError(e) };
@@ -1909,8 +2064,13 @@ const makePkgLibraryStore = () =>
     // staged copy is named `<ContentID>.pkg`, exactly like the upload flow.
     let contentId = pkg.contentId;
     if (!contentId) {
-      const m = await pkgMetadataConsole(transferAddr(host), pkg.path);
-      if (m?.contentId) contentId = m.contentId;
+      try {
+        const m = await pkgMetadataConsole(transferAddr(host), pkg.path);
+        if (m?.contentId) contentId = m.contentId;
+      } catch {
+        // Best-effort enrichment: the engine still parses the completed
+        // internal copy before installing it.
+      }
     }
     // Stage to internal with the Sony-friendly `<ContentID>.pkg` basename
     // (falls back to a unique name for headerless pkgs).
@@ -1921,6 +2081,7 @@ const makePkgLibraryStore = () =>
     );
     const internalPath = `${PKG_TEMP_DIR}/${basename}`;
     const label = pkg.name || contentId || "package";
+    let installAttempted = false;
     // Live install %, shared by the direct-from-USB and the copy-fallback paths.
     const onProgress = (installedBytes: number, total: number) => {
       if (total > 0) {
@@ -2001,6 +2162,7 @@ const makePkgLibraryStore = () =>
       }
       set({ busyNotice: null });
 
+      installAttempted = true;
       const viaCopy = await runPkgInstall(
         host,
         internalPath,
@@ -2012,16 +2174,39 @@ const makePkgLibraryStore = () =>
         true, // the internal copy is transient — always clean it
         onProgress,
       );
-
-      // Clean up the transient copy regardless of outcome.
-      await fsDelete(mgmtAddr(host), internalPath).catch(() => {});
+      // Only a CONFIRMED completion authorizes deletion. A request that Sony
+      // merely accepted can still be installing (or can fail asynchronously),
+      // and deleting here was the USB equivalent of the large-PKG data-loss
+      // bug. The original USB file is untouched, and the internal copy remains
+      // available for a retry until confirmed or the payload's stale sweep.
+      if (viaCopy.installed) {
+        await fsDelete(mgmtAddr(host), internalPath).catch(() => {});
+      }
 
       return viaCopy.installed
         ? { ok: true, mayNotLaunch: viaCopy.mayNotLaunch }
-        : { ok: false, message: viaCopy.errMessage || "Install was rejected." };
+        : {
+            ok: false,
+            acceptedUnverified: viaCopy.acceptedUnverified,
+            message:
+              (viaCopy.errMessage || "Install was rejected.") +
+              ` Internal staging was kept at ${internalPath}.`,
+          };
     } catch (e) {
-      await fsDelete(mgmtAddr(host), internalPath).catch(() => {});
-      return { ok: false, message: pkgError(e) };
+      // A partial copy is disposable, but once an install call has begun its
+      // outcome may be unknown. Preserve the complete staging copy in that
+      // case instead of risking deletion underneath Sony's async installer.
+      if (!installAttempted) {
+        await fsDelete(mgmtAddr(host), internalPath).catch(() => {});
+      }
+      return {
+        ok: false,
+        message:
+          pkgError(e) +
+          (installAttempted
+            ? ` Internal staging was kept at ${internalPath}.`
+            : ""),
+      };
     } finally {
       set({ installing: false, busyNotice: null, installPending: false });
     }
@@ -2068,19 +2253,24 @@ const makePkgLibraryStore = () =>
       // In-place install of a pkg the user pointed at on the console's disk
       // (e.g. from the File System browser). It's THEIR file at THEIR path, not
       // a staging copy we made — never delete it. deleteStaging: false.
-      const { installed, mayNotLaunch, errMessage } = await runPkgInstall(
-        host,
-        path,
-        null,
-        // In-place install of a user-pointed path: we never parsed this pkg, so
-        // the package_type is unknown. The engine reads the category from the
-        // staged pkg itself to detect a patch and arm the data-loss guard.
-        null,
-        false,
-      );
+      const { installed, mayNotLaunch, errMessage, acceptedUnverified } =
+        await runPkgInstall(
+          host,
+          path,
+          null,
+          // In-place install of a user-pointed path: we never parsed this pkg, so
+          // the package_type is unknown. The engine reads the category from the
+          // staged pkg itself to detect a patch and arm the data-loss guard.
+          null,
+          false,
+        );
       return installed
         ? { ok: true, mayNotLaunch }
-        : { ok: false, message: errMessage || "Install was rejected." };
+        : {
+            ok: false,
+            acceptedUnverified,
+            message: errMessage || "Install was rejected.",
+          };
     } catch (e) {
       return { ok: false, message: pkgError(e) };
     } finally {

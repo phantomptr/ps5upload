@@ -1,4 +1,19 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const sensorMocks = vi.hoisted(() => ({
+  fetchTemps: vi.fn(),
+  fetchPower: vi.fn(),
+  transferBusy: vi.fn(),
+}));
+
+vi.mock("../api/ps5", () => ({
+  fetchHwTemps: sensorMocks.fetchTemps,
+  fetchHwPower: sensorMocks.fetchPower,
+}));
+
+vi.mock("../lib/ps5Transfers", () => ({
+  transferScreenBusy: sensorMocks.transferBusy,
+}));
 
 import {
   useSensorsStore,
@@ -7,9 +22,22 @@ import {
   _refcountForTest,
   type SensorSample,
 } from "./sensors";
+import { EMPTY_HOST_RUNTIME, useConnectionStore } from "./connection";
+import { useTaskStore } from "./tasks";
 
 function resetStore() {
   useSensorsStore.setState({ byHost: {} });
+  useConnectionStore.setState({
+    host: "",
+    runtimeByHost: {},
+    payloadStatus: "unknown",
+    payloadStatusHost: null,
+  });
+  sensorMocks.fetchTemps.mockReset();
+  sensorMocks.fetchPower.mockReset();
+  sensorMocks.transferBusy.mockReset();
+  sensorMocks.transferBusy.mockReturnValue(false);
+  useTaskStore.setState({ tasks: [] });
 }
 
 const fakeTemps = (cpu: number, fan = 30) =>
@@ -60,7 +88,7 @@ describe("sensors store — record()", () => {
     useSensorsStore.getState().record("host:9090", makeSample(65, 2000));
     const bucket = useSensorsStore.getState().byHost["host"]!;
     expect(bucket.samples).toHaveLength(2);
-    expect(bucket.latest!.temps.cpu_temp).toBe(65);
+    expect(bucket.latest!.temps!.cpu_temp).toBe(65);
   });
 
   it("normalizes host:port → host key", () => {
@@ -77,15 +105,15 @@ describe("sensors store — record()", () => {
     expect(bucket.samples).toHaveLength(120);
     // Oldest 30 trimmed — first sample is index 30
     expect(bucket.samples[0].ts).toBe(30_000);
-    expect(bucket.latest!.temps.cpu_temp).toBe(60 + 149);
+    expect(bucket.latest!.temps!.cpu_temp).toBe(60 + 149);
   });
 
   it("isolates samples per host", () => {
     useSensorsStore.getState().record("hostA:9090", makeSample(60, 1000));
     useSensorsStore.getState().record("hostB:9090", makeSample(70, 1000));
     const state = useSensorsStore.getState();
-    expect(state.byHost["hostA"]!.latest!.temps.cpu_temp).toBe(60);
-    expect(state.byHost["hostB"]!.latest!.temps.cpu_temp).toBe(70);
+    expect(state.byHost["hostA"]!.latest!.temps!.cpu_temp).toBe(60);
+    expect(state.byHost["hostB"]!.latest!.temps!.cpu_temp).toBe(70);
   });
 });
 
@@ -112,7 +140,7 @@ describe("subscribeSensor / unsubscribeSensor refcounting", () => {
   afterEach(() => {
     resetStore();
     // Drain any handles we might have left
-    for (const h of ["hostA", "192.168.1.1", "never-subscribed"]) {
+    for (const h of ["hostA", "hostB", "192.168.1.1", "never-subscribed"]) {
       while (_refcountForTest(h) > 0) unsubscribeSensor(h);
     }
   });
@@ -149,5 +177,118 @@ describe("subscribeSensor / unsubscribeSensor refcounting", () => {
     expect(_refcountForTest("hostA")).toBe(0);
     unsubscribeSensor("hostA:9090");
     expect(_refcountForTest("hostA")).toBe(0);
+  });
+});
+
+describe("sensor polling safety", () => {
+  beforeEach(() => resetStore());
+  afterEach(() => {
+    for (const host of ["hostA", "hostB"]) {
+      while (_refcountForTest(host) > 0) unsubscribeSensor(host);
+    }
+    resetStore();
+  });
+
+  it("uses the polled host's runtime instead of the active console mirror", async () => {
+    sensorMocks.fetchTemps.mockResolvedValue(fakeTemps(64));
+    sensorMocks.fetchPower.mockResolvedValue(fakePower());
+    useConnectionStore.setState({
+      host: "hostA",
+      payloadStatus: "down",
+      payloadStatusHost: "hostA",
+      runtimeByHost: {
+        hostA: { ...EMPTY_HOST_RUNTIME, payloadStatus: "down" },
+        hostB: { ...EMPTY_HOST_RUNTIME, payloadStatus: "up" },
+      },
+    });
+
+    subscribeSensor("hostB:9113");
+
+    await vi.waitFor(() => {
+      expect(sensorMocks.fetchTemps).toHaveBeenCalledOnce();
+      expect(sensorMocks.fetchPower).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("does not borrow an up status from another console", async () => {
+    useConnectionStore.setState({
+      host: "hostA",
+      payloadStatus: "up",
+      payloadStatusHost: "hostA",
+      runtimeByHost: {
+        hostA: { ...EMPTY_HOST_RUNTIME, payloadStatus: "up" },
+        hostB: { ...EMPTY_HOST_RUNTIME, payloadStatus: "down" },
+      },
+    });
+
+    subscribeSensor("hostB:9113");
+    await Promise.resolve();
+
+    expect(sensorMocks.fetchTemps).not.toHaveBeenCalled();
+    expect(sensorMocks.fetchPower).not.toHaveBeenCalled();
+  });
+
+  it("pauses all sensor RPCs while that console has an active transfer", async () => {
+    sensorMocks.transferBusy.mockReturnValue(true);
+    useConnectionStore.setState({
+      host: "hostA",
+      payloadStatus: "up",
+      payloadStatusHost: "hostA",
+      runtimeByHost: {
+        hostA: { ...EMPTY_HOST_RUNTIME, payloadStatus: "up" },
+      },
+    });
+
+    subscribeSensor("hostA:9113");
+    await Promise.resolve();
+
+    expect(sensorMocks.transferBusy).toHaveBeenCalledWith("hostA:9113");
+    expect(sensorMocks.fetchTemps).not.toHaveBeenCalled();
+    expect(sensorMocks.fetchPower).not.toHaveBeenCalled();
+  });
+
+  it("pauses sensor RPCs while that console has an active package install", async () => {
+    useConnectionStore.setState({
+      host: "hostA",
+      payloadStatus: "up",
+      payloadStatusHost: "hostA",
+      runtimeByHost: {
+        hostA: { ...EMPTY_HOST_RUNTIME, payloadStatus: "up" },
+      },
+    });
+    useTaskStore.getState().registerTask({
+      kind: "pkg-install",
+      origin: "test",
+      label: "Installing package",
+      consoleId: "hostA",
+    });
+
+    subscribeSensor("hostA:9113");
+    await Promise.resolve();
+
+    expect(sensorMocks.fetchTemps).not.toHaveBeenCalled();
+    expect(sensorMocks.fetchPower).not.toHaveBeenCalled();
+  });
+
+  it("records a temperature sample when the power endpoint is unavailable", async () => {
+    const temps = fakeTemps(67);
+    sensorMocks.fetchTemps.mockResolvedValue(temps);
+    sensorMocks.fetchPower.mockRejectedValue(new Error("unsupported"));
+    useConnectionStore.setState({
+      host: "hostA",
+      payloadStatus: "up",
+      payloadStatusHost: "hostA",
+      runtimeByHost: {
+        hostA: { ...EMPTY_HOST_RUNTIME, payloadStatus: "up" },
+      },
+    });
+
+    subscribeSensor("hostA:9113");
+
+    await vi.waitFor(() => {
+      const latest = useSensorsStore.getState().byHost.hostA?.latest;
+      expect(latest?.temps).toBe(temps);
+      expect(latest?.power).toBeNull();
+    });
   });
 });

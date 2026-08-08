@@ -135,6 +135,14 @@ static int pt_attach_tracked(pid_t pid) {
 }
 
 static int pt_detach_tracked(pid_t pid, int sig) {
+    if (pt_tracee_was_lost(pid)) {
+        /* Timeout recovery terminated (or lost control of) this ShellUI. Do not
+         * ptrace a cached pid again; Sony will respawn it and the next resolve
+         * will discover the fresh process. */
+        g_attached = 0;
+        g_shellui_pid = 0;
+        return -1;
+    }
     int rc = pt_detach(pid, sig);
     g_attached = 0;
     return rc;
@@ -342,8 +350,8 @@ static int attach_with_refresh_locked(void) {
  * `*ok_out` (if non-NULL) reports whether the RPC machinery itself
  * (attach + dispatch + detach) ran cleanly — NOT whether the
  * remote function succeeded. Set to 1 once we make it past the
- * attach step, regardless of pt_call's return value; 0 means we
- * couldn't even attach. Callers use this to distinguish an "RPC
+ * attach step unless the call times out or the tracee is lost; 0 means we
+ * couldn't attach or safely finish recovery. Callers use this to distinguish an "RPC
  * couldn't run" failure (retry maybe helps) from "RPC ran, the
  * remote function returned <rc>" (treat <rc> as the result).
  * Sensor reads check `ok_out && rc > 0`; the launch path uses
@@ -360,11 +368,15 @@ static long do_remote_call(intptr_t addr, uint64_t a0, uint64_t a1,
         return -1;
     }
     long rc = pt_call(g_shellui_pid, addr, a0, a1, a2, a3, a4, a5);
+    int timed_out = pt_call_timed_out();
+    int tracee_lost = pt_tracee_was_lost(g_shellui_pid);
     /* Always detach even if the call failed — leaving ShellUI
      * stopped would freeze the entire UI. */
     (void)pt_detach_tracked(g_shellui_pid, 0);
     pthread_mutex_unlock(&g_rpc_mtx);
-    if (ok_out) *ok_out = 1;
+    if (ok_out) {
+        *ok_out = !timed_out && !tracee_lost;
+    }
     return rc;
 }
 
@@ -526,6 +538,8 @@ int shellui_rpc_launch_app(const char *title_id, int user_id_hint) {
     long rc = pt_call(g_shellui_pid, g_addr_lnc_launch,
                        (uint64_t)scratch, 0, (uint64_t)param_addr, 0, 0, 0);
     int dispatched = pt_call_was_dispatched();
+    int timed_out = pt_call_timed_out();
+    int tracee_lost = pt_tracee_was_lost(g_shellui_pid);
     (void)pt_munmap(g_shellui_pid, scratch, 0x1000);
     (void)pt_detach_tracked(g_shellui_pid, 0);
     pthread_mutex_unlock(&g_rpc_mtx);
@@ -544,7 +558,7 @@ int shellui_rpc_launch_app(const char *title_id, int user_id_hint) {
      *                       falling through to in-process strategies which
      *                       would race the running launch and produce a
      *                       misleading "all strategies failed" error. */
-    if (rc == -1 && dispatched) {
+    if (rc == -1 && dispatched && !timed_out && !tracee_lost) {
         return -2;
     }
     return (int)rc;
@@ -900,6 +914,15 @@ int shellui_rpc_install_pkg(const char *url,
         long init_rc = pt_call(g_shellui_pid, g_addr_appinst_init,
                                0, 0, 0, 0, 0, 0);
         (void)init_rc;
+        if (pt_call_timed_out() || pt_tracee_was_lost(g_shellui_pid)) {
+            if (!pt_tracee_was_lost(g_shellui_pid)) {
+                (void)pt_munmap(g_shellui_pid, scratch, APPINST_SCRATCH_SIZE);
+            }
+            (void)pt_detach_tracked(g_shellui_pid, 0);
+            pthread_mutex_unlock(&g_rpc_mtx);
+            if (out_err_code) *out_err_code = 0xE0000012u;
+            return -1;
+        }
     }
 
     /* Pre-install cancel: clear any stuck same-content_id task from
@@ -920,6 +943,15 @@ int shellui_rpc_install_pkg(const char *url,
         long cancel_rc = pt_call(g_shellui_pid, g_addr_appinst_cancel,
                                   (uint64_t)str_cid_in, 0, 0, 0, 0, 0);
         (void)cancel_rc;
+        if (pt_call_timed_out() || pt_tracee_was_lost(g_shellui_pid)) {
+            if (!pt_tracee_was_lost(g_shellui_pid)) {
+                (void)pt_munmap(g_shellui_pid, scratch, APPINST_SCRATCH_SIZE);
+            }
+            (void)pt_detach_tracked(g_shellui_pid, 0);
+            pthread_mutex_unlock(&g_rpc_mtx);
+            if (out_err_code) *out_err_code = 0xE0000012u;
+            return -1;
+        }
     }
 
     /* The actual install call. Three arg pointers all point into
@@ -931,6 +963,8 @@ int shellui_rpc_install_pkg(const char *url,
         (uint64_t)(scratch + APPINST_OFF_PLAYGO),
         0, 0, 0);
     int dispatched = pt_call_was_dispatched();
+    int timed_out = pt_call_timed_out();
+    int tracee_lost = pt_tracee_was_lost(g_shellui_pid);
 
     (void)pt_munmap(g_shellui_pid, scratch, APPINST_SCRATCH_SIZE);
     (void)pt_detach_tracked(g_shellui_pid, 0);
@@ -952,7 +986,7 @@ int shellui_rpc_install_pkg(const char *url,
      * which then collides with Sony's already-queued task and
      * returns 0x80B21106. Treat as success so the caller takes the
      * shellui-rpc accept branch instead. */
-    if (dispatched && install_rc == -1) {
+    if (dispatched && install_rc == -1 && !timed_out && !tracee_lost) {
         if (out_err_code) *out_err_code = 0;
         return 0;
     }

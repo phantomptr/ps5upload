@@ -234,10 +234,9 @@ export function TabRail() {
 }
 
 /**
- * Mobile bottom nav. Renders only below md. 5 icon tabs, hardware
- * back-button aware via the backStack store. The "More" tab opens the
- * full v4 Sidebar as a bottom sheet so every legacy route is still
- * reachable.
+ * Mobile bottom nav. Renders only below md. 5 labeled icon tabs. The "More"
+ * tab is a normal route containing every legacy screen, so browser and Android
+ * back navigation behave consistently.
  */
 export function TabBottomNav() {
   const tr = useTr();

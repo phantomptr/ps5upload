@@ -552,15 +552,24 @@ function QueueRow({
                   {tr("queue_will_install", undefined, "install after upload")}
                 </span>
               )}
-            {(item.installPhase === "done" || item.installPhase === "warn") && (
+            {(item.installPhase === "done" ||
+              item.installPhase === "warn" ||
+              item.installPhase === "unverified") && (
               <span
                 className={
-                  item.installPhase === "warn"
+                  item.installPhase === "warn" ||
+                  item.installPhase === "unverified"
                     ? "text-[var(--color-warn)]"
                     : "text-[var(--color-good)]"
                 }
               >
-                {item.installPhase === "warn"
+                {item.installPhase === "unverified"
+                  ? tr(
+                      "queue_install_unverified",
+                      undefined,
+                      "install accepted; verify on PS5 (package kept)",
+                    )
+                  : item.installPhase === "warn"
                   ? tr(
                       "queue_installed_warn",
                       undefined,

@@ -1,6 +1,11 @@
 {
   "ar": {
-    "missing": [],
+    "missing": [
+      "fs_install_unverified",
+      "queue_install_unverified",
+      "sidebar_collapse",
+      "sidebar_expand"
+    ],
     "stale": [],
     "untranslated": [
       "ffpkg_inspect_sce_sys",
@@ -10,7 +15,12 @@
     ]
   },
   "bn": {
-    "missing": [],
+    "missing": [
+      "fs_install_unverified",
+      "queue_install_unverified",
+      "sidebar_collapse",
+      "sidebar_expand"
+    ],
     "stale": [],
     "untranslated": [
       "ffpkg_inspect_sce_sys",
@@ -21,7 +31,12 @@
     ]
   },
   "de": {
-    "missing": [],
+    "missing": [
+      "fs_install_unverified",
+      "queue_install_unverified",
+      "sidebar_collapse",
+      "sidebar_expand"
+    ],
     "stale": [],
     "untranslated": [
       "console_tab_name",
@@ -37,7 +52,12 @@
     ]
   },
   "es": {
-    "missing": [],
+    "missing": [
+      "fs_install_unverified",
+      "queue_install_unverified",
+      "sidebar_collapse",
+      "sidebar_expand"
+    ],
     "stale": [],
     "untranslated": [
       "ffpkg_inspect_sce_sys",
@@ -51,7 +71,12 @@
     ]
   },
   "fr": {
-    "missing": [],
+    "missing": [
+      "fs_install_unverified",
+      "queue_install_unverified",
+      "sidebar_collapse",
+      "sidebar_expand"
+    ],
     "stale": [],
     "untranslated": [
       "ffpkg_inspect_sce_sys",
@@ -65,7 +90,12 @@
     ]
   },
   "hi": {
-    "missing": [],
+    "missing": [
+      "fs_install_unverified",
+      "queue_install_unverified",
+      "sidebar_collapse",
+      "sidebar_expand"
+    ],
     "stale": [],
     "untranslated": [
       "ffpkg_inspect_sce_sys",
@@ -76,7 +106,12 @@
     ]
   },
   "id": {
-    "missing": [],
+    "missing": [
+      "fs_install_unverified",
+      "queue_install_unverified",
+      "sidebar_collapse",
+      "sidebar_expand"
+    ],
     "stale": [],
     "untranslated": [
       "ffpkg_inspect_sce_sys",
@@ -92,7 +127,12 @@
     ]
   },
   "it": {
-    "missing": [],
+    "missing": [
+      "fs_install_unverified",
+      "queue_install_unverified",
+      "sidebar_collapse",
+      "sidebar_expand"
+    ],
     "stale": [],
     "untranslated": [
       "ffpkg_inspect_sce_sys",
@@ -108,7 +148,12 @@
     ]
   },
   "ja": {
-    "missing": [],
+    "missing": [
+      "fs_install_unverified",
+      "queue_install_unverified",
+      "sidebar_collapse",
+      "sidebar_expand"
+    ],
     "stale": [],
     "untranslated": [
       "ffpkg_inspect_sce_sys",
@@ -121,7 +166,12 @@
     ]
   },
   "ko": {
-    "missing": [],
+    "missing": [
+      "fs_install_unverified",
+      "queue_install_unverified",
+      "sidebar_collapse",
+      "sidebar_expand"
+    ],
     "stale": [],
     "untranslated": [
       "ffpkg_inspect_sce_sys",
@@ -132,7 +182,12 @@
     ]
   },
   "pl": {
-    "missing": [],
+    "missing": [
+      "fs_install_unverified",
+      "queue_install_unverified",
+      "sidebar_collapse",
+      "sidebar_expand"
+    ],
     "stale": [],
     "untranslated": [
       "ffpkg_inspect_sce_sys",
@@ -144,7 +199,12 @@
     ]
   },
   "pt-BR": {
-    "missing": [],
+    "missing": [
+      "fs_install_unverified",
+      "queue_install_unverified",
+      "sidebar_collapse",
+      "sidebar_expand"
+    ],
     "stale": [],
     "untranslated": [
       "ffpkg_inspect_sce_sys",
@@ -160,7 +220,12 @@
     ]
   },
   "ru": {
-    "missing": [],
+    "missing": [
+      "fs_install_unverified",
+      "queue_install_unverified",
+      "sidebar_collapse",
+      "sidebar_expand"
+    ],
     "stale": [],
     "untranslated": [
       "ffpkg_inspect_sce_sys",
@@ -173,7 +238,12 @@
     ]
   },
   "th": {
-    "missing": [],
+    "missing": [
+      "fs_install_unverified",
+      "queue_install_unverified",
+      "sidebar_collapse",
+      "sidebar_expand"
+    ],
     "stale": [],
     "untranslated": [
       "ffpkg_inspect_sce_sys",
@@ -186,7 +256,12 @@
     ]
   },
   "tr": {
-    "missing": [],
+    "missing": [
+      "fs_install_unverified",
+      "queue_install_unverified",
+      "sidebar_collapse",
+      "sidebar_expand"
+    ],
     "stale": [],
     "untranslated": [
       "ffpkg_inspect_sce_sys",
@@ -198,7 +273,12 @@
     ]
   },
   "vi": {
-    "missing": [],
+    "missing": [
+      "fs_install_unverified",
+      "queue_install_unverified",
+      "sidebar_collapse",
+      "sidebar_expand"
+    ],
     "stale": [],
     "untranslated": [
       "ffpkg_inspect_sce_sys",
@@ -211,7 +291,12 @@
     ]
   },
   "zh-CN": {
-    "missing": [],
+    "missing": [
+      "fs_install_unverified",
+      "queue_install_unverified",
+      "sidebar_collapse",
+      "sidebar_expand"
+    ],
     "stale": [],
     "untranslated": [
       "ffpkg_inspect_sce_sys",
@@ -222,7 +307,12 @@
     ]
   },
   "zh-TW": {
-    "missing": [],
+    "missing": [
+      "fs_install_unverified",
+      "queue_install_unverified",
+      "sidebar_collapse",
+      "sidebar_expand"
+    ],
     "stale": [],
     "untranslated": [
       "ffpkg_inspect_sce_sys",

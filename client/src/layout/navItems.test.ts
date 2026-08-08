@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 
+import en from "../i18n/locales/en";
 import {
   NAV_ITEMS,
   groupNavItems,
@@ -31,6 +32,27 @@ describe("NAV_ITEMS", () => {
   it("keeps every item reachable through grouping", () => {
     const grouped = groupNavItems(NAV_ITEMS).flatMap((g) => g.items);
     expect(grouped).toHaveLength(NAV_ITEMS.length);
+  });
+
+  it("keeps Install Package directly visible in the Files section", () => {
+    const files = groupNavItems(NAV_ITEMS).find(
+      (group) => group.section.key === "nav_section_files",
+    );
+    expect(files?.items.map((item) => item.to)).toContain("/install-package");
+  });
+
+  it("uses translation keys present in the English catalogue", () => {
+    for (const item of NAV_ITEMS) {
+      expect(en, `missing navigation translation: ${item.key}`).toHaveProperty(
+        item.key,
+      );
+      if (item.section) {
+        expect(
+          en,
+          `missing navigation section translation: ${item.section.key}`,
+        ).toHaveProperty(item.section.key);
+      }
+    }
   });
 });
 

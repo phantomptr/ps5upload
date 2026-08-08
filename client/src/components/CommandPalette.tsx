@@ -65,14 +65,14 @@ function useCommands(close: () => void): Command[] {
       nav("/connection", "connect", "Connection", ["host", "ip", "connect"]),
       nav("/upload", "upload", "Upload"),
       nav("/install-package", "install_package", "Install Package", ["pkg"]),
-      nav("/library", "library", "Library", ["games", "apps"]),
+      nav("/games", "library", "Library", ["games", "apps"]),
       nav("/saves", "saves", "Save data"),
       nav("/screenshots", "screenshots", "Screenshots"),
       nav("/search", "search", "Search"),
       nav("/volumes", "volumes", "Volumes", ["disk", "drives"]),
       nav("/disk-usage", "disk_usage", "Disk usage"),
-      nav("/file-system", "file_system", "File System", ["browse", "files"]),
-      nav("/hardware", "hardware", "Hardware", ["temps", "power"]),
+      nav("/files", "file_system", "File System", ["browse", "files"]),
+      nav("/console", "hardware", "Hardware", ["temps", "power"]),
       // 2.12.0 merged the SendPayload + KernelLog screens into tabs.
       // Keep old labels as keyword aliases for muscle memory; the
       // canonical entries are now /payloads and /logs with tabs.
@@ -86,7 +86,7 @@ function useCommands(close: () => void): Command[] {
       nav("/payloads?tab=send", "payloads_tab_send", "Send file", [
         "send payload",
       ]),
-      nav("/activity", "transfer_log", "Transfer Log"),
+      nav("/tasks", "transfer_log_title", "Transfer Log"),
       nav("/stats", "stats", "Stats"),
       nav("/logs", "logs", "Logs"),
       nav("/logs?tab=kernel", "logs_tab_kernel", "Kernel log", [

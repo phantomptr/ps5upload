@@ -136,7 +136,25 @@ export interface Task {
 // ---------------------------------------------------------------------------
 
 const STORAGE_KEY = "ps5upload.tasks.v1";
-const MAX_HISTORY = 200;
+export const MAX_TASK_HISTORY = 200;
+
+/** Bound both persisted and in-memory history while never evicting active
+ * work. Tasks are newest-first, so terminal slots naturally keep the newest
+ * results. If more than MAX_TASK_HISTORY tasks are active at once, all active
+ * tasks win and the temporary overflow disappears as they finish. */
+export function trimTaskHistory(tasks: Task[]): Task[] {
+  const activeCount = tasks.reduce(
+    (count, task) => count + (isTerminal(task.status) ? 0 : 1),
+    0,
+  );
+  let terminalSlots = Math.max(0, MAX_TASK_HISTORY - activeCount);
+  return tasks.filter((task) => {
+    if (!isTerminal(task.status)) return true;
+    if (terminalSlots <= 0) return false;
+    terminalSlots -= 1;
+    return true;
+  });
+}
 
 interface PersistedShape {
   tasks: Task[];
@@ -160,8 +178,7 @@ function loadInitial(): Task[] {
 }
 
 function persist(tasks: Task[]): void {
-  // Keep only the most recent MAX_HISTORY tasks to avoid unbounded growth.
-  const trimmed = tasks.slice(0, MAX_HISTORY);
+  const trimmed = trimTaskHistory(tasks);
   const shape: PersistedShape = { tasks: trimmed };
   safeSetItem(STORAGE_KEY, JSON.stringify(shape));
 }
@@ -243,7 +260,7 @@ interface TaskState {
   clearFinished: () => void;
 
   /** Look up a task by id. Returns undefined if not found (including
-   *  evicted-by-MAX_HISTORY). */
+   *  terminal history evicted by MAX_TASK_HISTORY). */
   getTask: (id: string) => Task | undefined;
 
   /** All currently-active (non-terminal) tasks. The badge / spinner
@@ -283,7 +300,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     };
     set((s) => {
       // New tasks go to the front so the Tasks tab shows newest first.
-      const tasks = [task, ...s.tasks];
+      const tasks = trimTaskHistory([task, ...s.tasks]);
       persist(tasks);
       return { tasks };
     });
@@ -303,8 +320,9 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       };
       const tasks = [...s.tasks];
       tasks[idx] = updated;
-      persist(tasks);
-      return { tasks };
+      const trimmed = trimTaskHistory(tasks);
+      persist(trimmed);
+      return { tasks: trimmed };
     });
   },
 
@@ -324,8 +342,9 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       };
       const tasks = [...s.tasks];
       tasks[idx] = updated;
-      persist(tasks);
-      return { tasks };
+      const trimmed = trimTaskHistory(tasks);
+      persist(trimmed);
+      return { tasks: trimmed };
     });
   },
 

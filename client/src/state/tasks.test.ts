@@ -5,6 +5,9 @@ import {
   isTerminal,
   isActivatable,
   onTaskStatusChange,
+  MAX_TASK_HISTORY,
+  trimTaskHistory,
+  type Task,
 } from "./tasks";
 
 function resetStore() {
@@ -250,6 +253,41 @@ describe("isTerminal / isActivatable predicates", () => {
     for (const s of ["done", "failed", "cancelled", "interrupted"] as const) {
       expect(isActivatable(s)).toBe(false);
     }
+  });
+});
+
+describe("bounded task history", () => {
+  const task = (id: number, status: Task["status"]): Task => ({
+    id: String(id),
+    kind: "upload-file",
+    origin: "test",
+    label: `task-${id}`,
+    consoleId: "host",
+    payload: {},
+    status,
+    createdAt: new Date(id).toISOString(),
+    updatedAtMs: id,
+    attempts: 1,
+    maxAttempts: 3,
+  });
+
+  it("caps terminal history while preserving active tasks in original order", () => {
+    const active = task(999, "running");
+    const input = [
+      ...Array.from({ length: MAX_TASK_HISTORY + 20 }, (_, i) =>
+        task(i, "done"),
+      ),
+      active,
+    ];
+
+    const trimmed = trimTaskHistory(input);
+
+    expect(trimmed).toHaveLength(MAX_TASK_HISTORY);
+    expect(trimmed).toContain(active);
+    expect(trimmed.filter((item) => isTerminal(item.status))).toHaveLength(
+      MAX_TASK_HISTORY - 1,
+    );
+    expect(trimmed[0].id).toBe("0");
   });
 });
 

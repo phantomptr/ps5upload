@@ -658,6 +658,11 @@ test-payload: payload
 		$(PAYLOAD_DIR)/tests/hw_guard_selftest.c
 	@/tmp/ps5upload-hw-guard-selftest
 	@echo "✓ hw-guard recovers Sony-getter faults without dropping the helper"
+	@echo "Running ptrace timeout-recovery self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-ptrace-recovery-selftest \
+		$(PAYLOAD_DIR)/tests/ptrace_recovery_selftest.c
+	@/tmp/ps5upload-ptrace-recovery-selftest
+	@echo "✓ ptrace timeout recovery never resumes injected registers"
 
 test-client: setup-client
 	@echo "Testing client build..."
