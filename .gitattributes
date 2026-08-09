@@ -1,0 +1,4 @@
+# This is the exact portable source tool from PS5 Payload SDK v0.42. Keep its
+# LF bytes stable on Windows so the pinned upstream SHA-256 remains verifiable
+# and its Unix shebang remains executable from Git Bash/WSL.
+scripts/ps5-sdk/prospero-nid text eol=lf
