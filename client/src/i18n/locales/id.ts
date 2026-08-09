@@ -674,6 +674,24 @@ nanodns_revert: "Kembalikan",
 nanodns_save: "Simpan",
 nanodns_apply_hint:
   "Bagian: [general] (log/debug/bind) · [upstream] (server×N, timeout_ms) · [overrides] (mask=IPv4, 0.0.0.0 = blokir) · [exceptions] (satu mask per baris). Menyimpan akan menulis file; muat ulang nanoDNS dari Payloads untuk menerapkan.",
+nanodns_version_modern:
+  "Terdeteksi dari log runtime. IPv6 dan mode senyap didukung.",
+nanodns_version_legacy:
+  "Terdeteksi dari log runtime. Payload 0.3 ini memakai pengaturan IPv4; quiet dan bind6 tidak diterapkan.",
+nanodns_version_config:
+  "Banner runtime tidak tersedia, tetapi file ini berisi pengaturan 0.4. Muat ulang nanoDNS 0.4 untuk memakai IPv6 dan mode senyap.",
+nanodns_version_unknown:
+  "Banner runtime maupun pengaturan 0.4 tidak ditemukan. Editor tetap dalam mode kompatibel 0.3 sampai nanoDNS 0.4 terdeteksi.",
+nanodns_migrate_body:
+  "Mempertahankan semua resolver, pengalihan, pengecualian, komentar, dan path khusus; hanya menambah pengaturan nanoDNS 0.4 yang belum ada dan memperbaiki alamat Yandex.DNS lama. Tinjau editor, lalu Simpan.",
+nanodns_yandex_body:
+  "nanoDNS 0.3 keliru menyertakan 77.77.88.88. Memperbaikinya menjadi 77.88.8.8 aman untuk 0.3 dan 0.4 serta tidak mengubah bagian file lainnya.",
+nanodns_quiet_hint:
+  "Menghentikan popup saat nanoDNS dimulai; pencatatan log tetap berjalan normal.",
+nanodns_quiet_label: "Mode senyap",
+nanodns_bind6_hint:
+  "Gunakan ::1 untuk konsol ini, :: untuk semua antarmuka IPv6, atau off untuk menonaktifkan IPv6.",
+nanodns_bind6_label: "Alamat bind IPv6",
 installed_badge_smp_needed: "SMP",
 notifications_unread_only_tooltip: "Hanya tampilkan entri yang belum dibaca saat panel ini dibuka",
 ok: "OK",

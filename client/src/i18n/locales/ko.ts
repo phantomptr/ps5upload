@@ -675,6 +675,24 @@ nanodns_revert: "되돌리기",
 nanodns_save: "저장",
 nanodns_apply_hint:
   "섹션: [general] (log/debug/bind) · [upstream] (server×N, timeout_ms) · [overrides] (mask=IPv4, 0.0.0.0 = 차단) · [exceptions] (한 줄에 mask 하나). 저장하면 파일이 기록됩니다. 적용하려면 Payloads에서 nanoDNS를 다시 로드하세요.",
+nanodns_version_modern:
+  "런타임 로그에서 감지했습니다. IPv6와 조용한 모드를 지원합니다.",
+nanodns_version_legacy:
+  "런타임 로그에서 감지했습니다. 이 0.3 페이로드는 IPv4 설정을 사용하며 quiet와 bind6는 적용되지 않습니다.",
+nanodns_version_config:
+  "런타임 배너를 확인할 수 없지만 이 파일에 0.4 설정이 있습니다. IPv6와 조용한 모드를 사용하려면 nanoDNS 0.4를 다시 로드하세요.",
+nanodns_version_unknown:
+  "런타임 배너나 0.4 설정을 찾지 못했습니다. nanoDNS 0.4가 감지될 때까지 편집기는 0.3 호환 모드를 유지합니다.",
+nanodns_migrate_body:
+  "사용자 지정 리졸버, 재정의, 예외, 주석, 경로를 모두 유지하고 누락된 nanoDNS 0.4 설정만 추가하며 오래된 Yandex.DNS 주소를 수정합니다. 편집기에서 확인한 뒤 저장하세요.",
+nanodns_yandex_body:
+  "nanoDNS 0.3에는 실수로 77.77.88.88이 포함되었습니다. 77.88.8.8로 수정해도 0.3과 0.4 모두 안전하며 파일의 나머지 부분은 바뀌지 않습니다.",
+nanodns_quiet_hint:
+  "nanoDNS 시작 팝업을 중지하며 로그 기록은 정상적으로 계속됩니다.",
+nanodns_quiet_label: "조용한 모드",
+nanodns_bind6_hint:
+  "이 콘솔에는 ::1, 모든 IPv6 인터페이스에는 ::, IPv6를 끄려면 off를 사용하세요.",
+nanodns_bind6_label: "IPv6 바인드 주소",
 installed_badge_smp_needed: "SMP",
 notifications_unread_only_tooltip: "이 패널을 열었을 때 읽지 않은 상태였던 항목만 표시",
 ok: "확인",

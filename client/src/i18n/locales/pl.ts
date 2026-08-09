@@ -943,6 +943,24 @@ nanodns_revert: "Przywróć",
 nanodns_save: "Zapisz",
 nanodns_apply_hint:
   "Sekcje: [general] (log/debug/bind) \u00b7 [upstream] (server\u00d7N, timeout_ms) \u00b7 [overrides] (mask=IPv4, 0.0.0.0 = block) \u00b7 [exceptions] (po jednej masce w wierszu). Zapisanie zapisuje plik; ponownie załaduj nanoDNS z Payloads, aby zastosować.",
+nanodns_version_modern:
+  "Wykryto w dzienniku działania. Obsługiwane są IPv6 i tryb cichy.",
+nanodns_version_legacy:
+  "Wykryto w dzienniku działania. Ten payload 0.3 używa ustawień IPv4; quiet i bind6 nie są stosowane.",
+nanodns_version_config:
+  "Baner działania był niedostępny, ale ten plik zawiera ustawienia 0.4. Załaduj ponownie nanoDNS 0.4, aby użyć IPv6 i trybu cichego.",
+nanodns_version_unknown:
+  "Nie znaleziono banera działania ani ustawień 0.4. Edytor pozostaje w trybie zgodnym z 0.3 do czasu wykrycia nanoDNS 0.4.",
+nanodns_migrate_body:
+  "Zachowuje wszystkie własne resolwery, przekierowania, wyjątki, komentarze i ścieżki; dodaje tylko brakujące ustawienia nanoDNS 0.4 i poprawia stary adres Yandex.DNS. Sprawdź edytor, a następnie zapisz.",
+nanodns_yandex_body:
+  "nanoDNS 0.3 omyłkowo zawierał adres 77.77.88.88. Zmiana na 77.88.8.8 jest bezpieczna dla 0.3 i 0.4 oraz nie zmienia reszty pliku.",
+nanodns_quiet_hint:
+  "Wyłącza komunikaty startowe nanoDNS; zapisywanie dziennika działa nadal normalnie.",
+nanodns_quiet_label: "Tryb cichy",
+nanodns_bind6_hint:
+  "Użyj ::1 dla tej konsoli, :: dla wszystkich interfejsów IPv6 albo off, aby wyłączyć IPv6.",
+nanodns_bind6_label: "Adres nasłuchu IPv6",
 notifications_unread_only_tooltip: "Pokaż tylko wpisy, które były nieprzeczytane po otwarciu tego panelu",
 ok: "OK",
 oled_mode: "Tryb OLED",

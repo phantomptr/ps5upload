@@ -675,6 +675,24 @@ nanodns_revert: "वापस लाएँ",
 nanodns_save: "सहेजें",
 nanodns_apply_hint:
   "अनुभाग: [general] (log/debug/bind) · [upstream] (server×N, timeout_ms) · [overrides] (mask=IPv4, 0.0.0.0 = ब्लॉक) · [exceptions] (प्रति पंक्ति एक mask)। सहेजने पर फ़ाइल लिखी जाती है; लागू करने के लिए Payloads से nanoDNS को फिर से लोड करें।",
+nanodns_version_modern:
+  "रनटाइम लॉग से पता चला। IPv6 और शांत मोड समर्थित हैं।",
+nanodns_version_legacy:
+  "रनटाइम लॉग से पता चला। यह 0.3 पेलोड IPv4 सेटिंग्स उपयोग करता है; quiet और bind6 लागू नहीं होते।",
+nanodns_version_config:
+  "रनटाइम बैनर उपलब्ध नहीं था, लेकिन इस फ़ाइल में 0.4 सेटिंग्स हैं। IPv6 और शांत मोड उपयोग करने के लिए nanoDNS 0.4 फिर से लोड करें।",
+nanodns_version_unknown:
+  "कोई रनटाइम बैनर या 0.4 सेटिंग्स नहीं मिलीं। nanoDNS 0.4 का पता चलने तक एडिटर 0.3-संगत मोड में रहेगा।",
+nanodns_migrate_body:
+  "सभी कस्टम रिज़ॉल्वर, ओवरराइड, अपवाद, टिप्पणियाँ और पाथ सुरक्षित रखता है; केवल छूटी nanoDNS 0.4 सेटिंग्स जोड़ता है और पुराने Yandex.DNS पते को ठीक करता है। एडिटर की समीक्षा करके सहेजें।",
+nanodns_yandex_body:
+  "nanoDNS 0.3 में गलती से 77.77.88.88 दिया गया था। इसे 77.88.8.8 करना 0.3 और 0.4 दोनों के लिए सुरक्षित है और बाकी फ़ाइल को नहीं बदलता।",
+nanodns_quiet_hint:
+  "nanoDNS के स्टार्टअप पॉपअप रोकता है; लॉगिंग सामान्य रूप से जारी रहती है।",
+nanodns_quiet_label: "शांत मोड",
+nanodns_bind6_hint:
+  "इस कंसोल के लिए ::1, सभी IPv6 इंटरफ़ेस के लिए ::, या IPv6 बंद करने के लिए off उपयोग करें।",
+nanodns_bind6_label: "IPv6 बाइंड पता",
 installed_badge_smp_needed: "SMP",
 notifications_unread_only_tooltip: "केवल वे प्रविष्टियाँ दिखाएँ जो यह पैनल खुलने के समय अपठित थीं",
 ok: "ठीक है",

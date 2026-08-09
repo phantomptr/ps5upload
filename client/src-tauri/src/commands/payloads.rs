@@ -505,7 +505,7 @@ const CATALOGUE: &[CatalogueEntry] = &[
         id: "nanodns",
         display_name: "nanoDNS",
         role: "On-console DNS server — block PSN / redirect domains",
-        description: "A minimal DNS server that runs on the PS5 (UDP :53). Ships blocking PlayStation Network + update domains by default (0.0.0.0), and can redirect any domain to a LAN IP — handy for staying offline-friendly while jailbroken. Point the console's DNS at it (set bind=0.0.0.0 in the ini to serve the LAN). Config: /data/nanodns/nanodns.ini (auto-created with sane defaults). PS5 build only — never the -ps4 asset.",
+        description: "A minimal DNS server that runs on the PS5 (UDP :53). Ships blocking PlayStation Network + update domains by default (0.0.0.0), and can redirect any domain to a LAN IP — handy for staying offline-friendly while jailbroken. Supports nanoDNS 0.3 and 0.4; the nanoDNS editor detects the running version and preserves existing /data/nanodns/nanodns.ini settings when enabling 0.4 quiet mode or IPv6. Point the console's DNS at it (set bind=0.0.0.0 in the ini to serve the LAN). PS5 build only — never the -ps4 asset.",
         repo_host: "github.com",
         repo_owner: "drakmor",
         repo_name: "nanoDNS",

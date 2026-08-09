@@ -674,6 +674,24 @@ nanodns_revert: "تراجع",
 nanodns_save: "حفظ",
 nanodns_apply_hint:
   "الأقسام: [general] (log/debug/bind) · [upstream] (server×N, timeout_ms) · [overrides] (mask=IPv4، 0.0.0.0 = حظر) · [exceptions] (mask واحد لكل سطر). الحفظ يكتب الملف؛ أعد تحميل nanoDNS من Payloads للتطبيق.",
+nanodns_version_modern:
+  "تم اكتشاف الإصدار من سجل التشغيل. يدعم IPv6 والوضع الهادئ.",
+nanodns_version_legacy:
+  "تم اكتشاف الإصدار من سجل التشغيل. تستخدم حمولة 0.3 هذه إعدادات IPv4؛ ولا يتم تطبيق quiet وbind6.",
+nanodns_version_config:
+  "تعذّر العثور على لافتة الإصدار في سجل التشغيل، لكن هذا الملف يحتوي على إعدادات 0.4. أعد تحميل nanoDNS 0.4 لاستخدام IPv6 والوضع الهادئ.",
+nanodns_version_unknown:
+  "لم يتم العثور على لافتة إصدار أثناء التشغيل أو إعدادات 0.4. يبقى المحرر في وضع متوافق مع 0.3 حتى يتم اكتشاف nanoDNS 0.4.",
+nanodns_migrate_body:
+  "يحتفظ بكل محللات DNS والتجاوزات والاستثناءات والتعليقات والمسارات المخصصة؛ ويضيف فقط إعدادات nanoDNS 0.4 المفقودة ويصحح عنوان Yandex.DNS القديم. راجع المحرر ثم احفظ.",
+nanodns_yandex_body:
+  "صدر nanoDNS 0.3 بالعنوان 77.77.88.88 عن طريق الخطأ. تصحيحه إلى 77.88.8.8 آمن للإصدارين 0.3 و0.4 ولا يغيّر بقية الملف.",
+nanodns_quiet_hint:
+  "يوقف نوافذ بدء تشغيل nanoDNS؛ ويستمر التسجيل بصورة طبيعية.",
+nanodns_quiet_label: "الوضع الهادئ",
+nanodns_bind6_hint:
+  "استخدم ::1 لهذه المنصة، أو :: لكل واجهات IPv6، أو off لتعطيل IPv6.",
+nanodns_bind6_label: "عنوان ربط IPv6",
 installed_badge_smp_needed: "SMP",
 notifications_unread_only_tooltip: "عرض المدخلات التي كانت غير مقروءة عند فتح هذه اللوحة فقط",
 ok: "موافق",

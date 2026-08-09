@@ -675,6 +675,24 @@ nanodns_revert: "元に戻す",
 nanodns_save: "保存",
 nanodns_apply_hint:
   "セクション: [general] (log/debug/bind) · [upstream] (server×N, timeout_ms) · [overrides] (mask=IPv4, 0.0.0.0 = ブロック) · [exceptions] (1 行に 1 つの mask)。保存するとファイルが書き込まれます。適用するには Payloads から nanoDNS を再読み込みしてください。",
+nanodns_version_modern:
+  "ランタイムログから検出しました。IPv6 と静音モードに対応しています。",
+nanodns_version_legacy:
+  "ランタイムログから検出しました。この 0.3 ペイロードは IPv4 設定を使用し、quiet と bind6 は適用されません。",
+nanodns_version_config:
+  "ランタイムバナーは取得できませんでしたが、このファイルには 0.4 の設定があります。IPv6 と静音モードを使うには nanoDNS 0.4 を再読み込みしてください。",
+nanodns_version_unknown:
+  "ランタイムバナーも 0.4 の設定も見つかりませんでした。nanoDNS 0.4 が検出されるまで、エディターは 0.3 互換モードを維持します。",
+nanodns_migrate_body:
+  "カスタムリゾルバー、上書き、例外、コメント、パスをすべて保持し、不足している nanoDNS 0.4 設定の追加と古い Yandex.DNS アドレスの修正だけを行います。エディターを確認してから保存してください。",
+nanodns_yandex_body:
+  "nanoDNS 0.3 には誤って 77.77.88.88 が含まれていました。77.88.8.8 への修正は 0.3 と 0.4 の両方で安全で、ファイルの他の部分は変更しません。",
+nanodns_quiet_hint:
+  "nanoDNS の起動ポップアップを停止します。ログ記録は通常どおり続きます。",
+nanodns_quiet_label: "静音モード",
+nanodns_bind6_hint:
+  "この本体では ::1、すべての IPv6 インターフェイスでは ::、IPv6 を無効にするには off を使用します。",
+nanodns_bind6_label: "IPv6 バインドアドレス",
 installed_badge_smp_needed: "SMP",
 notifications_unread_only_tooltip: "このパネルを開いた時点で未読だった項目のみ表示",
 ok: "OK",

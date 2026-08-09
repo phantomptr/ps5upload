@@ -4,6 +4,18 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.1.5
+
+**nanoDNS 0.3 and 0.4 compatibility.**
+
+- Detects the loaded nanoDNS version from its runtime log and keeps 0.3 in
+  legacy-safe mode.
+- Adds nanoDNS 0.4 controls for quiet mode and IPv6.
+- Safely updates old configs without deleting custom rules, comments, paths,
+  or resolvers, and corrects the old Yandex.DNS address.
+
+---
+
 ## 5.1.4
 
 **A stability hotfix for the 5.1 release.**

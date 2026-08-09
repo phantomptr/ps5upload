@@ -675,6 +675,24 @@ nanodns_revert: "還原",
 nanodns_save: "儲存",
 nanodns_apply_hint:
   "區段：[general]（log/debug/bind）· [upstream]（server×N, timeout_ms）· [overrides]（mask=IPv4，0.0.0.0 = 封鎖）· [exceptions]（每行一個 mask）。儲存會寫入檔案；從 Payloads 重新載入 nanoDNS 以套用。",
+nanodns_version_modern:
+  "已從執行記錄偵測到。支援 IPv6 和靜音模式。",
+nanodns_version_legacy:
+  "已從執行記錄偵測到。此 0.3 版 payload 使用 IPv4 設定；quiet 和 bind6 不會套用。",
+nanodns_version_config:
+  "無法取得執行時版本橫幅，但此檔案包含 0.4 設定。重新載入 nanoDNS 0.4 後即可使用 IPv6 和靜音模式。",
+nanodns_version_unknown:
+  "找不到執行時版本橫幅或 0.4 設定。在偵測到 nanoDNS 0.4 前，編輯器會維持 0.3 相容模式。",
+nanodns_migrate_body:
+  "保留所有自訂解析器、重新導向、例外、註解和路徑；只加入缺少的 nanoDNS 0.4 設定並修正舊的 Yandex.DNS 位址。請在編輯器中檢查後再儲存。",
+nanodns_yandex_body:
+  "nanoDNS 0.3 誤用了 77.77.88.88。修正為 77.88.8.8 對 0.3 和 0.4 都安全，且不會更改檔案的其他內容。",
+nanodns_quiet_hint:
+  "關閉 nanoDNS 啟動彈出通知；記錄仍會正常繼續。",
+nanodns_quiet_label: "靜音模式",
+nanodns_bind6_hint:
+  "此主機使用 ::1，所有 IPv6 介面使用 ::，或使用 off 停用 IPv6。",
+nanodns_bind6_label: "IPv6 繫結位址",
 installed_badge_smp_needed: "SMP",
 notifications_unread_only_tooltip: "僅顯示開啟此面板時處於未讀狀態的項目",
 ok: "確定",

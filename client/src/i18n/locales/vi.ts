@@ -676,6 +676,24 @@ nanodns_revert: "Hoàn nguyên",
 nanodns_save: "Lưu",
 nanodns_apply_hint:
   "Các phần: [general] (log/debug/bind) · [upstream] (server×N, timeout_ms) · [overrides] (mask=IPv4, 0.0.0.0 = chặn) · [exceptions] (mỗi dòng một mask). Lưu sẽ ghi tệp; nạp lại nanoDNS từ Payloads để áp dụng.",
+nanodns_version_modern:
+  "Đã phát hiện từ nhật ký chạy. Có hỗ trợ IPv6 và chế độ im lặng.",
+nanodns_version_legacy:
+  "Đã phát hiện từ nhật ký chạy. Payload 0.3 này dùng thiết lập IPv4; quiet và bind6 không được áp dụng.",
+nanodns_version_config:
+  "Không đọc được biểu ngữ khi chạy, nhưng tệp này có thiết lập 0.4. Hãy nạp lại nanoDNS 0.4 để dùng IPv6 và chế độ im lặng.",
+nanodns_version_unknown:
+  "Không tìm thấy biểu ngữ khi chạy hoặc thiết lập 0.4. Trình sửa giữ chế độ tương thích 0.3 cho đến khi phát hiện nanoDNS 0.4.",
+nanodns_migrate_body:
+  "Giữ nguyên mọi trình phân giải, chuyển hướng, ngoại lệ, chú thích và đường dẫn tùy chỉnh; chỉ thêm thiết lập nanoDNS 0.4 còn thiếu và sửa địa chỉ Yandex.DNS cũ. Hãy xem lại trong trình sửa rồi Lưu.",
+nanodns_yandex_body:
+  "nanoDNS 0.3 đã phát hành nhầm địa chỉ 77.77.88.88. Sửa thành 77.88.8.8 là an toàn cho cả 0.3 và 0.4 và không đổi phần còn lại của tệp.",
+nanodns_quiet_hint:
+  "Tắt cửa sổ bật lên khi nanoDNS khởi động; việc ghi nhật ký vẫn tiếp tục bình thường.",
+nanodns_quiet_label: "Chế độ im lặng",
+nanodns_bind6_hint:
+  "Dùng ::1 cho máy này, :: cho mọi giao diện IPv6 hoặc off để tắt IPv6.",
+nanodns_bind6_label: "Địa chỉ liên kết IPv6",
 installed_badge_smp_needed: "SMP",
 notifications_unread_only_tooltip: "Chỉ hiện các mục còn chưa đọc khi bảng này được mở",
 ok: "OK",

@@ -674,6 +674,24 @@ nanodns_revert: "ย้อนกลับ",
 nanodns_save: "บันทึก",
 nanodns_apply_hint:
   "ส่วน: [general] (log/debug/bind) · [upstream] (server×N, timeout_ms) · [overrides] (mask=IPv4, 0.0.0.0 = บล็อก) · [exceptions] (หนึ่ง mask ต่อหนึ่งบรรทัด) การบันทึกจะเขียนไฟล์ โหลด nanoDNS ใหม่จาก Payloads เพื่อนำไปใช้",
+nanodns_version_modern:
+  "ตรวจพบจากบันทึกการทำงาน รองรับ IPv6 และโหมดเงียบ",
+nanodns_version_legacy:
+  "ตรวจพบจากบันทึกการทำงาน เพย์โหลด 0.3 นี้ใช้การตั้งค่า IPv4 โดย quiet และ bind6 จะไม่ถูกนำไปใช้",
+nanodns_version_config:
+  "ไม่พบบันทึกแบนเนอร์ขณะทำงาน แต่ไฟล์นี้มีการตั้งค่า 0.4 โหลด nanoDNS 0.4 ใหม่เพื่อใช้ IPv6 และโหมดเงียบ",
+nanodns_version_unknown:
+  "ไม่พบบันทึกแบนเนอร์ขณะทำงานหรือการตั้งค่า 0.4 ตัวแก้ไขจะอยู่ในโหมดที่เข้ากันได้กับ 0.3 จนกว่าจะตรวจพบ nanoDNS 0.4",
+nanodns_migrate_body:
+  "เก็บตัวแก้ชื่อ การเปลี่ยนเส้นทาง ข้อยกเว้น ความคิดเห็น และพาธที่กำหนดเองทั้งหมดไว้ เพิ่มเฉพาะการตั้งค่า nanoDNS 0.4 ที่ขาดและแก้ที่อยู่ Yandex.DNS เก่า ตรวจสอบในตัวแก้ไขแล้วบันทึก",
+nanodns_yandex_body:
+  "nanoDNS 0.3 ใส่ 77.77.88.88 มาผิด การแก้เป็น 77.88.8.8 ปลอดภัยสำหรับทั้ง 0.3 และ 0.4 และไม่เปลี่ยนส่วนอื่นของไฟล์",
+nanodns_quiet_hint:
+  "หยุดป๊อปอัปตอนเริ่ม nanoDNS ส่วนการบันทึกข้อมูลยังทำงานตามปกติ",
+nanodns_quiet_label: "โหมดเงียบ",
+nanodns_bind6_hint:
+  "ใช้ ::1 สำหรับคอนโซลนี้, :: สำหรับอินเทอร์เฟซ IPv6 ทั้งหมด หรือ off เพื่อปิด IPv6",
+nanodns_bind6_label: "ที่อยู่ผูก IPv6",
 installed_badge_smp_needed: "SMP",
 notifications_unread_only_tooltip: "แสดงเฉพาะรายการที่ยังไม่ได้อ่านตอนเปิดแผงนี้",
 ok: "ตกลง",

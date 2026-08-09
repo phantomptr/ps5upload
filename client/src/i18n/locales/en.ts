@@ -948,6 +948,24 @@ nanodns_revert: "Revert",
 nanodns_save: "Save",
 nanodns_apply_hint:
   "Sections: [general] (log/debug/bind) \u00b7 [upstream] (server\u00d7N, timeout_ms) \u00b7 [overrides] (mask=IPv4, 0.0.0.0 = block) \u00b7 [exceptions] (one mask per line). Saving writes the file; re-load nanoDNS from Payloads to apply.",
+nanodns_version_modern:
+  "Detected from the runtime log. IPv6 and quiet mode are supported.",
+nanodns_version_legacy:
+  "Detected from the runtime log. This 0.3 payload uses IPv4 settings; quiet and bind6 are not applied.",
+nanodns_version_config:
+  "The runtime banner was unavailable, but this file contains 0.4 settings. Reload nanoDNS 0.4 to use IPv6 and quiet mode.",
+nanodns_version_unknown:
+  "No runtime banner or 0.4 settings were found. The editor stays in 0.3-compatible mode until nanoDNS 0.4 is detected.",
+nanodns_migrate_body:
+  "Keep every custom resolver, override, exception, comment, and path; add only missing nanoDNS 0.4 settings and correct the obsolete Yandex.DNS address. Review the editor, then Save.",
+nanodns_yandex_body:
+  "nanoDNS 0.3 shipped 77.77.88.88 by mistake. Correcting it to 77.88.8.8 is safe for both 0.3 and 0.4 and leaves the rest of the file unchanged.",
+nanodns_quiet_hint:
+  "Stops nanoDNS startup popups; logging continues normally.",
+nanodns_quiet_label: "Quiet mode",
+nanodns_bind6_hint:
+  "Use ::1 for this console, :: for all IPv6 interfaces, or off to disable IPv6.",
+nanodns_bind6_label: "IPv6 bind address",
 notifications_unread_only_tooltip: "Show only entries that were unread when this panel opened",
 ok: "OK",
 oled_mode: "OLED mode",

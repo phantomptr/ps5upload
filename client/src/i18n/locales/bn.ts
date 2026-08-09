@@ -674,6 +674,24 @@ nanodns_revert: "প্রত্যাবর্তন",
 nanodns_save: "সংরক্ষণ",
 nanodns_apply_hint:
   "বিভাগ: [general] (log/debug/bind) · [upstream] (server×N, timeout_ms) · [overrides] (mask=IPv4, 0.0.0.0 = ব্লক) · [exceptions] (প্রতি লাইনে একটি mask)। সংরক্ষণ করলে ফাইল লেখা হয়; প্রয়োগ করতে Payloads থেকে nanoDNS আবার লোড করুন।",
+nanodns_version_modern:
+  "রানটাইম লগ থেকে শনাক্ত করা হয়েছে। IPv6 এবং নীরব মোড সমর্থিত।",
+nanodns_version_legacy:
+  "রানটাইম লগ থেকে শনাক্ত করা হয়েছে। এই 0.3 পেলোড IPv4 সেটিংস ব্যবহার করে; quiet ও bind6 প্রয়োগ হয় না।",
+nanodns_version_config:
+  "রানটাইম ব্যানার পাওয়া যায়নি, তবে এই ফাইলে 0.4 সেটিংস আছে। IPv6 ও নীরব মোড ব্যবহার করতে nanoDNS 0.4 আবার লোড করুন।",
+nanodns_version_unknown:
+  "কোনো রানটাইম ব্যানার বা 0.4 সেটিংস পাওয়া যায়নি। nanoDNS 0.4 শনাক্ত না হওয়া পর্যন্ত এডিটর 0.3-সামঞ্জস্যপূর্ণ মোডে থাকবে।",
+nanodns_migrate_body:
+  "সব কাস্টম রিজলভার, ওভাররাইড, ব্যতিক্রম, মন্তব্য ও পাথ রাখে; শুধু অনুপস্থিত nanoDNS 0.4 সেটিংস যোগ করে এবং পুরোনো Yandex.DNS ঠিকানা সংশোধন করে। এডিটর দেখে তারপর সংরক্ষণ করুন।",
+nanodns_yandex_body:
+  "nanoDNS 0.3-এ ভুল করে 77.77.88.88 দেওয়া হয়েছিল। এটিকে 77.88.8.8 করা 0.3 ও 0.4 উভয়ের জন্য নিরাপদ এবং ফাইলের বাকি অংশ অপরিবর্তিত রাখে।",
+nanodns_quiet_hint:
+  "nanoDNS-এর স্টার্টআপ পপআপ বন্ধ করে; লগিং স্বাভাবিকভাবে চলতে থাকে।",
+nanodns_quiet_label: "নীরব মোড",
+nanodns_bind6_hint:
+  "এই কনসোলের জন্য ::1, সব IPv6 ইন্টারফেসের জন্য ::, অথবা IPv6 বন্ধ করতে off ব্যবহার করুন।",
+nanodns_bind6_label: "IPv6 বাইন্ড ঠিকানা",
 installed_badge_smp_needed: "SMP",
 notifications_unread_only_tooltip: "এই প্যানেল খোলার সময় যেগুলো অপঠিত ছিল কেবল সেগুলোই দেখান",
 ok: "ঠিক আছে",

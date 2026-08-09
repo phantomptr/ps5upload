@@ -674,6 +674,24 @@ nanodns_revert: "Reverter",
 nanodns_save: "Salvar",
 nanodns_apply_hint:
   "Seções: [general] (log/debug/bind) · [upstream] (server×N, timeout_ms) · [overrides] (mask=IPv4, 0.0.0.0 = bloquear) · [exceptions] (uma mask por linha). Salvar grava o arquivo; recarregue o nanoDNS em Payloads para aplicar.",
+nanodns_version_modern:
+  "Detectado no log de execução. IPv6 e o modo silencioso são compatíveis.",
+nanodns_version_legacy:
+  "Detectado no log de execução. Este payload 0.3 usa configurações IPv4; quiet e bind6 não são aplicados.",
+nanodns_version_config:
+  "O banner de execução não estava disponível, mas este arquivo contém configurações 0.4. Recarregue o nanoDNS 0.4 para usar IPv6 e o modo silencioso.",
+nanodns_version_unknown:
+  "Nenhum banner de execução nem configurações 0.4 foram encontrados. O editor permanece no modo compatível com 0.3 até o nanoDNS 0.4 ser detectado.",
+nanodns_migrate_body:
+  "Mantém todos os resolvedores, redirecionamentos, exceções, comentários e caminhos personalizados; adiciona apenas as configurações ausentes do nanoDNS 0.4 e corrige o endereço antigo do Yandex.DNS. Revise o editor e depois salve.",
+nanodns_yandex_body:
+  "O nanoDNS 0.3 incluiu 77.77.88.88 por engano. Corrigir para 77.88.8.8 é seguro nas versões 0.3 e 0.4 e mantém o restante do arquivo inalterado.",
+nanodns_quiet_hint:
+  "Desativa os avisos de inicialização do nanoDNS; o registro continua normalmente.",
+nanodns_quiet_label: "Modo silencioso",
+nanodns_bind6_hint:
+  "Use ::1 para este console, :: para todas as interfaces IPv6 ou off para desativar o IPv6.",
+nanodns_bind6_label: "Endereço de vínculo IPv6",
 installed_badge_smp_needed: "SMP",
 notifications_unread_only_tooltip: "Mostrar apenas as entradas que estavam não lidas quando este painel foi aberto",
 ok: "OK",

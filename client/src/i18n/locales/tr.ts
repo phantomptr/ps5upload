@@ -674,6 +674,24 @@ nanodns_revert: "Geri al",
 nanodns_save: "Kaydet",
 nanodns_apply_hint:
   "Bölümler: [general] (log/debug/bind) · [upstream] (server×N, timeout_ms) · [overrides] (mask=IPv4, 0.0.0.0 = engelle) · [exceptions] (her satıra bir mask). Kaydetmek dosyayı yazar; uygulamak için Payloads'tan nanoDNS'i yeniden yükleyin.",
+nanodns_version_modern:
+  "Çalışma günlüğünden algılandı. IPv6 ve sessiz mod destekleniyor.",
+nanodns_version_legacy:
+  "Çalışma günlüğünden algılandı. Bu 0.3 payload'u IPv4 ayarlarını kullanır; quiet ve bind6 uygulanmaz.",
+nanodns_version_config:
+  "Çalışma başlığı kullanılamadı ancak bu dosyada 0.4 ayarları var. IPv6 ve sessiz modu kullanmak için nanoDNS 0.4'ü yeniden yükleyin.",
+nanodns_version_unknown:
+  "Çalışma başlığı veya 0.4 ayarı bulunamadı. nanoDNS 0.4 algılanana kadar düzenleyici 0.3 uyumlu modda kalır.",
+nanodns_migrate_body:
+  "Tüm özel çözümleyicileri, yönlendirmeleri, istisnaları, yorumları ve yolları korur; yalnızca eksik nanoDNS 0.4 ayarlarını ekler ve eski Yandex.DNS adresini düzeltir. Düzenleyiciyi inceleyip Kaydet'e basın.",
+nanodns_yandex_body:
+  "nanoDNS 0.3 yanlışlıkla 77.77.88.88 ile yayımlandı. Bunu 77.88.8.8 olarak düzeltmek hem 0.3 hem 0.4 için güvenlidir ve dosyanın kalanını değiştirmez.",
+nanodns_quiet_hint:
+  "nanoDNS başlangıç bildirimlerini durdurur; günlük kaydı normal şekilde devam eder.",
+nanodns_quiet_label: "Sessiz mod",
+nanodns_bind6_hint:
+  "Bu konsol için ::1, tüm IPv6 arayüzleri için :: veya IPv6'yı kapatmak için off kullanın.",
+nanodns_bind6_label: "IPv6 bağlama adresi",
 installed_badge_smp_needed: "SMP",
 notifications_unread_only_tooltip: "Yalnızca bu panel açıldığında okunmamış olan kayıtları göster",
 ok: "Tamam",
