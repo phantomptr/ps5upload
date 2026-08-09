@@ -547,7 +547,7 @@ export default function InstallPackageScreen() {
       ),
       message: tr(
         "pkglib.stream.beta.body",
-        { fw: fwMajor === null ? "unknown" : String(fwMajor) },
+        { fw: firmwareLabel },
         `On ${firmwareLabel}, Stream uses the PS5's own HTTP installer to pull the package from this computer. Firmware version alone does not determine support, and console proxy/network settings can block it. If it fails, use Upload → Install instead. Continue with Stream?`,
       ),
       confirmLabel: tr(

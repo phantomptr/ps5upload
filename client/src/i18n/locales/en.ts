@@ -2217,6 +2217,13 @@ shortcuts_activate: "Open / activate",
   "pkglib.menu.copyDetails": "Copy details",
   "pkglib.menu.openFolder": "Open folder",
   "pkglib.stream": "Stream (beta)",
+  "pkglib.stream.beta.body":
+    "On {fw}, Stream uses the PS5's own HTTP installer to pull the package from this computer. Firmware version alone does not determine support, and console proxy/network settings can block it. If it fails, use Upload → Install instead. Continue with Stream?",
+  "pkglib.stream.beta.confirm": "Stream anyway",
+  "pkglib.stream.beta.title": "Stream install is beta",
+  "pkglib.variants.body":
+    "{n} staged patch/DLC variants target the same title and version. They are all preserved, but the PS5 can keep only one active patch for that version. “Install all” skips them; install the Optional Fix or Backport that matches this console from its row.",
+  "pkglib.variants.title": "Choose one same-version package variant",
   "pkglib.version.title": "Package version (PARAM.SFO APP_VER)",
   "profile.username.loading": "Reading console users…",
   rose_mode: "Rose",
