@@ -634,6 +634,9 @@ pub fn err_code_message(code: u32) -> Option<&'static str> {
         0x80B2_1401 => Some(
             "PS5 ShellUI install path rejected the request — likely a firmware-point or pkg-format incompatibility",
         ),
+        0xE000_0008 => Some(
+            "Staged DLC is being handed to the safer standalone DPI installer",
+        ),
         _ => None,
     }
 }
@@ -750,6 +753,7 @@ mod tests {
         // raw hex with no actionable copy.
         assert!(err_code_message(0x80B2116F).is_some());
         assert!(err_code_message(0x80B21401).is_some());
+        assert!(err_code_message(0xE0000008).is_some());
     }
 
     #[test]

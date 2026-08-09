@@ -16,6 +16,8 @@ import {
   FolderOpen,
   Copy,
   FileText,
+  Clock3,
+  MapPin,
 } from "lucide-react";
 
 import { isAndroid } from "../../lib/platform";
@@ -44,7 +46,12 @@ import {
   isFinishedPkg,
   pkgRowInstalled,
   pkgInstallAllPlan,
+  pkgAlternativeGroups,
+  pkgEntryIdentity,
+  loadPkgAlternativeSelections,
+  recordPkgAlternativeSelection,
   type PkgEntry,
+  type PkgAlternativeSelections,
 } from "../../state/pkgLibrary";
 import { useInstallSettingsStore } from "../../state/installSettings";
 import { pkgCategoryLabel, isAddonCategory } from "../../lib/pkgStagingPath";
@@ -77,6 +84,9 @@ function PkgRow({
   installed,
   installDisabled,
   deleteDisabled,
+  alternativeKey,
+  selectedForInstallAll,
+  onSelectAlternative,
   onInstall,
   onDelete,
 }: {
@@ -85,6 +95,9 @@ function PkgRow({
   installed: boolean;
   installDisabled: boolean;
   deleteDisabled: boolean;
+  alternativeKey?: string;
+  selectedForInstallAll?: boolean;
+  onSelectAlternative?: () => void;
   onInstall: () => void;
   onDelete: () => void;
 }) {
@@ -94,6 +107,15 @@ function PkgRow({
   const installingThis = entry.status === "installing";
   const queued = entry.status === "queued";
   const busy = uploading || installingThis || queued;
+  const categoryLabel = pkgCategoryLabel(entry.category);
+  const legacyVariantSuffix =
+    alternativeKey && entry.fingerprint
+      ? ` · ${entry.fingerprint.slice(0, 8)}`
+      : "";
+  const rowLabel = isAddonCategory(entry.category)
+    ? entry.originalName ||
+      `${categoryLabel || "Add-on"}${entry.appVer ? ` v${entry.appVer}` : ""}${legacyVariantSuffix}`
+    : entry.title || entry.originalName || entry.contentId || entry.name;
   // Right-click/⋯ context actions for the package (Open Folder, Copy Details).
   const dir = entry.path.slice(0, entry.path.lastIndexOf("/")) || "/";
   const menuItems: OverflowMenuItem[] = [
@@ -111,6 +133,10 @@ function PkgRow({
             entry.title,
             entry.appVer ? `v${entry.appVer}` : "",
             entry.originalName,
+            entry.sourcePath,
+            entry.uploadedAt
+              ? new Date(entry.uploadedAt).toLocaleString()
+              : undefined,
             entry.contentId,
             entry.titleId,
             entry.path,
@@ -127,15 +153,16 @@ function PkgRow({
 
   return (
     <li className="flex flex-col gap-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3">
-      <div className="flex items-center gap-3">
-        <Cover host={host} titleId={entry.titleId} />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+        <div className="flex min-w-0 items-center gap-3 sm:flex-1">
+          <Cover host={host} titleId={entry.titleId} />
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
             <span
-              className="truncate text-sm font-medium"
-              title={entry.title || entry.contentId || entry.name}
+              className="min-w-0 basis-full truncate text-sm font-medium sm:basis-auto sm:flex-1"
+              title={rowLabel}
             >
-              {entry.title || entry.contentId || entry.name}
+              {rowLabel}
             </span>
             {/* PS4 / PS5 platform badge — derived from the header magic
                 (\x7FFIH = PS5) and the title-id prefix (CUSA = PS4, PPSA =
@@ -169,29 +196,68 @@ function PkgRow({
                 v{entry.appVer}
               </span>
             )}
-          </div>
-          <div className="mt-0.5 truncate font-mono text-xs text-[var(--color-muted)]">
-            {entry.contentId || entry.name}
-            <span className="px-1 opacity-60">·</span>
-            <span className="tabular-nums">{formatBytes(entry.size)}</span>
-          </div>
-          {/* Original uploaded filename — the only thing that tells a game's
-              updates apart (they share a ContentID and a title). Best-effort:
-              shown when we captured it at upload (cached locally). */}
-          {entry.originalName && (
-            <div
-              className="mt-0.5 flex items-center gap-1 truncate text-xs text-[var(--color-muted)]"
-              title={entry.originalName}
-            >
-              <FileText size={11} className="shrink-0 opacity-70" />
-              <span className="truncate">{entry.originalName}</span>
             </div>
-          )}
+            <div className="mt-0.5 truncate font-mono text-xs text-[var(--color-muted)]">
+              {entry.contentId || entry.name}
+              <span className="px-1 opacity-60">·</span>
+              <span className="tabular-nums">{formatBytes(entry.size)}</span>
+            </div>
+            {/* Upload provenance. Computer-side details remain in this app's
+                local cache; older/other-computer rows still show the PS5 path
+                and use the staged file mtime as their best-known upload time. */}
+            <div className="mt-1.5 grid min-w-0 gap-x-4 gap-y-1 text-[11px] text-[var(--color-muted)] sm:grid-cols-2">
+              {entry.originalName && (
+                <div
+                  className="flex min-w-0 items-center gap-1"
+                  title={entry.originalName}
+                >
+                  <FileText size={11} className="shrink-0 opacity-70" />
+                  <span className="shrink-0 font-medium">
+                    {tr("pkglib.meta.file", undefined, "File:")}
+                  </span>
+                  <span className="truncate">{entry.originalName}</span>
+                </div>
+              )}
+              {entry.sourcePath && (
+                <div
+                  className="flex min-w-0 items-center gap-1"
+                  title={entry.sourcePath}
+                >
+                  <MapPin size={11} className="shrink-0 opacity-70" />
+                  <span className="shrink-0 font-medium">
+                    {tr("pkglib.meta.source", undefined, "Source:")}
+                  </span>
+                  <span className="truncate font-mono">{entry.sourcePath}</span>
+                </div>
+              )}
+              {entry.uploadedAt && (
+                <div
+                  className="flex min-w-0 items-center gap-1"
+                  title={new Date(entry.uploadedAt).toISOString()}
+                >
+                  <Clock3 size={11} className="shrink-0 opacity-70" />
+                  <span className="shrink-0 font-medium">
+                    {tr("pkglib.meta.uploaded", undefined, "Uploaded:")}
+                  </span>
+                  <span className="truncate tabular-nums">
+                    {new Date(entry.uploadedAt).toLocaleString()}
+                  </span>
+                </div>
+              )}
+              <div className="flex min-w-0 items-center gap-1" title={entry.path}>
+                <FolderOpen size={11} className="shrink-0 opacity-70" />
+                <span className="shrink-0 font-medium">
+                  {tr("pkglib.meta.onPs5", undefined, "On PS5:")}
+                </span>
+                <span className="truncate font-mono">{entry.path}</span>
+              </div>
+            </div>
+          </div>
         </div>
 
         {/* Actions */}
         {!busy && (
-          <div className="flex shrink-0 items-center gap-1.5">
+          <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
             <Button
               variant={installed ? "secondary" : "primary"}
               size="sm"
@@ -243,6 +309,38 @@ function PkgRow({
           </div>
         )}
       </div>
+
+      {alternativeKey && onSelectAlternative && !busy && (
+        <label className="flex cursor-pointer items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-2.5 py-2 text-xs">
+          <input
+            type="radio"
+            name={`pkg-variant-${alternativeKey}`}
+            checked={!!selectedForInstallAll}
+            onChange={onSelectAlternative}
+            disabled={installDisabled}
+            className="accent-[var(--color-accent)]"
+          />
+          <span
+            className={
+              selectedForInstallAll
+                ? "font-medium text-[var(--color-accent)]"
+                : "text-[var(--color-muted)]"
+            }
+          >
+            {selectedForInstallAll
+              ? tr(
+                  "pkglib.variant.selected",
+                  undefined,
+                  "Selected for Install all on this PS5",
+                )
+              : tr(
+                  "pkglib.variant.select",
+                  undefined,
+                  "Use this variant for Install all on this PS5",
+                )}
+          </span>
+        </label>
+      )}
 
       {/* Upload progress */}
       {uploading && (
@@ -345,6 +443,10 @@ export default function InstallPackageScreen() {
   const [picking, setPicking] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [dropActive, setDropActive] = useState(false);
+  const [alternativeSelections, setAlternativeSelections] =
+    useState<PkgAlternativeSelections>(() =>
+      loadPkgAlternativeSelections(host),
+    );
 
   const hostReady = !!host?.trim();
   // There is no reliable firmware cutoff for Stream install. Hardware proves
@@ -353,6 +455,9 @@ export default function InstallPackageScreen() {
   // clearly-labelled beta and surface the real network error instead of
   // disabling capable older consoles based on version alone.
   const fwMajor = firmwareMajor(runtime?.ps5Kernel);
+  useEffect(() => {
+    setAlternativeSelections(loadPkgAlternativeSelections(host));
+  }, [host]);
   // Stable ref so the drag-drop effect (subscribed once per host) always
   // calls the latest uploader without re-subscribing each render. Updated
   // in an effect (not during render) per the rules-of-hooks ref rule.
@@ -573,7 +678,39 @@ export default function InstallPackageScreen() {
       const p = Array.isArray(sel) ? sel[0] : sel;
       if (!p) return;
       const r = await installStream(p as string, host);
-      if (!r.ok && r.message) setPickError(r.message);
+      if (!r.ok && r.stagedFallbackRecommended) {
+        const fallback = await confirm({
+          title: tr(
+            "pkglib.stream.fallback.title",
+            undefined,
+            "Stream is blocked on this PS5",
+          ),
+          message: `${r.message || "The PS5 couldn't complete the HTTP install."}\n\nUpload the same package to PS5 staging and install it now? This uses the PS5-local file path and does not depend on Sony's HTTP proxy.`,
+          confirmLabel: tr(
+            "pkglib.stream.fallback.confirm",
+            undefined,
+            "Upload & install",
+          ),
+          cancelLabel: tr(
+            "pkglib.stream.fallback.cancel",
+            undefined,
+            "Not now",
+          ),
+        });
+        if (fallback) {
+          setPickError(null);
+          await addAndUpload(p as string, host, {
+            installAfterUpload: true,
+            selectVariant: true,
+          });
+          // addAndUpload records an explicit variant choice when needed.
+          setAlternativeSelections(loadPkgAlternativeSelections(host));
+        } else if (r.message) {
+          setPickError(r.message);
+        }
+      } else if (!r.ok && r.message) {
+        setPickError(r.message);
+      }
     } catch (e) {
       setPickError(`${e}`);
     } finally {
@@ -633,6 +770,10 @@ export default function InstallPackageScreen() {
       });
       if (!ok) return;
     }
+    // Manually installing an alternative is an explicit choice. Remember it
+    // for this console so a later Install all never replaces it with a sibling
+    // merely because that sibling appears later in the list.
+    selectAlternative(entry);
     void install(entry.path, host);
   }
 
@@ -655,6 +796,60 @@ export default function InstallPackageScreen() {
     if (ok) void remove(entry.path, host);
   }
 
+  const alternativeGroups = useMemo(
+    () => pkgAlternativeGroups(entries),
+    [entries],
+  );
+  const alternativeKeyByPath = useMemo(() => {
+    const byPath = new Map<string, string>();
+    for (const group of alternativeGroups) {
+      for (const entry of group.entries) byPath.set(entry.path, group.key);
+    }
+    return byPath;
+  }, [alternativeGroups]);
+  // If the console inventory proves one exact artifact is active, use it as
+  // the safe default unless the user made an explicit per-console choice.
+  const effectiveAlternativeSelections = useMemo(() => {
+    const next = { ...alternativeSelections };
+    for (const group of alternativeGroups) {
+      const identities = new Set(
+        group.entries.map((entry) => pkgEntryIdentity(entry)),
+      );
+      if (next[group.key] && identities.has(next[group.key])) continue;
+      const active = group.entries.filter((entry) =>
+        pkgRowInstalled(
+          entry,
+          installedIds,
+          entry.titleId
+            ? installedArtifacts.get(entry.titleId)
+            : undefined,
+        ),
+      );
+      if (active.length === 1) {
+        next[group.key] = pkgEntryIdentity(active[0]);
+      } else {
+        delete next[group.key];
+      }
+    }
+    return next;
+  }, [
+    alternativeGroups,
+    alternativeSelections,
+    installedArtifacts,
+    installedIds,
+  ]);
+
+  function selectAlternative(entry: PkgEntry) {
+    const key = alternativeKeyByPath.get(entry.path);
+    if (!key) return;
+    const identity = pkgEntryIdentity(entry);
+    recordPkgAlternativeSelection(host, key, identity);
+    setAlternativeSelections((current) => ({
+      ...current,
+      [key]: identity,
+    }));
+  }
+
   const totalSize = useMemo(
     () => entries.reduce((a, e) => a + (e.size || 0), 0),
     [entries],
@@ -668,10 +863,59 @@ export default function InstallPackageScreen() {
   // Count of not-yet-installed, idle rows — drives the "Install all (N)"
   // button. Mirrors installAll's own target filter in the store so the count
   // and the action agree. >1 so the button only appears when it saves taps.
-  const installPlan = useMemo(() => pkgInstallAllPlan(entries), [entries]);
+  const installedPathsForPlan = useMemo(
+    () =>
+      entries
+        .filter((entry) =>
+          pkgRowInstalled(
+            entry,
+            installedIds,
+            entry.titleId
+              ? installedArtifacts.get(entry.titleId)
+              : undefined,
+          ),
+        )
+        .map((entry) => entry.path),
+    [entries, installedArtifacts, installedIds],
+  );
+  const installPlan = useMemo(() => {
+    const installed = new Set(installedPathsForPlan);
+    return pkgInstallAllPlan(
+      entries.map((entry) => ({
+        ...entry,
+        installedHere: installed.has(entry.path),
+      })),
+      effectiveAlternativeSelections,
+    );
+  }, [entries, effectiveAlternativeSelections, installedPathsForPlan]);
   const installableCount = installPlan.targets.length;
-  const conflictingVariantCount = installPlan.conflicts.length;
-  const sorted = entries; // store already sorts by title
+  const titleGroups = useMemo(() => {
+    const grouped = new Map<
+      string,
+      { key: string; title: string; titleId?: string; entries: PkgEntry[] }
+    >();
+    for (const entry of entries) {
+      const key = entry.titleId
+        ? `title:${entry.titleId}`
+        : entry.contentId
+          ? `content:${entry.contentId}`
+          : `path:${entry.path}`;
+      const existing = grouped.get(key);
+      if (existing) {
+        existing.entries.push(entry);
+        if (entry.title) existing.title = entry.title;
+      } else {
+        grouped.set(key, {
+          key,
+          title:
+            entry.title || entry.titleId || entry.contentId || entry.name,
+          titleId: entry.titleId,
+          entries: [entry],
+        });
+      }
+    }
+    return [...grouped.values()];
+  }, [entries]);
   // Installing swaps the payload out (it owns the transfer port :9113), so it
   // can't run concurrently with an upload. Rather than block the button, the
   // store QUEUES an install behind any active transfer and surfaces a notice
@@ -679,6 +923,36 @@ export default function InstallPackageScreen() {
   // disables the Install button here is another install already in progress
   // (or queued) — clicking during an upload is allowed and just waits.
   const installBlocked = installing;
+
+  const renderPkgRow = (entry: PkgEntry) => {
+    const installed = pkgRowInstalled(
+      entry,
+      installedIds,
+      entry.titleId ? installedArtifacts.get(entry.titleId) : undefined,
+    );
+    const alternativeKey = alternativeKeyByPath.get(entry.path);
+    return (
+      <PkgRow
+        key={entry.path}
+        entry={entry}
+        host={host}
+        installed={installed}
+        installDisabled={installBlocked}
+        deleteDisabled={installing}
+        alternativeKey={alternativeKey}
+        selectedForInstallAll={
+          !!alternativeKey &&
+          effectiveAlternativeSelections[alternativeKey] ===
+            pkgEntryIdentity(entry)
+        }
+        onSelectAlternative={
+          alternativeKey ? () => selectAlternative(entry) : undefined
+        }
+        onInstall={() => void handleInstall(entry)}
+        onDelete={() => void handleDelete(entry)}
+      />
+    );
+  };
 
   return (
     <div className="p-6">
@@ -707,7 +981,13 @@ export default function InstallPackageScreen() {
                 variant="secondary"
                 size="sm"
                 leftIcon={<Download size={14} />}
-                onClick={() => void installAll(host)}
+                onClick={() =>
+                  void installAll(
+                    host,
+                    effectiveAlternativeSelections,
+                    installedPathsForPlan,
+                  )
+                }
                 loading={installingAll}
                 disabled={!hostReady || installing || installingAll}
                 title={
@@ -858,23 +1138,6 @@ export default function InstallPackageScreen() {
         </div>
       )}
 
-      {conflictingVariantCount > 0 && (
-        <div className="mb-4">
-          <WarningCard
-            title={tr(
-              "pkglib.variants.title",
-              undefined,
-              "Choose one same-version package variant",
-            )}
-            detail={tr(
-              "pkglib.variants.body",
-              { n: conflictingVariantCount },
-              `${conflictingVariantCount} staged patch/DLC variants target the same title and version. They are all preserved, but the PS5 can keep only one active patch for that version. “Install all” skips them; install the Optional Fix or Backport that matches this console from its row.`,
-            )}
-          />
-        </div>
-      )}
-
       {busyNotice && (
         <div className="mb-4 flex items-center justify-between gap-3 rounded-lg border border-[var(--color-accent)] bg-[var(--color-accent-soft)] px-4 py-3 text-sm">
           <div className="flex items-start gap-2">
@@ -915,31 +1178,110 @@ export default function InstallPackageScreen() {
         />
       ) : (
         <>
-          <ul className="grid gap-2">
-            {sorted.map((e) => {
-              // Only a base game earns the "installed"/"Reinstall" treatment —
-              // an update/DLC shares the base's title id, so a present base
-              // would otherwise make a never-installed add-on read as
-              // "INSTALLED · Reinstall". See `pkgRowInstalled`.
-              const installed = pkgRowInstalled(
-                e,
-                installedIds,
-                e.titleId ? installedArtifacts.get(e.titleId) : undefined,
+          <div className="grid gap-4">
+            {titleGroups.map((group) => {
+              const sections = [
+                {
+                  key: "base",
+                  label: tr("pkglib.section.base", undefined, "Base game"),
+                  rows: group.entries.filter(
+                    (entry) =>
+                      entry.category !== "gp" && entry.category !== "ac",
+                  ),
+                },
+                {
+                  key: "updates",
+                  label: tr("pkglib.section.updates", undefined, "Updates"),
+                  rows: group.entries.filter(
+                    (entry) => entry.category === "gp",
+                  ),
+                },
+                {
+                  key: "dlc",
+                  label: tr("pkglib.section.dlc", undefined, "DLC"),
+                  rows: group.entries.filter(
+                    (entry) => entry.category === "ac",
+                  ),
+                },
+              ].filter((section) => section.rows.length > 0);
+              const groupPaths = new Set(
+                group.entries.map((entry) => entry.path),
               );
+              const alternatives = alternativeGroups.filter((alternative) =>
+                alternative.entries.some((entry) => groupPaths.has(entry.path)),
+              );
+              const unresolved = alternatives.filter(
+                (alternative) =>
+                  !effectiveAlternativeSelections[alternative.key],
+              ).length;
+
               return (
-                <PkgRow
-                  key={e.path}
-                  entry={e}
-                  host={host}
-                  installed={installed}
-                  installDisabled={installBlocked}
-                  deleteDisabled={installing}
-                  onInstall={() => void handleInstall(e)}
-                  onDelete={() => void handleDelete(e)}
-                />
+                <section
+                  key={group.key}
+                  className="rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-1)] p-3"
+                >
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-[var(--color-border)] pb-3">
+                    <div className="min-w-0">
+                      <h2 className="truncate text-sm font-semibold">
+                        {group.title}
+                      </h2>
+                      <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-[var(--color-muted)]">
+                        {group.titleId && (
+                          <span className="font-mono">{group.titleId}</span>
+                        )}
+                        <span>
+                          {tr(
+                            "pkglib.group.count",
+                            { n: group.entries.length },
+                            `${group.entries.length} package${group.entries.length === 1 ? "" : "s"}`,
+                          )}
+                        </span>
+                      </div>
+                    </div>
+                    {alternatives.length > 0 && (
+                      <Badge
+                        tone={unresolved > 0 ? "warn" : "accent"}
+                        variant="soft"
+                      >
+                        {unresolved > 0
+                          ? `${unresolved} choice${unresolved === 1 ? "" : "s"} needed`
+                          : `${alternatives.length} variant choice${alternatives.length === 1 ? "" : "s"} set`}
+                      </Badge>
+                    )}
+                  </div>
+
+                  {alternatives.length > 0 && (
+                    <div className="mb-3 flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-2.5 text-xs text-[var(--color-muted)]">
+                      <Info size={13} className="mt-0.5 shrink-0" />
+                      <span>
+                        {tr(
+                          "pkglib.variant.help",
+                          undefined,
+                          "Every update/DLC variant is preserved below. Choose one same-version alternative for this PS5; Install all uses the selected row and leaves its siblings staged.",
+                        )}
+                      </span>
+                    </div>
+                  )}
+
+                  <div className="grid gap-4">
+                    {sections.map((section) => (
+                      <div key={section.key}>
+                        <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+                          <span>{section.label}</span>
+                          <span className="rounded-full bg-[var(--color-surface-3)] px-1.5 py-0.5 font-mono text-[10px] tabular-nums">
+                            {section.rows.length}
+                          </span>
+                        </div>
+                        <ul className="grid gap-2">
+                          {section.rows.map(renderPkgRow)}
+                        </ul>
+                      </div>
+                    ))}
+                  </div>
+                </section>
               );
             })}
-          </ul>
+          </div>
           {entries.length > 0 && (
             <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-[var(--color-border)] pt-3 text-xs text-[var(--color-muted)]">
               <span>

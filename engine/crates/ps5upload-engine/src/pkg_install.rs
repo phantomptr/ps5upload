@@ -110,6 +110,13 @@ pub struct InstallSession {
     /// byte-settle proved completion. Terminal for UI purposes, but never
     /// eligible for staging deletion or a green "installed" result.
     pub accepted_unverified: bool,
+    /// Number of pkg-host responses served for this session. Stream-install
+    /// diagnostics use zero to distinguish a Sony HTTP/proxy preflight reject
+    /// from a failure after package transfer began.
+    pub requests_served: u64,
+    /// Total response-body bytes served across Range requests. This may exceed
+    /// package size when Sony retries a range; it is diagnostic, not progress.
+    pub bytes_served: u64,
 }
 
 #[derive(Default)]
@@ -582,6 +589,20 @@ fn default_true() -> bool {
     true
 }
 
+/// Internal hand-off code shared with the payload's `BGFT_ERR_DPI_REQUIRED`.
+/// It is intentionally non-zero so every existing client follows its normal
+/// rejected-start -> standalone-DPI fallback without mistaking the hand-off
+/// for a completed install.
+const DLC_DPI_REQUIRED_ERR: u32 = 0xE000_0008;
+
+/// Staged DLC must never enter the main payload's AppInstUtil cascade. On FW
+/// 9.60 that call can remove an already-installed add-on before returning a
+/// rejection. Stream mode already invokes DPI directly and non-local installs
+/// have no staged path to hand to the local-path DPI route.
+fn staged_dlc_requires_dpi(is_local: bool, serve_only: bool, package_type: &str) -> bool {
+    is_local && !serve_only && package_type.ends_with("AC")
+}
+
 /// Decide the session's `staging_path` — the file the terminal-phase handler
 /// deletes after install. Returns `Some(path)` ONLY when the caller asked us to
 /// clean up (`delete_staging`) AND a non-empty local path was supplied; `None`
@@ -729,9 +750,9 @@ pub struct InstallStartResponse {
     pub may_not_launch: bool,
     /// The package_type the install actually ran with, AFTER the engine's
     /// staged-pkg category parse (so a "…DP" here means "this was treated as a
-    /// patch"). Lets the client recognise a guarded-patch rejection even on the
-    /// USB/queue/File-System paths where it sent no type — and skip the pointless
-    /// DPI fallback (DPI can't rescue a patch the same InstallByPackage rejected).
+    /// patch"). Lets the client recognise guarded patch/DLC hand-offs even on
+    /// USB/queue/File-System paths where it sent no type, then select the safe
+    /// category-aware DPI fallback.
     #[serde(default)]
     pub package_type: String,
 }
@@ -903,6 +924,8 @@ async fn install_start_handler(
         last_progress_unix: None,
         stalled: false,
         accepted_unverified: false,
+        requests_served: 0,
+        bytes_served: 0,
     };
 
     // Insert *before* sending the install frame so the HTTP listener
@@ -992,6 +1015,34 @@ async fn install_start_handler(
             shellui_err: None,
             appinst_err: None,
             via: "serve-only".to_string(),
+            package_type,
+        });
+    }
+
+    // Do not even send a staged DLC install frame to the main payload. This is
+    // deliberately enforced engine-side as well as payload-side so a current
+    // desktop remains safe when the console still has an older payload loaded.
+    // Return a typed start rejection; runPkgInstallCore then starts standalone
+    // DPI and verifies the exact add-on fingerprint before showing success.
+    if staged_dlc_requires_dpi(is_local, req.serve_only, &package_type) {
+        crate::log_info!(
+            "pkg_install: staged DLC session={} routed directly to standalone DPI; main payload skipped",
+            session_id,
+        );
+        return json_ok(&InstallStartResponse {
+            session_id,
+            url,
+            task_id: -1,
+            err_code: DLC_DPI_REQUIRED_ERR,
+            err_message: err_code_message(DLC_DPI_REQUIRED_ERR).map(str::to_string),
+            detail: "safe staged-DLC hand-off".to_string(),
+            may_not_launch: false,
+            register_path: "dpi-required".to_string(),
+            intdebug_avail: false,
+            kernel_rw: false,
+            shellui_err: None,
+            appinst_err: None,
+            via: "dpi-required".to_string(),
             package_type,
         });
     }
@@ -2087,6 +2138,9 @@ pub struct DpiInstallResponse {
     /// the underlying IPMI/kstuff issue resolves.
     pub init_failed: bool,
     pub err_message: Option<String>,
+    /// pkg-host evidence for Stream installs. Always zero for staged paths.
+    pub requests_served: u64,
+    pub bytes_served: u64,
 }
 
 /// One parsed reply from the DPI daemon. The daemon replies in the
@@ -2260,6 +2314,8 @@ async fn dpi_install_handler(Json(req): Json<DpiInstallRequest>) -> Response<Bod
                 rc,
                 init_failed,
                 err_message,
+                requests_served: 0,
+                bytes_served: 0,
             })
         }
         Ok(Err(e)) => json_err(
@@ -2334,6 +2390,13 @@ async fn dpi_direct_install_handler(
         url
     );
     let res = tokio::task::spawn_blocking(move || dpi_send(&ps5_ip, &url)).await;
+    let (requests_served, bytes_served) = {
+        let sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
+        sessions
+            .get(&req.session_id)
+            .map(|s| (s.requests_served, s.bytes_served))
+            .unwrap_or((0, 0))
+    };
     match res {
         Ok(Ok(reply)) => {
             let (ok, rc, init_failed, err_message) = match reply {
@@ -2407,6 +2470,8 @@ async fn dpi_direct_install_handler(
                 rc,
                 init_failed,
                 err_message,
+                requests_served,
+                bytes_served,
             })
         }
         Ok(Err(e)) => json_err(
@@ -2502,6 +2567,7 @@ async fn serve_handler(
     }
 
     let total = session.total_size;
+    let served_session_id = session.id.clone();
     let (start, end) = match parse_range_header(&headers, total) {
         Ok(r) => r,
         Err(_) => return plain_response(StatusCode::RANGE_NOT_SATISFIABLE, "invalid Range"),
@@ -2530,6 +2596,13 @@ async fn serve_handler(
         };
 
     let len = chunk.len() as u64;
+    {
+        let mut sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(active) = sessions.get_mut(&served_session_id) {
+            active.requests_served = active.requests_served.saturating_add(1);
+            active.bytes_served = active.bytes_served.saturating_add(len);
+        }
+    }
     let mut builder = Response::builder()
         .header(header::CONTENT_TYPE, "application/octet-stream")
         .header(header::ACCEPT_RANGES, "bytes")
@@ -3170,6 +3243,24 @@ mod tests {
         assert!(!is_synthetic_done_tier(None));
     }
 
+    // ── staged DLC routing (the FW 9.60 destructive-reject fix) ──
+
+    #[test]
+    fn staged_dlc_is_routed_to_dpi_before_main_payload() {
+        assert!(staged_dlc_requires_dpi(true, false, "PS4AC"));
+        assert!(staged_dlc_requires_dpi(true, false, "PS5AC"));
+    }
+
+    #[test]
+    fn staged_dlc_route_does_not_capture_stream_or_other_types() {
+        // Stream already invokes DPI directly, so its serve-only setup must
+        // still create an HTTP session instead of returning the staged handoff.
+        assert!(!staged_dlc_requires_dpi(true, true, "PS4AC"));
+        assert!(!staged_dlc_requires_dpi(false, false, "PS4AC"));
+        assert!(!staged_dlc_requires_dpi(true, false, "PS4DP"));
+        assert!(!staged_dlc_requires_dpi(true, false, "PS4GD"));
+    }
+
     // ── delete_staging / staging cleanup (the Auto-Delete data-loss fix) ──
 
     #[test]
@@ -3405,6 +3496,8 @@ mod tests {
             last_progress_unix: None,
             stalled: false,
             accepted_unverified: false,
+            requests_served: 0,
+            bytes_served: 0,
         }
     }
 

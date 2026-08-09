@@ -926,6 +926,7 @@ mod tests {
                     name: format!("f{i:05}.bin"),
                     kind: "file".to_string(),
                     size: 1,
+                    mtime: 0,
                 })
                 .collect();
             Ok((entries, false))
@@ -967,6 +968,7 @@ mod tests {
             name: name.to_string(),
             kind: "file".to_string(),
             size: 0,
+            mtime: 0,
         }
     }
 

@@ -45,6 +45,8 @@ import {
   platformFromTitleId,
   pkgEntryInstallOrder,
   pkgAlternativeKey,
+  pkgAlternativeGroups,
+  pkgEntryIdentity,
   pkgInstallAllPlan,
   pkgLibraryStore,
   evictPkgLibraryStore,
@@ -58,6 +60,8 @@ import {
   waitForConsoleReady,
   recordPkgInstalled,
   isPkgInstalledHere,
+  loadPkgAlternativeSelections,
+  recordPkgAlternativeSelection,
   PKG_MAY_NOT_LAUNCH_MESSAGE,
   PKG_ACCEPTED_UNVERIFIED_HINT,
   PKG_PATCH_REJECTED_HINT,
@@ -190,6 +194,75 @@ describe("pkgInstallAllPlan (variant safety)", () => {
     expect(plan.conflicts.map((e) => e.path)).toEqual([backport.path]);
   });
 
+  it("installs exactly the explicitly selected same-version variant", () => {
+    const optional = row({
+      path: "/updates/optional.pkg",
+      category: "gp",
+      appVer: "01.02",
+      fingerprint: "a".repeat(64),
+    });
+    const backport = row({
+      path: "/updates/backport.pkg",
+      category: "gp",
+      appVer: "01.02",
+      fingerprint: "b".repeat(64),
+    });
+    const key = pkgAlternativeKey(optional)!;
+    const plan = pkgInstallAllPlan([optional, backport], {
+      [key]: pkgEntryIdentity(backport),
+    });
+    expect(plan.conflicts).toEqual([]);
+    expect(plan.targets.map((entry) => entry.path)).toEqual([backport.path]);
+  });
+
+  it("treats a stale selection as unresolved instead of choosing by list order", () => {
+    const optional = row({
+      path: "/updates/optional.pkg",
+      category: "gp",
+      appVer: "01.02",
+      fingerprint: "a".repeat(64),
+    });
+    const backport = row({
+      path: "/updates/backport.pkg",
+      category: "gp",
+      appVer: "01.02",
+      fingerprint: "b".repeat(64),
+    });
+    const key = pkgAlternativeKey(optional)!;
+    const plan = pkgInstallAllPlan([optional, backport], {
+      [key]: "removed-artifact",
+    });
+    expect(plan.targets).toEqual([]);
+    expect(plan.conflicts).toHaveLength(2);
+  });
+
+  it("reports alternative groups while leaving different versions independent", () => {
+    const optional = row({
+      path: "/updates/optional.pkg",
+      category: "gp",
+      appVer: "01.02",
+      fingerprint: "a".repeat(64),
+    });
+    const backport = row({
+      path: "/updates/backport.pkg",
+      category: "gp",
+      appVer: "01.02",
+      fingerprint: "b".repeat(64),
+    });
+    const newer = row({
+      path: "/updates/103.pkg",
+      category: "gp",
+      appVer: "01.03",
+      fingerprint: "c".repeat(64),
+    });
+    const groups = pkgAlternativeGroups([optional, backport, newer]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].entries.map((entry) => entry.path)).toEqual([
+      optional.path,
+      backport.path,
+    ]);
+  });
+
   it("batches base, different patch versions, and independent DLC in order", () => {
     const base = row({ path: "/base.pkg", category: "gd" });
     const patch102 = row({
@@ -253,6 +326,58 @@ describe("pkgInstallAllPlan (variant safety)", () => {
     });
     const b = row({ ...a, path: "/new/a.pkg" });
     expect(pkgInstallAllPlan([a, b]).conflicts).toEqual([]);
+  });
+});
+
+describe("addAndUpload drag-event deduplication", () => {
+  const host = "192.168.55.5";
+  const localPath = "/tmp/OptionalFix.pkg";
+
+  afterEach(() => {
+    vi.mocked(invoke).mockReset();
+    evictPkgLibraryStore(host);
+  });
+
+  it("parses and starts only one add when two surfaces report the same drop", async () => {
+    let resolveMetadata!: (value: unknown) => void;
+    const metadata = new Promise((resolve) => {
+      resolveMetadata = resolve;
+    });
+    vi.mocked(invoke).mockImplementation(async (command: unknown) => {
+      if (command === "pkg_metadata_split") return metadata;
+      // No job id makes the first call settle quickly after the assertion;
+      // the important contract is that the second call never reaches parsing.
+      if (command === "transfer_file") return {};
+      return {};
+    });
+
+    const first = pkgLibraryStore(host)
+      .getState()
+      .addAndUpload(localPath, host);
+    await Promise.resolve();
+    const second = pkgLibraryStore(host)
+      .getState()
+      .addAndUpload(localPath, host);
+    await second;
+
+    expect(
+      vi
+        .mocked(invoke)
+        .mock.calls.filter(([command]) => command === "pkg_metadata_split"),
+    ).toHaveLength(1);
+
+    resolveMetadata({
+      parts: [localPath],
+      total_size: 8_192_000,
+      head: {
+        content_id: "UP0000-CUSA33334_00-TEST000000000000",
+        title: "Test",
+        category: "gp",
+        app_ver: "01.02",
+        fingerprint: "a".repeat(64),
+      },
+    });
+    await first;
   });
 });
 
@@ -599,6 +724,24 @@ describe("recordPkgInstalled / isPkgInstalledHere (per-console isolation)", () =
     expect(isPkgInstalledHere(A, PATH)).toBe(true);
     expect(isPkgInstalledHere(A, other)).toBe(false);
   });
+
+  it("clears a replaced alternative without touching another console", () => {
+    const backport = "/data/updates/backport.pkg";
+    recordPkgInstalled(A, PATH);
+    recordPkgInstalled(B, PATH);
+    recordPkgInstalled(A, backport, [PATH]);
+    expect(isPkgInstalledHere(A, PATH)).toBe(false);
+    expect(isPkgInstalledHere(A, backport)).toBe(true);
+    expect(isPkgInstalledHere(B, PATH)).toBe(true);
+  });
+
+  it("keeps alternative choices isolated per console", () => {
+    const key = "patch:CUSA33334:01.02";
+    recordPkgAlternativeSelection(A, key, "optional-fingerprint");
+    recordPkgAlternativeSelection(B, key, "backport-fingerprint");
+    expect(loadPkgAlternativeSelections(A)[key]).toBe("optional-fingerprint");
+    expect(loadPkgAlternativeSelections(B)[key]).toBe("backport-fingerprint");
+  });
 });
 
 describe("pkgInstallMayNotLaunch", () => {
@@ -779,6 +922,55 @@ describe("runPkgInstall — forwards deleteStaging to the engine", () => {
       (call) => call[0] === "pkg_dpi_install",
     )?.[1] as { localPs5Path?: string } | undefined;
     expect(dpiArgs?.localPs5Path).toBe(localPs5Path);
+  });
+
+  it("confirms a staged DLC routed directly to DPI by exact fingerprint", async () => {
+    const fingerprint = "a".repeat(64);
+    const contentId = "UP9000-CUSA00900_00-SPDLCMESSENGER00";
+    mockedInventory.mockResolvedValue([
+      {
+        kind: "dlc",
+        path: "/mnt/ext1/user/addcont/CUSA00900/SPDLCMESSENGER00/ac.pkg",
+        size: 1_048_576,
+        fingerprint,
+        contentId,
+      },
+    ]);
+    mockedInvoke.mockReset();
+    mockedInvoke.mockImplementation(async (cmd: unknown) => {
+      if (cmd === "pkg_install_start") {
+        return {
+          err_code: 0xe0000008,
+          err_message:
+            "Staged DLC is being handed to the safer standalone DPI installer",
+          register_path: "dpi-required",
+          package_type: "PS4AC",
+        };
+      }
+      if (cmd === "dpi_ensure") return { ok: true };
+      if (cmd === "pkg_dpi_install") return { ok: true, rc: 0 };
+      if (cmd === "payload_bundled_path") {
+        return { ok: true, path: "/tmp/p.elf" };
+      }
+      return {};
+    });
+
+    const r = await runPkgInstall(
+      "192.168.1.50",
+      "/user/data/ps5upload/pkg_library/dlc/fp/addon.pkg",
+      contentId,
+      "PS4AC",
+      false,
+      undefined,
+      undefined,
+      { size: 1_048_576, fingerprint },
+    );
+
+    expect(r.installed).toBe(true);
+    expect(r.acceptedUnverified).toBe(false);
+    expect(
+      mockedInvoke.mock.calls.some((c) => c[0] === "pkg_dpi_install"),
+    ).toBe(true);
   });
 
   it("confirms a DPI patch only when the exact installed fingerprint matches", async () => {
@@ -1308,8 +1500,8 @@ describe("clearAll", () => {
 describe("refresh — base + update coexistence and badging", () => {
   const mockedList = vi.mocked(fsListDir);
   const CID = "EP9000-CUSA00207_00-BLOODBORNE000000";
-  const file = (name: string, size: number) =>
-    ({ name, kind: "file", size }) as Awaited<
+  const file = (name: string, size: number, mtime = 0) =>
+    ({ name, kind: "file", size, mtime }) as Awaited<
       ReturnType<typeof fsListDir>
     >[number];
   const dir = (name: string) =>
@@ -1352,6 +1544,130 @@ describe("refresh — base + update coexistence and badging", () => {
     expect(base?.path.endsWith(`/${CID}.pkg`)).toBe(true);
     expect(update?.path).toContain("/updates/");
     expect(pkgLibraryStore(HOST).getState().error).toBeNull();
+  });
+
+  it("uses the staged file mtime as upload-time metadata for legacy rows", async () => {
+    const stagedAt = 1_725_000_000;
+    mockedList.mockImplementation(async (_addr: string, d: string) => {
+      if (d === DIR) return [file(`${CID}.pkg`, 100, stagedAt)];
+      return [];
+    });
+
+    await pkgLibraryStore(HOST).getState().refresh(HOST);
+
+    expect(pkgLibraryStore(HOST).getState().entries[0].uploadedAt).toBe(
+      stagedAt * 1000,
+    );
+  });
+
+  it("keeps filename, source path, and upload time scoped to each console", async () => {
+    const hostA = "192.168.7.31";
+    const hostB = "192.168.7.32";
+    const stagedPath = `${DIR}/${CID}.pkg`;
+    const storage = new globalThis.Map<string, string>();
+    storage.set(
+      "ps5upload.pkg_library.pathmeta.v1",
+      JSON.stringify({
+        [`${hostA}\u0000${stagedPath}`]: {
+          name: "optional-fix.pkg",
+          sourcePath: "/downloads/optional-fix.pkg",
+          uploadedAt: 1_725_000_000_000,
+        },
+        [`${hostB}\u0000${stagedPath}`]: {
+          name: "backport.pkg",
+          sourcePath: "/archive/backport.pkg",
+          uploadedAt: 1_726_000_000_000,
+        },
+      }),
+    );
+    (globalThis as { window?: unknown }).window = {
+      localStorage: {
+        getItem: (key: string) => storage.get(key) ?? null,
+        setItem: (key: string, value: string) =>
+          void storage.set(key, String(value)),
+        removeItem: (key: string) => void storage.delete(key),
+        clear: () => storage.clear(),
+      },
+    };
+    mockedList.mockImplementation(async (_addr: string, d: string) =>
+      d === DIR ? [file(`${CID}.pkg`, 100)] : [],
+    );
+
+    try {
+      await pkgLibraryStore(hostA).getState().refresh(hostA);
+      await pkgLibraryStore(hostB).getState().refresh(hostB);
+      expect(pkgLibraryStore(hostA).getState().entries[0]).toMatchObject({
+        originalName: "optional-fix.pkg",
+        sourcePath: "/downloads/optional-fix.pkg",
+        uploadedAt: 1_725_000_000_000,
+      });
+      expect(pkgLibraryStore(hostB).getState().entries[0]).toMatchObject({
+        originalName: "backport.pkg",
+        sourcePath: "/archive/backport.pkg",
+        uploadedAt: 1_726_000_000_000,
+      });
+    } finally {
+      evictPkgLibraryStore(hostA);
+      evictPkgLibraryStore(hostB);
+      delete (globalThis as { window?: unknown }).window;
+    }
+  });
+
+  it("preserves legacy path-only metadata when creating a console-scoped row", async () => {
+    const legacyHost = "192.168.7.33";
+    const stagedPath = `${DIR}/${CID}.pkg`;
+    const storage = new globalThis.Map<string, string>();
+    storage.set(
+      "ps5upload.pkg_library.pathmeta.v1",
+      JSON.stringify({
+        [stagedPath]: {
+          name: "legacy-upload.pkg",
+          sourcePath: "/downloads/legacy-upload.pkg",
+          uploadedAt: 1_724_000_000_000,
+          appVer: "01.09",
+        },
+      }),
+    );
+    (globalThis as { window?: unknown }).window = {
+      localStorage: {
+        getItem: (key: string) => storage.get(key) ?? null,
+        setItem: (key: string, value: string) =>
+          void storage.set(key, String(value)),
+        removeItem: (key: string) => void storage.delete(key),
+        clear: () => storage.clear(),
+      },
+    };
+    mockedList.mockImplementation(async (_addr: string, d: string) =>
+      d === DIR ? [file(`${CID}.pkg`, 100)] : [],
+    );
+    vi.mocked(pkgMetadataConsole).mockResolvedValueOnce({
+      contentId: CID,
+      title: "Bloodborne",
+      titleId: "CUSA00207",
+      category: "gd",
+      appVer: "01.09",
+      platform: "ps4",
+      fingerprint: "f".repeat(64),
+    });
+
+    try {
+      await pkgLibraryStore(legacyHost).getState().refresh(legacyHost);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      const cached = JSON.parse(
+        storage.get("ps5upload.pkg_library.pathmeta.v1") || "{}",
+      );
+      expect(cached[`${legacyHost}\u0000${stagedPath}`]).toMatchObject({
+        name: "legacy-upload.pkg",
+        sourcePath: "/downloads/legacy-upload.pkg",
+        uploadedAt: 1_724_000_000_000,
+        appVer: "01.09",
+        fingerprint: "f".repeat(64),
+      });
+    } finally {
+      evictPkgLibraryStore(legacyHost);
+      delete (globalThis as { window?: unknown }).window;
+    }
   });
 
   it("lists multiple same-ContentID variants from fingerprint directories", async () => {

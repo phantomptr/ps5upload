@@ -63,6 +63,10 @@ typedef enum {
 /* Synthetic task table is full — too many in-flight installs. Reset
  * the tx table or wait for current installs to drain. */
 #define BGFT_ERR_TASK_TABLE_FULL   0xE0000007u
+/* Staged DLC is intentionally routed to the standalone DPI process. Calling
+ * InstallByPackage from the main payload can remove an existing add-on before
+ * returning a rejection on FW 9.60. */
+#define BGFT_ERR_DPI_REQUIRED      0xE0000008u
 
 /* Register + start a BGFT install task.
  *

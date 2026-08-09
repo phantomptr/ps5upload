@@ -22,12 +22,15 @@ use crate::connection::Connection;
 ///
 /// `kind` is one of `"file"`, `"dir"`, `"link"`, `"other"`, or `"unknown"`
 /// (for entries whose `lstat` on the payload side failed). Size is 0 for
-/// non-regular-file kinds.
+/// non-regular-file kinds. `mtime` is Unix seconds and defaults to 0 when an
+/// older payload omits it or `lstat` failed.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DirEntry {
     pub name: String,
     pub kind: String,
     pub size: u64,
+    #[serde(default)]
+    pub mtime: i64,
 }
 
 /// A paginated directory listing response.
@@ -1775,7 +1778,7 @@ mod tests {
             "path":"/data",
             "entries":[
                 {"name":"games","kind":"dir","size":0},
-                {"name":"manifest.json","kind":"file","size":1234},
+                {"name":"manifest.json","kind":"file","size":1234,"mtime":1786291200},
                 {"name":"link-to-ext0","kind":"link","size":0}
             ],
             "truncated":false,
@@ -1786,6 +1789,8 @@ mod tests {
         assert_eq!(listing.path, "/data");
         assert_eq!(listing.entries.len(), 3);
         assert_eq!(listing.entries[1].size, 1234);
+        assert_eq!(listing.entries[1].mtime, 1_786_291_200);
+        assert_eq!(listing.entries[0].mtime, 0); // legacy payload omission
         assert!(!listing.truncated);
     }
 

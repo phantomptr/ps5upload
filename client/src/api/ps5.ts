@@ -996,6 +996,9 @@ export interface FsDirEntry {
   name: string;
   kind: "file" | "dir" | "unknown";
   size: number;
+  /** Last-modified time in seconds since the Unix epoch. Older payloads and
+   * stat failures may omit it or return 0. */
+  mtime?: number;
 }
 
 /** Shallow directory listing. Auto-paginates: the payload caps its
@@ -1019,12 +1022,22 @@ export async function fsListDir(
   let offset = 0;
   for (let i = 0; i < HARD_CAP / PAGE; i++) {
     const res = await invoke<{
-      entries?: Array<{ name?: string; kind?: string; size?: number }>;
+      entries?: Array<{
+        name?: string;
+        kind?: string;
+        size?: number;
+        mtime?: number;
+      }>;
       truncated?: boolean;
     }>("ps5_list_dir", { addr, path, offset, limit: PAGE });
     const page = (res.entries ?? [])
       .filter(
-        (e): e is { name: string; kind?: string; size?: number } =>
+        (e): e is {
+          name: string;
+          kind?: string;
+          size?: number;
+          mtime?: number;
+        } =>
           typeof e.name === "string" &&
           e.name !== "" &&
           e.name !== "." &&
@@ -1035,6 +1048,7 @@ export async function fsListDir(
         kind: (e.kind === "file" || e.kind === "dir" ? e.kind : "unknown") as
           "file" | "dir" | "unknown",
         size: typeof e.size === "number" ? e.size : 0,
+        mtime: typeof e.mtime === "number" ? e.mtime : 0,
       }));
     out.push(...page);
     if (!res.truncated || page.length === 0) break;

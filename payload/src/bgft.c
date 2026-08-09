@@ -1240,9 +1240,9 @@ int bgft_install_start(const char *url,
      *   1. **In-process AppInstUtil** (preferred): call
      *      sceAppInstUtilInstallByPackage directly with a per-call
      *      ShellCore-authid swap. No ptrace, no ShellUI freeze, no
-     *      respawn flash. Works for the broad majority of pkgs (DLC,
-     *      regular game pkgs, patches) when Sony's installer doesn't
-     *      require an HTTP fetch.
+     *      respawn flash. Works for regular game pkgs and patches when
+     *      Sony's installer doesn't require an HTTP fetch. Staged DLC is
+     *      routed to standalone DPI before this tier (see below).
      *
      *   2. **shellui-rpc** (fallback): ptrace into SceShellUI and call
      *      from there. Required when Sony's PlayGo whitelist gates the
@@ -1262,7 +1262,28 @@ int bgft_install_start(const char *url,
      * first) bypass most of that gate, so Tier 1 works for most pkgs
      * without the ShellUI flash. */
 
-    /* ─── Tier 1: in-process InstallByPackage (preferred for ALL urls) ──
+    /* Staged DLC safety route. On FW 9.60, calling InstallByPackage from this
+     * process while the same DLC is already installed can remove the existing
+     * add-on and then return 0x80B2116F without writing the replacement. The
+     * standalone DPI process installs the same staged package correctly. Do
+     * not touch Sony's installer here: return a typed hand-off so the host can
+     * launch DPI and confirm the exact DLC fingerprint. Stream installs are
+     * already sent straight to DPI by the host and do not enter this function. */
+    {
+        size_t pt_len = package_type ? strlen(package_type) : 0;
+        const char *pt_suffix = pt_len >= 2 ? package_type + pt_len - 2 : "";
+        if (url[0] == '/' && strcmp(pt_suffix, "AC") == 0) {
+            fprintf(stderr,
+                    "[bgft] staged DLC (package_type=%s) routed directly to "
+                    "standalone DPI; main-payload InstallByPackage skipped\n",
+                    package_type);
+            *out_err_code = BGFT_ERR_DPI_REQUIRED;
+            g_last_register_path = "dpi-required";
+            return -1;
+        }
+    }
+
+    /* ─── Tier 1: in-process InstallByPackage (preferred for other urls) ─
      * 2.25.x change — for a locally-staged pkg (`url` is a bare absolute
      * path, e.g. /user/data/tmp/<id>.pkg), we now call
      * sceAppInstUtilInstallByPackage with that path as the URI FIRST,
@@ -1310,18 +1331,16 @@ int bgft_install_start(const char *url,
             "[bgft] in-process InstallByPackage failed (rc=0x%08X)\n",
             (unsigned)app_err);
 
-    /* ─── PATCH guard: never fall past InstallByPackage for a patch ───────
+    /* ─── PATCH guard: never use ShellUI after a local reject ──────
      * A patch (…DP) carries the SAME content_id as its base game. The
      * shellui-rpc tier calls sceAppInstUtilInstallByPackage inside ShellUI,
      * which RE-REGISTERS the content_id and WIPES the installed base
      * (HW-reconfirmed 3.3.26: a Jak X patch via shellui-rpc deleted the 3.6GB
      * base, even with the bare-path URI fix). Only the in-process
      * InstallByPackage above (and the DPI daemon) apply patches safely.
-     * If in-process InstallByPackage failed for a patch, FAIL CLEANLY here
-     * with that error and leave the base intact — the caller should fall
-     * through to the DPI daemon (pkg_dpi_install) which also works safely.
-     * (DLC …AC carries its OWN content_id, so it doesn't collide with the
-     * base and may still use the fallbacks.) */
+     * If in-process InstallByPackage failed for a patch, FAIL CLEANLY here.
+     * The host then uses DPI and verifies the exact patch artifact before
+     * reporting success. DLC is routed to DPI before Tier 1 above. */
     {
         size_t pt_len = package_type ? strlen(package_type) : 0;
         const char *pt_suffix = pt_len >= 2 ? package_type + pt_len - 2 : "";

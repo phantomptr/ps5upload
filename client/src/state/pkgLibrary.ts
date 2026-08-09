@@ -160,6 +160,14 @@ export interface PkgEntry {
    *  Best-effort, like `title`: undefined for files staged on another machine
    *  or after the cache was cleared. */
   originalName?: string;
+  /** Absolute source path selected on the computer that uploaded this pkg.
+   * Kept only in this computer's local cache; it is never written to the PS5.
+   * Best-effort because another computer (or a cleared cache) cannot recover
+   * the original location from the staged file. */
+  sourcePath?: string;
+  /** When the upload completed, as Unix milliseconds. For packages staged by
+   * an older app/another computer this falls back to the PS5 file mtime. */
+  uploadedAt?: number;
   /** PARAM.SFO `APP_VER` (e.g. `01.04`) — the authoritative package version,
    *  parsed at upload and cached (path → version). For a patch this is the
    *  definitive "which update is this", since updates share a ContentID and a
@@ -258,6 +266,39 @@ export function pkgAlternativeKey(
   return null;
 }
 
+/** Stable value persisted as the user's per-console choice for an alternative
+ * group. A sampled fingerprint survives path moves; legacy rows fall back to
+ * their unique staged path. */
+export function pkgEntryIdentity(
+  e: Pick<PkgEntry, "fingerprint" | "path">,
+): string {
+  return e.fingerprint || e.path;
+}
+
+export type PkgAlternativeSelections = Record<string, string>;
+
+export interface PkgAlternativeGroup {
+  key: string;
+  entries: PkgEntry[];
+}
+
+/** Return only genuinely ambiguous groups (two or more exact artifacts).
+ * Same-version patch variants and same-ContentID DLC repacks are alternatives;
+ * different patch versions and independent DLC remain separate installables. */
+export function pkgAlternativeGroups(entries: PkgEntry[]): PkgAlternativeGroup[] {
+  const grouped = new Map<string, PkgEntry[]>();
+  for (const entry of entries) {
+    const key = pkgAlternativeKey(entry);
+    if (!key) continue;
+    grouped.set(key, [...(grouped.get(key) ?? []), entry]);
+  }
+  return [...grouped.entries()]
+    .filter(
+      ([, group]) => new Set(group.map((entry) => pkgEntryIdentity(entry))).size > 1,
+    )
+    .map(([key, group]) => ({ key, entries: group }));
+}
+
 export function pkgHasConflictingAlternative(
   entry: PkgEntry,
   entries: PkgEntry[],
@@ -277,10 +318,13 @@ export interface PkgInstallAllPlan {
   conflicts: PkgEntry[];
 }
 
-/** Build the safe Install-all plan. Mutually-exclusive variants remain staged
- * and are skipped until the user chooses one explicitly; independent DLC and
- * different patch versions remain batchable. */
-export function pkgInstallAllPlan(entries: PkgEntry[]): PkgInstallAllPlan {
+/** Build the safe Install-all plan. A valid per-console selection contributes
+ * exactly one mutually-exclusive variant; unresolved groups remain staged and
+ * are skipped. Independent DLC and different patch versions remain batchable. */
+export function pkgInstallAllPlan(
+  entries: PkgEntry[],
+  selections: PkgAlternativeSelections = {},
+): PkgInstallAllPlan {
   const staged = entries.filter((e) => e.status === "idle");
   const ready = staged.filter((e) => !e.installedHere);
   const variants = new Map<string, Set<string>>();
@@ -298,11 +342,20 @@ export function pkgInstallAllPlan(entries: PkgEntry[]): PkgInstallAllPlan {
   }
   const conflicts = ready.filter((e) => {
     const key = pkgAlternativeKey(e);
-    return !!key && (variants.get(key)?.size ?? 0) > 1;
+    if (!key || (variants.get(key)?.size ?? 0) <= 1) return false;
+    const selected = selections[key];
+    return !selected || !variants.get(key)?.has(selected);
   });
   const conflictPaths = new Set(conflicts.map((e) => e.path));
   const targets = ready
-    .filter((e) => !conflictPaths.has(e.path))
+    .filter((e) => {
+      if (conflictPaths.has(e.path)) return false;
+      const key = pkgAlternativeKey(e);
+      if (!key || (variants.get(key)?.size ?? 0) <= 1) return true;
+      // A valid explicit choice resolves the group: install only that exact
+      // artifact and leave every sibling safely staged.
+      return pkgEntryIdentity(e) === selections[key];
+    })
     .slice()
     .sort((a, b) => {
       const tier = pkgEntryInstallOrder(a) - pkgEntryInstallOrder(b);
@@ -424,17 +477,20 @@ function cacheTitle(contentId: string, title: string): void {
 // filename) and refresh-from-disk lists files without re-parsing them (so the
 // version is unknown then too). Both are the only things that tell a game's
 // updates apart — they share a ContentID *and* a PARAM.SFO title — so we
-// capture them at upload and cache here. Keyed by the on-PS5 PATH (unique per
-// staged file) rather than ContentID, because a base and its update share a
-// ContentID but live at distinct paths. A newer update overwrites the same
-// path (updates are cumulative — you only keep the latest), so the cached
-// entry tracks whatever is currently staged there.
+// capture them at upload and cache here. Keyed by console + on-PS5 path rather
+// than ContentID, because a base and its update share a ContentID and two
+// consoles can have the same staged path but different upload provenance.
 const PATH_META_CACHE_KEY = "ps5upload.pkg_library.pathmeta.v1";
 
 /** Per-staged-path metadata we can't recover from a bare dir listing. */
 interface PkgPathMeta {
   /** Original uploaded filename, e.g. `Jak X… [v01.04].pkg`. */
   name?: string;
+  /** Original computer-side path. This stays in localStorage on the uploader
+   * and is never copied into PS5-side metadata. */
+  sourcePath?: string;
+  /** Upload completion time in Unix milliseconds. */
+  uploadedAt?: number;
   /** PARAM.SFO `APP_VER`, e.g. `01.04` — the authoritative package version. */
   appVer?: string;
   /** Sampled BLAKE3 package identity; see `PkgEntry.fingerprint`. */
@@ -455,13 +511,76 @@ function loadPathMetaCache(): Record<string, PkgPathMeta> {
   }
 }
 
-function cachePathMeta(path: string, meta: PkgPathMeta): void {
-  if (!path) return;
+function pathMetaCacheKey(host: string, path: string): string {
+  return `${hostOf(host)}\u0000${path}`;
+}
+
+function pathMetaFor(
+  cache: Record<string, PkgPathMeta>,
+  host: string,
+  path: string,
+): PkgPathMeta | undefined {
+  // Fall back to the pre-5.1.8 path-only entry so existing filename/version
+  // metadata is retained while all new writes remain console-specific.
+  return cache[pathMetaCacheKey(host, path)] ?? cache[path];
+}
+
+function cachePathMeta(host: string, path: string, meta: PkgPathMeta): void {
+  if (!host?.trim() || !path) return;
   try {
     const c = loadPathMetaCache();
-    // Merge so a later partial write doesn't drop a previously-cached field.
-    c[path] = { ...c[path], ...meta };
+    // Merge the legacy path-only row too. Otherwise the first partial 5.1.8
+    // write (for example a newly discovered fingerprint) would create the
+    // console-scoped key and accidentally shadow the old filename/version.
+    const key = pathMetaCacheKey(host, path);
+    c[key] = { ...c[path], ...c[key], ...meta };
     safeSetItem(PATH_META_CACHE_KEY, JSON.stringify(c));
+  } catch {
+    /* best-effort */
+  }
+}
+
+// Per-console choices for mutually-exclusive variants. Patch alternatives
+// with the same title/version can coexist in staging but only one can be
+// active, so Install all needs an explicit intent rather than relying on list
+// order. Scope by bare host because a Pro and a Phat may deliberately use
+// different backports for the same title.
+const ALTERNATIVE_SELECTIONS_CACHE_KEY =
+  "ps5upload.pkg_library.alternative_selections.v1";
+
+function loadAllAlternativeSelections(): Record<
+  string,
+  PkgAlternativeSelections
+> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = safeGetItem(ALTERNATIVE_SELECTIONS_CACHE_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+export function loadPkgAlternativeSelections(
+  host: string,
+): PkgAlternativeSelections {
+  return { ...(loadAllAlternativeSelections()[hostOf(host)] ?? {}) };
+}
+
+export function recordPkgAlternativeSelection(
+  host: string,
+  key: string,
+  identity: string,
+): void {
+  if (!host?.trim() || !key || !identity || typeof window === "undefined")
+    return;
+  try {
+    const all = loadAllAlternativeSelections();
+    const consoleSelections = { ...(all[hostOf(host)] ?? {}) };
+    consoleSelections[key] = identity;
+    all[hostOf(host)] = consoleSelections;
+    safeSetItem(ALTERNATIVE_SELECTIONS_CACHE_KEY, JSON.stringify(all));
   } catch {
     /* best-effort */
   }
@@ -492,12 +611,17 @@ function loadInstalledCache(): Record<string, string[]> {
  *  so its library row reads "Reinstall" instead of "Install" — scoped to `host`
  *  so the same file staged on a sibling console is unaffected. Called from both
  *  install paths (the library tab and the upload-queue finisher). */
-export function recordPkgInstalled(host: string, path: string): void {
+export function recordPkgInstalled(
+  host: string,
+  path: string,
+  replacedAlternativePaths: string[] = [],
+): void {
   if (!path || typeof window === "undefined") return;
   try {
     const h = hostOf(host);
     const c = loadInstalledCache();
     const set = new Set(c[h] ?? []);
+    for (const replaced of replacedAlternativePaths) set.delete(replaced);
     set.add(path);
     c[h] = [...set];
     safeSetItem(INSTALLED_CACHE_KEY, JSON.stringify(c));
@@ -541,6 +665,15 @@ interface SplitParseResponse {
   };
 }
 
+export interface PkgUploadOptions {
+  /** Override the global auto-install preference for this upload. Stream's
+   * explicit fallback uses true because the user already asked to install. */
+  installAfterUpload?: boolean;
+  /** Treat this exact variant as an explicit choice even when an alternative
+   * with the same title/version is already staged. */
+  selectVariant?: boolean;
+}
+
 function pkgError(e: unknown): string {
   return humanizePs5Error(e instanceof Error ? e.message : String(e));
 }
@@ -572,7 +705,11 @@ interface PkgLibraryState {
   installingAll: boolean;
 
   refresh: (host: string) => Promise<void>;
-  addAndUpload: (localPath: string, host: string) => Promise<void>;
+  addAndUpload: (
+    localPath: string,
+    host: string,
+    options?: PkgUploadOptions,
+  ) => Promise<void>;
   install: (path: string, host: string) => Promise<void>;
   /** Stream-install (beta, #81) a local PC-side `.pkg` WITHOUT uploading it
    *  to PS5 staging first. The engine serves the file over HTTP at
@@ -589,13 +726,27 @@ interface PkgLibraryState {
     message?: string;
     mayNotLaunch?: boolean;
     acceptedUnverified?: boolean;
+    /** True when the same package should be retried through staged/file mode,
+     * which bypasses Sony's HTTP/proxy path. */
+    stagedFallbackRecommended?: boolean;
+    /** Sony/AppInstUtil return code from the DPI daemon, when available. */
+    rc?: number;
+    /** Number of HTTP requests that reached ps5upload's pkg-host listener. */
+    requestsServed?: number;
   }>;
   /** Install every staged, not-yet-installed, idle row sequentially, in
    *  base → update → DLC order (`pkgEntryInstallOrder`). Each item runs the
    *  full readiness-gated `install()` cascade; one failure doesn't abort the
    *  rest. Ends with a single summary bell. No-op if a single install is
    *  already running. */
-  installAll: (host: string) => Promise<void>;
+  installAll: (
+    host: string,
+    selections?: PkgAlternativeSelections,
+    /** Optional live-inventory verdict from the UI. When supplied it replaces
+     * legacy installedHere hints, which can be stale after one patch variant
+     * replaces another. */
+    installedPaths?: string[],
+  ) => Promise<void>;
   /** Abandon an install that's still waiting its turn behind an upload. */
   cancelPendingInstall: () => void;
   remove: (path: string, host: string) => Promise<void>;
@@ -747,6 +898,9 @@ const READY_WAIT_TIMEOUT_MS = 30_000;
 /** The DPI daemon's "console not in an installable state" rejection — transient
  *  (clears on settle). Retried with a readiness gate rather than failed outright. */
 const DPI_TRANSIENT_BUSY_RC = 0x80020002;
+/** SCE_HTTP_ERROR_PROXY — Sony's installer rejected its HTTP setup before it
+ * requested the package. Staged/file install bypasses this path entirely. */
+const DPI_HTTP_PROXY_RC = 0x80431084;
 /** How many times to (re)attempt a DPI install that keeps hitting the transient
  *  busy rc, each gated on the console becoming ready again. */
 const DPI_MAX_ATTEMPTS = 4;
@@ -1114,6 +1268,8 @@ async function runDpiDirectInstall(
   errMessage: string;
   daemonFailed: boolean;
   rc: number;
+  requestsServed: number;
+  bytesServed: number;
 }> {
   const ip = hostOf(host);
   log.info(
@@ -1136,10 +1292,18 @@ async function runDpiDirectInstall(
       ok: false,
       daemonFailed: true,
       rc: 0,
+      requestsServed: 0,
+      bytesServed: 0,
       errMessage: ens.error || "the DPI daemon didn't come up on :9040",
     };
   }
-  let resp: { ok?: boolean; rc?: number; err_message?: string } = {};
+  let resp: {
+    ok?: boolean;
+    rc?: number;
+    err_message?: string;
+    requests_served?: number;
+    bytes_served?: number;
+  } = {};
   for (let attempt = 1; attempt <= DPI_MAX_ATTEMPTS; attempt++) {
     try {
       resp = (await invoke("pkg_dpi_direct_install", {
@@ -1182,6 +1346,8 @@ async function runDpiDirectInstall(
     ok,
     daemonFailed: false,
     rc,
+    requestsServed: resp.requests_served ?? 0,
+    bytesServed: resp.bytes_served ?? 0,
     errMessage: ok
       ? ""
       : resp.err_message ||
@@ -1514,6 +1680,12 @@ export async function runPkgInstall(
   }
 }
 
+/** AppShell and the Install page can both observe one native drag event while
+ * navigation is settling. Deduplicate before the asynchronous header parse so
+ * two callers cannot race past the later destination-path check and start two
+ * writers for one staged file. */
+const pkgAddsInFlight = new Set<string>();
+
 /**
  * One isolated PkgLibrary store per PS5 console (see the registry below). The
  * store body is unchanged from the old single-instance design — making it a
@@ -1569,22 +1741,29 @@ const makePkgLibraryStore = () =>
             }
             const contentId = contentIdFromName(e.name);
             const path = `${dir}/${e.name}`;
+            const cached = pathMetaFor(pathMeta, host, path);
             entries.push({
               name: e.name,
               path,
               size: e.size,
               contentId,
               title: titles[contentId],
-              originalName: pathMeta[path]?.name,
-              appVer: pathMeta[path]?.appVer,
+              originalName: cached?.name,
+              sourcePath: cached?.sourcePath,
+              uploadedAt:
+                cached?.uploadedAt ??
+                (typeof e.mtime === "number" && e.mtime > 0
+                  ? e.mtime * 1000
+                  : undefined),
+              appVer: cached?.appVer,
               fingerprint:
-                pathMeta[path]?.fingerprint ??
+                cached?.fingerprint ??
                 fingerprintFromStagingSubdir(subdir),
               installedHere: isPkgInstalledHere(host, path),
               titleId: titleIdFromContentId(contentId) ?? undefined,
               // Authoritative category (read off the console) when we have it,
               // else the directory inference (updates/ → gp, dlc/ → ac).
-              category: pathMeta[path]?.category ?? categoryForSubdir(subdir),
+              category: cached?.category ?? categoryForSubdir(subdir),
               platform: platformFromTitleId(titleIdFromContentId(contentId)),
               status: "idle" as PkgStatus,
             });
@@ -1632,8 +1811,12 @@ const makePkgLibraryStore = () =>
       }
     },
 
-    async addAndUpload(localPath, host) {
+    async addAndUpload(localPath, host, options) {
       if (!host?.trim()) return;
+      const addKey = `${hostOf(host)}\u0000${localPath}`;
+      if (pkgAddsInFlight.has(addKey)) return;
+      pkgAddsInFlight.add(addKey);
+      try {
       // An install swaps the main payload out (DPI), which kills the transfer
       // port — never start an upload while one is running.
       if (get().installing) {
@@ -1693,7 +1876,12 @@ const makePkgLibraryStore = () =>
         : `${PKG_LIBRARY_DIR}/${basename}`;
       // Remember the filename + version for this staged path so the row can show
       // them (survives refresh-from-disk and app restarts via localStorage).
-      cachePathMeta(destPath, { name: originalName, appVer, fingerprint });
+      cachePathMeta(host, destPath, {
+        name: originalName,
+        sourcePath: localPath,
+        appVer,
+        fingerprint,
+      });
 
       // Refuse to re-add a pkg that's already uploading to the same path:
       // two concurrent transfers to one file would corrupt it, and the two
@@ -1743,6 +1931,7 @@ const makePkgLibraryStore = () =>
         contentId,
         title,
         originalName,
+        sourcePath: localPath,
         appVer,
         fingerprint,
         titleId: titleIdFromContentId(contentId) ?? undefined,
@@ -1856,8 +2045,11 @@ const makePkgLibraryStore = () =>
             throw new Error(js.error || "upload failed");
           }
         }
-        // Settle to idle and re-sync from the dir (authoritative).
-        patch({ status: "idle", bytes: undefined });
+        // Settle to idle and record the completion time before refreshing, so
+        // the authoritative row immediately shows where/when it came from.
+        const uploadedAt = Date.now();
+        cachePathMeta(host, destPath, { uploadedAt });
+        patch({ status: "idle", bytes: undefined, uploadedAt });
         await get().refresh(host);
         // Hands-off flow: once the .pkg has landed, kick the install without a
         // second manual click (opt-out via the Install Package screen). install()
@@ -1871,15 +2063,18 @@ const makePkgLibraryStore = () =>
           // Log the post-upload decision (install or not) with the settings that
           // drove it, so a "it auto-installed/deleted even though I disabled that"
           // report is answerable from the bundle alone.
+          const shouldInstall =
+            options?.installAfterUpload ?? s.autoInstallAfterUpload;
           log.info(
             "install",
-            `staged pkg uploaded: ${destPath} — auto-install=${s.autoInstallAfterUpload}, auto-delete=${s.autoRemoveAfterInstall}`,
+            `staged pkg uploaded: ${destPath} — install-after-upload=${shouldInstall}, auto-delete=${s.autoRemoveAfterInstall}`,
           );
-          if (s.autoInstallAfterUpload) {
+          if (shouldInstall) {
             const uploaded = get().entries.find((e) => e.path === destPath);
             if (
               uploaded &&
-              pkgHasConflictingAlternative(uploaded, get().entries)
+              pkgHasConflictingAlternative(uploaded, get().entries) &&
+              !options?.selectVariant
             ) {
               patch({
                 lastResult: {
@@ -1893,6 +2088,16 @@ const makePkgLibraryStore = () =>
                 body: "Another same-version patch or DLC variant is already in the library. Install the intended one from its row; ps5upload will not silently make the last upload win.",
               });
             } else {
+              if (uploaded && options?.selectVariant) {
+                const key = pkgAlternativeKey(uploaded);
+                if (key) {
+                  recordPkgAlternativeSelection(
+                    host,
+                    key,
+                    pkgEntryIdentity(uploaded),
+                  );
+                }
+              }
               await get().install(destPath, host);
             }
           }
@@ -1903,6 +2108,9 @@ const makePkgLibraryStore = () =>
           entries: get().entries.filter((e2) => e2.path !== destPath),
           error: `Upload failed: ${pkgError(e)}`,
         });
+      }
+      } finally {
+        pkgAddsInFlight.delete(addKey);
       }
     },
 
@@ -2057,7 +2265,29 @@ const makePkgLibraryStore = () =>
           // "Reinstall" — not "Install" — even though app_list can't confirm an
           // add-on. Scoped to `host` so a sibling console with the same staged
           // file isn't wrongly marked installed.
-          recordPkgInstalled(host, path);
+          const installedAlternativeKey = entry
+            ? pkgAlternativeKey(entry)
+            : null;
+          const replacedAlternativePaths = installedAlternativeKey
+            ? get()
+                .entries.filter(
+                  (candidate) =>
+                    candidate.path !== path &&
+                    pkgAlternativeKey(candidate) === installedAlternativeKey,
+                )
+                .map((candidate) => candidate.path)
+            : [];
+          recordPkgInstalled(host, path, replacedAlternativePaths);
+          if (replacedAlternativePaths.length > 0) {
+            const replaced = new Set(replacedAlternativePaths);
+            set({
+              entries: get().entries.map((candidate) =>
+                replaced.has(candidate.path)
+                  ? { ...candidate, installedHere: false }
+                  : candidate,
+              ),
+            });
+          }
           patch({
             status: "idle",
             installedHere: true,
@@ -2156,7 +2386,7 @@ const makePkgLibraryStore = () =>
       }
     },
 
-    async installAll(host) {
+    async installAll(host, selections, installedPaths) {
       if (!host?.trim()) return;
       // Don't start a batch on top of a single in-flight install (or another
       // batch) — the inner install() would early-return and we'd silently skip
@@ -2167,7 +2397,16 @@ const makePkgLibraryStore = () =>
       // DLC so an add-on never installs before its base. `installedHere` is the
       // authoritative per-package signal (see pkgRowInstalled); a row mid-upload
       // or queued is skipped — installAll only drives ready staged packages.
-      const { targets, conflicts } = pkgInstallAllPlan(get().entries);
+      const liveInstalled = installedPaths
+        ? new Set(installedPaths)
+        : undefined;
+      const planningEntries = liveInstalled
+        ? get().entries.map((entry) => ({
+            ...entry,
+            installedHere: liveInstalled.has(entry.path),
+          }))
+        : get().entries;
+      const { targets, conflicts } = pkgInstallAllPlan(planningEntries, selections);
 
       if (targets.length === 0) {
         pushNotification(
@@ -2191,7 +2430,14 @@ const makePkgLibraryStore = () =>
           // may have changed its state. Skip if it's no longer an idle, not-yet-
           // installed row.
           const cur = get().entries.find((e) => e.path === target.path);
-          if (!cur || cur.status !== "idle" || cur.installedHere) continue;
+          if (
+            !cur ||
+            cur.status !== "idle" ||
+            (liveInstalled
+              ? liveInstalled.has(cur.path)
+              : cur.installedHere)
+          )
+            continue;
           // install() self-serializes on `installing` and awaits the full
           // readiness-gated cascade; it sets the row's lastResult. It never
           // throws (it catches internally), so a single failure can't abort the
@@ -2328,15 +2574,43 @@ const makePkgLibraryStore = () =>
               `The engine wouldn't start a serving session (0x${rc.toString(16).padStart(8, "0")}).`,
           };
         }
+        const closeServingSession = async () => {
+          try {
+            await invoke("pkg_install_cancel", { session: sessionId });
+          } catch {
+            /* best-effort; the engine also age-GCs sessions */
+          }
+        };
 
         // 3. Hand the session's pkg-host URL to the DPI daemon. The daemon
         //    pulls the pkg over HTTP; no staging copy lands on the PS5.
         const dpi = await runDpiDirectInstall(host, sessionId, onStatus);
         if (dpi.daemonFailed) {
-          return { ok: false, message: dpi.errMessage };
+          await closeServingSession();
+          return {
+            ok: false,
+            message: `${dpi.errMessage}. Upload & install can still use the PS5-local staged path instead.`,
+            stagedFallbackRecommended: true,
+            rc: dpi.rc,
+            requestsServed: dpi.requestsServed,
+          };
         }
         if (!dpi.ok) {
-          return { ok: false, message: dpi.errMessage };
+          await closeServingSession();
+          const rcHex = `0x${dpi.rc.toString(16).padStart(8, "0")}`;
+          const blockedBeforeFetch = dpi.requestsServed === 0;
+          const proxyRejected = dpi.rc === DPI_HTTP_PROXY_RC;
+          const detail =
+            proxyRejected || blockedBeforeFetch
+              ? `Stream was blocked before the PS5 requested any package data (${rcHex}${proxyRejected ? ", SCE_HTTP_ERROR_PROXY" : ""}). In the PS5 network's Advanced Settings, set Proxy Server to “Do Not Use”, or use Upload & install. Staged install reads the package from PS5-local storage and bypasses this HTTP/proxy path.`
+              : `${dpi.errMessage} (${rcHex}) after ${dpi.requestsServed} package request${dpi.requestsServed === 1 ? "" : "s"} reached this computer. Upload & install uses the more reliable PS5-local staged path.`;
+          return {
+            ok: false,
+            message: detail,
+            stagedFallbackRecommended: true,
+            rc: dpi.rc,
+            requestsServed: dpi.requestsServed,
+          };
         }
 
         // 4. Verify the title actually landed (DPI's `ok` alone isn't
@@ -2344,6 +2618,7 @@ const makePkgLibraryStore = () =>
         //    async install result). The pkg-host session is still alive
         //    for this, then the engine GCs it.
         const verdict = await verifyInstallCompleted(sessionId);
+        await closeServingSession();
         if (verdict.completed) {
           pushNotification("success", `Installed ${label}`, {
             body: "Stream-install complete. The pkg was fetched over HTTP — nothing was staged on the PS5.",
@@ -2355,6 +2630,9 @@ const makePkgLibraryStore = () =>
         return {
           ok: false,
           acceptedUnverified: verdict.acceptedUnverified,
+          stagedFallbackRecommended: true,
+          rc: dpi.rc,
+          requestsServed: dpi.requestsServed,
           message: verdict.acceptedUnverified
             ? "The PS5 accepted the stream-install request, but ps5upload couldn’t verify completion. Check the PS5 home screen and Notifications / Downloads; the original package on your computer is unchanged."
             : verdict.message || "The install didn't complete.",
@@ -2710,7 +2988,7 @@ async function enrichStagedMetadata(
     if (!m || (!m.appVer && !m.category && !m.title && !m.fingerprint))
       continue;
     // Persist so a restart (and mergeListing) keep it without re-reading.
-    cachePathMeta(t.path, {
+    cachePathMeta(host, t.path, {
       appVer: m.appVer || undefined,
       category: m.category || undefined,
       fingerprint: m.fingerprint || undefined,

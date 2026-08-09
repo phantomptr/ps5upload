@@ -4,6 +4,18 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.1.8
+
+**Clear package choices and a safer Stream fallback.**
+
+- Groups each game's base, updates, and DLC while keeping every uploaded
+  variant visible and selectable per console.
+- Shows the original filename, source location, upload time, and PS5 location.
+- Diagnoses Stream HTTP/proxy failures and offers one-click staged installation.
+- Routes staged DLC through the verified installer path to prevent false success.
+
+---
+
 ## 5.1.7
 
 **Reliable package installs with multiple updates and DLC.**
