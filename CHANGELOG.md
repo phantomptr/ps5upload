@@ -4,6 +4,20 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.1.7
+
+**Reliable package installs with multiple updates and DLC.**
+
+- Keeps base games, multiple patch variants, and DLC side by side without
+  overwriting staged files.
+- Prevents conflicting same-version patches from being installed as a batch
+  and shows which exact package is installed.
+- Fixes duplicate drag-and-drop uploads and older-firmware package-path errors.
+- Restores Stream install on capable firmware and reports console HTTP/proxy
+  failures with a staged-install fallback.
+
+---
+
 ## 5.1.6
 
 **Updated the PS5 build toolchain.**

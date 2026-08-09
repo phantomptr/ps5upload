@@ -4,6 +4,9 @@ import {
   isSafeContentId,
   stagingBasename,
   stagingSubdirForCategory,
+  stagingDirectoryForPackage,
+  fingerprintFromStagingSubdir,
+  PACKAGE_FINGERPRINT_DIR_HEX_LEN,
   categoryForSubdir,
   pkgCategoryLabel,
   isAddonCategory,
@@ -128,12 +131,66 @@ describe("stagingSubdirForCategory", () => {
   });
 });
 
+describe("stagingDirectoryForPackage", () => {
+  const fpA = "a".repeat(64);
+  const fpB = "b".repeat(64);
+
+  it("keeps exact update and DLC variants in separate directories", () => {
+    expect(stagingDirectoryForPackage("gp", fpA)).toBe(
+      `updates/${fpA.slice(0, PACKAGE_FINGERPRINT_DIR_HEX_LEN)}`,
+    );
+    expect(stagingDirectoryForPackage("gp", fpB)).toBe(
+      `updates/${fpB.slice(0, PACKAGE_FINGERPRINT_DIR_HEX_LEN)}`,
+    );
+    expect(stagingDirectoryForPackage("ac", fpA)).toBe(
+      `dlc/${fpA.slice(0, PACKAGE_FINGERPRINT_DIR_HEX_LEN)}`,
+    );
+  });
+
+  it("keeps the longest canonical AppInstUtil path below 128 bytes", () => {
+    const dir = stagingDirectoryForPackage("gp", fpA);
+    const maxContentIdPkg = `${"C".repeat(36)}.pkg`;
+    const absolute = `/user/data/ps5upload/pkg_library/${dir}/${maxContentIdPkg}`;
+    expect(absolute.length).toBeLessThan(128);
+  });
+
+  it("keeps base packages at the legacy root", () => {
+    expect(stagingDirectoryForPackage("gd", fpA)).toBe("");
+  });
+
+  it("falls back to the legacy category dir for missing/bad fingerprints", () => {
+    expect(stagingDirectoryForPackage("gp", undefined)).toBe("updates");
+    expect(stagingDirectoryForPackage("ac", "../escape")).toBe("dlc");
+  });
+});
+
 describe("categoryForSubdir", () => {
   it("is the inverse mapping used by refresh", () => {
     expect(categoryForSubdir("updates")).toBe("gp");
     expect(categoryForSubdir("dlc")).toBe("ac");
+    expect(categoryForSubdir(`updates/${"a".repeat(64)}`)).toBe("gp");
+    expect(categoryForSubdir(`dlc/${"b".repeat(64)}`)).toBe("ac");
     expect(categoryForSubdir("")).toBeUndefined();
     expect(categoryForSubdir("anything-else")).toBeUndefined();
+  });
+});
+
+describe("fingerprintFromStagingSubdir", () => {
+  it("accepts current short tokens and legacy full fingerprints", () => {
+    expect(fingerprintFromStagingSubdir(`updates/${"a".repeat(32)}`)).toBe(
+      "a".repeat(32),
+    );
+    expect(fingerprintFromStagingSubdir(`dlc/${"B".repeat(64)}`)).toBe(
+      "b".repeat(64),
+    );
+  });
+
+  it("rejects malformed or differently-sized directory names", () => {
+    expect(fingerprintFromStagingSubdir("updates")).toBeUndefined();
+    expect(
+      fingerprintFromStagingSubdir(`updates/${"a".repeat(31)}`),
+    ).toBeUndefined();
+    expect(fingerprintFromStagingSubdir("updates/../escape")).toBeUndefined();
   });
 });
 

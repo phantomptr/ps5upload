@@ -3071,6 +3071,10 @@ struct PkgMetadataQuery {
     /// the same `fs_read` allowlist as every other read (so it can only reach
     /// the readable mounts — `/mnt/usb*`, `/mnt/ext*`, `/user`, `/data`, …).
     path: String,
+    /// Optional size from the directory listing. When present, sample the
+    /// first/last package blocks and return the full artifact fingerprint too.
+    #[serde(default)]
+    size: Option<u64>,
 }
 
 /// GET /api/ps5/pkg/metadata?addr=IP:PORT&path=/mnt/usb0/foo.pkg
@@ -3086,10 +3090,18 @@ async fn ps5_pkg_metadata(
 ) -> impl IntoResponse {
     let addr = mgmt_addr_or_default(q.addr, &state.default_ps5_addr);
     let path = q.path;
+    let size = q.size.unwrap_or(0);
     let result = tokio::task::spawn_blocking(move || {
-        ps5upload_pkg::metadata_from_reader(|off, len| {
+        let mut meta = ps5upload_pkg::metadata_from_reader(|off, len| {
             ps5upload_core::fs_ops::fs_read(&addr, &path, off, len).ok()
-        })
+        })?;
+        if size > 0 {
+            meta.fingerprint = ps5upload_pkg::package_fingerprint_from_reader(size, |off, len| {
+                ps5upload_core::fs_ops::fs_read(&addr, &path, off, len).ok()
+            })
+            .unwrap_or_default();
+        }
+        Some(meta)
     })
     .await;
     match result {

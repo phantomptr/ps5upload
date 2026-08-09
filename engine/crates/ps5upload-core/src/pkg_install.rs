@@ -570,6 +570,22 @@ pub fn err_code_message(code: u32) -> Option<&'static str> {
         0x8099_0086 => Some("Leftover download in notifications — clear it from the PS5 first"),
         0x8099_0088 => Some("This title is already installed"),
         0x80A3_0026 => Some("PS5 reports not enough free space — if the console clearly has room, its storage is likely too fragmented; rebuild the database from Safe Mode, then retry"),
+        // SCE_APP_INSTALLER_ERROR_PARAM. Hardware-observed on FW 9.60 when a
+        // valid patch was handed to AppInstUtil through a 146-byte local path;
+        // the exact bytes succeeded immediately from a bounded path. Current
+        // staging keeps canonical paths below 128 bytes, but retain actionable
+        // copy for old libraries and external paths.
+        0x80A3_0003 => Some(
+            "PS5 rejected the package path or parameters — the local path may be too long; re-add it to the Package Library so ps5upload can use a bounded install path",
+        ),
+        // SCE_HTTP_ERROR_PROXY. Hardware-observed when Stream install asks
+        // Sony's HTTP stack to reach the desktop but the console's configured
+        // proxy/network path cannot connect. The DPI daemon rejects before a
+        // single /pkg-host request reaches the engine; staged install avoids
+        // Sony's HTTP stack and remains the reliable fallback.
+        0x8043_1084 => Some(
+            "PS5 HTTP proxy/network settings blocked the stream — use staged Upload → Install, or disable the console's HTTP proxy and retry",
+        ),
         // PlayGo (BGFT's HTTP fetcher) — the engine returned a non-2xx
         // response to BGFT during the install pull. Usually means the
         // /pkg-host URL session expired or the engine restarted mid-
@@ -727,6 +743,8 @@ mod tests {
         assert!(err_code_message(0x80B22101).is_some());
         assert!(err_code_message(0x80B64002).is_some());
         assert!(err_code_message(0x80020005).is_some());
+        assert!(err_code_message(0x80431084).is_some());
+        assert!(err_code_message(0x80A30003).is_some());
         // Added during v2.16.1 hardware test against an NPXS pkg on
         // FW 9.60 — all 3 tiers returned these and the UI was showing
         // raw hex with no actionable copy.

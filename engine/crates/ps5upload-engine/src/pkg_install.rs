@@ -32,8 +32,8 @@ use ps5upload_core::pkg_install::{
     APPINST_VIA_TIER0_FLAG,
 };
 use ps5upload_pkg::{
-    extract_from_ffpkg, inspect_ffpkg, parse_pkg, parse_split_pkg, PkgKind, PkgMetadata,
-    SplitPkgMetadata,
+    extract_from_ffpkg, inspect_ffpkg, metadata_from_reader, package_fingerprint_from_reader,
+    parse_pkg, parse_split_pkg, PkgKind, PkgMetadata, SplitPkgMetadata,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -56,6 +56,10 @@ pub struct InstallSession {
     pub content_id: String,
     pub title: String,
     pub package_type: String,
+    /// Sampled BLAKE3 identity of the exact source artifact. Unlike ContentID
+    /// and APP_VER this distinguishes same-version alternatives (backport vs.
+    /// optional fix) and lets status verify the package that actually landed.
+    pub package_fingerprint: String,
     /// PS5 mgmt-port address for status polling.
     pub ps5_mgmt_addr: String,
     /// BGFT task_id assigned by the payload after install/start.
@@ -139,6 +143,7 @@ pub fn router(state: PkgInstallStateHandle) -> Router {
         .route("/api/pkg/install/start", post(install_start_handler))
         .route("/api/pkg/install/status", get(install_status_handler))
         .route("/api/pkg/install/cancel", post(install_cancel_handler))
+        .route("/api/pkg/installed", get(installed_pkg_inventory_handler))
         // Install a staged .pkg through the standalone DPI daemon (:9040).
         // The daemon runs sceAppInstUtilAppInstallPkg from a clean loader
         // process — installs without the PlayGo gate. Caller stages the
@@ -162,6 +167,266 @@ pub fn router(state: PkgInstallStateHandle) -> Router {
         // them as inconsistent).
         .route("/pkg-host/{session}/{filename}", get(serve_handler))
         .with_state(state)
+}
+
+// ─── /api/pkg/installed ──────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize)]
+pub struct InstalledPkgArtifact {
+    /// "base" | "patch" | "dlc".
+    pub kind: String,
+    pub path: String,
+    pub size: u64,
+    /// Same bounded sampled-BLAKE3 identity emitted by the local parser.
+    pub fingerprint: String,
+    /// Best-effort header ContentID. Useful for legacy staged rows whose
+    /// fingerprint was not cached.
+    pub content_id: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct InstalledPkgInventory {
+    pub title_id: String,
+    pub artifacts: Vec<InstalledPkgArtifact>,
+}
+
+#[derive(Debug, Deserialize)]
+struct InstalledPkgQuery {
+    addr: String,
+    title_id: String,
+}
+
+fn valid_title_id(title_id: &str) -> bool {
+    let b = title_id.as_bytes();
+    b.len() == 9
+        && b[..4].iter().all(u8::is_ascii_uppercase)
+        && b[4..].iter().all(u8::is_ascii_digit)
+}
+
+fn installed_storage_roots(addr: &str) -> Vec<String> {
+    let mut roots = vec![String::new()];
+    if let Ok(vols) = ps5upload_core::volumes::list_volumes(addr) {
+        roots.extend(
+            vols.volumes
+                .into_iter()
+                .filter(|v| v.path.starts_with("/mnt/ext"))
+                .map(|v| v.path),
+        );
+    }
+    roots
+}
+
+fn artifact_for_file(addr: &str, kind: &str, path: String, size: u64) -> InstalledPkgArtifact {
+    let fingerprint = package_fingerprint_from_reader(size, |off, len| {
+        ps5upload_core::fs_ops::fs_read(addr, &path, off, len).ok()
+    })
+    .unwrap_or_default();
+    let content_id = metadata_from_reader(|off, len| {
+        ps5upload_core::fs_ops::fs_read(addr, &path, off, len).ok()
+    })
+    .map(|m| m.content_id)
+    .unwrap_or_default();
+    InstalledPkgArtifact {
+        kind: kind.to_string(),
+        path,
+        size,
+        fingerprint,
+        content_id,
+    }
+}
+
+fn named_pkg_in_dir(
+    addr: &str,
+    kind: &str,
+    dir: &str,
+    filename: &str,
+) -> Option<InstalledPkgArtifact> {
+    let listing = ps5upload_core::fs_ops::list_dir(
+        addr,
+        dir,
+        ps5upload_core::fs_ops::ListDirOptions::default(),
+    )
+    .ok()?;
+    let entry = listing
+        .entries
+        .into_iter()
+        .find(|e| e.kind == "file" && e.name == filename && e.size > 0)?;
+    Some(artifact_for_file(
+        addr,
+        kind,
+        format!("{dir}/{filename}"),
+        entry.size,
+    ))
+}
+
+fn collect_dlc_pkgs(addr: &str, dir: &str, depth: u8, out: &mut Vec<InstalledPkgArtifact>) {
+    // Add-on layouts differ between PS4 BC and PS5-native packages. Walk a
+    // small bounded tree below /user/addcont/<title_id>; never escape it and
+    // cap the result so malformed directory graphs cannot grow work forever.
+    if depth > 4 || out.len() >= 256 {
+        return;
+    }
+    let Ok(listing) = ps5upload_core::fs_ops::list_dir(
+        addr,
+        dir,
+        ps5upload_core::fs_ops::ListDirOptions::default(),
+    ) else {
+        return;
+    };
+    for entry in listing.entries {
+        if out.len() >= 256 {
+            break;
+        }
+        let path = format!("{dir}/{}", entry.name);
+        if entry.kind == "file"
+            && entry.size > 0
+            && entry.name.to_ascii_lowercase().ends_with(".pkg")
+        {
+            out.push(artifact_for_file(addr, "dlc", path, entry.size));
+        } else if entry.kind == "dir" && entry.name != "." && entry.name != ".." {
+            collect_dlc_pkgs(addr, &path, depth + 1, out);
+        }
+    }
+}
+
+fn installed_pkg_inventory(addr: &str, title_id: &str) -> InstalledPkgInventory {
+    let mut artifacts = Vec::new();
+    for root in installed_storage_roots(addr) {
+        if let Some(a) = named_pkg_in_dir(
+            addr,
+            "base",
+            &format!("{root}/user/app/{title_id}"),
+            "app.pkg",
+        ) {
+            artifacts.push(a);
+        }
+        if let Some(a) = named_pkg_in_dir(
+            addr,
+            "patch",
+            &format!("{root}/user/patch/{title_id}"),
+            "patch.pkg",
+        ) {
+            artifacts.push(a);
+        }
+        collect_dlc_pkgs(
+            addr,
+            &format!("{root}/user/addcont/{title_id}"),
+            0,
+            &mut artifacts,
+        );
+    }
+    artifacts.sort_by(|a, b| a.path.cmp(&b.path));
+    artifacts.dedup_by(|a, b| a.path == b.path);
+    InstalledPkgInventory {
+        title_id: title_id.to_string(),
+        artifacts,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InstalledArtifactCheck {
+    Match,
+    Absent,
+    Different,
+    Unsupported,
+}
+
+fn package_kind_for_type(package_type: &str) -> &'static str {
+    if package_type.ends_with("DP") {
+        "patch"
+    } else if package_type.ends_with("AC") {
+        "dlc"
+    } else {
+        "base"
+    }
+}
+
+/// Verify the exact install target, not merely the shared base title.
+///
+/// A patch install used to call `verify_launchable(content_id)`, which sees the
+/// already-installed base `app.pkg` and immediately returns success before
+/// Sony has written `patch.pkg`. DLC had the same problem. We instead inspect
+/// the category-specific artifact and compare the sampled package identity (or
+/// size/content id for legacy callers).
+fn verify_installed_artifact(
+    addr: &str,
+    content_id: &str,
+    package_type: &str,
+    expected_size: u64,
+    expected_fingerprint: &str,
+) -> InstalledArtifactCheck {
+    let Some(title_id) = ps5upload_core::pkg_install::title_id_from_content_id(content_id) else {
+        return InstalledArtifactCheck::Unsupported;
+    };
+    let wanted_kind = package_kind_for_type(package_type);
+    let inventory = installed_pkg_inventory(addr, &title_id);
+    let candidates: Vec<_> = inventory
+        .artifacts
+        .iter()
+        .filter(|a| a.kind == wanted_kind)
+        .collect();
+    if candidates.is_empty() {
+        return InstalledArtifactCheck::Absent;
+    }
+    let matched = candidates.iter().any(|a| {
+        if !expected_fingerprint.is_empty() {
+            return a.fingerprint == expected_fingerprint;
+        }
+        if expected_size > 0 && a.size != expected_size {
+            return false;
+        }
+        // DLC ContentIDs are per-add-on and therefore useful even for legacy
+        // rows. Base/update ContentIDs are shared, so size is their fallback.
+        if wanted_kind == "dlc" && !content_id.is_empty() && !a.content_id.is_empty() {
+            return a.content_id == content_id;
+        }
+        true
+    });
+    if matched {
+        InstalledArtifactCheck::Match
+    } else {
+        InstalledArtifactCheck::Different
+    }
+}
+
+fn remote_pkg_size(addr: &str, path: &str) -> Option<u64> {
+    let (parent, name) = path.rsplit_once('/')?;
+    let parent = if parent.is_empty() { "/" } else { parent };
+    let listing = ps5upload_core::fs_ops::list_dir(
+        addr,
+        parent,
+        ps5upload_core::fs_ops::ListDirOptions::default(),
+    )
+    .ok()?;
+    listing
+        .entries
+        .into_iter()
+        .find(|e| e.kind == "file" && e.name == name)
+        .map(|e| e.size)
+}
+
+fn remote_pkg_identity(addr: &str, path: &str) -> (u64, String) {
+    let size = remote_pkg_size(addr, path).unwrap_or(0);
+    let fingerprint = package_fingerprint_from_reader(size, |off, len| {
+        ps5upload_core::fs_ops::fs_read(addr, path, off, len).ok()
+    })
+    .unwrap_or_default();
+    (size, fingerprint)
+}
+
+async fn installed_pkg_inventory_handler(Query(q): Query<InstalledPkgQuery>) -> Response<Body> {
+    if !valid_title_id(&q.title_id) {
+        return json_err(StatusCode::BAD_REQUEST, "invalid title_id");
+    }
+    let addr = q.addr;
+    let title_id = q.title_id;
+    match tokio::task::spawn_blocking(move || installed_pkg_inventory(&addr, &title_id)).await {
+        Ok(inventory) => json_ok(&inventory),
+        Err(e) => json_err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("installed pkg inventory task failed: {e}"),
+        ),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -280,6 +545,13 @@ pub struct InstallStartRequest {
     /// pkg itself, so an empty value still installs.
     #[serde(default)]
     pub content_id: Option<String>,
+    /// Expected exact source size and sampled identity. Current clients pass
+    /// these from the local parser; older clients may omit them, in which case
+    /// a staged PS5 path is sampled here before installation.
+    #[serde(default)]
+    pub expected_size: Option<u64>,
+    #[serde(default)]
+    pub package_fingerprint: Option<String>,
     /// Whether to DELETE the staged `local_ps5_path` pkg after the install
     /// reaches a terminal phase (the "Tier-1 staging cleanup"). This is the
     /// user's "Auto Delete after installation" preference. Defaults TRUE for
@@ -297,14 +569,11 @@ pub struct InstallStartRequest {
     /// session to `/api/pkg/dpi-direct-install`, which installs via the
     /// DPI daemon (a separate loader process) pulling bytes over HTTP.
     ///
-    /// This exists because the in-process installer, handed an `http://`
-    /// pkg-host URL on FW < 11, triggers Sony's PlayGo HTTP preflight and
-    /// HANGS the payload's RPC thread until the helper's watchdog kills it
-    /// (30 s read-timeout → console unreachable). `installStream`'s whole
-    /// premise is "register the session, let the DPI daemon do the actual
-    /// install" — so the in-process install must be skipped here, not just
-    /// as an optimisation but to avoid crashing the helper. Defaults false
-    /// so the staged/normal install path is completely unchanged.
+    /// The standalone DPI process owns Sony's HTTP installer state for Stream
+    /// installs. Keeping the main payload out of that call prevents a blocked
+    /// proxy/pre-flight request from tying up its RPC thread and lets the DPI
+    /// daemon return the real Sony error. Defaults false so the staged/normal
+    /// install path is completely unchanged.
     #[serde(default)]
     pub serve_only: bool,
 }
@@ -539,6 +808,33 @@ async fn install_start_handler(
         }
     }
 
+    // Exact source identity used by category-aware completion verification.
+    // PC/stream installs already have it from the local parser. Staged installs
+    // have no host-side file, so sample the PS5 copy once (two 64 KiB reads)
+    // before Sony begins consuming it. Caller-provided values win.
+    let mut expected_size = req.expected_size.unwrap_or(total_size);
+    let mut package_fingerprint = req
+        .package_fingerprint
+        .clone()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| head_meta.fingerprint.clone());
+    if is_local && (expected_size == 0 || package_fingerprint.is_empty()) {
+        if let Some(local_path) = req.local_ps5_path.as_deref() {
+            let addr = req.ps5_addr.clone();
+            let path = local_path.to_string();
+            if let Ok((remote_size, remote_fingerprint)) =
+                tokio::task::spawn_blocking(move || remote_pkg_identity(&addr, &path)).await
+            {
+                if expected_size == 0 {
+                    expected_size = remote_size;
+                }
+                if package_fingerprint.is_empty() {
+                    package_fingerprint = remote_fingerprint;
+                }
+            }
+        }
+    }
+
     // URL strategy: raw path when caller staged the pkg on PS5 disk
     // (Tier 1). On FW 9.60+ Sony's installer accepts a bare absolute
     // path WITHOUT the `file://` prefix; with the prefix it returns
@@ -577,7 +873,7 @@ async fn install_start_handler(
         id: session_id.clone(),
         parts,
         part_sizes,
-        total_size,
+        total_size: expected_size,
         content_id: head_meta.content_id.clone(),
         title: if head_meta.title.is_empty() {
             head_meta
@@ -590,6 +886,7 @@ async fn install_start_handler(
             head_meta.title.clone()
         },
         package_type: package_type.clone(),
+        package_fingerprint,
         ps5_mgmt_addr: req.ps5_addr.clone(),
         task_id: None,
         err_code: 0,
@@ -1058,6 +1355,11 @@ type RegisteredObs = Option<bool>;
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct TrackerObs {
     registered: RegisteredObs,
+    /// Legacy installs without an exact package fingerprint may fall back to
+    /// byte-settle on firmware where the target path is unreadable. Exact
+    /// variant installs must not: free-space movement cannot prove which
+    /// same-version patch/DLC landed.
+    allow_byte_settle: bool,
     /// Max bytes observed consumed so far (monotonic) — `max(free-space drop,
     /// title-dir size)`. Monotonic so a noisy free-space blip up can't look
     /// like a regression.
@@ -1120,7 +1422,8 @@ fn install_verdict(obs: &TrackerObs) -> InstallVerdict {
     // In BOTH, "essentially all expected bytes landed AND writing settled" means
     // the content really copied — which also cleanly rejects a "dead tile" (it
     // registers appmeta but writes ~no content, so it never settles near 100%).
-    if obs.registered != Some(true)
+    if obs.allow_byte_settle
+        && obs.registered != Some(true)
         && fraction >= INSTALL_SETTLE_FRACTION
         && obs.idle_sec >= obs.settle_sec
     {
@@ -1279,6 +1582,8 @@ async fn install_status_handler(
         cancelled,
         terminal,
         content_id,
+        package_type,
+        package_fingerprint,
         cached_launchable,
         cached_consumed,
         cached_stalled,
@@ -1299,6 +1604,8 @@ async fn install_status_handler(
                 s.cancelled,
                 s.terminal_status.clone(),
                 s.content_id.clone(),
+                s.package_type.clone(),
+                s.package_fingerprint.clone(),
                 s.launchable,
                 s.progress_consumed_bytes,
                 s.stalled,
@@ -1401,17 +1708,19 @@ async fn install_status_handler(
     if matches!(status.phase, InstallPhase::Done) {
         let addr = ps5_addr.clone();
         let cid = content_id.clone();
+        let pt = package_type.clone();
+        let fp = package_fingerprint.clone();
         let check = tokio::task::spawn_blocking(move || {
-            ps5upload_core::pkg_install::verify_launchable(&addr, &cid)
+            verify_installed_artifact(&addr, &cid, &pt, total, &fp)
         })
         .await
-        .unwrap_or(ps5upload_core::pkg_install::LaunchCheck::Unsupported);
+        .unwrap_or(InstalledArtifactCheck::Unsupported);
 
         // Normalize to the tracker's registered-observation.
         let registered: RegisteredObs = match check {
-            ps5upload_core::pkg_install::LaunchCheck::Registered => Some(true),
-            ps5upload_core::pkg_install::LaunchCheck::Absent => Some(false),
-            ps5upload_core::pkg_install::LaunchCheck::Unsupported => None,
+            InstalledArtifactCheck::Match => Some(true),
+            InstalledArtifactCheck::Absent | InstalledArtifactCheck::Different => Some(false),
+            InstalledArtifactCheck::Unsupported => None,
         };
 
         // Observe bytes consumed this poll (off-reactor: two blocking FS
@@ -1463,6 +1772,7 @@ async fn install_status_handler(
 
         let obs = TrackerObs {
             registered,
+            allow_byte_settle: package_fingerprint.is_empty(),
             consumed,
             expected: total,
             idle_sec,
@@ -2300,6 +2610,7 @@ async fn resolve_parts_and_meta(
             title_id: String::new(),
             category: String::new(),
             app_ver: String::new(),
+            fingerprint: String::new(),
             package_type: req.package_type_override.clone(),
             platform: ps5upload_pkg::derive_platform(
                 ps5upload_pkg::PKG_MAGIC,
@@ -2615,6 +2926,9 @@ mod tests {
     fn obs(registered: RegisteredObs, consumed: u64, expected: u64, idle_sec: u64) -> TrackerObs {
         TrackerObs {
             registered,
+            // Most tracker tests exercise the legacy, no-fingerprint path.
+            // Exact-identity tests opt out explicitly below.
+            allow_byte_settle: true,
             consumed,
             expected,
             idle_sec,
@@ -2786,6 +3100,17 @@ mod tests {
         let mut o = obs(Some(false), 24_900_000_000, 25_000_000_000, 180);
         o.synthetic_done_grace_sec = Some(180);
         assert_eq!(install_verdict(&o), InstallVerdict::Complete);
+    }
+
+    #[test]
+    fn verdict_exact_variant_never_completes_from_unrelated_byte_movement() {
+        // Two same-version patches can have identical Sony metadata and size.
+        // Free-space movement cannot prove which file landed, so an install
+        // carrying a sampled package identity must wait for the exact artifact.
+        let mut o = obs(Some(false), 24_900_000_000, 25_000_000_000, 180);
+        o.allow_byte_settle = false;
+        o.synthetic_done_grace_sec = Some(180);
+        assert_eq!(install_verdict(&o), InstallVerdict::AcceptedUnverified);
     }
 
     #[test]
@@ -3065,6 +3390,7 @@ mod tests {
             content_id: "TEST".into(),
             title: "Test".into(),
             package_type: "PS4GD".into(),
+            package_fingerprint: String::new(),
             ps5_mgmt_addr: "127.0.0.1:0".into(),
             task_id: None,
             err_code: 0,

@@ -43,20 +43,24 @@ import {
   usePkgLibrary,
   isFinishedPkg,
   pkgRowInstalled,
+  pkgInstallAllPlan,
   type PkgEntry,
 } from "../../state/pkgLibrary";
 import { useInstallSettingsStore } from "../../state/installSettings";
 import { pkgCategoryLabel, isAddonCategory } from "../../lib/pkgStagingPath";
 import {
   appsInstalled,
+  pkgInstalledInventory,
   pkgScanExternal,
   pkgMetadataConsole,
   type ExternalPkg,
   type PkgConsoleMetadata,
+  type InstalledPkgArtifact,
 } from "../../api/ps5";
 import { transferAddr, hostOf } from "../../lib/addr";
 import { firmwareMajor } from "../../lib/ps5Firmware";
 import { formatBytes } from "../../lib/format";
+import { acceptPkgDrop } from "../../lib/pkgDropDedupe";
 
 /* ─── Cover art ────────────────────────────────────────────────────────
  * Thin wrapper over the shared GameIcon (keyed by title id from the
@@ -157,7 +161,10 @@ function PkgRow({
             {entry.appVer && (
               <span
                 className="inline-flex shrink-0 items-center rounded-full border border-[var(--color-border)] px-1.5 py-0.5 font-mono text-xs font-medium tabular-nums text-[var(--color-muted)]"
-                title={tr("pkglib.version.title", "Package version (PARAM.SFO APP_VER)")}
+                title={tr(
+                  "pkglib.version.title",
+                  "Package version (PARAM.SFO APP_VER)",
+                )}
               >
                 v{entry.appVer}
               </span>
@@ -331,25 +338,31 @@ export default function InstallPackageScreen() {
   const [installedIds, setInstalledIds] = useState<Set<string>>(
     () => installedIdsCache.get(hostOf(host)) ?? new Set(),
   );
+  const [installedArtifacts, setInstalledArtifacts] = useState<
+    Map<string, InstalledPkgArtifact[]>
+  >(() => new Map());
   const [pickError, setPickError] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [dropActive, setDropActive] = useState(false);
 
   const hostReady = !!host?.trim();
-  // Stream install hangs on FW < 11 (PlayGo PPR auth check never returns
-  // without kernel patches we don't have for those firmwares). Hard-disable
-  // the button when we KNOW the firmware is too old. Unknown firmware (null)
-  // leaves it enabled — the handler's belt-and-suspenders dialog catches it.
+  // There is no reliable firmware cutoff for Stream install. Hardware proves
+  // it works on one FW 5.10 console while a FW 9.60 console can reject the
+  // same request at Sony's HTTP proxy layer before fetching a byte. Keep it a
+  // clearly-labelled beta and surface the real network error instead of
+  // disabling capable older consoles based on version alone.
   const fwMajor = firmwareMajor(runtime?.ps5Kernel);
-  const streamBlocked = fwMajor !== null && fwMajor < 11;
   // Stable ref so the drag-drop effect (subscribed once per host) always
   // calls the latest uploader without re-subscribing each render. Updated
   // in an effect (not during render) per the rules-of-hooks ref rule.
   const uploadRef = useRef<(p: string) => void>(() => {});
+  const recentPkgDrops = useRef(new Map<string, number>());
   useEffect(() => {
     uploadRef.current = (p: string) => {
-      if (hostReady) void addAndUpload(p, host);
+      if (hostReady && acceptPkgDrop(recentPkgDrops.current, p)) {
+        void addAndUpload(p, host);
+      }
     };
   });
 
@@ -376,6 +389,52 @@ export default function InstallPackageScreen() {
       cancelled = true;
     };
   }, [host, hostReady, entries.length, installing]);
+
+  const stagedTitleIds = useMemo(
+    () =>
+      [
+        ...new Set(entries.map((e) => e.titleId).filter(Boolean) as string[]),
+      ].sort(),
+    [entries],
+  );
+  const stagedTitleIdsKey = stagedTitleIds.join(",");
+
+  // Title-level app_list cannot prove a patch or DLC. Read the actual
+  // category-specific package artifacts (app.pkg / patch.pkg / addcont) and
+  // compare their sampled fingerprints to each staged row. Re-run after an
+  // install settles so only the variant that really landed reads Reinstall.
+  useEffect(() => {
+    if (!hostReady || installing) return;
+    let cancelled = false;
+    // Never carry an exact artifact verdict across a console switch while the
+    // new console's inventory request is still in flight.
+    setInstalledArtifacts(new Map());
+    const ids = stagedTitleIdsKey ? stagedTitleIdsKey.split(",") : [];
+    void Promise.all(
+      ids.map(async (titleId) => {
+        try {
+          return [
+            titleId,
+            await pkgInstalledInventory(transferAddr(host), titleId),
+          ] as const;
+        } catch {
+          return [titleId, undefined] as const;
+        }
+      }),
+    ).then((rows) => {
+      if (cancelled) return;
+      const next = new Map<string, InstalledPkgArtifact[]>();
+      for (const [titleId, artifacts] of rows) {
+        // Undefined means the live query failed; omit that key so the legacy
+        // installedHere hint can remain visible instead of asserting absence.
+        if (artifacts) next.set(titleId, artifacts);
+      }
+      setInstalledArtifacts(next);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [host, hostReady, installing, stagedTitleIdsKey]);
 
   // App-wide drag-drop hand-off: AppShell routes a dropped .pkg here via
   // location state.
@@ -478,48 +537,28 @@ export default function InstallPackageScreen() {
       );
       return;
     }
-    // FW gate — two separate concerns, HW-verified:
-    //
-    //  FW < 11 (e.g. 9.60): Stream install HANGS. The http:// URL path hits
-    //    Sony's PlayGo PPR auth check (pf_auth_client_request_for_ppr) which
-    //    never returns without kernel PPR patches. elf-arsenal carries those
-    //    patches for FW 1.x/2.x/12.00 only — there is NO patch table for
-    //    FW 9.60, so stream install is genuinely broken there. HARD block.
-    //
-    //  FW >= 11 (e.g. 12.00): May work (PPR patches exist for 12.00 in
-    //    elf-arsenal) but is still untested by us. Advisory warn only.
-    //
-    // The button itself is also disabled for FW < 11 (see `streamBlocked`
-    // below), so this dialog is a belt-and-suspenders guard for the case
-    // where the firmware is known-bad but the button was somehow triggered.
-    if (fwMajor !== null && fwMajor < 11) {
-      setPickError(
-        tr(
-          "pkglib.stream.fwLow.message",
-          { fw: String(fwMajor) },
-          `Stream install needs firmware 11 or newer — yours is ${fwMajor}.x. The HTTP install path hangs on older firmware because Sony's PlayGo pre-flight check never returns without kernel patches we don't have. Use the normal Upload → Install (staged) instead — it works perfectly on firmware ${fwMajor}.`,
-        ),
-      );
-      return;
-    }
-    if (fwMajor !== null && fwMajor >= 11) {
-      const proceed = await confirm({
-        title: tr(
-          "pkglib.stream.fw11.title",
-          undefined,
-          "Stream install is beta on this firmware",
-        ),
-        message: tr(
-          "pkglib.stream.fw11.body",
-          { fw: String(fwMajor) },
-          `Your PS5 is on firmware ${fwMajor}.x. Stream (beta) install hasn't been fully tested on this firmware yet. If it doesn't work, use the normal Upload → Install instead — that path is reliable on all firmwares. Continue with Stream?`,
-        ),
-        confirmLabel: tr("pkglib.stream.fw11.confirm", undefined, "Stream anyway"),
-        cancelLabel: tr("cancel", undefined, "Cancel"),
-        destructive: true,
-      });
-      if (!proceed) return;
-    }
+    const firmwareLabel =
+      fwMajor === null ? "this firmware" : `firmware ${fwMajor}.x`;
+    const proceed = await confirm({
+      title: tr(
+        "pkglib.stream.beta.title",
+        undefined,
+        "Stream install is beta",
+      ),
+      message: tr(
+        "pkglib.stream.beta.body",
+        { fw: fwMajor === null ? "unknown" : String(fwMajor) },
+        `On ${firmwareLabel}, Stream uses the PS5's own HTTP installer to pull the package from this computer. Firmware version alone does not determine support, and console proxy/network settings can block it. If it fails, use Upload → Install instead. Continue with Stream?`,
+      ),
+      confirmLabel: tr(
+        "pkglib.stream.beta.confirm",
+        undefined,
+        "Stream anyway",
+      ),
+      cancelLabel: tr("cancel", undefined, "Cancel"),
+      destructive: true,
+    });
+    if (!proceed) return;
     setStreaming(true);
     try {
       const sel = isAndroid()
@@ -629,10 +668,9 @@ export default function InstallPackageScreen() {
   // Count of not-yet-installed, idle rows — drives the "Install all (N)"
   // button. Mirrors installAll's own target filter in the store so the count
   // and the action agree. >1 so the button only appears when it saves taps.
-  const installableCount = useMemo(
-    () => entries.filter((e) => e.status === "idle" && !e.installedHere).length,
-    [entries],
-  );
+  const installPlan = useMemo(() => pkgInstallAllPlan(entries), [entries]);
+  const installableCount = installPlan.targets.length;
+  const conflictingVariantCount = installPlan.conflicts.length;
   const sorted = entries; // store already sorts by title
   // Installing swaps the payload out (it owns the transfer port :9113), so it
   // can't run concurrently with an upload. Rather than block the button, the
@@ -689,7 +727,8 @@ export default function InstallPackageScreen() {
                         )
                 }
               >
-                {tr("pkglib.installAll", undefined, "Install all")} ({installableCount})
+                {tr("pkglib.installAll", undefined, "Install all")} (
+                {installableCount})
               </Button>
             )}
             {isTauriEnv() && (
@@ -729,25 +768,17 @@ export default function InstallPackageScreen() {
                   }
                   onClick={handleStreamPick}
                   loading={streaming}
-                  disabled={
-                    !hostReady || installing || installingAll || streamBlocked
-                  }
+                  disabled={!hostReady || installing || installingAll}
                   title={
                     !hostReady
                       ? tr(
                           "install.add.disabledHint",
                           "Set a PS5 host on the Connection tab first",
                         )
-                      : streamBlocked
-                        ? tr(
-                            "pkglib.stream.fwLow.hint",
-                            { fw: String(fwMajor) },
-                            `Stream install needs firmware 11+ — yours is ${fwMajor}.x. The HTTP path hangs on older firmware. Use Upload → Install (staged) instead.`,
-                          )
-                        : tr(
-                            "pkglib.stream.hint",
-                            "Install a .pkg straight from this PC over HTTP — no staging upload (beta)",
-                          )
+                      : tr(
+                          "pkglib.stream.hint",
+                          "Install a .pkg straight from this PC over HTTP — no staging upload (beta)",
+                        )
                   }
                 >
                   {tr("pkglib.stream", undefined, "Stream (beta)")}
@@ -827,14 +858,27 @@ export default function InstallPackageScreen() {
         </div>
       )}
 
+      {conflictingVariantCount > 0 && (
+        <div className="mb-4">
+          <WarningCard
+            title={tr(
+              "pkglib.variants.title",
+              undefined,
+              "Choose one same-version package variant",
+            )}
+            detail={tr(
+              "pkglib.variants.body",
+              { n: conflictingVariantCount },
+              `${conflictingVariantCount} staged patch/DLC variants target the same title and version. They are all preserved, but the PS5 can keep only one active patch for that version. “Install all” skips them; install the Optional Fix or Backport that matches this console from its row.`,
+            )}
+          />
+        </div>
+      )}
+
       {busyNotice && (
         <div className="mb-4 flex items-center justify-between gap-3 rounded-lg border border-[var(--color-accent)] bg-[var(--color-accent-soft)] px-4 py-3 text-sm">
           <div className="flex items-start gap-2">
-            <Spinner
-              size={14}
-              tone="accent"
-              className="mt-0.5 shrink-0"
-            />
+            <Spinner size={14} tone="accent" className="mt-0.5 shrink-0" />
             <span>{busyNotice}</span>
           </div>
           {/* Only offer Cancel while the install is still WAITING its turn.
@@ -877,7 +921,11 @@ export default function InstallPackageScreen() {
               // an update/DLC shares the base's title id, so a present base
               // would otherwise make a never-installed add-on read as
               // "INSTALLED · Reinstall". See `pkgRowInstalled`.
-              const installed = pkgRowInstalled(e, installedIds);
+              const installed = pkgRowInstalled(
+                e,
+                installedIds,
+                e.titleId ? installedArtifacts.get(e.titleId) : undefined,
+              );
               return (
                 <PkgRow
                   key={e.path}
@@ -1061,7 +1109,10 @@ function ExternalPackages({ host }: { host: string }) {
     <div className="mb-4 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3">
       <div className="mb-2 flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2">
-          <HardDrive size={14} className="shrink-0 text-[var(--color-accent)]" />
+          <HardDrive
+            size={14}
+            className="shrink-0 text-[var(--color-accent)]"
+          />
           <span className="text-sm font-semibold">
             {tr("pkglib.external.title", "Install from USB / external drive")}
           </span>
@@ -1168,7 +1219,11 @@ function ExternalPackages({ host }: { host: string }) {
                       </Badge>
                     )}
                     {m?.appVer && (
-                      <Badge tone="neutral" variant="outline" className="font-mono">
+                      <Badge
+                        tone="neutral"
+                        variant="outline"
+                        className="font-mono"
+                      >
                         v{m.appVer}
                       </Badge>
                     )}
@@ -1201,7 +1256,7 @@ function ExternalPackages({ host }: { host: string }) {
                             : "var(--color-good)"
                           : r.acceptedUnverified
                             ? "var(--color-warn)"
-                          : "var(--color-bad)",
+                            : "var(--color-bad)",
                       }}
                     >
                       {r.ok ? (

@@ -26,6 +26,7 @@ vi.mock("../api/ps5", () => ({
   // Console-readiness probe; default to "ready" so install tests proceed past
   // the pre-install gate immediately. Readiness-specific tests override it.
   consoleReadiness: vi.fn(async () => true),
+  pkgInstalledInventory: vi.fn(async () => []),
 }));
 // No active transfer in tests → installs proceed immediately.
 vi.mock("../lib/ps5Transfers", () => ({ transferScreenBusy: () => false }));
@@ -37,11 +38,14 @@ import {
   fsCopy,
   pkgMetadataConsole,
   consoleReadiness,
+  pkgInstalledInventory,
 } from "../api/ps5";
 import {
   titleIdFromContentId,
   platformFromTitleId,
   pkgEntryInstallOrder,
+  pkgAlternativeKey,
+  pkgInstallAllPlan,
   pkgLibraryStore,
   evictPkgLibraryStore,
   isFinishedPkg,
@@ -82,15 +86,28 @@ describe("pkgEntryInstallOrder", () => {
   });
   it("falls back to a path hint when category is absent (headerless rows)", () => {
     expect(
-      pkgEntryInstallOrder({ category: undefined, path: "/data/updates/p.pkg" }),
+      pkgEntryInstallOrder({
+        category: undefined,
+        path: "/data/updates/p.pkg",
+      }),
     ).toBe(1);
     expect(
       pkgEntryInstallOrder({ category: undefined, path: "/data/dlc/p.pkg" }),
     ).toBe(2);
+    expect(
+      pkgEntryInstallOrder({
+        category: undefined,
+        path: `/data/updates/${"a".repeat(64)}/p.pkg`,
+      }),
+    ).toBe(1);
   });
   it("defaults an unknown/base-shaped row to 0", () => {
-    expect(pkgEntryInstallOrder({ category: undefined, path: "/data/game.pkg" })).toBe(0);
-    expect(pkgEntryInstallOrder({ category: "xx", path: "/data/game.pkg" })).toBe(0);
+    expect(
+      pkgEntryInstallOrder({ category: undefined, path: "/data/game.pkg" }),
+    ).toBe(0);
+    expect(
+      pkgEntryInstallOrder({ category: "xx", path: "/data/game.pkg" }),
+    ).toBe(0);
   });
   it("prefers the category over a misleading path hint", () => {
     // A base game that happens to live under an /updates/ dir must still be 0.
@@ -109,7 +126,133 @@ describe("pkgEntryInstallOrder", () => {
       .slice()
       .sort((a, b) => pkgEntryInstallOrder(a) - pkgEntryInstallOrder(b))
       .map((r) => r.path);
-    expect(sorted).toEqual(["/base2.pkg", "/base1.pkg", "/upd.pkg", "/dlc1.pkg"]);
+    expect(sorted).toEqual([
+      "/base2.pkg",
+      "/base1.pkg",
+      "/upd.pkg",
+      "/dlc1.pkg",
+    ]);
+  });
+});
+
+describe("pkgInstallAllPlan (variant safety)", () => {
+  const row = (p: Partial<PkgEntry> & Pick<PkgEntry, "path">): PkgEntry => ({
+    name: p.path.split("/").pop() || "x.pkg",
+    path: p.path,
+    size: p.size ?? 1,
+    contentId: p.contentId ?? "UP0000-CUSA33334_00-TEST000000000000",
+    titleId: p.titleId ?? "CUSA33334",
+    category: p.category,
+    appVer: p.appVer,
+    fingerprint: p.fingerprint,
+    status: p.status ?? "idle",
+    installedHere: p.installedHere,
+  });
+
+  it("preserves but skips two distinct same-version patch alternatives", () => {
+    const optional = row({
+      path: "/updates/optional.pkg",
+      category: "gp",
+      appVer: "01.02",
+      fingerprint: "a".repeat(64),
+    });
+    const backport = row({
+      path: "/updates/backport.pkg",
+      category: "gp",
+      appVer: "01.02",
+      fingerprint: "b".repeat(64),
+    });
+    const plan = pkgInstallAllPlan([optional, backport]);
+    expect(plan.targets).toEqual([]);
+    expect(plan.conflicts.map((e) => e.path)).toEqual([
+      optional.path,
+      backport.path,
+    ]);
+    expect(pkgAlternativeKey(optional)).toBe("patch:CUSA33334:01.02");
+  });
+
+  it("does not let Install all replace a previously-installed sibling variant", () => {
+    const optional = row({
+      path: "/updates/optional.pkg",
+      category: "gp",
+      appVer: "01.02",
+      fingerprint: "a".repeat(64),
+      installedHere: true,
+    });
+    const backport = row({
+      path: "/updates/backport.pkg",
+      category: "gp",
+      appVer: "01.02",
+      fingerprint: "b".repeat(64),
+    });
+    const plan = pkgInstallAllPlan([optional, backport]);
+    expect(plan.targets).toEqual([]);
+    expect(plan.conflicts.map((e) => e.path)).toEqual([backport.path]);
+  });
+
+  it("batches base, different patch versions, and independent DLC in order", () => {
+    const base = row({ path: "/base.pkg", category: "gd" });
+    const patch102 = row({
+      path: "/updates/102.pkg",
+      category: "gp",
+      appVer: "01.02",
+      fingerprint: "2".repeat(64),
+    });
+    const patch101 = row({
+      path: "/updates/101.pkg",
+      category: "gp",
+      appVer: "01.01",
+      fingerprint: "1".repeat(64),
+    });
+    const dlc = row({
+      path: "/dlc/one.pkg",
+      category: "ac",
+      contentId: "UP0000-CUSA33334_00-DLC000000000001",
+      fingerprint: "d".repeat(64),
+    });
+    expect(
+      pkgInstallAllPlan([dlc, patch102, base, patch101]).targets.map(
+        (e) => e.path,
+      ),
+    ).toEqual([base.path, patch101.path, patch102.path, dlc.path]);
+  });
+
+  it("treats same-ContentID DLC repacks as alternatives but not separate DLC", () => {
+    const first = row({
+      path: "/dlc/a.pkg",
+      category: "ac",
+      contentId: "UP0000-CUSA33334_00-DLC000000000001",
+      fingerprint: "a".repeat(64),
+    });
+    const repack = row({
+      path: "/dlc/b.pkg",
+      category: "ac",
+      contentId: first.contentId,
+      fingerprint: "b".repeat(64),
+    });
+    const separate = row({
+      path: "/dlc/c.pkg",
+      category: "ac",
+      contentId: "UP0000-CUSA33334_00-DLC000000000002",
+      fingerprint: "c".repeat(64),
+    });
+    const plan = pkgInstallAllPlan([first, repack, separate]);
+    expect(plan.conflicts.map((e) => e.path)).toEqual([
+      first.path,
+      repack.path,
+    ]);
+    expect(plan.targets.map((e) => e.path)).toEqual([separate.path]);
+  });
+
+  it("does not manufacture a conflict for duplicate rows of one exact artifact", () => {
+    const a = row({
+      path: "/legacy/a.pkg",
+      category: "gp",
+      appVer: "01.02",
+      fingerprint: "a".repeat(64),
+    });
+    const b = row({ ...a, path: "/new/a.pkg" });
+    expect(pkgInstallAllPlan([a, b]).conflicts).toEqual([]);
   });
 });
 
@@ -202,7 +345,9 @@ describe("installSpaceWarning (#115 pre-install free-space check)", () => {
     expect(w).toMatch(/Big Game/);
   });
   it("does not warn when it fits", () => {
-    expect(installSpaceWarning("Game", 5_000_000_000, 50_000_000_000)).toBeNull();
+    expect(
+      installSpaceWarning("Game", 5_000_000_000, 50_000_000_000),
+    ).toBeNull();
   });
   it("never blocks when free space is unknown (null)", () => {
     expect(installSpaceWarning("Game", 50_000_000_000, null)).toBeNull();
@@ -282,6 +427,88 @@ describe("pkgRowInstalled (installed/Reinstall badge)", () => {
       pkgRowInstalled(
         { titleId: "CUSA99999", category: "gp", installedHere: true },
         installed,
+      ),
+    ).toBe(true);
+  });
+
+  it("matches only the exact installed patch variant when live artifacts exist", () => {
+    const optionalFingerprint = "a".repeat(64);
+    const backportFingerprint = "b".repeat(64);
+    const artifacts = [
+      {
+        kind: "patch" as const,
+        size: 15_335_424,
+        fingerprint: backportFingerprint,
+        contentId: "UP1082-CUSA33334_00-SLUS008930000000",
+      },
+    ];
+    expect(
+      pkgRowInstalled(
+        {
+          titleId: "CUSA33334",
+          category: "gp",
+          size: 8_192_000,
+          fingerprint: optionalFingerprint,
+          installedHere: true,
+        },
+        new Set(["CUSA33334"]),
+        artifacts,
+      ),
+    ).toBe(false);
+    expect(
+      pkgRowInstalled(
+        {
+          titleId: "CUSA33334",
+          category: "gp",
+          size: 15_335_424,
+          fingerprint: backportFingerprint,
+        },
+        new Set(["CUSA33334"]),
+        artifacts,
+      ),
+    ).toBe(true);
+  });
+
+  it("matches a cold-scan 128-bit directory token to the full installed fingerprint", () => {
+    const fullFingerprint = "0123456789abcdef".repeat(4);
+    expect(
+      pkgRowInstalled(
+        {
+          titleId: "CUSA33334",
+          category: "gp",
+          fingerprint: fullFingerprint.slice(0, 32),
+        },
+        new Set(["CUSA33334"]),
+        [
+          {
+            kind: "patch",
+            size: 15_335_424,
+            fingerprint: fullFingerprint,
+            contentId: "UP1082-CUSA33334_00-SLUS008930000000",
+          },
+        ],
+      ),
+    ).toBe(true);
+  });
+
+  it("uses DLC ContentID and size for a legacy row without a fingerprint", () => {
+    expect(
+      pkgRowInstalled(
+        {
+          titleId: "CUSA07842",
+          category: "ac",
+          size: 4096,
+          contentId: "UP0000-CUSA07842_00-DLC000000000001",
+        },
+        installed,
+        [
+          {
+            kind: "dlc",
+            size: 4096,
+            fingerprint: "f".repeat(64),
+            contentId: "UP0000-CUSA07842_00-DLC000000000001",
+          },
+        ],
       ),
     ).toBe(true);
   });
@@ -380,15 +607,28 @@ describe("pkgInstallMayNotLaunch", () => {
     expect(pkgInstallMayNotLaunch({ may_not_launch: false })).toBe(false);
     // Flag wins even if register_path would say otherwise.
     expect(
-      pkgInstallMayNotLaunch({ may_not_launch: false, register_path: "appinst-local" }),
+      pkgInstallMayNotLaunch({
+        may_not_launch: false,
+        register_path: "appinst-local",
+      }),
     ).toBe(false);
   });
 
   it("falls back to register_path for older engines without the flag", () => {
     // Only the unlaunchable last-resort path warns.
-    expect(pkgInstallMayNotLaunch({ register_path: "appinst-local" })).toBe(true);
+    expect(pkgInstallMayNotLaunch({ register_path: "appinst-local" })).toBe(
+      true,
+    );
     // Every launchable tier does not.
-    for (const rp of ["appinst", "shellui-rpc", "intdebug", "regular", "tier0-worker", "none", ""]) {
+    for (const rp of [
+      "appinst",
+      "shellui-rpc",
+      "intdebug",
+      "regular",
+      "tier0-worker",
+      "none",
+      "",
+    ]) {
       expect(pkgInstallMayNotLaunch({ register_path: rp })).toBe(false);
     }
     // Nothing at all (very old engine) → no warning.
@@ -400,7 +640,10 @@ describe("pkgInstallMayNotLaunch", () => {
     // engine confirmed the title registered in app.db, so it's a clean
     // success (this is the elf-arsenal wait_for_install_row payoff).
     expect(
-      pkgInstallMayNotLaunch({ register_path: "appinst-local", launchable: true }),
+      pkgInstallMayNotLaunch({
+        register_path: "appinst-local",
+        launchable: true,
+      }),
     ).toBe(false);
     // launchable=false is a definitive warning even on a "launchable" tier —
     // Sony accepted it but the title never registered.
@@ -413,7 +656,10 @@ describe("pkgInstallMayNotLaunch", () => {
     ).toBe(false);
     // launchable null/undefined ⇒ verification not applicable ⇒ heuristic.
     expect(
-      pkgInstallMayNotLaunch({ register_path: "appinst-local", launchable: null }),
+      pkgInstallMayNotLaunch({
+        register_path: "appinst-local",
+        launchable: null,
+      }),
     ).toBe(true);
   });
 });
@@ -427,8 +673,10 @@ describe("pkgInstallMayNotLaunch", () => {
 // unverified (never installed), which also keeps this test fast.
 describe("runPkgInstall — forwards deleteStaging to the engine", () => {
   const mockedInvoke = vi.mocked(invoke);
+  const mockedInventory = vi.mocked(pkgInstalledInventory);
 
   beforeEach(() => {
+    mockedInventory.mockReset().mockResolvedValue([]);
     mockedInvoke.mockReset();
     mockedInvoke.mockImplementation(async (cmd: unknown) => {
       if (cmd === "pkg_install_start") {
@@ -441,11 +689,16 @@ describe("runPkgInstall — forwards deleteStaging to the engine", () => {
 
   const startArgs = () =>
     mockedInvoke.mock.calls.find((c) => c[0] === "pkg_install_start")?.[1] as
-      | { deleteStaging?: boolean }
-      | undefined;
+      { deleteStaging?: boolean } | undefined;
 
   it("passes deleteStaging=false → engine KEEPS the pkg (Auto Delete off)", async () => {
-    const r = await runPkgInstall("192.168.1.50", "/user/data/x.pkg", "CID", null, false);
+    const r = await runPkgInstall(
+      "192.168.1.50",
+      "/user/data/x.pkg",
+      "CID",
+      null,
+      false,
+    );
     expect(r.installed).toBe(false);
     expect(r.acceptedUnverified).toBe(true);
     expect(startArgs()?.deleteStaging).toBe(false);
@@ -467,14 +720,16 @@ describe("runPkgInstall — forwards deleteStaging to the engine", () => {
       if (cmd === "pkg_install_start") {
         return {
           err_code: 0x80b21106,
-          err_message: "PS5 rejected the PKG header — file may be corrupt or wrongly named",
+          err_message:
+            "PS5 rejected the PKG header — file may be corrupt or wrongly named",
           register_path: "none",
           package_type: "PS4DP",
         };
       }
       if (cmd === "dpi_ensure") return { ok: true };
       if (cmd === "pkg_dpi_install") return { ok: true, rc: 0 };
-      if (cmd === "payload_bundled_path") return { ok: true, path: "/tmp/p.elf" };
+      if (cmd === "payload_bundled_path")
+        return { ok: true, path: "/tmp/p.elf" };
       return {};
     });
     const r = await runPkgInstall(
@@ -487,9 +742,9 @@ describe("runPkgInstall — forwards deleteStaging to the engine", () => {
     expect(r.installed).toBe(false);
     expect(r.acceptedUnverified).toBe(true);
     expect(r.errMessage).toBe(PKG_ACCEPTED_UNVERIFIED_HINT);
-    expect(mockedInvoke.mock.calls.some((c) => c[0] === "pkg_dpi_install")).toBe(
-      true,
-    );
+    expect(
+      mockedInvoke.mock.calls.some((c) => c[0] === "pkg_dpi_install"),
+    ).toBe(true);
   });
 
   it("a rejected base game also reaches DPI with its staging path intact", async () => {
@@ -526,15 +781,69 @@ describe("runPkgInstall — forwards deleteStaging to the engine", () => {
     expect(dpiArgs?.localPs5Path).toBe(localPs5Path);
   });
 
+  it("confirms a DPI patch only when the exact installed fingerprint matches", async () => {
+    const fingerprint = "7".repeat(64);
+    const contentId = "UP1082-CUSA33334_00-SLUS008930000000";
+    mockedInventory.mockResolvedValue([
+      {
+        kind: "patch",
+        path: "/user/patch/CUSA33334/patch.pkg",
+        size: 8_192_000,
+        fingerprint,
+        contentId,
+      },
+    ]);
+    mockedInvoke.mockReset();
+    mockedInvoke.mockImplementation(async (cmd: unknown) => {
+      if (cmd === "pkg_install_start") {
+        return {
+          err_code: 0x80b21106,
+          register_path: "none",
+          package_type: "PS4DP",
+        };
+      }
+      if (cmd === "dpi_ensure") return { ok: true };
+      if (cmd === "pkg_dpi_install") return { ok: true, rc: 0 };
+      if (cmd === "payload_bundled_path") {
+        return { ok: true, path: "/tmp/p.elf" };
+      }
+      return {};
+    });
+
+    const r = await runPkgInstall(
+      "192.168.1.50",
+      "/user/data/ps5upload/pkg_library/updates/fp/CID.pkg",
+      contentId,
+      "PS4DP",
+      false,
+      undefined,
+      undefined,
+      { size: 8_192_000, fingerprint },
+    );
+
+    expect(r.installed).toBe(true);
+    expect(r.acceptedUnverified).toBe(false);
+    expect(mockedInventory).toHaveBeenCalledWith(
+      "192.168.1.50:9113",
+      "CUSA33334",
+    );
+  });
+
   it("a patch DPI can't apply gets update-specific guidance, not the raw error", async () => {
     mockedInvoke.mockReset();
     mockedInvoke.mockImplementation(async (cmd: unknown) => {
       if (cmd === "pkg_install_start") {
-        return { err_code: 0x80b21106, register_path: "none", package_type: "PS4DP" };
+        return {
+          err_code: 0x80b21106,
+          register_path: "none",
+          package_type: "PS4DP",
+        };
       }
       if (cmd === "dpi_ensure") return { ok: true };
-      if (cmd === "pkg_dpi_install") return { ok: false, rc: 0x80b21106, err_message: "raw" };
-      if (cmd === "payload_bundled_path") return { ok: true, path: "/tmp/p.elf" };
+      if (cmd === "pkg_dpi_install")
+        return { ok: false, rc: 0x80b21106, err_message: "raw" };
+      if (cmd === "payload_bundled_path")
+        return { ok: true, path: "/tmp/p.elf" };
       return {};
     });
     const r = await runPkgInstall(
@@ -628,7 +937,13 @@ describe("runPkgInstall — tracks the install to genuine completion", () => {
         };
       return {};
     });
-    const promise = runPkgInstall("192.168.1.50", "/user/data/x.pkg", "CID", null, true);
+    const promise = runPkgInstall(
+      "192.168.1.50",
+      "/user/data/x.pkg",
+      "CID",
+      null,
+      true,
+    );
     await vi.advanceTimersByTimeAsync(2600);
     const r = await promise;
     expect(r.installed).toBe(false); // ⇒ callers KEEP the pkg
@@ -643,7 +958,13 @@ describe("runPkgInstall — tracks the install to genuine completion", () => {
         return { phase: "error", err_code: 0x80b21106, total: 25_000_000_000 };
       return {};
     });
-    const promise = runPkgInstall("192.168.1.50", "/user/data/x.pkg", "CID", null, true);
+    const promise = runPkgInstall(
+      "192.168.1.50",
+      "/user/data/x.pkg",
+      "CID",
+      null,
+      true,
+    );
     await vi.advanceTimersByTimeAsync(2600);
     const r = await promise;
     expect(r.installed).toBe(false);
@@ -665,7 +986,13 @@ describe("runPkgInstall — tracks the install to genuine completion", () => {
       }
       return {};
     });
-    const promise = runPkgInstall("192.168.1.50", "/user/data/x.pkg", "CID", null, true);
+    const promise = runPkgInstall(
+      "192.168.1.50",
+      "/user/data/x.pkg",
+      "CID",
+      null,
+      true,
+    );
     await vi.advanceTimersByTimeAsync(2600 * 4);
     const r = await promise;
     expect(r.installed).toBe(true);
@@ -746,11 +1073,18 @@ describe("installExternal — copies USB→internal, then installs", () => {
     const startPaths: string[] = [];
     mockedInvoke.mockImplementation(async (cmd: unknown, args: unknown) => {
       if (cmd === "pkg_install_start") {
-        startPaths.push((args as { localPs5Path?: string })?.localPs5Path ?? "");
+        startPaths.push(
+          (args as { localPs5Path?: string })?.localPs5Path ?? "",
+        );
         return { err_code: 0, register_path: "shellui-rpc", session_id: "s1" };
       }
       if (cmd === "pkg_install_status")
-        return { phase: "done", launchable: true, installed_bytes: 1, total: 1 };
+        return {
+          phase: "done",
+          launchable: true,
+          installed_bytes: 1,
+          total: 1,
+        };
       return {};
     });
     const p = pkgLibraryStore(USBHOST)
@@ -801,7 +1135,10 @@ describe("installExternal — copies USB→internal, then installs", () => {
 
 describe("installedLastResult", () => {
   it("plain green success when launchable", () => {
-    expect(installedLastResult(false)).toEqual({ ok: true, message: "Installed." });
+    expect(installedLastResult(false)).toEqual({
+      ok: true,
+      message: "Installed package verified on the console.",
+    });
   });
   it("amber warn with re-install guidance when may not launch", () => {
     const r = installedLastResult(true);
@@ -820,6 +1157,7 @@ const DIR = "/user/data/ps5upload/pkg_library";
 
 function entry(p: Partial<PkgEntry> & { name: string }): PkgEntry {
   return {
+    ...p,
     name: p.name,
     path: p.path ?? `${DIR}/${p.name}`,
     size: p.size ?? 1000,
@@ -840,10 +1178,14 @@ function seed(entries: PkgEntry[]) {
 describe("isFinishedPkg", () => {
   it("is true only for idle rows whose last install succeeded", () => {
     expect(
-      isFinishedPkg(entry({ name: "a.pkg", lastResult: { ok: true, message: "" } })),
+      isFinishedPkg(
+        entry({ name: "a.pkg", lastResult: { ok: true, message: "" } }),
+      ),
     ).toBe(true);
     expect(
-      isFinishedPkg(entry({ name: "b.pkg", lastResult: { ok: false, message: "x" } })),
+      isFinishedPkg(
+        entry({ name: "b.pkg", lastResult: { ok: false, message: "x" } }),
+      ),
     ).toBe(false);
     expect(isFinishedPkg(entry({ name: "c.pkg" }))).toBe(false);
     expect(
@@ -868,11 +1210,17 @@ describe("clearFinished", () => {
 
   it("deletes only the successfully-installed rows from the PS5", async () => {
     seed([
-      entry({ name: "done1.pkg", lastResult: { ok: true, message: "Installed." } }),
+      entry({
+        name: "done1.pkg",
+        lastResult: { ok: true, message: "Installed." },
+      }),
       entry({ name: "pending.pkg" }),
       entry({ name: "failed.pkg", lastResult: { ok: false, message: "err" } }),
       entry({ name: "uploading.pkg", status: "uploading" }),
-      entry({ name: "done2.pkg", lastResult: { ok: true, message: "Installed." } }),
+      entry({
+        name: "done2.pkg",
+        lastResult: { ok: true, message: "Installed." },
+      }),
     ]);
 
     await pkgLibraryStore(HOST).getState().clearFinished(HOST);
@@ -898,15 +1246,25 @@ describe("clearFinished", () => {
       if (path.endsWith("done2.pkg")) throw new Error("EACCES");
     });
     seed([
-      entry({ name: "done1.pkg", lastResult: { ok: true, message: "Installed." } }),
-      entry({ name: "done2.pkg", lastResult: { ok: true, message: "Installed." } }),
+      entry({
+        name: "done1.pkg",
+        lastResult: { ok: true, message: "Installed." },
+      }),
+      entry({
+        name: "done2.pkg",
+        lastResult: { ok: true, message: "Installed." },
+      }),
     ]);
 
     await pkgLibraryStore(HOST).getState().clearFinished(HOST);
 
-    const names = pkgLibraryStore(HOST).getState().entries.map((e) => e.name);
+    const names = pkgLibraryStore(HOST)
+      .getState()
+      .entries.map((e) => e.name);
     expect(names).toEqual(["done2.pkg"]);
-    expect(pkgLibraryStore(HOST).getState().error).toContain("Failed to delete 1");
+    expect(pkgLibraryStore(HOST).getState().error).toContain(
+      "Failed to delete 1",
+    );
   });
 
   it("does nothing without a host", async () => {
@@ -961,7 +1319,11 @@ describe("refresh — base + update coexistence and badging", () => {
 
   beforeEach(() => {
     mockedList.mockReset();
-    pkgLibraryStore(HOST).setState({ entries: [], error: null, loading: false });
+    pkgLibraryStore(HOST).setState({
+      entries: [],
+      error: null,
+      loading: false,
+    });
   });
   afterEach(() => {
     pkgLibraryStore(HOST).setState({ entries: [], error: null });
@@ -990,6 +1352,56 @@ describe("refresh — base + update coexistence and badging", () => {
     expect(base?.path.endsWith(`/${CID}.pkg`)).toBe(true);
     expect(update?.path).toContain("/updates/");
     expect(pkgLibraryStore(HOST).getState().error).toBeNull();
+  });
+
+  it("lists multiple same-ContentID variants from fingerprint directories", async () => {
+    const optionalFingerprint = "a".repeat(64);
+    const backportFingerprint = "b".repeat(64);
+    mockedList.mockImplementation(async (_addr: string, d: string) => {
+      if (d === DIR) return [dir("updates"), dir("dlc")];
+      if (d === `${DIR}/updates`) {
+        return [dir(optionalFingerprint), dir(backportFingerprint)];
+      }
+      if (d === `${DIR}/updates/${optionalFingerprint}`) {
+        return [file(`${CID}.pkg`, 8_192_000)];
+      }
+      if (d === `${DIR}/updates/${backportFingerprint}`) {
+        return [file(`${CID}.pkg`, 15_335_424)];
+      }
+      return [];
+    });
+
+    await pkgLibraryStore(HOST).getState().refresh(HOST);
+
+    const updates = pkgLibraryStore(HOST)
+      .getState()
+      .entries.filter((e) => e.category === "gp");
+    expect(updates).toHaveLength(2);
+    expect(updates.map((e) => e.fingerprint).sort()).toEqual([
+      optionalFingerprint,
+      backportFingerprint,
+    ]);
+    expect(new Set(updates.map((e) => e.path)).size).toBe(2);
+    expect(updates.every((e) => e.contentId === CID)).toBe(true);
+  });
+
+  it("recognises current 32-hex variant directories after a cold refresh", async () => {
+    const token = "c".repeat(32);
+    mockedList.mockImplementation(async (_addr: string, d: string) => {
+      if (d === DIR) return [dir("updates")];
+      if (d === `${DIR}/updates`) return [dir(token)];
+      if (d === `${DIR}/updates/${token}`) {
+        return [file(`${CID}.pkg`, 15_335_424)];
+      }
+      return [];
+    });
+
+    await pkgLibraryStore(HOST).getState().refresh(HOST);
+
+    const update = pkgLibraryStore(HOST).getState().entries[0];
+    expect(update.category).toBe("gp");
+    expect(update.fingerprint).toBe(token);
+    expect(update.path).toContain(`/updates/${token}/`);
   });
 
   it("tolerates missing updates/ + dlc/ sub-dirs (ENOENT), still lists the base", async () => {
@@ -1043,6 +1455,7 @@ describe("refresh — base + update coexistence and badging", () => {
       category: "gp",
       appVer: "01.09",
       platform: "ps4",
+      fingerprint: "f".repeat(64),
     });
     mockedList.mockImplementation(async (_addr: string, d: string) => {
       if (d.endsWith("/updates") || d.endsWith("/dlc")) return [];
@@ -1055,6 +1468,7 @@ describe("refresh — base + update coexistence and badging", () => {
 
     const e = pkgLibraryStore(ENRICH_HOST).getState().entries[0];
     expect(e.appVer).toBe("01.09");
+    expect(e.fingerprint).toBe("f".repeat(64));
     expect(e.category).toBe("gp");
     expect(vi.mocked(pkgMetadataConsole)).toHaveBeenCalled();
   });

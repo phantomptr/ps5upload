@@ -43,7 +43,11 @@ export interface FolderInspection {
 }
 
 type InspectFolderResponse =
-  | { ok: true; result: FolderInspectResult; wrapped_hint: WrappedGameHint | null }
+  | {
+      ok: true;
+      result: FolderInspectResult;
+      wrapped_hint: WrappedGameHint | null;
+    }
   | { ok: false; error: string };
 
 /**
@@ -56,11 +60,12 @@ type InspectFolderResponse =
 /** "file" | "folder" | "other" | "missing". Used by the Upload screen's
  *  drag-drop handler to route the dropped path into the right picker. */
 export async function pathKind(
-  path: string
+  path: string,
 ): Promise<"file" | "folder" | "other" | "missing"> {
   const res = await invoke<{ kind: string }>("path_kind", { path });
   const k = res.kind;
-  if (k === "file" || k === "folder" || k === "other" || k === "missing") return k;
+  if (k === "file" || k === "folder" || k === "other" || k === "missing")
+    return k;
   return "missing";
 }
 
@@ -392,11 +397,11 @@ export async function profileApplyAvatar(
 export async function sendPayload(
   ip: string,
   elfPath: string,
-  port?: number
+  port?: number,
 ): Promise<void> {
   const resp = await invoke<{ ok?: boolean; status?: string; error?: string }>(
     "payload_send",
-    { ip, path: elfPath, port: port ?? null }
+    { ip, path: elfPath, port: port ?? null },
   );
   if (resp && resp.ok === false) {
     throw new Error(resp.error ?? resp.status ?? "payload_send failed");
@@ -837,7 +842,7 @@ export async function searchPS5(
   minSize: number,
   onProgress?: (p: SearchProgress) => void,
   roots?: string[],
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<{
   hits: SearchHit[];
   scanned: number;
@@ -853,7 +858,9 @@ export async function searchPS5(
   if (roots && roots.length > 0) {
     scanRoots = roots;
   } else {
-    const volRes = await invoke<{ volumes?: Volume[] }>("ps5_volumes", { addr });
+    const volRes = await invoke<{ volumes?: Volume[] }>("ps5_volumes", {
+      addr,
+    });
     scanRoots = (volRes?.volumes ?? [])
       .filter((v) => v.writable && !v.is_placeholder)
       .map((v) => v.path);
@@ -926,7 +933,9 @@ export async function searchPS5(
       for (const e of entries) {
         scanned += 1;
         if (!e.name) continue;
-        const full = path.endsWith("/") ? `${path}${e.name}` : `${path}/${e.name}`;
+        const full = path.endsWith("/")
+          ? `${path}${e.name}`
+          : `${path}/${e.name}`;
         if (e.kind === "dir") {
           stack.push({ path: full, depth: depth + 1 });
         }
@@ -1024,9 +1033,7 @@ export async function fsListDir(
       .map((e) => ({
         name: e.name,
         kind: (e.kind === "file" || e.kind === "dir" ? e.kind : "unknown") as
-          | "file"
-          | "dir"
-          | "unknown",
+          "file" | "dir" | "unknown",
         size: typeof e.size === "number" ? e.size : 0,
       }));
     out.push(...page);
@@ -1053,13 +1060,16 @@ export async function fsChmod(
   transferAddr: string,
   path: string,
   mode: string,
-  recursive: boolean
+  recursive: boolean,
 ): Promise<void> {
   const addr = toMgmtAddr(transferAddr);
   await invoke("ps5_fs_chmod", { req: { addr, path, mode, recursive } });
 }
 
-export async function fsMkdir(transferAddr: string, path: string): Promise<void> {
+export async function fsMkdir(
+  transferAddr: string,
+  path: string,
+): Promise<void> {
   const addr = toMgmtAddr(transferAddr);
   await invoke("ps5_fs_mkdir", { req: { addr, path } });
 }
@@ -1247,7 +1257,7 @@ export async function fsMount(
  *  `/mnt/ps5upload/`. */
 export async function fsUnmount(
   transferAddr: string,
-  mountPoint: string
+  mountPoint: string,
 ): Promise<void> {
   const addr = toMgmtAddr(transferAddr);
   await invoke("ps5_fs_unmount", { req: { addr, mount_point: mountPoint } });
@@ -1471,7 +1481,9 @@ export interface DriveSensorList {
 
 /** Read drive temperatures and filesystem usage for all `/dev/daN` disks.
  *  Also returns fixed-storage summaries (internal SSD + M.2 expansion). */
-export async function fetchDriveSensors(transferAddr: string): Promise<DriveSensorList> {
+export async function fetchDriveSensors(
+  transferAddr: string,
+): Promise<DriveSensorList> {
   const addr = toMgmtAddr(transferAddr);
   return invoke<DriveSensorList>("ps5_hw_drive_sensors", { addr });
 }
@@ -2201,13 +2213,22 @@ export interface AppLifecycleAck {
   apps?: RunningApp[];
 }
 
-export async function appSuspend(addr: string, appId: number): Promise<AppLifecycleAck> {
+export async function appSuspend(
+  addr: string,
+  appId: number,
+): Promise<AppLifecycleAck> {
   return invoke<AppLifecycleAck>("app_suspend", { addr, appId });
 }
-export async function appResume(addr: string, appId: number): Promise<AppLifecycleAck> {
+export async function appResume(
+  addr: string,
+  appId: number,
+): Promise<AppLifecycleAck> {
   return invoke<AppLifecycleAck>("app_resume", { addr, appId });
 }
-export async function appKill(addr: string, appId: number): Promise<AppLifecycleAck> {
+export async function appKill(
+  addr: string,
+  appId: number,
+): Promise<AppLifecycleAck> {
   return invoke<AppLifecycleAck>("app_kill", { addr, appId });
 }
 export async function appListRunning(addr: string): Promise<AppLifecycleAck> {
@@ -2240,7 +2261,10 @@ export async function toastPush(
 
 /** Drain the kernel log buffer into a string. Empty when nothing
  *  new arrived since the last call. */
-export async function klogChunk(addr: string, maxBytes?: number): Promise<string> {
+export async function klogChunk(
+  addr: string,
+  maxBytes?: number,
+): Promise<string> {
   return invoke<string>("klog_chunk", {
     addr,
     maxBytes: maxBytes ?? null,
@@ -2258,7 +2282,9 @@ export interface NetInterfaceList {
   interfaces: NetInterface[];
   err?: string;
 }
-export async function netInterfacesGet(addr: string): Promise<NetInterfaceList> {
+export async function netInterfacesGet(
+  addr: string,
+): Promise<NetInterfaceList> {
   return invoke<NetInterfaceList>("net_interfaces_get", { addr });
 }
 
@@ -2278,10 +2304,16 @@ export async function peripheralBdOff(addr: string): Promise<PeripheralAck> {
 export async function peripheralBdOn(addr: string): Promise<PeripheralAck> {
   return invoke<PeripheralAck>("peripheral_bd_on", { addr });
 }
-export async function peripheralUsbOff(addr: string, port: number): Promise<PeripheralAck> {
+export async function peripheralUsbOff(
+  addr: string,
+  port: number,
+): Promise<PeripheralAck> {
   return invoke<PeripheralAck>("peripheral_usb_off", { addr, port });
 }
-export async function peripheralUsbOn(addr: string, port: number): Promise<PeripheralAck> {
+export async function peripheralUsbOn(
+  addr: string,
+  port: number,
+): Promise<PeripheralAck> {
   return invoke<PeripheralAck>("peripheral_usb_on", { addr, port });
 }
 
@@ -2297,7 +2329,10 @@ export interface ModuleList {
   modules: ModuleInfo[];
   err?: string;
 }
-export async function procModulesGet(addr: string, pid?: number): Promise<ModuleList> {
+export async function procModulesGet(
+  addr: string,
+  pid?: number,
+): Promise<ModuleList> {
   return invoke<ModuleList>("proc_modules_get", {
     addr,
     pid: pid ?? null,
@@ -2355,7 +2390,10 @@ export interface Crc32Result {
   err?: string;
 }
 
-export async function crc32File(addr: string, path: string): Promise<Crc32Result> {
+export async function crc32File(
+  addr: string,
+  path: string,
+): Promise<Crc32Result> {
   return invoke<Crc32Result>("crc32_file_get", { addr, path });
 }
 
@@ -2628,7 +2666,9 @@ export async function smpMetaControl(
   });
 }
 
-export async function smpMetaStats(transferAddr: string): Promise<SmpMetaStats> {
+export async function smpMetaStats(
+  transferAddr: string,
+): Promise<SmpMetaStats> {
   const addr = toMgmtAddr(transferAddr);
   return invoke<SmpMetaStats>("ps5_smp_meta_stats", { addr });
 }
@@ -2703,9 +2743,13 @@ export interface LibraryEntry {
  *  Permission-denied / non-existent paths are silently skipped — the
  *  PS5 has plenty of system-only directories a user payload can't
  *  read, and they're not library content. */
-export async function scanLibrary(transferAddr: string): Promise<LibraryEntry[]> {
+export async function scanLibrary(
+  transferAddr: string,
+): Promise<LibraryEntry[]> {
   const addr = toMgmtAddr(transferAddr);
-  const volumesRaw = await invoke<{ volumes?: Volume[] }>("ps5_volumes", { addr });
+  const volumesRaw = await invoke<{ volumes?: Volume[] }>("ps5_volumes", {
+    addr,
+  });
   // Walk every non-placeholder volume — the walker only ever reads
   // (list_dir, stat for sce_sys/param.json), so a read-only mount is
   // perfectly walkable. Pre-2.2.52 we filtered by `writable` too, which
@@ -2714,9 +2758,7 @@ export async function scanLibrary(transferAddr: string): Promise<LibraryEntry[]>
   // to come back read-only on some firmwares regardless of the LVD-RW
   // flag we passed). The Move-modal still applies its own writable
   // filter; this list is just the scan roots.
-  const volumes = (volumesRaw?.volumes ?? []).filter(
-    (v) => !v.is_placeholder
-  );
+  const volumes = (volumesRaw?.volumes ?? []).filter((v) => !v.is_placeholder);
   // Set of volume roots — used by the walker to skip descending into
   // a path that's also a top-level volume root. Without this, a /data
   // walk and a /data/homebrew/PPSA17599 walk race for the shared
@@ -2761,8 +2803,10 @@ export async function scanLibrary(transferAddr: string): Promise<LibraryEntry[]>
   const scanLimit = createScanLimiter(6);
 
   const listDir = async (
-    path: string
-  ): Promise<Array<{ name?: string; kind?: string; size?: number; mtime?: number }>> =>
+    path: string,
+  ): Promise<
+    Array<{ name?: string; kind?: string; size?: number; mtime?: number }>
+  > =>
     scanLimit(async () => {
       try {
         const res = await invoke<{
@@ -2812,15 +2856,14 @@ export async function scanLibrary(transferAddr: string): Promise<LibraryEntry[]>
         if (!e.name) continue;
         if (e.kind === "file") {
           const lower = e.name.toLowerCase();
-          const imageFormat: "exfat" | "ffpkg" | "ffpfs" | null = lower.endsWith(
-            ".exfat"
-          )
-            ? "exfat"
-            : lower.endsWith(".ffpkg")
-              ? "ffpkg"
-              : lower.endsWith(".ffpfs")
-                ? "ffpfs"
-                : null;
+          const imageFormat: "exfat" | "ffpkg" | "ffpfs" | null =
+            lower.endsWith(".exfat")
+              ? "exfat"
+              : lower.endsWith(".ffpkg")
+                ? "ffpkg"
+                : lower.endsWith(".ffpfs")
+                  ? "ffpfs"
+                  : null;
           if (imageFormat) {
             const full = path === "/" ? `/${e.name}` : `${path}/${e.name}`;
             byPath.set(full, {
@@ -2852,7 +2895,7 @@ export async function scanLibrary(transferAddr: string): Promise<LibraryEntry[]>
         const sceSysPath = path === "/" ? "/sce_sys" : `${path}/sce_sys`;
         const sceContents = await listDir(sceSysPath);
         const hasParamJson = sceContents.some(
-          (c) => c.name === "param.json" && c.kind === "file"
+          (c) => c.name === "param.json" && c.kind === "file",
         );
         if (hasParamJson) {
           const basename =
@@ -2908,11 +2951,9 @@ export async function scanLibrary(transferAddr: string): Promise<LibraryEntry[]>
   // title_id, preferring the /mnt/ps5upload/* variant since that's
   // the PS5-native mount form that Sony's launcher expects for
   // nullfs-backed titles.
-  const rawGames = Array.from(byPath.values()).filter(
-    (e) => e.kind === "game"
-  );
+  const rawGames = Array.from(byPath.values()).filter((e) => e.kind === "game");
   const rawNonGames = Array.from(byPath.values()).filter(
-    (e) => e.kind !== "game"
+    (e) => e.kind !== "game",
   );
   // Fetch title_ids concurrently, capped by the same 6-slot limiter
   // the walker uses. 20ish games ~= ~200ms total on LAN.
@@ -2924,7 +2965,7 @@ export async function scanLibrary(transferAddr: string): Promise<LibraryEntry[]>
         return meta.title_id ?? null;
       });
       return { ...game, titleId: tid };
-    })
+    }),
   );
   // Group by titleId, pick the preferred path per group.
   const byTitleId = new Map<string, LibraryEntry[]>();
@@ -2946,9 +2987,11 @@ export async function scanLibrary(transferAddr: string): Promise<LibraryEntry[]>
     }
     // Prefer a mount-backed path; fall back to alphabetical first.
     const mountBacked = candidates.find((c) =>
-      c.path.startsWith("/mnt/ps5upload/")
+      c.path.startsWith("/mnt/ps5upload/"),
     );
-    dedupedGames.push(mountBacked ?? candidates.sort((a, b) => a.path.localeCompare(b.path))[0]);
+    dedupedGames.push(
+      mountBacked ?? candidates.sort((a, b) => a.path.localeCompare(b.path))[0],
+    );
   }
   const entries = [...dedupedGames, ...rawNonGames];
   entries.sort((a, b) => {
@@ -3017,11 +3060,11 @@ const engineBase = getEngineUrl;
  */
 export async function fetchGameMeta(
   transferAddr: string,
-  path: string
+  path: string,
 ): Promise<GameMeta> {
   const mgmt = toMgmtAddr(transferAddr);
   const url = `${engineBase()}/api/ps5/game-meta?addr=${encodeURIComponent(
-    mgmt
+    mgmt,
   )}&path=${encodeURIComponent(path)}`;
   const empty: GameMeta = {
     title: null,
@@ -3055,7 +3098,7 @@ export async function fetchGameMeta(
 export function gameIconUrl(transferAddr: string, path: string): string {
   const mgmt = toMgmtAddr(transferAddr);
   return `${engineBase()}/api/ps5/game-icon?addr=${encodeURIComponent(
-    mgmt
+    mgmt,
   )}&path=${encodeURIComponent(path)}`;
 }
 
@@ -3109,13 +3152,58 @@ export async function appsInstalled(
     .filter((t): t is { title_id: string } & typeof t => !!t.title_id)
     .map((t) => ({
       titleId: t.title_id,
-      titleName: t.title_name && t.title_name.trim() ? t.title_name : t.title_id,
+      titleName:
+        t.title_name && t.title_name.trim() ? t.title_name : t.title_id,
       origin: t.origin === "registered" ? "registered" : "pkg",
       imageBacked: !!t.image_backed,
       source: t.source ?? "",
       system: !!t.system,
     }));
   return { titles, registeredUnavailable: !!res?.registered_unavailable };
+}
+
+export type InstalledPkgKind = "base" | "patch" | "dlc";
+
+export interface InstalledPkgArtifact {
+  kind: InstalledPkgKind;
+  path: string;
+  size: number;
+  fingerprint: string;
+  contentId: string;
+}
+
+/** Read the actual installed package files for one title — app.pkg,
+ * patch.pkg, and add-on packages — with sampled identities. This is stronger
+ * than `appsInstalled`, whose title-level row cannot tell a base from a patch
+ * or a specific DLC. */
+export async function pkgInstalledInventory(
+  transferAddr: string,
+  titleId: string,
+): Promise<InstalledPkgArtifact[]> {
+  const addr = toMgmtAddr(transferAddr);
+  const res = await invoke<{
+    artifacts?: Array<{
+      kind?: string;
+      path?: string;
+      size?: number;
+      fingerprint?: string;
+      content_id?: string;
+    }>;
+  }>("pkg_installed_inventory", { addr, titleId });
+  return (res?.artifacts ?? [])
+    .filter(
+      (a): a is typeof a & { kind: InstalledPkgKind; path: string } =>
+        (a.kind === "base" || a.kind === "patch" || a.kind === "dlc") &&
+        typeof a.path === "string" &&
+        a.path.length > 0,
+    )
+    .map((a) => ({
+      kind: a.kind,
+      path: a.path,
+      size: a.size ?? 0,
+      fingerprint: a.fingerprint ?? "",
+      contentId: a.content_id ?? "",
+    }));
 }
 
 /** Whether the console is settled enough to take a .pkg install — the engine
@@ -3155,7 +3243,9 @@ export interface ExternalPkg {
  *  (the engine copies the file to /user/data first — Sony's installer can't
  *  read the exfat USB mount directly — then runs the normal install cascade),
  *  so they need no upload from the desktop. */
-export async function pkgScanExternal(transferAddr: string): Promise<ExternalPkg[]> {
+export async function pkgScanExternal(
+  transferAddr: string,
+): Promise<ExternalPkg[]> {
   const addr = toMgmtAddr(transferAddr);
   const res = await invoke<{
     packages?: Array<{
@@ -3193,6 +3283,8 @@ export interface PkgConsoleMetadata {
   /** PARAM.SFO APP_VER, e.g. "01.04". */
   appVer: string;
   platform: string;
+  /** Full sampled package identity when the caller supplied the file size. */
+  fingerprint: string;
 }
 
 /** Parse one on-console pkg (e.g. on `/mnt/usb0`) for its title, version
@@ -3202,6 +3294,7 @@ export interface PkgConsoleMetadata {
 export async function pkgMetadataConsole(
   transferAddr: string,
   path: string,
+  size?: number,
 ): Promise<PkgConsoleMetadata | null> {
   const addr = toMgmtAddr(transferAddr);
   try {
@@ -3212,7 +3305,8 @@ export async function pkgMetadataConsole(
       category?: string;
       app_ver?: string;
       platform?: string;
-    }>("pkg_metadata_console", { addr, path });
+      fingerprint?: string;
+    }>("pkg_metadata_console", { addr, path, size: size ?? null });
     return {
       contentId: m?.content_id ?? "",
       title: m?.title ?? "",
@@ -3220,6 +3314,7 @@ export async function pkgMetadataConsole(
       category: m?.category ?? "",
       appVer: m?.app_ver ?? "",
       platform: m?.platform ?? "",
+      fingerprint: m?.fingerprint ?? "",
     };
   } catch {
     return null;
@@ -3233,7 +3328,7 @@ export async function pkgMetadataConsole(
 export function appIconUrl(transferAddr: string, titleId: string): string {
   const mgmt = toMgmtAddr(transferAddr);
   return `${engineBase()}/api/ps5/app-icon?addr=${encodeURIComponent(
-    mgmt
+    mgmt,
   )}&title_id=${encodeURIComponent(titleId)}`;
 }
 
@@ -3348,7 +3443,7 @@ const toMgmtAddr = _mgmtAddr;
 export async function probeDestination(
   transferAddr: string,
   path: string,
-  isFolder: boolean
+  isFolder: boolean,
 ): Promise<DestinationProbe> {
   const addr = toMgmtAddr(transferAddr);
   const listPath = isFolder ? path : parentDir(path);
@@ -3362,7 +3457,7 @@ export async function probeDestination(
     if (isFolder) {
       const totalBytes = entries.reduce(
         (acc, e) => acc + (typeof e.size === "number" ? e.size : 0),
-        0
+        0,
       );
       return { exists: true, entryCount: entries.length, totalBytes };
     }
@@ -3480,7 +3575,9 @@ export class UploadJobError extends Error {
  *  the user can act on. Returns `null` when the reason is unknown
  *  (caller falls back to the raw `error` field). The hint is paired
  *  in the UI with the raw `error_detail` for diagnostic depth. */
-export function humanizeJobErrorReason(reason: string | undefined): string | null {
+export function humanizeJobErrorReason(
+  reason: string | undefined,
+): string | null {
   if (!reason) return null;
   // Mid-transfer write failure from the payload's direct-write path. The
   // payload sends `fs_write_failed_errno_<N>` (e.g. 28=ENOSPC, 27=EFBIG)
@@ -3489,7 +3586,10 @@ export function humanizeJobErrorReason(reason: string | undefined): string | nul
   // crashed" message. Map the disk-space codes pointedly; anything else
   // (and the bare `fs_write_failed` fallback) gets generic guidance.
   if (reason.startsWith("fs_write_failed")) {
-    if (reason === "fs_write_failed_errno_28" || reason === "fs_write_failed_errno_27") {
+    if (
+      reason === "fs_write_failed_errno_28" ||
+      reason === "fs_write_failed_errno_27"
+    ) {
       return "The destination drive ran out of space (or the file is too big for that filesystem). Free space on the PS5 / external drive — or pick a different destination — then click Retry.";
     }
     return "The PS5 couldn't write to the destination mid-transfer — most often the drive filled up or an external drive disconnected. Check free space / reconnect the drive, then click Retry (the upload resumes from where it stopped).";
@@ -3512,7 +3612,7 @@ export function humanizeJobErrorReason(reason: string | undefined): string | nul
     case "fs_list_dir_path_denied":
       return "PS5 refused access to that path. Use /data/, /user/, or a mounted /mnt/ext*, /mnt/usb* path.";
     case "fs_read_path_not_allowed":
-      return "This file is in a read-only system partition that's normally blocked. Enable Settings → \"Allow downloading system files\" to download from /system, /system_data, and other protected paths.";
+      return 'This file is in a read-only system partition that\'s normally blocked. Enable Settings → "Allow downloading system files" to download from /system, /system_data, and other protected paths.';
     case "tx_table_full":
       return "Too many simultaneous transfers in flight on the PS5. Wait for some to finish or restart the payload.";
     default:
@@ -3577,7 +3677,9 @@ export interface EngineLogsTail {
 /** Pull new engine log lines since the last-seen seq. Response includes
  *  `next_seq` to feed into the next call for incremental polling. */
 export async function engineLogsTail(since: number): Promise<EngineLogsTail> {
-  const raw = await invoke<Record<string, unknown>>("engine_logs_tail", { since });
+  const raw = await invoke<Record<string, unknown>>("engine_logs_tail", {
+    since,
+  });
   return raw as unknown as EngineLogsTail;
 }
 
@@ -3585,7 +3687,7 @@ export async function engineLogsTail(since: number): Promise<EngineLogsTail> {
  *  prod: Tauri Resources). Throws if not built yet. */
 export async function bundledPayloadPath(): Promise<string> {
   const resp = await invoke<{ ok: boolean; path?: string; error?: string }>(
-    "payload_bundled_path"
+    "payload_bundled_path",
   );
   if (!resp.ok || !resp.path) {
     throw new Error(resp.error ?? "payload_bundled_path failed");
@@ -3707,9 +3809,7 @@ export async function updateDownload(
   return invoke<UpdateDownload>("update_download", { url, filename });
 }
 
-export async function payloadCheck(
-  ip: string
-): Promise<{
+export async function payloadCheck(ip: string): Promise<{
   reachable: boolean;
   loaded: boolean;
   payloadVersion: string | null;
@@ -3758,7 +3858,7 @@ export async function payloadCheck(
       resp.status.max_transfer_streams > 0
         ? resp.status.max_transfer_streams
         : null,
-    error: resp?.reachable ? null : resp?.error ?? null,
+    error: resp?.reachable ? null : (resp?.error ?? null),
   };
 }
 
@@ -3783,11 +3883,15 @@ export async function remoteplayRequest(
   });
 }
 
-export async function remoteplayStatus(addr?: string): Promise<RemotePlayStatus> {
+export async function remoteplayStatus(
+  addr?: string,
+): Promise<RemotePlayStatus> {
   return invoke("remoteplay_status", { addr: addr ?? null });
 }
 
-export async function remoteplayCancel(addr?: string): Promise<{ ok: boolean }> {
+export async function remoteplayCancel(
+  addr?: string,
+): Promise<{ ok: boolean }> {
   return invoke("remoteplay_cancel", { addr: addr ?? null });
 }
 
@@ -3797,13 +3901,18 @@ export interface FanCurvePoint {
   duty_pct: number;
 }
 
-export async function fanCurveSet(points: FanCurvePoint[], addr?: string): Promise<{ ok: boolean }> {
+export async function fanCurveSet(
+  points: FanCurvePoint[],
+  addr?: string,
+): Promise<{ ok: boolean }> {
   return invoke("fan_curve_set", {
     req: { addr: addr ?? null, points },
   });
 }
 
-export async function fanCurveGet(addr?: string): Promise<{ points: FanCurvePoint[] }> {
+export async function fanCurveGet(
+  addr?: string,
+): Promise<{ points: FanCurvePoint[] }> {
   return invoke("fan_curve_get", {
     req: { addr: addr ?? null },
   });
@@ -3822,7 +3931,10 @@ export interface NotificationList {
   notifications: Notification[];
 }
 
-export async function notifList(sinceSeq = 0, addr?: string): Promise<NotificationList> {
+export async function notifList(
+  sinceSeq = 0,
+  addr?: string,
+): Promise<NotificationList> {
   return invoke("notif_list", {
     req: { addr: addr ?? null, since_seq: sinceSeq },
   });
@@ -3872,8 +3984,13 @@ export async function cheatsList(addr?: string): Promise<CheatsListResponse> {
   return invoke("cheats_list", { req: { addr: addr ?? null } });
 }
 
-export async function cheatsGet(titleId: string, addr?: string): Promise<CheatsGetResponse> {
-  return invoke("cheats_get", { req: { addr: addr ?? null, title_id: titleId } });
+export async function cheatsGet(
+  titleId: string,
+  addr?: string,
+): Promise<CheatsGetResponse> {
+  return invoke("cheats_get", {
+    req: { addr: addr ?? null, title_id: titleId },
+  });
 }
 
 export async function cheatsToggle(
@@ -3887,15 +4004,22 @@ export async function cheatsToggle(
   });
 }
 
-export async function cheatsDelete(titleId: string, addr?: string): Promise<{ ok: boolean }> {
-  return invoke("cheats_delete", { req: { addr: addr ?? null, title_id: titleId } });
+export async function cheatsDelete(
+  titleId: string,
+  addr?: string,
+): Promise<{ ok: boolean }> {
+  return invoke("cheats_delete", {
+    req: { addr: addr ?? null, title_id: titleId },
+  });
 }
 
 export async function cheatsReload(addr?: string): Promise<{ ok: boolean }> {
   return invoke("cheats_reload", { req: { addr: addr ?? null } });
 }
 
-export async function cheatsStatus(addr?: string): Promise<CheatsStatusResponse> {
+export async function cheatsStatus(
+  addr?: string,
+): Promise<CheatsStatusResponse> {
   return invoke("cheats_status", { req: { addr: addr ?? null } });
 }
 
@@ -4086,7 +4210,9 @@ export interface FwSpoofStatusResponse {
   spoofed: boolean;
 }
 
-export async function fwSpoofStatus(addr?: string): Promise<FwSpoofStatusResponse> {
+export async function fwSpoofStatus(
+  addr?: string,
+): Promise<FwSpoofStatusResponse> {
   return invoke("fw_spoof_status", { req: { addr: addr ?? null } });
 }
 
@@ -4177,7 +4303,13 @@ export async function smbDownloadFile(
   password?: string,
 ): Promise<number> {
   return invoke("smb_download_file", {
-    req: { server, user, share, path, dest_path: destPath, password: password ?? "" },
+    req: {
+      server,
+      user,
+      share,
+      path,
+      dest_path: destPath,
+      password: password ?? "",
+    },
   });
 }
-

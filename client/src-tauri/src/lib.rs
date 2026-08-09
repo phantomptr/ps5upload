@@ -282,6 +282,7 @@ pub fn run() {
             // before uploading). See ps5upload_pkg::ufs2.
             commands::ffpkg_inspect,
             commands::ffpkg_extract,
+            commands::pkg_installed_inventory,
             commands::pkg_install_start,
             commands::pkg_dpi_install,
             commands::pkg_dpi_direct_install,

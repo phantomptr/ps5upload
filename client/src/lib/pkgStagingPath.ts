@@ -25,12 +25,22 @@ const CONTENT_ID_MAX_LEN = 36;
  *  outside the staging dir. */
 const CONTENT_ID_SAFE_RE = /^[A-Za-z0-9._-]+$/;
 
+/** Sony's older AppInstUtil builds reject otherwise-valid local package paths
+ *  once the full path grows past roughly 127 bytes (hardware-observed on FW
+ *  9.60 as SCE_APP_INSTALLER_ERROR_PARAM). A 32-hex BLAKE3 prefix still gives
+ *  128 bits of collision resistance while keeping the longest canonical
+ *  staging path comfortably below that limit. The full 256-bit fingerprint is
+ *  retained in metadata and re-sampled from the staged file after a cold
+ *  refresh. */
+export const PACKAGE_FINGERPRINT_DIR_HEX_LEN = 32;
+
 /** True when `contentId` is safe to use as the basename of a staging
  *  file. False for empty strings, oversized strings, anything with
  *  path-traversal characters, or anything containing `..`. */
 export function isSafeContentId(contentId: string | null | undefined): boolean {
   if (!contentId) return false;
-  if (contentId.length === 0 || contentId.length > CONTENT_ID_MAX_LEN) return false;
+  if (contentId.length === 0 || contentId.length > CONTENT_ID_MAX_LEN)
+    return false;
   if (contentId.includes("..")) return false;
   return CONTENT_ID_SAFE_RE.test(contentId);
 }
@@ -73,6 +83,41 @@ export function stagingSubdirForCategory(
   }
 }
 
+/** Directory relative to the package-library root for one exact package.
+ *
+ * Updates and DLC keep the Sony-required `<ContentID>.pkg` basename, but each
+ * exact artifact gets a fingerprint directory. This lets two same-version
+ * alternatives (optional fix/backport) coexist instead of silently replacing
+ * one another. A missing/malformed fingerprint falls back to the legacy
+ * category directory so already-staged and headerless packages remain usable.
+ * Base packages intentionally retain the historical root path: one ContentID
+ * identifies one base, while variants are an update/DLC concern. */
+export function stagingDirectoryForPackage(
+  category: string | null | undefined,
+  fingerprint: string | null | undefined,
+): string {
+  const categoryDir = stagingSubdirForCategory(category);
+  if (!categoryDir) return "";
+  if (!fingerprint || !/^[a-f0-9]{64}$/i.test(fingerprint)) {
+    return categoryDir;
+  }
+  return `${categoryDir}/${fingerprint
+    .slice(0, PACKAGE_FINGERPRINT_DIR_HEX_LEN)
+    .toLowerCase()}`;
+}
+
+/** Recognise both the current bounded 128-bit directory token and the original
+ *  256-bit layout written by early multi-variant builds. */
+export function fingerprintFromStagingSubdir(
+  subdir: string,
+): string | undefined {
+  const token = subdir.split("/")[1];
+  if (!token || !/^(?:[a-f0-9]{32}|[a-f0-9]{64})$/i.test(token)) {
+    return undefined;
+  }
+  return token.toLowerCase();
+}
+
 /** Reverse of `stagingSubdirForCategory`: the category a library file's parent
  *  sub-directory implies. Used by refresh to badge files listed from disk
  *  (the filename alone can't distinguish base from update — they share a
@@ -80,7 +125,10 @@ export function stagingSubdirForCategory(
  *  we don't claim "Base" for a file that might just be an oddly-categorised
  *  pkg). */
 export function categoryForSubdir(subdir: string): string | undefined {
-  switch (subdir) {
+  // New layouts are `updates/<fingerprint>` / `dlc/<fingerprint>`; legacy
+  // layouts contain the pkg directly in the category directory. The first
+  // component identifies the category in both forms.
+  switch (subdir.split("/")[0]) {
     case "updates":
       return "gp";
     case "dlc":

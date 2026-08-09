@@ -191,10 +191,14 @@ pub async fn pkg_scan_external(addr: Option<String>) -> Result<JsonValue, String
 /// APP_VER) via ranged reads. Lazily enriches the External Packages listing
 /// (the bulk scan stays filename-fast). Proxies GET /api/ps5/pkg/metadata.
 #[tauri::command]
-pub async fn pkg_metadata_console(addr: Option<String>, path: String) -> Result<JsonValue, String> {
+pub async fn pkg_metadata_console(
+    addr: Option<String>,
+    path: String,
+    size: Option<u64>,
+) -> Result<JsonValue, String> {
     let base = engine::url();
     let p = urlencoding(&path);
-    let url = match addr {
+    let mut url = match addr {
         Some(a) => format!(
             "{base}/api/ps5/pkg/metadata?addr={}&path={}",
             urlencoding(&a),
@@ -202,6 +206,9 @@ pub async fn pkg_metadata_console(addr: Option<String>, path: String) -> Result<
         ),
         None => format!("{base}/api/ps5/pkg/metadata?path={}", p),
     };
+    if let Some(size) = size.filter(|n| *n > 0) {
+        url.push_str(&format!("&size={size}"));
+    }
     get_json(&url).await
 }
 
@@ -2268,6 +2275,19 @@ pub async fn ffpkg_extract(
     .await
 }
 
+/// Category-aware inventory of installed package artifacts for one title.
+/// Returns base app.pkg, patch.pkg, and DLC package files with sampled
+/// fingerprints so the UI can identify the exact staged variant.
+#[tauri::command]
+pub async fn pkg_installed_inventory(addr: String, title_id: String) -> Result<JsonValue, String> {
+    let mut url = reqwest::Url::parse(&format!("{}/api/pkg/installed", engine::url()))
+        .map_err(|e| format!("build installed-pkg URL: {e}"))?;
+    url.query_pairs_mut()
+        .append_pair("addr", &addr)
+        .append_pair("title_id", &title_id);
+    get_json(url.as_str()).await
+}
+
 /// Kick off an install. Returns the session_id, the HTTP URL the PS5
 /// will fetch from, and the BGFT task_id. Caller polls `pkg_install_status`
 /// until phase=done|error.
@@ -2283,6 +2303,8 @@ pub async fn pkg_install_start(
     package_type_override: Option<String>,
     local_ps5_path: Option<String>,
     content_id: Option<String>,
+    expected_size: Option<u64>,
+    package_fingerprint: Option<String>,
     // The user's "Auto Delete after installation" preference. When false, the
     // engine keeps the staged pkg instead of deleting it post-install. Optional
     // so any caller that omits it gets the safe default (true) via serde.
@@ -2300,6 +2322,8 @@ pub async fn pkg_install_start(
         "package_type_override": package_type_override,
         "local_ps5_path": local_ps5_path,
         "content_id": content_id,
+        "expected_size": expected_size,
+        "package_fingerprint": package_fingerprint,
         "delete_staging": delete_staging.unwrap_or(true),
         "serve_only": serve_only.unwrap_or(false),
     });

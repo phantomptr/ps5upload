@@ -5,6 +5,7 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
+blake3.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 

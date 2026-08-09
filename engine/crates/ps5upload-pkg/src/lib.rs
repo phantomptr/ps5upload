@@ -503,6 +503,13 @@ pub struct PkgMetadata {
     /// content_id and TITLE, so nothing else distinguishes versions). Empty
     /// when the SFO is missing or has no APP_VER key.
     pub app_ver: String,
+    /// Stable, inexpensive identity for this exact package variant. This is a
+    /// BLAKE3 digest over the file size plus bounded samples from the beginning
+    /// and end of the pkg. It deliberately differs for two patches that share
+    /// the same ContentID/category/APP_VER (for example an optional fix and a
+    /// backport), without making the UI hash a multi-gigabyte pkg before an
+    /// upload can start.
+    pub fingerprint: String,
     /// Mapping of `category` to BGFT's `package_type` string. None
     /// when the category is unknown / SFO missing — caller may still
     /// attempt install with `package_type=PS4GD` as a default.
@@ -545,6 +552,15 @@ pub fn parse_pkg(path: &Path) -> Result<PkgMetadata, PkgError> {
         return Err(PkgError::Truncated(size));
     }
 
+    let fingerprint = package_fingerprint_from_reader(size, |offset, len| {
+        let mut buf = vec![0u8; len as usize];
+        f.seek(SeekFrom::Start(offset)).ok()?;
+        f.read_exact(&mut buf).ok()?;
+        Some(buf)
+    })
+    .unwrap_or_default();
+
+    f.seek(SeekFrom::Start(0))?;
     let mut head = [0u8; 0xA0];
     f.read_exact(&mut head)?;
 
@@ -560,6 +576,7 @@ pub fn parse_pkg(path: &Path) -> Result<PkgMetadata, PkgError> {
         title_id: String::new(),
         category: String::new(),
         app_ver: String::new(),
+        fingerprint,
         package_type: None,
         platform: String::new(),
         icon_png_base64: None,
@@ -621,6 +638,57 @@ pub fn parse_pkg(path: &Path) -> Result<PkgMetadata, PkgError> {
     meta.platform = derive_platform(magic, &meta.content_id, &meta.title_id);
     meta.warnings = warnings;
     Ok(meta)
+}
+
+/// Bytes sampled at each end of a pkg for [`package_fingerprint_from_reader`].
+/// 64 KiB covers the complete package header/entry table in normal packages,
+/// while keeping an on-console verification to two small ranged reads.
+pub const PACKAGE_FINGERPRINT_SAMPLE_BYTES: u64 = 64 * 1024;
+
+/// Compute a stable package-variant identity using bounded ranged reads.
+///
+/// ContentID, CATEGORY and APP_VER are not unique: repacks/backports can share
+/// all three. The size plus first/last 64 KiB is enough to distinguish those
+/// artifacts in practice and is cryptographically bound with BLAKE3. This is
+/// an identity/deduplication fingerprint, not a promise that every byte in the
+/// middle was integrity-checked; callers needing a full-file audit should use
+/// the existing FS_HASH/BLAKE3 operation.
+pub fn package_fingerprint_from_reader<F>(size: u64, mut read_at: F) -> Option<String>
+where
+    F: FnMut(u64, u64) -> Option<Vec<u8>>,
+{
+    if size == 0 {
+        return None;
+    }
+    let prefix_len = size.min(PACKAGE_FINGERPRINT_SAMPLE_BYTES);
+    let prefix = read_at(0, prefix_len)?;
+    if prefix.len() as u64 != prefix_len {
+        return None;
+    }
+
+    let suffix_len = size.min(PACKAGE_FINGERPRINT_SAMPLE_BYTES);
+    let suffix_offset = size.saturating_sub(suffix_len);
+    // Small packages have one overlapping sample. Avoid reading and hashing it
+    // twice, while retaining the offset/length domain separators below.
+    let suffix = if suffix_offset == 0 {
+        Vec::new()
+    } else {
+        let bytes = read_at(suffix_offset, suffix_len)?;
+        if bytes.len() as u64 != suffix_len {
+            return None;
+        }
+        bytes
+    };
+
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"ps5upload-pkg-fingerprint-v1\0");
+    hasher.update(&size.to_le_bytes());
+    hasher.update(&prefix_len.to_le_bytes());
+    hasher.update(&prefix);
+    hasher.update(&suffix_offset.to_le_bytes());
+    hasher.update(&(suffix.len() as u64).to_le_bytes());
+    hasher.update(&suffix);
+    Some(hasher.finalize().to_hex().to_string())
 }
 
 /// Detect a split-pkg set rooted at `head_path`. Walks the parent
@@ -874,6 +942,11 @@ pub struct ReaderMetadata {
     pub app_ver: String,
     /// `"ps4"` | `"ps5"` | `""`.
     pub platform: String,
+    /// Optional sampled artifact identity. `metadata_from_reader` leaves this
+    /// empty because it does not know the total file size; remote callers that
+    /// do know it can populate the field with
+    /// [`package_fingerprint_from_reader`].
+    pub fingerprint: String,
 }
 
 /// Title id from a content id's second dash segment, e.g.
@@ -962,6 +1035,7 @@ where
         category,
         app_ver,
         platform,
+        fingerprint: String::new(),
     })
 }
 
@@ -1179,6 +1253,7 @@ mod tests {
             title_id: String::new(),
             category: String::new(),
             app_ver: String::new(),
+            fingerprint: String::new(),
             package_type: None,
             platform: String::new(),
             icon_png_base64: None,
@@ -1247,6 +1322,44 @@ mod tests {
         assert_eq!(bytes, [0x7F, 0x46, 0x49, 0x48]);
         // Sanity: confirms our format string matches the PS4/PS5 expected magic.
         assert_eq!(PKG_MAGIC.to_be_bytes(), [0x7F, 0x43, 0x4E, 0x54]);
+    }
+
+    #[test]
+    fn package_fingerprint_is_stable_and_variant_sensitive() {
+        let mut a = vec![0x11u8; (PACKAGE_FINGERPRINT_SAMPLE_BYTES * 3) as usize];
+        let mut b = a.clone();
+        // A tail-only difference must distinguish two same-size variants.
+        *b.last_mut().unwrap() = 0x22;
+        let read = |bytes: Vec<u8>| {
+            move |offset: u64, len: u64| {
+                let start = offset as usize;
+                let end = start.checked_add(len as usize)?;
+                bytes.get(start..end).map(|s| s.to_vec())
+            }
+        };
+        let a1 = package_fingerprint_from_reader(a.len() as u64, read(a.clone())).unwrap();
+        let a2 = package_fingerprint_from_reader(a.len() as u64, read(a.clone())).unwrap();
+        let b1 = package_fingerprint_from_reader(b.len() as u64, read(b)).unwrap();
+        assert_eq!(a1, a2);
+        assert_ne!(a1, b1);
+
+        // A middle-only change is intentionally outside this bounded identity
+        // sample; full-file integrity remains the FS_HASH operation's job.
+        a[PACKAGE_FINGERPRINT_SAMPLE_BYTES as usize + 7] ^= 0xff;
+        let a_middle = package_fingerprint_from_reader(a.len() as u64, read(a)).unwrap();
+        assert_eq!(a1, a_middle);
+    }
+
+    #[test]
+    fn package_fingerprint_rejects_zero_or_short_reads() {
+        assert_eq!(
+            package_fingerprint_from_reader(0, |_o, _l| Some(vec![])),
+            None
+        );
+        assert_eq!(
+            package_fingerprint_from_reader(100, |_o, _l| Some(vec![0; 1])),
+            None
+        );
     }
 
     #[test]

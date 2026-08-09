@@ -42,8 +42,9 @@ export class BrowserUnsupportedError extends Error {
  * those too so embedded `!` in PS5 paths don't corrupt query strings.
  */
 function uenc(s: string): string {
-  return encodeURIComponent(s).replace(/[!'()*]/g, (c) =>
-    `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
+  return encodeURIComponent(s).replace(
+    /[!'()*]/g,
+    (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
   );
 }
 
@@ -54,8 +55,8 @@ function addrUrl(path: string, addr?: string | null): string {
 
 // ── Fetch helpers ─────────────────────────────────────────────────────────────
 
-const TIMEOUT_STANDARD = 60_000;   // 60 s — matches Rust http_client
-const TIMEOUT_LONG     = 3_600_000; // 1 h  — matches Rust http_client_long
+const TIMEOUT_STANDARD = 60_000; // 60 s — matches Rust http_client
+const TIMEOUT_LONG = 3_600_000; // 1 h  — matches Rust http_client_long
 
 async function extractEngineError(r: Response): Promise<string> {
   try {
@@ -105,9 +106,11 @@ type AnyArgs = Record<string, any>;
  *   - Struct params (`req: FooReq`): nested as `{ req: { snake_case_fields } }`
  *     (serde default naming is preserved inside the struct).
  */
-export async function browserInvoke<T>(cmd: string, args: AnyArgs = {}): Promise<T> {
+export async function browserInvoke<T>(
+  cmd: string,
+  args: AnyArgs = {},
+): Promise<T> {
   switch (cmd) {
-
     // ── PS5 filesystem ──────────────────────────────────────────────────────
 
     case "ps5_volumes":
@@ -187,7 +190,10 @@ export async function browserInvoke<T>(cmd: string, args: AnyArgs = {}): Promise
     }
 
     case "ps5_fs_mkdir": {
-      const { addr, path } = args["req"] as { addr?: string | null; path: string };
+      const { addr, path } = args["req"] as {
+        addr?: string | null;
+        path: string;
+      };
       return postJson<T>("/api/ps5/fs/mkdir", { addr, path });
     }
 
@@ -207,14 +213,15 @@ export async function browserInvoke<T>(cmd: string, args: AnyArgs = {}): Promise
     }
 
     case "ps5_fs_mount": {
-      const { addr, image_path, mount_name, mount_point, read_only } =
-        args["req"] as {
-          addr?: string | null;
-          image_path: string;
-          mount_name?: string | null;
-          mount_point?: string | null;
-          read_only?: boolean | null;
-        };
+      const { addr, image_path, mount_name, mount_point, read_only } = args[
+        "req"
+      ] as {
+        addr?: string | null;
+        image_path: string;
+        mount_name?: string | null;
+        mount_point?: string | null;
+        read_only?: boolean | null;
+      };
       return postJson<T>("/api/ps5/fs/mount", {
         addr,
         image_path,
@@ -323,7 +330,8 @@ export async function browserInvoke<T>(cmd: string, args: AnyArgs = {}): Promise
       if (args["tzIndex"] != null) body["tz_index"] = args["tzIndex"];
       if (args["dateFormat"] != null) body["date_format"] = args["dateFormat"];
       if (args["timeFormat"] != null) body["time_format"] = args["timeFormat"];
-      if (args["summerPolicy"] != null) body["summer_policy"] = args["summerPolicy"];
+      if (args["summerPolicy"] != null)
+        body["summer_policy"] = args["summerPolicy"];
       if (args["setAuto"] != null) body["set_auto"] = args["setAuto"];
       return postJson<T>("/api/ps5/time/state/set", body);
     }
@@ -346,9 +354,13 @@ export async function browserInvoke<T>(cmd: string, args: AnyArgs = {}): Promise
       return getJson<T>(addrUrl("/api/profile/info", args["req"]?.addr));
 
     case "profile_avatar_current": {
-      const { addr, uid } = args["req"] as { addr?: string | null; uid: number };
+      const { addr, uid } = args["req"] as {
+        addr?: string | null;
+        uid: number;
+      };
       let url = `/api/profile/avatar/current?uid=${uid}`;
-      if (addr) url = `/api/profile/avatar/current?addr=${uenc(addr)}&uid=${uid}`;
+      if (addr)
+        url = `/api/profile/avatar/current?addr=${uenc(addr)}&uid=${uid}`;
       return getJson<T>(url);
     }
 
@@ -380,7 +392,10 @@ export async function browserInvoke<T>(cmd: string, args: AnyArgs = {}): Promise
     }
 
     case "profile_clear_slot": {
-      const { addr, slot } = args["req"] as { addr?: string | null; slot: number };
+      const { addr, slot } = args["req"] as {
+        addr?: string | null;
+        slot: number;
+      };
       return postJson<T>("/api/profile/clear-slot", { addr, slot });
     }
 
@@ -408,10 +423,38 @@ export async function browserInvoke<T>(cmd: string, args: AnyArgs = {}): Promise
       return getJson<T>(addrUrl("/api/ps5/pkg/scan-external", args["addr"]));
 
     case "pkg_metadata_console": {
-      const { addr, path } = args as { addr?: string | null; path: string };
+      const { addr, path, size } = args as {
+        addr?: string | null;
+        path: string;
+        size?: number | null;
+      };
       let url = `/api/ps5/pkg/metadata?path=${uenc(path)}`;
-      if (addr) url = `/api/ps5/pkg/metadata?addr=${uenc(addr)}&path=${uenc(path)}`;
+      if (addr)
+        url = `/api/ps5/pkg/metadata?addr=${uenc(addr)}&path=${uenc(path)}`;
+      if (size && size > 0) url += `&size=${size}`;
       return getJson<T>(url);
+    }
+
+    case "pkg_install_start":
+      return postJson<T>("/api/pkg/install/start", {
+        ps5_addr: args["ps5Addr"],
+        path: args["path"],
+        split_root: args["splitRoot"],
+        package_type_override: args["packageTypeOverride"],
+        local_ps5_path: args["localPs5Path"],
+        content_id: args["contentId"],
+        expected_size: args["expectedSize"],
+        package_fingerprint: args["packageFingerprint"],
+        delete_staging: args["deleteStaging"] ?? true,
+        serve_only: args["serveOnly"] ?? false,
+      });
+
+    case "pkg_installed_inventory": {
+      const addr = args["addr"] as string;
+      const titleId = args["titleId"] as string;
+      return getJson<T>(
+        `/api/pkg/installed?addr=${uenc(addr)}&title_id=${uenc(titleId)}`,
+      );
     }
 
     case "pkg_install_status":
@@ -526,7 +569,10 @@ export async function browserInvoke<T>(cmd: string, args: AnyArgs = {}): Promise
 
     case "saves_list": {
       // TS caller: { addr, userId } (Tauri 2 camelCases user_id → userId)
-      const { addr, userId } = args as { addr?: string | null; userId?: number | null };
+      const { addr, userId } = args as {
+        addr?: string | null;
+        userId?: number | null;
+      };
       let url = addrUrl("/api/ps5/saves/list", addr);
       if (userId != null) {
         url += `${url.includes("?") ? "&" : "?"}user_id=${userId}`;
@@ -551,7 +597,9 @@ export async function browserInvoke<T>(cmd: string, args: AnyArgs = {}): Promise
     // backing the same in-app picker (LocalPathPicker) Android already uses.
 
     case "local_list_dir":
-      return getJson<T>(`/api/local/list-dir?path=${uenc(args["path"] as string)}`);
+      return getJson<T>(
+        `/api/local/list-dir?path=${uenc(args["path"] as string)}`,
+      );
 
     case "local_storage_roots":
       return getJson<T>("/api/local/storage-roots");

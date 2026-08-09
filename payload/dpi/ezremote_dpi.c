@@ -17,14 +17,15 @@
  * isn't already listening, then hands it an http(s):// URL to install
  * (the engine serves the .pkg over its own /pkg-host/ endpoint).
  *
- * ── SYSTEM_AUTHID self-escalation (the FW-9.60 stream-install fix) ──
+ * ── SYSTEM_AUTHID self-escalation for HTTP stream installs ──
  * BGFT's task-creation path requires the calling process to hold
  * SYSTEM_AUTHID (0x4801000000000013) before it will queue a download
- * for an http:// URL. Without it, InstallByPackage returns 0x80431068
- * (BGFT download error) and fetches zero bytes — the exact failure
- * observed during HW testing on a Pro (FW 9.60). elf-arsenal solves
- * this by spawning dpi.elf as a CHILD of its kernel-RW main process
- * and escalating the child's pid via jb_escalate_pid(child_pid).
+ * for an http:// URL. elf-arsenal satisfies that requirement by spawning
+ * dpi.elf as a child of its kernel-RW main process and escalating the child
+ * via jb_escalate_pid(child_pid). Our SYSTEM context completed a real ranged
+ * HTTP package fetch on FW 5.10 hardware. A separate FW 9.60 console returned
+ * SCE_HTTP_ERROR_PROXY before any fetch, which is a console HTTP/proxy path
+ * failure rather than evidence of a firmware minimum.
  *
  * Our DPI daemon is loaded by the PS5's :9021 elfldr, which is a
  * single-payload loader — there is no parent to escalate us. Instead
@@ -405,19 +406,23 @@ int main(void) {
             metainfo.content_name       = fixed;
             metainfo.icon_url           = "";
 
-            /* Firmware-gated install authid — mirrors bgft.c's FW-11
-             * "authority cliff" exactly. BELOW FW 11 (5.10/9.60,
-             * HW-proven): ShellCore authid is the gate
-             * InstallByPackage's URL pre-flight requires. AT/ABOVE
-             * FW 11: the content-copy step is gated behind SYSTEM
-             * authid; swapping down to ShellCore registers the title
-             * but lands NO content (the "hollow dead-tile" bug —
-             * appmeta present, /user/app empty). So on FW 11+ we
-             * STAY at SYSTEM_AUTHID (set at boot escalation) and
-             * don't swap. fw==0 (unknown) → ShellCore, the proven
-             * default for the FW < 11 regime where DPI is most used. */
+            /* Authid depends on BOTH firmware and URI kind.
+             *
+             * A local staged path on FW < 11 needs ShellCore authority. An
+             * HTTP URL is different: BGFT task creation uses the SYSTEM
+             * authid acquired during self-escalation above. Keep that context
+             * for HTTP on every firmware, and only swap for the older-firmware
+             * local-path case. This completed an actual HTTP range download on
+             * a FW 5.10 Pro; the FW 9.60 Phat's 0x80431084 proxy reject happens
+             * before a request reaches the host and is handled as a network
+             * capability error.
+             *
+             * FW 11+ also stays at SYSTEM for both forms: swapping down can
+             * register metadata without landing content (hollow dead tile). */
             int fw_major = ps5_detect_firmware_major();
-            int need_swap = (fw_major < 11);
+            int is_http = (strncmp(fixed, "http://", 7) == 0 ||
+                           strncmp(fixed, "https://", 8) == 0);
+            int need_swap = (!is_http && fw_major < 11);
             pid_t me = getpid();
             uint64_t saved_authid = 0;
             if (need_swap) {
@@ -427,8 +432,9 @@ int main(void) {
                 }
             }
             fprintf(stderr,
-                    "[dpi] InstallByPackage: fw_major=%d authid=%s\n",
+                    "[dpi] InstallByPackage: fw_major=%d uri=%s authid=%s\n",
                     fw_major,
+                    is_http ? "http" : "local",
                     need_swap ? "ShellCore" : "SYSTEM (no swap)");
             ret = sceAppInstUtilInstallByPackage(&metainfo, &pkg_info, &playgo_info);
             if (need_swap && saved_authid != 0) {
