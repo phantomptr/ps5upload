@@ -1,4 +1,8 @@
+# Shell tools must retain Unix line endings when a checkout is created by Git
+# for Windows and then used from Git Bash, WSL, Linux, or macOS.
+*.sh text eol=lf
+
 # This is the exact portable source tool from PS5 Payload SDK v0.42. Keep its
-# LF bytes stable on Windows so the pinned upstream SHA-256 remains verifiable
-# and its Unix shebang remains executable from Git Bash/WSL.
+# LF bytes stable so the pinned upstream SHA-256 remains verifiable and its
+# Unix shebang remains executable from Git Bash/WSL.
 scripts/ps5-sdk/prospero-nid text eol=lf
