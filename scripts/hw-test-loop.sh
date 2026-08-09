@@ -32,8 +32,8 @@ say() { printf '\n=== %s ===\n' "$*"; }
 
 # --- 1. build --------------------------------------------------------
 say "1. Building payload"
-LLVM_CONFIG=/opt/homebrew/opt/llvm@22/bin/llvm-config make -s payload >/dev/null 2>&1 && \
-  echo "  built $(stat -f%z payload/ps5upload.elf 2>/dev/null || stat -c%s payload/ps5upload.elf) bytes"
+make -s payload >/dev/null 2>&1
+echo "  built $(stat -f%z payload/ps5upload.elf 2>/dev/null || stat -c%s payload/ps5upload.elf) bytes"
 
 # --- 2. check loader + send ------------------------------------------
 say "2. Probing PS5"

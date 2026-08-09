@@ -1,0 +1,56 @@
+#!/usr/bin/env python3
+# encoding: utf-8
+# Copyright (C) 2026 John Törnblom
+#
+# This program is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; see the file COPYING. If not see
+# <http://www.gnu.org/licenses/>.
+
+import hashlib
+import struct
+import sys
+
+
+def nid_encode(sym):
+    charset = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+-'
+    salt = b'\x51\x8d\x64\xa6\x35\xde\xd8\xc1\xe6\xb0\x39\xb1\xc3\xe5\x52\x30'
+    sha1 = hashlib.sha1()
+    sha1.update(sym.encode('utf-8'))
+    sha1.update(salt)
+    digest = bytearray(sha1.digest())
+
+    value = struct.unpack('>Q', digest[0:8])[0]
+    digest[0:8] = struct.pack('<Q', value)
+    digest[8:16] = b'\x00' * 8
+
+    nid = []
+    for i in range(0, 11, 3):
+        a = digest[i]
+        b = digest[i+1]
+        c = digest[i+2]
+        abc = (a << 16) | (b << 8) | c
+
+        nid.append(charset[(abc >> 18) & 0x3F])
+        nid.append(charset[(abc >> 12) & 0x3F])
+        nid.append(charset[(abc >> 6) & 0x3F])
+        nid.append(charset[abc & 0x3F])
+
+    return ''.join(nid[:11])
+
+
+if __name__ == '__main__':
+    if len(sys.argv) < 2:
+        print('Usage: %s <SYMBOL_NAME>' % sys.argv[0])
+        sys.exit(1)
+
+    print(nid_encode(sys.argv[1]))

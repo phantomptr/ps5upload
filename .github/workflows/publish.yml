@@ -75,35 +75,32 @@ jobs:
           sudo apt-get update
           # Add LLVM apt repo for llvm-22 (not in Ubuntu 24.04 default repos)
           curl -fsSL https://apt.llvm.org/llvm.sh | sudo bash -s -- 22
-          sudo apt-get install -y clang-22 llvm-22-dev lld-22 unzip
+          sudo apt-get install -y clang-22 llvm-22-dev lld-22 unzip python3
 
-      - name: Download PS5 Payload SDK
-        env:
-          PS5_SDK_TAG: v0.41
-        run: |
-          curl --retry 3 --retry-delay 5 --retry-connrefused \
-            --fail --location --silent --show-error \
-            -o /tmp/ps5-payload-sdk.zip \
-            "https://github.com/ps5-payload-dev/sdk/releases/download/${PS5_SDK_TAG}/ps5-payload-sdk.zip"
-          sudo unzip -q /tmp/ps5-payload-sdk.zip -d /opt
+      - name: Install pinned PS5 Payload SDK
+        run: sudo env PS5_SDK_INSTALL_DIR=/opt/ps5-payload-sdk bash scripts/install-ps5-sdk.sh
 
       - name: Build payload ELF
         env:
           PS5_PAYLOAD_SDK: /opt/ps5-payload-sdk
-          # SDK's prospero-llvm-config doesn't list llvm-config-22 in its
-          # candidate search (maxes at 21), so point it there explicitly.
+          # SDK v0.42's prospero-llvm-config candidate search maxes at 21,
+          # so point it at the CI-installed LLVM 22 explicitly.
           LLVM_CONFIG: /usr/bin/llvm-config-22
         run: make payload
 
       - name: Sanity-check ELF shape
         run: |
-          file payload/ps5upload.elf
+          file payload/ps5upload.elf payload/dpi/ezremote-dpi.elf
           test -s payload/ps5upload.elf
+          test -s payload/dpi/ezremote-dpi.elf
+          gzip -t payload/ps5upload.elf.gz payload/dpi/ezremote-dpi.elf.gz
 
-      - name: Gzip payload for bundling
+      - name: Gzip payloads for bundling
         run: |
-          gzip -kf payload/ps5upload.elf
-          ls -la payload/ps5upload.elf payload/ps5upload.elf.gz
+          gzip -kf payload/ps5upload.elf payload/dpi/ezremote-dpi.elf
+          ls -la \
+            payload/ps5upload.elf payload/ps5upload.elf.gz \
+            payload/dpi/ezremote-dpi.elf payload/dpi/ezremote-dpi.elf.gz
 
       - name: Upload payload artifact
         uses: actions/upload-artifact@v7
@@ -112,6 +109,8 @@ jobs:
           path: |
             payload/ps5upload.elf
             payload/ps5upload.elf.gz
+            payload/dpi/ezremote-dpi.elf
+            payload/dpi/ezremote-dpi.elf.gz
           if-no-files-found: error
 
   build-client:
@@ -254,7 +253,8 @@ jobs:
         shell: bash
         run: |
           test -s payload/ps5upload.elf.gz
-          ls -la payload/ps5upload.elf.gz
+          test -s payload/dpi/ezremote-dpi.elf.gz
+          ls -la payload/ps5upload.elf.gz payload/dpi/ezremote-dpi.elf.gz
 
       - name: Build engine sidecar binary
         working-directory: engine
@@ -379,6 +379,8 @@ jobs:
               mkdir -p "$staging"
               cp -v "$raw_exe" "$staging/PS5Upload.exe"
               rm -f "$dist_abs/PS5Upload.zip"
+              # PowerShell, rather than Bash, expands the $env variables below.
+              # shellcheck disable=SC2016
               PS5UP_EXE="$staging/PS5Upload.exe" \
               PS5UP_ZIP="$dist_abs/PS5Upload.zip" \
                 pwsh -NoProfile -Command 'Compress-Archive -LiteralPath $env:PS5UP_EXE -DestinationPath $env:PS5UP_ZIP -CompressionLevel Optimal'
@@ -478,7 +480,8 @@ jobs:
         shell: bash
         run: |
           test -s payload/ps5upload.elf.gz
-          ls -la payload/ps5upload.elf.gz
+          test -s payload/dpi/ezremote-dpi.elf.gz
+          ls -la payload/ps5upload.elf.gz payload/dpi/ezremote-dpi.elf.gz
 
       - name: Resolve NDK
         shell: bash

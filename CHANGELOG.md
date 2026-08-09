@@ -4,6 +4,18 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.1.6
+
+**Updated the PS5 build toolchain.**
+
+- Builds the main payload and package installer with PS5 Payload SDK v0.42.
+- Keeps local setup, pull-request checks, and release builds on the same
+  checksum-verified SDK version.
+- Fixes SDK upgrades and LLVM detection on macOS.
+- Restores the package-installer helper in release bundles.
+
+---
+
 ## 5.1.5
 
 **nanoDNS 0.3 and 0.4 compatibility.**

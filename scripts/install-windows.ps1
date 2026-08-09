@@ -8,7 +8,8 @@
 #   - Visual Studio 2022 Build Tools w/ C++ workload (MSVC + Windows SDK)
 #   - 7zip (used to extract the PS5 SDK zip in CI-clean way)
 #   - Microsoft Edge WebView2 Runtime (preinstalled on Win11; verified)
-#   - PS5 Payload SDK v0.41 → $env:USERPROFILE\ps5-payload-sdk
+#   - Repository-pinned PS5 Payload SDK (currently v0.42)
+#     → $env:USERPROFILE\ps5-payload-sdk
 #
 # Run from an elevated PowerShell:
 #   PS> Set-ExecutionPolicy -Scope Process Bypass -Force
@@ -27,11 +28,11 @@ param(
   # *build-time* SDK path and may point at somewhere the current user can't
   # write to. Pass -SdkDir or set $env:PS5_SDK_INSTALL_DIR to change.
   [string]$SdkDir = $(if ($env:PS5_SDK_INSTALL_DIR) { $env:PS5_SDK_INSTALL_DIR } else { Join-Path $env:USERPROFILE 'ps5-payload-sdk' }),
-  [string]$SdkTag = 'v0.41'
+  [string]$SdkTag = '',
+  [string]$SdkSha256 = ''
 )
 
 $ErrorActionPreference = 'Stop'
-$SdkUrl = "https://github.com/ps5-payload-dev/sdk/releases/download/$SdkTag/ps5-payload-sdk.zip"
 
 function Log    { param($m) Write-Host "`n==> $m" -ForegroundColor Cyan }
 function Ok     { param($m) Write-Host "✓ $m" -ForegroundColor Green }
@@ -39,6 +40,35 @@ function Warn   { param($m) Write-Host "! $m" -ForegroundColor Yellow }
 function Die    { param($m) Write-Host "ERROR: $m" -ForegroundColor Red; exit 1 }
 
 function Has-Cmd { param($name) (Get-Command $name -ErrorAction SilentlyContinue) -ne $null }
+
+# Load the same immutable SDK tag and release checksum used by the POSIX
+# installer and GitHub Actions. Callers may override both parameters together
+# for local experiments; release builds always use these repository values.
+$repoRoot = Split-Path -Parent $PSScriptRoot
+$sdkMetadataPath = Join-Path $PSScriptRoot 'ps5-sdk.env'
+if (-not (Test-Path $sdkMetadataPath)) { Die "missing SDK metadata: $sdkMetadataPath" }
+$sdkMetadata = @{}
+Get-Content $sdkMetadataPath | ForEach-Object {
+  if ($_ -match '^([A-Z0-9_]+)=(.+)$') { $sdkMetadata[$Matches[1]] = $Matches[2].Trim() }
+}
+$pinnedSdkTag = $sdkMetadata['PS5_SDK_TAG']
+$pinnedSdkSha256 = $sdkMetadata['PS5_SDK_SHA256']
+if ($pinnedSdkTag -notmatch '^v\d+\.\d+(?:\.\d+)?$') {
+  Die 'PS5_SDK_TAG in scripts\ps5-sdk.env is invalid'
+}
+if ($pinnedSdkSha256 -notmatch '^[0-9a-f]{64}$') {
+  Die 'PS5_SDK_SHA256 in scripts\ps5-sdk.env must be a lowercase SHA-256'
+}
+if ([string]::IsNullOrWhiteSpace($SdkTag)) { $SdkTag = $pinnedSdkTag }
+if ([string]::IsNullOrWhiteSpace($SdkSha256)) {
+  if ($SdkTag -ne $pinnedSdkTag) {
+    Die '-SdkSha256 is required when overriding -SdkTag'
+  }
+  $SdkSha256 = $pinnedSdkSha256
+}
+if ($SdkSha256 -notmatch '^[0-9a-fA-F]{64}$') { Die 'SDK SHA-256 must contain 64 hex characters' }
+$SdkUrl = "https://github.com/ps5-payload-dev/sdk/releases/download/$SdkTag/ps5-payload-sdk.zip"
+$sdkVersionMarker = '.ps5upload-sdk-version'
 
 function Winget-Install {
   param([string]$Id, [string]$Name, [string[]]$Override = @())
@@ -119,7 +149,7 @@ if (-not (Has-Cmd 7z)) {
 # The PS5 payload toolchain (prospero-clang + ld.lld) needs LLVM with
 # lld included. Without this `make payload` fails on a fresh Windows
 # checkout — the SDK ships its own clang shim but expects host lld to be
-# discoverable. macOS pins llvm@22 via brew, Ubuntu via apt; do the
+# discoverable. macOS discovers Homebrew's current llvm, Ubuntu pins 22; do the
 # equivalent here. winget's LLVM.LLVM tracks latest, which is fine —
 # prospero-clang is forward-compatible with newer host LLVM.
 if (Has-Cmd clang) {
@@ -132,31 +162,58 @@ if (Has-Cmd clang) {
 }
 
 # ─── 6. PS5 Payload SDK ────────────────────────────────────────────────────────
-if (Test-Path (Join-Path $SdkDir 'toolchain\prospero.mk')) {
-  Ok "PS5 SDK already present at $SdkDir"
+$prosperoMk = Join-Path $SdkDir 'toolchain\prospero.mk'
+$versionMarkerPath = Join-Path $SdkDir $sdkVersionMarker
+$installedSdkTag = if (Test-Path $versionMarkerPath) { (Get-Content $versionMarkerPath -Raw).Trim() } else { '' }
+if ((Test-Path $prosperoMk) -and $installedSdkTag -eq $SdkTag) {
+  Ok "PS5 SDK $SdkTag already installed at $SdkDir"
 } else {
   Log "Downloading PS5 Payload SDK $SdkTag → $SdkDir"
   $tmp = Join-Path $env:TEMP "ps5sdk-$(Get-Random)"
   New-Item -ItemType Directory -Path $tmp | Out-Null
-  $zip = Join-Path $tmp 'sdk.zip'
-  Invoke-WebRequest -UseBasicParsing -Uri $SdkUrl -OutFile $zip
-  Expand-Archive -Path $zip -DestinationPath $tmp -Force
-  $extracted = Join-Path $tmp 'ps5-payload-sdk'
-  if (-not (Test-Path $extracted)) {
-    Die "SDK zip did not contain expected ps5-payload-sdk\ directory"
+  try {
+    $zip = Join-Path $tmp 'sdk.zip'
+    Invoke-WebRequest -UseBasicParsing -Uri $SdkUrl -OutFile $zip
+    $actualSha256 = (Get-FileHash -Algorithm SHA256 -Path $zip).Hash.ToLowerInvariant()
+    if ($actualSha256 -ne $SdkSha256.ToLowerInvariant()) {
+      Die "SDK checksum mismatch: expected $SdkSha256, got $actualSha256"
+    }
+    Ok "Verified official archive SHA-256 $actualSha256"
+
+    Expand-Archive -Path $zip -DestinationPath $tmp -Force
+    $extracted = Join-Path $tmp 'ps5-payload-sdk'
+    if (-not (Test-Path (Join-Path $extracted 'toolchain\prospero.mk'))) {
+      Die "SDK zip did not contain the expected ps5-payload-sdk\ toolchain"
+    }
+    if (-not (Test-Path (Join-Path $extracted 'target\lib\crt1.o'))) {
+      Die 'SDK zip is missing target\lib\crt1.o'
+    }
+    Set-Content -Path (Join-Path $extracted $sdkVersionMarker) -Value $SdkTag -Encoding ascii
+
+    $parent = Split-Path $SdkDir -Parent
+    if (-not (Test-Path $parent)) { New-Item -ItemType Directory -Path $parent | Out-Null }
+    $backupDir = ''
+    if (Test-Path $SdkDir) {
+      $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+      $backupDir = "$SdkDir.backup-$stamp-$PID"
+      Move-Item -Path $SdkDir -Destination $backupDir
+      Ok "Moved the previous SDK to $backupDir"
+    }
+    try {
+      Move-Item -Path $extracted -Destination $SdkDir
+    } catch {
+      if ($backupDir -and (Test-Path $backupDir) -and -not (Test-Path $SdkDir)) {
+        Move-Item -Path $backupDir -Destination $SdkDir
+      }
+      throw
+    }
+  } finally {
+    if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }
   }
-  $parent = Split-Path $SdkDir -Parent
-  if (-not (Test-Path $parent)) { New-Item -ItemType Directory -Path $parent | Out-Null }
-  Move-Item -Path $extracted -Destination $SdkDir -Force
-  Remove-Item $tmp -Recurse -Force
-  if (-not (Test-Path (Join-Path $SdkDir 'toolchain\prospero.mk'))) {
-    Die "SDK extracted but prospero.mk missing"
-  }
-  Ok "PS5 SDK installed at $SdkDir"
+  Ok "PS5 SDK $SdkTag installed at $SdkDir"
 }
 
 # ─── 7. client npm deps ────────────────────────────────────────────────────────
-$repoRoot = Split-Path -Parent $PSScriptRoot
 $clientDir = Join-Path $repoRoot 'client'
 if (Test-Path $clientDir) {
   Log "Installing client npm dependencies"

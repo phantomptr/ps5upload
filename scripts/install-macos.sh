@@ -5,11 +5,11 @@
 #
 # Installs:
 #   - Xcode Command Line Tools (system WebKit framework + clang)
-#   - Homebrew (if missing) → node, llvm@22, openssl@3, pkg-config, cmake, file
-#     (SDK v0.41+ ships its own ld.lld and supports llvm 16–22; we pin llvm@22
-#      to match the Makefile's LLVM_CONFIG)
+#   - Homebrew (if missing) → node, llvm, python, openssl@3, pkg-config, cmake, file
+#     (the Makefile discovers Homebrew's current LLVM prefix automatically)
 #   - Rust toolchain (rustup, stable, default profile)
-#   - PS5 Payload SDK v0.41 → $PS5_PAYLOAD_SDK (default $HOME/ps5-payload-sdk)
+#   - Repository-pinned PS5 Payload SDK → $PS5_PAYLOAD_SDK
+#     (currently v0.42; default $HOME/ps5-payload-sdk)
 #
 # After it finishes the script prints the env exports you need to add to ~/.zshrc
 # (or ~/.bash_profile) so `make build` and `make run-client` work in any new shell.
@@ -23,12 +23,12 @@ set -euo pipefail
 # it to /opt/ps5-payload-sdk (root-only). Override the install location with
 # PS5_SDK_INSTALL_DIR if you want somewhere else.
 SDK_DIR="${PS5_SDK_INSTALL_DIR:-$HOME/ps5-payload-sdk}"
-SDK_TAG="v0.41"
-SDK_URL="https://github.com/ps5-payload-dev/sdk/releases/download/${SDK_TAG}/ps5-payload-sdk.zip"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 BREW_DEPS=(
   node
-  llvm@22
+  llvm
+  python
   openssl@3
   pkg-config
   cmake
@@ -77,12 +77,14 @@ log "Installing brew packages: ${BREW_DEPS[*]}"
 brew install "${BREW_DEPS[@]}"
 ok "brew packages installed"
 
-# Verify llvm@22 is installed
-LLVM22_PREFIX="$(brew --prefix llvm@22 2>/dev/null || true)"
-if [ -n "$LLVM22_PREFIX" ] && [ -x "$LLVM22_PREFIX/bin/llvm-config" ]; then
-  ok "llvm@22 at $LLVM22_PREFIX"
+# Verify the current Homebrew LLVM is installed. The formula becomes
+# version-suffixed only after a newer major replaces it, so hardcoding
+# /opt/homebrew/opt/llvm@22 breaks while LLVM 22 is still current.
+LLVM_PREFIX="$(brew --prefix llvm 2>/dev/null || true)"
+if [ -n "$LLVM_PREFIX" ] && [ -x "$LLVM_PREFIX/bin/llvm-config" ]; then
+  ok "LLVM at $LLVM_PREFIX ($("$LLVM_PREFIX/bin/llvm-config" --version))"
 else
-  warn "llvm@22 not found — payload build will fail"
+  die "Homebrew LLVM was installed but llvm-config is not available"
 fi
 
 # ─── 4. Rust toolchain ─────────────────────────────────────────────────────────
@@ -98,27 +100,12 @@ else
 fi
 
 # ─── 5. PS5 Payload SDK ────────────────────────────────────────────────────────
-if [ -f "$SDK_DIR/toolchain/prospero.mk" ]; then
-  ok "PS5 SDK already present at $SDK_DIR"
-else
-  log "Downloading PS5 Payload SDK ${SDK_TAG} → $SDK_DIR"
-  TMP="$(mktemp -d)"
-  trap 'rm -rf "$TMP"' EXIT
-  curl -fL --progress-bar -o "$TMP/sdk.zip" "$SDK_URL"
-  unzip -q -o "$TMP/sdk.zip" -d "$TMP"
-  if [ ! -d "$TMP/ps5-payload-sdk" ]; then
-    die "SDK zip did not contain expected ps5-payload-sdk/ directory"
-  fi
-  mkdir -p "$(dirname "$SDK_DIR")"
-  mv "$TMP/ps5-payload-sdk" "$SDK_DIR"
-  trap - EXIT
-  rm -rf "$TMP"
-  [ -f "$SDK_DIR/toolchain/prospero.mk" ] || die "SDK extracted but prospero.mk missing"
-  ok "PS5 SDK installed at $SDK_DIR"
-fi
+# The shared installer verifies the release checksum, upgrades stale/unmarked
+# SDKs recoverably, and replaces v0.42's Linux-only prospero-nid binary with the
+# exact portable implementation from the same upstream tag.
+PS5_SDK_INSTALL_DIR="$SDK_DIR" "$REPO_ROOT/scripts/install-ps5-sdk.sh"
 
 # ─── 6. client npm deps ────────────────────────────────────────────────────────
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 if [ -d "$REPO_ROOT/client" ]; then
   log "Installing client npm dependencies"
   (cd "$REPO_ROOT/client" && npm install --no-audit --no-fund)

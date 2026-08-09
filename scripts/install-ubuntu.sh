@@ -8,7 +8,8 @@
 #     libxdo, libssl, build-essential, file, curl, wget, unzip, pkg-config, python3)
 #   - Rust toolchain (rustup, stable, default profile)
 #   - Node.js 22 LTS via NodeSource (only if `node` is missing — keeps existing installs)
-#   - PS5 Payload SDK v0.41 → $PS5_PAYLOAD_SDK (default $HOME/ps5-payload-sdk)
+#   - Repository-pinned PS5 Payload SDK (currently v0.42) → $PS5_PAYLOAD_SDK
+#     (default $HOME/ps5-payload-sdk)
 #
 # After it finishes, the script prints the env exports you need to add to ~/.bashrc
 # (or ~/.zshrc) so `make build` and `make run-client` work in any new shell.
@@ -22,8 +23,7 @@ set -euo pipefail
 # it to /opt/ps5-payload-sdk (root-only). Override the install location with
 # PS5_SDK_INSTALL_DIR if you want somewhere else.
 SDK_DIR="${PS5_SDK_INSTALL_DIR:-$HOME/ps5-payload-sdk}"
-SDK_TAG="v0.41"
-SDK_URL="https://github.com/ps5-payload-dev/sdk/releases/download/${SDK_TAG}/ps5-payload-sdk.zip"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 NODE_MAJOR="22"
 
 APT_DEPS=(
@@ -43,7 +43,7 @@ APT_DEPS=(
   python3
   # LLVM 22 toolchain — required by the PS5 SDK's `prospero-clang` wrapper,
   # which dispatches into `${llvm-bindir}/clang` + `${llvm-bindir}/ld.lld`.
-  # SDK v0.41+ supports llvm 16–22; we pin to 22 to match the Makefile's
+  # SDK v0.42 supports llvm 16–22; we pin to 22 to match macOS's
   # macOS `LLVM_CONFIG` so both platforms use the same major. Ubuntu 24.04
   # doesn't ship llvm-22 in its own repos, so we add apt.llvm.org below
   # before installing these.
@@ -112,27 +112,11 @@ else
 fi
 
 # ─── 4. PS5 Payload SDK ────────────────────────────────────────────────────────
-if [ -f "$SDK_DIR/toolchain/prospero.mk" ]; then
-  ok "PS5 SDK already present at $SDK_DIR"
-else
-  log "Downloading PS5 Payload SDK ${SDK_TAG} → $SDK_DIR"
-  TMP="$(mktemp -d)"
-  trap 'rm -rf "$TMP"' EXIT
-  curl -fL --progress-bar -o "$TMP/sdk.zip" "$SDK_URL"
-  unzip -q -o "$TMP/sdk.zip" -d "$TMP"
-  if [ ! -d "$TMP/ps5-payload-sdk" ]; then
-    die "SDK zip did not contain expected ps5-payload-sdk/ directory"
-  fi
-  mkdir -p "$(dirname "$SDK_DIR")"
-  mv "$TMP/ps5-payload-sdk" "$SDK_DIR"
-  trap - EXIT
-  rm -rf "$TMP"
-  [ -f "$SDK_DIR/toolchain/prospero.mk" ] || die "SDK extracted but prospero.mk missing"
-  ok "PS5 SDK installed at $SDK_DIR"
-fi
+# Shared with CI so developer and release builds use the same tag, checksum,
+# archive validation, and recoverable upgrade path.
+PS5_SDK_INSTALL_DIR="$SDK_DIR" "$REPO_ROOT/scripts/install-ps5-sdk.sh"
 
 # ─── 5. client npm deps ────────────────────────────────────────────────────────
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 if [ -d "$REPO_ROOT/client" ]; then
   log "Installing client npm dependencies"
   (cd "$REPO_ROOT/client" && npm install --no-audit --no-fund)

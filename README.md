@@ -13,7 +13,7 @@
   <a href="https://github.com/phantomptr/ps5upload/releases"><img alt="release" src="https://img.shields.io/github/v/release/phantomptr/ps5upload?display_name=tag&sort=semver&color=blue" /></a>
   <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-GPL--3-green" /></a>
   <img alt="platforms" src="https://img.shields.io/badge/platforms-macOS_·_Linux_·_Windows-lightgrey" />
-  <img alt="firmware" src="https://img.shields.io/badge/PS5_firmware-1.00_–_12.70_supported_•_9.x–12.x_tested-brightgreen" />
+  <img alt="firmware" src="https://img.shields.io/badge/PS5_firmware-1.00_–_13.60_supported_•_9.x–12.x_tested-brightgreen" />
   <a href="https://discord.gg/fzK3xddtrM"><img alt="discord" src="https://img.shields.io/badge/discord-join-5865F2" /></a>
 </p>
 
@@ -201,17 +201,21 @@ make run-client    # launch the Tauri dev app
   (`libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `librsvg2-dev`,
   `libayatana-appindicator3-dev`, `libxdo-dev`, `libssl-dev`,
   `build-essential`), Node.js 22 LTS via NodeSource (only if missing),
-  Rust via rustup, and PS5 Payload SDK v0.41 → `~/ps5-payload-sdk`.
-- **`make install-macos`** — macOS: Xcode CLT, Homebrew, `node`, `llvm@22`
-  (SDK v0.41+ supports llvm 16–22; we pin to 22), Rust via rustup, and
-  PS5 Payload SDK.
+  Rust via rustup, and checksum-verified PS5 Payload SDK v0.42 →
+  `~/ps5-payload-sdk`.
+- **`make install-macos`** — macOS: Xcode CLT, Homebrew, `node`, current
+  `llvm` (LLVM 22 at this release), Rust via rustup, and checksum-verified
+  PS5 Payload SDK v0.42.
 - **`make install-windows`** — Windows 11: Node.js LTS, Rust, VS 2022 Build
   Tools (C++ workload), WebView2 Runtime, 7-Zip, and PS5 Payload SDK
   via `winget`. Run from an elevated PowerShell (or any shell with
   `pwsh` / `powershell.exe` on PATH).
 
 All three install scripts are idempotent — re-running them after a partial
-setup is safe; each step skips if already satisfied.
+setup is safe. A stale or unmarked SDK is upgraded to the repository pin and
+moved to a timestamped backup instead of being deleted. Local and GitHub
+Actions builds read the same tag and official release checksum from
+`scripts/ps5-sdk.env`.
 
 For per-platform bundles only (no full dev env): `make dist-mac`,
 `make dist-mac-x64`, `make dist-linux`, `make dist-linux-arm`,
@@ -314,15 +318,15 @@ cross-platform, and live-PS5 validation workflow.
 | **Windows** | ✓ | ✓ |
 
 **PS5 payload** — every firmware the PS5 Payload SDK supports,
-currently **1.00 through 12.70** on every console model (original
+currently **1.00 through 13.60** on every console model (original
 CFI-1xxx, Slim CFI-2xxx, Pro CFI-7xxx, Digital). Built against SDK
-v0.41, which ships per-firmware kernel offsets and resolves them at
+v0.42, which ships per-firmware kernel offsets and resolves them at
 payload startup via `kernel_get_fw_version()` — the same binary
 runs on every supported firmware without per-release rebuilds.
 
 | Range | Feature coverage |
 |---|---|
-| **1.00 – 12.70** | Supported — the same binary runs everywhere the SDK covers |
+| **1.00 – 13.60** | Supported — the same binary runs everywhere the SDK covers |
 | Hardware-tested | FW 5.10 and 9.60 (in-house) · FW 12.20 (user-confirmed) — core features (transfer, mount, browse, install) work across the range |
 
 > `.pkg` install depends on the console's jailbreak having live kernel
@@ -335,15 +339,15 @@ The process-list feature (Hardware tab's process snapshot) reads
 have been stable across every SDK-supported firmware — pid at
 byte 72, thread name at byte 447. No firmware-specific fallback
 table required; real command names appear across the full 1.00 –
-12.70 range. Transfer, mount, file browse, hardware monitor
+13.60 range. Transfer, mount, file browse, hardware monitor
 (except CPU/SoC temps, which Sony gates on a different credential
 check unrelated to firmware), and FS ops work identically across
 all supported firmwares.
 
 **What actually gates users in practice is the ELF loader** on
 port 9021 — a third-party component, not part of ps5upload. The
-ecosystem's real-world coverage is roughly **4.x through 12.x**;
-below 4.x is obscure and above 12.70 is future work.
+ecosystem's real-world coverage is roughly **4.x through 13.x**;
+below 4.x remains uncommon in current loader setups.
 
 ## FAQ
 

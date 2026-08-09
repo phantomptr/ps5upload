@@ -97,19 +97,16 @@ Game pkgs (UP / EP / JP / HP / CUSA / PPSA / PCSA / etc.) work fine.
   setup, permissions, and uploading from your phone.
 
 **Q: Which PS5 firmware works?**
-ps5upload is built against PS5 Payload SDK v0.41, which resolves
+ps5upload is built against PS5 Payload SDK v0.42, which resolves
 kernel offsets at startup for every firmware it knows about. The
-same binary runs on the full range **1.00 – 12.70**.
+same binary runs on the full range **1.00 – 13.60**.
 
 - **Hardware-tested:** FW 5.10 and 9.60 (in-house) and FW 12.20
   (user-confirmed). Core features — transfer, mount, file browse,
   hardware monitor, and `.pkg` install — work across this range.
-- **1.00 – 12.70 supported.** The same binary runs everywhere the SDK
-  has offsets. One cosmetic caveat outside 9–11: the Hardware tab's
-  process list can show `<pid:N>` placeholders instead of real command
-  names (the `p_comm` struct offset isn't SDK-exposed and our fallback
-  table only has validated values for 9–11). Everything else is
-  identical.
+- **1.00 – 13.60 supported.** The same binary runs everywhere the SDK
+  has offsets. The Hardware tab reads process names from `kinfo_proc`,
+  so it does not require a separate firmware-specific fallback table.
 - **`.pkg` install** additionally needs the console's jailbreak to have
   live kernel patches (kstuff / fpkg-enable). Where those aren't active
   (observed on some 9.60 setups), the installer says so honestly instead

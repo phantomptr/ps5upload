@@ -25,13 +25,25 @@ PS5_LOADER_PORT ?= 9021
 # elsewhere. `setup-payload` validates this path exists before any C build.
 PS5_PAYLOAD_SDK ?= /opt/ps5-payload-sdk
 export PS5_PAYLOAD_SDK
+PS5_SDK_TAG := $(shell sed -n 's/^PS5_SDK_TAG=//p' scripts/ps5-sdk.env 2>/dev/null)
 
 # On macOS the payload SDK's `prospero-clang` wrapper resolves `ld.lld`
-# and `clang` through `prospero-llvm-config`. SDK v0.41+ ships its own
-# ld.lld and supports llvm 16–22; we pin to Homebrew's llvm@22.
+# and `clang` through `prospero-llvm-config`. SDK v0.42 supports LLVM 16–22.
+# Homebrew exposes the current major as `llvm` (not `llvm@22`), so discover
+# its real prefix and retain versioned fallbacks for older installations.
 # Linux/WSL picks up `llvm-config-<N>` from apt naturally.
 ifeq ($(shell uname -s),Darwin)
-  LLVM_CONFIG ?= /opt/homebrew/opt/llvm@22/bin/llvm-config
+  MACOS_LLVM_CONFIG := $(shell \
+    if command -v brew >/dev/null 2>&1; then \
+      for formula in llvm llvm@22 llvm@18; do \
+        prefix="$$(brew --prefix "$$formula" 2>/dev/null || true)"; \
+        if [ -n "$$prefix" ] && [ -x "$$prefix/bin/llvm-config" ]; then \
+          printf '%s\n' "$$prefix/bin/llvm-config"; \
+          break; \
+        fi; \
+      done; \
+    fi)
+  LLVM_CONFIG ?= $(MACOS_LLVM_CONFIG)
   export LLVM_CONFIG
 endif
 
@@ -105,9 +117,9 @@ help:
 	@echo ""
 	@echo "First-time setup (fresh machine):"
 	@echo "  make install          - Auto-detect host OS and install all dev deps"
-	@echo "  make install-ubuntu   - Ubuntu/Debian/WSL2: apt + rustup + node + PS5 SDK"
-	@echo "  make install-macos    - macOS: brew + rustup + llvm@18 + PS5 SDK"
-	@echo "  make install-windows  - Windows 11: winget + rustup + VS Build Tools + PS5 SDK"
+	@echo "  make install-ubuntu   - Ubuntu/Debian/WSL2: apt + rustup + node + PS5 SDK $(PS5_SDK_TAG)"
+	@echo "  make install-macos    - macOS: brew + rustup + LLVM + PS5 SDK $(PS5_SDK_TAG)"
+	@echo "  make install-windows  - Windows 11: winget + rustup + VS Build Tools + PS5 SDK $(PS5_SDK_TAG)"
 	@echo ""
 	@echo "Quick start (after install):"
 	@echo "  1. make setup         - Check toolchains, install client deps"
@@ -171,7 +183,7 @@ help:
 	@echo "  PS5_PAYLOAD_SDK=$(PS5_PAYLOAD_SDK)     PS5 C payload SDK install"
 ifeq ($(shell uname -s),Darwin)
 	@echo "  LLVM_CONFIG=$(LLVM_CONFIG)"
-	@echo "                                Auto-set on macOS (needs Homebrew llvm@18)"
+	@echo "                                Auto-set on macOS (needs Homebrew llvm)"
 endif
 
 #──────────────────────────────────────────────────────────────────────────────
@@ -243,6 +255,17 @@ setup-payload:
 		exit 1; \
 	fi
 	@echo "✓ PS5 SDK found: $(PS5_PAYLOAD_SDK)"
+ifeq ($(shell uname -s),Darwin)
+	@if [ -z "$(LLVM_CONFIG)" ] || [ ! -x "$(LLVM_CONFIG)" ]; then \
+		echo ""; \
+		echo "ERROR: Homebrew llvm-config was not found."; \
+		echo "Install it with: brew install llvm"; \
+		echo "Or export LLVM_CONFIG=/path/to/llvm-config"; \
+		echo ""; \
+		exit 1; \
+	fi
+	@echo "✓ LLVM found: $(LLVM_CONFIG) ($$($(LLVM_CONFIG) --version))"
+endif
 
 setup-engine:
 	@echo "Checking Rust toolchain..."
@@ -643,16 +666,26 @@ test-desktop: setup-engine
 	@echo "✓ Desktop Rust checks passed"
 
 test-payload: payload
-	@echo "Validating payload binary..."
-	@if [ ! -f "$(PAYLOAD_ELF)" ]; then \
-		echo "ERROR: $(PAYLOAD_ELF) not found."; \
-		exit 1; \
-	fi
-	@file $(PAYLOAD_ELF) | grep -q "ELF" || { \
-		echo "ERROR: $(PAYLOAD_ELF) is not a valid ELF file."; \
-		exit 1; \
-	}
-	@echo "✓ $(PAYLOAD_ELF) exists and is an ELF binary"
+	@echo "Validating payload binaries..."
+	@for elf in "$(PAYLOAD_ELF)" "$(DPI_ELF)"; do \
+		if [ ! -s "$$elf" ]; then \
+			echo "ERROR: $$elf is missing or empty."; \
+			exit 1; \
+		fi; \
+		file "$$elf" | grep -q "ELF.*FreeBSD" || { \
+			echo "ERROR: $$elf is not a PS5/FreeBSD ELF file."; \
+			exit 1; \
+		}; \
+		if [ ! -s "$$elf.gz" ]; then \
+			echo "ERROR: $$elf.gz is missing or empty."; \
+			exit 1; \
+		fi; \
+		gzip -t "$$elf.gz" || { \
+			echo "ERROR: $$elf.gz is not a valid gzip resource."; \
+			exit 1; \
+		}; \
+	done
+	@echo "✓ Main payload and DPI installer are PS5 ELFs with gzip resources"
 	@echo "Running hw-guard fault-recovery self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-hw-guard-selftest \
 		$(PAYLOAD_DIR)/tests/hw_guard_selftest.c
@@ -817,6 +850,7 @@ clean: clean-payload clean-engine clean-client
 
 clean-payload:
 	@echo "Cleaning payload artifacts..."
+	@if [ -d "$(DPI_DIR)" ]; then $(MAKE) -C $(DPI_DIR) clean; fi
 	@if [ -d "$(PAYLOAD_DIR)" ]; then $(MAKE) -C $(PAYLOAD_DIR) clean; fi
 	@echo "✓ Payload cleaned"
 
@@ -841,7 +875,11 @@ info:
 	@echo "PS5 Upload - Build Information"
 	@echo ""
 	@echo "Environment:"
+	@echo "  Pinned PS5 SDK: $(PS5_SDK_TAG)"
 	@echo "  PS5_PAYLOAD_SDK: $(PS5_PAYLOAD_SDK)"
+ifeq ($(shell uname -s),Darwin)
+	@echo "  LLVM_CONFIG: $(LLVM_CONFIG)"
+endif
 	@echo "  Rust: $$(rustc --version 2>/dev/null || echo 'Not found')"
 	@echo "  Cargo: $$($(CARGO) --version 2>/dev/null || echo 'Not found')"
 	@echo "  Node: $$(node --version 2>/dev/null || echo 'Not found')"

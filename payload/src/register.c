@@ -266,7 +266,7 @@ static void register_module_init_impl(void) {
      *     symbols on the main thread at startup, not inside a mgmt
      *     handler.
      *
-     * Net: this runs on every firmware the SDK supports (1.00–12.70).
+     * Net: this runs on every firmware the SDK supports (1.00–13.60).
      * Install requests fail cleanly on any firmware where the API
      * isn't actually exported. */
     reg_dlopen_sideload(REG_LIB_APPINSTUTIL);

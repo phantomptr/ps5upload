@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -56,6 +57,89 @@ function hasCommand(cmd) {
   }).status === 0;
 }
 
+function checkSdkPin() {
+  const metadataPath = path.join(repoRoot, "scripts", "ps5-sdk.env");
+  const metadataText = fs.readFileSync(metadataPath, "utf8");
+  const metadata = Object.fromEntries(
+    metadataText
+      .split(/\r?\n/)
+      .filter((line) => /^[A-Z0-9_]+=/.test(line))
+      .map((line) => {
+        const split = line.indexOf("=");
+        return [line.slice(0, split), line.slice(split + 1)];
+      }),
+  );
+  const failures = [];
+  if (!/^v\d+\.\d+(?:\.\d+)?$/.test(metadata.PS5_SDK_TAG || "")) {
+    failures.push("PS5_SDK_TAG must be a v-prefixed release number");
+  }
+  for (const key of ["PS5_SDK_SHA256", "PS5_SDK_NID_SHA256"]) {
+    if (!/^[0-9a-f]{64}$/.test(metadata[key] || "")) {
+      failures.push(`${key} must be a lowercase SHA-256`);
+    }
+  }
+
+  const nidPath = path.join(repoRoot, "scripts", "ps5-sdk", "prospero-nid");
+  const nidHash = createHash("sha256").update(fs.readFileSync(nidPath)).digest("hex");
+  if (nidHash !== metadata.PS5_SDK_NID_SHA256) {
+    failures.push("portable prospero-nid does not match PS5_SDK_NID_SHA256");
+  }
+
+  const requiredReferences = new Map([
+    ["scripts/install-macos.sh", "scripts/install-ps5-sdk.sh"],
+    ["scripts/install-ubuntu.sh", "scripts/install-ps5-sdk.sh"],
+    ["scripts/install-windows.ps1", "ps5-sdk.env"],
+    [".github/workflows/engine-ci.yml", "scripts/install-ps5-sdk.sh"],
+    [".github/workflows/publish.yml", "scripts/install-ps5-sdk.sh"],
+  ]);
+  for (const [file, needle] of requiredReferences) {
+    const content = fs.readFileSync(path.join(repoRoot, file), "utf8");
+    if (!content.includes(needle)) failures.push(`${file} does not use ${needle}`);
+    if (content.includes("PS5_SDK_TAG: v0.")) failures.push(`${file} contains a second hard-coded SDK pin`);
+  }
+
+  const currentFiles = [
+    "Makefile",
+    "README.md",
+    "FAQ.md",
+    ...requiredReferences.keys(),
+  ];
+  for (const file of currentFiles) {
+    const content = fs.readFileSync(path.join(repoRoot, file), "utf8");
+    if (content.includes("SDK v0.41") || content.includes("SDK_TAG=\"v0.41\"")) {
+      failures.push(`${file} still references the previous SDK v0.41 pin`);
+    }
+  }
+  for (const file of ["README.md", "FAQ.md"]) {
+    const content = fs.readFileSync(path.join(repoRoot, file), "utf8");
+    if (!content.includes(`SDK ${metadata.PS5_SDK_TAG}`)) {
+      failures.push(`${file} does not document the pinned SDK ${metadata.PS5_SDK_TAG}`);
+    }
+  }
+
+  const publishWorkflow = fs.readFileSync(
+    path.join(repoRoot, ".github", "workflows", "publish.yml"),
+    "utf8",
+  );
+  const dpiArtifact = "payload/dpi/ezremote-dpi.elf.gz";
+  const dpiReferences = publishWorkflow.split(dpiArtifact).length - 1;
+  if (dpiReferences < 3) {
+    failures.push(
+      "publish.yml must build, upload, and verify the DPI installer gzip for release clients",
+    );
+  }
+
+  if (failures.length > 0) {
+    process.stderr.write("\n[check-scripts] PS5 SDK pin validation failed\n");
+    for (const failure of failures) process.stderr.write(`  - ${failure}\n`);
+    return false;
+  }
+  process.stdout.write(
+    `[check-scripts] PS5 SDK pin ok (${metadata.PS5_SDK_TAG}, ${metadata.PS5_SDK_SHA256})\n`,
+  );
+  return true;
+}
+
 const files = walk(repoRoot);
 const nodeFiles = files.filter((f) => /\.(mjs|js)$/i.test(f));
 const shellFiles = files.filter((f) => /\.sh$/i.test(f));
@@ -63,6 +147,7 @@ const pythonFiles = files.filter((f) => /\.py$/i.test(f));
 const psFiles = files.filter((f) => /\.ps1$/i.test(f));
 
 let ok = true;
+ok = checkSdkPin() && ok;
 for (const f of nodeFiles) ok = run(path.relative(repoRoot, f), "node", ["--check", f]) && ok;
 if (hasCommand("bash")) {
   for (const f of shellFiles) ok = run(path.relative(repoRoot, f), "bash", ["-n", f]) && ok;
