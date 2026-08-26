@@ -26,7 +26,6 @@ fn minus_one() -> i64 {
 }
 
 use crate::connection::Connection;
-use crate::fs_ops::app_launch;
 
 /// Which candidate symbol this probe uses as the authoritative answer.
 pub const BIG_APP_SYMBOL: &str = "sceSystemServiceGetAppIdOfBigApp";
@@ -154,109 +153,6 @@ pub fn focus_probe(addr: &str) -> Result<FocusProbe> {
         bail!("expected FOCUS_PROBE_ACK, got {ft:?}");
     }
     Ok(serde_json::from_slice(&resp)?)
-}
-
-/// What actually happened when we asked the console to raise a title.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BringToFrontOutcome {
-    /// It was already the app on screen; nothing was sent.
-    AlreadyForeground,
-    /// We asked, and the focus flag confirms the title now owns the screen.
-    Raised,
-    /// We asked, the console accepted the request, and the title still does
-    /// NOT own the screen after the timeout.
-    ///
-    /// This is a real and COMMON result, not a rare edge case: the payload's
-    /// launch call reports success for a request the shell then ignores. The
-    /// old code returned plain `ok` here, so the UI cheerfully claimed to
-    /// have raised a game that never appeared.
-    NotRaised,
-    /// The title is not running, so there is nothing to raise.
-    NotRunning,
-    /// The console cannot report focus (no event flag), so we asked and
-    /// cannot say whether it worked. Never reported as success.
-    Unverifiable,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BringToFrontResult {
-    pub outcome: BringToFrontOutcome,
-    /// App id of whatever owns the screen at the end, or -1 if unknown.
-    pub focus_app_id: i64,
-    pub app_id: u32,
-    pub waited_ms: u64,
-}
-
-/// Ask the console to raise `title_id`, then VERIFY it actually happened.
-///
-/// Verification matters because `app_launch` succeeding means only that the
-/// payload's launch call returned — not that the shell put anything on
-/// screen. Measured on FW 9.60, a launch against an already-running,
-/// backgrounded title routinely returns success while the dashboard stays
-/// exactly where it was.
-pub fn bring_to_front(addr: &str, title_id: &str) -> Result<BringToFrontResult> {
-    use std::time::{Duration, Instant};
-
-    let probe = focus_probe(addr)?;
-    let app_id = match probe.apps.iter().find(|a| a.title_id == title_id) {
-        Some(a) => a.app_id,
-        None => {
-            return Ok(BringToFrontResult {
-                outcome: BringToFrontOutcome::NotRunning,
-                focus_app_id: probe.focus_app_id,
-                app_id: 0,
-                waited_ms: 0,
-            })
-        }
-    };
-
-    if probe.focus_available && probe.focus_app_id == app_id as i64 {
-        return Ok(BringToFrontResult {
-            outcome: BringToFrontOutcome::AlreadyForeground,
-            focus_app_id: probe.focus_app_id,
-            app_id,
-            waited_ms: 0,
-        });
-    }
-
-    app_launch(addr, title_id)?;
-
-    if !probe.focus_available {
-        return Ok(BringToFrontResult {
-            outcome: BringToFrontOutcome::Unverifiable,
-            focus_app_id: -1,
-            app_id,
-            waited_ms: 0,
-        });
-    }
-
-    // Poll until the flag confirms, or give up. A real raise lands in about a
-    // second; 10s is generous without leaving the UI hanging.
-    let started = Instant::now();
-    let deadline = Duration::from_secs(10);
-    let mut last_focus = probe.focus_app_id;
-    while started.elapsed() < deadline {
-        std::thread::sleep(Duration::from_millis(500));
-        if let Ok(p) = focus_probe(addr) {
-            last_focus = p.focus_app_id;
-            if p.focus_app_id == app_id as i64 {
-                return Ok(BringToFrontResult {
-                    outcome: BringToFrontOutcome::Raised,
-                    focus_app_id: p.focus_app_id,
-                    app_id,
-                    waited_ms: started.elapsed().as_millis() as u64,
-                });
-            }
-        }
-    }
-
-    Ok(BringToFrontResult {
-        outcome: BringToFrontOutcome::NotRaised,
-        focus_app_id: last_focus,
-        app_id,
-        waited_ms: started.elapsed().as_millis() as u64,
-    })
 }
 
 #[cfg(test)]

@@ -63,7 +63,7 @@ use ps5upload_core::{
         download_to_local_multistream_ex, enumerate_download_set, DownloadKind,
         MAX_DOWNLOAD_STREAMS,
     },
-    focus::{bring_to_front, focus_probe, FocusProbe},
+    focus::{focus_probe, FocusProbe},
     fs_ops::{
         app_launch, app_list_registered, app_register, app_unregister, backup_content_databases,
         fs_copy_robust, fs_delete_with_op_id, fs_mkdir, fs_mount, fs_move_with_timeout,
@@ -2602,32 +2602,6 @@ async fn ps5_app_lifecycle(
     let addr = mgmt_addr_or_default(req.addr, &state.default_ps5_addr);
     let app_id = req.app_id;
     let r = tokio::task::spawn_blocking(move || app_lifecycle(&addr, action, app_id))
-        .await
-        .map_err(anyhow::Error::from)
-        .and_then(|r| r);
-    match r {
-        Ok(v) => (StatusCode::OK, Json(v)).into_response(),
-        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
-    }
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct BringToFrontReq {
-    addr: Option<String>,
-    title_id: String,
-}
-
-/// POST /api/ps5/focus/bring-to-front — raise a running title, and VERIFY it.
-///
-/// Unlike app/launch, this reports what actually happened. A launch that the
-/// shell ignores is common on FW 9.60 and used to surface as plain success.
-async fn ps5_bring_to_front(
-    State(state): State<AppState>,
-    Json(req): Json<BringToFrontReq>,
-) -> impl IntoResponse {
-    let addr = mgmt_addr_or_default(req.addr, &state.default_ps5_addr);
-    let title = req.title_id.clone();
-    let r = tokio::task::spawn_blocking(move || bring_to_front(&addr, &title))
         .await
         .map_err(anyhow::Error::from)
         .and_then(|r| r);
@@ -8373,7 +8347,6 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/ps5/klog", get(ps5_klog))
         .route("/api/ps5/net/interfaces", get(ps5_net_interfaces))
         .route("/api/ps5/focus", get(ps5_focus))
-        .route("/api/ps5/focus/bring-to-front", post(ps5_bring_to_front))
         .route("/api/ps5/fs/read-preview", post(ps5_fs_read_preview))
         .route("/api/ps5/process/list", get(ps5_process_list))
         .route("/api/ps5/process/kill", post(ps5_process_kill))

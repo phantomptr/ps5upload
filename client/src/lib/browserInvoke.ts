@@ -376,12 +376,6 @@ export async function browserInvoke<T>(
       });
     }
 
-    case "ps5_bring_to_front":
-      return postJson<T>("/api/ps5/focus/bring-to-front", {
-        addr: args["addr"],
-        title_id: args["titleId"] ?? args["title_id"],
-      });
-
     case "ps5_focus":
       return getJson<T>(addrUrl("/api/ps5/focus", args["addr"]));
 

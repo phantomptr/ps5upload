@@ -14,7 +14,6 @@ import {
   Square,
   CircleDot,
   Clock,
-  MonitorUp,
 } from "lucide-react";
 
 import { useNavigate } from "react-router";
@@ -24,7 +23,6 @@ import {
   appsInstalled,
   appUnregister,
   appLaunch,
-  bringToFront,
   appIconUrl,
   appKill,
   processKill,
@@ -186,7 +184,6 @@ function AppCard({
   onUninstall,
   onLaunch,
   onStop,
-  onBringToFront,
 }: {
   host: string;
   title: InstalledTitle;
@@ -208,7 +205,6 @@ function AppCard({
   /** Re-issue the launch for an already-running title, which is what brings it
    *  to the screen. Separate from onLaunch so the confirm/patient-launch
    *  bookkeeping around a cold start doesn't run for a foreground nudge. */
-  onBringToFront: (t: InstalledTitle) => void;
 }) {
   const tr = useTr();
   const navigate = useNavigate();
@@ -316,31 +312,6 @@ function AppCard({
               // explicit + confirmed — we never auto-close a running or
               // starting title.
               <>
-                {/* A game started from here often comes up BEHIND the
-                    dashboard: on this console, starting a title and putting it
-                    on screen are separate things, and the second one is the
-                    console's to do. Re-issuing the launch once the game has
-                    finished loading is what raises it — which is why this is a
-                    button you press rather than something automatic. Doing it
-                    on a timer meant guessing when "loaded" is, and guessing
-                    wrong either did nothing or, in a retry loop, froze the
-                    console outright. You know when the game is up; the app
-                    doesn't. */}
-                <Button
-                  variant="secondary"
-                  size="md"
-                  loading={launching}
-                  leftIcon={<MonitorUp size={15} />}
-                  className="min-w-fit"
-                  onClick={() => onBringToFront(title)}
-                  title={tr(
-                    "installed_bring_to_front_tooltip",
-                    undefined,
-                    "Bring this running game to the screen. Use it once the game has finished loading — the PS5 ignores it while a title is still starting.",
-                  )}
-                >
-                  {tr("installed_bring_to_front", undefined, "Bring to front")}
-                </Button>
                 <Button
                   variant="danger"
                   size="md"
@@ -684,141 +655,6 @@ export default function InstalledAppsScreen({
    * it back — and there is no readable "ready" signal to wait for. The user
    * can see when the game is up; the app can only guess, and guessing on a
    * timer is what previously froze a console. */
-  const handleBringToFront = useCallback(
-    async (t: InstalledTitle) => {
-      const probe = guard.capture();
-      // Confirm first, and steer toward the controller. Switching to the game
-      // on the console always works; this asks the PS5 to do it remotely and
-      // only lands if the title has finished loading. Recommending the
-      // reliable route — rather than presenting this as the normal way — is
-      // the honest framing, because the failure is silent: press it too early
-      // and nothing happens at all.
-      const ok = await confirmDialog({
-        title: tr(
-          "installed_bring_to_front_confirm_title",
-          { name: t.titleName },
-          `${t.titleName} is running but not on screen`,
-        ),
-        message: tr(
-          "installed_bring_to_front_confirm_body",
-          undefined,
-          "The most reliable way to switch to it is on the console itself — press the PS button and pick the game.\n\nThis asks the PS5 to bring it forward instead. It only works once the game has finished loading; while a title is still starting the console ignores the request and nothing visible happens.",
-        ),
-        confirmLabel: tr(
-          "installed_bring_to_front_confirm_ok",
-          undefined,
-          "Ask the PS5 anyway",
-        ),
-      });
-      if (!ok || probe.isStale()) return;
-      setLaunchingId(t.titleId);
-      try {
-        // Verified path: asks, then reads the console's focus flag to see
-        // whether anything actually came up. The old code sent a launch and
-        // always reported success — but a launch the shell ignores returns
-        // success too, so the UI routinely claimed to have raised a game that
-        // never appeared.
-        const res = await bringToFront(transferAddr(probe.host), t.titleId);
-        if (probe.isStale()) return;
-        if (res.outcome === "raised") {
-          pushNotification(
-            "info",
-            withConsolePrefix(
-              probe.host,
-              tr("installed_bring_to_front", undefined, "Bring to front"),
-            ),
-            {
-              body: tr(
-                "installed_bring_to_front_raised",
-                { name: t.titleName },
-                `${t.titleName} is on screen now.`,
-              ),
-            },
-          );
-        } else if (res.outcome === "already_foreground") {
-          pushNotification(
-            "info",
-            withConsolePrefix(
-              probe.host,
-              tr("installed_bring_to_front", undefined, "Bring to front"),
-            ),
-            {
-              body: tr(
-                "installed_bring_to_front_already",
-                { name: t.titleName },
-                `${t.titleName} is already the app on screen.`,
-              ),
-            },
-          );
-        } else if (res.outcome === "not_running") {
-          pushNotification(
-            "warning",
-            withConsolePrefix(
-              probe.host,
-              tr("installed_bring_to_front", undefined, "Bring to front"),
-            ),
-            {
-              body: tr(
-                "installed_bring_to_front_not_running",
-                { name: t.titleName },
-                `${t.titleName} isn't running, so there's nothing to bring forward.`,
-              ),
-            },
-          );
-        } else if (res.outcome === "unverifiable") {
-          pushNotification(
-            "info",
-            withConsolePrefix(
-              probe.host,
-              tr("installed_bring_to_front", undefined, "Bring to front"),
-            ),
-            {
-              body: tr(
-                "installed_bring_to_front_unverifiable",
-                { name: t.titleName },
-                `Asked the PS5 to show ${t.titleName}. This console can't report which app is on screen, so we can't confirm it worked.`,
-              ),
-            },
-          );
-        } else {
-          // not_raised: the console accepted the request and did nothing.
-          // A warning, not an error — nothing broke, it just didn't take.
-          pushNotification(
-            "warning",
-            withConsolePrefix(
-              probe.host,
-              tr(
-                "installed_bring_to_front_not_raised_title",
-                undefined,
-                "The PS5 didn't switch to it",
-              ),
-            ),
-            {
-              body: tr(
-                "installed_bring_to_front_not_raised",
-                { name: t.titleName },
-                `${t.titleName} is still running, but the console kept the screen where it was. Press the PS button on your controller and pick it from there.`,
-              ),
-            },
-          );
-        }
-      } catch (e) {
-        if (probe.isStale()) return;
-        pushNotification(
-          "error",
-          withConsolePrefix(
-            probe.host,
-            tr("installed_bring_to_front_failed", undefined, "Couldn't bring it to the screen"),
-          ),
-          { body: humanizePs5Error(e instanceof Error ? e.message : String(e)) },
-        );
-      } finally {
-        if (!probe.isStale()) setLaunchingId(null);
-      }
-    },
-    [guard, tr, confirmDialog],
-  );
-
   const handleStop = useCallback(
     async (t: InstalledTitle) => {
       if (!host?.trim()) return;
@@ -1039,7 +875,6 @@ export default function InstalledAppsScreen({
     onUninstall: handleUninstall,
     onLaunch: handleLaunch,
     onStop: handleStop,
-    onBringToFront: handleBringToFront,
   });
 
   // #116: order/filter the Installed group. Least-played first when sorting

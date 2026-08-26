@@ -2177,23 +2177,6 @@ pub async fn ps5_syslog_tail(addr: Option<String>) -> Result<JsonValue, String> 
     get_json(&addr_url("/api/ps5/syslog/tail", addr.as_deref())).await
 }
 
-/// Raise a running title and verify it actually reached the screen.
-///
-/// Blocks while the engine polls the console's focus flag (up to ~10s), so
-/// the caller gets a real outcome rather than a launch that may have been
-/// silently ignored.
-#[tauri::command]
-pub async fn ps5_bring_to_front(
-    addr: Option<String>,
-    title_id: String,
-) -> Result<JsonValue, String> {
-    post_json(
-        &addr_url("/api/ps5/focus/bring-to-front", addr.as_deref()),
-        &serde_json::json!({ "title_id": title_id }),
-    )
-    .await
-}
-
 /// Which application currently owns the screen, plus which focus symbols
 /// this firmware exports. Read-only; the payload answers via dlsym and never
 /// ptraces ShellUI. Newer helpers only — an older payload rejects the frame,

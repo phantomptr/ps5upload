@@ -1805,41 +1805,6 @@ export interface SmpStatus {
 }
 
 /** SMP status snapshot. `addr` is the management-port address. */
-/** What actually happened when we asked the console to raise a title. */
-export type BringToFrontOutcome =
-  | "already_foreground"
-  | "raised"
-  | "not_raised"
-  | "not_running"
-  | "unverifiable";
-
-export interface BringToFrontResult {
-  outcome: BringToFrontOutcome;
-  focus_app_id: number;
-  app_id: number;
-  waited_ms: number;
-}
-
-/**
- * Ask the PS5 to put a running title on screen, and VERIFY it happened.
- *
- * Prefer this over `appLaunch` for "bring to front": a launch the shell
- * ignores still returns success, so an unverified call routinely reports
- * having raised a game that never appeared. This reads the console's focus
- * flag afterwards and reports the real outcome. Can block up to ~10s while
- * it waits for the switch to land.
- */
-export async function bringToFront(
-  transferAddr: string,
-  titleId: string,
-): Promise<BringToFrontResult> {
-  const addr = toMgmtAddr(transferAddr);
-  return invoke<BringToFrontResult>("ps5_bring_to_front", {
-    addr,
-    titleId,
-  });
-}
-
 export async function smpStatus(addr: string): Promise<SmpStatus> {
   return invoke<SmpStatus>("smp_status", { addr });
 }
