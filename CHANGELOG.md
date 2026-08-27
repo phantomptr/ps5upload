@@ -4,6 +4,63 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.9.2
+
+**Installing is safer, and Stream install is no longer beta.**
+
+- **A failed "Upload & install" could delete the game it was replacing.**
+  The PS5 clears the old copy before writing the new one, so an install
+  that failed part-way left you with neither. Re-installing a game that
+  is already installed from PS5 storage is now refused, with a pointer to
+  Stream install instead.
+- **Stream install has left beta.** Across both test consoles and
+  packages up to 3.5 GB it worked every time, while the staged upload
+  path failed every time. It no longer hides behind a warning — and the
+  old warning's advice ("if it fails, use Upload & install") pointed at
+  the one path that can lose a game.
+- **Failed installs say so immediately.** A rejected install used to sit
+  on a spinner for ten minutes before admitting it. Installing an update
+  whose base game is missing now tells you at once, and errors the PS5
+  reports come with the fix rather than just a number.
+- **Installs tell you they finished — on the PS5 itself.** A notification
+  appears on the console when an install completes, stalls or fails, and
+  Stream install now shows its result in the Install Package view instead
+  of only in the app's notification bell.
+- **Smoother scrolling in long lists.** Game and file lists skip the work
+  of drawing rows that are off-screen.
+- Bug reports now include the console's own logs on the web build, where
+  they were silently empty, plus ShadowMount+'s log, a helper-version
+  mismatch flag and the console clock.
+
+---
+
+## 5.9.1
+
+- **"Bring to front" is gone.** Raising an already-running game had to go
+  through the PS5's launcher, and every route to it either did nothing or
+  destabilised the console UI — which then took the screen back, doing
+  the opposite of what the button promised. Press the PS button on your
+  controller instead; it always works.
+
+---
+
+## 5.9.0
+
+**Games started from the app stay on screen.**
+
+- **A game would appear, run for about twenty seconds, then drop back to
+  the dashboard.** The app misread the PS5's "launched successfully"
+  reply as a failure and quietly launched the game a second time, and
+  that second launch was what knocked the console UI over. Fixed, and a
+  game now holds the screen.
+- **A stale helper is now visible.** When the helper running on the PS5
+  is older than the app, a banner says so — the most common reason a
+  fix appears not to work is that the console is still running the old
+  one.
+- Covers show for disk images in Games and Game files.
+
+---
+
 ## 5.8.0
 
 **Scrolling on Linux is smooth again, and a game that starts behind the

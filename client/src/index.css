@@ -998,3 +998,45 @@ input[type="radio"] {
   background: var(--color-bad-soft);
   color: var(--color-bad);
 }
+
+/* ── Long-list scroll containment ────────────────────────────────────────
+ *
+ * Lets the engine SKIP layout and paint for rows that are off-screen. A
+ * library of 200 games or a directory of thousands of files otherwise pays
+ * full layout + paint for every row on every scroll frame, which is what
+ * makes the Linux (WebKitGTK) build feel sluggish where Android — which
+ * composites scrolling on the GPU far more aggressively — feels smooth.
+ *
+ * `contain-intrinsic-size` is the placeholder height used while a row is
+ * skipped. It only needs to be the right ORDER of magnitude: too far off and
+ * the scrollbar rescales as real heights resolve. The values below are
+ * measured against the actual row markup, not guessed.
+ *
+ * Safe to ship without a Linux device to test on: an engine that doesn't
+ * support `content-visibility` ignores both properties entirely and renders
+ * exactly as before. There is no fallback path to get wrong.
+ *
+ * NOT applied to short lists — for a handful of rows the bookkeeping costs
+ * more than it saves.
+ */
+/* Library / Installed rows: thumbnail + title + wrapping action cluster. */
+.list-row-contain-lg {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 5.5rem;
+}
+
+/* Game cards in the Installed grid: square cover + title + action row.
+ * Taller than a list row, so it gets its own estimate — a card told to
+ * reserve 5.5rem would make the scrollbar jump as real heights resolve. The
+ * `auto` keyword means the browser reuses the REAL size once a card has been
+ * rendered once, so this value only governs first paint. */
+.card-contain {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 16rem;
+}
+
+/* File-browser rows: a single line of text with an icon. */
+.list-row-contain-sm {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 2.25rem;
+}

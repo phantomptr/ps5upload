@@ -214,7 +214,7 @@ function AppCard({
   // affordance only appears when there's actually a folder to open.
   const sourceFolder = title.source || null;
   return (
-    <div className="group flex flex-col overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-2)]">
+    <div className="card-contain group flex flex-col overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-2)]">
       {/* Cover with corner overlays: platform (top-left), SMP warning
           (top-right) — keeps the body clean + every card the same height. */}
       <div className="relative">

@@ -2297,7 +2297,7 @@ export default function FileSystemScreen() {
               <li
                 key={e.name}
                 className={
-                  "flex items-center gap-3 rounded-md border p-2 text-sm " +
+                  "list-row-contain-sm flex items-center gap-3 rounded-md border p-2 text-sm " +
                   (isSelected
                     ? "border-[var(--color-accent)] bg-[var(--color-surface-2)]"
                     : "border-[var(--color-border)] bg-[var(--color-surface-2)]")

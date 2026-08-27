@@ -2408,7 +2408,7 @@ function LibraryRowImpl({
   };
 
   return (
-    <article className="flex flex-col gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3">
+    <article className="list-row-contain-lg flex flex-col gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3">
       {/* flex-wrap so the action cluster drops to its own line instead of
           overflowing off the (clipped) right edge on narrow phone widths —
           previously the Play/Details/⋯ buttons were pushed off-screen and
