@@ -1002,14 +1002,14 @@ input[type="radio"] {
 /* ── Long-list scroll containment ────────────────────────────────────────
  *
  * Lets the engine SKIP layout and paint for rows that are off-screen. A
- * library of 200 games or a directory of thousands of files otherwise pays
- * full layout + paint for every row on every scroll frame, which is what
- * makes the Linux (WebKitGTK) build feel sluggish where Android — which
- * composites scrolling on the GPU far more aggressively — feels smooth.
+ * directory of thousands of files otherwise pays full layout + paint for
+ * every row on every scroll frame, which is what makes the Linux
+ * (WebKitGTK) build feel sluggish where Android — which composites
+ * scrolling on the GPU far more aggressively — feels smooth.
  *
  * `contain-intrinsic-size` is the placeholder height used while a row is
  * skipped. It only needs to be the right ORDER of magnitude: too far off and
- * the scrollbar rescales as real heights resolve. The values below are
+ * the scrollbar rescales as real heights resolve. The value below is
  * measured against the actual row markup, not guessed.
  *
  * Safe to ship without a Linux device to test on: an engine that doesn't
@@ -1018,22 +1018,26 @@ input[type="radio"] {
  *
  * NOT applied to short lists — for a handful of rows the bookkeeping costs
  * more than it saves.
+ *
+ * ── Do not apply this to a list whose rows contain cover art ────────────
+ *
+ * It shipped on the Library rows and the Installed game cards in 5.9.2 and
+ * blanked every cover, so both were reverted to plain rows. The reason is
+ * worth keeping, because the obvious fix is wrong:
+ *
+ *   - Those rows carry `loading="lazy"` images. A skipped subtree has no
+ *     layout box, so the lazy-load observer has nothing to intersect and
+ *     the image can stay unloaded even once the row is scrolled into view.
+ *   - Dropping `loading="lazy"` does NOT fix it. `content-visibility` skips
+ *     *rendering*, not resource loading — a non-lazy <img> still fetches
+ *     immediately. That trades blank covers for 200 simultaneous icon0.png
+ *     reads against a console that serves one client at a time, which is
+ *     exactly what the lazy attribute was there to prevent.
+ *
+ * So the two are mutually exclusive, and for image lists the lazy fetch
+ * matters more than the paint saving. The file browser keeps containment
+ * because its rows are a line of text and an icon font — nothing to fetch.
  */
-/* Library / Installed rows: thumbnail + title + wrapping action cluster. */
-.list-row-contain-lg {
-  content-visibility: auto;
-  contain-intrinsic-size: auto 5.5rem;
-}
-
-/* Game cards in the Installed grid: square cover + title + action row.
- * Taller than a list row, so it gets its own estimate — a card told to
- * reserve 5.5rem would make the scrollbar jump as real heights resolve. The
- * `auto` keyword means the browser reuses the REAL size once a card has been
- * rendered once, so this value only governs first paint. */
-.card-contain {
-  content-visibility: auto;
-  contain-intrinsic-size: auto 16rem;
-}
 
 /* File-browser rows: a single line of text with an icon. */
 .list-row-contain-sm {

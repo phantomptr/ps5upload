@@ -4,6 +4,37 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.10.0
+
+**Game covers are back, and the helper reads the PS5's own databases properly.**
+
+- **Game covers work again.** 5.9.2's scrolling change stopped covers from
+  loading in the Library and the Installed games grid. That change has been
+  taken off both screens — it can't be combined with artwork that loads as
+  you scroll. The file browser keeps it, which is where it mattered most.
+- **A cover that fails once now tries again.** Every cover in the app gave
+  up permanently on its first failed load, so a moment's hiccup — the app
+  still starting, the console busy with something else — left a blank tile
+  until you navigated away and back. They retry a couple of times before
+  falling back to the controller icon. This is why covers kept breaking:
+  three screens each had their own copy of the same give-up-forever logic.
+- **Game lists come from the real database instead of a guess.** Reading
+  the console's app list meant scanning the raw file for anything that
+  looked like text, which sometimes returned a game's name glued to the
+  file path next to it. The helper now reads the database properly, so
+  names come back as names. The old scanner still covers the case where
+  the PS5 has the file locked.
+- **New: Console Play Time.** Game Activity can now show the playtime the
+  PS5 itself recorded, alongside the time this app has measured. It used
+  to report that the console couldn't provide it.
+- **New: per-game storage details.** The database behind Settings →
+  Storage can be read for any installed game, and a single entry repaired
+  when it goes wrong. That repair is guarded: the game has to be closed,
+  the entry has to already exist, and both databases are backed up first —
+  if the backup fails, the edit doesn't happen at all.
+
+---
+
 ## 5.9.2
 
 **Installing is safer, and Stream install is no longer beta.**

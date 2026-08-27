@@ -59,6 +59,7 @@ import { pushNotification } from "../../state/notifications";
 import { withConsolePrefix } from "../../state/roster";
 import { useTr } from "../../state/lang";
 import { transferAddr, mgmtAddr, hostOf } from "../../lib/addr";
+import { useImageRetry } from "../../lib/useImageRetry";
 import { transferScreenBusy } from "../../lib/ps5Transfers";
 import { useStaleHostGuard } from "../../lib/staleHostGuard";
 
@@ -136,13 +137,14 @@ function KindBadge({ title }: { title: InstalledTitle }) {
 // ── Cover art ────────────────────────────────────────────────────────────────
 
 function Cover({ host, title }: { host: string; title: InstalledTitle }) {
-  const [failed, setFailed] = useState(false);
-  const show = !failed && !!host.trim();
+  const { src, onError } = useImageRetry(
+    host.trim() ? appIconUrl(transferAddr(host), title.titleId) : null,
+  );
   return (
     <div className="relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-lg bg-[var(--color-surface-3)]">
-      {show ? (
+      {src ? (
         <img
-          src={appIconUrl(transferAddr(host), title.titleId)}
+          src={src}
           alt=""
           // `contain`, not `cover`: PS4/PS5 cover art isn't always square
           // (some titles ship wide key-art), and `cover` was cropping the
@@ -151,8 +153,11 @@ function Cover({ host, title }: { host: string; title: InstalledTitle }) {
           // icons still fill the square box edge-to-edge, and the neutral
           // surface backs any letterbox margins on non-square art.
           className="h-full w-full object-contain"
+          // lazy: a shelf of 200 covers is 200 icon0.png reads from a
+          // console that serves one client at a time. This is why the card
+          // deliberately does NOT carry `content-visibility`; see index.css.
           loading="lazy"
-          onError={() => setFailed(true)}
+          onError={onError}
         />
       ) : (
         <Gamepad2 size={28} className="text-[var(--color-muted)]" />
@@ -214,7 +219,7 @@ function AppCard({
   // affordance only appears when there's actually a folder to open.
   const sourceFolder = title.source || null;
   return (
-    <div className="card-contain group flex flex-col overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-2)]">
+    <div className="group flex flex-col overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-2)]">
       {/* Cover with corner overlays: platform (top-left), SMP warning
           (top-right) — keeps the body clean + every card the same height. */}
       <div className="relative">

@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Gamepad2 } from "lucide-react";
 
 import { appIconUrl, gameIconUrl } from "../api/ps5";
 import { transferAddr } from "../lib/addr";
+import { useImageRetry } from "../lib/useImageRetry";
 
 /**
  * Shared game cover/icon with a graceful glyph fallback.
@@ -59,7 +60,17 @@ export function GameIcon({
   useEffect(() => {
     setIdx(0);
   }, [key]);
-  const src = idx < candidates.length ? candidates[idx] : null;
+  const candidate = idx < candidates.length ? candidates[idx] : null;
+  // Retry the current candidate a couple of times before moving on. Every
+  // source here answers 404 for a transient read miss as readily as for a
+  // real absence, so advancing on the first error threw away art that was
+  // simply a moment late. Only after the retries are spent does the chain
+  // step to the next source, and then to the glyph.
+  const { src, onError, failed } = useImageRetry(candidate);
+  const advance = useCallback(() => setIdx((i) => i + 1), []);
+  useEffect(() => {
+    if (failed) advance();
+  }, [failed, advance]);
   return (
     <div
       className={`flex shrink-0 items-center justify-center overflow-hidden bg-[var(--color-surface-3)] ${rounded} ${className}`}
@@ -70,10 +81,15 @@ export function GameIcon({
           src={src}
           alt={alt}
           className="h-full w-full object-cover"
+          // Safe here: none of this component's call sites sit inside a
+          // `content-visibility: auto` row. If you ever place a <GameIcon>
+          // inside one of index.css's *-contain classes, drop this — the
+          // two together leave the image unloaded. See index.css.
           loading="lazy"
-          // Advance to the next candidate on failure; the glyph shows once idx
-          // walks past the end of the list.
-          onError={() => setIdx((i) => i + 1)}
+          // Failures go through useImageRetry first; it advances `failed`
+          // only once the retries for this candidate are spent, and the
+          // effect above then steps to the next source.
+          onError={onError}
         />
       ) : (
         <Gamepad2

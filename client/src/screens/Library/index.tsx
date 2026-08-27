@@ -94,6 +94,7 @@ import {
 import { useElapsed } from "../../lib/useElapsed";
 import { formatBytes } from "../../lib/format";
 import { mgmtAddr, transferAddr } from "../../lib/addr";
+import { useImageRetry } from "../../lib/useImageRetry";
 import { useStaleHostGuard } from "../../lib/staleHostGuard";
 import { createLimiter } from "../../lib/limitConcurrency";
 import { deleteWithRetry } from "../../lib/deleteWithRetry";
@@ -2408,7 +2409,7 @@ function LibraryRowImpl({
   };
 
   return (
-    <article className="list-row-contain-lg flex flex-col gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3">
+    <article className="flex flex-col gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3">
       {/* flex-wrap so the action cluster drops to its own line instead of
           overflowing off the (clipped) right edge on narrow phone widths —
           previously the Play/Details/⋯ buttons were pushed off-screen and
@@ -4040,36 +4041,37 @@ function LibraryThumb({
   registeredTitleId: string | null;
   fallbackIcon: LucideIcon;
 }) {
-  // Local swap-on-error: the meta.has_icon probe is best-effort; the
-  // actual <img> load can still 404 (e.g. mid-refresh the folder was
-  // just deleted). Keeping the fallback icon rendered under the img
-  // (as a sibling) means we don't have to re-render the wrapper.
-  const [failed, setFailed] = useState(false);
   // Folder rows read their own sce_sys/icon0.png; image rows go through
   // appmeta. `meta.has_icon` gates the folder source because we probed it —
   // there is no equivalent probe for appmeta, so we just try the fetch and let
-  // onError fall back to the glyph.
-  const src = meta?.has_icon
-    ? gameIconUrl(`${host}:${PS5_PAYLOAD_PORT}`, entry.path)
-    : registeredTitleId
-      ? appIconUrl(`${host}:${PS5_PAYLOAD_PORT}`, registeredTitleId)
-      : null;
-  const showIcon = src && !failed && host?.trim();
+  // the retry/fallback chain sort it out.
+  const wanted = !host?.trim()
+    ? null
+    : meta?.has_icon
+      ? gameIconUrl(`${host}:${PS5_PAYLOAD_PORT}`, entry.path)
+      : registeredTitleId
+        ? appIconUrl(`${host}:${PS5_PAYLOAD_PORT}`, registeredTitleId)
+        : null;
+  // A 404 here is not always permanent — the console serves one client at a
+  // time and the engine reports every read miss as 404. Retry a couple of
+  // times before falling back to the glyph.
+  const { src, onError } = useImageRetry(wanted);
   return (
     <div className="relative flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-md bg-[var(--color-surface-3)]">
-      {showIcon ? (
+      {src ? (
         <img
           src={src}
           alt=""
-          // lazy: a big library's thumbnails are icon0.png fetched over HTTP
-          // from the single-client PS5 — loading them only as rows scroll into
-          // view avoids a request storm against that one port on screen entry.
-          loading="lazy"
+          // lazy: a big library's thumbnails are icon0.png fetched over
+          // HTTP from the single-client PS5 — loading them only as rows
+          // scroll into view avoids a request storm against that one port
+          // on screen entry. This is why these rows deliberately do NOT
+          // carry a `content-visibility` class; see index.css.
           // `contain` so non-square cover art is shown whole rather than
           // centre-cropped (matches the InstalledApps grid). Square icons
           // still fill the square thumb edge-to-edge.
           className="h-full w-full object-contain"
-          onError={() => setFailed(true)}
+          onError={onError}
         />
       ) : (
         <FallbackIcon size={20} className="text-[var(--color-muted)]" />
