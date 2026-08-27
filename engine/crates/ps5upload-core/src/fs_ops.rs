@@ -1087,10 +1087,13 @@ pub struct RegisteredApps {
     pub apps: Vec<RegisteredApp>,
 }
 
-/// List titles registered in Sony's `app.db`. Fails with
-/// `list_sqlite_unavailable` on firmwares where `libSceSqlite` has
-/// been renamed or removed; callers should surface that as "Library
-/// filter unavailable on this firmware" rather than a hard error.
+/// List titles registered on the console.
+///
+/// Despite the name this does not read `app.db`: the payload scans
+/// `/user/app/` directly, because any title the console knows about has a
+/// directory there and a directory cannot be held open by the shell. The
+/// old `list_sqlite_unavailable` failure is no longer reachable — callers
+/// that still map it are harmless, and older payloads can still send it.
 pub fn app_list_registered(addr: &str) -> Result<RegisteredApps> {
     let mut c = Connection::connect(addr)?;
     c.send_frame(FrameType::AppListRegistered, &[])?;

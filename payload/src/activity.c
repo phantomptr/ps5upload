@@ -1,6 +1,6 @@
 #include "activity.h"
 
-#include "appdb_scan.h"
+#include "content_db.h"
 
 #include <ctype.h>
 #include <dirent.h>
@@ -496,19 +496,6 @@ int activity_get_json(char *buf, size_t cap, size_t *written) {
     return 0;
 }
 
-typedef struct sqlite3 sqlite3;
-typedef struct sqlite3_stmt sqlite3_stmt;
-typedef int (*adb_open_fn)(const char *, sqlite3 **, int, const char *);
-typedef int (*adb_close_fn)(sqlite3 *);
-typedef int (*adb_busy_fn)(sqlite3 *, int);
-typedef int (*adb_prepare_fn)(sqlite3 *, const char *, int, sqlite3_stmt **, const char **);
-typedef int (*adb_step_fn)(sqlite3_stmt *);
-typedef int (*adb_finalize_fn)(sqlite3_stmt *);
-typedef const unsigned char *(*adb_text_fn)(sqlite3_stmt *, int);
-
-#define ADB_READONLY 1
-#define ADB_ROW 100
-
 /* Emit a one-line JSON error body. The caller returns 0 either way — an
  * empty result with a reason is a valid answer, not a transport failure. */
 static int db_query_err(char *buf, size_t cap, size_t *written,
@@ -519,52 +506,24 @@ static int db_query_err(char *buf, size_t cap, size_t *written,
     return 0;
 }
 
-/* "Recently played" without sqlite.
- *
- * The console ships no libSceSqlite.sprx under any lib path and the
- * payload links none, so the dlsym probe below never resolves — on every
- * firmware, not just some. This is therefore the path that actually
- * serves this query. Shares appdb_scan_entries() with runtime.c's
- * APPDB_QUERY handler so the parsing has one implementation and one set
- * of tests (payload/tests/appdb_scan_selftest.c). */
-static int appdb_scan_rows_json(char *buf, size_t cap, size_t *written) {
-    int fd = open("/system_data/priv/mms/app.db", O_RDONLY);
-    if (fd < 0) return db_query_err(buf, cap, written, "cannot open app.db");
+/* ── recently played ─────────────────────────────────────────────────── */
 
-    /* app.db runs 400-800 KB in practice; cap the read so a surprise
-     * cannot balloon the payload's heap. */
-    const size_t raw_cap = 1024 * 1024;
-    unsigned char *raw = (unsigned char *)malloc(raw_cap);
-    if (!raw) {
-        close(fd);
-        return db_query_err(buf, cap, written, "out of memory");
-    }
-    size_t total = 0;
-    while (total < raw_cap) {
-        ssize_t r = read(fd, raw + total, raw_cap - total);
-        if (r <= 0) break;
-        total += (size_t)r;
-    }
-    close(fd);
-
+static int recently_played_json(char *buf, size_t cap, size_t *written) {
     const int max_rows = 100;
-    appdb_entry_t *entries =
-        (appdb_entry_t *)malloc(sizeof(appdb_entry_t) * (size_t)max_rows);
-    if (!entries) {
-        free(raw);
-        return db_query_err(buf, cap, written, "out of memory");
-    }
+    content_db_app_t *rows =
+        (content_db_app_t *)malloc(sizeof(content_db_app_t) * (size_t)max_rows);
+    if (!rows) return db_query_err(buf, cap, written, "out of memory");
 
-    int count = appdb_scan_entries(raw, total, entries, max_rows);
-    free(raw);
+    const char *source = "scan";
+    int count = content_db_apps(rows, max_rows, &source);
     if (count < 0) {
-        free(entries);
-        return db_query_err(buf, cap, written, "app.db is not a SQLite image");
+        free(rows);
+        return db_query_err(buf, cap, written, "cannot read app.db");
     }
 
     int n = snprintf(buf, cap, "{\"rows\":[");
     if (n < 0 || (size_t)n >= cap) {
-        free(entries);
+        free(rows);
         return -1;
     }
     int emitted = 0;
@@ -572,155 +531,132 @@ static int appdb_scan_rows_json(char *buf, size_t cap, size_t *written) {
         /* Skip Sony's own apps — Media Gallery, Disc Player and friends
          * are not "recently played". Same NPXS rule the play-time
          * watcher uses in find_running_title(). */
-        if (strncmp(entries[i].title_id, "NPXS", 4) == 0) continue;
+        if (strncmp(rows[i].title_id, "NPXS", 4) == 0) continue;
 
         char esc_tid[32], esc_name[512];
-        json_escape(entries[i].title_id, esc_tid, sizeof(esc_tid));
-        json_escape(entries[i].name, esc_name, sizeof(esc_name));
+        json_escape(rows[i].title_id, esc_tid, sizeof(esc_tid));
+        json_escape(rows[i].name, esc_name, sizeof(esc_name));
         int more = snprintf(buf + n, cap - (size_t)n,
                             "%s{\"title_id\":\"%s\",\"name\":\"%s\"}",
                             emitted ? "," : "", esc_tid, esc_name);
-        if (more < 0 || (size_t)(n + more) >= cap) break;
+        if (more < 0 || (size_t)(n + more) + 32 >= cap) break;
         n += more;
         emitted++;
     }
-    free(entries);
+    free(rows);
 
-    /* Distinct from the sqlite path's "app_db" so the UI can tell which
-     * one answered without guessing. */
-    int end = snprintf(buf + n, cap - (size_t)n, "],\"source\":\"app_db_scan\"}");
+    int end = snprintf(buf + n, cap - (size_t)n, "],\"source\":\"%s\"}",
+                       source);
     if (end < 0 || (size_t)(n + end) >= cap) return -1;
     n += end;
     if (written) *written = (size_t)n;
     return 0;
 }
 
+/* ── play time ───────────────────────────────────────────────────────── */
+
+/*
+ * Play time comes out of the system logger's database, where each session
+ * is one JSON document in a TEXT column rather than a set of columns. A
+ * byte-level scan of the file cannot reassemble those rows, which is why
+ * this query used to answer "play time needs sqlite, which this console
+ * does not provide". The payload links its own SQLite now, so it can.
+ *
+ * The console's own numbers, not ours: activity_get_json() reports what
+ * this payload has watched since it was started, which is a different and
+ * much shorter history.
+ */
+#define PLAYTIME_MAX_TITLES 128
+
+typedef struct {
+    char  *buf;
+    size_t cap;
+    int    n;
+    int    emitted;
+    int    overflow;
+    /* Titles already emitted. The query walks newest-first, so the first
+     * row seen for a title is its most recent session — and the field is
+     * the console's *cumulative* foreground time (totalFgTime), not a
+     * per-session delta, so later rows for the same title are older totals
+     * that must not be added or they would double-count. */
+    char   seen[PLAYTIME_MAX_TITLES][16];
+    int    nseen;
+} playtime_ctx_t;
+
+static int playtime_row(void *ctx_, int ncol, const char *const *vals) {
+    playtime_ctx_t *ctx = (playtime_ctx_t *)ctx_;
+    if (ncol < 1 || !vals[0]) return 0;
+    const char *log = vals[0];
+
+    const char *p = strstr(log, "\"appTitleId\":");
+    char tid[32] = "";
+    if (p) {
+        p += 13;
+        while (*p == ' ' || *p == '"') p++;
+        size_t tl = 0;
+        while (p[tl] && p[tl] != '"' && tl < sizeof(tid) - 1) {
+            tid[tl] = p[tl];
+            tl++;
+        }
+        tid[tl] = '\0';
+    }
+    if (!tid[0]) return 0;
+
+    for (int i = 0; i < ctx->nseen; i++)
+        if (strcmp(ctx->seen[i], tid) == 0) return 0; /* older total */
+    if (ctx->nseen < PLAYTIME_MAX_TITLES)
+        snprintf(ctx->seen[ctx->nseen++], sizeof(ctx->seen[0]), "%s", tid);
+
+    long long fg_time = 0;
+    p = strstr(log, "\"totalFgTime\":");
+    if (p) fg_time = strtoll(p + 14, NULL, 10);
+
+    char esc[32];
+    json_escape(tid, esc, sizeof(esc));
+    int more = snprintf(ctx->buf + ctx->n, ctx->cap - (size_t)ctx->n,
+                        "%s{\"title_id\":\"%s\",\"total_seconds\":%lld}",
+                        ctx->emitted ? "," : "", esc, fg_time);
+    if (more < 0 || (size_t)(ctx->n + more) + 32 >= ctx->cap) {
+        ctx->overflow = 1;
+        return 1; /* stop */
+    }
+    ctx->n += more;
+    ctx->emitted++;
+    return 0;
+}
+
+static int play_time_json(char *buf, size_t cap, size_t *written) {
+    playtime_ctx_t ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.buf = buf;
+    ctx.cap = cap;
+    ctx.n = snprintf(buf, cap, "{\"rows\":[");
+    if (ctx.n < 0 || (size_t)ctx.n >= cap) return -1;
+
+    int rows = content_db_select_text(
+        "/system_data/priv/system_logger2/nobackup/database/sl2_log.db",
+        "SELECT log FROM tbl_log WHERE event_id = "
+        "'ApplicationSessionEndBi' ORDER BY rowid DESC LIMIT 200",
+        200, &ctx, playtime_row);
+
+    if (rows < 0)
+        return db_query_err(buf, cap, written,
+                            "cannot read the system logger database");
+
+    int end = snprintf(buf + ctx.n, cap - (size_t)ctx.n,
+                       "],\"source\":\"sl2_log\"}");
+    if (end < 0 || (size_t)(ctx.n + end) >= cap) return -1;
+    ctx.n += end;
+    if (written) *written = (size_t)ctx.n;
+    return 0;
+}
+
 int activity_db_query_json(const char *query, char *buf, size_t cap,
                            size_t *written) {
     if (!query || !buf || cap == 0) return -1;
-
-    adb_open_fn    sq_open    = (adb_open_fn)dlsym(RTLD_DEFAULT, "sqlite3_open_v2");
-    adb_close_fn   sq_close   = (adb_close_fn)dlsym(RTLD_DEFAULT, "sqlite3_close");
-    adb_busy_fn    sq_busy    = (adb_busy_fn)dlsym(RTLD_DEFAULT, "sqlite3_busy_timeout");
-    adb_prepare_fn sq_prepare = (adb_prepare_fn)dlsym(RTLD_DEFAULT, "sqlite3_prepare_v2");
-    adb_step_fn    sq_step    = (adb_step_fn)dlsym(RTLD_DEFAULT, "sqlite3_step");
-    adb_finalize_fn sq_fin    = (adb_finalize_fn)dlsym(RTLD_DEFAULT, "sqlite3_finalize");
-    adb_text_fn    sq_text    = (adb_text_fn)dlsym(RTLD_DEFAULT, "sqlite3_column_text");
-
-    if (!sq_open || !sq_close || !sq_prepare || !sq_step ||
-        !sq_fin || !sq_text) {
-        /* Expected, not exceptional: no console we have tested ships
-         * libSceSqlite.sprx, so this is the normal path. recently_played
-         * has a parser that needs no sqlite; play_time does not, because
-         * its rows are serialized blobs inside sl2_log.db that a B-tree
-         * text scan cannot reassemble. Say so instead of blaming the
-         * firmware. */
-        if (strcmp(query, "recently_played") == 0)
-            return appdb_scan_rows_json(buf, cap, written);
-        if (strcmp(query, "play_time") == 0)
-            return db_query_err(buf, cap, written,
-                                "play time needs sqlite, which this console "
-                                "does not provide");
-        return db_query_err(buf, cap, written, "unknown query");
-    }
-
-    const char *db_path = NULL;
-    const char *sql = NULL;
-
-    if (strcmp(query, "recently_played") == 0) {
-        db_path = "/system_data/priv/mms/app.db";
-        sql = "SELECT titleId, titleName FROM tbl_appbrowser_2_appinfo "
-              "WHERE titleId IS NOT NULL "
-              "AND (titleId LIKE '%PPSA%' OR titleId LIKE '%CUSA%') "
-              "ORDER BY titleId LIMIT 100";
-    } else if (strcmp(query, "play_time") == 0) {
-        db_path = "/system_data/priv/system_logger2/nobackup/database/sl2_log.db";
-        sql = "SELECT log FROM tbl_log WHERE event_id="
-              "'ApplicationSessionEndBi' LIMIT 50";
-    } else {
-        int n = snprintf(buf, cap, "{\"rows\":[],\"source\":\"none\","
-                         "\"error\":\"unknown query\"}");
-        if (written) *written = (size_t)(n > 0 ? n : 0);
-        return 0;
-    }
-
-    sqlite3 *db = NULL;
-    if (sq_open(db_path, &db, ADB_READONLY, NULL) != 0 || !db) {
-        int n = snprintf(buf, cap, "{\"rows\":[],\"source\":\"none\","
-                         "\"error\":\"cannot open db\"}");
-        if (written) *written = (size_t)(n > 0 ? n : 0);
-        return 0;
-    }
-    if (sq_busy) sq_busy(db, 3000);
-
-    sqlite3_stmt *stmt = NULL;
-    if (sq_prepare(db, sql, -1, &stmt, NULL) != 0 || !stmt) {
-        sq_close(db);
-        int n = snprintf(buf, cap, "{\"rows\":[],\"source\":\"none\","
-                         "\"error\":\"prepare failed\"}");
-        if (written) *written = (size_t)(n > 0 ? n : 0);
-        return 0;
-    }
-
-    int n = snprintf(buf, cap, "{\"rows\":[");
-    int first = 1;
-
-    int rc;
-    while ((rc = sq_step(stmt)) == ADB_ROW) {
-        if (strcmp(query, "recently_played") == 0) {
-            const unsigned char *tid = sq_text(stmt, 0);
-            const unsigned char *name = sq_text(stmt, 1);
-            char esc_tid[32], esc_name[128];
-            json_escape((const char *)tid, esc_tid, sizeof(esc_tid));
-            json_escape((const char *)(name ? name : (const unsigned char *)""), 
-                       esc_name, sizeof(esc_name));
-            const char *sep = first ? "" : ",";
-            first = 0;
-            int more = snprintf(buf + n, cap - (size_t)n,
-                "%s{\"title_id\":\"%s\",\"name\":\"%s\"}",
-                sep, esc_tid, esc_name);
-            if (more < 0 || (size_t)(n + more) >= cap) break;
-            n += more;
-        } else {
-            const unsigned char *log = sq_text(stmt, 0);
-            if (!log) continue;
-            const char *p = strstr((const char *)log, "\"appTitleId\":");
-            char tid[32] = "";
-            if (p) {
-                p += 13;
-                while (*p == ' ' || *p == '"') p++;
-                size_t tl = 0;
-                while (p[tl] && p[tl] != '"' && tl < sizeof(tid) - 1) {
-                    tid[tl] = p[tl]; tl++;
-                }
-                tid[tl] = '\0';
-            }
-            int64_t fg_time = 0;
-            p = strstr((const char *)log, "\"totalFgTime\":");
-            if (p) fg_time = (int64_t)strtoll(p + 14, NULL, 10);
-
-            if (tid[0]) {
-                char esc[32];
-                json_escape(tid, esc, sizeof(esc));
-                const char *sep = first ? "" : ",";
-                first = 0;
-                int more = snprintf(buf + n, cap - (size_t)n,
-                    "%s{\"title_id\":\"%s\",\"total_seconds\":%lld}",
-                    sep, esc, (long long)fg_time);
-                if (more < 0 || (size_t)(n + more) >= cap) break;
-                n += more;
-            }
-        }
-    }
-
-    sq_fin(stmt);
-    sq_close(db);
-
-    const char *source = (strcmp(query, "recently_played") == 0) ? "app_db" : "sl2_log";
-    int end = snprintf(buf + n, cap - (size_t)n, "],\"source\":\"%s\"}", source);
-    if (end < 0 || (size_t)(n + end) >= cap) return -1;
-    n += end;
-
-    if (written) *written = (size_t)n;
-    return 0;
+    if (strcmp(query, "recently_played") == 0)
+        return recently_played_json(buf, cap, written);
+    if (strcmp(query, "play_time") == 0)
+        return play_time_json(buf, cap, written);
+    return db_query_err(buf, cap, written, "unknown query");
 }

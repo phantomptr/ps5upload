@@ -368,19 +368,19 @@ pub enum LaunchCheck {
 /// elf-arsenal verifies installs by polling app.db (`tbl_contentinfo`). We
 /// reproduce the *semantics* — "did the title row materialize?" — but the
 /// **primary** source is the filesystem enumeration (`app_list_registered`
-/// → `/user/app/<title_id>/` scan), NOT sqlite. Hardware on FW 9.60 proved
-/// the reason: the dlsym-only `AppDbQuery` returns `sqlite_unavailable`
-/// there (nothing `dlopen`s libSceSqlite — by design, since that hangs on
-/// 9.60), so an app.db-only check would no-op on the most common jailbreak
-/// firmware. The `/user/app/` scan works on every firmware (it's what the
-/// codebase already uses for the Library "installed" filter) and is the
-/// on-disk equivalent of Sony's app.db row — "any title Sony's XMB knows
-/// about has a /user/app/<id>/ directory" (register.h).
+/// → `/user/app/<title_id>/` scan), NOT sqlite. The `/user/app/` scan works
+/// on every firmware (it's what the codebase already uses for the Library
+/// "installed" filter) and is the on-disk equivalent of Sony's app.db row —
+/// "any title Sony's XMB knows about has a /user/app/<id>/ directory"
+/// (register.h).
 ///
 /// app.db (via `AppDbQuery`) is consulted as a **supplement** when the
-/// filesystem scan doesn't (yet) show the title and sqlite happens to be
-/// readable (newer firmwares) — it can surface a title that's registered
-/// in the DB a beat before the `/user/app` enumeration reflects it.
+/// filesystem scan doesn't (yet) show the title — it can surface a title
+/// that's registered in the DB a beat before the `/user/app` enumeration
+/// reflects it. That query is now answered by a SQLite the payload links
+/// itself, so it works on every firmware rather than none; it stays the
+/// supplement rather than the primary because a database the shell holds
+/// open can still refuse to open, and the filesystem never does.
 ///
 /// Any unverifiable case (no title_id, both sources unreadable) returns
 /// `Unsupported`, so a check we can't perform never fails a real install.
@@ -516,10 +516,10 @@ fn probe_app_pkg_at(addr: &str, app_dir: &str) -> PkgProbe {
     }
 }
 
-/// Whether app.db lists `title_id`. `Some(true/false)` only when sqlite is
-/// actually readable on this firmware (`err == None`); `None` otherwise (the
-/// dlsym-only AppDbQuery returns `sqlite_unavailable` on FW 9.60 — see the
-/// 9.60 note on [`verify_title_registered`]).
+/// Whether app.db lists `title_id`. `Some(true/false)` only when the query
+/// actually returned a row set (`err == None`); `None` when the database
+/// could not be read at all, so an unreadable database never counts as
+/// "the title is absent".
 fn appdb_has_title(addr: &str, title_id: &str) -> Option<bool> {
     match crate::diagnostics::appdb_query(addr) {
         Ok(list) if list.err.is_none() => Some(list.apps.iter().any(|a| a.title_id == title_id)),

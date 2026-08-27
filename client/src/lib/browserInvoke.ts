@@ -379,6 +379,25 @@ export async function browserInvoke<T>(
     case "ps5_focus":
       return getJson<T>(addrUrl("/api/ps5/focus", args["addr"]));
 
+    case "ps5_appinfo_query": {
+      const base = addrUrl("/api/ps5/appinfo", args["addr"]);
+      const sep = base.includes("?") ? "&" : "?";
+      const keys = String(args["keys"] ?? "");
+      const q =
+        `title_id=${encodeURIComponent(String(args["title_id"] ?? ""))}` +
+        (keys ? `&keys=${encodeURIComponent(keys)}` : "");
+      return getJson<T>(`${base}${sep}${q}`);
+    }
+
+    case "ps5_appinfo_set":
+      return postJson<T>("/api/ps5/appinfo/set", {
+        addr: args["addr"],
+        title_id: args["title_id"],
+        key: args["key"],
+        val: args["val"],
+        backup_dir: args["backup_dir"] ?? null,
+      });
+
     case "ps5_syslog_tail":
       return getJson<T>(addrUrl("/api/ps5/syslog/tail", args["addr"]));
 

@@ -80,3 +80,17 @@ in milliseconds and can't wedge a console.
   is absent under every lib path, so `dlsym(RTLD_DEFAULT, "sqlite3_*")`
   fails on *every* firmware — not just some. Degrade honestly instead of
   blaming the firmware.
+- **"The platform doesn't ship it" is not "we can't have it."** That
+  SQLite conclusion was right about Sony and wrong about us: a static
+  library is just more of our own `.text`. The payload now links its own
+  SQLite (`content_db.c`, built from the amalgamation that
+  `scripts/install-ps5-sdk.sh` fetches). Two full SQL implementations had
+  been sitting behind that dead `dlsym` probe long enough to drift apart
+  and hardcode different table names, and a third — in `register.c` — was
+  a table of function pointers that nothing ever assigned. A branch that
+  can never execute is where bugs go to hide, so prefer deleting it to
+  keeping it as a fallback that never fires.
+- **Check what a database says its schema is.** `content_db.c` finds the
+  app table through `sqlite_master` and `PRAGMA table_info` rather than
+  naming it, because the two dead implementations disagreed about the
+  name and there was no way to tell which was right.

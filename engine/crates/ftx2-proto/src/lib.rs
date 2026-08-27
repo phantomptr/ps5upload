@@ -121,9 +121,16 @@ pub enum FrameType {
     /// Request body: `{"title_id":"..."}`.
     AppLaunch = 60,
     AppLaunchAck = 61,
-    /// List titles currently registered in Sony's app.db. Fallbacks:
-    /// "sqlite_unavailable" if libSceSqlite can't be dlopened (rare;
-    /// only on firmware where Sony moved the library).
+    /// List titles currently registered on the console. Despite the name
+    /// this is a `/user/app` directory scan, not an app.db read: every
+    /// registered title has a directory there, and a directory cannot be
+    /// locked by the shell.
+    ///
+    /// Payloads older than 5.10 could answer "sqlite_unavailable" here.
+    /// That is no longer reachable — nothing in the current payload looks
+    /// for Sony's libSceSqlite, which never existed on any firmware; it
+    /// links its own instead (see content_db.h). Callers still map the
+    /// old string so an older payload keeps working.
     /// Request body: empty.
     /// ACK body: `{"apps":[{"title_id":"...","title_name":"...",
     ///             "src":"/mnt/ps5upload/foo","image_backed":true}, …]}`
@@ -706,6 +713,24 @@ pub enum FrameType {
     /// Req: `{}`. Ack: `{"running":bool,"real_fw":"..","spoofed_fw":".."}`.
     FwSpoofStatus = 232,
     FwSpoofStatusAck = 233,
+
+    // ── Content databases (v5.10) ──────────────────────────────────────
+    /// Per-title metadata from /system_data/priv/mms/appinfo.db, the
+    /// database behind Settings → Storage. Rows are (titleId, key, val)
+    /// triples: CONTENT_VERSION, VERSION_FILE_URI and friends.
+    /// Req: `{"title_id":"CUSAxxxxx","keys":"A,B"}` (`keys` optional —
+    /// omit for every key). Ack: `{"ok":bool,"title_id":"..",
+    /// "rows":[{"key":"..","val":".."}, …],"source":".."}`. Read-only.
+    AppInfoQuery = 234,
+    AppInfoQueryAck = 235,
+    /// Update one appinfo.db value. Writes to a live system database, so
+    /// it is guarded: the title must not be running, the row must already
+    /// exist (this never inserts), and the change is rolled back unless
+    /// exactly one row moved. Snapshot both databases first.
+    /// Req: `{"title_id":"..","key":"CONTENT_VERSION","val":".."}`.
+    /// Ack: `{"ok":bool,"err":".."}`.
+    AppInfoSet = 236,
+    AppInfoSetAck = 237,
 }
 
 impl FrameType {
@@ -928,6 +953,10 @@ impl FrameType {
             227 => Ok(Self::FtpStatusAck),
             232 => Ok(Self::FwSpoofStatus),
             233 => Ok(Self::FwSpoofStatusAck),
+            234 => Ok(Self::AppInfoQuery),
+            235 => Ok(Self::AppInfoQueryAck),
+            236 => Ok(Self::AppInfoSet),
+            237 => Ok(Self::AppInfoSetAck),
             240 => Ok(Self::NotifSend),
             241 => Ok(Self::NotifSendAck),
             246 => Ok(Self::HwFanCurveGet),
@@ -1396,6 +1425,10 @@ mod tests {
             FrameType::Crc32FileAck,
             FrameType::AppDbQuery,
             FrameType::AppDbQueryAck,
+            FrameType::AppInfoQuery,
+            FrameType::AppInfoQueryAck,
+            FrameType::AppInfoSet,
+            FrameType::AppInfoSetAck,
             FrameType::NetSpeedTest,
             FrameType::NetSpeedTestAck,
             FrameType::PkgDirectMount,

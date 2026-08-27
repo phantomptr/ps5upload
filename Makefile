@@ -719,6 +719,24 @@ test-payload: payload
 		$(PAYLOAD_DIR)/tests/appdb_scan_selftest.c
 	@/tmp/ps5upload-appdb-scan-selftest
 	@echo "✓ app.db scan recovers titles without sqlite"
+	@echo "Running content-database self-test (host build)..."
+	@mkdir -p /tmp/ps5upload-cdb
+	@cc -O1 -w -c -o /tmp/ps5upload-cdb/sqlite3.o \
+		-DSQLITE_OS_UNIX=1 -DSQLITE_THREADSAFE=1 -DSQLITE_TEMP_STORE=2 \
+		-DSQLITE_OMIT_LOAD_EXTENSION=1 -DSQLITE_OMIT_DEPRECATED=1 \
+		-DSQLITE_OMIT_JSON=1 -DSQLITE_DEFAULT_MEMSTATUS=0 -DSQLITE_DQS=0 \
+		-DSQLITE_UNTESTABLE=1 \
+		$(PAYLOAD_DIR)/third_party/sqlite3/sqlite3.c
+	@cc -O2 -Wall -Wextra -Werror -I$(PAYLOAD_DIR)/include \
+		-I$(PAYLOAD_DIR)/third_party/sqlite3 \
+		-DCONTENT_DB_APP='"/tmp/ps5upload-cdb/app.db"' \
+		-DCONTENT_DB_APPINFO='"/tmp/ps5upload-cdb/appinfo.db"' \
+		-o /tmp/ps5upload-content-db-selftest \
+		$(PAYLOAD_DIR)/src/content_db.c \
+		$(PAYLOAD_DIR)/tests/content_db_selftest.c \
+		/tmp/ps5upload-cdb/sqlite3.o
+	@/tmp/ps5upload-content-db-selftest
+	@echo "✓ content databases read via SQL, with guarded writes"
 	@echo "Running FTP wire-format self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-ftp-format-selftest \
 		$(PAYLOAD_DIR)/tests/ftp_format_selftest.c

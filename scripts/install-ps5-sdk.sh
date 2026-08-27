@@ -58,6 +58,16 @@ validate_metadata() {
   esac
   [ "${#PS5_SDK_SHA256}" -eq 64 ] || die "PS5_SDK_SHA256 must contain 64 hex characters"
   [ "${#PS5_SDK_NID_SHA256}" -eq 64 ] || die "PS5_SDK_NID_SHA256 must contain 64 hex characters"
+  case "$PS5_SQLITE_VERSION" in
+    ""|*[!0-9]*) die "invalid PS5_SQLITE_VERSION in $SDK_METADATA" ;;
+  esac
+  case "$PS5_SQLITE_YEAR" in
+    ""|*[!0-9]*) die "invalid PS5_SQLITE_YEAR in $SDK_METADATA" ;;
+  esac
+  case "$PS5_SQLITE_SHA256" in
+    ""|*[!0-9a-f]*) die "invalid PS5_SQLITE_SHA256 in $SDK_METADATA" ;;
+  esac
+  [ "${#PS5_SQLITE_SHA256}" -eq 64 ] || die "PS5_SQLITE_SHA256 must contain 64 hex characters"
   [ -f "$PORTABLE_NID" ] || die "missing portable prospero-nid at $PORTABLE_NID"
   [ "$(sha256_file "$PORTABLE_NID")" = "$PS5_SDK_NID_SHA256" ] || \
     die "portable prospero-nid checksum does not match $SDK_METADATA"
@@ -72,7 +82,72 @@ install_portable_nid() {
   [ "$actual" = "$EXPECTED_NID" ] || die "prospero-nid self-test failed (got $actual)"
 }
 
+# ── SQLite amalgamation ──────────────────────────────────────────────────
+#
+# The payload links a real SQLite so it can read (and repair) the console's
+# content databases with the actual record parser instead of a hand-rolled
+# b-tree walker. No firmware ships libSceSqlite.sprx, so this cannot come
+# from the console — it is compiled into the payload from these sources.
+#
+# Sources are fetched rather than committed: the amalgamation is a 9 MB
+# generated file, pinned by version and SHA-256 in ps5-sdk.env. Only
+# sqlite3.c and sqlite3.h are kept; shell.c and sqlite3ext.h are dropped
+# (a CLI shell and the extension ABI, neither of which the payload builds).
+install_sqlite_amalgamation() {
+  local dir="$SCRIPT_DIR/../payload/third_party/sqlite3"
+  local stamp="$dir/.version"
+
+  if [ -f "$dir/sqlite3.c" ] && [ -f "$dir/sqlite3.h" ] \
+    && [ -f "$stamp" ] \
+    && [ "$(tr -d '[:space:]' < "$stamp")" = "$PS5_SQLITE_VERSION" ]; then
+    ok "SQLite $PS5_SQLITE_VERSION amalgamation already present"
+    return 0
+  fi
+
+  log "Downloading SQLite $PS5_SQLITE_VERSION amalgamation"
+  local tmp zip
+  tmp="$(mktemp -d)"
+  zip="$tmp/sqlite-amalgamation.zip"
+  curl --retry 3 --retry-delay 2 --retry-connrefused \
+    --fail --location --silent --show-error --output "$zip" \
+    "https://www.sqlite.org/${PS5_SQLITE_YEAR}/sqlite-amalgamation-${PS5_SQLITE_VERSION}.zip"
+
+  local actual
+  actual="$(sha256_file "$zip")"
+  if [ "$actual" != "$PS5_SQLITE_SHA256" ]; then
+    rm -rf -- "$tmp"
+    die "SQLite checksum mismatch: expected $PS5_SQLITE_SHA256, got $actual"
+  fi
+  ok "Verified SQLite archive SHA-256 $actual"
+
+  # Same archive-layout guard the SDK download uses: every entry must live
+  # under the single documented top-level directory, with no traversal.
+  local top="sqlite-amalgamation-${PS5_SQLITE_VERSION}"
+  while IFS= read -r entry; do
+    case "$entry" in
+      "$top"/*) ;;
+      *) rm -rf -- "$tmp"; die "unexpected SQLite archive entry: $entry" ;;
+    esac
+    case "/$entry/" in
+      */../*|*/./*) rm -rf -- "$tmp"; die "unsafe SQLite archive entry: $entry" ;;
+    esac
+  done < <(unzip -Z1 "$zip")
+
+  unzip -q "$zip" -d "$tmp"
+  [ -f "$tmp/$top/sqlite3.c" ] || { rm -rf -- "$tmp"; die "SQLite archive is missing sqlite3.c"; }
+  [ -f "$tmp/$top/sqlite3.h" ] || { rm -rf -- "$tmp"; die "SQLite archive is missing sqlite3.h"; }
+
+  mkdir -p "$dir"
+  install -m 0644 "$tmp/$top/sqlite3.c" "$dir/sqlite3.c"
+  install -m 0644 "$tmp/$top/sqlite3.h" "$dir/sqlite3.h"
+  printf '%s\n' "$PS5_SQLITE_VERSION" > "$stamp"
+  chmod 0644 "$stamp"
+  rm -rf -- "$tmp"
+  ok "Installed SQLite $PS5_SQLITE_VERSION sources at $dir"
+}
+
 validate_metadata
+install_sqlite_amalgamation
 
 if [ -f "$SDK_DIR/toolchain/prospero.mk" ] \
   && [ -f "$SDK_DIR/$VERSION_MARKER" ] \

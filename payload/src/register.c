@@ -96,38 +96,17 @@ typedef int (*lnc_util_initialize_fn_t)(void);
 typedef int (*user_service_initialize_fn_t)(int *);
 typedef int (*user_service_get_foreground_user_fn_t)(int *);
 
-/* SQLite subset -- just the minimum for a single-statement SELECT.
- * If libsqlite3 is unavailable (renamed on a future firmware, not
- * loaded), list_registered_titles degrades to "sqlite_unavailable"
- * and register/unregister/launch all continue to work -- the
- * snd0info patch and the "installed titles" Library filter are the
- * only features that need it. */
-typedef struct sqlite3      sqlite3;
-typedef struct sqlite3_stmt sqlite3_stmt;
-
-typedef int  (*sqlite3_open_v2_fn)(const char *, sqlite3 **, int, const char *);
-typedef int  (*sqlite3_close_fn)(sqlite3 *);
-typedef int  (*sqlite3_busy_timeout_fn)(sqlite3 *, int);
-typedef int  (*sqlite3_prepare_v2_fn)(sqlite3 *, const char *, int,
-                                      sqlite3_stmt **, const char **);
-typedef int  (*sqlite3_step_fn)(sqlite3_stmt *);
-typedef int  (*sqlite3_finalize_fn)(sqlite3_stmt *);
-typedef int  (*sqlite3_bind_text_fn)(sqlite3_stmt *, int, const char *, int,
-                                     void (*)(void *));
-typedef const unsigned char *(*sqlite3_column_text_fn)(sqlite3_stmt *, int);
-typedef int  (*sqlite3_changes_fn)(sqlite3 *);
-
-#define SQLITE_OK     0
-#define SQLITE_ROW    100
-#define SQLITE_DONE   101
-#define SQLITE_OPEN_READWRITE 0x00000002
-#define SQLITE_OPEN_READONLY  0x00000001
-
-/* SQLITE_TRANSIENT is a sentinel sqlite3_bind_text accepts in place of
- * a real destructor: "make a private copy of the buffer". The actual
- * value is ((void(*)(void*))-1); declaring it as a cast-to-fn-pointer
- * lets us pass it through our typedef without a linker-visible stub. */
-#define REG_SQLITE_TRANSIENT ((void (*)(void *))-1)
+/* This file used to carry a dlsym'd SQLite subset for reading app.db.
+ * It was never wired up -- the function pointers were declared and
+ * never assigned, so every one of them was NULL for the lifetime of the
+ * payload -- and list_registered_titles_json has scanned /user/app/
+ * directly for a long time now. The declarations are gone rather than
+ * left as decoration.
+ *
+ * The payload does have a real SQLite now, linked statically; it lives
+ * behind content_db.h. The filesystem scan below stays the source for
+ * registered titles anyway: it cannot be locked by the shell, and a
+ * title's directory is the thing that actually has to exist. */
 
 typedef struct {
     int   firmware_major;   /* e.g. 9 for 9.60; 0 if unknown */
@@ -142,16 +121,6 @@ typedef struct {
     /* UserService -- foreground user for launch context */
     user_service_initialize_fn_t           user_service_initialize;
     user_service_get_foreground_user_fn_t  user_service_get_foreground_user;
-    /* SQLite -- app.db */
-    sqlite3_open_v2_fn      sq_open_v2;
-    sqlite3_close_fn        sq_close;
-    sqlite3_busy_timeout_fn sq_busy_timeout;
-    sqlite3_prepare_v2_fn   sq_prepare_v2;
-    sqlite3_step_fn         sq_step;
-    sqlite3_finalize_fn     sq_finalize;
-    sqlite3_bind_text_fn    sq_bind_text;
-    sqlite3_column_text_fn  sq_column_text;
-    sqlite3_changes_fn      sq_changes;
 } reg_module_t;
 
 static reg_module_t g_reg = {0};

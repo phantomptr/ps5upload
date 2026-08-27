@@ -2186,6 +2186,56 @@ pub async fn ps5_focus(addr: Option<String>) -> Result<JsonValue, String> {
     get_json(&addr_url("/api/ps5/focus", addr.as_deref())).await
 }
 
+/// Per-title rows from appinfo.db — the database behind Settings →
+/// Storage. Read-only.
+///
+/// Worth having alongside the app.db view: the two databases can disagree
+/// with each other and with what is on disk, and telling those apart is
+/// the whole diagnosis when a title lists but will not launch or delete.
+#[tauri::command]
+pub async fn ps5_appinfo_query(
+    addr: Option<String>,
+    title_id: String,
+    keys: Option<String>,
+) -> Result<JsonValue, String> {
+    let mut url = addr_url("/api/ps5/appinfo", addr.as_deref());
+    url.push_str(if url.contains('?') { "&" } else { "?" });
+    url.push_str(&format!("title_id={}", urlencoding(&title_id)));
+    if let Some(k) = keys.as_deref().filter(|k| !k.is_empty()) {
+        url.push_str(&format!("&keys={}", urlencoding(k)));
+    }
+    get_json(&url).await
+}
+
+/// Change one appinfo.db value on the console.
+///
+/// This edits a live system database. The engine snapshots both content
+/// databases before the write and refuses the write outright if the
+/// snapshot fails; the payload refuses if the title is running or if the
+/// row does not already exist. Callers should still confirm with the user
+/// first — the visible failure mode is a title whose Settings entry stops
+/// rendering.
+#[tauri::command]
+pub async fn ps5_appinfo_set(
+    addr: Option<String>,
+    title_id: String,
+    key: String,
+    val: String,
+    backup_dir: Option<String>,
+) -> Result<JsonValue, String> {
+    post_json(
+        &format!("{}/api/ps5/appinfo/set", engine::url()),
+        &serde_json::json!({
+            "addr": addr,
+            "title_id": title_id,
+            "key": key,
+            "val": val,
+            "backup_dir": backup_dir,
+        }),
+    )
+    .await
+}
+
 /// Read the PS5's current system clock. Cheap; safe to call once on
 /// the Hardware screen render and again right after a sync.
 #[tauri::command]

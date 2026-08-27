@@ -46,7 +46,9 @@ export default function GameActivityScreen() {
   const [dbSource, setDbSource] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<"tracked" | "recently_played">("tracked");
+  const [tab, setTab] = useState<"tracked" | "recently_played" | "play_time">(
+    "tracked",
+  );
 
   const refresh = useCallback(async () => {
     if (!addr || payloadStatus !== "up") return;
@@ -58,7 +60,10 @@ export default function GameActivityScreen() {
         setEntries(resp.titles ?? []);
         setCurrentTitle(resp.current_title ?? "");
       } else {
-        const resp = await activityDbQuery("recently_played", addr);
+        // Both database tabs render through the same row list — the rows
+        // carry title_id plus an optional name and total_seconds, and the
+        // renderer already shows whichever of those are present.
+        const resp = await activityDbQuery(tab, addr);
         setDbRows(resp.rows ?? []);
         setDbSource(resp.source ?? "");
       }
@@ -133,6 +138,13 @@ export default function GameActivityScreen() {
             onClick={() => setTab("recently_played")}
           >
             <Database size={16} /> {tr("game_activity_recent", undefined, "Recently Played")}
+          </Button>
+          <Button
+            variant={tab === "play_time" ? "primary" : "ghost"}
+            onClick={() => setTab("play_time")}
+          >
+            <TrendingUp size={16} />{" "}
+            {tr("game_activity_console_playtime", undefined, "Console Play Time")}
           </Button>
         </div>
 

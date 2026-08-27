@@ -242,6 +242,14 @@ pub struct AppDbList {
     pub apps: Vec<AppDbEntry>,
     #[serde(default)]
     pub err: Option<String>,
+    /// Which reader answered: `sqlite`, `sqlite-immutable` or `scan`.
+    ///
+    /// Worth surfacing rather than hiding. `scan` means the SQL open
+    /// failed and the rows came from the byte-level b-tree reader, which
+    /// recovers title ids reliably but display names only sometimes — so
+    /// a caller that sees a blank name knows whether to believe it.
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 /// Query app.db for the title_id ↔ app_id ↔ name mapping.
@@ -258,6 +266,89 @@ pub fn appdb_query(addr: &str) -> Result<AppDbList> {
     }
     if ft != FrameType::AppDbQueryAck {
         bail!("expected APPDB_QUERY_ACK, got {ft:?}");
+    }
+    Ok(serde_json::from_slice(&resp)?)
+}
+
+/// One (key, value) row of appinfo.db for a title.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppInfoRow {
+    pub key: String,
+    #[serde(default)]
+    pub val: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppInfoRows {
+    #[serde(default)]
+    pub ok: bool,
+    #[serde(default)]
+    pub title_id: String,
+    #[serde(default)]
+    pub rows: Vec<AppInfoRow>,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// Read per-title metadata out of appinfo.db, the database behind
+/// Settings → Storage.
+///
+/// `keys` filters to a comma-separated set; `None` returns every key.
+pub fn appinfo_query(addr: &str, title_id: &str, keys: Option<&str>) -> Result<AppInfoRows> {
+    let body = serde_json::json!({
+        "title_id": title_id,
+        "keys": keys.unwrap_or(""),
+    });
+    let mut c = Connection::connect(addr)?;
+    c.send_frame(FrameType::AppInfoQuery, body.to_string().as_bytes())?;
+    let (hdr, resp) = c.recv_frame()?;
+    let ft = hdr.frame_type().unwrap_or(FrameType::Error);
+    if ft == FrameType::Error {
+        bail!(
+            "payload rejected APPINFO_QUERY: {}",
+            String::from_utf8_lossy(&resp)
+        );
+    }
+    if ft != FrameType::AppInfoQueryAck {
+        bail!("expected APPINFO_QUERY_ACK, got {ft:?}");
+    }
+    Ok(serde_json::from_slice(&resp)?)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppInfoSetResult {
+    #[serde(default)]
+    pub ok: bool,
+    #[serde(default)]
+    pub err: Option<String>,
+}
+
+/// Change one appinfo.db value on the console.
+///
+/// This writes to a live system database. The payload enforces the
+/// preconditions (title not running, row must already exist, exactly one
+/// row changed or roll back), but the caller is responsible for taking a
+/// snapshot first — see [`crate::fs_ops::backup_content_databases`].
+pub fn appinfo_set(addr: &str, title_id: &str, key: &str, val: &str) -> Result<AppInfoSetResult> {
+    let body = serde_json::json!({
+        "title_id": title_id,
+        "key": key,
+        "val": val,
+    });
+    let mut c = Connection::connect(addr)?;
+    c.send_frame(FrameType::AppInfoSet, body.to_string().as_bytes())?;
+    let (hdr, resp) = c.recv_frame()?;
+    let ft = hdr.frame_type().unwrap_or(FrameType::Error);
+    if ft == FrameType::Error {
+        bail!(
+            "payload rejected APPINFO_SET: {}",
+            String::from_utf8_lossy(&resp)
+        );
+    }
+    if ft != FrameType::AppInfoSetAck {
+        bail!("expected APPINFO_SET_ACK, got {ft:?}");
     }
     Ok(serde_json::from_slice(&resp)?)
 }
@@ -518,4 +609,67 @@ pub fn proc_modules(addr: &str, pid: i32) -> Result<ModuleList> {
         bail!("expected PROC_MODULES_ACK, got {ft:?}");
     }
     Ok(serde_json::from_slice(&resp)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The payload answers an unreadable app.db with `err` set and `apps`
+    /// empty. This pins the cross-language shape, because getting it wrong
+    /// is silent: serde fills both missing fields with defaults, so the
+    /// generic `{"ok":false,"error":".."}` envelope decodes as "no error,
+    /// zero titles" — and `pkg_install::appdb_has_title` reads that as a
+    /// confident "the title is not installed", failing verification for an
+    /// install that actually worked.
+    #[test]
+    fn unreadable_appdb_decodes_as_an_error_not_an_empty_library() {
+        let list: AppDbList =
+            serde_json::from_str(r#"{"err":"cannot read app.db","apps":[]}"#).unwrap();
+        assert!(list.err.is_some(), "err must survive the round trip");
+        assert!(list.apps.is_empty());
+    }
+
+    #[test]
+    fn a_successful_list_reports_which_reader_answered() {
+        let list: AppDbList = serde_json::from_str(
+            r#"{"apps":[{"title_id":"CUSA00900","app_id":101,"name":"Bloodborne"}],
+                "source":"sqlite"}"#,
+        )
+        .unwrap();
+        assert!(list.err.is_none());
+        assert_eq!(list.source.as_deref(), Some("sqlite"));
+        assert_eq!(list.apps[0].name, "Bloodborne");
+    }
+
+    /// A payload older than this change sends no `source` at all; it must
+    /// still parse rather than failing the whole response.
+    #[test]
+    fn an_older_payload_without_source_still_parses() {
+        let list: AppDbList =
+            serde_json::from_str(r#"{"apps":[{"title_id":"CUSA00900","app_id":0,"name":"x"}]}"#)
+                .unwrap();
+        assert_eq!(list.source, None);
+        assert_eq!(list.apps.len(), 1);
+    }
+
+    #[test]
+    fn appinfo_rows_decode_with_their_key_value_pairs() {
+        let rows: AppInfoRows = serde_json::from_str(
+            r#"{"ok":true,"title_id":"PPSA01650","rows":[
+                 {"key":"CONTENT_VERSION","val":"01.00"}],"source":"sqlite"}"#,
+        )
+        .unwrap();
+        assert!(rows.ok);
+        assert_eq!(rows.rows[0].key, "CONTENT_VERSION");
+        assert_eq!(rows.rows[0].val, "01.00");
+    }
+
+    #[test]
+    fn a_refused_appinfo_write_carries_its_reason() {
+        let r: AppInfoSetResult =
+            serde_json::from_str(r#"{"ok":false,"err":"PPSA01650 is running"}"#).unwrap();
+        assert!(!r.ok);
+        assert!(r.err.unwrap().contains("running"));
+    }
 }

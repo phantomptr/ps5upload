@@ -1949,6 +1949,7 @@ game_activity_no_data: "কোনো ডেটা পাওয়া যায�
 game_activity_no_recent: "সাম্প্রতিক খেলার কোনো ডেটা নেই",
 game_activity_now_playing: "এখন খেলছেন",
 game_activity_recent: "সম্প্রতি খেলা",
+game_activity_console_playtime: "কনসোলের খেলার সময়",
 game_activity_source: "উৎস",
 game_activity_subtitle: "খেলার সময় ট্র্যাকিং ও সাম্প্রতিক গেম",
 game_activity_title: "গেম কার্যকলাপ ট্র্যাকার",

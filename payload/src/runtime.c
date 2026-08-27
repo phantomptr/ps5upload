@@ -32,7 +32,7 @@
 #include "config.h"
 #include "runtime.h"
 
-#include "appdb_scan.h"
+#include "content_db.h"
 #include "register.h"
 #include "hw_info.h"
 #include "drive_sensors.h"
@@ -456,6 +456,13 @@ extern int posix_fallocate(int fd, off_t offset, off_t len);
 /* v4.3: Firmware spoof detection */
 #define FTX2_FRAME_FWSPOOF_STATUS        232u
 #define FTX2_FRAME_FWSPOOF_STATUS_ACK    233u
+/* v5.10: appinfo.db, the database behind Settings -> Storage. Read is
+ * unguarded; the write is the only path in this payload that edits a live
+ * system database, and content_db.c holds the preconditions. */
+#define FTX2_FRAME_APPINFO_QUERY         234u
+#define FTX2_FRAME_APPINFO_QUERY_ACK     235u
+#define FTX2_FRAME_APPINFO_SET           236u
+#define FTX2_FRAME_APPINFO_SET_ACK       237u
 /* FOCUS_PROBE: which app currently owns the screen. Read-only, dlsym-only,
  * never ptrace — see focus_probe.h. Added to diagnose a foregrounded game
  * dropping back to the dashboard, which ShellUI's own event flags do not
@@ -12677,209 +12684,147 @@ static int handle_crc32_file(runtime_state_t *state, int client_fd,
 
 /* ── app.db query ────────────────────────────────────────────────────── */
 
-/* sqlite functions resolved via RTLD_DEFAULT — same pattern as
- * register.c's resolution. We re-resolve here rather than hand
- * pointers across module boundaries because handle_appdb_query is
- * the only sqlite consumer outside register.c and we want the
- * runtime path to fail gracefully if libsqlite has moved (firmware
- * delta) without propagating that failure into other handlers. */
-typedef struct sqlite3      sqlite3;
-typedef struct sqlite3_stmt sqlite3_stmt;
-typedef int  (*adb_open_v2_fn)(const char *, sqlite3 **, int, const char *);
-typedef int  (*adb_close_fn)(sqlite3 *);
-typedef int  (*adb_prepare_v2_fn)(sqlite3 *, const char *, int,
-                                   sqlite3_stmt **, const char **);
-typedef int  (*adb_step_fn)(sqlite3_stmt *);
-typedef int  (*adb_finalize_fn)(sqlite3_stmt *);
-typedef const unsigned char *(*adb_column_text_fn)(sqlite3_stmt *, int);
-typedef int  (*adb_column_int_fn)(sqlite3_stmt *, int);
-#define ADB_SQLITE_OPEN_READONLY 0x00000001
-#define ADB_SQLITE_ROW 100
-
-/* Raw file scan fallback for app.db. Used when sqlite symbols aren't
- * available via dlsym (common on FW 5.10 and 9.60 where libSceSqlite.sprx
- * can't be dlopen'd). Opens app.db with raw open()/read() — the payload
- * runs with full privileges, so unlike FS_READ RPCs, internal file I/O
- * isn't restricted by is_path_allowed. Scans the SQLite B-tree leaf pages
- * for title-id patterns and extracts the nearest printable game-title
- * string. Returns a JSON response in the same format as the sqlite path.
+/*
+ * Installed titles, straight out of app.db.
  *
- * The scan is heuristic but reliable: SQLite stores TEXT values inline
- * in leaf cells with no compression, and the columns we care about
- * (titleId, appName) are stored adjacent in the record. We scan for the
- * 4-letter-5-digit title-id pattern, then look forward for the longest
- * nearby ASCII run that looks like a title (has letters, spaces, length
- * > 5). */
-static int appdb_raw_scan(runtime_state_t *state, int client_fd,
-                           uint64_t trace_id) {
-    const char *path = "/system_data/priv/mms/app.db";
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) {
-        const char *err = "{\"err\":\"open_appdb_failed\",\"apps\":[]}";
-        return send_frame(client_fd, FTX2_FRAME_APPDB_QUERY_ACK, 0,
-                          trace_id, err, strlen(err));
-    }
+ * This used to resolve sqlite3_* through dlsym(RTLD_DEFAULT) and fall back
+ * to a byte-level b-tree scan when the lookups came back NULL. They always
+ * came back NULL -- no firmware ships libSceSqlite.sprx -- so the SQL half
+ * was dead code on every console and the scan did all the work.
+ *
+ * The payload now links its own SQLite, so the SQL path is the real one.
+ * The scan survives inside content_db_apps_json as the fallback for a
+ * database that will not open at all (locked by the shell, or damaged),
+ * which is a genuine runtime condition rather than a permanent one.
+ */
+static int handle_appdb_query(runtime_state_t *state, int client_fd,
+                               uint64_t trace_id) {
+    if (!state) return -1;
 
-    /* Read up to 1 MB of app.db (typical size is 400-800 KB). */
-    size_t cap = 1 * 1024 * 1024;
-    unsigned char *buf = (unsigned char *)malloc(cap);
-    if (!buf) {
-        close(fd);
-        const char *err = "{\"err\":\"oom\",\"apps\":[]}";
-        return send_frame(client_fd, FTX2_FRAME_APPDB_QUERY_ACK, 0,
-                          trace_id, err, strlen(err));
-    }
-    size_t total = 0;
-    while (total < cap) {
-        ssize_t n = read(fd, buf + total, cap - total);
-        if (n <= 0) break;
-        total += (size_t)n;
-    }
-    close(fd);
-
-    /* Shares appdb_scan_entries_ex() with activity.c rather than keeping
-     * a second implementation. The previous copy here scanned the whole
-     * file for two magic values and took the longest printable run as the
-     * name, which returned metadata blobs because SQLite stores a row's
-     * columns with no separators between them.
-     *
-     * ids_only: this path feeds install verification, which only asks
-     * whether a title id is present. A row whose name cannot be recovered
-     * must still be reported or a real install reads as a failure. */
-    const int max_rows = 256;
-    appdb_entry_t *entries =
-        (appdb_entry_t *)malloc(sizeof(appdb_entry_t) * (size_t)max_rows);
-    if (!entries) {
-        free(buf);
-        const char *err = "{\"err\":\"oom\",\"apps\":[]}";
-        return send_frame(client_fd, FTX2_FRAME_APPDB_QUERY_ACK, 0,
-                          trace_id, err, strlen(err));
-    }
-    int count = appdb_scan_entries_ex(buf, total, entries, max_rows, 1);
-    free(buf);
-
-    if (count < 0) {
-        free(entries);
-        const char *err = "{\"err\":\"invalid_appdb\",\"apps\":[]}";
-        return send_frame(client_fd, FTX2_FRAME_APPDB_QUERY_ACK, 0,
-                          trace_id, err, strlen(err));
-    }
-
-    int rcap = 128 * 1024;
-    char *resp = (char *)malloc((size_t)rcap);
+    const size_t cap = 64 * 1024;
+    char *resp = (char *)malloc(cap);
     if (!resp) {
-        free(entries);
         const char *err = "{\"err\":\"oom\",\"apps\":[]}";
         return send_frame(client_fd, FTX2_FRAME_APPDB_QUERY_ACK, 0,
                           trace_id, err, strlen(err));
     }
-    int rn = snprintf(resp, (size_t)rcap, "{\"err\":null,\"apps\":[");
-    for (int i = 0; i < count; i++) {
-        char tid_esc[32];
-        char name_esc[512];
-        json_escape_into(entries[i].title_id, tid_esc, sizeof(tid_esc));
-        json_escape_into(entries[i].name, name_esc, sizeof(name_esc));
-        int w = snprintf(resp + rn, (size_t)(rcap - rn),
-                         "%s{\"title_id\":\"%s\",\"app_id\":0,\"name\":\"%s\"}",
-                         i ? "," : "", tid_esc, name_esc);
-        if (w < 0 || w >= rcap - rn - 4) break;
-        rn += w;
-    }
-    free(entries);
-    if (rn < rcap - 2) {
-        resp[rn++] = ']';
-        resp[rn++] = '}';
-    }
 
-    int rc = send_frame(client_fd, FTX2_FRAME_APPDB_QUERY_ACK, 0, trace_id,
-                        resp, (uint64_t)rn);
+    size_t written = 0;
+    int rc;
+    if (content_db_apps_json(resp, cap, &written) != 0 || written == 0) {
+        const char *err = "{\"err\":\"appdb_unreadable\",\"apps\":[]}";
+        rc = send_frame(client_fd, FTX2_FRAME_APPDB_QUERY_ACK, 0, trace_id,
+                        err, strlen(err));
+    } else {
+        rc = send_frame(client_fd, FTX2_FRAME_APPDB_QUERY_ACK, 0, trace_id,
+                        resp, (uint64_t)written);
+    }
     free(resp);
+
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);
     return rc;
 }
 
-static int handle_appdb_query(runtime_state_t *state, int client_fd,
-                               uint64_t trace_id) {
+/* ── appinfo.db ──────────────────────────────────────────────────────── */
+
+/* Defined further down with the .pkg mount handlers; declared here because
+ * these two handlers sit next to the app.db handler they belong with. */
+static int parse_json_string_field_local(const char *body, uint64_t body_len,
+                                          const char *field, char *out,
+                                          size_t out_size);
+
+
+static int handle_appinfo_query(runtime_state_t *state, int client_fd,
+                                 uint64_t trace_id, const char *body,
+                                 uint64_t body_len) {
     if (!state) return -1;
-    adb_open_v2_fn       sq_open_v2  = (adb_open_v2_fn)dlsym(RTLD_DEFAULT, "sqlite3_open_v2");
-    adb_close_fn         sq_close    = (adb_close_fn)dlsym(RTLD_DEFAULT, "sqlite3_close");
-    adb_prepare_v2_fn    sq_prepare  = (adb_prepare_v2_fn)dlsym(RTLD_DEFAULT, "sqlite3_prepare_v2");
-    adb_step_fn          sq_step     = (adb_step_fn)dlsym(RTLD_DEFAULT, "sqlite3_step");
-    adb_finalize_fn      sq_finalize = (adb_finalize_fn)dlsym(RTLD_DEFAULT, "sqlite3_finalize");
-    adb_column_text_fn   sq_text     = (adb_column_text_fn)dlsym(RTLD_DEFAULT, "sqlite3_column_text");
-    adb_column_int_fn    sq_int      = (adb_column_int_fn)dlsym(RTLD_DEFAULT, "sqlite3_column_int");
-    if (!sq_open_v2 || !sq_close || !sq_prepare || !sq_step ||
-        !sq_finalize || !sq_text || !sq_int) {
-        /* sqlite unavailable — fall back to raw file scan. This works on
-         * FW 5.10 and 9.60 where libSceSqlite.sprx can't be dlopen'd. */
-        return appdb_raw_scan(state, client_fd, trace_id);
+    char title_id[32] = {0};
+    char keys[256] = {0};
+    (void)parse_json_string_field_local(body, body_len, "keys", keys,
+                                        sizeof(keys));
+
+    int rc;
+    if (parse_json_string_field_local(body, body_len, "title_id", title_id,
+                                       sizeof(title_id)) != 0 ||
+        title_id[0] == '\0') {
+        const char *err =
+            "{\"ok\":false,\"error\":\"title_id is required\"}";
+        rc = send_frame(client_fd, FTX2_FRAME_APPINFO_QUERY_ACK, 0, trace_id,
+                        err, strlen(err));
+    } else {
+        const size_t cap = 32 * 1024;
+        char *resp = (char *)malloc(cap);
+        if (!resp) {
+            const char *err = "{\"ok\":false,\"error\":\"oom\"}";
+            rc = send_frame(client_fd, FTX2_FRAME_APPINFO_QUERY_ACK, 0,
+                            trace_id, err, strlen(err));
+        } else {
+            size_t written = 0;
+            if (content_db_appinfo_json(title_id, keys[0] ? keys : NULL, resp,
+                                        cap, &written) != 0 || written == 0) {
+                const char *err =
+                    "{\"ok\":false,\"error\":\"appinfo.db unreadable\"}";
+                rc = send_frame(client_fd, FTX2_FRAME_APPINFO_QUERY_ACK, 0,
+                                trace_id, err, strlen(err));
+            } else {
+                rc = send_frame(client_fd, FTX2_FRAME_APPINFO_QUERY_ACK, 0,
+                                trace_id, resp, (uint64_t)written);
+            }
+            free(resp);
+        }
     }
-    sqlite3 *db = NULL;
-    int rc = sq_open_v2("/system_data/priv/mms/app.db",
-                         &db, ADB_SQLITE_OPEN_READONLY, NULL);
-    if (rc != 0 || !db) {
-        if (db) sq_close(db);
-        const char *err = "{\"err\":\"open_appdb_failed\",\"apps\":[]}";
-        return send_frame(client_fd, FTX2_FRAME_APPDB_QUERY_ACK, 0,
-                          trace_id, err, strlen(err));
-    }
-    sqlite3_stmt *stmt = NULL;
-    /* tbl_appbrowse_2_appinfo holds title_id + appId + name. Schema
-     * stable across PS5 firmware revisions per psdevwiki. */
-    const char *sql =
-        "SELECT titleId, appId, appName FROM tbl_appbrowse_2_appinfo "
-        "WHERE titleId IS NOT NULL ORDER BY titleId";
-    rc = sq_prepare(db, sql, -1, &stmt, NULL);
-    if (rc != 0 || !stmt) {
-        if (stmt) sq_finalize(stmt);
-        sq_close(db);
-        const char *err = "{\"err\":\"prepare_failed\",\"apps\":[]}";
-        return send_frame(client_fd, FTX2_FRAME_APPDB_QUERY_ACK, 0,
-                          trace_id, err, strlen(err));
-    }
-    char *resp = malloc(64 * 1024);
-    if (!resp) {
-        sq_finalize(stmt);
-        sq_close(db);
-        const char *err = "{\"err\":\"oom\",\"apps\":[]}";
-        return send_frame(client_fd, FTX2_FRAME_APPDB_QUERY_ACK, 0,
-                          trace_id, err, strlen(err));
-    }
-    int cap = 64 * 1024;
-    int n = 0;
-    n += snprintf(resp + n, cap - n, "{\"apps\":[");
-    int wrote_one = 0;
-    while ((rc = sq_step(stmt)) == ADB_SQLITE_ROW) {
-        const unsigned char *tid = sq_text(stmt, 0);
-        int aid = sq_int(stmt, 1);
-        const unsigned char *name = sq_text(stmt, 2);
-        if (!tid) continue;
-        char tid_esc[64];
-        char name_esc[512];
-        json_escape_into((const char *)tid, tid_esc, sizeof(tid_esc));
-        json_escape_into(name ? (const char *)name : "", name_esc, sizeof(name_esc));
-        if (n >= cap - 700) break;
-        if (wrote_one) resp[n++] = ',';
-        wrote_one = 1;
-        n += snprintf(resp + n, cap - n,
-                      "{\"title_id\":\"%s\",\"app_id\":%d,\"name\":\"%s\"}",
-                      tid_esc, aid, name_esc);
-    }
-    if (n < cap - 2) {
-        resp[n++] = ']';
-        resp[n++] = '}';
-    }
-    sq_finalize(stmt);
-    sq_close(db);
-    int rc2 = send_frame(client_fd, FTX2_FRAME_APPDB_QUERY_ACK, 0,
-                         trace_id, resp, (uint64_t)n);
-    free(resp);
+
     pthread_mutex_lock(&state->state_mtx);
     state->command_count += 1;
     pthread_mutex_unlock(&state->state_mtx);
-    return rc2;
+    return rc;
+}
+
+static int handle_appinfo_set(runtime_state_t *state, int client_fd,
+                               uint64_t trace_id, const char *body,
+                               uint64_t body_len) {
+    if (!state) return -1;
+    char title_id[32] = {0};
+    char key[128] = {0};
+    char val[512] = {0};
+    char resp[768];
+    int n;
+
+    if (parse_json_string_field_local(body, body_len, "title_id", title_id,
+                                       sizeof(title_id)) != 0 ||
+        parse_json_string_field_local(body, body_len, "key", key,
+                                       sizeof(key)) != 0 ||
+        parse_json_string_field_local(body, body_len, "val", val,
+                                       sizeof(val)) != 0) {
+        n = snprintf(resp, sizeof(resp),
+                     "{\"ok\":false,\"err\":\"title_id, key and val are "
+                     "required\"}");
+    } else {
+        char err[256] = {0};
+        if (content_db_appinfo_set(title_id, key, val, err,
+                                   sizeof(err)) == 0) {
+            n = snprintf(resp, sizeof(resp), "{\"ok\":true,\"err\":null}");
+            /* A Settings -> Storage edit is invisible until the user looks;
+             * say so on the console so the change is never silent. */
+            char toast[256];
+            snprintf(toast, sizeof(toast), "%s: %s updated", title_id, key);
+            pop_notification(toast);
+        } else {
+            char esc[512];
+            json_escape_into(err, esc, sizeof(esc));
+            n = snprintf(resp, sizeof(resp), "{\"ok\":false,\"err\":\"%s\"}",
+                         esc);
+        }
+    }
+
+    int rc = send_frame(client_fd, FTX2_FRAME_APPINFO_SET_ACK, 0, trace_id,
+                        resp, (uint64_t)(n > 0 ? n : 0));
+    pthread_mutex_lock(&state->state_mtx);
+    state->command_count += 1;
+    pthread_mutex_unlock(&state->state_mtx);
+    return rc;
 }
 
 /* ── Direct .pkg mount + UFS fsck ────────────────────────────────────── */
@@ -16390,6 +16335,14 @@ static int handle_binary_frame(runtime_state_t *state, int client_fd,
     }
     if (hdr.frame_type == FTX2_FRAME_APPDB_QUERY) {
         return handle_appdb_query(state, client_fd, hdr.trace_id);
+    }
+    if (hdr.frame_type == FTX2_FRAME_APPINFO_QUERY) {
+        return handle_appinfo_query(state, client_fd, hdr.trace_id,
+                                     request_body, hdr.body_len);
+    }
+    if (hdr.frame_type == FTX2_FRAME_APPINFO_SET) {
+        return handle_appinfo_set(state, client_fd, hdr.trace_id,
+                                   request_body, hdr.body_len);
     }
     if (hdr.frame_type == FTX2_FRAME_NET_SPEED_TEST) {
         return handle_net_speed_test(state, client_fd, hdr.trace_id,

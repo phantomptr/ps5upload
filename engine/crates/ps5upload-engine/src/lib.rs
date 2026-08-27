@@ -2551,6 +2551,118 @@ async fn ps5_klog(State(state): State<AppState>, Query(q): Query<KlogQuery>) -> 
     }
 }
 
+#[derive(Deserialize)]
+struct AppInfoQueryParams {
+    addr: Option<String>,
+    title_id: String,
+    /// Comma-separated key filter; omit for every key.
+    keys: Option<String>,
+}
+
+/// GET /api/ps5/appinfo — per-title rows from appinfo.db.
+///
+/// appinfo.db is the database behind Settings → Storage, and it can
+/// disagree with app.db and with what is actually on disk. Reading it is
+/// how you tell those three apart when a title misbehaves.
+async fn ps5_appinfo_query(
+    State(state): State<AppState>,
+    Query(q): Query<AppInfoQueryParams>,
+) -> impl IntoResponse {
+    let addr = mgmt_addr_or_default(q.addr, &state.default_ps5_addr);
+    let title_id = q.title_id;
+    let keys = q.keys;
+    let r = tokio::task::spawn_blocking(move || {
+        ps5upload_core::diagnostics::appinfo_query(&addr, &title_id, keys.as_deref())
+    })
+    .await
+    .map_err(anyhow::Error::from)
+    .and_then(|r| r);
+    match r {
+        Ok(v) => (StatusCode::OK, Json(v)).into_response(),
+        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct AppInfoSetReq {
+    addr: Option<String>,
+    title_id: String,
+    key: String,
+    val: String,
+    /// Where to put the pre-change snapshot of both content databases.
+    /// Omit to let the engine choose a directory under its data dir.
+    backup_dir: Option<String>,
+}
+
+/// POST /api/ps5/appinfo/set — change one appinfo.db value.
+///
+/// The only route in the engine that writes to a console system database.
+/// Both content databases are snapshotted first and the response says
+/// where, because the failure mode here is a title whose Settings entry
+/// stops rendering and there is otherwise nothing to restore from. If the
+/// snapshot cannot be taken the write does not happen at all — an
+/// unrecoverable edit is worse than a refused one.
+///
+/// The payload holds the rest of the preconditions (title not running, the
+/// row must already exist, exactly one row changed or roll back).
+async fn ps5_appinfo_set(
+    State(state): State<AppState>,
+    Json(req): Json<AppInfoSetReq>,
+) -> impl IntoResponse {
+    let addr = mgmt_addr_or_default(req.addr, &state.default_ps5_addr);
+    let stamp = now_ms() / 1000;
+    let backup_dir = match req.backup_dir {
+        Some(d) => std::path::PathBuf::from(d),
+        None => std::env::temp_dir().join(format!("ps5upload-appinfo-{stamp}")),
+    };
+
+    let addr2 = addr.clone();
+    let backup = tokio::task::spawn_blocking(move || {
+        ps5upload_core::fs_ops::backup_content_databases(&addr2, &backup_dir)
+    })
+    .await
+    .map_err(anyhow::Error::from)
+    .and_then(|r| r);
+
+    let saved = match backup {
+        Ok(paths) => paths,
+        Err(e) => {
+            return json_err(
+                StatusCode::BAD_GATEWAY,
+                format!("refusing to edit appinfo.db: could not snapshot it first: {e:#}"),
+            )
+            .into_response();
+        }
+    };
+
+    let (title_id, key, val) = (req.title_id, req.key, req.val);
+    let r = tokio::task::spawn_blocking(move || {
+        ps5upload_core::diagnostics::appinfo_set(&addr, &title_id, &key, &val)
+    })
+    .await
+    .map_err(anyhow::Error::from)
+    .and_then(|r| r);
+
+    let backup_paths: Vec<String> = saved.iter().map(|p| p.display().to_string()).collect();
+    match r {
+        Ok(v) if v.ok => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "ok": true, "backup": backup_paths })),
+        )
+            .into_response(),
+        Ok(v) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "ok": false,
+                "error": v.err.unwrap_or_else(|| "appinfo.db update refused".into()),
+                "backup": backup_paths,
+            })),
+        )
+            .into_response(),
+        Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
+    }
+}
+
 /// GET /api/ps5/net/interfaces — enumerate console network interfaces.
 ///
 /// Same reason as `ps5_klog`: the browser bug report was silently missing it.
@@ -3251,10 +3363,12 @@ async fn ps5_game_icon(
 //                          they still belong to the "installed from package"
 //                          group, since that's how they got there.
 //
-// Why filesystem enumeration and not Sony's app.db: dlopen'ing
-// libSceSqlite hangs on FW 9.60 (see register.c), so app.db is off-limits.
-// /user/appmeta is the safe, firmware-stable source — and it's where the
-// cover art (icon0.png) lives, served by /api/ps5/app-icon below.
+// Why filesystem enumeration and not Sony's app.db: /user/appmeta is where
+// the cover art (icon0.png) lives anyway, served by /api/ps5/app-icon below,
+// and a directory cannot be locked out from under us the way a database the
+// shell holds open can. (The payload *can* read app.db now — it links its
+// own SQLite rather than looking for Sony's, which never existed — but the
+// filesystem stays the primary source here for that reason.)
 
 #[derive(Debug, serde::Serialize)]
 struct InstalledApp {
@@ -8346,6 +8460,8 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/ps5/app/lifecycle", post(ps5_app_lifecycle))
         .route("/api/ps5/klog", get(ps5_klog))
         .route("/api/ps5/net/interfaces", get(ps5_net_interfaces))
+        .route("/api/ps5/appinfo", get(ps5_appinfo_query))
+        .route("/api/ps5/appinfo/set", post(ps5_appinfo_set))
         .route("/api/ps5/focus", get(ps5_focus))
         .route("/api/ps5/fs/read-preview", post(ps5_fs_read_preview))
         .route("/api/ps5/process/list", get(ps5_process_list))

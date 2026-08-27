@@ -219,3 +219,10 @@ PS5Upload-android.apk.idsig
 *.pepk
 *.pfx
 key.properties
+
+# Vendored SQLite amalgamation, fetched + checksum-verified by
+# scripts/install-ps5-sdk.sh (pinned in scripts/ps5-sdk.env). A 9 MB
+# generated file that never changes between pins, so it is fetched
+# rather than tracked.
+payload/third_party/sqlite3/
+payload/sqlite3.o
