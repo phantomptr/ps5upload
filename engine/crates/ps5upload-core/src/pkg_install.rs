@@ -655,6 +655,13 @@ pub fn err_code_message(code: u32) -> Option<&'static str> {
         // SCE_PLAYGO_ERROR_CORE_INVALID_SLOT. The AppInst/PlayGo path is not
         // compatible with this firmware/package context. Confirmed on FW 12.40
         // in issue #277 and independently reported by singleDPI on FW 11.60.
+        // Seen on FW 5.10 for a STAGED (PS5-local) install of a package that
+        // stream-installs fine on the same console minutes later — i.e. the
+        // installer refusing this route, not the package. Same family as
+        // 0x80B2116F, so it carries the same Debug Settings pointer.
+        0x80B2_150F => Some(
+            "PS5 AppInst rejected the staged (PS5-local) install (0x80B2150F) — the package was kept. Enable Settings → System → Debug Settings → Game → Package Installer, or install with Stream instead, which uses a different path.",
+        ),
         0x80B2_116F => Some(
             "PS5 AppInst/PlayGo rejected this firmware/package combination (0x80B2116F) — the staged pkg was kept; use Settings → System → Debug Settings → Game → Package Installer",
         ),
@@ -812,6 +819,7 @@ mod tests {
         // FW 9.60 — all 3 tiers returned these and the UI was showing
         // raw hex with no actionable copy.
         assert!(err_code_message(0x80B2116F).is_some());
+        assert!(err_code_message(0x80B2150F).is_some());
         assert!(err_code_message(0x80B21401).is_some());
         assert!(err_code_message(0xE0000008).is_some());
     }

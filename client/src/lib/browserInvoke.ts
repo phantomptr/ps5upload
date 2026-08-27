@@ -551,6 +551,12 @@ export async function browserInvoke<T>(
         /*long=*/ true,
       );
 
+    // Local .pkg header/split parse. Missing here meant the browser build
+    // could not stream-install at all: installStream reads metadata through
+    // this before it can open a serve-only session.
+    case "pkg_metadata_split":
+      return postJson<T>("/api/pkg/parse-split", { path: args["path"] });
+
     case "pkg_dpi_direct_install":
       // TS caller: { ps5Addr, sessionId } (Tauri 2 camelCase).
       // Direct/streaming install (beta, #81): the engine serves the pkg

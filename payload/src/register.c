@@ -1746,16 +1746,42 @@ int launch_title(const char *title_id, const char **err_reason_out,
      *
      * Init functions are documented as idempotent — calling them on
      * every launch is a few microseconds of overhead. */
+    /* SERIALIZED under sony_api_lock, like every other Sony call here.
+     *
+     * These three ran unlocked, and a raced sceUserServiceGetForegroundUser
+     * returns -1 ("no user") even when a user IS signed in. That -1 then
+     * cascades: launch_via_system_service refuses to build a ctx without a
+     * real user, Sony's launcher rejects the ctx-less call with 0x80940005,
+     * and the fallback ladder starts the title in a state the shell will not
+     * put on screen. Observed exactly that on FW 9.60 — the process ran with
+     * ~75s of CPU while the dashboard stayed up, and /api/ps5/users/list
+     * (which DOES serialize) reported the user correctly at the same moment.
+     *
+     * Unserialized sceUserService calls are also a documented way to take the
+     * host process down, so the lock is required regardless of the -1.
+     *
+     * Scoped tight: launch_via_system_service and the fallback ladder take
+     * this same non-recursive lock themselves, so it must be released here. */
+    int fg_user = -1;
+    pthread_mutex_lock(&sony_api_lock);
     if (g_reg.user_service_initialize) {
         (void)g_reg.user_service_initialize(NULL);
     }
     if (g_reg.lnc_util_initialize) {
         (void)g_reg.lnc_util_initialize();
     }
-    int fg_user = 0;
     if (g_reg.user_service_get_foreground_user) {
-        (void)g_reg.user_service_get_foreground_user(&fg_user);
+        int probe = -1;
+        /* Honour the return code: on failure the out-param is undefined, and
+         * treating whatever it holds as a user id is how a bogus id reaches
+         * Sony's launcher. */
+        if (g_reg.user_service_get_foreground_user(&probe) == 0) {
+            fg_user = probe;
+        }
     }
+    pthread_mutex_unlock(&sony_api_lock);
+    fprintf(stderr, "[payload2] launch %s: foreground user=%d\n",
+            title_id, fg_user);
     /* fg_user may still be 0 if no profile is currently selected on
      * the console. Sony's launcher would reject; but that's a real
      * "user must pick a profile" case, not a transient race — let

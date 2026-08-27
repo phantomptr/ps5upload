@@ -26,6 +26,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use ps5upload_core::app_lifecycle::{toast_send, ToastRequest};
 use ps5upload_core::pkg_install::{
     err_code_message, pkg_install, pkg_install_status, InstallPhase, PkgInstallRequest,
     PkgInstallResponse, PkgInstallStatus, APPINST_VIA_LOCAL_FLAG, APPINST_VIA_SHELLUI_FLAG,
@@ -91,6 +92,16 @@ pub struct InstallSession {
     /// FW, or no real title_id) — the legacy optimistic behavior. Cached
     /// alongside `terminal_status` so replayed polls stay consistent.
     pub launchable: Option<bool>,
+    /// True for a Stream/serve-only session: the engine only hosts the pkg
+    /// over HTTP and the DPI daemon performs the install, so this session
+    /// legitimately never gets a BGFT task_id.
+    pub serve_only: bool,
+    /// True once the console-side "install finished" toast has been sent.
+    ///
+    /// The status endpoint is polled repeatedly and a session can be observed
+    /// terminal on any number of those polls, so without this latch the
+    /// console would get a fresh toast every poll interval forever.
+    pub notified_console: bool,
     /// Free bytes on the data volume at the first status poll — the baseline
     /// the progress tracker measures "bytes consumed" against. `None` until the
     /// first poll captures it (or if volumes couldn't be listed). See
@@ -532,6 +543,13 @@ async fn parse_split_handler(Json(req): Json<ParseRequest>) -> Response<Body> {
 pub struct InstallStartRequest {
     /// PS5 mgmt-port address, e.g. "192.168.1.42:9114".
     pub ps5_addr: String,
+    /// Proceed with a staged re-install of an already-installed full game.
+    ///
+    /// Off by default because that path is destructive on failure (see the
+    /// guard in `install_start_handler`). A caller that has explicitly warned
+    /// the user may set it.
+    #[serde(default)]
+    pub allow_destructive_reinstall: bool,
     /// Either `path` (single .pkg) or `split_root` (lead `.pkg` of a
     /// split set) must be set. `split_root` triggers split-pkg
     /// detection — we look for `<root>.0`, `<root>.1`, ... siblings.
@@ -838,6 +856,90 @@ async fn install_start_handler(
         }
     }
 
+    // ── Destructive-staged-reinstall guard ──────────────────────────────
+    // A STAGED (PS5-local) install of a full game whose title is ALREADY
+    // installed is destructive on failure: Sony's installer clears the old
+    // title before writing the new one, so if the write then fails the user
+    // is left with neither. Hardware-observed on FW 5.10 — a working
+    // CUSA03474 was removed by a staged reinstall that failed with
+    // 0x80B2150F, while `install/start` had returned 0 (start only registers;
+    // the failure is asynchronous, so nothing upstream can react in time).
+    //
+    // Staged is also simply the worse path: measured 0/3 successful staged
+    // installs across two consoles vs 9/9 for stream, same packages.
+    //
+    // So refuse this specific combination by default and point at Stream.
+    // `allow_destructive_reinstall` lets a caller that has warned the user
+    // proceed anyway. Stream (serve_only) is never blocked — it does not
+    // take this destructive route.
+    if !req.serve_only && is_local && package_type.ends_with("GD") {
+        if let Some(title_id) =
+            ps5upload_core::pkg_install::title_id_from_content_id(&head_meta.content_id)
+        {
+            if !req.allow_destructive_reinstall {
+                let addr = req.ps5_addr.clone();
+                let tid = title_id.clone();
+                let check = tokio::task::spawn_blocking(move || {
+                    ps5upload_core::pkg_install::verify_title_registered(&addr, &tid)
+                })
+                .await
+                .unwrap_or(ps5upload_core::pkg_install::LaunchCheck::Unsupported);
+                if matches!(check, ps5upload_core::pkg_install::LaunchCheck::Registered) {
+                    crate::log_warn!(
+                        "staged reinstall refused: {} already installed on {} (destructive on failure)",
+                        title_id,
+                        req.ps5_addr
+                    );
+                    return json_err(
+                        StatusCode::CONFLICT,
+                        &format!(
+                            "{title_id} is already installed. Re-installing it from PS5 storage wipes the current copy before writing the new one, so a failure would leave the game gone. Use Stream install instead, or uninstall {title_id} first."
+                        ),
+                    );
+                }
+            }
+        }
+    }
+
+    // ── Patch-without-base pre-flight ───────────────────────────────────
+    // A patch whose base game isn't installed cannot install: Sony's
+    // installer accepts the request, writes nothing, and the progress tracker
+    // eventually calls it a stall — after ~10 MINUTES of a spinner. Measured:
+    // a Toy Story 2 backport (category `gp`) aimed at a console without
+    // CUSA33334 sat for 604s before reporting "0 of 15335424 bytes written".
+    //
+    // The answer is knowable instantly, so check it instantly. Only a
+    // DEFINITE absence fails: an enumeration that errors leaves the install
+    // to proceed exactly as before, because a check we cannot perform must
+    // never block a legitimate install.
+    if package_type.ends_with("DP") {
+        if let Some(title_id) =
+            ps5upload_core::pkg_install::title_id_from_content_id(&head_meta.content_id)
+        {
+            let addr = req.ps5_addr.clone();
+            let tid = title_id.clone();
+            let check = tokio::task::spawn_blocking(move || {
+                ps5upload_core::pkg_install::verify_title_registered(&addr, &tid)
+            })
+            .await
+            .unwrap_or(ps5upload_core::pkg_install::LaunchCheck::Unsupported);
+            if matches!(check, ps5upload_core::pkg_install::LaunchCheck::Absent) {
+                crate::log_warn!(
+                    "install rejected: patch {} has no installed base {} on {}",
+                    head_meta.content_id,
+                    title_id,
+                    req.ps5_addr
+                );
+                return json_err(
+                    StatusCode::BAD_REQUEST,
+                    &format!(
+                        "This is an update/patch for {title_id}, but that game isn't installed on this PS5. Install the base game first, then apply the patch."
+                    ),
+                );
+            }
+        }
+    }
+
     // Exact source identity used by category-aware completion verification.
     // PC/stream installs already have it from the local parser. Staged installs
     // have no host-side file, so sample the PS5 copy once (two 64 KiB reads)
@@ -928,6 +1030,8 @@ async fn install_start_handler(
         staging_path: staging_path_for(&req.local_ps5_path, req.delete_staging),
         terminal_status: None,
         launchable: None,
+        serve_only: req.serve_only,
+        notified_console: false,
         install_start_free_bytes: None,
         progress_consumed_bytes: 0,
         last_progress_unix: None,
@@ -1648,6 +1752,8 @@ async fn install_status_handler(
         cached_consumed,
         cached_stalled,
         cached_accepted_unverified,
+        register_err_code,
+        is_serve_only,
     ) = {
         let sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
         match sessions.get(&q.session) {
@@ -1670,6 +1776,8 @@ async fn install_status_handler(
                 s.progress_consumed_bytes,
                 s.stalled,
                 s.accepted_unverified,
+                s.err_code,
+                s.serve_only,
             ),
         }
     };
@@ -1733,7 +1841,19 @@ async fn install_status_handler(
             phase: InstallPhase::Done,
             downloaded: 0,
             total,
-            err_code: 0,
+            // Carry the REGISTER rejection code instead of hardcoding 0.
+            //
+            // This arm exists for serve-only (stream) sessions, which
+            // legitimately have no BGFT task_id — but a register-REJECT has no
+            // task_id either, so it landed here too and had its rejection
+            // silently rewritten to "err_code: 0, phase: Done". A staged
+            // install Sony refused (0x80B2116F — the firmware/package combo
+            // rejection, see err_code_message) therefore surfaced to the
+            // client as a clean success with no hint that anything had been
+            // declined, and no pointer to the Debug Settings workaround that
+            // message carries. The progress tracker below still
+            // decides completion; this only stops the reason being erased.
+            err_code: register_err_code,
             detail: String::new(),
             register_path: String::new(),
             intdebug_avail: false,
@@ -1742,6 +1862,35 @@ async fn install_status_handler(
             appinst_err: None,
         },
     };
+
+    // ── Register-reject fast-fail ───────────────────────────────────────
+    // A STAGED install whose register was refused has no BGFT task and no
+    // in-process install running: nothing will ever write a byte. Before this,
+    // such a session synthesized a Done, handed it to the progress tracker,
+    // and the tracker dutifully watched a flatline for ~10 MINUTES before
+    // calling it a stall — with the actual rejection code discarded, so the
+    // user never saw the reason or its documented workaround.
+    //
+    // Measured on both consoles: FW 5.10 refused with 0x80B2150F and FW 9.60
+    // with 0x80B2116F, each after a 600s spinner, while the same package
+    // stream-installed fine seconds later.
+    //
+    // Serve-only sessions are EXEMPT: they legitimately have no task_id
+    // because the DPI daemon does the install, and a non-zero register rc
+    // there is not fatal.
+    if !is_serve_only && task_id.is_none() && register_err_code != 0 {
+        status.phase = InstallPhase::Error;
+        status.err_code = register_err_code;
+        if status.detail.is_empty() {
+            status.detail = ps5upload_core::pkg_install::err_code_message(register_err_code)
+                .map(str::to_string)
+                .unwrap_or_else(|| {
+                    format!(
+                        "PS5 refused the install request (0x{register_err_code:08X}); the staged package was kept so you can retry."
+                    )
+                });
+        }
+    }
 
     // (`total` from the session is the fallback for build_status_response,
     // which prefers the BGFT-reported size when non-zero — BGFT reports 0
@@ -1973,10 +2122,62 @@ async fn install_status_handler(
     let installed_bytes = if matches!(status.phase, InstallPhase::Done | InstallPhase::Error) {
         let mut sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(s) = sessions.get_mut(&q.session) {
+            let first_terminal = !s.notified_console;
             s.terminal_status = Some(status.clone());
             s.launchable = launchable;
             s.stalled = stalled;
             s.accepted_unverified = accepted_unverified;
+            if first_terminal {
+                s.notified_console = true;
+                // Tell the CONSOLE the install finished. Installs are long and
+                // usually kicked off from another room; until now the only
+                // completion signal lived in the client UI, so whoever was
+                // watching the TV had no idea whether it had finished,
+                // stalled, or failed. Detached and fire-and-forget: a toast
+                // that fails must never change the install's reported outcome.
+                let toast_addr = ps5_addr.clone();
+                let title_name = if s.title.trim().is_empty() {
+                    content_id.clone()
+                } else {
+                    s.title.clone()
+                };
+                let done = matches!(status.phase, InstallPhase::Done);
+                let err_code = status.err_code;
+                let (summary, body) = if done && !accepted_unverified {
+                    (
+                        "Install complete",
+                        format!("{title_name} is ready to play."),
+                    )
+                } else if done {
+                    (
+                        "Install finished (unverified)",
+                        format!(
+                            "{title_name} was accepted, but completion could not be confirmed."
+                        ),
+                    )
+                } else if stalled {
+                    (
+                        "Install stalled",
+                        format!("{title_name} stopped making progress — the package was kept so you can retry."),
+                    )
+                } else {
+                    (
+                        "Install failed",
+                        format!("{title_name} did not install (error 0x{err_code:08x})."),
+                    )
+                };
+                tokio::task::spawn_blocking(move || {
+                    let req = ToastRequest {
+                        title: summary.to_string(),
+                        subtitle: body,
+                        icon: String::new(),
+                        action_url: String::new(),
+                    };
+                    if let Err(e) = toast_send(&toast_addr, &req) {
+                        crate::log_warn!("install console toast failed: {e}");
+                    }
+                });
+            }
             s.progress_consumed_bytes
         } else {
             cached_consumed
@@ -3500,6 +3701,8 @@ mod tests {
             staging_path: None,
             terminal_status: None,
             launchable: None,
+            serve_only: false,
+            notified_console: false,
             install_start_free_bytes: None,
             progress_consumed_bytes: 0,
             last_progress_unix: None,

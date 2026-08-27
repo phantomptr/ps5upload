@@ -67,7 +67,6 @@ import {
   type InstalledPkgArtifact,
 } from "../../api/ps5";
 import { transferAddr, hostOf } from "../../lib/addr";
-import { firmwareMajor } from "../../lib/ps5Firmware";
 import { formatBytes } from "../../lib/format";
 import { acceptPkgDrop } from "../../lib/pkgDropDedupe";
 
@@ -409,9 +408,6 @@ const installedIdsCache = new Map<string, Set<string>>();
 export default function InstallPackageScreen() {
   const tr = useTr();
   const host = useConnectionStore((s) => s.host);
-  // This console's runtime (kernel string → firmware major for the Stream
-  // FW-11 guard). Scoped to the active host like every other selector.
-  const runtime = useConnectionStore((s) => s.runtimeByHost[hostOf(host)]);
   // Per-console store: every selector is scoped to THIS console's host, so the
   // Install Package view is fully isolated per PS5 (parallel installs).
   const entries = usePkgLibrary(host, (s) => s.entries);
@@ -450,6 +446,19 @@ export default function InstallPackageScreen() {
     Map<string, InstalledPkgArtifact[]>
   >(() => new Map());
   const [pickError, setPickError] = useState<string | null>(null);
+  /** Terminal outcome of the last stream install, shown IN THIS VIEW.
+   *
+   *  A streamed package is a path on the PC, not a staging-library row, so it
+   *  has no entry.lastResult to hang a result off — which is why a finished
+   *  stream install used to leave this screen completely unchanged and only
+   *  ring the in-app bell. If you navigated away or missed the toast, there
+   *  was no way to tell whether it had worked. */
+  const [streamResult, setStreamResult] = useState<{
+    ok: boolean;
+    warn: boolean;
+    message: string;
+    name: string;
+  } | null>(null);
   const [picking, setPicking] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [dropActive, setDropActive] = useState(false);
@@ -459,12 +468,13 @@ export default function InstallPackageScreen() {
     );
 
   const hostReady = !!host?.trim();
-  // There is no reliable firmware cutoff for Stream install. Hardware proves
-  // it works on one FW 5.10 console while a FW 9.60 console can reject the
-  // same request at Sony's HTTP proxy layer before fetching a byte. Keep it a
-  // clearly-labelled beta and surface the real network error instead of
-  // disabling capable older consoles based on version alone.
-  const fwMajor = firmwareMajor(runtime?.ps5Kernel);
+  // There is no reliable firmware cutoff for Stream install, and no beta gate
+  // either: it is the primary path. Hardware across FW 5.10 and FW 9.60 ran
+  // 9/9 successful stream installs (16 MB to 3.56 GB) while the staged
+  // Upload -> Install path failed 0/3 on the same consoles and packages. A
+  // console can still reject a stream at Sony's HTTP proxy layer, so the real
+  // network error is surfaced when that happens rather than pre-emptively
+  // disabling capable consoles by version.
   useEffect(() => {
     setAlternativeSelections(loadPkgAlternativeSelections(host));
   }, [host]);
@@ -652,28 +662,18 @@ export default function InstallPackageScreen() {
       );
       return;
     }
-    const firmwareLabel =
-      fwMajor === null ? "this firmware" : `firmware ${fwMajor}.x`;
-    const proceed = await confirm({
-      title: tr(
-        "pkglib.stream.beta.title",
-        undefined,
-        "Stream install is beta",
-      ),
-      message: tr(
-        "pkglib.stream.beta.body",
-        { fw: firmwareLabel },
-        `On ${firmwareLabel}, Stream uses the PS5's own HTTP installer to pull the package from this computer. Firmware version alone does not determine support, and console proxy/network settings can block it. If it fails, use Upload → Install instead. Continue with Stream?`,
-      ),
-      confirmLabel: tr(
-        "pkglib.stream.beta.confirm",
-        undefined,
-        "Stream anyway",
-      ),
-      cancelLabel: tr("cancel", undefined, "Cancel"),
-      destructive: true,
-    });
-    if (!proceed) return;
+    // No beta gate. Stream is the RELIABLE path and is no longer hidden
+    // behind a scary confirm.
+    //
+    // Measured across both test consoles (FW 9.60 and FW 5.10), packages from
+    // 16 MB to 3.56 GB: Stream 9/9 succeeded; staged Upload -> Install 0/3,
+    // and one failed staged install REMOVED the working game it was
+    // replacing (Sony's installer clears the old title before writing the
+    // new one, so a failure leaves nothing). The old dialog told users the
+    // exact opposite — "if it fails, use Upload -> Install, that path is
+    // reliable on all firmwares" — which pointed them at the destructive
+    // route. Keeping a `destructive: true` confirm on the safe path while
+    // the unsafe one was one click away was the wrong way round.
     setStreaming(true);
     try {
       const sel = isAndroid()
@@ -687,7 +687,22 @@ export default function InstallPackageScreen() {
           });
       const p = Array.isArray(sel) ? sel[0] : sel;
       if (!p) return;
+      setStreamResult(null);
       const r = await installStream(p as string, host);
+      const streamName = String(p).split("/").pop() ?? String(p);
+      setStreamResult({
+        ok: !!r.ok,
+        warn: !r.ok && !!r.acceptedUnverified,
+        name: streamName,
+        message: r.ok
+          ? tr(
+              "install.stream.done",
+              undefined,
+              "Stream install complete — the package was fetched over HTTP, nothing was staged on the PS5.",
+            )
+          : r.message ||
+            tr("install.stream.failed", undefined, "The install didn't complete."),
+      });
       if (!r.ok && r.stagedFallbackRecommended) {
         const fallback = await confirm({
           title: tr(
@@ -1093,11 +1108,11 @@ export default function InstallPackageScreen() {
                         )
                       : tr(
                           "pkglib.stream.hint",
-                          "Install a .pkg straight from this PC over HTTP — no staging upload (beta)",
+                          "Install a .pkg straight from this PC over HTTP — no staging upload. The most reliable path.",
                         )
                   }
                 >
-                  {tr("pkglib.stream", undefined, "Stream (beta)")}
+                  {tr("pkglib.stream", undefined, "Stream install")}
                 </Button>
               </>
             )}
@@ -1170,6 +1185,40 @@ export default function InstallPackageScreen() {
         </div>
       )}
 
+      {streamResult && (
+        <div className="mb-4">
+          <div
+            className={`flex items-start gap-2 rounded-lg border px-3 py-2.5 text-sm ${
+              streamResult.ok
+                ? "border-[var(--color-good)] text-[var(--color-good)]"
+                : streamResult.warn
+                  ? "border-[var(--color-warn)] text-[var(--color-warn)]"
+                  : "border-[var(--color-bad)] text-[var(--color-bad)]"
+            }`}
+            role="status"
+          >
+            {streamResult.ok ? (
+              <CheckCircle2 size={15} className="mt-px shrink-0" />
+            ) : streamResult.warn ? (
+              <AlertTriangle size={15} className="mt-px shrink-0" />
+            ) : (
+              <XCircle size={15} className="mt-px shrink-0" />
+            )}
+            <div className="min-w-0">
+              <div className="font-medium break-words">{streamResult.name}</div>
+              <div className="opacity-90 break-words">{streamResult.message}</div>
+            </div>
+            <button
+              type="button"
+              className="ml-auto shrink-0 opacity-70 hover:opacity-100"
+              onClick={() => setStreamResult(null)}
+              aria-label={tr("common.dismiss", undefined, "Dismiss")}
+            >
+              ×
+            </button>
+          </div>
+        </div>
+      )}
       {pickError && (
         <div className="mb-4">
           <WarningCard
