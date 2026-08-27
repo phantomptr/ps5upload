@@ -67,3 +67,18 @@ export const useRunningAppsStore = create<RunningAppsState>((set, get) => ({
     set({ titleIds: new Set(), host, updatedAtMs: 0 });
   },
 }));
+
+/**
+ * Whether any game is running on the active console right now.
+ *
+ * Drives the "playing" dot on the Games tab. Reads the shared store rather
+ * than polling, so it costs nothing wherever it is rendered — the store is
+ * kept current by `installRunningWatch` at the shell level, and by the
+ * faster screen loops whenever Games or Library is open.
+ *
+ * Host correctness is the store's job: `clearForHostChange` empties the set
+ * on a console switch, so this cannot report the previous PS5's games.
+ */
+export function useAnyGameRunning(): boolean {
+  return useRunningAppsStore((s) => s.titleIds.size > 0);
+}

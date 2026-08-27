@@ -3,7 +3,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 vi.mock("../api/ps5", () => ({ processList: vi.fn() }));
 
 import { processList, type ProcessInfo } from "../api/ps5";
-import { fetchRunningGames } from "./runningGames";
+import { fetchRunningGames, sortRunningFirst } from "./runningGames";
 
 const mockedList = vi.mocked(processList);
 
@@ -77,5 +77,68 @@ describe("fetchRunningGames", () => {
       appId: 0,
       pid: 55,
     });
+  });
+});
+
+const t = (titleId: string) => ({ titleId });
+const ids = (rows: readonly { titleId: string }[]) =>
+  rows.map((r) => r.titleId);
+
+describe("sortRunningFirst", () => {
+  it("moves a running title to the front", () => {
+    const rows = [t("A"), t("B"), t("C")];
+    expect(ids(sortRunningFirst(rows, new Set(["C"])))).toEqual([
+      "C",
+      "A",
+      "B",
+    ]);
+  });
+
+  it("preserves the order of everything else", () => {
+    // The caller has usually already sorted by play time. A stable sort is
+    // what lets this be applied on top instead of replacing that ordering.
+    const rows = [t("A"), t("B"), t("C"), t("D")];
+    expect(ids(sortRunningFirst(rows, new Set(["C"])))).toEqual([
+      "C",
+      "A",
+      "B",
+      "D",
+    ]);
+  });
+
+  it("preserves the relative order of several running titles", () => {
+    const rows = [t("A"), t("B"), t("C"), t("D")];
+    expect(ids(sortRunningFirst(rows, new Set(["D", "B"])))).toEqual([
+      "B",
+      "D",
+      "A",
+      "C",
+    ]);
+  });
+
+  it("returns the input untouched when nothing is running", () => {
+    // The common case by far — it should not allocate a copy.
+    const rows = [t("A"), t("B")];
+    expect(sortRunningFirst(rows, new Set())).toBe(rows);
+  });
+
+  it("ignores running titles that are not in the list", () => {
+    // The process list can name a title the installed list has not caught up
+    // with yet (or a system app we never show).
+    const rows = [t("A"), t("B")];
+    expect(ids(sortRunningFirst(rows, new Set(["ZZ"])))).toEqual(["A", "B"]);
+  });
+
+  it("accepts the Map the Games screen actually holds", () => {
+    // InstalledApps keeps title -> RunningGame so it has a kill handle; the
+    // Library store keeps a bare Set. Both must work or one call site
+    // silently no-ops.
+    const rows = [t("A"), t("B")];
+    const running = new Map([["B", { titleId: "B", appId: 1, pid: 2 }]]);
+    expect(ids(sortRunningFirst(rows, running))).toEqual(["B", "A"]);
+  });
+
+  it("handles an empty list", () => {
+    expect(sortRunningFirst([], new Set(["A"]))).toEqual([]);
   });
 });

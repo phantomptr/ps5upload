@@ -3529,14 +3529,46 @@ export function appIconUrl(transferAddr: string, titleId: string): string {
  * Returns null rather than throwing: the caller's next step is a glyph
  * either way, and a rejected promise here is not an app error.
  */
+/**
+ * Cache keys for cover art. Exported as functions rather than inlined at
+ * each use so the synchronous lookups below and the async fetches above
+ * cannot drift apart — a mismatch would not fail loudly, it would just
+ * mean every read missed and the cache silently did nothing.
+ *
+ * Keyed on the console as well as the title: one console's artwork must
+ * never be served under another's name.
+ */
+const appIconKey = (addr: string, titleId: string) => `app|${addr}|${titleId}`;
+const gameIconKey = (addr: string, path: string) => `game|${addr}|${path}`;
+
+/**
+ * Artwork this session already holds for a title, or undefined.
+ *
+ * Synchronous by design: a caller reads it during render and hands it to
+ * `useImageRetry` as `cached`, so a re-mounted screen paints its covers on
+ * the first frame rather than re-deriving bytes it is already holding.
+ */
+export function cachedAppIcon(
+  transferAddr: string,
+  titleId: string,
+): string | undefined {
+  return getCachedIcon(appIconKey(toMgmtAddr(transferAddr), titleId));
+}
+
+/** Folder cover art this session already holds. See {@link cachedAppIcon}. */
+export function cachedGameIcon(
+  transferAddr: string,
+  path: string,
+): string | undefined {
+  return getCachedIcon(gameIconKey(toMgmtAddr(transferAddr), path));
+}
+
 export async function appIconDataUrl(
   transferAddr: string,
   titleId: string,
 ): Promise<string | null> {
   const addr = toMgmtAddr(transferAddr);
-  // Keyed on the console as well as the title: one console's artwork must
-  // never be served under another's name.
-  const key = `app|${addr}|${titleId}`;
+  const key = appIconKey(addr, titleId);
   const hit = getCachedIcon(key);
   if (hit) return hit;
   try {
@@ -3560,7 +3592,7 @@ export async function gameIconDataUrl(
   path: string,
 ): Promise<string | null> {
   const addr = toMgmtAddr(transferAddr);
-  const key = `game|${addr}|${path}`;
+  const key = gameIconKey(addr, path);
   const hit = getCachedIcon(key);
   if (hit) return hit;
   try {

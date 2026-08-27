@@ -1921,7 +1921,7 @@ hw_fan_preset_performance_hint: "僅在高負載時提速——閒置時較安�
 hw_fan_preset_quiet: "靜音",
 hw_fan_preset_quiet_hint: "風扇更早啟動——更涼，噪音較大",
 hw_m2_not_installed: "未安裝 M.2 硬碟或感測器無法使用",
-installed_needs_smp: "需要 ShadowMount+",
+installed_needs_smp: "需要 SMP",
 installed_now_playing: "正在遊玩",
 installed_only_unplayed: "僅顯示未見遊玩過的",
 installed_open_folder: "開啟資料夾",

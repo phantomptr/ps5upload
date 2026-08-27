@@ -19,12 +19,14 @@ import {
 import { useNavigate } from "react-router";
 import { openInFileSystem } from "../../state/fsNavigation";
 import { useConnectionStore } from "../../state/connection";
+import { useRunningAppsStore } from "../../state/runningApps";
 import {
   appsInstalled,
   appUnregister,
   appLaunch,
   appIconUrl,
   appIconDataUrl,
+  cachedAppIcon,
   appKill,
   processKill,
   smpStatus,
@@ -33,6 +35,7 @@ import {
 } from "../../api/ps5";
 import {
   fetchRunningGames,
+  sortRunningFirst,
   type RunningGame,
 } from "../../lib/runningGames";
 import {
@@ -141,6 +144,11 @@ function Cover({ host, title }: { host: string; title: InstalledTitle }) {
   const { src, onError } = useImageRetry(
     host.trim() ? appIconUrl(transferAddr(host), title.titleId) : null,
     {
+      // Bytes this session already fetched. Returning to Games then paints
+      // covers on the first frame instead of re-deriving what we hold.
+      cached: host.trim()
+        ? cachedAppIcon(transferAddr(host), title.titleId)
+        : undefined,
       // If the webview refuses the direct URL, pull the same bytes over the
       // IPC as a data: URL rather than showing a glyph. See useImageRetry.
       fallbackLoader: () =>
@@ -170,6 +178,89 @@ function Cover({ host, title }: { host: string; title: InstalledTitle }) {
         <Gamepad2 size={28} className="text-[var(--color-muted)]" />
       )}
     </div>
+  );
+}
+
+// ── Now playing ──────────────────────────────────────────────────────────────
+
+/**
+ * A running title, pulled out of the grid and pinned above it.
+ *
+ * The grid already marks a running game with a "Playing" corner badge, which
+ * is enough to recognise one you are looking at and not enough to find one
+ * you are not. This banner answers "what is running, and how do I stop it"
+ * without scrolling — the two things a user opens this screen for while a
+ * game is on.
+ *
+ * Deliberately not a card: it reuses the same Cover and the same Close-game
+ * path as the grid row, so there is no second implementation of stopping a
+ * game to keep in step with the first.
+ */
+function NowPlayingBanner({
+  host,
+  titles,
+  running,
+  stoppingId,
+  playByHost,
+  onStop,
+}: {
+  host: string;
+  titles: InstalledTitle[];
+  running: Map<string, RunningGame>;
+  stoppingId: string | null;
+  playByHost: Record<string, Record<string, number>>;
+  onStop: (t: InstalledTitle) => void;
+}) {
+  const tr = useTr();
+  // Only titles we can actually name and act on. A running process whose
+  // title isn't in the installed list (a system app, or a list that hasn't
+  // refreshed yet) is real but not actionable here, so it stays out rather
+  // than rendering a nameless row.
+  const playing = titles.filter((t) => running.has(t.titleId));
+  if (playing.length === 0) return null;
+
+  return (
+    <section className="flex flex-col gap-2 rounded-xl border border-[var(--color-good)]/40 bg-[var(--color-good)]/5 p-3">
+      <div className="flex items-center gap-1.5 text-xs font-semibold text-[var(--color-good)]">
+        <CircleDot size={12} className="animate-pulse shrink-0" />
+        {tr("installed_now_playing", undefined, "Now playing")}
+      </div>
+      {playing.map((t) => {
+        const secs = playSecondsFor({ byHost: playByHost }, host, t.titleId);
+        return (
+          <div key={t.titleId} className="flex items-center gap-3">
+            <div className="w-14 shrink-0">
+              <Cover host={host} title={t} />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-sm font-semibold" title={t.titleName}>
+                {t.titleName}
+              </div>
+              <div className="truncate font-mono text-xs text-[var(--color-muted)]">
+                {secs && secs > 0 ? formatPlayTime(secs) : t.titleId}
+              </div>
+            </div>
+            <Button
+              variant="danger"
+              size="sm"
+              className="min-w-0 shrink"
+              loading={stoppingId === t.titleId}
+              leftIcon={<Square size={13} />}
+              onClick={() => onStop(t)}
+              title={tr(
+                "installed_stop_tooltip",
+                undefined,
+                "Close this running game on the PS5",
+              )}
+            >
+              {stoppingId === t.titleId
+                ? tr("installed_stopping", undefined, "Closing…")
+                : tr("installed_stop", undefined, "Close game")}
+            </Button>
+          </div>
+        );
+      })}
+    </section>
   );
 }
 
@@ -329,7 +420,7 @@ function AppCard({
                   size="md"
                   loading={stopping}
                   leftIcon={<Square size={15} />}
-                  className="flex-1 min-w-fit"
+                  className="basis-full min-w-0"
                   onClick={() => onStop(title)}
                   title={tr(
                     "installed_stop_tooltip",
@@ -348,12 +439,26 @@ function AppCard({
                 size="md"
                 loading={launching}
                 leftIcon={<Play size={15} />}
-                // `min-w-fit` overrides the global `min-width:0` so the button
-                // never shrinks below its own label — on a disc-image card (which
-                // adds an "Open folder" button) the Play button used to get
-                // squeezed and clip "Play" → "Pla". `flex-wrap` on the row lets the
-                // icon buttons drop to a second line instead, before that happens.
-                className="flex-1 min-w-fit"
+                // `basis-full`: the primary action owns a full-width line of
+                // its own, and the icon buttons wrap beneath it.
+                //
+                // This previously read `flex-1 min-w-fit`, whose comment
+                // claimed min-w-fit stopped the button shrinking below its
+                // label. Measured at 360px, it does not: sharing the row with
+                // the open-folder button, the Play button was squeezed to
+                // 93px while its `whitespace-nowrap` label kept its full
+                // width, overflowing the button by 110px for "Needs
+                // ShadowMount+" and 253px for the German string. The card's
+                // `overflow-hidden` (there for the rounded corners) then cut
+                // the label off mid-glyph — the "button sliced in half".
+                //
+                // `flex-wrap` did not save it either: wrapping moves whole
+                // items to a new line, and the overflow here is inside one
+                // item. Giving the button the whole line, letting it shrink
+                // (`min-w-0`) and letting Button ellipsize its label is what
+                // actually bounds it — verified at 0px overflow for every
+                // label including the longest translation.
+                className="basis-full min-w-0"
                 onClick={() => onLaunch(title)}
                 // A disc-image title can't launch until ShadowMount+ mounts it.
                 // Also disabled while starting so a second click can't fire a
@@ -373,8 +478,14 @@ function AppCard({
                       )
                 }
               >
+                {/* "Needs SMP", not "Needs ShadowMount+". The truncation
+                    above already bounds the long form, but bounding it means
+                    showing "Needs Shadow…" in a card barely wider than the
+                    button. The abbreviation is what the corner badge on the
+                    cover already uses, and the full name stays in the `title`
+                    tooltip and in the section-level warning. */}
                 {discNeedsSmp
-                  ? tr("installed_needs_smp", undefined, "Needs ShadowMount+")
+                  ? tr("installed_needs_smp", undefined, "Needs SMP")
                   : launching
                     ? tr("installed_starting", undefined, "Starting…")
                     : tr("installed_play", undefined, "Play")}
@@ -575,7 +686,13 @@ export default function InstalledAppsScreen({
       if (transferScreenBusy(host)) return;
       try {
         const r = await fetchRunningGames(addr);
-        if (!cancelled) setRunning(r);
+        if (!cancelled) {
+          setRunning(r);
+          // Publish to the shared store too. Two reasons: the Games tab
+          // badge reads from there, and the shell-level watcher backs off
+          // while this faster loop is keeping it fresh.
+          useRunningAppsStore.getState().setRunning(Array.from(r.keys()), host);
+        }
       } catch {
         // Transient (console busy/offline) — keep the last known set rather
         // than flicker every card's state on one failed poll.
@@ -616,6 +733,9 @@ export default function InstalledAppsScreen({
             const r = await fetchRunningGames(addr);
             if (probe.isStale()) return;
             setRunning(r);
+            useRunningAppsStore
+              .getState()
+              .setRunning(Array.from(r.keys()), probe.host);
             if (r.has(t.titleId)) {
               confirmed = true;
               break;
@@ -720,11 +840,17 @@ export default function InstalledAppsScreen({
         if (ack.ok) {
           // Drop it from the running set immediately so the card flips back to
           // Play without waiting for the next poll.
-          setRunning((cur) => {
-            const next = new Map(cur);
-            next.delete(t.titleId);
-            return next;
-          });
+          // Computed outside the updater on purpose: React invokes updaters
+          // twice under StrictMode, so a store write in there would fire
+          // twice per close.
+          const next = new Map(running);
+          next.delete(t.titleId);
+          setRunning(next);
+          // Keep the shared store in step, or the tab badge would stay lit
+          // until the next poll for a game the user just closed.
+          useRunningAppsStore
+            .getState()
+            .setRunning(Array.from(next.keys()), probe.host);
           pushNotification("info", withConsolePrefix(probe.host, t.titleName), {
             body: tr("installed_stopped", undefined, "Game closed"),
           });
@@ -904,8 +1030,10 @@ export default function InstalledAppsScreen({
     if (sortByPlaytime) {
       rows = [...rows].sort((a, b) => secs(a) - secs(b));
     }
-    return rows;
-  }, [installed, onlyUnplayed, sortByPlaytime, playByHost, host]);
+    // Running titles to the front, after every other ordering. See
+    // sortRunningFirst for why this is applied last.
+    return sortRunningFirst(rows, running);
+  }, [installed, onlyUnplayed, sortByPlaytime, playByHost, host, running]);
 
   return (
     <div className={`flex flex-col gap-5 ${embedded ? "" : "p-6"}`}>
@@ -947,6 +1075,17 @@ export default function InstalledAppsScreen({
       )}
 
       <ConnectionGate require="payload">
+        {/* Anything actually running goes above every advisory on this
+            screen — it is the most time-sensitive thing here. */}
+        <NowPlayingBanner
+          host={host}
+          titles={all}
+          running={running}
+          stoppingId={stoppingId}
+          playByHost={playByHost}
+          onStop={handleStop}
+        />
+
         {/* kstuff status — games can't install or launch without kernel R/W.
           The gate guarantees a connected console here, so we key off the
           probe result alone. */}

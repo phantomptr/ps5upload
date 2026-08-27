@@ -1975,7 +1975,7 @@ hw_fan_preset_performance_hint: "Quạt chỉ tăng khi tải — yên tĩnh hơ
 hw_fan_preset_quiet: "Yên tĩnh",
 hw_fan_preset_quiet_hint: "Quạt chạy sớm hơn — mát hơn, ồn hơn",
 hw_m2_not_installed: "Chưa lắp ổ M.2 hoặc cảm biến không khả dụng",
-installed_needs_smp: "Cần ShadowMount+",
+installed_needs_smp: "Cần SMP",
 installed_now_playing: "Đang chơi",
 installed_only_unplayed: "Chỉ những mục chưa thấy chơi",
 installed_open_folder: "Mở thư mục",

@@ -1980,7 +1980,7 @@ hw_fan_preset_performance_hint: "Fan yalnızca yük altında hızlanır — boş
 hw_fan_preset_quiet: "Sessiz",
 hw_fan_preset_quiet_hint: "Fan daha erken devreye girer — daha serin, daha gürültülü",
 hw_m2_not_installed: "M.2 sürücü takılı değil ya da sensör kullanılamıyor",
-installed_needs_smp: "ShadowMount+ gerekir",
+installed_needs_smp: "SMP gerekir",
 installed_now_playing: "Şu anda oynanıyor",
 installed_only_unplayed: "Yalnızca oynarken görülmeyenler",
 installed_open_folder: "Klasörü aç",

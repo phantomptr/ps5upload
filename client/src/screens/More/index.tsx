@@ -35,6 +35,7 @@ import {
   HOME_NAV_ITEM,
   groupNavItems,
   filterNavItems,
+  resolveFavorites,
   type NavItem,
 } from "../../layout/navItems";
 
@@ -65,6 +66,14 @@ export default function MoreScreen() {
   );
   const groups = useMemo(() => groupNavItems(matches), [matches]);
   const searching = query.trim().length > 0;
+  // Starred screens, resolved against the real nav table so a stale stored
+  // path cannot render a row that goes nowhere. Only shown when not
+  // searching — a narrowed list is already the user's shortcut.
+  const favoritePaths = useNavFavoritesStore((s) => s.favorites);
+  const favoriteItems = useMemo(
+    () => resolveFavorites(favoritePaths),
+    [favoritePaths],
+  );
 
   return (
     <div className="app-page max-w-4xl! pb-6!">
@@ -143,7 +152,39 @@ export default function MoreScreen() {
           ))}
         </ul>
       ) : (
-        groups.map((group) => (
+        <>
+          {/* Starred screens, pinned above everything else.
+
+              Favorites used to feed exactly one consumer — the desktop
+              sidebar — while the star that creates them lives here, on the
+              screen that IS the navigation on a phone. Starring on Android
+              therefore changed nothing anywhere, which is a worse outcome
+              than not offering it. This is the missing half: the star now
+              means the same thing on both platforms, "put this where I can
+              reach it fast".
+
+              Unknown paths are dropped by resolveFavorites, so a favorite
+              left over from a version that had a screen this one doesn't
+              simply disappears instead of rendering a dead row. */}
+          {favoriteItems.length > 0 && (
+            <section className="mt-1">
+              <h2 className="flex items-center gap-1.5 px-1 pb-1 text-xs font-semibold uppercase tracking-wider text-[var(--color-muted)]">
+                <Star size={12} className="fill-current text-[var(--color-accent)]" />
+                {tr("nav_section_favorites", undefined, "Favorites")}
+              </h2>
+              <ul className="surface-panel overflow-hidden divide-y divide-[var(--color-border)]">
+                {favoriteItems.map((item) => (
+                  <MoreRow
+                    key={item.to}
+                    item={item}
+                    errorCount={errorCount}
+                    updateAvailable={updateAvailable}
+                  />
+                ))}
+              </ul>
+            </section>
+          )}
+          {groups.map((group) => (
           <section key={group.section.key} className="mt-4 first:mt-1">
             <h2 className="px-1 pb-1 text-xs font-semibold uppercase tracking-wider text-[var(--color-muted)]">
               {tr(group.section.key, undefined, group.section.fallback)}
@@ -158,8 +199,9 @@ export default function MoreScreen() {
                 />
               ))}
             </ul>
-          </section>
-        ))
+            </section>
+          ))}
+        </>
       )}
 
       {/* Utility footer — theme, notifications, version. */}
@@ -177,7 +219,10 @@ export default function MoreScreen() {
           {tr("more_theme", undefined, "Theme")}
         </button>
         <div className="flex items-center gap-2">
-          <NotificationInbox />
+          {/* Bottom-RIGHT of the screen here, unlike the desktop sidebar
+              footer — so the panel must grow leftward or it lands off the
+              edge of the phone. */}
+          <NotificationInbox align="right" />
           <span className="text-xs tabular-nums text-[var(--color-muted)]">
             {version ? `v${version}` : "—"}
           </span>

@@ -4,6 +4,35 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.12.0
+
+**Android layout fixes, a "now playing" cue, and covers that stop reloading.**
+
+- **The Play / Close game button is no longer sliced in half.** On a narrow
+  screen the button was not allowed to shrink below its own label, so a long
+  one ("Close game", "Needs ShadowMount+") overflowed its card and the card
+  cut it off mid-letter. The main action now gets a full-width line of its
+  own, and no button anywhere in the app can be clipped like that again.
+- **The notifications panel opens on-screen on Android.** It was anchored for
+  the desktop sidebar, where the bell sits on the left. On the phone the bell
+  is on the right, so the panel grew straight off the edge of the display.
+- **Starring a screen now does something on Android.** Favourites only ever
+  fed the desktop sidebar, so the star in More changed nothing on a phone.
+  Starred screens now appear pinned at the top of More.
+- **A running game is easy to find.** It moves to the top of Games with a
+  "Now playing" strip — cover, name, play time and Close game — and the Games
+  tab shows a dot while something is running, from any screen.
+- **Covers appear instantly when you return to a screen.** They were cached
+  since 5.11.0, but nothing looked in the cache until two loads had failed
+  and a retry timer had elapsed — so every visit still showed grey boxes for
+  a second or two. The app now uses artwork it already holds straight away,
+  and once it learns your window blocks direct image loading it stops
+  re-testing that for every single cover.
+- Play time is now counted whenever the app is open, not only while the
+  Library screen is showing.
+
+---
+
 ## 5.11.0
 
 **Game covers load instantly instead of being fetched over and over.**

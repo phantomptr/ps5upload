@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import {
+  isDirectTransportBlocked,
+  noteDirectTransportBlocked,
+} from "./imageTransport";
+
 /**
  * An <img> src that survives a transient failure.
  *
@@ -41,6 +46,42 @@ export function retryUrl(
   return `${src}${src.includes("?") ? "&" : "?"}_retry=${attempt}`;
 }
 
+/**
+ * Whether this image should skip the direct load entirely and go straight
+ * to the IPC fallback.
+ *
+ * Split out from the hook so the fix for "covers reload on every visit" is
+ * assertable. Everything has to line up: there is something to load, we are
+ * not already holding it, there IS another transport to use, and this
+ * session has already proven the direct one does not work here.
+ */
+export function shouldSkipDirect(
+  src: string | null,
+  cached: string | null | undefined,
+  hasFallbackLoader: boolean,
+  directBlocked: boolean,
+): boolean {
+  if (!src || cached) return false;
+  return hasFallbackLoader && directBlocked;
+}
+
+/**
+ * Which src an <img> should actually get, in priority order.
+ *
+ * Cache first — bytes in hand need no transport at all. Then a resolved
+ * fallback, because it is the transport that demonstrably worked for this
+ * image. The direct URL last, and only while it still has attempts left.
+ */
+export function pickImageSrc(
+  cached: string | null | undefined,
+  fallbackSrc: string | null,
+  src: string | null,
+  attempt: number,
+  failed: boolean,
+): string | null {
+  return cached ?? fallbackSrc ?? retryUrl(src, attempt, failed);
+}
+
 export function useImageRetry(
   src: string | null,
   {
@@ -51,9 +92,22 @@ export function useImageRetry(
     maxRetries,
     delayMs = 1200,
     fallbackLoader,
+    cached,
   }: {
     maxRetries?: number;
     delayMs?: number;
+    /**
+     * Bytes this session already holds for exactly this image, as a `data:`
+     * URL. When present it is used as-is and no request of any kind is
+     * made — no direct load, no retry timer, no IPC hop.
+     *
+     * This is what makes returning to a screen instant. The caller reads it
+     * synchronously from the session cache during render, so the first
+     * paint after a re-mount already has the image, instead of showing a
+     * placeholder while a transport it has used forty times before is
+     * re-negotiated.
+     */
+    cached?: string | null;
     /**
      * Last resort once the retries are spent: fetch the same image over a
      * different transport and return it as a `data:` URL (or null if that
@@ -99,6 +153,11 @@ export function useImageRetry(
 
   // Reset when the image itself changes — a row reused for a different
   // title must not inherit the previous one's failure.
+  //
+  // This is also where a session that has already learned the direct
+  // transport is blocked skips straight to the fallback. Waiting for
+  // `onError` to discover it again would cost this image the full retry
+  // budget plus its stagger, for a verdict the session reached long ago.
   useEffect(() => {
     clear();
     attempts.current = 0;
@@ -106,7 +165,33 @@ export function useImageRetry(
     setAttempt(0);
     setFailed(false);
     setFallbackSrc(null);
-  }, [src]);
+
+    // `!loader` is checked here rather than left to shouldSkipDirect's
+    // `hasFallbackLoader` argument so TypeScript can narrow it for the call
+    // below; the two together are the same condition the helper encodes.
+    const loader = loaderRef.current;
+    if (
+      !loader ||
+      !shouldSkipDirect(src, cached, true, isDirectTransportBlocked())
+    ) {
+      return;
+    }
+
+    fallbackTried.current = true;
+    let cancelled = false;
+    void loader()
+      .then((url) => {
+        if (cancelled) return;
+        if (url) setFallbackSrc(url);
+        else setFailed(true);
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [src, cached]);
 
   useEffect(() => clear, []);
 
@@ -119,8 +204,15 @@ export function useImageRetry(
         fallbackTried.current = true;
         void loader()
           .then((url) => {
-            if (url) setFallbackSrc(url);
-            else setFailed(true);
+            if (url) {
+              // The bytes exist and only the IPC could fetch them: that is
+              // evidence about the transport, not about this image, so the
+              // rest of the session can skip the direct attempt. A null
+              // here means the image genuinely has no artwork, which says
+              // nothing about the transport and must not latch.
+              noteDirectTransportBlocked();
+              setFallbackSrc(url);
+            } else setFailed(true);
           })
           .catch(() => setFailed(true));
         return;
@@ -139,9 +231,10 @@ export function useImageRetry(
     );
   }, [retries, delayMs]);
 
-  // A resolved fallback wins outright — it is the transport that worked.
+  // Cache first (nothing to fetch), then a resolved fallback — it is the
+  // transport that worked — and only then the direct URL.
   return {
-    src: fallbackSrc ?? retryUrl(src, attempt, failed),
+    src: pickImageSrc(cached, fallbackSrc, src, attempt, failed),
     onError,
     failed,
   };

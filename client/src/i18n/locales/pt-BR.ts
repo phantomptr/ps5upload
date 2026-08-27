@@ -2008,7 +2008,7 @@ hw_fan_preset_performance_hint: "O ventilador acelera só sob carga — mais sil
 hw_fan_preset_quiet: "Silencioso",
 hw_fan_preset_quiet_hint: "O ventilador liga mais cedo — mais frio, mais barulhento",
 hw_m2_not_installed: "Nenhuma unidade M.2 instalada ou sensor indisponível",
-installed_needs_smp: "Requer ShadowMount+",
+installed_needs_smp: "Requer SMP",
 installed_now_playing: "Jogando agora",
 installed_only_unplayed: "Só os não vistos jogando",
 installed_open_folder: "Abrir pasta",

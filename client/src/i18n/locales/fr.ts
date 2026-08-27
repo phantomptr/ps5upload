@@ -2010,7 +2010,7 @@ hw_fan_preset_performance_hint: "Le ventilateur monte seulement en charge — pl
 hw_fan_preset_quiet: "Silencieux",
 hw_fan_preset_quiet_hint: "Le ventilateur démarre plus tôt — plus frais, plus bruyant",
 hw_m2_not_installed: "Aucun disque M.2 installé ou capteur indisponible",
-installed_needs_smp: "Nécessite ShadowMount+",
+installed_needs_smp: "Nécessite SMP",
 installed_now_playing: "En cours de jeu",
 installed_only_unplayed: "Seulement ceux jamais vus en jeu",
 installed_open_folder: "Ouvrir le dossier",

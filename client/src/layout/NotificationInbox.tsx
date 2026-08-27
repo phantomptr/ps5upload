@@ -18,6 +18,19 @@ import {
 import { useTr } from "../state/lang";
 
 /**
+ * Which Tailwind anchor class the panel gets for a given alignment.
+ *
+ * Exported so the one thing that actually broke on Android is assertable
+ * without rendering an open panel: `left-0` in the mobile More footer —
+ * which sits at the bottom RIGHT of the screen — grew a 320px panel off the
+ * edge of the display. The width clamp on the panel caps its size but never
+ * moves its anchor, so only this can fix it.
+ */
+export function panelAnchorClass(align: "left" | "right"): string {
+  return align === "right" ? "right-0" : "left-0";
+}
+
+/**
  * Notification inbox — sidebar bell + slide-out panel.
  *
  * The bell is a single button that lives in the sidebar footer. It
@@ -30,7 +43,23 @@ import { useTr } from "../state/lang";
  * bell anywhere else (header, status bar) would steal pixels from
  * surfaces that already work.
  */
-export default function NotificationInbox() {
+export default function NotificationInbox({
+  align = "left",
+}: {
+  /**
+   * Which edge of the bell the panel is anchored to — i.e. which way it
+   * grows. This cannot be inferred from the component, because the same
+   * bell is rendered in two places that sit on opposite sides of the
+   * window: the desktop sidebar footer (bottom-LEFT, so the panel must
+   * grow rightward) and the mobile More footer (bottom-RIGHT, where
+   * growing rightward puts a 320px panel off the edge of the screen).
+   *
+   * `max-w-[calc(100vw-2rem)]` below caps the panel's WIDTH but does not
+   * move its anchor, which is why the mobile case needed a real fix
+   * rather than a tighter clamp.
+   */
+  align?: "left" | "right";
+} = {}) {
   const tr = useTr();
   const navigate = useNavigate();
   const entries = useNotificationsStore((s) => s.entries);
@@ -132,13 +161,11 @@ export default function NotificationInbox() {
 
       {open && (
         <div
-          // Anchor by the LEFT edge of the bell, not the right. The
-          // bell lives in the sidebar footer (left side of window),
-          // so `right-0` made the 320px panel grow leftward past
-          // the window's left edge and clip off-screen. `left-0`
-          // grows rightward into the main content area. The
-          // max-w-[calc(100vw-2rem)] keeps small windows safe.
-          className="anim-rise elev-2 absolute bottom-full left-0 mb-1 w-80 max-w-[calc(100vw-2rem)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface)]"
+          // Anchored per the `align` prop — see its doc comment. Whichever
+          // edge of the bell it pins to, it grows AWAY from the nearest
+          // window edge, and max-w-[calc(100vw-2rem)] keeps narrow windows
+          // safe on the other side.
+          className={`anim-rise elev-2 absolute bottom-full mb-1 w-80 max-w-[calc(100vw-2rem)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] ${panelAnchorClass(align)}`}
           style={{ zIndex: 60 }}
         >
           <header className="flex items-center justify-between border-b border-[var(--color-border)] px-3 py-2">

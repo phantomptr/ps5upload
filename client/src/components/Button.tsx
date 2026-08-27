@@ -105,7 +105,15 @@ export function Button({
       ) : (
         leftIcon
       )}
-      {children && <span>{children}</span>}
+      {/* `truncate` is a safety net, not a layout choice. `whitespace-nowrap`
+          above means a button squeezed below its label's width overflows its
+          own box — and any ancestor with `overflow-hidden` (every card in the
+          app, for its rounded corners) then slices the button through the
+          middle of a glyph. Ellipsizing is the graceful version of that, and
+          it costs nothing when there is room. Call sites that must never
+          truncate should give the button room; see the action row in
+          InstalledApps for how. */}
+      {children && <span className="truncate">{children}</span>}
       {!loading && rightIcon}
     </button>
   );

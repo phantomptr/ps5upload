@@ -48,3 +48,30 @@ export async function fetchRunningGames(
   }
   return byTitle;
 }
+
+/**
+ * Move running titles to the front, leaving everything else in order.
+ *
+ * A running title is the one row on the Games grid with a live,
+ * time-sensitive action attached (Close game), and hunting for it among two
+ * hundred covers is the opposite of what the user needs at that moment.
+ *
+ * Applied AFTER any other ordering so it wins rather than competes with it,
+ * and it relies on `sort` being stable (guaranteed since ES2019) so the
+ * relative order of everything else — including the play-time sort — is
+ * preserved exactly.
+ *
+ * Returns the input array untouched when nothing is running, so the common
+ * case does not allocate.
+ */
+export function sortRunningFirst<T extends { titleId: string }>(
+  rows: readonly T[],
+  running: ReadonlySet<string> | ReadonlyMap<string, unknown>,
+): readonly T[] {
+  const has = (id: string) =>
+    running instanceof Map ? running.has(id) : (running as Set<string>).has(id);
+  if (!rows.some((r) => has(r.titleId))) return rows;
+  return [...rows].sort(
+    (a, b) => Number(has(b.titleId)) - Number(has(a.titleId)),
+  );
+}

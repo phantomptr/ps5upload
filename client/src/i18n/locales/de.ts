@@ -1981,7 +1981,7 @@ hw_fan_preset_performance_hint: "Lüfter dreht nur unter Last auf — leiser im 
 hw_fan_preset_quiet: "Leise",
 hw_fan_preset_quiet_hint: "Lüfter startet früher — kühler, lauter",
 hw_m2_not_installed: "Kein M.2-Laufwerk installiert oder Sensor nicht verfügbar",
-installed_needs_smp: "Benötigt ShadowMount+",
+installed_needs_smp: "Benötigt SMP",
 installed_now_playing: "Wird gerade gespielt",
 installed_only_unplayed: "Nur nie beim Spielen gesehen",
 installed_open_folder: "Ordner öffnen",

@@ -2010,7 +2010,7 @@ hw_fan_preset_performance_hint: "फ़ैन केवल लोड पर त�
 hw_fan_preset_quiet: "शांत",
 hw_fan_preset_quiet_hint: "फ़ैन जल्दी चालू होता है — ठंडा, अधिक शोर",
 hw_m2_not_installed: "कोई M.2 ड्राइव नहीं है या सेंसर उपलब्ध नहीं",
-installed_needs_smp: "ShadowMount+ आवश्यक",
+installed_needs_smp: "SMP आवश्यक",
 installed_now_playing: "अभी खेल रहे हैं",
 installed_only_unplayed: "केवल वे जो खेलते नहीं देखे गए",
 installed_open_folder: "फ़ोल्डर खोलें",

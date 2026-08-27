@@ -1920,7 +1920,7 @@ hw_fan_preset_performance_hint: "Вентилятор ускоряется то�
 hw_fan_preset_quiet: "Тихий",
 hw_fan_preset_quiet_hint: "Вентилятор включается раньше — прохладнее, громче",
 hw_m2_not_installed: "Диск M.2 не установлен или датчик недоступен",
-installed_needs_smp: "Требуется ShadowMount+",
+installed_needs_smp: "Требуется SMP",
 installed_now_playing: "Сейчас в игре",
 installed_only_unplayed: "Только те, что не замечены в игре",
 installed_open_folder: "Открыть папку",

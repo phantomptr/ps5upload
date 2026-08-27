@@ -1920,7 +1920,7 @@ hw_fan_preset_performance_hint: "El ventilador sube solo con carga — más sile
 hw_fan_preset_quiet: "Silencioso",
 hw_fan_preset_quiet_hint: "El ventilador arranca antes — más frío, más ruidoso",
 hw_m2_not_installed: "No hay unidad M.2 instalada o el sensor no está disponible",
-installed_needs_smp: "Requiere ShadowMount+",
+installed_needs_smp: "Requiere SMP",
 installed_now_playing: "Jugando ahora",
 installed_only_unplayed: "Solo los no vistos jugando",
 installed_open_folder: "Abrir carpeta",

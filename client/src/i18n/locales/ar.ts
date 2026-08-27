@@ -1973,7 +1973,7 @@ hw_fan_preset_performance_hint: "ترتفع المروحة تحت الحمل ف�
 hw_fan_preset_quiet: "هادئ",
 hw_fan_preset_quiet_hint: "تعمل المروحة مبكرًا — أبرد وأعلى صوتًا",
 hw_m2_not_installed: "لا يوجد قرص M.2 مثبّت أو المستشعر غير متاح",
-installed_needs_smp: "يتطلب ShadowMount+",
+installed_needs_smp: "يتطلب SMP",
 installed_now_playing: "قيد اللعب الآن",
 installed_only_unplayed: "غير المرصودة أثناء اللعب فقط",
 installed_open_folder: "فتح المجلد",

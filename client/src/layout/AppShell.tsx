@@ -54,6 +54,7 @@ import { useTransferStore } from "../state/transfer";
 import { useUploadSettingsStore } from "../state/uploadSettings";
 import { ensurePayloadCurrent } from "../lib/ensurePayloadCurrent";
 import { installPlayTimeAccumulator } from "../state/playTime";
+import { installRunningWatch } from "../state/runningWatch";
 import { useTr } from "../state/lang";
 import { isAndroid } from "../lib/platform";
 import { localFs } from "../api/localFs";
@@ -1032,6 +1033,10 @@ export default function AppShell() {
     // Subscribe-once: cross-store accumulator that credits running
     // titles with elapsed wall-clock between updates. Idempotent.
     installPlayTimeAccumulator();
+    // One app-wide poll for "is a game running", so the Games badge works
+    // from any screen — not just the two that used to keep the store fed.
+    // Backs off while a screen-level loop is publishing. Idempotent.
+    installRunningWatch();
     // Notification auto-prune: run once at mount + every 6 hours.
     // Keeps the inbox from accumulating year-old "upload finished"
     // entries that nobody will ever revisit.

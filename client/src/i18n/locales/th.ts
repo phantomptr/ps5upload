@@ -2000,7 +2000,7 @@ hw_fan_preset_performance_hint: "พัดลมเร่งเฉพาะต�
 hw_fan_preset_quiet: "เงียบ",
 hw_fan_preset_quiet_hint: "พัดลมทำงานเร็วขึ้น — เย็นกว่า เสียงดังกว่า",
 hw_m2_not_installed: "ไม่ได้ติดตั้งไดรฟ์ M.2 หรือเซ็นเซอร์ไม่พร้อมใช้งาน",
-installed_needs_smp: "ต้องใช้ ShadowMount+",
+installed_needs_smp: "ต้องใช้ SMP",
 installed_now_playing: "กำลังเล่นอยู่",
 installed_only_unplayed: "เฉพาะที่ยังไม่พบว่าเล่น",
 installed_open_folder: "เปิดโฟลเดอร์",

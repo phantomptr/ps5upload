@@ -2011,7 +2011,7 @@ hw_fan_preset_performance_hint: "부하가 있을 때만 팬이 올라감 — �
 hw_fan_preset_quiet: "저소음",
 hw_fan_preset_quiet_hint: "팬이 더 일찍 작동 — 더 시원하지만 시끄러움",
 hw_m2_not_installed: "M.2 드라이브가 없거나 센서를 사용할 수 없습니다",
-installed_needs_smp: "ShadowMount+ 필요",
+installed_needs_smp: "SMP 필요",
 installed_now_playing: "지금 플레이 중",
 installed_only_unplayed: "플레이 확인 안 된 것만",
 installed_open_folder: "폴더 열기",

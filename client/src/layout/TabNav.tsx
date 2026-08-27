@@ -8,6 +8,7 @@ import {
   MoreHorizontal,
 } from "lucide-react";
 import { useTr } from "../state/lang";
+import { useAnyGameRunning } from "../state/runningApps";
 import type { LucideIcon } from "lucide-react";
 
 /**
@@ -128,6 +129,27 @@ const TABS: TabDef[] = [
   },
 ];
 
+/**
+ * The "a game is running" dot on the Games tab.
+ *
+ * Navigation is the only surface visible from every screen, which is
+ * exactly why the cue belongs here: a game keeps running while the user is
+ * off looking at sensors or logs, and until now nothing told them so
+ * outside the Games grid itself. Deliberately a dot and not a count —
+ * the console runs one game at a time, and the number would be noise.
+ *
+ * `aria-hidden` with the state carried in the tab's `title`/label instead:
+ * a bare dot announces nothing useful to a screen reader.
+ */
+function PlayingDot() {
+  return (
+    <span
+      aria-hidden
+      className="absolute right-0 top-0 h-2 w-2 animate-pulse rounded-full bg-[var(--color-good)] ring-2 ring-[var(--color-surface-2)]"
+    />
+  );
+}
+
 function useActiveTab(): string | null {
   const { pathname } = useLocation();
   for (const tab of TABS) {
@@ -151,6 +173,7 @@ function useActiveTab(): string | null {
 export function TabRail() {
   const tr = useTr();
   const activeTab = useActiveTab();
+  const playing = useAnyGameRunning();
   return (
     <>
       <nav
@@ -160,7 +183,13 @@ export function TabRail() {
         {TABS.map((tab, i) => {
           const Icon = tab.icon;
           const active = activeTab === tab.id;
-          const label = tr(`v5_tab_${tab.id}`, undefined, tab.id);
+          const base = tr(`v5_tab_${tab.id}`, undefined, tab.id);
+          const showPlaying = tab.id === "games" && playing;
+          // The dot is decorative; the fact it stands for rides on the
+          // accessible name so it is not silently lost.
+          const label = showPlaying
+            ? `${base} — ${tr("installed_now_playing", undefined, "Now playing")}`
+            : base;
           const desc = tr(`v5_tab_${tab.id}_desc`, undefined, "");
           return (
             <NavLink
@@ -181,6 +210,7 @@ export function TabRail() {
                 .join(" ")}
             >
               <Icon size={22} aria-hidden />
+              {showPlaying && <PlayingDot />}
               {active && (
                 <span
                   aria-hidden
@@ -242,6 +272,7 @@ export function TabRail() {
 export function TabBottomNav() {
   const tr = useTr();
   const activeTab = useActiveTab();
+  const playing = useAnyGameRunning();
 
   return (
     <>
@@ -252,7 +283,11 @@ export function TabBottomNav() {
         {TABS.map((tab) => {
           const Icon = tab.icon;
           const active = activeTab === tab.id;
-          const label = tr(`v5_tab_${tab.id}`, undefined, tab.id);
+          const base = tr(`v5_tab_${tab.id}`, undefined, tab.id);
+          const showPlaying = tab.id === "games" && playing;
+          const label = showPlaying
+            ? `${base} — ${tr("installed_now_playing", undefined, "Now playing")}`
+            : base;
           return (
             <NavLink
               key={tab.id}
@@ -260,7 +295,7 @@ export function TabBottomNav() {
               aria-label={label}
               aria-current={active ? "page" : undefined}
               className={[
-                "flex flex-1 flex-col items-center justify-center gap-0.5 text-xs font-medium",
+                "relative flex flex-1 flex-col items-center justify-center gap-0.5 text-xs font-medium",
                 "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-accent)]",
                 active
                   ? "text-[var(--color-accent)]"
@@ -269,8 +304,13 @@ export function TabBottomNav() {
                 .filter(Boolean)
                 .join(" ")}
             >
-              <Icon size={22} aria-hidden />
-              <span>{label}</span>
+              {/* The icon carries the dot, not the tab: a dot pinned to the
+                  full-width tab box would float far from the glyph. */}
+              <span className="relative">
+                <Icon size={22} aria-hidden />
+                {showPlaying && <PlayingDot />}
+              </span>
+              <span>{base}</span>
             </NavLink>
           );
         })}

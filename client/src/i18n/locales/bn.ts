@@ -1973,7 +1973,7 @@ hw_fan_preset_performance_hint: "ফ্যান শুধু লোডে ব�
 hw_fan_preset_quiet: "শান্ত",
 hw_fan_preset_quiet_hint: "ফ্যান আগে চালু হয় — ঠান্ডা, বেশি শব্দ",
 hw_m2_not_installed: "কোনো M.2 ড্রাইভ নেই বা সেন্সর উপলব্ধ নয়",
-installed_needs_smp: "ShadowMount+ প্রয়োজন",
+installed_needs_smp: "SMP প্রয়োজন",
 installed_now_playing: "এখন খেলছেন",
 installed_only_unplayed: "শুধু যেগুলো খেলতে দেখা যায়নি",
 installed_open_folder: "ফোল্ডার খুলুন",

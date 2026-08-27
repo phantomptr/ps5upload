@@ -62,6 +62,8 @@ import {
   gameIconUrl,
   appIconUrl,
   appIconDataUrl,
+  cachedAppIcon,
+  cachedGameIcon,
   gameIconDataUrl,
   appsInstalled,
   jobStatus,
@@ -4058,6 +4060,12 @@ function LibraryThumb({
   // time and the engine reports every read miss as 404. Retry a couple of
   // times before falling back to the glyph.
   const { src, onError } = useImageRetry(wanted, {
+    // Already-held bytes short-circuit the whole chain.
+    cached: meta?.has_icon
+      ? cachedGameIcon(`${host}:${PS5_PAYLOAD_PORT}`, entry.path)
+      : registeredTitleId
+        ? cachedAppIcon(`${host}:${PS5_PAYLOAD_PORT}`, registeredTitleId)
+        : undefined,
     // Same bytes over the IPC when the webview refuses the direct URL.
     fallbackLoader: () =>
       meta?.has_icon

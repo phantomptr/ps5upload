@@ -1982,7 +1982,7 @@ hw_fan_preset_performance_hint: "Kipas naik hanya saat beban — lebih senyap sa
 hw_fan_preset_quiet: "Senyap",
 hw_fan_preset_quiet_hint: "Kipas menyala lebih awal — lebih dingin, lebih berisik",
 hw_m2_not_installed: "Tidak ada drive M.2 terpasang atau sensor tidak tersedia",
-installed_needs_smp: "Butuh ShadowMount+",
+installed_needs_smp: "Butuh SMP",
 installed_now_playing: "Sedang dimainkan",
 installed_only_unplayed: "Hanya yang belum terlihat dimainkan",
 installed_open_folder: "Buka folder",

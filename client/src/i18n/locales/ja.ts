@@ -2015,7 +2015,7 @@ hw_fan_preset_performance_hint: "高負荷時のみファンが回る — アイ
 hw_fan_preset_quiet: "静音",
 hw_fan_preset_quiet_hint: "ファンが早めに回る — 低温だが音は大きめ",
 hw_m2_not_installed: "M.2ドライブ未搭載、またはセンサーを利用できません",
-installed_needs_smp: "ShadowMount+が必要",
+installed_needs_smp: "SMPが必要",
 installed_now_playing: "プレイ中",
 installed_only_unplayed: "プレイ未確認のみ",
 installed_open_folder: "フォルダーを開く",

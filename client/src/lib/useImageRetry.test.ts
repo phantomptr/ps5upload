@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { retryUrl } from "./useImageRetry";
+import { pickImageSrc, retryUrl, shouldSkipDirect } from "./useImageRetry";
 
 describe("retryUrl", () => {
   const cover =
@@ -36,5 +36,66 @@ describe("retryUrl", () => {
 
   it("returns null when there is no source", () => {
     expect(retryUrl(null, 0, false)).toBeNull();
+  });
+});
+
+describe("pickImageSrc", () => {
+  const cover = "http://127.0.0.1:19113/api/ps5/app-icon?addr=x&title_id=Y";
+  const data = "data:image/png;base64,AAAA";
+  const viaIpc = "data:image/png;base64,BBBB";
+
+  it("uses cached bytes over everything, so a revisit needs no transport", () => {
+    // The whole point of the fix: before this, a re-mounted screen ignored
+    // bytes it was already holding and re-ran the transport negotiation.
+    expect(pickImageSrc(data, viaIpc, cover, 0, false)).toBe(data);
+  });
+
+  it("prefers a resolved fallback over the direct url", () => {
+    // The fallback only exists because the direct url already failed.
+    expect(pickImageSrc(undefined, viaIpc, cover, 1, false)).toBe(viaIpc);
+  });
+
+  it("falls back to the direct url when nothing else is available", () => {
+    expect(pickImageSrc(undefined, null, cover, 0, false)).toBe(cover);
+  });
+
+  it("still yields cached bytes after the direct url has given up", () => {
+    // `failed` only condemns the direct transport, never the image.
+    expect(pickImageSrc(data, null, cover, 2, true)).toBe(data);
+  });
+
+  it("yields null when there is nothing at all to show", () => {
+    expect(pickImageSrc(undefined, null, cover, 2, true)).toBeNull();
+    expect(pickImageSrc(null, null, null, 0, false)).toBeNull();
+  });
+});
+
+describe("shouldSkipDirect", () => {
+  const cover = "http://127.0.0.1:19113/api/ps5/app-icon?addr=x&title_id=Y";
+
+  it("skips the direct attempt once the session knows it is blocked", () => {
+    // This is what stops every cover paying two failures and a 1.2-2.4s
+    // stagger before reaching the transport that works.
+    expect(shouldSkipDirect(cover, undefined, true, true)).toBe(true);
+  });
+
+  it("does not skip while the direct transport still looks healthy", () => {
+    // The direct url is cheaper; never abandon it without evidence.
+    expect(shouldSkipDirect(cover, undefined, true, false)).toBe(false);
+  });
+
+  it("does not skip when there is no other transport to skip to", () => {
+    // Skipping here would mean showing a glyph instead of trying at all.
+    expect(shouldSkipDirect(cover, undefined, false, true)).toBe(false);
+  });
+
+  it("does not fetch anything when the bytes are already cached", () => {
+    expect(shouldSkipDirect(cover, "data:image/png;base64,AAAA", true, true)).toBe(
+      false,
+    );
+  });
+
+  it("does nothing when there is no image to load", () => {
+    expect(shouldSkipDirect(null, undefined, true, true)).toBe(false);
   });
 });

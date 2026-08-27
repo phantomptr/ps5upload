@@ -1920,7 +1920,7 @@ hw_fan_preset_performance_hint: "La ventola sale solo sotto carico — più sile
 hw_fan_preset_quiet: "Silenzioso",
 hw_fan_preset_quiet_hint: "La ventola parte prima — più fresca, più rumorosa",
 hw_m2_not_installed: "Nessuna unità M.2 installata o sensore non disponibile",
-installed_needs_smp: "Richiede ShadowMount+",
+installed_needs_smp: "Richiede SMP",
 installed_now_playing: "In gioco ora",
 installed_only_unplayed: "Solo quelli mai visti in gioco",
 installed_open_folder: "Apri cartella",

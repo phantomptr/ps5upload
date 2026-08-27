@@ -4,6 +4,8 @@ import { Gamepad2 } from "lucide-react";
 import {
   appIconUrl,
   appIconDataUrl,
+  cachedAppIcon,
+  cachedGameIcon,
   gameIconUrl,
   gameIconDataUrl,
 } from "../api/ps5";
@@ -74,6 +76,14 @@ export function GameIcon({
   // The IPC fallback only applies to the two console-served sources; a
   // `fallbackSrc` CDN URL is already a different transport and needs none.
   const { src, onError, failed } = useImageRetry(candidate, {
+    // Whichever console-served source this attempt is on, if the session
+    // already holds its bytes there is nothing to fetch.
+    cached:
+      idx === 0 && hostReady && titleId
+        ? cachedAppIcon(transferAddr(host), titleId)
+        : idx === (titleId && hostReady ? 1 : 0) && hostReady && gamePath
+          ? cachedGameIcon(transferAddr(host), gamePath)
+          : undefined,
     fallbackLoader: () =>
       idx === 0 && hostReady && titleId
         ? appIconDataUrl(transferAddr(host), titleId)
