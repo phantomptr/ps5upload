@@ -2252,6 +2252,33 @@ pub async fn ps5_game_icon_data(addr: Option<String>, path: String) -> Result<St
     engine_icon_data_url(url).await
 }
 
+/// How much disk the engine's artwork cache is using.
+#[tauri::command]
+pub async fn cache_artwork_stats() -> Result<JsonValue, String> {
+    get_json(&format!("{}/api/cache/artwork", engine::url())).await
+}
+
+/// Delete every cached cover. Safe at any time — the cache is an
+/// optimisation, so the next render reads from the console again.
+#[tauri::command]
+pub async fn cache_artwork_clear() -> Result<JsonValue, String> {
+    let resp = http_client()
+        .delete(format!("{}/api/cache/artwork", engine::url()))
+        .send()
+        .await
+        .map_err(|e| format!("engine request failed: {e}"))?;
+    let status = resp.status();
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| format!("engine response body read failed: {e}"))?;
+    if !status.is_success() {
+        return Err(format!("engine HTTP {status}: {body}"));
+    }
+    serde_json::from_str::<JsonValue>(&body)
+        .map_err(|e| format!("engine returned invalid JSON: {e}"))
+}
+
 /// Per-title rows from appinfo.db — the database behind Settings →
 /// Storage. Read-only.
 ///

@@ -1544,7 +1544,11 @@ err_payload_rejected: "PS5 ने अनुरोध अस्वीकार �
     "कनेक्शन टूटा — पेलोड दोबारा भेजकर फिर शुरू हो रहा है ({attempt}/{max})…",
   "pkglib.queued": "कतार में — मौजूदा ट्रांसफ़र की प्रतीक्षा",
   folder_diff_paused: "ट्रांसफ़र चलते समय diff पूर्वावलोकन रुका रहता है।",
-  settings_section_reset: "रीसेट",
+  settings_section_artwork_cache: "कैश किए गए कवर",
+settings_artwork_cache_explain: "गेम कवर इसी कंप्यूटर पर रखे जाते हैं ताकि वे हर बार PS5 से पढ़े जाने के बजाय तुरंत दिखें। ये अपने आप ताज़ा होते हैं, और किसी कंसोल पर गेम इंस्टॉल या अनइंस्टॉल करने पर उसके कवर हटा दिए जाते हैं।",
+settings_artwork_cache_empty: "कुछ भी कैश नहीं",
+settings_artwork_cache_clear: "कैश किए गए कवर हटाएँ",
+settings_section_reset: "रीसेट",
   settings_group_general: "सामान्य",
   settings_group_uploads: "अपलोड",
   search_idle:

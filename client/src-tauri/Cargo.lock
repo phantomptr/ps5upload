@@ -3328,6 +3328,7 @@ dependencies = [
  "anyhow",
  "axum",
  "base64 0.23.1",
+ "blake3",
  "ftx2-proto",
  "ps5upload-core",
  "ps5upload-pkg",

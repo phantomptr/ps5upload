@@ -34,6 +34,7 @@
 //!   GET  /api/ps5/list-dir?path=...   → list immediate children of a directory on PS5
 
 mod engine_log;
+mod icon_cache;
 mod local_fs;
 mod log_dedup;
 mod pkg_install;
@@ -41,6 +42,7 @@ mod smb;
 #[cfg(feature = "webui")]
 mod webui;
 
+use axum::http::HeaderMap;
 use axum::{
     extract::{ConnectInfo, Path, Query, Request, State},
     http::{header, StatusCode},
@@ -1930,6 +1932,10 @@ async fn ps5_app_unregister(
     let started = std::time::Instant::now();
     crate::log_info!("app_unregister: addr={addr} title_id={title_id}");
     let title_for_log = title_id.clone();
+    // Uninstalling changes which artwork exists, so drop this console's
+    // cached images now rather than letting them age out — the user would
+    // otherwise see a cover for a title they just removed.
+    icon_cache::invalidate_console(&addr);
     match tokio::task::spawn_blocking(move || app_unregister(&addr, &title_id))
         .await
         .map_err(anyhow::Error::from)
@@ -2549,6 +2555,32 @@ async fn ps5_klog(State(state): State<AppState>, Query(q): Query<KlogQuery>) -> 
         Ok(text) => (StatusCode::OK, Json(serde_json::json!({ "text": text }))).into_response(),
         Err(e) => json_err(StatusCode::BAD_GATEWAY, format!("{e:#}")).into_response(),
     }
+}
+
+/// GET /api/cache/artwork — how much disk the artwork cache is using.
+///
+/// Exposed because cached artwork outlives the game it came from: the
+/// files stay after a title is uninstalled. Small, and on the user's own
+/// machine, but it is data that persists past its subject, so it should be
+/// visible and removable rather than silently accumulating.
+async fn cache_artwork_stats() -> impl IntoResponse {
+    let (files, bytes) = icon_cache::stats();
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "files": files, "bytes": bytes })),
+    )
+}
+
+/// DELETE /api/cache/artwork — remove every cached image.
+///
+/// Safe at any time: the cache is an optimisation, so the next render
+/// simply reads from the console again.
+async fn cache_artwork_clear() -> impl IntoResponse {
+    let freed = icon_cache::clear();
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "ok": true, "freed_bytes": freed })),
+    )
 }
 
 #[derive(Deserialize)]
@@ -3304,6 +3336,85 @@ async fn ps5_game_meta(
     }
 }
 
+/// Serve artwork, going to the console only when the cache cannot answer.
+///
+/// Shared by the two icon routes because the caching rules — revalidation,
+/// negative caching, per-console keying — should not be able to drift
+/// apart between them.
+///
+/// `identity` is what distinguishes one image from another *within* a
+/// console: a title id, or a folder path.
+async fn serve_cached_icon(
+    addr: String,
+    kind: &'static str,
+    identity: String,
+    remote_path: String,
+    if_none_match: Option<String>,
+) -> axum::response::Response {
+    // A revalidation we can answer from cache costs no console round-trip
+    // and no body — this is the cheap path once max-age lapses.
+    match icon_cache::get(&addr, kind, &identity) {
+        icon_cache::Cached::Hit { bytes, etag } => {
+            if icon_cache::etag_matches(if_none_match.as_deref(), &etag) {
+                return (StatusCode::NOT_MODIFIED, [(header::ETAG, etag.as_str())]).into_response();
+            }
+            return icon_response(bytes, &etag);
+        }
+        // The console told us there is no artwork here recently enough to
+        // believe. Answering from that saves a round-trip per render for
+        // every title that legitimately has none.
+        icon_cache::Cached::KnownMissing => {
+            return (StatusCode::NOT_FOUND, "no icon").into_response();
+        }
+        icon_cache::Cached::Unknown => {}
+    }
+
+    let read_addr = addr.clone();
+    let result: Result<Vec<u8>, anyhow::Error> =
+        tokio::task::spawn_blocking(move || fs_read(&read_addr, &remote_path, 0, 2 * 1024 * 1024))
+            .await
+            .map_err(anyhow::Error::from)
+            .and_then(|inner| inner);
+
+    match result {
+        Ok(bytes) if !bytes.is_empty() => {
+            icon_cache::put(&addr, kind, &identity, &bytes);
+            let etag = icon_cache::etag_for(&bytes);
+            icon_response(bytes, &etag)
+        }
+        // Only a clean "there is nothing there" is remembered. A transport
+        // error must NOT be: a console that was briefly unreachable would
+        // otherwise be recorded as having no artwork at all, and every
+        // cover would vanish for the length of the negative TTL.
+        Ok(_) => {
+            icon_cache::put_missing(&addr, kind, &identity);
+            (StatusCode::NOT_FOUND, "no icon").into_response()
+        }
+        Err(e) => {
+            if icon_cache::is_console_said_no(&e) {
+                icon_cache::put_missing(&addr, kind, &identity);
+            }
+            (StatusCode::NOT_FOUND, "no icon").into_response()
+        }
+    }
+}
+
+fn icon_response(bytes: Vec<u8>, etag: &str) -> axum::response::Response {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "image/png"),
+            // Icons rarely change once uploaded — a 5-minute cache keeps
+            // scrolling smooth across refreshes without sticking forever
+            // on a stale file. Past it the ETag makes revalidation cheap.
+            (header::CACHE_CONTROL, "private, max-age=300"),
+            (header::ETAG, etag),
+        ],
+        bytes,
+    )
+        .into_response()
+}
+
 /// GET /api/ps5/game-icon?addr=IP:MGMT_PORT&path=/mnt/ext1/homebrew/FooBar
 ///
 /// Streams the folder's `sce_sys/icon0.png` back as `image/png`. The
@@ -3312,34 +3423,20 @@ async fn ps5_game_meta(
 /// handlers can fall back to a placeholder without parsing a JSON body.
 async fn ps5_game_icon(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(q): Query<GameMetaQuery>,
 ) -> impl IntoResponse {
     if let Err((code, msg)) = validate_meta_path(&q.path) {
         return (code, msg).into_response();
     }
     let addr = mgmt_addr_or_default(q.addr, &state.default_ps5_addr);
-    let path = q.path;
-    let icon_path = format!("{}/sce_sys/icon0.png", path.trim_end_matches('/'));
-    let result: Result<Vec<u8>, anyhow::Error> =
-        tokio::task::spawn_blocking(move || fs_read(&addr, &icon_path, 0, 2 * 1024 * 1024))
-            .await
-            .map_err(anyhow::Error::from)
-            .and_then(|inner| inner);
-    match result {
-        Ok(bytes) if !bytes.is_empty() => (
-            StatusCode::OK,
-            [
-                (header::CONTENT_TYPE, "image/png"),
-                // Icons rarely change once uploaded — a 5-minute cache
-                // keeps the Library scroll smooth across refreshes
-                // without sticking forever on a stale file.
-                (header::CACHE_CONTROL, "private, max-age=300"),
-            ],
-            bytes,
-        )
-            .into_response(),
-        _ => (StatusCode::NOT_FOUND, "no icon").into_response(),
-    }
+    let path = q.path.trim_end_matches('/').to_string();
+    let icon_path = format!("{path}/sce_sys/icon0.png");
+    let inm = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    serve_cached_icon(addr, "game", path, icon_path, inm).await
 }
 
 // ─── Installed-apps inventory ─────────────────────────────────────────
@@ -3571,6 +3668,7 @@ struct AppIconQuery {
 /// can fall back to a placeholder.
 async fn ps5_app_icon(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(q): Query<AppIconQuery>,
 ) -> impl IntoResponse {
     // title_id is interpolated into a filesystem path, so validate hard:
@@ -3587,23 +3685,11 @@ async fn ps5_app_icon(
     }
     let addr = mgmt_addr_or_default(q.addr, &state.default_ps5_addr);
     let icon_path = format!("/user/appmeta/{}/icon0.png", q.title_id);
-    let result: Result<Vec<u8>, anyhow::Error> =
-        tokio::task::spawn_blocking(move || fs_read(&addr, &icon_path, 0, 2 * 1024 * 1024))
-            .await
-            .map_err(anyhow::Error::from)
-            .and_then(|inner| inner);
-    match result {
-        Ok(bytes) if !bytes.is_empty() => (
-            StatusCode::OK,
-            [
-                (header::CONTENT_TYPE, "image/png"),
-                (header::CACHE_CONTROL, "private, max-age=300"),
-            ],
-            bytes,
-        )
-            .into_response(),
-        _ => (StatusCode::NOT_FOUND, "no icon").into_response(),
-    }
+    let inm = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    serve_cached_icon(addr, "app", q.title_id, icon_path, inm).await
 }
 
 /// One `.pkg` found on a connected external/USB drive.
@@ -8460,6 +8546,10 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
         .route("/api/ps5/app/lifecycle", post(ps5_app_lifecycle))
         .route("/api/ps5/klog", get(ps5_klog))
         .route("/api/ps5/net/interfaces", get(ps5_net_interfaces))
+        .route(
+            "/api/cache/artwork",
+            get(cache_artwork_stats).delete(cache_artwork_clear),
+        )
         .route("/api/ps5/appinfo", get(ps5_appinfo_query))
         .route("/api/ps5/appinfo/set", post(ps5_appinfo_set))
         .route("/api/ps5/focus", get(ps5_focus))

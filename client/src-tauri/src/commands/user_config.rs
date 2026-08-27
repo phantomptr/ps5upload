@@ -192,7 +192,8 @@ fn config_base_dir(app: &AppHandle) -> Result<PathBuf, String> {
 /// Factory-reset: delete ALL local ps5upload data + metadata so the next
 /// launch starts from defaults. Wipes:
 ///   - the config base dir (`~/.ps5upload`): settings.json, crash-reports/,
-///     and any legacy `*.ini` / profile files — the whole dir is exclusively
+///     the engine's cached cover art under `cache/icons/`, and any legacy
+///     `*.ini` / profile files — the whole dir is exclusively
 ///     ours, so it's removed wholesale and recreated empty.
 ///   - app_data caches (resume_txids.json, send_payload_history.json, the
 ///     payloads/ cache) — removed surgically so we never touch the WebView's

@@ -9,6 +9,7 @@ import { getEngineUrl } from "../state/engine";
 // Logging wrapper: every command leaves a trace breadcrumb + logs failures at
 // warn. See lib/invokeLogged.ts. (Channel still comes straight from core.)
 import { invoke } from "../lib/invokeLogged";
+import { getCachedIcon, setCachedIcon } from "../lib/iconMemoryCache";
 import {
   appendManualListLine,
   SMP_MANUAL_LIST_PATH,
@@ -3532,13 +3533,22 @@ export async function appIconDataUrl(
   transferAddr: string,
   titleId: string,
 ): Promise<string | null> {
+  const addr = toMgmtAddr(transferAddr);
+  // Keyed on the console as well as the title: one console's artwork must
+  // never be served under another's name.
+  const key = `app|${addr}|${titleId}`;
+  const hit = getCachedIcon(key);
+  if (hit) return hit;
   try {
-    const addr = toMgmtAddr(transferAddr);
     const url = await invoke<string>("ps5_app_icon_data", {
       addr,
       titleId,
     });
-    return typeof url === "string" && url.startsWith("data:") ? url : null;
+    if (typeof url === "string" && url.startsWith("data:")) {
+      setCachedIcon(key, url);
+      return url;
+    }
+    return null;
   } catch {
     return null;
   }
@@ -3549,10 +3559,17 @@ export async function gameIconDataUrl(
   transferAddr: string,
   path: string,
 ): Promise<string | null> {
+  const addr = toMgmtAddr(transferAddr);
+  const key = `game|${addr}|${path}`;
+  const hit = getCachedIcon(key);
+  if (hit) return hit;
   try {
-    const addr = toMgmtAddr(transferAddr);
     const url = await invoke<string>("ps5_game_icon_data", { addr, path });
-    return typeof url === "string" && url.startsWith("data:") ? url : null;
+    if (typeof url === "string" && url.startsWith("data:")) {
+      setCachedIcon(key, url);
+      return url;
+    }
+    return null;
   } catch {
     return null;
   }

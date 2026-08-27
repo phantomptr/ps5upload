@@ -23,6 +23,9 @@ webui = ["dep:rust-embed", "dep:mime_guess"]
 anyhow.workspace = true
 axum.workspace = true
 base64 = "0.23"
+# Cache keys and ETags for the on-disk artwork cache (icon_cache.rs).
+# Already a workspace dependency via ps5upload-core; not a new build cost.
+blake3.workspace = true
 ftx2-proto = { path = "../ftx2-proto" }
 mime_guess = { version = "2", optional = true }
 smb2 = "0.18"

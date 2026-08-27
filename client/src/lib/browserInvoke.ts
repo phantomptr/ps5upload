@@ -405,6 +405,17 @@ export async function browserInvoke<T>(
       })) as T;
     }
 
+    case "cache_artwork_stats":
+      return getJson<T>("/api/cache/artwork");
+
+    case "cache_artwork_clear": {
+      const res = await fetch(`${getEngineUrl()}/api/cache/artwork`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error(`cache clear HTTP ${res.status}`);
+      return (await res.json()) as T;
+    }
+
     case "ps5_appinfo_query": {
       const base = addrUrl("/api/ps5/appinfo", args["addr"]);
       const sep = base.includes("?") ? "&" : "?";

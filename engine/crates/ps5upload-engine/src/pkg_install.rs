@@ -1915,6 +1915,10 @@ async fn install_status_handler(
     let mut stalled = false;
     let mut accepted_unverified = false;
     if matches!(status.phase, InstallPhase::Done) {
+        // A finished install changes which artwork exists on the console.
+        // Drop the cached images for it so the new title's cover appears
+        // immediately instead of waiting out the cache's TTL.
+        crate::icon_cache::invalidate_console(&ps5_addr);
         let addr = ps5_addr.clone();
         let cid = content_id.clone();
         let pt = package_type.clone();

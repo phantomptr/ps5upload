@@ -1157,6 +1157,7 @@ dependencies = [
  "anyhow",
  "axum",
  "base64",
+ "blake3",
  "ftx2-proto",
  "mime_guess",
  "ps5upload-core",

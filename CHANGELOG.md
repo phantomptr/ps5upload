@@ -4,6 +4,26 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.11.0
+
+**Game covers load instantly instead of being fetched over and over.**
+
+- **Covers are now kept on your computer.** Every time you opened a screen
+  with artwork, every cover was read from the PS5 again — about 290 KB per
+  game, so roughly 6.5 MB for a 23-game library, every single visit. They
+  are stored locally now and reused. A repeat view is around 2.5x faster,
+  and re-checking a cover that has not changed transfers nothing at all.
+- **Games with no cover stop costing anything.** The app remembers that a
+  title has no artwork instead of asking the console again on every screen.
+- **Nothing is kept forever.** Covers refresh on their own after a day, and
+  a console's artwork is cleared the moment you install or uninstall a game
+  on it, so you never see a cover for something that is no longer there.
+- **Settings → Cached artwork** shows how much space it is using, with a
+  button to clear it. "Reset PS5Upload" already removed it too.
+- Covers cached for one PS5 are never shown for another.
+
+---
+
 ## 5.10.1
 
 **Game covers, actually fixed this time.**

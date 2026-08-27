@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Settings as SettingsIcon,
   Moon as SleepIcon,
@@ -48,6 +48,10 @@ import {
   type ColorBlindPalette,
 } from "../../state/accessibility";
 import { isTauriEnv } from "../../lib/tauriEnv";
+import { Button, ErrorCard } from "../../components";
+import { invoke } from "../../lib/invokeLogged";
+import { formatBytes } from "../../lib/format";
+import { clearIconMemoryCache } from "../../lib/iconMemoryCache";
 import { safeGetItem, safeRemoveItem, safeSetItem } from "../../lib/safeStorage";
 import { useConfirm } from "../../components/ConfirmDialog";
 
@@ -894,6 +898,17 @@ export default function SettingsScreen() {
           <BackupRestorePanel />
         </Section>
 
+        <Section
+          title={tr(
+            "settings_section_artwork_cache",
+            undefined,
+            "Cached artwork",
+          )}
+          full
+        >
+          <ArtworkCachePanel />
+        </Section>
+
         <Section title={tr("settings_section_reset", undefined, "Reset")} full>
           <ResetPanel />
         </Section>
@@ -1539,6 +1554,80 @@ function BandwidthControl({
               "No limit. Set a cap if uploads saturate your Wi-Fi/LAN and make other devices laggy — it throttles the upload to leave headroom. Applies to the next started transfer.",
             )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Cached cover art: how much is stored, and a way to remove it.
+ *
+ * The engine keeps artwork on disk so a screen full of covers costs one
+ * console read per title rather than one per visit. That art outlives the
+ * game it came from — the files remain after a title is uninstalled — so
+ * it should be visible and removable rather than quietly accumulating.
+ */
+function ArtworkCachePanel() {
+  const tr = useTr();
+  const [stats, setStats] = useState<{ files: number; bytes: number } | null>(
+    null,
+  );
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const r = await invoke<{ files?: number; bytes?: number }>(
+        "cache_artwork_stats",
+      );
+      setStats({ files: r?.files ?? 0, bytes: r?.bytes ?? 0 });
+    } catch {
+      // An engine that cannot report the cache is not an error worth
+      // showing here — the rest of Settings still works.
+      setStats(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function clear() {
+    setBusy(true);
+    setError(null);
+    try {
+      await invoke("cache_artwork_clear");
+      // Drop the session copies too, or the UI would keep showing images
+      // the engine has just deleted.
+      clearIconMemoryCache();
+      await load();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const empty = !stats || stats.files === 0;
+  return (
+    <div className="space-y-3">
+      <p className="text-sm text-[var(--color-muted)]">
+        {tr(
+          "settings_artwork_cache_explain",
+          undefined,
+          "Game covers are kept on this computer so they load instantly instead of being read from your PS5 every time. They are refreshed automatically, and removed for a console when you install or uninstall a game there.",
+        )}
+      </p>
+      <div className="flex flex-wrap items-center gap-3">
+        <span className="text-sm font-medium">
+          {empty
+            ? tr("settings_artwork_cache_empty", undefined, "Nothing cached")
+            : `${stats.files} · ${formatBytes(stats.bytes)}`}
+        </span>
+        <Button variant="ghost" onClick={clear} disabled={busy || empty}>
+          {tr("settings_artwork_cache_clear", undefined, "Clear cached artwork")}
+        </Button>
+      </div>
+      {error && <ErrorCard title={error} />}
     </div>
   );
 }
