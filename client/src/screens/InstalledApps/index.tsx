@@ -24,6 +24,7 @@ import {
   appUnregister,
   appLaunch,
   appIconUrl,
+  appIconDataUrl,
   appKill,
   processKill,
   smpStatus,
@@ -139,6 +140,12 @@ function KindBadge({ title }: { title: InstalledTitle }) {
 function Cover({ host, title }: { host: string; title: InstalledTitle }) {
   const { src, onError } = useImageRetry(
     host.trim() ? appIconUrl(transferAddr(host), title.titleId) : null,
+    {
+      // If the webview refuses the direct URL, pull the same bytes over the
+      // IPC as a data: URL rather than showing a glyph. See useImageRetry.
+      fallbackLoader: () =>
+        appIconDataUrl(transferAddr(host), title.titleId),
+    },
   );
   return (
     <div className="relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-lg bg-[var(--color-surface-3)]">

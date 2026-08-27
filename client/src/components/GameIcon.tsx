@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { Gamepad2 } from "lucide-react";
 
-import { appIconUrl, gameIconUrl } from "../api/ps5";
+import {
+  appIconUrl,
+  appIconDataUrl,
+  gameIconUrl,
+  gameIconDataUrl,
+} from "../api/ps5";
 import { transferAddr } from "../lib/addr";
 import { useImageRetry } from "../lib/useImageRetry";
 
@@ -66,7 +71,16 @@ export function GameIcon({
   // real absence, so advancing on the first error threw away art that was
   // simply a moment late. Only after the retries are spent does the chain
   // step to the next source, and then to the glyph.
-  const { src, onError, failed } = useImageRetry(candidate);
+  // The IPC fallback only applies to the two console-served sources; a
+  // `fallbackSrc` CDN URL is already a different transport and needs none.
+  const { src, onError, failed } = useImageRetry(candidate, {
+    fallbackLoader: () =>
+      idx === 0 && hostReady && titleId
+        ? appIconDataUrl(transferAddr(host), titleId)
+        : idx === (titleId && hostReady ? 1 : 0) && hostReady && gamePath
+          ? gameIconDataUrl(transferAddr(host), gamePath)
+          : Promise.resolve(null),
+  });
   const advance = useCallback(() => setIdx((i) => i + 1), []);
   useEffect(() => {
     if (failed) advance();

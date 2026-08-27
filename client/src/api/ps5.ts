@@ -3514,6 +3514,50 @@ export function appIconUrl(transferAddr: string, titleId: string): string {
   )}&title_id=${encodeURIComponent(titleId)}`;
 }
 
+/**
+ * Cover art as a `data:` URL, fetched through the Tauri IPC instead of by
+ * pointing an `<img>` at the engine.
+ *
+ * Only used as a fallback (see `useImageRetry`). A direct URL is cheaper —
+ * no base64 inflation, and the browser caches it — but it is also the one
+ * thing the desktop renderer loads over plain HTTP rather than over the
+ * IPC, so when the webview refuses it every cover in the app goes blank
+ * while the engine reports a healthy 200. These go over the channel the
+ * rest of the app already uses.
+ *
+ * Returns null rather than throwing: the caller's next step is a glyph
+ * either way, and a rejected promise here is not an app error.
+ */
+export async function appIconDataUrl(
+  transferAddr: string,
+  titleId: string,
+): Promise<string | null> {
+  try {
+    const addr = toMgmtAddr(transferAddr);
+    const url = await invoke<string>("ps5_app_icon_data", {
+      addr,
+      titleId,
+    });
+    return typeof url === "string" && url.startsWith("data:") ? url : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Folder cover art as a `data:` URL. See {@link appIconDataUrl}. */
+export async function gameIconDataUrl(
+  transferAddr: string,
+  path: string,
+): Promise<string | null> {
+  try {
+    const addr = toMgmtAddr(transferAddr);
+    const url = await invoke<string>("ps5_game_icon_data", { addr, path });
+    return typeof url === "string" && url.startsWith("data:") ? url : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Enumerate PS5 storage volumes. Routes through the engine's mgmt-port
  *  FS_LIST_VOLUMES call. `is_placeholder: true` means the OS exposed a
  *  tiny stub (tmpfs) where a drive *could* mount but nothing real is

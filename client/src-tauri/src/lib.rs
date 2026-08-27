@@ -285,6 +285,8 @@ pub fn run() {
             commands::ps5_hw_temps,
             commands::ps5_hw_power,
             commands::ps5_focus,
+            commands::ps5_app_icon_data,
+            commands::ps5_game_icon_data,
             commands::ps5_appinfo_query,
             commands::ps5_appinfo_set,
             commands::ps5_syslog_tail,

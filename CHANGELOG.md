@@ -4,6 +4,22 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.10.1
+
+**Game covers, actually fixed this time.**
+
+- **Covers now load even when the app's window refuses to fetch them.**
+  Cover art was the one thing the app loaded directly over the network
+  instead of through its own backend — and on some systems the app window
+  quietly blocks that, so every cover fell back to a controller icon while
+  the backend reported success. Covers now come through the same channel as
+  everything else if the direct load is refused. Verified by blocking every
+  direct image load and confirming all artwork still appears.
+- 5.10.0 fixed a different cover bug (the scrolling change from 5.9.2). That
+  fix was real but was not this one.
+
+---
+
 ## 5.10.0
 
 **Game covers are back, and the helper reads the PS5's own databases properly.**

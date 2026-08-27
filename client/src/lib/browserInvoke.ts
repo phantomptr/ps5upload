@@ -379,6 +379,32 @@ export async function browserInvoke<T>(
     case "ps5_focus":
       return getJson<T>(addrUrl("/api/ps5/focus", args["addr"]));
 
+    // In the browser the direct <img> URL already works (same origin as the
+    // engine), so these only exist to keep the code path uniform.
+    case "ps5_app_icon_data":
+    case "ps5_game_icon_data": {
+      const base = addrUrl(
+        cmd === "ps5_app_icon_data"
+          ? "/api/ps5/app-icon"
+          : "/api/ps5/game-icon",
+        args["addr"],
+      );
+      const sep = base.includes("?") ? "&" : "?";
+      const q =
+        cmd === "ps5_app_icon_data"
+          ? `title_id=${encodeURIComponent(String(args["titleId"] ?? ""))}`
+          : `path=${encodeURIComponent(String(args["path"] ?? ""))}`;
+      const res = await fetch(`${base}${sep}${q}`);
+      if (!res.ok) throw new Error(`icon HTTP ${res.status}`);
+      const blob = await res.blob();
+      return (await new Promise<string>((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onload = () => resolve(String(fr.result));
+        fr.onerror = () => reject(new Error("icon read failed"));
+        fr.readAsDataURL(blob);
+      })) as T;
+    }
+
     case "ps5_appinfo_query": {
       const base = addrUrl("/api/ps5/appinfo", args["addr"]);
       const sep = base.includes("?") ? "&" : "?";

@@ -61,6 +61,8 @@ import {
   fetchGameMeta,
   gameIconUrl,
   appIconUrl,
+  appIconDataUrl,
+  gameIconDataUrl,
   appsInstalled,
   jobStatus,
   startTransferDownload,
@@ -4055,7 +4057,15 @@ function LibraryThumb({
   // A 404 here is not always permanent — the console serves one client at a
   // time and the engine reports every read miss as 404. Retry a couple of
   // times before falling back to the glyph.
-  const { src, onError } = useImageRetry(wanted);
+  const { src, onError } = useImageRetry(wanted, {
+    // Same bytes over the IPC when the webview refuses the direct URL.
+    fallbackLoader: () =>
+      meta?.has_icon
+        ? gameIconDataUrl(`${host}:${PS5_PAYLOAD_PORT}`, entry.path)
+        : registeredTitleId
+          ? appIconDataUrl(`${host}:${PS5_PAYLOAD_PORT}`, registeredTitleId)
+          : Promise.resolve(null),
+  });
   return (
     <div className="relative flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-md bg-[var(--color-surface-3)]">
       {src ? (

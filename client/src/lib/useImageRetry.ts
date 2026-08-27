@@ -44,18 +44,51 @@ export function retryUrl(
 export function useImageRetry(
   src: string | null,
   {
-    maxRetries = 2,
+    // One retry when there is another transport to fall back to, two when
+    // this is the only one. A webview refusing the load is deterministic —
+    // retrying it just delays the recovery — whereas a busy console is
+    // worth a couple of attempts.
+    maxRetries,
     delayMs = 1200,
-  }: { maxRetries?: number; delayMs?: number } = {},
+    fallbackLoader,
+  }: {
+    maxRetries?: number;
+    delayMs?: number;
+    /**
+     * Last resort once the retries are spent: fetch the same image over a
+     * different transport and return it as a `data:` URL (or null if that
+     * fails too).
+     *
+     * The desktop webview is the only place in this app that loads a URL
+     * directly, rather than going through the Tauri IPC — and when the
+     * webview refuses that load (a CSP or mixed-content decision made by
+     * whatever WebKit ships with the user's OS), every cover in the app
+     * turns into a controller glyph while the engine logs a healthy 200.
+     * Routing the bytes through the IPC instead sidesteps the question
+     * entirely, and the CSP already permits `data:` images.
+     */
+    fallbackLoader?: () => Promise<string | null>;
+  } = {},
 ) {
   // The attempt counter lives in a ref, and only the committed value is
   // mirrored into state. onError must not call one setState from inside
   // another's updater: React invokes updaters twice under StrictMode, which
   // would double-count every failure and burn the retry budget instantly.
+  const retries = maxRetries ?? (fallbackLoader ? 1 : 2);
   const attempts = useRef(0);
   const [attempt, setAttempt] = useState(0);
   const [failed, setFailed] = useState(false);
+  const [fallbackSrc, setFallbackSrc] = useState<string | null>(null);
+  const fallbackTried = useRef(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Held in a ref so a caller can pass an inline arrow without the reset
+  // effect below re-running (and re-clearing the fallback) every render.
+  // Seeded at mount and refreshed in an effect — assigning during render
+  // would be a render-phase side effect.
+  const loaderRef = useRef(fallbackLoader);
+  useEffect(() => {
+    loaderRef.current = fallbackLoader;
+  });
 
   const clear = () => {
     if (timer.current) {
@@ -69,14 +102,29 @@ export function useImageRetry(
   useEffect(() => {
     clear();
     attempts.current = 0;
+    fallbackTried.current = false;
     setAttempt(0);
     setFailed(false);
+    setFallbackSrc(null);
   }, [src]);
 
   useEffect(() => clear, []);
 
   const onError = useCallback(() => {
-    if (attempts.current >= maxRetries) {
+    if (attempts.current >= retries) {
+      // Retrying the same transport again will not help. Try the other one
+      // once, and only give up (glyph) if that fails too.
+      const loader = loaderRef.current;
+      if (loader && !fallbackTried.current) {
+        fallbackTried.current = true;
+        void loader()
+          .then((url) => {
+            if (url) setFallbackSrc(url);
+            else setFailed(true);
+          })
+          .catch(() => setFailed(true));
+        return;
+      }
       setFailed(true);
       return;
     }
@@ -89,7 +137,12 @@ export function useImageRetry(
       () => setAttempt(next),
       delayMs + Math.random() * delayMs,
     );
-  }, [maxRetries, delayMs]);
+  }, [retries, delayMs]);
 
-  return { src: retryUrl(src, attempt, failed), onError, failed };
+  // A resolved fallback wins outright — it is the transport that worked.
+  return {
+    src: fallbackSrc ?? retryUrl(src, attempt, failed),
+    onError,
+    failed,
+  };
 }

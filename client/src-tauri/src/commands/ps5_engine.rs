@@ -2186,6 +2186,72 @@ pub async fn ps5_focus(addr: Option<String>) -> Result<JsonValue, String> {
     get_json(&addr_url("/api/ps5/focus", addr.as_deref())).await
 }
 
+/// Cover art fetched through the Rust shell and returned as a `data:` URL.
+///
+/// Why this exists, when the renderer can already point an `<img>` straight
+/// at `/api/ps5/app-icon`: in the desktop webview that direct load is the
+/// ONLY part of the UI that leaves the renderer over plain HTTP. Everything
+/// else goes through this IPC. When the webview refuses that load — a CSP
+/// or mixed-content decision made by whatever WebKit ships with the user's
+/// OS, not by us — every cover in the app silently falls back to a
+/// controller glyph, while the engine logs a perfectly healthy 200.
+///
+/// That is exactly the failure we could not reproduce anywhere else: the
+/// route returns real PNG bytes to `curl` and renders correctly in Chrome,
+/// and still shows nothing in the packaged app.
+///
+/// So this routes the same bytes over the channel that demonstrably works,
+/// and the CSP already allows `data:` in `img-src`. It is a fallback, not
+/// the default: the direct URL is cheaper (no base64 inflation, browser
+/// caching) and is still tried first.
+async fn engine_icon_data_url(url: String) -> Result<String, String> {
+    let resp = http_client()
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("engine request failed: {e}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(format!("engine HTTP {status}"));
+    }
+    let mime = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("image/png")
+        .to_string();
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("engine response body read failed: {e}"))?;
+    if bytes.is_empty() {
+        return Err("empty image".into());
+    }
+    use base64::Engine as _;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Ok(format!("data:{mime};base64,{b64}"))
+}
+
+/// Cover art for an installed title, as a `data:` URL. See
+/// [`engine_icon_data_url`].
+#[tauri::command]
+pub async fn ps5_app_icon_data(addr: Option<String>, title_id: String) -> Result<String, String> {
+    let mut url = addr_url("/api/ps5/app-icon", addr.as_deref());
+    url.push_str(if url.contains('?') { "&" } else { "?" });
+    url.push_str(&format!("title_id={}", urlencoding(&title_id)));
+    engine_icon_data_url(url).await
+}
+
+/// Cover art for an on-console game folder, as a `data:` URL. See
+/// [`engine_icon_data_url`].
+#[tauri::command]
+pub async fn ps5_game_icon_data(addr: Option<String>, path: String) -> Result<String, String> {
+    let mut url = addr_url("/api/ps5/game-icon", addr.as_deref());
+    url.push_str(if url.contains('?') { "&" } else { "?" });
+    url.push_str(&format!("path={}", urlencoding(&path)));
+    engine_icon_data_url(url).await
+}
+
 /// Per-title rows from appinfo.db — the database behind Settings →
 /// Storage. Read-only.
 ///
