@@ -888,9 +888,9 @@ dependencies = [
 
 [[package]]
 name = "lzma-rust2"
-version = "0.19.0"
+version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c1bf3331fb5cf60f2ef15b63361f6cc39492a5d94c096053c395515e17d147f"
+checksum = "e6effa5c575f68109664a511f378c0e170888e33a426694ee0910a673762bd47"
 
 [[package]]
 name = "matchit"
@@ -1459,9 +1459,9 @@ dependencies = [
 
 [[package]]
 name = "sevenz-rust2"
-version = "0.21.5"
+version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cabfe266b357df6e7aa8d0c9bb11eac1fd0ed049f6318455bf55345d9de6c3b5"
+checksum = "c60ac6abbc2cc83e80d7c0c1450a46880272169f392122f439d6be9d99b22c7a"
 dependencies = [
  "aes",
  "bzip2",

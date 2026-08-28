@@ -28,7 +28,7 @@ zip = { version = "8", default-features = false, features = ["deflate"] }
 # cleanly to aarch64-linux-android with no C toolchain. LZMA2 covers the
 # overwhelming majority of real-world 7z game dumps; an archive using an
 # unsupported codec fails with a clear "re-pack with LZMA2" message.
-sevenz-rust2 = { version = "0.21", default-features = false }
+sevenz-rust2 = { version = "0.22", default-features = false }
 # Decode user-supplied avatar images (profile.rs). Pure-Rust decoders only
 # (png/jpeg/webp/bmp/gif) — no C deps, so the Android cross-compile stays
 # clean, same care as the zip/sevenz pins above. We hand-roll the bilinear
