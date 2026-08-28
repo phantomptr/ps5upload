@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { open as openDialog, confirm } from "@tauri-apps/plugin-dialog";
+import { confirm } from "@tauri-apps/plugin-dialog";
 import {
   CircleUserRound,
   ImageIcon,
@@ -27,6 +27,7 @@ import {
 import { useTr } from "../../state/lang";
 import { useConnectionStore } from "../../state/connection";
 import { mgmtAddr } from "../../lib/addr";
+import { pickPath } from "../../lib/pickPath";
 import { isTauriEnv } from "../../lib/tauriEnv";
 import {
   profileInfo,
@@ -195,8 +196,15 @@ function AvatarSection({
   async function pickImage() {
     setApplyOk(null);
     setApplyError(null);
-    const sel = await openDialog({
-      multiple: false,
+    // `pickPath`, not plugin-dialog's `open` directly (#278). On Android the
+    // native picker hands back a `content://` Storage Access Framework URI,
+    // and the avatar path is read with `std::fs` by the engine — so the
+    // preview failed with "HTTP 400 read image content://…" while every other
+    // picker in the app worked, because they already route through here.
+    // `pickPath` sends Android to the in-app real-path browser and keeps the
+    // native dialog (filters and all) on desktop.
+    const sel = await pickPath({
+      mode: "file",
       filters: [
         {
           name: tr("profile.avatar.imageFilter", "Image"),
