@@ -4,6 +4,19 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.12.1
+
+**Fixes picking an avatar image on Android.**
+
+- **Choosing a profile picture works on Android again.** The avatar picker
+  used the system file chooser, which hands back a reference the app cannot
+  actually read — so the image never appeared and you got a "read image"
+  error instead. It now uses the same in-app file browser every other picker
+  in the app already used, which is why uploads worked while this did not.
+  Thanks to the reporter on issue #278.
+
+---
+
 ## 5.12.0
 
 **Android layout fixes, a "now playing" cue, and covers that stop reloading.**
