@@ -517,7 +517,7 @@ jobs:
           cache-dependency-path: client/package-lock.json
 
       - name: Setup JDK 17
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "17"
