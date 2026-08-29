@@ -4,6 +4,41 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.13.1
+
+**Fixes the Fan threshold card appearing over and over on the Console tab.**
+
+- **The Console tab no longer fills up with copies of the Fan threshold
+  card.** Introduced in 5.13.0: the card kept its own copy of the console's
+  address as its identity, and the new System time card was given the same
+  one — so the app could no longer tell the two apart and added a fresh copy
+  of the card on every five-second sensor refresh. The longer the tab stayed
+  open, the more copies appeared. Both cards now have distinct identities,
+  and a test fails the build if any two cards on a screen are ever given the
+  same one again. Thanks to the reporter who spotted it the day 5.13.0 went
+  out.
+
+- **The Linux white-screen fix now adapts to your graphics setup.** The app
+  detects what it is running on and applies only the workarounds that stack
+  needs: every Linux session gets the DMABUF renderer disabled, and NVIDIA on
+  Wayland additionally gets accelerated compositing disabled and — when
+  launched through `PS5Upload.sh` — your system's `libwayland-client`
+  preloaded. Previously only the first of those was applied, so NVIDIA
+  Wayland users still got a white window and had to find the other two
+  themselves. The extra switches stay off everywhere else on purpose: they
+  cost scrolling smoothness, which this app's long lists feel. If detection
+  misses your setup, `PS5UPLOAD_FORCE_WAYLAND_PRELOAD=1` forces it, and
+  setting any of the variables yourself still overrides the app. Thanks to
+  the reporter of issue #285. See the FAQ entry "white/blank screen" for the
+  full table.
+
+- **Don't launch the Linux build with `sudo`** — it is never needed, and it
+  leaves root-owned files in `~/.ps5upload` that make later normal launches
+  fail in confusing ways. The FAQ now says so, with the one-line fix if you
+  have already done it.
+
+---
+
 ## 5.13.0
 
 **Sets your PS5's clock from internet time.**

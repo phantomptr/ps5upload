@@ -694,7 +694,12 @@ export default function HardwareScreen() {
             // key on host so the card's session-local state (lastSetC/draftC,
             // active preset, busy/error) resets on console switch — otherwise
             // console B shows console A's "Set to X°C" / active preset.
-            key={host ?? ""}
+            //
+            // Prefixed because siblings must not share a key: two cards both
+            // keyed plain `host` made React append a new copy of this card on
+            // every sensor poll (v5.13.0). Keep every key in this grid
+            // distinct.
+            key={`fan-${host ?? ""}`}
             host={host ?? ""}
             payloadUp={payloadStatus === "up"}
             pinnedC={temps?.fan_pinned_c ?? 0}
@@ -706,7 +711,8 @@ export default function HardwareScreen() {
             // Keyed on host so a console switch clears the previous
             // console's sync result and drift snapshot, rather than
             // showing console A's outcome under console B's name.
-            key={host ?? ""}
+            // Prefixed — see the note on FanThresholdCard above.
+            key={`systime-${host ?? ""}`}
             host={host ?? ""}
             payloadUp={payloadStatus === "up"}
           />
