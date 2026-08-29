@@ -2344,18 +2344,28 @@ pub async fn ps5_time_get(addr: Option<String>) -> Result<JsonValue, String> {
 #[tauri::command]
 pub async fn ps5_time_sync(
     addr: Option<String>,
-    target_unix_seconds: i64,
+    target_unix_seconds: Option<i64>,
+    use_ntp: Option<bool>,
+    ntp_server: Option<String>,
 ) -> Result<JsonValue, String> {
     let base = engine::url();
     let url = format!("{base}/api/ps5/time/sync");
-    post_json(
-        &url,
-        &serde_json::json!({
-            "addr": addr,
-            "target_unix_seconds": target_unix_seconds,
-        }),
-    )
-    .await
+    let use_ntp = use_ntp.unwrap_or(false);
+    let mut body = serde_json::json!({ "addr": addr, "use_ntp": use_ntp });
+    if use_ntp {
+        // Only forward a server the user actually chose; absent means
+        // "use the engine's default list".
+        if let Some(s) = ntp_server {
+            body["ntp_server"] = serde_json::Value::from(s);
+        }
+    } else {
+        // Omitted rather than defaulted to 0 — a 0 here would ask the
+        // console to set its clock to 1970.
+        body["target_unix_seconds"] = serde_json::Value::from(
+            target_unix_seconds.ok_or("target_unix_seconds is required unless use_ntp is set")?,
+        );
+    }
+    post_json(&url, &body).await
 }
 
 /// Read all PS5 Date & Time state (timezone, DST, NTP flag,

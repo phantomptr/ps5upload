@@ -48,6 +48,32 @@ function uenc(s: string): string {
   );
 }
 
+/**
+ * Request body for `ps5_time_sync`, mapping the TS callers' camelCase
+ * arguments onto the engine's snake_case route.
+ *
+ * Exported so the mapping is unit-testable: this request sets a games
+ * console's system clock, and a key lost in translation does not throw
+ * — it quietly changes the time that gets written. `target_unix_seconds`
+ * is omitted entirely for an NTP sync rather than sent as 0, which the
+ * engine would read as 1970.
+ */
+export function timeSyncBody(
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  const useNtp = args["useNtp"] === true;
+  const body: Record<string, unknown> = {
+    addr: args["addr"],
+    use_ntp: useNtp,
+  };
+  if (useNtp) {
+    if (args["ntpServer"] != null) body["ntp_server"] = args["ntpServer"];
+  } else {
+    body["target_unix_seconds"] = args["targetUnixSeconds"];
+  }
+  return body;
+}
+
 /** Build a path + optional `?addr=` query, matching the Rust `addr_url()`. */
 function addrUrl(path: string, addr?: string | null): string {
   return addr && addr.length > 0 ? `${path}?addr=${uenc(addr)}` : path;
@@ -442,11 +468,7 @@ export async function browserInvoke<T>(
       return getJson<T>(addrUrl("/api/ps5/time/get", args["addr"]));
 
     case "ps5_time_sync":
-      // TS caller: { addr, targetUnixSeconds }
-      return postJson<T>("/api/ps5/time/sync", {
-        addr: args["addr"],
-        target_unix_seconds: args["targetUnixSeconds"],
-      });
+      return postJson<T>("/api/ps5/time/sync", timeSyncBody(args));
 
     case "ps5_time_state_get":
       return getJson<T>(addrUrl("/api/ps5/time/state/get", args["addr"]));

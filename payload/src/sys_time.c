@@ -5,6 +5,7 @@
 #include <dlfcn.h>
 #include <pthread.h>
 #include <string.h>
+#include <sys/time.h>
 #include <time.h>
 
 /* Function pointer types match Sony's libSceSystemService exports. */
@@ -43,7 +44,7 @@ static void resolve_once(void) {
  * We use timegm rather than mktime because the PS5 stores the system
  * clock in UTC; mktime would apply the (uninitialised) local TZ on a
  * FreeBSD-flavour libc and silently give the wrong epoch. */
-static int64_t sce_dt_to_unix(const sce_datetime_t *dt) {
+int64_t sys_time_sce_to_unix(const sce_datetime_t *dt) {
     if (!dt) return -1;
     if (dt->year < 1970 || dt->year > 2200) return -1;
     if (dt->month < 1 || dt->month > 12) return -1;
@@ -64,32 +65,98 @@ static int64_t sce_dt_to_unix(const sce_datetime_t *dt) {
     return (int64_t)t;
 }
 
+int sys_time_unix_to_sce(int64_t unix_seconds, sce_datetime_t *out) {
+    if (!out) return -1;
+    /* Negative epochs are pre-1970, which sce_datetime_t's unsigned
+     * year cannot express and no console clock should hold. */
+    if (unix_seconds < 0) return -1;
+    time_t t = (time_t)unix_seconds;
+    struct tm tm;
+    if (!gmtime_r(&t, &tm)) return -1;
+    if (tm.tm_year > 2200 - 1900) return -1;
+    memset(out, 0, sizeof(*out));
+    out->year   = (uint16_t)(tm.tm_year + 1900);
+    out->month  = (uint16_t)(tm.tm_mon + 1);
+    out->day    = (uint16_t)tm.tm_mday;
+    out->hour   = (uint16_t)tm.tm_hour;
+    out->minute = (uint16_t)tm.tm_min;
+    out->second = (uint16_t)tm.tm_sec;
+    return 0;
+}
+
 int sys_time_get(sce_datetime_t *out, uint32_t *out_err_code) {
     if (!out) {
         if (out_err_code) *out_err_code = SYS_TIME_ERR_NULL_ARG;
         return -1;
     }
     resolve_once();
-    if (!g_get) {
-        if (out_err_code) *out_err_code = SYS_TIME_ERR_NO_SYMBOL;
-        return -1;
+    if (g_get) {
+        memset(out, 0, sizeof(*out));
+        int rc = g_get(out);
+        if (rc == 0) {
+            if (out_err_code) *out_err_code = 0;
+            return 0;
+        }
+        /* Fall through to the kernel clock rather than reporting
+         * failure — a rejected IPC does not mean the clock is
+         * unreadable. Keep the SCE code if the fallback fails too. */
+        if (out_err_code) *out_err_code = (uint32_t)rc;
+    } else if (out_err_code) {
+        *out_err_code = SYS_TIME_ERR_NO_SYMBOL;
     }
-    memset(out, 0, sizeof(*out));
-    int rc = g_get(out);
-    if (out_err_code) *out_err_code = (uint32_t)rc;
-    return rc == 0 ? 0 : -1;
+
+    /* Kernel wall clock. On FW 9.60 the SCE getter is not exported, so
+     * this is the only way the console can report its own time. */
+    struct timeval tv;
+    if (gettimeofday(&tv, NULL) == 0 &&
+        sys_time_unix_to_sce((int64_t)tv.tv_sec, out) == 0) {
+        if (out_err_code) *out_err_code = 0;
+        return 0;
+    }
+    return -1;
+}
+
+int sys_time_needs_fallback(int have_set_symbol,
+                            int set_rc,
+                            int64_t target_unix,
+                            int64_t observed_unix) {
+    if (!have_set_symbol) return 1;
+    if (set_rc != 0) return 1;
+    /* No read-back: we have no evidence the set failed, so trust it
+     * rather than writing the clock a second time. */
+    if (observed_unix < 0) return 0;
+    /* Magnitude of the difference, computed in unsigned arithmetic so
+     * that a request-controlled `target_unix` cannot overflow the
+     * subtraction. Signed overflow is undefined behaviour in C, not
+     * merely a wrong comparison; ordering the operands first keeps the
+     * unsigned result exact. */
+    uint64_t diff = (observed_unix >= target_unix)
+                        ? (uint64_t)observed_unix - (uint64_t)target_unix
+                        : (uint64_t)target_unix - (uint64_t)observed_unix;
+    return diff > (uint64_t)SYS_TIME_SET_TOLERANCE_SEC;
+}
+
+/* Read the wall clock without going through SCE. Used to verify the
+ * settimeofday fallback, which is exactly the path taken when the SCE
+ * getter is missing too. Returns -1 if unavailable. */
+static int64_t kernel_wall_clock_unix(void) {
+    struct timeval tv;
+    if (gettimeofday(&tv, NULL) != 0) return -1;
+    return (int64_t)tv.tv_sec;
 }
 
 int sys_time_set(const sce_datetime_t *dt,
                  uint32_t *out_err_code,
                  int64_t *out_prior_unix,
-                 int64_t *out_new_unix) {
+                 int64_t *out_new_unix,
+                 int *out_used_fallback) {
     if (!dt) {
         if (out_err_code) *out_err_code = SYS_TIME_ERR_NULL_ARG;
         return -1;
     }
-    if (out_prior_unix) *out_prior_unix = -1;
-    if (out_new_unix)   *out_new_unix   = -1;
+    if (out_prior_unix)    *out_prior_unix    = -1;
+    if (out_new_unix)      *out_new_unix      = -1;
+    if (out_used_fallback) *out_used_fallback = 0;
 
     resolve_once();
 
@@ -98,35 +165,84 @@ int sys_time_set(const sce_datetime_t *dt,
      * If get itself fails we still proceed to the set — we'd rather
      * the user's set attempt go through with no diagnostic data than
      * fail the whole call on a get-side issue. */
-    if (g_get && out_prior_unix) {
-        sce_datetime_t prior;
-        memset(&prior, 0, sizeof(prior));
-        if (g_get(&prior) == 0) {
-            int64_t u = sce_dt_to_unix(&prior);
-            if (u >= 0) *out_prior_unix = u;
+    if (out_prior_unix) {
+        int64_t prior = -1;
+        if (g_get) {
+            sce_datetime_t p;
+            memset(&p, 0, sizeof(p));
+            if (g_get(&p) == 0) prior = sys_time_sce_to_unix(&p);
         }
+        if (prior < 0) prior = kernel_wall_clock_unix();
+        *out_prior_unix = prior;
     }
 
-    if (!g_set) {
-        if (out_err_code) *out_err_code = SYS_TIME_ERR_NO_SYMBOL;
-        return -1;
+    uint32_t ec = 0;
+    int rc;
+    if (g_set) {
+        rc = g_set(dt);
+        ec = (uint32_t)rc;
+    } else {
+        rc = -1;
+        ec = SYS_TIME_ERR_NO_SYMBOL;
     }
 
-    int rc = g_set(dt);
-    if (out_err_code) *out_err_code = (uint32_t)rc;
-
-    /* Capture the post-set clock so the desktop can decide whether
-     * the call took. Some firmware/SPRX combos return rc=0 from
-     * set but the underlying syscall is a no-op — comparing
-     * new_unix against the requested epoch reveals that. */
-    if (g_get && out_new_unix) {
+    /* Capture the post-set clock so we (and the desktop) can decide
+     * whether the call took. Some firmware/SPRX combos return rc=0
+     * from set but the underlying syscall is a no-op. */
+    int64_t observed = -1;
+    if (g_get) {
         sce_datetime_t after;
         memset(&after, 0, sizeof(after));
-        if (g_get(&after) == 0) {
-            int64_t u = sce_dt_to_unix(&after);
-            if (u >= 0) *out_new_unix = u;
+        if (g_get(&after) == 0) observed = sys_time_sce_to_unix(&after);
+    }
+
+    /* Fallback: set the kernel wall clock directly.
+     *
+     * This is the only path the ps5-date-time-sync reference uses, and
+     * it works in cases the SCE call cannot — the symbol may be absent,
+     * ShellCore may reject the IPC on a non-elevated loader, or the
+     * SDK stub may be a no-op. It still requires an elevated ucred, so
+     * it is not a way around needing kstuff; it is a second door into
+     * the same room, and on several firmwares only one of the two is
+     * open.
+     *
+     * Guarded on a parseable target: a garbage date must not reach
+     * settimeofday, which would happily install it. */
+    int64_t target = sys_time_sce_to_unix(dt);
+    if (target >= 0 &&
+        sys_time_needs_fallback(g_set != NULL, rc, target, observed)) {
+        struct timeval tv;
+        memset(&tv, 0, sizeof(tv));
+        tv.tv_sec  = (time_t)target;
+        tv.tv_usec = 0;
+        if (settimeofday(&tv, NULL) == 0) {
+            int64_t after_fb = -1;
+            if (g_get) {
+                sce_datetime_t after;
+                memset(&after, 0, sizeof(after));
+                if (g_get(&after) == 0) after_fb = sys_time_sce_to_unix(&after);
+            }
+            if (after_fb < 0) after_fb = kernel_wall_clock_unix();
+            /* Only claim success if the clock actually moved. A
+             * settimeofday that returns 0 without taking effect must
+             * not be reported as a successful set. */
+            if (!sys_time_needs_fallback(1, 0, target, after_fb)) {
+                observed = after_fb;
+                rc = 0;
+                ec = 0;
+                if (out_used_fallback) *out_used_fallback = 1;
+            } else if (rc == 0) {
+                /* SCE claimed success, the fallback ran, and the clock
+                 * is still wrong. Say so rather than reporting ok. */
+                rc = -1;
+                ec = SYS_TIME_ERR_FALLBACK;
+            }
+        } else if (rc != 0 && ec == 0) {
+            ec = SYS_TIME_ERR_FALLBACK;
         }
     }
 
+    if (out_new_unix) *out_new_unix = observed;
+    if (out_err_code) *out_err_code = ec;
     return rc == 0 ? 0 : -1;
 }

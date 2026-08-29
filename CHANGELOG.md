@@ -4,6 +4,45 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.13.0
+
+**Sets your PS5's clock from internet time.**
+
+- **Sync the console clock to internet time.** Hardware → System time now
+  shows the PS5's clock next to your PC's, the drift between them, and a
+  button that corrects it from an internet time server (NTP). Both consoles
+  this was tested on had drifted on their own — one by three minutes — which
+  matters more than it sounds: a clock that is far out breaks PSN sign-in and
+  can make games fail their licence checks. There is a second button to sync
+  to your PC's clock instead, for a console on a network that cannot reach an
+  internet time server.
+
+- **The clock now works on firmware where Sony's own API is missing.** On both
+  9.60 and 5.10 the system call for reading and setting the date is not
+  exported at all, so the console could not even report its own time — the
+  panel just showed a dash. It now falls back to the system clock directly,
+  which is what actually sets the time on those firmwares. When that path is
+  used the app says so, because Sony's own Settings screen may keep showing
+  the old time until you reopen it.
+
+- **The time reply is now checked before it is trusted.** Internet time
+  arrives over a protocol with no authentication, and whatever it says would
+  become your console's clock. Replies that do not answer the request we
+  actually sent, come from a server admitting its own clock is unset, are a
+  rate-limit rejection, or claim an implausible date are now refused rather
+  than written to the console.
+
+- **Restores the System time panel**, which was removed in 2.23.5 while it was
+  experimental. The timezone and DST editor stays out for now.
+
+### Fixes
+
+- **The PS5 payload builds again.** A toolchain update started rejecting four
+  leftover variables that were set but never read; they have been removed.
+  This blocked building the payload at all, not just this feature.
+
+---
+
 ## 5.12.1
 
 **Fixes picking an avatar image on Android.**
