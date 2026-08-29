@@ -303,22 +303,52 @@ function TaskRow({ task }: { task: Task }) {
 }
 
 /**
+ * Order the active tasks.
+ *
+ * By start time, oldest first — never by `updatedAtMs`. That field changes
+ * on every progress poll, so ordering by it made two concurrent transfers
+ * trade places about twice a second, which reads as the progress bars
+ * flickering between them. Ordering on something fixed for the lifetime of
+ * the task means a new task appends below and existing rows never move.
+ *
+ * `id` breaks ties because two uploads started by one click share a
+ * timestamp, and without it their relative order would fall back to array
+ * order — which the store is free to change.
+ *
+ * Returns a new array; callers pass store-owned data that must not be
+ * sorted in place.
+ */
+export function sortActiveTasks(tasks: readonly Task[]): Task[] {
+  return [...tasks].sort((a, b) => {
+    const d = Date.parse(a.createdAt) - Date.parse(b.createdAt);
+    return d !== 0 ? d : a.id.localeCompare(b.id);
+  });
+}
+
+/**
+ * Order the finished tasks, most recently finished first.
+ *
+ * Safe to sort on a timestamp here: `endedAtMs` is written once when the
+ * task reaches a terminal state and never changes again, so there is
+ * nothing to churn. A task somehow missing it sorts last rather than
+ * jumping to the top as a 0.
+ */
+export function sortFinishedTasks(tasks: readonly Task[]): Task[] {
+  return [...tasks].sort((a, b) => (b.endedAtMs ?? 0) - (a.endedAtMs ?? 0));
+}
+
+/**
  * Full task list — active tasks on top, finished below.
- * Active tasks are sorted by updatedAtMs (most recent change first).
- * Finished tasks are sorted by endedAtMs (newest first).
  */
 export function TaskList({ maxFinished = 20 }: { maxFinished?: number }) {
   const tr = useTr();
   const tasks = useTaskStore((s) => s.tasks);
   const clearFinished = useTaskStore((s) => s.clearFinished);
 
-  const active = tasks
-    .filter((t) => isActivatable(t.status))
-    .sort((a, b) => b.updatedAtMs - a.updatedAtMs);
-  const finished = tasks
-    .filter((t) => isTerminal(t.status))
-    .sort((a, b) => (b.endedAtMs ?? 0) - (a.endedAtMs ?? 0))
-    .slice(0, maxFinished);
+  const active = sortActiveTasks(tasks.filter((t) => isActivatable(t.status)));
+  const finished = sortFinishedTasks(
+    tasks.filter((t) => isTerminal(t.status)),
+  ).slice(0, maxFinished);
 
   if (tasks.length === 0) return null;
 
