@@ -73,3 +73,59 @@ export function formatDrift(ps5Date: Date | null, pcMs: number): string {
   const m = Math.floor((ab % 3600) / 60);
   return `${sign}${h}h ${m}m`;
 }
+
+/** Wire shape returned by the `ps5_time_sync` Tauri command. */
+export interface PsTimeSyncJson {
+  ok: boolean;
+  err_code: number;
+  reason: string;
+  prior_unix: number;
+  new_unix: number;
+  /** Engine heuristic: payload said ok but the clock never reached the
+   *  target. */
+  stub_no_op: boolean;
+  /** The payload set the clock via settimeofday because the SCE call
+   *  was absent, rejected, or a no-op. */
+  used_fallback: boolean;
+  /** The epoch the console was asked to adopt. */
+  target_unix: number;
+  /** "ntp" or "client". */
+  source: string;
+  /** Which NTP server answered, when source is "ntp". */
+  ntp_server: string | null;
+}
+
+/** The four outcomes the card renders differently. */
+export type SyncOutcome =
+  | "synced"
+  | "synced_fallback"
+  | "stub_no_op"
+  | "failed";
+
+/**
+ * Classify a sync result.
+ *
+ * `ok` alone is not enough to decide what to tell the user. A console
+ * can report success without its clock moving, which must never be
+ * shown as success — the user would walk away believing the problem is
+ * fixed. And a success reached via settimeofday is worth distinguishing
+ * because it has a visible consequence: that path moves the kernel wall
+ * clock underneath ShellCore, so Sony's Settings UI may keep showing
+ * the old time until it is reopened.
+ */
+export function classifySyncResult(r: PsTimeSyncJson): SyncOutcome {
+  // Checked first: if the clock never reached the target, how we tried
+  // to get there is not the story.
+  if (r.stub_no_op) return "stub_no_op";
+  if (!r.ok) return "failed";
+  return r.used_fallback ? "synced_fallback" : "synced";
+}
+
+/** Human label for where a sync's target time came from. */
+export function formatSyncSource(
+  source: string,
+  ntpServer: string | null,
+): string {
+  if (source === "ntp") return ntpServer ?? "NTP";
+  return "this computer";
+}

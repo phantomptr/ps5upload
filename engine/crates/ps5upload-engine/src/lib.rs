@@ -2247,7 +2247,9 @@ async fn ps5_hw_power(
 struct TimeSyncReq {
     addr: Option<String>,
     /// Target wall-clock time as unix seconds (UTC). Used when
-    /// `use_ntp` is false (or absent). Ignored when `use_ntp` is true.
+    /// `use_ntp` is false (or absent). Ignored when `use_ntp` is true,
+    /// so an NTP sync may omit it entirely.
+    #[serde(default)]
     target_unix_seconds: i64,
     /// When true, the engine queries an NTP server (Cloudflare/Google/
     /// pool.ntp.org) for the current time instead of using the client-
@@ -2274,6 +2276,18 @@ struct TimeSyncResp {
     /// still &gt;5s away from the requested target. Indicates the SDK
     /// stub returned success without actually touching the clock.
     stub_no_op: bool,
+    /// True when the payload set the clock via `settimeofday` because
+    /// the SCE call was unavailable, rejected, or a no-op. Surfaced
+    /// because it has a visible consequence: settimeofday moves the
+    /// kernel wall clock underneath ShellCore, so Sony's Settings UI
+    /// may keep showing the old time until reopened.
+    used_fallback: bool,
+    /// The epoch the console was actually asked to adopt.
+    target_unix: i64,
+    /// Where `target_unix` came from — "ntp" or "client".
+    source: String,
+    /// Which NTP server answered. None when `source` is "client".
+    ntp_server: Option<String>,
 }
 
 async fn ps5_time_get_route(
@@ -2298,27 +2312,27 @@ async fn ps5_time_sync_route(
     let addr = mgmt_addr_or_default(req.addr, &state.default_ps5_addr);
 
     // Resolve the target time: either from NTP or from the client-provided value.
-    let target = if req.use_ntp {
+    let (target, source, ntp_server) = if req.use_ntp {
         let custom = req.ntp_server.clone();
         let ntp_result = tokio::task::spawn_blocking(move || {
             let servers: Vec<&str> = match &custom {
                 Some(s) => vec![s.as_str()],
                 None => ps5upload_core::sys_time::DEFAULT_NTP_SERVERS.to_vec(),
             };
-            ps5upload_core::sys_time::ntp_query_unix_seconds(&servers)
+            ps5upload_core::sys_time::ntp_query_unix_seconds_with_server(&servers)
         })
         .await
         .map_err(anyhow::Error::from)
         .and_then(|r| r);
         match ntp_result {
-            Ok(ts) => ts,
+            Ok((server, ts)) => (ts, "ntp", Some(server)),
             Err(e) => {
                 return json_err(StatusCode::BAD_GATEWAY, format!("NTP query failed: {e:#}"))
                     .into_response();
             }
         }
     } else {
-        req.target_unix_seconds
+        (req.target_unix_seconds, "client", None)
     };
 
     let target_final = target;
@@ -2348,6 +2362,10 @@ async fn ps5_time_sync_route(
                 prior_unix: v.prior_unix,
                 new_unix: v.new_unix,
                 stub_no_op,
+                used_fallback: v.used_fallback,
+                target_unix: target,
+                source: source.to_string(),
+                ntp_server,
             };
             (StatusCode::OK, Json(resp)).into_response()
         }

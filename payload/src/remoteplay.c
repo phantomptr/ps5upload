@@ -83,11 +83,9 @@ typedef int (*rp_confirm_regist_fn)(uint32_t *status, uint32_t *errcode);
 typedef int (*rp_notify_pin_err_fn)(int errcode);
 
 static rp_init_fn           g_init         = NULL;
-static rp_get_op_status_fn  g_op_status    = NULL;
 static rp_get_conn_status_fn g_conn_status = NULL;
 static rp_gen_pin_fn        g_gen_pin      = NULL;
 static rp_is_playing_fn     g_is_playing   = NULL;
-static rp_get_mode_fn       g_get_mode     = NULL;
 static rp_disconnect_fn     g_disconnect   = NULL;
 static rp_confirm_regist_fn g_confirm_regist = NULL;
 static rp_notify_pin_err_fn g_notify_pin_err = NULL;
@@ -116,11 +114,9 @@ static void resolve_impl(void) {
         lib = RTLD_DEFAULT;
     }
     g_init       = (rp_init_fn)dlsym(lib, "sceRemoteplayInitialize");
-    g_op_status  = (rp_get_op_status_fn)dlsym(lib, "sceRemoteplayGetOperationStatus");
     g_conn_status= (rp_get_conn_status_fn)dlsym(lib, "sceRemoteplayGetConnectionStatus");
     g_gen_pin    = (rp_gen_pin_fn)dlsym(lib, "sceRemoteplayGeneratePinCode");
     g_is_playing = (rp_is_playing_fn)dlsym(lib, "sceRemoteplayIsRemotePlaying");
-    g_get_mode   = (rp_get_mode_fn)dlsym(lib, "sceRemoteplayGetRpMode");
     g_disconnect = (rp_disconnect_fn)dlsym(lib, "sceRemoteplayDisconnect");
     g_confirm_regist = (rp_confirm_regist_fn)dlsym(lib, "sceRemoteplayConfirmDeviceRegist");
     g_notify_pin_err = (rp_notify_pin_err_fn)dlsym(lib, "sceRemoteplayNotifyPinCodeError");

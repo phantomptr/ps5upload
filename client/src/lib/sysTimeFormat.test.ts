@@ -3,6 +3,8 @@ import {
   psTimeToDate,
   formatUtcCompact,
   formatDrift,
+  classifySyncResult,
+  formatSyncSource,
   type PsTimeJson,
 } from "./sysTimeFormat";
 
@@ -129,5 +131,75 @@ describe("formatDrift", () => {
   it("handles drift exactly at 1h boundary", () => {
     const d = new Date(PC_BASE_MS + 3600_000);
     expect(formatDrift(d, PC_BASE_MS)).toBe("+1h 0m");
+  });
+});
+
+/**
+ * The sync result has four meaningfully different outcomes and the
+ * card renders a different message for each. Two of them are the
+ * awkward ones: the console can report success without its clock
+ * moving (an SDK stub no-op), and it can succeed by a route that has a
+ * visible side effect (settimeofday moves the kernel clock underneath
+ * ShellCore, so Sony's Settings UI keeps showing the old time until
+ * reopened). Neither is expressible as "ok: boolean".
+ */
+describe("classifySyncResult", () => {
+  const base = {
+    ok: true,
+    err_code: 0,
+    reason: "success",
+    prior_unix: 1_778_000_000,
+    new_unix: 1_778_887_800,
+    stub_no_op: false,
+    used_fallback: false,
+    target_unix: 1_778_887_800,
+    source: "ntp",
+    ntp_server: "time.cloudflare.com",
+  };
+
+  it("reports a clean SCE-path sync as synced", () => {
+    expect(classifySyncResult(base)).toBe("synced");
+  });
+
+  it("distinguishes a sync that fell back to settimeofday", () => {
+    expect(classifySyncResult({ ...base, used_fallback: true })).toBe(
+      "synced_fallback",
+    );
+  });
+
+  it("reports an outright failure as failed", () => {
+    expect(classifySyncResult({ ...base, ok: false, err_code: 0x80a2_3001 })).toBe(
+      "failed",
+    );
+  });
+
+  it("treats a reported success whose clock did not move as a no-op", () => {
+    // This is the case that must not be shown as success: believing it
+    // means the user walks away thinking the clock is fixed.
+    expect(classifySyncResult({ ...base, stub_no_op: true })).toBe(
+      "stub_no_op",
+    );
+  });
+
+  it("prefers the no-op verdict over the fallback badge", () => {
+    // Both flags set: the clock still did not reach the target, so
+    // "we used the fallback" is not the story worth telling.
+    expect(
+      classifySyncResult({ ...base, stub_no_op: true, used_fallback: true }),
+    ).toBe("stub_no_op");
+  });
+});
+
+describe("formatSyncSource", () => {
+  it("names the NTP server that answered", () => {
+    expect(formatSyncSource("ntp", "time.google.com")).toBe("time.google.com");
+  });
+
+  it("falls back to a generic NTP label when no server is named", () => {
+    expect(formatSyncSource("ntp", null)).toBe("NTP");
+  });
+
+  it("describes a PC-clock sync", () => {
+    expect(formatSyncSource("client", null)).toBe("this computer");
   });
 });

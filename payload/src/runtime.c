@@ -9366,15 +9366,20 @@ static int handle_time_set(runtime_state_t *state, int client_fd,
     dt.second = (uint16_t)second;
     uint32_t ec = 0;
     int64_t prior_unix = -1, new_unix = -1;
-    int rc = sys_time_set(&dt, &ec, &prior_unix, &new_unix);
+    int used_fallback = 0;
+    int rc = sys_time_set(&dt, &ec, &prior_unix, &new_unix, &used_fallback);
     char body[256];
+    /* snake_case keys: the engine deserializes this with serde, which
+     * silently zeroes any field whose name doesn't match. */
     int n = snprintf(body, sizeof(body),
                      "{\"ok\":%s,\"err_code\":%u,"
-                     "\"prior_unix\":%lld,\"new_unix\":%lld}",
+                     "\"prior_unix\":%lld,\"new_unix\":%lld,"
+                     "\"used_fallback\":%s}",
                      rc == 0 ? "true" : "false",
                      (unsigned)ec,
                      (long long)prior_unix,
-                     (long long)new_unix);
+                     (long long)new_unix,
+                     used_fallback ? "true" : "false");
     if (n < 0 || (size_t)n >= sizeof(body)) {
         const char *fb = "{\"ok\":false,\"err_code\":0}";
         return send_frame(client_fd, FTX2_FRAME_TIME_SET_ACK, 0, trace_id,
@@ -11568,7 +11573,6 @@ static int g_index_cancel = 0;
 static time_t g_index_started_at = 0;
 static time_t g_index_completed_at = 0;
 static pthread_t g_index_thread;
-static int g_index_thread_alive = 0;
 
 static void index_clear_locked(void) {
     if (g_index_entries) {
@@ -11653,7 +11657,6 @@ static void *index_thread_fn(void *arg) {
     pthread_mutex_lock(&g_index_lock);
     g_index_phase = 2;
     g_index_completed_at = time(NULL);
-    g_index_thread_alive = 0;
     pthread_mutex_unlock(&g_index_lock);
     free(args);
     return NULL;
@@ -11746,14 +11749,10 @@ static int handle_index_start(runtime_state_t *state, int client_fd,
         strcpy(args->roots[1], "/data");
         args->root_count = 2;
     }
-    pthread_mutex_lock(&g_index_lock);
-    g_index_thread_alive = 1;
-    pthread_mutex_unlock(&g_index_lock);
     if (pthread_create(&g_index_thread, NULL, index_thread_fn, args) != 0) {
         free(args);
         pthread_mutex_lock(&g_index_lock);
         g_index_phase = 0;
-        g_index_thread_alive = 0;
         pthread_mutex_unlock(&g_index_lock);
         const char *err = "{\"started\":false,\"err\":\"thread_create\"}";
         return send_frame(client_fd, FTX2_FRAME_INDEX_START_ACK, 0,

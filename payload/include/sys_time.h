@@ -52,11 +52,36 @@ typedef struct sce_datetime {
  * semantics. */
 #define SYS_TIME_ERR_NULL_ARG     0xE0002001U /* caller passed NULL */
 #define SYS_TIME_ERR_NO_SYMBOL    0xE0002002U /* dlsym returned NULL */
+/* Neither the SCE call nor settimeofday could move the clock. */
+#define SYS_TIME_ERR_FALLBACK     0xE0002003U
+
+/* How far the read-back clock may sit from the requested time and
+ * still count as "the set took". The read-back happens after the set
+ * and the clock API is whole-second granular, so a little slop is
+ * expected; 90 seconds of drift is not slop. Matches the engine-side
+ * stub-no-op heuristic in sys_time.rs. */
+#define SYS_TIME_SET_TOLERANCE_SEC 5
 
 /* Read the PS5's current system date/time (UTC). On success writes
  * *out and returns 0; on failure writes *out_err_code with one of
  * the SYS_TIME_ERR_* sentinels OR the raw int return from SCE
  * (uint32 cast). */
+/* Convert between Sony's date struct and a unix epoch (both UTC).
+ * Exposed because the settimeofday fallback needs both directions, and
+ * because they are the parts worth testing on the host.
+ * sys_time_sce_to_unix returns -1 for an unparseable date;
+ * sys_time_unix_to_sce returns 0 on success, -1 on a NULL out or an
+ * epoch it cannot represent. */
+int64_t sys_time_sce_to_unix(const sce_datetime_t *dt);
+int sys_time_unix_to_sce(int64_t unix_seconds, sce_datetime_t *out);
+
+/* Read the PS5's current system date/time (UTC). On success writes
+ * *out and returns 0.
+ *
+ * Falls back to the kernel wall clock (gettimeofday) when the SCE
+ * getter is absent — on FW 9.60 it is not exported at all, so without
+ * this the console cannot report its own time and the desktop has no
+ * drift to show. */
 int sys_time_get(sce_datetime_t *out, uint32_t *out_err_code);
 
 /* Set the PS5's system date/time (UTC). Returns 0 on success, -1 on
@@ -76,9 +101,34 @@ int sys_time_get(sce_datetime_t *out, uint32_t *out_err_code);
  * the prior epoch in the response lets the desktop UI show the
  * actual drift before/after so the user sees whether the set
  * actually took. */
+/* Whether the SCE set path failed to achieve `target_unix`, and the
+ * settimeofday fallback should therefore be attempted.
+ *
+ * Split out from sys_time_set so it can be tested without touching a
+ * clock (see payload/tests/sys_time_fallback_selftest.c). Pass
+ * `observed_unix` < 0 when the clock could not be read back.
+ *
+ * Three things send us to the fallback: the symbol is absent, the SCE
+ * call returned an error, or it returned success and the clock did not
+ * move (the stub-no-op some firmwares produce). An unverifiable
+ * success is left alone — with no evidence the set failed, writing the
+ * clock a second time buys nothing. */
+int sys_time_needs_fallback(int have_set_symbol,
+                            int set_rc,
+                            int64_t target_unix,
+                            int64_t observed_unix);
+
+/* out_used_fallback (optional) reports whether the clock was
+ * ultimately set by settimeofday rather than the SCE call. The desktop
+ * surfaces this because the two paths have different consequences: the
+ * SCE call goes through ShellCore and lets Sony's UI update alongside
+ * it, whereas settimeofday moves the kernel wall clock underneath
+ * ShellCore, so the Settings UI may keep showing the old time until it
+ * is reopened. */
 int sys_time_set(const sce_datetime_t *dt,
                  uint32_t *out_err_code,
                  int64_t *out_prior_unix,
-                 int64_t *out_new_unix);
+                 int64_t *out_new_unix,
+                 int *out_used_fallback);
 
 #endif /* PS5UPLOAD2_SYS_TIME_H */

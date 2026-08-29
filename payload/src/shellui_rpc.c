@@ -119,11 +119,6 @@ static intptr_t g_addr_get_soc_power = 0;    /* sceKernelGetSocPowerConsumption 
 static intptr_t g_addr_appinst_init = 0;     /* sceAppInstUtilInitialize */
 static intptr_t g_addr_appinst_install = 0;  /* sceAppInstUtilInstallByPackage */
 static intptr_t g_addr_appinst_cancel  = 0;  /* sceAppInstUtilCancelInstall(content_id) */
-static intptr_t g_addr_appinst_terminate = 0; /* sceAppInstUtilTerminate() — paired with
-                                                * Initialize to fully reset Sony's
-                                                * installer state. Used as last-resort
-                                                * recovery when Sony's queue is wedged
-                                                * with stuck same-content_id tasks. */
 
 /* Wrappers that keep g_attached in sync. Used in place of
  * pt_attach/pt_detach throughout. emergency_detach reads
@@ -263,7 +258,6 @@ static int shellui_rpc_resolve_locked(void) {
      * wedge the entire PS5. Resolved here so install_pkg can call
      * it via pt_call before the actual register. */
     g_addr_appinst_cancel  = resolve_in_target(pid, "sceAppInstUtilCancelInstall");
-    g_addr_appinst_terminate = resolve_in_target(pid, "sceAppInstUtilTerminate");
     g_init_rc = (g_addr_lnc_launch == 0) ? -2 : 0;
     return g_init_rc;
 }

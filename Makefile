@@ -764,6 +764,13 @@ test-payload: payload
 		$(PAYLOAD_DIR)/tests/elf_param_selftest.c
 	@/tmp/ps5upload-elf-param-selftest
 	@echo "✓ SDK patcher targets param segments, not stray magic bytes"
+	@echo "Running sys_time settimeofday-fallback self-test (host build)..."
+	@cc -O2 -Wall -Wextra -Werror -pthread -I$(PAYLOAD_DIR)/include \
+		-o /tmp/ps5upload-sys-time-fallback-selftest \
+		$(PAYLOAD_DIR)/src/sys_time.c \
+		$(PAYLOAD_DIR)/tests/sys_time_fallback_selftest.c
+	@/tmp/ps5upload-sys-time-fallback-selftest
+	@echo "✓ clock set falls back to settimeofday only when the SCE path did not take"
 	@echo "Running cross-device rename-guard self-test (host build)..."
 	@cc -O2 -Wall -Wextra -Werror -o /tmp/ps5upload-cross-device-selftest \
 		$(PAYLOAD_DIR)/tests/cross_device_selftest.c
