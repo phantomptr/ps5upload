@@ -23,6 +23,8 @@
 /// serve here.
 pub(crate) const DEFAULT_ENGINE_URL: &str = "http://127.0.0.1:19113";
 
+mod linux_gpu;
+
 mod commands;
 // The engine runs as a spawned sidecar binary on desktop, but in-process
 // (linked library) on mobile, where Tauri has no sidecar model. Same
@@ -77,41 +79,27 @@ fn center_main_window<R: tauri::Runtime>(_app: &tauri::AppHandle<R>) {}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Linux WebKitGTK white-screen rescue. On some GPU/compositor stacks
-    // (Bazzite, SteamOS, NVIDIA, parts of Mesa) WebKitGTK's accelerated
-    // compositing + DMABUF renderer produce a blank/white window. The
-    // shipped `PS5Upload.sh` launcher exports these vars, but a user who
-    // double-clicks the bare AppImage (or runs the .deb / folder build)
-    // never goes through that wrapper. Setting them here — at the very
-    // top of process startup, before the webview's child web process is
-    // spawned and inherits our environment — applies the fix to every
-    // launch method, not just the wrapper.
+    // Linux WebKitGTK white-screen rescue, matched to the graphics stack.
+    //
+    // The shipped `PS5Upload.sh` launcher exports these too, but a user who
+    // double-clicks the bare AppImage (or runs the .deb / .rpm / folder
+    // build) never goes through that wrapper. Setting them here — at the top
+    // of process startup, before the webview's child web process is spawned
+    // and inherits our environment — covers every launch method.
+    //
+    // Which variables, and why not simply all of them, is in linux_gpu.rs.
+    // Short version: disabling accelerated compositing costs everyone their
+    // scrolling smoothness, so it is applied only to the stack that needs it
+    // (NVIDIA on Wayland, issue #285) rather than to all Linux users.
     //
     // Single-threaded at this point (no Tauri runtime, no engine thread
     // yet), so set_var is sound; edition 2021 keeps it safe (non-unsafe).
-    // We only set when unset, so a user can still force the accelerated
-    // path back with e.g. `WEBKIT_DISABLE_COMPOSITING_MODE=0 ...`.
+    // Only ever set when unset, so an explicit user choice wins in either
+    // direction — including forcing a rescue back OFF.
     #[cfg(target_os = "linux")]
-    {
-        // DMABUF off by default: this is the targeted fix for the blank/white
-        // window on WebKitGTK 2.42+ with NVIDIA and some Mesa stacks, and it
-        // costs nothing perceptible.
-        //
-        // Compositing is deliberately NOT disabled here any more. Turning it
-        // off makes WebKitGTK render the whole page in software, and the
-        // earlier note that this was a "negligible cost for this app's plain
-        // UI" was wrong: the cost lands on SCROLLING, and this app's main
-        // screens are long lists — a library of 200 game rows, a file browser
-        // of thousands of entries. Linux users reported exactly that (sluggish
-        // scrolling on the .rpm build, smooth on Android, which composites
-        // normally).
-        //
-        // Anyone still hitting a white screen can set it themselves —
-        // `WEBKIT_DISABLE_COMPOSITING_MODE=1 ./PS5Upload.sh` — which the
-        // launcher and the FAQ both document. Trading everyone's scrolling for
-        // a rescue a minority need is the wrong default.
-        if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
-            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    for (key, value) in linux_gpu::webkit_workarounds(linux_gpu::probe()) {
+        if std::env::var_os(key).is_none() {
+            std::env::set_var(key, value);
         }
     }
 

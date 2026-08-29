@@ -336,25 +336,49 @@ This is WebKitGTK failing to render with accelerated compositing /
 the DMABUF renderer on your GPU/compositor — common on gaming distros
 (Bazzite, SteamOS) and NVIDIA. Fixes, easiest first:
 
-1. **Update to the latest version — the fix is built in.** The app sets
-   `WEBKIT_DISABLE_DMABUF_RENDERER=1` itself at startup, so a plain
-   double-click of `PS5Upload.AppImage` (or the `.deb` / `.rpm` / folder
-   build) should render correctly — no wrapper needed. This is the fix
-   for the great majority of blank windows.
+1. **Update to the latest version — the fix is built in, and now adapts
+   to your graphics stack.** The app detects what it is running on at
+   startup and applies only the workarounds that stack needs:
 
-2. **Still white? Disable accelerated compositing too:**
+   | Your setup | What the app does automatically |
+   | --- | --- |
+   | Any Linux | Disables the DMABUF renderer |
+   | **NVIDIA on Wayland** | Also disables accelerated compositing |
+   | **NVIDIA on Wayland, AppImage** | Also preloads your system's `libwayland-client` |
+
+   This works for a plain double-click of `PS5Upload.AppImage`, the
+   `.deb` / `.rpm` / folder build, and the `PS5Upload.sh` wrapper — with
+   one exception: the `libwayland-client` preload is only applied by
+   `PS5Upload.sh`, because `LD_PRELOAD` has to be set before the process
+   starts. **On NVIDIA + Wayland, launch via `./PS5Upload.sh` rather
+   than the bare AppImage.**
+
+   Why it is not simply all of them, everywhere: disabling accelerated
+   compositing makes WebKitGTK render the whole page in software, which
+   is fine for a static window but makes **scrolling sluggish** — and
+   this app's main screens are long lists (a library of hundreds of
+   games, a file browser of thousands of entries). An earlier version
+   set it for everyone, which is why scrolling felt heavier on Linux
+   than on Android or Windows. It is now scoped to the stack that needs
+   it.
+
+2. **Still white?** Apply the compositing switch by hand — your stack may
+   need it without being NVIDIA-on-Wayland:
 
    ```sh
    WEBKIT_DISABLE_COMPOSITING_MODE=1 ./PS5Upload.sh
    ```
 
-   This is deliberately *not* the default. It makes WebKitGTK render the
-   whole page in software, which is fine for a static window but makes
-   **scrolling sluggish** — and this app's main screens are long lists
-   (a library of hundreds of games, a file browser of thousands of
-   entries). Earlier versions set it for everyone, which is why scrolling
-   felt heavier on Linux than on Android or Windows. Use it only if you
-   actually need it.
+   If your setup needs the `libwayland-client` preload but is not
+   detected as NVIDIA (an unusual driver setup, a container), force it:
+
+   ```sh
+   PS5UPLOAD_FORCE_WAYLAND_PRELOAD=1 ./PS5Upload.sh
+   ```
+
+   Every automatic setting above is skipped if you set that variable
+   yourself, so you can also turn one back *off*
+   (`WEBKIT_DISABLE_DMABUF_RENDERER=0 ./PS5Upload.sh`).
 
 3. **Still white?** Force X11 instead of Wayland:
 
@@ -380,6 +404,15 @@ On the immutable-OS distros (Bazzite, Silverblue, etc.) the host
 WebKitGTK libraries are layered with `rpm-ostree install` and need a
 reboot to take effect; the AppImage bundles its own copies, but the
 core GTK/Wayland/X11 client libs still come from the host.
+
+**Don't launch with `sudo`.** None of these fixes need root, and running
+the app as root writes root-owned files into `~/.ps5upload` — after
+which a normal launch fails to read its own settings, which looks like a
+new bug. If you have already done it:
+
+```sh
+sudo chown -R "$USER:$USER" ~/.ps5upload
+```
 
 ---
 

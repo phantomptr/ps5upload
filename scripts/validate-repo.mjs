@@ -24,6 +24,7 @@ function run(label, command, args, opts = {}) {
 
 run("version sync", "node", ["scripts/update-version.js", "--check"]);
 run("script syntax", "node", ["scripts/check-scripts.mjs"]);
+run("linux launcher", "sh", ["scripts/release/linux-launcher-selftest.sh"]);
 run("script inventory", "node", ["scripts/audit-scripts.mjs"]);
 run("i18n coverage", "node", ["scripts/i18n-coverage.mjs"]);
 run("git whitespace", "git", ["diff", "--check"]);
