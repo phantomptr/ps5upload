@@ -1,5 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import { invoke } from "../../lib/invokeLogged";
+import { filterInstalledTitles } from "../../lib/installedFilter";
 import {
   Gamepad2,
   RefreshCw,
@@ -14,6 +21,8 @@ import {
   Square,
   CircleDot,
   Clock,
+  Search,
+  X,
 } from "lucide-react";
 
 import { useNavigate } from "react-router";
@@ -616,6 +625,10 @@ export default function InstalledAppsScreen({
   // unchanged (name order, everything shown).
   const [sortByPlaytime, setSortByPlaytime] = useState(false);
   const [onlyUnplayed, setOnlyUnplayed] = useState(false);
+  // Search box. Deliberately NOT persisted: leaving the tab clears it, so a
+  // forgotten filter never greets you later looking like missing games.
+  const [query, setQuery] = useState("");
+  const deferredQuery = useDeferredValue(query);
   // Per-title play stats for THIS console (cumulative seconds + last-seen ms).
   const playByHost = usePlayTimeStore((s) => s.byHost);
   const lastSeenByHost = usePlayTimeStore((s) => s.lastSeenByHost);
@@ -974,8 +987,24 @@ export default function InstalledAppsScreen({
     }
   }, [host, tr]);
 
-  // Group by kind.
-  const all = useMemo(() => titles ?? [], [titles]);
+  // Search, then group.
+  //
+  // Filtering BEFORE the grouping is what makes search work across every
+  // section at once: each group derives from the matches, so a group with
+  // no hits renders nothing (its `length > 0` guard below already handles
+  // that) and you never have to know whether a title is a disk image or a
+  // folder to find it.
+  //
+  // The input reflects `query` immediately so typing stays responsive; the
+  // filtering runs against the deferred value, so a fast typist is never
+  // blocked re-filtering a few hundred titles on every keystroke. Same
+  // shape as the Game files tab.
+  const all = useMemo(
+    () => filterInstalledTitles(titles ?? [], deferredQuery),
+    [titles, deferredQuery],
+  );
+  const searching = query.trim() !== "";
+  const totalMatches = all.length;
   const installed = useMemo(
     () => all.filter((t) => kindOf(t) === "installed"),
     [all],
@@ -1191,6 +1220,91 @@ export default function InstalledAppsScreen({
           />
         ) : (
           <div className="flex flex-col gap-6">
+            {/* Search — matches name, game code (CUSA/PPSA) and source path
+                across every group below. */}
+            <div className="flex items-center gap-2">
+              <div className="relative flex-1">
+                <Search
+                  size={14}
+                  aria-hidden
+                  className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--color-muted)]"
+                />
+                <input
+                  type="search"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    // Escape clears rather than just blurring — the whole
+                    // point of the key here is to get all the games back.
+                    if (e.key === "Escape" && query !== "") {
+                      e.preventDefault();
+                      setQuery("");
+                    }
+                  }}
+                  aria-label={tr(
+                    "installed_search_label",
+                    undefined,
+                    "Search games by name or game code",
+                  )}
+                  placeholder={tr(
+                    "installed_search_placeholder",
+                    undefined,
+                    "Search by name or game code (e.g. Bloodborne, CUSA00900)",
+                  )}
+                  // WebKit draws its own clear button inside a
+                  // type="search" input, which sat right next to ours and
+                  // made the field look like it had two X buttons. Ours
+                  // stays because the native one is unstyled and carries no
+                  // translated label.
+                  className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] py-1.5 pl-8 pr-8 text-sm outline-none focus:border-[var(--color-accent)] [&::-webkit-search-cancel-button]:appearance-none"
+                />
+                {searching && (
+                  <button
+                    type="button"
+                    onClick={() => setQuery("")}
+                    aria-label={tr(
+                      "installed_search_clear",
+                      undefined,
+                      "Clear search",
+                    )}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--color-muted)] hover:text-[var(--color-fg)]"
+                  >
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
+              {searching && (
+                <span
+                  className="shrink-0 text-xs text-[var(--color-muted)]"
+                  aria-live="polite"
+                >
+                  {tr(
+                    "installed_search_count",
+                    { count: totalMatches.toLocaleString() },
+                    `${totalMatches} match${totalMatches === 1 ? "" : "es"}`,
+                  )}
+                </span>
+              )}
+            </div>
+
+            {/* Every group hides itself when empty, so without this a
+                search that matches nothing would render a blank page. */}
+            {searching && totalMatches === 0 ? (
+              <EmptyState
+                icon={Search}
+                title={tr(
+                  "installed_search_none_title",
+                  undefined,
+                  "No games match your search",
+                )}
+                message={tr(
+                  "installed_search_none_body",
+                  undefined,
+                  "Try part of the name, or the game code like CUSA00900. Punctuation and capitals are ignored.",
+                )}
+              />
+            ) : null}
+
             {registeredUnavailable ? (
               <WarningCard
                 title={tr(

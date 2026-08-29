@@ -4,6 +4,33 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.14.0
+
+**Search your games, and a steadier Tasks list.**
+
+- **Search the "Ready to play" tab by name or game code.** A search box at the
+  top of Games → Ready to play filters as you type, matching the game's name,
+  its CUSA/PPSA code, and the path it was registered from. It searches every
+  section at once — installed, disk images, folder homebrew, system — so you
+  don't need to know which one a title lives in, and sections with no matches
+  get out of the way. Game codes match however you type them: `CUSA00900`,
+  `cusa-00900` and `ppsa 01342` all find the right game, because codes get
+  copied out of filenames and forum posts with punctuation attached. Escape
+  clears the box. The "Game files" tab already had its own search; this closes
+  the gap on the other tab.
+
+### Fixes
+
+- **The Tasks list no longer shuffles while transfers run.** With two uploads
+  going, the rows were ordered by "most recently updated" — and since every
+  progress tick updates a task, the two rows swapped places about twice a
+  second, so the progress bars appeared to flicker between them. Active tasks
+  are now ordered by when they started, which doesn't change while they run:
+  new tasks appear below, and nothing already on screen moves. Thanks to the
+  reporter.
+
+---
+
 ## 5.13.1
 
 **Fixes the Fan threshold card appearing over and over on the Console tab.**
