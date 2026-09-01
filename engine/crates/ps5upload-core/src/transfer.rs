@@ -3800,6 +3800,41 @@ struct SevenzPlanFile {
     shard_start: u64,
 }
 
+/// Pick the LZMA2 worker-thread count. Defaults to 1 — multi-threaded decode
+/// is opt-in via `PS5UPLOAD_7Z_THREADS` because it trades a bounded streaming
+/// footprint for one proportional to the whole archive.
+///
+/// Measured on a 2.5 GB corpus (sevenz-rust2 0.22.2 / lzma-rust2 0.20.1),
+/// peak RSS for the decode alone:
+///
+/// | archive packed with | threads=1 | threads>1        |
+/// |---------------------|-----------|------------------|
+/// | `-mmt=8` (MT LZMA2) | 74 MiB    | 2.3 GiB, +24%    |
+/// | `-mmt=1` (solid)    | 74 MiB    | 4.4 GiB, +0%     |
+///
+/// The reason is structural: `Lzma2ReaderMt` splits work on LZMA2
+/// dictionary-reset chunks (control byte `>= 0xE0` or `== 0x01`) and buffers
+/// each unit's *decompressed* output in a `Vec<u8>`. A solid stream contains a
+/// single dict reset, so the one work unit is the entire archive — the reader
+/// stops streaming and materialises everything in RAM. Halving a 205 GB game
+/// dump's transfer time is worthless if the engine is OOM-killed first, and
+/// Docker hosts and Android have the tightest budgets of anyone.
+///
+/// So: honour an explicit opt-in (clamped to a sane range), otherwise stay on
+/// the single-threaded path that keeps peak RAM at one LZMA2 window.
+fn select_sevenz_decode_threads(configured: Option<&str>) -> u32 {
+    const HARD_MAX: usize = 16;
+
+    configured
+        .and_then(|value| value.parse::<usize>().ok())
+        .map(|value| value.clamp(1, HARD_MAX))
+        .unwrap_or(1) as u32
+}
+
+fn sevenz_decode_threads() -> u32 {
+    select_sevenz_decode_threads(std::env::var("PS5UPLOAD_7Z_THREADS").ok().as_deref())
+}
+
 /// Reconstruct the exact order `ArchiveReader::for_each_entries` visits files:
 /// every file that belongs to a block (ordered by block index, then file
 /// index), followed by every block-less file (empties / directories). This
@@ -4039,11 +4074,13 @@ pub fn transfer_7z_with_opts(
             pw.clone(),
         )
         .map_err(|e| anyhow::anyhow!("open 7z reader {}: {e}", archive_path.display()))?;
-        // Single-threaded decode keeps peak RAM bounded to one LZMA2 window —
-        // multi-threaded decode reads ahead into per-thread buffers, which a
-        // 205 GB output stream can't afford. Network is the bottleneck on LAN
-        // anyway.
-        reader.set_thread_count(1);
+        // Single-threaded decode by default: it is the only setting whose peak
+        // RAM is one LZMA2 window rather than the archive's whole uncompressed
+        // size (see select_sevenz_decode_threads for the measurements). Users
+        // who are CPU-bound on an MT-packed archive can opt in with
+        // PS5UPLOAD_7Z_THREADS. Either way file/block visitation stays ordered,
+        // so resume still observes a contiguous shard prefix.
+        reader.set_thread_count(sevenz_decode_threads());
 
         let mut sender = PipelinedSender::new(&mut c, cfg, tx_id, total_shards);
         let mut buf = vec![0u8; cfg.shard_size];
@@ -5096,6 +5133,28 @@ mod rar_support {
             assert!(all.iter().any(|(p, _)| p == ".gitignore"));
             assert!(filtered.iter().all(|(p, _)| p != ".gitignore"));
         }
+    }
+}
+
+#[cfg(test)]
+mod sevenz_thread_tests {
+    use super::select_sevenz_decode_threads;
+
+    /// Multi-threaded decode buffers whole dict-reset units in RAM, so an
+    /// unset/unparseable value must never silently opt a 205 GB transfer into
+    /// it. Absence means single-threaded, not "guess from the CPU count".
+    #[test]
+    fn defaults_to_single_threaded_streaming_decode() {
+        assert_eq!(select_sevenz_decode_threads(None), 1);
+        assert_eq!(select_sevenz_decode_threads(Some("")), 1);
+        assert_eq!(select_sevenz_decode_threads(Some("invalid")), 1);
+    }
+
+    #[test]
+    fn explicit_override_is_validated_and_hard_capped() {
+        assert_eq!(select_sevenz_decode_threads(Some("2")), 2);
+        assert_eq!(select_sevenz_decode_threads(Some("0")), 1);
+        assert_eq!(select_sevenz_decode_threads(Some("999")), 16);
     }
 }
 

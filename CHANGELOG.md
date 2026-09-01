@@ -4,6 +4,42 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.15.0
+
+**Reliable browser uploads, safer firmware-12 helper recovery, and an opt-in 7z decoder speed-up.**
+
+- **Folder uploads now start from the self-hosted UI over plain HTTP.** The
+  browser build used a secure-context-only UUID API before it contacted the
+  engine. Browsers hide that API on LAN addresses such as
+  `http://192.168.x.x:19113`, leaving the task at “Starting…” forever. Upload,
+  queue, and payload-playlist IDs now use the browser's LAN-safe cryptographic
+  random source, with a compatibility fallback for older webviews. Once the
+  engine accepts an upload, it continues independently if that browser tab is
+  closed.
+
+- **The helper's rest-mode recovery is fail-closed on newer firmware.** A
+  network or manual clock correction can no longer be mistaken for a wake and
+  trigger raw credential writes. Recovery now requires matching realtime and
+  monotonic gaps plus a successful proof that no game is running. Unknown
+  process layouts are rejected, failed elevation stops the sequence, and the
+  detached watchdog no longer calls the mount scan that can hang on some
+  firmware/loader combinations.
+
+- **7z/LZMA2 uploads can opt into multiple decoder threads.** The engine
+  updates to `sevenz-rust2` 0.22.2 and `lzma-rust2` 0.20.1, and adds
+  `PS5UPLOAD_7Z_THREADS` (1–16). It stays on one decoder thread by default,
+  because multi-threaded LZMA2 decode is not free: the decoder splits work on
+  dictionary-reset chunks and buffers each unit's decompressed output in
+  memory. On a 2.5 GB test archive, peak RAM went from 74 MiB to 2.3 GiB for
+  an archive packed with 7-Zip's own multithreading (about 24% faster), and to
+  4.4 GiB with **no** speed-up at all for a solid archive — the RAM cost
+  scales with the archive, not with the thread count, so a large game dump
+  could exhaust memory. Turn it on if you are CPU-bound on a multi-threaded
+  archive and have RAM to spare. File and shard order is unchanged either way,
+  preserving byte correctness and resume safety.
+
+---
+
 ## 5.14.0
 
 **Search your games, and a steadier Tasks list.**
