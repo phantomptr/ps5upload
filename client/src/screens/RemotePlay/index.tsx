@@ -16,6 +16,7 @@ import {
   ConnectionGate,
   Spinner,
 } from "../../components";
+import { writeClipboard } from "../../lib/clipboard";
 import { useTr } from "../../state/lang";
 import { useConnectionStore } from "../../state/connection";
 import { useDocumentVisible } from "../../lib/visibility";
@@ -277,12 +278,13 @@ export default function RemotePlayScreen() {
 
   const handleCopyPin = useCallback(async () => {
     if (!status?.pin) return;
-    try {
-      await navigator.clipboard.writeText(status.pin);
+    // writeClipboard, not navigator.clipboard: the async Clipboard API is
+    // secure-context-only, so it is absent both in the packaged webview and
+    // on the self-hosted UI served over plain HTTP from a LAN address. The
+    // helper falls back to execCommand so the button actually copies there.
+    if (await writeClipboard(status.pin)) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2_000);
-    } catch {
-      // clipboard may be unavailable; silently ignore
     }
   }, [status]);
 
@@ -465,11 +467,10 @@ export default function RemotePlayScreen() {
                       variant="ghost"
                       size="sm"
                       onClick={async () => {
-                        try {
-                          await navigator.clipboard.writeText(status.account_id);
+                        if (await writeClipboard(status.account_id)) {
                           setCopiedAcct(true);
                           setTimeout(() => setCopiedAcct(false), 2_000);
-                        } catch { /* clipboard unavailable */ }
+                        }
                       }}
                       className="shrink-0 text-[var(--color-muted)]"
                     >
@@ -492,11 +493,10 @@ export default function RemotePlayScreen() {
                       variant="ghost"
                       size="sm"
                       onClick={async () => {
-                        try {
-                          await navigator.clipboard.writeText(chiakiNumeric);
+                        if (await writeClipboard(chiakiNumeric)) {
                           setCopiedChiaki(true);
                           setTimeout(() => setCopiedChiaki(false), 2_000);
-                        } catch { /* clipboard unavailable */ }
+                        }
                       }}
                       className="shrink-0 text-[var(--color-muted)]"
                     >

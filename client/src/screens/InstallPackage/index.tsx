@@ -69,6 +69,7 @@ import {
 import { transferAddr, hostOf } from "../../lib/addr";
 import { formatBytes } from "../../lib/format";
 import { acceptPkgDrop } from "../../lib/pkgDropDedupe";
+import { writeClipboard } from "../../lib/clipboard";
 
 /* ─── Cover art ────────────────────────────────────────────────────────
  * Thin wrapper over the shared GameIcon (keyed by title id from the
@@ -129,7 +130,7 @@ function PkgRow({
       label: tr("pkglib.menu.copyDetails", "Copy details"),
       icon: <Copy size={12} />,
       onSelect: () =>
-        void navigator.clipboard?.writeText(
+        void writeClipboard(
           [
             entry.title,
             entry.appVer ? `v${entry.appVer}` : "",

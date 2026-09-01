@@ -1365,7 +1365,7 @@ dependencies = [
 
 [[package]]
 name = "ftx2-proto"
-version = "5.14.0"
+version = "5.15.0"
 dependencies = [
  "serde",
  "thiserror 2.0.20",
@@ -2479,9 +2479,9 @@ dependencies = [
 
 [[package]]
 name = "lzma-rust2"
-version = "0.18.0"
+version = "0.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "12931b17820a3a0c48e46359d2be49ef57b5d50509fd5baba43e6c654977aa66"
+checksum = "5e2a88783b84d2d67ef2791778a9e76bfb68b8017aaf6c9d7d5f2626a478b16c"
 
 [[package]]
 name = "mac-notification-sys"
@@ -3271,7 +3271,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-core"
-version = "5.14.0"
+version = "5.15.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -3290,7 +3290,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-desktop"
-version = "5.14.0"
+version = "5.15.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -3323,7 +3323,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-engine"
-version = "5.14.0"
+version = "5.15.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -3343,7 +3343,7 @@ dependencies = [
 
 [[package]]
 name = "ps5upload-pkg"
-version = "5.14.0"
+version = "5.15.0"
 dependencies = [
  "blake3",
  "serde",
@@ -4064,9 +4064,9 @@ dependencies = [
 
 [[package]]
 name = "sevenz-rust2"
-version = "0.21.4"
+version = "0.22.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "20acd38118edb830eb5a0bfacaf83c687b9995f48d6983cdac3cb18ce1d571cc"
+checksum = "cb967eb8b29410e61e8c9005058fcfd5889d0b827856beb25529c73dfc86a98a"
 dependencies = [
  "crc32fast",
  "js-sys",

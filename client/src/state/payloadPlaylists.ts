@@ -1,6 +1,7 @@
 import { create } from "zustand";
 
 import { hostOf } from "../lib/addr";
+import { randomHexId } from "../lib/randomId";
 import {
   payloadPlaylistsLoad,
   payloadPlaylistsSave,
@@ -131,7 +132,7 @@ export function runStatusForHost(
 }
 
 function newId(): string {
-  return crypto.randomUUID().replace(/-/g, "");
+  return randomHexId();
 }
 
 export const usePayloadPlaylistsStore = create<PlaylistState>((set, get) => {

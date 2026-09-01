@@ -9,6 +9,7 @@ import { getEngineUrl } from "../state/engine";
 // Logging wrapper: every command leaves a trace breadcrumb + logs failures at
 // warn. See lib/invokeLogged.ts. (Channel still comes straight from core.)
 import { invoke } from "../lib/invokeLogged";
+import { randomHexId } from "../lib/randomId";
 import { getCachedIcon, setCachedIcon } from "../lib/iconMemoryCache";
 import {
   appendManualListLine,
@@ -805,12 +806,11 @@ export async function payloadPlaylistsSave(doc: unknown): Promise<void> {
 }
 
 export function generateTxIdHex(): string {
-  // crypto.randomUUID() returns "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx"
-  // (36 chars with dashes). Stripping the 4 dashes yields exactly 32
-  // hex chars = 16 bytes. The Version-4 and variant bits burn ~6 bits
-  // of entropy but 122 random bits is still far more than we need for
-  // uniqueness within the PS5's tx table (max 32-ish live entries).
-  return crypto.randomUUID().replace(/-/g, "");
+  // Do not call crypto.randomUUID() directly here. It is absent when the
+  // Docker/self-hosted UI is opened through a plain-HTTP LAN address, which
+  // used to strand folder uploads forever at "Starting…" before the engine
+  // received POST /api/transfer/dir (#290).
+  return randomHexId();
 }
 
 export interface DestinationProbe {

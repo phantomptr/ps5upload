@@ -304,8 +304,9 @@ const POLL_INTERVAL_MS = 500;
 const SAVE_DEBOUNCE_MS = 300;
 
 function newId(): string {
-  // 32-char hex from crypto UUID (same trick as generateTxIdHex).
-  return crypto.randomUUID().replace(/-/g, "");
+  // Same compatibility path as the transfer tx id. In an insecure LAN
+  // browser context randomUUID is absent, but queueing must still work.
+  return generateTxIdHex();
 }
 
 /** Distinct console hosts (bare IP, port-stripped) among the pending items,
