@@ -28,7 +28,7 @@ base64 = "0.23"
 blake3.workspace = true
 ftx2-proto = { path = "../ftx2-proto" }
 mime_guess = { version = "2", optional = true }
-smb2 = "0.18"
+smb2 = "0.20"
 ps5upload-core = { path = "../ps5upload-core" }
 ps5upload-pkg = { path = "../ps5upload-pkg" }
 rust-embed = { version = "8", optional = true }
