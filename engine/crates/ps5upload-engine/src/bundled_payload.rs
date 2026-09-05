@@ -6,7 +6,7 @@
 //! module the web UI could not bring up the DPI install daemon, and the
 //! install cascade's DPI fallback was dead. That fallback is the only path
 //! that lands a game *patch*, which is why base games installed from the
-//! web UI and updates did not (issue #295).
+//! web UI and updates did not (the web UI half of #152).
 //!
 //! Two sources, in this order:
 //!

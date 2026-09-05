@@ -5,7 +5,7 @@
  * Tauri-only `upload_queue_save`, which threw BrowserUnsupportedError.
  * The Upload screen caught it and rendered "Save failed — free disk space
  * or fix permissions" over an install that had actually succeeded, which
- * is how it showed up in the #295 hardware run.
+ * is how it showed up in the #300 hardware run.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 

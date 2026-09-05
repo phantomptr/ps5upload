@@ -5,7 +5,7 @@
 //! sends them itself, but a browser driving a self-hosted engine cannot —
 //! it has no TCP socket and no copy of the bytes. Without them the install
 //! cascade's DPI fallback (the only path that lands a game *patch*) is
-//! unreachable from the web UI, which is issue #295.
+//! unreachable from the web UI — the web UI half of #152.
 //!
 //! Both embeds are OPTIONAL, mirroring the desktop client's `have_dpi`
 //! gate: the images are produced by `make payload` and need the PS5 payload

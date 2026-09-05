@@ -25,7 +25,7 @@
 # The image also carries the two PS5 helper ELFs (ps5upload.elf and the DPI
 # install daemon). The browser cannot open a socket to the console's loader
 # or hold those bytes itself, so without them the web UI can install base
-# games but not updates or DLC (issue #295). Override with
+# games but not updates or DLC — the web UI half of #152. Override with
 # PS5UPLOAD_PAYLOAD_DIR if you need to pin different ones.
 #
 # SECURITY: the web UI is UNAUTHENTICATED.  Anyone whose IP is in
@@ -58,7 +58,7 @@ WORKDIR /build
 COPY engine/ ./engine/
 COPY third_party/ ./third_party/
 # See engine/Dockerfile: build.rs embeds these, and the web UI's update /
-# DLC install is exactly what breaks without them (#295).
+# DLC install is exactly what breaks without them (the web UI half of #152).
 COPY payload/ ./payload/
 WORKDIR /build/engine
 

@@ -17,7 +17,7 @@ name: docker-engine
 # DPI daemon up and put the helper back afterwards — the fallback that
 # installs a game PATCH. The desktop client does this from its own embeds;
 # a browser has no socket and no bytes, so without them the web UI could
-# install base games and nothing else (issue #295). That is why the tag
+# install base games and nothing else (the web UI half of #152). That is why the tag
 # builds now start with a `build-payload` job: the main payload is not
 # committed (see .gitignore) and needs the PS5 payload SDK.
 #

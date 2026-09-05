@@ -10,7 +10,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  * threw `BrowserUnsupportedError` before it ever reached the daemon. Base
  * games, which land on the in-process tier and never need the fallback,
  * kept working, which is why the report was "updates fail from the web UI
- * but install fine from the Windows app" (#295).
+ * but install fine from the Windows app" — the web UI half of #152.
  */
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("../lib/tauriEnv", () => ({ isTauriEnv: () => false }));

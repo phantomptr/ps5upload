@@ -987,7 +987,7 @@ const PKG_STALL_HINT =
  *  brought up. Distinct from `PKG_PATCH_REJECTED_HINT` on purpose: saying
  *  "the PS5 declined it" when the console never saw the request sends
  *  people hunting for the wrong base-game version. The common cause on a
- *  self-hosted engine is a build with no bundled daemon image (#295). */
+ *  self-hosted engine is a build with no bundled daemon image (#152). */
 export const PKG_PATCH_DAEMON_UNAVAILABLE_HINT =
   "This update couldn’t be applied because ps5upload couldn’t start the PS5’s update installer, so the console never saw the update. Your base game is untouched. If you’re running a self-hosted engine, use the released engine build (or the ps5upload-engine Docker image) — a source build without the PS5 payload SDK has no installer image to send. You can also apply the update from the PS5 itself: Settings → System → Debug Settings → Game → Package Installer.";
 
@@ -1188,7 +1188,7 @@ async function restoreMainPayload(ip: string): Promise<void> {
       // `payload_bundled_path`/`payload_send` are desktop-only commands —
       // calling them here threw BrowserUnsupportedError, which is what
       // made the whole DPI fallback (and therefore every patch install)
-      // fail from the web UI. See #295.
+      // fail from the web UI. See #152.
       const r = (await invoke("payload_restore", { ip })) as {
         ok?: boolean;
         error?: string;

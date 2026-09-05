@@ -66,7 +66,7 @@ describe("timeSyncBody", () => {
  * game. On the desktop the fallback works because the app embeds both
  * ELF images and streams them to the loader itself.
  *
- * A browser can do neither. Before #295 `dpi_ensure` had no entry in
+ * A browser can do neither. Before the web UI fix `dpi_ensure` had no entry in
  * this map, so it threw BrowserUnsupportedError, the cascade recorded
  * "daemon failed", and every update installed from the web UI died with
  * the generic "this update couldn't be applied" hint — while base games,
@@ -133,7 +133,7 @@ describe("loader-port commands the DPI fallback depends on", () => {
   });
 });
 
-describe("engine-backed commands the web UI depends on (#295 follow-up)", () => {
+describe("engine-backed commands the web UI depends on (#300)", () => {
   beforeEach(() => {
     vi.unstubAllGlobals();
   });

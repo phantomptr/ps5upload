@@ -6,7 +6,7 @@
  * added on the Rust side simply falls through to `default:` and throws
  * BrowserUnsupportedError the first time a self-hosted user clicks the
  * button. That is how the whole Cheats/SMB/Backup/SDK surface came to be
- * dead in the web UI while the engine was serving every route (#295).
+ * dead in the web UI while the engine was serving every route (#300).
  *
  * This test makes that drift a CI failure: every command must be either
  * mapped in the shim or listed below with a reason it cannot be.

@@ -166,7 +166,7 @@ pub enum LoaderImage {
 /// It exists because the install cascade's DPI fallback — the only path
 /// that lands a game *patch* — needs to load a daemon onto the console,
 /// and a browser can neither open a TCP socket nor reach the desktop
-/// client's embedded copy of that daemon (issue #295).
+/// client's embedded copy of that daemon (the web UI half of #152).
 ///
 /// Whether to shut a running payload down before streaming these bytes.
 ///

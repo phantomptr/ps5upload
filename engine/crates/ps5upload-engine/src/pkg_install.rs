@@ -171,7 +171,7 @@ pub fn router(state: PkgInstallStateHandle) -> Router {
         // helper back afterwards. The desktop client does both itself from
         // its own embedded ELFs; a browser can do neither, which left the
         // web UI with no DPI fallback at all — so no way to install a game
-        // patch (issue #295). See `bundled_payload`.
+        // patch (the web UI half of #152). See `bundled_payload`.
         .route("/api/pkg/dpi-ensure", post(dpi_ensure_handler))
         .route("/api/pkg/payload-restore", post(payload_restore_handler))
         // Direct/streaming install (beta, #81): skip the staging upload

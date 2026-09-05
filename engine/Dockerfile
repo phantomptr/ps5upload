@@ -50,7 +50,7 @@ COPY engine engine
 COPY third_party third_party
 # The PS5 helper ELFs the engine embeds (build.rs looks for them at
 # <repo root>/payload). Without this the image builds fine but installs
-# UPDATES and DLC with no installer to send — the exact #295 failure —
+# UPDATES and DLC with no installer to send — the exact #152 failure —
 # because `have_bundled_dpi` is never set. ezremote-dpi.elf is committed,
 # so this always works; ps5upload.elf appears only if you ran
 # `make payload` first (it needs the PS5 payload SDK).
