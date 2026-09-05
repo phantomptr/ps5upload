@@ -57,6 +57,9 @@ RUN apk add --no-cache musl-dev g++ make
 WORKDIR /build
 COPY engine/ ./engine/
 COPY third_party/ ./third_party/
+# See engine/Dockerfile: build.rs embeds these, and the web UI's update /
+# DLC install is exactly what breaks without them (#295).
+COPY payload/ ./payload/
 WORKDIR /build/engine
 
 # Populate the webui/ embed directory from the frontend build output.

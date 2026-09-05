@@ -24,6 +24,7 @@ import { useTr } from "../../state/lang";
 import { useConnectionStore } from "../../state/connection";
 import { transferAddr } from "../../lib/addr";
 import { humanizePs5Error } from "../../lib/humanizeError";
+import { isTauriEnv } from "../../lib/tauriEnv";
 import {
   smbListShares,
   smbListDir,
@@ -467,7 +468,10 @@ export default function SmbBrowserScreen() {
                           {formatSize(e.size)}
                         </span>
                       )}
-                      {!e.is_dir && (
+                      {/* Download saves to THIS computer via the native file
+                          dialog, so it exists only in the desktop app. Uploading
+                          to the PS5 (below) is engine-side and works anywhere. */}
+                      {!e.is_dir && isTauriEnv() && (
                         <button
                           className="shrink-0 rounded p-1.5 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-3)] hover:text-[var(--color-text)]"
                           onClick={(ev) => {

@@ -592,7 +592,11 @@ export default function ConnectionScreen() {
             running payload. Once step2 is "ok" they don't need it.
             One-click path; falls through to this manual flow if they
             prefer it. */}
-        {step2 !== "ok" && (
+        {/* Browser: /first-run is a NativeOnlyRoute — the wizard downloads
+            payload ELFs to the host and sends them over a raw socket, so
+            it bounces straight back here. Offering the button anyway just
+            makes the page look broken. */}
+        {step2 !== "ok" && isTauriEnv() && (
           <div className="flex flex-wrap items-start gap-3 rounded-md border border-[var(--color-accent)] bg-[var(--color-surface-2)] p-3 text-xs">
             <Sparkles
               size={14}

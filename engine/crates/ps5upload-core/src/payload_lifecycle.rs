@@ -109,6 +109,30 @@ pub fn port_is_open(addr: &str, timeout: Duration) -> bool {
         .any(|sa| TcpStream::connect_timeout(sa, timeout).is_ok())
 }
 
+/// Probe `host:port`, keeping "the name never resolved" distinct from
+/// "nothing answered".
+///
+/// The desktop client's `port_check` learned to separate these in #272:
+/// collapsing them made a DNS typo read as "your PS5 isn't jailbroken".
+/// The browser has no sockets of its own, so a self-hosted web UI has to
+/// borrow the engine's — and the engine is the better prober anyway, since
+/// it sits on the console's LAN while the browser may not.
+pub fn probe_port(host: &str, port: u16, timeout: Duration) -> Result<(), String> {
+    let addr = join_host_port(host, port);
+    let targets = resolve_connect_targets(&addr).map_err(|e| format!("resolve {host}: {e}"))?;
+    if targets.is_empty() {
+        return Err(format!("resolve {host}: no addresses"));
+    }
+    let mut last = String::from("no addresses to try");
+    for sa in &targets {
+        match TcpStream::connect_timeout(sa, timeout) {
+            Ok(_) => return Ok(()),
+            Err(e) => last = format!("connect {sa}: {e}"),
+        }
+    }
+    Err(last)
+}
+
 /// What is being loaded, which decides whether a payload already running
 /// on the console has to be shut down first.
 ///
@@ -311,5 +335,31 @@ mod tests {
             "198.51.100.1:9040",
             Duration::from_millis(300)
         ));
+    }
+
+    #[test]
+    fn probe_port_separates_a_bad_name_from_a_dead_host() {
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        assert!(probe_port("127.0.0.1", port, Duration::from_secs(2)).is_ok());
+
+        // A name that cannot resolve and a host that never answers are
+        // different problems, and the Connection screen says so (#272).
+        // Collapsing them is what made a typo read as "not jailbroken".
+        let unresolvable = probe_port("no-such-host.invalid", 9113, Duration::from_millis(300))
+            .expect_err("should not resolve");
+        assert!(
+            unresolvable.starts_with("resolve "),
+            "want a resolve error, got: {unresolvable}"
+        );
+
+        let unreachable = probe_port("198.51.100.1", 9113, Duration::from_millis(300))
+            .expect_err("nothing listens on TEST-NET-2");
+        assert!(
+            unreachable.starts_with("connect "),
+            "want a connect error, got: {unreachable}"
+        );
     }
 }
