@@ -8298,7 +8298,7 @@ async fn debug_crash(Query(q): Query<DebugCrashQuery>) -> axum::response::Respon
 /// Exists so the self-hosted web UI can light up the same connection
 /// status dots the desktop client does. A browser cannot open a raw
 /// socket, so without this the Connection screen and the first-run
-/// reachability step were both dead in a browser session (#295).
+/// reachability step were both dead in a browser session (#300).
 ///
 /// Mirrors the `port_check` Tauri command's shape exactly —
 /// `{ open: bool, error: string|null }` — so the two transports stay

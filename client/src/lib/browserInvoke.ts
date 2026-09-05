@@ -764,7 +764,7 @@ export async function browserInvoke<T>(
     // copy of the bytes, so the engine does it. Missing here, the install
     // cascade's DPI fallback was unreachable from the web UI — and that
     // fallback is the only path that lands a game PATCH, which is why
-    // base games installed from the browser and updates did not (#295).
+    // base games installed from the browser and updates did not (#152).
     case "dpi_ensure":
       // TS caller: { ip }. Response shape matches the Tauri command's
       // { ok, listening, sent, error? } — the cascade reads `sent` to
@@ -1058,7 +1058,7 @@ export async function browserInvoke<T>(
     // ── Cheats ───────────────────────────────────────────────────────────────
     // The whole Cheats screen used to be dead in a self-hosted browser
     // session: the engine served every one of these routes, but the shim
-    // had no mapping so each button threw BrowserUnsupportedError (#295).
+    // had no mapping so each button threw BrowserUnsupportedError (#300).
 
     case "cheats_list":
       return getJson<T>(

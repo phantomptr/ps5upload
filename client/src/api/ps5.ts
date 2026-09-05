@@ -813,7 +813,7 @@ export async function uploadQueueLoad<T = unknown>(): Promise<T> {
  *  In the browser this used to throw BrowserUnsupportedError on every
  *  queue mutation, which the Upload screen surfaced as a red "Save
  *  failed — free disk space or fix permissions" banner on an install
- *  that had in fact succeeded (#295). */
+ *  that had in fact succeeded (#300). */
 export async function uploadQueueSave(doc: unknown): Promise<void> {
   if (!isTauriEnv()) {
     try {
