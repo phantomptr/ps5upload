@@ -529,11 +529,14 @@ port 9021 — a third-party component, not part of ps5upload.
   on-console install daemon, and the engine has to send it to the console
   and put the ps5upload helper back afterwards — the desktop app does this
   from its own copies, which a browser tab cannot reach. The released
-  engine binaries and the official Docker images include them. A source
-  build only has them if you ran `make payload` first (it needs the PS5
-  payload SDK); otherwise point the engine at a directory holding
-  `ps5upload.elf` and `ezremote-dpi.elf` with
-  `-e PS5UPLOAD_PAYLOAD_DIR=/path/to/elves`. Base games install either way.
+  engine binaries and the official Docker images include them, and a
+  Docker image you build yourself does too — `ezremote-dpi.elf` is in the
+  repository, and that is the one the update install needs. A plain
+  `cargo build` picks it up only if you build from a full checkout; the
+  ps5upload helper itself is built by `make payload` (it needs the PS5
+  payload SDK). Either way you can point the engine at your own copies
+  with `-e PS5UPLOAD_PAYLOAD_DIR=/path/to/elves`. Base games install
+  regardless.
 
 ## Contributing
 
