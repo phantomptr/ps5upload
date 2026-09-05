@@ -4,6 +4,39 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.16.0
+
+**Game updates and DLC install from the self-hosted web UI.**
+
+- **Updates and add-ons now install from the browser, not just base games.**
+  An update can't go through the PS5's in-app installer — on firmware 10 and
+  newer it turns patches away, and the one remaining in-app route is the
+  destructive one that can wipe the base game, so ps5upload refuses it. The
+  install that actually works hands the package to a separate on-console
+  installer daemon, which means sending that daemon to the console and putting
+  the ps5upload helper back afterwards. The desktop app does that from its own
+  bundled copies. A browser tab can't: it has no way to open a socket to the
+  console, and no copy of the files. So every update installed from the web UI
+  stopped with "this update couldn't be applied", while base games — which
+  never need that route — installed fine. The engine now carries both helper
+  images and does this itself, so the browser and the desktop app take the same
+  install path. This also unblocks Stream (beta) installs in the browser.
+
+  The released engine binaries and the official Docker images
+  (`ghcr.io/phantomptr/ps5upload-engine`, `…-engine-webui`) include the images.
+  If you build the engine from source without the PS5 payload SDK it has none,
+  and it now says so plainly instead of reporting the console as having
+  declined the update; you can point it at your own copies with
+  `PS5UPLOAD_PAYLOAD_DIR`.
+
+- **A clearer message when the update never reached the console.** "The PS5
+  declined it — most often because the update doesn't match your installed
+  version" was shown even when the request never got that far, which sent
+  people hunting for the wrong version of a game. Failing to start the
+  installer now says exactly that, and what to do about it.
+
+---
+
 ## 5.15.0
 
 **Reliable browser uploads, safer firmware-12 helper recovery, and an opt-in 7z decoder speed-up.**

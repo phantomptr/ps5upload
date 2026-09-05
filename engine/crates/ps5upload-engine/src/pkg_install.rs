@@ -167,6 +167,13 @@ pub fn router(state: PkgInstallStateHandle) -> Router {
         // process — installs without the PlayGo gate. Caller stages the
         // pkg first and passes the bare PS5 path. See payload/dpi/.
         .route("/api/pkg/dpi-install", post(dpi_install_handler))
+        // Bring that daemon up in the first place, and put the ps5upload
+        // helper back afterwards. The desktop client does both itself from
+        // its own embedded ELFs; a browser can do neither, which left the
+        // web UI with no DPI fallback at all — so no way to install a game
+        // patch (issue #295). See `bundled_payload`.
+        .route("/api/pkg/dpi-ensure", post(dpi_ensure_handler))
+        .route("/api/pkg/payload-restore", post(payload_restore_handler))
         // Direct/streaming install (beta, #81): skip the staging upload
         // entirely — the engine serves the pkg at /pkg-host/ and the DPI
         // daemon pulls it straight over HTTP. Useful when PS5 disk space
@@ -2328,6 +2335,186 @@ async fn install_cancel_handler(
     })
 }
 
+// ─── /api/pkg/dpi-ensure + /api/pkg/payload-restore ──────────────────
+//
+// Loader-port (:9021) delivery of the two ELF images the install cascade
+// swaps between. The desktop client owns an identical pair of commands
+// (`dpi_ensure` / `payload_send`) backed by its own embedded copies; these
+// routes are what a browser-driven, self-hosted engine calls instead.
+//
+// Order matters to the caller and is the same on both transports:
+// `dpi-ensure` may REPLACE the running ps5upload helper (a single-payload
+// loader runs one process), so whoever calls it must call
+// `payload-restore` afterwards — including on the failure paths, or the
+// console is left with no helper and the web UI cannot reach it again.
+
+/// How long to wait for a TCP connect when asking "is :9040 up?".
+const DPI_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1500);
+/// Poll budget after streaming the daemon: 16 × 500 ms, matching the
+/// desktop client so a slow console behaves the same on both transports.
+const DPI_BRINGUP_POLLS: u32 = 16;
+const DPI_BRINGUP_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
+
+#[derive(Debug, Deserialize)]
+pub struct LoaderRequest {
+    /// Any PS5 address we hold (`ip:9114`, `ip:9113`) or a bare IP.
+    pub ps5_addr: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DpiEnsureResponse {
+    pub ok: bool,
+    /// True when the daemon is answering on :9040 — either it already was
+    /// (a scene daemon like etaHEN, or ours from a previous install) or it
+    /// came up after we streamed it.
+    pub listening: bool,
+    /// True when we actually pushed the daemon to the loader. The caller
+    /// uses this to know the helper was displaced: `sent: false` means
+    /// nothing was replaced and a restore is a no-op.
+    pub sent: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PayloadRestoreResponse {
+    pub ok: bool,
+    pub bytes: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+async fn dpi_ensure_handler(Json(req): Json<LoaderRequest>) -> Response<Body> {
+    let ps5_ip = strip_host_port(&req.ps5_addr);
+    if ps5_ip.is_empty() {
+        return json_err(StatusCode::BAD_REQUEST, "ps5_addr is required");
+    }
+    let res = tokio::task::spawn_blocking(move || dpi_ensure_blocking(&ps5_ip)).await;
+    match res {
+        Ok(resp) => json_ok(&resp),
+        Err(e) => json_err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("dpi-ensure task failed: {e}"),
+        ),
+    }
+}
+
+/// The blocking half of `dpi-ensure`. Split out so the decision sequence
+/// — probe, then stream, then wait — reads in one place.
+fn dpi_ensure_blocking(ps5_ip: &str) -> DpiEnsureResponse {
+    use ps5upload_core::payload_lifecycle as pl;
+
+    let dpi_addr = pl::join_host_port(ps5_ip, pl::DPI_DAEMON_PORT);
+    if pl::port_is_open(&dpi_addr, DPI_PROBE_TIMEOUT) {
+        crate::log_info!("dpi-ensure: {} already listening", dpi_addr);
+        return DpiEnsureResponse {
+            ok: true,
+            listening: true,
+            sent: false,
+            error: None,
+        };
+    }
+
+    let bytes = match crate::bundled_payload::image_bytes(crate::bundled_payload::Image::Dpi) {
+        Ok(b) => b,
+        Err(e) => {
+            crate::log_warn!("dpi-ensure: no daemon image available: {}", e);
+            return DpiEnsureResponse {
+                ok: false,
+                listening: false,
+                sent: false,
+                error: Some(e),
+            };
+        }
+    };
+
+    crate::log_info!(
+        "dpi-ensure: streaming {} bytes of DPI daemon to {}:{}",
+        bytes.len(),
+        ps5_ip,
+        pl::PS5_LOADER_PORT
+    );
+    if let Err(e) = pl::send_elf_to_loader(
+        ps5_ip,
+        pl::PS5_LOADER_PORT,
+        &bytes,
+        pl::LoaderImage::Companion,
+    ) {
+        crate::log_warn!("dpi-ensure: send failed: {}", e);
+        return DpiEnsureResponse {
+            ok: false,
+            listening: false,
+            sent: false,
+            error: Some(format!("send dpi.elf: {e}")),
+        };
+    }
+
+    for _ in 0..DPI_BRINGUP_POLLS {
+        std::thread::sleep(DPI_BRINGUP_INTERVAL);
+        if pl::port_is_open(&dpi_addr, DPI_PROBE_TIMEOUT) {
+            crate::log_info!("dpi-ensure: daemon up on {}", dpi_addr);
+            return DpiEnsureResponse {
+                ok: true,
+                listening: true,
+                sent: true,
+                error: None,
+            };
+        }
+    }
+    // Sent but never answered. `sent: true` is the important half of this
+    // reply: the helper has been displaced, so the caller must restore it.
+    crate::log_warn!("dpi-ensure: daemon never came up on {}", dpi_addr);
+    DpiEnsureResponse {
+        ok: false,
+        listening: false,
+        sent: true,
+        error: Some("DPI daemon did not come up on :9040".to_string()),
+    }
+}
+
+async fn payload_restore_handler(Json(req): Json<LoaderRequest>) -> Response<Body> {
+    let ps5_ip = strip_host_port(&req.ps5_addr);
+    if ps5_ip.is_empty() {
+        return json_err(StatusCode::BAD_REQUEST, "ps5_addr is required");
+    }
+    let res = tokio::task::spawn_blocking(move || {
+        use ps5upload_core::payload_lifecycle as pl;
+        let bytes = crate::bundled_payload::image_bytes(crate::bundled_payload::Image::Payload)?;
+        pl::send_elf_to_loader(
+            &ps5_ip,
+            pl::PS5_LOADER_PORT,
+            &bytes,
+            pl::LoaderImage::Ps5Upload,
+        )
+    })
+    .await;
+    match res {
+        Ok(Ok(bytes)) => {
+            crate::log_info!("payload-restore: sent {} bytes", bytes);
+            json_ok(&PayloadRestoreResponse {
+                ok: true,
+                bytes,
+                error: None,
+            })
+        }
+        Ok(Err(e)) => {
+            // Not an HTTP error: the caller runs this in a `finally` and a
+            // failed restore is information to log, not a reason to mask
+            // the install result that preceded it.
+            crate::log_warn!("payload-restore: {}", e);
+            json_ok(&PayloadRestoreResponse {
+                ok: false,
+                bytes: 0,
+                error: Some(e),
+            })
+        }
+        Err(e) => json_err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("payload-restore task failed: {e}"),
+        ),
+    }
+}
+
 // ─── /api/pkg/dpi-install ────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -3195,6 +3382,51 @@ fn now_unix() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod loader_route_tests {
+    use super::*;
+
+    /// The web UI sends the console address the same way it does for every
+    /// other pkg route. A rename on either side silently drops the console
+    /// and the handler answers "ps5_addr is required".
+    #[test]
+    fn loader_request_takes_the_shared_ps5_addr_key() {
+        let req: LoaderRequest =
+            serde_json::from_str(r#"{"ps5_addr":"192.168.1.50:9114"}"#).expect("deserialize");
+        assert_eq!(strip_host_port(&req.ps5_addr), "192.168.1.50");
+    }
+
+    /// `sent` is the field the caller reads to decide whether the ps5upload
+    /// helper was displaced and has to be put back. Serde must always emit
+    /// it — including on the failure replies, which is exactly when the
+    /// console is at risk of being left with no helper at all.
+    #[test]
+    fn dpi_ensure_always_reports_whether_the_daemon_was_sent() {
+        let failed = DpiEnsureResponse {
+            ok: false,
+            listening: false,
+            sent: true,
+            error: Some("DPI daemon did not come up on :9040".into()),
+        };
+        let v: serde_json::Value = serde_json::to_value(&failed).expect("serialize");
+        assert_eq!(v["sent"], serde_json::json!(true));
+        assert_eq!(v["ok"], serde_json::json!(false));
+        assert!(v["error"].is_string());
+
+        // No error key at all on the happy path, so a caller that checks
+        // `error` for truthiness doesn't read an empty string as a failure.
+        let ok = DpiEnsureResponse {
+            ok: true,
+            listening: true,
+            sent: false,
+            error: None,
+        };
+        let v: serde_json::Value = serde_json::to_value(&ok).expect("serialize");
+        assert!(v.get("error").is_none());
+        assert_eq!(v["sent"], serde_json::json!(false));
+    }
 }
 
 #[cfg(test)]

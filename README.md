@@ -524,6 +524,16 @@ port 9021 — a third-party component, not part of ps5upload.
   monitor, saves list, …) works the same as the desktop app. The upload
   queue also doesn't persist across a full page reload in browser mode
   (queue persistence is desktop-only).
+* Installing a **game update or DLC** from the browser needs an engine that
+  carries the two PS5 helper images. Those installs go through a separate
+  on-console install daemon, and the engine has to send it to the console
+  and put the ps5upload helper back afterwards — the desktop app does this
+  from its own copies, which a browser tab cannot reach. The released
+  engine binaries and the official Docker images include them. A source
+  build only has them if you ran `make payload` first (it needs the PS5
+  payload SDK); otherwise point the engine at a directory holding
+  `ps5upload.elf` and `ezremote-dpi.elf` with
+  `-e PS5UPLOAD_PAYLOAD_DIR=/path/to/elves`. Base games install either way.
 
 ## Contributing
 

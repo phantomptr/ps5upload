@@ -234,7 +234,7 @@ fn write_all_parts<W: Write>(stream: &mut W, parts: &[&[u8]]) -> io::Result<()> 
 /// The IP-literal fast path is kept ahead of `to_socket_addrs` so the common
 /// case (the address the app stores after discovery) never touches the
 /// resolver at all.
-fn resolve_connect_targets(addr: &str) -> Result<Vec<SocketAddr>> {
+pub(crate) fn resolve_connect_targets(addr: &str) -> Result<Vec<SocketAddr>> {
     if let Ok(sa) = addr.parse::<SocketAddr>() {
         return Ok(vec![sa]);
     }

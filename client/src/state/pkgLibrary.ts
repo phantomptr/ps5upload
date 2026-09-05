@@ -29,6 +29,7 @@ import {
 } from "../lib/pkgStagingPath";
 import { ensurePayloadCurrent } from "../lib/ensurePayloadCurrent";
 import { transferScreenBusy } from "../lib/ps5Transfers";
+import { isTauriEnv } from "../lib/tauriEnv";
 import { useInstallSettingsStore } from "./installSettings";
 import { useConnectionStore } from "./connection";
 import { log } from "./logs";
@@ -980,6 +981,16 @@ const PKG_STALL_HINT =
  *  installed game (or the base isn't installed). The base game is untouched;
  *  the PS5's own Package Installer is the most reliable last resort. This
  *  replaces the raw, misleading "PKG header — corrupt or wrongly named" text. */
+/** Shown when the update never reached the PS5 at all because the DPI
+ *  daemon — the only install path that can apply a patch once the
+ *  in-process installer hits the firmware authid gate — could not be
+ *  brought up. Distinct from `PKG_PATCH_REJECTED_HINT` on purpose: saying
+ *  "the PS5 declined it" when the console never saw the request sends
+ *  people hunting for the wrong base-game version. The common cause on a
+ *  self-hosted engine is a build with no bundled daemon image (#295). */
+export const PKG_PATCH_DAEMON_UNAVAILABLE_HINT =
+  "This update couldn’t be applied because ps5upload couldn’t start the PS5’s update installer, so the console never saw the update. Your base game is untouched. If you’re running a self-hosted engine, use the released engine build (or the ps5upload-engine Docker image) — a source build without the PS5 payload SDK has no installer image to send. You can also apply the update from the PS5 itself: Settings → System → Debug Settings → Game → Package Installer.";
+
 export const PKG_PATCH_REJECTED_HINT =
   "This update couldn’t be applied. ps5upload installs updates through the PS5’s safe install path (never one that could delete your base game), and on this console the PS5 declined it — most often because the update doesn’t match your installed version of the game, or the base game isn’t installed yet. Your base game is untouched. If you have the right update, you can also apply it from the PS5 itself: Settings → System → Debug Settings → Game → Package Installer.";
 
@@ -1172,6 +1183,26 @@ async function verifyDpiInstalledArtifact(
  */
 async function restoreMainPayload(ip: string): Promise<void> {
   try {
+    if (!isTauriEnv()) {
+      // Browser: the engine holds the payload bytes and owns the socket.
+      // `payload_bundled_path`/`payload_send` are desktop-only commands —
+      // calling them here threw BrowserUnsupportedError, which is what
+      // made the whole DPI fallback (and therefore every patch install)
+      // fail from the web UI. See #295.
+      const r = (await invoke("payload_restore", { ip })) as {
+        ok?: boolean;
+        error?: string;
+      };
+      if (!r?.ok) {
+        log.warn(
+          "install",
+          `couldn't restore the main payload on ${ip}: ${
+            r?.error ?? "engine reported no payload image"
+          }`,
+        );
+      }
+      return;
+    }
     const bp = (await invoke("payload_bundled_path")) as {
       ok?: boolean;
       path?: string;
@@ -1601,12 +1632,16 @@ async function runPkgInstallCore(
     if (dpi.daemonFailed) {
       // DPI couldn't even come up. For a patch, give update-specific guidance
       // (base is safe; try the PS5's Package Installer) rather than a raw
-      // daemon error.
+      // daemon error — but say that the console never saw the update, which
+      // is a different problem from "the PS5 declined it" and has a
+      // different fix.
       if (resolvedType.endsWith("DP")) {
         return {
           installed: false,
           mayNotLaunch,
-          errMessage: PKG_PATCH_REJECTED_HINT,
+          errMessage: dpi.errMessage
+            ? `${PKG_PATCH_DAEMON_UNAVAILABLE_HINT} (${dpi.errMessage})`
+            : PKG_PATCH_DAEMON_UNAVAILABLE_HINT,
           stalled,
         };
       }

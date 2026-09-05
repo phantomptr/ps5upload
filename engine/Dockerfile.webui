@@ -22,6 +22,12 @@
 # and may not be able to reach the PS5 on your LAN — this is a Docker
 # Desktop limitation, not an engine bug.
 #
+# The image also carries the two PS5 helper ELFs (ps5upload.elf and the DPI
+# install daemon). The browser cannot open a socket to the console's loader
+# or hold those bytes itself, so without them the web UI can install base
+# games but not updates or DLC (issue #295). Override with
+# PS5UPLOAD_PAYLOAD_DIR if you need to pin different ones.
+#
 # SECURITY: the web UI is UNAUTHENTICATED.  Anyone whose IP is in
 # PS5UPLOAD_ALLOW_IP gets full control over your PS5.  Only add IPs from
 # your own trusted LAN.  Never expose port 19113 to the internet.

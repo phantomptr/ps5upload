@@ -618,6 +618,30 @@ export async function browserInvoke<T>(
         session: args["session"],
       });
 
+    // Bring up the DPI install daemon on :9040, and put the ps5upload
+    // helper back once the install is done. On the desktop both of these
+    // stream an ELF the app has embedded; a browser has no socket and no
+    // copy of the bytes, so the engine does it. Missing here, the install
+    // cascade's DPI fallback was unreachable from the web UI — and that
+    // fallback is the only path that lands a game PATCH, which is why
+    // base games installed from the browser and updates did not (#295).
+    case "dpi_ensure":
+      // TS caller: { ip }. Response shape matches the Tauri command's
+      // { ok, listening, sent, error? } — the cascade reads `sent` to
+      // decide whether the helper needs restoring.
+      return postJson<T>("/api/pkg/dpi-ensure", {
+        ps5_addr: args["ip"],
+      });
+
+    case "payload_restore":
+      // Browser-only command (no Tauri twin): the desktop resolves its
+      // bundled payload path and calls `payload_send`, which a browser
+      // cannot do. Never long: a stuck restore must not hold the install
+      // cascade's `finally` open for an hour.
+      return postJson<T>("/api/pkg/payload-restore", {
+        ps5_addr: args["ip"],
+      });
+
     case "pkg_dpi_install":
       // TS caller: { ps5Addr, localPs5Path } (Tauri 2 camelCase)
       return postJson<T>(

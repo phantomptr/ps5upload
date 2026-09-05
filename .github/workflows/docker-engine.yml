@@ -12,6 +12,15 @@ name: docker-engine
 # images, in lockstep — one release cuts both. PRs that touch engine/ or
 # client/ get a build-only smoke-check of both Dockerfiles (no push).
 #
+# Both images embed the two PS5 ELF images (ps5upload.elf and the DPI
+# install daemon) so a browser driving a self-hosted engine can bring the
+# DPI daemon up and put the helper back afterwards — the fallback that
+# installs a game PATCH. The desktop client does this from its own embeds;
+# a browser has no socket and no bytes, so without them the web UI could
+# install base games and nothing else (issue #295). That is why the tag
+# builds now start with a `build-payload` job: the main payload is not
+# committed (see .gitignore) and needs the PS5 payload SDK.
+#
 # Manual re-run (e.g. after an Actions outage wedges a tag-push run):
 #   gh workflow run docker-engine.yml -f tag=v3.3.16
 on:
@@ -45,6 +54,16 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Stage the committed DPI daemon for the embed
+        # ps5upload.elf is not in the repo (it needs the payload SDK), so a
+        # PR build can only cover the DPI half. That is the half the web
+        # UI's patch install depends on, and staging it here means a broken
+        # embed fails the PR rather than the release.
+        run: |
+          set -euo pipefail
+          mkdir -p engine/crates/ps5upload-engine/payload
+          cp -v payload/dpi/ezremote-dpi.elf engine/crates/ps5upload-engine/payload/
+
       - uses: docker/setup-buildx-action@v4
 
       - uses: docker/build-push-action@v7
@@ -63,6 +82,16 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
+
+      - name: Stage the committed DPI daemon for the embed
+        # ps5upload.elf is not in the repo (it needs the payload SDK), so a
+        # PR build can only cover the DPI half. That is the half the web
+        # UI's patch install depends on, and staging it here means a broken
+        # embed fails the PR rather than the release.
+        run: |
+          set -euo pipefail
+          mkdir -p engine/crates/ps5upload-engine/payload
+          cp -v payload/dpi/ezremote-dpi.elf engine/crates/ps5upload-engine/payload/
 
       - uses: docker/setup-buildx-action@v4
 
@@ -112,9 +141,77 @@ jobs:
             echo "image_webui=ghcr.io/${owner_lc}/ps5upload-engine-webui"
           } >> "$GITHUB_OUTPUT"
 
+  # ── Build the two PS5 ELF images the engine embeds ─────────────────────────
+  # Mirrors publish.yml's job of the same name. Duplicated rather than shared
+  # because the two workflows run independently on a tag push and neither can
+  # wait on the other's artifacts. The DPI daemon is committed, but the main
+  # payload is not (see .gitignore), and the engine needs BOTH: it streams the
+  # daemon to the loader on :9021 and then puts ps5upload back afterwards.
+  build-payload:
+    needs: resolve
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+
+      - name: Install payload toolchain
+        timeout-minutes: 12
+        run: |
+          set -euo pipefail
+          # apt has no default network timeout, so a stalled mirror hangs
+          # until the job dies. Retry with explicit timeouts.
+          apt_retry() {
+            for attempt in 1 2 3; do
+              if sudo DEBIAN_FRONTEND=noninteractive apt-get \
+                   -o Acquire::Retries=3 \
+                   -o Acquire::http::Timeout=20 \
+                   -o Acquire::https::Timeout=20 \
+                   "$@"; then
+                return 0
+              fi
+              echo "apt attempt $attempt failed; retrying in 15s" >&2
+              sleep 15
+            done
+            echo "apt failed after 3 attempts: apt-get $*" >&2
+            return 1
+          }
+          apt_retry update
+          # llvm-22 is not in Ubuntu 24.04's default repos.
+          curl -fsSL --retry 3 --retry-delay 5 https://apt.llvm.org/llvm.sh | sudo bash -s -- 22
+          apt_retry install -y clang-22 llvm-22-dev lld-22 unzip python3
+
+      - name: Install pinned PS5 Payload SDK
+        run: sudo env PS5_SDK_INSTALL_DIR=/opt/ps5-payload-sdk bash scripts/install-ps5-sdk.sh
+
+      - name: Build payload ELFs
+        env:
+          PS5_PAYLOAD_SDK: /opt/ps5-payload-sdk
+          # SDK v0.42's prospero-llvm-config candidate search maxes at 21,
+          # so point it at the CI-installed LLVM 22 explicitly.
+          LLVM_CONFIG: /usr/bin/llvm-config-22
+        run: make payload
+
+      - name: Sanity-check ELF shape
+        run: |
+          file payload/ps5upload.elf payload/dpi/ezremote-dpi.elf
+          test -s payload/ps5upload.elf
+          test -s payload/dpi/ezremote-dpi.elf
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ps5upload-payload-elves
+          path: |
+            payload/ps5upload.elf
+            payload/dpi/ezremote-dpi.elf
+          if-no-files-found: error
+          retention-days: 1
+
   # ── Per-arch native build, push by digest (no tag yet) ─────────────────────
   build:
-    needs: resolve
+    needs: [resolve, build-payload]
     if: github.event_name != 'pull_request'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
@@ -138,6 +235,24 @@ jobs:
         env:
           PLATFORM: ${{ matrix.platform }}
         run: echo "PLATFORM_PAIR=$(printf '%s' "$PLATFORM" | tr '/' '-')" >> "$GITHUB_ENV"
+
+      - name: Stage the PS5 ELF images for the engine embed
+        uses: actions/download-artifact@v8
+        with:
+          name: ps5upload-payload-elves
+          path: /tmp/payload-elves
+
+      - name: Move them into the engine's embed directory
+        # `build.rs` looks here first — the same convention `webui/` uses for
+        # the React bundle, so the images ride along in the existing
+        # `COPY engine/` layer and no Dockerfile needs a second context path.
+        run: |
+          set -euo pipefail
+          mkdir -p engine/crates/ps5upload-engine/payload
+          cp -v /tmp/payload-elves/ps5upload.elf \
+                /tmp/payload-elves/dpi/ezremote-dpi.elf \
+                engine/crates/ps5upload-engine/payload/
+          ls -la engine/crates/ps5upload-engine/payload/
 
       - uses: docker/setup-buildx-action@v4
 
@@ -184,7 +299,7 @@ jobs:
   # so a webui-only failure doesn't need `fail-fast: false` gymnastics to
   # keep the plain engine image publishing on time.
   build-webui:
-    needs: resolve
+    needs: [resolve, build-payload]
     if: github.event_name != 'pull_request'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
@@ -208,6 +323,24 @@ jobs:
         env:
           PLATFORM: ${{ matrix.platform }}
         run: echo "PLATFORM_PAIR=$(printf '%s' "$PLATFORM" | tr '/' '-')" >> "$GITHUB_ENV"
+
+      - name: Stage the PS5 ELF images for the engine embed
+        uses: actions/download-artifact@v8
+        with:
+          name: ps5upload-payload-elves
+          path: /tmp/payload-elves
+
+      - name: Move them into the engine's embed directory
+        # `build.rs` looks here first — the same convention `webui/` uses for
+        # the React bundle, so the images ride along in the existing
+        # `COPY engine/` layer and no Dockerfile needs a second context path.
+        run: |
+          set -euo pipefail
+          mkdir -p engine/crates/ps5upload-engine/payload
+          cp -v /tmp/payload-elves/ps5upload.elf \
+                /tmp/payload-elves/dpi/ezremote-dpi.elf \
+                engine/crates/ps5upload-engine/payload/
+          ls -la engine/crates/ps5upload-engine/payload/
 
       - uses: docker/setup-buildx-action@v4
 

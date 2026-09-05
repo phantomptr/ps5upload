@@ -33,6 +33,7 @@
 //!   GET  /api/ps5/volumes             → list storage volumes detected by the payload
 //!   GET  /api/ps5/list-dir?path=...   → list immediate children of a directory on PS5
 
+mod bundled_payload;
 mod engine_log;
 mod icon_cache;
 mod local_fs;

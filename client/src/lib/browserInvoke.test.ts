@@ -1,6 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { timeSyncBody } from "./browserInvoke";
+import { browserInvoke, BrowserUnsupportedError, timeSyncBody } from "./browserInvoke";
+
+vi.mock("../state/engine", () => ({
+  getEngineUrl: () => "http://engine.test:19113",
+}));
 
 /**
  * The browser transport and the Tauri command are two independent
@@ -50,6 +54,81 @@ describe("timeSyncBody", () => {
     // would be a server named null.
     expect("ntp_server" in timeSyncBody({ addr: "a", useNtp: true })).toBe(
       false,
+    );
+  });
+});
+
+
+/**
+ * The install cascade's DPI fallback is the only path that lands a game
+ * PATCH: the in-process installer rejects updates on FW 10+, and the
+ * ShellUI tier is forbidden for patches because it can wipe the base
+ * game. On the desktop the fallback works because the app embeds both
+ * ELF images and streams them to the loader itself.
+ *
+ * A browser can do neither. Before #295 `dpi_ensure` had no entry in
+ * this map, so it threw BrowserUnsupportedError, the cascade recorded
+ * "daemon failed", and every update installed from the web UI died with
+ * the generic "this update couldn't be applied" hint — while base games,
+ * which never need the fallback, worked fine. That asymmetry is exactly
+ * what users reported.
+ */
+describe("loader-port commands the DPI fallback depends on", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function captureFetch(body: unknown) {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        calls.push({ url, init });
+        return {
+          ok: true,
+          status: 200,
+          json: async () => body,
+        } as unknown as Response;
+      }),
+    );
+    return calls;
+  }
+
+  it("routes dpi_ensure to the engine instead of throwing", async () => {
+    const calls = captureFetch({ ok: true, listening: true, sent: false });
+
+    const res = await browserInvoke("dpi_ensure", { ip: "192.168.1.50" });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe("http://engine.test:19113/api/pkg/dpi-ensure");
+    // The engine route names the console the same way every other pkg
+    // route does; `ip` is the Tauri command's spelling.
+    expect(JSON.parse(calls[0].init.body as string)).toEqual({
+      ps5_addr: "192.168.1.50",
+    });
+    // `sent` has to survive the translation — the cascade uses it to
+    // decide whether the helper was displaced and needs restoring.
+    expect(res).toEqual({ ok: true, listening: true, sent: false });
+  });
+
+  it("routes payload_restore to the engine", async () => {
+    const calls = captureFetch({ ok: true, bytes: 2230616 });
+
+    await browserInvoke("payload_restore", { ip: "192.168.1.50" });
+
+    expect(calls[0].url).toBe(
+      "http://engine.test:19113/api/pkg/payload-restore",
+    );
+    expect(JSON.parse(calls[0].init.body as string)).toEqual({
+      ps5_addr: "192.168.1.50",
+    });
+  });
+
+  it("still rejects commands that genuinely have no browser equivalent", async () => {
+    // Guard the guard: the fix must not turn the default branch into a
+    // silent no-op for desktop-only commands.
+    await expect(browserInvoke("payload_bundled_path", {})).rejects.toBeInstanceOf(
+      BrowserUnsupportedError,
     );
   });
 });

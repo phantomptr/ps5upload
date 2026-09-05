@@ -1261,9 +1261,11 @@ problem. If discovery finds nothing either, it is the network.
 
 **Q: A PS4 `.pkg` update won't install.**
 PS4 packages are recognised (the installer handles the `PS4GD` /
-`PS4AC` / `PS4DP` types) and are handed to **Sony's own installer** —
-ps5upload does not implement installation itself, it drives the DPI
-daemon. So a rejection is Sony's verdict, and the usual reasons are:
+`PS4AC` / `PS4DP` types). On firmware 10 and newer, Sony's in-app
+installer turns patches away, so ps5upload applies updates through a
+separate on-console **DPI install daemon** (the same path the desktop
+Package Install screen uses). A rejection after that hand-off is Sony's
+verdict, and the usual reasons are:
 
 - **The base game isn't installed.** An update patches something; with no
   matching PS4 base title on the console there is nothing to patch.
@@ -1275,6 +1277,14 @@ daemon. So a rejection is Sony's verdict, and the usual reasons are:
 - **The jailbreak lacks live kernel patches.** Fake-signed packages need
   kstuff / fpkg-enable active. Without them the installer refuses, and we
   report that rather than claiming a false success.
+
+**Self-hosted / web UI:** a browser cannot talk to the console's loader
+port or carry the daemon ELF itself, so the **engine** must. Use a
+released `ps5upload-engine` / `…-engine-webui` build (or Docker image) —
+those embed the helper images. A plain source build without the PS5
+payload SDK has none; point `PS5UPLOAD_PAYLOAD_DIR` at a directory that
+holds `ps5upload.elf` and `ezremote-dpi.elf`, or the update install will
+stop before the console ever sees the package.
 
 If the app reports an install failed but the game plays fine, that is a
 different thing — see the verification question above.
