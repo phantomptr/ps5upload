@@ -351,12 +351,20 @@ export default function App() {
         <Route path="/nanodns" element={<Navigate to="/payloads?tab=nanodns" replace />} />
         <Route path="/nano-dns" element={<Navigate to="/payloads?tab=nanodns" replace />} />
         <Route path="/shadowmount" element={<Navigate to="/payloads?tab=shadowmount" replace />} />
+        {/* The wizard's whole point is step 2: download the payload ELFs to
+            this machine and send them to the console over a raw socket.
+            Neither is possible from a browser, and the /payloads entry it
+            builds on is already hideInBrowser — so guard it the same way
+            rather than stranding self-hosted users on a wizard that dies
+            at step 2. */}
         <Route
           path="/first-run"
           element={
-            <Suspense fallback={<ScreenLoader />}>
-              <FirstRunScreen />
-            </Suspense>
+            <NativeOnlyRoute>
+              <Suspense fallback={<ScreenLoader />}>
+                <FirstRunScreen />
+              </Suspense>
+            </NativeOnlyRoute>
           }
         />
         <Route

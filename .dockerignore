@@ -17,7 +17,9 @@ engine/target/
 client/dist/
 client/src-tauri/target/
 client/src-tauri/gen/
-payload/ps5upload.elf
+# NOT excluded: payload/*.elf. The engine embeds these at build time
+# (engine/crates/ps5upload-engine/build.rs); excluding them here silently
+# produced images that could install base games but not updates (#295).
 payload/ps5upload.elf.gz
 
 # Node (installed fresh in the frontend stage)

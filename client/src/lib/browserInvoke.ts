@@ -79,6 +79,28 @@ function addrUrl(path: string, addr?: string | null): string {
   return addr && addr.length > 0 ? `${path}?addr=${uenc(addr)}` : path;
 }
 
+/**
+ * Build `path?k=v&…` using the engine's own encoding, skipping params that
+ * are null/undefined/empty-string.
+ *
+ * This mirrors the `let mut params = Vec::new(); … params.join("&")` shape
+ * the Rust commands in `ps5_engine.rs` use, so both transports produce
+ * byte-identical URLs. Numeric `0` and boolean `false` are NOT skipped —
+ * `since_seq=0` is a meaningful cursor, and dropping it would silently
+ * replay the whole notification backlog.
+ */
+function qs(
+  path: string,
+  params: Record<string, string | number | boolean | null | undefined>,
+): string {
+  const parts: string[] = [];
+  for (const [k, v] of Object.entries(params)) {
+    if (v === null || v === undefined || v === "") continue;
+    parts.push(`${k}=${uenc(String(v))}`);
+  }
+  return parts.length > 0 ? `${path}?${parts.join("&")}` : path;
+}
+
 // ── Fetch helpers ─────────────────────────────────────────────────────────────
 
 const TIMEOUT_STANDARD = 60_000; // 60 s — matches Rust http_client
@@ -116,6 +138,124 @@ async function postJson<T>(
   });
   if (!r.ok) throw new Error(await extractEngineError(r));
   return r.json() as Promise<T>;
+}
+
+// ── SSE (streaming archive inspect) ──────────────────────────────────────────
+
+/** Matches `INSPECT_IDLE_TIMEOUT_SECS` in `commands/ps5_engine.rs`. A slow
+ *  network mount or a spun-down USB HDD can go quiet for a long time between
+ *  events; only a truly wedged engine should trip this. */
+const INSPECT_IDLE_TIMEOUT_MS = 30_000;
+
+/** The shape `api/ps5.ts` hands us for progress. In Tauri this is a real
+ *  `Channel`; in the browser we only ever touch `.onmessage`, so we accept
+ *  any object carrying one. */
+type ProgressChannel = { onmessage?: (p: unknown) => void };
+
+/**
+ * Consume the engine's `text/event-stream` inspect endpoints, forwarding
+ * `progress` events to `channel.onmessage` and resolving with the `done`
+ * payload — the browser-side twin of `post_sse_inspect_with_watchdog()`.
+ *
+ * The idle watchdog is the reason this can't just be an `EventSource`:
+ * these endpoints are POSTs with a JSON body, and `EventSource` can only
+ * issue bodyless GETs. Progress delivery is fire-and-forget to match the
+ * Rust side — a throwing callback (e.g. an unmounted component) must not
+ * abort an inspect that is otherwise succeeding.
+ */
+async function postSseInspect<T>(
+  path: string,
+  body: unknown,
+  channel: ProgressChannel | undefined,
+): Promise<T> {
+  const r = await fetch(`${getEngineUrl()}${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "text/event-stream" },
+    body: JSON.stringify(body),
+  });
+  // A non-200 means the engine rejected the request shape outright; stream
+  // errors arrive as a final `event: error` on an otherwise-200 response.
+  if (!r.ok) throw new Error(await extractEngineError(r));
+  if (!r.body) throw new Error("engine returned no SSE body");
+
+  const reader = r.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  try {
+    for (;;) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const idle = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(
+              new Error(
+                `engine stopped responding (no SSE event for ${INSPECT_IDLE_TIMEOUT_MS / 1000}s)`,
+              ),
+            ),
+          INSPECT_IDLE_TIMEOUT_MS,
+        );
+      });
+      let chunk: ReadableStreamReadResult<Uint8Array>;
+      try {
+        chunk = await Promise.race([reader.read(), idle]);
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+      }
+      if (chunk.done) {
+        throw new Error(
+          "engine closed the inspect stream before sending a done/error event",
+        );
+      }
+      buf += decoder.decode(chunk.value, { stream: true });
+
+      for (;;) {
+        const m = /\r?\n\r?\n/.exec(buf);
+        if (!m) break;
+        const block = buf.slice(0, m.index);
+        buf = buf.slice(m.index + m[0].length);
+        const ev = parseSseBlock(block);
+        if (!ev) continue;
+        if (ev.event === "progress") {
+          try {
+            channel?.onmessage?.(JSON.parse(ev.data));
+          } catch {
+            /* fire-and-forget, exactly like the Rust Channel::send */
+          }
+        } else if (ev.event === "done") {
+          return JSON.parse(ev.data) as T;
+        } else if (ev.event === "error") {
+          let msg = ev.data;
+          try {
+            const j = JSON.parse(ev.data) as Record<string, unknown>;
+            if (typeof j["error"] === "string") msg = j["error"] as string;
+          } catch {
+            /* fall back to the raw data */
+          }
+          throw new Error(`engine reported: ${msg}`);
+        }
+      }
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+}
+
+/** Parse one SSE block into `{ event, data }`, mirroring the Rust
+ *  `parse_sse_block()` — multi-line `data:` fields join with newlines and
+ *  comment lines (`:`) are skipped. Exported for unit tests. */
+export function parseSseBlock(
+  block: string,
+): { event?: string; data: string } | null {
+  let event: string | undefined;
+  const data: string[] = [];
+  for (const raw of block.split("\n")) {
+    const line = raw.replace(/\r+$/, "");
+    if (line === "" || line.startsWith(":")) continue;
+    if (line.startsWith("event:")) event = line.slice(6).replace(/^ +/, "");
+    else if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ +/, ""));
+  }
+  if (event === undefined && data.length === 0) return null;
+  return { event, data: data.join("\n") };
 }
 
 // ── Dispatch ──────────────────────────────────────────────────────────────────
@@ -913,6 +1053,420 @@ export async function browserInvoke<T>(
     case "inspect_folder":
       return getJson<T>(
         `/api/local/inspect-folder?path=${uenc(args["path"] as string)}`,
+      );
+
+    // ── Cheats ───────────────────────────────────────────────────────────────
+    // The whole Cheats screen used to be dead in a self-hosted browser
+    // session: the engine served every one of these routes, but the shim
+    // had no mapping so each button threw BrowserUnsupportedError (#295).
+
+    case "cheats_list":
+      return getJson<T>(
+        qs("/api/ps5/cheats/list", { addr: args["req"]?.addr }),
+      );
+
+    case "cheats_get":
+      return getJson<T>(
+        qs("/api/ps5/cheats/get", {
+          addr: args["req"]?.addr,
+          title_id: args["req"]?.title_id,
+        }),
+      );
+
+    case "cheats_delete":
+      return getJson<T>(
+        qs("/api/ps5/cheats/delete", {
+          addr: args["req"]?.addr,
+          title_id: args["req"]?.title_id,
+        }),
+      );
+
+    case "cheats_reload":
+      return getJson<T>(
+        qs("/api/ps5/cheats/reload", { addr: args["req"]?.addr }),
+      );
+
+    case "cheats_status":
+      return getJson<T>(
+        qs("/api/ps5/cheats/status", { addr: args["req"]?.addr }),
+      );
+
+    case "cheats_toggle":
+      return postJson<T>("/api/ps5/cheats/toggle", {
+        addr: args["req"]?.addr,
+        title_id: args["req"]?.title_id,
+        index: args["req"]?.index,
+        on: args["req"]?.on,
+      });
+
+    case "cheats_engine_set":
+      return postJson<T>("/api/ps5/cheats/engine-set", {
+        addr: args["req"]?.addr,
+        enabled: args["req"]?.enabled,
+      });
+
+    case "cheats_repos_list":
+      return getJson<T>("/api/ps5/cheats/repos/list");
+
+    case "cheats_repos_search":
+      return getJson<T>(
+        qs("/api/ps5/cheats/repos/search", { query: args["req"]?.query }),
+      );
+
+    case "cheats_repos_download":
+      return postJson<T>("/api/ps5/cheats/repos/download", {
+        addr: args["req"]?.addr,
+        repo_id: args["req"]?.repo_id,
+        filename: args["req"]?.filename,
+        title_id: args["req"]?.title_id,
+      });
+
+    // ── Activity / notifications / hardware ──────────────────────────────────
+
+    case "activity_get":
+      return getJson<T>(
+        qs("/api/ps5/activity/get", { addr: args["req"]?.addr }),
+      );
+
+    case "activity_db_query":
+      return getJson<T>(
+        qs("/api/ps5/activity/db-query", {
+          addr: args["req"]?.addr,
+          query: args["req"]?.query,
+        }),
+      );
+
+    case "notif_list":
+      return getJson<T>(
+        qs("/api/ps5/notif/list", {
+          addr: args["req"]?.addr,
+          since_seq: args["req"]?.since_seq ?? 0,
+        }),
+      );
+
+    case "ps5_hw_drive_sensors":
+      return getJson<T>(
+        addrUrl("/api/ps5/hw/drive-sensors", args["addr"] as string | null),
+      );
+
+    case "fan_curve_get":
+      return getJson<T>(
+        qs("/api/ps5/hw/fan-curve/get", { addr: args["req"]?.addr }),
+      );
+
+    case "fan_curve_set":
+      return postJson<T>("/api/ps5/hw/fan-curve", {
+        addr: args["req"]?.addr,
+        points: args["req"]?.points,
+      });
+
+    // ── FTP / firmware spoof / SDK changer ───────────────────────────────────
+
+    case "ftp_start":
+      return postJson<T>("/api/ps5/ftp/start", {
+        addr: args["req"]?.addr,
+        port: args["req"]?.port,
+        root: args["req"]?.root,
+        readonly: args["req"]?.readonly,
+        user: args["req"]?.user,
+        pass: args["req"]?.pass,
+      });
+
+    case "ftp_status":
+      return getJson<T>(qs("/api/ps5/ftp/status", { addr: args["req"]?.addr }));
+
+    case "fw_spoof_status":
+      return getJson<T>(
+        qs("/api/ps5/fw-spoof/status", { addr: args["req"]?.addr }),
+      );
+
+    case "sdk_scan":
+      return getJson<T>(qs("/api/ps5/sdk/scan", { addr: args["req"]?.addr }));
+
+    case "sdk_patch":
+      return postJson<T>("/api/ps5/sdk/patch", {
+        addr: args["req"]?.addr,
+        title_id: args["req"]?.title_id,
+        target_sdk: args["req"]?.target_sdk,
+      });
+
+    case "sdk_restore":
+      return postJson<T>("/api/ps5/sdk/restore", {
+        addr: args["req"]?.addr,
+        title_id: args["req"]?.title_id,
+      });
+
+    case "tmdb_fetch":
+      return getJson<T>(
+        qs("/api/ps5/tmdb/fetch", {
+          addr: args["req"]?.addr,
+          title_id: args["req"]?.title_id,
+          // The Rust side pushes `refresh=true` only when set; a literal
+          // `refresh=false` would be truthy to the engine's string parse.
+          refresh: args["req"]?.refresh ? "true" : undefined,
+          region: args["req"]?.region,
+        }),
+      );
+
+    // ── Users / backup ───────────────────────────────────────────────────────
+
+    case "user_create":
+      return postJson<T>("/api/ps5/users/create", {
+        addr: args["req"]?.addr,
+        name: args["req"]?.name,
+      });
+
+    case "user_delete":
+      return postJson<T>("/api/ps5/users/delete", {
+        addr: args["req"]?.addr,
+        uid: args["req"]?.uid,
+        wipe_saves: args["req"]?.wipe_saves,
+      });
+
+    case "backup_list":
+      return getJson<T>(
+        qs("/api/ps5/backup/list", {
+          addr: args["req"]?.addr,
+          tag: args["req"]?.tag,
+        }),
+      );
+
+    case "backup_snapshot":
+      return postJson<T>(
+        "/api/ps5/backup/snapshot",
+        {
+          addr: args["req"]?.addr,
+          tag: args["req"]?.tag,
+          path: args["req"]?.path,
+        },
+        /*long=*/ true,
+      );
+
+    case "backup_restore":
+      return postJson<T>(
+        "/api/ps5/backup/restore",
+        {
+          addr: args["req"]?.addr,
+          tag: args["req"]?.tag,
+          timestamp: args["req"]?.timestamp,
+        },
+        /*long=*/ true,
+      );
+
+    case "backup_delete":
+      return postJson<T>(
+        "/api/ps5/backup/delete",
+        {
+          addr: args["req"]?.addr,
+          tag: args["req"]?.tag,
+          timestamp: args["req"]?.timestamp,
+        },
+        /*long=*/ true,
+      );
+
+    // ── Package / archive inspection ─────────────────────────────────────────
+
+    case "pkg_metadata":
+      return postJson<T>("/api/pkg/parse", { path: args["path"] });
+
+    case "ffpkg_inspect":
+      return postJson<T>("/api/ffpkg/inspect", { path: args["path"] });
+
+    case "ffpkg_extract":
+      return postJson<T>("/api/ffpkg/extract", {
+        ffpkg_path: args["ffpkgPath"],
+        inner_path: args["innerPath"],
+        dest_dir: args["destDir"],
+      });
+
+    case "zip_inspect":
+      return postJson<T>(
+        "/api/zip/inspect",
+        { zip_path: args["req"]?.zip_path },
+        /*long=*/ true,
+      );
+
+    case "sevenz_inspect":
+      return postJson<T>(
+        "/api/7z/inspect",
+        { archive_path: args["req"]?.archive_path },
+        /*long=*/ true,
+      );
+
+    case "rar_inspect":
+      return postJson<T>(
+        "/api/rar/inspect",
+        {
+          archive_path: args["req"]?.archive_path,
+          password: args["req"]?.password,
+        },
+        /*long=*/ true,
+      );
+
+    case "zip_inspect_stream":
+      return postSseInspect<T>(
+        "/api/zip/inspect/stream",
+        { zip_path: args["req"]?.zip_path },
+        args["onProgress"] as ProgressChannel | undefined,
+      );
+
+    case "sevenz_inspect_stream":
+      return postSseInspect<T>(
+        "/api/7z/inspect/stream",
+        { archive_path: args["req"]?.archive_path },
+        args["onProgress"] as ProgressChannel | undefined,
+      );
+
+    case "bps_inspect":
+      return postJson<T>("/api/bps/inspect", {
+        patch_path: args["req"]?.patch_path,
+      });
+
+    case "bps_apply":
+      return postJson<T>(
+        "/api/bps/apply",
+        {
+          source_path: args["req"]?.source_path,
+          patch_path: args["req"]?.patch_path,
+          dest_path: args["req"]?.dest_path,
+        },
+        /*long=*/ true,
+      );
+
+    // ── Profile avatar ───────────────────────────────────────────────────────
+
+    case "profile_avatar_preview":
+      return postJson<T>("/api/profile/avatar/preview", {
+        image_path: args["req"]?.image_path,
+        mode: args["req"]?.mode,
+      });
+
+    case "profile_apply_avatar":
+      return postJson<T>(
+        "/api/profile/avatar",
+        {
+          addr: args["req"]?.addr,
+          image_path: args["req"]?.image_path,
+          mode: args["req"]?.mode,
+          uid: args["req"]?.uid,
+          username: args["req"]?.username,
+        },
+        /*long=*/ true,
+      );
+
+    // ── SMB ──────────────────────────────────────────────────────────────────
+    // `smb_download_file` is deliberately absent: it writes the fetched bytes
+    // to a host path via `resolve_save_dest()`, which has no browser meaning.
+
+    case "smb_list_shares":
+      return postJson<T>("/api/smb/list-shares", {
+        server: args["req"]?.server,
+        user: args["req"]?.user,
+        password: args["req"]?.password,
+      });
+
+    case "smb_list_dir":
+      return postJson<T>("/api/smb/list-dir", {
+        server: args["req"]?.server,
+        user: args["req"]?.user,
+        password: args["req"]?.password,
+        share: args["req"]?.share,
+        path: args["req"]?.path,
+      });
+
+    case "smb_transfer":
+      return postJson<T>("/api/smb/transfer", {
+        server: args["req"]?.server,
+        user: args["req"]?.user,
+        password: args["req"]?.password,
+        share: args["req"]?.share,
+        path: args["req"]?.path,
+        dest_root: args["req"]?.dest_root,
+        addr: args["req"]?.addr,
+        bandwidth_cap_mbps: args["req"]?.bandwidth_cap_mbps,
+      });
+
+    // ── Transfers ────────────────────────────────────────────────────────────
+    // Paths here are the ENGINE's filesystem, not the browser's. On a
+    // self-hosted engine that is the point: the server holds the library and
+    // the browser is only the remote control.
+
+    case "transfer_zip":
+      return postJson<T>(
+        "/api/transfer/zip",
+        {
+          zip_path: args["req"]?.zip_path,
+          dest_root: args["req"]?.dest_root,
+          addr: args["req"]?.addr,
+          tx_id: args["req"]?.tx_id,
+          excludes: args["req"]?.excludes,
+          bandwidth_cap_mbps: args["req"]?.bandwidth_cap_mbps,
+        },
+        /*long=*/ true,
+      );
+
+    case "transfer_7z":
+      return postJson<T>(
+        "/api/transfer/7z",
+        {
+          archive_path: args["req"]?.archive_path,
+          dest_root: args["req"]?.dest_root,
+          addr: args["req"]?.addr,
+          tx_id: args["req"]?.tx_id,
+          excludes: args["req"]?.excludes,
+          bandwidth_cap_mbps: args["req"]?.bandwidth_cap_mbps,
+        },
+        /*long=*/ true,
+      );
+
+    case "transfer_rar":
+      return postJson<T>(
+        "/api/transfer/rar",
+        {
+          archive_path: args["req"]?.archive_path,
+          dest_root: args["req"]?.dest_root,
+          addr: args["req"]?.addr,
+          tx_id: args["req"]?.tx_id,
+          excludes: args["req"]?.excludes,
+          bandwidth_cap_mbps: args["req"]?.bandwidth_cap_mbps,
+          password: args["req"]?.password,
+        },
+        /*long=*/ true,
+      );
+
+    case "transfer_download":
+      return postJson<T>("/api/transfer/download", {
+        src_path: args["req"]?.src_path,
+        dest_dir: args["req"]?.dest_dir,
+        addr: args["req"]?.addr,
+        kind: args["req"]?.kind,
+        unsafe_read: args["req"]?.unsafe_read,
+      });
+
+    case "transfer_download_zip":
+      return postJson<T>("/api/transfer/download-zip", {
+        src_path: args["req"]?.src_path,
+        dest_zip: args["req"]?.dest_zip,
+        addr: args["req"]?.addr,
+        kind: args["req"]?.kind,
+        unsafe_read: args["req"]?.unsafe_read,
+      });
+
+    case "transfer_dir_diff_preview":
+      return postJson<T>("/api/transfer/dir-diff-preview", {
+        src_dir: args["srcDir"],
+        dest_root: args["destRoot"],
+        addr: args["addr"],
+        excludes: args["excludes"],
+      });
+
+    // ── Reachability ─────────────────────────────────────────────────────────
+
+    case "port_check":
+      // The desktop client opens the socket itself; a browser borrows the
+      // engine's, which is on the console's LAN even when the browser is not.
+      return getJson<T>(
+        qs("/api/ps5/port-check", { ip: args["ip"], port: args["port"] }),
       );
 
     // ── Native-only / unsupported ────────────────────────────────────────────

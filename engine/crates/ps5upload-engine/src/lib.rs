@@ -8293,6 +8293,53 @@ async fn debug_crash(Query(q): Query<DebugCrashQuery>) -> axum::response::Respon
     }
 }
 
+/// GET /api/ps5/port-check?ip=&port= — TCP reachability probe.
+///
+/// Exists so the self-hosted web UI can light up the same connection
+/// status dots the desktop client does. A browser cannot open a raw
+/// socket, so without this the Connection screen and the first-run
+/// reachability step were both dead in a browser session (#295).
+///
+/// Mirrors the `port_check` Tauri command's shape exactly —
+/// `{ open: bool, error: string|null }` — so the two transports stay
+/// interchangeable behind `portProbe()`.
+async fn ps5_port_check(Query(q): Query<PortCheckQuery>) -> impl IntoResponse {
+    let ip = q.ip.trim().to_string();
+    if ip.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "open": false, "error": "ip is required" })),
+        );
+    }
+    let timeout = Duration::from_millis(q.timeout_ms.unwrap_or(1500).clamp(100, 10_000));
+    let res = tokio::task::spawn_blocking(move || {
+        ps5upload_core::payload_lifecycle::probe_port(&ip, q.port, timeout)
+    })
+    .await;
+    match res {
+        Ok(Ok(())) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "open": true, "error": null })),
+        ),
+        Ok(Err(e)) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "open": false, "error": e })),
+        ),
+        Err(e) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "open": false, "error": format!("probe task: {e}") })),
+        ),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct PortCheckQuery {
+    ip: String,
+    port: u16,
+    /// Optional override so a slow LAN can be probed more patiently.
+    timeout_ms: Option<u64>,
+}
+
 /// GET /api/version — engine self-identification.
 ///
 /// Returned shape: `{"version": "x.y.z"}`. Used by the Tauri shell
@@ -8524,6 +8571,7 @@ async fn run(cfg: EngineConfig) -> anyhow::Result<()> {
     let app = Router::new()
         .route("/", get(ui_handler))
         .route("/api/ps5/status", get(ps5_status))
+        .route("/api/ps5/port-check", get(ps5_port_check))
         .route("/api/ps5/readiness", get(ps5_readiness))
         .route("/api/ps5/health/scan", get(health_scan_handler))
         .route("/api/ps5/health/junk", get(health_junk_handler))

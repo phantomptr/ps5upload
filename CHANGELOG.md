@@ -35,6 +35,41 @@ What's new in ps5upload, written for humans.
   people hunting for the wrong version of a game. Failing to start the
   installer now says exactly that, and what to do about it.
 
+- **Most of the app now works from the self-hosted web UI.** The browser build
+  translates each of the desktop app's actions into an engine request, and that
+  translation table had fallen a long way behind: Cheats, the SMB browser,
+  Backup, SDK Changer, Game Activity, Notifications, the FTP server, Fan Curve,
+  FW Spoof, drive sensors, avatar apply, TMDB lookups, package and archive
+  inspection (zip / 7z / rar / ffpkg / bps), user create and delete, and every
+  transfer and download action were all missing from it. The engine had been
+  serving every one of those routes the whole time, so the screens rendered
+  normally in a browser and then failed the moment you pressed a button. All of
+  them now go through. A build-time check keeps the two sides in step, so a
+  newly added action can no longer go missing here unnoticed.
+
+- **Connection status works in the browser.** Steps 1 and 2 of the Connect
+  screen could not tell whether your PS5 was reachable, because probing a TCP
+  port is something a browser cannot do. The engine now probes on its behalf —
+  and it is the better vantage point anyway, since it sits on the same network
+  as the console.
+
+- **No more "Save failed" alert on a successful install.** Every change to the
+  upload queue tried to write the desktop app's queue file, which does not
+  exist in a browser. The Upload screen reported that as "Queue changes could
+  not be saved — free disk space or fix permissions" over installs that had in
+  fact succeeded. The queue is now kept in the browser itself, and survives a
+  reload.
+
+- **Docker images built from source carry the on-console installer.** The two
+  helper images the engine embeds were never copied into the build context, so
+  anyone building their own image got one that installed base games but turned
+  every update away — the same failure this release fixes everywhere else. Only
+  the official images were unaffected.
+
+- **Screens that cannot work in a browser are no longer offered there.** The
+  first-run wizard and the SMB "download to this computer" button both need the
+  desktop app; they now stay hidden instead of failing when used.
+
 ---
 
 ## 5.15.0

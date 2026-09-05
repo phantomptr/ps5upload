@@ -8,6 +8,7 @@ import { Channel } from "@tauri-apps/api/core";
 import { getEngineUrl } from "../state/engine";
 // Logging wrapper: every command leaves a trace breadcrumb + logs failures at
 // warn. See lib/invokeLogged.ts. (Channel still comes straight from core.)
+import { isTauriEnv } from "../lib/tauriEnv";
 import { invoke } from "../lib/invokeLogged";
 import { randomHexId } from "../lib/randomId";
 import { getCachedIcon, setCachedIcon } from "../lib/iconMemoryCache";
@@ -781,17 +782,59 @@ export async function dirDiffPreview(
   });
 }
 
+/** Where the browser keeps the upload queue. The desktop app writes a
+ *  real file via persistence.rs; a browser has no such thing, and the
+ *  engine's copy would be shared by every browser pointed at it — so
+ *  this is deliberately per-browser, like the rest of the web UI's
+ *  settings. */
+const UPLOAD_QUEUE_KEY = "ps5upload.uploadQueue";
+
 /** Whole-document load for the upload-queue store. The renderer owns
  *  the shape — see state/uploadQueue.ts. Returns `{}` for first-time
  *  use (Tauri returns the empty default from persistence.rs). */
 export async function uploadQueueLoad<T = unknown>(): Promise<T> {
+  if (!isTauriEnv()) {
+    try {
+      const raw = localStorage.getItem(UPLOAD_QUEUE_KEY);
+      return (raw ? JSON.parse(raw) : {}) as T;
+    } catch {
+      // Private windows and blocked site-data both throw here. An
+      // unreadable queue is an empty queue, not a broken app.
+      return {} as T;
+    }
+  }
   return invoke<T>("upload_queue_load");
 }
 
 /** Whole-document save for the upload-queue store. Caller is
  *  responsible for serializing concurrent saves; the Tauri side has a
- *  per-store mutex so worst case is ordering, not corruption. */
+ *  per-store mutex so worst case is ordering, not corruption.
+ *
+ *  In the browser this used to throw BrowserUnsupportedError on every
+ *  queue mutation, which the Upload screen surfaced as a red "Save
+ *  failed — free disk space or fix permissions" banner on an install
+ *  that had in fact succeeded (#295). */
 export async function uploadQueueSave(doc: unknown): Promise<void> {
+  if (!isTauriEnv()) {
+    try {
+      localStorage.setItem(UPLOAD_QUEUE_KEY, JSON.stringify(doc));
+    } catch (e) {
+      // Quota exhaustion is the one case worth reporting: it means the
+      // queue silently stopped persisting. Everything else (private
+      // window, blocked storage) is a no-op by design.
+      const wrapped = new Error(
+        `couldn't save the upload queue in this browser: ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      );
+      // Keep the original around for the log bundle (eslint's
+      // preserve-caught-error rule enforces this); the target is ES2020,
+      // so `cause` is assigned rather than passed to the constructor.
+      (wrapped as Error & { cause?: unknown }).cause = e;
+      throw wrapped;
+    }
+    return;
+  }
   await invoke("upload_queue_save", { doc });
 }
 
