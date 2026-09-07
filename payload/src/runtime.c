@@ -78,12 +78,13 @@ extern int posix_fadvise(int fd, off_t offset, off_t len, int advice);
  * with the data-write loop on multi-GiB copies. */
 extern int posix_fallocate(int fd, off_t offset, off_t len);
 
-/* Capacity policy mirrored by ps5upload-core::volumes. The PS5 user-storage
- * allocator can return ENOSPC while statfs(/data) still advertises roughly
- * 70 GB. Keep 80 GiB out of large uploads on internal storage, plus 1 GiB on
- * ordinary external/image filesystems for metadata and concurrent activity. */
+/* Capacity policy mirrored by ps5upload-core::volumes. Keep a small working
+ * margin -- 1 GiB, scaled down for small volumes -- out of every filesystem
+ * for metadata and concurrent activity. The PS5 user-storage allocator can
+ * still return ENOSPC while statfs(/data) advertises far more; that is not
+ * predictable here and is handled after the fact, not by this gate. See
+ * capacity_reserve_for_mount. */
 #define PS5UPLOAD2_GIB ((uint64_t)1024u * 1024u * 1024u)
-#define PS5UPLOAD2_INTERNAL_SPACE_RESERVE (80u * PS5UPLOAD2_GIB)
 #define PS5UPLOAD2_EXTERNAL_SPACE_RESERVE (1u * PS5UPLOAD2_GIB)
 
 #define FTX2_MAGIC 0x32585446u
@@ -5649,22 +5650,27 @@ static int is_user_storage_path(const char *path) {
  * external_reserve_for_total}. The host falls back to the SAME rule when an
  * older payload omits the published field, so the two must not drift.
  *
- * The external margin is a CAP scaled to the volume, not a flat charge: a
- * flat 1 GiB on a 64 MiB mounted disk image reserves sixteen times its own
- * capacity, drives allocatable to zero, and refuses every write to it
+ * The margin is a CAP scaled to the volume, not a flat charge: a flat 1 GiB
+ * on a 64 MiB mounted disk image reserves sixteen times its own capacity,
+ * drives allocatable to zero, and refuses every write to it
  * (hardware-confirmed — a 29-byte write into a mounted 64 MiB image was
- * rejected as "have 0 bytes"). The INTERNAL reserve is deliberately NOT
- * scaled: it models the PS5 content allocator's hidden reserve, an absolute
- * quantity validated against a live FW 12.00 capture. */
+ * rejected as "have 0 bytes"). Internal storage is no longer a special case;
+ * the body says why. */
 static uint64_t capacity_reserve_for_mount(const char *mnt_on,
                                            const char *mnt_from,
                                            uint64_t total_bytes) {
     uint64_t scaled;
-    if ((mnt_on && (strcmp(mnt_on, "/data") == 0 ||
-                    strcmp(mnt_on, "/user") == 0)) ||
-        (mnt_from && strstr(mnt_from, "ssd0.user") != NULL)) {
-        return PS5UPLOAD2_INTERNAL_SPACE_RESERVE;
-    }
+    /* Internal storage (/data, /user) used to get a flat 80 GiB here, meant
+     * to model the PS5 content allocator's hidden pool. It was fitted to one
+     * FW 12.00 capture and did not generalise: this gate then rejected a
+     * 2.5 GiB pkg on a console with 86 GB free, and a 70 GB game on one with
+     * 136 GB free. The pool is real, but its size is not predictable from
+     * anything readable here -- and this gate REFUSES the transfer, so it now
+     * blocks only what is certainly impossible. A console that overstates its
+     * free space is caught mid-write instead, where the host turns that into
+     * a plain-language error (ps5upload-core::transfer::capacity_exhausted_body). */
+    (void)mnt_on;
+    (void)mnt_from;
     /* A volume reporting no total reserves nothing — better to let the write
      * be attempted than to block it on missing telemetry. */
     scaled = total_bytes / 64u;

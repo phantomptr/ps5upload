@@ -16,12 +16,20 @@ use serde::{Deserialize, Serialize};
 
 use crate::connection::Connection;
 
-/// The PS5 content-storage allocator keeps an internal pool that is not
-/// reflected reliably by `statfs(2)` on `/data`/`/user`. Real-world captures
-/// show allocation failing with ENOSPC while `f_bavail` still reports roughly
-/// 70 GB. Keep an additional 80 GiB out of upload capacity so a large transfer
-/// is rejected before it spends hours reaching that allocator boundary.
-pub const INTERNAL_STORAGE_SAFETY_RESERVE_BYTES: u64 = 80 * 1024 * 1024 * 1024;
+/// Rough size of the PS5 content allocator's hidden pool — capacity that
+/// `statfs(2)` on `/data`/`/user` advertises but the console will not actually
+/// hand out. A FW 12.00 capture hit ENOSPC with ~86 GB still showing free.
+///
+/// **This is an estimate for explaining a failure, never for preventing one.**
+/// It is deliberately NOT part of `safety_reserve_bytes()`. Subtracting it up
+/// front looked reasonable with n=1 and was badly wrong in the field: the gap
+/// is not a constant. Two later consoles measured 0 GB and ~58 GB against this
+/// 80 GiB, so as a gate it refused transfers that fit easily — a 2.5 GiB pkg
+/// onto a console with 86 GB free, and 70 GB onto one with 136 GB free.
+///
+/// Used only by the post-drop diagnosis, which runs after a transfer has
+/// already failed and only decides how to word the error.
+pub const INTERNAL_STORAGE_HIDDEN_RESERVE_ESTIMATE_BYTES: u64 = 80 * 1024 * 1024 * 1024;
 
 /// Leave a small working margin on ordinary external filesystems for metadata,
 /// journals, and activity elsewhere on the drive during a long upload. This is
@@ -98,17 +106,38 @@ impl Volume {
         self.path == "/data" || self.path == "/user" || self.mount_from.contains("ssd0.user")
     }
 
+    /// Capacity held back from the *blocking* capacity gate.
+    ///
+    /// This is a small filesystem working margin and nothing more. It must
+    /// stay small: the gate it feeds refuses the transfer outright, so
+    /// anything speculative here becomes a transfer the user cannot make at
+    /// all. The console's hidden content-allocator pool is explicitly NOT
+    /// modelled here — see `INTERNAL_STORAGE_HIDDEN_RESERVE_ESTIMATE_BYTES`
+    /// for why guessing at it up front was a mistake.
     pub fn safety_reserve_bytes(&self) -> u64 {
-        if self.safety_reserve_bytes > 0 {
-            self.safety_reserve_bytes
-        } else if self.is_internal_user_storage() {
-            // Deliberately NOT scaled. This models the PS5 content
-            // allocator's hidden reserve, an absolute quantity — a FW 12.00
-            // capture predicted that console's real usable space to within
-            // 0.06 GB of 153 GB with this exact constant.
-            INTERNAL_STORAGE_SAFETY_RESERVE_BYTES
+        let local = external_reserve_for_total(self.total_bytes);
+        if self.safety_reserve_bytes == 0 {
+            return local;
+        }
+        if self.is_internal_user_storage() {
+            // Payloads at 5.17.0 and earlier publish a flat 80 GiB here. A
+            // user who updates the app but keeps an old payload on the
+            // console would otherwise stay blocked by the very bug this
+            // fixes, so an internal volume's published reserve is capped at
+            // what we would compute ourselves.
+            return self.safety_reserve_bytes.min(local);
+        }
+        self.safety_reserve_bytes
+    }
+
+    /// Free space adjusted by the *estimated* hidden allocator pool, for
+    /// diagnosis only. Never use this to decide whether to start a transfer.
+    pub fn diagnostic_allocatable_bytes(&self) -> u64 {
+        if self.is_internal_user_storage() {
+            self.free_bytes
+                .saturating_sub(INTERNAL_STORAGE_HIDDEN_RESERVE_ESTIMATE_BYTES)
         } else {
-            external_reserve_for_total(self.total_bytes)
+            self.allocatable_bytes()
         }
     }
 
@@ -116,10 +145,15 @@ impl Volume {
         // A legitimate new-payload response may publish zero when the drive is
         // inside its safety reserve, so only trust the wire value when nonzero.
         // Recomputing is equivalent in the zero case and handles old payloads.
+        // Never trust a published value that is smaller than our own rule
+        // would give: an old payload's flat 80 GiB internal reserve arrives
+        // here pre-applied, and honouring it would reinstate the block that
+        // `safety_reserve_bytes` above exists to lift.
+        let local = self.free_bytes.saturating_sub(self.safety_reserve_bytes());
         if self.allocatable_bytes > 0 {
-            self.allocatable_bytes.min(self.free_bytes)
+            self.allocatable_bytes.min(self.free_bytes).max(local)
         } else {
-            self.free_bytes.saturating_sub(self.safety_reserve_bytes())
+            local
         }
     }
 }
@@ -310,15 +344,16 @@ mod tests {
             EXTERNAL_STORAGE_SAFETY_RESERVE_BYTES
         );
 
-        // Internal storage must NOT scale — the 80 GiB models the PS5
-        // content allocator and was validated against a live FW 12.00 capture.
+        // Internal storage gets the same small working margin as anything
+        // else. It used to get a flat 80 GiB, which is what made the console
+        // in `internal_gate_does_not_block_transfers_that_fit` unusable.
         let internal: Volume = serde_json::from_str(
             r#"{"path":"/data","mount_from":"/user/data","fs_type":"nullfs","total_bytes":673865203712,"free_bytes":609649819648,"writable":true}"#,
         )
         .unwrap();
         assert_eq!(
             internal.safety_reserve_bytes(),
-            INTERNAL_STORAGE_SAFETY_RESERVE_BYTES
+            EXTERNAL_STORAGE_SAFETY_RESERVE_BYTES
         );
 
         // Unknown total reserves nothing rather than blocking everything.
@@ -333,7 +368,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             internal.allocatable_bytes(),
-            150_000_000_000 - INTERNAL_STORAGE_SAFETY_RESERVE_BYTES
+            150_000_000_000 - EXTERNAL_STORAGE_SAFETY_RESERVE_BYTES
         );
 
         let external: Volume = serde_json::from_str(
@@ -342,6 +377,72 @@ mod tests {
         .unwrap();
         assert_eq!(external.safety_reserve_bytes(), 2 * 1024 * 1024 * 1024);
         assert_eq!(external.allocatable_bytes(), 897_852_516_352);
+    }
+
+    /// Both numbers here are verbatim from user bug reports against 5.17.0.
+    /// Each was refused by the flat 80 GiB internal reserve while the console
+    /// plainly had room, which is the whole reason that reserve is gone.
+    #[test]
+    fn internal_gate_does_not_block_transfers_that_fit() {
+        // Report 1 (FW 11.00). Payload log: free=86285615104 reserve=85899345920
+        // -> 386269184 allocatable, so a 2.5 GB pkg was rejected outright.
+        let user: Volume = serde_json::from_str(
+            r#"{"path":"/user","mount_from":"/dev/ssd0.user","fs_type":"ufs","total_bytes":904129740800,"free_bytes":86285615104,"writable":true}"#,
+        )
+        .unwrap();
+        assert!(
+            user.allocatable_bytes() >= 2_498_035_712,
+            "a 2.5 GB pkg must fit in 86 GB of free space, got {} allocatable",
+            user.allocatable_bytes()
+        );
+
+        // Report 2: BeginTx rejected a 70 GB game with 136 GB free.
+        let data: Volume = serde_json::from_str(
+            r#"{"path":"/data","mount_from":"/user/data","fs_type":"nullfs","total_bytes":904129740800,"free_bytes":136368816128,"writable":true}"#,
+        )
+        .unwrap();
+        assert!(
+            data.allocatable_bytes() >= 70_490_481_725,
+            "a 70 GB game must fit in 136 GB of free space, got {} allocatable",
+            data.allocatable_bytes()
+        );
+    }
+
+    /// A console still running a 5.17.0-era payload publishes the old flat
+    /// reserve on the wire. Updating only the app must still fix the user.
+    #[test]
+    fn stale_payload_reserve_does_not_reinstate_the_block() {
+        let stale: Volume = serde_json::from_str(
+            r#"{"path":"/user","mount_from":"/dev/ssd0.user","fs_type":"ufs","total_bytes":904129740800,"free_bytes":86285615104,"writable":true,"safety_reserve_bytes":85899345920,"allocatable_bytes":386269184}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            stale.safety_reserve_bytes(),
+            EXTERNAL_STORAGE_SAFETY_RESERVE_BYTES
+        );
+        assert!(
+            stale.allocatable_bytes() >= 2_498_035_712,
+            "got {} allocatable",
+            stale.allocatable_bytes()
+        );
+    }
+
+    /// The estimate survives, but only where it cannot block anything.
+    #[test]
+    fn hidden_reserve_estimate_is_diagnosis_only() {
+        let full: Volume = serde_json::from_str(
+            r#"{"path":"/data","mount_from":"/user/data","fs_type":"nullfs","total_bytes":947229556736,"free_bytes":85962588160,"writable":true}"#,
+        )
+        .unwrap();
+        assert!(
+            full.diagnostic_allocatable_bytes() < 1024 * 1024 * 1024,
+            "the FW 12.00 console must still be diagnosable as full"
+        );
+        assert_eq!(
+            full.allocatable_bytes(),
+            85_962_588_160 - EXTERNAL_STORAGE_SAFETY_RESERVE_BYTES,
+            "but it must not be blocked up front"
+        );
     }
 
     #[test]
