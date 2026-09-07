@@ -2408,7 +2408,11 @@ const CAPACITY_EXHAUSTED_FLOOR: u64 = 1024 * 1024 * 1024;
 /// Telemetry failure returns `None` — a busy management port must never
 /// invent a disk-full verdict.
 fn capacity_exhausted_body(volume: &crate::volumes::Volume) -> Option<String> {
-    let allocatable = volume.allocatable_bytes();
+    // Diagnosis, not gating, so this may use the pessimistic hidden-pool
+    // estimate that `allocatable_bytes()` deliberately does not. Being wrong
+    // here costs a mis-worded error on a transfer that already failed; being
+    // wrong in the gate costs the user the transfer itself.
+    let allocatable = volume.diagnostic_allocatable_bytes();
     if allocatable >= CAPACITY_EXHAUSTED_FLOOR {
         return None;
     }
@@ -2418,14 +2422,11 @@ fn capacity_exhausted_body(volume: &crate::volumes::Volume) -> Option<String> {
     // message back into the raw socket error it exists to replace.
     let detail = format!(
         "The PS5 ran out of usable space on {} while writing, so it closed the connection. \
-         {} reports {} bytes free, but {} bytes are held back by the console for system and \
-         filesystem overhead, leaving {} actually allocatable. Free up space on the PS5 (or \
-         pick another drive) and start the upload again — retrying now cannot succeed.",
-        volume.path,
-        volume.path,
-        volume.free_bytes,
-        volume.safety_reserve_bytes(),
-        allocatable,
+         {} reports {} bytes free, but the console holds back a large pool for its own \
+         content allocator that this figure never reflects, leaving roughly {} bytes \
+         actually usable. Free up space on the PS5 (or pick another drive) and start the \
+         upload again — retrying now cannot succeed.",
+        volume.path, volume.path, volume.free_bytes, allocatable,
     );
     Some(serde_json::json!({ "error": "insufficient_space", "detail": detail }).to_string())
 }
@@ -5687,7 +5688,7 @@ mod retry_classification_tests {
 
     #[test]
     fn out_of_space_is_reported_instead_of_a_bare_socket_error() {
-        use crate::volumes::{Volume, INTERNAL_STORAGE_SAFETY_RESERVE_BYTES};
+        use crate::volumes::{Volume, INTERNAL_STORAGE_HIDDEN_RESERVE_ESTIMATE_BYTES};
         let full = Volume {
             path: "/data".into(),
             mount_from: "/user/data".into(),
@@ -5729,7 +5730,7 @@ mod retry_classification_tests {
             ..full.clone()
         };
         assert!(
-            roomy.allocatable_bytes() > INTERNAL_STORAGE_SAFETY_RESERVE_BYTES,
+            roomy.diagnostic_allocatable_bytes() > INTERNAL_STORAGE_HIDDEN_RESERVE_ESTIMATE_BYTES,
             "sanity: this volume really does have room"
         );
         assert!(

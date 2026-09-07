@@ -4,6 +4,32 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.17.1
+
+**Uploads to internal storage are no longer refused when there is plenty of room.**
+
+- **The "not enough space" rejection was wrong.** 5.17.0 added a capacity check
+  that held back a flat 80 GB on the PS5's internal storage before deciding
+  whether an upload would fit. That figure came from one console where the PS5
+  really did stop accepting writes with ~86 GB still showing free, and it does
+  not carry over to other consoles: the gap it was modelling turned out to be
+  anywhere from nothing at all to about 58 GB. The result was a check that
+  refused transfers with obvious room for them — a 2.5 GB update onto a console
+  reporting 86 GB free, a 70 GB game onto one reporting 136 GB. If your Volumes
+  screen showed a large "reserved for system" figure and almost nothing
+  available, that was this.
+
+  The check now holds back only a small filesystem working margin, so it stops
+  a transfer only when the space genuinely is not there. A console that
+  overstates its own free space is still caught — but while writing, where
+  ps5upload already turns it into a plain explanation of what happened instead
+  of a bare connection error, rather than up front on a guess.
+
+  If you update the app but keep an older helper on the console, you are not
+  stuck: the app now ignores the old 80 GB figure when the helper reports it.
+
+---
+
 ## 5.17.0
 
 **The self-hosted web UI catches up with the desktop app.**
