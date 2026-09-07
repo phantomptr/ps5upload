@@ -4,6 +4,38 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.17.2
+
+**Logs say what they mean, and a bug report now carries what we actually need.**
+
+- **The engine log no longer labels everything an error.** The engine writes
+  all of its output — routine, warning, failure alike — down one pipe, and the
+  app was stamping that whole pipe as an error. A perfectly healthy session read
+  as a wall of `[engine:err] ... 200 (0ms)` lines, every one of which was a
+  success. Lines that already state their own level are now left alone. The Logs
+  screen in the app was always right about this; it was the log file inside a bug
+  report — the one a maintainer reads — that was wrong.
+
+- **The log stopped filling up with itself.** The Logs screen asks the engine for
+  new lines about once a second, and each of those requests was being written to
+  the log. Watching the log made it grow, forever, burying real activity. Reading
+  the log is no longer an event.
+
+- **Failures are recorded as failures.** Nothing in the engine had ever been
+  logged at error level, so every bug report said "0 errors" no matter what had
+  gone wrong, and filtering for errors showed an empty list. A transfer that dies
+  and an install the console refuses are now errors. Advisories that cost you
+  nothing stay warnings.
+
+- **Bug reports capture more of what a report is usually about.** Newly included:
+  free space per drive *with the reserved amount* (a 5.17.0 report about missing
+  space needed a hand-grep through helper logs to explain — that is now visible
+  at a glance), the list of installed titles, why each transfer ended rather than
+  just that it did, and what the console reported about an install. Package
+  filenames are included; the folders they came from are not.
+
+---
+
 ## 5.17.1
 
 **Uploads to internal storage are no longer refused when there is plenty of room.**

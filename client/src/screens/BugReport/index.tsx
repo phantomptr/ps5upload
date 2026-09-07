@@ -27,6 +27,7 @@ import { useTr } from "../../state/lang";
 import { useDiagSettingsStore, LOG_LEVELS } from "../../state/diagSettings";
 import { useConnectionStore } from "../../state/connection";
 import { buildDiagnosticBundle } from "../../lib/diagnosticBundle";
+import { collectEngineDiagnostics } from "../../lib/engineDiagnostics";
 import { buildPs5Snapshot } from "../../lib/ps5Snapshot";
 import { ensurePayloadCurrent } from "../../lib/ensurePayloadCurrent";
 import { hostOf } from "../../lib/addr";
@@ -236,6 +237,10 @@ export default function BugReportScreen() {
         payload_logs: payloadLogs,
       } = await buildPs5Snapshot({ redact });
 
+      // Engine-side state (loopback, in-memory): why transfers ended and what
+      // the console said about installs. Collected even when the PS5 is off.
+      const engineDiag = await collectEngineDiagnostics();
+
       const manifest = {
         schema: 1,
         kind: "ps5upload-bug-report",
@@ -251,6 +256,7 @@ export default function BugReportScreen() {
         redacted: redact,
         includes: include,
         diagnostic: bundle,
+        engine: engineDiag,
         ps5: snapshot,
       };
 

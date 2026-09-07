@@ -160,6 +160,7 @@ pub fn router(state: PkgInstallStateHandle) -> Router {
         .route("/api/ffpkg/extract", post(extract_handler))
         .route("/api/pkg/install/start", post(install_start_handler))
         .route("/api/pkg/install/status", get(install_status_handler))
+        .route("/api/pkg/install/sessions", get(install_sessions_handler))
         .route("/api/pkg/install/cancel", post(install_cancel_handler))
         .route("/api/pkg/installed", get(installed_pkg_inventory_handler))
         // Install a staged .pkg through the standalone DPI daemon (:9040).
@@ -1249,7 +1250,10 @@ async fn install_start_handler(
         // diagnose post-mortem without ssh — the diagnostic disclosure
         // in the UI shows the same fields, but engine.log gives an
         // append-only history per attempt.
-        crate::log_warn!(
+        // `error`: Sony refused the install outright, so the user's package
+        // did not land. Terminal and user-visible — see the note in
+        // `job_failed_from_err` on why this is not a `warn`.
+        crate::log_error!(
             "pkg_install rejected: session={} err_code=0x{:08x} detail={:?} register_path={} intdebug_avail={} kernel_rw={} shellui_err={} appinst_err={}",
             session_id,
             resp.err_code,
@@ -2276,6 +2280,56 @@ pub struct CancelResponse {
     /// BGFT continues running on the PS5; once it sees the HTTP stream
     /// drop it surfaces a download error in PS5 notifications.
     pub host_stopped: bool,
+}
+
+/// GET /api/pkg/install/sessions — summarise every live install session.
+///
+/// Read-only diagnostics. `install/status` needs a session id, so a bug
+/// report could never show what the console said about an install that the
+/// user had already navigated away from — the exact gap that made an
+/// "install reported success but the game is broken" report unanswerable.
+///
+/// Deliberately omits `parts` (host-side absolute paths, which carry the
+/// user's account name) and reports only the file names. Everything else here
+/// is console-side state the bundle already exposes elsewhere.
+async fn install_sessions_handler(State(state): State<PkgInstallStateHandle>) -> Response<Body> {
+    let sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
+    let summary: Vec<serde_json::Value> = sessions
+        .values()
+        .map(|s| {
+            serde_json::json!({
+                "id": s.id,
+                "content_id": s.content_id,
+                "title": s.title,
+                "package_type": s.package_type,
+                "total_size": s.total_size,
+                "part_names": s
+                    .parts
+                    .iter()
+                    .map(|p| {
+                        p.file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default()
+                    })
+                    .collect::<Vec<_>>(),
+                "task_id": s.task_id,
+                "err_code": s.err_code,
+                "detail": s.detail,
+                "cancelled": s.cancelled,
+                "created_at_unix": s.created_at_unix,
+                "staging_path": s.staging_path,
+                "launchable": s.launchable,
+                "serve_only": s.serve_only,
+                "stalled": s.stalled,
+                "accepted_unverified": s.accepted_unverified,
+                "requests_served": s.requests_served,
+                "bytes_served": s.bytes_served,
+                "progress_consumed_bytes": s.progress_consumed_bytes,
+                "last_progress_unix": s.last_progress_unix,
+            })
+        })
+        .collect();
+    json_ok(&summary)
 }
 
 async fn install_cancel_handler(
