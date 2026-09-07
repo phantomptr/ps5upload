@@ -706,6 +706,14 @@ pub async fn stop() {
 /// Per-line write so log rotation later can split on newlines without
 /// risking torn lines mid-write. The Mutex is std (not tokio) because
 /// the critical section is a sync `write_all` + flush — no awaits.
+/// True when a line the engine emitted already states its own level, e.g.
+/// `[engine:debug] ...`. Such a line must not be re-tagged by the pipe it
+/// happened to arrive on — the engine sends every level to stderr, so the
+/// pipe says nothing about severity.
+fn line_is_pre_tagged(line: &str) -> bool {
+    line.trim_start().starts_with("[engine")
+}
+
 async fn pipe_tagged<R>(mut reader: R, tag: &'static str, log: Option<Arc<Mutex<std::fs::File>>>)
 where
     R: tokio::io::AsyncRead + Unpin + Send + 'static,
@@ -721,10 +729,28 @@ where
     let mut line: Vec<u8> = Vec::with_capacity(256);
     let emit_bytes = |bytes: &[u8]| {
         let s = String::from_utf8_lossy(bytes);
-        eprintln!("{tag}{s}");
+        // The engine writes ALL of its own logs to stderr, each already
+        // carrying its real level (`[engine:debug]`, `[engine:info]`, ...).
+        // Blanket-prefixing the stderr pipe with `[engine:err] ` therefore
+        // relabelled every successful debug line as an error: a healthy
+        // session reads as a wall of `[engine:err] ... -> 200 (0ms)`, which
+        // is alarming and hides the failures that matter. A line that
+        // already states its level is passed through untouched; only
+        // genuinely untagged output (a panic, a linker message) still gets
+        // the pipe's tag, which is exactly the case the tag is for.
+        let pre_tagged = line_is_pre_tagged(&s);
+        if pre_tagged {
+            eprintln!("{s}");
+        } else {
+            eprintln!("{tag}{s}");
+        }
         if let Some(writer) = &log {
             if let Ok(mut f) = writer.lock() {
-                let _ = writeln!(f, "{tag}{s}");
+                let _ = if pre_tagged {
+                    writeln!(f, "{s}")
+                } else {
+                    writeln!(f, "{tag}{s}")
+                };
                 let _ = f.flush();
             }
         }
@@ -822,4 +848,37 @@ fn is_loopback_url(url: &str) -> bool {
             .parse::<std::net::IpAddr>()
             .map(|ip| ip.is_loopback())
             .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod log_tag_tests {
+    use super::line_is_pre_tagged;
+
+    #[test]
+    fn engine_own_levels_are_not_relabelled_as_errors() {
+        // Straight from a user report: a healthy session showed hundreds of
+        // `[engine:err] [engine:debug] ... -> 200 (0ms)` lines. Every one was
+        // a success logged at debug, mislabelled because it arrived on stderr.
+        for line in [
+            "[engine:debug] ts=1788748874711 GET /api/engine-logs -> 200 (0ms)",
+            "[engine:info] fs_delete ok: /data/ps5upload in 359 ms",
+            "[engine:warn] GET /api/ps5/status -> 502 (2576ms)",
+            "  [engine:debug] leading whitespace still counts",
+        ] {
+            assert!(line_is_pre_tagged(line), "must pass through: {line}");
+        }
+    }
+
+    #[test]
+    fn untagged_output_still_gets_the_pipe_tag() {
+        // Panics and linker noise carry no level of their own, which is the
+        // case the pipe tag exists for.
+        for line in [
+            "thread 'main' panicked at src/lib.rs:1:1",
+            "",
+            "Segmentation fault",
+        ] {
+            assert!(!line_is_pre_tagged(line), "must be tagged: {line}");
+        }
+    }
 }

@@ -280,7 +280,10 @@ diagnostics to help debug an issue — no games or app data.\n\
 \n\
   report.json          Summary: app version, OS, your description, the\n\
                        selected log level/window, the diagnostic bundle,\n\
-                       and a snapshot of the connected PS5 (if any).\n\
+                       engine state (transfer jobs with why they failed, and\n\
+                       live install sessions), and a snapshot of the connected\n\
+                       PS5 (if any) — including per-volume free space with the\n\
+                       safety reserve, and the installed title list.\n\
   logs/app.jsonl       The app's unified log for the selected time window\n\
                        (one JSON object per line: ts, level, source, message).\n\
   logs/engine.log      Full transfer-engine log (crash-survivable).\n\

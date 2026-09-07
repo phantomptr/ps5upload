@@ -9,6 +9,8 @@ import {
   fetchHwPower,
   fetchHwStorage,
   appListRunning,
+  appsInstalled,
+  listVolumes,
   procListGet,
   netInterfacesGet,
   klogChunk,
@@ -25,6 +27,7 @@ import {
   type RunningApp,
   type ProcEntry,
   type NetInterface,
+  type Volume,
 } from "../api/ps5";
 
 /**
@@ -64,6 +67,17 @@ export interface Ps5Snapshot {
   processes: ProcEntry[] | null;
   processes_total: number | null;
   net_interfaces: NetInterface[] | null;
+  /** Per-mount capacity, INCLUDING `safety_reserve_bytes` /
+   *  `allocatable_bytes`. `hw_storage` only carries the console-wide
+   *  aggregate, which cannot show why an upload was refused. A 5.17.0 report
+   *  ("only 300mb available, 80gb reserved") took a payload-log grep to
+   *  diagnose because this was missing; with it the cause is one glance. */
+  volumes: Volume[] | null;
+  /** Registered title ids. `running_apps` covers what is running; this covers
+   *  what is INSTALLED, which is what "the game shows a broken tile" and
+   *  "my update did not apply" reports actually turn on. */
+  installed_apps: { title_id: string; title_name?: string }[] | null;
+  installed_apps_total: number | null;
   /** ShadowMount+ state. It owns mounting and registration for disk images,
    *  so whether it is running (and what it has mounted) explains a whole
    *  class of "my game didn't appear" reports our own logs cannot. */
@@ -108,6 +122,9 @@ export interface Ps5SnapshotResult {
 /** Cap the embedded process list so a busy console can't bloat report.json;
  *  the full count is preserved in `processes_total`. */
 const PROC_CAP = 400;
+/** Installed-title cap. A full console runs to a few hundred titles; the ids
+ *  matter, the tail does not, and the bundle is posted to a chat channel. */
+const INSTALLED_APP_CAP = 500;
 
 function placeholder(v: string | null | undefined): string | null {
   if (!v) return v ?? null;
@@ -216,6 +233,9 @@ export async function buildPs5Snapshot(opts: {
     processes: null,
     processes_total: null,
     net_interfaces: null,
+    volumes: null,
+    installed_apps: null,
+    installed_apps_total: null,
     smp_status: null,
     smp_checkout: null,
     focus: null,
@@ -252,6 +272,8 @@ export async function buildPs5Snapshot(opts: {
     apps,
     procs,
     nets,
+    volumes,
+    installedApps,
     smp,
     checkout,
     focus,
@@ -268,6 +290,8 @@ export async function buildPs5Snapshot(opts: {
       probe("running_apps", () => appListRunning(maddr)),
       probe("processes", () => procListGet(maddr)),
       probe("net_interfaces", () => netInterfacesGet(maddr)),
+      probe("volumes", () => listVolumes(taddr)),
+      probe("installed_apps", () => appsInstalled(taddr)),
       probe("smp_status", () => smpStatus(taddr)),
       probe("smp_checkout", () => smpCheckoutStatus(taddr)),
       // Newer helpers only; an older payload rejects the frame and this
@@ -296,6 +320,15 @@ export async function buildPs5Snapshot(opts: {
   }
 
   base.net_interfaces = nets?.interfaces ?? null;
+  base.volumes = volumes;
+  if (installedApps?.titles) {
+    base.installed_apps_total = installedApps.titles.length;
+    // Ids + names only: origin/source add bulk without changing a diagnosis,
+    // and the list is capped for the same reason `processes` is.
+    base.installed_apps = installedApps.titles
+      .slice(0, INSTALLED_APP_CAP)
+      .map((t) => ({ title_id: t.titleId, title_name: t.titleName }));
+  }
   base.smp_status = smp;
   base.smp_checkout = checkout;
   base.focus = focus;

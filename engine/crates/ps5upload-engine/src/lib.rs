@@ -318,7 +318,14 @@ fn job_failed_from_err(started_at_ms: u64, completed_at_ms: u64, err: &anyhow::E
     // reconcile, download). Logging here means a mid-transfer death — the
     // "upload failed halfway through" case — shows the engine's full error
     // chain in engine.log, instead of the handler logging only the START.
-    log_warn!(
+    //
+    // `error`, not `warn`: the user's transfer is over and did not succeed.
+    // The engine used to have no `error` call sites at all, so every bug
+    // bundle reported `error_logs: 0` however badly a transfer had failed,
+    // and a maintainer filtering for errors saw an empty list. Advisory
+    // warnings ("capacity preflight unavailable", which only skips a check)
+    // stay at `warn` — the distinction is whether the user lost work.
+    log_error!(
         "transfer job failed: {err:#}{}",
         reason
             .as_deref()
@@ -476,7 +483,16 @@ async fn log_requests(req: Request, next: Next) -> axum::response::Response {
     // The full per-request trace always goes to the debug log, which is
     // what the crash trace relies on. What varies is whether this also
     // reaches the user at the default level.
-    log_debug!("{method} {path} -> {status} ({ms}ms)");
+    //
+    // The log-tail endpoint is the one exception: the log viewer polls it
+    // about once a second, so logging it makes the log grow purely from
+    // being watched — a self-feeding stream of `GET /api/engine-logs -> 200`
+    // that crowds out real traffic and never stops. Reading the log is not
+    // an event worth recording. A failure still gets through: only this
+    // debug line is skipped, and the 5xx path below is untouched.
+    if path != "/api/engine-logs" {
+        log_debug!("{method} {path} -> {status} ({ms}ms)");
+    }
 
     // A console that is switched off answers every status poll with 502,
     // once a second, indefinitely. Reported plainly that buries every
