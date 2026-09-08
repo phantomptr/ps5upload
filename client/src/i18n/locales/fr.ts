@@ -2729,6 +2729,17 @@ helper_mismatch_title: "L'assistant PS5 est en v{payload} mais cette application
 helper_mismatch_body: "Les correctifs et fonctionnalités de la version plus récente ne fonctionneront pas tant que l'assistant de la console ne correspondra pas. Rechargez-le depuis l'écran Connexion.",
 helper_mismatch_go: "Recharger l'assistant",
 
+"joberr.direct_staged_file_missing": "Cet envoi était déjà terminé, il ne restait donc rien à publier — et le fichier sur la PS5 est maintenant absent ou de taille incorrecte. Renvoyez-le en choisissant « Remplacer » plutôt que « Reprendre ».",
+"joberr.direct_tx_corrupt": "La PS5 a détecté une corruption du protocole sur ce transfert. Relancez le payload depuis l'onglet « Envoyer le payload », puis réessayez.",
+"joberr.direct_writer_io_error": "La PS5 a manqué d'espace libre (ou un disque externe a été déconnecté) pendant l'écriture du fichier. Libérez de l'espace sur le disque de destination et cliquez sur « Réessayer » : l'envoi reprend là où il s'était arrêté.",
+"joberr.fs_delete_path_not_allowed": "La PS5 a refusé l'accès à ce chemin. Utilisez /data/, /user/ ou un chemin monté dans /mnt/ext* ou /mnt/usb*.",
+"joberr.fs_read_path_not_allowed": "Ce fichier se trouve dans une partition système en lecture seule, normalement bloquée. Activez Paramètres → « Autoriser le téléchargement des fichiers système » pour télécharger depuis /system, /system_data et les autres chemins protégés.",
+"joberr.fs_write_failed": "La PS5 n'a pas pu écrire vers la destination en cours de transfert — le plus souvent le disque est plein ou un disque externe a été déconnecté. Vérifiez l'espace libre ou rebranchez le disque, puis cliquez sur « Réessayer » (l'envoi reprend là où il s'était arrêté).",
+"joberr.fs_write_failed_no_space": "Le disque de destination n'a plus d'espace libre (ou le fichier est trop volumineux pour ce système de fichiers). Libérez de l'espace sur la PS5 ou le disque externe — ou choisissez une autre destination — puis cliquez sur « Réessayer ».",
+"joberr.packed_unsupported": "L'assistant PS5 a refusé un transfert groupé. Cela arrive avec un payload obsolète lorsqu'un envoi de dossier se réduit à un seul petit fichier (par exemple en reprenant un jeu contenant de nombreux fichiers minuscules). Mettez ps5upload à jour, renvoyez le payload depuis l'onglet « Envoyer le payload », puis réessayez.",
+"joberr.preflight_insufficient_space": "Le disque de destination n'a pas assez d'espace libre pour ce fichier. Libérez de l'espace sur la PS5 (Paramètres → Stockage) ou choisissez une autre destination, puis cliquez sur « Réessayer ».",
+"joberr.size_mismatch": "Le transfert n'est pas allé à son terme avant d'être interrompu : un fichier sur la PS5 est incomplet et n'a donc pas été publié (votre ancienne copie, le cas échéant, reste intacte). Cela signifie généralement que la PS5 est passée en veille ou a perdu l'alimentation pendant l'envoi. Gardez la console éveillée (Paramètres → Système → Économie d'énergie → Délai avant extinction de la PS5), puis relancez cet élément : « Reprendre » ne renvoie que les fichiers manquants, « Remplacer » crée une copie propre.",
+"joberr.tx_table_full": "Trop de transferts simultanés sont en cours sur la PS5. Attendez que certains se terminent ou relancez le payload.",
 };
 
 export default fr;

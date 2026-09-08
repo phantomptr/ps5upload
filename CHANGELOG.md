@@ -4,6 +4,35 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.17.3
+
+**A repeat upload no longer deletes the file it already delivered — and failure messages now speak your language.**
+
+- **Re-uploading something that had already finished could destroy it.** When a
+  transfer was retried after it had actually completed — the Retry button, or a
+  retry the app made on its own — the console deleted the finished file and then
+  reported `direct_rename_failed`. Every further retry repeated the deletion, so
+  the file you had successfully uploaded simply vanished and the queue sat at
+  0 B. Committing the same transfer twice is now harmless: if the file is
+  already in place at the right size, that is treated as success and nothing is
+  touched. Nothing deletes a destination any more until there is a verified
+  replacement ready to take its place.
+
+  This was reproduced on a real console before and after the fix — old build:
+  file gone; fixed build: file intact.
+
+- **Transfer and install failure messages are translated.** These messages —
+  out of space, drive disconnected, path refused, transfer interrupted — were
+  English-only in every language, which is the worst moment to be handed a
+  language you may not read. All of them are now available in the app's 19
+  languages.
+
+- **Clearer wording when there is genuinely nothing to publish.** The old
+  message blamed a rename and printed an empty path. It now says what actually
+  happened and what to do: upload again and choose Override rather than Resume.
+
+---
+
 ## 5.17.2
 
 **Logs say what they mean, and a bug report now carries what we actually need.**

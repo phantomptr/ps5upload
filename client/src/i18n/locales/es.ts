@@ -2639,6 +2639,17 @@ helper_mismatch_title: "El asistente de la PS5 es v{payload} pero esta app es v{
 helper_mismatch_body: "Las correcciones y funciones de la versión más nueva no funcionarán hasta que el asistente de la consola coincida. Recárgalo desde la pantalla Conexión.",
 helper_mismatch_go: "Recargar asistente",
 
+"joberr.direct_staged_file_missing": "Esta subida ya había terminado, así que no quedaba nada por publicar, y ahora el archivo en la PS5 falta o tiene un tamaño incorrecto. Vuelve a subirlo y elige «Sobrescribir» en lugar de «Reanudar».",
+"joberr.direct_tx_corrupt": "La PS5 detectó corrupción del protocolo en esta transferencia. Reinicia el payload desde la pestaña «Enviar payload» y vuelve a intentarlo.",
+"joberr.direct_writer_io_error": "La PS5 se quedó sin espacio libre (o se desconectó una unidad externa) mientras escribía el archivo. Libera espacio en la unidad de destino y haz clic en «Reintentar»: la subida continúa desde donde se detuvo.",
+"joberr.fs_delete_path_not_allowed": "La PS5 denegó el acceso a esa ruta. Usa /data/, /user/ o una ruta montada en /mnt/ext* o /mnt/usb*.",
+"joberr.fs_read_path_not_allowed": "Este archivo está en una partición de sistema de solo lectura que normalmente está bloqueada. Activa Ajustes → «Permitir la descarga de archivos del sistema» para descargar desde /system, /system_data y otras rutas protegidas.",
+"joberr.fs_write_failed": "La PS5 no pudo escribir en el destino a mitad de la transferencia; lo más habitual es que la unidad se haya llenado o que se haya desconectado una unidad externa. Comprueba el espacio libre o vuelve a conectar la unidad y haz clic en «Reintentar» (la subida continúa desde donde se detuvo).",
+"joberr.fs_write_failed_no_space": "La unidad de destino se quedó sin espacio (o el archivo es demasiado grande para ese sistema de archivos). Libera espacio en la PS5 o en la unidad externa —o elige otro destino— y haz clic en «Reintentar».",
+"joberr.packed_unsupported": "El asistente de la PS5 rechazó una transferencia empaquetada. Esto ocurre con un payload desactualizado cuando la subida de una carpeta se reduce a un único archivo pequeño (por ejemplo, al reanudar un juego con muchos archivos diminutos). Actualiza ps5upload a la última versión, reenvía el payload desde la pestaña «Enviar payload» y vuelve a intentarlo.",
+"joberr.preflight_insufficient_space": "La unidad de destino no tiene espacio libre suficiente para este archivo. Libera espacio en la PS5 (Ajustes → Almacenamiento) o elige otro destino y haz clic en «Reintentar».",
+"joberr.size_mismatch": "La transferencia no terminó antes de interrumpirse: un archivo de la PS5 quedó incompleto, así que no se publicó (tu copia anterior, si la había, queda intacta). Normalmente significa que la PS5 entró en reposo o se quedó sin corriente a mitad de la subida. Mantén la consola despierta (Ajustes → Sistema → Ahorro de energía → Tiempo hasta que la PS5 se apague) y vuelve a ejecutar este elemento: «Reanudar» reenvía solo los archivos que faltan y «Sobrescribir» hace una copia limpia.",
+"joberr.tx_table_full": "Hay demasiadas transferencias simultáneas en curso en la PS5. Espera a que terminen algunas o reinicia el payload.",
 };
 
 export default es;

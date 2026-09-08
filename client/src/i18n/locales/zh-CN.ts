@@ -2645,6 +2645,17 @@ helper_mismatch_title: "PS5 助手为 v{payload}，而此应用为 v{app}",
 helper_mismatch_body: "新版本的修复和功能要等主机上的助手版本一致后才生效。请在“连接”界面重新加载。",
 helper_mismatch_go: "重新加载助手",
 
+"joberr.direct_staged_file_missing": "本次上传其实已经完成，没有剩余内容可以发布——而且 PS5 上的文件现在丢失或大小不对。请重新上传，并选择「覆盖」而不是「续传」。",
+"joberr.direct_tx_corrupt": "PS5 在本次传输中检测到协议损坏。请在「发送 payload」标签页重启 payload，然后重试。",
+"joberr.direct_writer_io_error": "写入文件时 PS5 的可用空间不足（或外接硬盘被拔出）。请释放目标硬盘的空间后点击「重试」——上传会从中断处继续。",
+"joberr.fs_delete_path_not_allowed": "PS5 拒绝访问该路径。请使用 /data/、/user/，或已挂载的 /mnt/ext*、/mnt/usb* 路径。",
+"joberr.fs_read_path_not_allowed": "该文件位于通常被封锁的只读系统分区中。请在设置中启用「允许下载系统文件」，即可从 /system、/system_data 等受保护路径下载。",
+"joberr.fs_write_failed": "传输中途 PS5 无法写入目标位置——通常是硬盘写满或外接硬盘被拔出。请检查可用空间或重新接上硬盘，然后点击「重试」（上传会从中断处继续）。",
+"joberr.fs_write_failed_no_space": "目标硬盘空间已用尽（或该文件对这个文件系统来说太大）。请释放 PS5 或外接硬盘的空间——或换一个目标位置——然后点击「重试」。",
+"joberr.packed_unsupported": "PS5 助手拒绝了打包传输。当文件夹上传最终只剩一个小文件时（例如续传一个包含大量小文件的游戏），旧版 payload 会出现这种情况。请将 ps5upload 更新到最新版本，在「发送 payload」标签页重新发送 payload，然后重试。",
+"joberr.preflight_insufficient_space": "目标硬盘没有足够的可用空间存放该文件。请释放 PS5 的空间（设置 → 存储）或换一个目标位置，然后点击「重试」。",
+"joberr.size_mismatch": "传输在完成前被中断——PS5 上的某个文件不完整，因此未被发布（如果存在旧副本，它保持不变）。这通常意味着上传过程中 PS5 进入了休息模式或断电。请让主机保持唤醒（设置 → 系统 → 节能 → PS5 关闭前的时间），然后重新执行此项：「续传」只会重发缺失的文件，「覆盖」则重新完整复制一份。",
+"joberr.tx_table_full": "PS5 上同时进行的传输过多。请等待部分传输完成，或重启 payload。",
 };
 
 export default zh_CN;

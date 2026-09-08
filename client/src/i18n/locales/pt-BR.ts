@@ -2727,6 +2727,17 @@ helper_mismatch_title: "O auxiliar do PS5 é v{payload}, mas este app é v{app}"
 helper_mismatch_body: "Correções e recursos da versão mais nova não funcionarão até o auxiliar no console corresponder. Recarregue-o na tela Conexão.",
 helper_mismatch_go: "Recarregar auxiliar",
 
+"joberr.direct_staged_file_missing": "Este envio já havia terminado, então não restava nada para publicar — e agora o arquivo no PS5 está ausente ou com o tamanho errado. Envie-o novamente e escolha «Substituir» em vez de «Retomar».",
+"joberr.direct_tx_corrupt": "O PS5 detectou corrupção de protocolo nesta transferência. Reinicie o payload na aba «Enviar payload» e tente de novo.",
+"joberr.direct_writer_io_error": "O PS5 ficou sem espaço livre (ou uma unidade externa foi desconectada) enquanto gravava o arquivo. Libere espaço na unidade de destino e clique em «Tentar novamente» — o envio continua de onde parou.",
+"joberr.fs_delete_path_not_allowed": "O PS5 negou acesso a esse caminho. Use /data/, /user/ ou um caminho montado em /mnt/ext* ou /mnt/usb*.",
+"joberr.fs_read_path_not_allowed": "Este arquivo está em uma partição de sistema somente leitura que normalmente fica bloqueada. Ative Configurações → «Permitir download de arquivos de sistema» para baixar de /system, /system_data e outros caminhos protegidos.",
+"joberr.fs_write_failed": "O PS5 não conseguiu gravar no destino durante a transferência — normalmente a unidade encheu ou uma unidade externa foi desconectada. Verifique o espaço livre ou reconecte a unidade e clique em «Tentar novamente» (o envio continua de onde parou).",
+"joberr.fs_write_failed_no_space": "A unidade de destino ficou sem espaço (ou o arquivo é grande demais para esse sistema de arquivos). Libere espaço no PS5 ou na unidade externa — ou escolha outro destino — e clique em «Tentar novamente».",
+"joberr.packed_unsupported": "O auxiliar do PS5 recusou uma transferência empacotada. Isso acontece com um payload desatualizado quando o envio de uma pasta se reduz a um único arquivo pequeno (por exemplo, ao retomar um jogo com muitos arquivos minúsculos). Atualize o ps5upload para a versão mais recente, reenvie o payload pela aba «Enviar payload» e tente de novo.",
+"joberr.preflight_insufficient_space": "A unidade de destino não tem espaço livre suficiente para este arquivo. Libere espaço no PS5 (Configurações → Armazenamento) ou escolha outro destino e clique em «Tentar novamente».",
+"joberr.size_mismatch": "A transferência não terminou antes de ser interrompida — um arquivo no PS5 está incompleto e por isso não foi publicado (sua cópia antiga, se houver, permanece intacta). Normalmente isso significa que o PS5 entrou em repouso ou perdeu energia durante o envio. Mantenha o console acordado (Configurações → Sistema → Economia de energia → Tempo até o PS5 desligar) e execute este item de novo: «Retomar» reenvia apenas os arquivos que faltam, «Substituir» faz uma cópia limpa.",
+"joberr.tx_table_full": "Há transferências simultâneas demais em andamento no PS5. Espere algumas terminarem ou reinicie o payload.",
 };
 
 export default pt_BR;

@@ -2988,6 +2988,17 @@ helper_mismatch_title: "Pomocnik PS5 ma v{payload}, a ta aplikacja v{app}",
 helper_mismatch_body: "Poprawki i funkcje nowszej wersji nie zadziałają, dopóki pomocnik na konsoli się nie zgadza. Załaduj go ponownie z ekranu Połączenie.",
 helper_mismatch_go: "Załaduj pomocnika",
 
+"joberr.direct_staged_file_missing": "To przesyłanie już się zakończyło, więc nie było nic do opublikowania — a pliku na PS5 teraz brakuje lub ma zły rozmiar. Wyślij go ponownie i wybierz „Nadpisz” zamiast „Wznów”.",
+"joberr.direct_tx_corrupt": "PS5 wykryła uszkodzenie protokołu podczas tego transferu. Uruchom ponownie payload z karty „Wyślij payload” i spróbuj jeszcze raz.",
+"joberr.direct_writer_io_error": "Podczas zapisu pliku na PS5 zabrakło wolnego miejsca (albo odłączono dysk zewnętrzny). Zwolnij miejsce na dysku docelowym i kliknij „Ponów” — przesyłanie wznowi się od miejsca przerwania.",
+"joberr.fs_delete_path_not_allowed": "PS5 odmówiła dostępu do tej ścieżki. Użyj /data/, /user/ albo zamontowanej ścieżki /mnt/ext* lub /mnt/usb*.",
+"joberr.fs_read_path_not_allowed": "Ten plik znajduje się w partycji systemowej tylko do odczytu, która normalnie jest zablokowana. Włącz w Ustawieniach „Zezwalaj na pobieranie plików systemowych”, aby pobierać z /system, /system_data i innych chronionych ścieżek.",
+"joberr.fs_write_failed": "PS5 nie mogła zapisać danych w miejscu docelowym w trakcie transferu — najczęściej dysk się zapełnił albo odłączono dysk zewnętrzny. Sprawdź wolne miejsce lub podłącz dysk ponownie, a potem kliknij „Ponów” (przesyłanie wznowi się od miejsca przerwania).",
+"joberr.fs_write_failed_no_space": "Na dysku docelowym zabrakło miejsca (albo plik jest za duży dla tego systemu plików). Zwolnij miejsce na PS5 lub dysku zewnętrznym — albo wybierz inne miejsce docelowe — i kliknij „Ponów”.",
+"joberr.packed_unsupported": "Pomocnik PS5 odrzucił transfer spakowany. Zdarza się to przy nieaktualnym payloadzie, gdy przesyłanie folderu sprowadza się do jednego małego pliku (np. przy wznawianiu gry z mnóstwem drobnych plików). Zaktualizuj ps5upload do najnowszej wersji, wyślij payload ponownie z karty „Wyślij payload”, a potem spróbuj jeszcze raz.",
+"joberr.preflight_insufficient_space": "Dysk docelowy nie ma wystarczającej ilości wolnego miejsca na ten plik. Zwolnij miejsce na PS5 (Ustawienia → Pamięć) albo wybierz inne miejsce docelowe, a następnie kliknij „Ponów”.",
+"joberr.size_mismatch": "Transfer nie zdążył się zakończyć przed przerwaniem — plik na PS5 jest niekompletny, więc nie został opublikowany (stara kopia, jeśli istniała, pozostaje nienaruszona). Zwykle oznacza to, że PS5 przeszła w tryb spoczynku albo straciła zasilanie w trakcie przesyłania. Nie pozwól konsoli zasnąć (Ustawienia → System → Oszczędzanie energii → Czas do wyłączenia PS5) i uruchom tę pozycję ponownie: „Wznów” dośle tylko brakujące pliki, a „Nadpisz” utworzy czystą kopię.",
+"joberr.tx_table_full": "Na PS5 trwa zbyt wiele jednoczesnych transferów. Poczekaj, aż część się zakończy, albo uruchom ponownie payload.",
 };
 
 export default pl;

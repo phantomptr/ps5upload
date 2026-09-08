@@ -2701,6 +2701,17 @@ helper_mismatch_title: "Helper PS5 v{payload}, tapi aplikasi ini v{app}",
 helper_mismatch_body: "Perbaikan dan fitur versi yang lebih baru tidak akan jalan sampai helper di konsol cocok. Muat ulang dari layar Koneksi.",
 helper_mismatch_go: "Muat ulang helper",
 
+"joberr.direct_staged_file_missing": "Unggahan ini sebenarnya sudah selesai, jadi tidak ada lagi yang perlu diterbitkan — dan berkas di PS5 kini hilang atau ukurannya salah. Unggah ulang dan pilih «Timpa», bukan «Lanjutkan».",
+"joberr.direct_tx_corrupt": "PS5 mendeteksi kerusakan protokol pada transfer ini. Mulai ulang payload dari tab «Kirim payload», lalu coba lagi.",
+"joberr.direct_writer_io_error": "PS5 kehabisan ruang kosong (atau drive eksternal terlepas) saat menulis berkas. Kosongkan ruang di drive tujuan lalu klik «Coba lagi» — unggahan berlanjut dari titik terakhir.",
+"joberr.fs_delete_path_not_allowed": "PS5 menolak akses ke jalur tersebut. Gunakan /data/, /user/, atau jalur terpasang /mnt/ext* maupun /mnt/usb*.",
+"joberr.fs_read_path_not_allowed": "Berkas ini berada di partisi sistem hanya-baca yang biasanya diblokir. Aktifkan Pengaturan → «Izinkan pengunduhan berkas sistem» untuk mengunduh dari /system, /system_data, dan jalur terlindungi lainnya.",
+"joberr.fs_write_failed": "PS5 tidak dapat menulis ke tujuan di tengah transfer — biasanya drive penuh atau drive eksternal terlepas. Periksa ruang kosong atau pasang kembali drive, lalu klik «Coba lagi» (unggahan berlanjut dari titik terakhir).",
+"joberr.fs_write_failed_no_space": "Drive tujuan kehabisan ruang (atau berkas terlalu besar untuk sistem berkas tersebut). Kosongkan ruang di PS5 atau drive eksternal — atau pilih tujuan lain — lalu klik «Coba lagi».",
+"joberr.packed_unsupported": "Helper PS5 menolak transfer terpaket. Ini terjadi pada payload usang ketika unggahan folder menyusut menjadi satu berkas kecil (misalnya saat melanjutkan game dengan banyak berkas mungil). Perbarui ps5upload ke versi terbaru, kirim ulang payload dari tab «Kirim payload», lalu coba lagi.",
+"joberr.preflight_insufficient_space": "Drive tujuan tidak punya cukup ruang kosong untuk berkas ini. Kosongkan ruang di PS5 (Pengaturan → Penyimpanan) atau pilih tujuan lain, lalu klik «Coba lagi».",
+"joberr.size_mismatch": "Transfer belum selesai sebelum terputus — sebuah berkas di PS5 tidak lengkap sehingga tidak diterbitkan (salinan lama Anda, jika ada, tetap utuh). Biasanya ini berarti PS5 masuk mode istirahat atau kehilangan daya di tengah unggahan. Jaga konsol tetap menyala (Pengaturan → Sistem → Penghematan Daya → Waktu Sampai PS5 Mati), lalu jalankan lagi item ini: «Lanjutkan» hanya mengirim ulang berkas yang hilang, «Timpa» membuat salinan bersih.",
+"joberr.tx_table_full": "Terlalu banyak transfer berjalan bersamaan di PS5. Tunggu beberapa selesai atau mulai ulang payload.",
 };
 
 export default id;

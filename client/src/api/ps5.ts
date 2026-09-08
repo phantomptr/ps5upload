@@ -4,6 +4,8 @@
 // allowlisting, and host-local calls (folder inspection, ELF loader
 // TCP send) stay in-process.
 
+import { t } from "../i18n";
+import { useLangStore } from "../state/lang";
 import { Channel } from "@tauri-apps/api/core";
 import { getEngineUrl } from "../state/engine";
 // Logging wrapper: every command leaves a trace breadcrumb + logs failures at
@@ -3889,6 +3891,31 @@ export class UploadJobError extends Error {
   }
 }
 
+/**
+ * Non-hook translator for module-level strings.
+ *
+ * `useTr()` is a React hook and cannot be called from a plain function, which
+ * is why every message in `humanizeJobErrorReason` was hardcoded English while
+ * the rest of the app shipped in 19 languages. These are the strings a user
+ * sees at the exact moment a transfer or install fails — the worst place to
+ * fall back to a language they may not read.
+ *
+ * Reads the active language at call time (the store is the single source of
+ * truth) and falls back to the English text passed at the call site, so a key
+ * missing from a locale degrades to today's behaviour rather than showing a
+ * raw key.
+ */
+function trStatic(key: string, fallback: string): string {
+  try {
+    const lang = useLangStore.getState().lang;
+    const out = t(lang, key);
+    return out === key ? fallback : out;
+  } catch {
+    // Never let a translation lookup turn an error message into an exception.
+    return fallback;
+  }
+}
+
 /** Humanize a payload's `error_reason` token into a one-line message
  *  the user can act on. Returns `null` when the reason is unknown
  *  (caller falls back to the raw `error` field). The hint is paired
@@ -3908,31 +3935,36 @@ export function humanizeJobErrorReason(
       reason === "fs_write_failed_errno_28" ||
       reason === "fs_write_failed_errno_27"
     ) {
-      return "The destination drive ran out of space (or the file is too big for that filesystem). Free space on the PS5 / external drive — or pick a different destination — then click Retry.";
+      return trStatic("joberr.fs_write_failed_no_space", "The destination drive ran out of space (or the file is too big for that filesystem). Free space on the PS5 / external drive — or pick a different destination — then click Retry.");
     }
-    return "The PS5 couldn't write to the destination mid-transfer — most often the drive filled up or an external drive disconnected. Check free space / reconnect the drive, then click Retry (the upload resumes from where it stopped).";
+    return trStatic("joberr.fs_write_failed", "The PS5 couldn't write to the destination mid-transfer — most often the drive filled up or an external drive disconnected. Check free space / reconnect the drive, then click Retry (the upload resumes from where it stopped).");
   }
   switch (reason) {
     case "preflight_insufficient_space":
-      return "The destination drive doesn't have enough free space for this file. Free up space on the PS5 (Settings → Storage) or pick a different destination, then click Retry.";
+      return trStatic("joberr.preflight_insufficient_space", "The destination drive doesn't have enough free space for this file. Free up space on the PS5 (Settings → Storage) or pick a different destination, then click Retry.");
+    case "direct_staged_file_missing":
+      return trStatic("joberr.direct_staged_file_missing", "This upload had already finished, so there was nothing left to publish — and the file on the PS5 is now missing or the wrong size. Upload it again and choose Override rather than Resume.");
     case "direct_writer_io_error":
-      return "The PS5 ran out of free space (or an external drive disconnected) while writing the file. Free up space on the destination drive and click Retry — the upload resumes from where it stopped.";
+      return trStatic("joberr.direct_writer_io_error", "The PS5 ran out of free space (or an external drive disconnected) while writing the file. Free up space on the destination drive and click Retry — the upload resumes from where it stopped.");
     case "direct_tx_corrupt":
-      return "The PS5 detected protocol corruption on this transfer. Restart the payload from the Send Payload tab and retry.";
+      return trStatic("joberr.direct_tx_corrupt", "The PS5 detected protocol corruption on this transfer. Restart the payload from the Send Payload tab and retry.");
     case "packed_unsupported":
-      return "The PS5 helper rejected a packed transfer — this happens with an outdated payload when a folder upload comes down to a single small file (e.g. a Resume of a game with many tiny files). Update ps5upload to the latest version, re-send the payload from the Send Payload tab, then retry.";
+      return trStatic("joberr.packed_unsupported", "The PS5 helper rejected a packed transfer — this happens with an outdated payload when a folder upload comes down to a single small file (e.g. a Resume of a game with many tiny files). Update ps5upload to the latest version, re-send the payload from the Send Payload tab, then retry.");
     case "size_mismatch":
     case "shards_incomplete":
     case "spool_apply_failed":
-      return "The transfer didn't finish before being interrupted — a file on the PS5 is incomplete, so it wasn't published (your old copy, if any, is untouched). This usually means the PS5 went into rest mode or lost power mid-upload. Keep the console awake (Settings → System → Power Saving → Set Time Until PS5 Turns Off), then re-run this item — Resume now re-sends only the missing files, or choose Override for a clean copy.";
+      return trStatic("joberr.size_mismatch", "The transfer didn't finish before being interrupted — a file on the PS5 is incomplete, so it wasn't published (your old copy, if any, is untouched). This usually means the PS5 went into rest mode or lost power mid-upload. Keep the console awake (Settings → System → Power Saving → Set Time Until PS5 Turns Off), then re-run this item — Resume now re-sends only the missing files, or choose Override for a clean copy.");
     case "fs_delete_path_not_allowed":
     case "fs_mkdir_path_not_allowed":
     case "fs_list_dir_path_denied":
-      return "PS5 refused access to that path. Use /data/, /user/, or a mounted /mnt/ext*, /mnt/usb* path.";
+      return trStatic("joberr.fs_delete_path_not_allowed", "PS5 refused access to that path. Use /data/, /user/, or a mounted /mnt/ext*, /mnt/usb* path.");
     case "fs_read_path_not_allowed":
-      return 'This file is in a read-only system partition that\'s normally blocked. Enable Settings → "Allow downloading system files" to download from /system, /system_data, and other protected paths.';
+      return trStatic(
+        "joberr.fs_read_path_not_allowed",
+        'This file is in a read-only system partition that\'s normally blocked. Enable Settings → "Allow downloading system files" to download from /system, /system_data, and other protected paths.',
+      );
     case "tx_table_full":
-      return "Too many simultaneous transfers in flight on the PS5. Wait for some to finish or restart the payload.";
+      return trStatic("joberr.tx_table_full", "Too many simultaneous transfers in flight on the PS5. Wait for some to finish or restart the payload.");
     default:
       return null;
   }

@@ -2699,6 +2699,17 @@ helper_mismatch_title: "PS5 yardımcısı v{payload}, bu uygulama ise v{app}",
 helper_mismatch_body: "Yeni sürümdeki düzeltmeler ve özellikler, konsoldaki yardımcı eşleşene kadar çalışmaz. Bağlantı ekranından yeniden yükle.",
 helper_mismatch_go: "Yardımcıyı yükle",
 
+"joberr.direct_staged_file_missing": "Bu yükleme zaten tamamlanmıştı, dolayısıyla yayımlanacak bir şey kalmamıştı — üstelik PS5'teki dosya şu anda yok ya da boyutu yanlış. Dosyayı yeniden yükleyin ve «Sürdür» yerine «Üzerine yaz» seçeneğini kullanın.",
+"joberr.direct_tx_corrupt": "PS5 bu aktarımda protokol bozulması algıladı. «Payload gönder» sekmesinden payload'ı yeniden başlatıp tekrar deneyin.",
+"joberr.direct_writer_io_error": "Dosya yazılırken PS5'in boş alanı tükendi (ya da harici sürücü çıkarıldı). Hedef sürücüde yer açıp «Yeniden dene»ye tıklayın — yükleme kaldığı yerden devam eder.",
+"joberr.fs_delete_path_not_allowed": "PS5 bu yola erişimi reddetti. /data/, /user/ ya da bağlanmış bir /mnt/ext*, /mnt/usb* yolu kullanın.",
+"joberr.fs_read_path_not_allowed": "Bu dosya normalde engellenen, salt okunur bir sistem bölümünde. /system, /system_data ve diğer korumalı yollardan indirmek için Ayarlar → «Sistem dosyalarının indirilmesine izin ver» seçeneğini açın.",
+"joberr.fs_write_failed": "PS5 aktarım sırasında hedefe yazamadı — çoğunlukla sürücü dolmuştur ya da harici sürücü çıkarılmıştır. Boş alanı kontrol edin veya sürücüyü yeniden takın, ardından «Yeniden dene»ye tıklayın (yükleme kaldığı yerden devam eder).",
+"joberr.fs_write_failed_no_space": "Hedef sürücüde yer kalmadı (ya da dosya bu dosya sistemi için fazla büyük). PS5'te veya harici sürücüde yer açın — ya da başka bir hedef seçin — sonra «Yeniden dene»ye tıklayın.",
+"joberr.packed_unsupported": "PS5 yardımcısı paketlenmiş bir aktarımı reddetti. Bu, klasör yüklemesi tek bir küçük dosyaya indiğinde (örneğin çok sayıda ufak dosyası olan bir oyunu sürdürürken) eski bir payload ile olur. ps5upload'ı en son sürüme güncelleyin, «Payload gönder» sekmesinden payload'ı yeniden gönderin ve tekrar deneyin.",
+"joberr.preflight_insufficient_space": "Hedef sürücüde bu dosya için yeterli boş alan yok. PS5'te yer açın (Ayarlar → Depolama) ya da başka bir hedef seçin, sonra «Yeniden dene»ye tıklayın.",
+"joberr.size_mismatch": "Aktarım kesintiye uğramadan önce tamamlanamadı — PS5'teki bir dosya eksik olduğu için yayımlanmadı (varsa eski kopyanıza dokunulmadı). Bu genellikle yükleme sırasında PS5'in dinlenme moduna geçtiği ya da elektriğinin kesildiği anlamına gelir. Konsolu uyanık tutun (Ayarlar → Sistem → Güç Tasarrufu → PS5'in Kapanmasına Kalan Süre) ve bu öğeyi yeniden çalıştırın: «Sürdür» yalnızca eksik dosyaları yeniden gönderir, «Üzerine yaz» ise temiz bir kopya oluşturur.",
+"joberr.tx_table_full": "PS5'te aynı anda çok fazla aktarım sürüyor. Bir kısmının bitmesini bekleyin ya da payload'ı yeniden başlatın.",
 };
 
 export default tr;
