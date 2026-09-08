@@ -6,8 +6,8 @@ What's new in ps5upload, written for humans.
 
 ## 5.17.7
 
-**Two problems from one report: an error that blamed the wrong thing, and a
-6 GB re-upload nobody asked for.**
+**One report, four fixes: updates that couldn't reach the console, an error
+that blamed the wrong thing, and a 6 GB re-upload nobody asked for.**
 
 - **A failed install no longer restarts the upload on its own.** When an update
   failed to install, the app treated it like a dropped connection and re-ran the
@@ -17,6 +17,27 @@ What's new in ps5upload, written for humans.
   never have changed the outcome. Anything that fails *after* the upload has
   committed — the install, or a mount — is now final, and the package stays on
   the PS5 for a retry.
+
+- **The update installer is now started early, while the console is known to be
+  reachable.** ps5upload applies updates through a small installer it hands to
+  the console's own payload loader. That loader belongs to your jailbreak, not
+  to us, and it can stop answering partway through a session — which is exactly
+  what happened to the person who reported this: it accepted ps5upload's helper
+  and then refused everything four minutes later, so the installer could never
+  be delivered and the update failed. ps5upload now starts that installer as
+  soon as it has talked to the console, rather than an hour later when an
+  upload has already finished. Once started it stays running, so the loader is
+  never needed again.
+
+  Verified on two consoles: the installer comes up in about half a second,
+  leaves the helper running beside it, and a later install uses it without
+  touching the loader at all.
+
+- **The self-hosted web UI can now redeploy the helper.** Its check for "is the
+  console running the right helper" asked the desktop shell for the app
+  version — a call that does not exist in a browser and threw, so the whole
+  check quietly did nothing there. That is also why the web UI could never
+  restore a helper it had just found stale or offline.
 
 - **"ps5upload couldn't start the PS5's update installer" told most people the
   wrong thing.** That message blamed a self-hosted engine built without the PS5

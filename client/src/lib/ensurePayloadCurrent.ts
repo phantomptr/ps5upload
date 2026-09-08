@@ -1,8 +1,10 @@
-import { getVersion } from "@tauri-apps/api/app";
-
 import { bundledPayloadPath, payloadCheck, sendPayload } from "../api/ps5";
+import { getAppVersion } from "./appVersion";
+import { isTauriEnv } from "./tauriEnv";
+import { restoreMainPayload } from "./restoreMainPayload";
 import { compareVersions } from "./semver";
 import { log } from "../state/logs";
+import { prearmDpiDaemon } from "./prearmDpi";
 
 export type EnsurePayloadResult =
   | "current"
@@ -52,7 +54,13 @@ export async function ensurePayloadCurrent(
   if (shouldCancel?.()) return "no-push";
   let appVersion: string;
   try {
-    appVersion = await getVersion();
+    // `getAppVersion`, not Tauri's `getVersion`: the latter needs
+    // `__TAURI_INTERNALS__` and THROWS in a browser, which made this whole
+    // function a no-op in the self-hosted web UI — the queue's
+    // payload-is-current check and its auto-recovery redeploy both did
+    // nothing there. In a browser the engine binary is the app, so its
+    // `/api/version` is the equivalent.
+    appVersion = await getAppVersion();
   } catch {
     // Can't read our own version — abort the auto-push entirely so we don't
     // accidentally push the wrong file. Proceed with the running payload.
@@ -69,6 +77,12 @@ export async function ensurePayloadCurrent(
     // payloadCheck threw — fall through to push attempt.
   }
   if (!force && running && compareVersions(running, appVersion) === 0) {
+    // The helper is current, which also means the console answered us just
+    // now. Take the opportunity to arm the update installer (see prearmDpi):
+    // it is one probe when the daemon is already up, and once per console per
+    // session otherwise. Deliberately not awaited — nothing here depends on
+    // it, and an unreachable loader must not slow down a healthy connect.
+    void prearmDpiDaemon(host);
     return "current";
   }
   // Need to push. Locate the bundled ELF + send it.
@@ -76,18 +90,26 @@ export async function ensurePayloadCurrent(
     "payload",
     `(re)deploying helper to ${host} (running=${running ?? "none"}, want=${appVersion})`,
   );
-  let elfPath: string;
-  try {
-    elfPath = await bundledPayloadPath();
-  } catch (e) {
-    log.warn("payload", `cannot locate bundled payload ELF: ${e instanceof Error ? e.message : String(e)}`);
-    return "no-push";
-  }
-  try {
-    await sendPayload(host, elfPath);
-  } catch (e) {
-    log.warn("payload", `payload send to ${host} failed: ${e instanceof Error ? e.message : String(e)}`);
-    return "no-push";
+  if (!isTauriEnv()) {
+    // A browser has neither the ELF bytes nor a socket to the loader, so the
+    // engine does the send. `bundledPayloadPath`/`sendPayload` are
+    // desktop-only commands and throw here — which is why the web UI could
+    // never redeploy a helper it had just found stale or dead.
+    await restoreMainPayload(host);
+  } else {
+    let elfPath: string;
+    try {
+      elfPath = await bundledPayloadPath();
+    } catch (e) {
+      log.warn("payload", `cannot locate bundled payload ELF: ${e instanceof Error ? e.message : String(e)}`);
+      return "no-push";
+    }
+    try {
+      await sendPayload(host, elfPath);
+    } catch (e) {
+      log.warn("payload", `payload send to ${host} failed: ${e instanceof Error ? e.message : String(e)}`);
+      return "no-push";
+    }
   }
   // Poll up to ~30 s for the new payload to come up + report matching
   // version. ps5-payload-sdk's loader takes a few seconds to gunzip +
@@ -102,6 +124,11 @@ export async function ensurePayloadCurrent(
         probe.payloadVersion &&
         compareVersions(probe.payloadVersion, appVersion) === 0
       ) {
+        // The loader just took an ELF, so we know it is alive THIS second.
+        // That is the whole point of arming here: a loader that works now can
+        // be gone by the time an update install needs it, and then the
+        // installer can never be delivered at all.
+        void prearmDpiDaemon(host);
         return "pushed";
       }
     } catch {

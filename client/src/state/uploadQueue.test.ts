@@ -874,6 +874,107 @@ describe("upload runner — unverified PKG install", () => {
   });
 });
 
+describe("upload runner — a rejected PKG install must not re-upload", () => {
+  const ADDR = "192.168.1.10:9113";
+
+  beforeEach(() => {
+    installLocalStorageStub();
+    vi.useFakeTimers();
+    mockedJobStatus.mockReset().mockResolvedValue({
+      status: "done",
+      bytes_sent: 100,
+      elapsed_ms: 10,
+      dest: "/user/data/ps5upload/pkg_library/updates/Update.pkg",
+    } as Awaited<ReturnType<typeof jobStatus>>);
+    mockedStartFile.mockReset().mockResolvedValue("job");
+    mockedFsDelete.mockClear();
+    // The 2026-09-08 report: the console never saw the update, and the
+    // message is one the recovery policy has never seen — in any of 19
+    // languages.
+    mockedPkgInstall.mockReset().mockResolvedValue({
+      installed: false,
+      mayNotLaunch: false,
+      errMessage:
+        "This update couldn’t be applied because ps5upload couldn’t reach " +
+        "your PS5’s payload loader on port 9021…",
+    });
+    useUploadQueueStore.setState({
+      items: [],
+      running: false,
+      runningHosts: {},
+      continueOnFailure: true,
+      loaded: true,
+    });
+  });
+
+  afterEach(() => {
+    useUploadQueueStore.getState().stop();
+    vi.useRealTimers();
+  });
+
+  it("fails the row once, with exactly one transfer", async () => {
+    useUploadQueueStore.getState().add({
+      sourceKind: "pkg",
+      sourcePath: "/src/Update.pkg",
+      displayName: "Update.pkg",
+      resolvedDest: "/user/data/ps5upload/pkg_library/updates/Update.pkg",
+      addr: ADDR,
+      strategy: "overwrite",
+      reconcileMode: "fast",
+      excludes: [],
+      mountAfterUpload: false,
+      mountReadOnly: false,
+      registerAfterUpload: false,
+      installAfterUpload: true,
+      deletePkgAfterInstall: true,
+      contentId: "UP0000-CUSA00001_00-GAME000000000000",
+    });
+
+    const run = useUploadQueueStore.getState().start();
+    // Long past every auto-recovery backoff (5s + 15s + 30s).
+    await vi.advanceTimersByTimeAsync(120_000);
+    await run;
+
+    const item = useUploadQueueStore.getState().items[0];
+    expect(item.status).toBe("failed");
+    // The whole point: the bytes were committed, so re-running the item would
+    // re-upload the package. A user watched 5.93 GiB start over six seconds
+    // after this error. Exactly one transfer, ever.
+    expect(mockedStartFile).toHaveBeenCalledTimes(1);
+    // And the staged pkg is kept, so the retry is an install retry.
+    expect(mockedFsDelete).not.toHaveBeenCalled();
+  });
+
+  it("still auto-recovers a genuine transport failure", async () => {
+    // Guard against over-correcting: the case auto-recovery exists for must
+    // keep re-running the item.
+    mockedJobStatus.mockReset().mockResolvedValue({
+      status: "failed",
+      error: "connect 192.168.1.10:9113: Connection refused",
+    } as Awaited<ReturnType<typeof jobStatus>>);
+    useUploadQueueStore.getState().add({
+      sourceKind: "pkg",
+      sourcePath: "/src/Update.pkg",
+      displayName: "Update.pkg",
+      resolvedDest: "/user/data/ps5upload/pkg_library/updates/Update.pkg",
+      addr: ADDR,
+      strategy: "overwrite",
+      reconcileMode: "fast",
+      excludes: [],
+      mountAfterUpload: false,
+      mountReadOnly: false,
+      registerAfterUpload: false,
+      installAfterUpload: true,
+      deletePkgAfterInstall: true,
+      contentId: "UP0000-CUSA00001_00-GAME000000000000",
+    });
+    const run = useUploadQueueStore.getState().start();
+    await vi.advanceTimersByTimeAsync(120_000);
+    await run;
+    expect(mockedStartFile).toHaveBeenCalledTimes(4); // 1 + 3 retries
+  });
+});
+
 // ── ShadowMount+ hand-off on image upload + mount-after-upload ────────────────
 
 describe("upload runner — ShadowMount+ hand-off (image + mountAfterUpload)", () => {

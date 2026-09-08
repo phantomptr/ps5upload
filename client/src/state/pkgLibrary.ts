@@ -1,5 +1,6 @@
 import { trStatic } from "../lib/trStatic";
 import { dpiUnavailableCopy } from "../lib/dpiUnavailable";
+import { restoreMainPayload } from "../lib/restoreMainPayload";
 import { useStore } from "zustand";
 import { createStore } from "zustand/vanilla";
 import { invoke } from "../lib/invokeLogged";
@@ -31,7 +32,6 @@ import {
 } from "../lib/pkgStagingPath";
 import { ensurePayloadCurrent } from "../lib/ensurePayloadCurrent";
 import { transferScreenBusy } from "../lib/ps5Transfers";
-import { isTauriEnv } from "../lib/tauriEnv";
 import { useInstallSettingsStore } from "./installSettings";
 import { useConnectionStore } from "./connection";
 import { log } from "./logs";
@@ -1191,51 +1191,6 @@ async function verifyDpiInstalledArtifact(
   return false;
 }
 
-/**
- * Install a staged/-on-disk `.pkg` via the standalone DPI daemon (:9040): bring
- * the daemon up (it replaces our payload on the single-payload loader), install,
- * then restore our payload. This is the path elf-arsenal uses to install
- * directly from a USB/exFAT path. Returns `daemonFailed:true` distinctly so a
- * caller that needs the cascade semantics (runPkgInstall) can still throw on a
- * genuine "daemon never came up" dead-end. The `rc==0`/`ok` here is NOT proof
- * of a real install — callers must rely on registration/byte-settle proof.
- */
-async function restoreMainPayload(ip: string): Promise<void> {
-  try {
-    if (!isTauriEnv()) {
-      // Browser: the engine holds the payload bytes and owns the socket.
-      // `payload_bundled_path`/`payload_send` are desktop-only commands —
-      // calling them here threw BrowserUnsupportedError, which is what
-      // made the whole DPI fallback (and therefore every patch install)
-      // fail from the web UI. See #152.
-      const r = (await invoke("payload_restore", { ip })) as {
-        ok?: boolean;
-        error?: string;
-      };
-      if (!r?.ok) {
-        log.warn(
-          "install",
-          `couldn't restore the main payload on ${ip}: ${
-            r?.error ?? "engine reported no payload image"
-          }`,
-        );
-      }
-      return;
-    }
-    const bp = (await invoke("payload_bundled_path")) as {
-      ok?: boolean;
-      path?: string;
-    };
-    if (bp?.ok && bp.path) {
-      await invoke("payload_send", { ip, path: bp.path, port: null });
-    }
-  } catch (e) {
-    // The app's reconnect watcher can make another attempt, but keep this in
-    // the bug bundle: a failed restore explains why the helper stayed offline.
-    log.warn("install", `couldn't restore the main payload on ${ip}: ${pkgError(e)}`);
-  }
-}
-
 async function runDpiInstall(
   host: string,
   localPs5Path: string,
@@ -1256,10 +1211,13 @@ async function runDpiInstall(
   appVerAfter?: string;
 }> {
   const ip = hostOf(host);
-  // dpi_ensure sends the DPI ELF to the loader port (:9021), which REPLACES the
-  // running main payload with the clean DPI process. Log around it: this is the
-  // exact moment the main helper is torn down, and issue #152's "helper dies
-  // ~4s after a rejected update" reports land right here — the next bundle will
+  // dpi_ensure sends the DPI ELF to the loader port (:9021). Whether that
+  // displaces the running helper is LOADER-dependent, not ours: we never evict
+  // for a companion image, and measured on FW 5.10 and FW 9.60 the helper's
+  // :9113/:9114 stayed up while :9040 came online beside them. A
+  // single-payload loader would still replace it, which is why `sent` drives a
+  // restore below. Log around it either way: issue #152's "helper dies ~4s
+  // after a rejected update" reports land right here, and the next bundle will
   // show whether dpi_ensure succeeded, timed out, or never returned.
   log.info(
     "install",
