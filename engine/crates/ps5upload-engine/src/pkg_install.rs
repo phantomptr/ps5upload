@@ -2428,7 +2428,23 @@ pub struct DpiEnsureResponse {
     pub sent: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Machine-readable cause when `ok` is false, so the client can pick the
+    /// right guidance instead of pattern-matching English prose. A user on
+    /// 5.17.6 was told to rebuild their engine when the real cause was that
+    /// their console's ELF loader had stopped answering on :9021 — three very
+    /// different problems were sharing one message.
+    ///
+    ///   * `no_image`           — this engine build carries no DPI daemon.
+    ///   * `loader_unreachable` — nothing accepted a connection on :9021.
+    ///   * `loader_send_failed` — the loader accepted, the transfer failed.
+    ///   * `no_bringup`         — image delivered, :9040 never came up.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<&'static str>,
 }
+
+use ps5upload_core::payload_lifecycle::{
+    dpi_send_failure_reason, DPI_REASON_NO_BRINGUP, DPI_REASON_NO_IMAGE,
+};
 
 #[derive(Debug, Serialize)]
 pub struct PayloadRestoreResponse {
@@ -2466,6 +2482,7 @@ fn dpi_ensure_blocking(ps5_ip: &str) -> DpiEnsureResponse {
             listening: true,
             sent: false,
             error: None,
+            reason: None,
         };
     }
 
@@ -2478,6 +2495,7 @@ fn dpi_ensure_blocking(ps5_ip: &str) -> DpiEnsureResponse {
                 listening: false,
                 sent: false,
                 error: Some(e),
+                reason: Some(DPI_REASON_NO_IMAGE),
             };
         }
     };
@@ -2499,6 +2517,7 @@ fn dpi_ensure_blocking(ps5_ip: &str) -> DpiEnsureResponse {
             ok: false,
             listening: false,
             sent: false,
+            reason: Some(dpi_send_failure_reason(&e)),
             error: Some(format!("send dpi.elf: {e}")),
         };
     }
@@ -2512,6 +2531,7 @@ fn dpi_ensure_blocking(ps5_ip: &str) -> DpiEnsureResponse {
                 listening: true,
                 sent: true,
                 error: None,
+                reason: None,
             };
         }
     }
@@ -2523,6 +2543,7 @@ fn dpi_ensure_blocking(ps5_ip: &str) -> DpiEnsureResponse {
         listening: false,
         sent: true,
         error: Some("DPI daemon did not come up on :9040".to_string()),
+        reason: Some(DPI_REASON_NO_BRINGUP),
     }
 }
 
@@ -3676,6 +3697,7 @@ mod loader_route_tests {
             listening: false,
             sent: true,
             error: Some("DPI daemon did not come up on :9040".into()),
+            reason: Some(DPI_REASON_NO_BRINGUP),
         };
         let v: serde_json::Value = serde_json::to_value(&failed).expect("serialize");
         assert_eq!(v["sent"], serde_json::json!(true));
@@ -3689,10 +3711,68 @@ mod loader_route_tests {
             listening: true,
             sent: false,
             error: None,
+            reason: None,
         };
         let v: serde_json::Value = serde_json::to_value(&ok).expect("serialize");
         assert!(v.get("error").is_none());
         assert_eq!(v["sent"], serde_json::json!(false));
+        assert!(v.get("reason").is_none());
+    }
+
+    /// The failure the field exists for. A console whose ELF loader has
+    /// stopped answering on :9021 cannot be handed the DPI daemon at all —
+    /// which is a problem with the console, not with the engine build. The
+    /// client picks its guidance from this code, so the classifier has to
+    /// separate "couldn't connect" from every later failure.
+    #[test]
+    fn a_refused_loader_port_is_reported_as_loader_unreachable() {
+        use ps5upload_core::payload_lifecycle::{
+            DPI_REASON_LOADER_SEND_FAILED, DPI_REASON_LOADER_UNREACHABLE,
+        };
+        assert_eq!(
+            dpi_send_failure_reason("connect 10.0.0.5:9021: Connection refused (os error 111)"),
+            DPI_REASON_LOADER_UNREACHABLE
+        );
+        assert_eq!(
+            dpi_send_failure_reason("connect 10.0.0.5:9021: Operation timed out (os error 60)"),
+            DPI_REASON_LOADER_UNREACHABLE
+        );
+        // Everything past the connect is a different problem with different
+        // advice, so it must NOT claim the loader was unreachable.
+        for after_connect in [
+            "write 10.0.0.5:9021: Broken pipe (os error 32)",
+            "half-close 10.0.0.5:9021: Socket is not connected (os error 57)",
+            "resolve ps5.local:9021: failed to lookup address information",
+            "not an ELF image (first bytes [00, 00, 00, 00])",
+        ] {
+            assert_eq!(
+                dpi_send_failure_reason(after_connect),
+                DPI_REASON_LOADER_SEND_FAILED,
+                "{after_connect}"
+            );
+        }
+    }
+
+    /// The prefix `dpi_send_failure_reason` keys off is produced by
+    /// `send_elf_to_loader`, in another crate. Pin the contract here so a
+    /// reworded error there fails this test instead of silently sending
+    /// every user the wrong advice.
+    #[test]
+    fn loader_send_reports_an_unreachable_port_with_the_connect_prefix() {
+        use ps5upload_core::payload_lifecycle as pl;
+        // RFC 5737 TEST-NET-2: nothing answers, so this is a connect failure.
+        let err = pl::send_elf_to_loader(
+            "198.51.100.1",
+            pl::PS5_LOADER_PORT,
+            b"\x7FELF-not-a-real-image",
+            pl::LoaderImage::Companion,
+        )
+        .expect_err("nothing is listening on TEST-NET-2");
+        assert!(err.starts_with("connect "), "{err}");
+        assert_eq!(
+            dpi_send_failure_reason(&err),
+            pl::DPI_REASON_LOADER_UNREACHABLE
+        );
     }
 }
 

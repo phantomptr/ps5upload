@@ -56,8 +56,9 @@ import { ensurePayloadCurrent } from "../lib/ensurePayloadCurrent";
 import { effectiveUploadStreams } from "../lib/uploadStreams";
 import {
   autoRecoverBackoffMs,
-  isAutoRecoverable,
   MAX_AUTO_RECOVER_ATTEMPTS,
+  PostUploadStepError,
+  shouldAutoRecover,
 } from "../lib/uploadRecovery";
 
 /** The engine job id currently uploading on each console (bare host key).
@@ -639,7 +640,9 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
                 );
               }
             } catch (e) {
-              const wrapped = new Error(
+              // Post-upload step: the transfer already committed, so this is
+              // not something re-sending the bytes can fix.
+              const wrapped = new PostUploadStepError(
                 `upload completed, but mount failed: ${
                   e instanceof Error ? e.message : String(e)
                 }`,
@@ -810,7 +813,13 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
                   ? `pkg "${item.displayName}" install stalled — staged pkg KEPT for retry: ${finalDest}`
                   : `pkg "${item.displayName}" install not confirmed — staged pkg KEPT: ${finalDest}`,
               );
-              throw new Error(r.errMessage || "Install was rejected.");
+              // PostUploadStepError, not Error: the bytes are committed, so
+              // the auto-recovery loop must not re-run this item — that would
+              // re-upload the whole package (a user watched a 5.93 GiB update
+              // restart itself six seconds after an install error, unasked).
+              throw new PostUploadStepError(
+                r.errMessage || "Install was rejected.",
+              );
             }
           } finally {
             pkgStore.setState({ installing: false, busyNotice: null });
@@ -1018,7 +1027,7 @@ export const useUploadQueueStore = create<QueueState>((set, get) => {
           const canRecover =
             autoResume &&
             recoverAttempt < MAX_AUTO_RECOVER_ATTEMPTS &&
-            isAutoRecoverable(reason, message);
+            shouldAutoRecover(e, reason, message);
 
           if (!canRecover) {
             set((s) => ({

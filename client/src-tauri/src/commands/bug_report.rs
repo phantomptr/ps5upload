@@ -283,7 +283,9 @@ diagnostics to help debug an issue — no games or app data.\n\
                        engine state (transfer jobs with why they failed, and\n\
                        live install sessions), and a snapshot of the connected\n\
                        PS5 (if any) — including per-volume free space with the\n\
-                       safety reserve, and the installed title list.\n\
+                       safety reserve, the installed title list, and which\n\
+                       service ports (loader :9021, DPI :9040, ours) were\n\
+                       answering.\n\
   logs/app.jsonl       The app's unified log for the selected time window\n\
                        (one JSON object per line: ts, level, source, message).\n\
   logs/engine.log      Full transfer-engine log (crash-survivable).\n\

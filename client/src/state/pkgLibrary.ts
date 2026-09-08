@@ -1,4 +1,5 @@
 import { trStatic } from "../lib/trStatic";
+import { dpiUnavailableCopy } from "../lib/dpiUnavailable";
 import { useStore } from "zustand";
 import { createStore } from "zustand/vanilla";
 import { invoke } from "../lib/invokeLogged";
@@ -987,10 +988,18 @@ const PKG_STALL_HINT =
  *  in-process installer hits the firmware authid gate — could not be
  *  brought up. Distinct from `PKG_PATCH_REJECTED_HINT` on purpose: saying
  *  "the PS5 declined it" when the console never saw the request sends
- *  people hunting for the wrong base-game version. The common cause on a
- *  self-hosted engine is a build with no bundled daemon image (#152). */
-export const PKG_PATCH_DAEMON_UNAVAILABLE_HINT =
-  "This update couldn’t be applied because ps5upload couldn’t start the PS5’s update installer, so the console never saw the update. Your base game is untouched. If you’re running a self-hosted engine, use the released engine build (or the ps5upload-engine Docker image) — a source build without the PS5 payload SDK has no installer image to send. You can also apply the update from the PS5 itself: Settings → System → Debug Settings → Game → Package Installer.";
+ *  people hunting for the wrong base-game version.
+ *
+ *  Which of the three causes it was — no image in this build, the console's
+ *  loader not answering on :9021, or the daemon never coming up on :9040 —
+ *  is decided by `dpiUnavailableCopy` from the engine's machine-readable
+ *  reason code. Re-exported here so existing importers keep working.
+ *  See `lib/dpiUnavailable.ts` for why one message for all three was wrong. */
+export {
+  PKG_PATCH_DAEMON_NO_BRINGUP_HINT,
+  PKG_PATCH_DAEMON_UNAVAILABLE_HINT,
+  PKG_PATCH_LOADER_UNREACHABLE_HINT,
+} from "../lib/dpiUnavailable";
 
 /** Shown when an update was accepted and then silently discarded. The
  *  workaround is not guessable, so it has to be in the message. */
@@ -1239,6 +1248,8 @@ async function runDpiInstall(
   ok: boolean;
   errMessage: string;
   daemonFailed: boolean;
+  /** Machine-readable cause when `daemonFailed` — see `dpiUnavailableCopy`. */
+  daemonReason?: string;
   rc: number;
   patchVerdict?: string;
   appVerBefore?: string;
@@ -1259,6 +1270,7 @@ async function runDpiInstall(
     error?: string;
     listening?: boolean;
     sent?: boolean;
+    reason?: string;
   };
   try {
     ens = (await invoke("dpi_ensure", { ip })) as typeof ens;
@@ -1269,6 +1281,9 @@ async function runDpiInstall(
     return {
       ok: false,
       daemonFailed: true,
+      // The bridge, not the console, is what failed here — no reason code
+      // applies, so the neutral fallback copy is the honest one.
+      daemonReason: undefined,
       rc: 0,
       errMessage: `couldn't start the DPI daemon: ${pkgError(e)}`,
     };
@@ -1276,6 +1291,7 @@ async function runDpiInstall(
   log.info(
     "install",
     `DPI ensure result: ok=${ens.ok} listening=${ens.listening ?? "?"} sent=${ens.sent ?? "?"}` +
+      (ens.reason ? ` reason=${ens.reason}` : "") +
       (ens.error ? ` error="${ens.error}"` : ""),
   );
   if (!ens.ok) {
@@ -1285,6 +1301,7 @@ async function runDpiInstall(
     return {
       ok: false,
       daemonFailed: true,
+      daemonReason: ens.reason,
       rc: 0,
       errMessage: ens.error || "the DPI daemon didn't come up on :9040",
     };
@@ -1388,6 +1405,7 @@ async function runDpiDirectInstall(
     error?: string;
     listening?: boolean;
     sent?: boolean;
+    reason?: string;
   };
   try {
     ens = (await invoke("dpi_ensure", { ip })) as typeof ens;
@@ -1405,6 +1423,7 @@ async function runDpiDirectInstall(
   log.info(
     "install",
     `DPI ensure (direct) result: ok=${ens.ok} listening=${ens.listening ?? "?"} sent=${ens.sent ?? "?"}` +
+      (ens.reason ? ` reason=${ens.reason}` : "") +
       (ens.error ? ` error="${ens.error}"` : ""),
   );
   if (!ens.ok) {
@@ -1670,14 +1689,24 @@ async function runPkgInstallCore(
       // (base is safe; try the PS5's Package Installer) rather than a raw
       // daemon error — but say that the console never saw the update, which
       // is a different problem from "the PS5 declined it" and has a
-      // different fix.
+      // different fix. WHICH guidance depends on why the daemon didn't
+      // start: a missing image in this build, a console loader that isn't
+      // answering on :9021, or a daemon that was sent and never came up.
+      // Those have nothing in common but the symptom.
+      const copy = dpiUnavailableCopy(dpi.daemonReason);
+      log.error(
+        "install",
+        `update installer never started: reason=${dpi.daemonReason ?? "unknown"} ` +
+          `err="${dpi.errMessage}"`,
+      );
       if (resolvedType.endsWith("DP")) {
+        const hint = trStatic(copy.key, copy.text);
         return {
           installed: false,
           mayNotLaunch,
-          errMessage: dpi.errMessage
-            ? `${PKG_PATCH_DAEMON_UNAVAILABLE_HINT} (${dpi.errMessage})`
-            : PKG_PATCH_DAEMON_UNAVAILABLE_HINT,
+          // Keep the raw daemon error appended: it is what makes the next
+          // bug report diagnosable in one read.
+          errMessage: dpi.errMessage ? `${hint} (${dpi.errMessage})` : hint,
           stalled,
         };
       }

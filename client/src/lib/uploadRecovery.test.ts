@@ -4,6 +4,8 @@ import {
   autoRecoverBackoffMs,
   isAutoRecoverable,
   MAX_AUTO_RECOVER_ATTEMPTS,
+  PostUploadStepError,
+  shouldAutoRecover,
 } from "./uploadRecovery";
 
 describe("isAutoRecoverable", () => {
@@ -87,5 +89,57 @@ describe("autoRecoverBackoffMs", () => {
 
   it("has a backoff entry for every recovery attempt", () => {
     expect(AUTO_RECOVER_BACKOFF_MS.length).toBe(MAX_AUTO_RECOVER_ATTEMPTS);
+  });
+});
+
+describe("shouldAutoRecover", () => {
+  it("never re-runs an item whose install failed after the upload committed", () => {
+    // The 2026-09-08 report: the update uploaded (6.37 GB, committed), the
+    // install was rejected, and the queue silently started the upload again.
+    // The install message is translated, so nothing about its text can be
+    // relied on — only its type.
+    const installFailed = new PostUploadStepError(
+      "This update couldn’t be applied because ps5upload couldn’t reach your PS5’s payload loader on port 9021…",
+    );
+    expect(shouldAutoRecover(installFailed, null, installFailed.message)).toBe(
+      false,
+    );
+    // Same in a language the matcher has never seen.
+    const localised = new PostUploadStepError(
+      "このアップデートは適用できませんでした。",
+    );
+    expect(shouldAutoRecover(localised, null, localised.message)).toBe(false);
+  });
+
+  it("never re-uploads when the post-upload mount failed", () => {
+    const mountFailed = new PostUploadStepError(
+      "upload completed, but mount failed: Device busy (os error 16)",
+    );
+    expect(shouldAutoRecover(mountFailed, null, mountFailed.message)).toBe(
+      false,
+    );
+  });
+
+  it("still recovers a genuine transport failure", () => {
+    // The case auto-recovery exists for must keep working: the payload died
+    // mid-transfer and a resume picks up from the committed shards.
+    const dropped = new Error("connect to 192.168.1.60:9113 ... refused");
+    expect(shouldAutoRecover(dropped, null, dropped.message)).toBe(true);
+    expect(shouldAutoRecover(dropped, "spool_apply_failed", "rest mode")).toBe(
+      true,
+    );
+  });
+
+  it("keeps deferring to the reason/message policy for plain errors", () => {
+    // No behaviour change for anything that isn't a post-upload step.
+    for (const [reason, message] of [
+      [null, "write frame split: Broken pipe"],
+      ["fs_write_failed_errno_28", "PS5 out of space"],
+      [null, "no such file or directory"],
+    ] as const) {
+      expect(shouldAutoRecover(new Error(message), reason, message)).toBe(
+        isAutoRecoverable(reason, message),
+      );
+    }
   });
 });

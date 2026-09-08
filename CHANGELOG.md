@@ -4,6 +4,41 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.17.7
+
+**Two problems from one report: an error that blamed the wrong thing, and a
+6 GB re-upload nobody asked for.**
+
+- **A failed install no longer restarts the upload on its own.** When an update
+  failed to install, the app treated it like a dropped connection and re-ran the
+  whole queue item — which for a package means uploading it again from scratch.
+  One user watched a 5.93 GiB update start over six seconds after the error,
+  with no prompt. The bytes were already on the console; re-sending them could
+  never have changed the outcome. Anything that fails *after* the upload has
+  committed — the install, or a mount — is now final, and the package stays on
+  the PS5 for a retry.
+
+- **"ps5upload couldn't start the PS5's update installer" told most people the
+  wrong thing.** That message blamed a self-hosted engine built without the PS5
+  payload SDK. That is one of three unrelated causes, and it was the *least*
+  likely: the common one is that the console's own ELF loader has stopped
+  answering on port 9021, so the installer can't be delivered at all. The
+  message now names which of the three actually happened, and what to do about
+  it — and all three now say the package is already on the PS5, so nothing needs
+  uploading again. In every language the app speaks.
+
+- **The web UI stopped logging a warning on every upload.** It asked the
+  desktop shell to keep the machine awake — a call that doesn't exist in a
+  browser. Nothing was broken, but each attempt left a scary-looking failure in
+  the log and in any bug report captured during a transfer.
+
+- **Bug reports now record which PS5 ports were answering.** The loader port is
+  the one dependency the whole update-install fallback rests on, and it isn't
+  ours. A report where it was down took a log grep to spot; now it's in the
+  snapshot alongside free space and the installed titles.
+
+---
+
 ## 5.17.6
 
 **A build fix, and one that quietly protected the Docker image.**

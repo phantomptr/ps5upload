@@ -86,6 +86,32 @@ const FATAL_MESSAGE_SUBSTRINGS = [
 const FATAL_ENOENT_NUMERIC = /os error 2(?!\d)/;
 
 /**
+ * Thrown when a step AFTER the bytes are committed fails — the post-upload
+ * install, or the post-upload mount.
+ *
+ * Auto-recovery re-runs the *whole* queue item, which for a pkg means
+ * re-uploading it. That is correct for a transport failure and pure waste
+ * once the transfer has already committed: the file is on the console, and
+ * nothing about sending it again changes whether Sony's installer accepts it.
+ *
+ * A user on 5.17.6 watched exactly that: a 5.93 GiB update failed to install,
+ * and six seconds later the app started re-uploading the same file with no
+ * prompt. `isAutoRecoverable` defaults unknown failures to recoverable — the
+ * right default for the transport errors it was written for, and the wrong
+ * one for an install rejection, whose message it had never seen.
+ *
+ * So the runner marks these failures by type rather than by wording. Message
+ * matching would be a losing game: install errors are translated into 19
+ * languages.
+ */
+export class PostUploadStepError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PostUploadStepError";
+  }
+}
+
+/**
  * Decide whether a failed upload job should be auto-recovered (wait +
  * re-deploy payload + resume) or surfaced as a terminal failure.
  *
@@ -115,4 +141,18 @@ export function isAutoRecoverable(
   // MAX_AUTO_RECOVER_ATTEMPTS so an unknown-but-truly-fatal error still
   // surfaces after a few cheap tries.
   return true;
+}
+
+/**
+ * The decision the queue runner actually makes: never auto-recover a failure
+ * that happened after the upload committed, otherwise apply the reason/message
+ * policy above.
+ */
+export function shouldAutoRecover(
+  err: unknown,
+  reason: string | null | undefined,
+  message: string | null | undefined,
+): boolean {
+  if (err instanceof PostUploadStepError) return false;
+  return isAutoRecoverable(reason, message);
 }

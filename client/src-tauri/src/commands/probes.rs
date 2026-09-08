@@ -617,7 +617,11 @@ fn find_bundled_dpi(app: &AppHandle) -> Result<PathBuf, String> {
 /// our main payload, so the caller must re-send the main payload after
 /// the install — and waits for `:9040`.
 ///
-/// Response: `{ ok, listening, sent, error? }`.
+/// Response: `{ ok, listening, sent, error?, reason? }`. `reason` is the
+/// machine-readable cause of a failure (`no_image`, `loader_unreachable`,
+/// `loader_send_failed`, `no_bringup`) — the UI picks its guidance from it
+/// rather than from the English `error`, which conflated three unrelated
+/// problems in 5.17.6.
 #[tauri::command]
 pub async fn dpi_ensure(app: AppHandle, ip: String) -> serde_json::Value {
     let addr = format!("{ip}:{DPI_DAEMON_PORT}");
@@ -634,10 +638,20 @@ pub async fn dpi_ensure(app: AppHandle, ip: String) -> serde_json::Value {
     {
         let dpi_path = match find_bundled_dpi(&app) {
             Ok(p) => p,
-            Err(e) => return serde_json::json!({ "ok": false, "error": e }),
+            Err(e) => {
+                return serde_json::json!({
+                    "ok": false, "listening": false, "sent": false,
+                    "error": e,
+                    "reason": ps5upload_core::payload_lifecycle::DPI_REASON_NO_IMAGE,
+                })
+            }
         };
         if let Err(e) = do_payload_send(&ip, &dpi_path.to_string_lossy(), PS5_LOADER_PORT).await {
-            return serde_json::json!({ "ok": false, "error": format!("send dpi.elf: {e}") });
+            return serde_json::json!({
+                "ok": false, "listening": false, "sent": false,
+                "error": format!("send dpi.elf: {e}"),
+                "reason": ps5upload_core::payload_lifecycle::dpi_send_failure_reason(&e),
+            });
         }
         for _ in 0..16 {
             tokio::time::sleep(Duration::from_millis(500)).await;
@@ -646,13 +660,15 @@ pub async fn dpi_ensure(app: AppHandle, ip: String) -> serde_json::Value {
             }
         }
         serde_json::json!({ "ok": false, "sent": true, "listening": false,
-                            "error": "DPI daemon did not come up on :9040" })
+                            "error": "DPI daemon did not come up on :9040",
+                            "reason": ps5upload_core::payload_lifecycle::DPI_REASON_NO_BRINGUP })
     }
     #[cfg(not(have_dpi))]
     {
         let _ = app;
         serde_json::json!({ "ok": false, "listening": false, "sent": false,
-                            "error": "DPI daemon is not bundled in this build" })
+                            "error": "DPI daemon is not bundled in this build",
+                            "reason": ps5upload_core::payload_lifecycle::DPI_REASON_NO_IMAGE })
     }
 }
 

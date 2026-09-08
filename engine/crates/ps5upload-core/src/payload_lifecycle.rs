@@ -34,6 +34,32 @@ use crate::connection::{resolve_connect_targets, Connection};
 /// as a fresh process once the sender half-closes the socket.
 pub const PS5_LOADER_PORT: u16 = 9021;
 
+/// Why a `dpi-ensure` failed, in a form a UI can branch on. Prose is a bad
+/// contract: 5.17.6 collapsed three unrelated causes into one message that
+/// told a user to rebuild their engine when the real problem was that their
+/// console's ELF loader had stopped answering on :9021.
+pub const DPI_REASON_NO_IMAGE: &str = "no_image";
+pub const DPI_REASON_LOADER_UNREACHABLE: &str = "loader_unreachable";
+pub const DPI_REASON_LOADER_SEND_FAILED: &str = "loader_send_failed";
+pub const DPI_REASON_NO_BRINGUP: &str = "no_bringup";
+
+/// Classify a loader-send failure.
+///
+/// Both senders (`send_elf_to_loader` here, and the desktop's
+/// `do_payload_send`) report a failure to reach the loader as
+/// `connect <addr>: <cause>`; every other failure they can return happens
+/// after the socket is up. Keying off that prefix keeps the distinction the
+/// user needs — "your loader isn't listening" vs "the send broke" — without a
+/// pre-flight probe, which we deliberately avoid: connecting to an ELF loader
+/// and closing without sending bytes can make it execute an empty image.
+pub fn dpi_send_failure_reason(err: &str) -> &'static str {
+    if err.starts_with("connect ") {
+        DPI_REASON_LOADER_UNREACHABLE
+    } else {
+        DPI_REASON_LOADER_SEND_FAILED
+    }
+}
+
 /// The standalone DPI install daemon's port (`payload/dpi/`, and the same
 /// port scene daemons like etaHEN/ezRemote listen on).
 pub const DPI_DAEMON_PORT: u16 = 9040;

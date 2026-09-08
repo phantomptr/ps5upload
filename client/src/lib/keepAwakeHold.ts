@@ -1,5 +1,6 @@
 import { invoke } from "./invokeLogged";
 import { setScreenWakeReason } from "./androidScreenWake";
+import { isTauriEnv } from "./tauriEnv";
 
 // Programmatic keep-awake hold for active transfers.
 //
@@ -55,6 +56,13 @@ export function setTransferKeepAwake(active: boolean): void {
   chain = chain.then(async () => {
     if (desired === current) return;
     current = desired;
+    // The inhibitor is a native command with no browser equivalent, and the
+    // self-hosted web UI runs outside Tauri. Calling it there throws a
+    // "requires the Tauri desktop client" error that we swallow — but it is
+    // logged first, so every browser upload seeded a warn into the app log
+    // and into any bug report captured during it. Nothing was broken; the
+    // noise just cost a reader time. Don't make the call at all.
+    if (!isTauriEnv()) return;
     const cmd = desired ? "keep_awake_acquire" : "keep_awake_release";
     try {
       await invoke(cmd, { reason: REASON });
