@@ -1,3 +1,4 @@
+import { trStatic } from "../lib/trStatic";
 import { useStore } from "zustand";
 import { createStore } from "zustand/vanilla";
 import { invoke } from "../lib/invokeLogged";
@@ -991,6 +992,15 @@ const PKG_STALL_HINT =
 export const PKG_PATCH_DAEMON_UNAVAILABLE_HINT =
   "This update couldn’t be applied because ps5upload couldn’t start the PS5’s update installer, so the console never saw the update. Your base game is untouched. If you’re running a self-hosted engine, use the released engine build (or the ps5upload-engine Docker image) — a source build without the PS5 payload SDK has no installer image to send. You can also apply the update from the PS5 itself: Settings → System → Debug Settings → Game → Package Installer.";
 
+/** Shown when an update was accepted and then silently discarded. The
+ *  workaround is not guessable, so it has to be in the message. */
+export const PKG_PATCH_DID_NOT_APPLY_HINT =
+  "The PS5 accepted this update and then did nothing with it — the game is still on its previous version. This means the console could not match the update to the base game you have installed. Re-install the base game through ps5upload from the base package that goes with this update (choose Override), then apply the update again.";
+
+/** Shown when re-applying an already-installed update removed it. */
+export const PKG_PATCH_REGRESSED_HINT =
+  "Re-applying this update removed it — the game has gone back to its base version. The PS5's installer treats a re-applied update as one to undo. Apply the update once more to return to the updated version, and avoid re-installing an update the game already has.";
+
 export const PKG_PATCH_REJECTED_HINT =
   "This update couldn’t be applied. ps5upload installs updates through the PS5’s safe install path (never one that could delete your base game), and on this console the PS5 declined it — most often because the update doesn’t match your installed version of the game, or the base game isn’t installed yet. Your base game is untouched. If you have the right update, you can also apply it from the PS5 itself: Settings → System → Debug Settings → Game → Package Installer.";
 
@@ -1221,11 +1231,18 @@ async function runDpiInstall(
   host: string,
   localPs5Path: string,
   onStatus?: (msg: string) => void,
+  // Identity of the package being installed. The engine cannot parse a file
+  // that lives on the console, so it needs these to check afterwards whether
+  // an update actually took effect. Optional: absent simply skips the check.
+  verify?: { titleId?: string; packageAppVer?: string },
 ): Promise<{
   ok: boolean;
   errMessage: string;
   daemonFailed: boolean;
   rc: number;
+  patchVerdict?: string;
+  appVerBefore?: string;
+  appVerAfter?: string;
 }> {
   const ip = hostOf(host);
   // dpi_ensure sends the DPI ELF to the loader port (:9021), which REPLACES the
@@ -1275,13 +1292,22 @@ async function runDpiInstall(
   // Send the install, retrying the transient "console busy" rejection
   // (0x80020002) — it clears once the console settles, so we gate each retry on
   // the readiness probe instead of failing the way a single attempt used to.
-  let resp: { ok?: boolean; rc?: number; err_message?: string } = {};
+  let resp: {
+    ok?: boolean;
+    rc?: number;
+    err_message?: string;
+    patch_verdict?: string;
+    app_ver_before?: string;
+    app_ver_after?: string;
+  } = {};
   try {
     for (let attempt = 1; attempt <= DPI_MAX_ATTEMPTS; attempt++) {
       try {
         resp = (await invoke("pkg_dpi_install", {
           ps5Addr: mgmtAddr(host),
           localPs5Path,
+          titleId: verify?.titleId,
+          packageAppVer: verify?.packageAppVer,
         })) as typeof resp;
       } catch (e) {
         resp = { ok: false, rc: 0, err_message: pkgError(e) };
@@ -1316,6 +1342,9 @@ async function runDpiInstall(
       ? ""
       : resp.err_message ||
         `Install was rejected (0x${rc.toString(16).padStart(8, "0")}).`,
+    patchVerdict: resp.patch_verdict,
+    appVerBefore: resp.app_ver_before,
+    appVerAfter: resp.app_ver_after,
   };
 }
 
@@ -1510,6 +1539,10 @@ async function runPkgInstallCore(
   // surface "Waiting for the PS5 to be ready…" instead of a frozen UI.
   onStatus?: (msg: string) => void,
   expected?: PkgExpectedIdentity,
+  /** `APP_VER` the package declares (from its PARAM.SFO). Lets the engine
+   *  check afterwards that an update actually raised the installed version —
+   *  Sony returns success for an update it silently discards. */
+  packageAppVer?: string,
 ): Promise<PkgInstallOutcome> {
   // PRE-INSTALL GATE: don't fire an install into the post-install SceShellUI
   // recovery window — that's what produces the transient rejections. Wait for
@@ -1622,7 +1655,10 @@ async function runPkgInstallCore(
       `in-process install rejected (${mainErr}) for type=${resolvedType || "?"} — ` +
         `handing off to DPI daemon (:9040)`,
     );
-    const dpi = await runDpiInstall(host, localPs5Path, onStatus);
+    const dpi = await runDpiInstall(host, localPs5Path, onStatus, {
+      titleId: titleIdFromContentId(contentId ?? "") ?? undefined,
+      packageAppVer,
+    });
     log.info(
       "install",
       `DPI fallback result: ok=${dpi.ok} daemonFailed=${dpi.daemonFailed} ` +
@@ -1648,6 +1684,49 @@ async function runPkgInstallCore(
       throw new Error(
         `Main-payload install failed (${mainErr}) and ${dpi.errMessage}`,
       );
+    }
+    if (dpi.patchVerdict === "regressed") {
+      // Re-applying an already-installed update makes the console DELETE it:
+      // hardware-observed on FW 5.10, /user/patch/<TID>/ removed and the title
+      // back from 01.09 to 01.00. Never report that as success.
+      log.error(
+        "install",
+        `update was removed by re-applying it: ${dpi.appVerBefore ?? "?"} -> ${dpi.appVerAfter ?? "?"}`,
+      );
+      return {
+        installed: false,
+        stalled: false,
+        acceptedUnverified: false,
+        mayNotLaunch: false,
+        errMessage: trStatic(
+          "pkg.patch_regressed",
+          PKG_PATCH_REGRESSED_HINT,
+        ),
+      };
+    }
+    if (dpi.patchVerdict === "did_not_apply") {
+      // The engine watched APP_VER and it never moved: Sony accepted the
+      // package and copied nothing. Proven on hardware — the same patch that
+      // no-ops over a base installed by another tool applies in 150 s once
+      // the base is re-installed through ps5upload. `dpi.errMessage` carries
+      // that workaround.
+      log.error(
+        "install",
+        `update did not apply: ${dpi.appVerBefore ?? "?"} -> ${dpi.appVerAfter ?? "?"} ` +
+          `(package declares ${packageAppVer ?? "?"})`,
+      );
+      return {
+        installed: false,
+        stalled: false,
+        acceptedUnverified: false,
+        mayNotLaunch: false,
+        // Use our own translated copy rather than the engine's English
+        // prose; the engine's text is for logs and bug reports.
+        errMessage: trStatic(
+          "pkg.patch_did_not_apply",
+          PKG_PATCH_DID_NOT_APPLY_HINT,
+        ),
+      };
     }
     if (dpi.ok) {
       // DPI's rc=0 proves only that Sony accepted InstallByPackage. Confirm the
@@ -1695,6 +1774,9 @@ export async function runPkgInstall(
   onProgress?: (installedBytes: number, total: number) => void,
   onStatus?: (msg: string) => void,
   expected?: PkgExpectedIdentity,
+  /** `APP_VER` the package declares. Enables the post-install check that an
+   *  update actually raised the installed version. */
+  packageAppVer?: string,
 ): Promise<PkgInstallOutcome> {
   const name = basenameOf(localPs5Path) || contentId || "package";
   const tasks = useTaskStore.getState();
@@ -1728,6 +1810,7 @@ export async function runPkgInstall(
         onStatus?.(message);
       },
       expected,
+      packageAppVer,
     );
 
     if (result.installed) {
@@ -2352,6 +2435,9 @@ const makePkgLibraryStore = () =>
           // Readiness-gate status (pre-install wait / DPI transient retry).
           (msg) => set({ busyNotice: msg }),
           { size: entry?.size, fingerprint: entry?.fingerprint },
+          // Lets the engine confirm an update actually raised APP_VER instead
+          // of trusting Sony's return code, which is 0 either way.
+          entry?.appVer,
         );
         useActivityHistoryStore
           .getState()

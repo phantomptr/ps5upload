@@ -2651,6 +2651,10 @@ helper_mismatch_go: "Ricarica helper",
 "joberr.size_mismatch": "Il trasferimento non è stato completato prima dell'interruzione: un file sulla PS5 è incompleto e quindi non è stato pubblicato (la tua eventuale copia precedente resta intatta). Di solito significa che la PS5 è andata in riposo o ha perso alimentazione durante il caricamento. Tieni sveglia la console (Impostazioni → Sistema → Risparmio energetico → Tempo di spegnimento della PS5), poi riesegui questo elemento: «Riprendi» reinvia solo i file mancanti, «Sovrascrivi» crea una copia pulita.",
 "joberr.tx_table_full": "Ci sono troppi trasferimenti simultanei in corso sulla PS5. Attendi che alcuni finiscano oppure riavvia il payload.",
 "bug_report_browser_note": "Lo zip viene scaricato tramite il browser. Contiene il log recente del motore anziché il file completo sull'host del motore: per quello usa «docker logs» sul container.",
+"pkg.patch_did_not_apply": "La PS5 ha accettato questo aggiornamento e poi non ne ha fatto nulla: il gioco è ancora alla versione precedente. Significa che la console non è riuscita ad abbinare l'aggiornamento al gioco base installato. Reinstalla il gioco base con ps5upload partendo dal pacchetto base corrispondente a questo aggiornamento (scegli «Sovrascrivi») e applicalo di nuovo.",
+"pkglib.updateBaseUnknown.title": "Questo aggiornamento potrebbe non essere applicato",
+"pkglib.updateBaseUnknown.installAnyway": "Installa comunque",
+"pkglib.updateBaseUnknown.body": "{id} è installato, ma non da un pacchetto base installato da ps5upload: la PS5 potrebbe non riuscire ad abbinare questo aggiornamento. In quel caso la console segnala successo e non cambia nulla. Se il gioco resta alla versione precedente, installa il pacchetto base corrispondente con ps5upload (scegli «Sovrascrivi») e applica di nuovo l'aggiornamento.",
 };
 
 export default it;

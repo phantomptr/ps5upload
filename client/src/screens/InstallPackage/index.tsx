@@ -795,6 +795,42 @@ export default function InstallPackageScreen() {
         ),
       });
       if (!ok) return;
+    } else if (entry.category === "gp" && entry.titleId) {
+      // The base IS installed — but if it did not come from a base package we
+      // can account for, the console may not be able to match this update to
+      // it. Sony's installer then reports success and copies nothing, leaving
+      // the game on its old version with no error. Hardware-confirmed: the
+      // same update did nothing over a pre-existing base and applied in about
+      // 150 s once the base was re-installed from its matching package.
+      //
+      // We warn rather than block: we can only tell that we cannot CONFIRM a
+      // matching base, not that the update will definitely fail.
+      const baseAccountedFor = entries.some(
+        (x) =>
+          x.titleId === entry.titleId &&
+          (x.category === "gd" || x.category === undefined) &&
+          x.installedHere,
+      );
+      if (!baseAccountedFor) {
+        const ok = await confirm({
+          title: tr(
+            "pkglib.updateBaseUnknown.title",
+            undefined,
+            "This update might not apply",
+          ),
+          message: tr(
+            "pkglib.updateBaseUnknown.body",
+            { id: entry.titleId },
+            `${entry.titleId} is installed, but not from a base package ps5upload installed — so the PS5 may not be able to match this update to it. When that happens the console reports success and silently changes nothing. If the game stays on its old version afterwards, install the matching base package through ps5upload (choose Override), then apply this update again.`,
+          ),
+          confirmLabel: tr(
+            "pkglib.updateBaseUnknown.installAnyway",
+            undefined,
+            "Install anyway",
+          ),
+        });
+        if (!ok) return;
+      }
     }
     // Manually installing an alternative is an explicit choice. Remember it
     // for this console so a later Install all never replaces it with a sibling

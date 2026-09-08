@@ -2712,6 +2712,10 @@ helper_mismatch_go: "Helfer neu laden",
 "joberr.size_mismatch": "Die Übertragung wurde unterbrochen, bevor sie fertig war – eine Datei auf der PS5 ist unvollständig und wurde deshalb nicht veröffentlicht (eine eventuell vorhandene alte Kopie bleibt unberührt). Meist ist die PS5 dabei in den Ruhemodus gegangen oder hat den Strom verloren. Halte die Konsole wach (Einstellungen → System → Energiesparen → Zeit bis zum Ausschalten der PS5) und führe diesen Eintrag erneut aus – „Fortsetzen“ sendet nur die fehlenden Dateien erneut, „Überschreiben“ liefert eine saubere Kopie.",
 "joberr.tx_table_full": "Auf der PS5 laufen zu viele gleichzeitige Übertragungen. Warte, bis einige abgeschlossen sind, oder starte das Payload neu.",
 "bug_report_browser_note": "Die ZIP-Datei wird über deinen Browser heruntergeladen. Sie enthält das jüngste Protokoll der Engine statt der vollständigen Datei auf dem Engine-Host – dafür nutze „docker logs“ auf dem Container.",
+"pkg.patch_did_not_apply": "Die PS5 hat dieses Update angenommen und dann nichts damit gemacht – das Spiel ist weiterhin auf der vorherigen Version. Das bedeutet, die Konsole konnte das Update nicht dem installierten Hauptspiel zuordnen. Installiere das Hauptspiel über ps5upload erneut, und zwar aus dem Basispaket, das zu diesem Update gehört (wähle „Überschreiben“), und wende das Update dann noch einmal an.",
+"pkglib.updateBaseUnknown.title": "Dieses Update wird möglicherweise nicht angewendet",
+"pkglib.updateBaseUnknown.installAnyway": "Trotzdem installieren",
+"pkglib.updateBaseUnknown.body": "{id} ist installiert, aber nicht aus einem Basispaket, das ps5upload installiert hat – die PS5 kann dieses Update daher möglicherweise nicht zuordnen. In dem Fall meldet die Konsole Erfolg und ändert stillschweigend nichts. Bleibt das Spiel danach auf der alten Version, installiere das passende Basispaket über ps5upload (wähle „Überschreiben“) und wende das Update erneut an.",
 };
 
 export default de;

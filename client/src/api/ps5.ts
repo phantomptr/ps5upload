@@ -4,8 +4,7 @@
 // allowlisting, and host-local calls (folder inspection, ELF loader
 // TCP send) stay in-process.
 
-import { t } from "../i18n";
-import { useLangStore } from "../state/lang";
+import { trStatic } from "../lib/trStatic";
 import { Channel } from "@tauri-apps/api/core";
 import { getEngineUrl } from "../state/engine";
 // Logging wrapper: every command leaves a trace breadcrumb + logs failures at
@@ -3891,30 +3890,6 @@ export class UploadJobError extends Error {
   }
 }
 
-/**
- * Non-hook translator for module-level strings.
- *
- * `useTr()` is a React hook and cannot be called from a plain function, which
- * is why every message in `humanizeJobErrorReason` was hardcoded English while
- * the rest of the app shipped in 19 languages. These are the strings a user
- * sees at the exact moment a transfer or install fails — the worst place to
- * fall back to a language they may not read.
- *
- * Reads the active language at call time (the store is the single source of
- * truth) and falls back to the English text passed at the call site, so a key
- * missing from a locale degrades to today's behaviour rather than showing a
- * raw key.
- */
-function trStatic(key: string, fallback: string): string {
-  try {
-    const lang = useLangStore.getState().lang;
-    const out = t(lang, key);
-    return out === key ? fallback : out;
-  } catch {
-    // Never let a translation lookup turn an error message into an exception.
-    return fallback;
-  }
-}
 
 /** Humanize a payload's `error_reason` token into a one-line message
  *  the user can act on. Returns `null` when the reason is unknown

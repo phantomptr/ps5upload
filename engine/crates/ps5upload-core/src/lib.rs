@@ -19,6 +19,7 @@ pub mod hw;
 pub mod local_image;
 pub mod log;
 pub mod notif;
+pub mod patch_verify;
 pub mod payload_lifecycle;
 pub mod pkg_install;
 pub mod process_mgr;

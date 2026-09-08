@@ -2741,6 +2741,10 @@ helper_mismatch_go: "Recharger l'assistant",
 "joberr.size_mismatch": "Le transfert n'est pas allé à son terme avant d'être interrompu : un fichier sur la PS5 est incomplet et n'a donc pas été publié (votre ancienne copie, le cas échéant, reste intacte). Cela signifie généralement que la PS5 est passée en veille ou a perdu l'alimentation pendant l'envoi. Gardez la console éveillée (Paramètres → Système → Économie d'énergie → Délai avant extinction de la PS5), puis relancez cet élément : « Reprendre » ne renvoie que les fichiers manquants, « Remplacer » crée une copie propre.",
 "joberr.tx_table_full": "Trop de transferts simultanés sont en cours sur la PS5. Attendez que certains se terminent ou relancez le payload.",
 "bug_report_browser_note": "Le zip est téléchargé via votre navigateur. Il contient le journal récent du moteur plutôt que le fichier complet présent sur l'hôte — pour cela, utilisez « docker logs » sur le conteneur.",
+"pkg.patch_did_not_apply": "La PS5 a accepté cette mise à jour puis n'en a rien fait — le jeu est toujours dans sa version précédente. Cela signifie que la console n'a pas pu associer la mise à jour au jeu de base installé. Réinstallez le jeu de base via ps5upload à partir du paquet de base correspondant à cette mise à jour (choisissez « Remplacer »), puis appliquez-la de nouveau.",
+"pkglib.updateBaseUnknown.title": "Cette mise à jour pourrait ne pas s'appliquer",
+"pkglib.updateBaseUnknown.installAnyway": "Installer quand même",
+"pkglib.updateBaseUnknown.body": "{id} est installé, mais pas à partir d'un paquet de base installé par ps5upload — la PS5 pourrait donc ne pas réussir à y associer cette mise à jour. Dans ce cas la console signale une réussite et ne change rien. Si le jeu reste dans son ancienne version, installez le paquet de base correspondant via ps5upload (choisissez « Remplacer »), puis appliquez de nouveau la mise à jour.",
 };
 
 export default fr;

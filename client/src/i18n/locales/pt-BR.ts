@@ -2739,6 +2739,10 @@ helper_mismatch_go: "Recarregar auxiliar",
 "joberr.size_mismatch": "A transferência não terminou antes de ser interrompida — um arquivo no PS5 está incompleto e por isso não foi publicado (sua cópia antiga, se houver, permanece intacta). Normalmente isso significa que o PS5 entrou em repouso ou perdeu energia durante o envio. Mantenha o console acordado (Configurações → Sistema → Economia de energia → Tempo até o PS5 desligar) e execute este item de novo: «Retomar» reenvia apenas os arquivos que faltam, «Substituir» faz uma cópia limpa.",
 "joberr.tx_table_full": "Há transferências simultâneas demais em andamento no PS5. Espere algumas terminarem ou reinicie o payload.",
 "bug_report_browser_note": "O zip é baixado pelo seu navegador. Ele traz o log recente do motor, não o arquivo completo no host do motor — para isso, use «docker logs» no contêiner.",
+"pkg.patch_did_not_apply": "O PS5 aceitou esta atualização e depois não fez nada com ela — o jogo continua na versão anterior. Isso significa que o console não conseguiu associar a atualização ao jogo base instalado. Reinstale o jogo base pelo ps5upload a partir do pacote base correspondente a esta atualização (escolha «Substituir») e aplique-a novamente.",
+"pkglib.updateBaseUnknown.title": "Esta atualização pode não ser aplicada",
+"pkglib.updateBaseUnknown.installAnyway": "Instalar mesmo assim",
+"pkglib.updateBaseUnknown.body": "{id} está instalado, mas não a partir de um pacote base instalado pelo ps5upload — então o PS5 pode não conseguir associar esta atualização. Quando isso acontece, o console informa sucesso e não muda nada. Se o jogo continuar na versão antiga, instale o pacote base correspondente pelo ps5upload (escolha «Substituir») e aplique a atualização de novo.",
 };
 
 export default pt_BR;

@@ -4,6 +4,43 @@ What's new in ps5upload, written for humans.
 
 ---
 
+## 5.17.5
+
+**An update that silently does nothing is now reported as a failure, and tells you how to fix it.**
+
+- **The PS5 could accept an update and then discard it.** The console returned
+  success, ps5upload believed it, and the game stayed on its old version with
+  nothing to explain why. That is the "base game installs but the update fails"
+  problem people have been reporting. ps5upload now checks the game's version
+  after an update and, if it did not move, says so instead of claiming success.
+
+- **And it tells you the fix.** It happens when the console cannot match the
+  update to the base game you have installed: it reports success and copies
+  nothing. Installing the matching base package through ps5upload (choose
+  Override) and then applying the update makes it work. That is now the message
+  you get, in every language the app speaks.
+
+  Verified on a console: the same update did nothing at all over the base game
+  that was already there, and applied in about two and a half minutes after the
+  base was re-installed from its matching package — same console, same
+  firmware, same storage.
+
+- **You are warned before it can happen.** When you install an update for a game
+  whose base package did not come from ps5upload, you now get a heads-up first,
+  with the fix, instead of finding out afterwards. It is a warning, not a block:
+  it means the update may not apply, not that it will fail.
+
+- **A re-installed update is not mistaken for a failure.** The console removes
+  the old update before putting the new one in place, so for a minute or two a
+  game legitimately looks like it has gone backwards. ps5upload waits that out
+  rather than reporting a problem that is not there.
+
+- Verified end to end on two consoles from a clean slate — base game, update
+  and three DLC, on both an older and a newer firmware, installing to internal
+  storage and to an M.2.
+
+---
+
 ## 5.17.4
 
 **You can file a bug report from the self-hosted web UI.**
